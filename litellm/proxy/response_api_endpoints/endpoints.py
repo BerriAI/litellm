@@ -34,6 +34,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.anthropic_interface.exceptions.exception_mapping_utils import AnthropicExceptionMapping
 from litellm.caching.dual_cache import DualCache
 from litellm.constants import EMPTY_MAPPING, MANAGED_BACKGROUND_RESPONSE_METADATA_KEY, TERMINAL_RESPONSE_STATUSES
+from litellm.exceptions import EndpointNotSupportedByModelError
 from litellm.integrations.custom_guardrail import ModifyResponseException
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, get_metadata_variable_name_from_kwargs
 from litellm.litellm_core_utils.internal_call_metadata import is_background_response, requests_background
@@ -78,6 +79,7 @@ from litellm.proxy.hooks.responses_id_security import ResponsesIDSecurity, decry
 from litellm.proxy.litellm_pre_call_utils import (
     _CLIENT_PRICING_METADATA_FIELDS,  # pyright: ignore[reportPrivateUsage]  # the HTTP path's own strip list
     _UNTRUSTED_METADATA_CONTROL_FIELDS,  # pyright: ignore[reportPrivateUsage]  # the HTTP path's own strip list
+    is_chat_completions_body,
 )
 from litellm.proxy.pass_through_endpoints.llm_provider_handlers.batch_attribution import (
     request_tags_from_request_data,
@@ -86,6 +88,7 @@ from litellm.proxy.route_llm_request import raise_if_required_body_param_missing
 from litellm.proxy.utils import count_request_input_tokens, handle_exception_on_proxy
 from litellm.responses.litellm_completion_transformation.compaction_items import messages_since_newest_compaction
 from litellm.responses.litellm_completion_transformation.count_request import MODEL_FILE_ID_MAPPING_FIELD
+from litellm.responses.retrieve_stream_query import RETRIEVE_INCLUDE_QUERY_KEYS, RETRIEVE_STREAM_QUERY_KEYS
 from litellm.responses.streaming_iterator import GuardedResponsesWsFrame, ResponsesWsFrameGuard, spawn_logging_task
 from litellm.router import Router
 from litellm.types.llms.base import LiteLLMBaseModel
@@ -106,11 +109,43 @@ router: Final = APIRouter()
 _RESPONSES_WS_CONFIG_VALUE_ADAPTER: Final[TypeAdapter[object | None]] = TypeAdapter(object | None)
 _DECODED_JSON: Final = TypeAdapter(object)
 _PROXY_SERVER_REQUEST_ADAPTER: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
+_RETRIEVE_QUERY_PARAMS: Final = tuple(sorted(RETRIEVE_INCLUDE_QUERY_KEYS | RETRIEVE_STREAM_QUERY_KEYS))
+_RETRIEVE_QUERY_OPENAPI: Final = {
+    "parameters": [
+        {
+            "name": "stream",
+            "in": "query",
+            "required": False,
+            "schema": {"type": "boolean"},
+            "description": "Replay the response's events as server-sent events (OpenAI, Azure, and Azure AI Foundry)",
+        },
+        {
+            "name": "starting_after",
+            "in": "query",
+            "required": False,
+            "schema": {"type": "integer", "minimum": 0},
+            "description": "With stream=true, replay only the events after this sequence number",
+        },
+        {
+            "name": "include",
+            "in": "query",
+            "required": False,
+            "schema": {"type": "array", "items": {"type": "string"}},
+            "description": "Additional output data to include, forwarded to the provider",
+        },
+        {
+            "name": "include_obfuscation",
+            "in": "query",
+            "required": False,
+            "schema": {"type": "boolean"},
+            "description": "With stream=true, whether delta events carry obfuscation padding",
+        },
+    ]
+}
 
 _ResponseDocSchemas: TypeAlias = dict[int | str, dict[str, object]]  # fastapi's responses kwarg
 
-RESPONSES_API_RESPONSE_SCHEMAS: Final[_ResponseDocSchemas] = {200: {"model": ResponsesAPIResponse}}
-RESPONSES_API_CREATE_RESPONSE_SCHEMAS: Final[_ResponseDocSchemas] = {
+RESPONSES_API_RESPONSE_SCHEMAS: Final[_ResponseDocSchemas] = {
     200: {
         "model": ResponsesAPIResponse,
         "content": {
@@ -179,13 +214,6 @@ def _normalize_tool_dialect(
     return {**data, **{key: value for key, value in replaceable if key in data}}
 
 
-def _is_chat_completions_body(data: Mapping[str, object]) -> bool:
-    messages: Final = data.get("messages")
-    if isinstance(messages, list) and messages:
-        return True
-    return "messages" in data and "input" not in data
-
-
 _CURSOR_THINKING_SEPARATOR: Final = "-thinking-"
 _CURSOR_FAST_SUFFIX: Final = "-fast"
 _CURSOR_THINKING_LEVELS: Final[frozenset[str]] = frozenset(get_args(REASONING_EFFORT))
@@ -207,11 +235,12 @@ def _parse_cursor_model_variant(model: str) -> _CursorModelVariant:
 def _router_can_serve(model: str, llm_router: "Router | None") -> bool:
     if llm_router is None:
         return False
-    if llm_router.is_recognized_model(model):
+    registry: Final = llm_router.registry()
+    if registry.resolve(model, kind="recognized"):
         return True
-    if model in llm_router.team_public_model_names:
+    if model in registry.names(kind="team_public"):
         return True
-    return bool(llm_router.pattern_router.get_pattern(model))
+    return bool(registry.patterns().get_pattern(model))
 
 
 def _resolve_cursor_model_variant(
@@ -226,7 +255,7 @@ def _resolve_cursor_model_variant(
     resolved: Final = {**data, "model": variant.base_model}
     if variant.reasoning_effort is None:
         return resolved
-    if _is_chat_completions_body(data):
+    if is_chat_completions_body(data):
         if "reasoning_effort" in data:
             return resolved
         return {**resolved, "reasoning_effort": variant.reasoning_effort}
@@ -254,19 +283,19 @@ async def _resolve_cursor_model_variant_before_auth(request: Request) -> None:
     "/v1/responses",
     dependencies=[Depends(user_api_key_auth)],
     tags=["responses"],
-    responses=RESPONSES_API_CREATE_RESPONSE_SCHEMAS,
+    responses=RESPONSES_API_RESPONSE_SCHEMAS,
 )
 @router.post(
     "/responses",
     dependencies=[Depends(user_api_key_auth)],
     tags=["responses"],
-    responses=RESPONSES_API_CREATE_RESPONSE_SCHEMAS,
+    responses=RESPONSES_API_RESPONSE_SCHEMAS,
 )
 @router.post(
     "/openai/v1/responses",
     dependencies=[Depends(user_api_key_auth)],
     tags=["responses"],
-    responses=RESPONSES_API_CREATE_RESPONSE_SCHEMAS,
+    responses=RESPONSES_API_RESPONSE_SCHEMAS,
 )
 async def responses_api(
     request: Request,
@@ -611,7 +640,7 @@ async def cursor_chat_completions(
 
     raw_body: Final = await read_request_body(request=request)
 
-    if _is_chat_completions_body(raw_body):
+    if is_chat_completions_body(raw_body):
         # Genuine chat completions body (Cursor sends these for models whose BYOK it
         # already fixed); delegate so behavior matches /chat/completions exactly.
         # Keyed on messages CONTENT, not key presence: Cursor can send a null or
@@ -749,18 +778,21 @@ async def cursor_chat_completions(
     dependencies=[Depends(user_api_key_auth)],
     tags=["responses"],
     responses=RESPONSES_API_RESPONSE_SCHEMAS,
+    openapi_extra=_RETRIEVE_QUERY_OPENAPI,
 )
 @router.get(
     "/responses/{response_id}",
     dependencies=[Depends(user_api_key_auth)],
     tags=["responses"],
     responses=RESPONSES_API_RESPONSE_SCHEMAS,
+    openapi_extra=_RETRIEVE_QUERY_OPENAPI,
 )
 @router.get(
     "/openai/v1/responses/{response_id}",
     dependencies=[Depends(user_api_key_auth)],
     tags=["responses"],
     responses=RESPONSES_API_RESPONSE_SCHEMAS,
+    openapi_extra=_RETRIEVE_QUERY_OPENAPI,
 )
 async def get_response(
     response_id: str,
@@ -784,6 +816,10 @@ async def get_response(
     
     # Get provider response
     curl -X GET http://localhost:4000/v1/responses/resp_abc123 \
+    -H "Authorization: Bearer $LITELLM_MASTER_KEY"
+
+    # Resume a background response's event stream after sequence number 7
+    curl -N "http://localhost:4000/v1/responses/resp_abc123?stream=true&starting_after=7" \
     -H "Authorization: Bearer $LITELLM_MASTER_KEY"
     ```
     """
@@ -832,6 +868,14 @@ async def get_response(
     data: Final = await read_request_body(request=request)
     read_settles_billing: Final = not carries_client_side_overrides(data)
     data["response_id"] = response_id
+    retrieve_query: Final = {
+        key: values[0] if len(values) == 1 else values
+        for key in _RETRIEVE_QUERY_PARAMS
+        if (values := request.query_params.getlist(key))
+    }
+    if retrieve_query:
+        body_extra_query: Final[object] = data.get("extra_query")
+        data["extra_query"] = {**(body_extra_query if isinstance(body_extra_query, dict) else {}), **retrieve_query}
     processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:
         response: Final[object] = await processor.base_process_llm_request(
@@ -843,7 +887,12 @@ async def get_response(
             llm_router=llm_router,
             general_settings=general_settings,
             proxy_config=proxy_config,
-            select_data_generator=select_data_generator,
+            select_data_generator=partial(
+                _streamed_retrieval_data_generator,
+                partial(select_data_generator, responses_stream_errors=True),
+                response_id,
+                read_settles_billing,
+            ),
             model=None,
             user_model=user_model,
             user_temperature=user_temperature,
@@ -917,12 +966,24 @@ async def _bill_finished_background_response(
     fastapi_response: Response,
     read_settles_billing: bool,
 ) -> None:
+    _report_charge(
+        await _settle_finished_background_read(response, response_id, user_api_key_dict, read_settles_billing),
+        fastapi_response,
+    )
+
+
+async def _settle_finished_background_read(
+    response: object,
+    response_id: str,
+    user_api_key_dict: UserAPIKeyAuth,
+    read_settles_billing: bool,
+) -> "_BilledCharge | None":
     from litellm.proxy.proxy_server import proxy_logging_obj
 
     if not isinstance(response, ResponsesAPIResponse) or not is_background_response(response):
-        return
+        return None
     if response.status not in TERMINAL_RESPONSE_STATUSES:
-        return
+        return None
     managed_files_hook: Final = _managed_files_hook(proxy_logging_obj)
     track_untracked: Final = (
         partial(
@@ -933,12 +994,11 @@ async def _bill_finished_background_response(
         if managed_files_hook is not None
         else None
     )
-    charge: Final = await _settle_background_billing(
+    return await _settle_background_billing(
         (lambda cost_check: cost_check.bill_if_finished(response_id, response, track_untracked))
         if read_settles_billing
         else (lambda cost_check: cost_check.bill_from_deployment(response_id, track_untracked))
     )
-    _report_charge(charge, fastapi_response)
 
 
 class _BilledCharge(Protocol):
@@ -1088,27 +1148,53 @@ def _streamed_background_data_generator(
         user_api_key_dict=user_api_key_dict,
         request_tags=_background_response_spend_tags(request_data),
     )
-    return _bill_streamed_background_response(response, chunks, track_untracked)
+    return _bill_streamed_background_response(
+        response, chunks, partial(_bill_finished_stream, track_untracked=track_untracked)
+    )
+
+
+def _streamed_retrieval_data_generator(
+    select_data_generator: Callable[..., AsyncIterator[str | bytes]],
+    response_id: str,
+    read_settles_billing: bool,
+    response: object,
+    user_api_key_dict: UserAPIKeyAuth,
+    request_data: Mapping[str, object],
+    request: Request | None = None,
+) -> AsyncIterator[str | bytes]:
+    chunks: Final = select_data_generator(
+        response=response, user_api_key_dict=user_api_key_dict, request_data=request_data, request=request
+    )
+    return _bill_streamed_background_response(
+        response,
+        chunks,
+        partial(
+            _settle_finished_background_read,
+            response_id=response_id,
+            user_api_key_dict=user_api_key_dict,
+            read_settles_billing=read_settles_billing,
+        ),
+    )
 
 
 async def _bill_streamed_background_response(
     stream: object,
     chunks: AsyncIterator[str | bytes],
-    track_untracked: Callable[[str, ResponsesAPIResponse], Awaitable[bool]],
+    bill: Callable[[ResponsesAPIResponse], Awaitable[object]],
 ) -> AsyncIterator[str | bytes]:
     async for chunk in chunks:
         completed: object = ProxyBaseLLMRequestProcessing.extract_completed_responses_response(stream)
         if not isinstance(completed, ResponsesAPIResponse):
             yield chunk
             continue
-        await _bill_finished_stream(completed, track_untracked)
+        await bill(completed)
         yield chunk
         async for remaining_chunk in chunks:
             yield remaining_chunk
         return
     late_completed: Final = ProxyBaseLLMRequestProcessing.extract_completed_responses_response(stream)
     if isinstance(late_completed, ResponsesAPIResponse):
-        await _bill_finished_stream(late_completed, track_untracked)
+        await bill(late_completed)
 
 
 async def _bill_finished_stream(
@@ -1996,6 +2082,14 @@ def _routing_hints_from_first_ws_frame(first_message: str) -> Mapping[str, objec
 
 
 def _responses_ws_failure_frame(failure: Exception) -> str:
+    if isinstance(failure, EndpointNotSupportedByModelError):
+        return json.dumps(
+            {
+                "type": "error",
+                "status": 400,
+                "error": {"type": "invalid_request_error", "message": failure.message.split("\n\n", 1)[0]},
+            }
+        )
     proxy_exception: Final = handle_exception_on_proxy(failure)
     status: Final = int(proxy_exception.code) if str(proxy_exception.code).isdigit() else 500
     error_type: Final = (
@@ -2354,7 +2448,12 @@ async def _responses_websocket_session(
             with contextlib.suppress(Exception):
                 await websocket.send_text(_responses_ws_failure_frame(e))
             with contextlib.suppress(Exception):
-                await websocket.close(code=1011, reason="Internal server error")
+                await websocket.close(
+                    code=1008 if isinstance(e, EndpointNotSupportedByModelError) else 1011,
+                    reason="Pre-call error"
+                    if isinstance(e, EndpointNotSupportedByModelError)
+                    else "Internal server error",
+                )
             return crash_row
         return bill_socket_failure(outcome) if isinstance(outcome, Exception) else None
 

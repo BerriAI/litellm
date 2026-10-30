@@ -40,6 +40,7 @@ from litellm.llms.ollama.common_utils import OllamaResponseIdNormalizer
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import (
+    CHOICE_LOGPROBS_OR_JSON,
     CacheCreationTokenDetails,
     CompletionTokensDetailsWrapper,
     Delta,
@@ -1201,7 +1202,10 @@ class CustomStreamWrapper:
                                         choice_json.pop(
                                             "finish_reason", None
                                         )  # for mistral etc. which return a value in their last chunk (not-openai compatible).
-                                        choices.append(StreamingChoices(**choice_json))
+                                        choice_json.pop("logprobs", None)
+                                        choices.append(
+                                            StreamingChoices(**choice_json, logprobs=getattr(choice, "logprobs", None))
+                                        )
                                 except Exception:
                                     choices.append(StreamingChoices())
                             setattr(model_response, "choices", choices)
@@ -1605,7 +1609,7 @@ class CustomStreamWrapper:
                     model_response.system_fingerprint = response_obj["original_chunk"].system_fingerprint
                     self.system_fingerprint = response_obj["original_chunk"].system_fingerprint
             if response_obj["logprobs"] is not None:
-                model_response.choices[0].logprobs = response_obj["logprobs"]
+                model_response.choices[0].logprobs = CHOICE_LOGPROBS_OR_JSON.validate_python(response_obj["logprobs"])
 
             if response_obj["usage"] is not None:
                 if isinstance(response_obj["usage"], dict):
@@ -1938,6 +1942,16 @@ class CustomStreamWrapper:
         model_response: Final = self.model_response_creator(
             hidden_params=None if self.received_model_id is None else {"received_model_id": self.received_model_id}
         )
+        served_tier: Final = next(
+            (
+                tier
+                for chunk in reversed(self.chunks)
+                if isinstance(tier := getattr(chunk, "service_tier", None), str) and tier
+            ),
+            None,
+        )
+        if served_tier is not None:
+            setattr(model_response, "service_tier", served_tier)  # noqa: B010  # pydantic extra, not a declared field
         _finish_reason: Final = self.received_finish_reason or self.intermittent_finish_reason
         if _finish_reason is not None:
             model_response.choices[0].finish_reason = _finish_reason
@@ -2472,6 +2486,25 @@ class CustomStreamWrapper:
     def bill_failure_after_earlier_rounds(self, earlier: "BilledRoundsSpend") -> None:
         self._earlier_rounds_spend = earlier
 
+    def partial_response(self) -> "ModelResponse | TextCompletionResponse | None":
+        partial: Final = (
+            litellm.stream_chunk_builder(
+                chunks=self.chunks,
+                messages=self.messages if isinstance(self.messages, list) else None,
+                logging_obj=self.logging_obj,
+                count_prompt_tokens=self.count_prompt_tokens,
+            )
+            if self.chunks
+            else None
+        )
+        usage: Final[object] = getattr(partial, "usage", None)
+        if partial is None or not isinstance(usage, Usage):
+            return None
+        if self.model:
+            partial.model = self.model
+        backfill_missing_cache_usage_fields(usage)
+        return partial
+
     def _record_partial_usage_for_failure(self) -> None:
         """
         A stream that breaks mid-flight still billed the provider for the chunks
@@ -2481,23 +2514,15 @@ class CustomStreamWrapper:
         moves it into terminal failure usage before opening the next attempt,
         so a recovered attempt logs its own usage.
         """
-        if self.logging_obj is None or not self.chunks:
+        if self.logging_obj is None:
             return
         try:
-            partial_response: Final = litellm.stream_chunk_builder(
-                chunks=self.chunks,
-                messages=self.messages if isinstance(self.messages, list) else None,
-                logging_obj=self.logging_obj,
-                count_prompt_tokens=self.count_prompt_tokens,
-            )
+            partial_response: Final = self.partial_response()
             if partial_response is None:
                 return
-            usage: Final = cast(Usage | None, getattr(partial_response, "usage", None))
-            if usage is None:
+            usage: Final[object] = getattr(partial_response, "usage", None)
+            if not isinstance(usage, Usage):
                 return
-            if self.model:
-                partial_response.model = self.model
-            backfill_missing_cache_usage_fields(usage)
             partial_cost: Final = self.logging_obj.response_cost_calculator(result=partial_response) or 0.0
             if self._earlier_rounds_spend is None:
                 self.logging_obj.model_call_details["combined_usage_object"] = usage

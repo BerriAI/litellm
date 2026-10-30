@@ -359,7 +359,7 @@ async def _authorize_models_this_test_can_call(
     for model in models:
         await can_key_call_resolved_model(
             model=model,
-            llm_model_list=llm_router.model_list,
+            llm_model_list=llm_router.registry().all(),
             valid_token=user_api_key_dict,
             llm_router=llm_router,
         )
@@ -456,7 +456,9 @@ async def get_auto_router_availability(
         ):
             raise HTTPException(status_code=403, detail="Cannot check another user's auto router")
     existing: Final = saved.deployment if saved is not None else None
-    others: Final = tuple(row.deployment for row in rows if row is not saved) + tuple(llm_router.config_deployments())
+    others: Final = tuple(row.deployment for row in rows if row is not saved) + tuple(
+        llm_router.registry().deployments(source="config")
+    )
     candidate: Final = MappingProxyType(
         {
             "litellm_params": MappingProxyType(
@@ -481,14 +483,14 @@ async def _resolve_saved_routing_test(
 ) -> AutoRouterRoutingTestRequest:
     if data.saved_model_id is None:
         return data
-    deployment: Final = llm_router.get_deployment(data.saved_model_id)
+    deployment: Final = llm_router.registry().deployment(data.saved_model_id)
     if deployment is None or deployment.model_info.blocked:
         raise HTTPException(status_code=404, detail="Saved auto router is unavailable")
     if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN and deployment.model_info.team_id != data.team_id:
         raise HTTPException(status_code=403, detail="Saved auto router belongs to a different team")
     await can_key_call_resolved_model(
         model=deployment.model_info.team_public_model_name or deployment.model_name,
-        llm_model_list=llm_router.model_list,
+        llm_model_list=llm_router.registry().all(),
         valid_token=user_api_key_dict,
         llm_router=llm_router,
     )
@@ -610,7 +612,7 @@ async def preview_auto_router_routing(
     )
 
     try:
-        complexity_router: Final = ComplexityRouter(
+        complexity_strategy: Final = ComplexityRouter(
             model_name=resolved.router_name,
             litellm_router_instance=llm_router,
             complexity_router_config=resolved.complexity_router_config.model_dump(exclude_none=True),
@@ -628,7 +630,7 @@ async def preview_auto_router_routing(
     refresh_proxy_server_request_body_snapshot(request_kwargs)
 
     try:
-        hook_response: Final = await complexity_router.async_pre_routing_hook(
+        hook_response: Final = await complexity_strategy.async_pre_routing_hook(
             model=resolved.router_name,
             request_kwargs=request_kwargs,
             messages=request_kwargs["messages"],
@@ -865,7 +867,7 @@ async def _recorded_autorouter_savings(
             entity_id_field="user_id",
             entity_id=user_id,
             exclude_entity_ids=None,
-            api_key=api_key,
+            api_key=(api_key,) if api_key is not None else None,
             start_date=start_day,
             end_date=end_day,
             model=None,
@@ -936,7 +938,7 @@ def _idle_router_groups(
     zero: Final = _summed_agg_row(())
     idle: Final = frozenset(
         key
-        for key in (_strategy_router_key(deployment) for deployment in llm_router.model_list or ())
+        for key in (_strategy_router_key(deployment) for deployment in llm_router.registry().all() or ())
         if key is not None and key not in covered
     )
     return tuple(
@@ -1101,13 +1103,14 @@ def _require_admin_writer(user_api_key_dict: UserAPIKeyAuth, action: str) -> Non
 
 
 def _is_configured_pre_routing_strategy(llm_router: "Router", router_name: str) -> bool:
+    router_registry: Final = llm_router.registry()
     return any(
         router_name in registry
         for registry in (
-            llm_router.auto_routers,
-            llm_router.complexity_routers,
-            llm_router.adaptive_routers,
-            llm_router.quality_routers,
+            router_registry.plugins("auto"),
+            router_registry.plugins("complexity"),
+            router_registry.plugins("adaptive"),
+            router_registry.plugins("quality"),
         )
     )
 
@@ -1183,7 +1186,7 @@ def _validate_model_scope(llm_router: "Router | None", models: Sequence[str]) ->
         model
         for model in models
         if judge_target(llm_router, model).via == "nothing"
-        and (llm_router is None or model not in llm_router.team_public_model_names)
+        and (llm_router is None or model not in llm_router.registry().names(kind="team_public"))
     )
     if unreachable:
         raise HTTPException(
@@ -1212,7 +1215,7 @@ def _router_arm_models(llm_router: "Router | None", router_name: str) -> tuple[t
     this lookup is unscoped; what each tier NAME resolves to is the team-dependent half, and
     it belongs to the caller that compares them.
     """
-    deployments: Final = llm_router.get_model_list(model_name=router_name) if llm_router is not None else None
+    deployments: Final = llm_router.registry().deployments(router_name) if llm_router is not None else None
     return tuple(
         dict.fromkeys(
             (dependency.role, dependency.model_name)

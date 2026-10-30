@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, NoReturn, cast
 
+from pydantic import TypeAdapter
 from typing_extensions import ReadOnly, TypedDict, assert_never
 
 import litellm
@@ -34,8 +35,8 @@ from litellm.types.utils import CallTypes, LlmProviders
 from litellm.utils import (
     ModelInfoLookupMiss,
     ProviderConfigManager,
+    aresolve_api_key_secret_reference,
     lookup_model_info_for_registration,
-    resolve_api_key_secret_reference,
 )
 
 from ..litellm_core_utils.core_helpers import as_str_mapping, normalize_drop_params
@@ -55,6 +56,7 @@ from ..llms.openai.realtime.handler import (
     confirm_session_started,
 )
 from ..llms.openai.workload_identity import openai_static_api_key, resolve_openai_bearer_token_async
+from ..llms.soniox.realtime.transformation import SonioxRealtimeOptions, soniox_realtime_health_check
 from ..llms.vertex_ai.audio_transcription.realtime_transformation import is_vertex_speech_to_text_model
 from ..llms.vertex_ai.realtime.transformation import VertexAIRealtimeConfig, vertex_realtime_config
 from ..llms.vertex_ai.vertex_llm_base import VertexBase
@@ -75,6 +77,7 @@ vertex_llm_base: Final = VertexBase()
 base_llm_http_handler = BaseLLMHTTPHandler()
 _EMPTY_MODEL_PARAMS: Final[Mapping[str, object]] = MappingProxyType({})
 _EMPTY_AUTH_HEADERS: Final[Mapping[str, str]] = MappingProxyType({})
+_DEPLOYMENT_PARAMS: Final = TypeAdapter(Mapping[str, object])
 
 
 def _model_params_with_stored_credentials(model_params: Mapping[str, object]) -> Mapping[str, object]:
@@ -527,6 +530,7 @@ async def _arealtime(
         custom_llm_provider=_custom_llm_provider,
     )
 
+    deployment_params: Final = _DEPLOYMENT_PARAMS.validate_python(kwargs)
     if live_session_start is not None:
         await _alive_session(
             model=model,
@@ -537,7 +541,7 @@ async def _arealtime(
             api_base=dynamic_api_base or litellm_params.api_base,
             api_key=dynamic_api_key,
             litellm_metadata=_build_litellm_metadata(kwargs),
-            litellm_params=kwargs,
+            litellm_params=deployment_params,
         )
         return
 
@@ -548,6 +552,7 @@ async def _arealtime(
             model=model,
             provider=LlmProviders(_custom_llm_provider),
             drop_params=drop_params,
+            litellm_params=deployment_params,
         )
     if provider_config is not None:
         await base_llm_http_handler.async_realtime(
@@ -840,7 +845,7 @@ async def realtime_health_check(
     resolved_api_base: Final = cast(  # cast-ok: provider parameters expose optional string endpoints
         str | None, api_base or resolved_params.get("api_base")
     )
-    resolved_api_key: Final = resolve_api_key_secret_reference(
+    resolved_api_key: Final = await aresolve_api_key_secret_reference(
         cast(  # cast-ok: provider parameters expose optional string credentials
             str | None, api_key or resolved_params.get("api_key")
         ),
@@ -882,6 +887,13 @@ async def realtime_health_check(
         )
     elif custom_llm_provider == "openai":
         url = openai_realtime.construct_url(api_base=openai_api_base, query_params={"model": model})
+    elif custom_llm_provider == "soniox":
+        return await soniox_realtime_health_check(
+            model=model,
+            api_base=resolved_api_base,
+            api_key=health_check_api_key,
+            options=SonioxRealtimeOptions.model_validate(dict(resolved_params)),
+        )
     elif custom_llm_provider == "xai":
         url = xai_realtime.construct_url(
             api_base=resolved_api_base or "https://api.x.ai/v1", query_params={"model": model}
