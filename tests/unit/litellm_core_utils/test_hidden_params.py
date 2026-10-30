@@ -3,6 +3,7 @@ from collections.abc import Callable
 from typing import ClassVar, Final
 
 import pytest
+from openai import BaseModel as OpenAIBaseModel
 from openai.types.chat import ChatCompletionChunk
 from pydantic import BaseModel, ConfigDict, PrivateAttr
 
@@ -361,6 +362,10 @@ class _InheritingExtraModel(_NoneClassAttribute, BaseModel):  # frozen-ok: assig
     model_config = ConfigDict(extra="allow")
 
 
+class _ForbiddingOpenAIModel(OpenAIBaseModel):  # frozen-ok: assignment tests need attribute writes
+    model_config = ConfigDict(extra="forbid")
+
+
 def _assignment_outcome(model: BaseModel, assign: Callable[[], None], name: str) -> tuple[object, ...]:
     try:
         assign()
@@ -385,6 +390,9 @@ def _assignment_outcome(model: BaseModel, assign: Callable[[], None], name: str)
         pytest.param(_IgnoredExtraModel, "fresh", 1, id="extra-ignore"),
         pytest.param(_MirroringModel, "fresh", 1, id="setattr-override"),
         pytest.param(_InheritingExtraModel, "inherited", 1, id="class-attribute-set-to-none"),
+        pytest.param(
+            lambda: _ForbiddingOpenAIModel.construct(existing=1), "fresh", 1, id="extra-forbid-built-by-construct"
+        ),
     ],
 )
 def test_set_extra_attribute_matches_setattr(build: Callable[[], BaseModel], name: str, value: object) -> None:

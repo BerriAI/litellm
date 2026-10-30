@@ -73,6 +73,7 @@ def _writes_plain_extra(model_class: type[BaseModel], name: str) -> bool:
     config: Final = model_class.model_config
     return (
         model_class.__setattr__ is BaseModel.__setattr__
+        and config.get("extra") == "allow"
         and not config.get("frozen")
         and not config.get("validate_assignment")
         and not name.startswith("_")
