@@ -41,6 +41,12 @@ STANDARD_MODE_REASONING_FIELD_VALUES: Final[ReasoningFieldValues] = types.Mappin
 ANY_REASONING_FIELD_VALUES: Final[ReasoningFieldValues] = types.MappingProxyType(
     {**SUMMARY_ONLY_REASONING_FIELD_VALUES, "mode": None, "context": None}
 )
+_RESPONSE_FORMAT_ERROR_MARKERS: Final = ("text.format", "json_schema", "response_format")
+
+
+def rejects_response_format(error_message: str) -> bool:
+    lowered: Final = error_message.lower()
+    return any(marker in lowered for marker in _RESPONSE_FORMAT_ERROR_MARKERS)
 
 
 class BaseResponsesAPIConfig(ABC):
@@ -299,6 +305,16 @@ class BaseResponsesAPIConfig(ABC):
 
     def may_answer_stream_with_json(self) -> bool:
         return False
+
+    def json_object_fallback_params(
+        self,
+        model: str,
+        response_api_optional_request_params: Mapping[str, object],
+        litellm_params: GenericLiteLLMParams,
+    ) -> Mapping[str, object] | None:
+        """The params to send once more when the provider rejects the requested ``text.format`` before any output,
+        or ``None`` when a rejection is final"""
+        return None
 
     def supports_native_websocket(self) -> bool:
         """

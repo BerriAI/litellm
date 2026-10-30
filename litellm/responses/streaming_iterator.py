@@ -7,7 +7,17 @@ import json
 import time
 import traceback
 import uuid
-from collections.abc import AsyncIterable, Awaitable, Callable, Coroutine, Iterable, Mapping, Sequence
+from collections.abc import (
+    AsyncIterable,
+    AsyncIterator,
+    Awaitable,
+    Callable,
+    Coroutine,
+    Iterable,
+    Iterator,
+    Mapping,
+    Sequence,
+)
 from dataclasses import dataclass, field
 from datetime import datetime
 from functools import lru_cache
@@ -27,7 +37,7 @@ from typing import (
 )
 
 import httpx
-from openai._streaming import SSEDecoder
+from openai._streaming import ServerSentEvent, SSEDecoder
 from pydantic import BaseModel, TypeAdapter, ValidationError
 from typing_extensions import TypeIs
 
@@ -59,7 +69,7 @@ from litellm.litellm_core_utils.llm_response_utils.response_metadata import (
     update_response_metadata,
 )
 from litellm.litellm_core_utils.thread_pool_executor import executor
-from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
+from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig, rejects_response_format
 from litellm.responses.litellm_completion_transformation.transformation import (
     LiteLLMCompletionResponsesConfig,
 )
@@ -365,6 +375,109 @@ def _mid_stream_fallback_eligible(mapped_exception: Exception) -> bool:
 
 
 PRE_OUTPUT_LIFECYCLE_EVENT_TYPES: Final = frozenset({"response.created", "response.in_progress", "response.queued"})
+
+
+class ResponseFormatRejectedError(Exception):
+    """The provider failed a stream before any output because it does not implement the requested ``text.format``"""
+
+
+@dataclass(frozen=True, slots=True)
+class _StreamHead:
+    """The events a stream opened with, through the first one that is not a first-time lifecycle event, and the
+    provider's error message when that event failed the response before any output. Each lifecycle event marks a
+    one-off state change, so a repeated one is a heartbeat and ends the read-ahead"""
+
+    events: tuple[ServerSentEvent, ...]
+    failure: str | None
+
+
+def _event_payload(event: ServerSentEvent) -> Mapping[str, object] | None:
+    try:
+        payload: Final = _load_json_value(event.data)
+    except json.JSONDecodeError:
+        return None
+    return payload if _is_json_object(payload) else None
+
+
+def _new_lifecycle_event_type(payload: Mapping[str, object] | None, seen: frozenset[str]) -> str | None:
+    event_type: Final = None if payload is None else payload.get("type")
+    return event_type if isinstance(event_type, str) and event_type in PRE_OUTPUT_LIFECYCLE_EVENT_TYPES - seen else None
+
+
+def _pre_output_failure(payload: Mapping[str, object] | None) -> str | None:
+    event_type: Final = None if payload is None else payload.get("type")
+    if payload is None or event_type not in ("error", "response.failed"):
+        return None
+    error_obj: Final = (
+        _event_field(_event_field(payload, "response"), "error")
+        if event_type == "response.failed"
+        else _error_event_error_object(payload)
+    )
+    return stream_error_status_and_message(error_obj)[1]
+
+
+async def _aread_stream_head(
+    events: AsyncIterator[ServerSentEvent], read: tuple[ServerSentEvent, ...] = (), seen: frozenset[str] = frozenset()
+) -> _StreamHead:
+    event: Final = await anext(events, None)
+    if event is None:
+        return _StreamHead(events=read, failure=None)
+    payload: Final = _event_payload(event)
+    head: Final = (*read, event)
+    lifecycle_type: Final = _new_lifecycle_event_type(payload, seen)
+    if lifecycle_type is not None:
+        return await _aread_stream_head(events, head, seen | {lifecycle_type})
+    return _StreamHead(events=head, failure=_pre_output_failure(payload))
+
+
+def _read_stream_head(
+    events: Iterator[ServerSentEvent], read: tuple[ServerSentEvent, ...] = (), seen: frozenset[str] = frozenset()
+) -> _StreamHead:
+    event: Final = next(events, None)
+    if event is None:
+        return _StreamHead(events=read, failure=None)
+    payload: Final = _event_payload(event)
+    head: Final = (*read, event)
+    lifecycle_type: Final = _new_lifecycle_event_type(payload, seen)
+    if lifecycle_type is not None:
+        return _read_stream_head(events, head, seen | {lifecycle_type})
+    return _StreamHead(events=head, failure=_pre_output_failure(payload))
+
+
+async def _areplayed(
+    head: tuple[ServerSentEvent, ...], rest: AsyncIterator[ServerSentEvent]
+) -> AsyncIterator[ServerSentEvent]:
+    for event in head:
+        yield event
+    async for event in rest:
+        yield event
+
+
+async def aopen_stream_events(
+    response: httpx.Response, *, checks_format_rejection: bool
+) -> AsyncIterator[ServerSentEvent]:
+    """The stream's events. With ``checks_format_rejection`` the lifecycle events are read ahead, and a stream
+    the provider fails over the requested ``text.format`` before any output raises ``ResponseFormatRejectedError``"""
+    events: Final = SSEDecoder().aiter_bytes(response.aiter_bytes())
+    if not checks_format_rejection:
+        return events
+    head: Final = await _aread_stream_head(events)
+    if head.failure is not None and rejects_response_format(head.failure):
+        await response.aclose()
+        raise ResponseFormatRejectedError(head.failure)
+    return _areplayed(head.events, events)
+
+
+def open_stream_events(response: httpx.Response, *, checks_format_rejection: bool) -> Iterator[ServerSentEvent]:
+    """Sync twin of ``aopen_stream_events``"""
+    events: Final = SSEDecoder().iter_bytes(response.iter_bytes())
+    if not checks_format_rejection:
+        return events
+    head: Final = _read_stream_head(events)
+    if head.failure is not None and rejects_response_format(head.failure):
+        response.close()
+        raise ResponseFormatRejectedError(head.failure)
+    return chain(head.events, events)
 
 
 class BaseResponsesAPIStreamingIterator:
@@ -1215,6 +1328,7 @@ class ResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
         request_data: dict[str, object] | None = None,
         call_type: str | None = None,
         replays_stored_stream: bool = False,
+        events: AsyncIterator[ServerSentEvent] | None = None,
     ):
         super().__init__(
             response,
@@ -1227,7 +1341,7 @@ class ResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
             call_type,
         )
         self._replays_stored_stream = replays_stored_stream
-        self.stream_iterator = SSEDecoder().aiter_bytes(response.aiter_bytes())
+        self.stream_iterator = events if events is not None else SSEDecoder().aiter_bytes(response.aiter_bytes())
 
     def __aiter__(self):
         return self
@@ -1315,6 +1429,7 @@ class SyncResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
         request_data: dict[str, object] | None = None,
         call_type: str | None = None,
         replays_stored_stream: bool = False,
+        events: Iterator[ServerSentEvent] | None = None,
     ):
         super().__init__(
             response,
@@ -1327,7 +1442,7 @@ class SyncResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
             call_type,
         )
         self._replays_stored_stream = replays_stored_stream
-        self.stream_iterator = SSEDecoder().iter_bytes(response.iter_bytes())
+        self.stream_iterator = events if events is not None else SSEDecoder().iter_bytes(response.iter_bytes())
 
     def __iter__(self):
         return self

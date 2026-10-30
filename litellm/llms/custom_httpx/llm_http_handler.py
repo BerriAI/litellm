@@ -100,7 +100,7 @@ from litellm.llms.base_llm.image_generation.transformation import (
 from litellm.llms.base_llm.realtime.http_transformation import BaseRealtimeHTTPConfig
 from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig
 from litellm.llms.base_llm.rerank.transformation import BaseRerankConfig
-from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
+from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig, rejects_response_format
 from litellm.llms.base_llm.search.transformation import BaseSearchConfig, SearchResponse
 from litellm.llms.base_llm.skills.transformation import BaseSkillsAPIConfig
 from litellm.llms.base_llm.text_to_speech.transformation import BaseTextToSpeechConfig
@@ -128,9 +128,12 @@ from litellm.responses.streaming_iterator import (
     BaseResponsesAPIStreamingIterator,
     MockResponsesAPIStreamingIterator,
     ProjectQuotaCallback,
+    ResponseFormatRejectedError,
     ResponsesAPIStreamingIterator,
     ResponsesWebSocketStreaming,
     SyncResponsesAPIStreamingIterator,
+    aopen_stream_events,
+    open_stream_events,
 )
 from litellm.types.containers.main import (
     ContainerFileListResponse,
@@ -398,6 +401,16 @@ def _send_with_goaway_retry(send: Callable[[], httpx.Response]) -> httpx.Respons
             raise
         verbose_logger.warning(_GOAWAY_RETRY_MESSAGE)
         return send()
+
+
+def _rejected_response_format(error: Exception) -> bool:
+    if isinstance(error, ResponseFormatRejectedError):
+        return True
+    return (
+        isinstance(error, httpx.HTTPStatusError)
+        and error.response.status_code in (400, 422)
+        and rejects_response_format(error.response.text)
+    )
 
 
 def _is_sized_json_body(response: httpx.Response) -> bool:
@@ -3094,6 +3107,10 @@ class BaseLLMHTTPHandler:
             call_type=CallTypes.responses.value,
         )
 
+        json_object_params: Final = responses_api_provider_config.json_object_fallback_params(
+            model, response_api_optional_request_params, litellm_params
+        )
+
         try:
             if is_stream_request:
                 response = sync_httpx_client.post(
@@ -3120,6 +3137,7 @@ class BaseLLMHTTPHandler:
                             custom_llm_provider=custom_llm_provider,
                             request_data=request_context,
                             call_type=CallTypes.responses.value,
+                            events=open_stream_events(response, checks_format_rejection=json_object_params is not None),
                         )
                 response.read()
             else:
@@ -3130,6 +3148,27 @@ class BaseLLMHTTPHandler:
                     **body_kwargs,
                 )
         except Exception as e:
+            if json_object_params is not None and _rejected_response_format(e):
+                verbose_logger.warning(
+                    "%s rejected text.format json_schema, retrying with json_object and the schema as instructions",
+                    model,
+                )
+                return self.response_api_handler(
+                    model=model,
+                    input=input,
+                    responses_api_provider_config=responses_api_provider_config,
+                    response_api_optional_request_params=dict(json_object_params),
+                    custom_llm_provider=custom_llm_provider,
+                    litellm_params=litellm_params,
+                    logging_obj=logging_obj,
+                    extra_headers=extra_headers,
+                    extra_body=extra_body,
+                    timeout=timeout,
+                    client=sync_httpx_client,
+                    fake_stream=fake_stream,
+                    litellm_metadata=litellm_metadata,
+                    shared_session=shared_session,
+                )
             raise self._handle_error(
                 e=e,
                 provider_config=responses_api_provider_config,
@@ -3177,7 +3216,7 @@ class BaseLLMHTTPHandler:
         model: str,
         input: str | ResponseInputParam,
         responses_api_provider_config: BaseResponsesAPIConfig,
-        response_api_optional_request_params: dict,
+        response_api_optional_request_params: dict[str, Any],
         custom_llm_provider: str,
         litellm_params: GenericLiteLLMParams,
         logging_obj: LiteLLMLoggingObj,
@@ -3303,6 +3342,9 @@ class BaseLLMHTTPHandler:
             request_data=request_context,
             call_type=CallTypes.responses.value,
         )
+        json_object_params: Final = responses_api_provider_config.json_object_fallback_params(
+            model, response_api_optional_request_params, litellm_params
+        )
 
         try:
             if is_stream_request:
@@ -3332,6 +3374,9 @@ class BaseLLMHTTPHandler:
                             custom_llm_provider=custom_llm_provider,
                             request_data=request_context,
                             call_type=CallTypes.responses.value,
+                            events=await aopen_stream_events(
+                                response, checks_format_rejection=json_object_params is not None
+                            ),
                         )
                 await response.aread()
             else:
@@ -3344,6 +3389,27 @@ class BaseLLMHTTPHandler:
                 )
 
         except Exception as e:
+            if json_object_params is not None and _rejected_response_format(e):
+                verbose_logger.warning(
+                    "%s rejected text.format json_schema, retrying with json_object and the schema as instructions",
+                    model,
+                )
+                return await self.async_response_api_handler(
+                    model=model,
+                    input=input,
+                    responses_api_provider_config=responses_api_provider_config,
+                    response_api_optional_request_params=dict(json_object_params),
+                    custom_llm_provider=custom_llm_provider,
+                    litellm_params=litellm_params,
+                    logging_obj=logging_obj,
+                    extra_headers=extra_headers,
+                    extra_body=extra_body,
+                    timeout=timeout,
+                    client=async_httpx_client,
+                    fake_stream=fake_stream,
+                    litellm_metadata=litellm_metadata,
+                    shared_session=shared_session,
+                )
             raise self._handle_error(
                 e=e,
                 provider_config=responses_api_provider_config,
