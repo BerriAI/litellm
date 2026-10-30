@@ -31,7 +31,7 @@ from typing import Final, Protocol
 from litellm.proxy.mcp_server.outbound_credentials.oauth_token_store import (
     OAuthToken,
 )
-from litellm.redis.stores.mcp_credential_refresh import refresh_lock_key
+from litellm.redis.stores.mcp_credential_refresh import RefreshLockTarget
 
 
 class LockAcquisition(Enum):
@@ -51,13 +51,13 @@ class DistributedLock(Protocol):
     after PX-expiry); ``extend`` refreshes the ``PX`` lease only for the owner; ``is_held`` is
     ``EXISTS`` (so a waiter can poll without taking the lock)."""
 
-    async def acquire(self, key: str, token: str, ttl_seconds: float) -> LockAcquisition: ...
+    async def acquire(self, target: RefreshLockTarget, token: str, ttl_seconds: float) -> LockAcquisition: ...
 
-    async def extend(self, key: str, token: str, ttl_seconds: float) -> bool: ...
+    async def extend(self, target: RefreshLockTarget, token: str, ttl_seconds: float) -> bool: ...
 
-    async def release(self, key: str, token: str) -> None: ...
+    async def release(self, target: RefreshLockTarget, token: str) -> None: ...
 
-    async def is_held(self, key: str) -> bool: ...
+    async def is_held(self, target: RefreshLockTarget) -> bool: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -86,11 +86,11 @@ class RedisRefreshCoordinator:
         refresh: Callable[[], Awaitable[OAuthToken | None]],
         reread: Callable[[], Awaitable[OAuthToken | None]],
     ) -> OAuthToken | None:
-        key: Final = refresh_lock_key(user_id, server_id)
+        target: Final = RefreshLockTarget(user_id, server_id)
         token: Final = self.new_token()
-        match await self.lock.acquire(key, token, self.lock_ttl_seconds):
+        match await self.lock.acquire(target, token, self.lock_ttl_seconds):
             case LockAcquisition.ACQUIRED:
-                return await self._refresh_with_lease_renewal(key, token, refresh)
+                return await self._refresh_with_lease_renewal(target, token, refresh)
             case LockAcquisition.ERROR:
                 # No election happened (lock backend down), so waiting would just re-read the
                 # still-expired token. Refresh anyway; worst case is an extra refresh, not a stale bearer.
@@ -100,34 +100,34 @@ class RedisRefreshCoordinator:
                 # the token it persisted - the winner wrote the fresh token to the store, so a plain
                 # re-read sees it without us refreshing again.
                 deadline: Final = self.clock() + self.wait_timeout_seconds
-                while self.clock() < deadline and await self.lock.is_held(key):
+                while self.clock() < deadline and await self.lock.is_held(target):
                     await self.sleep(self.poll_interval_seconds)
                 return await reread()
 
     async def _refresh_with_lease_renewal(
         self,
-        key: str,
+        target: RefreshLockTarget,
         token: str,
         refresh: Callable[[], Awaitable[OAuthToken | None]],
     ) -> OAuthToken | None:
         refresh_task: Final = asyncio.ensure_future(refresh())
-        renewal_task: Final = asyncio.create_task(self._renew_lease_until_done(key, token, refresh_task))
+        renewal_task: Final = asyncio.create_task(self._renew_lease_until_done(target, token, refresh_task))
         try:
             return await refresh_task
         finally:
             renewal_task.cancel()
             with suppress(asyncio.CancelledError):
                 await renewal_task
-            await self.lock.release(key, token)
+            await self.lock.release(target, token)
 
     async def _renew_lease_until_done(
         self,
-        key: str,
+        target: RefreshLockTarget,
         token: str,
         refresh_task: asyncio.Future[OAuthToken | None],
     ) -> None:
         budget_deadline: Final = self.clock() + self.refresh_budget_seconds
         while not refresh_task.done() and self.clock() < budget_deadline:
             await self.sleep(self.lock_ttl_seconds / 2)
-            if not refresh_task.done() and not await self.lock.extend(key, token, self.lock_ttl_seconds):
+            if not refresh_task.done() and not await self.lock.extend(target, token, self.lock_ttl_seconds):
                 return

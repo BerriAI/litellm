@@ -12,35 +12,41 @@ _EXTEND_IF_OWNER: Final = (
 )
 
 
-def refresh_lock_key(user_id: str, server_id: str) -> str:
-    return f"mcp:refresh_lock:{user_id}:{server_id}"
+@dataclass(frozen=True, slots=True)
+class RefreshLockTarget:
+    user_id: str
+    server_id: str
+
+
+def _lock_key(target: RefreshLockTarget) -> str:
+    return f"mcp:refresh_lock:{target.user_id}:{target.server_id}"
 
 
 class McpRefreshLockStore(Protocol):
-    async def acquire(self, key: str, owner: str, *, ttl: timedelta) -> bool | RedisFailure: ...
+    async def acquire(self, target: RefreshLockTarget, owner: str, *, ttl: timedelta) -> bool | RedisFailure: ...
 
-    async def extend(self, key: str, owner: str, *, ttl: timedelta) -> bool | RedisFailure: ...
+    async def extend(self, target: RefreshLockTarget, owner: str, *, ttl: timedelta) -> bool | RedisFailure: ...
 
-    async def release(self, key: str, owner: str) -> bool | RedisFailure: ...
+    async def release(self, target: RefreshLockTarget, owner: str) -> bool | RedisFailure: ...
 
-    async def is_held(self, key: str) -> bool | RedisFailure: ...
+    async def is_held(self, target: RefreshLockTarget) -> bool | RedisFailure: ...
 
 
 @dataclass(frozen=True, slots=True)
 class TransportMcpRefreshLockStore:
     transport: RedisTransport
 
-    async def acquire(self, key: str, owner: str, *, ttl: timedelta) -> bool | RedisFailure:
-        return await self.transport.set(key, owner, ttl=ttl, nx=True)
+    async def acquire(self, target: RefreshLockTarget, owner: str, *, ttl: timedelta) -> bool | RedisFailure:
+        return await self.transport.set(_lock_key(target), owner, ttl=ttl, nx=True)
 
-    async def extend(self, key: str, owner: str, *, ttl: timedelta) -> bool | RedisFailure:
-        reply: Final = await self.transport.eval(_EXTEND_IF_OWNER, (key,), (owner, ttl_ms(ttl)))
+    async def extend(self, target: RefreshLockTarget, owner: str, *, ttl: timedelta) -> bool | RedisFailure:
+        reply: Final = await self.transport.eval(_EXTEND_IF_OWNER, (_lock_key(target),), (owner, ttl_ms(ttl)))
         return reply if isinstance(reply, RedisFailure) else reply == 1
 
-    async def release(self, key: str, owner: str) -> bool | RedisFailure:
-        reply: Final = await self.transport.eval(_RELEASE_IF_OWNER, (key,), (owner,))
+    async def release(self, target: RefreshLockTarget, owner: str) -> bool | RedisFailure:
+        reply: Final = await self.transport.eval(_RELEASE_IF_OWNER, (_lock_key(target),), (owner,))
         return reply if isinstance(reply, RedisFailure) else reply == 1
 
-    async def is_held(self, key: str) -> bool | RedisFailure:
-        reply: Final = await self.transport.get(key)
+    async def is_held(self, target: RefreshLockTarget) -> bool | RedisFailure:
+        reply: Final = await self.transport.get(_lock_key(target))
         return reply if isinstance(reply, RedisFailure) else reply is not None

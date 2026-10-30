@@ -20,7 +20,7 @@ from typing import Final
 from litellm.proxy.mcp_server.outbound_credentials.redis_refresh_coordinator import (
     LockAcquisition,
 )
-from litellm.redis.stores.mcp_credential_refresh import McpRefreshLockStore
+from litellm.redis.stores.mcp_credential_refresh import McpRefreshLockStore, RefreshLockTarget
 from litellm.redis.transport.contract import RedisFailure
 
 
@@ -28,17 +28,17 @@ from litellm.redis.transport.contract import RedisFailure
 class RedisDistributedLock:
     store: McpRefreshLockStore
 
-    async def acquire(self, key: str, token: str, ttl_seconds: float) -> LockAcquisition:
-        acquired: Final = await self.store.acquire(key, token, ttl=timedelta(seconds=ttl_seconds))
+    async def acquire(self, target: RefreshLockTarget, token: str, ttl_seconds: float) -> LockAcquisition:
+        acquired: Final = await self.store.acquire(target, token, ttl=timedelta(seconds=ttl_seconds))
         if isinstance(acquired, RedisFailure):
             return LockAcquisition.ERROR
         return LockAcquisition.ACQUIRED if acquired else LockAcquisition.HELD
 
-    async def extend(self, key: str, token: str, ttl_seconds: float) -> bool:
-        return await self.store.extend(key, token, ttl=timedelta(seconds=ttl_seconds)) is True
+    async def extend(self, target: RefreshLockTarget, token: str, ttl_seconds: float) -> bool:
+        return await self.store.extend(target, token, ttl=timedelta(seconds=ttl_seconds)) is True
 
-    async def release(self, key: str, token: str) -> None:
-        _ = await self.store.release(key, token)
+    async def release(self, target: RefreshLockTarget, token: str) -> None:
+        _ = await self.store.release(target, token)
 
-    async def is_held(self, key: str) -> bool:
-        return await self.store.is_held(key) is True
+    async def is_held(self, target: RefreshLockTarget) -> bool:
+        return await self.store.is_held(target) is True
