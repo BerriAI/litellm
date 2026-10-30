@@ -1,7 +1,7 @@
 from collections.abc import Coroutine
 from typing import TYPE_CHECKING, Final
 
-from openai import AsyncOpenAI, OpenAI
+from openai import AsyncAzureOpenAI, AzureOpenAI
 from pydantic import BaseModel
 
 from litellm._uuid import uuid
@@ -40,6 +40,7 @@ class AzureAudioTranscription(AzureChatCompletion):
         custom_llm_provider: str = "azure",
     ) -> TranscriptionResponse | Coroutine[object, object, TranscriptionResponse]:
         data: Final = {"model": model, "file": audio_file, **optional_params}
+        deployment_api_version: Final = None if self.is_azure_v1_api_version(api_version) else api_version
 
         if atranscription is True:
             return self.async_audio_transcriptions(
@@ -49,7 +50,7 @@ class AzureAudioTranscription(AzureChatCompletion):
                 timeout=timeout,
                 api_key=api_key,
                 api_base=api_base,
-                api_version=api_version,
+                api_version=deployment_api_version,
                 client=client,
                 max_retries=max_retries,
                 logging_obj=logging_obj,
@@ -59,7 +60,7 @@ class AzureAudioTranscription(AzureChatCompletion):
             )
 
         azure_client: Final = self.get_azure_openai_client(
-            api_version=api_version,
+            api_version=deployment_api_version,
             api_base=api_base,
             api_key=api_key,
             model=model,
@@ -67,10 +68,10 @@ class AzureAudioTranscription(AzureChatCompletion):
             client=client,
             litellm_params=litellm_params,
         )
-        if not isinstance(azure_client, OpenAI):
+        if not isinstance(azure_client, AzureOpenAI):
             raise AzureOpenAIError(
                 status_code=500,
-                message="azure_client is not an instance of OpenAI",
+                message="azure_client is not an instance of AzureOpenAI",
             )
 
         ## LOGGING
@@ -138,10 +139,10 @@ class AzureAudioTranscription(AzureChatCompletion):
                 client=client,
                 litellm_params=litellm_params,
             )
-            if not isinstance(async_azure_client, AsyncOpenAI):
+            if not isinstance(async_azure_client, AsyncAzureOpenAI):
                 raise AzureOpenAIError(
                     status_code=500,
-                    message="async_azure_client is not an instance of AsyncOpenAI",
+                    message="async_azure_client is not an instance of AsyncAzureOpenAI",
                 )
 
             ## LOGGING

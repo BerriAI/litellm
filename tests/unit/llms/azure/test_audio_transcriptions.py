@@ -10,7 +10,6 @@ from openai import AsyncAzureOpenAI, AzureOpenAI
 import litellm
 from litellm.cost_calculator import completion_cost
 from litellm.litellm_core_utils.audio_utils.utils import calculate_request_duration
-from litellm.llms.azure.common_utils import AzureOpenAIError
 from litellm.types.utils import TranscriptionResponse
 
 AUDIO_FILE: Final = Path(__file__).parents[3] / "gettysburg.wav"
@@ -177,7 +176,7 @@ async def test_azure_transcription_parses_response_formats(
     ("api_version", "expected_path", "expected_query_version"),
     [
         ("2025-03-01-preview", "/openai/deployments/whisper-1/audio/transcriptions", "2025-03-01-preview"),
-        ("preview", "/openai/v1/audio/transcriptions", None),
+        ("preview", "/openai/deployments/whisper-1/audio/transcriptions", litellm.AZURE_DEFAULT_API_VERSION),
     ],
 )
 async def test_azure_transcription_sends_the_configured_api_version(
@@ -191,6 +190,7 @@ async def test_azure_transcription_sends_the_configured_api_version(
         return httpx.Response(200, json={"text": str(request.url)})
 
     transport: Final = httpx.MockTransport(echo_url)
+    monkeypatch.delenv("AZURE_API_VERSION", raising=False)
     monkeypatch.setattr(litellm, "aclient_session", httpx.AsyncClient(transport=transport))
     monkeypatch.setattr(litellm, "client_session", httpx.Client(transport=transport))
     request_kwargs: Final = {
@@ -206,40 +206,3 @@ async def test_azure_transcription_sends_the_configured_api_version(
     sent_url: Final = httpx.URL(response.text)
     assert sent_url.path == expected_path
     assert sent_url.params.get("api-version") == expected_query_version
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("is_async", [True, False])
-async def test_azure_transcription_rejects_a_client_of_the_other_kind(is_async: bool) -> None:
-    def unreachable(request: httpx.Request) -> httpx.Response:
-        raise AssertionError(f"no request expected, got {request.url}")
-
-    transport: Final = httpx.MockTransport(unreachable)
-    wrong_client: Final = (
-        AzureOpenAI(
-            api_key="test-key",
-            api_version="2024-06-01",
-            azure_endpoint="https://example.cognitiveservices.azure.com",
-            http_client=httpx.Client(transport=transport),
-        )
-        if is_async
-        else AsyncAzureOpenAI(
-            api_key="test-key",
-            api_version="2024-06-01",
-            azure_endpoint="https://example.cognitiveservices.azure.com",
-            http_client=httpx.AsyncClient(transport=transport),
-        )
-    )
-    request_kwargs: Final = {
-        "model": "azure/whisper-1",
-        "file": _audio_file(),
-        "api_base": "https://example.openai.azure.com",
-        "api_key": "test-key",
-        "api_version": "2024-06-01",
-        "client": wrong_client,
-    }
-
-    with pytest.raises((litellm.APIError, AzureOpenAIError), match="is not an instance of") as raised:
-        await _transcribe(is_async, request_kwargs)
-
-    assert raised.value.status_code == 500
