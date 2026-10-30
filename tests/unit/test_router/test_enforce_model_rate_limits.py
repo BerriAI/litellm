@@ -483,6 +483,21 @@ class Clock:
         return self.now
 
 
+class _ReadsThatFinishOnceAllStarted:
+    def __init__(self, expected: int, usage: int):
+        self.expected = expected
+        self.usage = usage
+        self.started = 0
+        self.all_started = asyncio.Event()
+
+    async def async_get_cache(self, key: str, parent_otel_span: object = None) -> int:
+        self.started += 1
+        if self.started == self.expected:
+            self.all_started.set()
+        await self.all_started.wait()
+        return self.usage
+
+
 def _pre_call(check: ModelRateLimitingCheck, deployment: dict[str, object]) -> object:
     return check.pre_call_check(deployment)
 
@@ -561,6 +576,25 @@ class TestDailyLimits:
         assert await check.async_deployment_ids_at_limit(
             [RPD_DEPLOYMENT, minute_spent, below_limits], None
         ) == frozenset({"daily-test-id", "minute-test-id"})
+
+    @pytest.mark.asyncio
+    async def test_deployment_limit_reads_wait_on_redis_together_rather_than_one_by_one(self):
+        deployments = [
+            {
+                "litellm_params": {"model": "gpt-4.1-mini", "rpm": 5},
+                "model_info": {"id": f"concurrent-{index}"},
+                "model_name": "daily-model",
+            }
+            for index in range(3)
+        ]
+        reads = _ReadsThatFinishOnceAllStarted(expected=len(deployments), usage=5)
+        redis_cache = MagicMock()
+        redis_cache.async_get_cache = reads.async_get_cache
+        check = ModelRateLimitingCheck(dual_cache=DualCache(redis_cache=redis_cache), clock=Clock(DAY_ONE))
+
+        at_limit = await asyncio.wait_for(check.async_deployment_ids_at_limit(deployments, None), timeout=5)
+
+        assert at_limit == frozenset({"concurrent-0", "concurrent-1", "concurrent-2"})
 
     def test_pre_call_check_minute_rejected_request_does_not_spend_rpd(self):
         clock = Clock(DAY_ONE)

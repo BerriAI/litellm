@@ -11,6 +11,7 @@ When a deployment sets both itpm/otpm and tpm/rpm, both are enforced. A warning
 is logged the first time such a deployment is seen.
 """
 
+import asyncio
 import contextlib
 from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime, timedelta
@@ -342,12 +343,11 @@ class ModelRateLimitingCheck(CustomLogger):
         counters: Final = tuple(
             chain.from_iterable(self._limit_counters(deployment, now) for deployment in deployments)
         )
+        usages: Final = await asyncio.gather(
+            *(self._async_get_current_tpm(key, limit, parent_otel_span) for _, key, limit in counters)
+        )
         return frozenset(
-            [
-                model_id
-                for model_id, key, limit in counters
-                if _reached(await self._async_get_current_tpm(key, limit, parent_otel_span), limit)
-            ]
+            model_id for (model_id, _, limit), usage in zip(counters, usages, strict=True) if _reached(usage, limit)
         )
 
     @with_service_target(ROUTER_USAGE_TARGET)
