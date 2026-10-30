@@ -1,6 +1,6 @@
 import { useTeamMetadataSchema } from "@/app/(dashboard)/hooks/teams/useTeamMetadataSchema";
 import * as networking from "@/components/networking";
-import { fireEvent, screen, waitFor } from "@testing-library/react";
+import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders } from "../../../tests/test-utils";
@@ -817,7 +817,7 @@ describe("TeamInfoView - member budget reset prompt", () => {
   });
 });
 
-describe("TeamInfoView - model rate limit picker", () => {
+describe("TeamInfoView - model settings", () => {
   const props = {
     teamId: "123",
     onUpdate: vi.fn(),
@@ -834,6 +834,61 @@ describe("TeamInfoView - model rate limit picker", () => {
 
   afterEach(() => {
     vi.clearAllMocks();
+  });
+
+  it.each([
+    { name: "unrestricted", models: [], organizationId: null },
+    { name: "explicit all models", models: ["all-proxy-models"], organizationId: null },
+    { name: "access groups only", models: ["no-default-models"], organizationId: null },
+    { name: "retained explicit models", models: ["retired-model", "openai/*"], organizationId: null },
+    { name: "unrestricted within an organization", models: [], organizationId: "org-1" },
+  ])("preserves $name model grants when saving only a budget", async ({ models, organizationId }) => {
+    const user = userEvent.setup({ delay: null });
+    vi.mocked(networking.teamInfoCall).mockResolvedValue(
+      createMockTeamData({ models, organization_id: organizationId }),
+    );
+    mockUseTeam.mockReturnValue({
+      data: { team_id: "123", organization_models: organizationId ? ["gpt-4"] : undefined },
+      isLoading: false,
+    } as unknown as ReturnType<typeof useTeam>);
+
+    renderWithProviders(<TeamInfoView {...props} userModels={["gpt-4"]} />);
+    await user.click(await screen.findByRole("tab", { name: "Settings" }));
+    await user.click(await screen.findByRole("button", { name: /edit settings/i }));
+    if (models.length === 0) {
+      expect(await screen.findByLabelText("All Proxy Models")).toBeInTheDocument();
+    }
+    fireEvent.change(await screen.findByLabelText("Max Budget (USD)"), { target: { value: "100" } });
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => expect(networking.teamUpdateCall).toHaveBeenCalledTimes(1));
+    const payload = vi.mocked(networking.teamUpdateCall).mock.calls[0][1];
+    expect(payload).toMatchObject({ team_id: "123", max_budget: 100 });
+    expect(payload).not.toHaveProperty("models");
+  });
+
+  it("discards a cancelled model clear but saves an intentional clear of unrestricted access", async () => {
+    const user = userEvent.setup({ delay: null });
+    vi.mocked(networking.teamInfoCall).mockResolvedValue(createMockTeamData({ models: [] }));
+
+    renderWithProviders(<TeamInfoView {...props} userModels={["gpt-4"]} />);
+    await user.click(await screen.findByRole("tab", { name: "Settings" }));
+    await user.click(await screen.findByRole("button", { name: /edit settings/i }));
+    await user.click(within(await screen.findByLabelText("All Proxy Models")).getByRole("button"));
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+    await user.click(await screen.findByRole("button", { name: /edit settings/i }));
+    expect(await screen.findByLabelText("All Proxy Models")).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Max Budget (USD)"), { target: { value: "100" } });
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => expect(networking.teamUpdateCall).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(networking.teamUpdateCall).mock.calls[0][1]).not.toHaveProperty("models");
+    await user.click(await screen.findByRole("button", { name: /edit settings/i }));
+    await user.click(within(await screen.findByLabelText("All Proxy Models")).getByRole("button"));
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => expect(networking.teamUpdateCall).toHaveBeenCalledTimes(2));
+    expect(vi.mocked(networking.teamUpdateCall).mock.calls[1][1].models).toEqual(["no-default-models"]);
   });
 
   it("offers access-group models, not no-default-models, in the model rate limit picker", async () => {
