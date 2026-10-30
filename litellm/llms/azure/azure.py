@@ -1,7 +1,7 @@
 import asyncio
 import json
 import time
-from collections.abc import Callable, Coroutine
+from collections.abc import Callable, Coroutine, Mapping
 from typing import Final
 
 import httpx
@@ -114,7 +114,7 @@ class AzureOpenAIAssistantsAPIConfig:
 
 
 def check_dynamic_azure_params(
-    azure_client_params: dict,
+    azure_client_params: Mapping[str, object],
     azure_client: AzureOpenAI | AsyncAzureOpenAI | None,
 ) -> bool:
     """

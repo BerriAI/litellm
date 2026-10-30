@@ -1,30 +1,40 @@
+import asyncio
 import datetime
 import json
 import os
 import sys
-from collections.abc import AsyncIterator, Mapping
+from collections.abc import AsyncIterator, Callable, Coroutine, Mapping
 from itertools import chain
 from typing import Final, cast
 from unittest.mock import AsyncMock, patch
 
+import httpx
 import pytest
 import respx
+from pydantic import TypeAdapter
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../../..")))
 
 import litellm
+from litellm.integrations.custom_logger import CustomLogger
+from litellm.integrations.custom_prompt_management import CustomPromptManagement
+from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     TOOL_RESULT_IMAGE_BOUNDARY,
     TOOL_RESULT_IMAGE_PLACEHOLDER,
 )
 from litellm.llms.anthropic.messages.responses_adapters.handler import (
     LiteLLMMessagesToResponsesAPIHandler,
-    _build_responses_kwargs,
+    _build_responses_request,
 )
+from litellm.llms.anthropic.messages.responses_adapters.streaming_iterator import AnthropicResponsesSSEByteStream
 from litellm.router import Router
-from litellm.types.integrations.custom_logger import CONVERTED_STREAM_KEYS, converted_stream_requested
+from litellm.types.integrations.custom_logger import CONVERTED_STREAM_KEYS
+from litellm.types.llms.openai import AllMessageValues
+from litellm.types.prompts.init_prompts import PromptSpec
+from litellm.types.utils import StandardCallbackDynamicParams
 
-MESSAGES = [{"role": "user", "content": "hello"}]
+MESSAGES: Final[list[dict[str, object]]] = [{"role": "user", "content": "hello"}]
 CLAUDE_CODE_USER_ID = json.dumps({"device_id": "d" * 64, "account_uuid": "", "session_id": "session-abc"})
 
 RESPONSES_SSE_BODY = (
@@ -40,20 +50,8 @@ RESPONSES_SSE_BODY = (
 )
 
 
-def test_build_responses_kwargs_never_asks_the_nested_call_to_replay_a_stream():
-    responses_kwargs: Final = _build_responses_kwargs(
-        max_tokens=1024,
-        messages=MESSAGES,
-        model="azure/gpt-5.6-luna",
-        extra_kwargs={"custom_llm_provider": "azure", **{key: True for key in CONVERTED_STREAM_KEYS}},
-    )
-
-    assert not converted_stream_requested(responses_kwargs)
-    assert responses_kwargs["custom_llm_provider"] == "azure"
-
-
-def test_build_responses_kwargs_derives_prompt_cache_key_from_claude_code_session_id():
-    responses_kwargs = _build_responses_kwargs(
+def test_build_responses_request_derives_prompt_cache_key_from_claude_code_session_id():
+    responses_kwargs = _build_responses_request(
         max_tokens=1024,
         messages=MESSAGES,
         model="openai/gpt-5.6-luna",
@@ -64,8 +62,8 @@ def test_build_responses_kwargs_derives_prompt_cache_key_from_claude_code_sessio
     assert responses_kwargs["prompt_cache_key"] == "session-abc"
 
 
-def test_build_responses_kwargs_sets_no_prompt_cache_key_for_plain_user_id():
-    responses_kwargs = _build_responses_kwargs(
+def test_build_responses_request_sets_no_prompt_cache_key_for_plain_user_id():
+    responses_kwargs = _build_responses_request(
         max_tokens=1024,
         messages=MESSAGES,
         model="openai/gpt-5.6-luna",
@@ -76,8 +74,8 @@ def test_build_responses_kwargs_sets_no_prompt_cache_key_for_plain_user_id():
     assert "prompt_cache_key" not in responses_kwargs
 
 
-def test_build_responses_kwargs_prefers_explicit_prompt_cache_key_over_derived():
-    responses_kwargs = _build_responses_kwargs(
+def test_build_responses_request_prefers_explicit_prompt_cache_key_over_derived():
+    responses_kwargs = _build_responses_request(
         max_tokens=1024,
         messages=MESSAGES,
         model="openai/gpt-5.6-luna",
@@ -88,8 +86,8 @@ def test_build_responses_kwargs_prefers_explicit_prompt_cache_key_over_derived()
     assert responses_kwargs["prompt_cache_key"] == "explicit-key"
 
 
-def test_build_responses_kwargs_asks_openai_for_encrypted_reasoning_without_thinking():
-    responses_kwargs = _build_responses_kwargs(
+def test_build_responses_request_asks_openai_for_encrypted_reasoning_without_thinking():
+    responses_kwargs = _build_responses_request(
         max_tokens=1024,
         messages=MESSAGES,
         model="openai/gpt-5.6-luna",
@@ -99,8 +97,8 @@ def test_build_responses_kwargs_asks_openai_for_encrypted_reasoning_without_thin
     assert "reasoning" not in responses_kwargs
 
 
-def test_build_responses_kwargs_skips_include_for_a_responses_provider_that_rejects_it():
-    responses_kwargs = _build_responses_kwargs(
+def test_build_responses_request_skips_include_for_a_responses_provider_that_rejects_it():
+    responses_kwargs = _build_responses_request(
         max_tokens=1024,
         messages=MESSAGES,
         model="perplexity/sonar",
@@ -118,11 +116,11 @@ def test_build_responses_kwargs_skips_include_for_a_responses_provider_that_reje
         ("openai/gpt-5.6-luna", "openai", "detailed"),
     ],
 )
-def test_build_responses_kwargs_auto_summary_asks_each_target_for_a_level_it_accepts(
+def test_build_responses_request_auto_summary_asks_each_target_for_a_level_it_accepts(
     monkeypatch: pytest.MonkeyPatch, model: str, provider: str, summary: str
 ) -> None:
     monkeypatch.setenv("LITELLM_REASONING_AUTO_SUMMARY", "true")
-    responses_kwargs: Final = _build_responses_kwargs(
+    responses_kwargs: Final = _build_responses_request(
         max_tokens=1024,
         messages=MESSAGES,
         model=model,
@@ -132,8 +130,8 @@ def test_build_responses_kwargs_auto_summary_asks_each_target_for_a_level_it_acc
     assert cast(Mapping[str, object], responses_kwargs["reasoning"])["summary"] == summary
 
 
-def test_build_responses_kwargs_keeps_the_deployment_include_next_to_encrypted_reasoning():
-    responses_kwargs = _build_responses_kwargs(
+def test_build_responses_request_keeps_the_deployment_include_next_to_encrypted_reasoning():
+    responses_kwargs = _build_responses_request(
         max_tokens=1024,
         messages=MESSAGES,
         model="openai/gpt-5.6-luna",
@@ -142,8 +140,8 @@ def test_build_responses_kwargs_keeps_the_deployment_include_next_to_encrypted_r
     assert responses_kwargs["include"] == ["reasoning.encrypted_content", "file_search_call.results"]
 
 
-def test_build_responses_kwargs_without_metadata_sets_no_prompt_cache_key():
-    responses_kwargs = _build_responses_kwargs(
+def test_build_responses_request_without_metadata_sets_no_prompt_cache_key():
+    responses_kwargs = _build_responses_request(
         max_tokens=1024,
         messages=MESSAGES,
         model="openai/gpt-5.6-luna",
@@ -194,8 +192,6 @@ async def test_streaming_hands_the_logging_object_the_message_id_the_caller_is_s
     The bridge mints the ``msg_`` id itself, and it is the only request id a streaming
     /v1/messages caller ever sees, so the spend row has to be keyed on that same value.
     """
-    from litellm.litellm_core_utils.litellm_logging import Logging
-
     monkeypatch.setenv("OPENAI_API_KEY", "sk-lit6825-test")
     monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
     litellm.in_memory_llm_clients_cache.flush_cache()
@@ -425,7 +421,7 @@ def _request_with_client_cache_marks(cache_control: dict[str, str] | None) -> di
 def test_client_cache_control_reaches_gpt_5_6_as_a_prompt_cache_breakpoint_on_the_same_block(
     extra_kwargs: dict[str, object],
 ) -> None:
-    responses_kwargs: Final = _build_responses_kwargs(
+    responses_kwargs: Final = _build_responses_request(
         model="openai/gpt-5.6",
         extra_kwargs=extra_kwargs,
         **_request_with_client_cache_marks({**EPHEMERAL, "ttl": "1h"}),
@@ -453,7 +449,7 @@ def test_client_cache_control_reaches_gpt_5_6_as_a_prompt_cache_breakpoint_on_th
 
 
 def test_client_cache_control_on_a_screenshot_inside_a_tool_result_reaches_gpt_5_6_on_that_screenshot() -> None:
-    responses_kwargs: Final = _build_responses_kwargs(
+    responses_kwargs: Final = _build_responses_request(
         model="openai/gpt-5.6",
         extra_kwargs=OPENAI_API,
         max_tokens=1024,
@@ -532,7 +528,7 @@ RAW_QUESTION: Final = {"type": "input_text", "text": "q", "prompt_cache_breakpoi
 def test_raw_prompt_cache_breakpoints_reach_a_deployment_unless_drop_params_drops_them_for_a_model_that_takes_none(
     model: str, extra_kwargs: dict[str, object], log_output: object, question: dict[str, object]
 ) -> None:
-    responses_kwargs: Final = _build_responses_kwargs(
+    responses_kwargs: Final = _build_responses_request(
         model=model,
         extra_kwargs=extra_kwargs,
         max_tokens=1024,
@@ -558,7 +554,7 @@ def test_raw_prompt_cache_breakpoints_reach_a_deployment_unless_drop_params_drop
 
 
 def _gpt_5_6_input_for_a_cached_block(drop_params: bool, raw_mark: Mapping[str, object]) -> object:
-    responses_kwargs: Final = _build_responses_kwargs(
+    responses_kwargs: Final = _build_responses_request(
         model="openai/gpt-5.6",
         extra_kwargs={**OPENAI_API, "drop_params": drop_params},
         max_tokens=1024,
@@ -589,10 +585,10 @@ def test_a_malformed_raw_marker_beside_cache_control_gives_way_to_it_only_under_
 def test_client_cache_control_changes_nothing_for_a_deployment_that_does_not_read_prompt_cache_breakpoint(
     model: str, extra_kwargs: dict[str, object]
 ) -> None:
-    marked: Final = _build_responses_kwargs(
+    marked: Final = _build_responses_request(
         model=model, extra_kwargs=extra_kwargs, **_request_with_client_cache_marks(EPHEMERAL)
     )
-    unmarked: Final = _build_responses_kwargs(
+    unmarked: Final = _build_responses_request(
         model=model, extra_kwargs=extra_kwargs, **_request_with_client_cache_marks(None)
     )
 
@@ -623,7 +619,7 @@ def _tool_result_turn_with(text_block: Mapping[str, object]) -> list[dict[str, o
 @pytest.mark.parametrize("text_block", MALFORMED_TEXT_BLOCKS)
 def test_malformed_tool_result_text_answers_400_naming_the_block(text_block: Mapping[str, object]) -> None:
     with pytest.raises(litellm.BadRequestError) as rejected:
-        _build_responses_kwargs(
+        _build_responses_request(
             model="openai/gpt-5.6",
             extra_kwargs=OPENAI_API,
             max_tokens=1024,
@@ -650,7 +646,7 @@ def test_many_malformed_tool_result_texts_answer_one_bounded_error() -> None:
     ]
 
     with pytest.raises(litellm.BadRequestError) as rejected:
-        _build_responses_kwargs(model="openai/gpt-5.6", extra_kwargs=OPENAI_API, max_tokens=1024, messages=messages)
+        _build_responses_request(model="openai/gpt-5.6", extra_kwargs=OPENAI_API, max_tokens=1024, messages=messages)
 
     assert rejected.value.status_code == 400
     assert f"tool_result {tool_use_id} content.0.text: Input should be a valid string" in rejected.value.message
@@ -659,7 +655,7 @@ def test_many_malformed_tool_result_texts_answer_one_bounded_error() -> None:
 
 @pytest.mark.parametrize("text_block", MALFORMED_TEXT_BLOCKS)
 def test_drop_params_drops_a_malformed_tool_result_text(text_block: Mapping[str, object]) -> None:
-    responses_kwargs: Final = _build_responses_kwargs(
+    responses_kwargs: Final = _build_responses_request(
         model="openai/gpt-5.6",
         extra_kwargs={**OPENAI_API, "drop_params": True},
         max_tokens=1024,
@@ -672,7 +668,7 @@ def test_drop_params_drops_a_malformed_tool_result_text(text_block: Mapping[str,
 
 
 def test_tool_result_text_block_without_text_still_reaches_the_model_as_empty_text() -> None:
-    responses_kwargs: Final = _build_responses_kwargs(
+    responses_kwargs: Final = _build_responses_request(
         model="openai/gpt-5.6",
         extra_kwargs=OPENAI_API,
         max_tokens=1024,
@@ -1084,3 +1080,344 @@ async def test_the_sync_path_reports_its_edits_on_the_streamed_message_delta(
     ]
     message_delta: Final = next(event for event in events if event["type"] == "message_delta")
     assert message_delta["context_management"]["applied_edits"][0]["cleared_tool_uses"] == 2
+SEARCH_MODEL: Final = "gpt-bridge-search-cost"
+SEARCH_RATES: Final = {"input_cost_per_token": 2e-06, "output_cost_per_token": 1e-05}
+SEARCH_COST_PER_QUERY: Final = 0.03
+SEARCH_RESPONSE: Final = {
+    **REASONING_RESPONSE,
+    "id": "resp_bridge_search",
+    "model": SEARCH_MODEL,
+    "output": [
+        *(
+            {
+                "type": "web_search_call",
+                "id": f"ws_{i}",
+                "status": "completed",
+                "action": {"type": "search", "query": "q"},
+            }
+            for i in range(3)
+        ),
+        REASONING_RESPONSE["output"][1],
+    ],
+    "usage": {"input_tokens": 100, "output_tokens": 20, "total_tokens": 120},
+}
+
+
+@pytest.mark.asyncio
+async def test_served_bridge_response_is_billed_for_each_web_search_call_the_provider_made(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-bridge-search-test")
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    monkeypatch.setitem(
+        litellm.model_cost,
+        SEARCH_MODEL,
+        {
+            "litellm_provider": "openai",
+            "mode": "responses",
+            "search_context_cost_per_query": {
+                f"search_context_size_{size}": SEARCH_COST_PER_QUERY for size in ("low", "medium", "high")
+            },
+            **SEARCH_RATES,
+        },
+    )
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    respx_mock.post("https://api.openai.com/v1/responses").respond(status_code=200, json=SEARCH_RESPONSE)
+    logging_obj: Final = Logging(
+        model=SEARCH_MODEL,
+        messages=MESSAGES,
+        stream=False,
+        call_type="anthropic_messages",
+        start_time=datetime.datetime.now(datetime.timezone.utc),
+        litellm_call_id="bridge-search-0000-4000-8000-000000000001",
+        function_id="1234",
+    )
+
+    served: Final = await LiteLLMMessagesToResponsesAPIHandler.async_anthropic_messages_handler(
+        max_tokens=412,
+        messages=MESSAGES,
+        model=f"openai/{SEARCH_MODEL}",
+        custom_llm_provider="openai",
+        tools=[{"type": "web_search_20250305", "name": "web_search"}],
+        litellm_logging_obj=logging_obj,
+    )
+    assert isinstance(served, dict)
+
+    cost: Final = ProxyBaseLLMRequestProcessing._response_cost_from_logging_obj(
+        response=dict(served), logging_obj=logging_obj
+    )
+
+    expected_tokens: Final = 100 * SEARCH_RATES["input_cost_per_token"] + 20 * SEARCH_RATES["output_cost_per_token"]
+    assert cost == pytest.approx(expected_tokens + 3 * SEARCH_COST_PER_QUERY)
+    assert logging_obj.cost_breakdown is not None
+    assert logging_obj.cost_breakdown["tool_usage_cost"] == pytest.approx(3 * SEARCH_COST_PER_QUERY)
+
+
+def _messages_logging_obj(stream: bool) -> Logging:
+    return Logging(
+        model="gpt-5.6-luna",
+        messages=MESSAGES,
+        stream=stream,
+        call_type="anthropic_messages",
+        start_time=datetime.datetime.now(datetime.timezone.utc),
+        litellm_call_id="6825beef-0000-4000-8000-000000000004",
+        function_id="1234",
+    )
+
+
+def _untyped_bridge() -> Callable[..., Coroutine[object, object, object]]:
+    return LiteLLMMessagesToResponsesAPIHandler.async_anthropic_messages_handler
+
+
+async def _logged_bridge_call(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, upstream_response: httpx.Response, **extra: object
+) -> tuple[object, respx.Route]:
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-native-test")
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    upstream: Final = respx_mock.post("https://api.openai.com/v1/responses").mock(return_value=upstream_response)
+    response: Final = await _untyped_bridge()(
+        max_tokens=1024,
+        messages=MESSAGES,
+        model="openai/gpt-5.6-luna",
+        custom_llm_provider="openai",
+        litellm_logging_obj=_messages_logging_obj(stream=False),
+        **extra,
+    )
+    return response, upstream
+
+
+@pytest.mark.asyncio
+async def test_bridge_answers_a_non_stream_request_with_a_message_even_when_the_caller_asked_for_stream_replay(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    response, upstream = await _logged_bridge_call(
+        respx_mock,
+        monkeypatch,
+        httpx.Response(200, json=TOOL_CALL_RESPONSE),
+        **{key: True for key in CONVERTED_STREAM_KEYS},
+    )
+
+    assert isinstance(response, dict) and response["type"] == "message"
+    assert json.loads(upstream.calls.last.request.content).get("stream") is not True
+
+
+@pytest.mark.asyncio
+async def test_bridge_sends_the_deployment_prompt_cache_options_upstream(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    _, upstream = await _logged_bridge_call(
+        respx_mock,
+        monkeypatch,
+        httpx.Response(200, json=TOOL_CALL_RESPONSE),
+        prompt_cache_options={"mode": "explicit"},
+    )
+
+    assert json.loads(upstream.calls.last.request.content)["prompt_cache_options"] == {"mode": "explicit"}
+
+
+@pytest.mark.asyncio
+async def test_bridge_raises_the_litellm_rate_limit_error_for_an_upstream_429(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    with pytest.raises(litellm.RateLimitError):
+        await _logged_bridge_call(
+            respx_mock,
+            monkeypatch,
+            httpx.Response(429, json={"error": {"message": "slow down", "type": "rate_limit_error"}}),
+        )
+
+
+class _TemplatePromptManager(CustomPromptManagement):
+    async def async_get_chat_completion_prompt(
+        self,
+        model: str,
+        messages: list[AllMessageValues],
+        non_default_params: dict[str, object],
+        prompt_id: str | None,
+        prompt_variables: dict[str, object] | None,
+        dynamic_callback_params: StandardCallbackDynamicParams,
+        litellm_logging_obj: Logging,
+        prompt_spec: PromptSpec | None = None,
+        tools: list[dict[str, object]] | None = None,
+        prompt_label: str | None = None,
+        prompt_version: int | None = None,
+        ignore_prompt_manager_model: bool | None = False,
+        ignore_prompt_manager_optional_params: bool | None = False,
+    ) -> tuple[str, list[AllMessageValues], dict[str, object]]:
+        return model, [{"role": "user", "content": "from the template"}], non_default_params
+
+
+@pytest.mark.asyncio
+async def test_bridge_applies_the_prompt_template_named_by_prompt_id(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(litellm, "callbacks", [_TemplatePromptManager()])
+
+    _, upstream = await _logged_bridge_call(
+        respx_mock, monkeypatch, httpx.Response(200, json=TOOL_CALL_RESPONSE), prompt_id="bridge_template"
+    )
+
+    assert "from the template" in upstream.calls.last.request.content.decode()
+
+
+def _logged_sync_bridge_call(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, upstream_response: httpx.Response
+) -> tuple[object, respx.Route]:
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-native-test")
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    upstream: Final = respx_mock.post("https://api.openai.com/v1/responses").mock(return_value=upstream_response)
+    response: Final = LiteLLMMessagesToResponsesAPIHandler.anthropic_messages_handler(
+        max_tokens=1024,
+        messages=MESSAGES,
+        model="openai/gpt-5.6-luna",
+        custom_llm_provider="openai",
+        litellm_logging_obj=_messages_logging_obj(stream=False),
+    )
+    return response, upstream
+
+
+def test_sync_bridge_answers_with_a_message_from_one_upstream_call(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    response, upstream = _logged_sync_bridge_call(respx_mock, monkeypatch, httpx.Response(200, json=TOOL_CALL_RESPONSE))
+
+    assert isinstance(response, dict) and response["type"] == "message"
+    assert [block["id"] for block in response["content"] if block["type"] == "tool_use"] == ["call_curl"]
+    assert upstream.call_count == 1
+
+
+def test_sync_bridge_raises_the_litellm_rate_limit_error_for_an_upstream_429(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    with pytest.raises(litellm.RateLimitError):
+        _logged_sync_bridge_call(
+            respx_mock,
+            monkeypatch,
+            httpx.Response(429, json={"error": {"message": "slow down", "type": "rate_limit_error"}}),
+        )
+
+
+class _SuccessRowRecorder(CustomLogger):
+    call_types: tuple[str, ...] = ()
+
+    async def async_log_success_event(
+        self, kwargs: Mapping[str, object], response_obj: object, start_time: object, end_time: object
+    ) -> None:
+        self.call_types = (*self.call_types, str(kwargs.get("call_type")))
+
+
+_PARKED_COMPLETION: Final = TypeAdapter(tuple[object])
+
+
+async def _release(parked: Coroutine[object, object, object]) -> None:
+    await parked
+
+
+async def _settled_rows(recorder: _SuccessRowRecorder) -> tuple[str, ...]:
+    for _ in range(200):
+        if recorder.call_types:
+            break
+        await asyncio.sleep(0.01)
+    await asyncio.sleep(0.05)
+    return recorder.call_types
+
+
+async def _bridged_stream(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, logging_obj: Logging
+) -> tuple[AnthropicResponsesSSEByteStream, _SuccessRowRecorder]:
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-native-test")
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    recorder: Final = _SuccessRowRecorder()
+    monkeypatch.setattr(litellm, "_async_success_callback", [recorder])
+    respx_mock.post("https://api.openai.com/v1/responses").mock(
+        return_value=httpx.Response(200, headers={"Content-Type": "text/event-stream"}, content=RESPONSES_SSE_BODY)
+    )
+    stream: Final = await _untyped_bridge()(
+        max_tokens=1024,
+        messages=MESSAGES,
+        model="openai/gpt-5.6-luna",
+        stream=True,
+        custom_llm_provider="openai",
+        litellm_logging_obj=logging_obj,
+    )
+    assert isinstance(stream, AnthropicResponsesSSEByteStream)
+    return stream, recorder
+
+
+@pytest.mark.asyncio
+async def test_bridged_stream_opens_with_the_cost_breakdown_headers(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    from litellm.proxy.common_request_processing import cost_headers
+
+    logging_obj: Final = _messages_logging_obj(stream=True)
+    stream, _ = await _bridged_stream(respx_mock, monkeypatch, logging_obj)
+
+    headers: Final = cost_headers(None, logging_obj)
+    await stream.aclose()
+
+    assert headers["x-litellm-response-cost-output"] == "0.0"
+    assert headers["x-litellm-response-cost-discount-amount"] == "0.0"
+    assert headers["x-litellm-response-cost-margin-amount"] == "0.0"
+
+
+async def _read_through_message_stop(stream: AsyncIterator[bytes]) -> None:
+    async for frame in stream:
+        if frame.startswith(b"event: message_stop"):
+            return
+
+
+@pytest.mark.asyncio
+async def test_bridged_stream_logs_one_row_when_the_client_stream_ends(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    stream, recorder = await _bridged_stream(respx_mock, monkeypatch, _messages_logging_obj(stream=True))
+
+    await _read_through_message_stop(stream)
+    rows_while_the_client_stream_is_open: Final = await _settled_rows(recorder)
+    remaining: Final[list[bytes]] = [frame async for frame in stream]
+
+    assert rows_while_the_client_stream_is_open == ()
+    assert remaining == []
+    assert await _settled_rows(recorder) == ("anthropic_messages",)
+
+
+@pytest.mark.asyncio
+async def test_bridged_stream_still_logs_when_the_client_leaves_after_message_stop(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    stream, recorder = await _bridged_stream(respx_mock, monkeypatch, _messages_logging_obj(stream=True))
+
+    await _read_through_message_stop(stream)
+    await stream.aclose()
+
+    assert await _settled_rows(recorder) == ("anthropic_messages",)
+
+
+@pytest.mark.asyncio
+async def test_bridged_stream_holds_its_row_for_the_proxy_end_of_stream_guardrails(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    logging_obj: Final = _messages_logging_obj(stream=True)
+
+    async def release(*held: object) -> None:
+        return None
+
+    setattr(logging_obj, "_on_deferred_stream_complete", release)  # noqa: B010  # the proxy arms this slot dynamically
+    stream, recorder = await _bridged_stream(respx_mock, monkeypatch, logging_obj)
+
+    frames: Final = [frame async for frame in stream]
+    rows_before_release: Final = await _settled_rows(recorder)
+    held: Final[object] = getattr(logging_obj, "_deferred_stream_complete_args", None)
+
+    assert frames[-1].startswith(b"event: message_stop")
+    assert rows_before_release == ()
+    (parked,) = _PARKED_COMPLETION.validate_python(held)
+    assert asyncio.iscoroutine(parked)
+    await _release(parked)
+    assert recorder.call_types == ("anthropic_messages",)

@@ -24,6 +24,7 @@ from litellm.llms.anthropic.messages.context_management import (
     apply_context_management,
 )
 from litellm.llms.anthropic.messages.convertible_blocks import reject_malformed_tool_result_text
+from litellm.llms.anthropic.messages.held_stream_completion import hold_completion_of
 from litellm.llms.anthropic.messages.safeguards import (
     SafeguardsEvaluator,
     build_safeguards_evaluator,
@@ -39,6 +40,7 @@ from litellm.llms.anthropic.messages.utils import (
     proxy_sub_call_logging_kwargs,
     proxy_sub_call_trace_id,
 )
+from litellm.native.chat_plan import aexecute_planned_chat, execute_planned_chat, plan_chat
 from litellm.types.integrations.custom_logger import CONVERTED_STREAM_KEYS
 from litellm.types.llms.anthropic_messages.anthropic_response import (
     AnthropicMessagesResponse,
@@ -797,8 +799,13 @@ class LiteLLMMessagesToCompletionTransformationHandler:
             extra_kwargs=kwargs,
         )
 
-        completion_response: Final = await litellm.acompletion(**completion_kwargs)
         logging_obj: Final = litellm_logging_obj_from_kwargs(kwargs)
+        planned_chat: Final = None if logging_obj is None else plan_chat(completion_kwargs, logging_obj)
+        completion_response: Final = (
+            await litellm.acompletion(**completion_kwargs)
+            if planned_chat is None
+            else await aexecute_planned_chat(planned_chat)
+        )
 
         if stream:
             transformed_stream: Final = ANTHROPIC_ADAPTER.translate_completion_output_params_streaming(
@@ -810,6 +817,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
                 completion_request=completion_kwargs,
                 litellm_logging_obj=logging_obj,
                 safeguards_evaluator=safeguards_evaluator,
+                held_completion=None if planned_chat is None else hold_completion_of(completion_response, logging_obj),
             )
             if transformed_stream is not None:
                 return transformed_stream
@@ -944,8 +952,11 @@ class LiteLLMMessagesToCompletionTransformationHandler:
             extra_kwargs=kwargs,
         )
 
-        completion_response: Final = litellm.completion(**completion_kwargs)
         logging_obj: Final = litellm_logging_obj_from_kwargs(kwargs)
+        planned_chat: Final = None if logging_obj is None else plan_chat(completion_kwargs, logging_obj)
+        completion_response: Final = (
+            litellm.completion(**completion_kwargs) if planned_chat is None else execute_planned_chat(planned_chat)
+        )
 
         if stream:
             transformed_stream: Final = ANTHROPIC_ADAPTER.translate_completion_output_params_streaming(
@@ -956,6 +967,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
                 is_async=False,
                 completion_request=completion_kwargs,
                 litellm_logging_obj=logging_obj,
+                held_completion=None if planned_chat is None else hold_completion_of(completion_response, logging_obj),
             )
             if transformed_stream is not None:
                 return transformed_stream

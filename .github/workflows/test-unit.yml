@@ -424,6 +424,7 @@ jobs:
               tests/unit/images
               tests/unit/interactions
               tests/unit/messages
+              tests/unit/native
               tests/unit/ocr
               tests/unit/passthrough
               tests/unit/rag
@@ -715,6 +716,7 @@ jobs:
             test-path: |-
               tests/unit/responses/litellm_completion_transformation
               tests/unit/responses/test_additional_tools.py
+              tests/unit/responses/test_bridge_executor.py
               tests/unit/responses/test_custom_tool_call.py
               tests/unit/responses/test_metadata_codex_callback.py
               tests/unit/responses/test_no_duplicate_spend_logs.py

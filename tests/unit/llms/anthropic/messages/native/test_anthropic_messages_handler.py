@@ -2,19 +2,19 @@ import asyncio
 import copy
 import json
 import os
+import unittest.mock
 import uuid
 from dataclasses import dataclass
+from collections.abc import Mapping
 from typing import Any, Dict, Final, List
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import responses
-import respx
 import pytest
+import respx
 from fastapi.testclient import TestClient
 from pydantic import TypeAdapter, ValidationError
-
-
-from unittest.mock import AsyncMock, MagicMock, patch
 
 import litellm
 from litellm.anthropic_interface import messages
@@ -30,7 +30,6 @@ from litellm.types.utils import (
     StreamingChoices,
 )
 from litellm.utils import _invalidate_model_cost_lowercase_map
-import unittest.mock
 
 
 @pytest.mark.asyncio
@@ -340,8 +339,10 @@ async def test_bedrock_converse_budget_tokens_preserved():
         usage={"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
     )
 
-    with patch("litellm.acompletion", new_callable=AsyncMock) as mock_acompletion:
-        mock_acompletion.return_value = mock_response
+    with patch(
+        "litellm.llms.anthropic.messages.adapters.handler.aexecute_planned_chat", new_callable=AsyncMock
+    ) as mock_chat:
+        mock_chat.return_value = mock_response
 
         try:
             await messages.acreate(
@@ -353,13 +354,9 @@ async def test_bedrock_converse_budget_tokens_preserved():
         except (ValueError, TypeError, AttributeError):
             pass  # Expected due to response format conversion
 
-        mock_acompletion.assert_called_once()
+        mock_chat.assert_called_once()
 
-        call_kwargs = mock_acompletion.call_args.kwargs
-        print("acompletion call kwargs: ", json.dumps(call_kwargs, indent=4, default=str))
-
-        # Verify thinking parameter is passed through with budget_tokens preserved
-        thinking_param = call_kwargs.get("thinking")
+        thinking_param = mock_chat.call_args.args[0].named.get("thinking")
         assert thinking_param is not None, "thinking parameter should be passed to acompletion"
         assert thinking_param.get("type") == "enabled", "thinking.type should be 'enabled'"
         assert thinking_param.get("budget_tokens") == 1024, (
@@ -1241,7 +1238,10 @@ async def test_messages_streaming_reports_provider_local_model(requested_model, 
         async def __anext__(self):
             raise StopAsyncIteration
 
-    with patch("litellm.acompletion", new=AsyncMock(return_value=_EmptyStream())):
+    with patch(
+        "litellm.llms.anthropic.messages.adapters.handler.aexecute_planned_chat",
+        new=AsyncMock(return_value=_EmptyStream()),
+    ):
         stream = await litellm.anthropic.messages.acreate(
             max_tokens=100,
             messages=[{"role": "user", "content": "ping"}],
@@ -2455,3 +2455,81 @@ async def test_anthropic_messages_strict_tools_rejection_is_sent_again_without_s
     assert first["tools"] == [tool]
     assert second == {**first, "tools": [{"name": "lookup_record", "input_schema": {"type": "object"}}]}
     assert _JSON_BODY.validate_python(response)["id"] == "msg_strict_retry"
+
+
+_REASONING_RESPONSE: Final = {
+    "id": "resp_thinking",
+    "object": "response",
+    "created_at": 1,
+    "status": "completed",
+    "model": "gpt-5.5",
+    "output": [
+        {"type": "reasoning", "id": "rs_1", "summary": [{"type": "summary_text", "text": "worked it out"}]},
+        {
+            "type": "message",
+            "id": "msg_1",
+            "role": "assistant",
+            "status": "completed",
+            "content": [{"type": "output_text", "text": "the answer", "annotations": []}],
+        },
+    ],
+    "parallel_tool_calls": True,
+    "tool_choice": "auto",
+    "tools": [],
+    "usage": {"input_tokens": 3, "output_tokens": 4, "total_tokens": 7},
+}
+
+
+class _DeploymentHookCounter(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.calls = 0
+
+    async def async_pre_call_deployment_hook(self, kwargs: Mapping[str, object], call_type: object) -> None:
+        self.calls += 1
+
+
+@pytest.mark.asyncio
+async def test_forced_chat_sends_openai_thinking_to_responses_through_the_chat_bridge(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    counter: Final = _DeploymentHookCounter()
+    monkeypatch.setattr(litellm, "callbacks", [counter])
+    monkeypatch.setattr(litellm, "use_chat_completions_url_for_anthropic_messages", True)
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+
+    with respx.mock(assert_all_called=False) as upstream:
+        responses_route: Final = upstream.post("http://openai.test/v1/responses").mock(
+            return_value=httpx.Response(200, json=_REASONING_RESPONSE)
+        )
+        chat_route: Final = upstream.post("http://openai.test/v1/chat/completions")
+        response: Final = await litellm.anthropic.messages.acreate(
+            model="openai/gpt-5.5",
+            api_base="http://openai.test/v1",
+            api_key="sk-test",
+            max_tokens=1024,
+            messages=[
+                {"role": "user", "content": "weather?"},
+                {
+                    "role": "assistant",
+                    "content": [
+                        {"type": "text", "text": "let me check"},
+                        {"type": "tool_use", "id": "toolu_1", "name": "get_w", "input": {"c": "a"}},
+                    ],
+                },
+                {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_1", "content": "sunny"}]},
+            ],
+            tools=[{"name": "get_w", "description": "d", "input_schema": {"type": "object", "properties": {}}}],
+            thinking={"type": "enabled", "budget_tokens": 1024},
+        )
+
+    assert isinstance(response, dict)
+    assert [block["type"] for block in response["content"]] == ["thinking", "text"]
+    assert response["content"][1]["text"] == "the answer"
+    assert (responses_route.call_count, chat_route.call_count) == (1, 0)
+    assert counter.calls == 1
+    sent_input: Final = json.loads(responses_route.calls[0].request.content)["input"]
+    assert [item["type"] for item in sent_input] == ["message", "message", "function_call", "function_call_output"]
+    assert sent_input[1]["role"] == "assistant"
+    assert sent_input[3]["output"] == [{"type": "input_text", "text": "sunny"}]

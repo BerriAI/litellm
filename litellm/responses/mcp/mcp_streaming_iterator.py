@@ -475,6 +475,7 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
         if not self.should_auto_execute:
             return None
         if isinstance(self.base_iterator, LiteLLMCompletionStreamingIterator):
+            self.base_iterator.log_rounds_as_chat()
             return StreamedRoundBilling(self.base_iterator.litellm_logging_obj)
         if isinstance(self.base_iterator, BaseResponsesAPIStreamingIterator):
             return StreamedRoundBilling(self.base_iterator.logging_obj)
@@ -1046,6 +1047,8 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
                 self._cached_response_id = None
                 self._round_index += 1
                 if self._round_billing is not None:
+                    if isinstance(follow_up_response, LiteLLMCompletionStreamingIterator):
+                        follow_up_response.log_rounds_as_chat()
                     self._round_billing.record_billed_rounds(follow_up_response)
 
         except Exception as e:
