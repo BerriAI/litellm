@@ -217,6 +217,9 @@ class _FakeJsonResponse:
         return self._payload
 
 
+LITE_HELPER: Final = "/usr/local/bin/lite --base-url http://localhost:4000 auth print-token"
+
+
 def _overlay_writer(tmp_path):
     def write(text, environ):
         target = tmp_path / "overlay.json"
@@ -1666,6 +1669,57 @@ class TestRunAgent:
         )
         assert calls["args"] == ("claude", "--resume")
 
+    @pytest.mark.parametrize(
+        ("project_local", "user", "exports_the_key"),
+        [
+            ({}, {"apiKeyHelper": LITE_HELPER}, False),
+            ({}, {"apiKeyHelper": LITE_HELPER.replace("localhost:4000", "other-proxy:4000")}, True),
+            ({}, {"apiKeyHelper": "/opt/mine/helper"}, True),
+            ({"apiKeyHelper": "/opt/mine/helper"}, {"apiKeyHelper": LITE_HELPER}, True),
+            ({}, {}, True),
+        ],
+        ids=["lites-helper-for-this-proxy", "another-proxy", "users-own-helper", "project-helper-wins", "no-helper"],
+    )
+    def test_claude_takes_the_key_from_lites_renewing_helper_only_when_it_is_the_one_claude_code_runs(
+        self, tmp_path, project_local, user, exports_the_key
+    ):
+        files = {
+            tmp_path / "repo" / ".claude" / "settings.local.json": project_local,
+            tmp_path / "cfg" / "settings.json": user,
+        }
+        launched = {}
+        run_agent(
+            "http://localhost:4000",
+            "sk-key",
+            ["claude"],
+            base_env={"CLAUDE_CONFIG_DIR": str(tmp_path / "cfg"), "ANTHROPIC_AUTH_TOKEN": "sk-stale"},
+            which=lambda name: f"/usr/local/bin/{name}",
+            verify=lambda *a: None,
+            launcher=lambda p, a, e: launched.update(env=dict(e)),
+            read_settings=lambda path: files.get(path, {}),
+            project_dir=tmp_path / "repo",
+        )
+        assert launched["env"]["ANTHROPIC_BASE_URL"] == "http://localhost:4000"
+        assert launched["env"].get("ANTHROPIC_AUTH_TOKEN") == ("sk-key" if exports_the_key else None)
+
+    def test_a_malformed_settings_file_still_launches_claude_with_the_key(self, tmp_path):
+        def unreadable(path):
+            raise ClaudeSettingsError(f"{path} contains invalid JSON")
+
+        launched = {}
+        run_agent(
+            "http://localhost:4000",
+            "sk-key",
+            ["claude"],
+            base_env={"CLAUDE_CONFIG_DIR": str(tmp_path / "cfg")},
+            which=lambda name: f"/usr/local/bin/{name}",
+            verify=lambda *a: None,
+            launcher=lambda p, a, e: launched.update(env=dict(e)),
+            read_settings=unreadable,
+            project_dir=tmp_path / "repo",
+        )
+        assert launched["env"]["ANTHROPIC_AUTH_TOKEN"] == "sk-key"
+
     def test_missing_binary_raises_with_install_hint(self):
         with pytest.raises(AgentRunError, match=r"claude.*Install it first"):
             run_agent(
@@ -1754,7 +1808,9 @@ class TestRunAgent:
         assert launched["env"]["ANTHROPIC_CUSTOM_HEADERS"] == "x-litellm-api-key: Bearer sk-key"
         assert "ANTHROPIC_AUTH_TOKEN" not in launched["env"]
 
-    def test_subscription_launch_blanks_the_credentials_claude_code_would_load_from_settings_json(self, tmp_path):
+    def test_subscription_launch_blanks_the_credentials_and_helper_claude_code_would_load_from_settings(
+        self, tmp_path
+    ):
         launched = {}
         run_agent(
             "http://localhost:4000",
@@ -1770,11 +1826,12 @@ class TestRunAgent:
         )
         assert launched["args"][:2] == ("claude", "--settings")
         assert _overlay(launched["args"]) == {
+            "apiKeyHelper": "",
             "env": {
                 "ANTHROPIC_AUTH_TOKEN": "",
                 "ANTHROPIC_API_KEY": "",
                 "ANTHROPIC_CUSTOM_HEADERS": "x-litellm-api-key: Bearer sk-key",
-            }
+            },
         }
         assert launched["args"][3:] == ("--resume",)
 
@@ -1880,6 +1937,7 @@ class TestRunAgent:
         assert launched["args"][:2] == ["claude", "--settings"]
         assert _overlay(launched["args"]) == {
             "model": "opus",
+            "apiKeyHelper": "",
             "env": {
                 "ANTHROPIC_AUTH_TOKEN": "",
                 "FOO": "bar",
@@ -1906,6 +1964,7 @@ class TestRunAgent:
         assert launched["args"][:2] == ["claude", "--settings"]
         assert _overlay(launched["args"]) == {
             "theme": "dark",
+            "apiKeyHelper": "",
             "env": {
                 "ANTHROPIC_API_KEY": "",
                 "ANTHROPIC_AUTH_TOKEN": "",
@@ -1984,6 +2043,7 @@ class TestRunAgent:
         assert launched["args"][:2] == ["claude", "--settings"]
         assert _overlay(launched["args"]) == {
             "theme": "dark",
+            "apiKeyHelper": "",
             "env": {
                 "ANTHROPIC_AUTH_TOKEN": "",
                 "ANTHROPIC_API_KEY": "",

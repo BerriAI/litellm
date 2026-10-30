@@ -29,10 +29,12 @@ from litellm.types.llms.base_model import LiteLLMBaseModel
 
 from .auth import cli_context_obj, context_secret_vault, get_stored_api_key, login
 from .claude_settings import (
+    API_KEY_HELPER_KEY,
     ENV_KEY,
     ClaudeSettingsError,
     claude_settings_path,
     install_statusline_script,
+    lite_api_key_helper,
     load_json_or_empty,
 )
 from .cmd_quoting import quote_for_cmd
@@ -130,6 +132,7 @@ def build_agent_env(
     profiles: frozenset[str],
     *,
     subscription: bool = False,
+    helper_renews_key: bool = False,
 ) -> dict[str, str]:
     """Return a copy of base_env wired to route the agent through the proxy.
 
@@ -148,6 +151,8 @@ def build_agent_env(
     travels in the x-litellm-api-key header through ANTHROPIC_CUSTOM_HEADERS, and no
     ANTHROPIC_AUTH_TOKEN or ANTHROPIC_API_KEY is left in the environment, since either one makes
     Claude Code stop using the subscription (and its connectors).
+    With helper_renews_key=True the Anthropic profile leaves ANTHROPIC_AUTH_TOKEN out, so Claude Code takes
+    its key from the renewing apiKeyHelper in its settings instead of a launch-time copy that expires.
     With subscription=True the OpenAI profile keeps Codex on its ChatGPT login: the key goes to
     LITELLM_PROXY_API_KEY, which Codex sends in the x-litellm-api-key header, and OPENAI_API_KEY and
     OPENAI_BASE_URL are left exactly as the caller had them, so the key is never offered to Codex as an
@@ -161,6 +166,8 @@ def build_agent_env(
             env[ANTHROPIC_CUSTOM_HEADERS_ENV] = _custom_headers_with_litellm_key(
                 env.get(ANTHROPIC_CUSTOM_HEADERS_ENV, ""), api_key
             )
+            env.pop(ANTHROPIC_AUTH_TOKEN_ENV, None)
+        elif helper_renews_key:
             env.pop(ANTHROPIC_AUTH_TOKEN_ENV, None)
         else:
             env[ANTHROPIC_AUTH_TOKEN_ENV] = api_key
@@ -246,7 +253,7 @@ def _settings_json(base: Mapping[str, JsonValue], api_key: str, inherited_header
         own_headers if isinstance(own_headers, str) else inherited_headers, api_key
     )
     overlay: Final = {**base_env, **_SUBSCRIPTION_SETTINGS_ENV, ANTHROPIC_CUSTOM_HEADERS_ENV: headers}
-    return json.dumps({**base, ENV_KEY: overlay}, separators=(",", ":"))
+    return json.dumps({**base, API_KEY_HELPER_KEY: "", ENV_KEY: overlay}, separators=(",", ":"))
 
 
 def _inherited_custom_headers(settings_files: Sequence[Mapping[str, JsonValue]], environ: Mapping[str, str]) -> str:
@@ -272,6 +279,29 @@ def claude_settings_files(
         return tuple(read_settings(path) for path in paths)
     except ClaudeSettingsError as e:
         raise AgentRunError(str(e)) from e
+
+
+def lite_helper_renews_key(
+    base_url: str, settings_files: Sequence[Mapping[str, JsonValue]], which: Callable[[str], str | None]
+) -> bool:
+    """Whether the apiKeyHelper Claude Code will run, the first one in settings precedence, is the one
+    `lite login --pkce --config-claude` wrote for this proxy. Claude Code prefers ANTHROPIC_AUTH_TOKEN over a
+    helper and warns when both are set, so exporting the key too would pin a copy that expires mid-session."""
+    configured: Final = next(
+        (settings[API_KEY_HELPER_KEY] for settings in settings_files if API_KEY_HELPER_KEY in settings), None
+    )
+    helper: Final = lite_api_key_helper(base_url, which=which)
+    return helper is not None and configured == helper.command
+
+
+def _readable_settings_files(
+    read_settings: Callable[[Path], Mapping[str, JsonValue]], environ: Mapping[str, str], project_dir: Path
+) -> tuple[Mapping[str, JsonValue], ...]:
+    """A launch that only checks for lite's helper goes ahead on a malformed settings file, as it did before."""
+    try:
+        return claude_settings_files(read_settings, environ, project_dir)
+    except AgentRunError:
+        return ()
 
 
 OVERLAY_FILE_NAME: Final = "litellm-subscription-overlay.json"
@@ -303,11 +333,12 @@ def subscription_launch_args(
 
     Claude Code applies `env` from its settings files over the process environment, so a key that `lite up` or
     `lite configure claude` left in ANTHROPIC_AUTH_TOKEN would land back in `Authorization`, and an
-    ANTHROPIC_CUSTOM_HEADERS there would drop the x-litellm-api-key header. The overlay blanks both credential
-    keys (read as unset for this session only) and carries the custom headers with the LiteLLM key appended,
-    taking the headers from the user's `--settings`, else the settings files in Claude Code's precedence order,
-    else the process environment. Any `--settings` the user passed is stripped and the last one (inline JSON or a
-    file, the one Claude Code would keep) is merged in, since Claude Code keeps only the last `--settings`.
+    ANTHROPIC_CUSTOM_HEADERS there would drop the x-litellm-api-key header, and an apiKeyHelper outranks the
+    claude.ai login. The overlay blanks both credential keys and the helper (read as unset for this session only)
+    and carries the custom headers with the LiteLLM key appended, taking the headers from the user's
+    `--settings`, else the settings files in Claude Code's precedence order, else the process environment. Any
+    `--settings` the user passed is stripped and the last one (inline JSON or a file, the one Claude Code would
+    keep) is merged in, since Claude Code keeps only the last `--settings`.
     """
     inherited: Final = _inherited_custom_headers(settings_files, environ)
     user_value, rest = _split_settings_flags(tuple(command[1:]))
@@ -1122,6 +1153,12 @@ def run_agent(
         (verify_subscription if subscription else verify)(base_url, api_key)
 
     env_before_sync: Final = base_env if base_env is not None else os.environ
+    project: Final = project_dir if project_dir is not None else Path.cwd()
+    helper_renews_key: Final = (
+        not subscription
+        and PROFILE_ANTHROPIC in profiles
+        and lite_helper_renews_key(base_url, _readable_settings_files(read_settings, env_before_sync, project), which)
+    )
     synced: Final = (
         _NO_EXTRA_ENV if subscription else sync_models(binary, env_before_sync, base_url, api_key, skip_verify)
     )
@@ -1133,7 +1170,14 @@ def run_agent(
 
     env: Final = MappingProxyType(
         {
-            **build_agent_env(env_before_sync, base_url, api_key, profiles, subscription=subscription),
+            **build_agent_env(
+                env_before_sync,
+                base_url,
+                api_key,
+                profiles,
+                subscription=subscription,
+                helper_renews_key=helper_renews_key,
+            ),
             **(synced if isinstance(synced, Mapping) else _NO_EXTRA_ENV),
         }
     )
@@ -1148,9 +1192,7 @@ def run_agent(
             command,
             api_key,
             env_before_sync,
-            claude_settings_files(
-                read_settings, env_before_sync, project_dir if project_dir is not None else Path.cwd()
-            ),
+            claude_settings_files(read_settings, env_before_sync, project),
             write_overlay,
         )
         if subscription and os.path.basename(command[0]) == "claude"

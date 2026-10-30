@@ -1501,18 +1501,18 @@ class TestLoginConfigClaude:
         assert "Configured Claude Code" not in result.output
 
     def test_flag_writes_the_settings_file_and_reports_success(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("PATH", str(_fake_lite(tmp_path).parent))
         result, settings_path, _backup_path = self._run_login(tmp_path, monkeypatch, ["--config-claude"])
 
         assert result.exit_code == 0
         written = json.loads(settings_path.read_text())
         assert written["env"]["ANTHROPIC_BASE_URL"] == "https://test.example.com"
         assert written["env"]["ENABLE_TOOL_SEARCH"] == "true"
-        # The minted key goes in as a static token: an apiKeyHelper would make Claude Code spawn `lite` (and
-        # its keychain probe) on every credential refresh, which is what this flag used to write.
         assert written["env"]["ANTHROPIC_AUTH_TOKEN"] == "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.test.jwt"
         assert "apiKeyHelper" not in written
         assert f"Configured Claude Code: {settings_path} now routes through https://test.example.com." in result.output
         assert "run `lite login --config-claude` again after it expires" in result.output
+        assert "`lite login --pkce --config-claude` instead lets Claude Code renew the key" in result.output
         assert "the model Claude Code starts and resumes on" in result.output
 
     def test_flag_preserves_unrelated_settings_on_an_existing_file(self, tmp_path, monkeypatch):
@@ -1613,6 +1613,58 @@ class TestLoginConfigClaude:
         assert "even though the CLI itself could not keep it" in result.output
         assert "You can now use the CLI without specifying --api-key" not in result.output
 
+    def _run_pkce_login(self, tmp_path, monkeypatch, path, stored):
+        settings_path = tmp_path / "claude" / "settings.json"
+        self._isolate_default_settings(tmp_path, monkeypatch)
+        with (
+            patch("litellm.proxy.client.cli.commands.auth.run_pkce_login", return_value=_pkce_credential()),
+            patch("litellm.proxy.client.cli.commands.auth.load_token", return_value=None),
+            patch("litellm.proxy.client.cli.commands.auth.save_token", return_value=stored),
+            patch("litellm.proxy.client.cli.interface.show_commands"),
+        ):
+            result = self.runner.invoke(
+                login,
+                ["--pkce", "--config-claude"],
+                obj={"base_url": PKCE_BASE_URL},
+                env={"CLAUDE_CONFIG_DIR": str(settings_path.parent), "PATH": path},
+            )
+        return result, settings_path
+
+    def test_a_pkce_login_gets_a_helper_that_renews_the_key_instead_of_a_copy_that_expires(self, tmp_path, monkeypatch):
+        lite = _fake_lite(tmp_path)
+        result, settings_path = self._run_pkce_login(tmp_path, monkeypatch, str(lite.parent), SecretStored())
+
+        assert result.exit_code == 0, result.output
+        written = json.loads(settings_path.read_text())
+        assert written["env"]["ANTHROPIC_BASE_URL"] == PKCE_BASE_URL
+        assert "ANTHROPIC_AUTH_TOKEN" not in written["env"]
+        assert str(lite.parent) in written["apiKeyHelper"]
+        assert written["apiKeyHelper"].endswith(f"--base-url {PKCE_BASE_URL} auth print-token")
+        assert "sk-cli-fresh" not in settings_path.read_text()
+        assert "`lite auth print-token`, which renews it before it expires" in result.output
+
+    @pytest.mark.parametrize(
+        ("lite_on_path", "stored", "reason"),
+        [
+            (False, SecretStored(), "`lite` is not on your PATH"),
+            (True, CredentialNotSaved("read-only ~/.litellm"), "even though the CLI itself could not keep it"),
+            (True, CredentialNotRecorded(), "even though the CLI itself could not keep it"),
+        ],
+        ids=["lite-not-on-path", "nothing-kept-it", "keychain-took-it-file-refused"],
+    )
+    def test_a_pkce_login_lite_cannot_renew_for_claude_code_gets_the_static_key(
+        self, tmp_path, monkeypatch, lite_on_path, stored, reason
+    ):
+        path = str(_fake_lite(tmp_path).parent) if lite_on_path else str(tmp_path / "empty-path")
+        result, settings_path = self._run_pkce_login(tmp_path, monkeypatch, path, stored)
+
+        assert result.exit_code == 0, result.output
+        written = json.loads(settings_path.read_text())
+        assert written["env"]["ANTHROPIC_AUTH_TOKEN"] == "sk-cli-fresh"
+        assert "apiKeyHelper" not in written
+        assert reason in result.output
+        assert "run `lite login --pkce --config-claude` again after it expires" in result.output
+
     def test_settings_failure_is_reported_without_claiming_login_failed(self, tmp_path, monkeypatch):
         settings_path = tmp_path / "claude" / "settings.json"
         settings_path.parent.mkdir(parents=True)
@@ -1625,6 +1677,14 @@ class TestLoginConfigClaude:
         assert "could not configure Claude Code" in result.output
         assert "invalid JSON" in result.output
         assert "Authentication failed" not in result.output
+
+
+def _fake_lite(tmp_path):
+    lite = tmp_path / "bin" / ("lite.exe" if os.name == "nt" else "lite")
+    lite.parent.mkdir(exist_ok=True)
+    lite.write_text("")
+    lite.chmod(0o700)
+    return lite
 
 
 class _FakeHttpResponse:

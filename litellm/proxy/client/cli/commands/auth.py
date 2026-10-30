@@ -42,12 +42,15 @@ from litellm.litellm_core_utils.cli_token_utils import (
 
 from .claude_settings import (
     STARTING_MODEL_ROLE,
+    ApiKeyHelper,
+    ClaudeCredential,
     ClaudeSettingsError,
     KeepModel,
     StaticToken,
     claude_settings_path,
     configure_claude_settings,
     configure_state_path,
+    lite_api_key_helper,
     refuse_while_owned,
     settings_file_owners,
 )
@@ -807,16 +810,26 @@ def _render_and_prompt_for_team_selection(teams: list[CliTeam]) -> str | None:
             return None
 
 
-def _configure_claude_code(base_url: str, api_key: str) -> None:
-    """Write the key this login just minted into Claude Code's settings.json as a static token, undoable with
-    `lite unconfigure claude`. The key expires with the login, so the flag is the re-wire step of each login
-    rather than a one-time setup: no apiKeyHelper is written, since Claude Code would spawn `lite` (and its
-    keychain probe) on every credential refresh to keep one fresh."""
+def _claude_credential(base_url: str, api_key: str, renews: bool, stored: SecretSave) -> ClaudeCredential:
+    """A helper only for a key `lite` can renew and kept: `print-token` renews from the stored record, so a
+    login the store refused, or one with no refresh token, gets the minted key as a static token."""
+    if not renews or isinstance(stored, (CredentialNotSaved, CredentialNotRecorded)):
+        return StaticToken(api_key)
+    helper: Final = lite_api_key_helper(base_url)
+    if helper is None:
+        click.echo("`lite` is not on your PATH, so Claude Code cannot run it to renew this login's key.")
+        return StaticToken(api_key)
+    return helper
+
+
+def _configure_claude_code(base_url: str, credential: ClaudeCredential, renews: bool) -> None:
+    """Wire Claude Code's settings.json to this login, undoable with `lite unconfigure claude`. A static key
+    expires with the login, so the flag is then the re-wire step of each login; a helper renews in place."""
     settings_path: Final = claude_settings_path(os.environ)
     try:
         configure_claude_settings(
             base_url,
-            StaticToken(api_key),
+            credential,
             KeepModel(),
             settings_path,
             configure_state_path(settings_path),
@@ -825,14 +838,27 @@ def _configure_claude_code(base_url: str, api_key: str) -> None:
     except ClaudeSettingsError as e:
         raise click.ClickException(f"Logged in, but could not configure Claude Code: {e}")
     click.echo(f"\nConfigured Claude Code: {settings_path} now routes through {base_url.rstrip('/')}.")
+    match credential:
+        case ApiKeyHelper():
+            click.echo(
+                "Claude Code gets this login's key from `lite auth print-token`, which renews it before it expires."
+            )
+        case StaticToken():
+            click.echo(
+                f"This login's key is stored in the file, so run `{_login_command(renews)} --config-claude` again "
+                "after it expires."
+            )
+            if not renews:
+                click.echo("`lite login --pkce --config-claude` instead lets Claude Code renew the key on its own.")
+        case _:
+            assert_never(credential)
     click.echo(
-        "This login's key is stored in the file, so run `lite login --config-claude` again after it expires. "
         "Your other Claude Code settings were left untouched. Restart Claude Code to pick this up. "
         f"Undo with `lite unconfigure claude`; `lite configure claude --model` sets {STARTING_MODEL_ROLE}."
     )
 
 
-def _finish_login(base_url: str, api_key: str, config_claude: bool, stored: SecretSave) -> None:
+def _finish_login(base_url: str, api_key: str, config_claude: bool, stored: SecretSave, *, renews: bool) -> None:
     """Claude Code is configured from the key in hand, so it does not wait on the CLI's own store: a login whose
     token file or keychain refused it still has a usable key, and `--config-claude` asked for exactly that
     key to be written into settings.json."""
@@ -842,7 +868,7 @@ def _finish_login(base_url: str, api_key: str, config_claude: bool, stored: Secr
     click.echo(f"JWT Token: {api_key[:20]}...")
     click.echo(storage_notice(stored))
     if config_claude:
-        _configure_claude_code(base_url, api_key)
+        _configure_claude_code(base_url, _claude_credential(base_url, api_key, renews, stored), renews)
     if isinstance(stored, (CredentialNotSaved, CredentialNotRecorded)):
         if config_claude:
             click.echo("Claude Code was configured with this key even though the CLI itself could not keep it.")
@@ -873,7 +899,7 @@ def _pkce_login(base_url: str, config_claude: bool, vault: SecretVault) -> None:
         click.echo(f"Authentication failed: {credential.reason}")
         return
     stored: Final = _replace_stored_token(pkce_token_record(base_url, credential), http, vault)
-    _finish_login(base_url, credential.access_token, config_claude, stored)
+    _finish_login(base_url, credential.access_token, config_claude, stored, renews=True)
 
 
 @click.command(name="login")
@@ -882,8 +908,9 @@ def _pkce_login(base_url: str, config_claude: bool, vault: SecretVault) -> None:
     is_flag=True,
     default=False,
     help=(
-        "After logging in, write this login's key into ~/.claude/settings.json so Claude Code routes through "
-        "this proxy; run it again after the key expires. Unrelated settings are preserved."
+        "After logging in, wire ~/.claude/settings.json so Claude Code routes through this proxy. A --pkce login "
+        "gets an apiKeyHelper that renews the key; any other login writes the key itself, so run it again after "
+        "the key expires. Unrelated settings are preserved."
     ),
 )
 @click.option(
@@ -965,7 +992,7 @@ def login(ctx: click.Context, config_claude: bool, pkce: bool | None) -> None:
                 context_secret_vault(ctx),
             )
 
-            _finish_login(base_url, api_key, config_claude, stored)
+            _finish_login(base_url, api_key, config_claude, stored, renews=False)
             return
         else:
             click.echo("Authentication timed out. Please try again.")

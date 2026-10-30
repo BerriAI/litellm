@@ -3,6 +3,7 @@ import os
 import pathlib
 import shlex
 import stat
+import subprocess
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
@@ -25,6 +26,7 @@ from litellm.proxy.client.cli.commands.claude_settings import (
     OWNED_ENV_KEYS,
     OWNED_TOP_LEVEL_KEYS,
     SETTINGS_FILE_OWNERS,
+    ApiKeyHelper,
     ClaudeSettingsError,
     KeepModel,
     SettingsFileOwner,
@@ -35,6 +37,7 @@ from litellm.proxy.client.cli.commands.claude_settings import (
     configure_claude_settings,
     install_statusline_script,
     configure_state_path,
+    lite_api_key_helper,
     merge_claude_settings,
     statusline_command,
     unconfigure_claude_settings,
@@ -163,6 +166,34 @@ class TestConfigureClaudeSettings:
         finally:
             settings_path.parent.chmod(0o700)
         assert not settings_path.exists()
+
+
+class TestLiteApiKeyHelper:
+    @pytest.mark.skipif(sys.platform.startswith("win"), reason="runs the command through sh, as Claude Code does on POSIX")
+    def test_sh_runs_the_lite_on_path_against_this_proxy(self, tmp_path):
+        lite = tmp_path / "my tools" / "lite"
+        lite.parent.mkdir()
+        lite.write_text('#!/bin/sh\nprintf "%s\\n" "$0" "$@"\n')
+        lite.chmod(0o700)
+
+        helper = lite_api_key_helper("https://proxy.example.com/", platform="linux", which=lambda name: str(lite))
+
+        assert helper is not None
+        ran = subprocess.run(["sh", "-c", helper.command], capture_output=True, text=True, check=True)
+        assert ran.stdout.splitlines() == [str(lite), "--base-url", "https://proxy.example.com", "auth", "print-token"]
+
+    def test_quotes_every_token_for_cmd_on_windows(self):
+        helper = lite_api_key_helper(
+            "https://proxy.example.com", platform="win32", which=lambda name: r"C:\Program Files\lite\lite.exe"
+        )
+
+        assert helper is not None
+        assert helper.command == (
+            r'"C:\Program Files\lite\lite.exe" "--base-url" "https://proxy.example.com" "auth" "print-token"'
+        )
+
+    def test_no_lite_on_path_means_no_helper(self):
+        assert lite_api_key_helper("https://proxy.example.com", which=lambda name: None) is None
 
 
 class TestConflictingOwnersOfTheSettingsFile:
@@ -313,6 +344,14 @@ class TestMergeClaudeSettings:
         assert "model" not in merged
         assert not any(key in merged["env"] for key in ANTHROPIC_DEFAULT_MODEL_ENV_KEYS)
 
+    def test_a_helper_lands_top_level_and_every_static_credential_is_cleared(self):
+        settings = {"env": {"ANTHROPIC_AUTH_TOKEN": "sk-expired-login", "ANTHROPIC_API_KEY": "leaked"}}
+        merged = merge_claude_settings(settings, "http://127.0.0.1:4000/", HELPER)
+        assert merged["apiKeyHelper"] == HELPER.command
+        assert merged["env"]["ANTHROPIC_BASE_URL"] == "http://127.0.0.1:4000"
+        assert "ANTHROPIC_AUTH_TOKEN" not in merged["env"]
+        assert "ANTHROPIC_API_KEY" not in merged["env"]
+
     def test_keeps_existing_switch_values_and_unrelated_keys_without_mutating_the_input(self):
         settings = {"theme": "dark", "env": {"SOME_OTHER_VAR": "value", "ENABLE_TOOL_SEARCH": "false"}}
         merged = merge_claude_settings(settings, "http://127.0.0.1:4000", StaticToken("token-abc"))
@@ -374,6 +413,7 @@ class TestMergeClaudeSettings:
 PROXY = "http://127.0.0.1:4000"
 ANTHROPIC = "https://api.anthropic.com"
 RELOGIN = StaticToken("sk-fresh-login")
+HELPER = ApiKeyHelper("/usr/local/bin/lite --base-url http://127.0.0.1:4000 auth print-token")
 ORIGINAL = {
     "theme": "dark",
     "permissions": {"allow": ["Bash"]},
@@ -432,6 +472,15 @@ class _Rig:
 # to be one test each; the receipt's rules are what make them all come out right.
 UNDO_SCENARIOS = {
     "plain round trip": (ORIGINAL, [], ORIGINAL, {"kept": ()}),
+    "helper round trip": (ORIGINAL, [], ORIGINAL, {"kept": ()}, {"credential": HELPER, "model": KeepModel()}),
+    "helper with no file before": (None, [], None, {"file_removed": True}, {"credential": HELPER}),
+    "re-logins switching between the token and the helper keep the first snapshot": (
+        ORIGINAL,
+        [{"credential": HELPER, "model": KeepModel()}, {"credential": RELOGIN, "model": KeepModel()}],
+        ORIGINAL,
+        {"kept": ()},
+        {"credential": HELPER, "model": KeepModel()},
+    ),
     "no file before": (None, [], None, {"file_removed": True}),
     "no env before": ({"theme": "dark"}, [], {"theme": "dark"}, {}),
     "null env before": ({"theme": "dark", "env": None}, [], {"theme": "dark", "env": None}, {}),
