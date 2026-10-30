@@ -146,7 +146,7 @@ class AzureAnthropicMessagesConfig(AnthropicMessagesConfig):
             headers=headers,
         )
         self._normalize_system_role_messages(
-            anthropic_messages_request, model=model, drop_params=getattr(litellm_params, "drop_params", None)
+            anthropic_messages_request, model=model, drop_params=litellm_params.drop_params
         )
         self._remove_scope_from_cache_control(anthropic_messages_request)
         return anthropic_messages_request

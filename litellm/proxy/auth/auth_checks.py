@@ -569,7 +569,6 @@ def is_model_cost_zero(model: str | list[str] | None, llm_router: Router | None)
                     return False
                 continue
         try:
-            # Use the router registry's group info directly for better reliability
             model_group_info = llm_router.registry().group(model_name, include_hidden=True)
 
             if model_group_info is None:
