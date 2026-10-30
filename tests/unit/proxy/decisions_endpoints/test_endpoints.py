@@ -765,6 +765,84 @@ def test_openai_format_decisions_reach_an_openai_deployment_unchanged_including_
     assert float(response.headers["x-litellm-response-cost"]) == pytest.approx(expected_cost)
 
 
+_AZURE_SDK_DECISIONS_PATHS: Final = (
+    "/openai/v1/decisions",
+    "/openai/v1/decisions?api-version=preview",
+    "/openai/decisions?api-version=2025-04-01-preview",
+)
+
+
+def _route_to_an_azure_deployment(monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter) -> respx.Route:
+    monkeypatch.setattr(
+        litellm.proxy.proxy_server,
+        "llm_router",
+        litellm.Router(
+            model_list=[
+                {
+                    "model_name": "decider",
+                    "litellm_params": {
+                        "model": "azure/gpt5_series/my-decisions-deployment",
+                        "api_base": "https://my-resource.openai.azure.com",
+                        "api_key": "azure-deployment-key",
+                    },
+                }
+            ]
+        ),
+    )
+    return respx_mock.post("https://my-resource.openai.azure.com/openai/v1/decisions").respond(
+        json={
+            "model": "gpt-6-luna",
+            "answers": _OPENAI_FORMAT_ANSWERS,
+            "usage": {
+                "input_tokens": _INPUT_TOKENS,
+                "output_tokens": _OUTPUT_TOKENS,
+                "total_tokens": _INPUT_TOKENS + _OUTPUT_TOKENS,
+            },
+        }
+    )
+
+
+@pytest.mark.parametrize("path", _AZURE_SDK_DECISIONS_PATHS)
+def test_azure_sdk_decisions_paths_reach_the_azure_deployment(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+    path: str,
+) -> None:
+    upstream: Final = _route_to_an_azure_deployment(monkeypatch, respx_mock)
+
+    response: Final = client.post(path, json=_OPENAI_FORMAT_REQUEST, headers={"api-key": "caller-key"})
+
+    assert response.status_code == 200, response.text
+    assert response.json()["answers"] == _OPENAI_FORMAT_ANSWERS
+    assert upstream.call_count == 1
+    sent: Final = upstream.calls[0].request
+    assert sent.headers["api-key"] == "azure-deployment-key"
+    assert json.loads(sent.content)["model"] == "my-decisions-deployment"
+    luna_decisions_cost: Final = apply_decisions_pricing(litellm.model_cost["azure/gpt-6-luna"])
+    expected_cost: Final = _INPUT_TOKENS * float(luna_decisions_cost["input_cost_per_token"]) + _OUTPUT_TOKENS * float(
+        luna_decisions_cost["output_cost_per_token"]
+    )
+    assert expected_cost > 0
+    assert float(response.headers["x-litellm-response-cost"]) == pytest.approx(expected_cost)
+
+
+@pytest.mark.parametrize("path", _AZURE_SDK_DECISIONS_PATHS)
+def test_azure_sdk_decisions_paths_require_a_virtual_key(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+    path: str,
+) -> None:
+    upstream: Final = _route_to_an_azure_deployment(monkeypatch, respx_mock)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "master_key", MASTER_KEY)
+
+    response: Final = client.post(path, json=_OPENAI_FORMAT_REQUEST)
+
+    assert response.status_code == 401, response.text
+    assert not upstream.called
+
+
 _CLEF_OMNI_MEDIA: Final[Mapping[str, object]] = {
     "audio": ["data:audio/wav;base64,YQ==", {"content_type": "audio/webm;codecs=opus", "base64": "Yg=="}],
     "videos": ["data:video/mp4;base64,Yw=="],

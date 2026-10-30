@@ -249,6 +249,20 @@ async def systemone(
 
 
 @router.post(
+    "/openai/v1/decisions",
+    dependencies=[Depends(user_api_key_auth)],
+    response_class=ORJSONResponse,  # pyright: ignore[reportDeprecated]  # required endpoint contract
+    tags=["decisions"],
+    include_in_schema=False,
+)
+@router.post(
+    "/openai/decisions",
+    dependencies=[Depends(user_api_key_auth)],
+    response_class=ORJSONResponse,  # pyright: ignore[reportDeprecated]  # required endpoint contract
+    tags=["decisions"],
+    include_in_schema=False,
+)
+@router.post(
     "/v1/decisions",
     dependencies=[Depends(user_api_key_auth)],
     response_class=ORJSONResponse,  # pyright: ignore[reportDeprecated]  # required endpoint contract
