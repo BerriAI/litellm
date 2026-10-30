@@ -84,6 +84,7 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.agent_endpoints.auth.agent_access_groups import (
+    AgentAccessGroupCeiling,
     CeilingResolver,
     resolve_agent_access_group_ceiling,
 )
@@ -446,7 +447,7 @@ def _request_has_trace_id(request_body: Mapping[str, object], request: Request, 
     from litellm.proxy.litellm_pre_call_utils import (
         _trace_id_from_traceparent,  # pyright: ignore[reportPrivateUsage]  # reuse W3C traceparent parser
         get_chain_id_from_headers,
-        metadata_variable_name_for_route,
+        metadata_variable_name_for_request,
     )
 
     if get_chain_id_from_headers(dict(request.headers)):
@@ -460,7 +461,7 @@ def _request_has_trace_id(request_body: Mapping[str, object], request: Request, 
         traceparent: Final[str | None] = request.headers.get("traceparent")
         if isinstance(traceparent, str) and _trace_id_from_traceparent(traceparent):
             return True
-    metadata_variable_name: Final = metadata_variable_name_for_route(get_request_route(request))
+    metadata_variable_name: Final = metadata_variable_name_for_request(get_request_route(request), request_body)
     selected_metadata: Final[object] = request_body.get(metadata_variable_name)
     if isinstance(selected_metadata, dict):
         selected_metadata_dict: Final = _TRACE_ID_METADATA_ADAPTER.validate_python(selected_metadata)
@@ -1367,11 +1368,15 @@ async def common_checks(
     if not skip_all_budget_checks:
         # Key metadata.tags are injected into request_body here so the tag budget
         # check can read them; this mutation must run before the gathered checks.
-        from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+        from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup, metadata_variable_name_for_request
 
         if valid_token is not None:
             for tag_target in LiteLLMProxyRequestSetup.pre_auth_tag_merge_targets(request, request_body):
                 LiteLLMProxyRequestSetup.pre_seed_litellm_metadata_for_route(request_data=tag_target, route=route)
+                LiteLLMProxyRequestSetup.merge_caller_body_tags(
+                    request_data=tag_target,
+                    metadata_variable_name=metadata_variable_name_for_request(route, tag_target),
+                )
                 LiteLLMProxyRequestSetup.apply_key_tags_pre_auth(request_data=tag_target, user_api_key_dict=valid_token)
         LiteLLMProxyRequestSetup.apply_authenticated_baggage_tags(request, request_body)
 
@@ -1680,6 +1685,7 @@ def get_actual_routes(allowed_routes: list) -> list:
 
 KEY_END_USER_BUDGET_ID_METADATA_FIELD: Final = "end_user_budget_id"
 _KEY_METADATA_ADAPTER: Final[TypeAdapter[Mapping[str, object] | None]] = TypeAdapter(Mapping[str, object] | None)
+_OBJECTS_ADAPTER: Final[TypeAdapter[tuple[object, ...]]] = TypeAdapter(tuple[object, ...])
 
 
 def get_key_end_user_budget_id(key_metadata: Mapping[str, object] | None) -> str | None:
@@ -5081,6 +5087,36 @@ async def can_agent_call_model(
     )
 
 
+async def _agent_access_group_ceilings(
+    valid_token: UserAPIKeyAuth, resolve_ceiling: CeilingResolver
+) -> tuple[AgentAccessGroupCeiling, ...]:
+    if not valid_token.agent_id:
+        return ()
+
+    from litellm.proxy.agent_endpoints.auth.agent_access_groups import resolve_managed_agent_ceilings
+
+    managed: Final = managed_agent_policy(valid_token)
+    if managed is not None:
+        return await resolve_managed_agent_ceilings(managed)
+    unmanaged: Final = await resolve_ceiling(valid_token.agent_id)
+    return (unmanaged,) if unmanaged is not None else ()
+
+
+def _managed_agent_model_grants(valid_token: UserAPIKeyAuth) -> frozenset[str]:
+    managed: Final = managed_agent_policy(valid_token)
+    granted: Final = (managed.object_permission or {}).get("models") if managed is not None else None
+    if not isinstance(granted, (list, tuple)):
+        return frozenset()
+    return frozenset(name for name in _OBJECTS_ADAPTER.validate_python(granted) if isinstance(name, str))
+
+
+async def agent_model_grants(
+    valid_token: UserAPIKeyAuth, resolve_ceiling: CeilingResolver = resolve_agent_access_group_ceiling
+) -> frozenset[str]:
+    ceilings: Final = await _agent_access_group_ceilings(valid_token, resolve_ceiling)
+    return _managed_agent_model_grants(valid_token).union(*(ceiling.models for ceiling in ceilings))
+
+
 async def _check_agent_access_group_model_access(
     model: str | list[str] | None,  # mutable-ok: _can_object_call_model and the client message helper take list[str]
     valid_token: UserAPIKeyAuth | None,
@@ -5088,20 +5124,9 @@ async def _check_agent_access_group_model_access(
     resolve_ceiling: CeilingResolver = resolve_agent_access_group_ceiling,
 ) -> Literal[True]:
     """Attached groups naming no model deny every model; the empty allowlist in ``_can_object_call_model`` allows."""
-    if not model or valid_token is None or not valid_token.agent_id:
+    if not model or valid_token is None:
         return True
-
-    from litellm.proxy.agent_endpoints.auth.agent_access_groups import resolve_managed_agent_ceilings
-
-    managed: Final = managed_agent_policy(valid_token)
-    unmanaged: Final = await resolve_ceiling(valid_token.agent_id) if managed is None else None
-    ceilings: Final = (
-        await resolve_managed_agent_ceilings(managed)
-        if managed is not None
-        else (unmanaged,)
-        if unmanaged is not None
-        else ()
-    )
+    ceilings: Final = await _agent_access_group_ceilings(valid_token, resolve_ceiling)
     dispatched: Final = _resolve_team_alias(
         model, team_model_aliases_for_auth_check(valid_token), valid_token.team_id, llm_router
     )
