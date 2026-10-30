@@ -18,6 +18,7 @@ import json
 import time
 import uuid
 from collections.abc import Iterator, Mapping, Sequence
+from itertools import chain
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Union, cast
 
@@ -36,6 +37,8 @@ from litellm.llms.base_llm.guardrail_translation.base_translation import (
 )
 from litellm.llms.base_llm.guardrail_translation.utils import (
     blocked_chat_stream_usage,
+    choice_payload,
+    choice_refusal,
     effective_scan_only_tool_results_for_guardrail,
     effective_skip_system_message_for_guardrail,
     effective_skip_tool_message_for_guardrail,
@@ -74,6 +77,9 @@ if TYPE_CHECKING:
     )
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
+
+_REFUSAL_CONTENT_POSITION: Final = -1
+_REFUSAL_FIELD: Final = "refusal"
 
 
 class OpenAIChatCompletionsHandler(BaseTranslation):
@@ -659,7 +665,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         output guardrail against it, and (when opted in) write any text or
         tool-call rewrite back across the buffered chunks."""
         model_response: Final = self._rebuild_ended_stream_per_choice(responses_so_far, litellm_logging_obj)
-        pre_guardrail_texts: Final = self._string_choice_contents(model_response)
+        pre_guardrail_texts: Final = self._rewritable_choice_texts(model_response)
         pre_guardrail_tool_calls: Final = self._function_tool_call_shapes(model_response)
         await self.process_output_response(
             response=model_response,
@@ -891,6 +897,11 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                 else:
                     continue
 
+                refusal = choice_refusal(choice)
+                if refusal is not None:
+                    refusal_key: tuple[int, int | None] = (choice.index, _REFUSAL_CONTENT_POSITION)
+                    combined_texts[refusal_key] = combined_texts.get(refusal_key, "") + refusal
+
                 if content is None:
                     continue
 
@@ -927,6 +938,8 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         if isinstance(response, ModelResponse):
             for choice in response.choices:
                 if isinstance(choice, litellm.Choices):
+                    if choice_refusal(choice) is not None:
+                        return True
                     # Check for text content
                     if choice.message.content and isinstance(choice.message.content, str):
                         return True
@@ -937,6 +950,8 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         elif isinstance(response, ModelResponseStream):
             for streaming_choice in response.choices:
                 if isinstance(streaming_choice, litellm.StreamingChoices):
+                    if choice_refusal(streaming_choice) is not None:
+                        return True
                     # Check for text content
                     if streaming_choice.delta.content and isinstance(streaming_choice.delta.content, str):
                         return True
@@ -999,6 +1014,11 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                         if url:
                             images_to_check.append(url)
 
+        refusal: Final = choice_refusal(choice)
+        if refusal is not None:
+            texts_to_check.append(refusal)
+            text_task_mappings.append((choice_idx, _REFUSAL_CONTENT_POSITION))
+
         # Process tool calls if they exist
         if tool_calls is not None and isinstance(tool_calls, list):
             for tool_call_idx, tool_call in enumerate(tool_calls):
@@ -1048,6 +1068,10 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
 
             choice = cast(Choices, response.choices[choice_idx])
 
+            if content_idx_optional == _REFUSAL_CONTENT_POSITION:
+                _write_choice_refusal(choice, guardrail_response)
+                continue
+
             # Handle content
             content = choice.message.content
             if content is None:
@@ -1095,38 +1119,36 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                                 existing_tool_call.function.name = func_dict["name"]
 
     @staticmethod
-    def _string_choice_contents(response: "ModelResponse") -> tuple[str | None, ...]:
-        return tuple(
-            choice.message.content if isinstance(choice.message.content, str) else None for choice in response.choices
+    def _rewritable_choice_texts(response: "ModelResponse") -> Mapping[tuple[int, int | None], str]:
+        return MappingProxyType(
+            dict(chain.from_iterable(_choice_rewritable_texts(choice) for choice in response.choices))
         )
 
     async def _write_ended_stream_text_rewrites(
         self,
         responses_so_far: list["ModelResponseStream"],  # mutable-ok: rewrites the caller's buffered chunks in place
         guardrailed_response: "ModelResponse",
-        pre_guardrail_texts: tuple[str | None, ...],
+        pre_guardrail_texts: Mapping[tuple[int, int | None], str],
     ) -> None:
         """Write ended-stream guardrail text rewrites back across the buffered
         chunks, one rewrite per rebuilt choice index: the full rewritten text
         lands in that choice's first content-carrying chunk and the rest are
         blanked, the same shape the in-flight write-back uses. Chunks carrying
         only finish_reason or usage stay untouched."""
-        post_guardrail_texts: Final = self._string_choice_contents(guardrailed_response)
-        rewrites_by_choice: Final = MappingProxyType(
+        post_guardrail_texts: Final = self._rewritable_choice_texts(guardrailed_response)
+        rewrites: Final = MappingProxyType(
             {
-                choice.index: after
-                for choice, before, after in zip(
-                    guardrailed_response.choices, pre_guardrail_texts, post_guardrail_texts
-                )
-                if before is not None and after is not None and after != before
+                position: after
+                for position, after in post_guardrail_texts.items()
+                if position in pre_guardrail_texts and after != pre_guardrail_texts[position]
             }
         )
-        if not rewrites_by_choice:
+        if not rewrites:
             return
         await self._apply_guardrail_responses_to_output_streaming(
             responses=responses_so_far,
-            guardrailed_texts=list(rewrites_by_choice.values()),
-            task_mappings=[(index, None) for index in rewrites_by_choice],
+            guardrailed_texts=list(rewrites.values()),
+            task_mappings=list(rewrites),
         )
 
     @staticmethod
@@ -1249,6 +1271,11 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                     content = choice.message.content
                 else:
                     continue
+
+                refusal_key: tuple[int, int | None] = (choice.index, _REFUSAL_CONTENT_POSITION)
+                if refusal_key in guardrail_map and choice_refusal(choice) is not None:
+                    _write_choice_refusal(choice, "" if refusal_key in already_set else guardrail_map[refusal_key])
+                    already_set[refusal_key] = True
 
                 if content is None:
                     continue
@@ -1383,6 +1410,19 @@ class _BlockedChunk(TypedDict):
 
 def _chat_sse_chunk(payload: _BlockedChunk) -> bytes:
     return f"data: {json.dumps(payload)}\n\n".encode()
+
+
+def _write_choice_refusal(choice: Choices | StreamingChoices, refusal: str) -> None:
+    setattr(choice_payload(choice), _REFUSAL_FIELD, refusal)
+
+
+def _choice_rewritable_texts(choice: Choices | StreamingChoices) -> Iterator[tuple[tuple[int, int | None], str]]:
+    content: Final = stream_item_field(choice_payload(choice), "content")
+    if isinstance(content, str):
+        yield (choice.index, None), content
+    refusal: Final = choice_refusal(choice)
+    if refusal is not None:
+        yield (choice.index, _REFUSAL_CONTENT_POSITION), refusal
 
 
 def _stream_chunk_choices(item: object) -> Sequence[object]:

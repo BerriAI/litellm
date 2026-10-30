@@ -135,6 +135,16 @@ def stream_item_field(item: object, field: str) -> object | None:
     return getattr(item, field, None)
 
 
+def choice_payload(choice: object) -> object | None:
+    delta: Final = stream_item_field(choice, "delta")
+    return delta if delta is not None else stream_item_field(choice, "message")
+
+
+def choice_refusal(choice: object) -> str | None:
+    refusal: Final = stream_item_field(choice_payload(choice), "refusal")
+    return refusal if isinstance(refusal, str) and refusal else None
+
+
 def stream_item_fingerprint(item: object) -> str:
     plain: Final = item.model_dump() if isinstance(item, BaseModel) else item
     return json.dumps(plain, sort_keys=True, default=str)

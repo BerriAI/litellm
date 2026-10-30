@@ -26,6 +26,7 @@ from litellm.litellm_core_utils.core_helpers import (
     get_metadata_variable_name_from_kwargs,
     get_or_create_metadata_bucket,
 )
+from litellm.llms.base_llm.guardrail_translation.utils import choice_refusal
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     get_async_httpx_client,
@@ -269,7 +270,8 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
 
         # Handle ModelResponse objects
         if isinstance(response, litellm.ModelResponse):
-            return get_content_from_model_response(response)
+            refusals: Final = tuple(refusal for choice in response.choices if (refusal := choice_refusal(choice)))
+            return "\n".join(part for part in (get_content_from_model_response(response), *refusals) if part)
 
         # For non-ModelResponse types (e.g., TTS, images), return empty string
         # These response types are not text-based and shouldn't be processed by text guardrails
@@ -908,7 +910,7 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
             return
 
         # Extract content from response
-        content: Final = self._extract_content_from_response(response)
+        content: Final = self._extract_scannable_content(response)
         if not content:
             verbose_proxy_logger.debug("Model Armor: No text content to process in response, skipping guardrail")
             return
@@ -962,12 +964,13 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
             if self.mask_response_content:
                 sanitized_content: Final = self._get_sanitized_content(armor_response)
                 if sanitized_content and sanitized_content != content:
-                    # Update response content
+                    if isinstance(response, ResponsesAPIResponse):
+                        raise HTTPException(
+                            status_code=400,
+                            detail=self._build_block_error_detail("Response blocked by Model Armor", armor_response),
+                        )
                     if isinstance(response, litellm.ModelResponse):
-                        for choice in response.choices:
-                            if isinstance(choice, Choices):
-                                if choice.message.content:
-                                    choice.message.content = sanitized_content
+                        self._apply_sanitized_content(response, sanitized_content)
 
         except ModelArmorAPIError as e:
             self._raise_if_fail_closed(e)
@@ -1049,11 +1052,11 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
             )
         return "".join((*texts, *(json.dumps(tool_call) for tool_call in tool_calls)))
 
-    def _extract_streaming_content(self, assembled_response: object) -> str:
-        """Text to scan from an assembled stream, for every endpoint shape this hook serves."""
-        if isinstance(assembled_response, ResponsesAPIResponse):
-            return self._responses_api_response_text(assembled_response)
-        return self._extract_content_from_response(assembled_response)
+    def _extract_scannable_content(self, response: object) -> str:
+        """Text to scan from a response, for every endpoint shape this hook serves."""
+        if isinstance(response, ResponsesAPIResponse):
+            return self._responses_api_response_text(response)
+        return self._extract_content_from_response(response)
 
     @staticmethod
     def _responses_delta_field(chunk: object) -> tuple[str, ...]:
@@ -1091,7 +1094,7 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
         delta events that its terminal body never repeats, so every delta field the body does not
         already carry is scanned after it.
         """
-        content: Final = self._extract_streaming_content(assembled_response)
+        content: Final = self._extract_scannable_content(assembled_response)
         if surface is not _StreamSurface.RESPONSES:
             return content
         unscanned: Final = tuple(text for text in self._responses_delta_field_texts(all_chunks) if text not in content)
@@ -1100,9 +1103,12 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
     @staticmethod
     def _apply_sanitized_content(assembled_response: ModelResponse, sanitized_content: str) -> None:
         """Replace every non-empty choice message with the Model Armor sanitized text."""
-        for choice in assembled_response.choices:
-            if isinstance(choice, Choices) and choice.message.content:
+        message_choices: Final = tuple(choice for choice in assembled_response.choices if isinstance(choice, Choices))
+        for choice in message_choices:
+            if choice.message.content:
                 choice.message.content = sanitized_content
+            if choice_refusal(choice):
+                choice.message.refusal = sanitized_content
 
     @staticmethod
     def _assemble_chat_completion_stream(

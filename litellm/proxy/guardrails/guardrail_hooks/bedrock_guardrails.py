@@ -43,6 +43,7 @@ from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import (
 )
 from litellm.llms.anthropic.chat.guardrail_translation.handler import AnthropicMessagesHandler
 from litellm.llms.base_llm.guardrail_translation.utils import (
+    choice_refusal,
     effective_scan_only_tool_results_for_guardrail,
     effective_skip_tool_message_for_guardrail,
 )
@@ -485,6 +486,13 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                     qualifier="guard_content" if has_grounding else None,
                 )
                 items.append(self._build_content_item(block))
+            refusal = choice_refusal(choice)
+            if refusal is not None:
+                items.append(
+                    self._build_content_item(
+                        QualifiedTextBlock(text=refusal, qualifier="guard_content" if has_grounding else None)
+                    )
+                )
         return items
 
     def convert_to_bedrock_format(
@@ -2828,7 +2836,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             has_text_content = False
             for choice in response.choices:
                 if isinstance(choice, litellm.Choices):
-                    if choice.message.content and isinstance(choice.message.content, str):
+                    if (choice.message.content and isinstance(choice.message.content, str)) or choice_refusal(choice):
                         has_text_content = True
                         break
 
@@ -2946,9 +2954,17 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         # Anthropic SSE, so the assembly below cannot scan them; the unified
         # guardrail's translation layer can, with buffering semantics kept.
         if _is_responses_api_route(user_api_key_dict.request_route):
+            from litellm.llms.openai.responses.guardrail_translation.handler import (
+                rewrite_buffered_responses_stream,
+            )
             from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail import (
                 UnifiedLLMGuardrails,
             )
+
+            if self.mask_response_content:
+                for masked_event in await rewrite_buffered_responses_stream(response, self, request_data):
+                    yield masked_event
+                return
 
             async for translated_chunk in UnifiedLLMGuardrails().async_post_call_streaming_iterator_hook(
                 user_api_key_dict=user_api_key_dict,
@@ -3230,6 +3246,9 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                         choice.message.content = masked_texts[masking_index]
                         masking_index += 1
                         verbose_proxy_logger.debug("Applied masking to choice message content")
+                if choice_refusal(choice) and masking_index < len(masked_texts):
+                    choice.message.refusal = masked_texts[masking_index]
+                    masking_index += 1
             elif isinstance(choice, StreamingChoices):
                 # For streaming responses, modify delta content
                 if choice.delta.content and isinstance(choice.delta.content, str):

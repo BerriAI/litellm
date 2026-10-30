@@ -2726,3 +2726,24 @@ def test_stream_chunk_builder_counts_a_custom_named_deployments_missing_usage_wi
         model="my-gpt-6", messages=messages
     )
     assert built.usage.prompt_tokens == litellm.token_counter(model=counted_as, messages=messages)
+
+
+def test_stream_chunk_builder_assembles_a_streamed_refusal():
+    chunks = [
+        ModelResponseStream(
+            id="chatcmpl-refusal",
+            created=1,
+            model="gpt-4",
+            object="chat.completion.chunk",
+            choices=[StreamingChoices(index=0, delta=delta, finish_reason=finish_reason)],
+        )
+        for delta, finish_reason in (
+            (Delta(role="assistant", refusal="I cannot "), None),
+            (Delta(refusal="help you."), None),
+            (Delta(), "stop"),
+        )
+    ]
+
+    built = stream_chunk_builder(chunks=chunks)
+
+    assert built.choices[0].message.refusal == "I cannot help you."

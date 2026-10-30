@@ -3,7 +3,7 @@ import base64
 import io
 import json
 from collections.abc import Iterator, Sequence
-from typing import cast
+from typing import Final, cast
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
@@ -5318,3 +5318,110 @@ async def test_apply_guardrail_raises_on_flagged_when_not_logging_only():
     entries = request_data["metadata"]["standard_logging_guardrail_information"]
     flagged = [e for e in entries if e["guardrail_status"] == "guardrail_flagged"]
     assert len(flagged) == 1
+
+
+def _model_armor_post_call_guardrail(mask_response_content: bool) -> ModelArmorGuardrail:
+    guardrail = ModelArmorGuardrail(
+        template_id="test-template",
+        project_id="test-project",
+        location="us-central1",
+        guardrail_name="model-armor-test",
+        mask_response_content=mask_response_content,
+    )
+    guardrail._ensure_access_token_async = AsyncMock(return_value=("test-token", "test-project"))
+    return guardrail
+
+
+def _armor_http_response(sanitization_result: dict) -> AsyncMock:
+    response = AsyncMock()
+    response.status_code = 200
+    response.json = AsyncMock(return_value={"sanitizationResult": sanitization_result})
+    return response
+
+
+def _armor_redaction(text: str) -> dict:
+    deidentify = {"matchState": "MATCH_FOUND", "data": {"text": text}}
+    return {
+        "filterMatchState": "MATCH_FOUND",
+        "filterResults": {"sdp": {"sdpFilterResult": {"deidentifyResult": deidentify}}},
+    }
+
+
+def _armor_block() -> dict:
+    return {
+        "filterMatchState": "MATCH_FOUND",
+        "filterResults": {"pi_and_jailbreak": {"piAndJailbreakFilterResult": {"matchState": "MATCH_FOUND"}}},
+    }
+
+
+def _responses_refusal_response():
+    from litellm.types.llms.openai import ResponsesAPIResponse
+
+    return ResponsesAPIResponse.model_validate(
+        {
+            "id": "resp_1",
+            "created_at": 0,
+            "model": "gpt-4o",
+            "object": "response",
+            "status": "completed",
+            "output": [
+                {
+                    "type": "message",
+                    "id": "msg_1",
+                    "status": "completed",
+                    "role": "assistant",
+                    "content": [{"type": "refusal", "refusal": "I cannot help card 4111-1111-1111-1111"}],
+                }
+            ],
+            "parallel_tool_calls": False,
+            "tool_choice": "auto",
+            "tools": [],
+        }
+    )
+
+
+_POST_CALL_REQUEST: Final = {
+    "model": "gpt-4",
+    "messages": [{"role": "user", "content": "What's my credit card?"}],
+    "metadata": {"guardrails": ["model-armor-test"]},
+}
+
+
+@pytest.mark.asyncio
+async def test_post_call_scans_and_sanitizes_a_chat_refusal():
+    guardrail = _model_armor_post_call_guardrail(mask_response_content=True)
+    post = AsyncMock(return_value=_armor_http_response(_armor_redaction("I cannot help card [REDACTED]")))
+    llm_response = litellm.ModelResponse()
+    llm_response.choices = [
+        litellm.Choices(message=litellm.Message(content=None, refusal="I cannot help card 4111-1111-1111-1111"))
+    ]
+
+    with patch.object(guardrail.async_handler, "post", post):
+        await guardrail.async_post_call_success_hook(
+            data=dict(_POST_CALL_REQUEST), user_api_key_dict=UserAPIKeyAuth(), response=llm_response
+        )
+
+    assert "4111-1111-1111-1111" in str(post.call_args)
+    assert llm_response.choices[0].message.refusal == "I cannot help card [REDACTED]"
+
+
+@pytest.mark.asyncio
+async def test_post_call_blocks_on_a_flagged_responses_refusal():
+    guardrail = _model_armor_post_call_guardrail(mask_response_content=False)
+    post = AsyncMock(return_value=_armor_http_response(_armor_block()))
+
+    with patch.object(guardrail.async_handler, "post", post), pytest.raises(HTTPException):
+        await guardrail.async_post_call_success_hook(
+            data=dict(_POST_CALL_REQUEST), user_api_key_dict=UserAPIKeyAuth(), response=_responses_refusal_response()
+        )
+
+
+@pytest.mark.asyncio
+async def test_post_call_blocks_a_responses_body_it_cannot_rewrite_instead_of_releasing_it():
+    guardrail = _model_armor_post_call_guardrail(mask_response_content=True)
+    post = AsyncMock(return_value=_armor_http_response(_armor_redaction("I cannot help card [REDACTED]")))
+
+    with patch.object(guardrail.async_handler, "post", post), pytest.raises(HTTPException):
+        await guardrail.async_post_call_success_hook(
+            data=dict(_POST_CALL_REQUEST), user_api_key_dict=UserAPIKeyAuth(), response=_responses_refusal_response()
+        )

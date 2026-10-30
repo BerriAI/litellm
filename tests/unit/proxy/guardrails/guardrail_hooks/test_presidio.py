@@ -32,6 +32,15 @@ from litellm.proxy.guardrails.guardrail_hooks.presidio import (
     PresidioPerRequestConfig,
 )
 from litellm.types.guardrails import LitellmParams, PiiAction, PiiEntityType
+from litellm.types.llms.openai import (
+    BaseLiteLLMOpenAIResponseObject,
+    OutputItemDoneEvent,
+    RefusalDeltaEvent,
+    RefusalDoneEvent,
+    ResponseCompletedEvent,
+    ResponsesAPIResponse,
+    ResponsesAPIStreamEvents,
+)
 from litellm.types.proxy.guardrails.guardrail_hooks.presidio import PresidioAnalyzeRequest, PresidioAnalyzeResponseItem
 from litellm.types.utils import Choices, Delta, Message, ModelResponse, StreamingChoices
 
@@ -5068,3 +5077,107 @@ def test_get_session_iterator_reuses_one_session_per_background_loop(
     assert len(sessions) == 10
     assert all(session is sessions[0] for session in sessions)
     assert presidio_guardrail._http_session is None
+
+
+_REFUSAL_POSITION: Final = {"item_id": "msg_1", "output_index": 0, "content_index": 0}
+
+
+def _email_masking_guardrail() -> OPTIONAL_PresidioPIIMasking:
+    return OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        apply_to_output=True,
+        mock_redacted_text={"text": "I cannot help <EMAIL_ADDRESS>"},
+    )
+
+
+def _refusal_stream_events() -> tuple[object, ...]:
+    refusal_part: Final = {"type": "refusal", "refusal": "I cannot help alice@example.com"}
+    message: Final = BaseLiteLLMOpenAIResponseObject(
+        type="message", id="msg_1", role="assistant", content=[refusal_part]
+    )
+    return (
+        RefusalDeltaEvent(type=ResponsesAPIStreamEvents.REFUSAL_DELTA, **_REFUSAL_POSITION, delta="I cannot help "),
+        RefusalDeltaEvent(type=ResponsesAPIStreamEvents.REFUSAL_DELTA, **_REFUSAL_POSITION, delta="alice@example.com"),
+        RefusalDoneEvent(
+            type=ResponsesAPIStreamEvents.REFUSAL_DONE,
+            **_REFUSAL_POSITION,
+            refusal="I cannot help alice@example.com",
+        ),
+        OutputItemDoneEvent(type=ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE, output_index=0, item=message),
+        ResponseCompletedEvent(
+            type=ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
+            response=ResponsesAPIResponse.model_validate(
+                {
+                    "id": "resp_1",
+                    "created_at": 1,
+                    "model": "gpt-4o",
+                    "object": "response",
+                    "status": "completed",
+                    "output": [
+                        {
+                            "type": "message",
+                            "id": "msg_1",
+                            "status": "completed",
+                            "role": "assistant",
+                            "content": [refusal_part],
+                        }
+                    ],
+                    "parallel_tool_calls": False,
+                    "tool_choice": "auto",
+                    "tools": [],
+                }
+            ),
+        ),
+    )
+
+
+async def _drain_output_masking(guardrail: OPTIONAL_PresidioPIIMasking, events: Iterable[object]) -> list[object]:
+    async def stream():
+        for event in events:
+            yield event
+
+    return [
+        event
+        async for event in guardrail.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
+            response=stream(),
+            request_data={"input": "hello"},
+        )
+    ]
+
+
+@pytest.mark.asyncio
+async def test_mask_and_unmask_cover_a_chat_refusal():
+    guardrail = _email_masking_guardrail()
+    response = ModelResponse(
+        choices=[Choices(index=0, message=Message(role="assistant", refusal="I cannot help alice@example.com"))]
+    )
+
+    await guardrail._process_response_for_pii(response=response, request_data={}, mode="mask")
+    assert response.choices[0].message.refusal == "I cannot help <EMAIL_ADDRESS>"
+
+    await guardrail._process_response_for_pii(
+        response=response,
+        request_data={"metadata": {"pii_tokens": {"<EMAIL_ADDRESS>": "alice@example.com"}}},
+        mode="unmask",
+    )
+    assert response.choices[0].message.refusal == "I cannot help alice@example.com"
+
+
+@pytest.mark.asyncio
+async def test_apply_to_output_masks_every_event_of_a_responses_refusal_stream():
+    collected = await _drain_output_masking(_email_masking_guardrail(), _refusal_stream_events())
+
+    assert len(collected) == len(_refusal_stream_events())
+    assert "alice@example.com" not in json.dumps([event.model_dump() for event in collected], default=str)
+    assert "".join(event.delta for event in collected[:2]) == "I cannot help <EMAIL_ADDRESS>"
+
+
+@pytest.mark.asyncio
+async def test_apply_to_output_blocks_a_responses_stream_before_any_event_is_released():
+    guardrail = _email_masking_guardrail()
+    blocked = BlockedPiiEntityError(entity_type="EMAIL_ADDRESS", guardrail_name="presidio")
+
+    with patch.object(guardrail, "check_pii", side_effect=blocked):
+        with pytest.raises(BlockedPiiEntityError):
+            await _drain_output_masking(guardrail, _refusal_stream_events())

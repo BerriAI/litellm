@@ -8105,3 +8105,97 @@ async def test_guardrail_secret_lookups_leave_the_event_loop_free(
     assert vault.read.is_set()
     assert not vault.read_on_loop.is_set()
     assert upstream.calls.last.request.url.host == "bedrock-runtime.us-west-2.amazonaws.com"
+
+
+def _masking_bedrock_guardrail() -> BedrockGuardrail:
+    return BedrockGuardrail(
+        guardrail_name="bedrock-mask-refusal",
+        guardrailIdentifier="test-id",
+        guardrailVersion="DRAFT",
+        event_hook=GuardrailEventHooks.post_call,
+        default_on=True,
+        mask_response_content=True,
+    )
+
+
+def _anonymized_scan(*masked_texts: str) -> dict:
+    return {
+        "action": "GUARDRAIL_INTERVENED",
+        "assessments": [],
+        "outputs": [{"text": text} for text in masked_texts],
+    }
+
+
+def test_output_scan_payload_carries_the_refusal_after_the_content():
+    response = litellm.ModelResponse(
+        choices=[
+            litellm.Choices(
+                index=0,
+                message=litellm.Message(role="assistant", content="Write to me", refusal="I cannot help alice"),
+            )
+        ]
+    )
+
+    items = _masking_bedrock_guardrail()._build_response_content_items(response, has_grounding=False)
+
+    assert [item["text"]["text"] for item in items] == ["Write to me", "I cannot help alice"]
+
+
+def test_masked_outputs_go_back_to_the_field_each_one_came_from():
+    response = litellm.ModelResponse(
+        choices=[
+            litellm.Choices(
+                index=0,
+                message=litellm.Message(role="assistant", content="Write to alice", refusal="I cannot help alice"),
+            )
+        ]
+    )
+
+    _masking_bedrock_guardrail()._apply_masking_to_model_response(
+        response, ["Write to <NAME>", "I cannot help <NAME>"]
+    )
+
+    assert response.choices[0].message.content == "Write to <NAME>"
+    assert response.choices[0].message.refusal == "I cannot help <NAME>"
+
+
+@pytest.mark.asyncio
+async def test_a_refusal_only_response_reaches_the_post_call_scan():
+    guardrail = _masking_bedrock_guardrail()
+    response = litellm.ModelResponse(
+        choices=[litellm.Choices(index=0, message=litellm.Message(role="assistant", refusal="I cannot help alice"))]
+    )
+
+    with patch.object(
+        guardrail, "make_bedrock_api_request", AsyncMock(return_value=_anonymized_scan("I cannot help <NAME>"))
+    ):
+        await guardrail.async_post_call_success_hook(
+            data={"model": "gpt-4o", "messages": [{"role": "user", "content": "hi"}]},
+            user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
+            response=response,
+        )
+
+    assert response.choices[0].message.refusal == "I cannot help <NAME>"
+
+
+@pytest.mark.asyncio
+async def test_masking_on_a_responses_stream_rewrites_the_events_the_client_reads():
+    guardrail = _masking_bedrock_guardrail()
+    stream_events = _responses_stream_events()
+
+    async def mock_stream():
+        for event in stream_events:
+            yield event
+
+    with patch.object(guardrail, "make_bedrock_api_request", AsyncMock(return_value=_anonymized_scan("Hello <NAME>"))):
+        yielded = [
+            event
+            async for event in guardrail.async_post_call_streaming_iterator_hook(
+                user_api_key_dict=UserAPIKeyAuth(api_key="test-key", request_route="/v1/responses"),
+                response=mock_stream(),
+                request_data={"model": "gpt-4o", "input": "hi"},
+            )
+        ]
+
+    assert "".join(event.delta for event in yielded[:-1]) == "Hello <NAME>"
+    assert "Hello world" not in yielded[-1].model_dump_json()

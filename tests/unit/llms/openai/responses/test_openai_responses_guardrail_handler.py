@@ -5017,3 +5017,152 @@ class TestCompactionOutputSummaryReachesOutputGuardrails:
             )
 
         assert ended_key(self.SUMMARY) != ended_key("The user lives elsewhere.")
+
+
+class _EmailMaskingGuardrail(CustomGuardrail):
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: Optional[Any] = None,
+    ) -> GenericGuardrailAPIInputs:
+        return {**inputs, "texts": [text.replace("alice@example.com", "<EMAIL>") for text in inputs.get("texts", [])]}
+
+
+class _EmailBlockingGuardrail(CustomGuardrail):
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: Optional[Any] = None,
+    ) -> GenericGuardrailAPIInputs:
+        if any("alice@example.com" in text for text in inputs.get("texts", [])):
+            raise HTTPException(status_code=400, detail="blocked")
+        return inputs
+
+
+class TestRefusalParts:
+    REFUSAL: Final = "I cannot help alice@example.com"
+
+    @classmethod
+    def _message(cls, *parts: dict) -> dict:
+        return {"type": "message", "id": "msg_1", "status": "completed", "role": "assistant", "content": list(parts)}
+
+    @classmethod
+    def _response(cls, *parts: dict) -> ResponsesAPIResponse:
+        return ResponsesAPIResponse.model_validate(
+            {
+                "id": "resp_1",
+                "created_at": 1,
+                "model": "gpt-4o",
+                "object": "response",
+                "status": "completed",
+                "output": [cls._message(*parts)],
+                "parallel_tool_calls": False,
+                "tool_choice": "auto",
+                "tools": [],
+            }
+        )
+
+    @classmethod
+    def _refusal_part(cls) -> dict:
+        return {"type": "refusal", "refusal": cls.REFUSAL}
+
+    @classmethod
+    def _stream_events(cls) -> list[dict]:
+        position: Final = {"output_index": 0, "content_index": 0}
+        return [
+            {"type": "response.refusal.delta", **position, "delta": "I cannot help "},
+            {"type": "response.refusal.delta", **position, "delta": "alice@example.com"},
+            {"type": "response.refusal.done", **position, "refusal": cls.REFUSAL},
+            {"type": "response.content_part.done", **position, "part": cls._refusal_part()},
+            {"type": "response.output_item.done", "output_index": 0, "item": cls._message(cls._refusal_part())},
+            {
+                "type": "response.completed",
+                "response": {
+                    "id": "resp_1",
+                    "model": "gpt-4o",
+                    "status": "completed",
+                    "output": [cls._message(cls._refusal_part())],
+                },
+            },
+        ]
+
+    @pytest.mark.asyncio
+    async def test_a_masking_guardrail_masks_a_refusal_part(self):
+        response = self._response(self._refusal_part())
+
+        await OpenAIResponsesHandler().process_output_response(
+            response=response, guardrail_to_apply=_EmailMaskingGuardrail(guardrail_name="mask")
+        )
+
+        assert response.output[0].content[0].refusal == "I cannot help <EMAIL>"
+
+    @pytest.mark.asyncio
+    async def test_a_masking_guardrail_keeps_text_and_refusal_parts_in_their_own_fields(self):
+        response = self._response(
+            {"type": "output_text", "text": "Write to alice@example.com", "annotations": []},
+            self._refusal_part(),
+        )
+
+        await OpenAIResponsesHandler().process_output_response(
+            response=response, guardrail_to_apply=_EmailMaskingGuardrail(guardrail_name="mask")
+        )
+
+        assert response.output[0].content[0].text == "Write to <EMAIL>"
+        assert response.output[0].content[1].refusal == "I cannot help <EMAIL>"
+
+    @pytest.mark.asyncio
+    async def test_a_blocking_guardrail_blocks_on_a_refusal_part(self):
+        with pytest.raises(HTTPException):
+            await OpenAIResponsesHandler().process_output_response(
+                response=self._response(self._refusal_part()),
+                guardrail_to_apply=_EmailBlockingGuardrail(guardrail_name="block"),
+            )
+
+    @pytest.mark.asyncio
+    async def test_an_ended_stream_delivers_the_masked_refusal_to_every_event(self):
+        events = self._stream_events()
+
+        await OpenAIResponsesHandler().process_output_streaming_response(
+            responses_so_far=events,
+            guardrail_to_apply=_EmailMaskingGuardrail(guardrail_name="mask"),
+            litellm_logging_obj=None,
+            deliver_ended_stream_rewrites=True,
+        )
+
+        assert "".join(event["delta"] for event in events[:2]) == "I cannot help <EMAIL>"
+        assert events[2]["refusal"] == "I cannot help <EMAIL>"
+        assert events[3]["part"]["refusal"] == "I cannot help <EMAIL>"
+        assert events[4]["item"]["content"][0]["refusal"] == "I cannot help <EMAIL>"
+        assert events[5]["response"]["output"][0]["content"][0]["refusal"] == "I cannot help <EMAIL>"
+
+    @pytest.mark.asyncio
+    async def test_a_stream_with_no_envelope_delivers_the_masked_refusal_over_its_deltas(self):
+        events = self._stream_events()[:3]
+
+        await OpenAIResponsesHandler().process_output_streaming_response(
+            responses_so_far=events,
+            guardrail_to_apply=_EmailMaskingGuardrail(guardrail_name="mask"),
+            litellm_logging_obj=None,
+            deliver_ended_stream_rewrites=True,
+        )
+
+        assert "".join(event["delta"] for event in events[:2]) == "I cannot help <EMAIL>"
+        assert events[2]["refusal"] == "I cannot help <EMAIL>"
+
+    @pytest.mark.asyncio
+    async def test_a_blocking_guardrail_blocks_on_refusal_deltas_with_no_envelope(self):
+        with pytest.raises(HTTPException):
+            await OpenAIResponsesHandler().process_output_streaming_response(
+                responses_so_far=self._stream_events()[:2],
+                guardrail_to_apply=_EmailBlockingGuardrail(guardrail_name="block"),
+                litellm_logging_obj=None,
+            )
+
+    def test_a_refusal_done_event_alone_supplies_the_text_to_scan(self):
+        done_event: Final = self._stream_events()[2]
+
+        assert OpenAIResponsesHandler().get_streaming_string_so_far([done_event]) == self.REFUSAL

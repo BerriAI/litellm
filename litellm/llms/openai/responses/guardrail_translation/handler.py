@@ -32,7 +32,7 @@ import copy
 import json
 import time
 import uuid
-from collections.abc import Iterable, Mapping, MutableSequence, Sequence
+from collections.abc import AsyncIterable, Iterable, Mapping, MutableSequence, Sequence
 from dataclasses import dataclass
 from itertools import accumulate, chain, groupby, repeat
 from types import MappingProxyType
@@ -123,7 +123,32 @@ if TYPE_CHECKING:
     from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 
 
+_StreamEventT: Final = TypeVar("_StreamEventT")
 _COMPACTION_SUMMARY_POSITION: Final = -1
+_REFUSAL_PART_TYPE: Final = "refusal"
+_SCANNED_PART_TYPES: Final = frozenset({"output_text", _REFUSAL_PART_TYPE})
+
+
+def _content_part_text_field(part: object) -> str:
+    return "refusal" if stream_item_field(part, "type") == _REFUSAL_PART_TYPE else "text"
+
+
+def _is_scanned_content_part(part: object) -> bool:
+    return isinstance(part, (OutputText, dict)) or stream_item_field(part, "type") in _SCANNED_PART_TYPES
+
+
+def _holds_content_part_text(part: object) -> bool:
+    return isinstance(part, dict) or hasattr(part, _content_part_text_field(part))
+
+
+def _content_part_text(part: object) -> str | None:
+    text: Final = stream_item_field(part, _content_part_text_field(part))
+    return text if _is_scanned_content_part(part) and isinstance(text, str) and text else None
+
+
+def _stream_event_whole_text(event: object) -> object | None:
+    text: Final = stream_item_field(event, "text")
+    return text if isinstance(text, str) else stream_item_field(event, "refusal")
 
 
 def _output_compaction_summary(item: object) -> str | None:
@@ -276,7 +301,11 @@ _TOOL_CALL_PAYLOAD_EVENT_TYPES: Final = _TOOL_CALL_PAYLOAD_DELTA_EVENT_TYPES | f
     _TOOL_CALL_PAYLOAD_DONE_EVENT_FIELDS
 )
 _OUTPUT_ITEM_EVENT_TYPES: Final = frozenset({"response.output_item.added", "response.output_item.done"})
-_OUTPUT_TEXT_EVENT_TYPES: Final = frozenset({"response.output_text.delta", "response.output_text.done"})
+_OUTPUT_TEXT_DELTA_EVENT_TYPES: Final = frozenset({"response.output_text.delta", "response.refusal.delta"})
+_OUTPUT_TEXT_DONE_EVENT_FIELDS: Final[Mapping[str, str]] = MappingProxyType(
+    {"response.output_text.done": "text", "response.refusal.done": "refusal"}
+)
+_OUTPUT_TEXT_EVENT_TYPES: Final = _OUTPUT_TEXT_DELTA_EVENT_TYPES | frozenset(_OUTPUT_TEXT_DONE_EVENT_FIELDS)
 _TOOL_OUTPUT_TEXT_PART_TYPES: Final = frozenset({"input_text", "output_text", "text"})
 _PATCHABLE_ITEM_FIELDS: Final[Mapping[str, str]] = MappingProxyType(
     {"function_call_output": "output", "custom_tool_call_output": "output", "message": "content"}
@@ -700,6 +729,21 @@ def _next_stream_sequence_number(responses_so_far: Sequence[object] | None) -> i
         for item in reversed(responses_so_far or ())
     )
     return next((n + 1 for n in sequence_numbers if isinstance(n, int)), 0)
+
+
+async def rewrite_buffered_responses_stream(
+    stream: AsyncIterable[_StreamEventT],
+    guardrail: "CustomGuardrail",
+    request_data: dict[str, object],  # mutable-ok: the per-request state dict every guardrail hook shares
+) -> tuple[_StreamEventT, ...]:
+    events: Final = [event async for event in stream]
+    await OpenAIResponsesHandler().process_output_streaming_response(
+        responses_so_far=events,
+        guardrail_to_apply=guardrail,
+        request_data=request_data,
+        deliver_ended_stream_rewrites=True,
+    )
+    return tuple(events)
 
 
 class OpenAIResponsesHandler(BaseTranslation):
@@ -1359,14 +1403,15 @@ class OpenAIResponsesHandler(BaseTranslation):
         spreading it over the text parts the guardrail scanned, in stream
         order: the whole rewrite on the first part and every later part
         blanked, through the same sync the envelope path uses. A scanned
-        event the sync cannot place (one that is not an ``output_text`` delta
-        or done, or lacks integer ``output_index`` / ``content_index``) makes
+        event the sync cannot place (one that is not an ``output_text`` or
+        ``refusal`` delta or done, or lacks integer ``output_index`` /
+        ``content_index``) makes
         the rewrite undeliverable, so the pipeline executor discards it and
         releases the original events."""
         scanned_events: Final = tuple(
             event
             for event in stream_events
-            if isinstance(stream_item_field(event, "text"), str) or isinstance(stream_item_field(event, "delta"), str)
+            if isinstance(_stream_event_whole_text(event), str) or isinstance(stream_item_field(event, "delta"), str)
         )
         scanned_positions: Final = tuple(
             dict.fromkeys(
@@ -1386,7 +1431,7 @@ class OpenAIResponsesHandler(BaseTranslation):
 
             raise UndeliverableStreamRewrite(
                 guardrail_name,
-                "the scanned text events are not all output_text deltas with an integer output_index and "
+                "the scanned text events are not all output_text or refusal deltas with an integer output_index and "
                 "content_index, so the text rewrite has nowhere to land",
             )
         self._sync_stream_events_with_rewrites(
@@ -1400,6 +1445,10 @@ class OpenAIResponsesHandler(BaseTranslation):
             event[field] = value  # rebind-ok: delivering the rewrite means editing the buffered event in place
         else:
             setattr(event, field, value)
+
+    @staticmethod
+    def _write_content_part_text(part: object, text: str) -> None:
+        OpenAIResponsesHandler._write_event_field(part, _content_part_text_field(part), text)
 
     @staticmethod
     def _write_compaction_summary(item: object, summary: str) -> None:
@@ -1416,8 +1465,9 @@ class OpenAIResponsesHandler(BaseTranslation):
     ) -> None:
         """Sync pre-completion stream events with the rewritten completed
         response, keyed by ``(output_index, content_index)``: the first
-        ``output_text.delta`` for a rewritten item carries the full rewritten
-        text and the rest are blanked, while ``output_text.done``,
+        ``output_text.delta`` or ``refusal.delta`` for a rewritten item carries
+        the full rewritten text and the rest are blanked, while
+        ``output_text.done``, ``refusal.done``,
         ``content_part.done``, and ``output_item.done`` events carry the full
         rewritten text, so every event a client may read agrees with the
         rewritten ``response.completed`` payload."""
@@ -1433,17 +1483,23 @@ class OpenAIResponsesHandler(BaseTranslation):
             if event_type == "response.output_item.done" and isinstance(output_index, int):
                 self._sync_output_item_done_event(event.get("item"), output_index, rewrites_by_position)
                 continue
-            if not isinstance(output_index, int) or not isinstance(content_index, int):
+            if (
+                not isinstance(event_type, str)
+                or not isinstance(output_index, int)
+                or not isinstance(content_index, int)
+            ):
                 continue
             position = (output_index, content_index)
-            if event_type == "response.output_text.delta" and position in delta_replacements:
+            if event_type in _OUTPUT_TEXT_DELTA_EVENT_TYPES and position in delta_replacements:
                 self._write_event_field(event, "delta", next(delta_replacements[position]))
-            elif event_type == "response.output_text.done" and position in rewrites_by_position:
-                self._write_event_field(event, "text", rewrites_by_position[position])
+            elif event_type in _OUTPUT_TEXT_DONE_EVENT_FIELDS and position in rewrites_by_position:
+                self._write_event_field(
+                    event, _OUTPUT_TEXT_DONE_EVENT_FIELDS[event_type], rewrites_by_position[position]
+                )
             elif event_type == "response.content_part.done" and position in rewrites_by_position:
                 part = event.get("part")
-                if isinstance(part, dict) or hasattr(part, "text"):
-                    self._write_event_field(part, "text", rewrites_by_position[position])
+                if _holds_content_part_text(part):
+                    self._write_content_part_text(part, rewrites_by_position[position])
 
     @staticmethod
     def _sync_output_item_done_event(
@@ -1459,7 +1515,7 @@ class OpenAIResponsesHandler(BaseTranslation):
         for (item_idx, content_idx), rewritten in rewrites_by_position.items():
             if item_idx != output_index or not 0 <= content_idx < len(content):
                 continue
-            OpenAIResponsesHandler._write_event_field(content[content_idx], "text", rewritten)
+            OpenAIResponsesHandler._write_content_part_text(content[content_idx], rewritten)
 
     def _deliver_ended_stream_tool_call_rewrites(
         self,
@@ -1680,7 +1736,9 @@ class OpenAIResponsesHandler(BaseTranslation):
         )
         message_parts: Final = chain.from_iterable(stream_item_items(item, "content") for item in message_items)
         part_texts: Final = tuple(
-            text for part in message_parts if isinstance(text := stream_item_field(part, "text"), str) and text
+            text
+            for part in message_parts
+            if isinstance(text := stream_item_field(part, _content_part_text_field(part)), str) and text
         )
         summaries: Final = tuple(summary for item in output_items if (summary := _output_compaction_summary(item)))
         return StreamingScanKey(
@@ -1720,8 +1778,8 @@ class OpenAIResponsesHandler(BaseTranslation):
         """
         Get the string so far from the responses so far.
 
-        ``response.output_text.done`` events carry the whole part in ``text``, while
-        ``response.output_text.delta`` events carry fragments in ``delta``. A stream
+        ``response.output_text.done`` and ``response.refusal.done`` events carry the
+        whole part in ``text`` or ``refusal``, while ``.delta`` events carry fragments in ``delta``. A stream
         that dies before its done event (``response.failed`` / ``response.incomplete``)
         has text only in deltas, so per content part the done text wins when present
         and the joined deltas fill in otherwise, never both.
@@ -1733,11 +1791,11 @@ class OpenAIResponsesHandler(BaseTranslation):
                     stream_item_field(event, "output_index"),
                     stream_item_field(event, "content_index"),
                 ),
-                stream_item_field(event, "text"),
+                _stream_event_whole_text(event),
                 stream_item_field(event, "delta"),
             )
             for event in responses_so_far
-            if isinstance(stream_item_field(event, "text"), str) or isinstance(stream_item_field(event, "delta"), str)
+            if isinstance(_stream_event_whole_text(event), str) or isinstance(stream_item_field(event, "delta"), str)
         )
 
         def part_text(part_key: tuple[object, object, object]) -> str:
@@ -1814,7 +1872,7 @@ class OpenAIResponsesHandler(BaseTranslation):
             return
 
         # Handle both GenericResponseOutputItem and dict
-        content: list[OutputText] | list[dict] | None = None
+        content: list[OutputText] | list[dict[str, object]] | None = None
         if isinstance(output_item, BaseModel):
             try:
                 output_item_dump: Final = output_item.model_dump()
@@ -1839,14 +1897,7 @@ class OpenAIResponsesHandler(BaseTranslation):
 
         # Iterate through content items (list of OutputText objects)
         for content_idx, content_item in enumerate(content):
-            # Handle both OutputText objects and dicts
-            if isinstance(content_item, OutputText):
-                text_content = content_item.text
-            elif isinstance(content_item, dict):
-                text_content = content_item.get("text")
-            else:
-                continue
-
+            text_content = _content_part_text(content_item)
             if text_content:
                 texts_to_check.append(text_content)
                 task_mappings.append((output_idx, int(content_idx)))
@@ -1862,13 +1913,7 @@ class OpenAIResponsesHandler(BaseTranslation):
 
         Override this method to customize how responses are applied.
         """
-        # Handle both dict and Pydantic object responses
-        if isinstance(response, dict):
-            response_output = response.get("output", [])
-        elif hasattr(response, "output"):
-            response_output = response.output or []
-        else:
-            return
+        response_output: Final = stream_item_items(response, "output")
 
         for task_idx, guardrail_response in enumerate(responses):
             mapping = task_mappings[task_idx]
@@ -1884,36 +1929,9 @@ class OpenAIResponsesHandler(BaseTranslation):
                 self._write_compaction_summary(output_item, guardrail_response)
                 continue
 
-            # Handle both GenericResponseOutputItem, BaseModel, and dict
-            if isinstance(output_item, GenericResponseOutputItem):
-                if output_item.content and content_idx < len(output_item.content):
-                    content_item = output_item.content[content_idx]
-                    if isinstance(content_item, OutputText):
-                        content_item.text = guardrail_response
-                    elif isinstance(content_item, dict):
-                        content_item["text"] = guardrail_response
-            elif isinstance(output_item, BaseModel):
-                # Handle other Pydantic models by converting to GenericResponseOutputItem
-                try:
-                    generic_item = GenericResponseOutputItem.model_validate(output_item.model_dump())
-                    if generic_item.content and content_idx < len(generic_item.content):
-                        content_item = generic_item.content[content_idx]
-                        if isinstance(content_item, OutputText):
-                            content_item.text = guardrail_response
-                            # Update the original response output
-                            if hasattr(output_item, "content") and output_item.content:
-                                original_content = output_item.content[content_idx]
-                                if hasattr(original_content, "text"):
-                                    original_content.text = guardrail_response
-                except Exception:
-                    pass
-            elif isinstance(output_item, dict):
-                content = output_item.get("content", [])
-                if content and content_idx < len(content):
-                    if isinstance(content[content_idx], dict):
-                        content[content_idx]["text"] = guardrail_response
-                    elif hasattr(content[content_idx], "text"):
-                        content[content_idx].text = guardrail_response
+            content = stream_item_items(output_item, "content")
+            if content_idx < len(content):
+                self._write_content_part_text(content[content_idx], guardrail_response)
 
     def build_block_sse_chunks(
         self,

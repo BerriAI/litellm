@@ -2209,6 +2209,8 @@ _NO_IO_TOKEN_RESERVATION: Final[Mapping[str, object]] = MappingProxyType({})
 _GUARDRAIL_INFORMATION_KEY: Final = "standard_logging_guardrail_information"
 
 
+_CONTENT_TEXT_FIELDS: Final = ("text", "refusal")
+
 _PII_DELTA_EVENT_TYPES: Final = frozenset(
     {
         "response.output_text.delta",
@@ -2242,12 +2244,13 @@ def _unmask_responses_event(response_str: str, pii_tokens: Mapping[str, str], un
             for content_block in content:
                 if not _is_json_object(content_block):
                     continue
-                text = content_block.get("text")
-                if isinstance(text, str):
-                    unmasked = unmask_pii_text(text, pii_tokens)
-                    if unmasked != text:
-                        content_block["text"] = unmasked
-                        modified = True
+                for text_field in _CONTENT_TEXT_FIELDS:
+                    text = content_block.get(text_field)
+                    if isinstance(text, str):
+                        unmasked = unmask_pii_text(text, pii_tokens)
+                        if unmasked != text:
+                            content_block[text_field] = unmasked
+                            modified = True
         return json.dumps(evt_obj) if modified else response_str
 
     if event_type in _PII_DELTA_EVENT_TYPES:
@@ -2845,6 +2848,7 @@ class ResponsesWebSocketStreaming:
     _OUTPUT_DONE_EVENT_TYPES = frozenset(
         {
             "response.output_text.done",
+            "response.refusal.done",
             "response.content_part.done",
             "response.output_item.done",
             "response.function_call_arguments.done",
@@ -2885,7 +2889,7 @@ class ResponsesWebSocketStreaming:
         Apply Presidio output masking (apply_to_output=True) to the
         ``response.completed`` event before it is forwarded to the client.
 
-        Walks ``response.output[*].content[*].text`` and masks every text block,
+        Walks ``response.output[*].content[*]`` and masks every ``text`` and ``refusal``,
         as well as ``response.output[*].arguments`` on function-call items and
         ``response.output[*].summary[*].text`` on reasoning items. Delta and
         ``*.done`` events are suppressed upstream in ``backend_to_client`` when
@@ -2946,8 +2950,10 @@ class ResponsesWebSocketStreaming:
                 for content_block in content:
                     if not _is_json_object(content_block):
                         continue
-                    text = content_block.get("text")
-                    if isinstance(text, str):
+                    for text_field in _CONTENT_TEXT_FIELDS:
+                        text = content_block.get(text_field)
+                        if not isinstance(text, str):
+                            continue
                         masked = await cb.check_pii(
                             text=text,
                             output_parse_pii=False,
@@ -2955,7 +2961,7 @@ class ResponsesWebSocketStreaming:
                             request_data=self.request_data,
                         )
                         if masked != text:
-                            content_block["text"] = masked
+                            content_block[text_field] = masked
                             modified = True
 
         return json.dumps(evt_obj) if modified else response_str
