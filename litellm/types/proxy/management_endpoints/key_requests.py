@@ -17,10 +17,10 @@ class AllowedVectorStoreIndexItem(LiteLLMPydanticObjectBase):
     index_permissions: list[Literal["read", "write"]]
 
 
-def _targets_that_are_not_model_names(rules: ContentPolicyFallbackRules) -> Iterator[object]:
+def _fallback_targets(rules: ContentPolicyFallbackRules) -> Iterator[object]:
     for rule in rules:
         for targets in rule.values():
-            yield from (target for target in targets if not isinstance(target, str))
+            yield from targets
 
 
 class KeyRequestBase(GenerateRequestBase):
@@ -54,7 +54,7 @@ class KeyRequestBase(GenerateRequestBase):
         cls, router_settings: UpdateRouterConfig | None
     ) -> UpdateRouterConfig | None:
         rules: Final = None if router_settings is None else router_settings.content_policy_fallbacks
-        if rules is not None and any(_targets_that_are_not_model_names(rules)):
+        if rules is not None and not all(isinstance(target, str) for target in _fallback_targets(rules)):
             raise ValueError(
                 'A key\'s content_policy_fallbacks targets must be model names, e.g. [{"gpt-4": ["gpt-4o"]}]'
             )

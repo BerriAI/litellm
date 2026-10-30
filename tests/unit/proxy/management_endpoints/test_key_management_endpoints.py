@@ -7738,13 +7738,15 @@ async def test_update_key_with_router_settings(
 
 
 @pytest.mark.parametrize("request_type", [GenerateKeyRequest, UpdateKeyRequest])
+@pytest.mark.parametrize("dict_target", [{"model": "gpt-4o-mini"}, {}])
 def test_a_key_content_policy_rule_can_only_name_fallback_models(
     request_type: type[GenerateKeyRequest] | type[UpdateKeyRequest],
+    dict_target: dict[str, str],
 ):
     with pytest.raises(ValidationError, match="must be model names"):
         request_type(
             key="sk-key",
-            router_settings={"content_policy_fallbacks": [{"gpt-4": ["gpt-4o", {"model": "gpt-4o-mini"}]}]},
+            router_settings={"content_policy_fallbacks": [{"gpt-4": ["gpt-4o", dict_target]}]},
         )
 
 
