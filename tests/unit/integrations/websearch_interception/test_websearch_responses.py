@@ -465,10 +465,10 @@ async def test_responses_turn_capped_above_the_default_ends_with_the_model_answe
     bodies = request_bodies(openai_responses_model)
     assert _output_text(response) == [FINAL_ANSWER]
     assert [offered_tool_names(body) for body in bodies] == [
-        *[["litellm_web_search", "get_weather"]] * 4,
+        *[["litellm_web_search", "get_weather"]] * 5,
         ["get_weather"],
     ]
-    assert [body.get("tool_choice") for body in bodies] == ["auto"] * 5
+    assert [body.get("tool_choice") for body in bodies] == ["auto"] * 6
     assert perplexity_search.call_count == 4
 
 

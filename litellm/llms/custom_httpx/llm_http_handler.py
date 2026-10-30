@@ -5965,6 +5965,7 @@ class BaseLLMHTTPHandler:
         depth: int,
         max_loops: int,
         model: str,
+        answered_at_cap: bool = False,
     ) -> str:
         """
         Evaluate agentic-loop safety guards (fingerprint cycle / max depth).
@@ -5979,7 +5980,7 @@ class BaseLLMHTTPHandler:
         fingerprint: Final = BaseLLMHTTPHandler._fingerprint_agentic_tools(tool_calls)
         if fingerprint in fingerprints:
             raise AgenticLoopSafetyError("Agentic loop detected repeated tool-call fingerprint; aborting rerun")
-        if depth >= max_loops:
+        if depth > max_loops or (depth == max_loops and not answered_at_cap):
             raise AgenticLoopSafetyError(f"Exceeded max_agentic_loops={max_loops} for model={model}")
         return fingerprint
 
@@ -6461,6 +6462,7 @@ class BaseLLMHTTPHandler:
                     depth=depth,
                     max_loops=max_loops,
                     model=model,
+                    answered_at_cap=callback.answers_tool_calls_at_agentic_loop_cap(custom_llm_provider),
                 )
             except AgenticLoopSafetyError as e:
                 if not self._can_replace_turn_with_terminal_response(stream, api_surface):
@@ -6646,6 +6648,7 @@ class BaseLLMHTTPHandler:
                 depth=depth,
                 max_loops=max_loops,
                 model=model,
+                answered_at_cap=callback.answers_tool_calls_at_agentic_loop_cap(custom_llm_provider),
             )
 
             try:

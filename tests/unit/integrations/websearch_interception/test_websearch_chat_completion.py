@@ -511,7 +511,7 @@ async def test_anthropic_chat_turn_capped_above_the_default_ends_with_the_model_
     assert response.choices[0].message.content == FINAL_ANSWER
     assert not response.choices[0].message.tool_calls
     assert [offered_tool_names(body) for body in request_bodies(anthropic_model)] == [
-        *[[SEARCH_TOOL_NAME, "get_weather"]] * 4,
+        *[[SEARCH_TOOL_NAME, "get_weather"]] * 5,
         ["get_weather"],
     ]
     assert perplexity_search.call_count == 4
@@ -539,7 +539,9 @@ async def test_anthropic_chat_last_follow_up_blocks_tool_calls_when_search_was_t
 
 
 @pytest.mark.asyncio
-async def test_openai_chat_turn_at_the_cap_ends_with_the_model_answer(monkeypatch, openai_chat_model, perplexity_search):
+async def test_openai_chat_turn_at_the_cap_ends_with_the_model_answer(
+    monkeypatch, openai_chat_model, perplexity_search
+):
     """reasoning_effort none keeps the request on /v1/chat/completions, where the loop runs inside the OpenAI handler."""
     monkeypatch.setattr(
         litellm, "callbacks", [WebSearchInterceptionLogger(enabled_providers=["openai"], max_agentic_loops=2)]
@@ -555,8 +557,7 @@ async def test_openai_chat_turn_at_the_cap_ends_with_the_model_answer(monkeypatc
 
     assert response.choices[0].message.content == FINAL_ANSWER
     assert [offered_tool_names(body) for body in request_bodies(openai_chat_model)] == [
-        [SEARCH_TOOL_NAME, "get_weather"],
-        [SEARCH_TOOL_NAME, "get_weather"],
+        *[[SEARCH_TOOL_NAME, "get_weather"]] * 3,
         ["get_weather"],
     ]
     assert perplexity_search.call_count == 2
@@ -579,8 +580,7 @@ async def test_openai_chat_bridged_to_responses_at_the_cap_ends_with_the_model_a
 
     assert response.choices[0].message.content == FINAL_ANSWER
     assert [offered_tool_names(body) for body in request_bodies(openai_responses_model)] == [
-        [SEARCH_TOOL_NAME, "get_weather"],
-        [SEARCH_TOOL_NAME, "get_weather"],
+        *[[SEARCH_TOOL_NAME, "get_weather"]] * 3,
         ["get_weather"],
     ]
     assert perplexity_search.call_count == 2
@@ -607,4 +607,34 @@ async def test_openai_chat_last_follow_up_sends_no_tools_when_search_was_the_onl
     assert response.choices[0].message.content == FINAL_ANSWER
     assert "tools" not in last_request
     assert "tool_choice" not in last_request
-    assert len(request_bodies(openai_chat_model)) == 2
+    assert len(request_bodies(openai_chat_model)) == 3
+
+
+@pytest.mark.asyncio
+async def test_a_search_call_without_a_query_runs_no_search_and_says_so(perplexity_search):
+    plan = await WebSearchInterceptionLogger().async_build_chat_completion_agentic_loop_plan(
+        tools={
+            "tool_calls": [
+                {"id": "call_with_query", "name": SEARCH_TOOL_NAME, "input": {"query": "latest ai news"}},
+                {"id": "call_without_query", "name": SEARCH_TOOL_NAME, "input": {}},
+            ],
+            "response_format": "openai",
+        },
+        model="gpt-5.6",
+        messages=NEWS_QUESTION,
+        response=MagicMock(),
+        optional_params={},
+        logging_obj=None,
+        stream=False,
+        kwargs={"custom_llm_provider": "openai"},
+    )
+
+    assert plan.request_patch is not None
+    tool_results = {
+        message["tool_call_id"]: message["content"]
+        for message in plan.request_patch.messages
+        if message.get("role") == "tool"
+    }
+    assert tool_results["call_without_query"] == "No search query provided"
+    assert "AI news" in tool_results["call_with_query"]
+    assert perplexity_search.call_count == 1

@@ -607,6 +607,9 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
     # AGENTIC LOOP HOOKS (for litellm.messages + future completion support)
     #########################################################
 
+    def answers_tool_calls_at_agentic_loop_cap(self, custom_llm_provider: str) -> bool:
+        return False
+
     async def async_should_run_agentic_loop(
         self,
         response: object,

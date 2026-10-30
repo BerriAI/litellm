@@ -16,6 +16,7 @@ OPENAI_CHAT_URL: Final = "https://api.openai.com/v1/chat/completions"
 OPENAI_RESPONSES_URL: Final = "https://api.openai.com/v1/responses"
 FINAL_ANSWER: Final = "Here is what the searches found."
 RUNAWAY_LOOP_LIMIT: Final = 8
+SEARCH_LIMIT_ERROR_CODE: Final = "max_uses_exceeded"
 
 
 @pytest.fixture
@@ -38,22 +39,26 @@ def offered_tool_names(body: Mapping[str, object]) -> list[str]:
 
 
 def _searching_model(
-    reply: Callable[[dict, int, bool], dict],
+    reply: Callable[[dict, int, bool, str], dict],
 ) -> Callable[[httpx.Request], httpx.Response]:
+    """
+    Searches while the search tool is offered. Once it is not, answers only if the
+    history says the search limit was reached, and otherwise ends the turn with no
+    text, which is what Claude did live when it still wanted to search.
+    """
     counter: Final[Iterator[int]] = itertools.count(1)
 
     def respond(request: httpx.Request) -> httpx.Response:
         body: Final = json.loads(request.content)
         call_number: Final = next(counter)
-        searches: Final = (
-            LITELLM_WEB_SEARCH_TOOL_NAME in offered_tool_names(body) and call_number < RUNAWAY_LOOP_LIMIT
-        )
-        return httpx.Response(200, json=reply(body, call_number, searches))
+        searches: Final = LITELLM_WEB_SEARCH_TOOL_NAME in offered_tool_names(body) and call_number < RUNAWAY_LOOP_LIMIT
+        answer: Final = FINAL_ANSWER if SEARCH_LIMIT_ERROR_CODE in request.content.decode() else ""
+        return httpx.Response(200, json=reply(body, call_number, searches, answer))
 
     return respond
 
 
-def _anthropic_reply(body: dict, call_number: int, searches: bool) -> dict:
+def _anthropic_reply(body: dict, call_number: int, searches: bool, answer: str) -> dict:
     content: Final = (
         [
             {
@@ -64,7 +69,7 @@ def _anthropic_reply(body: dict, call_number: int, searches: bool) -> dict:
             }
         ]
         if searches
-        else [{"type": "text", "text": FINAL_ANSWER}]
+        else [{"type": "text", "text": answer}]
     )
     return {
         "id": f"msg_{call_number}",
@@ -77,7 +82,7 @@ def _anthropic_reply(body: dict, call_number: int, searches: bool) -> dict:
     }
 
 
-def _openai_chat_reply(body: dict, call_number: int, searches: bool) -> dict:
+def _openai_chat_reply(body: dict, call_number: int, searches: bool, answer: str) -> dict:
     message: Final = (
         {
             "role": "assistant",
@@ -94,7 +99,7 @@ def _openai_chat_reply(body: dict, call_number: int, searches: bool) -> dict:
             ],
         }
         if searches
-        else {"role": "assistant", "content": FINAL_ANSWER}
+        else {"role": "assistant", "content": answer}
     )
     return {
         "id": f"chatcmpl-{call_number}",
@@ -106,7 +111,7 @@ def _openai_chat_reply(body: dict, call_number: int, searches: bool) -> dict:
     }
 
 
-def _openai_responses_reply(body: dict, call_number: int, searches: bool) -> dict:
+def _openai_responses_reply(body: dict, call_number: int, searches: bool, answer: str) -> dict:
     output: Final = (
         [
             {
@@ -125,7 +130,7 @@ def _openai_responses_reply(body: dict, call_number: int, searches: bool) -> dic
                 "id": f"msg_{call_number}",
                 "role": "assistant",
                 "status": "completed",
-                "content": [{"type": "output_text", "text": FINAL_ANSWER, "annotations": []}],
+                "content": [{"type": "output_text", "text": answer, "annotations": []}],
             }
         ]
     )
