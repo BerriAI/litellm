@@ -28,6 +28,10 @@ from litellm import LlmProviders
 from litellm._logging import verbose_logger
 from litellm.constants import DEFAULT_MAX_RETRIES
 from litellm.files.types import FileContentStreamingResult
+from litellm.litellm_core_utils.chat_completion_agentic_loop import (
+    bill_first_round_on_failure,
+    run_chat_completion_agentic_hooks,
+)
 from litellm.litellm_core_utils.core_helpers import set_provider_response_headers_in_hidden_params
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.logging_utils import speech_request_body, track_llm_api_timing
@@ -631,52 +635,23 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
 
         Returns the response from agentic loop, or None if no hook runs.
         """
-        from litellm._logging import verbose_logger
-        from litellm.integrations.custom_logger import CustomLogger
-
-        callbacks: Final = litellm.callbacks + (logging_obj.dynamic_success_callbacks or [])
-        # Avoid logging full callback objects to prevent leaking sensitive data
-        verbose_logger.debug("LiteLLM.AgenticHooks: callbacks_count=%s", len(callbacks))
-        tools: Final = optional_params.get("tools", [])
-        # Avoid logging full tools payloads; they may contain sensitive parameters
-        verbose_logger.debug(
-            "LiteLLM.AgenticHooks: tools_count=%s",
-            len(tools) if isinstance(tools, list) else 1 if tools else 0,
+        if not isinstance(response, ModelResponse):
+            return None
+        return await bill_first_round_on_failure(
+            run_chat_completion_agentic_hooks(
+                response=response,
+                model=model,
+                messages=messages,
+                optional_params=optional_params,
+                kwargs=litellm_params or {},
+                logging_obj=logging_obj,
+                custom_llm_provider=litellm_params.get("custom_llm_provider", "openai"),
+                stream=stream,
+            ),
+            logging_obj=logging_obj,
+            response=response,
+            stream=stream,
         )
-        # Get custom_llm_provider from litellm_params
-        custom_llm_provider: Final = litellm_params.get("custom_llm_provider", "openai")
-
-        custom_loggers: Final = tuple(callback for callback in callbacks if isinstance(callback, CustomLogger))
-        for callback in custom_loggers:
-            try:
-                should_run, tool_calls = await callback.async_should_run_chat_completion_agentic_loop(
-                    response=response,
-                    model=model,
-                    messages=messages,
-                    tools=tools,
-                    stream=stream,
-                    custom_llm_provider=custom_llm_provider,
-                    kwargs=litellm_params,
-                )
-            except Exception as e:
-                verbose_logger.exception(
-                    "LiteLLM.AgenticHookError: Exception in OpenAI chat completion agentic gate: %s", e
-                )
-                continue
-
-            if should_run:
-                return await callback.async_run_chat_completion_agentic_loop(
-                    tools=tool_calls,
-                    model=model,
-                    messages=messages,
-                    response=response,
-                    optional_params=optional_params,
-                    logging_obj=logging_obj,
-                    stream=stream,
-                    kwargs={**(litellm_params or {}), "custom_llm_provider": custom_llm_provider},
-                )
-
-        return None
 
     def mock_streaming(
         self,
@@ -1025,12 +1000,10 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                     _response_headers=headers,
                 )
             except openai.UnprocessableEntityError as e:
-                ## check if body contains unprocessable params - related issue https://github.com/BerriAI/litellm/issues/4800
                 if litellm.drop_params is True or drop_params is True:
                     data = drop_params_from_unprocessable_entity_error(e, data)
                 else:
                     raise e
-                # e.message
             except Exception as e:
                 exception_response: object = getattr(e, "response", None)
                 status_code = getattr(e, "status_code", 500)

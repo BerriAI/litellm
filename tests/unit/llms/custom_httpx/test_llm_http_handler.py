@@ -3423,20 +3423,40 @@ class TestServerFulfilledToolsInRequest:
             == frozenset()
         )
 
-    def test_interception_callbacks_declare_their_retrieval_tools(self):
+    @pytest.mark.parametrize("hook", ["compression", "headroom", "compresr"])
+    def test_a_retrieval_hook_holds_back_a_stream_carrying_its_retrieve_tool(self, hook):
         from litellm.integrations.compression_interception.handler import (
             LITELLM_CONTENT_RETRIEVE_TOOL_NAME,
             CompressionInterceptionLogger,
+        )
+        from litellm.proxy.guardrails.guardrail_hooks.compresr.compresr import (
+            COMPRESR_RETRIEVE_TOOL_NAME,
+            CompresrGuardrail,
         )
         from litellm.proxy.guardrails.guardrail_hooks.headroom.headroom import (
             HEADROOM_RETRIEVE_TOOL_NAME,
             HeadroomGuardrail,
         )
 
-        assert HeadroomGuardrail.server_fulfilled_tool_names == frozenset({HEADROOM_RETRIEVE_TOOL_NAME})
-        assert CompressionInterceptionLogger.server_fulfilled_tool_names == frozenset(
-            {LITELLM_CONTENT_RETRIEVE_TOOL_NAME}
-        )
+        callback, retrieve_tool_name = {
+            "compression": (CompressionInterceptionLogger(), LITELLM_CONTENT_RETRIEVE_TOOL_NAME),
+            "headroom": (
+                HeadroomGuardrail(api_base="https://headroom.test", api_key="hr-test", guardrail_name="headroom"),
+                HEADROOM_RETRIEVE_TOOL_NAME,
+            ),
+            "compresr": (
+                CompresrGuardrail(api_base="https://compresr.test", api_key="cr-test", guardrail_name="compresr"),
+                COMPRESR_RETRIEVE_TOOL_NAME,
+            ),
+        }[hook]
+        tools = [
+            {"name": "Bash", "input_schema": {"type": "object"}},
+            {"name": retrieve_tool_name, "input_schema": {"type": "object"}},
+        ]
+
+        assert BaseLLMHTTPHandler._server_fulfilled_tools_in_request(
+            logging_obj=self._logging_obj_with([callback]), tools=tools
+        ) == frozenset({retrieve_tool_name})
 
 
 def _make_stub_direct_vector_store_config(response):
@@ -4994,9 +5014,11 @@ async def test_responses_agentic_followup_sends_the_plans_request_param_over_a_s
 
 
 class _PlannedChatLoop(CustomLogger):
-    def __init__(self, plan: AgenticLoopPlan) -> None:
+    def __init__(self, plan: AgenticLoopPlan, claimed_call_name: str = "litellm_web_search") -> None:
         super().__init__()
         self._plan = plan
+        self._claimed_call_name = claimed_call_name
+        self.logging_objs: list[object] = []
 
     async def async_should_run_chat_completion_agentic_loop(
         self,
@@ -5008,7 +5030,12 @@ class _PlannedChatLoop(CustomLogger):
         custom_llm_provider: str,
         kwargs: dict,
     ) -> tuple[bool, dict]:
-        return True, {"tool_calls": [{"id": "call_search", "name": "litellm_web_search"}]}
+        claimed: Final = [
+            {"id": call.id, "name": call.function.name}
+            for call in _tool_calls_of(response)
+            if call.function.name == self._claimed_call_name
+        ]
+        return True, {"tool_calls": claimed or [{"id": "call_search", "name": self._claimed_call_name}]}
 
     async def async_build_chat_completion_agentic_loop_plan(
         self,
@@ -5021,6 +5048,7 @@ class _PlannedChatLoop(CustomLogger):
         stream: bool,
         kwargs: dict,
     ) -> AgenticLoopPlan:
+        self.logging_objs.append(logging_obj)
         return self._plan
 
 
@@ -5055,7 +5083,15 @@ class _RunOnlyChatLoop(CustomLogger):
         return self._result
 
 
-async def _run_chat_completion_agentic_hooks(response: ModelResponse, *callbacks: CustomLogger) -> object:
+def _tool_calls_of(response: object) -> list:
+    if not isinstance(response, ModelResponse) or not response.choices:
+        return []
+    return response.choices[0].message.tool_calls or []
+
+
+async def _run_chat_completion_agentic_hooks(
+    response: ModelResponse, *callbacks: CustomLogger, kwargs: Mapping[str, object] = MappingProxyType({})
+) -> object:
     logging_obj: Final = Mock(litellm_call_id="call-1", dynamic_success_callbacks=list(callbacks), model_call_details={})
     return await BaseLLMHTTPHandler()._call_agentic_chat_completion_hooks(
         response=response,
@@ -5065,7 +5101,7 @@ async def _run_chat_completion_agentic_hooks(response: ModelResponse, *callbacks
         logging_obj=logging_obj,
         stream=False,
         custom_llm_provider="openai",
-        kwargs={},
+        kwargs=dict(kwargs),
     )
 
 
@@ -5107,6 +5143,36 @@ async def test_chat_completion_agentic_hooks_return_a_run_only_loops_result():
 
 
 @pytest.mark.asyncio
+async def test_chat_completion_agentic_hooks_at_the_cap_drop_every_hooks_internal_call_and_keep_the_clients():
+    response: Final = ModelResponse(
+        choices=[
+            {
+                "index": 0,
+                "finish_reason": "tool_calls",
+                "message": {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {"id": f"call_{name}", "type": "function", "function": {"name": name, "arguments": "{}"}}
+                        for name in ("litellm_web_search", "litellm_code_execution", "lookup")
+                    ],
+                },
+            }
+        ]
+    )
+    searching: Final = _PlannedChatLoop(AgenticLoopPlan(run_agentic_loop=True))
+    running_code: Final = _PlannedChatLoop(
+        AgenticLoopPlan(run_agentic_loop=True), claimed_call_name="litellm_code_execution"
+    )
+
+    result: Final = await _run_chat_completion_agentic_hooks(
+        response, searching, running_code, kwargs={"_agentic_loop_depth": 1, "max_agentic_loops": 1}
+    )
+
+    assert [call.id for call in _tool_calls_of(result)] == ["call_lookup"]
+
+
+@pytest.mark.asyncio
 async def test_chat_completion_agentic_followup_does_not_repeat_request_params_from_plan_kwargs(monkeypatch):
     """A plan whose kwargs repeat a request param, or the explicitly passed model, must not crash the chat follow-up with a duplicate keyword"""
     from litellm.types.integrations.custom_logger import AgenticLoopPlan, AgenticLoopRequestPatch
@@ -5129,17 +5195,17 @@ async def test_chat_completion_agentic_followup_does_not_repeat_request_params_f
         ),
     )
 
-    response: Final = await BaseLLMHTTPHandler()._execute_chat_completion_agentic_plan(
-        plan=plan,
+    response: Final = await BaseLLMHTTPHandler()._call_agentic_chat_completion_hooks(
+        response=ModelResponse(),
         model="gpt-5",
         messages=[{"role": "user", "content": "x"}],
         optional_params={"temperature": 0.2},
-        kwargs=dict(request_kwargs),
+        logging_obj=Mock(
+            litellm_call_id="call-1", dynamic_success_callbacks=[_PlannedChatLoop(plan)], model_call_details={}
+        ),
+        stream=False,
         custom_llm_provider="openai",
-        depth=0,
-        max_loops=3,
-        fingerprints=[],
-        fingerprint="fp",
+        kwargs=dict(request_kwargs),
     )
 
     assert response == "followup-response"
@@ -5147,6 +5213,138 @@ async def test_chat_completion_agentic_followup_does_not_repeat_request_params_f
     assert followup_calls[0]["temperature"] == 0.2
     assert followup_calls[0]["api_base"] == "https://a"
     assert followup_calls[0]["model"] == "openai/gpt-5"
+
+
+def _a_search_tool_call_turn(call_number: int) -> httpx.Response:
+    return httpx.Response(
+        200,
+        json={
+            "id": f"chatcmpl-{call_number}",
+            "object": "chat.completion",
+            "created": 0,
+            "model": "served-model",
+            "choices": [
+                {
+                    "index": 0,
+                    "finish_reason": "tool_calls",
+                    "message": {
+                        "role": "assistant",
+                        "content": None,
+                        "tool_calls": [
+                            {
+                                "id": f"call-{call_number}",
+                                "type": "function",
+                                "function": {"name": "litellm_web_search", "arguments": '{"query": "weather"}'},
+                            }
+                        ],
+                    },
+                }
+            ],
+            "usage": {"prompt_tokens": 5, "completion_tokens": 3, "total_tokens": 8},
+        },
+    )
+
+
+class _SearchAgainLoop(CustomLogger):
+    def __init__(self, client: AsyncHTTPHandler) -> None:
+        super().__init__()
+        self._client = client
+
+    async def async_should_run_chat_completion_agentic_loop(
+        self,
+        response: object,
+        model: str,
+        messages: list[dict],
+        tools: list[dict] | None,
+        stream: bool,
+        custom_llm_provider: str,
+        kwargs: dict,
+    ) -> tuple[bool, dict]:
+        searches: Final = [
+            {"id": call.id, "name": call.function.name}
+            for call in response.choices[0].message.tool_calls or []
+            if call.function.name == "litellm_web_search"
+        ]
+        return bool(searches), {"tool_calls": searches}
+
+    async def async_build_chat_completion_agentic_loop_plan(
+        self,
+        tools: dict,
+        model: str,
+        messages: list[dict],
+        response: object,
+        optional_params: dict,
+        logging_obj: object,
+        stream: bool,
+        kwargs: dict,
+    ) -> AgenticLoopPlan:
+        return AgenticLoopPlan(
+            run_agentic_loop=True,
+            request_patch=AgenticLoopRequestPatch(
+                messages=[*messages, {"role": "user", "content": "here are the search results"}],
+                kwargs={"client": self._client},
+            ),
+        )
+
+
+@pytest.mark.asyncio
+async def test_hosted_vllm_bills_the_first_call_on_the_failure_log_when_the_follow_up_fails(monkeypatch):
+    loop: Final = _PlannedChatLoop(
+        AgenticLoopPlan(
+            run_agentic_loop=True,
+            request_patch=AgenticLoopRequestPatch(
+                messages=[{"role": "user", "content": "here are the search results"}],
+                kwargs={"mock_response": "litellm.RateLimitError"},
+            ),
+        )
+    )
+    monkeypatch.setattr(litellm, "callbacks", [loop])
+
+    with pytest.raises(litellm.RateLimitError):
+        await litellm.acompletion(
+            model="hosted_vllm/served-model",
+            api_base="https://fake-vllm.test/v1",
+            api_key="transport-only",
+            client=AsyncHTTPHandler(transport=httpx.MockTransport(lambda request: _a_search_tool_call_turn(1))),
+            messages=[{"role": "user", "content": "search the web for the weather"}],
+            input_cost_per_token=0.001,
+            output_cost_per_token=0.002,
+            num_retries=0,
+            max_retries=0,
+        )
+
+    (logging_obj,) = loop.logging_objs
+    assert logging_obj.model_call_details["combined_usage_object"].total_tokens == 8
+    assert logging_obj.model_call_details["response_cost"] == pytest.approx(5 * 0.001 + 3 * 0.002)
+
+
+@pytest.mark.asyncio
+async def test_hosted_vllm_ends_the_turn_at_max_agentic_loops_without_the_internal_search_call(monkeypatch):
+    upstream_calls: Final[asyncio.Queue[httpx.Request]] = asyncio.Queue()
+
+    def always_search(request: httpx.Request) -> httpx.Response:
+        upstream_calls.put_nowait(request)
+        return _a_search_tool_call_turn(upstream_calls.qsize())
+
+    client: Final = AsyncHTTPHandler(transport=httpx.MockTransport(always_search))
+    monkeypatch.setattr(litellm, "callbacks", [_SearchAgainLoop(client)])
+
+    response: Final = await asyncio.wait_for(
+        litellm.acompletion(
+            model="hosted_vllm/served-model",
+            api_base="https://fake-vllm.test/v1",
+            api_key="transport-only",
+            client=client,
+            messages=[{"role": "user", "content": "search the web for the weather"}],
+            max_agentic_loops=1,
+            num_retries=0,
+            max_retries=0,
+        ),
+        timeout=10,
+    )
+
+    assert upstream_calls.qsize() == 2
+    assert not response.choices[0].message.tool_calls
 
 
 _UPSTREAM_HEADERS: Final = {"x-request-id": "req_upstream", "x-ratelimit-remaining-requests": "41"}

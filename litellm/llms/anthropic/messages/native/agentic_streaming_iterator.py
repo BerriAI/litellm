@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING, Any, Final, cast
 
 from litellm._logging import verbose_logger
 from litellm.constants import STREAM_SSE_KEEPALIVE_PING_BYTES
+from litellm.types.integrations.custom_logger import AgenticLoopSafetyError
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -393,11 +394,10 @@ class AgenticAnthropicStreamingIterator:
                     "AgenticStreamingIterator: Unexpected result type from hooks: %s",
                     type(result).__name__,
                 )
-        except Exception as e:
-            _call_id: Final = getattr(self._logging_obj, "litellm_call_id", "unknown")
-            verbose_logger.exception(
-                "AgenticStreamingIterator: Error in agentic hook processing [call_id=%s model=%s]: %s",
-                _call_id,
+        except AgenticLoopSafetyError as e:
+            verbose_logger.warning(
+                "AgenticStreamingIterator: agentic loop refused [call_id=%s model=%s]: %s",
+                getattr(self._logging_obj, "litellm_call_id", "unknown"),
                 self._model,
                 str(e),
             )

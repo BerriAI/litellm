@@ -10,6 +10,7 @@ import json
 import time
 import uuid
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypeAlias, TypedDict, runtime_checkable
 
 from pydantic import ValidationError
@@ -139,6 +140,31 @@ class _SupportsOutput(Protocol):
 
 
 _CachedContainer: TypeAlias = tuple[ContainerHandle, SandboxToolParams | None, float, str | None]
+
+
+@dataclass(frozen=True, slots=True)
+class _ReadySandbox:
+    container: ContainerHandle
+    params: SandboxToolParams | None
+
+
+@dataclass(frozen=True, slots=True)
+class _SandboxUnavailable:
+    reason: str
+
+
+_Sandbox: TypeAlias = _ReadySandbox | _SandboxUnavailable
+
+
+def _unavailable_output(unavailable: _SandboxUnavailable) -> str:
+    return f"[sandbox unavailable] {unavailable.reason}"
+
+
+def _sandbox_unavailable(step: str, error: Exception) -> _SandboxUnavailable:
+    verbose_logger.warning(
+        "CodeInterpreterInterception: %s failed, answering the tool call with the failure: %s", step, error
+    )
+    return _SandboxUnavailable(reason=str(error))
 
 
 def _output_item_type(item: object) -> object:
@@ -451,16 +477,16 @@ class CodeInterpreterInterceptionLogger(CustomLogger):
         sandbox_key: Final = self._extract_sandbox_key(kwargs)
         is_session: Final = bool(kwargs.get(_SESSION_SCOPED_KEY))
         identity: Final = _extract_identity(kwargs) if is_session else None
-        container, params = await self._get_or_create_container(cache_key=sandbox_key, identity=identity)
+        sandbox: Final = await self._acquire_sandbox(cache_key=sandbox_key, identity=identity)
 
         try:
-            container_id: Final = self._container_id(container)
+            container_id: Final = self._sandbox_container_id(sandbox)
             input_list: Final = self._normalize_messages(messages)
             code_interpreter_calls: Final[list[CodeInterpreterCall]] = []
             for tool_call in tool_calls:
                 arguments = tool_call.get("arguments", "")
                 code = self._parse_code(arguments)
-                stdout = await self._run_tool_call(container=container, params=params, arguments=arguments)
+                stdout = await self._sandbox_tool_output(sandbox=sandbox, arguments=arguments)
                 input_list.append(
                     {
                         "type": "function_call",
@@ -526,14 +552,13 @@ class CodeInterpreterInterceptionLogger(CustomLogger):
         sandbox_key: Final = self._extract_sandbox_key(kwargs)
         is_session: Final = bool(kwargs.get(_SESSION_SCOPED_KEY))
         identity: Final = _extract_identity(kwargs) if is_session else None
-        container, params = await self._get_or_create_container(cache_key=sandbox_key, identity=identity)
+        sandbox: Final = await self._acquire_sandbox(cache_key=sandbox_key, identity=identity)
 
         try:
-            container_id: Final = self._container_id(container)
+            container_id: Final = self._sandbox_container_id(sandbox)
             tool_results: Final = [
                 await self._build_chat_completion_tool_result(
-                    container=container,
-                    params=params,
+                    sandbox=sandbox,
                     tool_call=tool_call,
                     container_id=container_id,
                 )
@@ -569,9 +594,13 @@ class CodeInterpreterInterceptionLogger(CustomLogger):
         )
 
     @staticmethod
-    def _container_id(container: ContainerHandle) -> str | None:
-        container_id: Final[object] = getattr(container, "id", None)
-        return container_id if isinstance(container_id, str) else None
+    def _sandbox_container_id(sandbox: _Sandbox) -> str | None:
+        match sandbox:
+            case _ReadySandbox(container=container):
+                container_id: Final[object] = getattr(container, "id", None)
+                return container_id if isinstance(container_id, str) else None
+            case _SandboxUnavailable():
+                return None
 
     @staticmethod
     def _agentic_tool_calls(tools: dict[str, object]) -> list[CodeExecutionToolCall]:
@@ -588,14 +617,13 @@ class CodeInterpreterInterceptionLogger(CustomLogger):
 
     async def _build_chat_completion_tool_result(
         self,
-        container: ContainerHandle,
-        params: SandboxToolParams | None,
+        sandbox: _Sandbox,
         tool_call: CodeExecutionToolCall,
         container_id: str | None,
     ) -> tuple[ChatCompletionToolMessage, CodeInterpreterCall]:
         arguments: Final = tool_call.get("arguments", "")
         code: Final = self._parse_code(arguments)
-        stdout: Final = await self._run_tool_call(container=container, params=params, arguments=arguments)
+        stdout: Final = await self._sandbox_tool_output(sandbox=sandbox, arguments=arguments)
         tool_call_id: Final = tool_call.get("id") or tool_call.get("call_id") or uuid.uuid4().hex
         return (
             {
@@ -694,18 +722,35 @@ class CodeInterpreterInterceptionLogger(CustomLogger):
         except (json.JSONDecodeError, TypeError, AttributeError):
             return ""
 
+    async def _sandbox_tool_output(self, sandbox: _Sandbox, arguments: str) -> str:
+        match sandbox:
+            case _SandboxUnavailable():
+                return _unavailable_output(sandbox)
+            case _ReadySandbox(container=container, params=params):
+                return await self._run_tool_call(container=container, params=params, arguments=arguments)
+
     async def _run_tool_call(self, container: ContainerHandle, params: SandboxToolParams | None, arguments: str) -> str:
         try:
             code: Final = json.loads(arguments).get("code", "") if arguments else ""
         except (json.JSONDecodeError, TypeError):
             return "[invalid tool arguments: could not parse code]"
 
-        result: Final = await self._run_code(container=container, params=params, code=code)
+        try:
+            result: Final = await self._run_code(container=container, params=params, code=code)
+        except Exception as e:
+            return _unavailable_output(_sandbox_unavailable("running the code", e))
         if getattr(result, "error", None):
             error: Final = result.error
             message: Final = error.get("value") or error.get("name") if isinstance(error, dict) else str(error)
             return f"[execution error] {message}"
         return getattr(result, "stdout", "") or ""
+
+    async def _acquire_sandbox(self, cache_key: str | None, identity: str | None) -> _Sandbox:
+        try:
+            container, params = await self._get_or_create_container(cache_key=cache_key, identity=identity)
+        except Exception as e:
+            return _sandbox_unavailable("creating the sandbox", e)
+        return _ReadySandbox(container=container, params=params)
 
     async def _get_or_create_container(
         self,

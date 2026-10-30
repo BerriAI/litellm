@@ -216,10 +216,17 @@ def scenario(rig: _Rig) -> Iterator[Scenario]:
         yield opened
 
 
-def _deploy(rig: _Rig, scenario: Scenario, mode: iv.Mode, *, api_key: str = iv.AZURE_KEY) -> _Deployment:
+def _deploy(
+    rig: _Rig,
+    scenario: Scenario,
+    mode: iv.Mode,
+    *,
+    api_key: str = iv.AZURE_KEY,
+    pricing: Mapping[str, JsonValue] = MappingProxyType({}),
+) -> _Deployment:
     name: Final = iv.deployment(mode)
     model: Final = scenario.model(
-        model=f"azure/{name}", api_base=rig.wire.url, api_key=api_key, api_version=iv.API_VERSION
+        model=f"azure/{name}", api_base=rig.wire.url, api_key=api_key, api_version=iv.API_VERSION, **pricing
     )
     return _Deployment(model, name)
 
@@ -754,27 +761,33 @@ def test_wrong_azure_key_surfaces_azures_401(rig: _Rig, scenario: Scenario) -> N
     assert len(_upstream(rig, deployment).model_calls) == 1
 
 
-def _assert_failed_once(call_id: str) -> None:
+def _assert_failed_once(call_id: str, *, spend: float) -> None:
     rows: Final = eventually(
-        lambda: read_rows('SELECT status FROM "LiteLLM_SpendLogs" WHERE litellm_call_id = %s', (call_id,)),
+        lambda: read_rows('SELECT status, spend FROM "LiteLLM_SpendLogs" WHERE litellm_call_id = %s', (call_id,)),
         lambda found: len(found) >= 1,
         seconds=70,
     )
     assert [row["status"] for row in rows] == ["failure"], rows
+    assert float(rows[0]["spend"]) == pytest.approx(spend), rows
 
 
 @pytest.mark.parametrize("stream", [True, False], ids=["stream", "json"])
 def test_failed_follow_up_call_answers_with_the_providers_error_instead_of_the_search_tool_call(
     rig: _Rig, scenario: Scenario, stream: bool
 ) -> None:
-    deployment: Final = _deploy(rig, scenario, "followup-fails")
+    deployment: Final = _deploy(
+        rig, scenario, "followup-fails", pricing={"input_cost_per_token": 0.001, "output_cost_per_token": 0.002}
+    )
     extra: Final = {**_NO_CACHE, "stream_options": dict(_USAGE)} if stream else _NO_CACHE
     body: Final = _chat_body(deployment, stream=stream, extra=extra)
     response: Final = rig.gateway.request("POST", "/v1/chat/completions", body)
     assert response.status_code == 500 and iv.FOLLOWUP_FAILURE in response.text, response.text
     assert iv.SEARCH_TOOL not in response.text, response.text
     _assert_upstream(_upstream(rig, deployment), model_calls=2, searches=1)
-    _assert_failed_once(response.headers["x-litellm-call-id"])
+    _assert_failed_once(
+        response.headers["x-litellm-call-id"],
+        spend=iv.FIRST_USAGE["prompt_tokens"] * 0.001 + iv.FIRST_USAGE["completion_tokens"] * 0.002,
+    )
     assert rig.gateway.chat(_deploy(rig, scenario, "plain").model)["object"] == "chat.completion"
 
 

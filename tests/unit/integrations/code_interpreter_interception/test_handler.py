@@ -831,11 +831,7 @@ async def test_post_hook_delete_is_idempotent_across_loop_levels():
 
 
 @pytest.mark.asyncio
-async def test_build_plan_deletes_sandbox_when_execution_raises():
-    """If sandbox execution raises before a plan is built (e.g. E2B aborts
-    output over its cap), the cached sandbox must be deleted before re-raising,
-    otherwise a caller can leak paid containers until the prune TTL."""
-
+async def test_a_failed_code_run_still_deletes_its_sandbox_once_the_loop_ends():
     class RaisingSandbox(FakeSandbox):
         async def arun_code(self, *, container, code, **kwargs):
             raise ValueError("output exceeded cap")
@@ -843,13 +839,11 @@ async def test_build_plan_deletes_sandbox_when_execution_raises():
     sandbox = RaisingSandbox()
     logger = CodeInterpreterInterceptionLogger(sandbox_config=sandbox)
 
-    with pytest.raises(ValueError, match="exceeded cap"):
-        await _build_plan(logger, sandbox, call_id="k1")
+    plan = await _build_plan(logger, sandbox, call_id="k1")
+    await logger.async_agentic_loop_cleanup_hook(plan=plan, kwargs={})
 
-    assert len(sandbox.create_calls) == 1, "the sandbox must have been created"
-    assert len(sandbox.delete_calls) == 1, (
-        "a build failure must delete the cached sandbox so it does not keep running and billing"
-    )
+    assert len(sandbox.create_calls) == 1
+    assert len(sandbox.delete_calls) == 1
     assert "sbxkey1" not in logger._container_cache
 
 
@@ -1448,3 +1442,63 @@ async def test_per_identity_cap_evicts_lru_session():
         "the entry with the oldest last_accessed timestamp must be evicted first (LRU)"
     )
     assert len(sandbox.delete_calls) == 1, "evicted sandbox must be deleted, not just removed from cache"
+
+
+class _SandboxThatCannotStart(FakeSandbox):
+    async def acreate_sandbox(self, **kwargs):
+        raise ConnectionError("sandbox provider unreachable")
+
+
+class _SandboxThatCannotRunCode(FakeSandbox):
+    async def arun_code(self, *, container, code, **kwargs):
+        raise TimeoutError("sandbox run timed out")
+
+
+_SANDBOX_FAILURES: Final = (
+    pytest.param(None, "[sandbox unavailable] CodeInterpreterInterception: no sandbox available", id="no_sandbox"),
+    pytest.param(_SandboxThatCannotStart(), "[sandbox unavailable] sandbox provider unreachable", id="create_fails"),
+    pytest.param(_SandboxThatCannotRunCode(), "[sandbox unavailable] sandbox run timed out", id="run_fails"),
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("sandbox", "expected_output"), _SANDBOX_FAILURES)
+async def test_a_sandbox_failure_answers_the_responses_tool_call_with_the_failure(sandbox, expected_output):
+    plan: Final = await _build_plan(CodeInterpreterInterceptionLogger(sandbox_config=sandbox), sandbox)
+
+    outputs: Final = [message for message in _iter_messages(plan) if message.get("type") == "function_call_output"]
+    assert plan.run_agentic_loop is True
+    assert [(output["call_id"], output["output"].startswith(expected_output)) for output in outputs] == [("c1", True)]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("sandbox", "expected_output"), _SANDBOX_FAILURES)
+async def test_a_sandbox_failure_answers_the_chat_tool_call_with_the_failure(sandbox, expected_output):
+    logger: Final = CodeInterpreterInterceptionLogger(sandbox_config=sandbox)
+
+    plan: Final = await logger.async_build_agentic_loop_plan(
+        tools={
+            "tool_calls": [
+                {"id": "call_1", "name": LITELLM_CODE_EXECUTION_TOOL_NAME, "arguments": '{"code":"print(40 + 2)"}'}
+            ]
+        },
+        model="gpt-5",
+        messages=[{"role": "user", "content": "x"}],
+        response={"choices": [{"message": {"tool_calls": [_chat_function_call_item()]}}]},
+        anthropic_messages_provider_config=None,
+        anthropic_messages_optional_request_params={"tools": []},
+        logging_obj=FakeLogging(litellm_call_id="k1"),
+        stream=False,
+        kwargs={
+            "litellm_call_id": "k1",
+            _ACTIVE_KEY: True,
+            _SANDBOX_KEY: "sbxkey1",
+            "_agentic_loop_api_surface": CHAT_COMPLETION_AGENTIC_SURFACE,
+        },
+    )
+
+    tool_messages: Final = [message for message in _iter_messages(plan) if message.get("role") == "tool"]
+    assert plan.run_agentic_loop is True
+    assert [(message["tool_call_id"], message["content"].startswith(expected_output)) for message in tool_messages] == [
+        ("call_1", True)
+    ]

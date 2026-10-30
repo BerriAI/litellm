@@ -1,7 +1,10 @@
-from collections.abc import Iterable
+import asyncio
+from collections.abc import Awaitable, Iterable, Mapping
 from itertools import chain
+from types import MappingProxyType
 from typing import Final
 
+from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import message_field, parts_of
 from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.types.utils import Choices, ModelResponse
@@ -11,9 +14,29 @@ def _strings(values: Iterable[object]) -> frozenset[str]:
     return frozenset(value for value in values if isinstance(value, str))
 
 
-def refused_tool_call_identifiers(tool_calls: object) -> tuple[frozenset[str], frozenset[str]]:
+def _claimed_calls(tool_calls: object) -> tuple[object, ...]:
     wrapped: Final = message_field(tool_calls, "tool_calls")
-    calls: Final = parts_of(tool_calls if wrapped is None else wrapped)
+    return parts_of(tool_calls if wrapped is None else wrapped)
+
+
+async def _calls_a_gate_claims(gate: Awaitable[tuple[bool, object]]) -> tuple[object, ...]:
+    try:
+        should_run, tool_calls = await gate
+    except Exception as e:
+        verbose_logger.debug("LiteLLM.AgenticLoopRefused: skipping a gate that failed: %s", e)
+        return ()
+    return _claimed_calls(tool_calls) if should_run else ()
+
+
+async def every_claimed_tool_call(
+    refused_tool_calls: object, other_gates: Iterable[Awaitable[tuple[bool, object]]]
+) -> Mapping[str, tuple[object, ...]]:
+    claims: Final = await asyncio.gather(*(_calls_a_gate_claims(gate) for gate in other_gates))
+    return MappingProxyType({"tool_calls": (*_claimed_calls(refused_tool_calls), *chain.from_iterable(claims))})
+
+
+def refused_tool_call_identifiers(tool_calls: object) -> tuple[frozenset[str], frozenset[str]]:
+    calls: Final = _claimed_calls(tool_calls)
     ids: Final = _strings(
         chain.from_iterable((message_field(call, "id"), message_field(call, "call_id")) for call in calls)
     )

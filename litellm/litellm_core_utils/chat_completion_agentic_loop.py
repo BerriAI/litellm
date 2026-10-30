@@ -1,17 +1,17 @@
 # this is a patch to allow for agentic loops covering llm_http_handler.py and openai sdk based calling flows for the .completion() api
 
 import json
-from collections.abc import Mapping
+from collections.abc import Awaitable, Iterator, Mapping, Sequence
 from itertools import chain
 from types import MappingProxyType
-from typing import Final
+from typing import Final, TypeVar
 
 from pydantic import TypeAdapter, ValidationError
 
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.agentic_followup_kwargs import build_agentic_followup_kwargs
-from litellm.litellm_core_utils.agentic_loop_refusal import finalize_refused_chat_turn
+from litellm.litellm_core_utils.agentic_loop_refusal import every_claimed_tool_call, finalize_refused_chat_turn
 from litellm.litellm_core_utils.agentic_loop_settings import (
     DEFAULT_MAX_AGENTIC_LOOPS,
     validated_max_agentic_loops,
@@ -31,6 +31,8 @@ from litellm.types.integrations.custom_logger import (
 from litellm.types.utils import ModelResponse
 from litellm.utils import CustomStreamWrapper
 
+_DispatchResult = TypeVar("_DispatchResult")
+
 _FOLLOWUP_INTERNAL_PARAMS: Final = frozenset(
     (
         "acompletion",
@@ -44,22 +46,36 @@ _FOLLOWUP_INTERNAL_PARAMS: Final = frozenset(
 )
 
 
+async def bill_first_round_on_failure(
+    dispatch: Awaitable[_DispatchResult], *, logging_obj: object, response: object, stream: bool
+) -> _DispatchResult:
+    try:
+        return await dispatch
+    except Exception:
+        if not stream and isinstance(logging_obj, LiteLLMLoggingObject):
+            logging_obj.record_earlier_round_for_failure(response)
+        raise
+
+
 def _gate_overridden(callback: CustomLogger) -> bool:
-    base: Final = CustomLogger.async_should_run_agentic_loop
-    func: Final = type(callback).async_should_run_agentic_loop
-    return getattr(func, "__func__", func) is not getattr(base, "__func__", base)
+    return type(callback).async_should_run_agentic_loop is not CustomLogger.async_should_run_agentic_loop
 
 
 def _build_plan_overridden(callback: CustomLogger) -> bool:
-    base: Final = CustomLogger.async_build_agentic_loop_plan
-    func: Final = type(callback).async_build_agentic_loop_plan
-    return getattr(func, "__func__", func) is not getattr(base, "__func__", base)
+    return type(callback).async_build_agentic_loop_plan is not CustomLogger.async_build_agentic_loop_plan
+
+
+def _chat_build_plan_overridden(callback: CustomLogger) -> bool:
+    return (
+        type(callback).async_build_chat_completion_agentic_loop_plan
+        is not CustomLogger.async_build_chat_completion_agentic_loop_plan
+    )
 
 
 def _post_hook_overridden(callback: CustomLogger) -> bool:
-    base: Final = CustomLogger.async_post_agentic_loop_response_hook
-    func: Final = type(callback).async_post_agentic_loop_response_hook
-    return getattr(func, "__func__", func) is not getattr(base, "__func__", base)
+    return (
+        type(callback).async_post_agentic_loop_response_hook is not CustomLogger.async_post_agentic_loop_response_hook
+    )
 
 
 _STREAM_OPTIONS_ADAPTER: Final[TypeAdapter[Mapping[str, object] | None]] = TypeAdapter(Mapping[str, object] | None)
@@ -76,7 +92,7 @@ def _coerce_int(value: object, default: int) -> int:
     return int(value) if isinstance(value, (int, str)) else default
 
 
-def _agentic_loop_settings(kwargs: dict[str, object]) -> tuple[int, int, list[str]]:
+def _agentic_loop_settings(kwargs: Mapping[str, object]) -> tuple[int, int, list[str]]:
     depth: Final = _coerce_int(kwargs.get("_agentic_loop_depth"), 0)
     configured: Final = validated_max_agentic_loops(
         kwargs.get("max_agentic_loops"), field="litellm_params.max_agentic_loops"
@@ -152,6 +168,59 @@ def _end_refused_turn(
         logging_obj=logging_obj,
     )
     return finalized if replay is None else replay
+
+
+def _custom_loggers(logging_obj: object) -> tuple[CustomLogger, ...]:
+    import litellm
+
+    dynamic: Final = getattr(logging_obj, "dynamic_success_callbacks", None) or []
+    return tuple(callback for callback in (*litellm.callbacks, *dynamic) if isinstance(callback, CustomLogger))
+
+
+async def _refused_chat_turn(
+    callbacks: Sequence[CustomLogger],
+    refusing: CustomLogger,
+    refused_tool_calls: object,
+    *,
+    response: ModelResponse,
+    model: str,
+    messages: list,
+    tools: list[dict[str, object]] | None,
+    custom_llm_provider: str,
+    kwargs: Mapping[str, object],
+) -> ModelResponse:
+    surface_kwargs: Final = {
+        **kwargs,
+        "_agentic_loop_api_surface": CHAT_COMPLETION_AGENTIC_SURFACE,
+        "custom_llm_provider": custom_llm_provider,
+    }
+
+    def other_gates() -> Iterator[Awaitable[tuple[bool, object]]]:
+        for callback in callbacks:
+            if callback is refusing:
+                continue
+            yield callback.async_should_run_chat_completion_agentic_loop(
+                response=response,
+                model=model,
+                messages=messages,
+                tools=tools,
+                stream=False,
+                custom_llm_provider=custom_llm_provider,
+                kwargs=dict(kwargs),
+            )
+            if _gate_overridden(callback):
+                yield callback.async_should_run_agentic_loop(
+                    response=response,
+                    model=model,
+                    messages=messages,
+                    tools=tools,
+                    stream=False,
+                    custom_llm_provider=custom_llm_provider,
+                    kwargs=dict(surface_kwargs),
+                )
+
+    claimed: Final = await every_claimed_tool_call(refused_tool_calls, other_gates())
+    return finalize_refused_chat_turn(response, claimed)
 
 
 def _with_agentic_loop_metadata(kwargs_for_followup: Mapping[str, object]) -> Mapping[str, object]:
@@ -280,16 +349,11 @@ async def maybe_run_chat_completion_agentic_loop(
     custom_llm_provider: str,
     stream: bool,
 ) -> ModelResponse | CustomStreamWrapper | None:
-    import litellm
-
-    callbacks: Final = litellm.callbacks + (getattr(logging_obj, "dynamic_success_callbacks", None) or [])
+    callbacks: Final = _custom_loggers(logging_obj)
     depth, max_loops, fingerprints = _agentic_loop_settings(kwargs)
     tools: Final = optional_params.get("tools", [])
 
     for callback in callbacks:
-        if not isinstance(callback, CustomLogger):
-            continue
-
         if not _gate_overridden(callback):
             continue
 
@@ -331,7 +395,17 @@ async def maybe_run_chat_completion_agentic_loop(
                 raise
             verbose_logger.warning("LiteLLM.AgenticLoopRefused: ending turn [model=%s]: %s", model, str(e))
             return _end_refused_turn(
-                finalize_refused_chat_turn(response, tool_calls),
+                await _refused_chat_turn(
+                    callbacks,
+                    callback,
+                    tool_calls,
+                    response=response,
+                    model=model,
+                    messages=messages,
+                    tools=tools,
+                    custom_llm_provider=custom_llm_provider,
+                    kwargs=kwargs,
+                ),
                 kwargs=kwargs,
                 depth=depth,
                 model=model,
@@ -393,3 +467,113 @@ async def maybe_run_chat_completion_agentic_loop(
         custom_llm_provider=custom_llm_provider,
         logging_obj=logging_obj,
     )
+
+
+async def run_chat_completion_agentic_hooks(
+    *,
+    response: ModelResponse,
+    model: str,
+    messages: list,
+    optional_params: dict,
+    kwargs: dict[str, object],
+    logging_obj: LiteLLMLoggingObject,
+    custom_llm_provider: str,
+    stream: bool,
+) -> object | None:
+    callbacks: Final = _custom_loggers(logging_obj)
+    depth, max_loops, fingerprints = _agentic_loop_settings(kwargs)
+    tools: Final = optional_params.get("tools", [])
+    hook_kwargs: Final = {**kwargs, "custom_llm_provider": custom_llm_provider}
+
+    for callback in callbacks:
+        try:
+            should_run, tool_calls = await callback.async_should_run_chat_completion_agentic_loop(
+                response=response,
+                model=model,
+                messages=messages,
+                tools=tools,
+                stream=stream,
+                custom_llm_provider=custom_llm_provider,
+                kwargs=kwargs,
+            )
+        except Exception as e:
+            verbose_logger.exception(
+                "LiteLLM.AgenticHookError: Exception in async_should_run_chat_completion_agentic_loop: %s", str(e)
+            )
+            continue
+
+        if not should_run:
+            continue
+
+        try:
+            fingerprint = _check_agentic_loop_safety(
+                tool_calls=tool_calls,
+                fingerprints=fingerprints,
+                depth=depth,
+                max_loops=max_loops,
+                model=model,
+            )
+        except AgenticLoopSafetyError as e:
+            if stream:
+                raise
+            verbose_logger.warning("LiteLLM.AgenticLoopRefused: ending turn [model=%s]: %s", model, str(e))
+            return await _refused_chat_turn(
+                callbacks,
+                callback,
+                tool_calls,
+                response=response,
+                model=model,
+                messages=messages,
+                tools=tools,
+                custom_llm_provider=custom_llm_provider,
+                kwargs=kwargs,
+            )
+
+        if not _chat_build_plan_overridden(callback):
+            return await callback.async_run_chat_completion_agentic_loop(
+                tools=tool_calls,
+                model=model,
+                messages=messages,
+                response=response,
+                optional_params=optional_params,
+                logging_obj=logging_obj,
+                stream=stream,
+                kwargs=hook_kwargs,
+            )
+
+        plan = await callback.async_build_chat_completion_agentic_loop_plan(
+            tools=tool_calls,
+            model=model,
+            messages=messages,
+            response=response,
+            optional_params=optional_params,
+            logging_obj=logging_obj,
+            stream=stream,
+            kwargs=hook_kwargs,
+        )
+
+        if plan.response_override is not None:
+            return plan.response_override
+        if plan.terminate:
+            verbose_logger.debug(
+                "Agentic chat loop terminated by callback=%s reason=%s", type(callback).__name__, plan.stop_reason
+            )
+            return response
+        if not plan.run_agentic_loop:
+            continue
+
+        return await _execute_chat_completion_agentic_plan(
+            plan=plan,
+            callback=callback,
+            model=model,
+            optional_params=optional_params,
+            kwargs=hook_kwargs,
+            logging_obj=logging_obj,
+            custom_llm_provider=custom_llm_provider,
+            depth=depth,
+            max_loops=max_loops,
+            fingerprints=fingerprints,
+            fingerprint=fingerprint,
+        )
+
+    return None

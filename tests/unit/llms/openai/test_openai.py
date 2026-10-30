@@ -19,6 +19,7 @@ import litellm
 from litellm import create_thread, get_thread
 from litellm.caching.caching import Cache, LiteLLMCacheType
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.types.integrations.custom_logger import AgenticLoopPlan, AgenticLoopRequestPatch
 from litellm.llms.openai.openai import (
     AssistantEventHandler,
     AsyncAssistantEventHandler,
@@ -246,6 +247,7 @@ class _FailingFollowUpChatLoop(_SearchingChatGate):
     def __init__(self, error: Exception) -> None:
         super().__init__()
         self.error = error
+        self.logging_objs: list[object] = []
 
     async def async_run_chat_completion_agentic_loop(
         self,
@@ -259,6 +261,7 @@ class _FailingFollowUpChatLoop(_SearchingChatGate):
         kwargs: dict,
     ) -> object:
         self.runs += 1
+        self.logging_objs.append(logging_obj)
         raise self.error
 
 
@@ -359,6 +362,25 @@ async def test_acompletion_surfaces_a_failed_agentic_follow_up_instead_of_the_fi
 
 
 @pytest.mark.asyncio
+async def test_a_failed_agentic_follow_up_bills_the_first_call_on_the_failure_log(monkeypatch: pytest.MonkeyPatch):
+    loop: Final = _FailingFollowUpChatLoop(
+        litellm.RateLimitError(message="follow-up rate limited", llm_provider="openai", model="gpt-5.6")
+    )
+    monkeypatch.setattr(litellm, "callbacks", [loop])
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(_respond_with_a_search_tool_call)) as http_client:
+        with pytest.raises(litellm.RateLimitError):
+            await _acompletion_through(http_client)
+
+    (logging_obj,) = loop.logging_objs
+    price: Final = litellm.model_cost["gpt-5.6"]
+    assert logging_obj.model_call_details["combined_usage_object"].total_tokens == 8
+    assert logging_obj.model_call_details["response_cost"] == pytest.approx(
+        5 * price["input_cost_per_token"] + 3 * price["output_cost_per_token"]
+    )
+
+
+@pytest.mark.asyncio
 async def test_acompletion_does_not_resend_the_first_call_when_the_agentic_follow_up_answers_422(
     monkeypatch: pytest.MonkeyPatch,
 ):
@@ -455,6 +477,78 @@ async def test_acompletion_skips_a_failing_agentic_gate_and_runs_the_next_hook(m
 
     assert loop.runs == 1
     assert response.choices[0].message.content == "after the search"
+
+
+class _SearchAgainLoop(CustomLogger):
+    def __init__(self, client: AsyncOpenAI) -> None:
+        super().__init__()
+        self._client = client
+
+    async def async_should_run_chat_completion_agentic_loop(
+        self,
+        response: object,
+        model: str,
+        messages: list[dict],
+        tools: list[dict] | None,
+        stream: bool,
+        custom_llm_provider: str,
+        kwargs: dict,
+    ) -> tuple[bool, dict]:
+        searches: Final = [
+            {"id": call.id, "name": call.function.name}
+            for call in response.choices[0].message.tool_calls or []
+            if call.function.name == "litellm_web_search"
+        ]
+        return bool(searches), {"tool_calls": searches}
+
+    async def async_build_chat_completion_agentic_loop_plan(
+        self,
+        tools: dict,
+        model: str,
+        messages: list[dict],
+        response: object,
+        optional_params: dict,
+        logging_obj: object,
+        stream: bool,
+        kwargs: dict,
+    ) -> AgenticLoopPlan:
+        return AgenticLoopPlan(
+            run_agentic_loop=True,
+            request_patch=AgenticLoopRequestPatch(
+                messages=[*messages, {"role": "user", "content": "here are the search results"}],
+                kwargs={"client": self._client},
+            ),
+        )
+
+
+@pytest.mark.asyncio
+async def test_acompletion_ends_the_turn_at_max_agentic_loops_without_the_internal_search_call(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    upstream_calls: Final[asyncio.Queue[httpx.Request]] = asyncio.Queue()
+
+    def always_search(request: httpx.Request) -> httpx.Response:
+        upstream_calls.put_nowait(request)
+        return _respond_with_a_search_tool_call(request)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(always_search)) as http_client:
+        client: Final = AsyncOpenAI(api_key="transport-only", http_client=http_client)
+        monkeypatch.setattr(litellm, "callbacks", [_SearchAgainLoop(client)])
+        response: Final = await asyncio.wait_for(
+            litellm.acompletion(
+                model="openai/gpt-5.6",
+                api_key="transport-only",
+                client=client,
+                messages=[{"role": "user", "content": "search the web for the weather"}],
+                max_agentic_loops=1,
+                num_retries=0,
+                max_retries=0,
+            ),
+            timeout=10,
+        )
+
+    assert upstream_calls.qsize() == 2
+    assert not response.choices[0].message.tool_calls
 
 
 _REASONING_TOOL_CALL_REPLY: Final = {

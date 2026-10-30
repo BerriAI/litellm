@@ -2565,6 +2565,11 @@ class Logging(LiteLLMLoggingBaseClass):
         self._stream_failure_claimed = True
         return True
 
+    def record_earlier_round_for_failure(self, response: object) -> None:
+        usage: Final = get_usage_object(completion_response=response)
+        if usage is not None:
+            self.record_partial_usage_for_failure(usage, self.response_cost_calculator(result=response) or 0.0)
+
     def record_assembled_response_for_failure(self, assembled: ModelResponse) -> None:
         """Bill a fully streamed response on the failure log when a post-call hook rejects it."""
         usage: Final = getattr(assembled, "usage", None)

@@ -52,6 +52,7 @@ from litellm.types.utils import (
     Function,
     Message,
     ModelResponse,
+    Usage,
 )
 
 # The internal control fields that must never reach a provider request body.
@@ -420,8 +421,12 @@ async def _run_refused_rerun(
     rail_kwargs: Dict[str, object],
     stream: bool = False,
     gate_tool_calls: Optional[Dict[str, object]] = _REFUSED_GATE_TOOL_CALLS,
+    other_hooks_tool_calls: tuple[Dict[str, object], ...] = (),
 ) -> Any:
-    litellm.callbacks = [_GateOnlyLogger(plan=AgenticLoopPlan(run_agentic_loop=True), tool_calls=gate_tool_calls)]
+    litellm.callbacks = [
+        _GateOnlyLogger(plan=AgenticLoopPlan(run_agentic_loop=True), tool_calls=tool_calls)
+        for tool_calls in (gate_tool_calls, *other_hooks_tool_calls)
+    ]
     acompletion_mock = AsyncMock()
     with patch.object(litellm, "acompletion", acompletion_mock):
         try:
@@ -474,6 +479,34 @@ async def test_refused_rerun_keeps_the_clients_own_tool_call(restore_callbacks):
 
 
 @pytest.mark.asyncio
+async def test_refused_rerun_drops_every_hooks_internal_call_and_keeps_the_clients(restore_callbacks):
+    response = ModelResponse(
+        choices=[
+            Choices(
+                finish_reason="tool_calls",
+                message=Message(
+                    role="assistant",
+                    content=None,
+                    tool_calls=[
+                        _tool_call("call_abc", "litellm_code_execution"),
+                        _tool_call("call_search", "litellm_web_search"),
+                        _tool_call("call_client", "lookup"),
+                    ],
+                ),
+            )
+        ]
+    )
+
+    result = await _run_refused_rerun(
+        response,
+        _REFUSING_RAILS[0],
+        other_hooks_tool_calls=({"tool_calls": [{"id": "call_search", "name": "litellm_web_search"}]},),
+    )
+
+    assert [call.id for call in result.choices[0].message.tool_calls] == ["call_client"]
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "response, gate_tool_calls",
     [(_plain_model_response(), _REFUSED_GATE_TOOL_CALLS), (_tool_call_model_response(), None)],
@@ -509,6 +542,62 @@ async def test_dispatcher_surfaces_a_failed_follow_up_instead_of_the_tool_call_t
         await _dispatch_tool_call_turn(_tool_call_model_response(), logger)
 
     assert logger.cleanup_calls == 1
+
+
+class _PlanRecordingLogger(_GateOnlyLogger):
+    def __init__(self, plan: AgenticLoopPlan, tool_calls: Dict[str, Any]) -> None:
+        super().__init__(plan=plan, tool_calls=tool_calls)
+        self.logging_objs: List[Any] = []
+
+    async def async_build_agentic_loop_plan(
+        self,
+        tools: Dict[str, Any],
+        model: str,
+        messages: List[Dict[str, Any]],
+        response: Any,
+        anthropic_messages_provider_config: Any,
+        anthropic_messages_optional_request_params: Dict[str, Any],
+        logging_obj: Any,
+        stream: bool,
+        kwargs: Dict[str, Any],
+    ) -> AgenticLoopPlan:
+        self.logging_objs.append(logging_obj)
+        return self._plan
+
+
+@pytest.mark.asyncio
+async def test_acompletion_bills_the_first_call_on_the_failure_log_when_the_follow_up_fails(restore_callbacks):
+    logger: Final = _PlanRecordingLogger(
+        plan=AgenticLoopPlan(
+            run_agentic_loop=True,
+            request_patch=AgenticLoopRequestPatch(
+                messages=_patched_messages(), kwargs={"mock_response": "litellm.RateLimitError"}
+            ),
+        ),
+        tool_calls={"tool_calls": [{"id": "call_abc"}]},
+    )
+    litellm.callbacks = [logger]
+    first_call: Final = ModelResponse(
+        choices=_tool_call_model_response().choices, usage=Usage(prompt_tokens=5, completion_tokens=3, total_tokens=8)
+    )
+    mock_client: Final = MagicMock()
+    mock_client.post = AsyncMock(return_value=_raw_response_for(first_call))
+
+    with pytest.raises(litellm.RateLimitError):
+        await litellm.acompletion(
+            model="openai/gpt-4o-mini",
+            messages=[{"role": "user", "content": "what is 6*7?"}],
+            api_key="sk-test",
+            client=mock_client,
+            num_retries=0,
+        )
+
+    (logging_obj,) = logger.logging_objs
+    price: Final = litellm.model_cost["gpt-4o-mini"]
+    assert logging_obj.model_call_details["combined_usage_object"].total_tokens == 8
+    assert logging_obj.model_call_details["response_cost"] == pytest.approx(
+        5 * price["input_cost_per_token"] + 3 * price["output_cost_per_token"]
+    )
 
 
 class _RunOnlyLoopLogger(CustomLogger):
