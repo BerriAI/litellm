@@ -30,4 +30,3 @@ Use a list of exact tool names to restrict a server. Use the string `"*"` for an
 ```
 
 To preserve unrelated metadata, update the top-level `native_mcp_policy` field. Direct metadata writes are also validated and permission checked. Metadata replacement follows the existing management API behavior. Replacing metadata with a blob that omits its policy removes that policy and therefore requires proxy-admin permission. Key holders and team admins cannot broaden or remove grants through either write path.
-
