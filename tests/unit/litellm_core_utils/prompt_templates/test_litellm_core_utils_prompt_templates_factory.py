@@ -8085,11 +8085,7 @@ def test_anthropic_messages_pt_thinking_blocks_no_server_tools_unchanged():
     ], f"Expected sequential order but got: {types}"
 
 
-def test_anthropic_messages_pt_interleave_more_thinking_than_tool_groups():
-    """
-    Test interleaving when there are more thinking blocks than server tool groups.
-    Extra thinking blocks should appear before the text block.
-    """
+def test_anthropic_messages_pt_never_puts_thinking_blocks_side_by_side_when_their_order_is_unknown():
     messages = [
         {"role": "user", "content": "Search for something"},
         {
@@ -8147,14 +8143,190 @@ def test_anthropic_messages_pt_interleave_more_thinking_than_tool_groups():
     content = assistant_msg["content"]
     types = [c.get("type") for c in content]
 
-    assert types == [
+    assert types == ["thinking", "server_tool_use", "web_search_tool_result", "thinking", "text"]
+    assert [block["signature"] for block in content if block["type"] == "thinking"] == ["sig_1", "sig_3"]
+
+
+def _recorded_search_turn(**overrides: object) -> dict[str, object]:
+    turn: Final = {
+        "role": "assistant",
+        "content": "Plan first. The answer is 42.",
+        "thinking_blocks": [
+            {"type": "thinking", "thinking": "Plan the lookups.", "signature": "sig_1"},
+            {"type": "thinking", "thinking": "Search next.", "signature": "sig_2"},
+            {"type": "thinking", "thinking": "Read the result.", "signature": "sig_3"},
+        ],
+        "tool_calls": [
+            {
+                "id": "srvtoolu_01ONLY",
+                "type": "function",
+                "function": {"name": "web_search", "arguments": '{"query": "the answer"}'},
+            }
+        ],
+        "provider_specific_fields": {
+            "web_search_results": [
+                {
+                    "type": "web_search_tool_result",
+                    "tool_use_id": "srvtoolu_01ONLY",
+                    "content": [{"type": "web_search_result", "url": "https://example.com", "title": "Answer"}],
+                }
+            ],
+            "content_block_order": [
+                {"type": "thinking"},
+                {"type": "text", "length": 12},
+                {"type": "thinking"},
+                {"type": "server_tool_use", "id": "srvtoolu_01ONLY"},
+                {"type": "web_search_tool_result", "tool_use_id": "srvtoolu_01ONLY"},
+                {"type": "thinking"},
+                {"type": "text", "length": 17},
+            ],
+        },
+    }
+    return {**turn, **overrides}
+
+
+def _replayed_assistant_content(turn: dict[str, object]) -> list[dict[str, object]]:
+    replayed = anthropic_messages_pt(
+        [{"role": "user", "content": "What is the answer?"}, turn, {"role": "user", "content": "Thanks."}],
+        model="claude-opus-5-5",
+        llm_provider="anthropic",
+    )
+    return replayed[1]["content"]
+
+
+def _without_block_order(turn: dict[str, object]) -> dict[str, object]:
+    fields: Final = turn["provider_specific_fields"]
+    return {
+        **turn,
+        "provider_specific_fields": {key: value for key, value in fields.items() if key != "content_block_order"},
+    }
+
+
+def _with_block_order(order: object) -> dict[str, object]:
+    turn: Final = _recorded_search_turn()
+    return {**turn, "provider_specific_fields": {**turn["provider_specific_fields"], "content_block_order": order}}
+
+
+def test_anthropic_messages_pt_replays_a_recorded_block_order_with_text_back_in_place():
+    content: Final = _replayed_assistant_content(_recorded_search_turn(cache_control={"type": "ephemeral"}))
+
+    assert [(block["type"], block.get("signature") or block.get("text") or block.get("id")) for block in content] == [
+        ("thinking", "sig_1"),
+        ("text", "Plan first. "),
+        ("thinking", "sig_2"),
+        ("server_tool_use", "srvtoolu_01ONLY"),
+        ("web_search_tool_result", None),
+        ("thinking", "sig_3"),
+        ("text", "The answer is 42."),
+    ]
+    assert [block.get("cache_control") for block in content if block["type"] == "text"] == [
+        None,
+        {"type": "ephemeral"},
+    ]
+
+
+def test_anthropic_messages_pt_adds_tool_calls_missing_from_the_block_order_at_the_end():
+    turn: Final = _recorded_search_turn()
+    weather_call: Final = {
+        "id": "toolu_01Weather",
+        "type": "function",
+        "function": {"name": "get_weather", "arguments": '{"city": "Paris"}'},
+    }
+
+    content: Final = _replayed_assistant_content({**turn, "tool_calls": [*turn["tool_calls"], weather_call]})
+
+    assert [block["type"] for block in content] == [
+        "thinking",
+        "text",
         "thinking",
         "server_tool_use",
         "web_search_tool_result",
         "thinking",
-        "thinking",
         "text",
-    ], f"Expected order but got: {types}"
+        "tool_use",
+    ]
+    assert content[-1]["id"] == "toolu_01Weather"
+
+
+def test_anthropic_messages_pt_skips_block_order_entries_the_message_no_longer_carries():
+    order: Final = _recorded_search_turn()["provider_specific_fields"]["content_block_order"]
+
+    content: Final = _replayed_assistant_content(
+        _with_block_order([*order[:-1], {"type": "tool_use", "id": "toolu_01Dropped"}, order[-1]])
+    )
+
+    assert [(block["type"], block.get("signature") or block.get("text") or block.get("id")) for block in content] == [
+        ("thinking", "sig_1"),
+        ("text", "Plan first. "),
+        ("thinking", "sig_2"),
+        ("server_tool_use", "srvtoolu_01ONLY"),
+        ("web_search_tool_result", None),
+        ("thinking", "sig_3"),
+        ("text", "The answer is 42."),
+    ]
+
+
+def test_anthropic_messages_pt_replays_a_recorded_search_once_when_two_assistant_messages_repeat_it():
+    turn: Final = _recorded_search_turn()
+
+    replayed: Final = anthropic_messages_pt(
+        [{"role": "user", "content": "What is the answer?"}, turn, turn, {"role": "user", "content": "Thanks."}],
+        model="claude-opus-5-5",
+        llm_provider="anthropic",
+    )
+
+    assert [block["id"] for block in replayed[1]["content"] if block["type"] == "server_tool_use"] == [
+        "srvtoolu_01ONLY"
+    ]
+
+
+@pytest.mark.parametrize(
+    "turn",
+    [
+        pytest.param(_recorded_search_turn(content="Edited by the client."), id="text_edited"),
+        pytest.param(
+            _recorded_search_turn(thinking_blocks=_recorded_search_turn()["thinking_blocks"][:2]),
+            id="thinking_block_removed",
+        ),
+        pytest.param(
+            _recorded_search_turn(
+                thinking_blocks=[
+                    *_recorded_search_turn()["thinking_blocks"][:2],
+                    {"type": "redacted_thinking", "data": "EmwKAhgBEgy3va3pzix"},
+                ]
+            ),
+            id="thinking_block_type_changed",
+        ),
+        pytest.param(
+            _with_block_order(
+                [
+                    *_recorded_search_turn()["provider_specific_fields"]["content_block_order"],
+                    {"type": "server_tool_use", "id": "srvtoolu_01GONE"},
+                ]
+            ),
+            id="search_removed",
+        ),
+        pytest.param(
+            {
+                **_recorded_search_turn(),
+                "provider_specific_fields": {
+                    "content_block_order": _recorded_search_turn()["provider_specific_fields"]["content_block_order"]
+                },
+            },
+            id="search_result_missing",
+        ),
+        pytest.param(_with_block_order([{"length": 12}]), id="entry_without_type"),
+        pytest.param(_with_block_order("thinking,text"), id="not_a_list"),
+    ],
+)
+def test_anthropic_messages_pt_ignores_a_block_order_that_no_longer_matches_the_message(turn: dict[str, object]):
+    content: Final = _replayed_assistant_content(turn)
+
+    assert content == _replayed_assistant_content(_without_block_order(turn))
+    assert all(
+        not (first["type"] == "thinking" and second["type"] == "thinking")
+        for first, second in zip(content, content[1:])
+    )
 
 
 def test_anthropic_messages_pt_list_content_with_thinking_preserves_order():

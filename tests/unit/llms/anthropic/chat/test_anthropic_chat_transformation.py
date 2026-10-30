@@ -3728,6 +3728,100 @@ def test_server_tool_result_round_trips_right_after_its_call(
     assert [block["tool_use_id"] for block in replayed[2]["content"]] == ["toolu_01Weather"]
 
 
+def _thought(signature: str) -> dict[str, object]:
+    return {"type": "thinking", "thinking": f"Reasoning {signature}", "signature": signature}
+
+
+def _searches(*numbers: int) -> list[dict[str, object]]:
+    uses: Final = [
+        {"type": "server_tool_use", "id": f"srvtoolu_0{n}", "name": "web_search", "input": {"query": f"step {n}"}}
+        for n in numbers
+    ]
+    results: Final = [
+        {
+            "type": "web_search_tool_result",
+            "tool_use_id": f"srvtoolu_0{n}",
+            "content": [{"type": "web_search_result", "url": f"https://example.com/{n}", "title": f"Step {n}"}],
+        }
+        for n in numbers
+    ]
+    return [*uses, *results]
+
+
+def _said(text: str) -> dict[str, object]:
+    return {"type": "text", "text": text}
+
+
+@pytest.mark.parametrize(
+    ("content", "stop_reason", "follow_up"),
+    [
+        pytest.param(
+            [
+                _thought("sig_1"),
+                _said("I will look up each step."),
+                *_searches(1),
+                _thought("sig_2"),
+                _thought("sig_3"),
+                *_searches(2),
+                _thought("sig_4"),
+                _said("Two more lookups."),
+                *_searches(3, 4),
+                _thought("sig_5"),
+                _said("The answer is 42."),
+                _said(" Source: step 4."),
+            ],
+            "end_turn",
+            {"role": "user", "content": "Summarize it in one sentence."},
+            id="more_thinking_blocks_than_searches",
+        ),
+        pytest.param(
+            [_thought("sig_1"), _said("First a plan."), _thought("sig_2"), *_searches(1), _said("Done.")],
+            "end_turn",
+            {"role": "user", "content": "Thanks."},
+            id="text_between_two_thinking_blocks",
+        ),
+        pytest.param(
+            [
+                {"type": "redacted_thinking", "data": "EmwKAhgBEgy3va3pzix/LafPsn4aDFIT2Xlxh0L5L8rLVyIwxtE3rAFBa8cr3qpP"},
+                *_searches(1),
+                _thought("sig_1"),
+                _said("It is in Paris."),
+                _thought("sig_2"),
+                _WEATHER_CALL,
+            ],
+            "tool_use",
+            {"role": "tool", "tool_call_id": "toolu_01Weather", "content": "18C"},
+            id="redacted_thinking_and_a_client_tool_call",
+        ),
+    ],
+)
+def test_thinking_turn_with_web_search_replays_in_the_order_claude_returned_it(
+    content: list[dict[str, object]], stop_reason: str, follow_up: dict[str, str]
+):
+    message: Final = _parsed_assistant_message(content, stop_reason)
+
+    replayed: Final = anthropic_messages_pt(
+        messages=[{"role": "user", "content": "Chain eight lookups."}, message.model_dump(), follow_up],
+        model="claude-opus-5-5",
+        llm_provider="anthropic",
+    )
+
+    assert replayed[1]["content"] == content
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        pytest.param([_thought("sig_1"), _said("No search needed.")], id="thinking_without_server_tools"),
+        pytest.param([*_searches(1), _said("Found it.")], id="server_tools_without_thinking"),
+    ],
+)
+def test_only_thinking_turns_with_server_tools_carry_a_content_block_order(content: list[dict[str, object]]):
+    message: Final = _parsed_assistant_message(content, "end_turn")
+
+    assert "content_block_order" not in (message.provider_specific_fields or {})
+
+
 def _block_ids(message: dict[str, object], block_type: str, id_key: str) -> list[object]:
     return sorted(block[id_key] for block in message["content"] if block["type"] == block_type)
 

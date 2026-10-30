@@ -2836,6 +2836,148 @@ def _thinking_in_replay_order(
     )
 
 
+_CONTENT_BLOCK_ORDER: Final = TypeAdapter(tuple[AnthropicContentBlockOrderEntry, ...])
+_THINKING_BLOCK_TYPES: Final = frozenset({"thinking", "redacted_thinking"})
+
+
+def _recorded_content_block_order(order: object) -> tuple[AnthropicContentBlockOrderEntry, ...] | None:
+    if order is None:
+        return None
+    try:
+        return _CONTENT_BLOCK_ORDER.validate_python(order)
+    except ValidationError:
+        return None
+
+
+def _block_field(block: Mapping[str, object], key: str) -> object:
+    return block.get(key)
+
+
+_ReplayedBlock: TypeAlias = AnthropicMessagesAssistantMessageValues | _AnthropicToolInvokeItem
+
+
+def _recorded_block(
+    entry: AnthropicContentBlockOrderEntry,
+    thinking_seen: int,
+    text_end: int,
+    *,
+    thinking_blocks: Sequence[ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock],
+    text: str,
+    tool_uses: Mapping[object, _AnthropicToolInvokeItem],
+    tool_results: Mapping[object, _AnthropicToolInvokeItem],
+    drop_params: bool,
+    message: ChatCompletionAssistantMessage,
+) -> tuple[_ReplayedBlock, ...]:
+    match entry:
+        case AnthropicContentBlockOrderEntry(type="thinking" | "redacted_thinking"):
+            return tuple(_replayable_thinking_blocks([thinking_blocks[thinking_seen - 1]], drop_params=drop_params))
+        case AnthropicContentBlockOrderEntry(type="text", length=int() as length) if length:
+            text_block: Final = AnthropicMessagesTextParam(type="text", text=text[text_end - length : text_end])
+            if text_end == len(text):
+                add_cache_control_to_content(anthropic_content_element=text_block, original_content_element=message)
+            return (text_block,)
+        case AnthropicContentBlockOrderEntry(id=str() as block_id) if block_id in tool_uses:
+            return (tool_uses[block_id],)
+        case AnthropicContentBlockOrderEntry(tool_use_id=str() as tool_use_id) if tool_use_id in tool_results:
+            return (tool_results[tool_use_id],)
+        case _:
+            return ()
+
+
+def _blocks_in_recorded_order(
+    order: tuple[AnthropicContentBlockOrderEntry, ...],
+    thinking_blocks: Sequence[ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock],
+    tool_invokes: Sequence[_AnthropicToolInvokeItem],
+    text: str,
+    *,
+    drop_params: bool,
+    message: ChatCompletionAssistantMessage,
+) -> tuple[_ReplayedBlock, ...] | None:
+    tool_uses: Final = MappingProxyType(
+        {
+            _block_field(item, "id"): item
+            for item in tool_invokes
+            if _block_field(item, "type") in ("server_tool_use", "tool_use")
+        }
+    )
+    tool_results: Final = MappingProxyType(
+        {
+            _block_field(item, "tool_use_id"): item
+            for item in tool_invokes
+            if str(_block_field(item, "type")).endswith("_tool_result")
+        }
+    )
+    recorded_server_tool_uses: Final = frozenset(entry.id for entry in order if entry.type == "server_tool_use")
+    server_tool_uses: Final = frozenset(
+        block_id for block_id, item in tool_uses.items() if _block_field(item, "type") == "server_tool_use"
+    )
+    if (
+        tuple(entry.type for entry in order if entry.type in _THINKING_BLOCK_TYPES)
+        != tuple(_block_field(block, "type") for block in thinking_blocks)
+        or sum(entry.length or 0 for entry in order if entry.type == "text") != len(text)
+        or recorded_server_tool_uses != server_tool_uses
+        or not recorded_server_tool_uses.issubset(tool_results)
+    ):
+        return None
+    placed: Final = tuple(
+        itertools.chain.from_iterable(
+            _recorded_block(
+                entry,
+                thinking_seen,
+                text_end,
+                thinking_blocks=thinking_blocks,
+                text=text,
+                tool_uses=tool_uses,
+                tool_results=tool_results,
+                drop_params=drop_params,
+                message=message,
+            )
+            for entry, thinking_seen, text_end in zip(
+                order,
+                itertools.accumulate(int(entry.type in _THINKING_BLOCK_TYPES) for entry in order),
+                itertools.accumulate((entry.length or 0) if entry.type == "text" else 0 for entry in order),
+            )
+        )
+    )
+    placed_objects: Final = frozenset(map(id, placed))
+    return (*placed, *(item for item in tool_invokes if id(item) not in placed_objects))
+
+
+_OBJECTS: Final = TypeAdapter(tuple[object, ...])
+
+
+def _objects(value: object) -> Sequence[object] | None:
+    return _OBJECTS.validate_python(value) if isinstance(value, list) else None
+
+
+def _replay_in_recorded_order(
+    message: ChatCompletionAssistantMessage,
+    *,
+    answered_tool_ids: Container[str],
+    drop_params: bool,
+) -> tuple[_ReplayedBlock, ...] | None:
+    fields: Final = as_str_mapping(message.get("provider_specific_fields")) or {}
+    order: Final = _recorded_content_block_order(fields.get("content_block_order"))
+    tool_calls: Final = message.get("tool_calls")
+    content: Final = message.get("content")
+    if order is None or tool_calls is None or not isinstance(content, (str, type(None))):
+        return None
+    tool_invokes: Final = convert_to_anthropic_tool_invoke(
+        tool_calls,
+        web_search_results=_objects(fields.get("web_search_results")),
+        tool_results=_objects(fields.get("tool_results")),
+        answered_tool_ids=answered_tool_ids,
+    )
+    return _blocks_in_recorded_order(
+        order,
+        message.get("thinking_blocks") or (),
+        tool_invokes,
+        content or "",
+        drop_params=drop_params,
+        message=message,
+    )
+
+
 _STREAM_ONLY_THINKING_KEYS: Final = frozenset({"index"})
 _UNSUPPORTED_THINKING_KEYS: Final = frozenset({"index", "cache_control"})
 
@@ -3118,7 +3260,29 @@ def anthropic_messages_pt(
                         _has_server_tool_calls = True
                         break
 
-            if (
+            _recorded_replay = (
+                _replay_in_recorded_order(
+                    assistant_content_block, answered_tool_ids=client_answered_tool_ids, drop_params=drop_params
+                )
+                if thinking_blocks is not None and _has_server_tool_calls
+                else None
+            )
+
+            if _recorded_replay is not None:
+                for block in _recorded_replay:
+                    item_id = _block_field(block, "id")
+                    if isinstance(item_id, str) and item_id in unique_tool_ids:
+                        continue
+                    if isinstance(item_id, str):
+                        unique_tool_ids.add(item_id)
+                    assistant_content.append(
+                        cast(  # cast-ok: server tool blocks are Anthropic-native dicts the content union does not model
+                            AnthropicMessagesAssistantMessageValues, block
+                        )
+                    )
+                assistant_tool_calls = None
+
+            elif (
                 thinking_blocks is not None
                 and _has_server_tool_calls
                 and isinstance(assistant_content_block.get("content", None), (str, type(None)))
@@ -3182,7 +3346,9 @@ def anthropic_messages_pt(
 
                 # Interleave: each thinking block precedes its server tool group.
                 # Pattern: thinking[0], group[0], thinking[1], group[1], ...
-                # Any remaining thinking blocks (after all groups) go before text.
+                # Only the last remaining thinking block goes before text, since
+                # Anthropic rejects thinking blocks that were apart in the original
+                # response and sit side by side in the replay.
                 # Any remaining groups (after all thinking blocks) go after.
                 tb_idx = 0
                 grp_idx = 0
@@ -3203,8 +3369,8 @@ def anthropic_messages_pt(
                             assistant_content.append(cast(AnthropicMessagesAssistantMessageValues, block))
                         grp_idx += 1
                     elif tb_idx < num_tb:
-                        # More thinking blocks than tool groups - emit before text
-                        assistant_content.append(thinking_blocks[tb_idx])
+                        if tb_idx == num_tb - 1:
+                            assistant_content.append(thinking_blocks[tb_idx])
                         tb_idx += 1
                     else:
                         # More tool groups than thinking blocks - emit remaining

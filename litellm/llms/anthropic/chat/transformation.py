@@ -7,7 +7,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, ClassVar, Final, NoReturn, cast
 
 import httpx
-from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
+from pydantic import BaseModel, ConfigDict, ModelWrapValidatorHandler, TypeAdapter, ValidationError, model_validator
 from typing_extensions import ReadOnly, TypedDict
 
 import litellm
@@ -67,6 +67,7 @@ from litellm.types.llms.anthropic import (
     AllAnthropicToolsValues,
     AnthropicCodeExecutionTool,
     AnthropicComputerTool,
+    AnthropicContentBlockOrderEntry,
     AnthropicHostedTools,
     AnthropicInputSchema,
     AnthropicMcpServerTool,
@@ -266,6 +267,41 @@ class _AnthropicToolResultBlock(TypedDict, total=False):
     type: ReadOnly[str]
     tool_use_id: ReadOnly[str]
     content: ReadOnly[object]
+
+
+class _AnthropicResponseContent(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    content: tuple[Mapping[str, object], ...] = ()
+
+    @model_validator(mode="wrap")
+    @classmethod
+    def _empty_when_malformed(
+        cls, value: object, handler: ModelWrapValidatorHandler["_AnthropicResponseContent"]
+    ) -> "_AnthropicResponseContent":
+        try:
+            return handler(value)
+        except ValidationError:
+            return cls()
+
+
+def _content_block_order_entry(block: Mapping[str, object]) -> AnthropicContentBlockOrderEntry:
+    match block:
+        case {"type": "text", "text": str() as text}:
+            return AnthropicContentBlockOrderEntry(type="text", length=len(text))
+        case {"type": str() as kind, "id": str() as block_id}:
+            return AnthropicContentBlockOrderEntry(type=kind, id=block_id)
+        case {"type": str() as kind, "tool_use_id": str() as tool_use_id}:
+            return AnthropicContentBlockOrderEntry(type=kind, tool_use_id=tool_use_id)
+        case _:
+            return AnthropicContentBlockOrderEntry(type=str(block.get("type")))
+
+
+def content_block_order(content: Sequence[Mapping[str, object]]) -> tuple[Mapping[str, object], ...] | None:
+    kinds: Final = frozenset(block.get("type") for block in content)
+    if kinds.isdisjoint(("thinking", "redacted_thinking")) or "server_tool_use" not in kinds:
+        return None
+    return tuple(_content_block_order_entry(block).model_dump(exclude_none=True) for block in content)
 
 
 _ENUM_TYPE_CHECKS: Final[Mapping[object, Callable[[object], bool]]] = MappingProxyType(
@@ -2964,6 +3000,10 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
         if compaction_blocks is not None:
             provider_specific_fields["compaction_blocks"] = compaction_blocks
+
+        block_order: Final = content_block_order(_AnthropicResponseContent.model_validate(completion_response).content)
+        if block_order is not None:
+            provider_specific_fields["content_block_order"] = block_order
 
         refusal_fields: Final = refusal_provider_specific_fields(
             REFUSAL_STOP_FIELDS.validate_python(completion_response)
