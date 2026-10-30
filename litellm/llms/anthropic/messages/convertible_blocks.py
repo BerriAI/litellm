@@ -13,6 +13,7 @@ import litellm
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, drops_unsupported_params
 from litellm.litellm_core_utils.prompt_templates.factory import sanitize_anthropic_tool_use_id
 from litellm.llms.anthropic.messages.native.utils import normalize_native_messages
+from litellm.types.llms.anthropic import ANTHROPIC_UNRENDERED_BLOCK_TYPES
 from litellm.types.utils import TokenCountMessagesFormat
 
 _CONVERTIBLE_BLOCK_TYPES: Final = MappingProxyType(
@@ -57,6 +58,8 @@ def _block_label(block: JsonValue, convertible: frozenset[str]) -> str | None:
     block_type: Final = block.get("type")
     if not isinstance(block_type, str):
         return "a block without a type"
+    if block_type in ANTHROPIC_UNRENDERED_BLOCK_TYPES:
+        return None
     if block_type not in convertible:
         return block_type
     return _source_label(block_type, block.get("source")) if block_type in _SOURCED_BLOCK_TYPES else None

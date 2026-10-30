@@ -61,6 +61,7 @@ from litellm.llms.custom_httpx.http_handler import get_httpx_client, header_valu
 from litellm.router_utils.deployment_pricing import deployment_pricing_models
 from litellm.rust_bridge.tokenizer import get_encoding
 from litellm.types.llms.anthropic import (
+    ANTHROPIC_UNRENDERED_BLOCK_TYPES,
     AnthropicContentParamSource,
     AnthropicContentParamSourceFileId,
     AnthropicContentParamSourceUrl,
@@ -1703,6 +1704,8 @@ def _count_content_list(
                 block_text = str(c.get(_TEXT_FIELD_BY_BLOCK_TYPE[c["type"]]) or "")
                 if block_text:
                     num_tokens += count_function(block_text)
+            elif c["type"] in ANTHROPIC_UNRENDERED_BLOCK_TYPES:
+                continue
             elif c["type"] == "image_url":
                 image_url = c.get("image_url")
                 num_tokens += _count_image_tokens(image_url, use_default_image_token_count)
@@ -1752,7 +1755,7 @@ def _count_content_list(
                     f"Invalid content item type: {content_type}. "
                     f"Expected str or dict with 'type' field "
                     f"(text, image_url, image, document, file, tool_use, tool_result, thinking, redacted_thinking, "
-                    f"compaction, tool_reference, search_result)."
+                    f"compaction, tool_reference, search_result, fallback)."
                 )
         return num_tokens
     except Exception as e:

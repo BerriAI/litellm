@@ -202,6 +202,15 @@ def carries_signed_compaction_block(messages: Sequence[object]) -> bool:
     return any(map(_is_signed_compaction_block, chain.from_iterable(map(_message_blocks, messages))))
 
 
+def _is_fallback_block(block: object) -> bool:
+    fields: Final = as_str_mapping(block)
+    return fields is not None and fields.get("type") == "fallback"
+
+
+def carries_fallback_block(messages: Sequence[object]) -> bool:
+    return any(map(_is_fallback_block, chain.from_iterable(map(_message_blocks, messages))))
+
+
 def requires_native_compaction_beta(
     custom_llm_provider: str,
     optional_params: Mapping[str, object],
@@ -265,6 +274,7 @@ def count_tokens_feature_betas(
                 ANTHROPIC_MID_CONVERSATION_TOOL_CHANGES_BETA_HEADER,
                 AnthropicModelInfo().is_mid_conversation_tool_change_used(messages),
             ),
+            (ANTHROPIC_BETA_HEADER_VALUES.SERVER_SIDE_FALLBACK_2026_06_01.value, carries_fallback_block(messages)),
         )
         if used
     )

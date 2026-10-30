@@ -79,6 +79,14 @@ def test_blocks_both_conversions_drop_are_named(role: str, block: Mapping[str, o
     assert unconvertible_anthropic_blocks([{"role": role, "content": [block]}]) == (label,)
 
 
+@pytest.mark.parametrize("role", ("user", "assistant"))
+def test_a_fallback_block_is_accepted_because_it_renders_nothing_to_lose(role: str) -> None:
+    block: Final = {"type": "fallback", "from": {"model": "first"}, "to": {"model": "second"}}
+
+    assert _converted_by_both_adapters(role, block) == (False, False)
+    assert unconvertible_anthropic_blocks([{"role": role, "content": [block]}]) == ()
+
+
 def test_labels_are_listed_once_in_order_and_string_content_is_accepted() -> None:
     messages: Final = [
         {"role": "user", "content": "plain text"},

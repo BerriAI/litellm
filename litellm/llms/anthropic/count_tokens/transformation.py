@@ -27,6 +27,7 @@ from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import 
 )
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.anthropic.common_utils import (
+    carries_fallback_block,
     carries_signed_compaction_block,
     context_management_betas,
     context_management_with_edits,
@@ -436,15 +437,22 @@ class AnthropicCountTokensConfig:
         bearer for ``ANTHROPIC_AUTH_TOKEN`` and for sk-ant-oat tokens, whose mandatory oauth beta
         merges with the token-counting beta instead of replacing it. A history that carries a
         signed compaction block also needs the compaction beta, or Anthropic rejects the block
-        as an unknown content type, and ``context_management`` edits need the betas inference sends."""
+        as an unknown content type. A history that echoes a fallback block needs the fallback beta
+        the same way, and ``context_management`` edits need the betas inference sends."""
         compaction_betas: Final = (
             (ANTHROPIC_BETA_HEADER_VALUES.COMPACT_2026_09_04.value,)
             if carries_signed_compaction_block(messages)
             else ()
         )
+        fallback_betas: Final = (
+            (ANTHROPIC_BETA_HEADER_VALUES.SERVER_SIDE_FALLBACK_2026_06_01.value,)
+            if carries_fallback_block(messages)
+            else ()
+        )
         request_betas: Final = (
             ANTHROPIC_TOKEN_COUNTING_BETA_VERSION,
             *compaction_betas,
+            *fallback_betas,
             *context_management_betas(context_management),
         )
         return {
