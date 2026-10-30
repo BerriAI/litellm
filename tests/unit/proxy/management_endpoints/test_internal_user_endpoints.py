@@ -4292,6 +4292,34 @@ async def test_get_user_info_for_proxy_admin_validates_keys_and_teams():
     assert returned_key["models"] == []
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "raw_rows",
+    [
+        [{"teams": None, "keys": "sk-row-content-must-not-leak"}],
+        [{"teams": None, "keys": ["sk-row-content-must-not-leak"]}],
+    ],
+)
+async def test_get_user_info_for_proxy_admin_errors_do_not_echo_row_content(raw_rows):
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from pydantic import ValidationError
+
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.internal_user_endpoints import (
+        _get_user_info_for_proxy_admin,
+    )
+
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.query_raw = AsyncMock(return_value=raw_rows)
+
+    with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client):
+        with pytest.raises(ValidationError) as exc_info:
+            await _get_user_info_for_proxy_admin(user_api_key_dict=UserAPIKeyAuth(user_id=None))
+
+    assert "sk-row-content-must-not-leak" not in str(exc_info.value)
+
+
 def _object_permission_mocks(mocker, existing_object_permission_id=None):
     """Prisma double whose user row optionally already links a permission row."""
     mock_prisma_client = mocker.MagicMock()
@@ -4970,7 +4998,7 @@ _DB_OUTAGE_503_BODY: Final = {
     "error": {
         "message": "Service Unavailable, the authentication database is temporarily unreachable. Please retry shortly.",
         "type": "no_db_connection",
-        "param": "None",
+        "param": None,
         "code": "503",
     }
 }
@@ -5211,3 +5239,18 @@ async def test_user_update_without_password_revokes_nothing(_admin_prisma, mocke
     await _update_single_user_helper(user_request=user_request, user_api_key_dict=admin_caller)
 
     revoke_mock.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_user_update_reports_a_bad_budget_duration_as_a_request_error_not_an_auth_error(_admin_prisma: MagicMock) -> None:
+    from litellm.proxy.management_endpoints.internal_user_endpoints import user_update
+
+    with pytest.raises(ProxyException) as exc_info:
+        await user_update(
+            data=UpdateUserRequest(user_id="target-user", budget_duration="not-a-duration"),
+            user_api_key_dict=UserAPIKeyAuth(user_id="admin-1", user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+
+    assert (exc_info.value.code, exc_info.value.type) == ("400", "invalid_request_error")
+    assert "Invalid budget_duration" in exc_info.value.message
+    assert "Authentication Error" not in exc_info.value.message

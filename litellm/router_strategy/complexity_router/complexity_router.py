@@ -23,6 +23,7 @@ import random
 import re
 import time
 from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
+from dataclasses import dataclass
 from functools import partial
 from itertools import accumulate, chain, islice, takewhile
 from threading import Lock
@@ -1390,6 +1391,11 @@ def _session_affinity_cache_value(model: str, tier: ComplexityTier | str | None)
     return {"model": model, "tier": tier_value}
 
 
+@dataclass(frozen=True, slots=True)
+class _JevConnectionError:
+    message: str
+
+
 class ComplexityRouter(CustomLogger):
     """
     Complexity router that classifies requests and routes to appropriate models.
@@ -1405,7 +1411,7 @@ class ComplexityRouter(CustomLogger):
     - Question complexity (multiple questions)
     """
 
-    def _build_jev_client(self, config: OpenSourceClassifierConfig) -> JevClassifierClient:
+    def _build_jev_client(self, config: OpenSourceClassifierConfig) -> JevClassifierClient | _JevConnectionError:
         if config.deployment_name is not None:
             return RouterJevClassifierClient(self.litellm_router_instance, config.deployment_name)
         if config.provider in ("laya", "bespoke"):
@@ -1426,12 +1432,22 @@ class ComplexityRouter(CustomLogger):
                 http_client=get_async_httpx_client(httpxSpecialProvider.PassThroughEndpoint),
                 provider="databricks",
             )
-        api_key: Final = config.api_key or get_secret_str("TYPESAFE_API_KEY")
-        if not api_key:
-            raise ValueError(
+        api_key: Final = (
+            get_secret_str(config.api_key)
+            if config.api_key is not None and config.api_key.startswith("os.environ/")
+            else config.api_key or get_secret_str("TYPESAFE_API_KEY")
+        )
+        if not api_key or not api_key.strip():
+            return _JevConnectionError(
                 "opensource_classifier_config.api_key or TYPESAFE_API_KEY is required for classifier_type 'oss_classifier'"
             )
-        api_base: Final = config.api_base or get_secret_str("TYPESAFE_API_BASE") or "https://api.typesafe.ai"
+        api_base: Final = (
+            get_secret_str(config.api_base)
+            if config.api_base is not None and config.api_base.startswith("os.environ/")
+            else config.api_base or get_secret_str("TYPESAFE_API_BASE") or "https://api.typesafe.ai"
+        )
+        if not api_base or not api_base.strip():
+            return _JevConnectionError("opensource_classifier_config.api_base must resolve to a non-empty value")
         return HttpJevClassifierClient(
             api_key=api_key,
             api_base=api_base,
@@ -1474,13 +1490,18 @@ class ComplexityRouter(CustomLogger):
             self.config.default_model = default_model
 
         jev_config: Final = self.config.opensource_classifier_config
-        self._jev_client: JevClassifierClient | None = (
+        jev_client_result: Final = (
             jev_client
             if jev_client is not None
             else self._build_jev_client(jev_config)
             if self.config.classifier_type == "oss_classifier" and jev_config is not None
             else None
         )
+        match jev_client_result:
+            case _JevConnectionError(message=message):
+                raise ValueError(message)
+            case _:
+                self._jev_client: JevClassifierClient | None = jev_client_result
 
         self._tier_affinity_config = hashlib.sha256(
             self.config.model_dump_json(include=MappingProxyType({"tiers": True, "tier_model_configs": True})).encode()
@@ -2586,9 +2607,10 @@ class ComplexityRouter(CustomLogger):
         """The classifier-failed outcome for classifier_fallback='default_model'.
 
         The outcome still carries a tier because ClassificationOutcome requires one, so it reports
-        the tier whose pool holds default_model, and MEDIUM when no pool does. Nothing about the
-        request produced that tier, so the pre-routing hook never logs it as the request's tier: it
-        routes this cause straight to default_model rather than picking from the tier's pool, since
+        the tier whose pool holds default_model, or the first custom tier (MEDIUM for built-in
+        tiers) when no pool does. Nothing about the request produced that tier, so the
+        pre-routing hook never logs it as the request's tier: it routes this cause straight to
+        default_model rather than picking from the tier's pool, since
         a pool with several models would otherwise land somewhere else and the point of this
         fallback is a known destination when classification failed.
 
@@ -2601,14 +2623,11 @@ class ComplexityRouter(CustomLogger):
         """
         default_model: Final = self.config.default_model
         pools: Final = self._tier_pools()
-        tier: Final = next(
-            (
-                candidate
-                for candidate in self.config.active_tier_severity_order()
-                if default_model in pools.get(candidate.value, ())
-            ),
-            ComplexityTier.MEDIUM,
+        name: Final = next(
+            (candidate for candidate in self.config.tier_names() if default_model in pools.get(candidate, ())),
+            self.config.tier_names()[0] if self.config.has_custom_tiers else ComplexityTier.MEDIUM.value,
         )
+        tier: Final = name if self.config.has_custom_tiers else ComplexityTier(name)
         return ClassificationOutcome(
             tier=tier, score=None, signals=("classifier-failed:default-model",), cause="default_model_fallback"
         )
@@ -3394,8 +3413,8 @@ class ComplexityRouter(CustomLogger):
 
     def _active_tier_severity(self, tier: ComplexityTier | str) -> int:
         """Position of a tier in the active severity order: TIER_SEVERITY_ORDER for the built-in
-        set, tier_definitions list order (ascending) for a custom set -- the same order
-        keyword_tier_rules resolve severity against."""
+        set, tier_definitions list order or inferred mapping order (ascending) for a custom set --
+        the same order keyword_tier_rules resolve severity against."""
         return self.config.tier_names().index(_tier_name(tier))
 
     def _matched_plan_mode_signal(
@@ -4940,7 +4959,8 @@ class ComplexityRouter(CustomLogger):
         fallback_model: Final = self.config.default_model if not self.config.plugins else None
         # A sentinel-carrying request skips the failure exit below, whether or not the floor
         # moved the tier: default_model carries no tier guarantee (its placeholder tier is the
-        # pool that holds it, or MEDIUM when none does), so a placeholder at or above the floor
+        # pool that holds it, or the first custom tier / MEDIUM when none does), so a placeholder
+        # at or above the floor
         # would otherwise route a plan-mode request to a model the floor cannot vouch for. The
         # clamped tier's pool is the destination the floor can guarantee.
         if outcome.cause == "default_model_fallback" and fallback_model is not None and plan_mode_sentinel is None:
