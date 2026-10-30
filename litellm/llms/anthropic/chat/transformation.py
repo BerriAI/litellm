@@ -1828,12 +1828,12 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         model: str,
         drop_params: bool,
     ) -> dict:
-        request_params: Final = (
-            non_default_params
-            if self.runs_hosted_mcp()
-            else tool_params_without_hosted_mcp(
-                non_default_params, model=model, route=self._resolved_provider, drop_params=drop_params
-            )
+        request_params: Final = tool_params_without_hosted_mcp(
+            non_default_params,
+            model=model,
+            route=self._resolved_provider,
+            drop_params=drop_params,
+            runs_hosted_mcp=self.runs_hosted_mcp,
         )
         is_thinking_enabled: Final = self.is_thinking_enabled(non_default_params=request_params)
 

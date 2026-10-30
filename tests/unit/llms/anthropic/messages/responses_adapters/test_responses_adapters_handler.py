@@ -780,11 +780,18 @@ def test_mcp_servers_the_responses_bridge_cannot_run_answer_400(monkeypatch: pyt
     assert "to gpt-5.6 on openai, so the MCP server `deepwiki` would not run" in rejected.value.message
 
 
-def test_drop_params_keeps_mcp_servers_off_the_responses_request(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize(
+    "drop_form",
+    [{"drop_params": True}, {"additional_drop_params": ["mcp_servers"]}],
+    ids=["drop_params", "additional_drop_params"],
+)
+def test_drop_params_keeps_mcp_servers_off_the_responses_request(
+    monkeypatch: pytest.MonkeyPatch, drop_form: Mapping[str, object]
+) -> None:
     monkeypatch.setattr(litellm, "drop_params", False)
     responses_kwargs: Final = _build_responses_kwargs(
         model="gpt-5.6",
-        extra_kwargs={**OPENAI_API, "mcp_servers": [_DEEPWIKI_SERVER], "drop_params": True},
+        extra_kwargs={**OPENAI_API, "mcp_servers": [_DEEPWIKI_SERVER], **drop_form},
         max_tokens=1024,
         messages=MESSAGES,
     )

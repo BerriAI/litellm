@@ -15,7 +15,11 @@ from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.asyncify import run_async_function
 from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObject
-from litellm.litellm_core_utils.tool_fields import ROUTES_WITHOUT_MCP_SERVERS, tools_without_mcp_servers
+from litellm.litellm_core_utils.tool_fields import (
+    ROUTES_WITHOUT_MCP_SERVERS,
+    drops_mcp_servers,
+    tools_without_mcp_servers,
+)
 from litellm.llms.anthropic.messages.adapters.transformation import (
     AnthropicAdapter,
 )
@@ -620,7 +624,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
                 tools or (),
                 model=model,
                 route=target_provider,
-                drop_params=drop_params,
+                drop_params=drops_mcp_servers(provider_kwargs),
             )
             if strips_mcp_servers
             else tools

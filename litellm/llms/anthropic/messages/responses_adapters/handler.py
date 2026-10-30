@@ -20,7 +20,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     prompt_cache_breakpoint_for_wire,
     with_prompt_cache_breakpoint,
 )
-from litellm.litellm_core_utils.tool_fields import tools_without_mcp_servers
+from litellm.litellm_core_utils.tool_fields import drops_mcp_servers, tools_without_mcp_servers
 from litellm.responses.utils import auto_reasoning_summary
 from litellm.types.integrations.custom_logger import CONVERTED_STREAM_KEYS
 from litellm.types.llms.anthropic import (
@@ -169,7 +169,7 @@ def _build_responses_kwargs(
         tools or (),
         model=model,
         route=target_provider if isinstance(target_provider, str) else "this route",
-        drop_params=drops_unsupported_params(forwarded_kwargs.get("drop_params")),
+        drop_params=drops_mcp_servers(forwarded_kwargs),
     )
     block_rewrite: Final = _prompt_cache_block_rewrite(model, forwarded_kwargs)
     request_messages: Final[AnthropicRequestMessages] = (

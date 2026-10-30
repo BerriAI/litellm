@@ -27,6 +27,7 @@ Tests cover (consolidating PRs #23706 and #22727):
 
 import os
 import sys
+from collections.abc import Mapping
 from typing import Final
 from unittest.mock import MagicMock, patch
 
@@ -341,7 +342,14 @@ def test_drop_params_drops_the_mcp_toolset_tools_of_dropped_mcp_servers(
     assert ("tool_choice" in completion_kwargs) == bool(kept_tool_names)
 
 
-@pytest.mark.parametrize("drop_params", ["request", "global"])
+_DROP_FORMS: Final[Mapping[str, Mapping[str, object]]] = {
+    "request": {"drop_params": True},
+    "global": {},
+    "additional_drop_params": {"additional_drop_params": ["mcp_servers"]},
+}
+
+
+@pytest.mark.parametrize("drop_params", list(_DROP_FORMS))
 def test_drop_params_drops_mcp_servers_instead_of_forwarding_them(
     monkeypatch: pytest.MonkeyPatch, drop_params: str
 ) -> None:
@@ -350,7 +358,7 @@ def test_drop_params_drops_mcp_servers_instead_of_forwarding_them(
         extra_kwargs={
             "mcp_servers": [_DEEPWIKI_SERVER],
             "custom_llm_provider": "gemini",
-            **({"drop_params": True} if drop_params == "request" else {}),
+            **_DROP_FORMS[drop_params],
         },
         model="gemini-3.8-flash",
     )

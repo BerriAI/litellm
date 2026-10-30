@@ -247,6 +247,13 @@ def _is_mcp_toolset(tool: object) -> bool:
             return False
 
 
+def drops_mcp_servers(request_kwargs: Mapping[str, object]) -> bool:
+    additional_drop_params: Final = request_kwargs.get("additional_drop_params")
+    return drops_unsupported_params(request_kwargs.get("drop_params")) or (
+        isinstance(additional_drop_params, list) and "mcp_servers" in additional_drop_params
+    )
+
+
 def tools_without_mcp_servers(
     mcp_servers: object, tools: Sequence[_ToolT], model: str, route: str, drop_params: bool
 ) -> Sequence[_ToolT]:
@@ -270,11 +277,17 @@ _TOOL_SELECTION_PARAMS: Final = frozenset({"tools", "tool_choice", "parallel_too
 _ParamsT: Final = TypeVar("_ParamsT", bound=dict[str, object])
 
 
-def tool_params_without_hosted_mcp(params: _ParamsT, model: str, route: str, drop_params: bool) -> _ParamsT:
+def tool_params_without_hosted_mcp(
+    params: _ParamsT, model: str, route: str, drop_params: bool, runs_hosted_mcp: Callable[[], bool] | None = None
+) -> _ParamsT:
     tools: Final = params.get("tools")
     if not isinstance(tools, list) or not tools:
         return params
     sent_tools: Final = _TOOLS.validate_python(tools)
+    if all(_hosted_mcp_server_label(tool) is None for tool in sent_tools) or (
+        runs_hosted_mcp is not None and runs_hosted_mcp()
+    ):
+        return params
     kept_tools: Final = tools_without_hosted_mcp(tools=sent_tools, model=model, route=route, drop_params=drop_params)
     if len(kept_tools) == len(sent_tools):
         return params
