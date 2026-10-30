@@ -22,6 +22,7 @@ litellm-config.workspace = true
 litellm-error.workspace = true
 litellm-circuit-breaker.workspace = true
 litellm-redis-client.workspace = true
+litellm-redis-connect.workspace = true
 litellm-http.workspace = true
 litellm-llms.workspace = true
 litellm-secrets.workspace = true
@@ -35,6 +36,7 @@ tower-sessions-moka-store = "0.15.0"
 
 [dev-dependencies]
 litellm-redis-testing.workspace = true
+litellm-http = { workspace = true, features = ["test-support"] }
 base64.workspace = true
 rstest.workspace = true
 tempfile.workspace = true

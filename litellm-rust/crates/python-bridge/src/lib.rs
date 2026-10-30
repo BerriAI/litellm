@@ -11,6 +11,14 @@ mod marshal;
 mod model_registry;
 mod preflight;
 mod python_settings;
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "the NativeRedisClient pyclass that hands these adapters to redis-connect lands with the first ported keyspace"
+    )
+)]
+mod redis;
 mod routes;
 mod secrets;
 mod tokenizer;

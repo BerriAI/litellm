@@ -13,24 +13,67 @@ pub enum Error {
 }
 
 #[derive(Debug, thiserror::Error)]
-#[error("connecting to Redis")]
-pub struct ConnectError(#[from] RedisError);
+pub enum ConnectError {
+    #[error("connecting to Redis")]
+    Redis(#[from] RedisError),
+    #[error("reading the Redis TLS file {path}")]
+    TlsFile {
+        path: String,
+        #[source]
+        source: std::io::Error,
+    },
+}
 
-impl From<RedisError> for Error {
-    fn from(error: RedisError) -> Self {
-        match error.kind() {
-            ErrorKind::Server(
-                ServerErrorKind::BusyLoading
-                | ServerErrorKind::ClusterDown
-                | ServerErrorKind::MasterDown
-                | ServerErrorKind::TryAgain
-                | ServerErrorKind::ReadOnly,
-            ) => Self::Transport(error),
-            ErrorKind::Server(_) | ErrorKind::Extension => Self::Server(error),
-            ErrorKind::Parse | ErrorKind::UnexpectedReturnType => Self::Decode(error),
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Deployment {
+    Standalone,
+    Cluster,
+    Sentinel,
+}
+
+const CONNECTION_ERR_MESSAGES: &[&str] = &[
+    "max number of clients reached",
+    "invalid password",
+    "Client sent AUTH, but no password is set",
+    "AUTH <password> called without any password configured for the default user",
+];
+
+impl Error {
+    pub(crate) fn classify(error: RedisError, deployment: Deployment) -> Self {
+        match (error.kind(), deployment) {
+            (ErrorKind::Parse | ErrorKind::UnexpectedReturnType, _) => Self::Decode(error),
+            (ErrorKind::Server(kind), _) if is_unavailable(kind, deployment) => {
+                Self::Transport(error)
+            }
+            (ErrorKind::Server(ServerErrorKind::ResponseError), _)
+                if error.detail().is_some_and(|detail| {
+                    CONNECTION_ERR_MESSAGES
+                        .iter()
+                        .any(|message| detail.contains(message))
+                }) =>
+            {
+                Self::Transport(error)
+            }
+            (ErrorKind::Extension, _) if matches!(error.code(), Some("NOAUTH" | "WRONGPASS")) => {
+                Self::Transport(error)
+            }
+            (ErrorKind::Server(_) | ErrorKind::Extension | ErrorKind::InvalidClientConfig, _) => {
+                Self::Server(error)
+            }
             _ => Self::Transport(error),
         }
     }
+}
+
+fn is_unavailable(kind: ServerErrorKind, deployment: Deployment) -> bool {
+    matches!(
+        (kind, deployment),
+        (
+            ServerErrorKind::BusyLoading | ServerErrorKind::ClusterDown,
+            _
+        ) | (ServerErrorKind::MasterDown, Deployment::Cluster)
+            | (ServerErrorKind::ReadOnly, Deployment::Sentinel)
+    )
 }
 
 #[cfg(test)]
@@ -38,12 +81,20 @@ mod tests {
     use redis::{RedisError, Value};
     use rstest::rstest;
 
-    use super::Error;
+    use super::{Deployment, Error};
 
     fn reply(resp: &str) -> RedisError {
         match redis::parse_redis_value(resp.as_bytes()).unwrap() {
             Value::ServerError(error) => error.into(),
             other => panic!("{resp:?} parsed as {other:?}"),
+        }
+    }
+
+    fn is_transport(resp: &str, deployment: Deployment) -> bool {
+        match Error::classify(reply(resp), deployment) {
+            Error::Transport(_) => true,
+            Error::Server(_) => false,
+            other => panic!("{resp:?} classified as {other:?}"),
         }
     }
 
@@ -53,17 +104,69 @@ mod tests {
     #[case::cross_slot("-CROSSSLOT Keys in request don't hash to the same slot\r\n")]
     #[case::generic("-ERR value is not an integer or out of range\r\n")]
     #[case::no_perm("-NOPERM this user has no permissions to access one of the keys\r\n")]
-    fn rejections_are_server_errors(#[case] resp: &str) {
-        assert!(matches!(Error::from(reply(resp)), Error::Server(_)));
+    #[case::try_again("-TRYAGAIN Multiple keys request during rehashing of slot\r\n")]
+    #[case::out_of_memory("-OOM command not allowed when used memory > 'maxmemory'.\r\n")]
+    #[case::auth_arity("-ERR wrong number of arguments for 'auth' command\r\n")]
+    fn rejections_are_server_errors_on_every_deployment(
+        #[case] resp: &str,
+        #[values(Deployment::Standalone, Deployment::Cluster, Deployment::Sentinel)]
+        deployment: Deployment,
+    ) {
+        assert!(!is_transport(resp, deployment));
     }
 
     #[rstest]
     #[case::loading("-LOADING Redis is loading the dataset in memory\r\n")]
     #[case::cluster_down("-CLUSTERDOWN The cluster is down\r\n")]
-    #[case::master_down("-MASTERDOWN Link with MASTER is down\r\n")]
-    #[case::try_again("-TRYAGAIN Multiple keys request during rehashing of slot\r\n")]
-    #[case::read_only("-READONLY You can't write against a read only replica.\r\n")]
-    fn unavailable_nodes_are_transport_errors(#[case] resp: &str) {
-        assert!(matches!(Error::from(reply(resp)), Error::Transport(_)));
+    #[case::no_auth("-NOAUTH Authentication required.\r\n")]
+    #[case::wrong_pass("-WRONGPASS invalid username-password pair or user is disabled.\r\n")]
+    #[case::max_clients("-ERR max number of clients reached\r\n")]
+    #[case::invalid_password("-ERR invalid password\r\n")]
+    #[case::no_password_set("-ERR Client sent AUTH, but no password is set\r\n")]
+    fn unavailable_nodes_are_transport_errors_on_every_deployment(
+        #[case] resp: &str,
+        #[values(Deployment::Standalone, Deployment::Cluster, Deployment::Sentinel)]
+        deployment: Deployment,
+    ) {
+        assert!(is_transport(resp, deployment));
+    }
+
+    #[rstest]
+    #[case::master_down_on_standalone(
+        "-MASTERDOWN Link with MASTER is down\r\n",
+        Deployment::Standalone,
+        false
+    )]
+    #[case::master_down_on_sentinel(
+        "-MASTERDOWN Link with MASTER is down\r\n",
+        Deployment::Sentinel,
+        false
+    )]
+    #[case::master_down_on_cluster(
+        "-MASTERDOWN Link with MASTER is down\r\n",
+        Deployment::Cluster,
+        true
+    )]
+    #[case::read_only_on_standalone(
+        "-READONLY You can't write against a read only replica.\r\n",
+        Deployment::Standalone,
+        false
+    )]
+    #[case::read_only_on_cluster(
+        "-READONLY You can't write against a read only replica.\r\n",
+        Deployment::Cluster,
+        false
+    )]
+    #[case::read_only_on_sentinel(
+        "-READONLY You can't write against a read only replica.\r\n",
+        Deployment::Sentinel,
+        true
+    )]
+    fn topology_decides_like_redis_py(
+        #[case] resp: &str,
+        #[case] deployment: Deployment,
+        #[case] transport: bool,
+    ) {
+        assert_eq!(is_transport(resp, deployment), transport);
     }
 }

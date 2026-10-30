@@ -7,7 +7,8 @@ use sha2::{Digest, Sha256};
 use aws_credential_types::Credentials;
 use aws_credential_types::provider::ProvideCredentials;
 use aws_sigv4::http_request::{
-    SignableBody, SignableRequest, SigningParams, SigningSettings, sign,
+    SignableBody, SignableRequest, SignatureLocation, SigningInstructions, SigningParams,
+    SigningSettings, sign,
 };
 use aws_sigv4::sign::v4;
 use aws_smithy_runtime_api::client::identity::Identity;
@@ -473,16 +474,6 @@ pub fn sign_headers(
     headers: &HeaderMap,
     scope: SigningScope<'_>,
 ) -> Result<HeaderMap, Error> {
-    let identity: Identity = scope.credentials.clone().into();
-    let params = v4::SigningParams::builder()
-        .identity(&identity)
-        .region(scope.region)
-        .name(scope.service)
-        .time(scope.time)
-        .settings(SigningSettings::default())
-        .build()
-        .map(SigningParams::from)
-        .map_err(Error::signing(SigningStage::Parameters))?;
     let header_refs = headers
         .iter()
         .map(|(name, value)| {
@@ -494,16 +485,14 @@ pub fn sign_headers(
                 })
         })
         .collect::<Result<Vec<_>, _>>()?;
-    let request = SignableRequest::new(
+    let instructions = sign_request(
         method,
         url,
         header_refs.into_iter(),
-        SignableBody::Bytes(body),
-    )
-    .map_err(Error::signing(SigningStage::Request))?;
-    let (instructions, _) = sign(request, &params)
-        .map_err(Error::signing(SigningStage::Signature))?
-        .into_parts();
+        body,
+        SigningSettings::default(),
+        scope,
+    )?;
     instructions
         .headers()
         .map(|(name, value)| {
@@ -514,6 +503,60 @@ pub fn sign_headers(
             Ok((name, value))
         })
         .collect()
+}
+
+pub fn presign_url(
+    url: &str,
+    expires_in: Duration,
+    scope: SigningScope<'_>,
+) -> Result<String, Error> {
+    let mut signed = url::Url::parse(url).map_err(Error::signing(SigningStage::Request))?;
+    let mut settings = SigningSettings::default();
+    settings.signature_location = SignatureLocation::QueryParams;
+    settings.expires_in = Some(expires_in);
+    let instructions = sign_request(
+        "GET",
+        signed.as_str(),
+        std::iter::empty(),
+        &[],
+        settings,
+        scope,
+    )?;
+    let (signature, auth): (Vec<_>, Vec<_>) = instructions
+        .params()
+        .iter()
+        .map(|(name, value)| (*name, value.as_ref()))
+        .partition(|(name, _)| *name == "X-Amz-Signature");
+    signed
+        .query_pairs_mut()
+        .extend_pairs(auth.into_iter().chain(signature));
+    Ok(signed.into())
+}
+
+fn sign_request<'a>(
+    method: &'a str,
+    url: &'a str,
+    headers: impl Iterator<Item = (&'a str, &'a str)>,
+    body: &'a [u8],
+    settings: SigningSettings,
+    scope: SigningScope<'_>,
+) -> Result<SigningInstructions, Error> {
+    let identity: Identity = scope.credentials.clone().into();
+    let params = v4::SigningParams::builder()
+        .identity(&identity)
+        .region(scope.region)
+        .name(scope.service)
+        .time(scope.time)
+        .settings(settings)
+        .build()
+        .map(SigningParams::from)
+        .map_err(Error::signing(SigningStage::Parameters))?;
+    let request = SignableRequest::new(method, url, headers, SignableBody::Bytes(body))
+        .map_err(Error::signing(SigningStage::Request))?;
+    let (instructions, _) = sign(request, &params)
+        .map_err(Error::signing(SigningStage::Signature))?
+        .into_parts();
+    Ok(instructions)
 }
 
 /// Model-id and region parsing shared by every Bedrock route.
@@ -1190,5 +1233,45 @@ mod tests {
             "no Bedrock region returned HTTP 200: {}",
             failures.join("; ")
         );
+    }
+
+    #[rstest::rstest]
+    #[case::provisioned(
+        None,
+        "https://cache-1/?Action=connect&User=iam-user",
+        "cache-1/?Action=connect&User=iam-user&X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=AKIDEXAMPLE%2F20261029%2Fus-east-1%2Felasticache%2Faws4_request&X-Amz-Date=20261029T120000Z&X-Amz-Expires=900&X-Amz-SignedHeaders=host&X-Amz-Signature=dfa58492a6ae9ba065088724170a52437329d03f3e9bc9a4c90a80cc8a18e2f6"
+    )]
+    #[case::serverless_with_a_session_token(
+        Some("session-token"),
+        "https://cache-1/?Action=connect&User=iam-user&ResourceType=ServerlessCache",
+        "cache-1/?Action=connect&User=iam-user&ResourceType=ServerlessCache&X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=AKIDEXAMPLE%2F20261029%2Fus-east-1%2Felasticache%2Faws4_request&X-Amz-Date=20261029T120000Z&X-Amz-Expires=900&X-Amz-SignedHeaders=host&X-Amz-Security-Token=session-token&X-Amz-Signature=e48bdbb3bf9d5e8f1d325bf33d5260e333df1f6b8868e8edd1e4c3cc01b4c3f9"
+    )]
+    fn presigned_urls_match_botocore_sigv4_query_auth(
+        #[case] session_token: Option<&str>,
+        #[case] url: &str,
+        #[case] expected: &str,
+    ) {
+        // Expected values from botocore 1.43.117 SigV4QueryAuth with get_current_datetime patched to
+        // 2026-10-29T12:00:00Z (generated 2026-10-29), the signer Python's ElastiCache IAM provider uses
+        let credentials = Credentials::new(
+            "AKIDEXAMPLE",
+            "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY",
+            session_token.map(str::to_owned),
+            None,
+            "test",
+        );
+        let signed = presign_url(
+            url,
+            Duration::from_secs(900),
+            SigningScope {
+                region: "us-east-1",
+                service: "elasticache",
+                credentials: &credentials,
+                time: UNIX_EPOCH + Duration::from_secs(1_793_275_200),
+            },
+        )
+        .unwrap();
+
+        assert_eq!(signed.strip_prefix("https://"), Some(expected));
     }
 }

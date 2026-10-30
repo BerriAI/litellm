@@ -1,12 +1,25 @@
-use std::{collections::BTreeMap, fmt, time::Duration};
+use std::{collections::BTreeMap, time::Duration};
 
 use litellm_auth_types::SecretValue;
 use litellm_router_types::Spelled;
 use serde::{Deserialize, Deserializer, de::Error as _};
+use veil::Redact;
 
-use crate::{AdditionalFields, Error, Object, Value};
+use crate::{AdditionalFields, Object, Value};
+
+mod auth;
+mod error;
+mod sentinel;
+mod tls;
+
+pub use auth::{AwsIamAuth, AzureAdAuth, RedisAuth};
+pub use error::{Expected, RedisError};
+pub use sentinel::RedisSentinel;
+pub use tls::RedisTls;
 
 pub type Lookup<'a> = &'a dyn Fn(&str) -> Option<String>;
+
+pub type SharedLookup = std::sync::Arc<dyn Fn(&str) -> Option<String> + Send + Sync>;
 
 const SUPPORTED: &[&str] = &[
     "url",
@@ -35,11 +48,26 @@ const IGNORED: &[&str] = &[
     "client_name",
     "lib_name",
     "lib_version",
+];
+
+const RESOLVED: &[&str] = &[
+    "socket_connect_timeout",
+    "ssl_ca_certs",
+    "ssl_certfile",
+    "ssl_keyfile",
+    "ssl_cert_reqs",
+    "ssl_check_hostname",
+    "sentinel_nodes",
     "sentinel_password",
+    "service_name",
+    "credential_provider",
+    "gcp_service_account",
     "gcp_ssl_ca_certs",
+    "azure_redis_ad_token",
     "azure_client_id",
     "azure_tenant_id",
     "azure_client_secret",
+    "aws_iam_auth",
     "aws_iam_user_name",
     "aws_iam_cache_name",
     "aws_iam_region",
@@ -111,12 +139,7 @@ const REDIS_PY_KWARGS: &[&str] = &[
     "username",
 ];
 
-const UNSUPPORTED_EXTRA: &[&str] = &[
-    "credential_provider",
-    "sentinel_nodes",
-    "retry",
-    "connection_pool",
-];
+const UNSUPPORTED_EXTRA: &[&str] = &["retry", "connection_pool"];
 
 const CACHE_ONLY: &[&str] = &[
     "type",
@@ -130,7 +153,7 @@ const CACHE_ONLY: &[&str] = &[
     "_backend",
 ];
 
-#[derive(Clone, Default)]
+#[derive(Clone, Default, Redact)]
 pub struct RedisSettings {
     pub url: Option<SecretValue>,
     pub host: Option<Spelled<String>>,
@@ -142,7 +165,9 @@ pub struct RedisSettings {
     pub socket_timeout: Option<Spelled<f64>>,
     pub startup_nodes: Option<Value>,
     pub namespace: Option<Spelled<String>>,
+    #[redact(with = "[REDACTED]")]
     pub additional_fields: AdditionalFields,
+    #[redact(with = "[REDACTED]")]
     unparsed: DeferredInputs,
 }
 
@@ -170,29 +195,6 @@ impl<'de> Deserialize<'de> for RedisSettings {
     }
 }
 
-impl fmt::Debug for RedisSettings {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("RedisSettings")
-            .field("url", &self.url)
-            .field("host", &self.host)
-            .field("port", &self.port)
-            .field("username", &self.username)
-            .field("password", &self.password)
-            .field("ssl", &self.ssl)
-            .field("db", &self.db)
-            .field("socket_timeout", &self.socket_timeout)
-            .field(
-                "startup_nodes",
-                &self.startup_nodes.as_ref().map(|_| "<configured>"),
-            )
-            .field("namespace", &self.namespace)
-            .field("additional_fields", &self.additional_fields.keys())
-            .field("unparsed", &self.unparsed.keys())
-            .finish()
-    }
-}
-
 #[derive(Clone, Debug)]
 pub enum CacheSettings {
     Redis(Box<RedisSettings>),
@@ -216,57 +218,35 @@ impl<'de> Deserialize<'de> for CacheSettings {
     }
 }
 
-#[derive(Clone, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct ResolvedRedis {
     pub endpoint: RedisEndpoint,
+    pub auth: RedisAuth,
     pub namespace: Option<String>,
     pub timeout: Option<Duration>,
+    pub connect_timeout: Option<Duration>,
 }
 
-impl fmt::Debug for ResolvedRedis {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("ResolvedRedis")
-            .field("endpoint", &self.endpoint)
-            .field("namespace", &self.namespace)
-            .field("timeout", &self.timeout)
-            .finish()
-    }
-}
-
-#[derive(Clone, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum RedisEndpoint {
-    Url(SecretValue),
+    Url { url: SecretValue, tls: RedisTls },
     Host(RedisHost),
     Cluster(RedisCluster),
-}
-
-impl fmt::Debug for RedisEndpoint {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Url(_) => formatter.debug_tuple("Url").field(&"<redacted>").finish(),
-            Self::Host(host) => host.fmt(formatter),
-            Self::Cluster(cluster) => cluster.fmt(formatter),
-        }
-    }
+    Sentinel(RedisSentinel),
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct RedisHost {
     pub host: String,
     pub port: u16,
-    pub username: Option<SecretValue>,
-    pub password: Option<SecretValue>,
-    pub tls: bool,
+    pub tls: Option<RedisTls>,
     pub db: i64,
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct RedisCluster {
     pub nodes: Vec<RedisNode>,
-    pub username: Option<SecretValue>,
-    pub password: Option<SecretValue>,
-    pub tls: bool,
+    pub tls: Option<RedisTls>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -284,15 +264,15 @@ struct Entry {
 type Kwargs = BTreeMap<String, Entry>;
 
 impl RedisSettings {
-    pub fn resolve(&self, lookup: Lookup<'_>) -> Result<ResolvedRedis, Error> {
+    pub fn resolve(&self, lookup: Lookup<'_>) -> Result<ResolvedRedis, RedisError> {
         self.resolve_with(lookup, false)
     }
 
-    pub fn resolve_cache(&self, lookup: Lookup<'_>) -> Result<ResolvedRedis, Error> {
+    pub fn resolve_cache(&self, lookup: Lookup<'_>) -> Result<ResolvedRedis, RedisError> {
         self.resolve_with(lookup, true)
     }
 
-    fn resolve_with(&self, lookup: Lookup<'_>, cache: bool) -> Result<ResolvedRedis, Error> {
+    fn resolve_with(&self, lookup: Lookup<'_>, cache: bool) -> Result<ResolvedRedis, RedisError> {
         let block = self.kwargs(cache);
         let block: Kwargs = block
             .into_iter()
@@ -311,56 +291,72 @@ impl RedisSettings {
             .filter(|(key, _)| !(key == "url" && drop_environment_url))
             .chain(block)
             .collect();
-        reject_unsupported(&merged, lookup)?;
+        reject_unsupported(&merged)?;
         warn_ignored(&merged);
 
         let startup_nodes = match merged.get("startup_nodes") {
-            Some(entry) => Some(cluster_nodes(&entry.value)?),
+            Some(entry) => Some(cluster_nodes(&entry.value).ok_or_else(|| invalid(&entry.source, Expected::StartupNodes))?),
             None => lookup("REDIS_CLUSTER_NODES")
-                .map(|nodes| cluster_nodes(&Value::String(nodes)))
+                .map(|nodes| {
+                    cluster_nodes(&Value::String(nodes))
+                        .ok_or_else(|| invalid("REDIS_CLUSTER_NODES", Expected::StartupNodes))
+                })
                 .transpose()?,
+        }
+        .filter(|nodes| !nodes.is_empty());
+        let url = text_value(&merged, "url");
+        let ssl = bool_value(&merged, "ssl");
+        let uses_tls = match (&startup_nodes, &url) {
+            (Some(_), _) | (None, None) => ssl,
+            (None, Some(url)) => url
+                .split_once("://")
+                .is_some_and(|(scheme, _)| scheme.eq_ignore_ascii_case("rediss")),
         };
-        let username = secret_value(&merged, "username");
-        let password = secret_value(&merged, "password");
-        let tls = bool_value(&merged, "ssl");
-        let endpoint = match (startup_nodes, text_value(&merged, "url")) {
-            (Some(nodes), _) if !nodes.is_empty() => RedisEndpoint::Cluster(RedisCluster {
-                nodes,
-                username,
-                password,
-                tls,
-            }),
-            (_, Some(url)) => RedisEndpoint::Url(SecretValue::new(url)),
-            _ => RedisEndpoint::Host(RedisHost {
-                host: text_value(&merged, "host").ok_or(Error::RedisInvalid {
-                    setting: "host",
-                    reason: "either host or url must be specified for redis",
-                })?,
-                port: integer(&merged, "port")?.unwrap_or(6379),
-                username,
-                password,
-                tls,
-                db: integer(&merged, "db")?.unwrap_or(0),
-            }),
+        let auth = auth::redis_auth(&merged, lookup, uses_tls)?;
+        let gcp_ca_certs = match &auth {
+            RedisAuth::GcpIam { .. } if ssl => text_value(&merged, "gcp_ssl_ca_certs")
+                .or_else(|| lookup("REDIS_GCP_SSL_CA_CERTS"))
+                .filter(|path| !path.is_empty()),
+            _ => None,
         };
-        let timeout = merged
-            .get("socket_timeout")
-            .and_then(|entry| as_text(&entry.value))
-            .map(|seconds| {
-                seconds
-                    .parse::<f64>()
-                    .ok()
-                    .and_then(|seconds| Duration::try_from_secs_f64(seconds).ok())
-                    .ok_or(Error::RedisInvalid {
-                        setting: "socket_timeout",
-                        reason: "must be a non-negative number of seconds",
-                    })
-            })
-            .transpose()?;
+        let tls_options = tls::tls_options(&merged, gcp_ca_certs)?;
+        let tls = ssl.then(|| tls_options.clone());
+        let db = integer(&merged, "db")?.unwrap_or(0);
+        let endpoint = match (startup_nodes, url) {
+            (Some(nodes), _) => RedisEndpoint::Cluster(RedisCluster { nodes, tls }),
+            (None, Some(url)) => RedisEndpoint::Url {
+                url: SecretValue::new(url),
+                tls: tls_options,
+            },
+            (None, None) => match sentinel::sentinel_target(&merged, lookup)? {
+                Some(target) => RedisEndpoint::Sentinel(RedisSentinel {
+                    sentinels: target.sentinels,
+                    service_name: target.service_name,
+                    sentinel_password: target.sentinel_password,
+                    tls,
+                    db,
+                }),
+                None => RedisEndpoint::Host(RedisHost {
+                    host: text_value(&merged, "host").ok_or(RedisError::NoTarget)?,
+                    port: integer(&merged, "port")?.unwrap_or(6379),
+                    tls,
+                    db,
+                }),
+            },
+        };
+        let auth = match (&endpoint, auth) {
+            (RedisEndpoint::Url { .. }, RedisAuth::Static { username, .. }) => RedisAuth::Static {
+                username,
+                password: None,
+            },
+            (_, auth) => auth,
+        };
         Ok(ResolvedRedis {
             endpoint,
+            auth,
             namespace: text_value(&merged, "namespace"),
-            timeout,
+            timeout: seconds(&merged, "socket_timeout")?,
+            connect_timeout: seconds(&merged, "socket_connect_timeout")?,
         })
     }
 
@@ -453,37 +449,43 @@ pub fn environment_has_target(lookup: Lookup<'_>) -> bool {
     .any(|name| lookup(name).is_some())
 }
 
-fn reject_unsupported(merged: &Kwargs, lookup: Lookup<'_>) -> Result<(), Error> {
-    let active_auth = [
-        merged
-            .get("gcp_service_account")
-            .map(|entry| entry.source.as_str())
-            .or_else(|| lookup("REDIS_GCP_SERVICE_ACCOUNT").map(|_| "REDIS_GCP_SERVICE_ACCOUNT")),
-        text_value(merged, "azure_redis_ad_token")
-            .or_else(|| lookup("REDIS_AZURE_AD_TOKEN"))
-            .filter(|value| value.eq_ignore_ascii_case("true"))
-            .map(|_| {
-                merged
-                    .get("azure_redis_ad_token")
-                    .map_or("REDIS_AZURE_AD_TOKEN", |entry| entry.source.as_str())
-            }),
-        bool_value(merged, "aws_iam_auth").then(|| merged["aws_iam_auth"].source.as_str()),
-        merged
-            .get("sentinel_nodes")
-            .map(|entry| entry.source.as_str())
-            .or_else(|| lookup("REDIS_SENTINEL_NODES").map(|_| "REDIS_SENTINEL_NODES")),
-    ];
-    if let Some(setting) = active_auth.into_iter().flatten().next() {
-        return Err(Error::RedisSetting(setting.to_owned()));
-    }
-    match merged
-        .iter()
-        .find(|(key, _)| is_unsupported(key))
-        .map(|(_, entry)| entry.source.clone())
-    {
-        Some(setting) => Err(Error::RedisSetting(setting)),
+fn reject_unsupported(merged: &Kwargs) -> Result<(), RedisError> {
+    match merged.iter().find(|(key, _)| is_unsupported(key)) {
+        Some((_, entry)) => Err(RedisError::Unsupported {
+            setting: entry.source.clone(),
+        }),
         None => Ok(()),
     }
+}
+
+fn invalid(setting: &str, expected: Expected) -> RedisError {
+    RedisError::Invalid {
+        setting: setting.to_owned(),
+        expected,
+    }
+}
+
+fn parsed<T>(
+    kwargs: &Kwargs,
+    key: &str,
+    expected: Expected,
+    parse: impl Fn(&str) -> Option<T>,
+) -> Result<Option<T>, RedisError> {
+    kwargs
+        .get(key)
+        .and_then(|entry| Some((as_text(&entry.value)?, &entry.source)))
+        .map(|(text, source)| parse(&text).ok_or_else(|| invalid(source, expected)))
+        .transpose()
+}
+
+pub fn parse_seconds(text: &str) -> Option<Duration> {
+    text.parse::<f64>()
+        .ok()
+        .and_then(|seconds| Duration::try_from_secs_f64(seconds).ok())
+}
+
+fn seconds(merged: &Kwargs, key: &str) -> Result<Option<Duration>, RedisError> {
+    parsed(merged, key, Expected::Seconds, parse_seconds)
 }
 
 fn warn_ignored(merged: &Kwargs) {
@@ -496,12 +498,7 @@ fn warn_ignored(merged: &Kwargs) {
 
 fn is_unsupported(key: &str) -> bool {
     let known = REDIS_PY_KWARGS.contains(&key) || UNSUPPORTED_EXTRA.contains(&key);
-    let handled = SUPPORTED.contains(&key)
-        || IGNORED.contains(&key)
-        || matches!(
-            key,
-            "gcp_service_account" | "azure_redis_ad_token" | "aws_iam_auth"
-        );
+    let handled = SUPPORTED.contains(&key) || IGNORED.contains(&key) || RESOLVED.contains(&key);
     known && !handled
 }
 
@@ -559,29 +556,14 @@ fn bool_value(kwargs: &Kwargs, key: &str) -> bool {
     }
 }
 
-fn integer<T: std::str::FromStr>(kwargs: &Kwargs, key: &'static str) -> Result<Option<T>, Error> {
-    kwargs
-        .get(key)
-        .and_then(|entry| as_text(&entry.value))
-        .map(|text| {
-            text.parse().map_err(|_| Error::RedisInvalid {
-                setting: key,
-                reason: "must be an integer",
-            })
-        })
-        .transpose()
+fn integer<T: std::str::FromStr>(kwargs: &Kwargs, key: &str) -> Result<Option<T>, RedisError> {
+    parsed(kwargs, key, Expected::Integer, |text| text.parse().ok())
 }
 
-const INVALID_NODES: Error = Error::RedisInvalid {
-    setting: "startup_nodes",
-    reason: "must be a list of {host, port} objects",
-};
-
-fn cluster_nodes(value: &Value) -> Result<Vec<RedisNode>, Error> {
+fn cluster_nodes(value: &Value) -> Option<Vec<RedisNode>> {
     match value {
         Value::String(json) => {
-            let nodes: Vec<serde_json::Map<String, serde_json::Value>> =
-                serde_json::from_str(json).map_err(|_| INVALID_NODES)?;
+            let nodes: Vec<serde_json::Map<String, serde_json::Value>> = serde_json::from_str(json).ok()?;
             nodes
                 .iter()
                 .map(|node| {
@@ -601,15 +583,15 @@ fn cluster_nodes(value: &Value) -> Result<Vec<RedisNode>, Error> {
                 )
             })
             .collect(),
-        _ => Err(INVALID_NODES),
+        _ => None,
     }
 }
 
-fn cluster_node(host: Option<String>, port: Option<String>) -> Result<RedisNode, Error> {
-    match (host, port.and_then(|port| port.parse().ok())) {
-        (Some(host), Some(port)) => Ok(RedisNode { host, port }),
-        _ => Err(INVALID_NODES),
-    }
+fn cluster_node(host: Option<String>, port: Option<String>) -> Option<RedisNode> {
+    Some(RedisNode {
+        host: host?,
+        port: port?.parse().ok()?,
+    })
 }
 
 fn json_text(value: &serde_json::Value) -> Option<String> {
@@ -645,7 +627,7 @@ fn cloned(
         .collect()
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct DeferredInput(Value);
 
 type DeferredInputs = BTreeMap<String, DeferredInput>;
