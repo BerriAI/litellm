@@ -602,6 +602,29 @@ def test_provider_prefixed_batch_spend_row_carries_the_mapped_tags(mapped: Rig) 
         assert _spend_tags(mapped.proxy, key) == {mapped.exact_tag, mapped.tenant_tag(tenant)}
 
 
+@pytest.mark.parametrize("route", ["/litellm_proxy/v1/batches", "/hosted_vllm/v1/batches"])
+def test_spent_mapped_tag_budget_rejects_a_provider_prefixed_batch_before_the_provider(mapped: Rig, route: str) -> None:
+    entry: Final = uuid.uuid4().hex
+    tag: Final = mapped.usecase_tag(entry)
+    baggage: Final = f"entrypoint={entry},tenant={entry}"
+    with mapped.proxy.scenario() as scenario:
+        key: Final = scenario.key(allowed_routes=["/v1/chat/completions", route])
+        mapped.proxy.post("/tag/new", {"name": tag, "max_budget": 0.0001})
+        scenario.cleanups.callback(lambda: mapped.proxy.request("POST", "/tag/delete", {"name": tag}))
+
+        def batch() -> httpx.Response:
+            return mapped.proxy.request("POST", route, _batch_body(mapped), key=key, headers={"baggage": baggage})
+
+        first: Final = _chat(mapped, key, baggage)
+        assert first.status_code == 200, first.text
+        eventually(lambda: batch().status_code, lambda status: status == 422, seconds=70)
+        mapped.provider.drain()
+        blocked: Final = batch()
+        assert blocked.status_code == 422, blocked.text
+        assert "budget" in blocked.text.lower(), blocked.text
+        assert mapped.provider.drain() == ()
+
+
 def test_require_budgeted_tag_rejects_an_unbudgeted_mapped_tag_until_the_tag_has_a_budget(mapped: Rig) -> None:
     value: Final = uuid.uuid4().hex
     tag: Final = mapped.budgeted_tag(value)

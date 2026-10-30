@@ -1,4 +1,3 @@
-import re
 from collections.abc import Mapping, Sequence
 from typing import Final
 from urllib.parse import unquote_plus
@@ -14,7 +13,6 @@ from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.types.proxy.request_tag_mappings import RequestTagMapping
 
 REQUEST_TAG_MAPPINGS_ADAPTER: Final = TypeAdapter(tuple[RequestTagMapping, ...])
-_PROVIDER_PREFIXED_BATCH_OR_FILE_ROUTE: Final = re.compile(r"/[^/]+/v1/(?:batches|files)(?:/.*)?")
 
 
 def is_baggage_mapped_route(route: str) -> bool:
@@ -24,7 +22,7 @@ def is_baggage_mapped_route(route: str) -> bool:
         (
             RouteChecks.is_llm_api_route(route)
             or InitPassThroughEndpointHelpers.is_registered_pass_through_route(route)
-            or _PROVIDER_PREFIXED_BATCH_OR_FILE_ROUTE.fullmatch(route) is not None
+            or RouteChecks.is_provider_prefixed_batch_or_file_route(route)
         )
         and not RouteChecks.is_unbilled_route(route)
         and not RouteChecks.check_route_access(route=route, allowed_routes=LiteLLMRoutes.mcp_inference_routes.value)

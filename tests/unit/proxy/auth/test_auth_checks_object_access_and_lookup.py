@@ -11201,6 +11201,18 @@ def test_route_skips_budget_checks_marks_only_spend_free_routes() -> None:
     assert route_skips_budget_checks(route="/v1/chat/completions") is False
 
 
+@pytest.mark.parametrize(
+    "route", ["/litellm_proxy/v1/batches", "/hosted_vllm/v1/batches/batch_qa/cancel", "/xai/v1/files", "/manus/v1/files/f"]
+)
+def test_provider_prefixed_batch_and_file_routes_keep_budget_checks(route: str) -> None:
+    assert route_skips_budget_checks(route=route) is False
+
+
+@pytest.mark.parametrize("route", ["/hosted_vllm/nested/v1/batches", "/hosted_vllm/v1/batches_extra"])
+def test_routes_outside_the_batch_and_file_handlers_still_skip_budget_checks(route: str) -> None:
+    assert route_skips_budget_checks(route=route) is True
+
+
 def test_request_skips_budget_checks_extends_route_rule_with_zero_cost_models() -> None:
     assert request_skips_budget_checks(route="/v1/models", model=None, llm_router=None) is True
     assert request_skips_budget_checks(route="/v1/chat/completions", model=None, llm_router=None) is False
