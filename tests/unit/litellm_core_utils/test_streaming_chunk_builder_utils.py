@@ -1077,6 +1077,30 @@ def test_cost_field_in_usage_chunks():
     assert usage.completion_tokens == 5
 
 
+def test_the_rebuilt_response_keeps_the_upstream_cost_a_stamped_usage_chunk_saved(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(litellm, "cost_margin_config", {"global": 0.5})
+    text_chunk = ModelResponseStream(
+        id="chatcmpl-1",
+        model="gpt-4.1",
+        choices=[StreamingChoices(finish_reason="stop", index=0, delta=Delta(content="Hi"))],
+    )
+    usage_chunk = ModelResponseStream(
+        id="chatcmpl-1",
+        model="gpt-4.1",
+        choices=[],
+        usage=Usage(completion_tokens=5, prompt_tokens=10, total_tokens=15, cost=0.0015),
+    )
+    usage_chunk._hidden_params = {"response_cost": 0.0015, "upstream_usage_cost": 0.001}
+
+    rebuilt = stream_chunk_builder([text_chunk, usage_chunk], messages=[{"role": "user", "content": "hi"}])
+
+    assert rebuilt is not None
+    assert rebuilt._hidden_params["upstream_usage_cost"] == 0.001
+    assert litellm.completion_cost(rebuilt, custom_llm_provider="openai") == pytest.approx(0.0015), (
+        "the upstream's 0.001 gets the 50% margin once, litellm's 0.0015 bill is not margined again"
+    )
+
+
 
 def _perplexity_usage_chunk(cost: Mapping[str, float], finish_reason: str | None) -> ModelResponseStream:
     return ModelResponseStream(
