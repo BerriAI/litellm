@@ -38,3 +38,18 @@ async def test_positional_parameters_reach_the_wire(server: RecordingServer, asy
     body: Final = _OBJECT.validate_python(server.requests[0].body)
     assert body["temperature"] == temperature
     assert body["max_tokens"] == supplied["max_tokens"]
+
+
+@pytest.mark.asyncio
+async def test_a_native_response_has_the_id_and_detail_fields_the_python_path_reports(server: RecordingServer) -> None:
+    result: Final = await litellm.acompletion(
+        MESSAGES_MODEL, list(MESSAGES), base_url=server.base_url, api_key="test-key", max_tokens=32
+    )
+
+    assert isinstance(result, ModelResponse)
+    assert_served_natively(server)
+    assert result.id.startswith("chatcmpl-")
+    assert result.object == "chat.completion"
+    assert result.usage.completion_tokens_details.reasoning_tokens == 0
+    assert result.usage.completion_tokens_details.text_tokens == result.usage.completion_tokens
+    assert result.choices[0].message.provider_specific_fields == {"citations": None, "thinking_blocks": None}

@@ -7,7 +7,7 @@
   - accept a subset of parameters, which is recorded per provider in `supported_openai_param_mappings`, not by trimming the type
   - add top-level request or response fields, preserved through the existing extra-field maps instead of new typed fields
   - return slightly different usage or finish reasons, normalized in the provider transformation
-- `ChatCompletionsResponse` is LiteLLM's response contract to the host, a typed projection rather than the full upstream schema
+- `ChatCompletion` is LiteLLM's response contract to the host, the id the route mints plus `ChatCompletionsResponse`, a typed projection rather than the full upstream schema
 
 # references
 

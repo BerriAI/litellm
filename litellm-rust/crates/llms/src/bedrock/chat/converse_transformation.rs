@@ -176,6 +176,7 @@ impl BaseConfig for AmazonConverseConfig {
             response.usage.output_tokens,
             response.usage.cache_read_input_tokens,
             response.usage.cache_write_input_tokens,
+            0,
         );
         // Converse reports `totalTokens` and Python passes it straight through,
         // where Anthropic has no such field and Python adds the two counts
@@ -201,6 +202,7 @@ impl BaseConfig for AmazonConverseConfig {
                     // Anthropic. A caller calling `.strip()` on it would break
                     // on this path alone.
                     content: Some(text),
+                    provider_specific_fields: None,
                 },
                 finish_reason: finish_reason_for(
                     ConverseStopReason::parse(response.stop_reason)
@@ -786,6 +788,26 @@ mod tests {
         );
         assert_eq!(response.usage.prompt_tokens, 17);
         assert_eq!(response.usage.completion_tokens, 4);
+    }
+
+    #[test]
+    fn reports_all_output_as_text_and_no_provider_fields_for_a_text_response() {
+        let response = transform_response(json!({
+            "output": {"message": {"content": [{"text": "x"}]}},
+            "stopReason": "end_turn",
+            "usage": {"inputTokens": 10, "outputTokens": 4, "totalTokens": 14}
+        }))
+        .expect("response transforms");
+        let value = serde_json::to_value(response).expect("serializable");
+        assert_eq!(
+            value["usage"]["completion_tokens_details"],
+            json!({"reasoning_tokens": 0, "text_tokens": 4})
+        );
+        assert!(
+            value["choices"][0]["message"]
+                .get("provider_specific_fields")
+                .is_none()
+        );
     }
 
     #[test]

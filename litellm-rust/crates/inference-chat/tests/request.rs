@@ -33,7 +33,7 @@ fn request<'a>(
 
 async fn complete(
     request: ChatCompletionsRequest<'_>,
-) -> Result<litellm_llms_types::formats::chat_completions::ChatCompletionsResponse, Error> {
+) -> Result<litellm_llms_types::formats::chat_completions::ChatCompletion, Error> {
     chat_completions_route().execute(request, &(), None).await
 }
 

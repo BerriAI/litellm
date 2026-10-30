@@ -3887,6 +3887,7 @@ dependencies = [
  "tokio",
  "tokio-tungstenite",
  "tower",
+ "uuid",
  "wiremock",
 ]
 
@@ -4100,6 +4101,7 @@ dependencies = [
  "serde_json",
  "tokio",
  "tracing",
+ "uuid",
  "wiremock",
 ]
 

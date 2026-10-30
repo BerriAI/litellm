@@ -4,14 +4,14 @@ use litellm_host::{
     call::{CallOutput, HostedMachine, hosted_call},
     protocol::Protocol,
 };
-use litellm_llms_types::formats::chat_completions::ChatCompletionsResponse;
+use litellm_llms_types::formats::chat_completions::ChatCompletion;
 
 use super::{ChatCompletionsRoute, Error, types::ChatCompletionsCall};
 
 pub struct ChatCompletions;
 
 impl Protocol for ChatCompletions {
-    type Response = ChatCompletionsResponse;
+    type Response = ChatCompletion;
     type Error = Error;
     type Request = ChatCompletionsCall;
     type HostCall = Infallible;

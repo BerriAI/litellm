@@ -68,6 +68,69 @@ async fn chat_aliases_call_core_and_use_the_body_model_before_the_path(
 }
 
 #[rstest]
+#[case::anthropic(
+    "anthropic/test-model",
+    json!({
+        "id": "msg_upstream", "model": "test-model", "content": [{"type": "text", "text": "hello"}],
+        "stop_reason": "end_turn",
+        "usage": {"input_tokens": 3, "output_tokens": 10, "output_tokens_details": {"thinking_tokens": 4}}
+    }),
+    json!({"reasoning_tokens": 4, "text_tokens": 6}),
+    json!({"citations": null, "thinking_blocks": null})
+)]
+#[case::openai_like(
+    "openai_like/test-model",
+    json!({
+        "id": "chatcmpl-upstream", "model": "test-model",
+        "choices": [{"index": 0, "message": {"role": "assistant", "content": "hello"}, "finish_reason": "stop"}],
+        "usage": {
+            "prompt_tokens": 3, "completion_tokens": 10, "total_tokens": 13,
+            "completion_tokens_details": {"reasoning_tokens": 4, "audio_tokens": 0}
+        }
+    }),
+    json!({"reasoning_tokens": 4, "audio_tokens": 0}),
+    Value::Null
+)]
+#[tokio::test]
+async fn chat_answers_with_a_minted_id_and_the_full_openai_shape(
+    #[case] model: &str,
+    #[case] provider_body: Value,
+    #[case] completion_tokens_details: Value,
+    #[case] provider_specific_fields: Value,
+) {
+    let upstream = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(provider_body))
+        .mount(&upstream)
+        .await;
+    let app = support::app(model, &upstream.uri());
+    let request = json!({
+        "model": "public/model",
+        "messages": [{"role": "user", "content": "hi"}],
+        "max_tokens": 16,
+    });
+
+    let first =
+        support::json(support::post(app.clone(), "/v1/chat/completions", request.clone()).await)
+            .await;
+    let second = support::json(support::post(app, "/v1/chat/completions", request).await).await;
+
+    let id = first["id"].as_str().expect("the body carries an id");
+    let uuid = id.strip_prefix("chatcmpl-").expect("a chatcmpl id");
+    assert!(uuid::Uuid::parse_str(uuid).is_ok(), "{id} ends in a uuid");
+    assert_ne!(first["id"], second["id"]);
+    assert_eq!(first["object"], "chat.completion");
+    assert_eq!(
+        first["usage"]["completion_tokens_details"],
+        completion_tokens_details
+    );
+    assert_eq!(
+        first["choices"][0]["message"]["provider_specific_fields"],
+        provider_specific_fields
+    );
+}
+
+#[rstest]
 #[case::streaming(json!({"messages": [{"role": "user", "content": "hi"}], "stream": true}), 501)]
 #[case::missing_messages(json!({}), 400)]
 #[case::malformed_messages(json!({"messages": "hi"}), 400)]

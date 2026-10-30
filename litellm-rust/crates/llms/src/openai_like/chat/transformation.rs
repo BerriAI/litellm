@@ -177,6 +177,10 @@ impl BaseConfig for OpenAILikeChatConfig {
                         .and_then(Value::as_u64)
                         .unwrap_or(0),
                 },
+                completion_tokens_details: usage
+                    .and_then(|usage| usage.get("completion_tokens_details"))
+                    .cloned()
+                    .and_then(|details| serde_json::from_value(details).ok()),
             },
         })
     }
@@ -273,6 +277,7 @@ fn normalize_choice(position: usize, choice: &Value) -> Result<ChatCompletionsCh
                 .unwrap_or("assistant")
                 .to_string(),
             content: content.and_then(Value::as_str).map(str::to_string),
+            provider_specific_fields: None,
         },
         finish_reason: choice
             .get("finish_reason")
@@ -524,6 +529,53 @@ mod tests {
         assert_eq!(response.usage.prompt_tokens, 3);
         assert_eq!(response.usage.completion_tokens, 5);
         assert_eq!(response.usage.total_tokens, 8);
+    }
+
+    #[rstest]
+    #[case::passes_through_what_the_upstream_reports(
+        json!({"reasoning_tokens": 2, "audio_tokens": 0, "accepted_prediction_tokens": 1, "rejected_prediction_tokens": 3}),
+        json!({"reasoning_tokens": 2, "audio_tokens": 0, "accepted_prediction_tokens": 1, "rejected_prediction_tokens": 3})
+    )]
+    #[case::null_upstream_field_is_left_out(
+        json!({"reasoning_tokens": 2, "audio_tokens": null}),
+        json!({"reasoning_tokens": 2})
+    )]
+    #[case::null_details_are_left_out(Value::Null, Value::Null)]
+    #[case::malformed_details_are_left_out(json!({"reasoning_tokens": "two"}), Value::Null)]
+    fn completion_tokens_details_mirror_the_upstream(
+        #[case] details: Value,
+        #[case] expected: Value,
+    ) {
+        let response = transform_response(json!({
+            "model": "m",
+            "choices": [{"message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}],
+            "usage": {
+                "prompt_tokens": 1,
+                "completion_tokens": 5,
+                "total_tokens": 6,
+                "completion_tokens_details": details,
+            },
+        }))
+        .expect("response normalizes");
+        let value = serde_json::to_value(response).expect("serializable");
+        assert_eq!(value["usage"]["completion_tokens_details"], expected);
+    }
+
+    #[rstest]
+    fn an_upstream_without_details_reports_none() {
+        let response = transform_response(json!({
+            "model": "m",
+            "choices": [{"message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 5, "total_tokens": 6},
+        }))
+        .expect("response normalizes");
+        let value = serde_json::to_value(response).expect("serializable");
+        assert!(value["usage"].get("completion_tokens_details").is_none());
+        assert!(
+            value["choices"][0]["message"]
+                .get("provider_specific_fields")
+                .is_none()
+        );
     }
 
     #[rstest]

@@ -20,7 +20,7 @@
 - Name types after the format, never the originator (`formats::messages::MessagesRequest`, not `AnthropicMessagesRequest`)
 - A field defined by the format stays in the format type even when provider support varies
 - Keep one canonical definition and import path. Move consumers with the type instead of adding re-exports
-- LiteLLM's normalized contracts live here too. `ChatCompletionsResponse` is the response handed to the host, so do not swap it for a fuller upstream schema
+- LiteLLM's normalized contracts live here too. `ChatCompletionsResponse` is the normalized provider response, and `ChatCompletion` wraps it with the id the route mints for the host, so do not swap either for a fuller upstream schema
 
 ## Providers
 

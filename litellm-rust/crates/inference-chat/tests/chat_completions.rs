@@ -6,7 +6,7 @@ use litellm_host::{
 use std::time::Duration;
 
 use litellm_inference_chat::{Error, types::ChatCompletionsRequest};
-use litellm_llms_types::formats::chat_completions::ChatCompletionsResponse;
+use litellm_llms_types::formats::chat_completions::ChatCompletion;
 use rstest::{fixture, rstest};
 use serde_json::{Map, Value, json};
 use wiremock::ResponseTemplate;
@@ -16,7 +16,7 @@ use support::*;
 
 const ANTHROPIC_MESSAGE: &str = r#"{"id":"msg_1","type":"message","role":"assistant","model":"claude-sonnet-4-5-20260101","content":[{"type":"text","text":"hello"}],"stop_reason":"end_turn","stop_sequence":null,"usage":{"input_tokens":11,"output_tokens":4}}"#;
 
-async fn complete(request: ChatCompletionsRequest<'_>) -> Result<ChatCompletionsResponse, Error> {
+async fn complete(request: ChatCompletionsRequest<'_>) -> Result<ChatCompletion, Error> {
     chat_completions_route().execute(request, &(), None).await
 }
 
@@ -83,10 +83,10 @@ async fn anthropic_round_trip_translates_the_conversation_and_normalizes_the_res
     );
     assert_eq!(body["max_tokens"], 16);
     assert_eq!(
-        response.choices[0].message.content.as_deref(),
+        response.body.choices[0].message.content.as_deref(),
         Some("hello")
     );
-    assert_eq!(response.usage.total_tokens, 15);
+    assert_eq!(response.body.usage.total_tokens, 15);
 }
 
 #[rstest]
@@ -152,10 +152,10 @@ async fn bedrock_round_trip_is_signed_and_normalized(request: ChatCompletionsReq
         json!([{"role": "user", "content": [{"text": "hi"}]}])
     );
     assert_eq!(
-        response.choices[0].message.content.as_deref(),
+        response.body.choices[0].message.content.as_deref(),
         Some("hello")
     );
-    assert_eq!(response.usage.total_tokens, 15);
+    assert_eq!(response.body.usage.total_tokens, 15);
 }
 
 #[rstest]
@@ -308,7 +308,7 @@ async fn direct_and_hosted_calls_share_hooks_and_lifecycle(
             .unwrap()
     };
     assert_eq!(
-        response.choices[0].message.content.as_deref(),
+        response.body.choices[0].message.content.as_deref(),
         Some("hello")
     );
     assert_eq!(

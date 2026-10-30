@@ -9,15 +9,24 @@ use litellm_llms::base_llm::{
     chat::transformation::BaseConfig,
     chat::transformation::ProviderChatResponseData,
 };
-use litellm_llms_types::formats::chat_completions::ChatCompletionsResponse;
+use litellm_llms_types::formats::chat_completions::{ChatCompletion, ChatCompletionsResponse};
 use litellm_secrets::source::Secrets;
 use serde_json::Value;
+use uuid::Uuid;
 
 use super::Error;
 use crate::{
     common_utils::string_headers, constants::CHAT_COMPLETIONS_TIMEOUT_SECS,
     types::ResolvedChatCompletionsRequest,
 };
+
+fn minted(body: ChatCompletionsResponse) -> ChatCompletion {
+    ChatCompletion {
+        id: format!("chatcmpl-{}", Uuid::new_v4()),
+        object: "chat.completion".to_owned(),
+        body,
+    }
+}
 
 #[expect(clippy::too_many_arguments)] // mirrors BaseLLMHTTPHandler.completion, which takes each stage input separately
 pub(super) async fn execute(
@@ -31,7 +40,7 @@ pub(super) async fn execute(
     cache_options: Option<litellm_cache_response::CachePolicy>,
     interceptors: &impl Interceptors<Error>,
     observers: Option<&ObservationSender>,
-) -> Result<ChatCompletionsResponse, Error> {
+) -> Result<ChatCompletion, Error> {
     let validated = config.validate_environment(
         string_headers(call.extra_headers)?,
         call.api_key.as_deref(),
@@ -127,6 +136,7 @@ pub(super) async fn execute(
             })?;
             config
                 .transform_response(provider.model, ProviderChatResponseData { body })
+                .map(minted)
                 .map_err(Error::from)
                 .map_err(Error::after_send)
         },

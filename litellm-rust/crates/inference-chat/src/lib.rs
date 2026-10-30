@@ -5,7 +5,7 @@ pub use litellm_inference::Error;
 mod common_utils;
 pub mod constants;
 pub(crate) mod handler;
-use litellm_llms_types::formats::chat_completions::ChatCompletionsResponse;
+use litellm_llms_types::formats::chat_completions::ChatCompletion;
 
 use litellm_auth::AuthServices;
 use litellm_inference::provider::resolve_llm_provider;
@@ -47,7 +47,7 @@ impl ChatCompletionsRoute {
         request: ChatCompletionsRequest<'_>,
         interceptors: &impl litellm_host::interceptors::Interceptors<Error>,
         options: impl Into<litellm_inference::CallOptions>,
-    ) -> Result<ChatCompletionsResponse, Error> {
+    ) -> Result<ChatCompletion, Error> {
         let litellm_inference::CallOptions {
             cache: cache_options,
             observers,
@@ -78,7 +78,7 @@ impl ChatCompletionsRoute {
         cache_options: Option<litellm_cache_response::CachePolicy>,
         interceptors: &impl litellm_host::interceptors::Interceptors<Error>,
         observers: Option<&ObservationSender>,
-    ) -> Result<ChatCompletionsResponse, Error> {
+    ) -> Result<ChatCompletion, Error> {
         litellm_inference::diagnostic::unary(async {
             let model = call.model.clone();
             let custom_llm_provider = call.custom_llm_provider.clone();
@@ -93,21 +93,19 @@ impl ChatCompletionsRoute {
                 <&'static str>::from(provider.provider),
             );
             let secrets = self.secrets.resolve(&config.secret_names()).await?;
-            let execute: futures_util::future::BoxFuture<
-                '_,
-                Result<ChatCompletionsResponse, Error>,
-            > = Box::pin(handler::execute(
-                &self.http,
-                &self.auth,
-                config,
-                provider,
-                call,
-                secrets,
-                self.cache.clone(),
-                cache_options,
-                interceptors,
-                observers,
-            ));
+            let execute: futures_util::future::BoxFuture<'_, Result<ChatCompletion, Error>> =
+                Box::pin(handler::execute(
+                    &self.http,
+                    &self.auth,
+                    config,
+                    provider,
+                    call,
+                    secrets,
+                    self.cache.clone(),
+                    cache_options,
+                    interceptors,
+                    observers,
+                ));
             execute.await
         })
         .await

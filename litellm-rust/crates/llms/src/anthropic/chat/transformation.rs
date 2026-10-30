@@ -74,6 +74,8 @@ struct ResponseUsageProjection {
     cache_read_input_tokens: Option<u64>,
     #[serde(default)]
     cache_creation_input_tokens: Option<u64>,
+    #[serde(default)]
+    output_tokens_details: Option<Value>,
 }
 
 pub struct AnthropicConfig;
@@ -153,6 +155,10 @@ impl BaseConfig for AnthropicConfig {
                 message: ChatCompletionsChoiceMessage {
                     role: "assistant".to_string(),
                     content: (!text.is_empty()).then_some(text),
+                    provider_specific_fields: Some(Map::from_iter([
+                        ("citations".to_string(), Value::Null),
+                        ("thinking_blocks".to_string(), Value::Null),
+                    ])),
                 },
                 finish_reason: finish_reason_for(body.stop_reason.as_deref().unwrap_or(""))
                     .to_string(),
@@ -162,6 +168,12 @@ impl BaseConfig for AnthropicConfig {
                 body.usage.output_tokens,
                 body.usage.cache_read_input_tokens.unwrap_or(0),
                 body.usage.cache_creation_input_tokens.unwrap_or(0),
+                body.usage
+                    .output_tokens_details
+                    .as_ref()
+                    .and_then(|details| details.get("thinking_tokens"))
+                    .and_then(Value::as_u64)
+                    .unwrap_or(0),
             ),
         })
     }
@@ -630,8 +642,54 @@ mod tests {
         assert_eq!(response.choices[0].message.content, None);
     }
 
+    #[rstest]
+    #[case::reported(json!({"thinking_tokens": 4}), 4, 6)]
+    #[case::over_reported_is_capped_at_the_output(json!({"thinking_tokens": 40}), 10, 0)]
+    #[case::not_reported(json!({}), 0, 10)]
+    #[case::not_a_count(json!({"thinking_tokens": "many"}), 0, 10)]
+    #[case::not_an_object(json!("none"), 0, 10)]
+    fn usage_splits_reported_thinking_tokens_from_the_text(
+        #[case] output_tokens_details: Value,
+        #[case] reasoning: u64,
+        #[case] text: u64,
+    ) {
+        let response = transform_response(json!({
+            "model": "claude-sonnet-4-5",
+            "content": [{"type": "text", "text": "hi"}],
+            "stop_reason": "end_turn",
+            "usage": {
+                "input_tokens": 1,
+                "output_tokens": 10,
+                "output_tokens_details": output_tokens_details,
+            }
+        }))
+        .expect("response transforms");
+        let details = response
+            .usage
+            .completion_tokens_details
+            .expect("details are always reported");
+        assert_eq!(details.reasoning_tokens, Some(reasoning));
+        assert_eq!(details.text_tokens, Some(text));
+    }
+
     #[test]
-    fn response_carries_no_id_so_python_keeps_its_chatcmpl_id() {
+    fn message_reports_null_citations_and_thinking_blocks_like_python() {
+        let response = transform_response(json!({
+            "model": "claude-sonnet-4-5",
+            "content": [{"type": "text", "text": "hi"}],
+            "stop_reason": "end_turn",
+            "usage": {"input_tokens": 1, "output_tokens": 1}
+        }))
+        .expect("response transforms");
+        let value = serde_json::to_value(response).expect("serializable");
+        assert_eq!(
+            value["choices"][0]["message"]["provider_specific_fields"],
+            json!({"citations": null, "thinking_blocks": null})
+        );
+    }
+
+    #[test]
+    fn response_carries_no_id_so_the_route_mints_the_chatcmpl_id() {
         let response = transform_response(json!({
             "id": "msg_should_not_leak",
             "model": "claude-sonnet-4-5",

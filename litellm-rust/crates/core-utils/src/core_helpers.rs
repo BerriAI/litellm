@@ -2,7 +2,9 @@
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use litellm_llms_types::formats::chat_completions::{ChatCompletionsUsage, PromptTokensDetails};
+use litellm_llms_types::formats::chat_completions::{
+    ChatCompletionsUsage, CompletionTokensDetails, PromptTokensDetails,
+};
 
 /// OpenAI finish reasons, mirroring Python's `_FINISH_REASON_MAP` for the
 /// reasons the providers on this route can emit. Python warns and falls back to
@@ -30,13 +32,16 @@ pub fn finish_reason_for(provider_reason: &str) -> &'static str {
 
 /// Python folds cache tokens into `prompt_tokens` and reports the split under
 /// `prompt_tokens_details`; mirror that so cost tracking agrees on both paths.
+/// Python caps the reported reasoning count at the output, and the rest is text.
 pub fn usage_from_parts(
     input_tokens: u64,
     output_tokens: u64,
     cache_read_tokens: u64,
     cache_creation_tokens: u64,
+    reported_reasoning_tokens: u64,
 ) -> ChatCompletionsUsage {
     let prompt_tokens = input_tokens + cache_read_tokens + cache_creation_tokens;
+    let reasoning_tokens = reported_reasoning_tokens.min(output_tokens);
     ChatCompletionsUsage {
         prompt_tokens,
         completion_tokens: output_tokens,
@@ -46,6 +51,11 @@ pub fn usage_from_parts(
             cache_creation_tokens,
             text_tokens: input_tokens,
         },
+        completion_tokens_details: Some(CompletionTokensDetails {
+            reasoning_tokens: Some(reasoning_tokens),
+            text_tokens: Some(output_tokens - reasoning_tokens),
+            ..CompletionTokensDetails::default()
+        }),
     }
 }
 
@@ -93,7 +103,7 @@ mod tests {
 
     #[test]
     fn folds_cache_tokens_into_prompt_tokens() {
-        let usage = usage_from_parts(10, 4, 7, 3);
+        let usage = usage_from_parts(10, 4, 7, 3, 0);
         assert_eq!(usage.prompt_tokens, 20);
         assert_eq!(usage.completion_tokens, 4);
         assert_eq!(usage.total_tokens, 24);
@@ -104,9 +114,26 @@ mod tests {
 
     #[test]
     fn reports_raw_input_tokens_when_no_cache_is_involved() {
-        let usage = usage_from_parts(12, 5, 0, 0);
+        let usage = usage_from_parts(12, 5, 0, 0, 0);
         assert_eq!(usage.prompt_tokens, 12);
         assert_eq!(usage.total_tokens, 17);
         assert_eq!(usage.prompt_tokens_details.text_tokens, 12);
+    }
+
+    #[rstest]
+    #[case::no_reasoning(0, 0, 10)]
+    #[case::splits_the_output(3, 3, 7)]
+    #[case::all_reasoning(10, 10, 0)]
+    #[case::over_report_is_capped_at_the_output(20, 10, 0)]
+    fn splits_completion_tokens_into_reasoning_and_text(
+        #[case] reported: u64,
+        #[case] reasoning: u64,
+        #[case] text: u64,
+    ) {
+        let details = usage_from_parts(1, 10, 0, 0, reported)
+            .completion_tokens_details
+            .expect("details are always reported");
+        assert_eq!(details.reasoning_tokens, Some(reasoning));
+        assert_eq!(details.text_tokens, Some(text));
     }
 }
