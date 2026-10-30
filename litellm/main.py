@@ -592,14 +592,31 @@ async def acompletion(
         api_base=base_url or kwargs.get("api_base"),
     )
 
-    if (
-        fallbacks is None
-        and isinstance(litellm_logging_obj, LiteLLMLoggingObj)
+    prompt_id: Final = cast(str | None, kwargs.get("prompt_id", None))  # cast-ok: read from untyped kwargs
+    prompt_management_logger: Final = (
+        litellm_logging_obj.get_custom_logger_for_prompt_management(
+            model=model,
+            non_default_params=kwargs,
+            tools=tools,
+            prompt_id=prompt_id,
+            dynamic_callback_params=litellm_logging_obj.standard_callback_dynamic_params,
+        )
+        if isinstance(litellm_logging_obj, LiteLLMLoggingObj)
         and litellm_logging_obj.should_run_prompt_management_hooks(
-            prompt_id=kwargs.get("prompt_id", None),
+            prompt_id=prompt_id,
             non_default_params=kwargs,
             tools=tools,
         )
+        else None
+    )
+    each_fallback_writes_its_own_cache_dialect: Final = fallbacks is not None and isinstance(
+        prompt_management_logger, AnthropicCacheControlHook
+    )
+
+    if (
+        isinstance(litellm_logging_obj, LiteLLMLoggingObj)
+        and prompt_management_logger is not None
+        and not each_fallback_writes_its_own_cache_dialect
     ):
         (
             model,
@@ -609,8 +626,9 @@ async def acompletion(
             model=model,
             messages=messages,
             non_default_params=kwargs,
-            prompt_id=kwargs.get("prompt_id", None),
+            prompt_id=prompt_id,
             prompt_variables=kwargs.get("prompt_variables", None),
+            prompt_management_logger=prompt_management_logger,
             tools=tools,
             prompt_label=kwargs.get("prompt_label", None),
             prompt_version=kwargs.get("prompt_version", None),

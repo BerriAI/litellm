@@ -1,6 +1,7 @@
 """Tests for litellm.litellm_core_utils.fallback_utils."""
 
 import json
+import pathlib
 from typing import Final
 
 import httpx
@@ -8,6 +9,7 @@ import pytest
 import respx
 
 import litellm
+from litellm.litellm_core_utils import litellm_logging
 from litellm.litellm_core_utils.core_helpers import process_response_headers
 from litellm.litellm_core_utils.fallback_utils import (
     async_completion_with_fallbacks,
@@ -589,3 +591,43 @@ async def test_acompletion_fallback_sends_the_context_a_vector_store_tool_retrie
     assert "litellm is an LLM gateway" in json.dumps(direct_body)
     assert fallback_body == direct_body
     assert search_route.call_count <= openai_route.call_count + anthropic_route.call_count
+
+
+@pytest.mark.asyncio
+async def test_acompletion_fallback_sends_the_prompt_the_primary_model_prefix_template_renders(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+) -> None:
+    _ = (tmp_path / "brief.prompt").write_text(
+        "---\ninput:\n  schema:\n    question: string\n---\nSystem: Answer in one word.\n\nUser: {{question}}\n"
+    )
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "global_prompt_directory", str(tmp_path))
+    monkeypatch.setattr(litellm_logging, "_in_memory_loggers", [])
+    _ = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
+        return_value=httpx.Response(
+            401,
+            json={"error": {"message": "invalid key", "type": "authentication_error", "param": None, "code": None}},
+        )
+    )
+    anthropic_route: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(
+        return_value=httpx.Response(200, json=ANTHROPIC_ANSWER)
+    )
+
+    async def send(**kwargs: object) -> None:
+        await python_acompletion(
+            prompt_id="brief",
+            prompt_variables={"question": "What color is the sky?"},
+            messages=[{"role": "user", "content": "placeholder"}],
+            **kwargs,
+        )
+
+    await send(model="dotprompt/anthropic/claude-haiku-4-5", api_key="anthropic-key")
+    await send(
+        model="dotprompt/openai/gpt-6.1-sol",
+        api_key="openai-key",
+        fallbacks=[{"model": "anthropic/claude-haiku-4-5", "api_key": "anthropic-key"}],
+    )
+
+    direct_body, fallback_body = (json.loads(call.request.content) for call in anthropic_route.calls)
+    assert "What color is the sky?" in json.dumps(direct_body)
+    assert fallback_body == direct_body
