@@ -688,6 +688,7 @@ def _output_items(item: object) -> tuple[dict[str, object], ...]:
                 "call_id": _attr(item, "call_id", ""),
                 "type": "function_call",
                 "arguments": safe_json_loads(arguments, default={}) if isinstance(arguments, str) else arguments,
+                **({"namespace": namespace} if (namespace := _attr(item, "namespace")) is not None else {}),
             },
         )
     return ()
