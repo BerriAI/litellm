@@ -12,15 +12,14 @@ import httpx
 import prisma
 import pytest
 
-
-from litellm.proxy._types import LiteLLM_BudgetTableFull, LiteLLM_VerificationToken
-from litellm.proxy.common_utils import reset_budget_job as reset_budget_job_module
 from litellm.constants import (
     PROXY_BUDGET_RESCHEDULER_MIN_TIME,
     RESET_BUDGET_JOB_BATCH_SIZE,
     RESET_BUDGET_JOB_LOCK_TTL_SECONDS,
     RESET_BUDGET_JOB_NAME,
 )
+from litellm.proxy._types import LiteLLM_BudgetTableFull, LiteLLM_VerificationToken
+from litellm.proxy.common_utils import reset_budget_job as reset_budget_job_module
 from litellm.proxy.common_utils.reset_budget_job import (
     ResetBudgetJob,
     _RowReset,
@@ -29,6 +28,7 @@ from litellm.proxy.common_utils.reset_budget_job import (
 )
 from litellm.proxy.common_utils.timezone_utils import BudgetResetSettings
 from litellm.proxy.utils import PrismaClient
+from litellm.redis.stores.pod_lock import HeldBy
 from tests.unit.proxy.db.fake_prisma_engine import engine_call
 
 
@@ -2595,8 +2595,7 @@ class FakePodLockManager:
 
     def __init__(self, *, acquired: bool, held_by_other: bool = False, has_redis: bool = True):
         self.redis_cache = MagicMock() if has_redis else None
-        if self.redis_cache is not None:
-            self.redis_cache.async_get_cache = AsyncMock(return_value="another-pod" if held_by_other else None)
+        self._holder = HeldBy("another-pod") if held_by_other else None
         self._acquired = acquired
         self.acquire_calls: List[Dict[str, str | int | None]] = []
         self.release_calls: List[str] = []
@@ -2611,6 +2610,9 @@ class FakePodLockManager:
 
     async def release_lock(self, cronjob_id: str) -> None:
         self.release_calls.append(cronjob_id)
+
+    async def lock_holder(self, cronjob_id: str) -> HeldBy | None:
+        return self._holder
 
 
 def _make_leader_election_job(monkeypatch, pod_lock_manager):

@@ -53,6 +53,8 @@ from litellm.proxy.db.db_transaction_queue.pod_lock_manager import POD_LOCK_TARG
 from litellm.proxy.db.exception_handler import call_with_db_reconnect_retry
 from litellm.proxy.spend_tracking.spend_counter_batch import SPEND_COUNTERS_TARGET
 from litellm.proxy.utils import PrismaClient, ProxyLogging
+from litellm.redis.stores.pod_lock import HeldBy
+from litellm.redis.transport.contract import RedisFailure
 from litellm.repositories.organization_repository import OrganizationRepository
 from litellm.repositories.prisma_protocols import PrismaBatch, SpendLinkedTable
 from litellm.repositories.project_repository import ProjectRepository
@@ -508,14 +510,14 @@ class ResetBudgetJob:
         skipping; being wrong here costs a duplicate sweep, and the alternative
         strands every expired budget at its cap.
         """
-        if lock_manager.redis_cache is None:
-            return False
-        try:
-            lock_key: Final = lock_manager.get_redis_lock_key(RESET_BUDGET_JOB_NAME)
-            return bool(await lock_manager.redis_cache.async_get_cache(lock_key))
-        except Exception as exc:  # noqa: BLE001  # an unreadable lease must not strand the sweep
-            verbose_proxy_logger.warning("Reset budget job: could not read the reset lease: %s", exc)
-            return False
+        match await lock_manager.lock_holder(RESET_BUDGET_JOB_NAME):
+            case HeldBy():
+                return True
+            case None:
+                return False
+            case RedisFailure(message=message):
+                verbose_proxy_logger.warning("Reset budget job: could not read the reset lease: %s", message)
+                return False
 
     async def _acquire_lease(self) -> _Lease:
         """Elect one sweeper per tick.
