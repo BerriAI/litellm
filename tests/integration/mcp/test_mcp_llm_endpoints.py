@@ -1,5 +1,6 @@
 import asyncio
 import json
+import re
 import uuid
 from collections.abc import Callable, Generator, Iterator, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
@@ -1408,10 +1409,6 @@ REPORT: Final[tuple[str, dict[str, JsonValue]]] = (
     "Write one report",
     {"type": "object", "properties": {"query": {"type": "string"}, "format": {}}},
 )
-COLD: Final[tuple[str, dict[str, JsonValue]]] = (
-    "",
-    {"type": "object", "properties": {}, "additionalProperties": False},
-)
 RELOAD_FAST: Final = {"PROXY_CONFIG_RELOAD_INTERVAL_SECONDS": "5"}
 CALL_ID: Final = "x-litellm-call-id"
 T = TypeVar("T")
@@ -1577,12 +1574,14 @@ def _echoed(value: JsonValue) -> Echo:
 
 
 @contextmanager
-def _bridge_rig(hooked: Hooked, bridge: Bridge) -> Generator[BridgeRig, None, None]:
+def _bridge_rig(
+    hooked: Hooked, bridge: Bridge, lookup_description: str | Callable[[Mapping[str, str]], str] = LOOKUP[0]
+) -> Generator[BridgeRig, None, None]:
     alias: Final = "brg" + uuid.uuid4().hex[:8]
     lookup: Final = ScriptedTool(
         "lookup",
         lambda params: text_result("found:" + json.dumps(JSON_OBJECT.validate_python(params)["arguments"])),
-        description=LOOKUP[0],
+        description=lookup_description,
         input_schema=LOOKUP[1],
     )
     report: Final = ScriptedTool(
@@ -1753,23 +1752,35 @@ def test_bridge_hook_sees_the_definition_of_the_tool_filtered_for_that_request(
         assert _spend_row(key, found.call_id)["status"] == "success"
 
 
+def _fetched_lookup(description: JsonValue) -> bool:
+    return isinstance(description, str) and re.fullmatch(rf"{LOOKUP[0]} [0-9a-f]{{32}}", description) is not None
+
+
 @pytest.mark.parametrize("bridge", BRIDGES)
 def test_direct_call_after_bridge_only_discovery_stays_cold(hooked: Hooked, bridge: Bridge) -> None:
-    with _bridge_rig(hooked, bridge) as rig:
+    with _bridge_rig(hooked, bridge, lambda _: f"{LOOKUP[0]} {uuid.uuid4().hex}") as rig:
         key: Final = _bridge_key(rig)
         workers: Final = _both_workers(rig.hooked.proxy)
         bridged: Final = _ask(rig, key, HOOK_PROBE, [rig.mcp("lookup")], False, "sync")
-        assert _echoed(bridged.text) == _served(LOOKUP), bridged
+        discovered: Final = _echoed(bridged.text)
+        offered: Final = rig.upstream_by_prompt()
+        assert _fetched_lookup(discovered[0]) and discovered[1] == _served(LOOKUP)[1], bridged
+        assert set(offered) == {HOOK_PROBE} and all(
+            definitions == ((rig.tool("lookup"), *discovered),) for definitions in offered[HOOK_PROBE]
+        ), (discovered, offered)
         direct: Final = eventually(
             lambda: tuple(
                 _on_worker(rig.hooked.proxy, lambda client: _direct_probe(rig, key, "lookup", client)) for _ in range(6)
             ),
             lambda seen: frozenset(pid for pid, _ in seen) == workers,
         )
-        assert all(echo == COLD for _, echo in direct) and frozenset(pid for pid, _ in direct) == workers, (
-            direct,
-            workers,
-        )
+        assert (
+            all(
+                _fetched_lookup(description) and description != discovered[0] and parameters == discovered[1]
+                for _, (description, parameters) in direct
+            )
+            and frozenset(pid for pid, _ in direct) == workers
+        ), (direct, discovered, workers)
         assert rig.peer_calls() == ()
 
 
