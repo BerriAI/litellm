@@ -1,7 +1,10 @@
-from typing import Final
+from typing import TYPE_CHECKING, Final
 
 from litellm.litellm_core_utils.stream_usage_chunks import is_injected_stream_usage_artifact
 from litellm.types.utils import Choices, ModelResponse, ModelResponseStream, TextChoices, TextCompletionResponse
+
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 
 
 class TextCompletionStreamWrapper:
@@ -12,8 +15,10 @@ class TextCompletionStreamWrapper:
         stream_options: dict | None = None,
         custom_llm_provider: str | None = None,
         usage_injected_by_proxy: bool = False,
+        source_stream: "CustomStreamWrapper | TextCompletionStreamWrapper | None" = None,
     ):
         self.completion_stream = completion_stream
+        self.source_stream: Final = source_stream
         self.model = model
         self.stream_options = stream_options
         self.custom_llm_provider = custom_llm_provider
@@ -23,6 +28,11 @@ class TextCompletionStreamWrapper:
             and stream_options is not None
             and stream_options.get("include_usage", False) is True
         )
+
+    def record_partial_usage_for_failure(self) -> None:
+        if self.source_stream is None:
+            return
+        self.source_stream.record_partial_usage_for_failure()
 
     def __iter__(self):
         return self

@@ -32,6 +32,7 @@ import litellm
 import litellm.proxy.proxy_server as ps
 from litellm.constants import RETURN_RAW_MODEL_NAME_METADATA_KEY
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 from litellm.proxy.common_request_processing import create_response
 from litellm.proxy.proxy_server import (
@@ -602,6 +603,7 @@ async def test_apply_streaming_chunk_hooks_appends_to_str_so_far(monkeypatch):
         user_api_key_dict=_user_auth(),
         request_data={},
         str_so_far="prior:",
+        stream=None,
     )
 
     observed = {
@@ -629,7 +631,44 @@ async def test_apply_streaming_chunk_hooks_hook_raises_exception(monkeypatch):
             user_api_key_dict=_user_auth(),
             request_data={},
             str_so_far="",
+            stream=None,
         )
+
+
+@pytest.mark.asyncio
+async def test_apply_streaming_chunk_hooks_block_bills_what_the_provider_already_streamed(monkeypatch):
+    stream: Final = await litellm.acompletion(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": "Tell me about the lighthouse keeper"}],
+        stream=True,
+        mock_response="The lighthouse keeper lights the lamp at dusk.",
+    )
+    assert isinstance(stream, CustomStreamWrapper)
+    success_dispatches: Final[list[object]] = []
+
+    async def _dispatch_success(*args: object) -> None:
+        success_dispatches.append(args)
+
+    stream.logging_obj._on_deferred_stream_complete = _dispatch_success
+    first_chunk: Final = await anext(stream)
+
+    async def _block(*, user_api_key_dict, response, data, str_so_far=None):
+        raise HTTPException(status_code=400, detail="blocked")
+
+    monkeypatch.setattr(ps.proxy_logging_obj, "async_post_call_streaming_hook", _block)
+
+    with pytest.raises(HTTPException):
+        await _apply_streaming_chunk_hooks(
+            chunk=first_chunk,
+            user_api_key_dict=_user_auth(),
+            request_data={"litellm_logging_obj": stream.logging_obj},
+            str_so_far="",
+            stream=stream,
+        )
+
+    usage: Final = stream.logging_obj.model_call_details["combined_usage_object"]
+    assert (usage.prompt_tokens > 0, usage.completion_tokens > 0, success_dispatches) == (True, True, [])
+    assert stream.logging_obj.model_call_details["response_cost"] > 0
 
 
 # ---------------------------------------------------------------------------

@@ -953,6 +953,7 @@ from litellm.proxy.ui_crud_endpoints.user_banner_endpoints import (
     router as user_banner_endpoints_router,
 )
 from litellm.proxy.utils import (  # noqa: F401, RUF100  # legacy module exports
+    USAGE_RECOVERABLE_STREAMS,
     PrismaClient,
     ProxyLogging,
     ProxyUpdateSpend,
@@ -10250,15 +10251,20 @@ async def _apply_streaming_chunk_hooks(
     *,
     chunk: Any,
     user_api_key_dict: UserAPIKeyAuth,
-    request_data: dict,
+    request_data: dict[str, object],
     str_so_far: str,
+    stream: object,
 ) -> tuple[object, str]:
-    chunk = await proxy_logging_obj.async_post_call_streaming_hook(
-        user_api_key_dict=user_api_key_dict,
-        response=chunk,
-        data=request_data,
-        str_so_far=str_so_far if str_so_far else None,
-    )
+    try:
+        chunk = await proxy_logging_obj.async_post_call_streaming_hook(
+            user_api_key_dict=user_api_key_dict,
+            response=chunk,
+            data=request_data,
+            str_so_far=str_so_far if str_so_far else None,
+        )
+    except Exception as e:
+        ProxyLogging.bill_stream_ended_by_proxy_error(request_data, stream, e)
+        raise
 
     if isinstance(chunk, (ModelResponse, ModelResponseStream)):
         response_str: Final = litellm.get_response_string(response_obj=chunk)
@@ -10502,7 +10508,7 @@ def _make_keepalive_resolver(request_data: Mapping[str, object]) -> Callable[[ob
 async def async_data_generator(
     response,
     user_api_key_dict: UserAPIKeyAuth,
-    request_data: dict,
+    request_data: dict[str, object],
     request: Request | None = None,
     *,
     responses_stream_errors: bool = False,
@@ -10562,6 +10568,7 @@ async def async_data_generator(
         # happens to start with it off.
         resolve_keepalive_seconds: Final = _make_keepalive_resolver(request_data)
         initial_keepalive_seconds: Final = resolve_keepalive_seconds(response)
+        usage_recoverable_stream: Final = response if isinstance(response, USAGE_RECOVERABLE_STREAMS) else None
         stream_source = (
             _iter_with_keepalive(
                 stream_iterator.__aiter__(),
@@ -10592,6 +10599,7 @@ async def async_data_generator(
                     user_api_key_dict=user_api_key_dict,
                     request_data=request_data,
                     str_so_far=_str_so_far,
+                    stream=usage_recoverable_stream,
                 )
             stream_started = True
 

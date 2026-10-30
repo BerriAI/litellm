@@ -168,6 +168,7 @@ from litellm.litellm_core_utils.served_output_texts import (
     record_served_output_texts,
     served_stream_output_texts,
 )
+from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.litellm_core_utils.token_counter import offload_token_count, usage_tokenizer_model
 from litellm.llms import load_guardrail_translation_mappings
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
@@ -276,9 +277,11 @@ from litellm.repositories.user_repository import UserRepository
 from litellm.repositories.verification_token_repository import (
     VerificationTokenRepository,
 )
+from litellm.router_utils.add_retry_fallback_headers import HiddenParamsAsyncIteratorWrapper
 from litellm.router_utils.common_utils import resolve_model_group_alias
 from litellm.router_utils.deployment_pricing import pricing_models
 from litellm.secret_managers.main import str_to_bool
+from litellm.text_completions.streaming_iterator import TextCompletionStreamWrapper
 from litellm.types.integrations.slack_alerting import DEFAULT_ALERT_TYPES
 from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.types.mcp import (
@@ -1495,6 +1498,7 @@ object rather than ``True`` because ``request_data`` is the client body: JSON ca
 client can neither hide a guardrail block nor force a row by sending the key or a ``litellm_call_id`` itself."""
 
 _PROXY_ONLY_LLM_API_ERRORS: Final = (HTTPException, ProxyException, GuardrailRaisedException)
+USAGE_RECOVERABLE_STREAMS: Final = (CustomStreamWrapper, TextCompletionStreamWrapper, HiddenParamsAsyncIteratorWrapper)
 _PROXY_ONLY_ERROR_LOGGED_FIELDS: Final = frozenset(
     {"model", "messages", "input", "prompt", "user", "stream", "litellm_call_id"}
 )
@@ -4555,7 +4559,8 @@ class ProxyLogging:
             except (GeneratorExit, asyncio.CancelledError):
                 raise
             except Exception as e:
-                if not ProxyLogging._discard_deferred_stream_logging_for_failure(request_data, e):
+                cut_stream: Final = response if isinstance(response, USAGE_RECOVERABLE_STREAMS) else None
+                if not ProxyLogging.bill_stream_ended_by_proxy_error(request_data, cut_stream, e):
                     ProxyLogging.fire_deferred_stream_logging(request_data)
                 raise
             ProxyLogging.fire_deferred_stream_logging(request_data)
@@ -4644,7 +4649,8 @@ class ProxyLogging:
             raise
         except Exception as e:
             await ProxyLogging._record_served_stream_output(request_data, served_chunks)
-            if not ProxyLogging._discard_deferred_stream_logging_for_failure(request_data, e):
+            cut_provider_stream: Final = response if isinstance(response, USAGE_RECOVERABLE_STREAMS) else None
+            if not ProxyLogging.bill_stream_ended_by_proxy_error(request_data, cut_provider_stream, e):
                 ProxyLogging.fire_deferred_stream_logging(request_data)
             raise
 
@@ -4930,6 +4936,36 @@ class ProxyLogging:
             asyncio.create_task(_deferred_cb(*_args))
 
     _fire_deferred_stream_logging = fire_deferred_stream_logging
+
+    @staticmethod
+    def bill_stream_ended_by_proxy_error(request_data: Mapping[str, object], stream: object, error: Exception) -> bool:
+        if ProxyLogging._discard_deferred_stream_logging_for_failure(request_data, error):
+            return True
+        ProxyLogging._record_cut_stream_usage_for_failure(request_data, stream, error)
+        return False
+
+    @staticmethod
+    def _record_cut_stream_usage_for_failure(
+        request_data: Mapping[str, object], stream: object, error: Exception
+    ) -> None:
+        logging_obj: Final = request_data.get("litellm_logging_obj")
+        if not isinstance(error, _PROXY_ONLY_LLM_API_ERRORS) or not isinstance(logging_obj, Logging):
+            return
+        if getattr(logging_obj, "_on_deferred_stream_complete", None) is None:
+            return
+        if getattr(logging_obj, "_deferred_stream_complete_args", None) is not None:
+            return
+        ProxyLogging._record_partial_stream_usage(stream)
+
+    @staticmethod
+    def _record_partial_stream_usage(stream: object) -> None:
+        match stream:
+            case CustomStreamWrapper() | TextCompletionStreamWrapper():
+                stream.record_partial_usage_for_failure()
+            case HiddenParamsAsyncIteratorWrapper(inner=inner):
+                ProxyLogging._record_partial_stream_usage(inner)
+            case _:
+                return
 
     @staticmethod
     def _discard_deferred_stream_logging_for_failure(request_data: Mapping[str, object], error: Exception) -> bool:

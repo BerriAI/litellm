@@ -2,7 +2,7 @@ import contextlib
 import json
 import re
 import uuid
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
@@ -36,6 +36,8 @@ _REPLACE: Final = "replace-client-error"
 _REPLACEMENT_MESSAGE: Final = "Request blocked by policy"
 _CRASH_MESSAGE: Final = "Guardrail service crashed while scanning"
 _RAISED_BLOCK: Final = "Raised block: policy"
+_INPUT_COST_PER_TOKEN: Final = 0.001
+_OUTPUT_COST_PER_TOKEN: Final = 0.002
 _SPAN: Final = "spanword"
 _LEAD: Final = "The lighthouse on the northern cliff has guided ships for two hundred years, and "
 _TEXTS: Final[Mapping[str, tuple[str, ...]]] = {
@@ -187,6 +189,8 @@ def _config(upstream_url: str) -> dict[str, JsonValue]:
                     "api_base": f"{upstream_url}/v1",
                     "api_key": "synthetic-stream-key",
                     "allow_client_keepalive_override": True,
+                    "input_cost_per_token": _INPUT_COST_PER_TOKEN,
+                    "output_cost_per_token": _OUTPUT_COST_PER_TOKEN,
                 },
             }
         ],
@@ -422,6 +426,63 @@ def test_mid_stream_block_releases_the_parallel_request_slot_and_logs_one_failur
         seconds=70,
     )
     assert [row["status"] for row in rows] == ["failure"], rows
+
+
+def _spend_row(rig: Rig, call_id: str) -> dict[str, JsonValue]:
+    (row,) = eventually(
+        lambda: rig.proxy.gateway.rows(
+            'SELECT status, prompt_tokens, completion_tokens, total_tokens, spend FROM "LiteLLM_SpendLogs" '
+            "WHERE litellm_call_id = %s",
+            (call_id,),
+        ),
+        lambda found: len(found) == 1,
+        seconds=70,
+    )
+    return row
+
+
+def _completion_body(scenario: str, marker: str, guardrails: Sequence[str]) -> dict[str, JsonValue]:
+    return {
+        "model": _MODEL,
+        "stream": True,
+        "prompt": _prompt(scenario, marker),
+        "guardrails": list(guardrails),
+        "num_retries": 0,
+        "cache": {"no-cache": True},
+    }
+
+
+@pytest.mark.parametrize(
+    ("path", "body", "scenario", "guardrail"),
+    [
+        pytest.param("/v1/chat/completions", _body, "filter-late", _FILTER, id="chat_stream_iterator_hook"),
+        pytest.param("/v1/chat/completions", _body, "span-late", _SPAN_POST, id="chat_per_chunk_hook"),
+        pytest.param(
+            "/v1/completions", _completion_body, "filter-late", _FILTER, id="completions_stream_iterator_hook"
+        ),
+    ],
+)
+def test_mid_stream_block_bills_what_the_provider_streamed_on_the_failure_row(
+    rig: Rig, path: str, body: Callable[[str, str, Sequence[str]], dict[str, JsonValue]], scenario: str, guardrail: str
+) -> None:
+    marker: Final = _marker()
+    served: Final = rig.proxy.gateway.request("POST", path, body(scenario, marker, ()))
+    assert served.status_code == 200, served.text
+    assert all("error" not in payload for payload in _payloads(served.text)), served.text
+    blocked: Final = rig.proxy.gateway.request("POST", path, body(scenario, marker, (guardrail,)))
+    assert blocked.status_code == 200 and "error" in _payloads(blocked.text)[-1], blocked.text
+
+    served_row: Final = _spend_row(rig, served.headers["x-litellm-call-id"])
+    failed_row: Final = _spend_row(rig, blocked.headers["x-litellm-call-id"])
+    assert (served_row["status"], failed_row["status"]) == ("success", "failure"), (served_row, failed_row)
+    prompt_tokens: Final = int(str(failed_row["prompt_tokens"]))
+    completion_tokens: Final = int(str(failed_row["completion_tokens"]))
+    assert prompt_tokens == served_row["prompt_tokens"] and prompt_tokens > 0, (served_row, failed_row)
+    assert 0 < completion_tokens <= int(str(served_row["completion_tokens"])), (served_row, failed_row)
+    assert failed_row["total_tokens"] == prompt_tokens + completion_tokens, failed_row
+    assert float(str(failed_row["spend"])) == pytest.approx(
+        prompt_tokens * _INPUT_COST_PER_TOKEN + completion_tokens * _OUTPUT_COST_PER_TOKEN
+    ), failed_row
 
 
 def test_failure_hook_replacement_hides_a_non_http_failure_mid_stream(rig: Rig) -> None:

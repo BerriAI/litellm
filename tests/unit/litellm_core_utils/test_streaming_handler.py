@@ -4985,7 +4985,7 @@ def test_record_partial_usage_for_failure_stashes_usage_and_cost():
         )
     ]
 
-    wrapper._record_partial_usage_for_failure()
+    wrapper.record_partial_usage_for_failure()
 
     stashed = logging_obj.model_call_details["combined_usage_object"]
     assert stashed.prompt_tokens == 30
@@ -5077,7 +5077,7 @@ def test_record_partial_usage_for_failure_noop_without_chunks():
     )
     wrapper.chunks = []
 
-    wrapper._record_partial_usage_for_failure()
+    wrapper.record_partial_usage_for_failure()
 
     assert "combined_usage_object" not in logging_obj.model_call_details
 
@@ -5135,7 +5135,7 @@ def test_record_partial_usage_for_failure_prices_alias_restamped_chunks_at_real_
     )
     assert "bedrock/bedrock-claude-opus-5" not in litellm.model_cost
 
-    wrapper._record_partial_usage_for_failure()
+    wrapper.record_partial_usage_for_failure()
 
     stashed = logging_obj.model_call_details["combined_usage_object"]
     assert stashed.completion_tokens == 5
@@ -5147,7 +5147,7 @@ def test_record_partial_usage_for_failure_prices_alias_restamped_chunks_at_real_
 def test_record_partial_usage_for_failure_counts_prompt_tokens_from_request_messages():
     wrapper, logging_obj = _wrapper_with_partial_chunks(chunk_model="my-public-alias")
 
-    wrapper._record_partial_usage_for_failure()
+    wrapper.record_partial_usage_for_failure()
 
     stashed = logging_obj.model_call_details["combined_usage_object"]
     assert stashed.prompt_tokens > 0
@@ -5156,7 +5156,7 @@ def test_record_partial_usage_for_failure_counts_prompt_tokens_from_request_mess
 def test_record_partial_usage_for_failure_backfills_missing_cache_fields():
     wrapper, logging_obj = _wrapper_with_partial_chunks(chunk_model="gpt-4o-mini")
 
-    wrapper._record_partial_usage_for_failure()
+    wrapper.record_partial_usage_for_failure()
 
     stashed = logging_obj.model_call_details["combined_usage_object"]
     assert stashed.cache_creation_input_tokens == 0
@@ -5173,7 +5173,7 @@ def test_record_partial_usage_for_failure_prices_corrected_model_not_chunk_model
         custom_llm_provider="openai",
     )
 
-    wrapper._record_partial_usage_for_failure()
+    wrapper.record_partial_usage_for_failure()
 
     rates = litellm.model_cost["gpt-4o-mini"]
     expected = 40 * rates["input_cost_per_token"] + 5 * rates["output_cost_per_token"]
@@ -5191,7 +5191,7 @@ def test_record_partial_usage_for_failure_carries_up_openai_style_cached_tokens(
         chunk_model="gpt-4o-mini", usage=recovered
     )
 
-    wrapper._record_partial_usage_for_failure()
+    wrapper.record_partial_usage_for_failure()
 
     stashed = logging_obj.model_call_details["combined_usage_object"]
     assert stashed.cache_read_input_tokens == 500
@@ -5210,7 +5210,7 @@ def test_record_partial_usage_for_failure_keeps_cache_values_recovered_from_chun
         chunk_model="gpt-4o-mini", usage=recovered
     )
 
-    wrapper._record_partial_usage_for_failure()
+    wrapper.record_partial_usage_for_failure()
 
     stashed = logging_obj.model_call_details["combined_usage_object"]
     assert stashed.cache_read_input_tokens == 7

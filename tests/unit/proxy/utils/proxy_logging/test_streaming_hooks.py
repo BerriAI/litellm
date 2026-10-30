@@ -23,11 +23,14 @@ from litellm.exceptions import GuardrailRaisedException
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.llms.anthropic.messages.native.streaming_iterator import (
     BaseAnthropicMessagesStreamingIterator,
 )
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.utils import ProxyLogging
+from litellm.router_utils.add_retry_fallback_headers import prepare_response_for_header_attachment
+from litellm.text_completions.streaming_iterator import TextCompletionStreamWrapper
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import Usage
 
@@ -733,6 +736,139 @@ async def test_chat_stream_generic_callback_error_after_stream_end_still_flushes
         "failure_usage_recorded": "combined_usage_object" in logging_obj.model_call_details,
     }
     assert snapshot == {"events": ["success_dispatched"], "args_cleared": True, "failure_usage_recorded": False}
+
+
+_CUT_PROMPT: Final = "Tell me about the lighthouse keeper"
+_CUT_REPLY: Final = "The lighthouse keeper lights the lamp at dusk and keeps it burning until dawn."
+
+
+async def _mock_provider_stream(endpoint: str) -> tuple[object, LiteLLMLoggingObj]:
+    match endpoint:
+        case "chat":
+            chat: Final = await litellm.acompletion(
+                model="gpt-4o-mini",
+                messages=[{"role": "user", "content": _CUT_PROMPT}],
+                stream=True,
+                mock_response=_CUT_REPLY,
+            )
+            assert isinstance(chat, CustomStreamWrapper)
+            return chat, chat.logging_obj
+        case _:
+            text: Final = await litellm.atext_completion(
+                model="gpt-4o-mini", prompt=_CUT_PROMPT, stream=True, mock_response=_CUT_REPLY
+            )
+            assert isinstance(text, TextCompletionStreamWrapper)
+            assert isinstance(text.source_stream, CustomStreamWrapper)
+            return prepare_response_for_header_attachment(text), text.source_stream.logging_obj
+
+
+def _arm_success_dispatch(logging_obj: LiteLLMLoggingObj, events: list[str]) -> None:
+    async def _dispatch_success(*args: object) -> None:
+        events.append("success_dispatched")
+
+    logging_obj._on_deferred_stream_complete = _dispatch_success
+
+
+class _BlocksOnSecondChunk(CustomLogger):
+    def __init__(self, error: Exception) -> None:
+        super().__init__()
+        self.error: Final = error
+
+    async def async_post_call_streaming_iterator_hook(
+        self, user_api_key_dict: UserAPIKeyAuth, response: AsyncIterator[object], request_data: dict[str, object]
+    ) -> AsyncGenerator[object, None]:
+        yield await anext(response)
+        await anext(response)
+        raise self.error
+
+
+async def _raw_provider_stream() -> AsyncGenerator[dict[str, object], None]:
+    yield {"id": "c1", "choices": [{"index": 0, "delta": {"content": "The"}, "finish_reason": None}]}
+    yield {"id": "c1", "choices": [{"index": 0, "delta": {"content": " keeper"}, "finish_reason": None}]}
+
+
+def _client_stream(shape: str, provider_stream: object) -> object:
+    match shape:
+        case "raw":
+            return _raw_provider_stream()
+        case "text_without_provider_stream":
+            return TextCompletionStreamWrapper(completion_stream=_raw_provider_stream(), model="gpt-4o-mini")
+        case _:
+            return provider_stream
+
+
+async def _drain(
+    proxy_logging: ProxyLogging, stream: object, user_api_key_dict: UserAPIKeyAuth, logging_obj: LiteLLMLoggingObj
+) -> None:
+    async for _ in proxy_logging.async_post_call_streaming_iterator_hook(
+        response=stream,
+        user_api_key_dict=user_api_key_dict,
+        request_data={"metadata": {}, "litellm_logging_obj": logging_obj},
+    ):
+        pass
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("endpoint", ["chat", "text_completion"])
+async def test_stream_blocked_mid_stream_bills_what_the_provider_already_streamed(
+    proxy_logging: ProxyLogging, make_user_api_key_auth, monkeypatch: pytest.MonkeyPatch, endpoint: str
+) -> None:
+    events: Final[list[str]] = []
+    stream, logging_obj = await _mock_provider_stream(endpoint)
+    _arm_success_dispatch(logging_obj, events)
+    monkeypatch.setattr(litellm, "callbacks", [_BlocksOnSecondChunk(HTTPException(status_code=400, detail="blocked"))])
+
+    with pytest.raises(HTTPException):
+        await _drain(proxy_logging, stream, make_user_api_key_auth(), logging_obj)
+    await asyncio.sleep(0)
+
+    usage: Final = logging_obj.model_call_details["combined_usage_object"]
+    rates: Final = litellm.model_cost["gpt-4o-mini"]
+    assert events == []
+    assert usage.prompt_tokens > 0
+    assert 0 < usage.completion_tokens < litellm.token_counter(model="gpt-4o-mini", text=_CUT_REPLY)
+    assert logging_obj.model_call_details["response_cost"] == pytest.approx(
+        usage.prompt_tokens * rates["input_cost_per_token"] + usage.completion_tokens * rates["output_cost_per_token"]
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("armed", "parked", "error", "shape", "expected_events"),
+    [
+        pytest.param(False, None, HTTPException(status_code=400), "chat", [], id="success_dispatch_not_deferred"),
+        pytest.param(True, None, RuntimeError("callback crashed"), "chat", [], id="not_a_proxy_error"),
+        pytest.param(True, None, HTTPException(status_code=400), "raw", [], id="stream_without_recoverable_chunks"),
+        pytest.param(
+            True, None, HTTPException(status_code=400), "text_without_provider_stream", [], id="text_without_source"
+        ),
+        pytest.param(
+            True, (None, False), HTTPException(status_code=400), "chat", ["success_dispatched"], id="stream_completed"
+        ),
+    ],
+)
+async def test_stream_error_leaves_failure_usage_unset_unless_the_proxy_cut_a_recoverable_stream(
+    proxy_logging: ProxyLogging,
+    make_user_api_key_auth,
+    monkeypatch: pytest.MonkeyPatch,
+    armed: bool,
+    parked: tuple[None, bool] | None,
+    error: Exception,
+    shape: str,
+    expected_events: list[str],
+) -> None:
+    events: Final[list[str]] = []
+    stream, logging_obj = await _mock_provider_stream("chat")
+    if armed:
+        _arm_success_dispatch(logging_obj, events)
+    logging_obj._deferred_stream_complete_args = parked
+    monkeypatch.setattr(litellm, "callbacks", [_BlocksOnSecondChunk(error)])
+
+    with pytest.raises(type(error)):
+        await _drain(proxy_logging, _client_stream(shape, stream), make_user_api_key_auth(), logging_obj)
+    await asyncio.sleep(0)
+
+    assert (events, "combined_usage_object" in logging_obj.model_call_details) == (expected_events, False)
 
 
 # ---------------------------------------------------------------------------

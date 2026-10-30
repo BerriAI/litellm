@@ -2468,7 +2468,7 @@ class CustomStreamWrapper:
         self._handle_stream_fallback_error(e)
 
     def _dispatch_stream_failure(self, e: Exception, traceback_exception: str) -> None:
-        self._record_partial_usage_for_failure()
+        self.record_partial_usage_for_failure()
         self._failure_logging = asyncio.create_task(
             self.logging_obj.dispatch_attempt_failure_handlers(e, traceback_exception)
         )
@@ -2486,7 +2486,7 @@ class CustomStreamWrapper:
     def bill_failure_after_earlier_rounds(self, earlier: "BilledRoundsSpend") -> None:
         self._earlier_rounds_spend = earlier
 
-    def _record_partial_usage_for_failure(self) -> None:
+    def record_partial_usage_for_failure(self) -> None:
         """
         A stream that breaks mid-flight still billed the provider for the chunks
         already delivered. Recover that partial usage from the chunks seen so
