@@ -550,6 +550,7 @@ from litellm.proxy.common_utils.periodic_reload_schedule import (
     write_reload_interval,
 )
 from litellm.proxy.common_utils.proxy_state import ProxyState
+from litellm.proxy.common_utils.registry_read_through import resync_model_deployments_by_ids
 from litellm.proxy.common_utils.reset_budget_job import ResetBudgetJob
 from litellm.proxy.common_utils.responses_stream_errors import ResponsesStreamErrorState
 from litellm.proxy.common_utils.scheduled_job_stagger import (
@@ -719,6 +720,9 @@ from litellm.proxy.management_endpoints.customer_endpoints import (
 )
 from litellm.proxy.management_endpoints.daily_activity_routes import router as daily_activity_router
 from litellm.proxy.management_endpoints.fallback_management_endpoints import (
+    apply_content_policy_fallbacks,
+)
+from litellm.proxy.management_endpoints.fallback_management_endpoints import (
     router as fallback_management_router,
 )
 from litellm.proxy.management_endpoints.gateway_request_endpoints import (
@@ -777,6 +781,9 @@ from litellm.proxy.management_endpoints.session_endpoints import (
     router as session_management_router,
 )
 from litellm.proxy.management_endpoints.sso.saml_sso import SAML_AUTHN_REQUEST_TTL_SECONDS
+from litellm.proxy.management_endpoints.subscription_accounts import (
+    router as subscription_accounts_router,
+)
 from litellm.proxy.management_endpoints.tag_management_endpoints import (
     router as tag_management_router,
 )
@@ -8160,14 +8167,38 @@ class ProxyConfig:
             if db_router_settings is not None and db_router_settings.param_value is not None
             else _EMPTY_SETTINGS_MAPPING
         )
+        previous_content_policy_rules: Final = self.router_settings.resolved().get("content_policy_fallbacks")
         self.router_settings.apply_db_row("router_settings", db_values)
         combined_router_settings: Final = self.router_settings.resolved()
         if combined_router_settings:
-            self._apply_router_settings(llm_router, combined_router_settings)
+            self._apply_router_settings(
+                llm_router,
+                combined_router_settings,
+                content_policy_owned_by_config=self.router_settings.owned_by_config("content_policy_fallbacks"),
+                content_policy_rules_changed=(
+                    combined_router_settings.get("content_policy_fallbacks") != previous_content_policy_rules
+                ),
+            )
 
     @staticmethod
-    def _apply_router_settings(llm_router: Router, router_settings: Mapping[str, object]) -> None:
-        llm_router.apply(ChangeSet(settings={k: v for k, v in router_settings.items() if k != "routing_groups"}))
+    def _apply_router_settings(
+        llm_router: Router,
+        router_settings: Mapping[str, object],
+        *,
+        content_policy_owned_by_config: bool,
+        content_policy_rules_changed: bool,
+    ) -> None:
+        llm_router.apply(
+            ChangeSet(
+                settings={
+                    k: v for k, v in router_settings.items() if k not in ("routing_groups", "content_policy_fallbacks")
+                }
+            )
+        )
+        if "content_policy_fallbacks" in router_settings and not content_policy_owned_by_config:
+            apply_content_policy_fallbacks(
+                llm_router, router_settings["content_policy_fallbacks"], log_skipped_rules=content_policy_rules_changed
+            )
         if "routing_groups" not in router_settings:
             return
         try:
@@ -8751,6 +8782,7 @@ class ProxyConfig:
         subscriber: Final = ConfigSyncSubscriber(
             redis_cache=redis_cache,
             resync_callbacks=(_resync_config_from_db,),
+            apply_model_ids=resync_model_deployments_by_ids,
         )
         self.config_sync_subscriber = subscriber
         subscriber.start()
@@ -21803,6 +21835,7 @@ app.include_router(memory_router)
 app.include_router(lens_router)
 app.include_router(plugin_router)
 app.include_router(cost_tracking_settings_router)
+app.include_router(subscription_accounts_router)
 app.include_router(prompt_caching_requests_router)
 app.include_router(router_settings_router)
 app.include_router(fallback_management_router)

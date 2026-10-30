@@ -42,6 +42,7 @@ from litellm.llms.ollama.common_utils import OllamaResponseIdNormalizer
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import (
+    CHOICE_LOGPROBS_OR_JSON,
     CacheCreationTokenDetails,
     CompletionTokensDetailsWrapper,
     Delta,
@@ -1271,7 +1272,10 @@ class CustomStreamWrapper:
                                         choice_json.pop(
                                             "finish_reason", None
                                         )  # for mistral etc. which return a value in their last chunk (not-openai compatible).
-                                        choices.append(StreamingChoices(**choice_json))
+                                        choice_json.pop("logprobs", None)
+                                        choices.append(
+                                            StreamingChoices(**choice_json, logprobs=getattr(choice, "logprobs", None))
+                                        )
                                 except Exception:
                                     choices.append(StreamingChoices())
                             setattr(model_response, "choices", choices)
@@ -1709,7 +1713,7 @@ class CustomStreamWrapper:
                     model_response.system_fingerprint = response_obj["original_chunk"].system_fingerprint
                     self.system_fingerprint = response_obj["original_chunk"].system_fingerprint
             if response_obj["logprobs"] is not None:
-                model_response.choices[0].logprobs = response_obj["logprobs"]
+                model_response.choices[0].logprobs = CHOICE_LOGPROBS_OR_JSON.validate_python(response_obj["logprobs"])
 
             if response_obj["usage"] is not None:
                 if isinstance(response_obj["usage"], dict):
