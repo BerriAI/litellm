@@ -871,27 +871,43 @@ def test_stamp_responses_usage_cost_bills_the_spend_row_price_over_the_provider_
 
     assert getattr(response.usage, "cost", None) == pytest.approx(0.00032), "the client sees what the row bills"
     priced = logging_obj.response_cost_calculator.call_args.kwargs["result"]
-    assert response_cost_in_hidden_params(priced) == pytest.approx(0.5), "the reported cost reaches the calculator"
+    assert priced.hidden_params["upstream_usage_cost"] == pytest.approx(0.5), "the reported cost reaches the calculator"
+    assert response_cost_in_hidden_params(priced) is None, "never as a response-cost header, the calculator returns that unmargined"
 
 
-@pytest.mark.parametrize("upstream_cost", [None, 0.5])
-def test_stamp_responses_usage_cost_prices_the_saved_upstream_cost_not_an_earlier_bill(upstream_cost: float | None):
-    from litellm.litellm_core_utils.core_helpers import response_cost_in_hidden_params
+@pytest.mark.parametrize(("upstream_cost", "expected_bill"), [(None, 0.00021), (0.001, 0.0015)])
+def test_stamp_responses_usage_cost_margins_the_upstream_charge_once_however_often_it_stamps(
+    monkeypatch: pytest.MonkeyPatch, upstream_cost: float | None, expected_bill: float
+):
     from litellm.responses.streaming_iterator import stamp_responses_usage_cost
 
-    response = _responses_api_response_with_usage()
-    setattr(response.usage, "cost", 0.00048)
-    response._hidden_params = {"response_cost": 0.00048, "upstream_usage_cost": upstream_cost}
-    logging_obj = Mock(spec=LiteLLMLoggingObj)
-    logging_obj.model_call_details = {"custom_llm_provider": "anthropic"}
-    logging_obj.response_cost_calculator.return_value = 0.00048
+    monkeypatch.setattr(litellm, "cost_margin_config", {"global": 0.5})
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "stamp-test-model",
+        {"input_cost_per_token": 1e-6, "output_cost_per_token": 2e-6, "litellm_provider": "deepinfra", "mode": "chat"},
+    )
+    response = _responses_api_response_with_usage().model_copy(update={"model": "stamp-test-model"})
+    if upstream_cost is not None:
+        setattr(response.usage, "cost", upstream_cost)
+    logging_obj = LiteLLMLoggingObj(
+        model="stamp-test-model",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        call_type="aresponses",
+        start_time=datetime.now(),
+        litellm_call_id="call-stamp",
+        function_id="fn-stamp",
+    )
+    logging_obj.model_call_details["custom_llm_provider"] = "deepinfra"
+    logging_obj.optional_params = {}
 
     stamp_responses_usage_cost(response, logging_obj)
+    first_bill = getattr(response.usage, "cost", None)
+    stamp_responses_usage_cost(response, logging_obj)
 
-    priced = logging_obj.response_cost_calculator.call_args.kwargs["result"]
-    assert response_cost_in_hidden_params(priced) == upstream_cost, "the chat bridge's bill is not the upstream's charge"
-    assert priced.hidden_params["upstream_usage_cost"] == upstream_cost
-    assert response._hidden_params["upstream_usage_cost"] == upstream_cost
+    assert first_bill == pytest.approx(expected_bill), "20 in and 60 out at 1e-6 and 2e-6, or the upstream's 0.001, plus 50%"
+    assert getattr(response.usage, "cost", None) == pytest.approx(expected_bill), "stamping again neither re-margins nor drops the margin"
 
 
 def _unvalidated_response_with_dict_usage(usage: dict) -> ResponsesAPIResponse:

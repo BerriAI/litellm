@@ -45,7 +45,6 @@ from litellm.litellm_core_utils.core_helpers import (
     finite_cost,
     process_response_headers,
     provider_reported_usage_cost,
-    set_response_cost_in_hidden_params,
     stamp_litellm_bill_on_usage,
 )
 from litellm.litellm_core_utils.exception_mapping_utils import with_deployment_api_base
@@ -1869,7 +1868,6 @@ def stamp_responses_usage_cost(
         else provider_reported_usage_cost(usage_obj, logging_obj.model_call_details.get("custom_llm_provider"))
     )
     priced.hidden_params = {UPSTREAM_USAGE_COST: upstream_cost}
-    set_response_cost_in_hidden_params(priced, upstream_cost)
     try:
         bill: Final = logging_obj.response_cost_calculator(result=priced)
     except Exception:  # noqa: BLE001  # a pricing failure leaves the client usage as the upstream sent it
