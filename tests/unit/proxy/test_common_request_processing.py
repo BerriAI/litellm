@@ -12508,3 +12508,62 @@ def test_maybe_get_model_id_prefers_litellm_metadata_over_caller_metadata_withou
 
 def test_maybe_get_model_id_returns_none_before_the_router_picked_a_deployment():
     assert ProxyBaseLLMRequestProcessing(data={"metadata": {}}).maybe_get_model_id(None) is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("accounting", "finalized_amount", "expected_cost"),
+    [
+        ("missing_logger", None, 0.0),
+        ("unbilled", None, 0.0),
+        ("paid_rounds", None, 0.23),
+        ("paid_rounds", 0.41, 0.41),
+        ("paid_rounds", 0.0, 0.0),
+    ],
+)
+async def test_failure_cost_headers_report_accounted_rounds_without_changing_charges(
+    accounting: Literal["missing_logger", "unbilled", "paid_rounds"],
+    finalized_amount: float | None,
+    expected_cost: float,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.litellm_core_utils.llm_cost_calc.finalization import finalize_cost
+    from litellm.types.utils import Usage
+
+    monkeypatch.setattr(litellm, "callbacks", [])
+    logging_obj: Final = (
+        None
+        if accounting == "missing_logger"
+        else Logging(
+            model="failure-header-test",
+            messages=[],
+            stream=False,
+            call_type="acompletion",
+            start_time=datetime.datetime(2026, 1, 1),
+            litellm_call_id="failure-header-test",
+            function_id="failure-header-test",
+        )
+    )
+    if logging_obj is not None:
+        if finalized_amount is not None:
+            logging_obj.record_finalized_cost(finalize_cost(finalized_amount, None))
+        if accounting == "paid_rounds":
+            logging_obj.record_partial_usage_for_failure(Usage(prompt_tokens=7, completion_tokens=3), 0.23)
+        else:
+            logging_obj.model_call_details["response_cost"] = 0.23
+    processor: Final = ProxyBaseLLMRequestProcessing(
+        data={"model": "failure-header-test", "litellm_logging_obj": logging_obj}
+    )
+    with pytest.raises(ProxyException) as raised:
+        await processor.handle_llm_api_exception(
+            e=HTTPException(status_code=400, detail="tool execution rejected"),
+            user_api_key_dict=ProxyUserAPIKeyAuth(api_key="test-key", spend=2.0),
+            proxy_logging_obj=ProxyLogging(user_api_key_cache=UserApiKeyCache()),
+        )
+    assert raised.value.code == "400"
+    assert float(raised.value.headers["x-litellm-response-cost"]) == pytest.approx(expected_cost)
+    assert float(raised.value.headers["x-litellm-key-spend"]) == pytest.approx(2.0 + expected_cost)
+    if accounting != "paid_rounds":
+        assert raised.value.headers["x-litellm-response-cost"] == "0"
+    if logging_obj is not None:
+        assert logging_obj.model_call_details["response_cost"] == 0.23
