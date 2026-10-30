@@ -1620,6 +1620,7 @@ async def test_a_whole_gateway_entry_beside_an_ungranted_toolset_still_lists_the
 ):
     from litellm.proxy.mcp_server.ui_session_utils import granted_toolset_ids
     from litellm.proxy._types import LiteLLM_ObjectPermissionTable
+    from litellm.types.mcp_server.mcp_toolset import MCPToolset
 
     servers: Final = (
         MCPServer(server_id="srv-wiki", name="deepwiki", alias="deepwiki", transport=MCPTransport.http),
@@ -1630,8 +1631,14 @@ async def test_a_whole_gateway_entry_beside_an_ungranted_toolset_still_lists_the
         "context7": [MCPTool(name="resolve_library_id", inputSchema={"type": "object"})],
     }
 
-    async def toolset_by_name(_prisma_client: object, name: str) -> types.SimpleNamespace:
-        return types.SimpleNamespace(toolset_id=TOOLSET_IDS_BY_NAME[name])
+    docs_toolset: Final = MCPToolset(
+        toolset_id="ts-other",
+        toolset_name="other-toolset",
+        tools=[{"server_id": "srv-docs", "tool_name": "resolve_library_id"}],
+    )
+
+    async def toolset_row(*, where: dict[str, str]) -> MCPToolset | None:
+        return docs_toolset if where["toolset_name"] == docs_toolset.toolset_name else None
 
     async def upstream_listing(_client: object, server_name: str) -> list[MCPTool]:
         return upstream_tools[server_name]
@@ -1640,10 +1647,15 @@ async def test_a_whole_gateway_entry_beside_an_ungranted_toolset_still_lists_the
     manager.registry = {server.server_id: server for server in servers}
     manager.create_mcp_client = AsyncMock(return_value=object())
     manager._fetch_tools_with_timeout = AsyncMock(side_effect=upstream_listing)
-    manager.get_toolset_by_name_cached = AsyncMock(side_effect=toolset_by_name)
+    tables: Final = types.SimpleNamespace(
+        litellm_mcptoolsettable=types.SimpleNamespace(
+            find_first=AsyncMock(side_effect=toolset_row), find_many=AsyncMock(return_value=[docs_toolset])
+        )
+    )
     monkeypatch.setattr("litellm.proxy.mcp_server.mcp_server_manager.global_mcp_server_manager", manager)
     monkeypatch.setattr(mcp_operations, "global_mcp_server_manager", manager)
-    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", MagicMock())
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", types.SimpleNamespace(db=tables, writer_db=tables))
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", DualCache())
     monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {"supported_db_objects": []})
 
     async def team_permission(context: UserAPIKeyAuth) -> LiteLLM_ObjectPermissionTable:
