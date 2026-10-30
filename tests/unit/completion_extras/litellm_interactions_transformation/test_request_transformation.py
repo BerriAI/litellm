@@ -163,7 +163,7 @@ def test_structured_output_pydantic_model_and_thinking_config() -> None:
 @pytest.mark.parametrize(
     ("model", "expected_level"),
     (
-        ("gemini/future-unknown-model", "low"),
+        ("gemini/gemini-2.5-pro", "low"),
         ("gemini-3.1-pro-preview", "low"),
         ("gemini-2.5-flash", "low"),
         ("gemini-3-flash-preview", "minimal"),
@@ -189,15 +189,15 @@ def test_disabled_thinking_defaults_to_low_for_unknown_or_non_gemini3_flash_mode
 @pytest.mark.parametrize(
     ("model", "litellm_params", "expected_level"),
     (
-        ("gemini-3.8-flash", {}, "low"),
+        ("gemini-2.5-pro", {}, "low"),
         ("gemini-3.1-pro-preview", {}, "low"),
         (
-            "gemini/custom-minimal-capable",
+            "gemini/gemini-3.1-pro-preview",
             {"model_info": {"supports_minimal_reasoning_effort": True}},
             "minimal",
         ),
         (
-            "gemini/custom-levels-capable",
+            "gemini/gemini-2.5-pro",
             {"model_info": {"reasoning_effort_levels": ["minimal", "low", "medium", "high"]}},
             "minimal",
         ),
@@ -467,3 +467,58 @@ def test_unsigned_thinking_summary_and_provider_thought_signatures_merge_onto_th
         {"type": "model_output", "content": [{"type": "text", "text": "Hello there."}]},
         {"type": "user_input", "content": [{"type": "text", "text": "Next?"}]},
     ]
+
+
+def test_drop_params_omits_unsupported_sampling_params_and_normalizes_builtin_tools_and_provider_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    monkeypatch.setattr(
+        litellm,
+        "model_cost",
+        {"gemini/gemini-3.1-flash-lite-preview": {"supports_sampling_params": False}},
+    )
+
+    with pytest.raises(UnsupportedParamsError):
+        transform_chat_to_interactions_request(
+            messages=[{"role": "user", "content": "hi"}],
+            model="gemini/gemini-3.1-flash-lite-preview",
+            optional_params={"temperature": 0.7, "top_p": 0.9},
+            litellm_params={},
+        )
+
+    dropped: Final = transform_chat_to_interactions_request(
+        messages=[{"role": "user", "content": "hi"}],
+        model="gemini/gemini-3.1-flash-lite-preview",
+        optional_params={
+            "temperature": 0.7,
+            "top_p": 0.9,
+            "seed": 42,
+            "tools": [
+                {"type": "google_search_retrieval"},
+                {"type": "urlContext"},
+                {"type": "codeExecution"},
+                {"type": "google_maps"},
+            ],
+        },
+        litellm_params={"drop_params": True},
+    )
+    assert dropped.optional_params == {
+        "generation_config": {"seed": 42},
+        "tools": [
+            {"type": "google_search"},
+            {"type": "url_context"},
+            {"type": "code_execution"},
+            {"type": "google_maps"},
+        ],
+    }
+
+    with pytest.raises(UnsupportedParamsError) as vertex_exc:
+        transform_chat_to_interactions_request(
+            messages=[{"role": "user", "content": "hi"}],
+            model="gemini-3-flash-preview",
+            optional_params={"cached_content": "cachedContents/123"},
+            litellm_params={},
+            custom_llm_provider="vertex_ai",
+        )
+    assert getattr(vertex_exc.value, "llm_provider", None) == "vertex_ai"

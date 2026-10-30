@@ -54,6 +54,8 @@ _BUILTIN_TOOL_TYPES: Final[Mapping[str, str]] = MappingProxyType(
         "googleSearch": "google_search",
         "google_search_retrieval": "google_search",
         "googleSearchRetrieval": "google_search",
+        "google_maps": "google_maps",
+        "googleMaps": "google_maps",
         "url_context": "url_context",
         "urlContext": "url_context",
         "code_execution": "code_execution",
@@ -146,13 +148,19 @@ def _strip_signature_suffix(raw_call_id: str) -> str:
     return raw_call_id
 
 
-def _reject_or_drop(model: str, message: str, drop_params: bool) -> None:
+def _reject_or_drop(
+    model: str,
+    message: str,
+    drop_params: bool,
+    *,
+    custom_llm_provider: str,
+) -> None:
     if litellm.drop_params or drop_params:
         return
     raise UnsupportedParamsError(
         message=(f"{message} To drop unsupported params, set `litellm.drop_params = True` or pass `drop_params=True`."),
         model=model,
-        llm_provider="gemini",
+        llm_provider=custom_llm_provider,
         status_code=400,
     )
 
@@ -171,24 +179,29 @@ def _validate_request_params(
     params: JsonMapping,
     model: str,
     drop_params: bool,
+    *,
+    custom_llm_provider: str,
 ) -> None:
     if params.get("cached_content") is not None or params.get("cachedContent") is not None:
         _reject_or_drop(
             model,
             "Explicit prompt caching ('cached_content') is not supported by the Gemini Interactions API.",
             drop_params,
+            custom_llm_provider=custom_llm_provider,
         )
     if params.get("video_metadata") is not None:
         _reject_or_drop(
             model,
             "'video_metadata' is not supported by the Gemini Interactions API.",
             drop_params,
+            custom_llm_provider=custom_llm_provider,
         )
     if params.get("logprobs") is True or params.get("top_logprobs") is not None:
         _reject_or_drop(
             model,
             "'logprobs' is not supported by the Gemini Interactions API.",
             drop_params,
+            custom_llm_provider=custom_llm_provider,
         )
     candidate_count: Final = params.get("n")
     if isinstance(candidate_count, int) and not isinstance(candidate_count, bool) and candidate_count > 1:
@@ -196,6 +209,7 @@ def _validate_request_params(
             model,
             "Multiple candidate completions ('n > 1') are not supported by the Gemini Interactions API.",
             drop_params,
+            custom_llm_provider=custom_llm_provider,
         )
     freq_penalty: Final = params.get("frequency_penalty")
     pres_penalty: Final = params.get("presence_penalty")
@@ -206,6 +220,7 @@ def _validate_request_params(
             model,
             "Frequency and presence penalties are not supported by the Gemini Interactions API.",
             drop_params,
+            custom_llm_provider=custom_llm_provider,
         )
     if not VertexGeminiConfig.supports_sampling_params(model):
         _validate_sampling_param(params, "temperature", model, drop_params)
@@ -216,6 +231,7 @@ def _validate_request_params(
             model,
             f"Unsupported tool_choice={raw_choice!r} for the Gemini Interactions API.",
             drop_params,
+            custom_llm_provider=custom_llm_provider,
         )
 
 
@@ -663,10 +679,9 @@ def _convert_single_tool(tool: JsonValue) -> tuple[JsonValue, ...]:
     if (builtin := _matching_builtin_tool(tool)) is not None:
         return (builtin,)
     tool_type: Final = tool.get("type")
+    if isinstance(tool_type, str) and tool_type in _BUILTIN_TOOL_TYPES:
+        return ({**dict(tool), "type": _BUILTIN_TOOL_TYPES[tool_type]},)
     if isinstance(tool_type, str) and tool_type in (
-        "google_search",
-        "url_context",
-        "code_execution",
         "file_search",
         "computer_use",
         "mcp_server",
@@ -866,11 +881,16 @@ def _resolve_thinking_fields(params: JsonMapping, model: str, model_info: object
 
 
 def _build_generation_config(params: JsonMapping, model: str, model_info: object = None) -> JsonValue:
+    allows_sampling: Final = VertexGeminiConfig.supports_sampling_params(model)
     raw_existing: Final = params.get("generation_config")
-    existing: Final = raw_existing if isinstance(raw_existing, dict) else _EMPTY_JSON_MAP
+    existing: Final = (
+        {k: v for k, v in raw_existing.items() if allows_sampling or k not in ("temperature", "top_p")}
+        if isinstance(raw_existing, dict)
+        else _EMPTY_JSON_MAP
+    )
 
-    temp: Final = params.get("temperature")
-    top_p: Final = params.get("top_p")
+    temp: Final = params.get("temperature") if allows_sampling else None
+    top_p: Final = params.get("top_p") if allows_sampling else None
     seed: Final = params.get("seed")
     max_tokens: Final = (
         params.get("max_completion_tokens")
@@ -929,7 +949,12 @@ def transform_chat_to_interactions_request(
     }
     drop_params: Final = bool(litellm_params.get("drop_params") or optional_params.get("drop_params"))
 
-    _validate_request_params(normalized_params, model=model, drop_params=drop_params)
+    _validate_request_params(
+        normalized_params,
+        model=model,
+        drop_params=drop_params,
+        custom_llm_provider=custom_llm_provider,
+    )
 
     fetcher: Final = media_fetcher or _default_media_fetcher
     message_list: Final = normalized_messages if isinstance(normalized_messages, list) else []
