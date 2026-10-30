@@ -199,6 +199,7 @@ from litellm.types.caching import RedisPipelineIncrementOperation
 from litellm.types.utils import (
     PRICING_OVERRIDES_KEY,
     CountContextManagement,
+    LlmProviders,
     ModelResponse,
     ModelResponseStream,
     TextCompletionResponse,
@@ -443,6 +444,7 @@ from litellm.proxy.auth.model_checks import (
     get_key_models,
     get_mcp_server_ids,
     get_team_models,
+    run_model_listing,
 )
 from litellm.proxy.auth.password_policy import validate_password_not_breached, validate_password_policy
 from litellm.proxy.auth.user_api_key_auth import (  # noqa: F401, RUF100  # legacy module exports
@@ -3508,7 +3510,7 @@ async def increment_spend_counters(
     user_id: str | None,
     response_cost: float | None,
     org_id: str | None = None,
-    budget_reservation: dict | None = None,
+    budget_reservation: dict[str, object] | None = None,
     end_user_id: str | None = None,
     tags: list[str] | None = None,
     request_started_at: datetime | None = None,
@@ -12487,20 +12489,23 @@ async def model_list(
         # Get complete model list including wildcard routes if requested
         from litellm.proxy.auth.model_checks import get_complete_model_list
 
-        all_models = get_complete_model_list(
-            key_models=[],
-            team_models=[],
-            proxy_model_list=[
-                *proxy_model_list,
-                *(typesafe_allowlist_model_names() if asks_for_allowlist_names else ()),
-            ],
-            user_model=None,
-            infer_model_from_keys=False,
-            return_wildcard_routes=include_wildcard_routes,
-            llm_router=llm_router,
-            model_access_groups=model_access_groups,
-            include_model_access_groups=include_model_access_groups or False,
-            only_model_access_groups=only_model_access_groups or False,
+        all_models = await run_model_listing(
+            partial(
+                get_complete_model_list,
+                key_models=[],
+                team_models=[],
+                proxy_model_list=[
+                    *proxy_model_list,
+                    *(typesafe_allowlist_model_names() if asks_for_allowlist_names else ()),
+                ],
+                user_model=None,
+                infer_model_from_keys=False,
+                return_wildcard_routes=include_wildcard_routes,
+                llm_router=llm_router,
+                model_access_groups=model_access_groups,
+                include_model_access_groups=include_model_access_groups or False,
+                only_model_access_groups=only_model_access_groups or False,
+            )
         )
 
         expanded_undiscoverable_names: Final = undiscoverable_model_names(
@@ -14747,6 +14752,8 @@ from litellm.responses.litellm_completion_transformation.count_request import (
     with_provider_file_ids,
 )
 
+_PROVIDERS_WITH_LISTING_ONLY_MODEL_INFO: Final = frozenset({LlmProviders.OPENROUTER})
+
 
 def _with_client_oauth_token(
     counter: BaseTokenCounter | None, client_oauth_token: str | None
@@ -14782,14 +14789,13 @@ def _get_provider_token_counter(
         )
 
         # Switch case pattern using existing get_provider_model_info
-        from litellm.types.utils import LlmProviders
         from litellm.utils import ProviderConfigManager
 
         # Convert string provider to LlmProviders enum
         llm_provider_enum: Final = LlmProviders(custom_llm_provider)
         # Add more provider mappings as needed
 
-        if llm_provider_enum:
+        if llm_provider_enum not in _PROVIDERS_WITH_LISTING_ONLY_MODEL_INFO:
             provider_model_info: Final = ProviderConfigManager.get_provider_model_info(
                 model=full_model, provider=llm_provider_enum
             )
@@ -17941,7 +17947,7 @@ async def model_info_v1(
     alias_models: Final = copy.deepcopy(registry.deployments(source="alias"))
     all_models.extend(alias_models)
 
-    all_models = expand_wildcard_deployments_for_model_info(all_models, llm_router)
+    all_models = await run_model_listing(partial(expand_wildcard_deployments_for_model_info, all_models, llm_router))
 
     allowed_model_names: Final = await _get_v1_model_info_allowed_model_names_with_access_groups(
         user_api_key_dict=user_api_key_dict,
@@ -18279,14 +18285,17 @@ async def model_group_info(
         LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
     )
     all_models_str: Final = (
-        get_complete_model_list(
-            key_models=(),
-            team_models=(),
-            proxy_model_list=llm_router.registry().names(),
-            user_model=user_model,
-            infer_model_from_keys=general_settings.get("infer_model_from_keys", False),
-            return_wildcard_routes=False,
-            llm_router=llm_router,
+        await run_model_listing(
+            partial(
+                get_complete_model_list,
+                key_models=(),
+                team_models=(),
+                proxy_model_list=llm_router.registry().names(),
+                user_model=user_model,
+                infer_model_from_keys=general_settings.get("infer_model_from_keys", False),
+                return_wildcard_routes=False,
+                llm_router=llm_router,
+            )
         )
         if is_proxy_admin
         else await get_available_models_for_user(

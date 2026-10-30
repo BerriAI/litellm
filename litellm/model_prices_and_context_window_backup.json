@@ -8715,7 +8715,7 @@
             "search_context_size_low": 0.014,
             "search_context_size_medium": 0.014
         },
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://azure.microsoft.com/en-us/pricing/details/cognitive-services/openai-service/",
         "supported_endpoints": [
             "/v1/chat/completions",
             "/v1/responses"
@@ -8742,7 +8742,11 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "supports_web_search": true,
-        "supports_xhigh_reasoning_effort": true
+        "supports_xhigh_reasoning_effort": true,
+        "cache_creation_input_token_cost_above_272k_tokens_flex": 1.25e-05,
+        "cache_read_input_token_cost_above_272k_tokens_flex": 1e-06,
+        "input_cost_per_token_above_272k_tokens_flex": 1e-05,
+        "output_cost_per_token_above_272k_tokens_flex": 3.75e-05
     },
     "azure/gpt-6-astra-2026-09-03": {
         "cache_creation_input_token_cost": 1.25e-05,
@@ -8763,7 +8767,7 @@
             "search_context_size_low": 0.014,
             "search_context_size_medium": 0.014
         },
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://azure.microsoft.com/en-us/pricing/details/cognitive-services/openai-service/",
         "supported_endpoints": [
             "/v1/chat/completions",
             "/v1/responses"
@@ -8790,7 +8794,11 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "supports_web_search": true,
-        "supports_xhigh_reasoning_effort": true
+        "supports_xhigh_reasoning_effort": true,
+        "cache_creation_input_token_cost_above_272k_tokens_flex": 1.25e-05,
+        "cache_read_input_token_cost_above_272k_tokens_flex": 1e-06,
+        "input_cost_per_token_above_272k_tokens_flex": 1e-05,
+        "output_cost_per_token_above_272k_tokens_flex": 3.75e-05
     },
     "azure/gpt-6-luna": {
         "cache_creation_input_token_cost": 1.25e-07,
@@ -29553,6 +29561,7 @@
         ],
         "supports_audio_input": true,
         "supports_audio_output": false,
+        "supports_computer_use": true,
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_pdf_input": true,
@@ -30159,6 +30168,7 @@
             "text"
         ],
         "supports_audio_input": true,
+        "supports_computer_use": true,
         "supports_function_calling": true,
         "supports_native_streaming": true,
         "supports_pdf_input": true,
@@ -30202,6 +30212,7 @@
             "text"
         ],
         "supports_audio_input": true,
+        "supports_computer_use": true,
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_pdf_input": true,
@@ -30266,6 +30277,7 @@
             "text"
         ],
         "supports_audio_input": true,
+        "supports_computer_use": true,
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_pdf_input": true,
@@ -30326,6 +30338,7 @@
             "text"
         ],
         "supports_audio_input": true,
+        "supports_computer_use": true,
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_pdf_input": true,
@@ -30393,6 +30406,7 @@
             "text"
         ],
         "supports_audio_input": true,
+        "supports_computer_use": true,
         "supports_function_calling": true,
         "supports_minimal_reasoning_effort": false,
         "supports_native_streaming": true,
@@ -30856,8 +30870,9 @@
         "output_cost_per_token": 0,
         "output_vector_size": 3072,
         "rpm": 10000,
-        "source": "https://ai.google.dev/gemini-api/docs/embeddings#model-versions",
-        "tpm": 10000000
+        "source": "https://ai.google.dev/gemini-api/docs/pricing",
+        "tpm": 10000000,
+        "input_cost_per_token_batches": 7.5e-08
     },
     "gemini/gemini-embedding-2": {
         "input_cost_per_audio_token": 6.5e-06,
@@ -31713,7 +31728,10 @@
         "input_cost_per_token_flex": 6.25e-07,
         "output_cost_per_token_batches": 5e-06,
         "output_cost_per_token_flex": 5e-06,
-        "supports_url_context": true
+        "supports_url_context": true,
+        "cache_read_input_token_cost_above_200k_tokens_batches": 2.5e-07,
+        "input_cost_per_token_above_200k_tokens_batches": 1.25e-06,
+        "output_cost_per_token_above_200k_tokens_batches": 7.5e-06
     },
     "gemini/gemini-2.5-computer-use-preview-10-2025": {
         "deprecation_date": "2026-07-28",
@@ -31871,7 +31889,8 @@
         },
         "search_free_requests": {"count": 5000, "period": "month", "shared_group": "gemini-3"},
         "web_search_billing_unit": "per_query",
-        "google_maps_grounding_cost_per_query": 0.014
+        "google_maps_grounding_cost_per_query": 0.014,
+        "supports_computer_use": true
     },
     "gemini/gemini-3-flash-preview": {
         "cache_read_input_audio_token_cost": 1e-07,
@@ -31937,7 +31956,8 @@
         "input_cost_per_token_flex": 2.5e-07,
         "output_cost_per_token_batches": 1.5e-06,
         "output_cost_per_token_flex": 1.5e-06,
-        "supports_audio_input": true
+        "supports_audio_input": true,
+        "supports_computer_use": true
     },
     "gemini/gemini-3.5-flash": {
         "prompt_cache_min_tokens": 4096,
@@ -32184,7 +32204,8 @@
         },
         "search_free_requests": {"count": 5000, "period": "month", "shared_group": "gemini-3"},
         "web_search_billing_unit": "per_query",
-        "google_maps_grounding_cost_per_query": 0.014
+        "google_maps_grounding_cost_per_query": 0.014,
+        "supports_computer_use": true
     },
     "gemini/gemini-omni-flash-preview": {
         "input_cost_per_audio_token": 1.5e-06,
@@ -32280,7 +32301,10 @@
         "web_search_billing_unit": "per_query",
         "google_maps_grounding_cost_per_query": 0.014,
         "input_cost_per_token_flex": 1e-06,
-        "output_cost_per_token_flex": 6e-06
+        "output_cost_per_token_flex": 6e-06,
+        "cache_read_input_token_cost_above_200k_tokens_batches": 4e-07,
+        "input_cost_per_token_above_200k_tokens_batches": 2e-06,
+        "output_cost_per_token_above_200k_tokens_batches": 9e-06
     },
     "gemini/gemini-3.1-pro-preview-customtools": {
         "prompt_cache_min_tokens": 4096,
@@ -32343,7 +32367,10 @@
         "web_search_billing_unit": "per_query",
         "google_maps_grounding_cost_per_query": 0.014,
         "input_cost_per_token_flex": 1e-06,
-        "output_cost_per_token_flex": 6e-06
+        "output_cost_per_token_flex": 6e-06,
+        "cache_read_input_token_cost_above_200k_tokens_batches": 4e-07,
+        "input_cost_per_token_above_200k_tokens_batches": 2e-06,
+        "output_cost_per_token_above_200k_tokens_batches": 9e-06
     },
     "gemini-3-flash-preview": {
         "cache_read_input_audio_token_cost": 1e-07,
@@ -32384,6 +32411,7 @@
             "text"
         ],
         "supports_audio_output": false,
+        "supports_computer_use": true,
         "supports_function_calling": true,
         "supports_native_streaming": true,
         "supports_parallel_function_calling": true,
@@ -32458,6 +32486,7 @@
         ],
         "supports_audio_output": false,
         "supports_audio_input": true,
+        "supports_computer_use": true,
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_pdf_input": true,
@@ -32522,6 +32551,7 @@
         ],
         "supports_audio_output": false,
         "supports_audio_input": true,
+        "supports_computer_use": true,
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_pdf_input": true,
@@ -32582,6 +32612,7 @@
         ],
         "supports_audio_output": false,
         "supports_audio_input": true,
+        "supports_computer_use": true,
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_pdf_input": true,
@@ -32649,6 +32680,7 @@
         ],
         "supports_audio_input": true,
         "supports_audio_output": false,
+        "supports_computer_use": true,
         "supports_function_calling": true,
         "supports_minimal_reasoning_effort": false,
         "supports_native_streaming": true,
@@ -47603,6 +47635,24 @@
         "output_cost_per_token": 0.0,
         "source": "https://cohere.com/pricing"
     },
+    "rerank-v5.0-fast": {
+        "input_cost_per_token": 2e-08,
+        "litellm_provider": "cohere",
+        "max_input_tokens": 32768,
+        "max_output_tokens": 32768,
+        "mode": "rerank",
+        "output_cost_per_token": 0.0,
+        "source": "https://cohere.com/blog/rerank-5"
+    },
+    "rerank-v5.0-pro": {
+        "input_cost_per_token": 5e-08,
+        "litellm_provider": "cohere",
+        "max_input_tokens": 32768,
+        "max_output_tokens": 32768,
+        "mode": "rerank",
+        "output_cost_per_token": 0.0,
+        "source": "https://cohere.com/blog/rerank-5"
+    },
     "nvidia_nim/nvidia/nv-rerankqa-mistral-4b-v3": {
         "input_cost_per_query": 0.0,
         "input_cost_per_token": 0.0,
@@ -52692,6 +52742,7 @@
         ],
         "supports_audio_input": true,
         "supports_audio_output": false,
+        "supports_computer_use": true,
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_pdf_input": true,
@@ -72228,6 +72279,7 @@
     },
     "aiand/deepseek-ai/deepseek-v4-flash": {
         "cache_read_input_token_cost": 8e-08,
+        "deprecation_date": "2026-10-27",
         "input_cost_per_token": 1.5e-07,
         "litellm_provider": "aiand",
         "max_input_tokens": 1048576,
@@ -72258,6 +72310,22 @@
     },
     "aiand/deepseek-ai/deepseek-v4.1-flash": {
         "cache_read_input_token_cost": 2e-08,
+        "deprecation_date": "2026-11-05",
+        "input_cost_per_token": 3e-07,
+        "litellm_provider": "aiand",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 384000,
+        "mode": "chat",
+        "output_cost_per_token": 6e-07,
+        "source": "https://api.aiand.com/v1/models",
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "aiand/deepseek-ai/deepseek-v4.1-flash-1017": {
+        "cache_read_input_token_cost": 2e-08,
         "input_cost_per_token": 3e-07,
         "litellm_provider": "aiand",
         "max_input_tokens": 1048576,
@@ -72286,8 +72354,24 @@
         "supports_tool_choice": true,
         "supports_vision": true
     },
+    "aiand/meta/muse-spark-open": {
+        "cache_read_input_token_cost": 1.5e-07,
+        "input_cost_per_token": 1.25e-06,
+        "litellm_provider": "aiand",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 943718,
+        "mode": "chat",
+        "output_cost_per_token": 4.25e-06,
+        "source": "https://api.aiand.com/v1/models",
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
     "aiand/moonshotai/kimi-k2.7-code": {
         "cache_read_input_token_cost": 2e-07,
+        "deprecation_date": "2026-10-27",
         "input_cost_per_token": 7.5e-07,
         "litellm_provider": "aiand",
         "max_input_tokens": 262144,
@@ -72378,6 +72462,7 @@
     },
     "aiand/zai-org/glm-5.2": {
         "cache_read_input_token_cost": 3e-07,
+        "deprecation_date": "2026-10-27",
         "input_cost_per_token": 1e-06,
         "litellm_provider": "aiand",
         "max_input_tokens": 1048576,
@@ -76443,6 +76528,7 @@
         ],
         "supports_audio_input": true,
         "supports_audio_output": false,
+        "supports_computer_use": true,
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_pdf_input": true,
@@ -76488,6 +76574,7 @@
         ],
         "supports_audio_input": true,
         "supports_audio_output": false,
+        "supports_computer_use": true,
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_pdf_input": true,
@@ -76540,6 +76627,7 @@
         ],
         "supports_audio_input": true,
         "supports_audio_output": false,
+        "supports_computer_use": true,
         "supports_function_calling": true,
         "supports_minimal_reasoning_effort": false,
         "supports_native_streaming": true,
@@ -76598,6 +76686,7 @@
             "text"
         ],
         "supports_audio_input": true,
+        "supports_computer_use": true,
         "supports_function_calling": true,
         "supports_minimal_reasoning_effort": false,
         "supports_native_streaming": true,
@@ -81100,5 +81189,61 @@
         "output_cost_per_token": 0.0,
         "source": "https://inference.baseten.co/v1/models",
         "supports_vision": true
+    },
+    "gpt-6-rosalind": {
+        "cache_creation_input_token_cost": 1.875e-05,
+        "cache_creation_input_token_cost_above_12hr": 3.75e-05,
+        "cache_creation_input_token_cost_above_12hr_above_272k_tokens": 7.5e-05,
+        "cache_creation_input_token_cost_above_272k_tokens": 3.75e-05,
+        "cache_read_input_token_cost": 1.5e-06,
+        "cache_read_input_token_cost_above_272k_tokens": 3e-06,
+        "input_cost_per_token": 1.5e-05,
+        "input_cost_per_token_above_272k_tokens": 3e-05,
+        "litellm_provider": "openai",
+        "max_input_tokens": 922000,
+        "max_output_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 7.5e-05,
+        "output_cost_per_token_above_272k_tokens": 0.0001125,
+        "regional_processing_uplift_multiplier_eu": 1.1,
+        "regional_processing_uplift_multiplier_us": 1.1,
+        "source": "https://developers.openai.com/api/docs/pricing",
+        "supports_computer_use": true,
+        "supports_function_calling": true,
+        "supports_max_reasoning_effort": true,
+        "supports_minimal_reasoning_effort": false,
+        "supports_native_streaming": true,
+        "supports_none_reasoning_effort": false,
+        "supports_parallel_function_calling": true,
+        "supports_pdf_input": true,
+        "supports_prompt_cache_breakpoint": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_tool_search": true,
+        "supports_vision": true,
+        "supports_web_search": true,
+        "supports_xhigh_reasoning_effort": true
+    },
+    "chatgpt/gpt-6-rosalind": {
+        "litellm_provider": "chatgpt",
+        "max_input_tokens": 922000,
+        "max_output_tokens": 128000,
+        "mode": "responses",
+        "source": "https://developers.openai.com/api/docs/pricing",
+        "supported_endpoints": [
+            "/v1/responses"
+        ],
+        "supports_function_calling": true,
+        "supports_max_reasoning_effort": true,
+        "supports_minimal_reasoning_effort": false,
+        "supports_none_reasoning_effort": false,
+        "supports_parallel_function_calling": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_vision": true,
+        "supports_xhigh_reasoning_effort": true
     }
 }

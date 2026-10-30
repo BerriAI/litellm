@@ -11,7 +11,7 @@ import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from types import CodeType, FrameType, MappingProxyType
+from types import CodeType, FrameType, MappingProxyType, TracebackType
 from typing import AsyncIterator, Callable, Final, Iterator, Literal, NoReturn, Optional, cast
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
@@ -6292,53 +6292,76 @@ def test_openai_chunk_creator_skips_full_chunk_dump_and_delta_rebuild(
     assert finish_output.choices[0].delta.content is None
 
 
-def _openai_chunk(chunk_id: str, delta: Mapping[str, object]) -> ChatCompletionChunk:
+def _openai_chunk(
+    chunk_id: str,
+    delta: Mapping[str, object],
+    choice_extras: Mapping[str, object] = MappingProxyType({}),
+    finish_reason: str | None = None,
+    chunk_extras: Mapping[str, object] = MappingProxyType({}),
+) -> ChatCompletionChunk:
     return ChatCompletionChunk(
         id=chunk_id,
         created=1,
         model="gpt-4o",
         object="chat.completion.chunk",
-        choices=[{"index": 0, "delta": delta, "finish_reason": None}],
+        choices=[{"index": 0, "delta": delta, "finish_reason": finish_reason, **choice_extras}],
+        **chunk_extras,
     )
 
 
-def _missed_attributes(wrapper: CustomStreamWrapper, chunks: Sequence[ChatCompletionChunk]) -> tuple[str, ...]:
-    attribute_lookup: Final = BaseModel.__getattr__.__code__
-    misses: Final[list[str]] = []
+def _raised_attribute_errors(wrapper: CustomStreamWrapper, chunks: Sequence[ChatCompletionChunk]) -> tuple[str, ...]:
+    raised: Final[list[str]] = []
 
-    def record_miss(frame: FrameType, event: str, arg: object) -> Callable[[FrameType, str, object], object]:
-        if event == "exception" and isinstance(arg, tuple) and isinstance(arg[1], AttributeError):
-            misses.append(str(frame.f_locals["item"]))
-        return record_miss
-
-    def trace_lookups(frame: FrameType, event: str, _arg: object) -> Callable[[FrameType, str, object], object] | None:
-        return record_miss if event == "call" and frame.f_code is attribute_lookup else None
+    def record_raise(frame: FrameType, event: str, arg: object) -> Callable[[FrameType, str, object], object]:
+        if event == "exception" and isinstance(arg, tuple):
+            _, error, traceback = arg
+            if isinstance(error, AttributeError) and isinstance(traceback, TracebackType) and traceback.tb_next is None:
+                raised.append(f"{frame.f_code.co_qualname}: {error}")
+        return record_raise
 
     previous_tracer: Final = sys.gettrace()
-    sys.settrace(trace_lookups)
+    sys.settrace(record_raise)
     try:
         tuple(wrapper.chunk_creator(chunk=chunk) for chunk in chunks)
     finally:
         sys.settrace(previous_tracer)
-    return tuple(misses)
+    return tuple(raised)
 
 
-def test_openai_chunk_creator_builds_one_delta_and_misses_no_attribute_per_later_chunk(
-    logging_obj: Logging,
+_AZURE_CHOICE_EXTRAS: Final = MappingProxyType(
+    {"content_filter_results": {"hate": {"filtered": False, "severity": "safe"}}}
+)
+_OPENAI_AND_AZURE_CHOICE_EXTRAS: Final = (
+    pytest.param("openai", MappingProxyType({}), id="openai"),
+    pytest.param("azure", _AZURE_CHOICE_EXTRAS, id="azure"),
+)
+
+
+@pytest.mark.parametrize(("custom_llm_provider", "choice_extras"), _OPENAI_AND_AZURE_CHOICE_EXTRAS)
+def test_openai_chunk_creator_builds_one_delta_and_raises_no_attribute_error_per_later_chunk(
+    logging_obj: Logging, custom_llm_provider: str, choice_extras: Mapping[str, object]
 ) -> None:
     wrapper: Final = CustomStreamWrapper(
         completion_stream=iter(()),
         model="gpt-4o",
-        custom_llm_provider="openai",
+        custom_llm_provider=custom_llm_provider,
         logging_obj=logging_obj,
     )
-    wrapper.chunk_creator(chunk=_openai_chunk("chunk-1", {"role": "assistant", "content": ""}))
-    plain_chunks: Final = (
-        _openai_chunk("chunk-2", {"content": "hello"}),
-        _openai_chunk("chunk-3", {"content": " world"}),
+
+    def later_chunk(chunk_id: str, delta: Mapping[str, object]) -> ChatCompletionChunk:
+        return _openai_chunk(
+            chunk_id, delta, choice_extras, chunk_extras={"service_tier": "default", "obfuscation": chunk_id}
+        )
+
+    nested_delta: Final = {"content": "!", "reasoning_details": [{"type": "reasoning.text", "text": "thought"}]}
+    first_chunk_of_each_shape: Final = (
+        later_chunk("chunk-1", {"role": "assistant", "content": ""}),
+        later_chunk("chunk-2", nested_delta),
     )
-    nested_chunk: Final = _openai_chunk(
-        "chunk-4", {"content": "!", "reasoning_details": [{"type": "reasoning.text", "text": "thought"}]}
+    tuple(wrapper.chunk_creator(chunk=chunk) for chunk in first_chunk_of_each_shape)
+    plain_chunks: Final = (
+        later_chunk("chunk-3", {"content": "hello"}),
+        later_chunk("chunk-4", {"content": " world"}),
     )
     delta_init: Final = Delta.__init__.__code__
     streaming_choices_init: Final = StreamingChoices.__init__.__code__
@@ -6348,7 +6371,145 @@ def test_openai_chunk_creator_builds_one_delta_and_misses_no_attribute_per_later
     assert sum(call.code is delta_init for call in calls) == len(plain_chunks)
     assert sum(call.code is streaming_choices_init for call in calls) == len(plain_chunks)
     assert [output.choices[0].delta.content if output else None for output in outputs] == ["hello", " world"]
-    assert _missed_attributes(wrapper, (*plain_chunks, nested_chunk)) == ()
+    assert _raised_attribute_errors(wrapper, (*plain_chunks, later_chunk("chunk-5", nested_delta))) == ()
+
+
+_OPENAI_STREAM_JSON: Final = (
+    (
+        '{"id":"chatcmpl-1","created":1,"model":"gpt-4o","object":"chat.completion.chunk",'
+        '"system_fingerprint":null,"choices":[{"finish_reason":null,"index":0,'
+        '"delta":{"provider_specific_fields":null,"refusal":null,"content":"","role":"assistant",'
+        '"function_call":null,"tool_calls":null,"audio":null},"logprobs":null}],'
+        '"provider_specific_fields":null,"citations":null,"service_tier":"default","obfuscation":"o0"}'
+    ),
+    (
+        '{"id":"chatcmpl-1","created":1,"model":"gpt-4o","object":"chat.completion.chunk",'
+        '"system_fingerprint":null,"choices":[{"finish_reason":null,"index":0,'
+        '"delta":{"provider_specific_fields":null,"refusal":null,"content":"one","role":null,'
+        '"function_call":null,"tool_calls":null,"audio":null},"logprobs":null}],'
+        '"provider_specific_fields":null,"citations":null,"service_tier":"default","obfuscation":"o1"}'
+    ),
+    (
+        '{"id":"chatcmpl-1","created":1,"model":"gpt-4o","object":"chat.completion.chunk",'
+        '"system_fingerprint":null,"choices":[{"finish_reason":null,"index":0,'
+        '"delta":{"provider_specific_fields":null,"refusal":null,"content":" two","role":null,'
+        '"function_call":null,"tool_calls":null,"audio":null},"logprobs":null}],'
+        '"provider_specific_fields":null,"citations":null,"service_tier":"default","obfuscation":"o2"}'
+    ),
+    (
+        '{"id":"chatcmpl-1","created":1,"model":"gpt-4o","object":"chat.completion.chunk",'
+        '"system_fingerprint":null,"choices":[{"finish_reason":"stop","index":0,'
+        '"delta":{"provider_specific_fields":null,"content":null,"role":null,"function_call":null,'
+        '"tool_calls":null,"audio":null},"logprobs":null}],"provider_specific_fields":null,'
+        '"service_tier":"default","obfuscation":"o3"}'
+    ),
+    (
+        '{"id":"chatcmpl-1","created":1,"model":"gpt-4o","object":"chat.completion.chunk",'
+        '"system_fingerprint":null,"choices":[],"provider_specific_fields":null,'
+        '"usage":{"completion_tokens":3,"prompt_tokens":9,"total_tokens":12,"completion_tokens_details":null,'
+        '"prompt_tokens_details":null}}'
+    ),
+)
+_AZURE_STREAM_JSON: Final = (
+    (
+        '{"id":"chatcmpl-1","created":1,"model":"gpt-4o","object":"chat.completion.chunk",'
+        '"system_fingerprint":null,"choices":[{"content_filter_results":{"hate":{"filtered":false,'
+        '"severity":"safe"}},"finish_reason":null,"index":0,"delta":{"provider_specific_fields":null,'
+        '"refusal":null,"content":"","role":"assistant","function_call":null,"tool_calls":null,"audio":null},'
+        '"logprobs":null}],"provider_specific_fields":null,"citations":null,"service_tier":"default",'
+        '"obfuscation":"o0"}'
+    ),
+    (
+        '{"id":"chatcmpl-1","created":1,"model":"gpt-4o","object":"chat.completion.chunk",'
+        '"system_fingerprint":null,"choices":[{"content_filter_results":{"hate":{"filtered":false,'
+        '"severity":"safe"}},"finish_reason":null,"index":0,"delta":{"provider_specific_fields":null,'
+        '"refusal":null,"content":"one","role":null,"function_call":null,"tool_calls":null,"audio":null},'
+        '"logprobs":null}],"provider_specific_fields":null,"citations":null,"service_tier":"default",'
+        '"obfuscation":"o1"}'
+    ),
+    (
+        '{"id":"chatcmpl-1","created":1,"model":"gpt-4o","object":"chat.completion.chunk",'
+        '"system_fingerprint":null,"choices":[{"content_filter_results":{"hate":{"filtered":false,'
+        '"severity":"safe"}},"finish_reason":null,"index":0,"delta":{"provider_specific_fields":null,'
+        '"refusal":null,"content":" two","role":null,"function_call":null,"tool_calls":null,"audio":null},'
+        '"logprobs":null}],"provider_specific_fields":null,"citations":null,"service_tier":"default",'
+        '"obfuscation":"o2"}'
+    ),
+    (
+        '{"id":"chatcmpl-1","created":1,"model":"gpt-4o","object":"chat.completion.chunk",'
+        '"system_fingerprint":null,"choices":[{"finish_reason":"stop","index":0,'
+        '"delta":{"provider_specific_fields":null,"content":null,"role":null,"function_call":null,'
+        '"tool_calls":null,"audio":null},"logprobs":null}],"provider_specific_fields":null,'
+        '"service_tier":"default","obfuscation":"o3"}'
+    ),
+    (
+        '{"id":"chatcmpl-1","created":1,"model":"gpt-4o","object":"chat.completion.chunk",'
+        '"system_fingerprint":null,"choices":[],"provider_specific_fields":null,'
+        '"usage":{"completion_tokens":3,"prompt_tokens":9,"total_tokens":12,"completion_tokens_details":null,'
+        '"prompt_tokens_details":null}}'
+    ),
+)
+
+
+@pytest.mark.parametrize(
+    ("custom_llm_provider", "choice_extras", "expected_json"),
+    [
+        pytest.param("openai", MappingProxyType({}), _OPENAI_STREAM_JSON, id="openai"),
+        pytest.param("azure", _AZURE_CHOICE_EXTRAS, _AZURE_STREAM_JSON, id="azure"),
+    ],
+)
+def test_openai_chunk_creator_emits_each_chunk_as_the_same_json(
+    logging_obj: Logging,
+    custom_llm_provider: str,
+    choice_extras: Mapping[str, object],
+    expected_json: tuple[str | None, ...],
+) -> None:
+    wrapper: Final = CustomStreamWrapper(
+        completion_stream=iter(()),
+        model="gpt-4o",
+        custom_llm_provider=custom_llm_provider,
+        logging_obj=logging_obj,
+        stream_options={"include_usage": True},
+    )
+    chunks: Final = (
+        _openai_chunk(
+            "chatcmpl-1",
+            {"role": "assistant", "content": ""},
+            choice_extras,
+            chunk_extras={"service_tier": "default", "obfuscation": "o0"},
+        ),
+        _openai_chunk(
+            "chatcmpl-1",
+            {"content": "one"},
+            choice_extras,
+            chunk_extras={"service_tier": "default", "obfuscation": "o1"},
+        ),
+        _openai_chunk(
+            "chatcmpl-1",
+            {"content": " two"},
+            choice_extras,
+            chunk_extras={"service_tier": "default", "obfuscation": "o2"},
+        ),
+        _openai_chunk(
+            "chatcmpl-1", {}, choice_extras, "stop", chunk_extras={"service_tier": "default", "obfuscation": "o3"}
+        ),
+        ChatCompletionChunk(
+            id="chatcmpl-1",
+            created=1,
+            model="gpt-4o",
+            object="chat.completion.chunk",
+            choices=[],
+            service_tier="default",
+            obfuscation="o4",
+            usage={"prompt_tokens": 9, "completion_tokens": 3, "total_tokens": 12},
+        ),
+    )
+
+    outputs: Final = tuple(wrapper.chunk_creator(chunk=chunk) for chunk in chunks)
+
+    assert tuple(
+        output.model_copy(update={"created": 1}).model_dump_json() if output else None for output in outputs
+    ) == expected_json
 
 
 def test_chunk_creator_skips_full_dump_of_model_response_stream_chunks(
@@ -6684,6 +6845,37 @@ def test_the_usage_chunk_carries_the_bill_the_builder_priced_for_the_spend_row()
     _stamp_usage_cost(usage_chunk, complete)
 
     assert usage_chunk.usage is not None and usage_chunk.usage.cost == 0.00032, "the client sees what the row bills"
+
+
+@pytest.mark.parametrize("upstream_cost", [None, 0.001])
+def test_rebuilding_a_priced_stream_bills_the_margin_once(monkeypatch: pytest.MonkeyPatch, upstream_cost: float | None) -> None:
+    from litellm.litellm_core_utils.core_helpers import stamp_litellm_bill_on_usage
+    from litellm.litellm_core_utils.streaming_handler import (
+        _stamp_usage_cost,  # pyright: ignore[reportPrivateUsage]  # the helper under test
+    )
+
+    monkeypatch.setattr(litellm, "cost_margin_config", {"global": 0.5})
+    model: Final = "anthropic/claude-sonnet-4-5"
+    shared_usage: Final = Usage(prompt_tokens=9, completion_tokens=16, total_tokens=25)
+    if upstream_cost is not None:
+        setattr(shared_usage, "cost", upstream_cost)
+    reference: Final = ModelResponse(model=model, usage=shared_usage.model_copy())
+    billed_once: Final = litellm.completion_cost(reference, custom_llm_provider="anthropic")
+    complete: Final = ModelResponse(model=model, usage=shared_usage)
+    stamp_litellm_bill_on_usage(complete, shared_usage, billed_once)
+    text_chunk: Final = ModelResponseStream(
+        id="chunk-1", model=model, choices=[StreamingChoices(index=0, delta=Delta(content="hi"), finish_reason="stop")]
+    )
+    usage_chunk: Final = ModelResponseStream(id="chunk-1", model=model, choices=[], usage=shared_usage)
+
+    _stamp_usage_cost(usage_chunk, complete)
+    rebuilt: Final = litellm.stream_chunk_builder([text_chunk, usage_chunk], messages=[{"role": "user", "content": "hi"}])
+
+    assert rebuilt is not None and rebuilt.usage is not None  # pyright: ignore[reportAttributeAccessIssue]  # ModelResponse carries usage at runtime
+    assert usage_chunk.usage is not None and usage_chunk.usage.cost == pytest.approx(billed_once)
+    assert litellm.completion_cost(rebuilt, custom_llm_provider="anthropic") == pytest.approx(billed_once), (
+        "pricing the rebuilt stream must not margin litellm's own bill again"
+    )
 
 
 def test_chunk_creator_keeps_provider_model_private_across_stream():

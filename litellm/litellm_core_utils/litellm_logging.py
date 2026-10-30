@@ -76,6 +76,7 @@ from litellm.litellm_core_utils.classifier_logging import (
     is_classifier_call,
 )
 from litellm.litellm_core_utils.core_helpers import (
+    finite_cost,
     get_provider_response_headers_from_hidden_params,
     is_expected_client_error,
     native_messages_reported_cost,
@@ -84,6 +85,7 @@ from litellm.litellm_core_utils.core_helpers import (
     proxy_stamped_used_client_oauth_token,
     reconstruct_model_name,
     set_response_cost_in_hidden_params,
+    single_log_line,
 )
 from litellm.litellm_core_utils.error_normalization import normalize_error
 from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
@@ -567,6 +569,7 @@ def _resolve_mantle_region_for_cost(
 
 _PER_CALL_LITELLM_PARAM_DICTS: Final = frozenset({"metadata", "litellm_metadata"})
 _LITELLM_PARAMS: Final = TypeAdapter(dict[str, object])
+_SERVED_ANTHROPIC_BODY: Final = TypeAdapter(dict[str, object])
 _REDACTED_RESULT: Final = TypeAdapter(object)
 _GUARDRAIL_INFORMATION_KEY: Final = "standard_logging_guardrail_information"
 
@@ -2093,7 +2096,7 @@ class Logging(LiteLLMLoggingBaseClass):
                     litellm_model_name=litellm_model_name,
                     router_model_id=router_model_id or hidden_params.get("model_id"),
                 )
-                return hidden_params["response_cost"]
+                return self._recorded_response_cost(hidden_params["response_cost"])
             elif router_model_id is None and "model_id" in hidden_params:  # use model_id if not already set
                 router_model_id = hidden_params["model_id"]
 
@@ -2193,7 +2196,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 litellm_model_name=litellm_model_name,
                 router_model_id=router_model_id,
             )
-            return total_response_cost
+            return self._recorded_response_cost(total_response_cost)
         except Exception as e:  # error calculating cost
             debug_info = StandardLoggingModelCostFailureDebugInformation(
                 error_str=str(e),
@@ -2218,6 +2221,15 @@ class Logging(LiteLLMLoggingBaseClass):
         return None
 
     _response_cost_calculator = response_cost_calculator
+
+    def _recorded_response_cost(self, cost: float | None) -> float | None:
+        if cost is None or finite_cost(cost) is not None:
+            return cost
+        verbose_logger.warning(
+            "Recording a non-finite response_cost as 0 for litellm_call_id=%s", single_log_line(self.litellm_call_id)
+        )
+        self.cost_breakdown = None
+        return 0.0
 
     def uncached_price(self, result: object) -> UncachedPrice:
         previous_cost_breakdown: Final = self.cost_breakdown
@@ -5056,13 +5068,15 @@ class Logging(LiteLLMLoggingBaseClass):
             verbose_logger.warning("LiteLLM: the anthropic_messages stream assembled no response, logging an empty one")
             return litellm.ModelResponse(model=self.model)
         else:
-            from litellm.types.llms.anthropic import AnthropicResponse
-
-            pydantic_result: Final = AnthropicResponse.model_validate({"stop_sequence": None, **(served_body or {})})
-            import httpx
-
+            anthropic_body: Final = (
+                served_body
+                if served_body is not None
+                else _SERVED_ANTHROPIC_BODY.validate_python(
+                    result.model_dump() if isinstance(result, BaseModel) else result
+                )
+            )
             result = litellm.AnthropicConfig().transform_parsed_response(
-                completion_response=pydantic_result.model_dump(),
+                completion_response={"stop_sequence": None, **anthropic_body},
                 raw_response=httpx.Response(
                     status_code=200,
                     headers={},
@@ -7582,7 +7596,15 @@ def get_standard_logging_object_payload(
         )
         custom_pricing: Final = False if spilled_over else logging_obj.custom_pricing_for(init_response_obj)
         raw_response_cost: Final = kwargs.get("response_cost")
-        llm_response_cost: Final[float] = raw_response_cost or 0.0
+        numeric_response_cost: Final = raw_response_cost if isinstance(raw_response_cost, int | float) else None
+        priced_response_cost: Final = finite_cost(numeric_response_cost)
+        if numeric_response_cost is not None and priced_response_cost is None:
+            verbose_logger.warning(
+                "Logging a non-finite response_cost=%s as 0 for litellm_call_id=%s",
+                numeric_response_cost,
+                single_log_line(logging_obj.litellm_call_id),
+            )
+        llm_response_cost: Final[float] = priced_response_cost or 0.0
         guardrail_cost: Final = guardrail_information_cost(metadata.get("standard_logging_guardrail_information"))
         finalized_cost: Final = _finalized_cost_of(logging_obj)
         response_cost: Final[float] = (
