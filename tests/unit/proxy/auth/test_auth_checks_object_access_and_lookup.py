@@ -5884,7 +5884,7 @@ async def test_team_member_budget_check_reads_from_spend_counter():
 
 
 class TestGuardrailModificationCheck:
-    """Defense-in-depth: `_guardrail_modification_check` must 403 when the
+    """Defense-in-depth: `guardrail_modification_check` must 403 when the
     caller's metadata attempts to modify any guardrail-related key and the
     team lacks the `modify_guardrails` permission. Checks both the
     historically-covered `guardrails` list and the bypass toggles that
@@ -5892,11 +5892,11 @@ class TestGuardrailModificationCheck:
     """
 
     def _call(self, request_body):
-        from litellm.proxy.auth.auth_checks import _guardrail_modification_check
+        from litellm.proxy.auth.auth_checks import guardrail_modification_check
 
         team_object = MagicMock()
         team_object.metadata = {}  # no permission
-        return _guardrail_modification_check(request_body=request_body, team_object=team_object)
+        return guardrail_modification_check(request_body=request_body, team_object=team_object)
 
     def test_noop_when_no_guardrail_keys_present(self):
         # no-op — should return silently

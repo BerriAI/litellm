@@ -147,6 +147,7 @@ from litellm.exceptions import (
 from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     ModifyResponseException,
+    merged_guardrail_entries,
 )
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.prometheus import PrometheusLogger
@@ -3506,6 +3507,7 @@ class ProxyLogging:
         data: dict,
         user_api_key_dict: UserAPIKeyAuth | None,
         call_type: CallTypesLiteral,
+        guardrails_only: bool = False,
     ):
         caps: Final = ProxyLogging.callback_capabilities()
         if not caps.has_guardrail and not caps.has_moderation_override:
@@ -3517,6 +3519,7 @@ class ProxyLogging:
             if (
                 isinstance(callback, CustomLogger)
                 and not isinstance(callback, CustomGuardrail)
+                and (not guardrails_only or callback.enforces_request_content)
                 and _overrides_moderation_hook(callback)
                 and user_api_key_dict is not None
             ):
@@ -9100,8 +9103,7 @@ def _merge_guardrails_with_existing(data: dict, model_level_guardrails: object) 
     if not isinstance(model_level_guardrails, list):
         model_level_guardrails = [model_level_guardrails] if model_level_guardrails else []
 
-    # Combine existing and model-level guardrails
-    metadata["guardrails"] = list(set(existing_guardrails + model_level_guardrails))
+    metadata["guardrails"] = merged_guardrail_entries(existing_guardrails, model_level_guardrails)
     return modified_data
 
 
