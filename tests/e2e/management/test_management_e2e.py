@@ -882,7 +882,7 @@ class TestModelRoutes:
         model_id = client.proxy.create_model(
             model_name,
             LiteLLMParamsBody(
-                model="gpt-4o-mini",
+                model="gpt-5.6-luna",
                 mock_response="ok",
                 input_cost_per_token=_INITIAL_INPUT_COST,
             ),
@@ -898,7 +898,7 @@ class TestModelRoutes:
 
         client.proxy.update_model(
             model_id,
-            LiteLLMParamsBody(model="gpt-4o-mini", input_cost_per_token=_UPDATED_INPUT_COST),
+            LiteLLMParamsBody(model="gpt-5.6-luna", input_cost_per_token=_UPDATED_INPUT_COST),
         )
 
         def updated() -> ModelInfoEntry | None:

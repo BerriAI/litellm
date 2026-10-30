@@ -59,7 +59,7 @@ test("project creation and explicit detachment preserve saved scope and restore 
       const model = await post("/model/new", {
         model_name: alias,
         litellm_params: {
-          model: "openai/gpt-4o-mini",
+          model: "openai/gpt-5.6-luna",
           api_key: "synthetic-provider-key",
           api_base: `${process.env.INTEGRATION_UPSTREAM_URL}/v1`,
         },

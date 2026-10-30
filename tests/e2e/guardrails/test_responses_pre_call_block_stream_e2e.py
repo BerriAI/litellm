@@ -14,7 +14,7 @@ from pydantic import BaseModel, TypeAdapter
 
 pytestmark = pytest.mark.e2e
 
-BACKEND_MODEL: Final = "openai/gpt-4.1-mini"
+BACKEND_MODEL: Final = "openai/gpt-5.6-luna"
 
 DENIAL: Final = "This model is not currently available. Please contact support if you think this is a mistake."
 

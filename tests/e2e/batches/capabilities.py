@@ -21,7 +21,7 @@ def batch_model_name(base: str) -> str:
     return f"{base}-{_BATCH_RUN}"
 
 
-OPENAI_BATCH_BACKEND: Final = "gpt-4o-mini"
+OPENAI_BATCH_BACKEND: Final = "gpt-5.6-luna"
 AZURE_BATCH_BACKEND: Final = "gpt-5.4-mini-batch"
 VERTEX_BATCH_BACKEND: Final = "gemini-2.5-flash"
 BEDROCK_BATCH_BACKEND: Final = "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0"

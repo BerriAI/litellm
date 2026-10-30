@@ -6,7 +6,7 @@
 //
 // Usage:
 //
-//	litellm --model gpt-4o
+//	litellm --model gpt-5.6
 //	go run ./tools
 package main
 
@@ -34,7 +34,7 @@ func main() {
 	}
 
 	model := openai.NewLiteLLM(proxyURL,
-		openai.WithModel("gpt-4o"),
+		openai.WithModel("gpt-5.6"),
 	)
 
 	// Define a type-safe tool. The function signature enforces correct types.

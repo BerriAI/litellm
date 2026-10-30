@@ -5,9 +5,9 @@ litellm_settings:
   drop_params: true
 
 model_list:
-  - model_name: openai-gpt-4o-mini
+  - model_name: openai-gpt-5.6-luna
     litellm_params:
-      model: gpt-4o-mini
+      model: gpt-5.6-luna
   - model_name: anthropic-claude-haiku-4-5
     litellm_params:
       model: anthropic/claude-haiku-4-5

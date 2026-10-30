@@ -20,7 +20,7 @@ from models import ChatResponse, GuardrailInformationEntry
 
 pytestmark = pytest.mark.e2e
 
-BACKEND_MODEL: Final = "openai/gpt-4.1-mini"
+BACKEND_MODEL: Final = "openai/gpt-5.6-luna"
 
 GUARDRAIL_PROPAGATION_DEADLINE_SECONDS: Final = 40.0
 GUARDRAIL_PROPAGATION_POLL_INTERVAL_SECONDS: Final = 5.0

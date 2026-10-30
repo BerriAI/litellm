@@ -332,7 +332,7 @@ class TestCostEstimate:
                 "/cost/estimate",
                 headers=client.proxy.transport.master,
                 json=CostEstimateBody(
-                    model="gpt-4o-mini", input_tokens=1000, output_tokens=500, num_requests_per_day=100
+                    model="gpt-5.6-luna", input_tokens=1000, output_tokens=500, num_requests_per_day=100
                 ),
                 response_type=CostEstimateResponse,
             )
@@ -365,7 +365,7 @@ class TestComplianceRoutes:
                 json=ComplianceGdprBody(
                     request_id=f"e2e-gdpr-{unique_marker()}",
                     user_id=f"e2e-user-{unique_marker()}",
-                    model="gpt-4o-mini",
+                    model="gpt-5.6-luna",
                     timestamp="2026-07-21T00:00:00Z",
                 ),
                 response_type=ComplianceResponse,

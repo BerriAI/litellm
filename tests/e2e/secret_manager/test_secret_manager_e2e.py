@@ -17,7 +17,7 @@ from e2e_metadata import Domain, Mode, Provider, Subject, meta
 
 pytestmark = [pytest.mark.e2e, pytest.mark.secret_manager]
 
-BACKEND_MODEL: Final = "openai/gpt-4o-mini"
+BACKEND_MODEL: Final = "openai/gpt-5.6-luna"
 VIRTUAL_KEY_PREFIX: Final = "litellm-e2e/virtual-keys/"
 PROVIDER_KEY_ENV: Final = "OPENAI_API_KEY"
 

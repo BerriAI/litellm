@@ -21,7 +21,7 @@ pytestmark = pytest.mark.e2e
 
 GEMINI_BACKEND: Final = "gemini/gemini-2.5-flash"
 ANTHROPIC_BACKEND: Final = "anthropic/claude-haiku-4-5"
-OPENAI_BACKEND: Final = "openai/gpt-4o-mini"
+OPENAI_BACKEND: Final = "openai/gpt-5.6-luna"
 
 CATEGORY_PROMPTS: tuple[tuple[str, str], ...] = (
     (

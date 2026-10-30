@@ -2,7 +2,7 @@
 //
 // Usage:
 //
-//	litellm --model gpt-4o   # start proxy in another terminal
+//	litellm --model gpt-5.6  # start proxy in another terminal
 //	go run ./basic
 package main
 
@@ -25,7 +25,7 @@ func main() {
 	// Connect to LiteLLM proxy. NewLiteLLM creates an OpenAI-compatible
 	// provider pointed at the given URL.
 	model := openai.NewLiteLLM(proxyURL,
-		openai.WithModel("gpt-4o"), // any model name configured in LiteLLM
+		openai.WithModel("gpt-5.6"), // any model name configured in LiteLLM
 	)
 
 	// Create and run a simple agent.

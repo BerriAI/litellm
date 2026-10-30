@@ -210,9 +210,9 @@ model_list:
       api_key: os.environ/OPENAI_API_KEY
       api_base: https://api.openai.com/v1
 
-  - model_name: gpt-4o
+  - model_name: gpt-5.6
     litellm_params:
-      model: openai/gpt-4o
+      model: openai/gpt-5.6
       api_key: os.environ/OPENAI_API_KEY
       api_base: https://api.openai.com/v1
 

@@ -27,9 +27,9 @@ model_list:
   # ---- Underlying deployments the router picks from ---------------------
   - model_name: fast
     litellm_params:
-      model: openai/gpt-4o-mini
+      model: openai/gpt-5.6-luna
       api_key: os.environ/OPENAI_API_KEY
-      input_cost_per_token: 0.00000015
+      input_cost_per_token: 0.0000002
     model_info:
       adaptive_router_preferences:
         quality_tier: 2
@@ -37,9 +37,9 @@ model_list:
 
   - model_name: smart
     litellm_params:
-      model: openai/gpt-4o
+      model: openai/gpt-5.6
       api_key: os.environ/OPENAI_API_KEY
-      input_cost_per_token: 0.0000050
+      input_cost_per_token: 0.000004
     model_info:
       adaptive_router_preferences:
         quality_tier: 3

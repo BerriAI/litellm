@@ -133,7 +133,6 @@ def _streamed_tool_call(events: list[str]) -> tuple[str, str]:
 
 _FIXTURES_DIR: Final = Path(__file__).parent / "fixtures"
 CAT_IMAGE: Final = _FIXTURES_DIR / "cat.jpg"
-OPENAI_VISION_BACKEND = "openai/gpt-4o"
 
 
 def _cat_image_data_url() -> str:
@@ -1034,7 +1033,7 @@ class TestOpenAIChatCompletions:
             domain=Domain.LLM_TRANSLATION,
             route=Route.CHAT_COMPLETIONS,
             providers=(Provider.OPENAI,),
-            models=(OPENAI_VISION_BACKEND,),
+            models=(OPENAI_BACKEND,),
             capabilities=(Capability.VISION,),
             mode=Mode.NONSTREAM,
         )
@@ -1044,7 +1043,7 @@ class TestOpenAIChatCompletions:
     ) -> None:
         model = f"e2e-openai-vision-{unique_marker()}"
         model_id = client.proxy.create_model(
-            model, LiteLLMParamsBody(model=OPENAI_VISION_BACKEND, api_key="os.environ/OPENAI_API_KEY")
+            model, LiteLLMParamsBody(model=OPENAI_BACKEND, api_key="os.environ/OPENAI_API_KEY")
         )
         resources.defer(lambda: client.proxy.delete_model(model_id))
         key = resources.key()

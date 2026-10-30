@@ -52,8 +52,8 @@ class _OptionalResponsesBody(BaseModel):
     max_output_tokens: int | None = None
 
 
-OPENAI_MINI_BACKEND: Final = "openai/gpt-4o-mini"
-OPENAI_VISION_BACKEND: Final = "openai/gpt-4o"
+OPENAI_MINI_BACKEND: Final = "openai/gpt-5.6-luna"
+OPENAI_VISION_BACKEND: Final = "openai/gpt-5.6"
 ANTHROPIC_BACKEND: Final = "anthropic/claude-haiku-4-5"
 BEDROCK_CONVERSE_BACKEND: Final = "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0"
 VERTEX_BACKEND: Final = "vertex_ai/gemini-2.5-flash"
@@ -413,7 +413,7 @@ class TestResponses:
         )
         row = next((logged_row for logged_row in rows if (logged_row.spend or 0) > 0), None)
         assert row is not None, f"no costed spend row for response id {response.id}"
-        assert "gpt-4o-mini" in (row.model or ""), f"unexpected spend row model: {row.model}"
+        assert OPENAI_MINI_BACKEND.removeprefix("openai/") in (row.model or ""), f"unexpected spend row model: {row.model}"
 
     @pytest.mark.covers("llm.responses.openai.tool_use.nonstream.works")
     @meta(

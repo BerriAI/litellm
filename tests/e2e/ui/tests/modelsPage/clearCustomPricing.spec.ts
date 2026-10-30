@@ -34,7 +34,7 @@ test.describe("Clear custom pricing on a deployment", () => {
       data: {
         model_name: modelName,
         litellm_params: {
-          model: "openai/gpt-4o",
+          model: "openai/gpt-5.6",
           api_key: "sk-e2e-not-used",
           input_cost_per_token: SEED_INPUT_PER_TOKEN,
           output_cost_per_token: SEED_OUTPUT_PER_TOKEN,

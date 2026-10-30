@@ -5,7 +5,7 @@
 //
 // Usage:
 //
-//	litellm --model gpt-4o
+//	litellm --model gpt-5.6
 //	go run ./streaming
 package main
 
@@ -26,7 +26,7 @@ func main() {
 	}
 
 	model := openai.NewLiteLLM(proxyURL,
-		openai.WithModel("gpt-4o"),
+		openai.WithModel("gpt-5.6"),
 	)
 
 	agent := core.NewAgent[string](model)

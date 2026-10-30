@@ -45,7 +45,7 @@ from transport import Transport
 
 pytestmark = pytest.mark.e2e
 
-BACKING_MODEL: Final = "gpt-4o-mini"
+BACKING_MODEL: Final = "gpt-5.6-luna"
 DENIED_MODEL: Final = "gpt-5.5"
 MAX_BUDGET: Final = 25.0
 TPM_LIMIT: Final = 313131

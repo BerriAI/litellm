@@ -8,7 +8,7 @@ A working example showing how to use [gollem](https://github.com/fugue-labs/goll
 
 ```bash
 # Simple start with a single model
-litellm --model gpt-4o
+litellm --model gpt-5.6
 
 # Or with the example config for multi-provider access
 litellm --config proxy_config.yaml
@@ -36,7 +36,7 @@ The included `proxy_config.yaml` sets up three providers through LiteLLM:
 
 ```yaml
 model_list:
-  - model_name: gpt-4o          # OpenAI
+  - model_name: gpt-5.6         # OpenAI
   - model_name: claude-sonnet    # Anthropic
   - model_name: gemini-pro       # Google Vertex AI
 ```
@@ -45,7 +45,7 @@ Switch providers in Go by changing a single string — no code changes needed:
 
 ```go
 model := openai.NewLiteLLM("http://localhost:4000",
-    openai.WithModel("gpt-4o"),        // OpenAI
+    openai.WithModel("gpt-5.6"),       // OpenAI
     // openai.WithModel("claude-sonnet"),  // Anthropic
     // openai.WithModel("gemini-pro"),     // Google
 )
@@ -100,7 +100,7 @@ export LITELLM_PROXY_URL="http://localhost:4000"
 ## Troubleshooting
 
 **Connection errors?**
-- Make sure LiteLLM is running: `litellm --model gpt-4o`
+- Make sure LiteLLM is running: `litellm --model gpt-5.6`
 - Check the URL is correct (default: `http://localhost:4000`)
 
 **Model not found?**

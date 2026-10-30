@@ -181,14 +181,14 @@ class AccessControlClient:
             time.sleep(self.proxy.poll_interval)
         raise AssertionError(f"/team/info never resolved team {team_id!r} created by /team/new")
 
-    @step("Add a deployment named {model_name} that calls openai/gpt-4o-mini with the given key")
+    @step("Add a deployment named {model_name} that calls openai/gpt-5.6-luna with the given key")
     def create_model_status(self, key: str, model_name: str) -> StreamingResponse:
         return self.proxy.transport.send(
             "/model/new",
             headers=self.proxy.transport.bearer(key),
             json=ModelNewBody(
                 model_name=model_name,
-                litellm_params=LiteLLMParamsBody(model="openai/gpt-4o-mini"),
+                litellm_params=LiteLLMParamsBody(model="openai/gpt-5.6-luna"),
                 model_info=ModelInfoBody(id=model_name),
             ),
         )
