@@ -2203,6 +2203,9 @@ async def _key_team_object(user_api_key_dict: UserAPIKeyAuth) -> LiteLLM_TeamTab
     team_id: Final = user_api_key_dict.team_id
     if team_id is None or team_id == UI_TEAM_ID:
         return None
+    team_from_key: Final = LiteLLM_TeamTable(team_id=team_id, metadata=user_api_key_dict.team_metadata)
+    if prisma_client is None:
+        return team_from_key
     try:
         return await get_team_object(
             team_id=team_id,
@@ -2212,7 +2215,7 @@ async def _key_team_object(user_api_key_dict: UserAPIKeyAuth) -> LiteLLM_TeamTab
             proxy_logging_obj=proxy_logging_obj,
         )
     except HTTPException:
-        return LiteLLM_TeamTable(team_id=team_id, metadata=user_api_key_dict.team_metadata)
+        return team_from_key
 
 
 def _responses_ws_frame_guard(

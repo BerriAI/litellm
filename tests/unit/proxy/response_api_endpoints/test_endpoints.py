@@ -3067,8 +3067,22 @@ class TestResponsesWSFirstFrameModelAuth:
         [(True, ["hi"]), (False, [])],
         ids=["open", "locked"],
     )
-    async def test_frame_guard_reads_the_key_s_team_metadata_when_the_team_row_is_gone(
-        self, modify_guardrails: bool, picked_inputs: list[str]
+    @pytest.mark.parametrize(
+        "team_lookup",
+        [
+            lambda: patch(
+                "litellm.proxy.response_api_endpoints.endpoints.get_team_object",
+                AsyncMock(side_effect=HTTPException(status_code=404, detail={"error": "Team doesn't exist"})),
+            ),
+            lambda: patch("litellm.proxy.proxy_server.prisma_client", None),
+        ],
+        ids=["team-row-gone", "no-database"],
+    )
+    async def test_frame_guard_reads_the_key_s_team_metadata_when_the_team_cannot_be_loaded(
+        self,
+        modify_guardrails: bool,
+        picked_inputs: list[str],
+        team_lookup: Callable[[], contextlib.AbstractContextManager[object]],
     ):
         from litellm.proxy.response_api_endpoints.endpoints import _responses_ws_frame_guard
 
@@ -3080,13 +3094,7 @@ class TestResponsesWSFirstFrameModelAuth:
         )
         frame = json.dumps({"type": "response.create", "input": "hi", "guardrails": ["frame-pick"]})
 
-        with (
-            _guardrails_on(frame_pick) as proxy_logging_obj,
-            patch(
-                "litellm.proxy.response_api_endpoints.endpoints.get_team_object",
-                AsyncMock(side_effect=HTTPException(status_code=404, detail={"error": "Team doesn't exist"})),
-            ),
-        ):
+        with _guardrails_on(frame_pick) as proxy_logging_obj, team_lookup():
             guard = _responses_ws_frame_guard(
                 {"model": "gpt-4o-mini", "litellm_metadata": {}}, key, proxy_logging_obj, MagicMock()
             )
