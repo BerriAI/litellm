@@ -9,6 +9,7 @@ save endpoint so the two can never drift.
 
 from collections.abc import Mapping
 from dataclasses import dataclass
+from types import MappingProxyType
 from typing import Final
 
 from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper
@@ -97,3 +98,15 @@ def resolve_sso_config(sso_db_settings: Mapping[str, object] | None, env: Mappin
     }
     config: Final = SSOConfig(**{**values, **structured})
     return ResolvedSSOConfig(config=config, provenance=provenance)
+
+
+_SSO_SECRET_DESCRIPTORS: Final = tuple(d for d in SSO_DESCRIPTORS if d.is_secret)
+
+
+def resolve_sso_secrets(sso_db_settings: Mapping[str, object] | None, env: Mapping[str, str]) -> Mapping[str, str]:
+    """Effective client secrets (stored row, then env), decrypted. Reads only the secret keys so a
+    malformed role or team mapping on the row cannot block a settings update."""
+    raw: Final = dict(sso_db_settings) if sso_db_settings else {}
+    stored: Final = _decrypt({d.db_key: raw[d.db_key] for d in _SSO_SECRET_DESCRIPTORS if d.db_key in raw})
+    values, _ = resolve_fields(_SSO_SECRET_DESCRIPTORS, stored, env)
+    return MappingProxyType({name: value for name, value in values.items() if value})

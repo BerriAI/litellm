@@ -389,6 +389,15 @@ describe("SSOModals", () => {
         generic_authorization_endpoint: "https://example.okta.com/authorize",
         generic_token_endpoint: "https://example.okta.com/token",
         generic_userinfo_endpoint: "https://example.okta.com/userinfo",
+        google_client_id: null,
+        google_client_secret: null,
+        microsoft_client_id: null,
+        microsoft_client_secret: null,
+        microsoft_tenant: null,
+        saml_idp_metadata_url: null,
+        saml_idp_metadata_xml: null,
+        saml_sp_entity_id: null,
+        saml_allow_unsolicited: null,
         role_mappings: {
           provider: "generic",
           group_claim: "groups",
@@ -535,6 +544,8 @@ describe("SSOModals", () => {
         user_email: null,
         sso_provider: null,
         role_mappings: null,
+        team_mappings: null,
+        ui_access_mode: null,
       });
     });
 

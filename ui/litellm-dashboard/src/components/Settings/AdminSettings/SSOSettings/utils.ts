@@ -58,6 +58,8 @@ export const processSSOSettingsPayload = (formValues: Record<string, any>): Reco
         internal_user_viewer: splitTeams(internal_viewer_teams),
       },
     };
+  } else if (!supportsRoleMappings || "use_role_mappings" in formValues) {
+    payload.role_mappings = null;
   }
 
   // Add team mappings only if use_team_mappings is checked AND provider supports team mappings
@@ -66,6 +68,8 @@ export const processSSOSettingsPayload = (formValues: Record<string, any>): Reco
     payload.team_mappings = {
       team_ids_jwt_field: team_ids_jwt_field,
     };
+  } else if (!supportsTeamMappings || "use_team_mappings" in formValues) {
+    payload.team_mappings = null;
   }
 
   return payload;

@@ -4,6 +4,7 @@ import { renderWithProviders } from "../../../../../../tests/test-utils";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import BaseSSOSettingsForm, {
   emptySSOSettingsFormValues,
+  pickMountedSSOValues,
   renderProviderFields,
   ssoProviderConfigs,
   submitMountedSSOValues,
@@ -434,5 +435,29 @@ describe("renderProviderFields", () => {
     });
 
     expect(await screen.findByLabelText("Default Role")).toHaveTextContent("Internal User");
+  });
+});
+
+describe("pickMountedSSOValues", () => {
+  it("nulls the previous provider's fields after a provider switch so the save clears them", () => {
+    const picked = pickMountedSSOValues(
+      {
+        sso_provider: "microsoft",
+        google_client_id: "old-google-id",
+        google_client_secret: "old-google-secret",
+        microsoft_client_id: "new-microsoft-id",
+        user_email: "admin@example.com",
+      },
+      "sso-settings",
+    );
+
+    expect(picked).toMatchObject({
+      sso_provider: "microsoft",
+      microsoft_client_id: "new-microsoft-id",
+      google_client_id: null,
+      google_client_secret: null,
+      generic_client_id: null,
+      saml_idp_metadata_url: null,
+    });
   });
 });

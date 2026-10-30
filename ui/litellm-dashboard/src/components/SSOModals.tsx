@@ -224,6 +224,8 @@ const SSOModals: React.FC<SSOModalsProps> = ({
         user_email: null,
         sso_provider: null,
         role_mappings: null,
+        team_mappings: null,
+        ui_access_mode: null,
       };
 
       await updateSSOSettings(accessToken, clearSettings);

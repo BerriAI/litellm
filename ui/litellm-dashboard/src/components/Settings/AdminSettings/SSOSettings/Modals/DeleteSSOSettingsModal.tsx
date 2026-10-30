@@ -38,6 +38,7 @@ const DeleteSSOSettingsModal: React.FC<DeleteSSOSettingsModalProps> = ({ isVisib
       sso_provider: null,
       role_mappings: null,
       team_mappings: null,
+      ui_access_mode: null,
     };
 
     await editSSOSettings(clearSettings, {

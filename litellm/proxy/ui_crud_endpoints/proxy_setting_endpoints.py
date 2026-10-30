@@ -33,8 +33,8 @@ from litellm.proxy.config_resolvers.settings_store import ConfigOwnedKeyError
 from litellm.proxy.config_resolvers.sso import (
     SSO_FIELD_ENV_VARS,
     SSO_SECRET_FIELDS,
-    ResolvedSSOConfig,
     resolve_sso_config,
+    resolve_sso_secrets,
 )
 from litellm.proxy.management_endpoints.team_admin_field_permissions import (
     SUPPORTED_TEAM_ADMIN_PERMISSIONS,
@@ -1238,38 +1238,33 @@ def _stored_sso_settings(record: _StoredSsoSettingsRow | None) -> Mapping[str, J
     if record is None or not record.sso_settings:
         return None
     stored: Final = record.sso_settings
-    decoded: Final = _DECODED_JSON.validate_python(json.loads(stored)) if isinstance(stored, str) else stored
     try:
+        decoded: Final = _DECODED_JSON.validate_python(json.loads(stored)) if isinstance(stored, str) else stored
         return _SSO_SETTINGS_VALUES.validate_python(decoded)
-    except ValidationError:
+    except ValueError:
         return None
 
 
-def _current_sso_value(current: ResolvedSSOConfig, field_name: str, value: JsonValue) -> JsonValue:
-    return None if current.provenance.get(field_name) in ("default", "unset") else value
-
-
-def _merged_sso_field(field_name: str, incoming: JsonValue, current: JsonValue, submitted: bool) -> JsonValue:
-    if not submitted:
-        return current
-    if field_name not in SSO_SECRET_FIELDS or not isinstance(current, str) or not current:
+def _kept_sso_secret(field_name: str, incoming: JsonValue, current_secret: str | None) -> JsonValue:
+    if current_secret is None:
         return incoming
-    if incoming == mask_sensitive_keys({field_name: current}, {field_name})[field_name]:
-        return current
-    return incoming
+    shown_secret: Final = mask_sensitive_keys({field_name: current_secret}, {field_name})[field_name]
+    return current_secret if incoming == shown_secret else incoming
 
 
-def merge_sso_settings_update(sso_config: SSOConfig, current: ResolvedSSOConfig) -> Mapping[str, JsonValue]:
-    """Fields the request omits keep their effective value, and a client secret sent back
-    as the mask /get/sso_settings returned keeps the real secret. An explicit null or empty
-    string still clears a field."""
+def merge_sso_settings_update(
+    sso_config: SSOConfig, stored: Mapping[str, JsonValue], current_secrets: Mapping[str, str]
+) -> Mapping[str, JsonValue]:
+    """Fields the request omits keep their stored value (never an env-only value, so a save does not
+    freeze env into the row), and a client secret sent back as the mask /get/sso_settings returned
+    keeps the real secret. An explicit null or empty string still clears a field."""
     incoming: Final = _SSO_SETTINGS_VALUES.validate_python(sso_config.model_dump(mode="json"))
-    current_values: Final = {
-        name: _current_sso_value(current, name, value)
-        for name, value in _SSO_SETTINGS_VALUES.validate_python(current.config.model_dump(mode="json")).items()
-    }
     return {
-        name: _merged_sso_field(name, value, current_values[name], name in sso_config.model_fields_set)
+        name: (
+            _kept_sso_secret(name, value, current_secrets.get(name))
+            if name in sso_config.model_fields_set
+            else stored.get(name)
+        )
         for name, value in incoming.items()
     }
 
@@ -1335,9 +1330,11 @@ async def update_sso_settings(
         config["general_settings"] = {}
 
     # Update environment variables in config and in memory
-    sso_data: Final = merge_sso_settings_update(sso_config, resolve_sso_config(stored_sso_settings, os.environ))
+    sso_data: Final = merge_sso_settings_update(
+        sso_config, before_sso_data or {}, resolve_sso_secrets(stored_sso_settings, os.environ)
+    )
     for field_name, value in sso_data.items():
-        if field_name in SSO_FIELD_ENV_VARS:
+        if field_name in SSO_FIELD_ENV_VARS and field_name in sso_config.model_fields_set:
             env_var_name = SSO_FIELD_ENV_VARS[field_name]
             if isinstance(value, str) and value:
                 os.environ[env_var_name] = value
