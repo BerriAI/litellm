@@ -1,8 +1,33 @@
-from dataclasses import dataclass
+import time
+from dataclasses import dataclass, field
 from datetime import timedelta
-from typing import Final, Protocol
+from typing import Final, Literal, Protocol, TypeAlias
+
+from pydantic import TypeAdapter, ValidationError
 
 from litellm.redis.transport.contract import EvalReply, RedisFailure, RedisTransport
+
+ScopeKey: TypeAlias = Literal["api_key", "team"]
+ReservationBackend: TypeAlias = Literal["redis", "memory"]
+
+
+@dataclass(frozen=True, slots=True)
+class BatchEnqueuedTokenScope:
+    key: ScopeKey
+    value: str
+    limit: int
+
+
+@dataclass(frozen=True, slots=True)
+class BatchEnqueuedTokenReservation:
+    tokens: int
+    scopes: tuple[BatchEnqueuedTokenScope, ...]
+    backend: ReservationBackend = "redis"
+    owner: str = ""
+    reserved_at_monotonic: float = field(default_factory=time.monotonic, compare=False)
+
+
+RESERVATION_ADAPTER: Final = TypeAdapter(BatchEnqueuedTokenReservation)
 
 _RESERVE: Final = """
 local amount = tonumber(ARGV[1])
@@ -59,12 +84,30 @@ class OverLimit:
 
 @dataclass(frozen=True, slots=True)
 class Popped:
-    document: bytes
+    reservation: BatchEnqueuedTokenReservation
+
+
+@dataclass(frozen=True, slots=True)
+class MalformedRecord:
+    pass
 
 
 @dataclass(frozen=True, slots=True)
 class AlreadyPopped:
     pass
+
+
+def encode_reservation(reservation: BatchEnqueuedTokenReservation) -> str:
+    return RESERVATION_ADAPTER.dump_json(reservation).decode("utf-8")
+
+
+def decode_reservation(raw: object) -> BatchEnqueuedTokenReservation | MalformedRecord:
+    try:
+        if isinstance(raw, (str, bytes)):
+            return RESERVATION_ADAPTER.validate_json(raw)
+        return RESERVATION_ADAPTER.validate_python(raw)
+    except ValidationError:
+        return MalformedRecord()
 
 
 class EnqueuedTokensStore(Protocol):
@@ -74,11 +117,13 @@ class EnqueuedTokensStore(Protocol):
 
     async def refund(self, scope_key: str, scope_value: str, tokens: int) -> None | RedisFailure: ...
 
-    async def save_record(self, batch_id: str, document: str, *, ttl: timedelta) -> None | RedisFailure: ...
+    async def save_record(
+        self, batch_id: str, reservation: BatchEnqueuedTokenReservation, *, ttl: timedelta
+    ) -> None | RedisFailure: ...
 
     async def pop_record(
         self, batch_id: str, *, tombstone_ttl: timedelta
-    ) -> Popped | AlreadyPopped | None | RedisFailure: ...
+    ) -> Popped | AlreadyPopped | MalformedRecord | None | RedisFailure: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -105,13 +150,17 @@ class TransportEnqueuedTokensStore:
         reply: Final = await self.transport.eval(_REFUND, (counter_key(scope_key, scope_value),), (tokens,))
         return reply if isinstance(reply, RedisFailure) else None
 
-    async def save_record(self, batch_id: str, document: str, *, ttl: timedelta) -> None | RedisFailure:
-        reply: Final = await self.transport.eval(_SAVE_RECORD, (record_key(batch_id),), (document, _seconds(ttl)))
+    async def save_record(
+        self, batch_id: str, reservation: BatchEnqueuedTokenReservation, *, ttl: timedelta
+    ) -> None | RedisFailure:
+        reply: Final = await self.transport.eval(
+            _SAVE_RECORD, (record_key(batch_id),), (encode_reservation(reservation), _seconds(ttl))
+        )
         return reply if isinstance(reply, RedisFailure) else None
 
     async def pop_record(
         self, batch_id: str, *, tombstone_ttl: timedelta
-    ) -> Popped | AlreadyPopped | None | RedisFailure:
+    ) -> Popped | AlreadyPopped | MalformedRecord | None | RedisFailure:
         reply: Final = await self.transport.eval(_POP_RECORD, (record_key(batch_id),), (_seconds(tombstone_ttl),))
         match reply:
             case RedisFailure() | None:
@@ -119,7 +168,8 @@ class TransportEnqueuedTokensStore:
             case b"":
                 return AlreadyPopped()
             case bytes():
-                return Popped(reply)
+                decoded: Final = decode_reservation(reply)
+                return decoded if isinstance(decoded, MalformedRecord) else Popped(decoded)
             case _:
                 return _decode_failure("enqueued-token reservation record", reply)
 
