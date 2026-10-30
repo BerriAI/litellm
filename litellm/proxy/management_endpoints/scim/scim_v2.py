@@ -1181,6 +1181,42 @@ async def _handle_team_membership_changes(
         )
 
 
+async def _sync_requested_teams(
+    prisma_client: PrismaClient,
+    user_id: str,
+    record_teams: Sequence[str],
+    requested_teams: Sequence[str],
+) -> tuple[str, ...]:
+    """Write the roster change and return the teams to persist, leaving out groups that have no team row.
+
+    A group the IdP pushed before LiteLLM has a team for it must not hold back the rest of the
+    request, since that same request may be the one that deactivates the user.
+    """
+    changed: Final = frozenset(record_teams) ^ frozenset(requested_teams)
+    if not changed:
+        return tuple(requested_teams)
+
+    rows: Final = await find_many_in(
+        _table(TeamRepository(prisma_client)),
+        "team_id",
+        changed,
+        chunk_size=SCIM_GROUP_MEMBER_LOOKUP_BATCH_SIZE,
+    )
+    teamless: Final = changed - frozenset(team.team_id for team in rows)
+    if teamless:
+        verbose_proxy_logger.warning(
+            "SCIM: ignoring groups with no LiteLLM team for user %s: %s", user_id, sorted(teamless)
+        )
+
+    teams_to_keep: Final = tuple(team for team in requested_teams if team not in teamless)
+    await _handle_team_membership_changes(
+        user_id=user_id,
+        existing_teams=[team for team in record_teams if team not in teamless],
+        new_teams=list(teams_to_keep),
+    )
+    return teams_to_keep
+
+
 SCIM_BLOCKED_METADATA_KEY: Final = "scim_blocked"
 
 
@@ -1957,24 +1993,27 @@ async def update_user(
             if user_data["teams"]
             else existing_user.teams
         )
-        await _handle_team_membership_changes(
+        synced_teams: Final = await _sync_requested_teams(
+            prisma_client=prisma_client,
             user_id=user_id,
-            existing_teams=existing_user.teams,
-            new_teams=target_teams,
+            record_teams=existing_user.teams,
+            requested_teams=target_teams,
         )
 
         update_data: Final = {
             "user_email": user_data["user_email"],
             "user_alias": user_data["user_alias"],
             "sso_user_id": user_data["sso_user_id"],
-            "teams": target_teams,
+            "teams": list(synced_teams),
             "metadata": safe_dumps(metadata),
         }
 
         admin_group: Final = await _get_scim_admin_group()
         if admin_group is not None and user_data["teams"]:
             update_data["user_role"] = _resolve_scim_user_role(
-                user.groups or [], admin_group, _default_scim_user_role()
+                [group for group in user.groups or [] if group.value in synced_teams],
+                admin_group,
+                _default_scim_user_role(),
             )
 
         updated_user: Final = await _table(UserRepository(prisma_client)).update(
@@ -2607,12 +2646,9 @@ def _apply_patch_ops(
 
     record_teams: Final = tuple(existing_user.teams or [])
     group_ops: Final = tuple(op for op in patch_ops.Operations if _is_group_path(op.path))
-    last_replace: Final = next((op for op in reversed(group_ops) if op.op == "replace"), None)
     final_teams: Final = _keep_record_team_order(
         record_teams,
-        _apply_group_operation(record_teams, last_replace)
-        if last_replace is not None
-        else reduce(_apply_group_operation, group_ops, record_teams),
+        reduce(_apply_group_operation, group_ops, record_teams),
     )
     final_metadata: Final = (
         {
@@ -2785,19 +2821,19 @@ async def patch_user(
         patched_metadata: Final = update_data.get("metadata")
         new_active: Final = _scim_active_value(patched_metadata if isinstance(patched_metadata, Mapping) else None)
 
-        # Handle team membership changes
-        await _handle_team_membership_changes(
+        synced_teams: Final = await _sync_requested_teams(
+            prisma_client=prisma_client,
             user_id=user_id,
-            existing_teams=existing_user.teams or [],
-            new_teams=list(final_teams),
+            record_teams=existing_user.teams or [],
+            requested_teams=final_teams,
         )
 
-        update_data["teams"] = list(final_teams)
+        update_data["teams"] = list(synced_teams)
 
         admin_group: Final = await _get_scim_admin_group()
         if admin_group is not None:
             update_data["user_role"] = _resolve_scim_user_role(
-                await _scim_groups_from_team_ids(prisma_client, list(final_teams)),
+                await _scim_groups_from_team_ids(prisma_client, list(synced_teams)),
                 admin_group,
                 _default_scim_user_role(),
             )
