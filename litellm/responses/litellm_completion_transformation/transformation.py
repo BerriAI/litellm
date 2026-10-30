@@ -3479,9 +3479,7 @@ class LiteLLMCompletionResponsesConfig:
                         GenericResponseOutputItem(
                             type="reasoning",
                             id=mint_reasoning_item_id(),
-                            status=LiteLLMCompletionResponsesConfig._map_chat_completion_finish_reason_to_responses_status(
-                                choice.finish_reason
-                            ),
+                            status=LiteLLMCompletionResponsesConfig._responses_status_for_choice(choice),
                             role="assistant",
                             content=[
                                 OutputText(
