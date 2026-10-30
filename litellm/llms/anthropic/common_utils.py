@@ -131,6 +131,21 @@ def is_anthropic_messages_url(url: str) -> bool:
     return parsed_url.hostname == "api.anthropic.com" or parsed_url.path.removesuffix("/").endswith("/v1/messages")
 
 
+def _message_blocks(message: object) -> Sequence[object]:
+    fields: Final = as_str_mapping(message)
+    blocks: Final = validated_object_list(fields.get("content")) if fields is not None else None
+    return blocks or ()
+
+
+def _is_fallback_block(block: object) -> bool:
+    fields: Final = as_str_mapping(block)
+    return fields is not None and fields.get("type") == "fallback"
+
+
+def carries_fallback_block(messages: Sequence[object]) -> bool:
+    return any(map(_is_fallback_block, chain.from_iterable(map(_message_blocks, messages))))
+
+
 def requires_native_compaction_beta(
     custom_llm_provider: str,
     optional_params: Mapping[str, object],
