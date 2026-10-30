@@ -289,10 +289,6 @@ def is_batch_retrieve_call_type(call_type: object) -> bool:
     return isinstance(call_type, str) and call_type in BATCH_RETRIEVE_CALL_TYPES
 
 
-def batch_charged_once_marker_key(spend_key: str, batch_id: str) -> str:
-    return f"{spend_key}:batch:{batch_id}"
-
-
 def batch_id_to_charge_once(call_type: object, response_obj: object, response_cost: float) -> str | None:
     """A finished batch reports its whole cost on every poll, so its id is charged once per counter."""
     if response_cost <= 0 or not is_batch_retrieve_call_type(call_type):

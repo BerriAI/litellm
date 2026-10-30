@@ -2,7 +2,7 @@ import asyncio
 import importlib
 import json
 from io import BytesIO
-from typing import Dict, Final, List
+from typing import Final
 
 import pytest
 
@@ -18,7 +18,7 @@ from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outco
 
 # Fixtures
 @pytest.fixture
-def sample_jsonl_data() -> List[Dict]:
+def sample_jsonl_data() -> list[dict]:
     """Fixture providing sample JSONL data"""
     return [
         {
@@ -101,17 +101,9 @@ def test_file_like_object(sample_file_like):
 def test_router_metadata_variable_name():
     """Test that the variable name is correct"""
     assert get_router_metadata_variable_name(function_name="completion") == "metadata"
-    assert (
-        get_router_metadata_variable_name(function_name="batch") == "litellm_metadata"
-    )
-    assert (
-        get_router_metadata_variable_name(function_name="acreate_file")
-        == "litellm_metadata"
-    )
-    assert (
-        get_router_metadata_variable_name(function_name="aget_file")
-        == "litellm_metadata"
-    )
+    assert get_router_metadata_variable_name(function_name="batch") == "litellm_metadata"
+    assert get_router_metadata_variable_name(function_name="acreate_file") == "litellm_metadata"
+    assert get_router_metadata_variable_name(function_name="aget_file") == "litellm_metadata"
 
 
 def test_non_json_input():
@@ -384,8 +376,13 @@ def setup_and_teardown():
 
 @pytest.mark.parametrize(
     ("call_type", "cost", "eligible"),
-    (("aretrieve_batch", 0.25, True), ("retrieve_batch", 0.25, True), ("acompletion", 0.25, False),
-     ("aretrieve_batch", 0, False), ("aretrieve_batch", -0.25, False)),
+    (
+        ("aretrieve_batch", 0.25, True),
+        ("retrieve_batch", 0.25, True),
+        ("acompletion", 0.25, False),
+        ("aretrieve_batch", 0, False),
+        ("aretrieve_batch", -0.25, False),
+    ),
 )
 def test_batch_charge_identity_requires_a_cost_bearing_retrieval(call_type: str, cost: float, eligible: bool) -> None:
     from openai.types import Batch
@@ -393,8 +390,13 @@ def test_batch_charge_identity_requires_a_cost_bearing_retrieval(call_type: str,
     from litellm.litellm_core_utils.batch_utils import batch_id_to_charge_once
 
     batch: Final = Batch(
-        id="batch-budget", completion_window="24h", created_at=1, endpoint="/v1/chat/completions",
-        input_file_id="file-budget", object="batch", status="completed",
+        id="batch-budget",
+        completion_window="24h",
+        created_at=1,
+        endpoint="/v1/chat/completions",
+        input_file_id="file-budget",
+        object="batch",
+        status="completed",
     )
     assert batch_id_to_charge_once(call_type, batch, cost) == (batch.id if eligible else None)
     assert batch_id_to_charge_once(call_type, {"id": batch.id}, cost) is None
@@ -402,10 +404,10 @@ def test_batch_charge_identity_requires_a_cost_bearing_retrieval(call_type: str,
 
 def test_batch_charge_markers_keep_counters_and_batches_independent() -> None:
     from litellm.caching.in_memory_cache import InMemoryCache
-    from litellm.litellm_core_utils.batch_utils import batch_charged_once_marker_key
+    from litellm.redis.stores.batch_charge_marker import charge_marker_key
 
     cache: Final = InMemoryCache()
-    cache.set_cache(batch_charged_once_marker_key("provider-spend", "first-batch"), 1)
-    assert cache.get_cache(batch_charged_once_marker_key("provider-spend", "first-batch")) == 1
-    assert cache.get_cache(batch_charged_once_marker_key("deployment-spend", "first-batch")) is None
-    assert cache.get_cache(batch_charged_once_marker_key("provider-spend", "second-batch")) is None
+    cache.set_cache(charge_marker_key("provider-spend", "first-batch"), 1)
+    assert cache.get_cache(charge_marker_key("provider-spend", "first-batch")) == 1
+    assert cache.get_cache(charge_marker_key("deployment-spend", "first-batch")) is None
+    assert cache.get_cache(charge_marker_key("provider-spend", "second-batch")) is None

@@ -36,11 +36,17 @@ from litellm._logging import verbose_router_logger
 from litellm.caching.caching import DualCache
 from litellm.caching.redis_cache import RedisCache, RedisPipelineIncrementOperation, log_redis_failure
 from litellm.integrations.custom_logger import CustomLogger, Span
-from litellm.litellm_core_utils.batch_utils import batch_charged_once_marker_key, batch_id_to_charge_once
+from litellm.litellm_core_utils.batch_utils import batch_id_to_charge_once
 from litellm.litellm_core_utils.core_helpers import (
     get_metadata_variable_name_from_kwargs,
 )
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds_from
+from litellm.redis.stores.batch_charge_marker import (
+    BatchChargeMarkerStore,
+    TransportBatchChargeMarkerStore,
+    charge_marker_key,
+)
+from litellm.redis.transport.contract import RedisFailure, raise_redis_failure
 from litellm.router_strategy.tag_based_routing import get_tags_from_request_kwargs
 from litellm.router_utils.cooldown_callbacks import (
     get_prometheus_logger_from_callbacks,
@@ -640,13 +646,15 @@ class RouterBudgetLimiting(CustomLogger):
         verbose_router_logger.debug("Incremented spend for %s by %s", spend_key, response_cost)
 
     async def _claim_batch_charge(self, spend_key: str, batch_id: str, ttl_seconds: int) -> bool:
-        marker_key: Final = batch_charged_once_marker_key(spend_key=spend_key, batch_id=batch_id)
         redis_cache: Final = self.dual_cache.redis_cache
         if redis_cache is not None:
-            polls: Final = await redis_cache.async_increment(key=marker_key, value=1, ttl=ttl_seconds, refresh_ttl=True)
-            return polls == 1
+            store: Final[BatchChargeMarkerStore] = TransportBatchChargeMarkerStore(redis_cache.transport())
+            claimed: Final = await store.claim_batch(spend_key, batch_id, ttl=timedelta(seconds=ttl_seconds))
+            if isinstance(claimed, RedisFailure):
+                raise_redis_failure(claimed)
+            return claimed
         local_polls: Final = await self.dual_cache.in_memory_cache.async_increment(
-            key=marker_key, value=1, ttl=ttl_seconds, refresh_ttl=True
+            key=charge_marker_key(spend_key, batch_id), value=1, ttl=ttl_seconds, refresh_ttl=True
         )
         return local_polls == 1
 

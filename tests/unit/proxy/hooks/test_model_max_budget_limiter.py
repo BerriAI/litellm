@@ -7,11 +7,14 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from types import MappingProxyType, SimpleNamespace
 from typing import Final
+from unittest.mock import patch
 
+import fakeredis
 import pytest
 
 import litellm
 from litellm.caching.caching import DualCache
+from litellm.caching.redis_cache import RedisCache
 from litellm.proxy._types import Litellm_EntityType, UserAPIKeyAuth
 from litellm.proxy.db.db_transaction_queue.window_spend_update_queue import WindowSpendTransaction
 from litellm.proxy.hooks.model_budget_shared_windows import DatabaseSharedWindows, SharedWindows
@@ -27,6 +30,7 @@ from litellm.proxy.hooks.model_max_budget_limiter import (
 from litellm.router import Router
 from litellm.types.caching import RedisPipelineIncrementOperation
 from litellm.types.utils import LiteLLMBatch, Usage
+from tests._support.fake_redis import fake_redis_cache
 
 KEY_HASH: Final = "key-hash-batch"
 USER_ID: Final = "user-batch"
@@ -261,10 +265,8 @@ class _SharedRedisDouble:
         return [await self.async_increment(op["key"], op["increment_value"], ttl=op["ttl"]) for op in increment_list]
 
 
-def _worker(redis: _SharedRedisDouble) -> PROXY_VirtualKeyModelMaxBudgetLimiter:
-    return PROXY_VirtualKeyModelMaxBudgetLimiter(
-        dual_cache=DualCache(redis_cache=redis)  # pyright: ignore[reportArgumentType]  # duck-typed Redis double
-    )
+def _worker(redis: RedisCache, clock: Callable[[], float] = time.time) -> PROXY_VirtualKeyModelMaxBudgetLimiter:
+    return PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=DualCache(redis_cache=redis), clock=clock)
 
 
 async def _drain_redis_pushes() -> None:
@@ -299,7 +301,7 @@ async def test_a_second_batch_and_chat_requests_still_charge_the_budget():
 
 @pytest.mark.asyncio
 async def test_two_workers_polling_the_same_finished_batch_at_once_charge_it_once():
-    redis: Final = _SharedRedisDouble()
+    redis: Final = fake_redis_cache(fakeredis.FakeServer())
     worker_a: Final = _worker(redis)
     worker_b: Final = _worker(redis)
     finished: Final = _batch("batch_first", "completed")
@@ -314,16 +316,18 @@ async def test_two_workers_polling_the_same_finished_batch_at_once_charge_it_onc
 @pytest.mark.asyncio
 async def test_a_batch_polled_within_every_budget_window_is_never_charged_again():
     clock: Final = _Clock()
-    limiter: Final = _worker(_SharedRedisDouble(now=clock.now))
+    limiter: Final = _worker(fake_redis_cache(fakeredis.FakeServer()), clock=clock.now)
     finished: Final = _batch("batch_first", "completed")
 
-    await _poll(limiter, finished, BATCH_COST)
-    clock.advance(12 * 3600)
-    await _poll(limiter, finished, BATCH_COST)
-    clock.advance(18 * 3600)
-    await _poll(limiter, finished, BATCH_COST)
-
-    assert _local_spend(limiter, KEY_SPEND_KEY) == pytest.approx(BATCH_COST)
+    clock.advance(WINDOW_EPOCH)
+    with patch("time.time", clock.now):
+        await _poll(limiter, finished, BATCH_COST)
+        assert _local_spend(limiter, KEY_SPEND_KEY) == pytest.approx(BATCH_COST)
+        clock.advance(12 * 3600)
+        await _poll(limiter, finished, BATCH_COST)
+        clock.advance(18 * 3600)
+        await _poll(limiter, finished, BATCH_COST)
+        assert _local_spend(limiter, KEY_SPEND_KEY) == 0.0
 
 
 OPUS_GROUP: Final = "claude-opus"
@@ -660,9 +664,10 @@ async def test_spend_charged_while_the_database_is_unreachable_reaches_the_share
         shared_windows=database.replica(),
     )
     assert usage["claude-opus*"]["current_spend"] == round(CHAT_COST * 3, 4)
-    assert usage["claude-opus*"]["budget_reset_at"] == datetime.fromtimestamp(
-        WINDOW_EPOCH + 24 * 3600, tz=timezone.utc
-    ).isoformat()
+    assert (
+        usage["claude-opus*"]["budget_reset_at"]
+        == datetime.fromtimestamp(WINDOW_EPOCH + 24 * 3600, tz=timezone.utc).isoformat()
+    )
 
 
 @pytest.mark.asyncio
@@ -715,7 +720,9 @@ def test_an_access_group_named_after_a_served_model_never_widens_that_models_ent
         resolved: Final = resolve_model_budget(
             model="gpt-4o-mini",
             model_max_budget=model_max_budget,
-            model_access_groups=lambda model, team_id: model_access_groups_of(router=router, model=model, team_id=team_id),
+            model_access_groups=lambda model, team_id: model_access_groups_of(
+                router=router, model=model, team_id=team_id
+            ),
         )
         return None if resolved is None else resolved.budget_model
 
