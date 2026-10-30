@@ -25,12 +25,14 @@ from starlette.datastructures import FormData
 import litellm
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.integrations.prometheus import PrometheusLogger
 from tests._master_key import MASTER_KEY as SHARED_MASTER_KEY
 from litellm.caching.caching import DualCache
-from litellm.types.utils import CallTypesLiteral
+from litellm.types.utils import CallTypes, CallTypesLiteral
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException, ModifyResponseException
 from litellm.proxy._types import AwsErrorTypeProxyException, ProxyException
+from litellm.proxy.spend_tracking.spend_tracking_utils import get_spend_logs_id
 from litellm.proxy.utils import ProxyLogging
 from litellm.passthrough.main import raise_for_provider_status
 from litellm.llms.bedrock.common_utils import BedrockError
@@ -6489,6 +6491,55 @@ class TestVertexAILiveWebsocketPassthrough:
         assert "use_in_pass_through" in close_kwargs["reason"]
         assert "default_vertex_config" in close_kwargs["reason"]
         assert len(close_kwargs["reason"].encode("utf-8")) <= 123
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("model, expected_model", [("gemini-3.8-live", "gemini-3.8-live"), (None, "")])
+    async def test_credential_failure_logs_the_named_model_under_vertex_ai(
+        self, monkeypatch: pytest.MonkeyPatch, model: str | None, expected_model: str
+    ):
+        from litellm.proxy.pass_through_endpoints import (
+            llm_passthrough_endpoints as passthrough_module,
+        )
+
+        class _FailureRecorder(CustomLogger):
+            def __init__(self) -> None:
+                super().__init__()
+                self.request_data: tuple[dict[str, object], ...] = ()
+
+            async def async_post_call_failure_hook(
+                self,
+                request_data: dict[str, object],
+                original_exception: Exception,
+                user_api_key_dict: UserAPIKeyAuth,
+                traceback_str: str | None = None,
+            ) -> None:
+                self.request_data = (*self.request_data, request_data)
+
+        recorder: Final = _FailureRecorder()
+        monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None)
+        monkeypatch.setattr(
+            "litellm.proxy.proxy_server.proxy_logging_obj", ProxyLogging(user_api_key_cache=DualCache())
+        )
+        monkeypatch.setattr(litellm, "callbacks", [recorder])
+        monkeypatch.setattr(passthrough_module.passthrough_endpoint_router, "default_vertex_config", None)
+        self._clear_vertex_env(monkeypatch)
+        ensure_token: Final = AsyncMock(side_effect=Exception("Unable to find your credentials"))
+
+        with patch.object(passthrough_module.vertex_llm_base, "ensure_access_token_async", ensure_token):
+            await passthrough_module.vertex_ai_live_websocket_passthrough(
+                websocket=self._websocket(),
+                model=model,
+                user_api_key_dict=UserAPIKeyAuth(),
+            )
+
+        assert [
+            (
+                d["model"],
+                PrometheusLogger._extract_api_provider_from_request_data(d),
+                get_spend_logs_id(CallTypes.pass_through.value, {}, d) is not None,
+            )
+            for d in recorder.request_data
+        ] == [(expected_model, "vertex_ai", True)]
 
 
 class TestAnthropicProxyRoute:
