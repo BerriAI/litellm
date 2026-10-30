@@ -799,7 +799,7 @@ class DeploymentAffinityCheck(CustomLogger):
                     verbose_router_logger.debug(
                         "DeploymentAffinityCheck: set session affinity mapping model_map_key=%s deployment=%s ttl=%s session_id=%s",
                         deployment_model_name,
-                        model_id,
+                        pin_value["model_id"],
                         session_affinity_ttl,
                         session_id,
                     )
@@ -808,7 +808,7 @@ class DeploymentAffinityCheck(CustomLogger):
                         "DeploymentAffinityCheck: session pin already claimed model_map_key=%s existing=%s ours=%s session_id=%s",
                         deployment_model_name,
                         claimed_session_pin,
-                        model_id,
+                        pin_value["model_id"],
                         session_id,
                     )
             except Exception as e:

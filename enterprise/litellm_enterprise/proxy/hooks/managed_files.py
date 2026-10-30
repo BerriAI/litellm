@@ -2266,15 +2266,10 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             """
             ## check if file object
             if hasattr(response, "data") and isinstance(response.data, list):
-                if all(isinstance(file_object, FileObject) for file_object in response.data):
-                    ## Get all file id's
-                    ## Check which file id's were created by the user
-                    ## Filter the response to only include the files created by the user
-                    ## Return the filtered response
-                    file_ids = [
-                        file_object.id
-                        for file_object in cast(list[FileObject], response.data)  # type: ignore
-                    ]
+                page_items: Final = TypeAdapter(tuple[object, ...]).validate_python(response.data)
+                file_objects: Final = tuple(item for item in page_items if isinstance(item, FileObject))
+                if len(file_objects) == len(page_items):
+                    file_ids = [file_object.id for file_object in file_objects]
                     user_created_file_ids = await self.get_user_created_file_ids(user_api_key_dict, file_ids)
                     ## Filter the response to only include the files created by the user
                     response.data = user_created_file_ids  # type: ignore
