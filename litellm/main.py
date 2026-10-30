@@ -6776,6 +6776,23 @@ async def aembedding(*args, **kwargs) -> EmbeddingResponse:
         )
 
 
+def _embedding_headers(param: str, configured: object, model: str, drop_params: bool) -> Mapping[str, object]:
+    if not configured:
+        return {}
+    if isinstance(configured, Mapping):
+        return dict(cast(Mapping[str, object], configured))  # cast-ok: header names from untyped request JSON
+    try:
+        return dict(cast(Iterable[tuple[str, object]], configured))  # cast-ok: name and value pairs from request JSON
+    except (TypeError, ValueError):
+        if drop_params:
+            return {}
+        raise litellm.UnsupportedParamsError(
+            message=f"{param} must be a JSON object of header names to values. "
+            "To drop it from the call, set `litellm.drop_params = True`.",
+            model=model,
+        )
+
+
 # fmt: off
 
 # Overload for when aembedding=True (returns coroutine)
@@ -6890,7 +6907,10 @@ def embedding(
     azure_ad_token_provider: Final = kwargs.get("azure_ad_token_provider", None)
     aembedding: Final[bool | None] = kwargs.get("aembedding", None)
     extra_headers: Final = kwargs.get("extra_headers", None)
-    headers = {**(kwargs.get("headers") or {}), **(extra_headers or {})}
+    headers = {
+        **_embedding_headers("headers", kwargs.get("headers"), model, drop_unsupported_params),
+        **_embedding_headers("extra_headers", extra_headers, model, drop_unsupported_params),
+    }
     # Inject proxy auth headers if configured
     if litellm.proxy_auth is not None:
         try:

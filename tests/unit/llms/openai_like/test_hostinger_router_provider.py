@@ -434,6 +434,56 @@ def test_hostinger_router_embeddings_extra_headers_stay_with_their_request():
     assert second.headers.get_list("x-org-id") == ["org-1"]
 
 
+@pytest.mark.parametrize("param", ["headers", "extra_headers"])
+def test_hostinger_router_embeddings_send_headers_given_as_name_value_pairs(param: str):
+    with respx.mock() as upstream:
+        route: Final = upstream.post("https://router.hostinger.com/v1/embeddings").respond(200, json=EMBEDDING_RESPONSE)
+        litellm.embedding(
+            model="hostinger_router/text-embedding-3-small",
+            input=["Say hello"],
+            api_key="hostinger-test-key",
+            **{param: [["X-Trace-Id", "trace-1"]]},
+        )
+
+    request: Final = route.calls.last.request
+    assert request.headers.get_list("x-trace-id") == ["trace-1"]
+    assert request.headers.get_list("authorization") == ["Bearer hostinger-test-key"]
+
+
+@pytest.mark.parametrize("param", ["headers", "extra_headers"])
+def test_hostinger_router_embeddings_refuse_headers_that_are_not_an_object(param: str):
+    with respx.mock(assert_all_called=False) as upstream:
+        route: Final = upstream.post("https://router.hostinger.com/v1/embeddings").respond(200, json=EMBEDDING_RESPONSE)
+        with pytest.raises(litellm.UnsupportedParamsError, match=rf"\b{param} must be a JSON object") as refused:
+            litellm.embedding(
+                model="hostinger_router/text-embedding-3-small",
+                input=["Say hello"],
+                api_key="hostinger-test-key",
+                **{param: "X-Trace-Id: trace-1"},
+            )
+
+    assert refused.value.status_code == 400
+    assert route.call_count == 0
+
+
+@pytest.mark.parametrize("param", ["headers", "extra_headers"])
+def test_hostinger_router_embeddings_drop_headers_that_are_not_an_object_under_drop_params(param: str):
+    with respx.mock() as upstream:
+        route: Final = upstream.post("https://router.hostinger.com/v1/embeddings").respond(200, json=EMBEDDING_RESPONSE)
+        litellm.embedding(
+            model="hostinger_router/text-embedding-3-small",
+            input=["Say hello"],
+            api_key="hostinger-test-key",
+            drop_params=True,
+            **{param: "X-Trace-Id: trace-1"},
+        )
+
+    request: Final = route.calls.last.request
+    assert "x-trace-id" not in request.headers
+    assert request.headers.get_list("authorization") == ["Bearer hostinger-test-key"]
+    assert set(json.loads(request.content)) == {"model", "input"}
+
+
 def test_hostinger_router_embeddings_never_borrow_another_providers_key(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.delenv("HOSTINGER_ROUTER_API_KEY", raising=False)
     monkeypatch.setenv("OPENAI_LIKE_API_KEY", "other-provider-key")
