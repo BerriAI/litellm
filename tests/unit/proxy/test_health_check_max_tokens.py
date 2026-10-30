@@ -1,5 +1,6 @@
 import asyncio
 import copy
+import io
 import json
 import logging
 from typing import Final
@@ -11,6 +12,7 @@ import respx
 
 import litellm
 from litellm.litellm_core_utils.health_check_helpers import HealthCheckHelpers
+from litellm.litellm_core_utils.llm_request_utils import RankedChatModel
 from litellm.proxy import health_check as hc_module
 from litellm.proxy.health_check import (
     _is_strategy_router_deployment,
@@ -85,8 +87,10 @@ async def test_ahealth_check_wildcard_models_respects_max_tokens():
     """
     with (
         patch(
-            "litellm.litellm_core_utils.llm_request_utils.pick_cheapest_chat_models_from_llm_provider",
-            return_value=["gpt-4o-mini"],
+            "litellm.litellm_core_utils.llm_request_utils.rank_chat_models_from_llm_provider",
+            return_value=(
+                RankedChatModel(model="gpt-4o-mini", route_rank=0, cost=0.0, is_past_deprecation_date=False),
+            ),
         ),
         patch("litellm.acompletion", new_callable=AsyncMock),
     ):
@@ -1561,3 +1565,84 @@ async def test_a_failing_health_probe_leaves_the_deployment_serving_requests(mon
 
     assert "error" in probe
     assert reply.choices[0].message.content == "ok"
+
+
+@pytest.mark.parametrize(
+    ("component_params", "probed_component"),
+    [
+        ({"extra_headers": {"X-Amzn-SageMaker-Inference-Component": "header-component"}}, "header-component"),
+        (
+            {"model_id": "own-component", "extra_headers": {"X-Amzn-SageMaker-Inference-Component": "header-component"}},
+            "own-component",
+        ),
+        (
+            {"model_id": "own-component", "extra_headers": {1: "other", "X-Amzn-SageMaker-Inference-Component": "x"}},
+            "own-component",
+        ),
+        (
+            {"extra_headers": {1: "other", "X-Amzn-SageMaker-Inference-Component": "header-component"}},
+            "header-component",
+        ),
+        (
+            {
+                "configurable_clientside_auth_params": ["model_id"],
+                "extra_headers": {"X-Amzn-SageMaker-Inference-Component": "header-component"},
+            },
+            None,
+        ),
+    ],
+    ids=[
+        "header_pinned",
+        "own_model_id_beats_the_header",
+        "own_model_id_beside_a_non_string_header_key",
+        "header_pinned_beside_a_non_string_header_key",
+        "client_configurable_model_id_takes_no_header_pin",
+    ],
+)
+@pytest.mark.asyncio
+async def test_run_model_health_check_probes_a_legacy_sagemaker_embedding_at_the_deployments_component(
+    component_params: dict[str, object], probed_component: str | None
+) -> None:
+    embedding_reply: Final = {"object": "list", "data": [{"object": "embedding", "index": 0, "embedding": [0.1]}]}
+    invoke_endpoint: Final = MagicMock(return_value={"Body": io.BytesIO(json.dumps(embedding_reply).encode())})
+    client: Final = MagicMock(invoke_endpoint=invoke_endpoint)
+    deployment: Final = {
+        "litellm_params": {
+            "model": "sagemaker/openai/embed-endpoint",
+            "aws_region_name": "us-east-1",
+            "aws_access_key_id": "test-key",
+            "aws_secret_access_key": "test-secret",
+            **component_params,
+        },
+        "model_info": {"mode": "embedding"},
+    }
+
+    with patch("boto3.Session", return_value=MagicMock(client=MagicMock(return_value=client))):
+        result: Final = await hc_module._run_model_health_check(deployment)
+
+    assert "error" not in result, result
+    assert invoke_endpoint.call_count == 1
+    assert invoke_endpoint.call_args.kwargs.get("InferenceComponentName") == probed_component
+
+
+@pytest.mark.asyncio
+async def test_run_model_health_check_reports_why_a_string_configurable_clientside_auth_params_fails() -> None:
+    invoke_endpoint: Final = MagicMock()
+    deployment: Final = {
+        "litellm_params": {
+            "model": "sagemaker/openai/embed-endpoint",
+            "model_id": "own-component",
+            "aws_region_name": "us-east-1",
+            "aws_access_key_id": "test-key",
+            "aws_secret_access_key": "test-secret",
+        },
+        "model_info": {"mode": "embedding", "health_check_params": {"configurable_clientside_auth_params": "model_id"}},
+    }
+
+    client: Final = MagicMock(invoke_endpoint=invoke_endpoint)
+
+    with patch("boto3.Session", return_value=MagicMock(client=MagicMock(return_value=client))):
+        result: Final = await hc_module._run_model_health_check(deployment)
+
+    assert "configurable_clientside_auth_params" in result["error"]
+    invoke_endpoint.assert_not_called()

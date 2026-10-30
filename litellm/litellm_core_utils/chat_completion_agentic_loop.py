@@ -16,6 +16,7 @@ from litellm.litellm_core_utils.agentic_loop_settings import (
     DEFAULT_MAX_AGENTIC_LOOPS,
     validated_max_agentic_loops,
 )
+from litellm.litellm_core_utils.core_helpers import qualify_agentic_followup_model
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObject
 from litellm.llms.base_llm.base_model_iterator import MockResponseIterator
 from litellm.types.integrations.custom_logger import (
@@ -31,7 +32,7 @@ from litellm.types.integrations.custom_logger import (
 from litellm.types.utils import ModelResponse
 from litellm.utils import CustomStreamWrapper
 
-_DispatchResult = TypeVar("_DispatchResult")
+_DispatchResult: Final = TypeVar("_DispatchResult")
 
 _FOLLOWUP_INTERNAL_PARAMS: Final = frozenset(
     (
@@ -273,9 +274,7 @@ async def _execute_chat_completion_agentic_plan(
     if patch.messages is None:
         raise ValueError("Agentic loop plan missing patched messages")
 
-    full_model_name = patch.model or model
-    if "/" not in full_model_name:
-        full_model_name = f"{custom_llm_provider}/{full_model_name}"
+    full_model_name: Final = qualify_agentic_followup_model(patch.model, model, custom_llm_provider)
 
     optional_params_for_followup: Final = {**optional_params, **patch.optional_params}
     if patch.tools is not None:

@@ -34,6 +34,7 @@ from litellm.integrations.code_interpreter_interception.handler import (
 )
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.chat_completion_agentic_loop import (
+    _execute_chat_completion_agentic_plan,
     maybe_run_chat_completion_agentic_loop,
 )
 from litellm.litellm_core_utils.litellm_logging import Logging
@@ -365,6 +366,49 @@ async def test_dispatcher_runs_followup_with_incremented_depth_and_patched_messa
     assert "_agentic_loop_api_surface" not in call_kwargs
     # Cleanup hook always runs.
     assert logger.cleanup_calls == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "model,custom_llm_provider,routed_model",
+    [
+        ("cohere/command-a-03-2025", "cohere_chat", "command-a-03-2025"),
+        ("anthropic/claude-2", "anthropic_text", "claude-2"),
+    ],
+)
+async def test_sdk_followup_keeps_a_model_whose_prefix_already_routes_to_its_provider(
+    model: str, custom_llm_provider: str, routed_model: str
+) -> None:
+    plan: Final = AgenticLoopPlan(
+        run_agentic_loop=True,
+        request_patch=AgenticLoopRequestPatch(messages=_patched_messages()),
+    )
+    gate: Final = _GateOnlyLogger(plan=plan, tool_calls={"tool_calls": [{"id": "call_abc"}]})
+    logging_obj: Final = Logging(
+        model=model,
+        messages=[{"role": "user", "content": "what is 6*7?"}],
+        stream=False,
+        call_type="acompletion",
+        start_time=datetime.datetime(2026, 1, 1, tzinfo=datetime.timezone.utc),
+        litellm_call_id="call-prefix",
+        function_id="fn-prefix",
+        dynamic_success_callbacks=[gate],
+    )
+
+    followup: Final = await maybe_run_chat_completion_agentic_loop(
+        response=_tool_call_model_response(),
+        model=model,
+        messages=[{"role": "user", "content": "what is 6*7?"}],
+        optional_params={},
+        kwargs={"mock_response": "done"},
+        logging_obj=logging_obj,
+        custom_llm_provider=custom_llm_provider,
+        stream=False,
+    )
+
+    assert isinstance(followup, ModelResponse)
+    assert followup.model == routed_model
+    assert followup._hidden_params["custom_llm_provider"] == custom_llm_provider
 
 
 @pytest.mark.asyncio
@@ -732,3 +776,55 @@ async def test_converted_stream_replays_the_final_answer_with_the_requested_usag
         if include_usage
         else []
     )
+
+
+class TestAgenticFollowUpKeepsTheProviderPrefix:
+    @staticmethod
+    async def _run_followup(
+        model: str, custom_llm_provider: str, patched_model: str | None = None
+    ) -> ModelResponse:
+        response: Final = await _execute_chat_completion_agentic_plan(
+            plan=AgenticLoopPlan(
+                run_agentic_loop=True,
+                request_patch=AgenticLoopRequestPatch(
+                    messages=[{"role": "user", "content": "hi"}], model=patched_model
+                ),
+            ),
+            callback=CustomLogger(),
+            model=model,
+            optional_params={"mock_response": "ok from followup"},
+            kwargs={},
+            logging_obj=None,
+            custom_llm_provider=custom_llm_provider,
+            depth=0,
+            max_loops=2,
+            fingerprints=[],
+            fingerprint="fp",
+        )
+        assert isinstance(response, ModelResponse)
+        return response
+
+    @pytest.mark.asyncio
+    async def test_a_sub_path_model_still_resolves_a_provider(self) -> None:
+        response: Final = await self._run_followup("mantle/anthropic.claude-sonnet-5", "bedrock")
+
+        assert response.choices[0].message.content == "ok from followup"
+
+    @pytest.mark.asyncio
+    async def test_an_ordinary_model_still_resolves_a_provider(self) -> None:
+        response: Final = await self._run_followup("gpt-4o-mini", "openai")
+
+        assert response.choices[0].message.content == "ok from followup"
+
+    @pytest.mark.asyncio
+    async def test_a_hook_that_patches_another_providers_model_reaches_that_provider(self) -> None:
+        response: Final = await self._run_followup("gpt-4o", "openai", patched_model="anthropic/claude-sonnet-4-5")
+
+        assert response.model == "claude-sonnet-4-5"
+        assert response._hidden_params["custom_llm_provider"] == "anthropic"
+
+    @pytest.mark.asyncio
+    async def test_a_hook_echoing_an_org_style_model_stays_on_the_request_provider(self) -> None:
+        response: Final = await self._run_followup("openai/gpt-4o", "openrouter", patched_model="openai/gpt-4o")
+
+        assert response._hidden_params["custom_llm_provider"] == "openrouter"
