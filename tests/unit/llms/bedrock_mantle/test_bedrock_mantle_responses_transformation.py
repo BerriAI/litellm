@@ -1963,4 +1963,3 @@ def test_mantle_drop_params_cuts_a_responses_breakpoint_down_to_its_mode(
         "text": "Stable prefix",
         "prompt_cache_breakpoint": marker,
     }
-

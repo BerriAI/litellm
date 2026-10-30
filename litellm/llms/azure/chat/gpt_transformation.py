@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING, Any, Final
 from httpx._models import Headers, Response
 
 import litellm
-from litellm.integrations.anthropic_cache_control_hook import supports_openai_prompt_cache_breakpoint
+from litellm.integrations.anthropic_cache_control_hook import openai_prompt_cache_breakpoint_support
 from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     chat_completion_prompt_cache_breakpoints_for_wire,
@@ -298,8 +298,12 @@ class AzureOpenAIConfig(BaseConfig):
     ) -> dict:
         ordered_messages: Final = system_messages_first(messages) if litellm.openai_system_messages_first else messages
         params: Final = LITELLM_PARAM_FIELDS.validate_python(litellm_params)
-        trims_breakpoints: Final = drops_unsupported_params(params.get("drop_params")) and any(
-            supports_openai_prompt_cache_breakpoint(name, "azure") for name in (model, *declared_base_models(params))
+        known_support: Final = (
+            openai_prompt_cache_breakpoint_support(name, "azure") for name in (*declared_base_models(params), model)
+        )
+        trims_breakpoints: Final = (
+            drops_unsupported_params(params.get("drop_params"))
+            and next((support for support in known_support if support is not None), None) is not False
         )
         wire_messages: Final = (
             [

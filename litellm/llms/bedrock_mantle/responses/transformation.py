@@ -15,7 +15,8 @@ role / access key / profile / web identity), signed via the shared
 BaseAWSLLM._sign_request after the request body is finalized.
 """
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
+from functools import partial
 from typing import Final, cast  # noqa: TID251  # map_openai_params returns the filtered params as a bare dict
 
 import httpx
@@ -114,8 +115,8 @@ class BedrockMantleResponsesAPIConfig(BedrockMantleAuthMixin, OpenAIResponsesAPI
             headers["OpenAI-Project"] = litellm_params.aws_bedrock_project_id
         return headers
 
-    def _wire_prompt_cache_breakpoint(self, marker: object) -> object:
-        return chat_completion_prompt_cache_breakpoint_for_wire(marker, drop_params=True)
+    def _prompt_cache_breakpoint_to_wire(self, litellm_params: GenericLiteLLMParams) -> Callable[[object], object]:
+        return partial(chat_completion_prompt_cache_breakpoint_for_wire, drop_params=True)
 
     def supports_native_file_search(self) -> bool:
         return False

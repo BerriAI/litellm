@@ -825,6 +825,11 @@ def registered_azure_breakpoint_reader(monkeypatch: pytest.MonkeyPatch) -> None:
         "azure/unit-breakpoint-reader",
         {"litellm_provider": "azure", "mode": "chat", "supports_prompt_cache_breakpoint": True},
     )
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "azure/unit-breakpoint-ignorer",
+        {"litellm_provider": "azure", "mode": "chat", "supports_prompt_cache_breakpoint": False},
+    )
 
 
 def _azure_request_parts(
@@ -847,8 +852,9 @@ def _azure_request_parts(
         ("unit-breakpoint-reader", {"drop_params": True}),
         ("my-azure-alias", {"drop_params": True, "base_model": "azure/unit-breakpoint-reader"}),
         ("my-azure-alias", {"drop_params": True, "model_info": {"base_model": "azure/unit-breakpoint-reader"}}),
+        ("my-azure-alias", {"drop_params": True}),
     ],
-    ids=("deployment-name", "litellm-params-base-model", "model-info-base-model"),
+    ids=("deployment-name", "litellm-params-base-model", "model-info-base-model", "unknown-deployment"),
 )
 def test_azure_drop_params_cuts_part_breakpoints_down_to_what_azure_chat_accepts(
     registered_azure_breakpoint_reader: None,
@@ -866,11 +872,12 @@ def test_azure_drop_params_cuts_part_breakpoints_down_to_what_azure_chat_accepts
     [
         ("unit-breakpoint-reader", {}),
         ("unit-breakpoint-reader", {"drop_params": False}),
-        ("my-azure-alias", {"drop_params": True}),
+        ("unit-breakpoint-ignorer", {"drop_params": True}),
+        ("unit-breakpoint-reader", {"drop_params": True, "base_model": "azure/unit-breakpoint-ignorer"}),
     ],
-    ids=("no-drop-params", "drop-params-false", "unknown-deployment"),
+    ids=("no-drop-params", "drop-params-false", "known-non-reader", "base-model-known-non-reader"),
 )
-def test_azure_sends_part_breakpoints_as_written_without_drop_params_or_a_breakpoint_reader(
+def test_azure_sends_part_breakpoints_as_written_without_drop_params_or_to_a_known_non_reader(
     registered_azure_breakpoint_reader: None, model: str, litellm_params: dict[str, object]
 ) -> None:
     assert _azure_request_parts(AzureOpenAIConfig(), model, litellm_params) == list(_MARKED_AZURE_PARTS)

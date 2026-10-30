@@ -2220,6 +2220,10 @@ def prompt_cache_breakpoint_for_wire(marker: object, drop_params: bool) -> objec
     return prompt_cache_breakpoint_within(_PROMPT_CACHE_BREAKPOINT, marker)
 
 
+def whole_prompt_cache_breakpoint_or_none(marker: object) -> PromptCacheBreakpoint | None:
+    return _accepted_prompt_cache_breakpoint(_PROMPT_CACHE_BREAKPOINT, marker)
+
+
 def chat_completion_prompt_cache_breakpoint_for_wire(marker: object, drop_params: bool) -> object:
     if marker is None or not drop_params:
         return marker

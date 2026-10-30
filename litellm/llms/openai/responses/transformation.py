@@ -1,5 +1,5 @@
 from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
-from functools import lru_cache
+from functools import lru_cache, partial
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Protocol, cast, get_type_hints
 
@@ -25,6 +25,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     drop_non_python_regex_patterns,
     flatten_combinators_and_drop_non_python_regex_patterns,
     prompt_cache_breakpoint_for_wire,
+    whole_prompt_cache_breakpoint_or_none,
     with_prompt_cache_breakpoint,
 )
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
@@ -704,15 +705,17 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         keeps_markers: Final = reads_breakpoints or self._keeps_prompt_cache_breakpoints(
             model=model, litellm_params=litellm_params
         )
-        to_wire: Final = self._wire_prompt_cache_breakpoint if keeps_markers else None
+        to_wire: Final = self._prompt_cache_breakpoint_to_wire(litellm_params) if keeps_markers else None
         wire_safe_items: Final = tuple(_item_with_wire_safe_prompt_cache_breakpoints(item, to_wire) for item in input)
         if _same_objects(wire_safe_items, input):
             return input
         wire_safe_input: Final = list(wire_safe_items)
         return cast("ResponseInputParam", wire_safe_input)  # cast-ok: items keep their shape, minus a rejected marker
 
-    def _wire_prompt_cache_breakpoint(self, marker: object) -> object:
-        return prompt_cache_breakpoint_for_wire(marker, drop_params=True)
+    def _prompt_cache_breakpoint_to_wire(self, litellm_params: GenericLiteLLMParams) -> Callable[[object], object]:
+        if self._targets_openai_api(litellm_params):
+            return partial(prompt_cache_breakpoint_for_wire, drop_params=True)
+        return whole_prompt_cache_breakpoint_or_none
 
     def _keeps_prompt_cache_breakpoints(self, model: str, litellm_params: GenericLiteLLMParams) -> bool:
         provider: Final = _provider_name(self.custom_llm_provider)

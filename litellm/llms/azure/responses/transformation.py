@@ -1,6 +1,7 @@
 import re
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from copy import deepcopy
+from functools import partial
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal
 from urllib.parse import urlsplit
@@ -82,8 +83,8 @@ class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
     def _is_gpt_5_model(model: str) -> bool:
         return AzureOpenAIGPT5Config.is_model_gpt_5_model(model)
 
-    def _wire_prompt_cache_breakpoint(self, marker: object) -> object:
-        return prompt_cache_breakpoint_within(_AZURE_RESPONSES_PROMPT_CACHE_BREAKPOINT, marker)
+    def _prompt_cache_breakpoint_to_wire(self, litellm_params: GenericLiteLLMParams) -> Callable[[object], object]:
+        return partial(prompt_cache_breakpoint_within, _AZURE_RESPONSES_PROMPT_CACHE_BREAKPOINT)
 
     @staticmethod
     def _supports_reasoning_effort_none(model: str) -> bool:

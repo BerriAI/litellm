@@ -4454,8 +4454,9 @@ def test_an_unsupported_ttl_is_dropped_and_the_explicit_mode_kept_under_drop_par
         (OpenAIResponsesAPIConfig(), {"mode": "explicit", "ttl": "12h"}, {"mode": "explicit", "ttl": "12h"}),
         (AzureOpenAIResponsesAPIConfig(), {"mode": "explicit", "ttl": "30m"}, {"mode": "explicit", "ttl": "30m"}),
         (AzureOpenAIResponsesAPIConfig(), {"mode": "explicit", "ttl": "12h"}, {"mode": "explicit"}),
+        (AzureAIResponsesAPIConfig(), {"mode": "explicit", "ttl": "12h"}, {"mode": "explicit"}),
     ],
-    ids=("openai-keeps-12h", "azure-keeps-30m", "azure-drops-12h"),
+    ids=("openai-keeps-12h", "azure-keeps-30m", "azure-drops-12h", "azure-ai-drops-12h"),
 )
 def test_drop_params_keeps_only_a_ttl_the_target_responses_api_accepts(
     monkeypatch: pytest.MonkeyPatch,
@@ -4463,12 +4464,32 @@ def test_drop_params_keeps_only_a_ttl_the_target_responses_api_accepts(
     marker: Mapping[str, str],
     wire_marker: Mapping[str, str],
 ) -> None:
-    """Azure OpenAI Responses answered 400 for a 12h breakpoint ttl and 200 for 30m on 2026-10-29."""
+    """Azure OpenAI Responses answered 400 for a 12h breakpoint ttl and 200 for 30m on 2026-10-29, and Azure AI
+    Foundry Responses did the same on 2026-10-30."""
     monkeypatch.setattr(litellm, "drop_params", False)
     input: Final = _marked_message("input_text", marker)
     trimmed: Final = _transformed_input(config, input, GenericLiteLLMParams(drop_params=True))
     assert _single_part(trimmed) == {**_PARTS["input_text"], "prompt_cache_breakpoint": wire_marker}
     assert _transformed_input(config, input, GenericLiteLLMParams(drop_params=False)) == input
+
+
+@pytest.mark.parametrize(
+    "config, litellm_params",
+    [
+        (XAIResponsesAPIConfig(), GenericLiteLLMParams(drop_params=True)),
+        (HostedVLLMResponsesAPIConfig(), GenericLiteLLMParams(drop_params=True, api_base="http://localhost:8000/v1")),
+        (OpenAIResponsesAPIConfig(), GenericLiteLLMParams(drop_params=True, api_base="http://localhost:8000/v1")),
+    ],
+    ids=("xai", "hosted-vllm", "openai-compatible-host"),
+)
+def test_a_responses_api_not_known_to_take_breakpoints_gets_a_marker_whole_or_not_at_all(
+    monkeypatch: pytest.MonkeyPatch, config: BaseResponsesAPIConfig, litellm_params: GenericLiteLLMParams
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    unsupported_ttl: Final = _marked_message("input_text", _UNSUPPORTED_TTL_MARKER)
+    assert _single_part(_transformed_input(config, unsupported_ttl, litellm_params)) == _PARTS["input_text"]
+    openai_ttl: Final = _marked_message("input_text", {"mode": "explicit", "ttl": "12h"})
+    assert _transformed_input(config, openai_ttl, litellm_params) == openai_ttl
 
 
 def test_prompt_cache_breakpoint_unknown_key_is_trimmed_under_drop_params(monkeypatch: pytest.MonkeyPatch) -> None:
