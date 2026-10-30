@@ -147,6 +147,7 @@ class PipelineBatch:
     backend: PipelineBackend
     name: str = "redis_batch"
     transaction: bool = False
+    raise_on_error: bool = False
     _pending: list[_Op[object]] = field(default_factory=list)  # mutable-ok: drained by flush
     _flush_hooks: list[Callable[[], None]] = field(default_factory=list)  # mutable-ok: append-only registry
     _lock: asyncio.Lock = field(default_factory=asyncio.Lock)
@@ -207,7 +208,7 @@ class PipelineBatch:
         async def run() -> list[object]:
             async with self.backend.client().pipeline(transaction=self.transaction) as pipe:
                 widths.extend(op.spec.enqueue(pipe) for op in ops)
-                return await pipe.execute(raise_on_error=False)
+                return await pipe.execute(raise_on_error=self.raise_on_error)
 
         try:
             replies: Final = await _run_under_circuit_breaker(
