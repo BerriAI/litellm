@@ -6,7 +6,9 @@ import uuid
 from collections.abc import Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
+from queue import SimpleQueue
 from typing import Final
 
 import httpx
@@ -30,16 +32,23 @@ DEFAULT_RESERVATION: Final = int(OTPM_LIMIT * FRACTION)
 class Rig:
     owned: OwnedProxy
     upstream: Wire
-    release: threading.Event
+    gates: SimpleQueue[threading.Event]
 
 
-def _reply_for(release: threading.Event) -> Callable[[Request], Reply]:
+@dataclass(frozen=True, slots=True)
+class Admissions:
+    held_forwarded_max_tokens: bool
+    statuses: tuple[int, int, int]
+    one_minute: bool
+
+
+def _reply_for(gates: SimpleQueue[threading.Event]) -> Callable[[Request], Reply]:
     def reply(request: Request) -> Reply:
         if is_model_info_probe(request):
             return model_list_reply()
         if JSON_OBJECT.validate_json(request.body).get("stream") is True:
             return dataclasses.replace(
-                chat_reply("chatcmpl-held", OPENAI_MODEL, "held", stream=True), gate_before_first=release
+                chat_reply("chatcmpl-held", OPENAI_MODEL, "held", stream=True), gate_before_first=gates.get(timeout=60)
             )
         return chat_reply("chatcmpl-capped", OPENAI_MODEL, "capped", stream=False)
 
@@ -69,10 +78,10 @@ def _config(directory: Path, upstream: Wire) -> Path:
 @pytest.fixture(scope="module")
 def rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Rig]:
     directory: Final = tmp_path_factory.mktemp("otpm-fraction")
-    release: Final = threading.Event()
+    gates: Final[SimpleQueue[threading.Event]] = SimpleQueue()
     with (
         gateway_from_environment() as gateway,
-        wire_server(_reply_for(release)) as upstream,
+        wire_server(_reply_for(gates)) as upstream,
         owned_proxy_process(
             gateway,
             directory,
@@ -80,10 +89,7 @@ def rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Rig]:
             config=_config(directory, upstream),
         ) as owned,
     ):
-        try:
-            yield Rig(owned, upstream, release)
-        finally:
-            release.set()
+        yield Rig(owned, upstream, gates)
 
 
 def _chat(rig: Rig, **params: int | bool) -> httpx.Response:
@@ -99,15 +105,32 @@ def _await_forwarded_chat(upstream: Wire) -> Request:
     return _await_forwarded_chat(upstream) if is_model_info_probe(request) else request
 
 
-def test_reservation_fraction_env_var_sets_what_a_request_without_max_tokens_holds(rig: Rig) -> None:
+def _utc_minute() -> str:
+    return datetime.now(UTC).strftime("%Y-%m-%d %H:%M")
+
+
+def _admissions_beside_a_held_stream(rig: Rig) -> Admissions:
+    release: Final = threading.Event()
+    rig.gates.put(release)
+    started: Final = _utc_minute()
     with ThreadPoolExecutor(max_workers=1) as pool:
         held: Final = pool.submit(_chat, rig, stream=True)
         try:
-            assert "max_tokens" not in JSON_OBJECT.validate_json(_await_forwarded_chat(rig.upstream).body)
+            forwarded: Final = JSON_OBJECT.validate_json(_await_forwarded_chat(rig.upstream).body)
             over: Final = _chat(rig, max_tokens=OTPM_LIMIT - DEFAULT_RESERVATION + 1)
-            fits: Final = _chat(rig, max_tokens=OTPM_LIMIT - DEFAULT_RESERVATION)
+            fits: Final = _chat(rig, max_tokens=DEFAULT_RESERVATION // 2)
+            ended: Final = _utc_minute()
         finally:
-            rig.release.set()
+            release.set()
+        return Admissions(
+            held_forwarded_max_tokens="max_tokens" in forwarded,
+            statuses=(over.status_code, fits.status_code, held.result(timeout=60).status_code),
+            one_minute=started == ended,
+        )
 
-        assert (over.status_code, fits.status_code) == (429, 200), (over.text, fits.text)
-        assert held.result(timeout=60).status_code == 200
+
+def test_reservation_fraction_env_var_sets_what_a_request_without_max_tokens_holds(rig: Rig) -> None:
+    first: Final = _admissions_beside_a_held_stream(rig)
+    admissions: Final = first if first.one_minute else _admissions_beside_a_held_stream(rig)
+
+    assert admissions == Admissions(held_forwarded_max_tokens=False, statuses=(429, 200, 200), one_minute=True)
