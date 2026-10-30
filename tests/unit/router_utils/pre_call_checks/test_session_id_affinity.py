@@ -11,7 +11,7 @@ from fakeredis.aioredis import FakeConnection
 from redis.asyncio import BlockingConnectionPool, Redis
 
 import litellm
-from litellm.caching.affinity_cache import claim_affinity_pin
+from litellm.caching.affinity_cache import claim_affinity_pin_in_memory
 from litellm.caching.dual_cache import DualCache
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.caching.redis_cache import RedisCache
@@ -901,7 +901,6 @@ async def test_claim_pin_falls_back_to_pod_local_when_redis_is_down():
     assert second == "our-deployment"
 
 
-@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("stored", "expected"),
     [
@@ -914,13 +913,13 @@ async def test_claim_pin_falls_back_to_pod_local_when_redis_is_down():
         (None, {"model": "second"}),
     ],
 )
-async def test_eligible_affinity_claim_replaces_stale_pins_and_slides_ttl(stored: object, expected: object) -> None:
+def test_eligible_affinity_claim_replaces_stale_pins_and_slides_ttl(stored: object, expected: object) -> None:
     clock: Final = MagicMock(return_value=100.0)
     cache: Final = DualCache(in_memory_cache=InMemoryCache(clock=clock))
     cache.in_memory_cache.set_cache("tier-pin", stored, ttl=10)
     clock.return_value = 105.0
 
-    winner: Final = await claim_affinity_pin(
+    winner: Final = claim_affinity_pin_in_memory(
         cache,
         "tier-pin",
         {"model": "second"},
@@ -936,24 +935,21 @@ async def test_eligible_affinity_claim_replaces_stale_pins_and_slides_ttl(stored
     assert cache.in_memory_cache.get_cache("tier-pin") is None
 
 
-@pytest.mark.asyncio
-async def test_concurrent_eligible_claims_return_one_winner() -> None:
+def test_eligible_local_claims_keep_first_winner() -> None:
     cache: Final = DualCache()
     candidates: Final = ({"model": "first"}, {"model": "second"})
-    winners: Final = await asyncio.gather(
-        *(
-            claim_affinity_pin(
-                cache,
-                "tier-pin",
-                candidates[index % 2],
-                30,
-                eligible_values=candidates,
-            )
-            for index in range(20)
+    winners: Final = tuple(
+        claim_affinity_pin_in_memory(
+            cache,
+            "tier-pin",
+            candidates[index % 2],
+            30,
+            eligible_values=candidates,
         )
+        for index in range(20)
     )
 
-    assert winners == [{"model": "first"}] * 20
+    assert winners == ({"model": "first"},) * 20
     assert cache.in_memory_cache.get_cache("tier-pin") == {"model": "first"}
 
 
