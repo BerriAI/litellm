@@ -2955,6 +2955,7 @@ async def test_async_realtime_sends_setup_at_connect_when_provider_cannot_build_
     provider_config.session_configuration_request.return_value = setup
     provider_config.unbilled_usage_on_session_close.return_value = None
     provider_config.open_backend = AsyncMock(return_value=None)
+    provider_config.wrap_backend.side_effect = lambda opened: opened
     handler = BaseLLMHTTPHandler()
 
     with patch.object(handler, "_open_realtime_backend_ws", AsyncMock(return_value=backend)):

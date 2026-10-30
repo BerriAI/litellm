@@ -311,9 +311,11 @@ class RealTimeStreaming:
         logging_worker: _LoggingWorker = GLOBAL_LOGGING_WORKER,
         lazy_setup_deadline_seconds: float = REALTIME_LAZY_SETUP_DEADLINE_SECONDS,
         lazy_setup_content_grace_seconds: float = REALTIME_LAZY_SETUP_CONTENT_GRACE_SECONDS,
+        clock: Callable[[], float] = time.monotonic,
     ):
         self.websocket: _ClientWebSocket = websocket
-        self._lazy_setup_deadline: Final = time.monotonic() + lazy_setup_deadline_seconds
+        self._clock: Final = clock
+        self._lazy_setup_deadline: Final = clock() + lazy_setup_deadline_seconds
         self._lazy_setup_content_grace_seconds: Final = lazy_setup_content_grace_seconds
         self._held_client_content: tuple[str, ...] = ()
         self._held_client_content_bytes: int = 0
@@ -804,7 +806,7 @@ class RealTimeStreaming:
 
     def _hold_client_content(self, message: str) -> None:
         if self._held_client_content_deadline is None:
-            self._held_client_content_deadline = time.monotonic() + self._lazy_setup_content_grace_seconds
+            self._held_client_content_deadline = self._clock() + self._lazy_setup_content_grace_seconds
         self._held_client_content = (*self._held_client_content, message)
         self._held_client_content_bytes += len(message.encode("utf-8"))
 
@@ -832,7 +834,7 @@ class RealTimeStreaming:
             return await self._receive_client_message()
         receive: Final = asyncio.ensure_future(self._receive_client_message())
         try:
-            done, _ = await asyncio.wait((receive,), timeout=self._setup_deadline() - time.monotonic())
+            done, _ = await asyncio.wait((receive,), timeout=self._setup_deadline() - self._clock())
             if not done:
                 await self._send_setup_before_content(None)
             return await receive

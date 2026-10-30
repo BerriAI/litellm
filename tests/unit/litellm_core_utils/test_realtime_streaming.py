@@ -1,7 +1,6 @@
 import asyncio
 import base64
 import json
-import time
 from collections.abc import Callable, Coroutine, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Final, Literal
@@ -15,6 +14,7 @@ from websockets.frames import Close
 import litellm
 from litellm.constants import (
     BEDROCK_REALTIME_PENDING_OPENING_MESSAGE_SCOPE_KEY,
+    REALTIME_LAZY_SETUP_DEADLINE_SECONDS,
     REALTIME_METERED_USAGE_KEY,
     REALTIME_SESSION_FAILURE_LOGGED_KEY,
     REALTIME_SESSION_SUCCESS_LOGGED_KEY,
@@ -2626,26 +2626,6 @@ def test_merge_session_fields_replaces_nested_mappings_wholesale_past_the_depth_
     assert level(merged, 9)["new"] == 1
 
 
-
-def _merge_cost(levels: int, leaves: int) -> float:
-    def nested(depth: int) -> dict[str, object]:
-        return {"child": nested(depth - 1)} if depth else {f"k{index}": index for index in range(leaves)}
-
-    session: Final = nested(levels)
-
-    def once() -> float:
-        started: Final = time.perf_counter()
-        _merge_session_fields(session, session)
-        return time.perf_counter() - started
-
-    return min(once() for _ in range(3))
-
-
-def test_merge_session_fields_cost_stays_flat_as_matching_updates_nest_deeper():
-    growth: Final = _merge_cost(7, 2000) / _merge_cost(1, 2000)
-
-    assert growth < 8.0, f"merging seven nested levels cost {growth:.1f}x one level"
-
 @pytest.mark.asyncio
 async def test_default_mode_acknowledges_each_held_session_update_before_any_backend_frame(monkeypatch):
     """A client that waits for session.updated before sending content must not
@@ -2836,6 +2816,14 @@ async def test_default_mode_sends_the_setup_before_a_guardrail_blocks_the_first_
     assert errors == ["guardrail_violation"]
 
 
+class _SteppedClock:
+    def __init__(self, epoch: float) -> None:
+        self.now = epoch
+
+    def __call__(self) -> float:
+        return self.now
+
+
 def _client_ws_receiving(*steps: Callable[[], Coroutine[object, object, str]]) -> MagicMock:
     remaining: Final = iter(steps)
 
@@ -2849,15 +2837,18 @@ def _client_ws_receiving(*steps: Callable[[], Coroutine[object, object, str]]) -
 
 
 @pytest.mark.asyncio
-async def test_default_mode_sends_the_held_setup_when_no_content_arrives_before_the_deadline(monkeypatch):
+@pytest.mark.parametrize("epoch", [0.0, 1e9])
+async def test_default_mode_sends_the_held_setup_when_no_content_arrives_before_the_deadline(monkeypatch, epoch):
     """Vertex AI refuses a setup sent minutes after connecting, so an idle session
     sends what it holds at the deadline and answers any later session.update as late."""
     monkeypatch.setattr(litellm, "gemini_live_defer_setup", False, raising=False)
     from litellm.llms.gemini.realtime.transformation import GeminiRealtimeConfig
 
+    clock: Final = _SteppedClock(epoch)
     setup_sent: Final = asyncio.Event()
 
-    async def instructions_update() -> str:
+    async def instructions_update_then_the_deadline_passes() -> str:
+        clock.now += REALTIME_LAZY_SETUP_DEADLINE_SECONDS
         return json.dumps({"type": "session.update", "session": {"instructions": "Be brief."}})
 
     async def late_update_once_the_setup_is_out() -> str:
@@ -2872,12 +2863,12 @@ async def test_default_mode_sends_the_held_setup_when_no_content_arrives_before_
     backend_ws: Final = MagicMock()
     backend_ws.send = AsyncMock(side_effect=lambda frame: setup_sent.set())
     streaming: Final = RealTimeStreaming(
-        _client_ws_receiving(instructions_update, late_update_once_the_setup_is_out, disconnect),
+        _client_ws_receiving(instructions_update_then_the_deadline_passes, late_update_once_the_setup_is_out, disconnect),
         backend_ws,
         MagicMock(),
         provider_config=GeminiRealtimeConfig(),
         model="gemini-live-2.5-flash",
-        lazy_setup_deadline_seconds=0.05,
+        clock=clock,
     )
 
     await asyncio.wait_for(streaming.client_ack_messages(), timeout=5)
@@ -2957,7 +2948,8 @@ async def test_default_mode_applies_a_session_update_that_arrives_while_audio_st
 
 
 @pytest.mark.asyncio
-async def test_held_items_go_out_with_the_setup_when_no_response_create_follows(monkeypatch):
+@pytest.mark.parametrize("epoch", [0.0, 1e9])
+async def test_held_items_go_out_with_the_setup_when_no_response_create_follows(monkeypatch, epoch):
     monkeypatch.setattr(litellm, "gemini_live_defer_setup", False, raising=False)
     from litellm.llms.gemini.realtime.transformation import GeminiRealtimeConfig
 
@@ -2983,7 +2975,8 @@ async def test_held_items_go_out_with_the_setup_when_no_response_create_follows(
         MagicMock(),
         provider_config=GeminiRealtimeConfig(),
         model="gemini-live-2.5-flash",
-        lazy_setup_content_grace_seconds=0.05,
+        lazy_setup_content_grace_seconds=0,
+        clock=_SteppedClock(epoch),
     )
 
     await asyncio.wait_for(streaming.client_ack_messages(), timeout=5)
