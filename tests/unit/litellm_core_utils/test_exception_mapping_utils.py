@@ -474,7 +474,7 @@ async def test_sglang_context_window_error_mapping(
         return httpx.Response(
             400,
             request=request,
-            json={"error": {"message": error_message, "type": "BadRequestError", "param": None, "code": 400}},
+            json={"object": "error", "message": error_message, "type": "BadRequestError", "param": None, "code": 400},
         )
 
     transport: Final = httpx.MockTransport(reject_request)
