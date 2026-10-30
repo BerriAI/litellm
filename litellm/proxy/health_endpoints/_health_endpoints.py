@@ -49,6 +49,7 @@ from litellm.proxy.auth.auth_checks import (
     can_user_call_model,
     get_user_object,
     key_model_aliases_for_auth_check,
+    model_matches_any_wildcard_pattern_in_list,
     team_model_aliases_for_auth_check,
 )
 from litellm.proxy.auth.auth_exception_handler import (
@@ -1260,9 +1261,12 @@ class _AccessGroupGrants:
 
     def requested_name(self, name: str, public_names: Mapping[str, str], admitted_names: frozenset[str]) -> str:
         public_name: Final = public_names.get(name)
-        if public_name is None or public_name not in admitted_names or name in self.granted_names:
+        if public_name is None or public_name not in admitted_names or self._grants(name):
             return name
         return public_name
+
+    def _grants(self, name: str) -> bool:
+        return name in self.granted_names or model_matches_any_wildcard_pattern_in_list(name, tuple(self.granted_names))
 
     def narrow(self, serving_ids: frozenset[str], served_names: frozenset[str]) -> frozenset[str]:
         in_granted_groups: Final = serving_ids & self.ids_in_granted_groups

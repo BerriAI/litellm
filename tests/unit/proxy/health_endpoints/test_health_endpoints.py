@@ -4965,8 +4965,11 @@ async def test_health_endpoint_probes_only_the_access_groups_team_deployments_se
 
 
 @pytest.mark.asyncio
-async def test_health_endpoint_probes_a_team_deployment_whose_internal_name_the_key_holds() -> None:
-    caller: Final = _team_key(["premium", "model_name_team-a_9d2f6e01"])
+@pytest.mark.parametrize("internal_name_grant", ["model_name_team-a_9d2f6e01", "model_name_team-a_*"])
+async def test_health_endpoint_probes_a_team_deployment_whose_internal_name_the_key_holds(
+    internal_name_grant: str,
+) -> None:
+    caller: Final = _team_key(["premium", internal_name_grant])
 
     probed: Final = await _live_probed_model_ids(_team_split_model_list("gpt-5.4-mini", "openai/gpt-5.4-mini"), caller)
 
