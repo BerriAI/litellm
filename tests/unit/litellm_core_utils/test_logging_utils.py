@@ -5,6 +5,7 @@ Tests for litellm.litellm_core_utils.logging_utils — base64 truncation helpers
 import asyncio, datetime, importlib, litellm, os, pytest_asyncio
 import sys
 import threading
+from itertools import chain
 from types import FrameType
 from unittest.mock import MagicMock
 
@@ -19,7 +20,7 @@ from litellm.litellm_core_utils.logging_utils import (
     truncate_base64_in_messages,
     truncate_base64_in_messages_async,
 )
-from collections.abc import AsyncIterator, Callable, Coroutine
+from collections.abc import AsyncIterator, Callable, Coroutine, Sequence
 from datetime import datetime as datetime_assemble_streaming
 from litellm import(
     Choices,
@@ -325,7 +326,7 @@ class TestTruncateBase64InMessagesAsync:
         ],
         ids=["json_rows", "sse_lines", "code_with_semicolons", "sse_lines_with_semicolons", "base64_marker_without_data"],
     )
-    def test_tool_message_without_data_uri_is_copied_without_a_regex_scan(self, row):
+    def test_tool_message_without_data_uri_is_copied_without_a_regex_scan(self, row: str):
         tool_output: Final = (row * (_PLAIN_TOOL_OUTPUT_CHARS // len(row) + 1))[:_PLAIN_TOOL_OUTPUT_CHARS]
         messages: Final = _tool_result_messages(tool_output)
 
@@ -347,7 +348,9 @@ class TestTruncateBase64InMessagesAsync:
         assert payload not in result[0]["content"][1]["image_url"]["url"]
         assert "base64_data truncated" in result[0]["content"][1]["image_url"]["url"]
 
-    def test_large_plain_text_is_copied_inline_without_a_thread_hop(self, monkeypatch):
+    def test_large_plain_text_is_copied_inline_without_rescanning_or_a_thread_hop(
+        self, monkeypatch: pytest.MonkeyPatch, scan_threads: Sequence[int]
+    ):
         monkeypatch.setattr(logging_utils, "BASE64_TRUNCATION_OFFLOAD_THRESHOLD_CHARS", 1_000)
         messages: Final = _tool_result_messages("plain tool output\n" * 100)
 
@@ -355,12 +358,15 @@ class TestTruncateBase64InMessagesAsync:
 
         assert result == messages
         assert result is not messages
+        assert scan_threads == []
 
     @pytest.mark.asyncio
-    async def test_long_plain_text_history_is_copied_off_the_event_loop(self, monkeypatch, scan_threads):
+    async def test_long_plain_text_history_is_copied_off_the_event_loop(
+        self, monkeypatch: pytest.MonkeyPatch, scan_threads: Sequence[int]
+    ):
         monkeypatch.setattr(logging_utils, "BASE64_TRUNCATION_OFFLOAD_THRESHOLD_CHARS", 1_000)
         monkeypatch.setattr(logging_utils, "BASE64_TRUNCATION_OFFLOAD_THRESHOLD_STRINGS", 10)
-        messages: Final = [message for turn in range(5) for message in _tool_result_messages(f"rows {turn}\n" * 100)]
+        messages: Final = list(chain.from_iterable(_tool_result_messages(f"rows {turn}\n" * 100) for turn in range(5)))
 
         result: Final = await truncate_base64_in_messages_async(messages)
         offload_threads: Final = tuple(scan_threads)

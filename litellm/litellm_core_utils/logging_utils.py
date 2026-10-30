@@ -3,7 +3,7 @@ import functools
 import inspect
 import re
 import time
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Final, TypeAlias, cast
 
@@ -76,6 +76,7 @@ def _truncate_base64_in_string(value: str) -> str:
 
 def _truncate_base64_in_value(
     value: str | dict[str, object] | list[object] | None,
+    truncate_string: Callable[[str], str],
 ) -> str | dict[str, object] | list[object] | None:
     """Iteratively truncate base64 data URIs in a JSON-like value (str/list/dict).
 
@@ -85,13 +86,13 @@ def _truncate_base64_in_value(
     # Stack entries: (source_value, depth, parent_container, key_or_index)
     # We mutate *copies* of dicts/lists in-place via parent references.
     if isinstance(value, str):
-        return _truncate_base64_in_string(value)
+        return truncate_string(value)
     if not isinstance(value, (dict, list)):
         return value
 
     # Shallow-copy the root so we don't mutate the caller's data.
     root: Final = {k: v for k, v in value.items()} if isinstance(value, dict) else list(value)
-    stack: Final[list] = [(root, 0)]
+    stack: Final[list[tuple[dict[str, object] | list[object], int]]] = [(root, 0)]  # mutable-ok: explicit stack
 
     while stack:
         container, depth = stack.pop()
@@ -100,19 +101,19 @@ def _truncate_base64_in_value(
         if isinstance(container, dict):
             for k, v in container.items():
                 if isinstance(v, str):
-                    container[k] = _truncate_base64_in_string(v)
+                    container[k] = truncate_string(v)
                 elif isinstance(v, dict):
-                    copy: dict | list = {ck: cv for ck, cv in v.items()}
+                    copy: dict[str, object] | list[object] = {ck: cv for ck, cv in v.items()}
                     container[k] = copy
                     stack.append((copy, depth + 1))
                 elif isinstance(v, list):
                     copy = list(v)
                     container[k] = copy
                     stack.append((copy, depth + 1))
-        elif isinstance(container, list):
+        else:
             for i, v in enumerate(container):
                 if isinstance(v, str):
-                    container[i] = _truncate_base64_in_string(v)
+                    container[i] = truncate_string(v)
                 elif isinstance(v, dict):
                     copy = {ck: cv for ck, cv in v.items()}
                     container[i] = copy
@@ -134,8 +135,15 @@ def truncate_base64_in_messages(
     """
     if messages is None or MAX_BASE64_LENGTH_FOR_LOGGING <= 0:
         return messages
+    return _copy_messages(messages, _truncate_base64_in_string)
+
+
+def _copy_messages(
+    messages: str | dict[str, object] | list[object],  # mutable-ok: same contract as truncate_base64_in_messages
+    truncate_string: Callable[[str], str],
+) -> str | dict[str, object] | list[object] | None:  # mutable-ok: same contract as truncate_base64_in_messages
     try:
-        return _truncate_base64_in_value(messages)
+        return _truncate_base64_in_value(messages, truncate_string)
     except Exception as e:
         verbose_logger.debug("Failed to truncate base64 in messages: %s", e)
         return messages
@@ -177,8 +185,10 @@ async def truncate_base64_in_messages_async(
     if messages is None or MAX_BASE64_LENGTH_FOR_LOGGING <= 0:
         return messages
     leaves: Final = tuple(_iter_string_leaves(messages))
-    if sum(len(leaf) for leaf in leaves) < BASE64_TRUNCATION_OFFLOAD_THRESHOLD_CHARS or _is_few_plain_strings(leaves):
+    if sum(len(leaf) for leaf in leaves) < BASE64_TRUNCATION_OFFLOAD_THRESHOLD_CHARS:
         return truncate_base64_in_messages(messages)
+    if _is_few_plain_strings(leaves):
+        return _copy_messages(messages, lambda text: text)
     return await asyncio.to_thread(truncate_base64_in_messages, messages)
 
 
