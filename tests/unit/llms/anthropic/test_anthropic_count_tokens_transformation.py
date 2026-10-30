@@ -14,6 +14,7 @@ from pydantic import JsonValue, TypeAdapter
 
 import litellm
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+from litellm.llms.anthropic.common_utils import AnthropicError
 from litellm.llms.anthropic.count_tokens.handler import AnthropicCountTokensHandler
 from litellm.llms.anthropic.count_tokens.token_counter import AnthropicTokenCounter
 from litellm.llms.anthropic.count_tokens.transformation import (
@@ -524,6 +525,35 @@ def test_count_drops_a_leading_system_message_without_text() -> None:
 
     assert result == {"model": "claude-opus-5-5", "messages": [{"role": "user", "content": "hi"}]}
 
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("httpx_transport_clients")
+@pytest.mark.parametrize("handler_type", (AnthropicCountTokensHandler, AzureAIAnthropicCountTokensHandler))
+async def test_handler_answers_400_for_a_text_attachment_it_cannot_decode(
+    handler_type: type[AnthropicCountTokensHandler] | type[AzureAIAnthropicCountTokensHandler],
+) -> None:
+    text_attachment: Final = "data:text/plain;charset=bogus-cs;base64," + b64encode(b"hello").decode()
+    messages: Final[list[dict[str, JsonValue]]] = [
+        {"role": "user", "content": [{"type": "image_url", "image_url": {"url": text_attachment}}]}
+    ]
+    api_base: Final = "https://gateway.example"
+    handler: Final = handler_type()
+    with respx.mock:
+        route: Final = respx.post(f"{api_base}/v1/messages/count_tokens").mock(
+            return_value=httpx.Response(200, json={"input_tokens": 7})
+        )
+        with pytest.raises(AnthropicError) as exc_info:
+            await (
+                handler.handle_count_tokens_request(
+                    model="claude-opus-5-5", messages=messages, api_base=api_base, auth_header={"x-api-key": "test-key"}
+                ) if isinstance(handler, AnthropicCountTokensHandler) else handler.handle_count_tokens_request(
+                    model="claude-opus-5-5", messages=messages, api_base=api_base, api_key="test-key"
+                )
+            )
+
+    assert exc_info.value.status_code == 400
+    assert "bogus-cs" in exc_info.value.message
+    assert not route.called
 
 @pytest.mark.asyncio
 async def test_handler_sends_the_leading_system_run_as_system_not_as_a_message(httpx_transport_clients):

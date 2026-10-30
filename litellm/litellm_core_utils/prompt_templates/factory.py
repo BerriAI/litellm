@@ -909,7 +909,7 @@ def convert_to_anthropic_image_obj(openai_image_url: str, format: str | None) ->
         # Extract the media type and base64 data
         media_type, base64_data = openai_image_url.split("data:")[1].split(";base64,")
 
-        if format:
+        if isinstance(format, str) and format:
             media_type = format
         else:
             media_type = media_type.replace("\\/", "/")
@@ -954,7 +954,7 @@ def create_anthropic_image_param(
             return anthropic_content_element_factory(
                 convert_to_anthropic_image_obj(openai_image_url=base64_url, format=format)
             )
-        elif format is not None and format.partition(";")[0].strip().lower() == "application/pdf":
+        elif isinstance(format, str) and format.partition(";")[0].strip().lower() == "application/pdf":
             return AnthropicMessagesDocumentParam(
                 type="document",
                 source=AnthropicContentParamSourceUrl(type="url", url=image_url),
@@ -2365,8 +2365,10 @@ def anthropic_content_element_factory(
 
 
 def select_anthropic_content_block_type_for_file(
-    format: str,
+    format: object,
 ) -> Literal["document", "image", "container_upload"]:
+    if not isinstance(format, str):
+        return "container_upload"
     media_type: Final = format.strip().lower()
     if media_type == "application/pdf" or media_type == "text/plain":
         return "document"

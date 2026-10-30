@@ -9488,3 +9488,31 @@ def test_create_anthropic_image_param_links_an_https_pdf_as_a_document_only_when
         "type": "image",
         "source": {"type": "url", "url": url},
     }
+
+
+@pytest.mark.parametrize("bad_format", (7, ["image/png"]), ids=("int", "list"))
+@pytest.mark.parametrize(
+    "block, expected",
+    (
+        (
+            {"type": "image_url", "image_url": {"url": "https://example.com/cat.png"}},
+            {"type": "image", "source": {"type": "url", "url": "https://example.com/cat.png"}},
+        ),
+        (
+            {"type": "image_url", "image_url": {"url": _PNG_DATA_URI}},
+            {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": _PNG_DATA_URI.split(",", 1)[1]}},
+        ),
+        (
+            {"type": "file", "file": {"file_id": "file_abc"}},
+            {"type": "container_upload", "file_id": "file_abc"},
+        ),
+    ),
+    ids=("https_link", "data_uri", "file_id"),
+)
+def test_anthropic_messages_pt_ignores_a_format_that_is_not_a_string(bad_format, block, expected):
+    payload_key = "image_url" if block["type"] == "image_url" else "file"
+    messages = [{"role": "user", "content": [{**block, payload_key: {**block[payload_key], "format": bad_format}}]}]
+
+    result = anthropic_messages_pt(messages=messages, model="claude-sonnet-5", llm_provider="anthropic")
+
+    assert result[0]["content"] == [expected]
