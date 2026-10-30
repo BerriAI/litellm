@@ -3171,6 +3171,30 @@ def anthropic_messages_pt(
                         _has_server_tool_calls = True
                         break
 
+            # Get web_search_results and tool_results from provider_specific_fields
+            # for server_tool_use reconstruction.
+            # Fixes: https://github.com/BerriAI/litellm/issues/17737
+            _provider_specific_fields_raw = assistant_content_block.get("provider_specific_fields")
+            _provider_specific_fields: dict[str, Any] = (
+                cast(dict[str, Any], _provider_specific_fields_raw)
+                if isinstance(_provider_specific_fields_raw, dict)
+                else {}
+            )
+            tool_invoke_results = (
+                convert_to_anthropic_tool_invoke(
+                    assistant_tool_calls,
+                    web_search_results=_provider_specific_fields.get("web_search_results"),
+                    tool_results=_provider_specific_fields.get("tool_results"),
+                    answered_tool_ids=client_answered_tool_ids,
+                )
+                if assistant_tool_calls is not None
+                else ()
+            )
+            turn_paused = bool(_unrun_server_tool_use_ids(tool_invoke_results))
+            replayed_tool_invokes, replayed_thinking_blocks = _paused_turn_replay(
+                tool_invoke_results, thinking_blocks or (), is_final_message=msg_i == len(messages) - 1
+            )
+
             if (
                 thinking_blocks is not None
                 and _has_server_tool_calls
@@ -3182,23 +3206,6 @@ def anthropic_messages_pt(
                 # thinking_2, text, server_tool_use_2, result_2, ...].
                 # We must preserve this interleaved order because Anthropic
                 # verifies thinking block signatures based on position.
-
-                # Build the tool call groups (server_tool_use + its result)
-                _provider_specific_fields_raw_tc = assistant_content_block.get("provider_specific_fields")
-                _provider_specific_fields_tc: dict[str, Any] = {}
-                if isinstance(_provider_specific_fields_raw_tc, dict):
-                    _provider_specific_fields_tc = cast(dict[str, Any], _provider_specific_fields_raw_tc)
-                _web_search_results_tc = _provider_specific_fields_tc.get("web_search_results")
-                _tool_results_tc = _provider_specific_fields_tc.get("tool_results")
-                tool_invoke_results = convert_to_anthropic_tool_invoke(
-                    assistant_tool_calls,
-                    web_search_results=_web_search_results_tc,
-                    tool_results=_tool_results_tc,
-                    answered_tool_ids=client_answered_tool_ids,
-                )
-                replayed_tool_invokes, replayed_thinking_blocks = _paused_turn_replay(
-                    tool_invoke_results, thinking_blocks, is_final_message=msg_i == len(messages) - 1
-                )
 
                 # Group tool invoke results into (server_tool_use, result) pairs
                 # and separate regular tool_use blocks
@@ -3301,18 +3308,18 @@ def anthropic_messages_pt(
                 )
                 _content_list = assistant_content_block.get("content") if _content_is_list else None
 
-                if (
-                    thinking_blocks is not None and not _content_is_list
-                ):  # IMPORTANT: ADD THIS FIRST, ELSE ANTHROPIC WILL RAISE AN ERROR
-                    assistant_content.extend(thinking_blocks)
+                if not _content_is_list:  # IMPORTANT: ADD THIS FIRST, ELSE ANTHROPIC WILL RAISE AN ERROR
+                    assistant_content.extend(replayed_thinking_blocks)
                 if _content_is_list and _content_list is not None:
-                    for m in _with_missing_thinking_blocks(_content_list, thinking_blocks or ()):
+                    for m in _with_missing_thinking_blocks(_content_list, replayed_thinking_blocks):
                         if not isinstance(m, dict):
                             continue
                         # handle thinking blocks
                         if (thinking_block := _as_thinking_block(m)) is not None:
                             assistant_content.extend(
-                                _replayable_thinking_blocks([thinking_block], drop_params=drop_params)
+                                ()
+                                if turn_paused
+                                else _replayable_thinking_blocks([thinking_block], drop_params=drop_params)
                             )
                             continue
                         text_block = cast(str, m.get("text", ""))
@@ -3352,28 +3359,9 @@ def anthropic_messages_pt(
                     assistant_content.append(_anthropic_text_content_element)
 
             if assistant_tool_calls is not None:  # support assistant tool invoke conversion
-                # Get web_search_results and tool_results from provider_specific_fields
-                # for server_tool_use reconstruction.
-                # Fixes: https://github.com/BerriAI/litellm/issues/17737
-                _provider_specific_fields_raw = assistant_content_block.get("provider_specific_fields")
-                _provider_specific_fields: dict[str, Any] = {}
-                if isinstance(_provider_specific_fields_raw, dict):
-                    _provider_specific_fields = cast(dict[str, Any], _provider_specific_fields_raw)
-                _web_search_results = _provider_specific_fields.get("web_search_results")
-                _tool_results = _provider_specific_fields.get("tool_results")
-                tool_invoke_results = convert_to_anthropic_tool_invoke(
-                    assistant_tool_calls,
-                    web_search_results=_web_search_results,
-                    tool_results=_tool_results,
-                    answered_tool_ids=client_answered_tool_ids,
-                )
-                resent_tool_invokes, _ = _paused_turn_replay(
-                    tool_invoke_results, (), is_final_message=msg_i == len(messages) - 1
-                )
-
                 # Prevent "tool_use ids must be unique" errors by filtering duplicates
                 # This can happen when merging history that already contains the tool calls
-                for item in resent_tool_invokes:
+                for item in replayed_tool_invokes:
                     # tool_use items are typically dicts, but handle objects just in case
                     item_id = item.get("id") if isinstance(item, dict) else getattr(item, "id", None)
 

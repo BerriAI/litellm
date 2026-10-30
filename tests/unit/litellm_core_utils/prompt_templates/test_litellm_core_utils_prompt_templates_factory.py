@@ -8157,10 +8157,10 @@ def test_anthropic_messages_pt_interleave_more_thinking_than_tool_groups():
 
 
 
-def _paused_web_search_turn(thinking_blocks):
+def _paused_web_search_turn(thinking_blocks, content="Step 1 is Tokyo."):
     assistant_message = {
         "role": "assistant",
-        "content": "Step 1 is Tokyo.",
+        "content": content,
         "tool_calls": [
             {
                 "id": "srvtoolu_01Done",
@@ -8212,46 +8212,64 @@ _PAUSED_TURN_THINKING_CASES = pytest.mark.parametrize(
     ids=["without_thinking", "fewer_thinking_than_searches", "more_thinking_than_searches"],
 )
 
+_PAUSED_TURN_CONTENT_CASES = pytest.mark.parametrize(
+    "content",
+    [
+        "Step 1 is Tokyo.",
+        [{"type": "text", "text": "Step 1 is Tokyo."}],
+        [
+            {"type": "thinking", "thinking": "Search first", "signature": "sig_1"},
+            {"type": "text", "text": "Step 1 is Tokyo."},
+        ],
+    ],
+    ids=["string_content", "text_parts", "text_parts_with_inline_thinking"],
+)
+
 
 @_PAUSED_TURN_THINKING_CASES
-def test_anthropic_messages_pt_paused_turn_ends_on_unrun_server_tool_use(thinking_blocks):
+@_PAUSED_TURN_CONTENT_CASES
+def test_anthropic_messages_pt_paused_turn_ends_on_unrun_server_tool_use(thinking_blocks, content):
     """A pause_turn response resent as-is must end on its unrun server_tool_use:
     Anthropic reads a turn ending on text as prefill, which newer models reject,
     and a tool_use without a tool_result is a 400. Its thinking blocks are dropped,
     since chat cannot say where Claude wrote them and Anthropic rejects moved ones."""
     result = anthropic_messages_pt(
-        [{"role": "user", "content": "Play the sister city chain game."}, _paused_web_search_turn(thinking_blocks)],
+        [
+            {"role": "user", "content": "Play the sister city chain game."},
+            _paused_web_search_turn(thinking_blocks, content),
+        ],
         model="claude-sonnet-4-5",
         llm_provider="anthropic",
     )
 
-    content = result[-1]["content"]
-    assert content[-1] == {
+    replayed = result[-1]["content"]
+    assert replayed[-1] == {
         "type": "server_tool_use",
         "id": "srvtoolu_01Paused",
         "name": "web_search",
         "input": {"query": "Adelaide sister cities"},
     }
-    assert [block["id"] for block in content if block["type"] == "server_tool_use"] == [
+    assert [block["id"] for block in replayed if block["type"] == "server_tool_use"] == [
         "srvtoolu_01Done",
         "srvtoolu_02Done",
         "srvtoolu_01Paused",
     ]
-    assert [block["type"] for block in content if block["type"] in ("tool_use", "thinking")] == []
-    assert [block.get("tool_use_id") for block in content if block["type"] == "web_search_tool_result"] == [
+    assert [block["type"] for block in replayed if block["type"] in ("tool_use", "thinking")] == []
+    assert [block.get("tool_use_id") for block in replayed if block["type"] == "web_search_tool_result"] == [
         "srvtoolu_01Done",
         "srvtoolu_02Done",
     ]
 
 
 @_PAUSED_TURN_THINKING_CASES
-def test_anthropic_messages_pt_paused_turn_before_new_user_message_drops_unrun_search(thinking_blocks):
+@_PAUSED_TURN_CONTENT_CASES
+def test_anthropic_messages_pt_paused_turn_before_new_user_message_drops_unrun_search(thinking_blocks, content):
     """A client may answer a paused turn with a new user message instead of resending it.
     Anthropic then rejects a server_tool_use without its result, so the unrun search is dropped."""
     result = anthropic_messages_pt(
         [
             {"role": "user", "content": "Play the sister city chain game."},
-            _paused_web_search_turn(thinking_blocks),
+            _paused_web_search_turn(thinking_blocks, content),
             {"role": "user", "content": "Please continue."},
         ],
         model="claude-sonnet-4-5",
@@ -8259,17 +8277,17 @@ def test_anthropic_messages_pt_paused_turn_before_new_user_message_drops_unrun_s
     )
 
     assert [message["role"] for message in result] == ["user", "assistant", "user"]
-    content = result[1]["content"]
-    assert [block["id"] for block in content if block["type"] == "server_tool_use"] == [
+    replayed = result[1]["content"]
+    assert [block["id"] for block in replayed if block["type"] == "server_tool_use"] == [
         "srvtoolu_01Done",
         "srvtoolu_02Done",
     ]
-    assert [block["type"] for block in content if block["type"] in ("tool_use", "thinking")] == []
-    assert [block.get("tool_use_id") for block in content if block["type"] == "web_search_tool_result"] == [
+    assert [block["type"] for block in replayed if block["type"] in ("tool_use", "thinking")] == []
+    assert [block.get("tool_use_id") for block in replayed if block["type"] == "web_search_tool_result"] == [
         "srvtoolu_01Done",
         "srvtoolu_02Done",
     ]
-    assert {"type": "text", "text": "Step 1 is Tokyo."} in content
+    assert {"type": "text", "text": "Step 1 is Tokyo."} in replayed
 
 
 def test_anthropic_messages_pt_list_content_with_thinking_preserves_order():
