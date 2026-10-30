@@ -42,7 +42,11 @@ from litellm.caching.redis_batch import (
     active_request_redis_batch,
 )
 from litellm.caching.redis_cache import log_redis_failure
-from litellm.constants import DYNAMIC_RATE_LIMIT_ERROR_THRESHOLD_PER_MINUTE, INTERNAL_CALL_ORIGIN_METADATA_KEY
+from litellm.constants import (
+    DYNAMIC_RATE_LIMIT_ERROR_THRESHOLD_PER_MINUTE,
+    INTERNAL_CALL_ORIGIN_METADATA_KEY,
+    NO_MAX_TOKENS_TPM_RESERVATION_FRACTION,
+)
 from litellm.cost_calculator import get_usage_object
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.audio_utils.utils import estimate_audio_tokens
@@ -508,11 +512,6 @@ REDIS_NODE_HASHTAG_NAME: Final = "all_keys"
 # *some* output budget; these define that fallback estimate.
 DEFAULT_MAX_TOKENS_ESTIMATE: Final = 4096
 DEFAULT_CHARS_PER_TOKEN: Final = 4
-# Fraction of the available output budget reserved as the upfront floor when
-# the request omits max_tokens. Applied to both DEFAULT_MAX_TOKENS_ESTIMATE
-# (baseline floor) and to the smallest configured TPM limit (capped floor for
-# small per-tenant TPM caps).
-_TPM_FLOOR_FRACTION: Final = 4
 # Both embeddings and the Responses API put their prompt in data["input"],
 # but only embeddings have no output tokens. Every "is this an embedding"
 # check on data["input"] must exclude these call types, or a Responses call
@@ -1003,10 +1002,10 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         per-tenant cap can't be tripped by the floor alone. Returns the
         baseline floor when no limit is provided.
         """
-        baseline: Final = DEFAULT_MAX_TOKENS_ESTIMATE // _TPM_FLOOR_FRACTION
+        baseline: Final = int(DEFAULT_MAX_TOKENS_ESTIMATE * NO_MAX_TOKENS_TPM_RESERVATION_FRACTION)
         if min_configured_tpm_limit is None:
             return baseline
-        return min(baseline, max(1, min_configured_tpm_limit // _TPM_FLOOR_FRACTION))
+        return min(baseline, max(1, int(min_configured_tpm_limit * NO_MAX_TOKENS_TPM_RESERVATION_FRACTION)))
 
     @staticmethod
     def _is_embedding_request(data: object, call_type: str | None) -> bool:
@@ -1138,7 +1137,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             if call_type in RESPONSES_API_CALL_TYPES
             else base_capped_floor
         )
-        baseline_floor: Final = DEFAULT_MAX_TOKENS_ESTIMATE // _TPM_FLOOR_FRACTION
+        baseline_floor: Final = int(DEFAULT_MAX_TOKENS_ESTIMATE * NO_MAX_TOKENS_TPM_RESERVATION_FRACTION)
         is_embedding: Final = PROXY_MaxParallelRequestsHandler_v3._is_embedding_request(data, call_type)
         if (
             capped_floor >= baseline_floor
