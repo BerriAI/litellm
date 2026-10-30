@@ -23,6 +23,7 @@ from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.decisions.transformation import (
     BaseDecisionsConfig,
     DecisionsResponseValidationError,
+    cost_map_mode,
     image_media_type,
     image_param,
     input_images,
@@ -276,8 +277,11 @@ class _DeploymentCapabilities(BaseModel):
     supports_audio_input: _DeploymentFlag = None
     supports_video_input: _DeploymentFlag = None
 
-    def decisions_media_flag(self, flag: bool | None) -> bool | None:
-        return flag if self.mode is None or is_decisions_model_mode(self.mode) else None
+    def decisions_media_flag(self, flag: bool | None, model: str, custom_llm_provider: str) -> bool | None:
+        if flag is None:
+            return None
+        mode: Final = self.mode if self.mode is not None else cost_map_mode(model, custom_llm_provider)
+        return flag if mode is None or is_decisions_model_mode(mode) else None
 
 
 @dataclass(frozen=True, slots=True)
@@ -293,17 +297,24 @@ def _resolved_support(
     custom_llm_provider: str,
     headers: Mapping[str, str],
     kwargs: Mapping[str, object],
+    fields: RequestFields,
 ) -> _ResolvedSupport:
     deployment: Final = _DeploymentCapabilities.model_validate(kwargs.get("model_info") or {})
     return _ResolvedSupport(
         box_questions=provider_config.supports_box_questions(
             model, custom_llm_provider, headers, deployment.supports_box_questions
         ),
-        audio=provider_config.supports_audio_input(
-            model, custom_llm_provider, deployment.decisions_media_flag(deployment.supports_audio_input)
+        audio=bool(fields.audio)
+        and provider_config.supports_audio_input(
+            model,
+            custom_llm_provider,
+            deployment.decisions_media_flag(deployment.supports_audio_input, model, custom_llm_provider),
         ),
-        videos=provider_config.supports_video_input(
-            model, custom_llm_provider, deployment.decisions_media_flag(deployment.supports_video_input)
+        videos=bool(fields.videos)
+        and provider_config.supports_video_input(
+            model,
+            custom_llm_provider,
+            deployment.decisions_media_flag(deployment.supports_video_input, model, custom_llm_provider),
         ),
     )
 
@@ -499,7 +510,7 @@ def prepare_call(
         raise litellm.BadRequestError(message=str(error), model=model, llm_provider=provider) from error
     try:
         headers: Final = _outbound_headers(extra_headers, provider, kwargs)
-        support: Final = _resolved_support(provider_config, canonical_model, provider, headers, kwargs)
+        support: Final = _resolved_support(provider_config, canonical_model, provider, headers, kwargs, fields)
         request_safety_identifier: Final = _request_safety_identifier(safety_identifier, provider_config, kwargs)
         request: Final = _fields_without_unsupported_media(fields, support, kwargs).validate(
             safety_identifier=request_safety_identifier, drops_params=_drops_params(kwargs)

@@ -497,12 +497,16 @@ def ir_to_systemone_response(response: DecisionsIRResponse, request: DecisionsIR
     )
 
 
-def _is_decisions_model(model: str, custom_llm_provider: str) -> bool:
+def cost_map_mode(model: str, custom_llm_provider: str) -> str | None:
     try:
-        model_mode: Final = litellm.get_model_info(model=model, custom_llm_provider=custom_llm_provider).get("mode")
+        model_info: Final = litellm.get_model_info(model=model, custom_llm_provider=custom_llm_provider)
     except Exception:  # noqa: BLE001  # get_model_info raises bare Exception for an unmapped model, which has no mode
-        return False
-    return is_decisions_model_mode(model_mode)
+        return None
+    return model_info.get("mode")
+
+
+def _is_decisions_model(model: str, custom_llm_provider: str) -> bool:
+    return is_decisions_model_mode(cost_map_mode(model, custom_llm_provider))
 
 
 class BaseDecisionsConfig(ABC):

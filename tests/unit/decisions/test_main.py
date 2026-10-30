@@ -3773,6 +3773,44 @@ async def test_media_flags_on_a_deployment_whose_own_mode_is_not_decisions_never
 
 
 @pytest.mark.asyncio
+async def test_media_flags_on_a_deployment_without_its_own_mode_follow_the_mode_the_cost_map_lists(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, local_model_cost_map: None
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    for mode in ("chat", "decisions"):
+        monkeypatch.setitem(
+            litellm.model_cost, f"openrouter/example/omni-{mode}", {"litellm_provider": "openrouter", "mode": mode}
+        )
+    route: Final = respx_mock.post("https://openrouter.ai/api/alpha/decisions").respond(json=_RESPONSE)
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": mode,
+                "litellm_params": {"model": f"openrouter/example/omni-{mode}", "api_key": "k"},
+                "model_info": {"id": f"listed-{mode}", "supports_audio_input": True, "supports_video_input": True},
+            }
+            for mode in ("chat", "decisions")
+        ]
+    )
+    send: Final = partial(
+        router.adecisions, input="review", questions=_PREDICATE_QUESTIONS, audio=_AUDIO_CLIPS, videos=_VIDEO_CLIPS
+    )
+
+    with pytest.raises(litellm.UnsupportedParamsError, match=re.escape("['audio', 'videos']")):
+        await send(model="chat")
+    assert not route.called
+
+    monkeypatch.setattr(litellm, "drop_params", True)
+    await send(model="chat")
+    dropped: Final = json.loads(route.calls.last.request.content)
+    assert ("audio" in dropped, "videos" in dropped) == (False, False)
+
+    await send(model="decisions")
+    sent: Final = json.loads(route.calls.last.request.content)
+    assert (sent["audio"], sent["videos"]) == (list(_AUDIO_CLIPS), list(_VIDEO_CLIPS))
+
+
+@pytest.mark.asyncio
 async def test_a_deployment_that_turns_audio_off_is_refused_or_dropped_even_when_the_cost_map_allows_it(
     respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, local_model_cost_map: None
 ) -> None:
