@@ -245,3 +245,24 @@ async def test_shutdown_during_conflict_isolation_completes_every_receipt() -> N
     results: Final = await asyncio.gather(first, second, return_exceptions=True)
     assert all(isinstance(result, UsageCaptureError) for result in results)
     assert (meter.pending_records, meter.pending_bytes) == (0, 0)
+
+
+@pytest.mark.asyncio
+async def test_elapsed_flush_deadline_commits_a_partial_batch() -> None:
+    from litellm.proxy.spend_tracking.usage_meter import _wait_for_batch
+
+    database: Final = CommitBarrier()
+    database.release.set()
+
+    async def expired_flush(wakeup: asyncio.Event, timeout: float) -> None:
+        await _wait_for_batch(wakeup, 0)
+
+    meter: Final = DurableUsageMeter(database.write, UsageCaptureSettings(batch_size=10), wait_for_batch=expired_flush)
+    receipt: Final = meter.submit((_write("partial-batch"),))
+    try:
+        await receipt
+        assert database.committed == ("partial-batch",)
+        assert database.transactions == 1
+        assert (meter.pending_records, meter.pending_bytes) == (0, 0)
+    finally:
+        await meter.stop(0)

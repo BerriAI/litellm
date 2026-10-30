@@ -34,7 +34,7 @@ _DAILY_TARGETS: Final = (
 )
 
 
-def _targets(dimensions: tuple[Dimension, ...]) -> tuple[DeliveryTarget, ...]:
+def usage_delivery_targets(dimensions: tuple[Dimension, ...]) -> tuple[DeliveryTarget, ...]:
     names: Final = frozenset(dimension.name for dimension in dimensions)
     return tuple(dict.fromkeys(target for dimension, target in _DAILY_TARGETS if dimension in names))
 
@@ -63,7 +63,7 @@ class _Pending:
 async def _wait_for_batch(wakeup: asyncio.Event, timeout: float) -> None:
     try:
         await asyncio.wait_for(wakeup.wait(), timeout)
-    except TimeoutError:
+    except asyncio.TimeoutError:
         return
 
 
@@ -139,7 +139,7 @@ class DurableUsageMeter:
 
     async def record(self, event: InboundUsageEvent | OutboundUsageEvent) -> None:
         envelope: Final = '{"event":' + event.model_dump_json() + "}"
-        await asyncio.shield(self.submit((UsageWrite(event, envelope, _targets(event.dimensions)),)))
+        await asyncio.shield(self.submit((UsageWrite(event, envelope, usage_delivery_targets(event.dimensions)),)))
 
     async def flush(self) -> None:
         self._ensure_worker()
@@ -157,7 +157,7 @@ class DurableUsageMeter:
             self._closed = True
         try:
             await asyncio.wait_for(self.close(), timeout)
-        except TimeoutError:
+        except asyncio.TimeoutError:
             if self._task is not None:
                 self._task.cancel()
                 await asyncio.gather(self._task, return_exceptions=True)
