@@ -3949,3 +3949,41 @@ async def test_async_post_call_failure_hook_disable_pre_routing_error_logs(
             user_api_key_dict=user_api_key_dict,
         )
     assert len(writer.rows) == rows_written
+
+
+@pytest.mark.asyncio
+async def test_failure_capture_overload_does_not_skip_budget_release(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy.spend_tracking.usage_capture import UsageCaptureRuntime
+    from litellm.proxy.spend_tracking.usage_meter import UsageCaptureSettings
+    from tests.unit.proxy.spend_tracking.test_usage_meter import CommitBarrier, _write
+
+    database: Final = CommitBarrier()
+    runtime: Final = UsageCaptureRuntime()
+    runtime.start(database.write, UsageCaptureSettings(batch_size=2, max_pending_records=2))
+    monkeypatch.setattr(proxy_server, "usage_capture", runtime)
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    meter: Final = runtime.meter
+    assert meter is not None
+    receipt: Final = meter.submit((_write("occupied-one"), _write("occupied-two")))
+    auth: Final = UserAPIKeyAuth(budget_reservation={"reserved_cost": 0.5, "entries": [], "finalized": False})
+    request: Final = {
+        "call_type": "acompletion",
+        "litellm_call_id": "failed",
+        "model": "capture-model",
+        "start_time": _CALL_START,
+        "litellm_params": {},
+    }
+    try:
+        await database.entered.wait()
+        await ProxyDBLogger().async_post_call_failure_hook(request, RuntimeError("provider failed"), auth)
+        assert auth.budget_reservation is not None and auth.budget_reservation["finalized"] is True
+        assert "Usage capture failed on the request failure path" in caplog.text
+        assert "_accounting_capture" not in request
+    finally:
+        database.release.set()
+        await runtime.stop(1)
+    await receipt
+    assert database.committed == ("occupied-one", "occupied-two")

@@ -4314,6 +4314,45 @@ async def test_capture_enablement_rejects_unrecoverable_writer_modes(
 
 
 @pytest.mark.asyncio
+async def test_capture_configuration_requires_restart_without_replacing_the_active_writer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy.spend_tracking.usage_capture import UsageCaptureRuntime
+    from litellm.proxy.utils import PrismaClient
+
+    runtime: Final = UsageCaptureRuntime()
+    monkeypatch.setattr(proxy_server, "usage_capture", runtime)
+    monkeypatch.setattr(proxy_server, "general_settings", {"accounting_sync_ack": True})
+    with pytest.raises(ValueError, match="requires accounting_capture"):
+        proxy_server._configure_usage_capture()
+    client: Final = PrismaClient("postgresql://localhost/unused", ProxyLogging(UserApiKeyCache()))
+    monkeypatch.setattr(proxy_server, "prisma_client", client)
+    monkeypatch.setattr(litellm, "apply_search_free_tier", False)
+    monkeypatch.setenv("LITELLM_COLLECTOR_ENABLED", "false")
+    monkeypatch.delenv("SPEND_LOGS_URL", raising=False)
+    monkeypatch.setattr(proxy_server, "general_settings", {"accounting_capture": {"batch_size": 4}})
+    try:
+        proxy_server._configure_usage_capture()
+        active: Final = runtime.meter
+        assert active is not None
+        assert active.settings.batch_size == 4
+        proxy_server._configure_usage_capture()
+        assert runtime.meter is active
+        monkeypatch.setattr(proxy_server, "general_settings", {"accounting_capture": {"batch_size": 6}})
+        with pytest.raises(ValueError, match="Changing accounting_capture requires a worker restart"):
+            proxy_server._configure_usage_capture()
+        monkeypatch.setattr(proxy_server, "general_settings", {})
+        with pytest.raises(ValueError, match="Disabling accounting_capture requires a worker restart"):
+            proxy_server._configure_usage_capture()
+        assert runtime.meter is active
+        assert active.settings.batch_size == 4
+    finally:
+        await runtime.stop(1)
+    assert runtime.meter is None
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("path", "payload"),
     [

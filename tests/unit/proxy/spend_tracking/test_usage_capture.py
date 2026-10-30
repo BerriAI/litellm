@@ -197,6 +197,60 @@ async def test_terminal_retrieval_reuses_accepted_snapshot_but_rejects_changed_u
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("terminal", [False, True])
+async def test_competing_writers_reuse_only_terminal_pricing_snapshots(terminal: bool) -> None:
+    from litellm.constants import INTERNAL_CALL_ORIGIN_METADATA_KEY
+    from litellm.proxy.spend_tracking.usage_capture import UsageBatchWriter, capture_callback
+    from litellm.types.utils import BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN
+
+    database: Final = StoredUsage()
+    attempts: Final = asyncio.Queue[tuple[UsageWrite, ...]]()
+    competing: Final = asyncio.Event()
+
+    async def insert(writes: tuple[UsageWrite, ...]) -> None:
+        attempts.put_nowait(writes)
+        if attempts.qsize() >= 2:
+            competing.set()
+        await competing.wait()
+        await database.insert(writes)
+
+    meters: Final = tuple(
+        DurableUsageMeter(UsageBatchWriter(insert, database.load).write, UsageCaptureSettings()) for _ in range(2)
+    )
+    kwargs: Final = {
+        "call_type": "aget_responses" if terminal else "acompletion",
+        "litellm_call_id": "caller",
+        "model": "capture-model",
+        "litellm_params": {
+            "metadata": {INTERNAL_CALL_ORIGIN_METADATA_KEY: BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN}
+            if terminal
+            else {}
+        },
+    }
+    response: Final = {
+        "id": "job",
+        "status": "completed",
+        "background": terminal,
+        "created_at": NOW.timestamp(),
+        "usage": {"input_tokens": 5, "output_tokens": 2, "total_tokens": 7},
+    }
+    captured: Final = tuple(
+        capture_callback(meter, {**kwargs, "response_cost": price}, response, NOW, NOW)
+        for meter, price in zip(meters, (2.0, 9.0), strict=True)
+    )
+    try:
+        await asyncio.gather(*(meter.flush() for meter in meters))
+        results: Final = await asyncio.gather(*(capture.receipt for capture in captured), return_exceptions=True)
+        assert sum(result is None for result in results) == (2 if terminal else 1)
+        assert sum(isinstance(result, UsageCaptureError) for result in results) == (0 if terminal else 1)
+        assert database.rows in tuple(capture.writes for capture in captured)
+        assert len(database.rows) == (1 if terminal else 2)
+        assert attempts.qsize() == (3 if terminal else 2)
+    finally:
+        await asyncio.gather(*(meter.stop(0) for meter in meters))
+
+
+@pytest.mark.asyncio
 async def test_batch_poll_has_distinct_identity_and_only_terminal_usage_is_chargeable() -> None:
     from litellm.proxy.spend_tracking.usage_capture import capture_callback
 
