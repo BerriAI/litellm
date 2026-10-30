@@ -25,7 +25,8 @@ import pytest
 from fastapi import Request
 from pydantic import ValidationError
 
-from litellm.caching.redis_cache import RedisCache
+from litellm.caching.redis_cache import RedisCache, RedisCircuitBreakerOpenError
+from litellm.constants import REDIS_CIRCUIT_BREAKER_FAILURE_THRESHOLD
 from litellm.proxy.response_polling.polling_handler import ResponsePollingHandler
 from tests._support.fake_redis import fake_redis_cache
 
@@ -38,6 +39,7 @@ async def _seed(cache: RedisCache, state: dict[str, object]) -> None:
 
 async def _legacy_read(cache: RedisCache, polling_id: str) -> dict[str, object]:
     return json.loads(await cache.async_get_cache(ResponsePollingHandler.get_cache_key(polling_id)))
+
 
 from tests.unit.proxy.router_entry_point_stubs import route_entry_points_to_stubs
 
@@ -578,18 +580,21 @@ class TestResponsePollingHandler:
         assert await handler.get_state("litellm_poll_test") is None
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("stored", [b"not json", b'{"id": "single-encoded"}', b'"[1, 2]"'])
-    async def test_a_state_that_does_not_decode_reads_as_missing(self, stored: bytes):
+    @pytest.mark.parametrize("stored", [b'{"id": "single-encoded"}', b'"[1, 2]"'])
+    async def test_a_state_that_does_not_decode_raises_from_reads_and_updates(self, stored: bytes):
         server = fakeredis.FakeServer()
         await fakeredis.FakeAsyncRedis(server=server).set(
             ResponsePollingHandler.get_cache_key("litellm_poll_x"), stored
         )
         handler = ResponsePollingHandler(redis_cache=fake_redis_cache(server))
 
-        assert await handler.get_state("litellm_poll_x") is None
+        with pytest.raises((TypeError, ValueError)):
+            await handler.get_state("litellm_poll_x")
+        with pytest.raises((TypeError, ValueError)):
+            await handler.update_state("litellm_poll_x", status="completed")
 
     @pytest.mark.asyncio
-    async def test_an_unreachable_redis_reads_as_missing_and_fails_the_delete(self):
+    async def test_an_unreachable_redis_reads_as_missing_and_raises_from_the_delete(self):
         server = fakeredis.FakeServer()
         cache = fake_redis_cache(server)
         await _seed(cache, {"id": "litellm_poll_test", "status": "queued"})
@@ -597,9 +602,45 @@ class TestResponsePollingHandler:
         server.connected = False
 
         assert await handler.get_state("litellm_poll_test") is None
-        assert await handler.delete_polling("litellm_poll_test") is False
+        await handler.update_state("litellm_poll_test", status="completed")
+        with pytest.raises(RuntimeError):
+            await handler.delete_polling("litellm_poll_test")
         queued = await handler.create_initial_state(polling_id="litellm_poll_new", request_data={})
         assert queued.status == "queued"
+
+    @pytest.mark.asyncio
+    async def test_an_open_breaker_raises_from_every_operation(self):
+        server = fakeredis.FakeServer()
+        cache = fake_redis_cache(server)
+        handler = ResponsePollingHandler(redis_cache=cache)
+        server.connected = False
+        for _ in range(REDIS_CIRCUIT_BREAKER_FAILURE_THRESHOLD):
+            assert await handler.get_state("litellm_poll_test") is None
+
+        with pytest.raises(RedisCircuitBreakerOpenError):
+            await handler.get_state("litellm_poll_test")
+        with pytest.raises(RedisCircuitBreakerOpenError):
+            await handler.update_state("litellm_poll_test", status="completed")
+        with pytest.raises(RedisCircuitBreakerOpenError):
+            await handler.create_initial_state(polling_id="litellm_poll_new", request_data={})
+        with pytest.raises(RedisCircuitBreakerOpenError):
+            await handler.delete_polling("litellm_poll_test")
+
+    @pytest.mark.asyncio
+    async def test_initial_state_and_updates_keep_the_legacy_bytes_in_redis(self):
+        server = fakeredis.FakeServer()
+        raw = fakeredis.FakeAsyncRedis(server=server)
+        handler = ResponsePollingHandler(redis_cache=fake_redis_cache(server))
+        key = ResponsePollingHandler.get_cache_key("litellm_poll_bytes")
+
+        queued = await handler.create_initial_state(
+            polling_id="litellm_poll_bytes", request_data={"metadata": {"note": "caf\u00e9"}}
+        )
+        assert await raw.get(key) == json.dumps(queued.model_dump_json()).encode()
+
+        await handler.update_state("litellm_poll_bytes", status="completed")
+        updated = {**json.loads(queued.model_dump_json()), "status": "completed"}
+        assert await raw.get(key) == json.dumps(json.dumps(updated)).encode()
 
     @pytest.mark.asyncio
     async def test_delete_polling_returns_false_without_redis(self):

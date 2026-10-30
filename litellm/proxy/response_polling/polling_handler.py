@@ -6,12 +6,12 @@ from collections.abc import Mapping, Sequence
 from datetime import datetime, timedelta, timezone
 from typing import Final
 
-from pydantic import TypeAdapter
+from pydantic import JsonValue, TypeAdapter
 
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid4
-from litellm.caching.redis_cache import RedisCache
+from litellm.caching.redis_cache import RedisCache, RedisCircuitBreakerOpenError
 from litellm.redis.stores import response_polling
 from litellm.redis.stores.response_polling import ResponsePollingStore, TransportResponsePollingStore
 from litellm.redis.transport.contract import RedisFailure
@@ -86,9 +86,8 @@ class ResponsePollingHandler:
         )
 
         if self._store is not None:
-            written: Final = await self._store.put(polling_id, response.model_dump(mode="json"), ttl=self._ttl())
-            if written is None:
-                verbose_proxy_logger.debug("Created initial polling state for %s with TTL=%ss", polling_id, self.ttl)
+            _raise_if_breaker_open(await self._store.create(polling_id, response, ttl=self._ttl()))
+            verbose_proxy_logger.debug("Created initial polling state for %s with TTL=%ss", polling_id, self.ttl)
 
         return response
 
@@ -148,9 +147,7 @@ class ResponsePollingHandler:
         if self._store is None:
             return
 
-        cached_state: Final = await self._store.get(polling_id)
-        if isinstance(cached_state, RedisFailure):
-            return
+        cached_state: Final = _unless_raising(await self._store.get(polling_id))
         if cached_state is None:
             verbose_proxy_logger.warning("No cached state found for polling_id: %s", polling_id)
             return
@@ -181,9 +178,7 @@ class ResponsePollingHandler:
             **{key: value for key, value in updates.items() if value is not None},
         }
 
-        written: Final = await self._store.put(polling_id, state, ttl=self._ttl())
-        if written is not None:
-            return
+        _raise_if_breaker_open(await self._store.update(polling_id, state, ttl=self._ttl()))
 
         output_count: Final = len(_JSON_LIST.validate_python(state.get("output", [])))
         verbose_proxy_logger.debug(
@@ -196,8 +191,7 @@ class ResponsePollingHandler:
         if self._store is None:
             return None
 
-        cached_state: Final = await self._store.get(polling_id)
-        return None if isinstance(cached_state, RedisFailure) else cached_state
+        return _unless_raising(await self._store.get(polling_id))
 
     async def cancel_polling(self, polling_id: str) -> bool:
         """
@@ -217,7 +211,33 @@ class ResponsePollingHandler:
         if self._store is None:
             return False
 
-        return await self._store.delete(polling_id) is None
+        deleted: Final = await self._store.delete(polling_id)
+        if isinstance(deleted, RedisFailure):
+            raise _cache_error(deleted)
+        return True
+
+
+def _cache_error(failure: RedisFailure) -> Exception:
+    match failure.kind:
+        case "breaker_open":
+            return RedisCircuitBreakerOpenError(failure.message)
+        case "decode":
+            return ValueError(failure.message)
+        case "transport" | "server":
+            return RuntimeError(failure.message)
+
+
+def _raise_if_breaker_open(written: RedisFailure | None) -> None:
+    if isinstance(written, RedisFailure) and written.kind == "breaker_open":
+        raise _cache_error(written)
+
+
+def _unless_raising(read: Mapping[str, JsonValue] | None | RedisFailure) -> Mapping[str, JsonValue] | None:
+    if not isinstance(read, RedisFailure):
+        return read
+    if read.kind in ("breaker_open", "decode"):
+        raise _cache_error(read)
+    return None
 
 
 def should_use_polling_for_request(
