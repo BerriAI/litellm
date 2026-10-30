@@ -1215,19 +1215,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         return self._map_function(value, optional_params, send_integer_enums)
 
     def _map_response_schema(self, value: dict, send_integer_enums: bool = False) -> Mapping[str, object]:
-        old_schema = deepcopy(value)
-        if isinstance(old_schema, list):
-            for item in old_schema:
-                if isinstance(item, dict):
-                    item = build_vertex_schema(
-                        parameters=item, add_property_ordering=True, send_integer_enums=send_integer_enums
-                    )
-
-        elif isinstance(old_schema, dict):
-            old_schema = build_vertex_schema(
-                parameters=old_schema, add_property_ordering=True, send_integer_enums=send_integer_enums
-            )
-        return old_schema
+        return build_vertex_schema(
+            parameters=deepcopy(value), add_property_ordering=True, send_integer_enums=send_integer_enums
+        )
 
     def apply_response_schema_transformation(
         self, value: dict, optional_params: dict, model: str, allow_integer_enums: bool = True

@@ -833,21 +833,84 @@ def _fix_enum_types(schema, depth=0, send_integer_enums: bool = False):
                 _fix_enum_types(item, depth=depth + 1, send_integer_enums=send_integer_enums)
 
 
+def _with_oneof_as_anyof(schema: Mapping[str, JsonValue], depth: int = 0) -> Mapping[str, object]:
+    if depth > DEFAULT_MAX_RECURSE_DEPTH:
+        raise ValueError(
+            f"Max depth of {DEFAULT_MAX_RECURSE_DEPTH} exceeded while processing schema. Please check the schema for excessive nesting."
+        )
+    node: Final = _oneof_node_as_anyof(schema)
+    return {key: _subschemas_with_oneof_as_anyof(key, value, depth + 1) for key, value in node.items()}
+
+
+def _oneof_node_as_anyof(schema: Mapping[str, JsonValue]) -> Mapping[str, JsonValue]:
+    match schema:
+        case {"oneOf": list() as branches, **keywords} if "anyOf" not in keywords:
+            return {"anyOf": [_branch_with_node_keywords(keywords, branch) for branch in branches]}
+        case _:
+            return schema
+
+
+def _branch_with_node_keywords(keywords: Mapping[str, JsonValue], branch: JsonValue) -> JsonValue:
+    if not isinstance(branch, dict):
+        return branch
+    properties: Final = {**_object_keyword(keywords, "properties"), **_object_keyword(branch, "properties")}
+    named: Final = (
+        name
+        for name in (*_list_keyword(keywords, "required"), *_list_keyword(branch, "required"))
+        if isinstance(name, str)
+    )
+    required: Final[JsonValue] = [name for name in dict.fromkeys(named) if name in properties]
+    merged: Final = {
+        key: value for key, value in {**keywords, **branch}.items() if key not in ("properties", "required")
+    }
+    return {
+        **merged,
+        **({"properties": properties} if properties else {}),
+        **({"required": required} if required else {}),
+    }
+
+
+def _object_keyword(schema: Mapping[str, JsonValue], key: str) -> Mapping[str, JsonValue]:
+    value: Final = schema.get(key)
+    return value if isinstance(value, dict) else {}
+
+
+def _list_keyword(schema: Mapping[str, JsonValue], key: str) -> Sequence[JsonValue]:
+    value: Final = schema.get(key)
+    return value if isinstance(value, list) else ()
+
+
+def _subschema_with_oneof_as_anyof(node: JsonValue, depth: int) -> object:
+    return _with_oneof_as_anyof(node, depth) if isinstance(node, dict) else node
+
+
+def _subschemas_with_oneof_as_anyof(key: str, value: JsonValue, depth: int) -> object:
+    match key, value:
+        case "properties", dict():
+            return {name: _subschema_with_oneof_as_anyof(child, depth) for name, child in value.items()}
+        case "anyOf", list():
+            return [_subschema_with_oneof_as_anyof(branch, depth) for branch in value]
+        case "items", _:
+            return _subschema_with_oneof_as_anyof(value, depth)
+        case _:
+            return value
+
+
 def build_vertex_schema(
     parameters: dict, add_property_ordering: bool = False, send_integer_enums: bool = False
 ) -> dict[str, object]:
     """
     This is a modified version of https://github.com/google-gemini/generative-ai-python/blob/8f77cc6ac99937cd3a81299ecf79608b91b06bbb/google/generativeai/types/content_types.py#L419
 
-    Updates the input parameters, removing extraneous fields, adjusting types, unwinding $defs, and adding propertyOrdering if specified, returning the updated parameters.
+    Builds a Vertex schema from the input parameters, removing extraneous fields, adjusting types, unwinding $defs, and adding propertyOrdering if specified.
 
     Parameters:
-        parameters: dict - the json schema to build from
+        parameters: dict - the json schema to build from. Its $defs are popped and its $ref entries expanded in place
         add_property_ordering: bool - whether to add propertyOrdering to the schema. This is only applicable to schemas for structured outputs. See
           set_schema_property_ordering for more details.
         send_integer_enums: bool - whether to send integer enums with string values instead of removing them
     Returns:
-        parameters: dict - the input parameters, modified in place
+        dict - the Vertex schema
     """
     # Get valid fields from Schema TypedDict
     valid_schema_fields: Final = set(get_type_hints(Schema).keys())
@@ -859,32 +922,34 @@ def build_vertex_schema(
     # refs recursively and correctly detects/skips circular references.
     unpack_defs(parameters, defs)
 
-    _convert_schema_types(parameters)
+    schema: Final = dict(_with_oneof_as_anyof(parameters))
+
+    _convert_schema_types(schema)
 
     # 5. Nullable fields:
     #     * https://github.com/pydantic/pydantic/issues/1270
     #     * https://stackoverflow.com/a/58841311
     #     * https://github.com/pydantic/pydantic/discussions/4872
-    convert_anyof_null_to_nullable(parameters)
+    convert_anyof_null_to_nullable(schema)
 
     # Handle empty strings in enum values - Gemini doesn't accept empty strings in enums
-    _fix_enum_empty_strings(parameters)
+    _fix_enum_empty_strings(schema)
 
     # Remove enums for non-string typed fields (Gemini requires enum only on strings)
-    _fix_enum_types(parameters, send_integer_enums=send_integer_enums)
+    _fix_enum_types(schema, send_integer_enums=send_integer_enums)
 
     # Handle empty items objects
-    process_items(parameters)
-    add_object_type(parameters)
+    process_items(schema)
+    add_object_type(schema)
     # Postprocessing
     # Filter out fields that don't exist in Schema
 
-    parameters = filter_schema_fields(parameters, valid_schema_fields)
+    filtered: Final = filter_schema_fields(schema, valid_schema_fields)
 
     if add_property_ordering:
-        set_schema_property_ordering(parameters)
+        set_schema_property_ordering(filtered)
 
-    return parameters
+    return filtered
 
 
 _build_vertex_schema = build_vertex_schema
@@ -998,6 +1063,10 @@ def set_schema_property_ordering(schema: dict[str, object], depth: int = 0) -> d
     items: Final = schema.get("items")
     if isinstance(items, dict):
         set_schema_property_ordering(cast("dict[str, object]", items), depth + 1)  # cast-ok: JSON Schema child
+    any_of: Final = schema.get("anyOf")
+    for branch in any_of if isinstance(any_of, list) else ():
+        if isinstance(branch, dict):
+            set_schema_property_ordering(cast("dict[str, object]", branch), depth + 1)  # cast-ok: JSON Schema child
     return schema
 
 
