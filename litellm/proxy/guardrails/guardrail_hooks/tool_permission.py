@@ -61,10 +61,20 @@ _FUNCTION_CALLING_CONFIG_KEYS: Final = ("functionCallingConfig", "function_calli
 _ALLOWED_FUNCTION_NAMES_KEYS: Final = ("allowedFunctionNames", "allowed_function_names")
 _FORCED_FUNCTION_CALLING_MODES: Final = frozenset({"ANY", "VALIDATED"})
 _NAME_IDENTIFIED_TYPES: Final = frozenset({"function", "custom", "namespace", *_HOSTED_SERVER_NAME_FIELDS})
+_CLIENT_RUN_TYPE_PREFIXES: Final = ("bash_", "text_editor_", "computer_", "memory_")
+_TYPE_VERSION_SUFFIX: Final = re.compile(r"_\d{8}$")
 _NAMED_CHOICE_TYPES: Final = frozenset({"tool", "function", "custom", "allowed_tools", "any", "auto", "none"})
 _DECODED_ARGUMENTS: Final = TypeAdapter(object)
 _REQUEST_DATA: Final = TypeAdapter(object)
 _ToolTarget: TypeAlias = tuple[str | None, str | None]
+
+
+def _name_identifies_tool(name: str, tool_type: str) -> bool:
+    return (
+        tool_type in _NAME_IDENTIFIED_TYPES
+        or tool_type.startswith(_CLIENT_RUN_TYPE_PREFIXES)
+        or _TYPE_VERSION_SUFFIX.sub("", tool_type) == name
+    )
 
 
 def _object_mapping(value: object) -> Mapping[str, object] | None:
@@ -944,9 +954,11 @@ class ToolPermissionGuardrail(CustomGuardrail):
         )
         normalized_type: Final = "function" if tool_type is None or anthropic_custom else tool_type
         names: Final = _request_tool_names(tool)
-        type_target: Final = ((None, normalized_type),) if normalized_type not in _NAME_IDENTIFIED_TYPES else ()
+        named_targets: Final = tuple((name, normalized_type) for name in names)
+        if names and all(_name_identifies_tool(name, normalized_type) for name in names):
+            return named_targets
         if names:
-            return tuple((name, normalized_type) for name in names) + type_target
+            return (*named_targets, (None, normalized_type))
         return ((None, tool_type),) if tool_type is not None else ()
 
     def _get_legacy_function_name(self, function: object) -> str | None:

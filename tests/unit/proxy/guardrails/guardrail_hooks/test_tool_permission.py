@@ -2272,6 +2272,64 @@ class TestToolPermissionGuardrailAnthropicMessages:
         assert result["tools"] == [weather]
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "rules, tool",
+        [
+            (
+                [{"id": "allow_bash", "tool_name": r"^bash$", "decision": "allow"}],
+                {"type": "bash_20250124", "name": "bash"},
+            ),
+            (
+                [{"id": "allow_edit", "tool_name": r"^str_replace_based_edit_tool$", "decision": "allow"}],
+                {"type": "text_editor_20250728", "name": "str_replace_based_edit_tool"},
+            ),
+            (
+                [{"id": "allow_search", "tool_name": r"^web_search$", "decision": "allow"}],
+                {"type": "web_search_20250305", "name": "web_search"},
+            ),
+            (
+                [
+                    {
+                        "id": "allow_search",
+                        "tool_name": r"^web_search$",
+                        "tool_type": r"^web_search_20250305$",
+                        "decision": "allow",
+                    }
+                ],
+                {"type": "web_search_20250305", "name": "web_search"},
+            ),
+        ],
+        ids=["client_tool_by_name", "client_tool_with_its_own_name", "server_tool_by_name", "name_and_type_rule"],
+    )
+    async def test_pre_call_allows_an_anthropic_defined_tool_that_an_allowlist_names(
+        self, rules: list[dict[str, object]], tool: dict[str, object]
+    ) -> None:
+        guardrail = self._pre_call(rules, "block", default_action="deny")
+        data = {"model": "claude-sonnet-4-5", "messages": [{"role": "user", "content": "hi"}], "tools": [tool]}
+
+        result = await self._run_pre_call(guardrail, data, "acompletion")
+
+        assert result["tools"] == [tool]
+
+    @pytest.mark.asyncio
+    async def test_pre_call_blocks_an_anthropic_server_tool_whose_name_is_not_its_own(self) -> None:
+        guardrail = self._pre_call(
+            [{"id": "allow_weather", "tool_name": r"^get_weather$", "decision": "allow"}],
+            "block",
+            default_action="deny",
+        )
+        data = {
+            "model": "gemini-3",
+            "messages": [{"role": "user", "content": "hi"}],
+            "tools": [{"type": "web_search_20250305", "name": "get_weather"}],
+        }
+
+        with pytest.raises(HTTPException) as excinfo:
+            await self._run_pre_call(guardrail, data, "anthropic_messages")
+
+        assert excinfo.value.detail["detection_message"] == "Tool 'web_search_20250305' denied by default action"
+
+    @pytest.mark.asyncio
     async def test_pre_call_blocks_a_tool_whose_type_is_not_a_string_by_its_name(self) -> None:
         guardrail = self._pre_call(
             [
