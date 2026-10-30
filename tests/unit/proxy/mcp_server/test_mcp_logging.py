@@ -15,6 +15,7 @@ from mcp.server.auth.middleware.auth_context import auth_context_var
 from mcp.shared.exceptions import MCPError
 from mcp.types import CallToolResult, EmptyResult, Request, RequestParams, TextContent
 from mcp.types import Tool as MCPTool
+from pydantic import ConfigDict
 
 import litellm
 from litellm.caching.caching import DualCache
@@ -29,6 +30,12 @@ from litellm.proxy.mcp_server.server import (
     set_auth_context,
 )
 from litellm.types.mcp import MCPPostCallResponseObject
+
+
+class SDKRejectionParams(RequestParams):
+    model_config = ConfigDict(frozen=True)
+    name: int | None = None
+    arguments: dict[str, str] | None = None
 
 
 class SDKRejectionLogger(CustomLogger):
@@ -93,7 +100,9 @@ async def test_sdk_rejection_emits_one_redacted_zero_cost_failure(
 ) -> None:
     async with Client(server, mode="legacy") as client:
         with pytest.raises(MCPError) as rejected:
-            await client.session.send_request(Request(method=method, params=RequestParams(**params)), EmptyResult)
+            await client.session.send_request(
+                Request(method=method, params=SDKRejectionParams.model_validate(params)), EmptyResult
+            )
         assert rejected.value.code == code
         assert rejected.value.message == message
         await client.session.send_ping()
