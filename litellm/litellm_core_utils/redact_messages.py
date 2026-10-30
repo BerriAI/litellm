@@ -196,6 +196,11 @@ def _redact_function_call(function_call) -> None:
 
 def _redact_choice_content(choice):
     """Helper to redact content in a choice (message or delta)."""
+    if (
+        isinstance(choice, (litellm.Choices, litellm.utils.StreamingChoices))
+        and getattr(choice, "token_ids", None) is not None
+    ):
+        setattr(choice, "token_ids", None)  # noqa: B010  # pydantic extra, not a declared field
     if isinstance(choice, litellm.Choices):
         if choice.message.content is not None:
             choice.message.content = REDACTED_BY_LITELLM
@@ -250,6 +255,7 @@ def _redacted_provider_specific_fields(fields: Mapping[str, object]) -> Mapping[
                 "citations",
                 "compaction_blocks",
                 "compaction_delta",
+                "token_ids",
             )
             if key in fields
         },
@@ -421,6 +427,8 @@ def _redact_model_response_dict_choices(choices, redacted_str: str):
     for choice in choices:
         if isinstance(choice, dict):
             _redact_provider_specific_fields_dict(choice)
+            if choice.get("token_ids") is not None:
+                choice["token_ids"] = None
             if "message" in choice and isinstance(choice["message"], dict):
                 if choice["message"].get("content") is not None:
                     choice["message"]["content"] = redacted_str

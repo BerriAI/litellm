@@ -187,6 +187,36 @@ def test_text_completion_stream_keeps_each_choices_text_and_token_ids_on_its_own
     } == {0: (" 5, 6", [20, 11, 21, 11, 220]), 1: (" 7, 8", [22, 11, 220, 23])}
 
 
+@pytest.mark.parametrize(
+    "upstream",
+    [
+        (
+            _completion_chunk(" a", None, index=0),
+            _completion_chunk(" b", None, index=1),
+            _completion_chunk("", "length", index=2),
+            _completion_chunk(" red", "stop", index=1, stop_reason=","),
+            _completion_chunk(" s", "stop", index=0, stop_reason=","),
+        ),
+        (
+            _completion_chunk(" a", None, index=0),
+            _completion_chunk(" b", None, index=1),
+            _completion_chunk(" s", "stop", index=0, stop_reason=","),
+            _completion_chunk("", "length", index=2),
+            _completion_chunk(" red", "stop", index=1, stop_reason=","),
+        ),
+    ],
+    ids=["other-choices-finish-first", "choice-0-finishes-first"],
+)
+def test_text_completion_stream_finishes_each_choice_on_its_own_index(upstream: Sequence[Completion]) -> None:
+    finished: Final = [
+        (choice.index, choice.finish_reason, choice.get("stop_reason"))
+        for choice in chain.from_iterable(response.choices for response in _text_completion_stream(upstream))
+        if choice.finish_reason is not None
+    ]
+
+    assert sorted(finished) == [(0, "stop", ","), (1, "stop", ","), (2, "length", None)]
+
+
 def test_text_completion_conversion_rejects_non_streaming_choices() -> None:
     chunk: Final = Choices()
     wrapper: Final = TextCompletionStreamWrapper(completion_stream=None, model="test-model")

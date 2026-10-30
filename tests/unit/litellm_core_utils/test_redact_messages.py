@@ -560,6 +560,34 @@ class TestPerformRedaction:
             {"text": "redacted-by-litellm", "finish_reason": "length", "index": 1},
         ]
 
+    def test_redacts_token_ids_that_decode_to_the_completion(self):
+        details = {
+            "stream": True,
+            "complete_streaming_response": litellm.ModelResponse(
+                choices=[
+                    litellm.Choices(message=litellm.Message(content="secret", role="assistant"), token_ids=[20, 11])
+                ]
+            ),
+            "standard_logging_object": {
+                "response": {
+                    "choices": [
+                        {
+                            "token_ids": [20, 11],
+                            "message": {"content": "secret", "provider_specific_fields": {"token_ids": [20, 11]}},
+                        },
+                        {"text": " Paris.", "token_ids": [20, 11], "index": 1},
+                    ]
+                }
+            },
+        }
+
+        perform_redaction(details, None)
+
+        logged_choices = details["standard_logging_object"]["response"]["choices"]
+        assert [choice["token_ids"] for choice in logged_choices] == [None, None]
+        assert logged_choices[0]["message"]["provider_specific_fields"]["token_ids"] is None
+        assert details["complete_streaming_response"].choices[0].get("token_ids") is None
+
     def test_redacts_object_choices_inside_model_response_dict(self):
         result = {
             "choices": [

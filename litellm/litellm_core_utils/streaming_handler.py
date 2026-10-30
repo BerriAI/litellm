@@ -891,13 +891,15 @@ class CustomStreamWrapper:
                     is_finished = True
                     finish_reason = choices[0].finish_reason
             usage = getattr(chunk, "usage", None)
+            choice_index: Final = _upstream_choice_index(chunk)
             return {
                 "text": text,
                 "is_finished": is_finished,
                 "finish_reason": finish_reason,
                 "usage": usage,
                 "chunk_choice_fields": _non_null_upstream_choice_fields(chunk, STREAM_CHUNK_CHOICE_FIELDS),
-                "choice_index": _upstream_choice_index(chunk),
+                "choice_index": choice_index,
+                "sibling_finish_reason": finish_reason if choice_index != 0 else None,
             }
 
         except Exception as e:
@@ -1212,6 +1214,7 @@ class CustomStreamWrapper:
             "chunk_choice_fields", _NO_UPSTREAM_CHOICE_FIELDS
         )
         chunk_choice_fields: Final = self._take_carried_chunk_choice_fields(response_obj, upstream_chunk_choice_fields)
+        sibling_finish_reason: Final[str | None] = response_obj.get("sibling_finish_reason")
 
         if is_chunk_non_empty:  # cannot set content of an OpenAI Object to be an empty string
             self.raise_on_model_repetition()
@@ -1305,11 +1308,19 @@ class CustomStreamWrapper:
                         model_response.choices[0].index = _index
 
                 _apply_choice_fields(model_response.choices[0], chunk_choice_fields)
+                if sibling_finish_reason is not None:
+                    self._finish_sibling_choice(model_response.choices[0], sibling_finish_reason)
                 self._optional_combine_thinking_block_in_choices(model_response=model_response)
 
                 return model_response
             else:
                 return
+        elif sibling_finish_reason is not None:
+            sibling_chunk: Final = _choice_fields_chunk(
+                model_response, _response_choice_index(response_obj), chunk_choice_fields
+            )
+            self._finish_sibling_choice(sibling_chunk.choices[0], sibling_finish_reason)
+            return sibling_chunk
         elif self.received_finish_reason is not None:
             chunk_upstream_index: Final = _response_choice_index(response_obj)
             if chunk_choice_fields and self._streams_past_the_pending_finish(
@@ -1597,8 +1608,9 @@ class CustomStreamWrapper:
             completion_obj["content"] = response_obj["text"]
             print_verbose(f"completion obj content: {completion_obj['content']}")
             if response_obj["is_finished"]:
-                self.received_finish_reason = response_obj["finish_reason"]
                 self._record_finish_choice_fields(chunk)
+            if response_obj["is_finished"] and response_obj["sibling_finish_reason"] is None:
+                self.received_finish_reason = response_obj["finish_reason"]
             if response_obj["usage"] is not None:
                 _text_completion_usage: Final[Usage] = response_obj["usage"]
                 setattr(
@@ -2038,6 +2050,10 @@ class CustomStreamWrapper:
 
     def _apply_finish_choice_fields(self, choice: StreamingChoices) -> None:
         _apply_choice_fields(choice, self.received_finish_choice_fields.get(choice.index, _NO_UPSTREAM_CHOICE_FIELDS))
+
+    def _finish_sibling_choice(self, choice: StreamingChoices, finish_reason: str) -> None:
+        choice.finish_reason = map_finish_reason(finish_reason)  # rebind-ok: chunks are built in place here
+        self._apply_finish_choice_fields(choice)
 
     def _streams_past_the_pending_finish(
         self, model_response: ModelResponseStream, response_obj: Mapping[str, object], upstream_index: int
