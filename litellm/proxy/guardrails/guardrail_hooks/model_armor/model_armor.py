@@ -26,6 +26,7 @@ from litellm.litellm_core_utils.core_helpers import (
     get_metadata_variable_name_from_kwargs,
     get_or_create_metadata_bucket,
 )
+from litellm.llms.base_llm.guardrail_translation.utils import stream_item_field, stream_item_items
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     get_async_httpx_client,
@@ -1036,18 +1037,20 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
         )
 
         texts: Final[list[str]] = []  # mutable-ok: the shared extractor below appends into caller-owned lists
+        reasoning_texts: Final[list[str]] = []  # mutable-ok: the same extractor's sink for a reasoning item's text
         tool_calls: Final[list[ChatCompletionToolCallChunk]] = []  # mutable-ok: the same extractor's tool-call sink
         handler: Final = OpenAIResponsesHandler()
-        for output_idx, output_item in enumerate(response.output or ()):
+        for output_idx, output_item in enumerate(stream_item_items(response, "output")):
             handler._extract_output_text_and_images(  # pyright: ignore[reportPrivateUsage]  # the shared Responses output extractor; forking it would duplicate per-item parsing
                 output_item=output_item,
                 output_idx=output_idx,
-                texts_to_check=texts,
+                texts_to_check=reasoning_texts if stream_item_field(output_item, "type") == "reasoning" else texts,
                 images_to_check=[],
                 task_mappings=[],
                 tool_calls_to_check=tool_calls,
             )
-        return "".join((*texts, *(json.dumps(tool_call) for tool_call in tool_calls)))
+        answer: Final = "".join((*texts, *(json.dumps(tool_call) for tool_call in tool_calls)))
+        return "\n".join(text for text in (answer, *reasoning_texts) if text)
 
     def _extract_streaming_content(self, assembled_response: object) -> str:
         """Text to scan from an assembled stream, for every endpoint shape this hook serves."""
