@@ -134,3 +134,46 @@ def test_caller_request_metadata_is_ignored_because_invoke_model_has_no_field_fo
 
     assert "requestMetadata" not in request
     assert request["inferenceConfig"] == {"maxTokens": 8}
+
+
+GUARDED_CONVERSATION = [
+    {
+        "role": "system",
+        "content": [
+            {"type": "text", "text": "be brief"},
+            {"type": "guarded_text", "text": "guarded system", "cache_control": EPHEMERAL},
+        ],
+    },
+    {"role": "user", "content": [{"type": "text", "text": "hello"}, {"type": "guarded_text", "text": "guarded user"}]},
+    {"role": "assistant", "content": [{"type": "text", "text": "hi"}, {"type": "guarded_text", "text": "guarded assistant"}]},
+    {"role": "user", "content": "again"},
+]
+
+
+@pytest.mark.parametrize("drop_params_source", ["request", "global"])
+def test_guarded_parts_drop_under_drop_params_because_invoke_model_rejects_guard_content(
+    local_model_cost_map, monkeypatch, drop_params_source
+):
+    if drop_params_source == "global":
+        monkeypatch.setattr(litellm, "drop_params", True)
+    request = _transform_request(
+        messages=GUARDED_CONVERSATION,
+        optional_params={"max_tokens": 20},
+        litellm_params={"drop_params": True} if drop_params_source == "request" else {},
+    )
+    assert request["system"] == [{"text": "be brief", "cachePoint": DEFAULT_CACHE_POINT}]
+    assert [message["content"] for message in request["messages"]] == [
+        [{"text": "hello"}],
+        [{"text": "hi"}],
+        [{"text": "again"}],
+    ]
+
+
+def test_guarded_parts_reach_bedrock_without_drop_params(local_model_cost_map):
+    request = _transform_request(messages=GUARDED_CONVERSATION, optional_params={"max_tokens": 20})
+    sent_guard_texts = [
+        block["guardContent"]["text"]["text"]
+        for block in [*request["system"], *(block for message in request["messages"] for block in message["content"])]
+        if "guardContent" in block
+    ]
+    assert sent_guard_texts == ["guarded system", "guarded user", "guarded assistant"]
