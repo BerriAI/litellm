@@ -826,6 +826,7 @@ class NomaGuardrail(CustomGuardrail):
         )
 
         if isinstance(assembled_model_response, ModelResponse):
+            texts_before_check: Final = self._choice_texts(assembled_model_response)
             try:
                 processed_response: Final = await self._check_llm_response(
                     request_data,
@@ -839,7 +840,11 @@ class NomaGuardrail(CustomGuardrail):
                 if self.block_failures:
                     raise
                 verbose_proxy_logger.error("Noma streaming post-call hook failed: %s", e)
-                for chunk in all_chunks:
+                if self._choice_texts(assembled_model_response) == texts_before_check:
+                    for chunk in all_chunks:
+                        yield chunk
+                    return
+                async for chunk in MockResponseIterator(model_response=assembled_model_response):
                     yield chunk
                 return
 
