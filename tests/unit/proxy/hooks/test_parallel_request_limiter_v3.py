@@ -2591,7 +2591,8 @@ async def test_agent_session_rate_limit_skipped_without_session_id():
 
 
 @pytest.mark.asyncio
-async def test_agent_rate_limit_from_metadata_agent_id():
+@pytest.mark.parametrize("metadata_field", ("metadata", "litellm_metadata"))
+async def test_agent_rate_limit_from_metadata_agent_id(metadata_field):
     """
     Test that agent rate limits work when agent_id comes from
     request metadata (header) rather than from the API key.
@@ -2639,7 +2640,7 @@ async def test_agent_rate_limit_from_metadata_agent_id():
             cache=local_cache,
             data={
                 "model": "gpt-4",
-                "metadata": {"agent_id": _agent_id},
+                metadata_field: {"agent_id": _agent_id},
             },
             call_type="",
         )
