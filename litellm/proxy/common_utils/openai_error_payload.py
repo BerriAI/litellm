@@ -26,6 +26,8 @@ _OPENAI_ERROR_TYPE_BY_STATUS: Final[Mapping[int, str]] = MappingProxyType(
 
 _AUTH_FAILURE_STATUS_CODES: Final = frozenset({status.HTTP_401_UNAUTHORIZED, status.HTTP_403_FORBIDDEN})
 
+_HTTP_ERROR_STATUSES: Final = range(status.HTTP_400_BAD_REQUEST, 600)
+
 _FAILOVER_SQLSTATES: Final = frozenset({"25006", "57P01", "57P02", "57P03"})
 
 _FAILOVER_REFUSALS: Final = (
@@ -43,15 +45,26 @@ def attribute_of(value: object, name: str, default: object = None) -> object:
 
 
 def error_status_code(exc: object, default: int) -> int:
-    """The HTTP status an exception carries as ``status_code`` (an int or a decimal string) or, the
-    way ``ProxyException`` stores it, as a stringified ``code``; ``default`` when it carries neither."""
-    carried: Final = attribute_of(exc, "status_code")
-    if isinstance(carried, int) and not isinstance(carried, bool):
+    """The 4xx or 5xx HTTP status an exception carries as ``status_code`` (an int or a decimal string) or,
+    the way ``ProxyException`` stores it, as a stringified ``code``; ``default`` when it carries neither."""
+    carried: Final = _http_error_status(attribute_of(exc, "status_code"))
+    if carried is not None:
         return carried
-    if isinstance(carried, str) and carried.isdecimal():
-        return int(carried)
     stringified: Final = attribute_of(exc, "code")
-    return int(stringified) if isinstance(stringified, str) and stringified.isdecimal() else default
+    from_code: Final = _http_error_status(stringified) if isinstance(stringified, str) else None
+    return default if from_code is None else from_code
+
+
+def _http_error_status(value: object) -> int | None:
+    match value:
+        case bool():
+            return None
+        case int() if value in _HTTP_ERROR_STATUSES:
+            return value
+        case str() if len(value) == 3 and value.isascii() and value.isdigit():
+            return _http_error_status(int(value))
+        case _:
+            return None
 
 
 def openai_error_type(exc: object, status_code: int) -> str:
