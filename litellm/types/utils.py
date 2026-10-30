@@ -3792,6 +3792,7 @@ class ClassifierAudit(TypedDict, total=False):
 
 
 class StandardLoggingPayload(ClassifierAudit):
+    cost_finalized: NotRequired[ReadOnly[bool]]
     id: str
     trace_id: str  # Trace multiple LLM calls belonging to same overall request (e.g. fallbacks/retries)
     session_id: str  # End-user/conversation session id (litellm_session_id), independent of trace_id
@@ -4151,6 +4152,7 @@ DEPLOYMENT_SCOPED_CAPABILITY_FIELDS: Final[frozenset[str]] = frozenset(
         "supports_regex_lookaround",
         "supports_assistant_prefill",
         "supports_bedrock_native_structured_output",
+        "supports_pdf_input",
         "reasoning_modes",
         "reasoning_contexts",
     }
@@ -4565,6 +4567,7 @@ class LlmProviders(str, Enum):
     S3_VECTORS = "s3_vectors"
     VALKEY = "valkey"
     MONGODB = "mongodb"
+    OPENSEARCH = "opensearch"
     HELICONE = "helicone"
     HYPERBOLIC = "hyperbolic"
     RECRAFT = "recraft"

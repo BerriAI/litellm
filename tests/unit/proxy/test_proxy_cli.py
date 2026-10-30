@@ -1,7 +1,10 @@
+import gc
+import importlib
 import inspect
 import json
 import logging
 import os
+from collections.abc import Iterator
 from contextlib import nullcontext
 from pathlib import Path
 from types import SimpleNamespace
@@ -4111,6 +4114,48 @@ general_settings:
 """
 
 
+_PROBE_LOGGER: Final = "litellm-test-worker-log-config"
+
+
+@pytest.fixture
+def probe_logger() -> Iterator[logging.Logger]:
+    logger: Final = logging.getLogger(_PROBE_LOGGER)
+    yield logger
+    logger.setLevel(logging.NOTSET)
+    gc.unfreeze()
+
+
+def _log_config_source(kind: str, tmp_path: Path) -> str | dict[str, object]:
+    config: Final[dict[str, object]] = {"version": 1, "incremental": True, "loggers": {_PROBE_LOGGER: {"level": "ERROR"}}}
+    if kind == "dict":
+        return config
+    written: Final = tmp_path / f"log_config.{kind}"
+    written.write_text(json.dumps(config) if kind == "json" else yaml.dump(config))
+    return str(written)
+
+
+@pytest.mark.parametrize("kind", ["dict", "json", "yaml"])
+def test_a_spawned_worker_applies_the_log_config_in_the_app_factory_not_in_uvicorn(
+    kind: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, probe_logger: logging.Logger
+) -> None:
+    monkeypatch.setenv(proxy_cli.WORKER_LOG_CONFIG_ENV, "")
+    log_config: Final = _log_config_source(kind, tmp_path)
+    worker_args: Final = {
+        "app": "litellm.proxy.proxy_server:app",
+        "log_config": log_config,
+        **ProxyInitializationHelpers.child_process_uvicorn_overrides(log_config),
+    }
+    assert probe_logger.level == logging.ERROR
+
+    probe_logger.setLevel(logging.NOTSET)
+    uvicorn.Config(**worker_args)
+    assert probe_logger.level == logging.NOTSET
+
+    served: Final = import_from_string(worker_args["app"])()
+    assert served is importlib.import_module("litellm.proxy.proxy_server").app
+    assert probe_logger.level == logging.ERROR
+
+
 class TestJsonLogsConfigReachesSpawnedWorkers:
     """`litellm_settings.json_logs: true` turns JSON on inside the CLI process, but the workers that
     uvicorn or granian spawn are fresh interpreters that pick plain or JSON from the JSON_LOGS
@@ -4393,3 +4438,20 @@ def test_granian_flag_notices_are_json_records_in_json_mode(
         "LiteLLM: --ciphers is not applied when using --run_granian.",
     ]
     assert [record["level"] for record in records] == ["INFO", "WARNING", "WARNING"]
+
+
+def test_migration_data_check_exits_zero_when_there_is_nothing_to_dry_run(monkeypatch, capfd):
+    monkeypatch.setenv("DATABASE_URL", "postgresql://user:pass@db.example/litellm")
+
+    assert ProxyInitializationHelpers.run_migration_data_check(use_migrate=False) == 0
+
+    out, err = capfd.readouterr()
+    assert out == "LiteLLM Proxy: The schema is pushed rather than migrated, there is nothing to dry-run.\n"
+    assert err == ""
+
+
+def test_migration_data_check_requires_database_url(monkeypatch):
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+
+    with pytest.raises(click.UsageError, match="requires DATABASE_URL"):
+        ProxyInitializationHelpers.run_migration_data_check(use_migrate=True)
