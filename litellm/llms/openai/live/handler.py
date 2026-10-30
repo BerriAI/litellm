@@ -30,6 +30,7 @@ from litellm.litellm_core_utils.realtime_errors import (
     websocket_close_reason,
 )
 from litellm.litellm_core_utils.realtime_streaming import backend_close_from
+from litellm.llms.openai.common_utils import openai_organization_header
 from litellm.llms.openai.realtime.handler import OpenAIRealtime
 from litellm.types.utils import LiteLLMRealtimeStreamLoggingObject, Usage
 
@@ -411,6 +412,7 @@ class OpenAILiveSessions(OpenAIRealtime):
         session_start: Mapping[str, object],
         api_base: str | None,
         api_key: str | None,
+        organization: str | None = None,
     ) -> None:
         if api_key is None:
             raise ValueError("api_key is required for OpenAI Live session calls")
@@ -418,7 +420,8 @@ class OpenAILiveSessions(OpenAIRealtime):
 
         resolved_api_base: Final = api_base or self._get_default_api_base()
         url: Final = self._construct_live_url(resolved_api_base)
-        headers: Final = self._get_additional_headers(api_key)
+        protocol_headers: Final = self._get_additional_headers(api_key)
+        headers: Final = {**protocol_headers, **openai_organization_header(protocol_headers, organization)}
         ssl_config: Final = self._get_ssl_config(url)
         session: Final = as_str_mapping(session_start.get("session"))
         if session is None:

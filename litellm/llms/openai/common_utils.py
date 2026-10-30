@@ -450,6 +450,13 @@ class BaseOpenAILLM:
         return cls._get_sync_http_client()
 
 
+def openai_organization_header(headers: Mapping[str, object], organization: str | None) -> Mapping[str, str]:
+    caller_set_header: Final = any(name.lower() == "openai-organization" for name in headers)
+    if not organization or caller_set_header:
+        return {}
+    return {"OpenAI-Organization": organization}
+
+
 class OpenAICredentials(NamedTuple):
     api_base: str
     api_key: str | None

@@ -311,3 +311,17 @@ def test_input_fidelity_passes_through_optional_param_filter():
     assert filtered["input_fidelity"] == "low"
     assert filtered["quality"] == "high"
     assert "unknown_param" not in filtered
+
+
+def test_validate_environment_sends_the_deployment_organization(
+    image_edit_config: OpenAIImageEditConfig,
+):
+    headers = image_edit_config.validate_environment(
+        headers={},
+        model="gpt-image-1",
+        api_key="test-key",
+        litellm_params={"organization": "org-deployment"},
+    )
+
+    assert headers["OpenAI-Organization"] == "org-deployment"
+    assert headers["Authorization"] == "Bearer test-key"

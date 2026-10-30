@@ -758,6 +758,16 @@ class TestResponsesValidateEnvironmentFromDeployment:
         )
         assert headers["Authorization"] == "Bearer responses-bearer"
 
+    @respx.mock
+    def test_sends_the_deployment_organization_with_a_minted_bearer(self, deployment_wif: dict[str, str]) -> None:
+        mock_token_exchange("responses-bearer")
+        headers: Final = OpenAIResponsesAPIConfig().validate_environment(
+            headers={},
+            model="gpt-4o-mini",
+            litellm_params=GenericLiteLLMParams(organization="org-deployment", **deployment_wif),
+        )
+        assert headers["OpenAI-Organization"] == "org-deployment"
+
     def test_static_key_in_litellm_params_wins(self, deployment_wif: dict[str, str]) -> None:
         headers: Final = OpenAIResponsesAPIConfig().validate_environment(
             headers={},

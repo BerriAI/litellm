@@ -17,6 +17,7 @@ from litellm.llms.azure.responses.transformation import AzureOpenAIResponsesAPIC
 from litellm.llms.azure_ai.responses.transformation import AzureAIResponsesAPIConfig
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 from litellm.llms.hosted_vllm.responses.transformation import HostedVLLMResponsesAPIConfig
+from litellm.llms.litellm_proxy.responses.transformation import LiteLLMProxyResponsesAPIConfig
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.llms.xai.responses.transformation import XAIResponsesAPIConfig
 from litellm.responses.litellm_completion_transformation.transformation import LiteLLMCompletionResponsesConfig
@@ -811,6 +812,34 @@ class TestOpenAIResponsesAPIConfig:
 
             assert result.type == ResponsesAPIStreamEvents.RESPONSE_COMPLETED
             assert result.response.id == "resp_123"
+
+    def test_validate_environment_sends_the_deployment_organization(self):
+        result = self.config.validate_environment(
+            headers={},
+            model=self.model,
+            litellm_params=GenericLiteLLMParams(api_key="test_api_key", organization="org-deployment"),
+        )
+
+        assert result["OpenAI-Organization"] == "org-deployment"
+
+    def test_validate_environment_keeps_the_callers_organization_header(self):
+        result = self.config.validate_environment(
+            headers={"openai-organization": "org-caller"},
+            model=self.model,
+            litellm_params=GenericLiteLLMParams(api_key="test_api_key", organization="org-deployment"),
+        )
+
+        assert result["openai-organization"] == "org-caller"
+        assert "OpenAI-Organization" not in result
+
+    def test_validate_environment_keeps_the_organization_off_other_providers(self):
+        result = LiteLLMProxyResponsesAPIConfig().validate_environment(
+            headers={},
+            model=self.model,
+            litellm_params=GenericLiteLLMParams(api_key="test_api_key", organization="org-deployment"),
+        )
+
+        assert "OpenAI-Organization" not in result
 
     @pytest.mark.serial
     def test_validate_environment(self):

@@ -10,6 +10,7 @@ from httpx._types import FileContent, FileTypes, RequestFiles
 
 from litellm.litellm_core_utils.url_utils import encode_url_path_segment, join_api_base
 from litellm.llms.base_llm.videos.transformation import BaseVideoConfig
+from litellm.llms.openai.common_utils import openai_organization_header
 from litellm.llms.openai.image_edit.transformation import ImageEditRequestUtils
 from litellm.llms.openai.workload_identity import resolve_openai_bearer_token
 from litellm.types.llms.openai import CreateVideoRequest
@@ -72,7 +73,7 @@ class OpenAIVideoConfig(BaseVideoConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, object],
         model: str,
         api_key: str | None = None,
         litellm_params: GenericLiteLLMParams | None = None,
@@ -83,7 +84,9 @@ class OpenAIVideoConfig(BaseVideoConfig):
             api_base=params.api_base,
             litellm_params=params.model_dump(exclude_none=True),
         )
-        headers.update({"Authorization": f"Bearer {bearer_token}"})
+        headers.update(
+            {"Authorization": f"Bearer {bearer_token}", **openai_organization_header(headers, params.organization)}
+        )
         return headers
 
     def get_complete_url(

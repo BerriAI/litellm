@@ -1961,6 +1961,7 @@ def _complete_text_completion_openai(
         litellm_params=litellm_params,
         logger_fn=logger_fn,
         timeout=timeout,
+        organization=ctx.organization,
     )
 
     if optional_params.get("stream", False) is False and acompletion is False and text_completion is False:
@@ -6810,6 +6811,7 @@ def embedding(
     logger_fn=None,
     *,
     aembedding: Literal[True],
+    organization: str | None = None,
     **kwargs,
 ) -> Coroutine[object, object, EmbeddingResponse]: 
     ...
@@ -6836,6 +6838,7 @@ def embedding(
     logger_fn=None,
     *,
     aembedding: Literal[False] = False,
+    organization: str | None = None,
     **kwargs,
 ) -> EmbeddingResponse: 
     ...
@@ -6861,6 +6864,7 @@ def embedding(
     custom_llm_provider=None,
     litellm_call_id=None,
     logger_fn=None,
+    organization: str | None = None,
     **kwargs,
 ) -> EmbeddingResponse | Coroutine[object, object, EmbeddingResponse]:
     """
@@ -7099,6 +7103,7 @@ def embedding(
                 max_retries=max_retries,
                 shared_session=shared_session,
                 litellm_params=litellm_params_dict,
+                organization=organization,
             )
         elif custom_llm_provider == "databricks":
             api_base = api_base or litellm.api_base or get_secret("DATABRICKS_API_BASE")
@@ -8321,13 +8326,16 @@ def adapter_completion(*, adapter_id: str, **kwargs) -> BaseModel | AdapterCompl
 ##### Moderation #######################
 
 
-def moderation(input: str, model: str | None = None, api_key: str | None = None, **kwargs) -> OpenAIModerationResponse:
+def moderation(
+    input: str, model: str | None = None, api_key: str | None = None, organization: str | None = None, **kwargs
+) -> OpenAIModerationResponse:
     static_api_key: Final = api_key or litellm.api_key or litellm.openai_key or get_secret_str("OPENAI_API_KEY")
     api_base: Final = kwargs.get("api_base", None)
 
     openai_client: Final = kwargs.get("client", None) or build_openai_client(
         api_key=static_api_key,
         api_base=api_base,
+        organization=organization,
         litellm_params=kwargs,
     )
 
@@ -8380,6 +8388,7 @@ async def amoderation(
             is_async=True,
             api_key=static_api_key,
             api_base=optional_params.api_base or _dynamic_api_base,
+            organization=optional_params.organization,
             litellm_params=optional_params.model_dump(exclude_none=True),
         )
     else:
@@ -8512,6 +8521,7 @@ def transcription(
     max_retries: int | None = None,
     custom_llm_provider=None,
     base_url: str | None = None,
+    organization: str | None = None,
     **kwargs,
 ) -> TranscriptionResponse | Coroutine[object, object, TranscriptionResponse]:
     """
@@ -8649,6 +8659,7 @@ def transcription(
             provider_config=provider_config,
             litellm_params=litellm_params_dict,
             shared_session=shared_session,
+            organization=organization,
         )
     elif custom_llm_provider == "nvidia_riva":
         # NVIDIA Riva is gRPC-based, not HTTP. It has its own dedicated handler
@@ -8933,13 +8944,6 @@ def speech(
             or litellm.api_key  # for deepinfra/perplexity/anyscale we check in get_llm_provider and pass in the api key from there
             or litellm.openai_key
             or get_secret("OPENAI_API_KEY")
-        )
-
-        organization = (
-            organization
-            or litellm.organization
-            or get_secret("OPENAI_ORGANIZATION")
-            or None  # default - https://github.com/openai/openai-python/blob/284c1799070c723c6a553337134148a7ab088dd8/openai/util.py#L105
         )
 
         project = (

@@ -48,7 +48,7 @@ from ..llms.azure.common_utils import get_azure_ad_token
 from ..llms.azure.realtime.handler import AzureOpenAIRealtime, azure_realtime_protocol_for_client
 from ..llms.bedrock.realtime.handler import BedrockRealtime, raise_if_session_committed
 from ..llms.custom_httpx.http_handler import realtime_ssl_for_url
-from ..llms.openai.common_utils import is_openai_backed_api_base
+from ..llms.openai.common_utils import is_openai_backed_api_base, openai_organization_header
 from ..llms.openai.live.handler import OpenAILiveSessions
 from ..llms.openai.realtime.handler import (
     OpenAIRealtime,
@@ -163,6 +163,14 @@ async def _realtime_http_bearer_token(
     return bearer_token or ""
 
 
+def _realtime_organization_header(
+    custom_llm_provider: str, extra_headers: Mapping[str, object] | None, organization: str | None
+) -> Mapping[str, str]:
+    if custom_llm_provider != LlmProviders.OPENAI.value:
+        return {}
+    return openai_organization_header(extra_headers or {}, organization)
+
+
 @wrapper_client
 async def acreate_realtime_client_secret(
     model: str | None = None,
@@ -178,7 +186,8 @@ async def acreate_realtime_client_secret(
     )
     model_name = (req.session.model if req.session is not None else None) or req.model or "gpt-4o-realtime-preview"
     litellm_logging_obj: Final[LiteLLMLogging] = kwargs.get("litellm_logging_obj")
-    litellm_params: Final = GenericLiteLLMParams(**kwargs)
+    litellm_params: Final = GenericLiteLLMParams.model_validate(kwargs)
+    caller_headers: Final[Mapping[str, object]] = kwargs.get("extra_headers") or {}
 
     (
         model_name,
@@ -222,7 +231,10 @@ async def acreate_realtime_client_secret(
         timeout=timeout or request_timeout,
         provider_config=provider_config,
         model=model_name,
-        extra_headers=kwargs.get("extra_headers"),
+        extra_headers={
+            **caller_headers,
+            **_realtime_organization_header(custom_llm_provider, caller_headers, litellm_params.organization),
+        },
         client=kwargs.get("client"),
         api_version=litellm_params.api_version,
     )
@@ -250,7 +262,8 @@ async def acreate_realtime_transcription_session(
     )
     model_name = req.resolved_model() or "gpt-realtime-whisper"
     litellm_logging_obj: Final[LiteLLMLogging] = kwargs.get("litellm_logging_obj")
-    litellm_params: Final = GenericLiteLLMParams(**kwargs)
+    litellm_params: Final = GenericLiteLLMParams.model_validate(kwargs)
+    caller_headers: Final[Mapping[str, object]] = kwargs.get("extra_headers") or {}
 
     (
         model_name,
@@ -297,7 +310,10 @@ async def acreate_realtime_transcription_session(
         timeout=timeout or request_timeout,
         provider_config=provider_config,
         model=model_name,
-        extra_headers=kwargs.get("extra_headers"),
+        extra_headers={
+            **caller_headers,
+            **_realtime_organization_header(custom_llm_provider, caller_headers, litellm_params.organization),
+        },
         client=kwargs.get("client"),
         api_version=litellm_params.api_version,
     )
@@ -457,6 +473,7 @@ async def _alive_session(
     api_key: str | None,
     litellm_metadata: Mapping[str, object],
     litellm_params: Mapping[str, object],
+    organization: str | None,
 ) -> None:
     rejection: Final = _live_session_rejection(custom_llm_provider, litellm_metadata)
     if rejection is not None:
@@ -471,6 +488,7 @@ async def _alive_session(
         api_key=await resolve_openai_bearer_token_async(
             static_api_key=openai_static_api_key(api_key), api_base=resolved_api_base, litellm_params=litellm_params
         ),
+        organization=organization,
     )
 
 
@@ -542,6 +560,7 @@ async def _arealtime(
             api_key=dynamic_api_key,
             litellm_metadata=_build_litellm_metadata(kwargs),
             litellm_params=deployment_params,
+            organization=litellm_params.organization,
         )
         return
 
@@ -624,6 +643,7 @@ async def _arealtime(
             query_params=query_params,
             user_api_key_dict=kwargs.get("user_api_key_dict"),
             litellm_metadata=_build_litellm_metadata(kwargs),
+            organization=litellm_params.organization,
         )
     elif _custom_llm_provider == "bedrock":
         # Extract AWS parameters from kwargs

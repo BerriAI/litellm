@@ -212,6 +212,40 @@ async def test_async_realtime_url_contains_model():
 
 
 @pytest.mark.asyncio
+async def test_async_realtime_sends_the_deployment_organization():
+    from litellm.llms.openai.realtime.handler import OpenAIRealtime
+
+    class _BackendConnection:
+        async def __aenter__(self):
+            return MagicMock()
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+    websocket = MagicMock()
+    websocket.headers = {}
+    websocket.scope = {"headers": []}
+    with (
+        patch("websockets.connect", return_value=_BackendConnection()) as mock_ws_connect,
+        patch("litellm.llms.openai.realtime.handler.RealTimeStreaming") as mock_realtime_streaming,
+    ):
+        mock_realtime_streaming.return_value.bidirectional_forward = AsyncMock()
+
+        await OpenAIRealtime().async_realtime(
+            model="gpt-realtime",
+            websocket=websocket,
+            logging_obj=MagicMock(),
+            api_base="https://api.openai.com/",
+            api_key="test-key",
+            organization="org-deployment",
+        )
+
+    additional_headers = mock_ws_connect.call_args[1]["additional_headers"]
+    assert additional_headers["Authorization"] == "Bearer test-key"
+    assert additional_headers["OpenAI-Organization"] == "org-deployment"
+
+
+@pytest.mark.asyncio
 async def test_async_realtime_forwards_openai_beta_header_when_client_sends_it():
     """Upstream WS gets OpenAI-Beta: realtime=v1 only when the client WebSocket included it."""
     from litellm.llms.openai.realtime.handler import OpenAIRealtime

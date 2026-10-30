@@ -5,6 +5,7 @@ import httpx
 import litellm
 from litellm.litellm_core_utils.url_utils import encode_url_path_segment, join_api_base
 from litellm.llms.base_llm.vector_store.transformation import BaseVectorStoreConfig
+from litellm.llms.openai.common_utils import openai_organization_header
 from litellm.llms.openai.workload_identity import resolve_openai_bearer_token
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.router import GenericLiteLLMParams
@@ -48,7 +49,7 @@ class OpenAIVectorStoreConfig(BaseVectorStoreConfig):
             "write": [("POST", "/vector_stores")],
         }
 
-    def validate_environment(self, headers: dict, litellm_params: GenericLiteLLMParams | None) -> dict:
+    def validate_environment(self, headers: dict[str, object], litellm_params: GenericLiteLLMParams | None) -> dict:
         params: Final = litellm_params or GenericLiteLLMParams()
         bearer_token: Final = resolve_openai_bearer_token(
             api_key=params.api_key, api_base=params.api_base, litellm_params=params.model_dump(exclude_none=True)
@@ -57,6 +58,7 @@ class OpenAIVectorStoreConfig(BaseVectorStoreConfig):
             {
                 "Authorization": f"Bearer {bearer_token}",
                 "Content-Type": "application/json",
+                **openai_organization_header(headers, params.organization),
             }
         )
 

@@ -7,6 +7,7 @@ from collections.abc import Awaitable, Callable, Mapping
 from types import ModuleType
 from typing import Final, Literal, Protocol
 from unittest.mock import MagicMock, Mock, patch
+from uuid import uuid4
 
 import httpx
 import pytest
@@ -2320,3 +2321,131 @@ def test_openai_config_hoists_a_later_developer_message_only_for_a_model_off_ope
         model_info=None,
     )
     assert [message["role"] for message in messages] == expected_roles
+
+
+_DEPLOYMENT_ORGANIZATION: Final = "org-deployment"
+_ORGANIZATION_WIRE_BODIES: Final[Mapping[str, Mapping[str, object]]] = {
+    "/v1/embeddings": {
+        "object": "list",
+        "model": "text-embedding-3-small",
+        "data": [{"object": "embedding", "index": 0, "embedding": [0.1]}],
+        "usage": {"prompt_tokens": 1, "total_tokens": 1},
+    },
+    "/v1/completions": {
+        "id": "cmpl-1",
+        "object": "text_completion",
+        "created": 1,
+        "model": "gpt-3.5-turbo-instruct",
+        "choices": [{"index": 0, "text": "hi", "finish_reason": "stop", "logprobs": None}],
+        "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+    },
+    "/v1/moderations": {
+        "id": "modr-1",
+        "model": "omni-moderation-latest",
+        "results": [{"flagged": False, "categories": {}, "category_scores": {}}],
+    },
+    "/v1/audio/transcriptions": {"text": "hi"},
+}
+
+
+class _OpenAIThatRecordsTheHeaders:
+    def __init__(self) -> None:
+        self.headers: httpx.Headers | None = None
+
+    def __call__(self, request: httpx.Request) -> httpx.Response:
+        self.headers = request.headers
+        body: Final = _ORGANIZATION_WIRE_BODIES.get(request.url.path)
+        if body is None:
+            return httpx.Response(200, content=b"audio")
+        return httpx.Response(200, json=body)
+
+
+@pytest.fixture
+def recording_openai(monkeypatch: pytest.MonkeyPatch) -> _OpenAIThatRecordsTheHeaders:
+    recorder: Final = _OpenAIThatRecordsTheHeaders()
+    transport: Final = httpx.MockTransport(recorder)
+    monkeypatch.setattr(litellm, "client_session", httpx.Client(transport=transport))
+    monkeypatch.setattr(litellm, "aclient_session", httpx.AsyncClient(transport=transport))
+    monkeypatch.delenv("OPENAI_ORG_ID", raising=False)
+    return recorder
+
+
+_EMBEDDING_CALL: Final[Mapping[str, object]] = {"model": "openai/text-embedding-3-small", "input": "hi"}
+_TEXT_COMPLETION_CALL: Final[Mapping[str, object]] = {
+    "model": "text-completion-openai/gpt-3.5-turbo-instruct",
+    "prompt": "hi",
+}
+_MODERATION_CALL: Final[Mapping[str, object]] = {"model": "omni-moderation-latest", "input": "hi"}
+_SPEECH_CALL: Final[Mapping[str, object]] = {"model": "openai/tts-1", "input": "hi", "voice": "alloy"}
+_TRANSCRIPTION_CALL: Final[Mapping[str, object]] = {"model": "openai/whisper-1", "file": ("hello.wav", b"audio")}
+
+
+@pytest.mark.parametrize(
+    ("route", "route_kwargs"),
+    [
+        (litellm.embedding, _EMBEDDING_CALL),
+        (litellm.text_completion, _TEXT_COMPLETION_CALL),
+        (litellm.speech, _SPEECH_CALL),
+        (litellm.transcription, _TRANSCRIPTION_CALL),
+    ],
+)
+def test_sync_route_sends_the_deployment_organization(
+    recording_openai: _OpenAIThatRecordsTheHeaders,
+    route: Callable[..., object],
+    route_kwargs: Mapping[str, object],
+) -> None:
+    route(api_key=f"sk-{uuid4()}", organization=_DEPLOYMENT_ORGANIZATION, **route_kwargs)
+
+    assert recording_openai.headers is not None
+    assert recording_openai.headers["OpenAI-Organization"] == _DEPLOYMENT_ORGANIZATION
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("route", "route_kwargs"),
+    [
+        (litellm.aembedding, _EMBEDDING_CALL),
+        (litellm.atext_completion, _TEXT_COMPLETION_CALL),
+        (litellm.amoderation, _MODERATION_CALL),
+        (litellm.aspeech, _SPEECH_CALL),
+        (litellm.atranscription, _TRANSCRIPTION_CALL),
+    ],
+)
+async def test_async_route_sends_the_deployment_organization(
+    recording_openai: _OpenAIThatRecordsTheHeaders,
+    route: Callable[..., Awaitable[object]],
+    route_kwargs: Mapping[str, object],
+) -> None:
+    await route(api_key=f"sk-{uuid4()}", organization=_DEPLOYMENT_ORGANIZATION, **route_kwargs)
+
+    assert recording_openai.headers is not None
+    assert recording_openai.headers["OpenAI-Organization"] == _DEPLOYMENT_ORGANIZATION
+
+
+@respx.mock
+def test_sync_moderation_sends_the_deployment_organization() -> None:
+    moderations: Final = respx.post("https://api.openai.com/v1/moderations").mock(
+        return_value=httpx.Response(200, json=_ORGANIZATION_WIRE_BODIES["/v1/moderations"])
+    )
+
+    litellm.moderation(api_key=f"sk-{uuid4()}", organization=_DEPLOYMENT_ORGANIZATION, **_MODERATION_CALL)
+
+    assert moderations.calls.last.request.headers["OpenAI-Organization"] == _DEPLOYMENT_ORGANIZATION
+
+
+@pytest.mark.parametrize(
+    ("route", "route_kwargs"),
+    [(litellm.embedding, _EMBEDDING_CALL), (litellm.speech, _SPEECH_CALL)],
+)
+def test_process_wide_organization_stays_off_routes_a_deployment_did_not_pin(
+    recording_openai: _OpenAIThatRecordsTheHeaders,
+    monkeypatch: pytest.MonkeyPatch,
+    route: Callable[..., object],
+    route_kwargs: Mapping[str, object],
+) -> None:
+    monkeypatch.setenv("OPENAI_ORGANIZATION", "org-process-wide")
+
+    route(api_key=f"sk-{uuid4()}", **route_kwargs)
+
+    assert recording_openai.headers is not None
+    assert "OpenAI-Organization" not in recording_openai.headers

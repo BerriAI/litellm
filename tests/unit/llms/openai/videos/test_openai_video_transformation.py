@@ -115,3 +115,15 @@ def test_video_edit_request_without_file_sends_json_id_reference():
     assert url == "https://api.openai.com/v1/videos/edits"
     assert data == {"prompt": "brighter", "video": {"id": "video_abc123"}}
     assert files is None
+
+
+def test_validate_environment_sends_the_deployment_organization():
+    headers = OpenAIVideoConfig().validate_environment(
+        headers={},
+        model="sora-2",
+        api_key="test-key",
+        litellm_params=GenericLiteLLMParams(organization="org-deployment"),
+    )
+
+    assert headers["OpenAI-Organization"] == "org-deployment"
+    assert headers["Authorization"] == "Bearer test-key"

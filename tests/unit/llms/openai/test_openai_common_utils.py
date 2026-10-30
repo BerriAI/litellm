@@ -9,7 +9,11 @@ import respx
 
 import litellm
 from litellm.litellm_core_utils.token_counter import token_counter
-from litellm.llms.openai.common_utils import BaseOpenAILLM, is_openai_backed_api_base
+from litellm.llms.openai.common_utils import (
+    BaseOpenAILLM,
+    is_openai_backed_api_base,
+    openai_organization_header,
+)
 
 # Test parameters for different API functions
 API_FUNCTION_PARAMS = [
@@ -588,3 +592,18 @@ async def test_azure_gateway_and_image_variations_use_the_callers_async_session(
         )
         assert response.data[0].url == "https://example.com/image.png"
         assert not session.is_closed
+
+
+@pytest.mark.parametrize(
+    ("headers", "organization", "expected"),
+    [
+        ({}, "org-deployment", {"OpenAI-Organization": "org-deployment"}),
+        ({}, None, {}),
+        ({}, "", {}),
+        ({"OPENAI-ORGANIZATION": "org-caller"}, "org-deployment", {}),
+    ],
+)
+def test_openai_organization_header_keeps_the_callers_header(
+    headers: dict[str, object], organization: str | None, expected: dict[str, str]
+) -> None:
+    assert openai_organization_header(headers, organization) == expected

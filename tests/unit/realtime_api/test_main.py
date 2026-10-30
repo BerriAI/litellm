@@ -282,9 +282,11 @@ async def test_arealtime_live_session_dispatches_to_openai_live_handler(monkeypa
         websocket=websocket,
         litellm_logging_obj=logging_obj,
         live_session_start=start_frame,
+        organization="org-deployment",
     )
 
     assert captured.values is not None
+    assert captured.values["organization"] == "org-deployment"
     assert captured.values["model"] == "gpt-live-1"
     assert captured.values["websocket"] is websocket
     assert captured.values["logging_obj"] is logging_obj
@@ -434,9 +436,11 @@ async def test_arealtime_without_live_start_preserves_openai_realtime_dispatch(
         model="gpt-realtime",
         websocket=MagicMock(),
         litellm_logging_obj=FakeLogging(),
+        organization="org-deployment",
     )
 
     assert captured.values is not None
+    assert captured.values["organization"] == "org-deployment"
     assert captured.values["model"] == "gpt-realtime"
     assert captured.values["api_key"] == "resolved-key"
     assert captured.values["api_base"] == "https://realtime-gateway.example/v1"
@@ -984,6 +988,79 @@ async def test_realtime_http_routes_send_a_bare_model_name_to_its_explicit_provi
         **route_kwargs,
     )
     assert gateway.url == f"https://realtime-gateway.example/v1/realtime/{path}"
+
+
+class _GatewayThatRecordsTheHeaders:
+    def __init__(self) -> None:
+        self.headers: httpx.Headers = httpx.Headers()
+
+    def __call__(self, request: httpx.Request) -> httpx.Response:
+        self.headers = request.headers
+        return httpx.Response(200, json={"value": "ek_test"})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "route",
+    [realtime_main.acreate_realtime_client_secret, realtime_main.acreate_realtime_transcription_session],
+)
+async def test_realtime_http_routes_send_the_deployment_organization(
+    route: Callable[..., Awaitable[object]],
+) -> None:
+    gateway: Final = _GatewayThatRecordsTheHeaders()
+    await route.__wrapped__(
+        model="my-realtime",
+        custom_llm_provider="openai",
+        api_base="https://realtime-gateway.example/v1",
+        api_key="fake-key",
+        organization="org-deployment",
+        litellm_logging_obj=FakeLogging(),
+        client=AsyncHTTPHandler(transport=httpx.MockTransport(gateway)),
+    )
+    assert gateway.headers["OpenAI-Organization"] == "org-deployment"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "route",
+    [realtime_main.acreate_realtime_client_secret, realtime_main.acreate_realtime_transcription_session],
+)
+async def test_realtime_http_routes_keep_the_caller_organization_header(
+    route: Callable[..., Awaitable[object]],
+) -> None:
+    gateway: Final = _GatewayThatRecordsTheHeaders()
+    await route.__wrapped__(
+        model="my-realtime",
+        custom_llm_provider="openai",
+        api_base="https://realtime-gateway.example/v1",
+        api_key="fake-key",
+        organization="org-deployment",
+        extra_headers={"openai-organization": "org-caller"},
+        litellm_logging_obj=FakeLogging(),
+        client=AsyncHTTPHandler(transport=httpx.MockTransport(gateway)),
+    )
+    assert gateway.headers["OpenAI-Organization"] == "org-caller"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "route",
+    [realtime_main.acreate_realtime_client_secret, realtime_main.acreate_realtime_transcription_session],
+)
+async def test_realtime_http_routes_keep_the_organization_off_other_providers(
+    route: Callable[..., Awaitable[object]],
+) -> None:
+    gateway: Final = _GatewayThatRecordsTheHeaders()
+    await route.__wrapped__(
+        model="my-realtime",
+        custom_llm_provider="hosted_vllm",
+        api_base="https://realtime-gateway.example/v1",
+        api_key="fake-key",
+        organization="org-deployment",
+        litellm_logging_obj=FakeLogging(),
+        client=AsyncHTTPHandler(transport=httpx.MockTransport(gateway)),
+    )
+    assert "OpenAI-Organization" not in gateway.headers
 
 
 class _ClientWebSocketWithHeaders:

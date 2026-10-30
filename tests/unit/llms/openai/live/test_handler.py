@@ -1206,3 +1206,28 @@ async def test_async_live_session_reports_redacted_server_error_and_bounds_close
     finally:
         if worker.coroutine is not None:
             await worker.coroutine
+
+
+@pytest.mark.asyncio
+async def test_async_live_session_sends_the_deployment_organization() -> None:
+    client_frames: Final = ('{"type":"session.close"}',)
+    upstream_frames: Final = (
+        '{"type":"session.started","session":{"model":"gpt-live-1"}}',
+        '{"type":"session.closed","usage":{"seconds":1}}',
+    )
+    connector: Final = _FakeConnector(_FakeUpstream(client_frames=client_frames, upstream_frames=upstream_frames))
+
+    await OpenAILiveSessions(logging_worker=_FakeLoggingWorker(), websocket_connector=connector).async_live_session(
+        model="gpt-live-1",
+        websocket=_FakeClientWebSocket(messages=client_frames),
+        logging_obj=cast(Logging, _FakeLogging()),
+        session_start={"type": "session.start", "session": {"model": "gpt-live-1"}},
+        api_base="https://api.openai.com/",
+        api_key="live-test-key",
+        organization="org-deployment",
+    )
+
+    assert connector.kwargs["additional_headers"] == {
+        "Authorization": "Bearer live-test-key",
+        "OpenAI-Organization": "org-deployment",
+    }

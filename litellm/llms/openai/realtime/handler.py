@@ -26,7 +26,7 @@ from ....litellm_core_utils.realtime_streaming import (
     client_sent_openai_beta_realtime_header,
 )
 from ....llms.custom_httpx.http_handler import get_shared_realtime_ssl_context
-from ..common_utils import is_openai_backed_api_base
+from ..common_utils import is_openai_backed_api_base, openai_organization_header
 from ..openai import OpenAIChatCompletion
 
 if TYPE_CHECKING:
@@ -197,6 +197,7 @@ class OpenAIRealtime(OpenAIChatCompletion):
         query_params: RealtimeQueryParams | None = None,
         user_api_key_dict: object | None = None,
         litellm_metadata: dict | None = None,
+        organization: str | None = None,
         **kwargs: object,
     ):
         import websockets
@@ -223,7 +224,8 @@ class OpenAIRealtime(OpenAIChatCompletion):
                     "If your client expects beta event names, add 'OpenAI-Beta: realtime=v1' "
                     "to the WebSocket headers sent to the LiteLLM proxy."
                 )
-            headers: Final = self._get_additional_headers(api_key, openai_beta_realtime=openai_beta_realtime)
+            protocol_headers: Final = self._get_additional_headers(api_key, openai_beta_realtime=openai_beta_realtime)
+            headers: Final = {**protocol_headers, **openai_organization_header(protocol_headers, organization)}
 
             # Log a masked request preview consistent with other endpoints.
             logging_obj.pre_call(
