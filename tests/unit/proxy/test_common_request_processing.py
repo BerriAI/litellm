@@ -12489,27 +12489,6 @@ async def test_completed_stream_cleanup_does_not_release_an_unowned_legacy_slot(
     assert rejected.value.status_code == 429
 
 
-def test_maybe_get_model_id_reads_the_chat_metadata_the_router_updated_in_place():
-    processing_obj: Final = ProxyBaseLLMRequestProcessing(data={"metadata": {"model_info": {"id": "declared-text"}}})
-
-    assert processing_obj.maybe_get_model_id(None) == "declared-text"
-
-
-def test_maybe_get_model_id_prefers_litellm_metadata_over_caller_metadata_without_a_deployment():
-    processing_obj: Final = ProxyBaseLLMRequestProcessing(
-        data={
-            "metadata": {"trace_id": "t-1"},
-            "litellm_metadata": {"model_info": {"id": "vision"}},
-        }
-    )
-
-    assert processing_obj.maybe_get_model_id(None) == "vision"
-
-
-def test_maybe_get_model_id_returns_none_before_the_router_picked_a_deployment():
-    assert ProxyBaseLLMRequestProcessing(data={"metadata": {}}).maybe_get_model_id(None) is None
-
-
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("accounting", "finalized_amount", "expected_cost"),
@@ -12567,3 +12546,24 @@ async def test_failure_cost_headers_report_accounted_rounds_without_changing_cha
         assert raised.value.headers["x-litellm-response-cost"] == "0"
     if logging_obj is not None:
         assert logging_obj.model_call_details["response_cost"] == 0.23
+
+
+def test_maybe_get_model_id_reads_the_chat_metadata_the_router_updated_in_place():
+    processing_obj: Final = ProxyBaseLLMRequestProcessing(data={"metadata": {"model_info": {"id": "declared-text"}}})
+
+    assert processing_obj.maybe_get_model_id(None) == "declared-text"
+
+
+def test_maybe_get_model_id_prefers_litellm_metadata_over_caller_metadata_without_a_deployment():
+    processing_obj: Final = ProxyBaseLLMRequestProcessing(
+        data={
+            "metadata": {"trace_id": "t-1"},
+            "litellm_metadata": {"model_info": {"id": "vision"}},
+        }
+    )
+
+    assert processing_obj.maybe_get_model_id(None) == "vision"
+
+
+def test_maybe_get_model_id_returns_none_before_the_router_picked_a_deployment():
+    assert ProxyBaseLLMRequestProcessing(data={"metadata": {}}).maybe_get_model_id(None) is None

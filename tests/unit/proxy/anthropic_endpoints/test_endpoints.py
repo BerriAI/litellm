@@ -11,8 +11,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
-from fastapi import Request, Response
-from fastapi.responses import StreamingResponse
+from fastapi import HTTPException, Request, Response
+from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.testclient import TestClient
 from starlette.types import Message
 
@@ -20,6 +20,7 @@ from litellm import Router
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.dual_cache import DualCache
 from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.types.guardrails import GuardrailEventHooks
@@ -425,6 +426,66 @@ class TestHttpExceptionDictDetail:
         assert "{'error'" not in body["error"]["message"]
         assert body["error"]["provider_specific_fields"] == detail
         mock_logging.post_call_failure_hook.assert_awaited_once()
+
+
+class _RecordUsageThenReject(CustomGuardrail):
+    def __init__(self, paid: bool, finalized_amount: float | None) -> None:
+        super().__init__(guardrail_name="paid-round-failure", event_hook=GuardrailEventHooks.pre_call, default_on=True)
+        self.paid = paid
+        self.finalized_amount = finalized_amount
+        self.logging_obj: Logging | None = None
+
+    async def async_pre_call_hook(
+        self, user_api_key_dict: UserAPIKeyAuth, cache: DualCache, data: dict[str, object], call_type: str
+    ) -> None:
+        from litellm.litellm_core_utils.llm_cost_calc.finalization import finalize_cost
+        from litellm.types.utils import Usage
+
+        logging_obj: Final = data["litellm_logging_obj"]
+        assert isinstance(logging_obj, Logging)
+        self.logging_obj = logging_obj
+        if self.finalized_amount is not None:
+            logging_obj.record_finalized_cost(finalize_cost(self.finalized_amount, None))
+        if self.paid:
+            logging_obj.record_partial_usage_for_failure(Usage(prompt_tokens=7, completion_tokens=3), 0.23)
+        raise HTTPException(status_code=400, detail="tool execution rejected")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("paid", "finalized_amount", "expected_cost"),
+    ((False, None, 0.0), (True, None, 0.23), (True, 0.41, 0.41), (True, 0.0, 0.0)),
+)
+async def test_messages_failure_headers_report_recorded_cost_after_failure_hook(
+    paid: bool, finalized_amount: float | None, expected_cost: float
+) -> None:
+    import litellm
+    import litellm.proxy.anthropic_endpoints.endpoints as ep
+    from litellm.proxy import proxy_server
+    from litellm.proxy.utils import ProxyLogging
+
+    blocker: Final = _RecordUsageThenReject(paid, finalized_amount)
+    with (
+        patch.object(
+            proxy_server, "proxy_logging_obj", new=ProxyLogging(user_api_key_cache=DualCache())
+        ),  # test-quality-ok: module global imported at call time; no injection seam
+        patch.object(litellm, "callbacks", new=[blocker]),  # test-quality-ok: callbacks register through this global
+    ):
+        response: Final = await ep.anthropic_response(
+            fastapi_response=Response(),
+            request=_messages_request({"model": "claude-haiku-5-5", "messages": [{"role": "user", "content": "hi"}]}),
+            user_api_key_dict=UserAPIKeyAuth(api_key="test-key", spend=2.0),
+        )
+    assert isinstance(response, JSONResponse)
+    assert response.status_code == 400
+    assert json.loads(response.body)["error"]["message"] == "tool execution rejected"
+    assert float(response.headers["x-litellm-response-cost"]) == pytest.approx(expected_cost)
+    assert float(response.headers["x-litellm-key-spend"]) == pytest.approx(2.0 + expected_cost)
+    assert blocker.logging_obj is not None
+    if paid:
+        assert blocker.logging_obj.model_call_details["response_cost"] == 0.23
+    else:
+        assert response.headers["x-litellm-response-cost"] == "0"
 
 
 class TestFailureHookRequestData:

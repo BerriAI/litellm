@@ -8,7 +8,7 @@ from typing import Final
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.responses import JSONResponse
-from pydantic import JsonValue, ValidationError
+from pydantic import JsonValue, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, TypedDict
 
 import litellm
@@ -18,6 +18,7 @@ from litellm.anthropic_interface.exceptions import (
     AnthropicExceptionMapping,
 )
 from litellm.integrations.custom_guardrail import ModifyResponseException
+from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.tool_fields import first_validation_error
 from litellm.llms.anthropic.chat.guardrail_translation.handler import AnthropicMessagesHandler
 from litellm.llms.anthropic.messages.context_management import (
@@ -28,6 +29,7 @@ from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_request_processing import (
     ProxyBaseLLMRequestProcessing,
     create_response,
+    failure_response_cost,
     log_llm_api_exception,
     proxy_exception_from_http_exception,
     proxy_exception_from_route_error,
@@ -41,6 +43,7 @@ from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # leg
 )
 from litellm.proxy.common_utils.openai_error_payload import (
     LITELLM_CALL_ID_HEADER,
+    attribute_of,
     error_status_code,
     litellm_call_id_headers,
     openai_error_param,
@@ -58,6 +61,7 @@ from litellm.router import Router
 router: Final = APIRouter()
 
 _NO_HEADERS: Final[Mapping[str, str]] = MappingProxyType({})
+_REQUEST_FIELDS: Final = TypeAdapter(Mapping[str, object])
 
 
 def _with_provider_specific_fields(exc: ProxyException, detail: AnthropicErrorDetail) -> AnthropicErrorDetail:
@@ -262,6 +266,10 @@ async def anthropic_response(
         )
         return JSONResponse(status_code=e.status_code, content=body)
     except Exception as e:
+        billing_logging_obj: Final = _REQUEST_FIELDS.validate_python(
+            attribute_of(base_llm_response_processor, "data")
+        ).get("litellm_logging_obj")
+        logging_obj: Final = billing_logging_obj if isinstance(billing_logging_obj, Logging) else None
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict, original_exception=e, request_data=base_llm_response_processor.data
         )
@@ -283,7 +291,7 @@ async def anthropic_response(
             call_id=base_llm_response_processor.litellm_call_id,
             model_id=model_id,
             version=version,
-            response_cost=0,
+            response_cost=failure_response_cost(logging_obj),
             model_region=getattr(user_api_key_dict, "allowed_model_region", ""),
             request_data=data,
             timeout=getattr(e, "timeout", None),

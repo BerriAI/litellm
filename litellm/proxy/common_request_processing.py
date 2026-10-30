@@ -1809,7 +1809,7 @@ def _response_cost_header_value(hidden_params: Mapping[str, object]) -> float | 
     return response_cost if isinstance(response_cost, (int, float, str)) and response_cost else ""
 
 
-def _failure_response_cost(logging_obj: LiteLLMLoggingObj | None) -> float:
+def failure_response_cost(logging_obj: LiteLLMLoggingObj | None) -> float:
     if logging_obj is None:
         return 0
     if logging_obj.finalized_cost is not None:
@@ -4362,7 +4362,7 @@ class ProxyBaseLLMRequestProcessing:
             call_id=self.litellm_call_id,
             model_id=model_id,
             version=version,
-            response_cost=_failure_response_cost(_litellm_logging_obj),
+            response_cost=failure_response_cost(_litellm_logging_obj),
             model_region=getattr(user_api_key_dict, "allowed_model_region", ""),
             request_data=self.data,
             timeout=timeout,
