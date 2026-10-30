@@ -85,8 +85,8 @@ from litellm.proxy._types import (
 from litellm.proxy.bug_report_config import build_proxy_bug_report
 from litellm.proxy.common_utils.openai_error_payload import (
     attribute_of,
-    litellm_call_id_headers,
-    openai_error_param,
+    error_status_code,
+    openai_shaped_proxy_exception,
     with_litellm_call_id,
 )
 from litellm.proxy.spend_tracking.spend_log_error_logger import spend_log_error
@@ -9186,39 +9186,30 @@ def _recreate_writer_on_read_only_transaction(prisma_client: "PrismaClient | Non
     asyncio.create_task(prisma_client.recreate_read_only_writer(reason="postgres_read_only_transaction"))
 
 
+def _client_message(e: Exception) -> str:
+    status_is_none: Final = hasattr(e, "status_code") and attribute_of(e, "status_code") is None
+    return "Internal server error" if status_is_none else strip_bug_report_notice(str(e))
+
+
 def handle_exception_on_proxy(e: Exception, litellm_call_id: str | None = None) -> ProxyException:
     """
     Returns an Exception as ProxyException, this ensures all exceptions are OpenAI API compatible
     """
-    from fastapi import status
-
     verbose_proxy_logger.exception("Exception: %s", e)
     if PrismaDBExceptionHandler.is_read_only_transaction_error(e):
         from litellm.proxy.proxy_server import prisma_client
 
         _recreate_writer_on_read_only_transaction(prisma_client)
 
-    headers: Final = litellm_call_id_headers(litellm_call_id)
-    if isinstance(e, HTTPException):
-        return ProxyException(
-            message=getattr(e, "detail", f"error({e})"),
-            type=ProxyErrorTypes.internal_server_error,
-            param=openai_error_param(e),
-            headers=headers,
-            code=getattr(e, "status_code", status.HTTP_500_INTERNAL_SERVER_ERROR),
-        )
-    elif isinstance(e, ProxyException):
+    if isinstance(e, ProxyException):
         return with_litellm_call_id(e, litellm_call_id)
-    _status_code: Final = getattr(e, "status_code", status.HTTP_500_INTERNAL_SERVER_ERROR)
+    if isinstance(e, HTTPException):
+        return with_litellm_call_id(openai_shaped_proxy_exception(e, str(e.detail), e.status_code), litellm_call_id)
     if should_report_bug(e):
         verbose_proxy_logger.error(bug_report_notice(build_proxy_bug_report(e)))
-    return ProxyException(
-        message=strip_bug_report_notice(str(e)),
-        type=ProxyErrorTypes.internal_server_error,
-        param=openai_error_param(e),
-        headers=headers,
-        code=_status_code,
-    )
+    message: Final = _client_message(e)
+    status_code: Final = error_status_code(e, status.HTTP_500_INTERNAL_SERVER_ERROR)
+    return with_litellm_call_id(openai_shaped_proxy_exception(e, message, status_code), litellm_call_id)
 
 
 def require_enterprise_license(feature: str | None = None) -> None:

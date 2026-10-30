@@ -18750,7 +18750,7 @@ async def test_list_keys_rejects_invalid_expires():
                 expires="expred",
             )
 
-    assert exc_info.value.code == "400"
+    assert (exc_info.value.code, exc_info.value.type) == ("400", "invalid_request_error")
     assert "Invalid expires value" in str(exc_info.value.message)
 
 
