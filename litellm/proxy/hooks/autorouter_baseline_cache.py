@@ -24,11 +24,11 @@ from litellm.llms.anthropic.prompt_cache_prediction import (
     TokenCounter,
     UnsupportedCachePlan,
     UnsupportedPredictionTarget,
+    aresolve_baseline_prediction_target,
     count_cache_plan,
     count_prompt_tokens,
     parse_cache_plan,
     prepare_native_baseline_body,
-    resolve_baseline_prediction_target,
     supported_baseline_recipient,
     supported_prediction_headers,
 )
@@ -153,7 +153,7 @@ class AutoRouterBaselineCache(CustomLogger):
             deployment: Final = router.registry().deployment(request.route.baseline_deployment_id) if router else None
             if deployment is None:
                 return
-            target: Final = resolve_baseline_prediction_target(deployment.litellm_params)
+            target: Final = await aresolve_baseline_prediction_target(deployment.litellm_params)
             prices: Final = _PRICES.validate_python(
                 _effective_model_info(router, request.route.baseline_deployment_id, request.route.baseline_model)
             )

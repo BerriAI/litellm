@@ -17,6 +17,7 @@ from litellm.llms.anthropic.prompt_cache_prediction import (
     PromptPrefix,
     TokenCounter,
     UnsupportedPredictionTarget,
+    aresolve_prediction_target,
     cache_scope,
     count_prompt_tokens,
     lookup,
@@ -102,7 +103,7 @@ class AnthropicCacheRouting:
         return isinstance(resolve_prediction_target(deployment.litellm_params), NativePredictionTarget)
 
     async def is_warm(self, deployment: Deployment, caller: str, cache: DualCache, now: float) -> bool:
-        target: Final = resolve_prediction_target(deployment.litellm_params)
+        target: Final = await aresolve_prediction_target(deployment.litellm_params)
         if not isinstance(target, NativePredictionTarget):
             return False
         scope: Final = cache_scope(caller, deployment.model_info.id or "", target.api_key, target.model)
@@ -180,7 +181,7 @@ async def predict_arm(
     unknown: Final = CachePredictionArm(deployment_id=deployment_id, model=params.model)
     if deployment.model_info.blocked:
         return unknown.model_copy(update=MappingProxyType({"reason": "unsupported_deployment_configuration"}))
-    target: Final = resolve_prediction_target(params)
+    target: Final = await aresolve_prediction_target(params)
     if isinstance(target, UnsupportedPredictionTarget):
         return unknown.model_copy(update=MappingProxyType({"reason": target.reason}))
     model: Final = target.model

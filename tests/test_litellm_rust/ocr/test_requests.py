@@ -4,9 +4,11 @@ from typing import Final
 import pytest
 
 import litellm
+from litellm.types.utils import admin_api_key_secret_reference
 from tests.test_litellm_rust.ocr.data import (
     OCR_DOCUMENT,
     OCR_RESPONSE,
+    call,
     call_aocr,
     call_ocr,
 )
@@ -132,3 +134,19 @@ def test_azure_document_intelligence_drop_params_drops_an_unsupported_output_con
     assert response.pages[0].markdown == "hello"
     assert "outputContentFormat" not in server.requests[0].path
     assert "drop_params" not in server.requests[0].path
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+async def test_ocr_sends_the_token_behind_an_admin_oidc_env_api_key(
+    server: RecordingServer, asynchronous: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("MISTRAL_SA_TOKEN", "env-token")
+    reference: Final = admin_api_key_secret_reference(
+        {"api_key": "oidc/env/MISTRAL_SA_TOKEN", "api_base": server.base_url}
+    )["api_key"]
+
+    response: Final = await call(server, asynchronous, api_key=reference)
+
+    assert server.requests[0].headers["authorization"] == "Bearer env-token"
+    assert_served_natively(server, response)

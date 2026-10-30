@@ -926,6 +926,22 @@ async def acredential_updates(kwargs: Mapping[str, object], call_type: str | Non
     )
 
 
+def with_credentials_from_list(kwargs: Mapping[str, object], call_type: str | None = None) -> Mapping[str, object]:
+    return MappingProxyType(
+        {**kwargs, **_credential_updates(kwargs, _named_credential_values(kwargs), call_type=call_type)}
+    )
+
+
+async def awith_credentials_from_list(
+    kwargs: Mapping[str, object], call_type: str | None = None
+) -> Mapping[str, object]:
+    return MappingProxyType({**kwargs, **(await acredential_updates(kwargs, call_type))})
+
+
+def carries_admin_api_key_reference(kwargs: Mapping[str, object]) -> bool:
+    return isinstance(_api_key_after_credentials(kwargs, _named_credential_values(kwargs)), AdminApiKeySecretReference)
+
+
 def _api_key_after_credentials(kwargs: Mapping[str, object], credential_values: Mapping[str, object]) -> object:
     return kwargs.get("api_key", credential_values.get("api_key"))
 

@@ -5,7 +5,7 @@ import hashlib
 import json
 import time
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from functools import reduce
 from itertools import accumulate, groupby
 from types import MappingProxyType
@@ -16,6 +16,7 @@ from pydantic import ConfigDict, Field, JsonValue, StrictInt, TypeAdapter, Valid
 
 import litellm
 from litellm.caching.dual_cache import DualCache
+from litellm.exceptions import AuthenticationError, ServiceUnavailableError
 from litellm.litellm_core_utils.dot_notation_indexing import delete_nested_value
 from litellm.llms.anthropic.common_utils import (
     AnthropicModelInfo,
@@ -35,8 +36,8 @@ from litellm.router_strategy.auto_router.baseline_request import (
 )
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.router import GenericLiteLLMParams, LiteLLM_Params
-from litellm.types.utils import ModelResponse
-from litellm.utils import supports_thinking_cache_preservation
+from litellm.types.utils import API_KEY_UPSTREAM_PARAMS, AdminApiKeySecretReference, ModelResponse
+from litellm.utils import aresolve_api_key_secret_reference, supports_thinking_cache_preservation
 
 _JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
 _HEADERS: Final = TypeAdapter(dict[str, str])
@@ -631,6 +632,37 @@ def resolve_prediction_target(params: LiteLLM_Params) -> NativePredictionTarget 
 
 def resolve_baseline_prediction_target(params: LiteLLM_Params) -> NativePredictionTarget | UnsupportedPredictionTarget:
     return _resolve_prediction_target(params, allow_configured_endpoint=True)
+
+
+async def aresolve_prediction_target(params: LiteLLM_Params) -> NativePredictionTarget | UnsupportedPredictionTarget:
+    return await _with_secret_behind_api_key_reference(params, resolve_prediction_target(params))
+
+
+async def aresolve_baseline_prediction_target(
+    params: LiteLLM_Params,
+) -> NativePredictionTarget | UnsupportedPredictionTarget:
+    return await _with_secret_behind_api_key_reference(params, resolve_baseline_prediction_target(params))
+
+
+async def _with_secret_behind_api_key_reference(
+    params: LiteLLM_Params, target: NativePredictionTarget | UnsupportedPredictionTarget
+) -> NativePredictionTarget | UnsupportedPredictionTarget:
+    if isinstance(target, UnsupportedPredictionTarget) or not isinstance(params.api_key, AdminApiKeySecretReference):
+        return target
+    try:
+        secret: Final = await aresolve_api_key_secret_reference(
+            params.api_key,
+            model=params.model,
+            llm_provider="anthropic",
+            upstream=MappingProxyType(
+                {"model": params.model, **params.model_dump(include=set(API_KEY_UPSTREAM_PARAMS))}
+            ),
+        )
+    except (AuthenticationError, ServiceUnavailableError):
+        return UnsupportedPredictionTarget("unsupported_provider_credentials")
+    if secret is None or not _supported_provider_key(secret):
+        return UnsupportedPredictionTarget("unsupported_provider_credentials")
+    return replace(target, api_key=secret)
 
 
 def prepare_native_baseline_body(request: Mapping[str, object], model: str) -> Mapping[str, JsonValue] | None:

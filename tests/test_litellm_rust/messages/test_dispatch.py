@@ -22,6 +22,7 @@ from litellm.rust_bridge.messages.entrypoints import NATIVE_AMESSAGES, NATIVE_ME
 from litellm.rust_bridge.public_call import NativeCall
 from litellm.types.llms.anthropic import ANTHROPIC_ADVISOR_TOOL_TYPE
 from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicMessagesResponse
+from litellm.types.utils import admin_api_key_secret_reference
 
 MESSAGES: Final = [{"role": "user", "content": "hi"}]
 PYTHON_RULES: Final[Rules] = ()
@@ -485,6 +486,12 @@ STRICT_TOOL: Final = {"name": "a", "input_schema": {"type": "object"}, "strict":
             "anthropic/claude-sonnet-4-5",
             {"stream": True},
             {"include_cost_in_streaming_usage": True},
+        ),
+        (
+            Feature.ADMIN_API_KEY_REFERENCE,
+            "anthropic/claude-sonnet-4-5",
+            admin_api_key_secret_reference({"api_key": "oidc/env/ANTHROPIC_SA_TOKEN"}),
+            {},
         ),
     ),
 )

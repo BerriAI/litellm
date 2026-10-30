@@ -6,7 +6,7 @@ import pytest
 import respx
 
 import litellm
-from litellm.types.utils import LiteLLMFineTuningJob
+from litellm.types.utils import LiteLLMFineTuningJob, admin_api_key_secret_reference
 
 API_BASE: Final = "https://fine-tuning.test"
 BASE_MODEL: Final = "gpt-4.1-nano-2025-04-14"
@@ -92,3 +92,25 @@ async def test_create_with_api_version_reaches_the_provider_and_only_azure_gets_
     assert isinstance(job, LiteLLMFineTuningJob)
     assert job.id == PROVIDER_JOB["id"]
     assert sent.calls.last.request.url.params.get("api-version") == sent_api_version
+
+
+@pytest.mark.asyncio
+@respx.mock
+@pytest.mark.parametrize("is_async", [True, False], ids=["async", "sync"])
+async def test_list_jobs_sends_the_token_behind_an_admin_oidc_env_api_key(
+    monkeypatch: pytest.MonkeyPatch, is_async: bool
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setenv("OPENAI_SA_TOKEN", "env-token")
+    listed: Final = respx.get(f"{API_BASE}/v1/fine_tuning/jobs").mock(
+        return_value=httpx.Response(200, json={"object": "list", "data": [PROVIDER_JOB], "has_more": False})
+    )
+    request: Final = {
+        "custom_llm_provider": "openai",
+        "api_base": f"{API_BASE}/v1",
+        **admin_api_key_secret_reference({"api_key": "oidc/env/OPENAI_SA_TOKEN", "api_base": f"{API_BASE}/v1"}),
+    }
+
+    await litellm.alist_fine_tuning_jobs(**request) if is_async else litellm.list_fine_tuning_jobs(**request)
+
+    assert listed.calls.last.request.headers["Authorization"] == "Bearer env-token"

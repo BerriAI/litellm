@@ -108,6 +108,8 @@ class Feature(str, Enum):
     """A model_list that Python fans out across its deployments."""
     MODEL_ALIAS_MAP = "model_alias_map"
     """A model that litellm.model_alias_map rewrites before the call."""
+    ADMIN_API_KEY_REFERENCE = "admin_api_key_reference"
+    """An admin-configured oidc/ api_key reference that Python swaps for its secret on each call."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -151,6 +153,7 @@ COMMON_PYTHON_FEATURES: Final = frozenset(
         Feature.TIMEOUT_VARIANTS,
         Feature.AGENTIC_LOOP_HOOK,
         Feature.TLS_POLICY,
+        Feature.ADMIN_API_KEY_REFERENCE,
     }
 )
 

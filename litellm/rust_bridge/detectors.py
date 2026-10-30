@@ -171,6 +171,13 @@ def tls_policy(_request: NativeCall) -> bool:
     )
 
 
+def admin_api_key_reference(request: NativeCall) -> bool:
+    """Python reads the secret behind an admin oidc/ api_key reference, after the deployment hook may move api_base."""
+    from litellm.utils import carries_admin_api_key_reference
+
+    return carries_admin_api_key_reference(request.resolved)
+
+
 COMMON: Final[Detectors] = MappingProxyType(
     {
         Feature.MOCK_RESPONSE: mock_response,
@@ -179,5 +186,6 @@ COMMON: Final[Detectors] = MappingProxyType(
         Feature.TIMEOUT_VARIANTS: timeout_variants,
         Feature.AGENTIC_LOOP_HOOK: agentic_loop_hook,
         Feature.TLS_POLICY: tls_policy,
+        Feature.ADMIN_API_KEY_REFERENCE: admin_api_key_reference,
     }
 )

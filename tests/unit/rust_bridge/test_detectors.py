@@ -17,7 +17,9 @@ from litellm.rust_bridge.chat_completions import detectors as chat_detectors
 from litellm.rust_bridge.messages import detectors as messages_detectors
 from litellm.rust_bridge.public_call import NativeCall
 from litellm.rust_bridge.responses import detectors as responses_detectors
+from litellm.models.credentials import CredentialItem
 from litellm.types.llms.anthropic import ANTHROPIC_ADVISOR_TOOL_TYPE, ANTHROPIC_TOOL_SEARCH_TOOL_TYPES
+from litellm.types.utils import admin_api_key_secret_reference
 
 GATEWAY_TOOL: Final = {"type": "mcp", "server_label": "gateway", "server_url": "litellm_proxy"}
 REMOTE_TOOL: Final = {"type": "mcp", "server_label": "docs", "server_url": "https://mcp.example.com/sse"}
@@ -35,6 +37,7 @@ THINKING_TURN: Final = {"role": "assistant", "content": [{"type": "thinking", "t
 REDACTED: Final = {"type": "redacted_thinking", "data": "x"}
 STRICT_TOOL: Final = {"name": "b", "input_schema": {"type": "object"}, "strict": True}
 TOOL_SEARCH_TYPE: Final = sorted(ANTHROPIC_TOOL_SEARCH_TOOL_TYPES)[0]
+ADMIN_REFERENCE: Final = admin_api_key_secret_reference({"api_key": "oidc/env/PROVIDER_SA_TOKEN"})["api_key"]
 
 
 def function_tool(parameters: object) -> Mapping[str, object]:
@@ -234,6 +237,10 @@ def _wrap_nested_level(value: object, depth: int) -> object:
             False,
         ),
         (responses_detectors.encoded_item_ids, {"input": "hi"}, False),
+        (detectors.admin_api_key_reference, {"api_key": ADMIN_REFERENCE}, True),
+        (detectors.admin_api_key_reference, {"api_key": str(ADMIN_REFERENCE)}, False),
+        (detectors.admin_api_key_reference, {"api_key": "sk-static"}, False),
+        (detectors.admin_api_key_reference, {}, False),
     ),
 )
 def test_request_detectors(
@@ -542,3 +549,16 @@ def test_tls_policy_flags_only_curves_native_tls_lacks(
         monkeypatch.setenv("SSL_ECDH_CURVE", environment)
     monkeypatch.setattr(litellm, "ssl_ecdh_curve", setting)
     assert detectors.tls_policy(call()) is expected
+
+
+@pytest.mark.parametrize(("credential_key", "expected"), (("oidc/env/PROVIDER_SA_TOKEN", True), ("sk-static", False)))
+def test_admin_api_key_reference_reads_the_named_credential(
+    monkeypatch: pytest.MonkeyPatch, credential_key: str, expected: bool
+) -> None:
+    monkeypatch.setattr(
+        litellm,
+        "credential_list",
+        [CredentialItem(credential_name="provider-sa", credential_values={"api_key": credential_key}, credential_info={})],
+    )
+
+    assert detectors.admin_api_key_reference(call(litellm_credential_name="provider-sa")) is expected

@@ -40,7 +40,7 @@ _MESSAGES_JSON: Final = """[{"role":"user","content":[
     {"type":"text","text":"question"}]}]"""
 
 
-_MODELS: Final = _MESSAGES.validate_json("""[
+_MODELS_JSON: Final = """[
     {"model_name":"test-router","litellm_params":{"model":"auto_router/complexity_router",
       "complexity_router_config":{"tiers":{"SIMPLE":"sonnet","MEDIUM":"sonnet","COMPLEX":"sonnet",
       "REASONING":{"model_name":"opus","litellm_params":{"max_tokens":16}}},"session_affinity":false,
@@ -48,7 +48,8 @@ _MODELS: Final = _MESSAGES.validate_json("""[
     {"model_name":"sonnet","litellm_params":{"model":"anthropic/claude-sonnet-5","api_key":"test-selected"},
       "model_info":{"id":"selected"}},
     {"model_name":"opus","litellm_params":{"model":"anthropic/claude-opus-5","api_key":"test-selected"},
-      "model_info":{"id":"baseline"}}]""")
+      "model_info":{"id":"baseline"}}]"""
+_MODELS: Final = _MESSAGES.validate_json(_MODELS_JSON)
 
 
 def _message(completed: bool, model: str) -> Mapping[str, JsonValue]:
@@ -285,6 +286,25 @@ async def test_count_failure_preserves_initial_observed_equivalence(monkeypatch:
         captured: Final = _observation(await rig.capture.payload())
     assert captured.observation.baseline_equivalent and captured.observation.usage is not None
     assert captured.observation.plan is None and captured.observation.reason == "token_count_unavailable"
+
+
+async def test_baseline_count_uses_the_secret_behind_an_admin_oidc_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("BASELINE_SA_TOKEN", "test-selected")
+
+    async def count(model: str, api_key: str, body: Mapping[str, JsonValue]) -> int | None:
+        return await _count(model, api_key, body) if api_key == "test-selected" else None
+
+    rig: Final = _Rig(
+        monkeypatch,
+        count=count,
+        models=_MESSAGES.validate_json(
+            _MODELS_JSON.replace('"api_key":"test-selected"', '"api_key":"oidc/env/BASELINE_SA_TOKEN"')
+        ),
+    )
+    with _transport(_upstream):
+        await _call(rig.router, rig.logging(), messages=_MESSAGES_JSON.replace("question", "question USE_OPUS"))
+        captured: Final = _observation(await rig.capture.payload())
+    assert captured.observation.plan is not None and captured.observation.plan.total_tokens == 6000
 
 
 async def test_native_retry_is_uncertain_even_when_final_response_succeeds(monkeypatch: pytest.MonkeyPatch) -> None:

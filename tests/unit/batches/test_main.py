@@ -44,6 +44,7 @@ import respx
 from pydantic import TypeAdapter
 from typing_extensions import ReadOnly, TypedDict
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.types.utils import admin_api_key_secret_reference
 
 
 # --------------------------------------------------------------------------- #
@@ -1204,3 +1205,46 @@ async def test_delete_batch_output_file(respx_mock: respx.MockRouter, monkeypatc
     assert delete_route.call_count == 1
     assert delete_response.id == "file-output123"
     assert delete_response.deleted is True
+
+
+@pytest.mark.asyncio
+async def test_router_cancel_batch_sends_the_token_behind_an_admin_oidc_env_api_key_on_each_call(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setenv("OPENAI_SA_TOKEN", "env-token-one")
+    router: Final = litellm.Router(
+        model_list=[
+            {"model_name": "gpt", "litellm_params": {"model": "openai/gpt-4o", "api_key": "oidc/env/OPENAI_SA_TOKEN"}}
+        ]
+    )
+    cancel_route: Final = respx_mock.post("https://api.openai.com/v1/batches/batch_abc123/cancel").mock(
+        return_value=httpx.Response(200, json={**_OPENAI_BATCH_JSON, "status": "cancelling"})
+    )
+
+    await router.acancel_batch(model="gpt", batch_id="batch_abc123")
+    monkeypatch.setenv("OPENAI_SA_TOKEN", "env-token-two")
+    cancelled: Final = await router.acancel_batch(model="gpt", batch_id="batch_abc123")
+
+    assert [call.request.headers["Authorization"] for call in cancel_route.calls] == [
+        "Bearer env-token-one",
+        "Bearer env-token-two",
+    ]
+    assert cancelled.status == "cancelling"
+
+
+def test_cancel_batch_sends_the_token_behind_an_admin_oidc_env_api_key(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setenv("OPENAI_SA_TOKEN", "env-token")
+    cancel_route: Final = respx_mock.post("https://api.openai.com/v1/batches/batch_abc123/cancel").mock(
+        return_value=httpx.Response(200, json={**_OPENAI_BATCH_JSON, "status": "cancelling"})
+    )
+
+    litellm.cancel_batch(
+        batch_id="batch_abc123",
+        custom_llm_provider="openai",
+        api_key=admin_api_key_secret_reference({"api_key": "oidc/env/OPENAI_SA_TOKEN"})["api_key"],
+    )
+
+    assert cancel_route.calls.last.request.headers["Authorization"] == "Bearer env-token"
