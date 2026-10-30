@@ -327,40 +327,51 @@ async fn readiness_answers_without_credentials_like_the_proxy_with_no_database(
 }
 
 #[rstest]
+#[case::fast_mode("supports_speed", "speed", json!("fast"))]
+#[case::adaptive_thinking("supports_adaptive_thinking", "thinking", json!({"type": "adaptive"}))]
 #[tokio::test]
-async fn forwards_speed_to_a_model_the_catalog_marks_fast() {
+async fn forwards_a_param_the_catalog_says_the_model_supports(
+    #[case] capability: &str,
+    #[case] param: &str,
+    #[case] value: Value,
+) {
     let catalog = Catalog::parse(BUNDLED_REGISTRY).unwrap().value;
-    let (fast_model, _) = catalog
+    let (model, _) = catalog
         .served()
         .find(|(name, fields)| {
             !name.contains('/')
                 && fields.get("litellm_provider").and_then(Value::as_str) == Some("anthropic")
-                && fields.get("supports_speed") == Some(&Value::Bool(true))
+                && fields.get(capability) == Some(&Value::Bool(true))
         })
         .unwrap();
     let upstream = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/v1/messages"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "id": "msg_test", "type": "message", "role": "assistant", "model": fast_model,
+            "id": "msg_test", "type": "message", "role": "assistant", "model": model,
             "content": [{"type": "text", "text": "hi"}], "stop_reason": "end_turn",
-            "usage": {"input_tokens": 1, "output_tokens": 1, "speed": "fast"}
+            "usage": {"input_tokens": 1, "output_tokens": 1}
         })))
         .mount(&upstream)
         .await;
     let config = Config::from_yaml(&format!(
-        "model_list:\n  - model_name: public-model\n    litellm_params:\n      model: anthropic/{fast_model}\n      api_base: {}\n      api_key: test-key\ngeneral_settings:\n  master_key: gateway-key\n",
+        "model_list:\n  - model_name: public-model\n    litellm_params:\n      model: anthropic/{model}\n      api_base: {}\n      api_key: test-key\ngeneral_settings:\n  master_key: gateway-key\n",
         upstream.uri()
     ))
     .unwrap();
+    let body: serde_json::Map<String, Value> = [
+        ("model", json!("public-model")),
+        ("max_tokens", json!(8)),
+        ("messages", json!([{"role": "user", "content": "hi"}])),
+        (param, value.clone()),
+    ]
+    .into_iter()
+    .map(|(key, field)| (key.to_owned(), field))
+    .collect();
     let request = Request::post("/v1/messages")
         .header("authorization", "Bearer gateway-key")
         .header("content-type", "application/json")
-        .body(Body::from(
-            json!({"model": "public-model", "max_tokens": 8, "speed": "fast",
-                "messages": [{"role": "user", "content": "hi"}]})
-            .to_string(),
-        ))
+        .body(Body::from(Value::Object(body).to_string()))
         .unwrap();
 
     let response = litellm_gateway::router(
@@ -376,5 +387,5 @@ async fn forwards_speed_to_a_model_the_catalog_marks_fast() {
     assert_eq!(response.status().as_u16(), 200);
     let forwarded: Value =
         serde_json::from_slice(&upstream.received_requests().await.unwrap()[0].body).unwrap();
-    assert_eq!(forwarded["speed"], "fast");
+    assert_eq!(forwarded[param], value);
 }
