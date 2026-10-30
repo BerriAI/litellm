@@ -8,8 +8,9 @@ import copy
 import json
 import logging
 import pickle
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from itertools import chain
-from typing import Literal
+from typing import Final, Literal
 from unittest.mock import MagicMock
 
 import pytest
@@ -1798,23 +1799,28 @@ async def test_streaming_step_discards_a_legacy_rewrite_the_translation_cannot_r
     assert chunks == [_chunk()]
 
 
+_AnthropicHookResponse = dict[str, list[dict[str, object]]]
+
+
 class _AnthropicTextRewritingLegacyGuardrail(_LegacyHookGuardrail):
-    async def async_post_call_success_hook(self, data, user_api_key_dict, response):
+    async def async_post_call_success_hook(
+        self, data: dict[str, object], user_api_key_dict: UserAPIKeyAuth, response: _AnthropicHookResponse
+    ) -> None:
         self.calls.append({"response": copy.deepcopy(response)})
         for block in response["content"]:
-            if block["type"] == "text":
-                block["text"] = "[REWRITTEN] " + block["text"]
+            if block["type"] == "text" and isinstance(text := block.get("text"), str):
+                block["text"] = "[REWRITTEN] " + text
 
 
-def _anthropic_web_search_stream():
-    result_block = {
+def _anthropic_web_search_stream() -> list[bytes]:
+    result_block: Final = {
         "type": "web_search_tool_result",
         "tool_use_id": "srvtoolu_1",
         "content": [
             {"type": "web_search_result", "url": "https://example.test/a", "title": "A", "encrypted_content": ""}
         ],
     }
-    events = (
+    events: Final = (
         {
             "type": "message_start",
             "message": {
@@ -1849,11 +1855,11 @@ def _anthropic_web_search_stream():
     return _anthropic_sse(events)
 
 
-def _anthropic_sse(events):
+def _anthropic_sse(events: Iterable[Mapping[str, object]]) -> list[bytes]:
     return [f"event: {event['type']}\ndata: {json.dumps(event)}\n\n".encode() for event in events]
 
 
-def _anthropic_tool_only_stream():
+def _anthropic_tool_only_stream() -> list[bytes]:
     return _anthropic_sse(
         (
             {
@@ -1890,39 +1896,41 @@ def _anthropic_tool_only_stream():
     )
 
 
-def _streamed_block_deltas(chunks, index, field):
-    events = (
+def _streamed_events(chunks: Sequence[bytes]) -> list[dict[str, object]]:
+    return [
         json.loads(line[len("data: ") :])
         for line in b"".join(chunks).decode().splitlines()
         if line.startswith("data: ")
-    )
-    return "".join(
-        event["delta"][field]
-        for event in events
+    ]
+
+
+def _streamed_block_deltas(chunks: Sequence[bytes], index: int, field: str) -> str:
+    deltas: Final = (
+        event["delta"]
+        for event in _streamed_events(chunks)
         if event.get("index") == index and event["type"] == "content_block_delta"
     )
+    return "".join(str(delta[field]) for delta in deltas if isinstance(delta, dict))
 
 
-def _streamed_web_search_results(chunks):
-    events = (
-        json.loads(line[len("data: ") :])
-        for line in b"".join(chunks).decode().splitlines()
-        if line.startswith("data: ")
+def _streamed_web_search_results(chunks: Sequence[bytes]) -> list[dict[str, str]]:
+    blocks: Final = (
+        event["content_block"] for event in _streamed_events(chunks) if event["type"] == "content_block_start"
     )
-    result_blocks = (
-        event["content_block"]
-        for event in events
-        if event["type"] == "content_block_start" and event["content_block"]["type"] == "web_search_tool_result"
+    results: Final = (
+        block["content"] for block in blocks if isinstance(block, dict) and block["type"] == "web_search_tool_result"
     )
-    return list(chain.from_iterable(block["content"] for block in result_blocks))
+    return list(chain.from_iterable(results))
 
 
 @pytest.mark.asyncio
-async def test_streaming_step_delivers_a_legacy_hook_mask_of_web_search_result_titles(monkeypatch, caplog):
-    chunks = _anthropic_web_search_stream()
+async def test_streaming_step_delivers_a_legacy_hook_mask_of_web_search_result_titles(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    chunks: Final = _anthropic_web_search_stream()
 
     with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
-        result = await _run_legacy_streaming_step(
+        result: Final = await _run_legacy_streaming_step(
             monkeypatch, _AnthropicMaskingLegacyGuardrail(), chunks, translation=AnthropicMessagesHandler()
         )
 
@@ -1935,14 +1943,16 @@ async def test_streaming_step_delivers_a_legacy_hook_mask_of_web_search_result_t
 
 
 class _AnthropicMaskingLegacyGuardrail(_LegacyHookGuardrail):
-    async def async_post_call_success_hook(self, data, user_api_key_dict, response):
+    async def async_post_call_success_hook(
+        self, data: dict[str, object], user_api_key_dict: UserAPIKeyAuth, response: _AnthropicHookResponse
+    ) -> None:
         for block in response["content"]:
-            if block["type"] == "text":
-                block["text"] = block["text"].replace("hello", "[MASKED]")
-            if block["type"] == "tool_use":
-                block["input"] = {key: "[MASKED]" for key in block["input"]}
-            if block["type"] == "web_search_tool_result":
-                block["content"] = [{**result, "title": "[MASKED]"} for result in block["content"]]
+            if block["type"] == "text" and isinstance(text := block.get("text"), str):
+                block["text"] = text.replace("hello", "[MASKED]")
+            if block["type"] == "tool_use" and isinstance(tool_input := block.get("input"), dict):
+                block["input"] = {key: "[MASKED]" for key in tool_input}
+            if block["type"] == "web_search_tool_result" and isinstance(results := block.get("content"), list):
+                block["content"] = [{**result, "title": "[MASKED]"} for result in results]
 
 
 @pytest.mark.parametrize(
@@ -1952,12 +1962,15 @@ class _AnthropicMaskingLegacyGuardrail(_LegacyHookGuardrail):
 )
 @pytest.mark.asyncio
 async def test_streaming_step_delivers_a_legacy_hook_mask_of_a_streamed_tool_input(
-    monkeypatch, caplog, stream, masked_key
-):
-    chunks = stream()
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    stream: Callable[[], list[bytes]],
+    masked_key: str,
+) -> None:
+    chunks: Final = stream()
 
     with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
-        result = await _run_legacy_streaming_step(
+        result: Final = await _run_legacy_streaming_step(
             monkeypatch, _AnthropicMaskingLegacyGuardrail(), chunks, translation=AnthropicMessagesHandler()
         )
 
@@ -1969,18 +1982,20 @@ async def test_streaming_step_delivers_a_legacy_hook_mask_of_a_streamed_tool_inp
 
 
 @pytest.mark.asyncio
-async def test_streaming_step_delivers_a_legacy_text_rewrite_on_a_web_search_stream(monkeypatch, caplog):
-    guardrail = _AnthropicTextRewritingLegacyGuardrail()
-    chunks = _anthropic_web_search_stream()
+async def test_streaming_step_delivers_a_legacy_text_rewrite_on_a_web_search_stream(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    guardrail: Final = _AnthropicTextRewritingLegacyGuardrail()
+    chunks: Final = _anthropic_web_search_stream()
 
     with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
-        result = await _run_legacy_streaming_step(
+        result: Final = await _run_legacy_streaming_step(
             monkeypatch, guardrail, chunks, translation=AnthropicMessagesHandler()
         )
 
     assert result.terminal_action == "allow"
     assert [step.outcome for step in result.step_results] == ["pass"]
-    raw = b"".join(chunks).decode()
+    raw: Final = b"".join(chunks).decode()
     assert "[REWRITTEN] hello world" in raw
     assert '"title": "A"' in raw and '"url": "https://example.test/a"' in raw
     assert not any("discarded" in record.getMessage() for record in caplog.records)
