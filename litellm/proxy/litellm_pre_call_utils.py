@@ -49,7 +49,7 @@ from litellm.constants import (
     X_LITELLM_DISABLE_CALLBACKS,
 )
 from litellm.integrations.custom_guardrail import without_server_streaming_classification
-from litellm.litellm_core_utils.core_helpers import is_codex_user_agent
+from litellm.litellm_core_utils.core_helpers import is_codex_user_agent, normalize_drop_params
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
     TRUSTED_CALLBACK_VARS_FIELD,
@@ -1102,18 +1102,17 @@ def should_auto_drop_params_for_agentic_cli(
 ) -> bool:
     """drop_params defaults to on for agentic CLIs so their client-specific
     params (e.g. Claude Code's thinking, Codex's service_tier) don't fail
-    requests routed to providers that reject them. An explicit drop_params
-    from the caller or in the operator's ``litellm_settings`` always wins
-    over this default."""
+    requests routed to providers that reject them. A drop_params from the
+    caller wins over this default, and the operator's ``litellm_settings``
+    turns it off only with a value that reads as false."""
     from litellm.llms.anthropic.common_utils import is_claude_code_user_agent
 
     if not (is_claude_code_user_agent(user_agent) or is_codex_user_agent(user_agent)):
         return False
     if caller_set_drop_params:
         return False
-    config: Final = getattr(proxy_config, "config", None)
-    litellm_settings: Final = config.get("litellm_settings") if isinstance(config, dict) else None
-    return not (isinstance(litellm_settings, dict) and "drop_params" in litellm_settings)
+    litellm_settings: Final = _request_fields(proxy_config.config.get("litellm_settings"))
+    return normalize_drop_params(litellm_settings.get("drop_params")) is not False
 
 
 def safe_add_api_version_from_query_params(data: dict, request: Request):
@@ -2506,6 +2505,7 @@ def refresh_proxy_server_request_body_snapshot(
                 "litellm_logging_obj",
                 VECTOR_STORE_CALLER_METADATA_KWARG,
                 STREAM_USAGE_INJECTED_FIELD,
+                "_litellm_strip_stream_usage",
             }
         )
         | _TRANSPORT_ONLY_CREDENTIAL_KEYS
@@ -3142,10 +3142,11 @@ def _fallback_lists(
     key/team ``router_settings.fallbacks`` the proxy prefers over router-level
     fallbacks in ``_configured_fallbacks``."""
     lists: Final[list[Sequence[object]]] = []  # mutable-ok: accumulates each fallback list found
+    configured: Final = llm_router.settings()
     for router_list in (
-        cast("object", llm_router.fallbacks),  # cast-ok: router fallback attrs are untyped
-        cast("object", llm_router.context_window_fallbacks),  # cast-ok: router fallback attrs are untyped
-        cast("object", llm_router.content_policy_fallbacks),  # cast-ok: router fallback attrs are untyped
+        cast("object", configured.fallbacks),  # cast-ok: router fallback attrs are untyped
+        cast("object", configured.context_window_fallbacks),  # cast-ok: router fallback attrs are untyped
+        cast("object", configured.content_policy_fallbacks),  # cast-ok: router fallback attrs are untyped
     ):
         if isinstance(router_list, list):
             lists.append(cast("Sequence[object]", router_list))  # cast-ok: fallback lists hold mixed entry shapes
@@ -3286,10 +3287,11 @@ def _per_user_credential_names_for_groups(
     )
     from litellm.router_strategy.auto_router.auto_router_model_naming import classify_strategy_router_model
 
+    registry: Final = llm_router.registry()
     names: Final[list[str]] = []  # mutable-ok: accumulates one name per per-user deployment
     for group in model_groups:
-        by_name = llm_router.get_model_list(model_name=group, team_id=team_id) or ()
-        deployment_id_match = llm_router.get_deployment(model_id=group)
+        by_name = registry.deployments(model_name=group, team_id=team_id) or ()
+        deployment_id_match = registry.deployment(group)
         deployments: Sequence[object] = (
             *by_name,
             *((deployment_id_match,) if deployment_id_match is not None else ()),
@@ -3530,7 +3532,7 @@ def _update_model_if_team_alias_exists(
     # (format: "model_name_{team_id}_{uuid}")
     is_stale_team_alias: Final = aliased_target.startswith(f"model_name_{user_api_key_dict.team_id}_")
     if is_stale_team_alias and llm_router:
-        if aliased_target not in llm_router.model_name_to_deployment_indices:
+        if aliased_target not in llm_router.registry().index("model_name"):
             _warn_stale_team_alias_once(
                 f"deleted:{user_api_key_dict.team_id}:{_model}:{aliased_target}",
                 "Team model alias for model='%s', team_id='%s' targets '%s', which has no live "
@@ -3544,7 +3546,7 @@ def _update_model_if_team_alias_exists(
         # This is a stale alias from pre-PR deployments.
         # Check if current team deployments exist for the public name.
         key: Final = (user_api_key_dict.team_id, _model)
-        if key in llm_router.team_model_to_deployment_indices:
+        if key in llm_router.registry().index("team_model"):
             if enable_stale_alias_bypass:
                 # Team deployments exist; skip stale alias
                 return
@@ -3694,7 +3696,7 @@ def _resolve_provider_from_deployment(
 
     for name in candidates:
         try:
-            deployment = llm_router.get_deployment_by_model_group_name(model_group_name=name)
+            deployment = llm_router.registry().deployments(name, source="first_in_group")
         except Exception:
             deployment = None
         if deployment is None:

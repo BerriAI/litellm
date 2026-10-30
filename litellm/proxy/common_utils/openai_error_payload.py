@@ -8,7 +8,9 @@ from types import MappingProxyType
 from typing import Final
 
 from fastapi import HTTPException, status
+from pydantic import TypeAdapter
 
+from litellm._logging import redact_internal_details_from_client_fields
 from litellm.constants import STRINGIFIED_NONE
 from litellm.proxy._types import ProxyErrorTypes, ProxyException, proxy_exception_status_code
 from litellm.proxy.db.db_lookup_gate import DBLookupDeadlineExceeded
@@ -25,6 +27,8 @@ _OPENAI_ERROR_TYPE_BY_STATUS: Final[Mapping[int, str]] = MappingProxyType(
 )
 
 _AUTH_FAILURE_STATUS_CODES: Final = frozenset({status.HTTP_401_UNAUTHORIZED, status.HTTP_403_FORBIDDEN})
+
+_ERROR_BODY: Final = TypeAdapter(dict[str, object])
 
 _FAILOVER_SQLSTATES: Final = frozenset({"25006", "57P01", "57P02", "57P03"})
 
@@ -75,6 +79,18 @@ def openai_error_param(exc: object) -> str | None:
     serializes as JSON ``null``."""
     carried: Final = attribute_of(exc, "param")
     return carried if isinstance(carried, str) and carried != STRINGIFIED_NONE else None
+
+
+def relayed_provider_specific_fields(
+    exc: object,
+) -> dict[str, object] | None:  # mutable-ok: ProxyException.provider_specific_fields is a dict
+    body: Final = attribute_of(exc, "body")
+    if not isinstance(body, dict):
+        return None
+    fields: Final = _ERROR_BODY.validate_python(body).get("provider_specific_fields")
+    if not isinstance(fields, dict):
+        return None
+    return _ERROR_BODY.validate_python(redact_internal_details_from_client_fields(_ERROR_BODY.validate_python(fields)))
 
 
 def proxy_exception_for(exc: Exception, default_status_code: int) -> ProxyException:
@@ -131,8 +147,37 @@ def _is_failover_refusal(exc: Exception) -> bool:
     return any(refusal in message for refusal in _FAILOVER_REFUSALS)
 
 
+def answered_status_code(message: str, status_code: int) -> int:
+    return int(proxy_exception_status_code(message, str(status_code)))
+
+
+def route_failure_proxy_exception(
+    exc: Exception,
+    message: str,
+    default_status_code: int,
+    headers: dict[str, str] | None = None,  # mutable-ok: ProxyException.headers
+    openai_code: str | None = None,
+) -> ProxyException:
+    raised_status: Final = error_status_code(exc, default_status_code)
+    answered_status: Final = answered_status_code(message, raised_status)
+    return ProxyException(
+        message=message,
+        type=_route_failure_error_type(exc, raised_status, answered_status),
+        param=openai_error_param(exc),
+        headers=headers,
+        openai_code=openai_code,
+        code=answered_status,
+    )
+
+
+def _route_failure_error_type(exc: Exception, raised_status: int, answered_status: int) -> str:
+    if answered_status != raised_status and answered_status in _AUTH_FAILURE_STATUS_CODES:
+        return ProxyErrorTypes.auth_error.value
+    return openai_error_type(exc, answered_status)
+
+
 def _openai_shaped_proxy_exception(exc: Exception, message: str, status_code: int) -> ProxyException:
-    answered_status: Final = int(proxy_exception_status_code(message, str(status_code)))
+    answered_status: Final = answered_status_code(message, status_code)
     return ProxyException(
         message=message,
         type=_catch_all_error_type(exc, answered_status),

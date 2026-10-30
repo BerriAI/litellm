@@ -932,6 +932,34 @@
     "default_model_placeholder": "gpt-3.5-turbo"
   },
   {
+    "provider": "CLF_AI_GATEWAY",
+    "provider_display_name": "CLF AI Gateway",
+    "litellm_provider": "clf_ai_gateway",
+    "credential_fields": [
+      {
+        "key": "api_base",
+        "label": "API Base",
+        "placeholder": "https://api.clfaigateway.dev/v1",
+        "tooltip": null,
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "api_key",
+        "label": "API Key",
+        "placeholder": null,
+        "tooltip": null,
+        "required": true,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      }
+    ],
+    "default_model_placeholder": "clf_ai_gateway/glm-5.3"
+  },
+  {
     "provider": "CLOUDFLARE",
     "provider_display_name": "Cloudflare",
     "litellm_provider": "cloudflare",
@@ -1554,6 +1582,34 @@
     "default_model_placeholder": "gpt-3.5-turbo"
   },
   {
+    "provider": "EU_JEV",
+    "provider_display_name": "eu/jev",
+    "litellm_provider": "eu_jev",
+    "credential_fields": [
+      {
+        "key": "api_base",
+        "label": "API Base",
+        "placeholder": "https://eu-jev.com",
+        "tooltip": null,
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "api_key",
+        "label": "API Key",
+        "placeholder": null,
+        "tooltip": null,
+        "required": true,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      }
+    ],
+    "default_model_placeholder": "eu_jev/eu-jeff-latest"
+  },
+  {
     "provider": "FalAI",
     "provider_display_name": "Fal AI",
     "litellm_provider": "fal_ai",
@@ -2022,6 +2078,34 @@
       }
     ],
     "default_model_placeholder": "jina_ai/"
+  },
+  {
+    "provider": "KYMA",
+    "provider_display_name": "Kyma API",
+    "litellm_provider": "kyma",
+    "credential_fields": [
+      {
+        "key": "api_base",
+        "label": "API Base",
+        "placeholder": "https://kymaapi.com/v1",
+        "tooltip": null,
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "api_key",
+        "label": "API Key",
+        "placeholder": null,
+        "tooltip": null,
+        "required": true,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      }
+    ],
+    "default_model_placeholder": "kyma/qwen3.7-flash"
   },
   {
     "provider": "Laya",
@@ -3584,7 +3668,7 @@
         "key": "api_key",
         "label": "Soniox API Key",
         "placeholder": null,
-        "tooltip": "Currently only the async Speech-to-Text REST API (api.soniox.com) is supported. Realtime STT (stt-rt.soniox.com) and TTS (tts-rt.soniox.com) are not yet available.",
+        "tooltip": "Supports async Speech-to-Text (api.soniox.com) on /v1/audio/transcriptions and realtime Speech-to-Text (stt-rt.soniox.com) on /v1/realtime. TTS (tts-rt.soniox.com) is not yet available.",
         "required": true,
         "field_type": "password",
         "options": null,

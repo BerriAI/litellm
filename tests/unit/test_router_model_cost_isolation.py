@@ -614,6 +614,63 @@ def test_capability_flag_stays_on_the_deployment_that_set_it(flag: str) -> None:
         _restore_model_cost_entries(model_keys)
 
 
+def test_pdf_opt_out_on_one_deployment_does_not_block_its_sibling(respx_mock: respx.MockRouter) -> None:
+    api_base: Final = "http://localhost:12361/v1"
+    backend_model: Final = "openai/qa-shared-pdf-backend"
+    pdf_messages: Final = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Summarize this."},
+                {
+                    "type": "file",
+                    "file": {"filename": "report.pdf", "file_data": "data:application/pdf;base64,JVBERi0xLjQK"},
+                },
+            ],
+        }
+    ]
+    route: Final = respx_mock.post(url__regex=rf"{api_base}/chat/completions.*").mock(
+        return_value=httpx.Response(
+            status_code=200,
+            json={
+                "id": "chatcmpl-pdf",
+                "object": "chat.completion",
+                "created": 1712697600,
+                "model": "qa-shared-pdf-backend",
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            },
+        )
+    )
+    model_keys: Final = {
+        key: litellm.model_cost.get(key) for key in ("qa-pdf-marked", "qa-pdf-unmarked", backend_model)
+    }
+    try:
+        router: Final = Router(
+            model_list=[
+                {
+                    "model_name": "pdf-blocked",
+                    "litellm_params": {"model": backend_model, "api_base": api_base, "api_key": "fake-key"},
+                    "model_info": {"id": "qa-pdf-marked", "supports_pdf_input": False},
+                },
+                {
+                    "model_name": "pdf-allowed",
+                    "litellm_params": {"model": backend_model, "api_base": api_base, "api_key": "fake-key"},
+                    "model_info": {"id": "qa-pdf-unmarked"},
+                },
+            ],
+        )
+
+        with pytest.raises(litellm.BadRequestError, match="does not accept PDF input"):
+            router.completion(model="pdf-blocked", messages=pdf_messages)
+        router.completion(model="pdf-allowed", messages=pdf_messages)
+
+        assert route.call_count == 1
+        assert json.loads(route.calls[0].request.content)["messages"] == pdf_messages
+    finally:
+        _restore_model_cost_entries(model_keys)
+
+
 def test_token_count_settings_stay_on_the_deployment_that_set_them() -> None:
     """A deployment's ``token_count_model`` and ``token_count_framing`` must not land on
     the shared ``{provider}/{model}`` key, or a sibling deployment of that model would count with them."""
