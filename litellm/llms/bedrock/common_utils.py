@@ -366,19 +366,8 @@ class NativeOutputFallback:
     litellm_params: Mapping[str, object]
 
 
-_BEDROCK_STRICT_TOOLS_REJECTION: Final = re.compile(
-    r"Too many strict tools \(\d+\)"
-    r"|Schemas contains too many (?:optional parameters|parameters with union types)"
-    r"|[Cc]ompiled grammar (?:is too large|size)"
-    r"|tools\.\d+\.custom(?:\.strict)?: "
-    r"|Grammar compilation timed out"
-)
 _TOOLS_ADAPTER: Final = TypeAdapter(tuple[Mapping[str, object], ...])
 _TOOL_SPEC_ADAPTER: Final = TypeAdapter(Mapping[str, object])
-
-
-def is_bedrock_strict_tools_rejection(status_code: int, error_text: str) -> bool:
-    return status_code == 400 and _BEDROCK_STRICT_TOOLS_REJECTION.search(error_text) is not None
 
 
 def warn_bedrock_strict_tools_dropped(model: str) -> None:
