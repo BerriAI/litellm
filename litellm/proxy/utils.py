@@ -251,7 +251,11 @@ from litellm.proxy.hooks.sensitive_data_routing import (  # noqa: F401, RUF100  
     PROXY_SensitiveDataRoutingHandler,
     _PROXY_SensitiveDataRoutingHandler,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
 )
-from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup, add_guardrails_from_auth_metadata
+from litellm.proxy.litellm_pre_call_utils import (
+    LiteLLMProxyRequestSetup,
+    add_guardrails_from_auth_metadata,
+    key_or_team_allows_client_message_redaction_opt_out,
+)
 from litellm.proxy.management_helpers.key_settings_audit import with_settings_updated_at
 from litellm.proxy.policy_engine.pipeline_executor import (
     PipelineExecutor,
@@ -3963,6 +3967,7 @@ class ProxyLogging:
             from litellm._uuid import uuid
 
             request_data.setdefault("litellm_call_id", str(uuid.uuid4()))
+            redact: Final = should_redact_failed_request(request_fields)
 
             litellm_logging_obj, data = litellm.utils.function_setup(
                 original_function=route or "IGNORE_THIS",
@@ -3971,8 +3976,13 @@ class ProxyLogging:
                 **_proxy_only_error_log_fields(  # pyright: ignore[reportArgumentType]  # the allowlist never carries is_async_call
                     request_fields, logged_metadata_keys
                 ),
-                # The allowlist leaves out the request's redaction opt-in, so carry the decision over
-                **({"turn_off_message_logging": True} if should_redact_failed_request(request_fields) else {}),
+                # The allowlist leaves out the request's redaction choice, so carry it over. As in the pre-call
+                # checks, an opt-out only counts for a key or team allowed to send one
+                **(
+                    {"turn_off_message_logging": redact}
+                    if redact or key_or_team_allows_client_message_redaction_opt_out(user_api_key_dict)
+                    else {}
+                ),
             )
             request_data["litellm_logging_obj"] = litellm_logging_obj  # rebind-ok: lifted then popped by the caller
             request_data.update({REJECTED_BEFORE_REQUEST_SETUP_KEY: REJECTED_BEFORE_REQUEST_SETUP})

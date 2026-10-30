@@ -233,6 +233,40 @@ async def test_proxy_only_error_log_keeps_the_request_redaction_opt_in(opt_in: M
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("opt_out_allowed", [True, False], ids=["allowed", "not_allowed"])
+@pytest.mark.parametrize(
+    "opt_out",
+    [{"turn_off_message_logging": False}, {"metadata": {"headers": {"litellm-disable-message-redaction": "true"}}}],
+    ids=["body_flag", "disable_header"],
+)
+async def test_proxy_only_error_log_keeps_a_redaction_opt_out_only_for_a_key_allowed_to_send_one(
+    monkeypatch: pytest.MonkeyPatch, opt_out: Mapping[str, object], opt_out_allowed: bool
+) -> None:
+    secret: Final = "my ssn is 123-45-6789"
+    monkeypatch.setattr(litellm, "turn_off_message_logging", True)
+    request_data: Final[dict[str, object]] = {
+        "model": "gpt-4o",
+        "messages": [{"role": "user", "content": secret}],
+        **opt_out,
+    }
+
+    await ProxyLogging(user_api_key_cache=DualCache())._handle_logging_proxy_only_error(
+        request_data=request_data,
+        user_api_key_dict=UserAPIKeyAuth(
+            api_key="sk-rejected",
+            team_id="team-a",
+            request_route="/v1/rerank",
+            metadata={"allow_client_message_redaction_opt_out": opt_out_allowed},
+        ),
+        route="/v1/rerank",
+        original_exception=HTTPException(status_code=400, detail=f"blocked: {secret}"),
+    )
+
+    payload: Final = request_data["litellm_logging_obj"].model_call_details["standard_logging_object"]
+    assert (f"blocked: {secret}" in payload["error_str"]) is opt_out_allowed
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("metadata_field", ["metadata", "litellm_metadata"])
 async def test_proxy_only_error_log_drops_malformed_metadata_tags(metadata_field: str) -> None:
     guardrail_info: Final = [{"guardrail_name": "g", "guardrail_status": "guardrail_intervened"}]
