@@ -2,7 +2,7 @@
 DeepSeek Anthropic-compatible messages transformation config.
 """
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import Any, Final
 
 import litellm
@@ -21,6 +21,10 @@ class DeepSeekAnthropicMessagesConfig(AnthropicMessagesConfig):
     It accepts the native Anthropic Messages conversation shape, including
     thinking blocks in assistant history, but rejects Anthropic's explicit
     custom-tool discriminator (`{"type": "custom"}`).
+
+    It reads `thinking` and `output_config.effort` natively (ignoring
+    `budget_tokens`) and accepts any `temperature`, so the Claude-specific
+    effort and temperature reshaping is skipped.
     """
 
     @property
@@ -93,6 +97,18 @@ class DeepSeekAnthropicMessagesConfig(AnthropicMessagesConfig):
             base_url = f"{base_url}/anthropic"
 
         return f"{base_url}/v1/messages"
+
+    @staticmethod
+    def _translate_adaptive_effort_for_non_adaptive_model(
+        model: str, optional_params: Mapping[str, object], max_tokens: int | None, custom_llm_provider: str
+    ) -> None:
+        return None
+
+    @staticmethod
+    def _drop_incompatible_temperature_for_thinking(
+        model: str, optional_params: Mapping[str, object], custom_llm_provider: str
+    ) -> None:
+        return None
 
     @staticmethod
     def _sanitize_tools_for_deepseek(tools: Any) -> object:
