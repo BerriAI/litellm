@@ -1,3 +1,4 @@
+import logging
 from collections.abc import Mapping, Sequence
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -6,7 +7,7 @@ import pytest
 from fastapi import HTTPException
 from pydantic import TypeAdapter
 
-from litellm.proxy._types import LiteLLM_UserTable
+from litellm.proxy._types import LiteLLM_UserTable, LitellmUserRoles
 from litellm.proxy.management_endpoints.scim.scim_v2 import _apply_patch_ops, _sync_requested_teams, patch_user
 from litellm.types.proxy.management_endpoints.scim_v2 import (
     SCIM_ENTERPRISE_METADATA_KEY,
@@ -689,6 +690,70 @@ async def test_sync_requested_teams_reads_no_team_rows_when_the_groups_did_not_c
 
     assert teams == ("team-real",)
     mock_client.db.litellm_teamtable.find_many.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("teams_with_rows", "expected_warnings"),
+    [
+        pytest.param(["team-real"], 1, id="a_group_with_no_team_row_is_named_in_one_warning"),
+        pytest.param(["team-real", "team-new"], 0, id="no_warning_when_every_group_has_a_team_row"),
+    ],
+)
+async def test_sync_requested_teams_warns_only_about_groups_it_left_out(
+    teams_with_rows: list[str],
+    expected_warnings: int,
+    caplog: pytest.LogCaptureFixture,
+):
+    mock_client: Final = MagicMock()
+    mock_client.db.litellm_teamtable.find_many = AsyncMock(return_value=_team_rows(teams_with_rows))
+
+    with (
+        patch("litellm.proxy.management_endpoints.scim.scim_v2.patch_team_membership", AsyncMock()),
+        caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"),
+    ):
+        await _sync_requested_teams(
+            prisma_client=mock_client,
+            user_id="user-groups",
+            record_teams=[],
+            requested_teams=["team-real", "team-new"],
+        )
+
+    warnings: Final = [record.getMessage() for record in caplog.records if record.levelno == logging.WARNING]
+    assert len(warnings) == expected_warnings
+    assert all("team-new" in warning and "team-real" not in warning for warning in warnings)
+
+
+@pytest.mark.asyncio
+async def test_patch_user_ignores_a_group_with_no_team_named_like_the_scim_admin_group():
+    mock_user: Final = LiteLLM_UserTable(
+        user_id="not-an-admin",
+        user_email="not-an-admin@example.com",
+        teams=[],
+        metadata={},
+    )
+    mock_client: Final = MagicMock()
+    mock_client.db.litellm_usertable.find_unique = AsyncMock(return_value=mock_user)
+    mock_client.db.litellm_usertable.update = AsyncMock(return_value=mock_user)
+    mock_client.db.litellm_teamtable.find_many = AsyncMock(return_value=[])
+    mock_client.db.litellm_teamtable.find_unique = AsyncMock(return_value=None)
+    patch_ops: Final = SCIMPatchOp(
+        Operations=[SCIMPatchOperation(op="add", path="groups", value=[{"value": "litellm-admins"}])]
+    )
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", mock_client),
+        patch("litellm.proxy.proxy_server.proxy_config") as mock_proxy_config,
+        patch("litellm.default_internal_user_params", None),
+    ):
+        mock_proxy_config.get_config = AsyncMock(
+            return_value={"litellm_settings": {"scim_admin_group": "litellm-admins"}}
+        )
+        await patch_user(user_id="not-an-admin", patch_ops=patch_ops)
+
+    update_data: Final = mock_client.db.litellm_usertable.update.call_args.kwargs["data"]
+    assert update_data["user_role"] == LitellmUserRoles.INTERNAL_USER_VIEW_ONLY
+    assert update_data["teams"] == []
 
 
 @pytest.mark.asyncio

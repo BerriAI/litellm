@@ -1193,9 +1193,6 @@ async def _sync_requested_teams(
     request, since that same request may be the one that deactivates the user.
     """
     changed: Final = frozenset(record_teams) ^ frozenset(requested_teams)
-    if not changed:
-        return tuple(requested_teams)
-
     rows: Final = await find_many_in(
         _table(TeamRepository(prisma_client)),
         "team_id",
