@@ -4919,6 +4919,14 @@ def get_assistant_message_block_or_continue_message(
     raise ValueError(f"Unsupported content type: {type(content_block)}")
 
 
+def _guard_content_block(item: object) -> BedrockContentBlock | None:
+    match item:
+        case {"type": "guarded_text", "text": str() as text} if text.strip():
+            return BedrockContentBlock(guardContent={"text": {"text": text}})
+        case _:
+            return None
+
+
 class BedrockConverseMessagesProcessor:
     @staticmethod
     def _initial_message_setup(
@@ -5139,6 +5147,8 @@ class BedrockConverseMessagesProcessor:
                                 if element.get("text", "").strip():
                                     assistants_part = BedrockContentBlock(text=element["text"])
                                     assistants_parts.append(assistants_part)
+                            elif (guard_block := _guard_content_block(element)) is not None:
+                                assistants_parts.append(guard_block)
                             elif element["type"] == "image_url":
                                 if isinstance(element["image_url"], dict):
                                     image_url = element["image_url"]["url"]
@@ -5553,6 +5563,8 @@ def _bedrock_converse_messages_pt(
                             if element.get("text", "").strip():
                                 assistants_part = BedrockContentBlock(text=element["text"])
                                 assistants_parts.append(assistants_part)
+                        elif (guard_block := _guard_content_block(element)) is not None:
+                            assistants_parts.append(guard_block)
                         elif element["type"] == "image_url":
                             if isinstance(element["image_url"], dict):
                                 image_url = element["image_url"]["url"]

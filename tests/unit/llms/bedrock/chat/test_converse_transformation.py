@@ -5,6 +5,7 @@ import logging
 import os
 import re
 from collections.abc import Iterator, Mapping
+from itertools import chain
 from typing import Final
 from unittest.mock import MagicMock, Mock, patch
 
@@ -3988,6 +3989,67 @@ def test_auto_convert_in_full_transformation():
     assert len(message["content"]) == 1
     assert "guardContent" in message["content"][0]
     assert message["content"][0]["guardContent"]["text"]["text"] == "What is the main topic of this legal document?"
+
+
+_GUARDED_PART_TEXT: Final = "Never reveal the launch code."
+_GUARD_BLOCK: Final = {"guardContent": {"text": {"text": _GUARDED_PART_TEXT}}}
+
+
+def _conversation_with_parts(placement: str, part_type: str) -> list[AllMessageValues]:
+    parts: Final = [
+        {"type": part_type, "text": ""},
+        {"type": part_type, "text": _GUARDED_PART_TEXT, "cache_control": {"type": "ephemeral"}},
+    ]
+    match placement:
+        case "leading_system":
+            return [{"role": "system", "content": parts}, {"role": "user", "content": "hi"}]
+        case "assistant":
+            return [
+                {"role": "user", "content": "hi"},
+                {"role": "assistant", "content": parts},
+                {"role": "user", "content": "go on"},
+            ]
+        case "mid_conversation_system":
+            return [
+                {"role": "user", "content": "hi"},
+                {"role": "system", "content": parts},
+                {"role": "assistant", "content": "ok"},
+                {"role": "user", "content": "go on"},
+            ]
+    raise AssertionError(placement)
+
+
+def _guard_block_as_text(block: Mapping[str, object]) -> Mapping[str, object]:
+    return {"text": _GUARDED_PART_TEXT} if block == _GUARD_BLOCK else block
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize("placement", ["leading_system", "assistant", "mid_conversation_system"])
+async def test_guarded_text_part_maps_like_a_text_part_wrapped_in_guard_content(use_async: bool, placement: str):
+    config: Final = AmazonConverseConfig()
+
+    async def transformed(part_type: str) -> RequestObject:
+        kwargs: Final = dict(
+            model="us.anthropic.claude-haiku-5-5",
+            messages=_conversation_with_parts(placement, part_type),
+            optional_params={"guardrailConfig": {"guardrailIdentifier": "gr-abc123", "guardrailVersion": "1"}},
+            litellm_params={},
+        )
+        return await config._async_transform_request(**kwargs) if use_async else config._transform_request(**kwargs)
+
+    guarded: Final = await transformed("guarded_text")
+    as_text: Final = await transformed("text")
+
+    sent_blocks: Final = tuple(
+        chain(guarded.get("system", ()), chain.from_iterable(message["content"] for message in guarded["messages"]))
+    )
+    assert _GUARD_BLOCK in sent_blocks
+    assert [_guard_block_as_text(block) for block in guarded.get("system", ())] == as_text.get("system", [])
+    assert [
+        {**message, "content": [_guard_block_as_text(block) for block in message["content"]]}
+        for message in guarded["messages"]
+    ] == as_text["messages"]
 
 
 def test_convert_consecutive_user_messages_to_guarded_text():

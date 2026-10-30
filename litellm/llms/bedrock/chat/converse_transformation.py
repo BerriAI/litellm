@@ -86,6 +86,7 @@ from litellm.types.llms.openai import (
     ChatCompletionAssistantMessage,
     ChatCompletionAssistantToolCall,
     ChatCompletionCachedContent,
+    ChatCompletionGuardedTextObject,
     ChatCompletionRedactedThinkingBlock,
     ChatCompletionResponseMessage,
     ChatCompletionSystemMessage,
@@ -1547,7 +1548,12 @@ class AmazonConverseConfig(BaseConfig):
             note,
             *text_blocks,
         ]
-        return ChatCompletionUserMessage(role="user", content=body)
+        return ChatCompletionUserMessage(
+            role="user",
+            content=cast(  # cast-ok: the Bedrock user-turn path reads guarded_text parts, which OpenAI content lacks
+                list[OpenAIMessageContentListBlock], body
+            ),
+        )
 
     def _converted_or_kept(self, message: AllMessageValues) -> AllMessageValues | None:
         if not is_system_message(message):
@@ -1556,28 +1562,48 @@ class AmazonConverseConfig(BaseConfig):
             cast(ChatCompletionSystemMessage, message)  # cast-ok: the role is checked on the line above
         )
 
-    def _converted_text_blocks(self, message: ChatCompletionSystemMessage) -> tuple[ChatCompletionTextObject, ...]:
+    def _converted_text_blocks(
+        self, message: ChatCompletionSystemMessage
+    ) -> tuple[ChatCompletionTextObject | ChatCompletionGuardedTextObject, ...]:
         content: Final = message.get("content")
         if isinstance(content, str):
             return (self._converted_text_block(content, message.get("cache_control")),) if content else ()
         parts: Final[Sequence[object]] = content or ()
-        return tuple(
-            self._converted_text_block(part["text"], part.get("cache_control"))
-            for part in map(self._text_part, parts)
-            if part is not None
+        return tuple(self._converted_part(part) for part in map(self._text_part, parts) if part is not None)
+
+    @staticmethod
+    def _text_part(part: object) -> ChatCompletionTextObject | ChatCompletionGuardedTextObject | None:
+        if not isinstance(part, dict) or part.get("type") not in ("text", "guarded_text") or not part.get("text"):
+            return None
+        return cast(  # cast-ok: the shape is checked on the line above
+            ChatCompletionTextObject | ChatCompletionGuardedTextObject, part
         )
 
     @staticmethod
-    def _text_part(part: object) -> ChatCompletionTextObject | None:
-        if not isinstance(part, dict) or part.get("type") != "text" or not part.get("text"):
-            return None
-        return cast(ChatCompletionTextObject, part)  # cast-ok: the shape is checked on the line above
+    def _converted_part(
+        part: ChatCompletionTextObject | ChatCompletionGuardedTextObject,
+    ) -> ChatCompletionTextObject | ChatCompletionGuardedTextObject:
+        match part["type"]:
+            case "text":
+                return AmazonConverseConfig._converted_text_block(part["text"], part.get("cache_control"))
+            case "guarded_text":
+                return part
 
     @staticmethod
     def _converted_text_block(text: str, cache_control: ChatCompletionCachedContent | None) -> ChatCompletionTextObject:
         if cache_control is None:
             return ChatCompletionTextObject(type="text", text=text)
         return ChatCompletionTextObject(type="text", text=text, cache_control=cache_control)
+
+    @staticmethod
+    def _system_content_block(part: object) -> SystemContentBlock | None:
+        match part:
+            case {"type": "text", "text": str() as text} if text:
+                return SystemContentBlock(text=text)
+            case {"type": "guarded_text", "text": str() as text} if text:
+                return SystemContentBlock(guardContent={"text": {"text": text}})
+            case _:
+                return None
 
     def _transform_system_message(
         self, messages: list[AllMessageValues], model: str | None = None, deployment_model: str | None = None
@@ -1602,13 +1628,14 @@ class AmazonConverseConfig(BaseConfig):
                     system_content_blocks.append(cache_block)
             elif isinstance(content, list):
                 for m in content:
-                    if m.get("type") == "text" and m.get("text"):
-                        system_content_blocks.append(SystemContentBlock(text=m["text"]))
-                        cache_block = self.get_cache_point_block(
-                            m, block_type="system", model=model, deployment_model=deployment_model
-                        )
-                        if cache_block:
-                            system_content_blocks.append(cache_block)
+                    if (content_block := self._system_content_block(m)) is None:
+                        continue
+                    system_content_blocks.append(content_block)
+                    cache_block = self.get_cache_point_block(
+                        m, block_type="system", model=model, deployment_model=deployment_model
+                    )
+                    if cache_block:
+                        system_content_blocks.append(cache_block)
         reordered: Final = tuple(
             chain.from_iterable(
                 self._reordered_around_tool_results(remaining, index) for index in range(len(remaining))
