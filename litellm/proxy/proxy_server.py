@@ -10513,7 +10513,11 @@ async def async_data_generator(
     client_disconnected = False
     error_state: Final = ResponsesStreamErrorState() if responses_stream_errors else None
     ends_with_openai_done: Final = not request_data.get("_litellm_skip_openai_stream_done")
-    needs_iterator_wrap: Final = proxy_logging_obj.needs_iterator_wrap()
+    from litellm.proxy.auth.native_mcp_policy import resolve_native_mcp_policy
+
+    needs_iterator_wrap: Final = (
+        proxy_logging_obj.needs_iterator_wrap() or resolve_native_mcp_policy(user_api_key_dict) is not None
+    )
     stream_iterator: Final = _object_stream(
         proxy_logging_obj.async_post_call_streaming_iterator_hook(
             user_api_key_dict=user_api_key_dict,

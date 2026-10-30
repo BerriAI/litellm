@@ -66,7 +66,7 @@ Native MCP call records in non-streaming responses are checked against the same 
 
 Normal provider GET `/v1/responses/{response_id}` retrieval checks the stored attachment URLs returned by the provider against the caller’s current policy, then checks the returned tool calls. Creation responses cannot use this retrieval fallback. When a native policy is active, streamed retrieval (including resume), Redis polling reads, and creation through Redis polling return HTTP 400 in v1. These paths do not yet carry a validated server URL binding.
 
-Streaming response enforcement is added in the dependent change.
+Streaming uses the existing proxy iterator and error handling. Complete native MCP call events are checked before release. Events whose call ID is not yet validated are held until its server and tool identity arrives. An unresolved call at the end of the stream is rejected. Partial SSE bytes are held until a complete frame can be inspected. A denial terminates the stream using the endpoint's existing error format; previously delivered text is not recalled. Allowed events retain their payload, though SSE chunk boundaries may change.
 
 Response enforcement cannot undo a tool the provider already executed. Request-side restrictions are what constrain the tools the provider is authorized to execute.
 

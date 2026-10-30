@@ -4554,10 +4554,10 @@ class ProxyLogging:
 
     async def async_post_call_streaming_iterator_hook(
         self,
-        response,
+        response: AsyncIterable[object],
         user_api_key_dict: UserAPIKeyAuth,
-        request_data: dict,
-    ):
+        request_data: dict[str, object],
+    ) -> AsyncGenerator[object, None]:
         """
         Allow user to modify outgoing streaming data -> Given a whole response iterator.
         This hook is best used when you need to modify multiple chunks of the response at once.
@@ -4565,6 +4565,10 @@ class ProxyLogging:
         Covers:
         1. /chat/completions
         """
+        from litellm.proxy.auth.native_mcp_policy import resolve_native_mcp_policy
+        from litellm.proxy.guardrails.native_mcp_stream import validate_native_mcp_stream
+
+        native_mcp_active: Final = resolve_native_mcp_policy(user_api_key_dict) is not None
         caps: Final = ProxyLogging.callback_capabilities()
         post_call_pipelines: Final = _streamable_post_call_pipelines(request_data, user_api_key_dict)
         # Fast path: no real overrides. Internal proxy CustomLogger callbacks
@@ -4573,8 +4577,11 @@ class ProxyLogging:
         # through each of them adds N pass-through trampolines per chunk for
         # zero behavior change. Skip the chain entirely and stream through.
         if not caps.iterator_overrides and not post_call_pipelines:
+            checked_response: Final = (
+                validate_native_mcp_stream(response, user_api_key_dict, request_data) if native_mcp_active else response
+            )
             try:
-                async for chunk in response:
+                async for chunk in checked_response:
                     yield chunk
             except (GeneratorExit, asyncio.CancelledError):
                 raise
@@ -4582,6 +4589,11 @@ class ProxyLogging:
                 if not ProxyLogging._discard_deferred_stream_logging_for_failure(request_data, e):
                     ProxyLogging.fire_deferred_stream_logging(request_data)
                 raise
+            finally:
+                if native_mcp_active:
+                    from litellm.proxy.common_request_processing import close_guarded_stream
+
+                    await close_guarded_stream(checked_response)
             ProxyLogging.fire_deferred_stream_logging(request_data)
             return
 
@@ -4657,9 +4669,16 @@ class ProxyLogging:
             )
             guarded_layers.append(current_response)
 
+        native_stream: Final = (
+            validate_native_mcp_stream(current_response, user_api_key_dict, request_data) if native_mcp_active else None
+        )
+        validated_response: Final = native_stream if native_stream is not None else current_response
+        if native_stream is not None:
+            guarded_layers.append(native_stream)
+
         served_chunks: Final[list[object]] = []  # mutable-ok: accumulates while yielding to the client
         try:
-            async for chunk in current_response:
+            async for chunk in validated_response:
                 served_chunks.append(chunk)
                 yield chunk
         except (GeneratorExit, asyncio.CancelledError):
