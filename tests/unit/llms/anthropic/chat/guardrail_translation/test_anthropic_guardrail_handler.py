@@ -621,7 +621,7 @@ class TestAnthropicMessagesHandlerStreamingOutputProcessing:
         }
 
     @classmethod
-    def _web_search_stream_chunks(cls) -> list[bytes]:
+    def _web_search_stream_chunks(cls, server_tool_block_type: str = "server_tool_use") -> list[bytes]:
         events = [
             (
                 "message_start",
@@ -643,7 +643,12 @@ class TestAnthropicMessagesHandlerStreamingOutputProcessing:
                 {
                     "type": "content_block_start",
                     "index": 0,
-                    "content_block": {"type": "server_tool_use", "id": "srvtoolu_1", "name": "web_search", "input": {}},
+                    "content_block": {
+                        "type": server_tool_block_type,
+                        "id": "srvtoolu_1",
+                        "name": "web_search",
+                        "input": {},
+                    },
                 },
             ),
             (
@@ -685,14 +690,17 @@ class TestAnthropicMessagesHandlerStreamingOutputProcessing:
         ]
         return [f"event: {name}\ndata: {json.dumps(payload)}\n\n".encode() for name, payload in events]
 
+    @pytest.mark.parametrize("server_tool_block_type", ["server_tool_use", "tool_use"])
     @pytest.mark.parametrize(
         "guardrail_factory",
         [_python_masking_guardrail, _python_texts_masking_guardrail],
         ids=["texts_and_tool_calls", "texts_only"],
     )
     @pytest.mark.asyncio
-    async def test_deliver_ended_stream_rewrites_mask_the_web_search_query_results_and_text(self, guardrail_factory):
-        chunks = self._web_search_stream_chunks()
+    async def test_deliver_ended_stream_rewrites_mask_the_web_search_query_results_and_text(
+        self, guardrail_factory, server_tool_block_type
+    ):
+        chunks = self._web_search_stream_chunks(server_tool_block_type)
 
         await AnthropicMessagesHandler().process_output_streaming_response(
             responses_so_far=chunks,

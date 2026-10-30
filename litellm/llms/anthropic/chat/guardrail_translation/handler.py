@@ -453,16 +453,16 @@ def _write_back_tool_use(
 
 
 def _streamed_query_strings(
-    tool_call_blocks: Sequence[tuple[int, str]], tool_calls: Sequence[_ToolCallShape]
+    tool_call_blocks: Sequence[tuple[int, Mapping[str, object]]], tool_calls: Sequence[_ToolCallShape]
 ) -> tuple[_WebSearchString, ...]:
     if len(tool_call_blocks) != len(tool_calls):
         return ()
     return tuple(
         chain.from_iterable(
             _web_search_block_strings(
-                index, {"type": block_type, "input": _rewritten_tool_use_input(tool_call.arguments)}, with_query=True
+                index, {**block, "input": _rewritten_tool_use_input(tool_call.arguments)}, with_query=True
             )
-            for (index, block_type), tool_call in zip(tool_call_blocks, tool_calls)
+            for (index, block), tool_call in zip(tool_call_blocks, tool_calls)
         )
     )
 
@@ -486,7 +486,7 @@ def _with_query(tool_call: _ToolCallShape, query: str) -> _ToolCallShape:
 
 def _with_query_rewrites(
     tool_calls: tuple[_ToolCallShape, ...],
-    tool_call_blocks: Sequence[tuple[int, str]],
+    tool_call_blocks: Sequence[tuple[int, Mapping[str, object]]],
     query_rewrites: Mapping[int, str],
 ) -> tuple[_ToolCallShape, ...]:
     if not query_rewrites or len(tool_call_blocks) != len(tool_calls):
@@ -1866,10 +1866,12 @@ class AnthropicMessagesHandler(BaseTranslation):
         cls._rewrite_ended_stream_events(responses_so_far, rewrite_result_block)
 
     @classmethod
-    def _streamed_tool_call_blocks(cls, responses_so_far: Sequence[object]) -> tuple[tuple[int, str], ...]:
+    def _streamed_tool_call_blocks(
+        cls, responses_so_far: Sequence[object]
+    ) -> tuple[tuple[int, Mapping[str, object]], ...]:
         events: Final = chain.from_iterable(cls._iter_sse_events(item) for item in responses_so_far)
         return tuple(
-            (index, block_type)
+            (index, block)
             for event in events
             if event.get("type") == "content_block_start"
             and (block := as_str_mapping(event.get("content_block"))) is not None
