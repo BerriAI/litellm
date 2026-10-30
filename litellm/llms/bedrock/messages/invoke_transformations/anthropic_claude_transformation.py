@@ -760,7 +760,7 @@ class AmazonAnthropicClaudeMessagesConfig(
                 "display": "updates",
             }
         self._normalize_system_role_messages(
-            anthropic_messages_request, model=model, drop_params=litellm_params.drop_params
+            anthropic_messages_request, model=model, drop_params=getattr(litellm_params, "drop_params", None)
         )
         #########################################################
         ############## BEDROCK Invoke SPECIFIC TRANSFORMATION ###
@@ -835,7 +835,7 @@ class AmazonAnthropicClaudeMessagesConfig(
             final_request,
             final_request.get("messages"),
             body_betas=filtered_betas,
-            drop_params=litellm_params.drop_params,
+            drop_params=getattr(litellm_params, "drop_params", None),
         )
         log_beta_gated_strips(gated.stripped, model=model, provider="bedrock_invoke")
         if gated.thinking_stripped:
