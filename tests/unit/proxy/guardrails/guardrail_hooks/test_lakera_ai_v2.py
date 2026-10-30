@@ -320,7 +320,7 @@ class TestAsyncPostCallSuccessHookSkipFlags:
 
 
 @pytest.mark.asyncio
-async def test_post_call_skips_a_response_with_no_assistant_text() -> None:
+async def test_post_call_skips_an_extraction_response_with_no_text() -> None:
     guardrail: Final = LakeraAIGuardrail(api_key="test_key")
     data: Final = {"model": "clairic", "metadata": {}}
     llm_response: Final = MagicMock()
@@ -329,7 +329,7 @@ async def test_post_call_skips_a_response_with_no_assistant_text() -> None:
     with patch.object(guardrail, "call_v2_guard", new_callable=AsyncMock) as mock_call:
         result: Final = await guardrail.async_post_call_success_hook(
             data=data,
-            user_api_key_dict=UserAPIKeyAuth(api_key="test_key"),
+            user_api_key_dict=UserAPIKeyAuth(api_key="test_key", request_route="/v1/extraction"),
             response=llm_response,
         )
 
@@ -337,6 +337,25 @@ async def test_post_call_skips_a_response_with_no_assistant_text() -> None:
     assert result is llm_response
     assert "applied_guardrails" not in data["metadata"]
 
+
+
+@pytest.mark.asyncio
+async def test_post_call_on_a_responses_request_without_text_still_reaches_lakera() -> None:
+    guardrail: Final = LakeraAIGuardrail(api_key="test_key")
+    llm_response: Final = MagicMock()
+    llm_response.model_dump.return_value = {"output": []}
+
+    with patch.object(
+        guardrail, "call_v2_guard", new_callable=AsyncMock, side_effect=HTTPException(500, "lakera unavailable")
+    ) as mock_call:
+        with pytest.raises(HTTPException, match="lakera unavailable"):
+            await guardrail.async_post_call_success_hook(
+                data={"model": "clairic", "input": "draw a refund form", "metadata": {}},
+                user_api_key_dict=UserAPIKeyAuth(api_key="test_key", request_route="/v1/responses"),
+                response=llm_response,
+            )
+
+    mock_call.assert_called_once()
 
 PII_ONLY_LAKERA_RESPONSE = {
     "flagged": True,

@@ -70,6 +70,27 @@ async def test_request_without_text_lakera_reads_skips_the_vendor_and_is_not_lis
 
 
 @pytest.mark.asyncio
+async def test_request_without_text_on_a_hook_route_still_reaches_lakera_and_fails_when_it_is_down() -> None:
+    scans: Final[list[httpx.Request]] = []
+
+    def unavailable(request: httpx.Request) -> httpx.Response:
+        scans.append(request)
+        return httpx.Response(503, text="lakera unavailable")
+
+    guardrail: Final = _lakera(httpx.MockTransport(unavailable))
+
+    with pytest.raises(Exception, match="lakera unavailable"):
+        await guardrail.async_pre_call_hook(
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-9876"),
+            cache=DualCache(),
+            data={"model": "m", "prompt": "draw a refund form"},
+            call_type="image_generation",
+        )
+
+    assert len(scans) == 1
+
+
+@pytest.mark.asyncio
 async def test_clean_scan_of_string_input_lists_the_guardrail() -> None:
     guardrail: Final = _lakera(_clean_scan_of("is this a refund request?"))
     data: Final[dict[str, object]] = {

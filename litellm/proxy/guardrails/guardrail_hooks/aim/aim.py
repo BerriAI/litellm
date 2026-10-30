@@ -179,7 +179,7 @@ class AimGuardrail(CustomGuardrail):
         self, data: dict, hook: str, key_alias: str | None, call_type: CallTypesLiteral | None = None
     ) -> dict:
         messages: Final = self._build_aim_inspection_messages(data)  # pyright: ignore[reportUnknownMemberType]  # hook request data is an untyped dict
-        if not messages:
+        if not messages and call_type in APPLY_GUARDRAIL_ONLY_CALL_TYPES:
             return data  # pyright: ignore[reportUnknownVariableType]  # hook request data is an untyped dict
         if call_type in APPLY_GUARDRAIL_ONLY_CALL_TYPES:
             add_guardrail_to_applied_guardrails_header(request_data=data, guardrail_name=self.guardrail_name)

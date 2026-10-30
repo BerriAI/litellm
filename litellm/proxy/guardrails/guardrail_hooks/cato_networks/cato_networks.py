@@ -302,7 +302,7 @@ class CatoNetworksGuardrail(CustomGuardrail):
         call_type: CallTypesLiteral | None = None,
     ) -> dict:
         messages: Final = self._inspection_messages(data)  # pyright: ignore[reportUnknownVariableType,reportUnknownMemberType]  # hook request data is an untyped dict
-        if not messages:
+        if not messages and call_type in APPLY_GUARDRAIL_ONLY_CALL_TYPES:
             return data  # pyright: ignore[reportUnknownVariableType]  # hook request data is an untyped dict
         if call_type in APPLY_GUARDRAIL_ONLY_CALL_TYPES:
             add_guardrail_to_applied_guardrails_header(request_data=data, guardrail_name=self.guardrail_name)

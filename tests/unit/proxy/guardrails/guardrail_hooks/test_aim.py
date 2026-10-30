@@ -830,9 +830,16 @@ async def test_aim_streaming_block_stops_after_verified_chunks(monkeypatch: pyte
         ),
         pytest.param("aextraction", {"state": {"invoice": "INV-1"}}, 0, None, id="extraction"),
         pytest.param("acompletion", {"messages": [{"role": "user", "content": "Refund?"}]}, 1, None, id="chat"),
+        pytest.param(
+            "acompletion",
+            {"messages": [{"role": "user", "content": [{"type": "image_url", "image_url": {"url": "https://a.test/i.png"}}]}]},
+            1,
+            None,
+            id="chat-image-only",
+        ),
     ],
 )
-async def test_aim_calls_aim_and_lists_itself_only_when_the_request_has_text(
+async def test_aim_skips_requests_without_text_and_lists_itself_only_on_apply_guardrail_routes(
     respx_mock: respx.MockRouter,
     call_type: CallTypesLiteral,
     request_fields: Mapping[str, object],

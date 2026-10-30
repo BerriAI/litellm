@@ -14,6 +14,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_guardrail import (
     DEFAULT_ADVISORY_MESSAGE,
     CustomGuardrail,
+    is_apply_guardrail_only_route,
 )
 from litellm.llms.base_llm.guardrail_translation.utils import (
     effective_skip_system_message_for_guardrail,
@@ -781,7 +782,7 @@ class LakeraAIGuardrail(CustomGuardrail):
 
         # Use a copy of original_messages so _mask_pii_in_messages does not mutate data["messages"]
         post_call_messages: Final = list(copy.deepcopy(original_messages)) + response_messages
-        if not post_call_messages:
+        if not post_call_messages and is_apply_guardrail_only_route(user_api_key_dict.request_route):
             return response
 
         # Call Lakera guardrail

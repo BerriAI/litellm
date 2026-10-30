@@ -2801,9 +2801,16 @@ async def test_cato_still_inspects_every_conversational_call_type(call_type: str
         ),
         pytest.param("aextraction", {"state": {"invoice": "INV-1"}}, 0, None, id="extraction"),
         pytest.param("acompletion", {"messages": [{"role": "user", "content": "Refund?"}]}, 1, None, id="chat"),
+        pytest.param(
+            "aresponses",
+            {"input": [{"role": "user", "content": [{"type": "input_image", "image_url": "https://a.test/i.png"}]}]},
+            1,
+            None,
+            id="responses-image-only",
+        ),
     ],
 )
-async def test_cato_calls_cato_and_lists_itself_only_when_the_request_has_text(
+async def test_cato_skips_requests_without_text_and_lists_itself_only_on_apply_guardrail_routes(
     respx_mock: respx.MockRouter,
     call_type: CallTypesLiteral,
     request_fields: Mapping[str, object],

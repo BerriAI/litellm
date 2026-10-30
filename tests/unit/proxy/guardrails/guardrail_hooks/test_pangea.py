@@ -385,9 +385,10 @@ async def test_pangea_ai_guard_response_transformed(pangea_guardrail):
         ),
         pytest.param("aextraction", {"state": {"invoice": "INV-1"}}, 0, None, id="extraction"),
         pytest.param("adecisions", {"input": "Is this a refund?"}, 0, None, id="decisions"),
+        pytest.param("aresponses", {"input": "Is this a refund?"}, 1, ["pangea-ai-guard"], id="responses"),
     ],
 )
-async def test_pangea_calls_pangea_and_lists_itself_only_when_the_request_has_messages(
+async def test_pangea_skips_requests_without_messages_only_on_apply_guardrail_routes(
     respx_mock: respx.MockRouter,
     call_type: str,
     request_fields: Mapping[str, object],
