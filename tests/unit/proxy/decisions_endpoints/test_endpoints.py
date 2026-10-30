@@ -937,7 +937,7 @@ def test_a_non_string_safety_identifier_is_refused_unless_the_deployment_drops_p
 
 
 _IMAGE_TEXT: Final = "Is the screen cracked?"
-_PNG_DATA_URL: Final = "data:image/png;base64,AA=="
+_PNG_DATA_URL: Final = "data:image/png;base64,iVBORw0KGgo="
 _IMAGE_ENDPOINTS: Final = ("/v1/decisions", "/v1/systemone")
 _IMAGE_REQUEST_BODIES: Final[tuple[Mapping[str, object], ...]] = (
     {
