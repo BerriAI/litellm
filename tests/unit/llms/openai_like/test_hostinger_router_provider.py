@@ -321,17 +321,11 @@ def test_hostinger_router_embeddings_ignore_transport_extra_headers(name: str, c
     assert request.headers.get_list("x-trace-id") == ["trace-1"]
 
 
-MALFORMED_EXTRA_HEADERS: Final = [
-    ("Host:evil.example", "x"),
-    ("X Note", "x"),
-    ("X-Note", "a\r\nHost: evil.example"),
-    ("X-Note", "line\nbreak"),
-    ("X-Note", "caf\u00e9"),
-]
+MALFORMED_HEADER_NAMES: Final = ["Host:evil.example", "X Note", "X-Caf\u00e9"]
 
 
-@pytest.mark.parametrize(("name", "configured"), MALFORMED_EXTRA_HEADERS)
-def test_hostinger_router_embeddings_refuse_malformed_extra_headers(name: str, configured: str):
+@pytest.mark.parametrize("name", MALFORMED_HEADER_NAMES)
+def test_hostinger_router_embeddings_refuse_malformed_extra_header_names(name: str):
     with respx.mock(assert_all_called=False) as upstream:
         route: Final = upstream.post("https://router.hostinger.com/v1/embeddings").respond(200, json=EMBEDDING_RESPONSE)
         with pytest.raises(litellm.UnsupportedParamsError) as refused:
@@ -339,7 +333,7 @@ def test_hostinger_router_embeddings_refuse_malformed_extra_headers(name: str, c
                 model="hostinger_router/text-embedding-3-small",
                 input=["Say hello"],
                 api_key="hostinger-test-key",
-                extra_headers={name: configured},
+                extra_headers={name: "x"},
             )
 
     assert refused.value.status_code == 400
@@ -347,22 +341,53 @@ def test_hostinger_router_embeddings_refuse_malformed_extra_headers(name: str, c
     assert route.call_count == 0
 
 
-@pytest.mark.parametrize(("name", "configured"), MALFORMED_EXTRA_HEADERS)
-def test_hostinger_router_embeddings_drop_malformed_extra_headers_under_drop_params(name: str, configured: str):
+@pytest.mark.parametrize("name", MALFORMED_HEADER_NAMES)
+def test_hostinger_router_embeddings_drop_malformed_extra_header_names_under_drop_params(name: str):
     with respx.mock() as upstream:
         route: Final = upstream.post("https://router.hostinger.com/v1/embeddings").respond(200, json=EMBEDDING_RESPONSE)
         litellm.embedding(
             model="hostinger_router/text-embedding-3-small",
             input=["Say hello"],
             api_key="hostinger-test-key",
-            extra_headers={name: configured, "X-Trace-Id": "trace-1"},
+            extra_headers={name: "x", "X-Trace-Id": "trace-1"},
             drop_params=True,
         )
 
     request: Final = route.calls.last.request
     assert request.headers.get_list("host") == ["router.hostinger.com"]
     assert request.headers.get_list("x-trace-id") == ["trace-1"]
-    assert name not in request.headers
+    assert name.lower() not in request.headers.keys()
+
+
+@pytest.mark.parametrize("configured", ["a\r\nHost: evil.example", "line\nbreak", "caf\u00e9", "a\x7fb"])
+def test_hostinger_router_embeddings_drop_extra_header_values_http_cannot_carry(configured: str):
+    with respx.mock() as upstream:
+        route: Final = upstream.post("https://router.hostinger.com/v1/embeddings").respond(200, json=EMBEDDING_RESPONSE)
+        litellm.embedding(
+            model="hostinger_router/text-embedding-3-small",
+            input=["Say hello"],
+            api_key="hostinger-test-key",
+            extra_headers={"x-litellm-user_api_key_alias": configured, "X-Trace-Id": "trace-1"},
+        )
+
+    request: Final = route.calls.last.request
+    assert request.headers.get_list("host") == ["router.hostinger.com"]
+    assert request.headers.get_list("x-trace-id") == ["trace-1"]
+    assert "x-litellm-user_api_key_alias" not in request.headers
+
+
+@pytest.mark.parametrize(("configured", "sent"), [(" x ", "x"), ("\t", ""), (" a\tb ", "a\tb")])
+def test_hostinger_router_embeddings_trim_spaces_around_extra_header_values(configured: str, sent: str):
+    with respx.mock() as upstream:
+        route: Final = upstream.post("https://router.hostinger.com/v1/embeddings").respond(200, json=EMBEDDING_RESPONSE)
+        litellm.embedding(
+            model="hostinger_router/text-embedding-3-small",
+            input=["Say hello"],
+            api_key="hostinger-test-key",
+            extra_headers={"X-Rig": configured},
+        )
+
+    assert route.calls.last.request.headers.get_list("x-rig") == [sent]
 
 
 def test_hostinger_router_embeddings_never_borrow_another_providers_key(monkeypatch: pytest.MonkeyPatch):

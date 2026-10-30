@@ -12,6 +12,7 @@ import httpx
 from pydantic import TypeAdapter
 
 import litellm
+from litellm._logging import verbose_logger
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
@@ -31,10 +32,9 @@ _HEADER_VALUE: Final = re.compile(r"[\t\x20-\x7e]*")
 def _header_text(name: str, value: object) -> str | None:
     if isinstance(value, bool) or not isinstance(value, str | int | float):
         return None
-    text: Final = str(value)
-    if _HEADER_NAME.fullmatch(name) is None or _HEADER_VALUE.fullmatch(text) is None:
+    if _HEADER_NAME.fullmatch(name) is None:
         return None
-    return text
+    return str(value).strip(" \t")
 
 
 def _extra_headers_as_text(extra_headers: Mapping[str, object], model: str, drop_params: bool) -> Mapping[str, str]:
@@ -46,11 +46,17 @@ def _extra_headers_as_text(extra_headers: Mapping[str, object], model: str, drop
     if refused and not drop_params:
         raise litellm.UnsupportedParamsError(
             message=f"extra_headers {', '.join(map(repr, refused))} cannot be sent. A header needs a name made of "
-            "letters, digits or !#$%&'*+-.^_`|~ and a text or number value of printable ASCII on one line. "
+            "letters, digits or !#$%&'*+-.^_`|~ and a text or number value. "
             "To drop them from the call, set `litellm.drop_params = True`.",
             model=model,
         )
-    return MappingProxyType({name: text for name, text in texts.items() if text is not None})
+    named: Final = MappingProxyType({name: text for name, text in texts.items() if text is not None})
+    unsendable: Final = sorted(name for name, text in named.items() if _HEADER_VALUE.fullmatch(text) is None)
+    if unsendable:
+        verbose_logger.warning(
+            "extra_headers %s dropped, since a header value must be printable ASCII on one line", unsendable
+        )
+    return MappingProxyType({name: text for name, text in named.items() if name not in unsendable})
 
 
 class OpenAILikeEmbeddingHandler(OpenAILikeBase):
