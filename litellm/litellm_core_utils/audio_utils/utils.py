@@ -21,6 +21,16 @@ from litellm.types.files import (
 from litellm.types.utils import FileTypes
 
 
+def normalized_audio_duration_seconds(value: object) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    try:
+        seconds: Final = float(value)
+    except OverflowError:
+        return None
+    return seconds if math.isfinite(seconds) and seconds >= 0 else None
+
+
 @dataclass
 class ProcessedAudioFile:
     """

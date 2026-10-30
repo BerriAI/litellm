@@ -29,6 +29,7 @@ from litellm.llms.gemini.image_generation.cost_calculator import (
 from litellm.llms.vertex_ai.image_generation.cost_calculator import (
     cost_calculator as vertex_image_generation_cost_calculator,
 )
+from litellm.types.llms.base import CachedTokensDetails
 from litellm.types.utils import (
     CacheCreationTokenDetails,
     CompletionTokensDetailsWrapper,
@@ -40,6 +41,62 @@ from litellm.types.utils import (
     PromptTokensDetailsWrapper,
     Usage,
 )
+
+
+def test_realtime_cached_modality_breakdown_matches_prompt_cost(_local_model_cost_map):
+    model: Final = "gpt-realtime-2.1-mini"
+    rates: Final = litellm.model_cost[model]
+    usage: Final = Usage(
+        prompt_tokens=1000,
+        completion_tokens=0,
+        total_tokens=1000,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            text_tokens=400,
+            audio_tokens=400,
+            image_tokens=200,
+            cached_tokens=300,
+            cached_tokens_details=CachedTokensDetails(text_tokens=100, audio_tokens=150, image_tokens=50),
+        ),
+    )
+
+    prompt_cost, _ = generic_cost_per_token(model=model, usage=usage, custom_llm_provider="openai")
+    breakdown: Final = get_token_type_cost_breakdown(model=model, custom_llm_provider="openai", usage=usage)
+    cached_cost: Final = (
+        100 * rates["cache_read_input_token_cost"]
+        + 150 * rates["cache_read_input_audio_token_cost"]
+        + 50 * rates["cache_read_input_image_token_cost"]
+    )
+    uncached_cost: Final = (
+        300 * rates["input_cost_per_token"]
+        + 250 * rates["input_cost_per_audio_token"]
+        + 150 * rates["input_cost_per_image_token"]
+    )
+
+    assert breakdown.cache_read_cost == pytest.approx(cached_cost)
+    assert prompt_cost == pytest.approx(uncached_cost + cached_cost)
+
+
+def test_image_model_bills_cached_image_tokens_at_its_cached_image_rate(_local_model_cost_map):
+    model: Final = "gpt-image-2"
+    rates: Final = litellm.model_cost[model]
+    usage: Final = Usage(
+        prompt_tokens=1000,
+        completion_tokens=0,
+        total_tokens=1000,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            text_tokens=200,
+            image_tokens=800,
+            cached_tokens=600,
+            cached_tokens_details=CachedTokensDetails(text_tokens=100, image_tokens=500),
+        ),
+    )
+
+    prompt_cost, _ = generic_cost_per_token(model=model, usage=usage, custom_llm_provider="openai")
+    cached_cost: Final = 100 * rates["cache_read_input_token_cost"] + 500 * rates["cache_read_input_image_token_cost"]
+    uncached_cost: Final = 100 * rates["input_cost_per_token"] + 300 * rates["input_cost_per_image_token"]
+
+    assert rates["cache_read_input_image_token_cost"] != rates["cache_read_input_token_cost"]
+    assert prompt_cost == pytest.approx(uncached_cost + cached_cost)
 
 
 @pytest.fixture
@@ -2234,6 +2291,10 @@ def test_cache_writing_cost_with_zero_creation_tokens_and_ephemeral_details():
     prompt_tokens_details: PromptTokensDetailsResult = {
         "cache_hit_tokens": 0,
         "cache_hit_audio_tokens": 0,
+        "cached_text_tokens": 0,
+        "cached_audio_tokens": 0,
+        "cached_image_tokens": 0,
+        "has_cached_tokens_details": False,
         "cache_creation_tokens": 0,
         "cache_creation_token_details": CacheCreationTokenDetails(
             ephemeral_5m_input_tokens=100,

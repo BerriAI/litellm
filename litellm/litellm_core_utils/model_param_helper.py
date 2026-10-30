@@ -1,6 +1,6 @@
 from collections.abc import Mapping
 from functools import lru_cache
-from typing import ClassVar, Final
+from typing import ClassVar, Final, get_args
 
 from openai.types.chat.completion_create_params import (
     CompletionCreateParamsNonStreaming,
@@ -20,6 +20,7 @@ from openai.types.responses.response_create_params import (
 
 from litellm._logging import verbose_logger
 from litellm.types.llms.anthropic import AnthropicMessagesRequest
+from litellm.types.llms.openai import OpenAIAudioTranscriptionOptionalParams
 from litellm.types.rerank import RerankRequest
 
 
@@ -167,6 +168,7 @@ class ModelParamHelper:
 
         This follows the OpenAI API Spec
         """
+        litellm_transcription_kwargs: Final = set(get_args(OpenAIAudioTranscriptionOptionalParams))
         try:
             from openai.types.audio.transcription_create_params import (
                 TranscriptionCreateParamsNonStreaming,
@@ -176,11 +178,11 @@ class ModelParamHelper:
             non_streaming_kwargs = set(getattr(TranscriptionCreateParamsNonStreaming, "__annotations__", {}).keys())
             streaming_kwargs: Final = set(getattr(TranscriptionCreateParamsStreaming, "__annotations__", {}).keys())
 
-            all_transcription_kwargs: Final = non_streaming_kwargs.union(streaming_kwargs)
+            all_transcription_kwargs: Final = non_streaming_kwargs.union(streaming_kwargs, litellm_transcription_kwargs)
             return all_transcription_kwargs
         except Exception as e:
             verbose_logger.debug("Error getting transcription kwargs %s", str(e))
-            return set()
+            return litellm_transcription_kwargs
 
     @staticmethod
     def _get_litellm_supported_responses_api_kwargs() -> set[str]:
