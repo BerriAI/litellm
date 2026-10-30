@@ -1334,6 +1334,25 @@ async def test_hosted_vllm_router_batch_list_comes_back_as_openai_batches(
     ]
 
 
+async def test_hosted_vllm_router_batch_list_passes_through_a_status_that_is_not_a_string(
+    respx_mock: respx.MockRouter,
+):
+    respx_mock.get(f"{VLLM_ROUTER_API_BASE}/batches").respond(
+        200,
+        json={
+            "object": "list",
+            "data": [{**VLLM_ROUTER_BATCH, "status": ["pending"]}],
+            "first_id": "batch_5f8dac",
+            "last_id": "batch_5f8dac",
+            "has_more": False,
+        },
+    )
+
+    batches: Final = await _list_on_vllm_router()
+
+    assert [(batch.id, batch.object, batch.status) for batch in batches] == [("batch_5f8dac", "batch", ["pending"])]
+
+
 async def test_openai_batch_list_items_come_back_as_openai_sent_them(respx_mock: respx.MockRouter):
     respx_mock.get("http://openai.test/v1/batches").respond(
         200,

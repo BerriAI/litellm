@@ -4900,6 +4900,10 @@ OPENAI_BATCH_STATUS_FOR_VLLM_ROUTER_STATUS: Final = MappingProxyType(
 )
 
 
+def openai_batch_status(status: _JsonValue) -> _JsonValue:
+    return OPENAI_BATCH_STATUS_FOR_VLLM_ROUTER_STATUS.get(status, status) if isinstance(status, str) else status
+
+
 class LiteLLMBatch(Batch):
     _hidden_params: dict = {}
 
@@ -4913,7 +4917,7 @@ class LiteLLMBatch(Batch):
     @field_validator("status", mode="before")
     @classmethod
     def _map_vllm_router_status(cls, value: _JsonValue) -> _JsonValue:
-        return OPENAI_BATCH_STATUS_FOR_VLLM_ROUTER_STATUS.get(value, value) if isinstance(value, str) else value
+        return openai_batch_status(value)
 
     @property
     def hidden_params(self) -> dict[str, _JsonValue]:  # mutable-ok: API requires mutation

@@ -2051,16 +2051,38 @@ def test_openai_config_hoists_a_later_developer_message_only_for_a_model_off_ope
     assert [message["role"] for message in messages] == expected_roles
 
 
-def test_sync_batch_list_refuses_an_async_client_instead_of_returning_an_unawaited_page():
-    async_client: Final = AsyncOpenAI(api_key="sk-test", base_url="http://vllm-router.test/v1")
+@pytest.mark.asyncio
+async def test_sync_batch_list_given_an_async_client_returns_a_page_the_caller_can_await(
+    respx_mock: respx.MockRouter,
+):
+    respx_mock.get("http://vllm-router.test/v1/batches").respond(
+        200,
+        json={
+            "object": "list",
+            "data": [
+                {
+                    "id": "batch_5f8dac",
+                    "status": "pending",
+                    "input_file_id": "file-b73f4c",
+                    "created_at": 1793239207,
+                    "endpoint": "/v1/chat/completions",
+                    "completion_window": "24h",
+                }
+            ],
+            "first_id": "batch_5f8dac",
+            "last_id": "batch_5f8dac",
+            "has_more": False,
+        },
+    )
 
-    with pytest.raises(TypeError, match="not an instance of OpenAI"):
-        OpenAIBatchesAPI().list_batches(
-            _is_async=False,
-            api_key="sk-test",
-            api_base="http://vllm-router.test/v1",
-            timeout=5.0,
-            max_retries=0,
-            organization=None,
-            client=async_client,
-        )
+    page: Final = OpenAIBatchesAPI().list_batches(
+        _is_async=False,
+        api_key="sk-test",
+        api_base="http://vllm-router.test/v1",
+        timeout=5.0,
+        max_retries=0,
+        organization=None,
+        client=AsyncOpenAI(api_key="sk-test", base_url="http://vllm-router.test/v1"),
+    )
+
+    assert [(batch.id, batch.status) for batch in (await page).data] == [("batch_5f8dac", "pending")]

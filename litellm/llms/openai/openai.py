@@ -16,6 +16,7 @@ from openai._base_client import make_request_options
 from openai._constants import RAW_RESPONSE_HEADER
 from openai._legacy_response import LegacyAPIResponse
 from openai._types import RequestOptions
+from openai.pagination import SyncCursorPage
 from openai.types import CreateEmbeddingResponse
 from openai.types.beta.assistant_deleted import AssistantDeleted
 from openai.types.chat import ChatCompletion, ChatCompletionChunk
@@ -34,12 +35,12 @@ from litellm.litellm_core_utils.logging_utils import speech_request_body, track_
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator, MockResponseIterator
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.types.utils import (
-    OPENAI_BATCH_STATUS_FOR_VLLM_ROUTER_STATUS,
     EmbeddingResponse,
     ImageResponse,
     LiteLLMBatch,
     ModelResponse,
     ModelResponseStream,
+    openai_batch_status,
 )
 from litellm.utils import (
     CustomStreamWrapper,
@@ -2167,7 +2168,7 @@ def _with_openai_batch_fields(batches: Sequence[Batch]) -> Sequence[Batch]:
         batch.model_copy(
             update={
                 "object": batch.object or "batch",
-                "status": OPENAI_BATCH_STATUS_FOR_VLLM_ROUTER_STATUS.get(batch.status, batch.status),
+                "status": openai_batch_status(batch.status),
             }
         )
         for batch in batches
@@ -2376,7 +2377,7 @@ class OpenAIBatchesAPI(BaseLLM):
         organization: str | None,
         after: str | None = None,
         limit: int | None = None,
-        client: OpenAI | None = None,
+        client: OpenAI | AsyncOpenAI | None = None,
         litellm_params: Mapping[str, object] | None = None,
     ):
         openai_client: Final[OpenAI | AsyncOpenAI | None] = self.get_openai_client(
@@ -2400,9 +2401,9 @@ class OpenAIBatchesAPI(BaseLLM):
                     "OpenAI client is not an instance of AsyncOpenAI. Make sure you passed an AsyncOpenAI client."
                 )
             return self.alist_batches(openai_client=openai_client, after=after, limit=limit)
-        if not isinstance(openai_client, OpenAI):
-            raise TypeError("OpenAI client is not an instance of OpenAI. Make sure you passed a sync OpenAI client.")
         response: Final = openai_client.batches.list(after=after, limit=limit)
+        if not isinstance(response, SyncCursorPage):
+            return response
         return response.model_copy(update={"data": _with_openai_batch_fields(response.data)})
 
 
