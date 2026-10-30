@@ -9389,6 +9389,25 @@ def test_anthropic_messages_pt_rejects_a_text_attachment_it_cannot_decode():
 
     assert "utf-8" in str(raised.value)
     assert undeclared_latin1.split(",", 1)[1] not in str(raised.value)
+    assert "file block's format" in str(raised.value)
+
+
+def test_anthropic_messages_pt_reads_a_text_file_block_in_the_charset_its_format_names():
+    undeclared_latin1: Final = "data:text/plain;base64," + base64.b64encode("caf\xe9".encode("iso-8859-1")).decode()
+    messages: Final = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "file", "file": {"file_data": undeclared_latin1, "format": "text/plain;charset=iso-8859-1"}}
+            ],
+        }
+    ]
+
+    result: Final = anthropic_messages_pt(messages=messages, model="claude-sonnet-5", llm_provider="anthropic")
+
+    assert result[0]["content"] == [
+        {"type": "document", "source": {"type": "text", "media_type": "text/plain", "data": "café"}}
+    ]
 
 
 @pytest.mark.parametrize("native_input", [{"city": "lyon"}, "[1, 2]"])

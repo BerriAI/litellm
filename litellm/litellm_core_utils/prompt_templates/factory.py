@@ -1856,7 +1856,8 @@ def _anthropic_text_document_source(
     except (LookupError, UnicodeDecodeError) as decode_error:
         raise litellm.BadRequestError(
             message=f"Text attachment could not be read as {charset!r}: {decode_error}. "
-            "Send it as utf-8, or name its encoding in the data URI (data:text/plain;charset=...).",
+            "Send it as utf-8, or name its encoding (text/plain;charset=...) in the data URI "
+            "or in a file block's format.",
             model=None,
             llm_provider="anthropic",
         ) from decode_error
