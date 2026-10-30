@@ -119,6 +119,10 @@ def _azure_chat(effort: str) -> Expected:
     return lambda marker: {"model": GPT, "messages": chat_messages(marker), "reasoning_effort": effort, "stream": False}
 
 
+def _chat_without_effort(*, model: str = GPT, **fields: JsonValue) -> Expected:
+    return lambda marker: {"model": model, "messages": chat_messages(marker), **fields}
+
+
 def _anthropic_chat(effort: str, thinking: Mapping[str, JsonValue]) -> Expected:
     return lambda marker: {
         "model": CLAUDE,
@@ -282,6 +286,15 @@ def _responses_bridged_messages(effort: str) -> Expected:
         "include": ["reasoning.encrypted_content"],
         "max_output_tokens": 4096,
         "reasoning": {"effort": effort},
+    }
+
+
+def _responses_bridged_chat(effort: str) -> Expected:
+    return lambda marker: {
+        "model": GPT,
+        "input": [{"type": "message", "role": "user", "content": [{"type": "input_text", "text": prompt(marker)}]}],
+        "reasoning": {"effort": effort},
+        "stream": False,
     }
 
 
@@ -729,6 +742,158 @@ CELLS: Final[Mapping[str, Cell]] = MappingProxyType(
             _OPENAI_CHAT,
             status=400,
             error="reasoning_effort=minimal is not supported",
+        ),
+        "chat-openai-output-config-without-drop-params-still-reaches-the-provider": Cell(
+            CHAT,
+            "openai",
+            _UNDECLARED,
+            {"output_config": {"effort": "low"}},
+            _chat_without_effort(output_config={"effort": "low"}),
+            _OPENAI_CHAT,
+        ),
+        "chat-openai-declared-output-config-without-drop-params-still-reaches-the-provider": Cell(
+            CHAT,
+            "openai",
+            _GPT_INFO,
+            {"output_config": {"effort": "minimal"}},
+            _chat_without_effort(output_config={"effort": "low"}),
+            _OPENAI_CHAT,
+        ),
+        "chat-openai-output-config-drop-params-sends-its-effort": Cell(
+            CHAT,
+            "openai",
+            _UNDECLARED,
+            {"output_config": {"effort": "low"}, "drop_params": True},
+            _openai_chat("low"),
+            _OPENAI_CHAT,
+        ),
+        "chat-openai-output-config-deployment-drop-params-sends-its-effort": Cell(
+            CHAT,
+            "openai_drop_params",
+            _UNDECLARED,
+            {"output_config": {"effort": "low"}},
+            _openai_chat("low"),
+            _OPENAI_CHAT,
+        ),
+        "chat-openai-output-config-drop-params-drops-its-format": Cell(
+            CHAT,
+            "openai",
+            _UNDECLARED,
+            {"output_config": {"effort": "low", "format": _JSON_SCHEMA_FORMAT}, "drop_params": True},
+            _openai_chat("low"),
+            _OPENAI_CHAT,
+        ),
+        "chat-openai-format-only-output-config-drop-params-sends-no-effort": Cell(
+            CHAT,
+            "openai",
+            _UNDECLARED,
+            {"output_config": {"format": _JSON_SCHEMA_FORMAT}, "drop_params": True},
+            _chat_without_effort(),
+            _OPENAI_CHAT,
+        ),
+        "chat-openai-declared-output-config-drop-params-rounds-its-effort": Cell(
+            CHAT,
+            "openai",
+            _GPT_INFO,
+            {"output_config": {"effort": "minimal"}, "drop_params": True},
+            _openai_chat("low"),
+            _OPENAI_CHAT,
+        ),
+        "chat-openai-declared-output-config-beside-budget-drop-params-rounds-its-effort": Cell(
+            CHAT,
+            "openai",
+            _GPT_INFO,
+            {"output_config": {"effort": "minimal"}, "thinking": _BUDGET, "drop_params": True},
+            _openai_chat("low"),
+            _OPENAI_CHAT,
+        ),
+        "chat-openai-output-config-beside-budget-drop-params-sends-its-effort": Cell(
+            CHAT,
+            "openai",
+            _UNDECLARED,
+            {"output_config": {"effort": "low"}, "thinking": _BUDGET, "drop_params": True},
+            _openai_chat("low"),
+            _OPENAI_CHAT,
+        ),
+        "chat-openai-default-output-config-drop-params-sends-no-effort": Cell(
+            CHAT,
+            "openai",
+            _UNDECLARED,
+            {"output_config": {"effort": "default"}, "drop_params": True},
+            _chat_without_effort(),
+            _OPENAI_CHAT,
+        ),
+        "chat-openai-unknown-output-config-drop-params-sends-no-effort": Cell(
+            CHAT,
+            "openai",
+            _UNDECLARED,
+            {"output_config": {"effort": "turbo"}, "drop_params": True},
+            _chat_without_effort(),
+            _OPENAI_CHAT,
+        ),
+        "chat-openai-explicit-effort-beside-output-config-drop-params-wins": Cell(
+            CHAT,
+            "openai",
+            _UNDECLARED,
+            {"reasoning_effort": "high", "output_config": {"effort": "low"}, "drop_params": True},
+            _openai_chat("high"),
+            _OPENAI_CHAT,
+        ),
+        "chat-openai-extra-body-output-config-drop-params-sends-its-effort": Cell(
+            CHAT,
+            "openai",
+            _UNDECLARED,
+            {"extra_body": {"output_config": {"effort": "low"}}, "drop_params": True},
+            _openai_chat("low"),
+            _OPENAI_CHAT,
+        ),
+        "chat-openai-allowed-output-config-drop-params-still-reaches-the-provider": Cell(
+            CHAT,
+            "openai",
+            _UNDECLARED,
+            {"output_config": {"effort": "low"}, "drop_params": True, "allowed_openai_params": ["output_config"]},
+            _chat_without_effort(output_config={"effort": "low"}),
+            _OPENAI_CHAT,
+        ),
+        "chat-openai-claude-output-config-drop-params-still-reaches-the-gateway": Cell(
+            CHAT,
+            "openai_claude",
+            _UNDECLARED,
+            {"output_config": {"effort": "low"}, "drop_params": True},
+            _chat_without_effort(model=CLAUDE, output_config={"effort": "low"}),
+            _OPENAI_CHAT,
+        ),
+        "chat-litellm-proxy-output-config-drop-params-still-reaches-the-gateway": Cell(
+            CHAT,
+            "litellm_proxy",
+            _UNDECLARED,
+            {"output_config": {"effort": "low"}, "drop_params": True},
+            _chat_without_effort(output_config={"effort": "low"}),
+            _OPENAI_CHAT,
+        ),
+        "chat-openai-responses-output-config-drop-params-sends-its-effort": Cell(
+            CHAT,
+            "openai_responses",
+            _UNDECLARED,
+            {"output_config": {"effort": "low"}, "drop_params": True},
+            _responses_bridged_chat("low"),
+            _OPENAI_RESPONSES,
+        ),
+        "chat-azure-output-config-without-drop-params-still-reaches-the-provider": Cell(
+            CHAT,
+            "azure",
+            _UNDECLARED,
+            {"output_config": {"effort": "low"}},
+            _chat_without_effort(stream=False, output_config={"effort": "low"}),
+            _AZURE_CHAT,
+        ),
+        "chat-azure-output-config-drop-params-sends-its-effort": Cell(
+            CHAT,
+            "azure",
+            _UNDECLARED,
+            {"output_config": {"effort": "low"}, "drop_params": True},
+            _azure_chat("low"),
+            _AZURE_CHAT,
         ),
         "chat-azure-medium-to-high": Cell(
             CHAT,

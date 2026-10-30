@@ -24,7 +24,7 @@ llms/bedrock/common_utils.py, which ranks max below xhigh while the thinking-bud
 it above.
 """
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Final, TypeAlias, get_args
@@ -111,10 +111,12 @@ def declared_reasoning_efforts_for_model(model: str, custom_llm_provider: str) -
     it does not know: a provider config runs on the request path for every model it serves, most of
     which the map never named, and a lookup miss there must not fail the call.
     """
-    entry: Final = litellm.model_cost.get(f"{custom_llm_provider}/{model}") or litellm.model_cost.get(model)
-    if not isinstance(entry, dict):
-        return None
-    return declared_reasoning_efforts(entry)
+    entry: Final = _catalog_entry(model, custom_llm_provider)
+    return None if entry is None else declared_reasoning_efforts(entry)
+
+
+def _catalog_entry(model: str, custom_llm_provider: str) -> Mapping[str, object] | None:
+    return as_str_mapping(litellm.model_cost.get(f"{custom_llm_provider}/{model}") or litellm.model_cost.get(model))
 
 
 _ROUNDING_KEY: Final = "reasoning_effort_rounding"
@@ -123,6 +125,8 @@ _EFFORT_KEY: Final = "effort"
 _LOGGABLE_REQUESTED_LEVELS: Final = frozenset((*REASONING_EFFORT_ADVERTISEMENT_ORDER, _DEFAULT_EFFORT))
 _UNRECOGNIZED_LEVEL: Final = "unrecognized"
 _PROVIDERS_SENDING_THINKING_AS_EFFORT: Final = frozenset(("hosted_vllm",))
+_PROVIDERS_REJECTING_OUTPUT_CONFIG: Final = frozenset(("openai", "azure"))
+_UNFLAGGED_REASONING_ROW_EFFORTS: Final = ("low", "medium", "high")
 
 
 def deployment_reasoning_effort_levels(deployment_model_info: object) -> tuple[str, ...] | None:
@@ -163,6 +167,10 @@ def thinking_budget_effort(thinking: object, *, model: str, custom_llm_provider:
     if "thinking" in (get_supported_openai_params(model=model, custom_llm_provider=custom_llm_provider) or ()):
         return None
     return reasoning_effort_from_thinking(thinking, drop_params=drop_params)
+
+
+def rejects_output_config(custom_llm_provider: str, model: str) -> bool:
+    return custom_llm_provider in _PROVIDERS_REJECTING_OUTPUT_CONFIG and "claude" not in model.lower()
 
 
 def provider_reads_thinking(thinking: object, *, model: str, custom_llm_provider: str, drop_params: bool) -> bool:
@@ -322,6 +330,7 @@ def resolve_chat_reasoning(
     deployment_model_info: object,
     model_group: str | None,
     drop_params: bool,
+    output_config_rejected: bool,
 ) -> ChatReasoning:
     def resolve(requested: RequestedReasoningEffort) -> DeploymentReasoningEffort:
         return resolve_deployment_reasoning_effort(
@@ -335,9 +344,19 @@ def resolve_chat_reasoning(
 
     explicit: Final = resolve(reasoning_effort)
     output: Final = resolve(output_config).value
-    if thinking is None or deployment_reasoning_effort_levels(deployment_model_info) is None:
-        return ChatReasoning(effort=explicit, thinking=thinking, output_config=output)
     explicit_kept: Final = keeps_effort(reasoning_effort, explicit.value)
+    if thinking is None or deployment_reasoning_effort_levels(deployment_model_info) is None:
+        output_level: Final = _requested_level(output)
+        carries_output_level: Final = (
+            output_config_rejected
+            and not explicit_kept
+            and output_level in _sendable_effort_levels(model, custom_llm_provider, deployment_model_info)
+        )
+        return ChatReasoning(
+            effort=resolve(_with_level(reasoning_effort, output_level)) if carries_output_level else explicit,
+            thinking=thinking,
+            output_config=output,
+        )
     if not explicit_kept and not keeps_effort(output_config, output):
         budget_level: Final = thinking_budget_effort(
             thinking, model=model, custom_llm_provider=custom_llm_provider, drop_params=drop_params
@@ -373,6 +392,78 @@ def resolve_chat_reasoning(
         ),
         output_config=output,
     )
+
+
+@dataclass(frozen=True, slots=True)
+class ChatReasoningParams:
+    reasoning: ChatReasoning
+    provider_params: Mapping[str, object]
+
+
+def resolve_chat_reasoning_params(
+    reasoning_effort: RequestedReasoningEffort,
+    thinking: AnthropicThinkingParam | None,
+    non_default_params: Mapping[str, object],
+    request_kwargs: Mapping[str, object],
+    *,
+    model: str,
+    custom_llm_provider: str,
+    model_group: str | None,
+    drop_params: bool,
+) -> ChatReasoningParams:
+    allowed_openai_params: Final = request_kwargs.get("allowed_openai_params")
+    additional_drop_params: Final = request_kwargs.get("additional_drop_params")
+    output_config_rejected: Final = (
+        drop_params
+        and rejects_output_config(custom_llm_provider, model)
+        and not (isinstance(allowed_openai_params, Collection) and "output_config" in allowed_openai_params)
+    )
+    extra_body: Final = as_str_mapping(non_default_params.get("extra_body")) or {}
+    requested_output_config: Final = as_str_mapping(
+        non_default_params.get("output_config") or (extra_body.get("output_config") if output_config_rejected else None)
+    )
+    reasoning: Final = resolve_chat_reasoning(
+        reasoning_effort,
+        thinking,
+        requested_output_config,
+        model=model,
+        custom_llm_provider=custom_llm_provider,
+        deployment_model_info=request_kwargs.get("model_info"),
+        model_group=model_group,
+        drop_params=drop_params,
+        output_config_rejected=output_config_rejected,
+    )
+    resolved_output_config: Final = reasoning.output_config
+    if resolved_output_config is requested_output_config and not output_config_rejected:
+        return ChatReasoningParams(reasoning=reasoning, provider_params=non_default_params)
+    return ChatReasoningParams(
+        reasoning=reasoning,
+        provider_params={
+            **{key: value for key, value in non_default_params.items() if key != "output_config"},
+            **({"output_config": resolved_output_config} if resolved_output_config is not None else {}),
+            **(
+                {
+                    "additional_drop_params": [
+                        *(additional_drop_params if isinstance(additional_drop_params, (list, tuple)) else ()),
+                        "output_config",
+                    ]
+                }
+                if output_config_rejected
+                else {}
+            ),
+        },
+    )
+
+
+def _sendable_effort_levels(model: str, custom_llm_provider: str, deployment_model_info: object) -> tuple[str, ...]:
+    declared: Final = deployment_reasoning_effort_levels(deployment_model_info)
+    if declared is not None:
+        return declared
+    entry: Final = _catalog_entry(model.removeprefix("responses/"), custom_llm_provider)
+    if entry is None:
+        return ()
+    supported: Final = resolve_supported_reasoning_efforts(entry, deployment_is_mapped=True)
+    return _UNFLAGGED_REASONING_ROW_EFFORTS if supported is None else supported
 
 
 def _provider_model(model: str, custom_llm_provider: str | None) -> str:

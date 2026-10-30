@@ -2410,6 +2410,140 @@ def test_openai_responses_bridge_applies_additional_drop_params_to_a_reasoning_e
     assert request_body.get("reasoning") == expected_reasoning
 
 
+@pytest.fixture
+def openai_chat_route(
+    restore_model_registry, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> respx.Route:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.register_model(
+        {
+            "gpt-6.1-terra": {
+                "litellm_provider": "openai",
+                "mode": "chat",
+                "supports_reasoning": True,
+                "input_cost_per_token": 0.0,
+                "output_cost_per_token": 0.0,
+            }
+        },
+        persist_across_reloads=False,
+    )
+    return respx_mock.post("https://api.openai.com/v1/chat/completions").respond(
+        json={
+            "id": "chatcmpl-test",
+            "object": "chat.completion",
+            "created": 1,
+            "model": "gpt-6.1-terra",
+            "choices": [{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": "ok"}}],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+        }
+    )
+
+
+@pytest.mark.parametrize(
+    "fields, expected_effort",
+    [
+        ({"output_config": {"effort": "low"}}, "low"),
+        ({"output_config": {"effort": "low", "format": {"type": "text"}}}, "low"),
+        ({"extra_body": {"output_config": {"effort": "low"}}}, "low"),
+        ({"output_config": {"effort": "default"}}, None),
+        ({"output_config": {"effort": "low"}, "reasoning_effort": "high"}, "high"),
+    ],
+)
+def test_openai_chat_under_drop_params_sends_no_output_config_and_keeps_its_effort(
+    fields: dict[str, object], expected_effort: str | None, openai_chat_route: respx.Route
+):
+    litellm.completion(
+        model="openai/gpt-6.1-terra",
+        messages=[{"role": "user", "content": "hello"}],
+        drop_params=True,
+        api_key="fake-key",
+        **fields,
+    )
+
+    request_body: Final = json.loads(openai_chat_route.calls[0].request.content)
+    assert "output_config" not in request_body
+    assert request_body.get("reasoning_effort") == expected_effort
+
+
+def test_openai_chat_under_drop_params_still_drops_the_callers_additional_params(openai_chat_route: respx.Route):
+    litellm.completion(
+        model="openai/gpt-6.1-terra",
+        messages=[{"role": "user", "content": "hello"}],
+        output_config={"effort": "low"},
+        seed=7,
+        additional_drop_params=["seed"],
+        drop_params=True,
+        api_key="fake-key",
+    )
+
+    request_body: Final = json.loads(openai_chat_route.calls[0].request.content)
+    assert "seed" not in request_body
+    assert "output_config" not in request_body
+
+
+@pytest.mark.parametrize(
+    "fields",
+    [
+        {},
+        {"drop_params": True, "allowed_openai_params": ["output_config"]},
+    ],
+)
+def test_openai_chat_forwards_output_config_unless_drop_params_may_remove_it(
+    fields: dict[str, object], openai_chat_route: respx.Route
+):
+    litellm.completion(
+        model="openai/gpt-6.1-terra",
+        messages=[{"role": "user", "content": "hello"}],
+        output_config={"effort": "low"},
+        api_key="fake-key",
+        **fields,
+    )
+
+    request_body: Final = json.loads(openai_chat_route.calls[0].request.content)
+    assert request_body["output_config"] == {"effort": "low"}
+    assert "reasoning_effort" not in request_body
+
+
+def test_openai_claude_deployment_keeps_output_config_under_drop_params(respx_mock: respx.MockRouter):
+    route: Final = respx_mock.post("https://gateway.example/v1/chat/completions").respond(
+        json={
+            "id": "chatcmpl-test",
+            "object": "chat.completion",
+            "created": 1,
+            "model": "claude-behind-gateway",
+            "choices": [{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": "ok"}}],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+        }
+    )
+    litellm.completion(
+        model="openai/claude-behind-gateway",
+        messages=[{"role": "user", "content": "hello"}],
+        output_config={"effort": "low"},
+        drop_params=True,
+        api_base="https://gateway.example/v1",
+        api_key="fake-key",
+    )
+
+    assert json.loads(route.calls[0].request.content)["output_config"] == {"effort": "low"}
+
+
+def test_openai_responses_bridge_under_drop_params_sends_no_output_config_and_keeps_its_effort(
+    openai_responses_route: respx.Route,
+):
+    litellm.completion(
+        model="openai/responses/gpt-6.1-terra",
+        messages=[{"role": "user", "content": "hello"}],
+        output_config={"effort": "low"},
+        drop_params=True,
+        api_key="fake-key",
+    )
+
+    request_body: Final = json.loads(openai_responses_route.calls[0].request.content)
+    assert "output_config" not in request_body
+    assert (request_body.get("extra_body") or {}).get("output_config") is None
+    assert request_body["reasoning"]["effort"] == "low"
+
+
 def test_openai_responses_bridge_gives_a_reasoning_effort_dict_the_auto_summary_a_string_gets(
     openai_responses_route: respx.Route, monkeypatch: pytest.MonkeyPatch
 ):

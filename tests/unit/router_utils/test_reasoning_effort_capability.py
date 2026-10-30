@@ -9,9 +9,12 @@ import litellm
 from litellm._logging import JsonFormatter, verbose_logger
 from litellm.router_utils.reasoning_effort_capability import (
     RequestedReasoningEffort,
+    declared_reasoning_efforts_for_model,
     deployment_is_catalog_mapped,
     intersect_supported_reasoning_efforts,
     nearest_declared_reasoning_effort,
+    rejects_output_config,
+    resolve_chat_reasoning,
     resolve_deployment_reasoning_effort,
     resolve_supported_reasoning_efforts,
     thinking_budget_effort,
@@ -737,3 +740,115 @@ class TestThinkingBudgetEffort:
         assert thinking_budget_effort(thinking, model=model, custom_llm_provider=custom_llm_provider, drop_params=False) == (
             expected
         )
+
+
+class TestDeclaredReasoningEffortsForModel:
+    def test_a_provider_prefixed_row_answers_with_its_declaration(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setitem(litellm.model_cost, "openai/declaring-row", {"reasoning_effort_levels": ["high", "low"]})
+
+        assert declared_reasoning_efforts_for_model("declaring-row", "openai") == ("low", "high")
+
+    def test_a_model_the_map_never_named_has_no_opinion(self) -> None:
+        assert declared_reasoning_efforts_for_model("never-named-row", "openai") is None
+
+
+class TestRejectsOutputConfig:
+    @pytest.mark.parametrize(
+        "custom_llm_provider, model, expected",
+        [
+            ("openai", "gpt-chat-row", True),
+            ("azure", "my-azure-deployment", True),
+            ("openai", "claude-behind-gateway", False),
+            ("azure", "Team-Claude-Deployment", False),
+            ("litellm_proxy", "gpt-chat-row", False),
+            ("hosted_vllm", "gpt-chat-row", False),
+            ("anthropic", "gpt-chat-row", False),
+        ],
+    )
+    def test_only_openai_and_azure_reject_it_outside_a_claude_deployment(
+        self, custom_llm_provider: str, model: str, expected: bool
+    ) -> None:
+        assert rejects_output_config(custom_llm_provider, model) is expected
+
+
+_CARRY_MODEL: Final = "gpt-carry-row"
+_CARRY_ROW: Final = {"litellm_provider": "openai", "mode": "chat", "supports_reasoning": True}
+
+
+def _carried(
+    reasoning_effort: RequestedReasoningEffort,
+    output_config: Mapping[str, object] | None,
+    deployment_model_info: Mapping[str, object] | None = None,
+    *,
+    model: str = _CARRY_MODEL,
+    provider: str = "openai",
+    output_config_rejected: bool = True,
+) -> RequestedReasoningEffort:
+    return resolve_chat_reasoning(
+        reasoning_effort,
+        None,
+        output_config,
+        model=model,
+        custom_llm_provider=provider,
+        deployment_model_info=deployment_model_info,
+        model_group=None,
+        drop_params=True,
+        output_config_rejected=output_config_rejected,
+    ).effort.value
+
+
+class TestOutputConfigEffortCarry:
+    @pytest.fixture(autouse=True)
+    def _catalog_row(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setitem(litellm.model_cost, _CARRY_MODEL, _CARRY_ROW)
+
+    def test_a_level_the_catalog_lists_is_carried(self) -> None:
+        assert _carried(None, {"effort": "low"}) == "low"
+
+    def test_a_level_the_catalog_leaves_out_is_not_carried(self) -> None:
+        assert _carried(None, {"effort": "max"}) is None
+
+    def test_a_level_the_catalog_flags_is_carried(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setitem(litellm.model_cost, _CARRY_MODEL, {**_CARRY_ROW, "supports_max_reasoning_effort": True})
+
+        assert _carried(None, {"effort": "max"}) == "max"
+
+    def test_a_provider_prefixed_catalog_row_is_read(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setitem(
+            litellm.model_cost,
+            "azure/gpt-azure-carry-row",
+            {"litellm_provider": "azure", "mode": "chat", "supports_reasoning": True},
+        )
+
+        assert _carried(None, {"effort": "low"}, model="gpt-azure-carry-row", provider="azure") == "low"
+
+    def test_a_responses_route_model_is_read_through_its_catalog_row(self) -> None:
+        assert _carried(None, {"effort": "low"}, model=f"responses/{_CARRY_MODEL}") == "low"
+
+    def test_a_model_the_catalog_never_named_gets_no_effort(self) -> None:
+        assert _carried(None, {"effort": "low"}, model="off-map-deployment") is None
+
+    @pytest.mark.parametrize("level", ["default", "turbo"])
+    def test_a_level_no_provider_would_take_is_not_carried(self, level: str) -> None:
+        assert _carried(None, {"effort": level}) is None
+
+    def test_a_declared_deployment_rounds_the_carried_level(self) -> None:
+        assert _carried(None, {"effort": "medium"}, {"reasoning_effort_levels": ["low", "high"]}) == "high"
+
+    def test_a_declared_deployment_outranks_the_catalog(self) -> None:
+        assert _carried(None, {"effort": "max"}, {"reasoning_effort_levels": ["max"]}) == "max"
+
+    def test_a_kept_explicit_effort_wins(self) -> None:
+        assert _carried("high", {"effort": "low"}) == "high"
+
+    def test_an_explicit_effort_the_deployment_dropped_gives_way(self) -> None:
+        assert _carried("turbo", {"effort": "low"}, {"reasoning_effort_levels": ["low"]}) == "low"
+
+    def test_a_reasoning_dict_keeps_its_other_fields_beside_the_carried_level(self) -> None:
+        assert _carried({"summary": "auto"}, {"effort": "low"}) == {"summary": "auto", "effort": "low"}
+
+    def test_a_reasoning_dict_is_untouched_when_output_config_has_no_level(self) -> None:
+        assert _carried({"summary": "auto"}, {"format": {"type": "text"}}) == {"summary": "auto"}
+
+    def test_nothing_is_carried_where_output_config_may_stay(self) -> None:
+        assert _carried(None, {"effort": "low"}, output_config_rejected=False) is None
