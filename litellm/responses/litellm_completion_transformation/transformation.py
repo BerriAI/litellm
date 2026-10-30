@@ -45,6 +45,7 @@ from litellm.constants import (
     REDACTED_BY_LITELLM,
     REDACTED_TOOL_CALL_ARGUMENTS_PLACEHOLDER,
 )
+from litellm.exceptions import BadRequestError
 from litellm.integrations.anthropic_cache_control_hook import MAX_CACHE_CONTROL_BLOCKS, AnthropicCacheControlHook
 from litellm.litellm_core_utils.core_helpers import drops_unsupported_params, normalize_drop_params
 from litellm.litellm_core_utils.get_supported_openai_params import (
@@ -56,6 +57,7 @@ from litellm.litellm_core_utils.hidden_params import (
     set_hidden_params,
 )
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import message_field
 from litellm.llms.anthropic.common_utils import supports_anthropic_cache_control
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.bedrock.common_utils import bedrock_declared_cache_point_support
@@ -427,6 +429,26 @@ def tool_output_to_chat_content(
 TOOL_CALL_OUTPUT_ITEM_TYPES: Final = frozenset(
     {"function_call_output", "custom_tool_call_output", "computer_call_output", "tool_result"}
 )
+
+
+def _non_string_tool_output_call_id_error(input_items: Sequence[object]) -> BadRequestError | None:
+    tool_outputs: Final = (
+        (index, message_field(item, "call_id"))
+        for index, item in enumerate(input_items)
+        if message_field(item, "type") in TOOL_CALL_OUTPUT_ITEM_TYPES
+    )
+    malformed: Final = next(
+        ((index, call_id) for index, call_id in tool_outputs if call_id is not None and not isinstance(call_id, str)),
+        None,
+    )
+    if malformed is None:
+        return None
+    index, call_id = malformed
+    return BadRequestError(
+        message=f"Invalid type for 'input[{index}].call_id': expected a string, got {type(call_id).__name__}",
+        model="",
+        llm_provider="",
+    )
 
 
 def _input_item_role(input_item: Mapping[str, object]) -> str:
@@ -1481,6 +1503,9 @@ class LiteLLMCompletionResponsesConfig:
         if isinstance(input, str):
             messages.append(ChatCompletionUserMessage(role="user", content=input))
         elif isinstance(input, list):
+            call_id_error: Final = _non_string_tool_output_call_id_error(input)
+            if call_id_error is not None:
+                raise call_id_error
             existing_tool_call_ids: Final[set[str]] = set()
             for _input in input:
                 chat_completion_messages = (

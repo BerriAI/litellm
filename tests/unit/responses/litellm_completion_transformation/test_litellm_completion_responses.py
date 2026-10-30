@@ -7052,3 +7052,27 @@ async def test_bridge_partial_response_on_disconnect_bills_only_the_input_since_
     assert await _input_tokens_billed_on_disconnect(
         cast(ResponseInputParam, [*history_it_replaces, *since_compaction])
     ) == await _input_tokens_billed_on_disconnect(since_compaction)
+
+
+@pytest.mark.parametrize("output_type", ["function_call_output", "custom_tool_call_output"])
+@pytest.mark.parametrize(("call_id", "type_name"), [({"id": "call_weather"}, "dict"), (["call_weather"], "list")])
+def test_a_tool_output_with_a_non_string_call_id_is_a_400_naming_its_input_item(
+    output_type: str, call_id: object, type_name: str
+) -> None:
+    history: Final = cast(
+        ResponseInputParam,
+        [
+            {"role": "user", "content": "Weather in Paris?"},
+            {"type": "function_call", "call_id": "call_weather", "name": "get_weather", "arguments": "{}"},
+            {"type": output_type, "call_id": call_id, "output": "sunny"},
+        ],
+    )
+
+    with pytest.raises(litellm.BadRequestError) as raised:
+        LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+            input=history, responses_api_request={}
+        )
+
+    assert raised.value.message == (
+        f"litellm.BadRequestError: Invalid type for 'input[2].call_id': expected a string, got {type_name}"
+    )

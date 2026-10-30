@@ -9917,6 +9917,42 @@ def _orphan_answer_with(tool_call_id: object) -> list[dict[str, object]]:
             "dict",
             id="object_assistant_tool_call_id",
         ),
+        pytest.param(
+            [*_orphan_answer_with({"id": "toolu_01"})[:3], {"role": ["user"], "content": "Go on"}],
+            "messages[3].role",
+            "list",
+            id="list_role_after_an_orphan_object_tool_call_id",
+        ),
+        pytest.param(
+            [
+                *_orphan_answer_with({"id": "toolu_01"})[:3],
+                {**_WEATHER_CALL, "tool_calls": [{**_WEATHER_CALL["tool_calls"][0], "id": {"value": "toolu_01"}}]},
+                {"role": "tool", "tool_call_id": "toolu_01", "content": "sunny"},
+            ],
+            "messages[3].tool_calls[0].id",
+            "dict",
+            id="object_assistant_tool_call_id_after_an_orphan_object_tool_call_id",
+        ),
+        pytest.param(
+            [
+                {**_ASK, "tool_call_id": {"id": "stray"}},
+                _WEATHER_CALL,
+                {"role": "tool", "tool_call_id": {"id": "toolu_01"}, "content": "sunny"},
+            ],
+            "messages[2].tool_call_id",
+            "dict",
+            id="object_tool_call_id_after_a_stray_id_on_a_user_message",
+        ),
+        pytest.param(
+            [
+                {**_ASK, "tool_calls": [{**_WEATHER_CALL["tool_calls"][0], "id": {"value": "stray"}}]},
+                {**_WEATHER_CALL, "tool_calls": [{**_WEATHER_CALL["tool_calls"][0], "id": {"value": "toolu_01"}}]},
+                {"role": "tool", "tool_call_id": "toolu_01", "content": "sunny"},
+            ],
+            "messages[1].tool_calls[0].id",
+            "dict",
+            id="object_assistant_tool_call_id_after_stray_tool_calls_on_a_user_message",
+        ),
     ],
 )
 @pytest.mark.parametrize("modify_params", [False, True])
@@ -9976,6 +10012,22 @@ def test_chat_transform_request_keeps_converting_a_non_string_id_it_never_reads(
         converted["messages"]
         == _chat_request(AnthropicConfig(), UNFLAGGED_CLAUDE, copy.deepcopy(well_formed))["messages"]
     )
+
+
+def test_chat_transform_request_keeps_a_conversion_error_that_a_dropped_orphan_answer_did_not_cause(
+    local_model_cost_map, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(litellm, "modify_params", True)
+
+    with pytest.raises(AnthropicError) as raised:
+        _chat_request(
+            AnthropicConfig(),
+            UNFLAGGED_CLAUDE,
+            [*_orphan_answer_with({"id": "toolu_01"})[:3], {"role": "bogus", "content": "Go on"}],
+        )
+
+    assert raised.value.status_code == 400
+    assert "Invalid Message passed in {'role': 'bogus'" in raised.value.message
 
 
 def test_chat_transform_request_names_no_field_for_a_failure_outside_roles_and_tool_call_ids(local_model_cost_map):

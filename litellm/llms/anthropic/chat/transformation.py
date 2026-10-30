@@ -189,20 +189,40 @@ def _non_string_tool_call_ids(index: int, tool_calls: object) -> Iterator[tuple[
     )
 
 
-def _non_string_message_fields(index: int, message: object) -> Iterator[tuple[str, object]]:
-    role: Final = message_field(message, "role")
-    if _is_present_non_string(role):
-        yield f"messages[{index}].role", role
-    tool_call_id: Final = message_field(message, "tool_call_id")
-    if role in ("tool", "function") and _is_present_non_string(tool_call_id):
-        yield f"messages[{index}].tool_call_id", tool_call_id
-    if role == "assistant":
-        yield from _non_string_tool_call_ids(index, message_field(message, "tool_calls"))
+def _non_string_roles(messages: Sequence[object]) -> Iterator[tuple[str, object]]:
+    roles: Final = ((index, message_field(message, "role")) for index, message in enumerate(messages))
+    return ((f"messages[{index}].role", role) for index, role in roles if _is_present_non_string(role))
+
+
+def _non_string_assistant_tool_call_ids(messages: Sequence[object]) -> Iterator[tuple[str, object]]:
+    assistant_turns: Final = (
+        (index, message) for index, message in enumerate(messages) if message_field(message, "role") == "assistant"
+    )
+    return chain.from_iterable(
+        _non_string_tool_call_ids(index, message_field(message, "tool_calls")) for index, message in assistant_turns
+    )
+
+
+def _non_string_tool_answer_ids(messages: Sequence[object]) -> Iterator[tuple[str, object]]:
+    answers: Final = (
+        (index, message_field(message, "tool_call_id"))
+        for index, message in enumerate(messages)
+        if message_field(message, "role") in ("tool", "function")
+    )
+    return (
+        (f"messages[{index}].tool_call_id", tool_call_id)
+        for index, tool_call_id in answers
+        if _is_present_non_string(tool_call_id)
+    )
 
 
 def non_string_message_field_error(messages: Sequence[object]) -> AnthropicError | None:
     malformed_field: Final = next(
-        chain.from_iterable(_non_string_message_fields(index, message) for index, message in enumerate(messages)),
+        chain(
+            _non_string_roles(messages),
+            _non_string_assistant_tool_call_ids(messages),
+            _non_string_tool_answer_ids(messages),
+        ),
         None,
     )
     if malformed_field is None:
@@ -2404,7 +2424,10 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 drop_params=drop_params,
             )
         except Exception as e:
-            raise non_string_message_field_error(messages) or AnthropicError(
+            conversion_field_error: Final = (
+                non_string_message_field_error(messages) if isinstance(e, TypeError) else None
+            )
+            raise conversion_field_error or AnthropicError(
                 status_code=400,
                 message=f"{e}\nReceived Messages={messages}",
             )  # don't use verbose_logger.exception, if exception is raised
