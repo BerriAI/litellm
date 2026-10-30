@@ -91,6 +91,7 @@ from litellm.proxy.common_request_processing import (
     open_sse_before_first_byte,
     resolve_litellm_call_id,
 )
+from litellm.proxy.common_utils.custom_openapi_spec import inline_request_body
 from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # legacy module exports
     _read_request_body,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     _safe_get_request_headers,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
@@ -119,6 +120,7 @@ from litellm.proxy.pass_through_endpoints.injected_stream_usage import (
 )
 from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     HttpPassThroughEndpointHelpers,
+    YieldsToConfiguredPassThroughRoute,
     create_pass_through_route,
     create_websocket_passthrough_route,
     websocket_passthrough_request,
@@ -132,6 +134,7 @@ from litellm.proxy.vector_store_endpoints.utils import (
     is_allowed_to_call_vector_store_endpoint,
 )
 from litellm.secret_managers.main import get_secret_str, normalize_nonempty_secret_str, str_to_bool
+from litellm.types.passthrough_endpoints.eu_jev import EuJevDecisionRequest, EuJevDecisionResponse
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY,
     LITELLM_PASS_THROUGH_DEPLOYMENT_MODEL_INFO_STATE_KEY,
@@ -712,6 +715,85 @@ def typesafe_allowlist_model_names() -> tuple[str, ...]:
         name for name in priced_names if match_routing_generalization(name) == "typesafe"
     )
     return ("typesafe/*", *jev_models_typesafe_serves)
+
+
+_EU_JEV_DECISION_REQUEST_BODY: Final = inline_request_body(
+    EuJevDecisionRequest,
+    {
+        "model": "eu-jeff-latest",
+        "state": "I was charged twice. Can I get a refund?",
+        "questions": {
+            "team": {
+                "type": "choice",
+                "instructions": "Which team should handle this?",
+                "criteria": {"billing": "Payments, invoices, and refunds", "support": "Technical issues and bugs"},
+            },
+            "is_refund_request": {"type": "noul", "instructions": "Is the customer asking for a refund?"},
+            "frustration": {
+                "type": "score",
+                "instructions": "How frustrated is the customer?",
+                "criteria": ["calm", "mildly annoyed", "angry"],
+            },
+        },
+    },
+)
+
+
+eu_jev_router: Final = APIRouter(route_class=YieldsToConfiguredPassThroughRoute)
+
+
+@eu_jev_router.post(
+    "/eu_jev/v1/systemone",
+    tags=["eu/jev Pass-through", "pass-through"],
+    responses={200: {"model": EuJevDecisionResponse}},
+    openapi_extra={"requestBody": _EU_JEV_DECISION_REQUEST_BODY},
+)
+async def eu_jev_proxy_route(
+    request: Request,
+    fastapi_response: Response,
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+) -> Response:
+    """
+    Forward a request to eu/jev, an EU-hosted decision API, with `EU_JEV_API_KEY`.
+
+    `POST /eu_jev/v1/systemone` sends a `state` and one to eight named `questions` (`choice`, `noul` or `score`)
+    and returns one answer per question name, with spend booked from the reported `usage`. `custom_body` and
+    `stream` are rejected with a 400. A pass-through endpoint configured at this path keeps serving it.
+
+    [Docs](https://docs.litellm.ai/docs/pass_through/eu_jev)
+    """
+    body: Final = TypeAdapter(dict[str, object]).validate_python(await read_request_body(request))
+    if "custom_body" in body:
+        raise HTTPException(status_code=400, detail="custom_body is not supported for eu_jev requests")
+    if body.get("stream"):
+        raise HTTPException(status_code=400, detail="Streaming is not supported for eu_jev requests")
+    eu_jev_credentials: Final = passthrough_endpoint_router.get_proxy_wide_credentials(custom_llm_provider="eu_jev")
+    if eu_jev_credentials is None:
+        raise HTTPException(status_code=503, detail="eu_jev is not configured, set EU_JEV_API_KEY on the proxy")
+    base_url: Final = httpx.URL(
+        (eu_jev_credentials.api_base or get_secret_str("EU_JEV_API_BASE") or "https://eu-jev.com")
+        .rstrip("/")
+        .removesuffix("/v1")
+    )
+    updated_url: Final = base_url.copy_with(
+        path=HttpPassThroughEndpointHelpers.join_base_and_endpoint_path(base_url, "/v1/systemone"),
+    )
+    endpoint_func: Final = create_pass_through_route(
+        endpoint="v1/systemone",
+        target=str(updated_url),
+        custom_headers={
+            "Authorization": f"Bearer {eu_jev_credentials.api_key}",
+            "Content-Type": "application/json",
+        },
+        custom_llm_provider="eu_jev",
+        is_streaming_request=False,
+    )
+    return TypeAdapter(Response, config=ConfigDict(arbitrary_types_allowed=True)).validate_python(
+        await endpoint_func(request, fastapi_response, user_api_key_dict)
+    )
+
+
+router.include_router(eu_jev_router)
 
 
 @router.post(

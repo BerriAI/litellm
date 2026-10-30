@@ -43,6 +43,7 @@ from ...common_utils import (
     OBJECT_LIST_ADAPTER,
     AnthropicError,
     AnthropicModelInfo,
+    context_management_betas,
     is_claude_model_target,
     merge_anthropic_beta_headers,
     optionally_handle_anthropic_oauth,
@@ -745,6 +746,8 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             )
             if transformed_context_management is not None:
                 anthropic_messages_optional_request_params["context_management"] = transformed_context_management
+            elif drops_unsupported_params(litellm_params.drop_params):
+                anthropic_messages_optional_request_params.pop("context_management")
 
         ####### get required params for all anthropic messages requests ######
         # Lazy %s: the f-string previously stringified the entire messages
@@ -873,28 +876,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         if requires_native_compaction_beta(custom_llm_provider, optional_params, messages):
             beta_values.add(ANTHROPIC_BETA_HEADER_VALUES.COMPACT_2026_09_04.value)
 
-        # Check for context management
-        context_management_param: Final = optional_params.get("context_management")
-        if context_management_param is not None:
-            # Check edits array for compact_20260112 type
-            edits: Final = context_management_param.get("edits", ())
-            has_compact = False
-            has_other = False
-
-            for edit in edits:
-                edit_type = edit.get("type", "")
-                if edit_type == "compact_20260112":
-                    has_compact = True
-                else:
-                    has_other = True
-
-            # Add compact header if any compact edits exist
-            if has_compact:
-                beta_values.add(ANTHROPIC_BETA_HEADER_VALUES.COMPACT_2026_01_12.value)
-
-            # Add context management header if any other edits exist
-            if has_other:
-                beta_values.add(ANTHROPIC_BETA_HEADER_VALUES.CONTEXT_MANAGEMENT_2025_06_27.value)
+        beta_values.update(context_management_betas(optional_params.get("context_management")))
 
         # Check for structured outputs. Anthropic's newer request shape nests
         # the schema under output_config.format; the older top-level
