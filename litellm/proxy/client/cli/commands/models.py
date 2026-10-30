@@ -63,6 +63,10 @@ def _get_model_info_obj_from_yaml(model: Mapping[str, Any]) -> ModelYamlInfo:
     )
 
 
+def _str_field(model: Mapping[str, object], key: str, default: str) -> str:
+    return str(model.get(key, default))
+
+
 def format_iso_datetime_str(iso_datetime_str: str | None) -> str:
     """Format an ISO format datetime string to human-readable date with minute resolution."""
     if not iso_datetime_str:
@@ -144,10 +148,10 @@ def list_models(ctx: click.Context, output_format: Literal["table", "json"]) -> 
                 created = int(created)
 
             table.add_row(
-                str(model.get("id", "")),
-                str(model.get("object", "model")),
+                _str_field(model, "id", ""),
+                _str_field(model, "object", "model"),
                 (format_timestamp(created) if isinstance(created, int) else format_iso_datetime_str(created)),
-                str(model.get("owned_by", "")),
+                _str_field(model, "owned_by", ""),
             )
 
         rich.print(table)
