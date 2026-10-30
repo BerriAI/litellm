@@ -50,6 +50,7 @@ class NativeMCPRequestContext:
 
 
 _REQUEST_CONTEXT: Final = TypeAdapter(NativeMCPRequestContext)
+_CONTEXT_FIELDS: Final = TypeAdapter(dict[str, object])
 _CONTEXT_KEY: Final = "native_mcp_request_context"
 
 
@@ -84,7 +85,11 @@ def native_mcp_deployment_validator(
 
             prepared: Final = prepare_response_for_header_attachment(response)
             if prepared is not None:
-                set_hidden_param(prepared, _CONTEXT_KEY, _REQUEST_CONTEXT.dump_python(context, mode="json"))
+                set_hidden_param(
+                    prepared,
+                    _CONTEXT_KEY,
+                    _CONTEXT_FIELDS.validate_python(_REQUEST_CONTEXT.dump_python(context, mode="json")),
+                )
             return prepared
 
         return bind

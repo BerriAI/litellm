@@ -4,6 +4,16 @@ from typing import Final
 from litellm.exceptions import GuardrailRaisedException
 
 
+def is_proxy_tool_access_denied(e: Exception) -> bool:
+    if getattr(e, "type", None) != "tool_access_denied":
+        return False
+    try:
+        from litellm.proxy._types import ProxyErrorTypes, ProxyException
+    except ImportError:
+        return False
+    return isinstance(e, ProxyException) and e.type == ProxyErrorTypes.tool_access_denied
+
+
 def is_fastapi_http_exception(e: Exception, block_status_codes: Collection[int]) -> bool:
     try:
         from fastapi.exceptions import HTTPException

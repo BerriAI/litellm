@@ -114,9 +114,9 @@ def is_guardrail_intervention(e: Exception) -> bool:
         ),
     ):
         return True
-    from litellm.proxy.guardrails.exception_utils import is_fastapi_http_exception
+    from litellm.proxy.guardrails.exception_utils import is_fastapi_http_exception, is_proxy_tool_access_denied
 
-    return is_fastapi_http_exception(e, _GUARDRAIL_BLOCK_STATUS_CODES)
+    return is_proxy_tool_access_denied(e) or is_fastapi_http_exception(e, _GUARDRAIL_BLOCK_STATUS_CODES)
 
 
 def _user_api_key_auth_from_request(request_data: Mapping[str, object]) -> "UserAPIKeyAuth":

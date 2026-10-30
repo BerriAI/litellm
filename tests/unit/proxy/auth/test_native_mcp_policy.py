@@ -229,3 +229,12 @@ def test_deployment_validation_rejects_final_configured_tools() -> None:
     with pytest.raises(ProxyException, match="no grant"):
         validate(request())
     assert native_mcp_deployment_validator(UserAPIKeyAuth()) is None
+
+
+def test_native_tool_denial_uses_existing_guardrail_stop_routing_classification() -> None:
+    from litellm.integrations.custom_guardrail import is_guardrail_intervention
+
+    with pytest.raises(ProxyException) as error:
+        check_native_mcp_request(identity(), request(["delete_repo"]))
+    assert is_guardrail_intervention(error.value)
+    assert not is_guardrail_intervention(ProxyException("provider unavailable", "server_error", None, 503))

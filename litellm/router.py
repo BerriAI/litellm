@@ -9132,6 +9132,8 @@ class Router(DeprecatedRouterMembers):
 
                 return response
         except Exception as new_exception:
+            if is_guardrail_intervention(new_exception):
+                raise
             parent_otel_span: Final = get_parent_otel_span_from_kwargs(kwargs)
             fallback_failure_exception_str = truncate_fallback_error_detail(redact_string(str(new_exception)))
             cooldown_info: Final = await async_get_cooldown_deployments_with_debug_info(

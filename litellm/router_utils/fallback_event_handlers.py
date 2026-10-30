@@ -12,6 +12,7 @@ from pydantic import TypeAdapter
 
 import litellm
 from litellm._logging import verbose_router_logger
+from litellm.integrations.custom_guardrail import is_guardrail_intervention
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.batch_utils import get_router_metadata_variable_name
 from litellm.litellm_core_utils.core_helpers import get_metadata_variable_name_from_kwargs, safe_deep_copy
@@ -909,6 +910,8 @@ async def run_async_fallback(
             )
             return response
         except Exception as e:
+            if is_guardrail_intervention(e):
+                raise
             error_from_fallbacks = e
             fallback_errors = fallback_errors + (get_fallback_error_info(e),)
             await log_failure_fallback_event(
