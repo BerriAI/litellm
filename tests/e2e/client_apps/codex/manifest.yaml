@@ -27,3 +27,21 @@ features:
     name: Structured output
   - id: web_search
     name: Web search
+
+known_gaps:
+  - feature: web_search
+    provider: openai
+    reason: The proxy has no POST /v1/alpha/search route, so Codex's web search calls get a 404 and never complete
+  - feature: web_search
+    provider: azure
+    reason: >-
+      The proxy has no POST /v1/alpha/search route, and the Responses WebSocket relay forwards Codex's OpenAI-only
+      internal_chat_message_metadata_passthrough input field, which Azure rejects with a 400
+  - feature: web_search
+    provider: bedrock_mantle
+    reason: >-
+      The Responses WebSocket replay drops Codex's custom_tool_call output item, so Bedrock rejects the next turn with
+      a 400, and the proxy's error frame has no status, so Codex waits until the timeout
+  - feature: web_search
+    provider: vertex_ai
+    reason: The proxy drops Gemini's search tool whenever the request also has function tools, which Codex always sends

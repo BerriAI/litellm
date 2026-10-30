@@ -5,12 +5,13 @@ from argparse import ArgumentParser
 from collections.abc import Iterator, Mapping
 from datetime import datetime, timezone
 from importlib.metadata import version
+from itertools import chain
 from pathlib import Path
 from types import MappingProxyType
-from typing import Annotated, Final, Literal
+from typing import Annotated, Final, Literal, Self
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
 
 from client_apps.compat_results import (
     Failed,
@@ -35,12 +36,43 @@ class ManifestFeature(_Frozen):
     name: str
 
 
+class KnownGap(_Frozen):
+    feature: str
+    provider: str
+    reason: str = Field(min_length=1)
+
+
 class Manifest(_Frozen):
     schema_version: str
     client: str
     package: str
     providers: tuple[str, ...]
     features: tuple[ManifestFeature, ...]
+    known_gaps: tuple[KnownGap, ...] = ()
+
+    @model_validator(mode="after")
+    def _known_gaps_name_manifest_cells(self) -> Self:
+        problems: Final = tuple(chain.from_iterable(self._gap_problems(gap) for gap in self.known_gaps))
+        if problems:
+            raise ValueError(f"known_gaps: {'; '.join(problems)}")
+        cells: Final = tuple(f"{gap.feature}/{gap.provider}" for gap in self.known_gaps)
+        repeated: Final = sorted(frozenset(cell for cell in cells if cells.count(cell) > 1))
+        if repeated:
+            raise ValueError(f"known_gaps lists a cell more than once: {', '.join(repeated)}")
+        return self
+
+    def _gap_problems(self, gap: KnownGap) -> tuple[str, ...]:
+        feature_problem: Final = (
+            () if any(feature.id == gap.feature for feature in self.features) else (f"unknown feature {gap.feature!r}",)
+        )
+        provider_problem: Final = () if gap.provider in self.providers else (f"unknown provider {gap.provider!r}",)
+        return (*feature_problem, *provider_problem)
+
+    def known_gap(self, feature_id: str, provider: str) -> KnownGap | None:
+        return next(
+            (gap for gap in self.known_gaps if gap.feature == feature_id and gap.provider == provider),
+            None,
+        )
 
 
 class MatrixFeature(_Frozen):

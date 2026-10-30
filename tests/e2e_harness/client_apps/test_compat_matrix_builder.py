@@ -6,11 +6,13 @@ from pathlib import Path
 from typing import Final
 
 import pytest
+from pydantic import ValidationError
 
 from client_apps.compat_results import Failed, NotApplicable, NotTested, Outcome, Passed, ResultRow, write_rows
 from client_apps.matrix_builder import (
     REGRESSION_EXIT_CODE,
     REGRESSIONS,
+    KnownGap,
     Manifest,
     ManifestFeature,
     Matrix,
@@ -136,3 +138,59 @@ def test_shipped_manifests_validate_and_pin_their_client() -> None:
         manifest = load_manifest(path)
         assert len({feature.id for feature in manifest.features}) == len(manifest.features)
         assert pinned_client_version(manifest.package)
+
+
+
+def _manifest_yaml(known_gaps: str) -> str:
+    return f"""schema_version: "1"
+client: codex
+package: "@openai/codex"
+providers: [openai, vertex_ai]
+features:
+  - {{id: vision, name: Vision}}
+  - {{id: web_search, name: Web search}}
+known_gaps: {known_gaps}
+"""
+
+
+def test_known_gaps_are_read_from_the_manifest_yaml(tmp_path: Path) -> None:
+    path: Final = tmp_path / "manifest.yaml"
+    _ = path.write_text(_manifest_yaml("[{feature: web_search, provider: vertex_ai, reason: drops search tools}]"))
+
+    manifest: Final = load_manifest(path)
+
+    assert manifest.known_gap("web_search", "vertex_ai") == KnownGap(
+        feature="web_search", provider="vertex_ai", reason="drops search tools"
+    )
+    assert manifest.known_gap("web_search", "openai") is None
+    assert manifest.known_gap("vision", "vertex_ai") is None
+    assert MANIFEST.known_gaps == ()
+
+
+@pytest.mark.parametrize(
+    ("known_gaps", "problem"),
+    (
+        ("[{feature: web_serch, provider: openai, reason: r}]", "unknown feature 'web_serch'"),
+        ("[{feature: vision, provider: azure, reason: r}]", "unknown provider 'azure'"),
+        (
+            "[{feature: vision, provider: openai, reason: a}, {feature: vision, provider: openai, reason: b}]",
+            "known_gaps lists a cell more than once: vision/openai",
+        ),
+    ),
+)
+def test_a_known_gap_must_name_a_single_manifest_cell(tmp_path: Path, known_gaps: str, problem: str) -> None:
+    path: Final = tmp_path / "manifest.yaml"
+    _ = path.write_text(_manifest_yaml(known_gaps))
+
+    with pytest.raises(ValidationError, match=problem):
+        _ = load_manifest(path)
+
+
+def test_a_known_gap_needs_a_reason(tmp_path: Path) -> None:
+    path: Final = tmp_path / "manifest.yaml"
+    _ = path.write_text(_manifest_yaml("[{feature: vision, provider: openai, reason: ''}]"))
+
+    with pytest.raises(ValidationError) as raised:
+        _ = load_manifest(path)
+
+    assert [error["loc"] for error in raised.value.errors()] == [("known_gaps", 0, "reason")]

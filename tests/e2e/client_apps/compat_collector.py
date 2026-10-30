@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Iterable
 from dataclasses import dataclass
 from functools import cache
 from itertools import chain
@@ -39,7 +40,7 @@ def client_manifest(client_dir: Path) -> Manifest:
     return load_manifest(client_dir / "manifest.yaml")
 
 
-def cell_address(test_file: Path, clients_dir: Path = CLIENT_APPS_DIR) -> CellAddress | None:
+def cell_address(test_file: Path, clients_dir: Path) -> CellAddress | None:
     resolved: Final = test_file.resolve()
     if not resolved.is_relative_to(clients_dir):
         return None
@@ -85,16 +86,33 @@ class CompatRecorder:
         _record(self._item, _row(self.address, None, NotApplicable(reason=reason)))
 
 
-def _fails_cell(report: pytest.TestReport) -> bool:
-    return report.failed and report.when in ("setup", "call")
+def known_gap_marks(
+    items: Iterable[pytest.Item], clients_dir: Path
+) -> tuple[tuple[pytest.Item, pytest.MarkDecorator], ...]:
+    marked: Final = ((item, _known_gap_mark(item.path, clients_dir)) for item in items)
+    return tuple((item, mark) for item, mark in marked if mark is not None)
+
+
+def _known_gap_mark(test_file: Path, clients_dir: Path) -> pytest.MarkDecorator | None:
+    address: Final = cell_address(test_file, clients_dir)
+    if address is None:
+        return None
+    gap: Final = client_manifest(clients_dir / address.client).known_gap(address.feature_id, address.provider)
+    return None if gap is None else pytest.mark.xfail(strict=True, reason=gap.reason)
+
+
+def _raised(call: pytest.CallInfo[None]) -> bool:
+    return call.excinfo is not None and not call.excinfo.errisinstance(pytest.skip.Exception)
 
 
 def outcome_rows(
-    address: CellAddress, recorded: tuple[ResultRow, ...], report: pytest.TestReport
+    address: CellAddress, recorded: tuple[ResultRow, ...], call: pytest.CallInfo[None], report: pytest.TestReport
 ) -> tuple[ResultRow, ...]:
-    if _fails_cell(report) and not any(isinstance(row.outcome, Failed) for row in recorded):
+    if call.when not in ("setup", "call"):
+        return ()
+    if _raised(call) and not any(isinstance(row.outcome, Failed) for row in recorded):
         return (_row(address, None, Failed(error=_crash_message(report))),)
-    if report.passed and report.when == "call" and not recorded:
+    if call.when == "call" and call.excinfo is None and not recorded:
         return (_row(address, None, Failed(error=NO_RESULT_ERROR)),)
     return ()
 
@@ -105,21 +123,21 @@ def _crash_message(report: pytest.TestReport) -> str:
     return (error_lines or lines or (f"{report.when} failed",))[-1].removeprefix("E ").strip()
 
 
-def known_clients() -> tuple[str, ...]:
-    return tuple(sorted(manifest.parent.name for manifest in CLIENT_APPS_DIR.glob("*/manifest.yaml")))
+def known_clients(clients_dir: Path) -> tuple[str, ...]:
+    return tuple(sorted(manifest.parent.name for manifest in clients_dir.glob("*/manifest.yaml")))
 
 
 def worker_id() -> str | None:
     return os.environ.get("PYTEST_XDIST_WORKER")
 
 
-def _item_rows(item: pytest.Item, client: str) -> tuple[ResultRow, ...]:
-    address: Final = cell_address(item.path)
+def _item_rows(item: pytest.Item, client: str, clients_dir: Path) -> tuple[ResultRow, ...]:
+    address: Final = cell_address(item.path, clients_dir)
     return item.stash.get(ROWS, ()) if address is not None and address.client == client else ()
 
 
-def client_rows(session: pytest.Session, client: str) -> tuple[ResultRow, ...]:
-    return tuple(chain.from_iterable(_item_rows(item, client) for item in session.items))
+def client_rows(session: pytest.Session, client: str, clients_dir: Path) -> tuple[ResultRow, ...]:
+    return tuple(chain.from_iterable(_item_rows(item, client, clients_dir) for item in session.items))
 
 
 def clear_shards(client: str) -> None:
