@@ -69,6 +69,7 @@ from litellm.types.passthrough_endpoints.pass_through_endpoints import (
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import (
     BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN,
+    LiteLLMBatch,
     StandardLoggingHiddenParams,
     StandardLoggingMetadata,
     StandardLoggingModelInformation,
@@ -220,6 +221,64 @@ def test_get_logging_payload_maps_openai_cached_tokens_to_cache_read_input_token
 
     assert additional_usage_values["cache_read_input_tokens"] == 123
     assert additional_usage_values["prompt_tokens_details"]["cached_tokens"] == 123
+
+
+_PROVIDER_READ_BATCH: Final = LiteLLMBatch.model_validate(
+    {
+        "id": "batch_spend_row",
+        "completion_window": "24h",
+        "created_at": 1,
+        "endpoint": "/v1/chat/completions",
+        "input_file_id": "file-in",
+        "object": "batch",
+        "status": "completed",
+        "output_file_id": "file-out",
+        "usage": {
+            "input_tokens": 29,
+            "input_tokens_details": {"cached_tokens": 8},
+            "output_tokens": 46,
+            "output_tokens_details": {"reasoning_tokens": 0},
+            "total_tokens": 75,
+        },
+    }
+)
+
+
+@pytest.mark.parametrize(
+    "batch",
+    [
+        _PROVIDER_READ_BATCH,
+        _PROVIDER_READ_BATCH.model_copy(
+            update={
+                "usage": litellm.Usage(
+                    prompt_tokens=29,
+                    completion_tokens=46,
+                    total_tokens=75,
+                    prompt_tokens_details={"cached_tokens": 8},
+                )
+            }
+        ),
+    ],
+    ids=["provider_read", "poller_billed"],
+)
+def test_batch_spend_row_stores_the_same_usage_extras_as_a_chat_call_with_its_counts(batch: LiteLLMBatch) -> None:
+    payload: Final = get_logging_payload(
+        kwargs={
+            "model": "gpt-4o-mini",
+            "call_type": "aretrieve_batch",
+            "litellm_params": {"metadata": {"user_api_key": "test-key"}},
+        },
+        response_obj=batch,
+        start_time=datetime.datetime.now(timezone.utc),
+        end_time=datetime.datetime.now(timezone.utc),
+    )
+
+    assert (payload["prompt_tokens"], payload["completion_tokens"], payload["total_tokens"]) == (29, 46, 75)
+    assert json.loads(payload["metadata"])["additional_usage_values"] == _get_additional_usage_values_for_usage(
+        litellm.Usage(
+            prompt_tokens=29, completion_tokens=46, total_tokens=75, prompt_tokens_details={"cached_tokens": 8}
+        )
+    )
 
 
 class _HashingCache(litellm.Cache):
@@ -2333,6 +2392,65 @@ def test_get_logging_payload_includes_overhead_in_spend_logs_metadata():
     assert metadata.get("litellm_overhead_time_ms") == test_overhead_ms, (
         f"Expected overhead '{test_overhead_ms}', got '{metadata.get('litellm_overhead_time_ms')}'"
     )
+
+
+@patch("litellm.proxy.proxy_server.master_key", None)
+@patch("litellm.proxy.proxy_server.general_settings", {})
+def test_get_logging_payload_carries_upstream_provider_from_hidden_params_regression() -> None:
+    standard_logging_payload: Final = _make_standard_logging_payload_with_usage_object(usage_object={})
+    payload_with_provider: Final = {
+        **dict(standard_logging_payload),
+        "hidden_params": {
+            **dict(standard_logging_payload["hidden_params"]),
+            "upstream_provider": "serving-site-a",
+        },
+    }
+    payload: Final = get_logging_payload(
+        kwargs={
+            "model": "gpt-5.6",
+            "call_type": "responses",
+            "litellm_params": {"metadata": {"user_api_key": "test-key"}},
+            "standard_logging_object": payload_with_provider,
+        },
+        response_obj={
+            "id": "resp-test",
+            "usage": {
+                "input_tokens": 1000,
+                "output_tokens": 10,
+                "total_tokens": 1010,
+            },
+        },
+        start_time=datetime.datetime(2025, 1, 1, tzinfo=timezone.utc),
+        end_time=datetime.datetime(2025, 1, 1, 0, 0, 1, tzinfo=timezone.utc),
+    )
+
+    assert json.loads(payload["metadata"]).get("upstream_provider") == "serving-site-a"
+
+
+@patch("litellm.proxy.proxy_server.master_key", None)
+@patch("litellm.proxy.proxy_server.general_settings", {})
+def test_get_logging_payload_omits_upstream_provider_when_hidden_param_absent_guard() -> None:
+    standard_logging_payload: Final = _make_standard_logging_payload_with_usage_object(usage_object={})
+    payload: Final = get_logging_payload(
+        kwargs={
+            "model": "gpt-5.6",
+            "call_type": "responses",
+            "litellm_params": {"metadata": {"user_api_key": "test-key"}},
+            "standard_logging_object": standard_logging_payload,
+        },
+        response_obj={
+            "id": "resp-test",
+            "usage": {
+                "input_tokens": 1000,
+                "output_tokens": 10,
+                "total_tokens": 1010,
+            },
+        },
+        start_time=datetime.datetime(2025, 1, 1, tzinfo=timezone.utc),
+        end_time=datetime.datetime(2025, 1, 1, 0, 0, 1, tzinfo=timezone.utc),
+    )
+
+    assert "upstream_provider" not in json.loads(payload["metadata"])
 
 
 @patch("litellm.proxy.proxy_server.master_key", None)
@@ -6852,7 +6970,10 @@ def test_spend_logs_payload(model_id: str | None):
     )
 
     assert len(payload["request_id"]) > 0
-    expected_metadata_keys: Final = SpendLogsMetadata.__annotations__.keys() - {"is_silent_experiment"}
+    expected_metadata_keys: Final = SpendLogsMetadata.__annotations__.keys() - {
+        "is_silent_experiment",
+        "upstream_provider",
+    }
 
     assert "metadata" in payload
     assert isinstance(payload["metadata"], str)

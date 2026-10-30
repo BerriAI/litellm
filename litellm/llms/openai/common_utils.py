@@ -29,8 +29,10 @@ if TYPE_CHECKING:
     from aiohttp import ClientSession
 
 import litellm
+from litellm.exceptions import error_response_without_credentials
 from litellm.litellm_core_utils.completion_timeout import CompletionTimeout
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, decoded_json_object
+from litellm.litellm_core_utils.reasoning_effort_utils import warn_dropped_reasoning_params
 from litellm.litellm_core_utils.token_counter import token_counter, usage_tokenizer_model
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.custom_httpx.http_handler import (
@@ -148,6 +150,14 @@ class OpenAIError(BaseLLMException):
         )
 
 
+def upstream_error_response(error: Exception) -> httpx.Response | None:
+    if not isinstance(error, (openai.APIStatusError, httpx.HTTPStatusError)):
+        return None
+    return error_response_without_credentials(
+        error.response.status_code, error.response, "https://docs.litellm.ai/docs"
+    )
+
+
 _DECODED_JSON: Final = TypeAdapter(object)
 
 
@@ -156,17 +166,11 @@ _DECODED_JSON: Final = TypeAdapter(object)
 def drop_params_from_unprocessable_entity_error(
     e: openai.UnprocessableEntityError | httpx.HTTPStatusError,
     data: Mapping[str, object],
+    *,
+    model: str | None,
+    drop_params_gated: bool,
 ) -> dict[str, object]:
-    """
-    Helper function to read OpenAI UnprocessableEntityError and drop the params that raised an error from the error message.
-
-    Args:
-    e (UnprocessableEntityError): The UnprocessableEntityError exception
-    data (Dict[str, Any]): The original data dictionary containing all parameters
-
-    Returns:
-    Dict[str, Any]: A new dictionary with invalid parameters removed
-    """
+    """Return a copy of ``data`` without the params a 422 response names as invalid."""
     invalid_params: Final[list[str]] = []
     if isinstance(e, httpx.HTTPStatusError):
         error_json: Final = decoded_json_object(_DECODED_JSON.validate_python(e.response.json()))
@@ -194,6 +198,13 @@ def drop_params_from_unprocessable_entity_error(
                     invalid_params.append(error_dict["loc"][1])
 
     new_data: Final = {k: v for k, v in data.items() if k not in invalid_params}
+    warn_dropped_reasoning_params(
+        invalid_params,
+        data,
+        model,
+        "the provider answered 422 naming it an invalid param.",
+        drop_params_gated=drop_params_gated,
+    )
 
     return new_data
 

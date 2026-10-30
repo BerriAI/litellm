@@ -246,6 +246,7 @@ LLM_CONFIG_NAMES: Final = (
     "MistralEmbeddingConfig",
     "OpenAIImageVariationConfig",
     "DeepInfraConfig",
+    "ClfAiGatewayConfig",
     "DeepgramAudioTranscriptionConfig",
     "TopazImageVariationConfig",
     "OpenAITextCompletionConfig",
@@ -977,6 +978,10 @@ _LLM_CONFIGS_IMPORT_MAP: Final = {
         "OpenAIImageVariationConfig",
     ),
     "DeepInfraConfig": (".llms.deepinfra.chat.transformation", "DeepInfraConfig"),
+    "ClfAiGatewayConfig": (
+        ".llms.clf_ai_gateway.chat.transformation",
+        "ClfAiGatewayConfig",
+    ),
     "DeepgramAudioTranscriptionConfig": (
         ".llms.deepgram.audio_transcription.transformation",
         "DeepgramAudioTranscriptionConfig",
