@@ -1,5 +1,5 @@
 import json
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from datetime import UTC, datetime
 from typing import Final
 
@@ -15,6 +15,8 @@ from litellm.exceptions import (
     AuthenticationError,
     BadRequestError,
     InternalServerError,
+    NotFoundError,
+    PermissionDeniedError,
     RateLimitError,
 )
 from litellm.litellm_core_utils.litellm_logging import Logging
@@ -216,45 +218,112 @@ def test_gemini_sync_streaming_yields_custom_stream_wrapper() -> None:
     assert emitted == "STREAM_OK"
 
 
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("status_code", "expected_cls"),
+    ("status_code", "grpc_status", "expected_cls"),
     (
-        (400, BadRequestError),
-        (401, AuthenticationError),
-        (429, RateLimitError),
-        (500, InternalServerError),
+        (400, "INVALID_ARGUMENT", BadRequestError),
+        (401, "UNAUTHENTICATED", AuthenticationError),
+        (403, "PERMISSION_DENIED", PermissionDeniedError),
+        (404, "NOT_FOUND", NotFoundError),
+        (429, "RESOURCE_EXHAUSTED", RateLimitError),
+        (500, "INTERNAL", InternalServerError),
     ),
 )
-def test_sync_http_status_errors_map_to_litellm_exceptions_with_model_and_provider(
+@pytest.mark.parametrize("provider", ("gemini", "vertex_ai"))
+async def test_http_status_errors_map_realistic_google_envelopes_sync_and_async(
     status_code: int,
+    grpc_status: str,
     expected_cls: type[Exception],
+    provider: str,
 ) -> None:
+    def minter(_creds: VERTEX_CREDENTIALS_TYPES | None, project_id: str | None) -> tuple[str, str]:
+        return "vertex-tok", project_id or "proj-1"
+
     def failing_transport(_req: httpx.Request) -> httpx.Response:
-        return httpx.Response(status_code, json={"error": {"message": f"HTTP {status_code} failure"}})
+        return httpx.Response(
+            status_code,
+            json={
+                "error": {
+                    "code": status_code,
+                    "message": f"HTTP {status_code} failure ({grpc_status})",
+                    "status": grpc_status,
+                }
+            },
+        )
+
+    bridge: Final = InteractionsToCompletionBridgeHandler(
+        provider_config=VertexAIInteractionsConfig(mint_access_token=minter) if provider == "vertex_ai" else None
+    )
+    llm_params: Final[Mapping[str, object]] = {"vertex_project": "proj-1"} if provider == "vertex_ai" else {}
 
     sync_client: Final = HTTPHandler()
     sync_client.client = httpx.Client(transport=httpx.MockTransport(failing_transport))
-    log_obj: Final = _logging_stub("gemini-3-flash-preview")
-    bridge: Final = InteractionsToCompletionBridgeHandler()
-
-    with pytest.raises(expected_cls) as exc_info:
+    sync_log: Final = _logging_stub("gemini-3-flash-preview")
+    with pytest.raises(expected_cls) as sync_exc:
         bridge.completion(
             model="gemini-3-flash-preview",
             messages=[{"role": "user", "content": "ping"}],
             model_response=ModelResponse(id="fallback"),
-            logging_obj=log_obj,
+            logging_obj=sync_log,
             optional_params={},
-            litellm_params={},
+            litellm_params=llm_params,
+            api_key="test-gemini-key",
+            client=sync_client,
+            custom_llm_provider=provider,
+            stream=False,
+        )
+    assert getattr(sync_exc.value, "model", None) == "gemini-3-flash-preview"
+    assert getattr(sync_exc.value, "llm_provider", None) == provider
+    assert isinstance(sync_exc.value.__cause__, httpx.HTTPStatusError)
+    assert f"HTTP {status_code} failure" in _logged_original_response(sync_log)
+
+    async_client: Final = AsyncHTTPHandler()
+    async_client.client = httpx.AsyncClient(transport=httpx.MockTransport(failing_transport))
+    async_log: Final = _logging_stub("gemini-3-flash-preview")
+    with pytest.raises(expected_cls) as async_exc:
+        await bridge.acompletion(
+            model="gemini-3-flash-preview",
+            messages=[{"role": "user", "content": "ping"}],
+            model_response=ModelResponse(id="fallback"),
+            logging_obj=async_log,
+            optional_params={},
+            litellm_params=llm_params,
+            api_key="test-gemini-key",
+            client=async_client,
+            custom_llm_provider=provider,
+            stream=False,
+        )
+    assert getattr(async_exc.value, "model", None) == "gemini-3-flash-preview"
+    assert getattr(async_exc.value, "llm_provider", None) == provider
+    assert isinstance(async_exc.value.__cause__, httpx.HTTPStatusError)
+    assert f"HTTP {status_code} failure" in _logged_original_response(async_log)
+
+
+def test_truncated_streaming_error_body_read_error_is_suppressed_cleanly() -> None:
+    class _BrokenErrorStream(httpx.SyncByteStream):
+        def __iter__(self) -> Iterator[bytes]:
+            raise httpx.ReadError("connection reset reading error body")
+
+    def broken_403_transport(_req: httpx.Request) -> httpx.Response:
+        return httpx.Response(403, stream=_BrokenErrorStream())
+
+    sync_client: Final = HTTPHandler()
+    sync_client.client = httpx.Client(transport=httpx.MockTransport(broken_403_transport))
+    bridge: Final = InteractionsToCompletionBridgeHandler()
+
+    with pytest.raises(PermissionDeniedError) as exc_info:
+        bridge.completion(
+            model="gemini-3-flash-preview",
+            messages=[{"role": "user", "content": "ping"}],
+            model_response=ModelResponse(id="fallback"),
+            logging_obj=_logging_stub("gemini-3-flash-preview", stream=True),
             api_key="test-gemini-key",
             client=sync_client,
             custom_llm_provider="gemini",
-            stream=False,
+            stream=True,
         )
-
-    assert getattr(exc_info.value, "model", None) == "gemini-3-flash-preview"
-    assert getattr(exc_info.value, "llm_provider", None) == "gemini"
-    assert isinstance(exc_info.value.__cause__, httpx.HTTPStatusError)
-    assert f"HTTP {status_code} failure" in _logged_original_response(log_obj)
+    assert exc_info.value.status_code == 403
 
 
 @pytest.mark.asyncio

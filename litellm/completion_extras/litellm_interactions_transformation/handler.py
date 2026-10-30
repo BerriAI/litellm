@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 from collections.abc import Coroutine, Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
@@ -9,7 +10,7 @@ import httpx
 from pydantic import JsonValue, TypeAdapter
 
 from litellm.constants import request_timeout
-from litellm.exceptions import APIConnectionError
+from litellm.exceptions import APIConnectionError, PermissionDeniedError
 from litellm.interactions.utils import get_provider_interactions_api_config
 from litellm.litellm_core_utils.core_helpers import (
     process_response_headers,  # pyright: ignore[reportUnknownVariableType]  # upstream helper uses bare dict
@@ -216,6 +217,13 @@ def _build_provider_http_error(
     return GeminiError(status_code=status_code, message=error_text, headers=hdrs)
 
 
+def _safe_response_text(response: httpx.Response, fallback: str = "") -> str:
+    try:
+        return response.text
+    except httpx.ResponseNotRead:
+        return fallback
+
+
 def _raise_mapped_http_error(
     *,
     model: str,
@@ -223,7 +231,22 @@ def _raise_mapped_http_error(
     original_exception: Exception,
     llm_map: Mapping[str, object],
     cause: Exception | None,
+    response: httpx.Response | None = None,
 ) -> NoReturn:
+    if isinstance(original_exception, BaseLLMException) and original_exception.status_code == 403:
+        stub_resp: Final = response or httpx.Response(
+            403,
+            request=httpx.Request("POST", "https://generativelanguage.googleapis.com/v1beta/interactions"),
+        )
+        perm_err: Final = PermissionDeniedError(
+            message=f"{custom_llm_provider.capitalize()}Exception - {original_exception.message}",
+            llm_provider=custom_llm_provider,
+            model=model,
+            response=stub_resp,
+        )
+        if cause is not None:
+            raise perm_err from cause
+        raise perm_err
     try:
         mapped_val: Final[object] = exception_type(  # pyright: ignore[reportUnknownVariableType]  # upstream helper lacks return annotation
             model=model,
@@ -244,7 +267,6 @@ def _raise_mapped_http_error(
 def _handle_httpx_error(
     *,
     exc: httpx.HTTPError,
-    error_text_override: str | None = None,
     model: str,
     custom_llm_provider: str,
     wire: _PreparedWireCall,
@@ -254,11 +276,8 @@ def _handle_httpx_error(
     llm_map: Mapping[str, object],
 ) -> NoReturn:
     if isinstance(exc, httpx.HTTPStatusError):
-        error_text: Final = (
-            error_text_override
-            if error_text_override is not None
-            else str(getattr(exc, "text", "") or exc.response.text)
-        )
+        attr_text: Final = str(getattr(exc, "text", "") or "")
+        error_text: Final = attr_text or _safe_response_text(exc.response, str(exc))
         call_logger.post_call(
             input=list(messages),
             api_key=api_key or "",
@@ -277,6 +296,7 @@ def _handle_httpx_error(
             original_exception=provider_err,
             llm_map=llm_map,
             cause=exc,
+            response=exc.response,
         )
 
     call_logger.post_call(
@@ -552,7 +572,8 @@ class InteractionsToCompletionBridgeHandler:
             )
         except httpx.HTTPError as exc:
             if isinstance(exc, httpx.HTTPStatusError):
-                exc.response.read()
+                with contextlib.suppress(httpx.HTTPError):
+                    exc.response.read()
             _handle_httpx_error(
                 exc=exc,
                 model=model,
@@ -565,8 +586,9 @@ class InteractionsToCompletionBridgeHandler:
             )
 
         if raw_response.status_code >= 400:
-            raw_response.read()
-            error_body: Final = raw_response.text
+            with contextlib.suppress(httpx.HTTPError):
+                raw_response.read()
+            error_body: Final = _safe_response_text(raw_response, f"HTTP {raw_response.status_code}")
             call_logger.post_call(
                 input=list(messages),
                 api_key=api_key or "",
@@ -585,6 +607,7 @@ class InteractionsToCompletionBridgeHandler:
                 original_exception=provider_err,
                 llm_map=llm_map,
                 cause=None,
+                response=raw_response,
             )
 
         if wire.is_stream:
@@ -679,7 +702,8 @@ class InteractionsToCompletionBridgeHandler:
             )
         except httpx.HTTPError as exc:
             if isinstance(exc, httpx.HTTPStatusError):
-                await exc.response.aread()
+                with contextlib.suppress(httpx.HTTPError):
+                    await exc.response.aread()
             _handle_httpx_error(
                 exc=exc,
                 model=model,
@@ -692,8 +716,9 @@ class InteractionsToCompletionBridgeHandler:
             )
 
         if raw_response.status_code >= 400:
-            await raw_response.aread()
-            error_body: Final = raw_response.text
+            with contextlib.suppress(httpx.HTTPError):
+                await raw_response.aread()
+            error_body: Final = _safe_response_text(raw_response, f"HTTP {raw_response.status_code}")
             call_logger.post_call(
                 input=list(messages),
                 api_key=api_key or "",
@@ -712,6 +737,7 @@ class InteractionsToCompletionBridgeHandler:
                 original_exception=provider_err,
                 llm_map=llm_map,
                 cause=None,
+                response=raw_response,
             )
 
         if wire.is_stream:
