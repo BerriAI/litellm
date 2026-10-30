@@ -749,40 +749,37 @@ def test_a_utf8_401_body_with_no_charset_prints_as_written(
 
 
 @pytest.mark.parametrize(
-    "reason, charset",
+    "content, charset",
     [
-        ("caf\u00e9", "iso-8859-1"),
-        ("the key\u2019s owner", "windows-1252"),
-        ("\u65e5\u672c", "shift_jis"),
-        ("refused", "utf-16"),
+        (b"forbidden \xff\xfe", "utf-8"),
+        (b"forbidden \xff\xfe", "undefined"),
+        (b"forbidden \xff\xfe", "idna"),
+        (b"forbidden \xff\xfe", "bad\x00name"),
+        ("forbidden caf\u00e9".encode("iso-8859-1"), "iso-8859-1"),
+        ("forbidden \u2019".encode("windows-1252"), "windows-1252"),
+        ("forbidden \u65e5\u672c".encode("shift_jis"), "shift_jis"),
+        ("forbidden".encode("utf-16"), "utf-16"),
+        (f"forbidden \x81sk-{FAKE_SECRET}".encode("latin-1"), "shift_jis"),
+    ],
+    ids=[
+        "stray_bytes_in_utf8",
+        "undefined_charset",
+        "idna_charset",
+        "nul_in_the_charset_name",
+        "latin1",
+        "windows_1252",
+        "shift_jis",
+        "utf16",
+        "lead_byte_before_a_key",
     ],
 )
-def test_a_401_body_in_a_declared_charset_prints_as_written(
-    requests_mock: Mocker, secret_vault_factory: type[FakeSecretVault], reason: str, charset: str
+def test_a_401_body_that_is_not_utf8_is_never_printed(
+    requests_mock: Mocker, secret_vault_factory: type[FakeSecretVault], content: bytes, charset: str
 ) -> None:
     requests_mock.post(
         f"{BASE_URL}/key/generate",
         status_code=401,
-        content=reason.encode(charset),
-        headers={"Content-Type": f"text/plain; charset={charset}"},
-    )
-
-    result: Final = _lite(
-        ["keys", "generate"], secret_vault_factory(), FakeBrowserSignIn(_credential()), ["--api-key", "sk-explicit"]
-    )
-
-    assert result.exit_code == 1
-    assert f"The proxy said: {reason}" in result.stderr
-
-
-@pytest.mark.parametrize("charset", ["utf-8", "undefined", "idna"])
-def test_a_401_body_its_charset_cannot_read_is_never_printed(
-    requests_mock: Mocker, secret_vault_factory: type[FakeSecretVault], charset: str
-) -> None:
-    requests_mock.post(
-        f"{BASE_URL}/key/generate",
-        status_code=401,
-        content=b"forbidden \xff\xfe",
+        content=content,
         headers={"Content-Type": f"text/plain; charset={charset}"},
     )
 
@@ -795,6 +792,7 @@ def test_a_401_body_its_charset_cannot_read_is_never_printed(
     assert "The proxy said: " in result.stderr
     assert "forbidden" not in result.stderr
     assert "\ufffd" not in result.stderr
+    assert FAKE_SECRET[-8:] not in result.stderr
 
 
 @pytest.mark.parametrize(
