@@ -1092,6 +1092,27 @@ def test_the_chat_bridge_keeps_other_keys_for_an_openai_prefixed_name_it_resolve
     assert bridged("gpt-6.1-sol", True) == {"effort": "high", "mode": declared_mode}
 
 
+def test_the_chat_bridge_keeps_every_reasoning_value_for_a_provider_that_declares_none(
+    local_model_cost_map: None,
+) -> None:
+    requested: Final = {"effort": "high", "mode": "turbo", "context": "forever"}
+
+    bridged: Final = bridge_reasoning(
+        requested=requested,
+        effort_kept=True,
+        summary_alias=None,
+        model="my-vllm-model",
+        base_model=None,
+        custom_llm_provider="hosted_vllm",
+        api_base=None,
+        deployment_model_info=None,
+        drop_params=True,
+        additional_drop_params=None,
+    )
+
+    assert bridged == requested
+
+
 def test_the_chat_bridge_keeps_only_effort_for_a_catalog_model_that_does_not_reason(local_model_cost_map: None) -> None:
     non_reasoning_model: Final = next(
         name

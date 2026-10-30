@@ -3393,6 +3393,7 @@ class TestMalformedParamsFollowDropParams:
         [
             pytest.param({"tool_choice": "auto"}, id="auto-without-tools"),
             pytest.param({"tool_choice": "none"}, id="none-without-tools"),
+            pytest.param({"tool_choice": None}, id="tool-choice-null"),
             pytest.param({"tool_choice": "required", "tools": [_WEATHER_TOOL]}, id="required-with-tools"),
             pytest.param(
                 {"tool_choice": {"type": "function", "name": "get_weather"}, "tools": [_WEATHER_TOOL]},
