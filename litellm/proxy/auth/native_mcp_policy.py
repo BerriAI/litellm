@@ -3,7 +3,7 @@ from dataclasses import dataclass
 from typing import Final, Literal, Protocol, TypeAlias
 from uuid import uuid4
 
-from pydantic import TypeAdapter, ValidationError
+from pydantic import BaseModel, TypeAdapter, ValidationError
 
 from litellm.litellm_core_utils.api_route_to_call_types import get_call_types_for_route
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
@@ -190,7 +190,13 @@ def check_native_mcp_request(identity: NativeMCPIdentity, data: Mapping[str, obj
     raise_native_mcp_denial(evaluate_native_mcp_policy(policy, extract_request_mcp_accesses(data)))
 
 
-def check_native_mcp_response(identity: NativeMCPIdentity, data: Mapping[str, object], response: object) -> None:
+def check_native_mcp_response(
+    identity: NativeMCPIdentity,
+    data: Mapping[str, object],
+    response: object,
+    *,
+    is_retrieval: bool = False,
+) -> None:
     policy: Final = resolve_native_mcp_policy(identity)
     if policy is None:
         return
@@ -199,7 +205,11 @@ def check_native_mcp_response(identity: NativeMCPIdentity, data: Mapping[str, ob
         extract_response_mcp_accesses,
     )
 
-    request_accesses: Final = extract_request_mcp_accesses(data)
+    # Only retrieval binds from the provider's stored attachment list. Creation
+    # must remain bound to the request validated before dispatch.
+    response_fields: Final = as_str_mapping(response.model_dump() if isinstance(response, BaseModel) else response)
+    binding: Final = {"tools": response_fields.get("tools")} if is_retrieval and response_fields is not None else data
+    request_accesses: Final = extract_request_mcp_accesses(binding)
     raise_native_mcp_denial(evaluate_native_mcp_policy(policy, request_accesses))
     if isinstance(request_accesses, NativeMCPDenial) or is_gateway_only(request_accesses):
         return

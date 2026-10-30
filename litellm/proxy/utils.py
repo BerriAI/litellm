@@ -4227,7 +4227,14 @@ class ProxyLogging:
             raise e
         from litellm.proxy.auth.native_mcp_policy import check_native_mcp_response
 
-        check_native_mcp_response(user_api_key_dict, TypeAdapter(Mapping[str, object]).validate_python(data), response)
+        policy_data: Final = TypeAdapter(Mapping[str, object]).validate_python(data)
+        policy_logging: Final = policy_data.get("litellm_logging_obj")
+        check_native_mcp_response(
+            user_api_key_dict,
+            policy_data,
+            response,
+            is_retrieval=isinstance(policy_logging, Logging) and policy_logging.call_type == "aget_responses",
+        )
         return response
 
     async def _run_parallel_post_call_guardrails(

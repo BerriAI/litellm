@@ -290,3 +290,47 @@ async def test_existing_success_hook_rejects_ungranted_native_response() -> None
     )
     with pytest.raises(ProxyException, match="delete_repo"):
         await logging.post_call_success_hook(data=request(), response=response, user_api_key_dict=identity())
+
+
+@pytest.mark.parametrize("field", ["message", "delta"])
+def test_translated_native_calls_are_checked_in_provider_fields(field: str) -> None:
+    response: Final = {
+        "choices": [
+            {
+                field: {
+                    "provider_specific_fields": {
+                        "mcp_tool_uses": [
+                            {"type": "mcp_tool_use", "id": "call-1", "server_name": "github", "name": "delete_repo"}
+                        ]
+                    }
+                }
+            }
+        ]
+    }
+    with pytest.raises(ProxyException, match="delete_repo"):
+        check_native_mcp_response(identity(), request(), response)
+
+
+def test_translated_native_result_without_identity_is_denied() -> None:
+    response: Final = {
+        "provider_specific_fields": {
+            "tool_results": [{"type": "mcp_tool_result", "tool_use_id": "missing", "content": "secret"}]
+        }
+    }
+    with pytest.raises(ProxyException, match="absent from the response"):
+        check_native_mcp_response(identity(), request(), response)
+
+
+def test_retrieval_uses_provider_attachment_echo_and_current_policy() -> None:
+    response: Final = {**request(), "output": [{"type": "mcp_call", "server_label": "github", "name": "search_code"}]}
+    assert check_native_mcp_response(identity(), {}, response, is_retrieval=True) is None
+    with pytest.raises(ProxyException, match="no grant"):
+        check_native_mcp_response(UserAPIKeyAuth(metadata={"native_mcp_policy": {}}), {}, response, is_retrieval=True)
+    with pytest.raises(ProxyException, match="absent from the validated request"):
+        check_native_mcp_response(identity(), {}, response)
+
+
+def test_retrieval_cannot_bind_native_calls_without_a_provider_url() -> None:
+    response: Final = {"output": [{"type": "mcp_call", "server_label": "github", "name": "search_code"}]}
+    with pytest.raises(ProxyException, match="absent from the validated request"):
+        check_native_mcp_response(identity(), {}, response, is_retrieval=True)

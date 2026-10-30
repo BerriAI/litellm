@@ -241,16 +241,45 @@ def _response_mcp_access(
         return NativeMCPDenial("Native MCP response has no readable tool name")
 
 
-def extract_response_mcp_accesses(
-    response: object, request_accesses: tuple[NativeMCPAccess, ...]
-) -> NativeMCPExtraction:
+def _provider_mcp_items(data: Mapping[str, object]) -> Iterator[Mapping[str, object]]:
+    fields: Final = as_str_mapping(data.get("provider_specific_fields")) or {}
+    yield from _mcp_entries(fields, "mcp_tool_uses")
+    yield from _mcp_entries(fields, "tool_results")
+
+
+def _response_items(data: Mapping[str, object]) -> Iterator[Mapping[str, object]]:
+    yield from _mcp_entries(data, "output")
+    yield from _mcp_entries(data, "content")
+    yield from _provider_mcp_items(data)
+    for choice in _mcp_entries(data, "choices"):
+        for field in ("message", "delta"):
+            message: Final = as_str_mapping(choice.get(field)) or {}
+            yield from _provider_mcp_items(message)
+
+
+def response_mcp_items(response: object) -> tuple[Mapping[str, object], ...] | NativeMCPDenial:
     data: Final = as_str_mapping(response.model_dump() if isinstance(response, BaseModel) else response)
     if data is None:
         return NativeMCPDenial("Cannot read the response for native MCP policy validation")
     try:
-        items: Final = (*_mcp_entries(data, "output"), *_mcp_entries(data, "content"))
+        return tuple(_response_items(data))
     except ValidationError:
         return NativeMCPDenial("Cannot read native MCP response items")
+
+
+def extract_response_mcp_accesses(
+    response: object, request_accesses: tuple[NativeMCPAccess, ...]
+) -> NativeMCPExtraction:
+    items: Final = response_mcp_items(response)
+    if isinstance(items, NativeMCPDenial):
+        return items
+    call_ids: Final = tuple(item.get("id") for item in items if item.get("type") == "mcp_tool_use")
+    if any(
+        not isinstance(item.get("tool_use_id"), str) or item.get("tool_use_id") not in call_ids
+        for item in items
+        if item.get("type") == "mcp_tool_result"
+    ):
+        return NativeMCPDenial("Native MCP result references a call absent from the response")
     results: Final = tuple(_response_mcp_access(item, request_accesses) for item in items)
     failure: Final = next((result for result in results if isinstance(result, NativeMCPDenial)), None)
     if failure is not None:
