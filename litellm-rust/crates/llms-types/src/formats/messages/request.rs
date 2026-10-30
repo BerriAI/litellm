@@ -369,6 +369,22 @@ pub struct MessagesOptionalParams {
     pub extra: Map<String, Value>,
 }
 
+impl MessagesOptionalParams {
+    pub fn countable(self) -> Self {
+        Self {
+            max_tokens: self.max_tokens,
+            system: self.system,
+            tools: self.tools,
+            tool_choice: self.tool_choice,
+            thinking: self.thinking,
+            context_management: self.context_management,
+            output_config: self.output_config,
+            reasoning_effort: self.reasoning_effort,
+            ..Self::default()
+        }
+    }
+}
+
 impl Message {
     pub fn blocks(&self) -> &[ContentBlock] {
         match &self.content {

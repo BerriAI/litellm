@@ -55,6 +55,18 @@ impl BaseMessagesConfig for AzureAnthropicMessagesConfig {
         complete_azure_anthropic_url(api_base, env_lookup)
     }
 
+    fn get_count_tokens_url(
+        &self,
+        api_base: Option<&str>,
+        _litellm_params: &LitellmParams,
+        env_lookup: &dyn Fn(&str) -> Option<String>,
+    ) -> Option<Result<String, Error>> {
+        Some(
+            complete_azure_anthropic_url(api_base, env_lookup)
+                .map(|messages_url| format!("{messages_url}/count_tokens")),
+        )
+    }
+
     fn transform_anthropic_messages_request(
         &self,
         request: MessagesRequest,
@@ -197,6 +209,31 @@ mod tests {
             url,
             "https://resource.services.ai.azure.com/anthropic/v1/messages"
         );
+    }
+
+    #[rstest]
+    #[case::resource_root("https://resource.services.ai.azure.com")]
+    #[case::anthropic_segment("https://resource.services.ai.azure.com/anthropic/")]
+    #[case::complete_messages_endpoint(
+        "https://resource.services.ai.azure.com/anthropic/v1/messages"
+    )]
+    fn count_url_sits_under_the_messages_endpoint(#[case] api_base: &str) {
+        let url = AZURE_ANTHROPIC_MESSAGES_CONFIG
+            .get_count_tokens_url(Some(api_base), &LitellmParams::default(), &|_| None)
+            .expect("azure ai has a count api")
+            .expect("url builds");
+        assert_eq!(
+            url,
+            "https://resource.services.ai.azure.com/anthropic/v1/messages/count_tokens"
+        );
+    }
+
+    #[test]
+    fn count_url_without_a_base_is_an_error() {
+        let url = AZURE_ANTHROPIC_MESSAGES_CONFIG
+            .get_count_tokens_url(None, &LitellmParams::default(), &|_| None)
+            .expect("azure ai has a count api");
+        assert!(url.is_err(), "{url:?}");
     }
 
     #[test]

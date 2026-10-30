@@ -17,6 +17,7 @@ use litellm_llms_types::{
     formats::messages::CountTokensResponse,
     headers::{ProviderSpecificHeader, ProviderSpecificHeaders},
 };
+use serde::Serialize;
 use serde_json::{Map, Value};
 
 use crate::{Deployment, Error, Gateway, JsonObject, RequestId, request};
@@ -29,6 +30,14 @@ const OPENROUTER_API_HEADERS: [&str; 2] = [
 ];
 const ANTHROPIC_API_HEADER_PROVIDERS: &str =
     "anthropic,bedrock,bedrock_mantle,vertex_ai,openrouter,deepseek";
+const PROVIDER_COUNT_SOURCE: &str = "provider";
+
+#[derive(Serialize)]
+struct SourcedCount {
+    #[serde(flatten)]
+    count: CountTokensResponse,
+    litellm_count_source: &'static str,
+}
 
 pub async fn create(
     State(gateway): State<Arc<Gateway>>,
@@ -92,11 +101,14 @@ async fn count(
     identity: &AuthenticatedRequest,
     headers: &HeaderMap,
     body: Map<String, Value>,
-) -> Result<CountTokensResponse, Error> {
+) -> Result<SourcedCount, Error> {
     let deployment = request::resolve_deployment(gateway, "/v1/messages/count_tokens", &body)?;
     request::authorize_model(identity, deployment, &body).await?;
     let call = project(deployment, body, headers)?;
-    Ok(gateway.messages.count_tokens(call).await?)
+    Ok(SourcedCount {
+        count: gateway.messages.count_tokens(call).await?,
+        litellm_count_source: PROVIDER_COUNT_SOURCE,
+    })
 }
 
 fn project(

@@ -20,7 +20,7 @@ use litellm_llms::base_llm::{
     },
 };
 use litellm_llms_types::formats::messages::{
-    CountTokensResponse, MessagesRequest, MessagesResponse,
+    CountTokensResponse, MessagesOptionalParams, MessagesRequest, MessagesResponse,
 };
 use litellm_secrets::source::Secrets;
 use litellm_tracing::ByteChunk;
@@ -34,6 +34,8 @@ use super::{
     types::invalid_request,
 };
 use litellm_inference::{caching::CallCache, context::CallContext, outbound::outbound_request};
+
+const UNCAPPED_MAX_TOKENS: u64 = u64::MAX;
 
 struct ProviderCall {
     identity: ProviderIdentity,
@@ -249,13 +251,13 @@ pub(super) async fn count_tokens(
     let sanitized = config.shape_request(
         MessagesRequest {
             model: config.count_tokens_model(&model).to_string(),
+            params: body.params.countable(),
             ..body
         },
         shaping.settings.reasoning_auto_summary,
     )?;
-    let request =
+    let trimmed =
         without_additional_drop_params(sanitized, &shaping.settings.additional_drop_params)?;
-
     let scoped =
         get_provider_specific_headers(provider_specific_header.as_ref(), provider.as_str());
     let forwarded = string_headers(Some(
@@ -264,26 +266,36 @@ pub(super) async fn count_tokens(
     let validated = config.validate_environment(
         forwarded,
         api_key.as_deref(),
-        &request.model,
-        &request.params,
+        &trimmed.model,
+        &trimmed.params,
         &connection_params,
         &env_lookup,
+    )?;
+    let transformed = config.transform_anthropic_messages_request(
+        with_a_max_tokens(trimmed),
+        &MessagesTransformContext::new(shaping.capabilities, shaping.settings.drop_params),
     )?;
     let environment = ValidatedEnvironment {
         headers: config.request_headers(
             with_default_headers(validated.headers, config.default_headers()),
-            &request,
+            &transformed,
         ),
         auth: validated.auth,
     };
     let authenticated =
         resolve_auth(&route.auth, environment, &|key| std::env::var(key).ok()).await?;
-
+    let wire_body = MessagesRequest {
+        params: MessagesOptionalParams {
+            max_tokens: None,
+            ..transformed.params
+        },
+        ..transformed
+    };
     let response = send(
         &route.http,
         authenticated,
         &url,
-        &serde_json::to_value(&request).map_err(serialize_failure)?,
+        &serde_json::to_value(&wire_body).map_err(serialize_failure)?,
         timeout.or_else(|| shaping.settings.request_timeout()),
     )
     .await?;
@@ -297,6 +309,16 @@ pub(super) async fn count_tokens(
             err,
         ))
     })
+}
+
+fn with_a_max_tokens(request: MessagesRequest) -> MessagesRequest {
+    MessagesRequest {
+        params: MessagesOptionalParams {
+            max_tokens: request.params.max_tokens.or(Some(UNCAPPED_MAX_TOKENS)),
+            ..request.params
+        },
+        ..request
+    }
 }
 
 fn without_additional_drop_params(

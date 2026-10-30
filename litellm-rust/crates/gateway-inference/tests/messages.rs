@@ -166,7 +166,7 @@ async fn count_tokens_answers_with_the_providers_count_for_the_deployment_model(
         .and(body_json(json!({
             "model": "test-model", "messages": messages, "system": "be brief", "tools": tools,
         })))
-        .respond_with(ResponseTemplate::new(200).set_body_json(counted.clone()))
+        .respond_with(ResponseTemplate::new(200).set_body_json(counted))
         .expect(1)
         .mount(&upstream)
         .await;
@@ -183,7 +183,14 @@ async fn count_tokens_answers_with_the_providers_count_for_the_deployment_model(
         .await
         .unwrap();
     assert_eq!(response.status(), 200);
-    assert_eq!(support::json(response).await, counted);
+    assert_eq!(
+        support::json(response).await,
+        json!({
+            "input_tokens": 14,
+            "context_management": {"original_input_tokens": 20},
+            "litellm_count_source": "provider",
+        })
+    );
 }
 
 #[rstest]
