@@ -1520,7 +1520,6 @@ async def _tools_listing_kwargs_for_toolset_url(
     owner_role: LitellmUserRoles = LitellmUserRoles.INTERNAL_USER,
     requested_toolsets: tuple[str, ...] = ("team-toolset",),
     team_id: str | None = "team-1",
-    whole_gateway: bool = False,
 ) -> dict[str, object]:
     from litellm.proxy.mcp_server.ui_session_utils import granted_toolset_ids
     from litellm.proxy._types import LiteLLM_ObjectPermissionTable
@@ -1543,8 +1542,7 @@ async def _tools_listing_kwargs_for_toolset_url(
     await LiteLLM_Proxy_MCP_Handler._get_mcp_tools_from_manager(
         user_api_key_auth=team_key,
         mcp_tools_with_litellm_proxy=[
-            *([{"type": "mcp", "server_url": "litellm_proxy"}] if whole_gateway else []),
-            *({"type": "mcp", "server_url": f"litellm_proxy/mcp/{name}"} for name in requested_toolsets),
+            {"type": "mcp", "server_url": f"litellm_proxy/mcp/{name}"} for name in requested_toolsets
         ],
         granted_toolsets=granted_through_team,
     )
@@ -1620,11 +1618,61 @@ async def test_a_denied_toolset_beside_a_granted_one_adds_nothing_to_the_scoped_
 async def test_a_whole_gateway_entry_beside_an_ungranted_toolset_still_lists_the_keys_own_servers(
     monkeypatch: pytest.MonkeyPatch,
 ):
-    kwargs: Final = await _tools_listing_kwargs_for_toolset_url(
-        monkeypatch, team_toolset_id="ts-other", whole_gateway=True
+    from litellm.proxy.mcp_server.ui_session_utils import granted_toolset_ids
+    from litellm.proxy._types import LiteLLM_ObjectPermissionTable
+
+    servers: Final = (
+        MCPServer(server_id="srv-wiki", name="deepwiki", alias="deepwiki", transport=MCPTransport.http),
+        MCPServer(server_id="srv-docs", name="context7", alias="context7", transport=MCPTransport.http),
     )
-    assert kwargs["mcp_servers"] is None
-    assert kwargs["user_api_key_auth"].object_permission is None
+    upstream_tools: Final = {
+        "deepwiki": [MCPTool(name="read_wiki_structure", inputSchema={"type": "object"})],
+        "context7": [MCPTool(name="resolve_library_id", inputSchema={"type": "object"})],
+    }
+
+    async def toolset_by_name(_prisma_client: object, name: str) -> types.SimpleNamespace:
+        return types.SimpleNamespace(toolset_id=TOOLSET_IDS_BY_NAME[name])
+
+    async def upstream_listing(_client: object, server_name: str) -> list[MCPTool]:
+        return upstream_tools[server_name]
+
+    manager: Final = MCPServerManager()
+    manager.registry = {server.server_id: server for server in servers}
+    manager.create_mcp_client = AsyncMock(return_value=object())
+    manager._fetch_tools_with_timeout = AsyncMock(side_effect=upstream_listing)
+    manager.get_toolset_by_name_cached = AsyncMock(side_effect=toolset_by_name)
+    monkeypatch.setattr("litellm.proxy.mcp_server.mcp_server_manager.global_mcp_server_manager", manager)
+    monkeypatch.setattr(mcp_operations, "global_mcp_server_manager", manager)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", MagicMock())
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {"supported_db_objects": []})
+
+    async def team_permission(context: UserAPIKeyAuth) -> LiteLLM_ObjectPermissionTable:
+        return LiteLLM_ObjectPermissionTable(object_permission_id="op-team", mcp_toolsets=["ts-granted"])
+
+    async def granted_through_team(context: UserAPIKeyAuth) -> frozenset[str]:
+        return await granted_toolset_ids(context, team_object_permission=team_permission, require_key_access=False)
+
+    wiki_key: Final = UserAPIKeyAuth(
+        api_key="sk-wiki",
+        team_id="team-1",
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+        object_permission=LiteLLM_ObjectPermissionTable(object_permission_id="op-key", mcp_servers=["srv-wiki"]),
+    )
+    try:
+        tools, server_names = await LiteLLM_Proxy_MCP_Handler._get_mcp_tools_from_manager(
+            user_api_key_auth=wiki_key,
+            mcp_tools_with_litellm_proxy=[
+                {"type": "mcp", "server_url": "litellm_proxy"},
+                {"type": "mcp", "server_url": "litellm_proxy/mcp/other-toolset"},
+            ],
+            granted_toolsets=granted_through_team,
+        )
+    finally:
+        for server in servers:
+            manager._drop_listed_tools(server.server_id)
+
+    assert [tool.name for tool in tools] == ["deepwiki-read_wiki_structure"]
+    assert server_names == ["deepwiki"]
 
 
 @pytest.mark.asyncio
