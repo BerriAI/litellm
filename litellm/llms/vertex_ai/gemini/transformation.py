@@ -936,14 +936,17 @@ def gemini_convert_messages_with_history(
                         model=model,
                         forward_function_call_id=forward_function_call_id,
                     )
-                    ## check if gemini_tool_call already exists in assistant_content
-                    for gemini_tool_call_part in gemini_tool_call_parts:
+                    ## check if gemini_tool_call already exists in assistant_content before this batch
+                    pre_existing_parts = list(assistant_content)
+                    assistant_content.extend(
+                        gemini_tool_call_part
+                        for gemini_tool_call_part in gemini_tool_call_parts
                         if not check_if_part_exists_in_parts(
-                            assistant_content,
+                            pre_existing_parts,
                             gemini_tool_call_part,
                             excluded_keys=["thoughtSignature"],
-                        ):
-                            assistant_content.append(gemini_tool_call_part)
+                        )
+                    )
                     # Only record this as the active tool-call message when it actually
                     # carries tool calls. The `if` guard above is also entered for a
                     # text-only assistant message (`assistant_msg.get("tool_calls", [])
