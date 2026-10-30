@@ -95,6 +95,7 @@
       "name": "generic_api_key",
       "display_name": "API Key (Generic)",
       "pattern": "\\b([Aa][Pp][Ii][-_]?[Kk][Ee][Yy][\\s:=]+['\"]?[A-Za-z0-9_\\-]{20,}['\"]?)\\b",
+      "prefix_pattern": "\\b[Aa][Pp][Ii][-_]?[Kk][Ee][Yy][\\s:=]+['\"]?$",
       "category": "Credential Patterns",
       "description": "Detects generic API key patterns"
     },
@@ -450,6 +451,7 @@
       "name": "street_address",
       "display_name": "Street Address",
       "pattern": "\\b\\d{1,6}\\s+[A-Za-z0-9][A-Za-z0-9\\s.'-]*\\s+(?:Street|St|Avenue|Ave|Road|Rd|Boulevard|Blvd|Drive|Dr|Lane|Ln|Way|Court|Ct|Place|Pl|Circle|Cir)\\b",
+      "prefix_pattern": "\\b\\d{1,6}\\s+[A-Za-z0-9][A-Za-z0-9\\s.'-]*$",
       "category": "PII Patterns",
       "description": "Detects street addresses (number + street name + street type)"
     },
