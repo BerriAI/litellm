@@ -7392,65 +7392,66 @@ class Router(DeprecatedRouterMembers):
         """
         handler_name: Final = original_function.__name__
         metadata_variable_name: Final = get_router_metadata_variable_name(function_name="generic_api_call")
-        try:
-            verbose_router_logger.debug("Inside _generic_api_call() - handler: %s, model: %s", handler_name, model)
-            self._update_kwargs_before_fallbacks(
-                model=model,
-                kwargs=kwargs,
-                metadata_variable_name=metadata_variable_name,
-            )
-            with (
-                self._video_call_pin(handler_name, kwargs),
-                self._route_capability_pin(handler_name),
-                picks_reserve(True),
-            ):
-                deployment: Final = self.get_available_deployment(
+        with owning_picks(self._core_least_busy_reservations, call_id_of(CALL_IDENTITY.validate_python(kwargs))):
+            try:
+                verbose_router_logger.debug("Inside _generic_api_call() - handler: %s, model: %s", handler_name, model)
+                self._update_kwargs_before_fallbacks(
                     model=model,
-                    messages=kwargs.get("messages", None),
-                    input=kwargs.get("input", None),
-                    specific_deployment=kwargs.pop("specific_deployment", None),
-                    request_kwargs=kwargs,
+                    kwargs=kwargs,
+                    metadata_variable_name=metadata_variable_name,
                 )
-            self._update_kwargs_with_deployment(
-                deployment=deployment,
-                kwargs=kwargs,
-                function_name="generic_api_call",
-                splits_stream_timeout=handler_name in _STREAM_TIMEOUT_AWARE_GENERIC_HANDLERS,
-            )
+                with (
+                    self._video_call_pin(handler_name, kwargs),
+                    self._route_capability_pin(handler_name),
+                    picks_reserve(True),
+                ):
+                    deployment: Final = self.get_available_deployment(
+                        model=model,
+                        messages=kwargs.get("messages", None),
+                        input=kwargs.get("input", None),
+                        specific_deployment=kwargs.pop("specific_deployment", None),
+                        request_kwargs=kwargs,
+                    )
+                self._update_kwargs_with_deployment(
+                    deployment=deployment,
+                    kwargs=kwargs,
+                    function_name="generic_api_call",
+                    splits_stream_timeout=handler_name in _STREAM_TIMEOUT_AWARE_GENERIC_HANDLERS,
+                )
 
-            data: Final = deployment["litellm_params"].copy()
-            model_name: Final = data["model"]
+                data: Final = deployment["litellm_params"].copy()
+                model_name: Final = data["model"]
 
-            self.total_calls[model_name] += 1
+                self.total_calls[model_name] += 1
 
-            # For passthrough routes, use the actual model from deployment
-            # and swap model name in endpoint if present
-            if "endpoint" in kwargs and kwargs["endpoint"]:
-                kwargs["endpoint"] = kwargs["endpoint"].replace(model, model_name)
-            kwargs["model"] = model_name
+                # For passthrough routes, use the actual model from deployment
+                # and swap model name in endpoint if present
+                if "endpoint" in kwargs and kwargs["endpoint"]:
+                    kwargs["endpoint"] = kwargs["endpoint"].replace(model, model_name)
+                kwargs["model"] = model_name
 
-            # Perform pre-call checks for routing strategy
-            self.routing_strategy_pre_call_checks(deployment=deployment)
+                # Perform pre-call checks for routing strategy
+                self.routing_strategy_pre_call_checks(deployment=deployment)
 
-            custom_llm_provider: Final = provider_for_generic_call(data)
+                custom_llm_provider: Final = provider_for_generic_call(data)
 
-            response: Final = original_function(
-                **{
-                    **data,
-                    "custom_llm_provider": custom_llm_provider,
-                    "caching": self._core_cache_responses,
-                    **kwargs,
-                }
-            )
+                response: Final = original_function(
+                    **{
+                        **data,
+                        "custom_llm_provider": custom_llm_provider,
+                        "caching": self._core_cache_responses,
+                        **kwargs,
+                    }
+                )
 
-            self.success_calls[model_name] += 1
-            verbose_router_logger.info("%s(model=%s)\x1b[32m 200 OK\x1b[0m", handler_name, model_name)
-            return response
-        except Exception as e:
-            verbose_router_logger.info("%s(model=%s)\x1b[31m Exception %s\x1b[0m", handler_name, model, e)
-            if model is not None:
-                self.fail_calls[model] += 1
-            raise e
+                self.success_calls[model_name] += 1
+                verbose_router_logger.info("%s(model=%s)\x1b[32m 200 OK\x1b[0m", handler_name, model_name)
+                return response
+            except Exception as e:
+                verbose_router_logger.info("%s(model=%s)\x1b[31m Exception %s\x1b[0m", handler_name, model, e)
+                if model is not None:
+                    self.fail_calls[model] += 1
+                raise e
 
     def embedding(
         self,

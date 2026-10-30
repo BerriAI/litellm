@@ -939,6 +939,18 @@ def test_a_sync_text_completion_does_not_keep_its_deployment_busy(
     assert _router_pick(router, TEXT_GROUP) == _called_deployment(route)
 
 
+
+@pytest.mark.parametrize("call_identity", _CALL_IDENTITIES)
+def test_a_sync_responses_call_that_fails_before_reaching_its_provider_frees_its_pick(
+    call_identity: dict[str, str],
+) -> None:
+    router: Final = _least_busy_router()
+
+    with pytest.raises(litellm.InternalServerError):
+        router.responses(model=ROUTER_GROUP, input="hi", api_base="not-a-url", **call_identity)
+
+    assert _router_pick(router) == ROUTER_DEPLOYMENT_IDS[0]
+
 @pytest.mark.asyncio
 async def test_a_batch_cancel_does_not_keep_its_deployment_busy(
     respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
