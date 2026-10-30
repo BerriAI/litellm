@@ -529,8 +529,8 @@ def check_file_size_under_limit(
 
     if llm_router is not None and request_data["model"] in router_model_names:
         try:
-            deployment: Final[Deployment | None] = llm_router.get_deployment_by_model_group_name(
-                model_group_name=request_data["model"]
+            deployment: Final[Deployment | None] = llm_router.registry().deployments(
+                request_data["model"], source="first_in_group"
             )
             if (
                 deployment
@@ -845,5 +845,3 @@ def _add_vector_store_id_from_path(request_data: dict, request: Request) -> None
             "populate_request_with_path_params: Updated request_data with vector_store_ids=%s",
             request_data.get("vector_store_ids"),
         )
-    else:
-        verbose_proxy_logger.debug("populate_request_with_path_params: No vector_store_id present in path=%s", path)

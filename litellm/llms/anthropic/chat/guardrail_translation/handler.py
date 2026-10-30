@@ -18,9 +18,9 @@ from copy import deepcopy
 from dataclasses import dataclass
 from itertools import chain, repeat
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Protocol, cast, overload, runtime_checkable
+from typing import TYPE_CHECKING, Any, Final, Protocol, TypeVar, cast, overload, runtime_checkable
 
-from pydantic import TypeAdapter, ValidationError
+from pydantic import ConfigDict, TypeAdapter, ValidationError, with_config
 from typing_extensions import ReadOnly, TypedDict, assert_never
 
 from litellm._logging import verbose_proxy_logger
@@ -349,14 +349,40 @@ def _tool_call_shapes(tool_calls: Sequence[object]) -> tuple[_ToolCallShape, ...
     )
 
 
-class _AnthropicSSEDelta(TypedDict, total=False):
-    type: ReadOnly[str]
+@with_config(ConfigDict(extra="ignore", strict=True))
+class _SSETextDelta(TypedDict, total=False):
+    type: ReadOnly[object]
     text: ReadOnly[str]
-    stop_reason: ReadOnly[str | None]
 
 
-class _AnthropicSSEEvent(TypedDict, total=False):
-    delta: ReadOnly[_AnthropicSSEDelta]
+@with_config(ConfigDict(extra="ignore", strict=True))
+class _SSETextDeltaEvent(TypedDict, total=False):
+    delta: ReadOnly[_SSETextDelta]
+
+
+@with_config(ConfigDict(extra="ignore", strict=True))
+class _SSEStopDelta(TypedDict, total=False):
+    stop_reason: ReadOnly[object]
+
+
+@with_config(ConfigDict(extra="ignore", strict=True))
+class _SSEStopDeltaEvent(TypedDict, total=False):
+    delta: ReadOnly[_SSEStopDelta]
+
+
+_SSE_TEXT_DELTA_EVENT: Final = TypeAdapter(_SSETextDeltaEvent)
+_SSE_STOP_DELTA_EVENT: Final = TypeAdapter(_SSEStopDeltaEvent)
+_SSEEventT = TypeVar("_SSEEventT")
+
+
+def _parse_sse_event(adapter: TypeAdapter[_SSEEventT], event_type: str, data_line: str) -> _SSEEventT | None:
+    try:
+        return adapter.validate_python(json.loads(data_line))
+    except json.JSONDecodeError:
+        verbose_proxy_logger.warning("Skipping a %s SSE event that is not valid JSON", event_type)
+    except ValidationError:
+        verbose_proxy_logger.warning("Skipping a %s SSE event with an unexpected shape", event_type)
+    return None
 
 
 class AnthropicMessagesHandler(BaseTranslation):
@@ -432,27 +458,30 @@ class AnthropicMessagesHandler(BaseTranslation):
         message, _ = serialize_http_exception_detail(exc.detail)
         return tuple(anthropic_sse_error_frames(message))
 
-    def _standalone_block_chunks(self, exc: "ModifyResponseException") -> list[bytes]:
+    def build_block_response(self, exc: "ModifyResponseException") -> "AnthropicMessagesResponse":
         import uuid
 
-        from litellm.llms.anthropic.messages.native.fake_stream_iterator import (
-            FakeAnthropicMessagesStreamIterator,
-        )
         from litellm.llms.base_llm.guardrail_translation.utils import (
             blocked_response_usage,
         )
         from litellm.types.utils import AnthropicMessagesResponse
 
-        block_response: Final = AnthropicMessagesResponse(
+        return AnthropicMessagesResponse(
             id=f"msg_{uuid.uuid4()}",
             type="message",
             role="assistant",
             content=[{"type": "text", "text": exc.message}],
             model=exc.model,
             stop_reason="end_turn",
-            usage=blocked_response_usage(getattr(exc, "original_response", None)),
+            usage=blocked_response_usage(exc.original_response),
         )
-        return list(FakeAnthropicMessagesStreamIterator(response=block_response))
+
+    def _standalone_block_chunks(self, exc: "ModifyResponseException") -> list[bytes]:
+        from litellm.llms.anthropic.messages.native.fake_stream_iterator import (
+            FakeAnthropicMessagesStreamIterator,
+        )
+
+        return list(FakeAnthropicMessagesStreamIterator(response=self.build_block_response(exc)))
 
     def _block_continuation_chunks(
         self, exc: "ModifyResponseException", responses_so_far: Sequence[object]
@@ -1803,13 +1832,10 @@ class AnthropicMessagesHandler(BaseTranslation):
 
                 # Only process content_block_delta events
                 if event_type == "content_block_delta" and data_line:
-                    try:
-                        data: _AnthropicSSEEvent = json.loads(data_line)
-                        delta: _AnthropicSSEDelta = data.get("delta", {})
-                        if delta.get("type") == "text_delta":
-                            text += delta.get("text", "")
-                    except json.JSONDecodeError:
-                        verbose_proxy_logger.warning("Failed to parse JSON from SSE data: %s", data_line)
+                    data = _parse_sse_event(_SSE_TEXT_DELTA_EVENT, event_type, data_line)
+                    delta: _SSETextDelta = {} if data is None else data.get("delta", {})
+                    if delta.get("type") == "text_delta":
+                        text += delta.get("text", "")
 
         except Exception as e:
             verbose_proxy_logger.error("Error extracting text from SSE: %s", e)
@@ -1866,14 +1892,11 @@ class AnthropicMessagesHandler(BaseTranslation):
 
                         # Check for message_delta event with stop_reason
                         if event_type == "message_delta" and data_line:
-                            try:
-                                data: _AnthropicSSEEvent = json.loads(data_line)
-                                delta: _AnthropicSSEDelta = data.get("delta", {})
-                                stop_reason: str | None = delta.get("stop_reason")
-                                if stop_reason is not None:
-                                    return True
-                            except json.JSONDecodeError:
-                                verbose_proxy_logger.warning("Failed to parse JSON from SSE data: %s", data_line)
+                            data = _parse_sse_event(_SSE_STOP_DELTA_EVENT, event_type, data_line)
+                            delta: _SSEStopDelta = {} if data is None else data.get("delta", {})
+                            stop_reason: object = delta.get("stop_reason")
+                            if stop_reason is not None:
+                                return True
 
                 except Exception as e:
                     verbose_proxy_logger.error("Error checking streaming end in SSE: %s", e)

@@ -20,7 +20,7 @@ from litellm.responses.litellm_completion_transformation.transformation import (
     LiteLLMCompletionResponsesConfig,
 )
 from litellm.responses.main import previous_response_client_ids
-from litellm.types.llms.openai import ResponseInputParam
+from litellm.types.llms.openai import ALL_RESPONSES_API_TOOL_PARAMS, ResponseInputParam
 from litellm.utils import ProviderConfigManager
 
 _COUNTED_CHAT_PARAMS: Final = (
@@ -114,19 +114,18 @@ def with_provider_file_ids(
     }
 
 
-def _with_hoisted_additional_tools(responses_request: Mapping[str, object]) -> Mapping[str, object]:
+def _with_hoisted_additional_tools(responses_request: Mapping[str, object], drop_params: bool) -> Mapping[str, object]:
     responses_input: Final = responses_request.get("input")
     if not isinstance(responses_input, list):
         return responses_request
     input_items: Final = cast(ResponseInputParam, responses_input)  # cast-ok: forwarded as sent, as inference does
-    hoisted: Final = hoist_additional_tools(input_items, None)
+    top_level_tools: Final = cast(  # cast-ok: tools are forwarded as sent, as inference does
+        "tuple[ALL_RESPONSES_API_TOOL_PARAMS, ...]", _ITEMS.validate_python(responses_request.get("tools") or ())
+    )
+    hoisted: Final = hoist_additional_tools(input_items, top_level_tools, drop_params=drop_params)
     if not hoisted.hoisted:
         return responses_request
-    return {
-        **responses_request,
-        "input": hoisted.input,
-        "tools": [*_ITEMS.validate_python(responses_request.get("tools") or ()), *hoisted.hoisted],
-    }
+    return {**responses_request, "input": hoisted.input, "tools": list(hoisted.tools)}
 
 
 def _with_emulated_file_search(responses_request: Mapping[str, object]) -> Mapping[str, object]:
@@ -197,7 +196,7 @@ async def chat_count_request(
         chat_body: Final = await _with_previous_turns(
             responses_batch_body_to_chat_body(
                 _with_compaction_as_summary_text(
-                    _with_emulated_file_search(_with_hoisted_additional_tools(responses_request))
+                    _with_emulated_file_search(_with_hoisted_additional_tools(responses_request, policy.drop_params))
                 ),
                 custom_llm_provider,
                 policy.drop_params,
