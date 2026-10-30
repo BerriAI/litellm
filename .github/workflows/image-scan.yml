@@ -13,8 +13,10 @@ on:
       - migrations/Dockerfile
       - migrations/run.py
       - gateway/Dockerfile
+      - gateway/launch.py
       - gateway/main.py
       - gateway/routes/allowlist.py
+      - litellm_cli/**
       - backend/Dockerfile
       - backend/main.py
       - litellm-rust/**

@@ -8,6 +8,7 @@ import itertools
 import re
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
+from types import MappingProxyType
 from typing import Final, ParamSpec, TypeVar
 
 import litellm
@@ -478,7 +479,15 @@ def _deployment_team_id(deployment: Mapping[str, object]) -> str | None:
 
 
 def _cached_wildcard_routing(llm_router: Router | None) -> Callable[[str, str | None], frozenset[str]] | None:
-    return None if llm_router is None else functools.cache(llm_router.wildcard_routed_models)
+    if llm_router is None:
+        return None
+    registry: Final = llm_router.registry()
+
+    def wildcard_routed_models(model: str, team_id: str | None) -> frozenset[str]:
+        routed: Final[frozenset[str]] = registry.names(model, kind="wildcard", team_id=team_id)
+        return routed
+
+    return functools.cache(wildcard_routed_models)
 
 
 def _routes_to_model(
@@ -633,7 +642,7 @@ def _wildcard_route_models(
     team_id: str | None,
     routes_to_model: Callable[[str, str], bool],
 ) -> Iterator[str]:
-    router_models: Final = llm_router.get_model_list(model_name=wildcard_route, team_id=team_id) if llm_router else None
+    router_models: Final = llm_router.registry().deployments(wildcard_route, team_id=team_id) if llm_router else None
     if not router_models:
         yield from get_known_models_from_wildcard(wildcard_model=wildcard_route, litellm_params=None)
         return
@@ -643,6 +652,15 @@ def _wildcard_route_models(
             litellm_params=LiteLLM_Params(**router_model["litellm_params"]),
             routes_to_model=routes_to_model,
         )
+
+
+_FALLBACK_SETTING_BY_TYPE: Final[Mapping[str, str]] = MappingProxyType(
+    {
+        "general": "fallbacks",
+        "context_window": "context_window_fallbacks",
+        "content_policy": "content_policy_fallbacks",
+    }
+)
 
 
 def get_all_fallbacks(
@@ -665,16 +683,15 @@ def get_all_fallbacks(
         return []
 
     # Get the appropriate fallback list based on type
-    fallbacks_config: list = []
-    if fallback_type == "general":
-        fallbacks_config = getattr(llm_router, "fallbacks", [])
-    elif fallback_type == "context_window":
-        fallbacks_config = getattr(llm_router, "context_window_fallbacks", [])
-    elif fallback_type == "content_policy":
-        fallbacks_config = getattr(llm_router, "content_policy_fallbacks", [])
-    else:
+    setting_name: Final = _FALLBACK_SETTING_BY_TYPE.get(fallback_type)
+    if setting_name is None:
         verbose_proxy_logger.warning("Unknown fallback_type: %s", fallback_type)
         return []
+    settings: Final = llm_router.settings()
+    # An unset setting reads as no fallbacks, as the router attribute's absence did.
+    if not settings.is_set(setting_name):
+        return []
+    fallbacks_config: list = getattr(settings, setting_name)
 
     if not fallbacks_config:
         return []

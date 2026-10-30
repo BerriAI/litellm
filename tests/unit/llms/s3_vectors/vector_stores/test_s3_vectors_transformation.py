@@ -12,6 +12,7 @@ from litellm.llms.s3_vectors.vector_stores.transformation import (
 )
 from litellm.types.utils import EmbeddingResponse
 from litellm.types.vector_stores import VectorStoreSearchResponse
+from tests.unit.proxy.router_entry_point_stubs import route_entry_points_to_stubs
 
 QUERY_VECTOR = [0.1, 0.2, 0.3]
 
@@ -174,7 +175,7 @@ class TestS3VectorsVectorStoreConfig:
         """Regression (LIT-6750): a store that never named an embedding model keeps working on a proxy
         whose model list has no text-embedding-3-small, embedding through the SDK instead of erroring."""
         config = S3VectorsVectorStoreConfig()
-        router = MagicMock()
+        router = route_entry_points_to_stubs(MagicMock())
         router.get_model_list.return_value = [
             {"model_name": "team-embeddings", "litellm_params": {"model": "openai/text-embedding-3-small"}}
         ]

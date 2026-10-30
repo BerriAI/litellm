@@ -425,7 +425,7 @@ def get_credentials_for_model(
             detail={"error": "Router not initialized. Cannot use model-based routing."},
         )
 
-    credentials: Final = llm_router.get_deployment_credentials_with_provider(model_id=model_id)
+    credentials: Final = llm_router.registry().credentials(model_id, form="with_provider")
 
     if credentials is None:
         raise ProxyModelNotFoundError(
@@ -481,7 +481,7 @@ def deployment_drop_params(
     llm_router: Optional["Router"], model_id: str, request: Mapping[str, object]
 ) -> Mapping[str, bool | str]:
     deployment: Final = (
-        llm_router.get_credential_deployment(model_id=model_id)
+        llm_router.registry().credentials(model_id, form="deployment")
         if llm_router is not None and "drop_params" not in request
         else None
     )
@@ -512,13 +512,15 @@ class _RouterDeployment(TypedDict):
     litellm_params: ReadOnly[Mapping[str, object]]
 
 
-def _deployment_serves_provider(llm_router: "Router", deployment: _RouterDeployment, custom_llm_provider: str) -> bool:
+def _deployment_serves_provider(deployment: _RouterDeployment, custom_llm_provider: str) -> bool:
+    from litellm.router_utils.common_utils import credential_provider
+
     litellm_params: Final = deployment["litellm_params"]
     model: Final = litellm_params.get("model")
     deployment_provider: Final = litellm_params.get("custom_llm_provider")
     return (
         isinstance(model, str)
-        and llm_router.credential_provider(deployment_provider if isinstance(deployment_provider, str) else None, model)
+        and credential_provider(deployment_provider if isinstance(deployment_provider, str) else None, model)
         == custom_llm_provider
     )
 
@@ -576,8 +578,9 @@ def get_team_provider_credentials(
     team_id: Final = user_api_key_dict.team_id
     team_models: Final = user_api_key_dict.team_models or []
 
-    proxy_model_list: Final = llm_router.get_model_names(team_id=team_id)
-    model_access_groups: Final = llm_router.get_model_access_groups()
+    registry: Final = llm_router.registry()
+    proxy_model_list: Final = registry.names(team_id=team_id)
+    model_access_groups: Final = registry.access_groups()
 
     raw_key_models: Final = user_api_key_dict.models or []
     sentinel_values: Final = {
@@ -605,7 +608,7 @@ def get_team_provider_credentials(
         return isinstance(public_model_name, str) and _key_allowlist_covers(public_model_name, key_model_allowlist)
 
     def _provider_credentials(model_id: str) -> dict[str, object] | None:
-        credentials: Final = llm_router.get_deployment_credentials_with_provider(model_id=model_id, team_id=team_id)
+        credentials: Final = registry.credentials(model_id, form="with_provider", team_id=team_id)
         if credentials is not None and credentials.get("custom_llm_provider") == custom_llm_provider:
             return {key: value for key, value in credentials.items() if key != "model"}
         return None
@@ -629,7 +632,7 @@ def get_team_provider_credentials(
         team_deployment_orders: Final = sorted(
             (
                 order
-                for deployment in llm_router.model_list or []
+                for deployment in registry.all() or []
                 if (order := _usable_team_deployment_order(deployment)) is not None
             ),
             key=_by_team_deployment_rank,
@@ -644,10 +647,7 @@ def get_team_provider_credentials(
 
     if not include_accessible_deployments:
         return None
-    if not any(
-        _deployment_serves_provider(llm_router, deployment, custom_llm_provider)
-        for deployment in llm_router.model_list or []
-    ):
+    if not any(_deployment_serves_provider(deployment, custom_llm_provider) for deployment in registry.all()):
         return None
 
     # 2. Fall back to deployments the caller is allowed to access. The key's
@@ -756,7 +756,7 @@ def add_internal_model_credentials(
     if model_id is None:
         return
     try:
-        credentials: Final = llm_router.get_deployment_credentials_with_provider(model_id=model_id)
+        credentials: Final = llm_router.registry().credentials(model_id, form="with_provider")
     except Exception:  # noqa: BLE001  # the snapshot only enables cost accounting; a batch whose deployment no longer resolves must still be retrievable
         return
     if credentials is None:
@@ -774,7 +774,9 @@ def add_deployment_model_info(
     (in-place), the way the router does for routed calls, so the completed batch is
     priced by its deployment id instead of the published model rate.
     """
-    deployment: Final = llm_router.get_credential_deployment(model_id=model_id) if llm_router is not None else None
+    deployment: Final = (
+        llm_router.registry().credentials(model_id, form="deployment") if llm_router is not None else None
+    )
     if deployment is None:
         return
     data["litellm_metadata"] = {

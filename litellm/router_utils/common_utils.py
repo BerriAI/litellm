@@ -105,6 +105,14 @@ def is_proxy_admin_request(request_kwargs: Mapping[str, object] | None) -> bool:
 _is_proxy_admin_request = is_proxy_admin_request
 
 
+def credential_provider(custom_llm_provider: str | None, model: str) -> str:
+    if custom_llm_provider:
+        return custom_llm_provider
+    if "/" in model:
+        return model.split("/")[0]
+    return "openai"
+
+
 def team_may_use_deployment(owner_team_id: object, team_id: str | None) -> bool:
     """A deployment owned by a team (``model_info.team_id``) serves only that team; one with no owner serves every team."""
     return owner_team_id is None or owner_team_id == team_id

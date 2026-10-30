@@ -5317,3 +5317,53 @@ def test_record_request_error_feeds_the_failure_rollup_with_the_logged_status() 
             status_code=503,
         ): 1
     }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("disable_error_logs", [False, True])
+@pytest.mark.parametrize("status", ["success", "failure"])
+async def test_completed_spend_survives_error_log_suppression(
+    monkeypatch: pytest.MonkeyPatch, disable_error_logs: bool, status: str
+) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.types.utils import ModelResponse, Usage
+
+    writer: Final = DBSpendUpdateWriter()
+    prisma: Final = _tool_usage_prisma()
+    prisma.get_request_status.return_value = status
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+    monkeypatch.setattr(proxy_server, "disable_spend_logs", False)
+    monkeypatch.setattr(proxy_server, "general_settings", {"disable_error_logs": disable_error_logs})
+    now: Final = datetime(2026, 10, 20, 12, tzinfo=timezone.utc)
+    result: Final = ModelResponse(
+        model="gpt-4o-mini", usage=Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15)
+    )
+    assert await writer.update_database(
+        token="test-token",
+        user_id="test-user",
+        end_user_id=None,
+        team_id=None,
+        org_id=None,
+        kwargs={
+            "model": "gpt-4o-mini",
+            "litellm_call_id": "completed-call",
+            "litellm_params": {
+                "metadata": {
+                    "user_api_key": "test-token",
+                    "user_api_key_user_id": "test-user",
+                    "status": status,
+                }
+            },
+        },
+        completion_response=result,
+        start_time=now,
+        end_time=now,
+        response_cost=0.23,
+    )
+    await drain_logging_tasks()
+    assert len(prisma.spend_log_transactions) == (0 if status == "failure" and disable_error_logs else 1)
+    updates: Final = await writer.daily_spend_update_queue.flush_all_updates_from_in_memory_queue()
+    rows: Final = [row for update in updates for row in update.values()]
+    assert len(rows) == 1
+    assert rows[0]["spend"] == pytest.approx(0.23)
+    assert (rows[0]["prompt_tokens"], rows[0]["completion_tokens"]) == (10, 5)
