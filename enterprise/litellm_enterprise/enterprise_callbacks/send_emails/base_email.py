@@ -149,10 +149,11 @@ class BaseEmailLogger(CustomLogger):
         )
         if include_api_key is None:
             include_api_key = True  # Default to True if not set
-        key_token_display = (
+        key_token_display: Final = html.escape(
             send_key_created_email_event.virtual_key
             if include_api_key
-            else "[Key hidden for security - retrieve from dashboard]"
+            else "[Key hidden for security - retrieve from dashboard]",
+            quote=True,
         )
 
         email_html_content = KEY_CREATED_EMAIL_TEMPLATE.format(
