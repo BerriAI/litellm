@@ -9935,6 +9935,16 @@ def _orphan_answer_with(tool_call_id: object) -> list[dict[str, object]]:
             id="object_assistant_tool_call_id",
         ),
         pytest.param(
+            [
+                _ASK,
+                {**_WEATHER_CALL, "tool_calls": [{**_WEATHER_CALL["tool_calls"][0], "id": 7}]},
+                {"role": "tool", "tool_call_id": "7", "content": "sunny"},
+            ],
+            "messages[1].tool_calls[0].id",
+            "int",
+            id="int_assistant_tool_call_id",
+        ),
+        pytest.param(
             [*_orphan_answer_with({"id": "toolu_01"})[:3], {"role": ["user"], "content": "Go on"}],
             "messages[3].role",
             "list",

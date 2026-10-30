@@ -7063,18 +7063,30 @@ async def test_bridge_partial_response_on_disconnect_bills_only_the_input_since_
     ) == await _input_tokens_billed_on_disconnect(since_compaction)
 
 
+_ANTHROPIC_MODEL: Final = "anthropic/claude-sonnet-5-5"
+_WEATHER_ASK: Final = {"role": "user", "content": "Weather in Paris?"}
+
+
+def _weather_call(**fields: object) -> dict[str, object]:
+    return {"type": "function_call", "name": "get_weather", "arguments": "{}", **fields}
+
+
+def _bridge_to(model: str, history: list[dict[str, object]], **request: object) -> dict:
+    return LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+        model=model,
+        input=cast(ResponseInputParam, history),
+        responses_api_request=cast(ResponsesAPIOptionalRequestParams, request),
+    )
+
+
 @pytest.mark.parametrize("output_type", ["function_call_output", "custom_tool_call_output"])
 @pytest.mark.parametrize(("call_id", "type_name"), [({"id": "call_weather"}, "dict"), (["call_weather"], "list")])
-def test_a_tool_output_with_a_non_string_call_id_is_a_400_naming_its_input_item(
+def test_a_tool_output_with_an_unhashable_call_id_is_a_400_naming_its_input_item(
     output_type: str, call_id: object, type_name: str
 ) -> None:
     history: Final = cast(
         ResponseInputParam,
-        [
-            {"role": "user", "content": "Weather in Paris?"},
-            {"type": "function_call", "call_id": "call_weather", "name": "get_weather", "arguments": "{}"},
-            {"type": output_type, "call_id": call_id, "output": "sunny"},
-        ],
+        [_WEATHER_ASK, _weather_call(call_id="call_weather"), {"type": output_type, "call_id": call_id, "output": "sunny"}],
     )
 
     with pytest.raises(litellm.BadRequestError) as raised:
@@ -7087,38 +7099,135 @@ def test_a_tool_output_with_a_non_string_call_id_is_a_400_naming_its_input_item(
     )
 
 
-@pytest.mark.parametrize(("role", "type_name"), [(["user"], "list"), ({"name": "user"}, "dict"), (7, "int")])
-def test_a_message_item_with_a_non_string_role_is_a_400_naming_its_input_item(role: object, type_name: str) -> None:
-    history: Final = cast(ResponseInputParam, [{"role": "user", "content": "Hi"}, {"role": role, "content": "Go on"}])
-
-    with pytest.raises(litellm.BadRequestError) as raised:
-        LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
-            input=history, responses_api_request={"instructions": "Be terse."}
-        )
-
-    assert raised.value.message == (
-        f"litellm.BadRequestError: Invalid type for 'input[1].role': expected a string, got {type_name}"
-    )
-
-
-def test_a_non_string_role_on_an_item_that_never_reads_it_still_converts() -> None:
+def test_a_malformed_call_id_after_a_compaction_item_is_named_by_its_index_in_the_request() -> None:
     history: Final = cast(
         ResponseInputParam,
         [
-            {"role": "user", "content": "Weather in Paris?"},
-            {
-                "type": "function_call",
-                "call_id": "call_weather",
-                "name": "get_weather",
-                "arguments": "{}",
-                "role": ["x"],
-            },
-            {"type": "function_call_output", "call_id": "call_weather", "output": "sunny", "role": ["x"]},
+            {"role": "user", "content": "Plan a Tokyo trip."},
+            {"role": "assistant", "content": "Day one, Asakusa."},
+            {"type": "compaction", "id": "cmp_litellm", "encrypted_content": json.dumps(_COMPACTION_BLOCK)},
+            _weather_call(call_id="call_weather"),
+            {"type": "function_call_output", "call_id": {"id": "call_weather"}, "output": "sunny"},
         ],
     )
 
-    messages: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
-        input=history, responses_api_request={}
+    with pytest.raises(litellm.BadRequestError) as raised:
+        LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+            input=history, responses_api_request={}, only_since_compaction=True
+        )
+
+    assert "'input[4].call_id'" in raised.value.message
+
+
+def test_a_conversion_failure_elsewhere_is_never_blamed_on_a_numeric_call_id() -> None:
+    history: Final = cast(
+        ResponseInputParam,
+        [
+            _WEATHER_ASK,
+            {"type": "function_call_output", "call_id": 7, "output": "sunny"},
+            {"type": ["message"], "role": "user", "content": "Go on"},
+        ],
     )
 
-    assert [message_field(message, "role") for message in messages] == ["user", "assistant", "tool"]
+    with pytest.raises((TypeError, litellm.BadRequestError)) as raised:
+        LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+            input=history, responses_api_request={}
+        )
+
+    assert "call_id" not in str(raised.value)
+
+
+def test_a_tool_output_with_an_int_call_id_converts_like_its_string_form() -> None:
+    def converted(call_id: object) -> list[object]:
+        return list(
+            LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+                input=cast(
+                    ResponseInputParam,
+                    [_WEATHER_ASK, {"type": "function_call_output", "call_id": call_id, "output": "sunny"}],
+                ),
+                responses_api_request={},
+            )
+        )
+
+    assert converted(7) == converted("7")
+
+
+def test_a_non_string_role_still_converts_for_a_target_that_judges_it_itself() -> None:
+    history: Final = [{"role": "user", "content": "Hi"}, {"role": ["user"], "content": "Go on"}]
+
+    shared: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+        input=cast(ResponseInputParam, history), responses_api_request={}
+    )
+    bridged: Final = _bridge_to("gemini/gemini-3.8-flash", history)
+
+    assert [message_field(message, "role") for message in shared] == ["user", ["user"]]
+    assert [message_field(message, "role") for message in bridged["messages"]] == ["user", ["user"]]
+
+
+@pytest.mark.parametrize(
+    ("history", "field_path", "type_name"),
+    [
+        pytest.param(
+            [{"role": "user", "content": "Hi"}, {"role": ["user"], "content": "Go on"}],
+            "input[1].role",
+            "list",
+            id="list_role",
+        ),
+        pytest.param(
+            [{"role": "user", "content": "Hi"}, {"role": {"name": "user"}, "content": "Go on"}],
+            "input[1].role",
+            "dict",
+            id="dict_role",
+        ),
+        pytest.param(
+            [{"role": "user", "content": "Hi"}, {"role": 7, "content": "Go on"}], "input[1].role", "int", id="int_role"
+        ),
+        pytest.param(
+            [_WEATHER_ASK, _weather_call(call_id={"id": "call_weather"})],
+            "input[1].call_id",
+            "dict",
+            id="dict_function_call_id",
+        ),
+        pytest.param(
+            [_WEATHER_ASK, _weather_call(call_id=7), {"type": "function_call_output", "call_id": "7", "output": "sunny"}],
+            "input[1].call_id",
+            "int",
+            id="int_function_call_id",
+        ),
+        pytest.param(
+            [_WEATHER_ASK, _weather_call(id=["fc_weather"])], "input[1].id", "list", id="list_function_call_item_id"
+        ),
+        pytest.param(
+            [
+                {"role": "user", "content": "Plan a Tokyo trip."},
+                {"role": "assistant", "content": "Day one, Asakusa."},
+                {"type": "compaction", "id": "cmp_litellm", "encrypted_content": json.dumps(_COMPACTION_BLOCK)},
+                {"role": ["user"], "content": "And Osaka?"},
+            ],
+            "input[3].role",
+            "list",
+            id="list_role_after_a_compaction_item",
+        ),
+    ],
+)
+def test_a_non_string_field_bridged_to_anthropic_is_a_400_naming_its_input_item(
+    history: list[dict[str, object]], field_path: str, type_name: str
+) -> None:
+    with pytest.raises(litellm.BadRequestError) as raised:
+        _bridge_to(_ANTHROPIC_MODEL, history, instructions="Be terse.")
+
+    assert raised.value.message == (
+        f"litellm.BadRequestError: Invalid type for '{field_path}': expected a string, got {type_name}"
+    )
+
+
+def test_a_non_string_role_on_an_item_that_never_reads_it_still_bridges_to_anthropic() -> None:
+    history: Final = [
+        _WEATHER_ASK,
+        _weather_call(call_id="call_weather", role=["x"]),
+        {"type": "function_call_output", "call_id": "call_weather", "output": "sunny", "role": ["x"]},
+    ]
+
+    bridged: Final = _bridge_to(_ANTHROPIC_MODEL, history)
+
+    assert [message_field(message, "role") for message in bridged["messages"]] == ["user", "assistant", "tool"]

@@ -219,7 +219,7 @@ def _non_string_tool_answer_ids(messages: Sequence[object]) -> Iterator[tuple[st
 def non_string_message_field_error(messages: Sequence[object], error: Exception) -> AnthropicError | None:
     tool_call_ids: Final = (
         chain(_non_string_assistant_tool_call_ids(messages), _non_string_tool_answer_ids(messages))
-        if isinstance(error, TypeError)
+        if isinstance(error, (TypeError, AttributeError))
         else ()
     )
     malformed_field: Final = next(chain(_non_string_roles(messages), tool_call_ids), None)
