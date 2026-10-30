@@ -3376,7 +3376,7 @@ def test_bedrock_messages_legacy_output_format_wins_over_output_config_format(lo
     }
     newer_format = {
         "type": "json_schema",
-        "schema": {"type": "object", "properties": {"newer_field": {"type": "string"}}},
+        "schema": {"type": "object", "properties": {"newer_field": {"type": "string"}}, "additionalProperties": False},
     }
 
     result = cfg.transform_anthropic_messages_request(

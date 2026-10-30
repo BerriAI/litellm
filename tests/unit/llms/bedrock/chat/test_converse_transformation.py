@@ -5157,9 +5157,8 @@ def test_native_output_schema_drops_keywords_bedrock_rejects_and_closes_objects(
         (ROOT_REF_SCHEMA, "$ref"),
         (OPEN_OBJECT_SCHEMA, "additionalProperties"),
         (LOOKAROUND_PATTERN_SCHEMA, "pattern"),
-        (UNKNOWN_FORMAT_SCHEMA, "format"),
     ],
-    ids=["recursive", "root-ref", "open-object", "lookaround-pattern", "unlisted-format"],
+    ids=["recursive", "root-ref", "open-object", "lookaround-pattern"],
 )
 def test_schema_native_output_cannot_hold_keeps_the_tool_path_on_a_native_profile(
     set_native_structured_output, schema, kept_keyword, native_key
@@ -5173,6 +5172,22 @@ def test_schema_native_output_cannot_hold_keeps_the_tool_path_on_a_native_profil
     tool_spec: Final = request["toolConfig"]["tools"][0]["toolSpec"]
     assert tool_spec["name"] == "json_tool_call"
     assert kept_keyword in _schema_keys(tool_spec["inputSchema"]["json"])
+
+
+@pytest.mark.parametrize("native_key", ["legacy", "bedrock"])
+def test_unlisted_string_format_moves_into_the_description_and_keeps_native_output(
+    set_native_structured_output, native_key
+):
+    """Claude's grammar rejects a string ``format`` outside its list ("format
+    'x-litellm-unlisted-format' is not supported"), so the shaper drops it and
+    notes it, the way it does for other constraints, instead of leaving native output."""
+    model: Final = "us.anthropic.claude-opus-4-8"
+    set_native_structured_output(model, native_key)
+
+    request: Final = _converse_request_for_schema(model, UNKNOWN_FORMAT_SCHEMA)
+
+    sent: Final = json.loads(request["outputConfig"]["textFormat"]["structure"]["jsonSchema"]["schema"])
+    assert sent["properties"]["blob"] == {"type": "string", "description": "Note: format: x-litellm-unlisted-format."}
 
 
 def _shared_defs_schema(defs_key: str) -> Mapping[str, object]:
@@ -5782,6 +5797,81 @@ def test_output_config_applies_additional_properties():
     parsed = json.loads(output_config["textFormat"]["structure"]["jsonSchema"]["schema"])
     assert parsed["additionalProperties"] is False
     assert parsed["properties"]["nested"]["additionalProperties"] is False
+
+
+_SCHEMA_CLAUDE_REJECTS = {
+    "type": "object",
+    "properties": {
+        "score": {"type": "number", "minimum": 0, "maximum": 1},
+        "tags": {"type": "array", "items": {"type": "string"}, "maxItems": 3},
+        "meta": {"type": ["object", "null"], "properties": {"a": {"type": "string"}}},
+    },
+    "required": ["score"],
+}
+
+
+def _converse_schema_json(model: str, schema: object) -> str:
+    response_format = {"type": "json_schema", "json_schema": {"name": "Score", "schema": schema}}
+    result = AmazonConverseConfig()._translate_response_format_param(
+        value=response_format,
+        model=model,
+        optional_params={},
+        non_default_params={"response_format": response_format},
+        is_thinking_enabled=False,
+    )
+    return result["outputConfig"]["textFormat"]["structure"]["jsonSchema"]["schema"]
+
+
+def _converse_schema_for(model: str) -> dict:
+    return json.loads(_converse_schema_json(model, _SCHEMA_CLAUDE_REJECTS))
+
+
+def test_claude_response_format_schema_shaped_like_anthropic_path(local_model_cost_map):
+    """Bedrock relays a Claude schema to Claude's grammar compiler, which 400s on
+    keywords it cannot enforce ("For 'array' type, property 'maxItems' is not
+    supported") and on any object that is not closed, so Converse shapes it like
+    the direct Anthropic path."""
+    assert _converse_schema_for("us.anthropic.claude-sonnet-4-6") == {
+        "type": "object",
+        "properties": {
+            "score": {"type": "number", "description": "Note: minimum value: 0, maximum value: 1."},
+            "tags": {"type": "array", "items": {"type": "string"}, "description": "Note: maximum number of items: 3."},
+            "meta": {
+                "type": ["object", "null"],
+                "properties": {"a": {"type": "string"}},
+                "additionalProperties": False,
+            },
+        },
+        "required": ["score"],
+        "additionalProperties": False,
+    }
+
+
+def test_non_claude_response_format_schema_keeps_constraints(local_model_cost_map):
+    """Non-Claude Bedrock models enforce these keywords, so only the missing
+    ``additionalProperties`` is filled in."""
+    assert _converse_schema_for("qwen.qwen3-32b-v1:0") == {
+        "type": "object",
+        "properties": {
+            "score": {"type": "number", "minimum": 0, "maximum": 1},
+            "tags": {"type": "array", "items": {"type": "string"}, "maxItems": 3},
+            "meta": {
+                "type": ["object", "null"],
+                "properties": {"a": {"type": "string"}},
+                "additionalProperties": False,
+            },
+        },
+        "required": ["score"],
+        "additionalProperties": False,
+    }
+
+
+@pytest.mark.parametrize("model", ["us.anthropic.claude-sonnet-4-6", "qwen.qwen3-32b-v1:0"])
+@pytest.mark.parametrize("schema", [True, "not a schema"])
+def test_non_object_response_format_schema_is_forwarded_unchanged(local_model_cost_map, model: str, schema: object):
+    """A schema that is not an object reaches Bedrock as sent, so the caller gets
+    Bedrock's 400 instead of a 500 from the proxy."""
+    assert json.loads(_converse_schema_json(model, schema)) == schema
 
 
 _TOOL_PARAM = [

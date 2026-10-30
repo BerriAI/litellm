@@ -689,6 +689,75 @@ def test_apply_structured_output_prefers_legacy_output_format(local_model_cost_m
     assert "output_format" not in body
 
 
+_SCHEMA_WITH_REJECTED_KEYWORDS = {
+    "type": "object",
+    "properties": {
+        "tags": {"type": "array", "items": {"type": "string"}, "maxItems": 3},
+        "meta": {"type": ["object", "null"], "properties": {"a": {"type": "string"}}},
+    },
+    "required": ["tags"],
+}
+
+
+def test_apply_structured_output_shapes_schema_for_native_models(local_model_cost_map):
+    """Bedrock relays the schema to Claude's grammar compiler, which 400s on
+    keywords it cannot enforce and on open objects, so the Invoke path shapes
+    the schema like the direct Anthropic path before forwarding it."""
+    from litellm.llms.bedrock.common_utils import apply_bedrock_invoke_structured_output
+
+    body = {
+        "messages": [{"role": "user", "content": "hi"}],
+        "output_format": {"type": "json_schema", "schema": _SCHEMA_WITH_REJECTED_KEYWORDS},
+    }
+
+    apply_bedrock_invoke_structured_output(
+        model="us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+        request_body=body,
+    )
+
+    assert body["output_config"]["format"] == {
+        "type": "json_schema",
+        "schema": {
+            "type": "object",
+            "properties": {
+                "tags": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Note: maximum number of items: 3.",
+                },
+                "meta": {
+                    "type": ["object", "null"],
+                    "properties": {"a": {"type": "string"}},
+                    "additionalProperties": False,
+                },
+            },
+            "required": ["tags"],
+            "additionalProperties": False,
+        },
+    }
+
+
+def test_apply_structured_output_inlines_raw_schema_for_other_models(local_model_cost_map):
+    """The prompt-engineered fallback is text the model reads, not a grammar, so
+    the schema is inlined untouched."""
+    import json
+
+    from litellm.llms.bedrock.common_utils import apply_bedrock_invoke_structured_output
+
+    body = {
+        "messages": [{"role": "user", "content": "hi"}],
+        "output_format": {"type": "json_schema", "schema": _SCHEMA_WITH_REJECTED_KEYWORDS},
+    }
+
+    apply_bedrock_invoke_structured_output(
+        model="anthropic.claude-3-haiku-20240307-v1:0",
+        request_body=body,
+    )
+
+    assert "output_config" not in body
+    assert json.loads(body["messages"][-1]["content"][-1]["text"]) == _SCHEMA_WITH_REJECTED_KEYWORDS
+
+
 def test_sign_aws_request_assumes_role_with_external_id(monkeypatch):
     """A trust policy requiring sts:ExternalId must be satisfied when signing batch API requests."""
     import datetime

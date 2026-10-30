@@ -2,7 +2,7 @@ import copy
 import json
 import re
 import time
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, ClassVar, Final, NoReturn, cast
 
@@ -27,15 +27,12 @@ from litellm.constants import (
 from litellm.litellm_core_utils.core_helpers import drops_unsupported_params, map_finish_reason
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     DEFS_MAX_INLINED_BYTES,
-    is_object_schema,
     sanitize_input_schema_for_anthropic,
-    schema_fragment_ref,
     schema_grammar_branch_count,
     schema_has_lookaround_pattern,
     schema_has_open_object,
     schema_has_unresolvable_ref,
     schema_optional_property_count,
-    schema_string_formats,
     schema_union_property_count,
     unpack_defs,
 )
@@ -47,6 +44,9 @@ from litellm.litellm_core_utils.prompt_templates.image_handling import (
 from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import (
     place_mid_conversation_system,
     split_leading_system_run,
+)
+from litellm.llms.anthropic.output_schema import (
+    shape_claude_output_schema,
 )
 from litellm.llms.base_llm.base_utils import (
     ResponseFormatSchema,
@@ -166,9 +166,6 @@ _DEFER_LOADING_ADAPTER: Final = TypeAdapter(bool)
 _TOOL_FIELDS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _TOOLS_ADAPTER: Final = TypeAdapter(list[object])
 _LITELLM_PARAMS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
-_NATIVE_OUTPUT_STRING_FORMATS: Final = frozenset(
-    ("date-time", "time", "date", "duration", "email", "hostname", "uri", "ipv4", "ipv6", "uuid")
-)
 NATIVE_OUTPUT_MAX_UNION_PARAMETERS: Final = 16
 NATIVE_OUTPUT_MAX_OPTIONAL_PARAMETERS: Final = 24
 NATIVE_OUTPUT_MAX_GRAMMAR_BRANCHES: Final = 2048
@@ -266,31 +263,6 @@ class _AnthropicToolResultBlock(TypedDict, total=False):
     type: ReadOnly[str]
     tool_use_id: ReadOnly[str]
     content: ReadOnly[object]
-
-
-_ENUM_TYPE_CHECKS: Final[Mapping[object, Callable[[object], bool]]] = MappingProxyType(
-    {
-        "null": lambda v: v is None,
-        "boolean": lambda v: isinstance(v, bool),
-        "integer": lambda v: isinstance(v, int) and not isinstance(v, bool),
-        "number": lambda v: isinstance(v, (int, float)) and not isinstance(v, bool),
-        "string": lambda v: isinstance(v, str),
-        "array": lambda v: isinstance(v, list),
-        "object": lambda v: isinstance(v, dict),
-    }
-)
-
-
-def _enum_conflicts_with_declared_type(schema: Mapping[str, object]) -> bool:
-    """Whether ``schema``'s ``enum`` cannot match its declared ``type``."""
-    enum_values: Final = schema.get("enum")
-    declared_type: Final = schema.get("type")
-    if not isinstance(enum_values, list) or declared_type is None:
-        return False
-    if isinstance(declared_type, list):
-        return True
-    check: Final = _ENUM_TYPE_CHECKS.get(declared_type)
-    return check is not None and not all(check(value) for value in enum_values)
 
 
 # Single, internal-only key on ``litellm_params`` used to thread the per-
@@ -766,149 +738,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         return params
 
     @staticmethod
-    def filter_anthropic_output_schema(schema: dict[str, Any]) -> dict[str, Any]:
-        """
-        Filter out unsupported fields from JSON schema for Anthropic's output_format API.
-
-        Anthropic's output_format doesn't support certain JSON schema properties.
-        These are constraints that cannot be enforced by the constrained-decoding
-        grammar Anthropic compiles the schema into, so the API rejects them with a
-        400 ``invalid_request_error`` (e.g. "output_format.schema: For 'array' type,
-        property 'uniqueItems' is not supported"):
-        - maxItems/minItems above 1/uniqueItems/contains/minContains/maxContains/prefixItems: array constraints
-        - minimum/maximum/exclusiveMinimum/exclusiveMaximum/multipleOf: numeric constraints
-        - minLength/maxLength: string constraints
-        - minProperties/maxProperties/patternProperties/propertyNames: object constraints
-        - dependentRequired/dependentSchemas/unevaluatedProperties: object constraints
-        - if/then/else/not: conditional and negation keywords
-
-        ``oneOf`` is also rejected ("Schema type 'oneOf' is not supported") and is
-        rewritten to ``anyOf``, matching the Anthropic SDK. Unknown keywords are
-        ignored by the API, so anything not listed here passes through untouched.
-
-        This mirrors the transformation done by the Anthropic Python SDK.
-        See: https://platform.claude.com/docs/en/build-with-claude/structured-outputs#how-sdk-transformation-works
-
-        The SDK approach:
-        1. Remove unsupported constraints from schema
-        2. Add constraint info to description (e.g., "Must be at least 100")
-        3. Validate responses against original schema
-        Args:
-            schema: The JSON schema dictionary to filter
-
-        Returns:
-            A new dictionary with unsupported fields removed and descriptions updated
-
-        Related issues:
-        - https://github.com/BerriAI/litellm/issues/19444
-        """
-        if not isinstance(schema, dict):
-            return schema
-
-        constraint_labels: Final = {
-            "minItems": "minimum number of items: {}",
-            "maxItems": "maximum number of items: {}",
-            "uniqueItems": "all array items must be unique",
-            "contains": "array must contain an item matching: {}",
-            "minContains": "minimum number of matching items: {}",
-            "maxContains": "maximum number of matching items: {}",
-            "prefixItems": "leading items must match, in order: {}",
-            "minimum": "minimum value: {}",
-            "maximum": "maximum value: {}",
-            "exclusiveMinimum": "exclusive minimum value: {}",
-            "exclusiveMaximum": "exclusive maximum value: {}",
-            "multipleOf": "must be a multiple of {}",
-            "minLength": "minimum length: {}",
-            "maxLength": "maximum length: {}",
-            "minProperties": "minimum number of properties: {}",
-            "maxProperties": "maximum number of properties: {}",
-            "patternProperties": "properties whose names match each pattern must satisfy: {}",
-            "propertyNames": "property names must satisfy: {}",
-            "dependentRequired": "dependent required properties: {}",
-            "dependentSchemas": "dependent schemas: {}",
-            "unevaluatedProperties": "unevaluated properties must satisfy: {}",
-            "if": "conditional (if): {}",
-            "then": "conditional (then): {}",
-            "else": "conditional (else): {}",
-            "not": "must not match: {}",
-        }
-        schema_fields: Final[Mapping[str, object]] = MappingProxyType(schema)
-        min_items: Final = schema.get("minItems")
-        enforced_min_items: Final = (
-            isinstance(min_items, int) and not isinstance(min_items, bool) and min_items in (0, 1)
-        )
-        unsupported_fields: Final = set(constraint_labels) - ({"minItems"} if enforced_min_items else set())
-
-        # Build description additions from removed constraints. Iterating
-        # constraint_labels (not the set) keeps the note order deterministic across
-        # processes, so identical requests serialize identically regardless of
-        # PYTHONHASHSEED and stay cache-friendly.
-        constraint_descriptions: Final[list] = []
-        for field, label in constraint_labels.items():
-            if field not in schema or field not in unsupported_fields:
-                continue
-            value = schema_fields[field]
-            # A falsy boolean constraint (e.g. ``uniqueItems: false``) imposes no
-            # real requirement, so don't add a misleading advisory note for it.
-            if isinstance(value, bool) and not value:
-                continue
-            # Sub-schema constraints (e.g. ``contains``) are serialized as JSON so
-            # the advisory note preserves what the constraint actually required,
-            # instead of just noting that it existed.
-            note_value = json.dumps(value) if isinstance(value, (dict, list)) else value
-            constraint_descriptions.append(label.format(note_value))
-
-        result: Final[dict[str, Any]] = {}
-
-        # Update description with removed constraint info
-        if constraint_descriptions:
-            existing_desc: Final = schema.get("description", "")
-            constraint_note: Final = "Note: " + ", ".join(constraint_descriptions) + "."
-            if existing_desc:
-                result["description"] = existing_desc + " " + constraint_note
-            else:
-                result["description"] = constraint_note
-
-        drops_conflicting_type: Final = _enum_conflicts_with_declared_type(schema)
-
-        for key, value in schema_fields.items():
-            if key in unsupported_fields:
-                continue
-            if key == "type" and drops_conflicting_type:
-                continue
-            if key == "description" and "description" in result:
-                # Already handled above
-                continue
-
-            if key in ("properties", "$defs", "definitions") and isinstance(value, dict):
-                nested_schemas: dict[str, Any] = value  # mutable-ok: filter_anthropic_output_schema takes a dict
-                result[key] = {k: AnthropicConfig.filter_anthropic_output_schema(v) for k, v in nested_schemas.items()}
-            elif key == "items" and isinstance(value, dict):
-                nested_schema: dict[str, Any] = value  # mutable-ok: filter_anthropic_output_schema takes a dict
-                result[key] = AnthropicConfig.filter_anthropic_output_schema(nested_schema)
-            elif key == "anyOf" and isinstance(value, list):
-                result["anyOf"] = result.get("anyOf", []) + [
-                    AnthropicConfig.filter_anthropic_output_schema(item) for item in value
-                ]
-            elif key == "allOf" and isinstance(value, list):
-                result[key] = [AnthropicConfig.filter_anthropic_output_schema(item) for item in value]
-            elif key == "$ref" and isinstance(value, str):
-                result[key] = schema_fragment_ref(value)
-            elif key == "oneOf" and isinstance(value, list):
-                # Anthropic rejects oneOf ("Schema type 'oneOf' is not supported");
-                # the Anthropic SDK rewrites it to anyOf, so do the same.
-                result["anyOf"] = result.get("anyOf", []) + [
-                    AnthropicConfig.filter_anthropic_output_schema(item) for item in value
-                ]
-            else:
-                result[key] = value
-
-        # Anthropic requires additionalProperties=false for object schemas
-        # See: https://docs.anthropic.com/en/docs/build-with-claude/structured-outputs
-        if is_object_schema(result):
-            result["additionalProperties"] = False
-
-        return result
+    def filter_anthropic_output_schema(schema: Mapping[str, object]) -> dict[str, object]:
+        """Shape ``schema`` for Anthropic's ``output_format`` API. See ``shape_claude_output_schema``."""
+        return shape_claude_output_schema(schema)
 
     def get_json_schema_from_pydantic_object(self, response_format: type[BaseModel] | dict | None) -> dict | None:
         return type_to_response_format_param(
@@ -1671,7 +1503,6 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             schema_has_unresolvable_ref(json_schema)
             or schema_has_open_object(json_schema)
             or schema_has_lookaround_pattern(json_schema)
-            or not schema_string_formats(json_schema) <= _NATIVE_OUTPUT_STRING_FORMATS
             or schema_union_property_count(json_schema) > NATIVE_OUTPUT_MAX_UNION_PARAMETERS
             or schema_optional_property_count(json_schema) > NATIVE_OUTPUT_MAX_OPTIONAL_PARAMETERS
             or schema_grammar_branch_count(json_schema) > NATIVE_OUTPUT_MAX_GRAMMAR_BRANCHES

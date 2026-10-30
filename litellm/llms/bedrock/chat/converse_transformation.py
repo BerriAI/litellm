@@ -68,6 +68,7 @@ from litellm.llms.bedrock.common_utils import (
     bedrock_native_output_is_opt_in,
     bedrock_supports_tool_search,
     deployment_model_info,
+    json_object_or_none,
     requests_output_config_format,
 )
 from litellm.llms.bedrock.request_metadata import (
@@ -970,17 +971,20 @@ class AmazonConverseConfig(BaseConfig):
     def _native_output_schema(
         self,
         model: str,
-        json_schema: Mapping[str, object],
+        json_schema: object,
         thinking_requested: bool,
         model_info: Mapping[str, object] | None,
-    ) -> Mapping[str, object] | None:
+    ) -> object | None:
         if not self._supports_native_structured_outputs(
             model, self.custom_llm_provider, thinking_requested, model_info
         ):
             return None
+        schema: Final = json_object_or_none(json_schema)
+        if schema is None:
+            return json_schema
         if BedrockModelInfo.get_base_model(model).startswith("anthropic"):
-            return bedrock_cleaned_output_schema(model, json_schema, self.custom_llm_provider or "bedrock_converse")
-        return json_schema
+            return bedrock_cleaned_output_schema(model, schema, self.custom_llm_provider or "bedrock_converse")
+        return schema
 
     def _output_config_for_anthropic_format(
         self, model: str, output_config_format: Mapping[str, object], model_info: Mapping[str, object] | None
@@ -999,7 +1003,7 @@ class AmazonConverseConfig(BaseConfig):
 
     @staticmethod
     def _create_output_config_for_response_format(
-        json_schema: dict | None = None,
+        json_schema: object | None = None,
         name: str | None = None,
         description: str | None = None,
     ) -> "OutputConfigBlock":
@@ -1022,9 +1026,12 @@ class AmazonConverseConfig(BaseConfig):
             }
         }
         """
-        if json_schema is not None:
-            json_schema = AmazonConverseConfig._add_additional_properties_to_schema(json_schema)
-        schema_str: Final = json.dumps(json_schema) if json_schema is not None else "{}"
+        closed_schema: Final = (
+            AmazonConverseConfig._add_additional_properties_to_schema(json_schema)
+            if isinstance(json_schema, dict)
+            else json_schema
+        )
+        schema_str: Final = json.dumps(closed_schema) if closed_schema is not None else "{}"
         json_schema_def: Final[JsonSchemaDefinition] = {"schema": schema_str}
         if name is not None:
             json_schema_def["name"] = name
@@ -1322,7 +1329,7 @@ class AmazonConverseConfig(BaseConfig):
             # Requires an explicit schema — json_object with no schema falls through
             # to the tool-call path below.
             output_config: Final = self._create_output_config_for_response_format(
-                json_schema=dict(native_schema),
+                json_schema=dict(native_schema) if isinstance(native_schema, Mapping) else native_schema,
                 name=name,
                 description=description,
             )
