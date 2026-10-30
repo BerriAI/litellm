@@ -1,5 +1,6 @@
 """Tests for litellm.litellm_core_utils.fallback_utils."""
 
+import asyncio
 import json
 import pathlib
 from typing import Final
@@ -9,11 +10,13 @@ import pytest
 import respx
 
 import litellm
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils import litellm_logging
 from litellm.litellm_core_utils.core_helpers import process_response_headers
 from litellm.litellm_core_utils.fallback_utils import (
     async_completion_with_fallbacks,
 )
+from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.main import acompletion as python_acompletion
 from litellm.main import completion as python_completion
 from litellm.vector_stores.vector_store_registry import LiteLLM_ManagedVectorStore, VectorStoreRegistry
@@ -631,3 +634,158 @@ async def test_acompletion_fallback_sends_the_prompt_the_primary_model_prefix_te
     direct_body, fallback_body = (json.loads(call.request.content) for call in anthropic_route.calls)
     assert "What color is the sky?" in json.dumps(direct_body)
     assert fallback_body == direct_body
+
+
+def _model_unavailable() -> httpx.Response:
+    return httpx.Response(
+        404,
+        json={
+            "error": {
+                "message": "model unavailable",
+                "type": "invalid_request_error",
+                "param": None,
+                "code": "model_not_found",
+            }
+        },
+    )
+
+
+def _replies(contents: tuple[str | None, ...]) -> tuple[httpx.Response, ...]:
+    return tuple(
+        _model_unavailable()
+        if content is None
+        else httpx.Response(
+            200,
+            json={
+                **OPENAI_ANSWER,
+                "choices": [
+                    {"index": 0, "message": {"role": "assistant", "content": content}, "finish_reason": "stop"}
+                ],
+            },
+        )
+        for content in contents
+    )
+
+
+def _requested_models(route: respx.Route) -> tuple[str, ...]:
+    return tuple(json.loads(call.request.content)["model"] for call in route.calls)
+
+
+GLOBAL_CHAIN_OUTCOMES: Final = (
+    pytest.param(("first answer",), ("first",), id="primary-answers"),
+    pytest.param((None, None, "third answer"), ("first", "second", "third"), id="falls-through-in-order"),
+)
+
+
+@pytest.mark.timeout(30, method="thread")
+@pytest.mark.parametrize(("contents", "expected_models"), GLOBAL_CHAIN_OUTCOMES)
+@pytest.mark.asyncio
+async def test_acompletion_tries_the_global_model_fallbacks_once_each_in_order(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    contents: tuple[str | None, ...],
+    expected_models: tuple[str, ...],
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "model_fallbacks", ["openai/second", "openai/third"])
+    route: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(side_effect=_replies(contents))
+
+    response: Final = await python_acompletion(
+        model="openai/first", messages=[{"role": "user", "content": "hello"}], api_key="test-key"
+    )
+
+    assert response.choices[0].message.content == contents[-1]
+    assert _requested_models(route) == expected_models
+
+
+@pytest.mark.timeout(30, method="thread")
+@pytest.mark.parametrize(("contents", "expected_models"), GLOBAL_CHAIN_OUTCOMES)
+def test_completion_tries_the_global_model_fallbacks_once_each_in_order(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    contents: tuple[str | None, ...],
+    expected_models: tuple[str, ...],
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "model_fallbacks", ["openai/second", "openai/third"])
+    route: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(side_effect=_replies(contents))
+
+    response: Final = python_completion(
+        model="openai/first", messages=[{"role": "user", "content": "hello"}], api_key="test-key"
+    )
+
+    assert response.choices[0].message.content == contents[-1]
+    assert _requested_models(route) == expected_models
+
+
+@pytest.mark.timeout(30, method="thread")
+@pytest.mark.asyncio
+async def test_acompletion_per_call_fallbacks_win_over_the_global_model_fallbacks(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "model_fallbacks", ["openai/global-fallback"])
+    route: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
+        side_effect=_replies((None, "per-call answer"))
+    )
+
+    response: Final = await python_acompletion(
+        model="openai/first",
+        messages=[{"role": "user", "content": "hello"}],
+        api_key="test-key",
+        fallbacks=["openai/second"],
+    )
+
+    assert response.choices[0].message.content == "per-call answer"
+    assert _requested_models(route) == ("first", "second")
+
+
+
+@pytest.mark.timeout(30, method="thread")
+@pytest.mark.asyncio
+async def test_acompletion_empty_per_call_fallbacks_opt_out_of_the_global_model_fallbacks(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "model_fallbacks", ["openai/second"])
+    route: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
+        side_effect=_replies((None, "fallback answer"))
+    )
+
+    with pytest.raises(litellm.NotFoundError, match="model unavailable"):
+        await python_acompletion(
+            model="openai/first", messages=[{"role": "user", "content": "hello"}], api_key="test-key", fallbacks=[]
+        )
+
+    assert _requested_models(route) == ("first",)
+
+class _SuccessRecorder(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.models: list[object] = []
+
+    async def async_log_success_event(
+        self, kwargs: dict[str, object], response_obj: object, start_time: object, end_time: object
+    ) -> None:
+        self.models.append(kwargs.get("model"))
+
+
+@pytest.mark.timeout(30, method="thread")
+@pytest.mark.asyncio
+async def test_acompletion_through_the_global_model_fallbacks_logs_one_success(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    recorder: Final = _SuccessRecorder()
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "model_fallbacks", ["openai/second"])
+    monkeypatch.setattr(litellm, "callbacks", [recorder])
+    _ = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
+        side_effect=_replies((None, "fallback answer"))
+    )
+
+    await python_acompletion(model="openai/first", messages=[{"role": "user", "content": "hello"}], api_key="test-key")
+    await asyncio.sleep(0)
+    GLOBAL_LOGGING_WORKER.start()
+    await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=10.0)
+
+    assert recorder.models == ["second"]

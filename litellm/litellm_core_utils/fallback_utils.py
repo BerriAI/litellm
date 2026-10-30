@@ -1,8 +1,12 @@
-from typing import Final
+from collections.abc import Mapping
+from typing import Final, TypeAlias
+
+from pydantic import TypeAdapter
 
 import litellm
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
+from litellm.constants import INTERNAL_KWARG_PREFIX
 from litellm.litellm_core_utils.core_helpers import (
     filter_internal_params,
     safe_deep_copy,
@@ -12,6 +16,21 @@ from litellm.router_utils.add_retry_fallback_headers import (
 )
 
 from .asyncify import run_async_function
+
+FALLBACK_ATTEMPT_KWARG: Final = f"{INTERNAL_KWARG_PREFIX}fallback_attempt"
+
+FallbackChain: TypeAlias = tuple[str | dict[str, object], ...]
+_FALLBACK_CHAIN: Final = TypeAdapter(FallbackChain)
+
+
+def resolve_fallbacks(request_kwargs: Mapping[str, object]) -> FallbackChain | None:
+    if request_kwargs.get(FALLBACK_ATTEMPT_KWARG) is True:
+        return None
+    per_call: Final = request_kwargs.get("fallbacks")
+    configured: Final = litellm.model_fallbacks if per_call is None else per_call
+    if not configured:
+        return None
+    return _FALLBACK_CHAIN.validate_python(configured)
 
 
 async def async_completion_with_fallbacks(**kwargs):
@@ -34,7 +53,7 @@ async def async_completion_with_fallbacks(**kwargs):
     nested_kwargs: Final = kwargs.pop("kwargs", {})
     original_model: Final = kwargs["model"]
     model = original_model
-    fallbacks: Final = [original_model] + nested_kwargs.pop("fallbacks", [])
+    fallbacks: Final = (original_model, *nested_kwargs.pop("fallbacks", ()))
     kwargs.pop("acompletion", None)  # Remove to prevent keyword conflicts
     litellm_call_id: Final = str(uuid.uuid4())
     base_kwargs: Final = {**kwargs, **nested_kwargs, "litellm_call_id": litellm_call_id}
@@ -60,7 +79,7 @@ async def async_completion_with_fallbacks(**kwargs):
             completion_kwargs = filter_internal_params(completion_kwargs)
 
             response = await litellm.acompletion(
-                **completion_kwargs,
+                **{**completion_kwargs, FALLBACK_ATTEMPT_KWARG: True},
                 model=model,
                 litellm_logging_obj=litellm_logging_obj,
             )
