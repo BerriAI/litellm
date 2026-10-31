@@ -48157,7 +48157,6 @@
           "type": "object"
         },
         "ChatCompletionRefusalObject": {
-          "description": "Assistant content part holding the refusal text of a turn the model declined.",
           "properties": {
             "cache_control": {
               "$ref": "#/components/schemas/ChatCompletionCachedContent"

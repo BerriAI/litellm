@@ -28953,10 +28953,7 @@ export interface components {
         } & {
             [key: string]: unknown;
         };
-        /**
-         * ChatCompletionRefusalObject
-         * @description Assistant content part holding the refusal text of a turn the model declined.
-         */
+        /** ChatCompletionRefusalObject */
         ChatCompletionRefusalObject: {
             cache_control?: components["schemas"]["ChatCompletionCachedContent"];
             /** Refusal */
