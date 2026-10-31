@@ -2,6 +2,7 @@ import asyncio
 import itertools
 import json
 from collections.abc import Sequence
+from datetime import datetime, timezone
 from typing import Final
 from unittest.mock import AsyncMock, patch
 
@@ -1304,6 +1305,8 @@ async def test_previous_response_id_pin_holds_even_after_its_deployment_failed()
 def _mixed_web_search_router(
     optional_pre_call_checks: list[str],  # mutable-ok: Router signature
     orders: tuple[int | None, int | None] = (None, None),
+    search_rpm: int | None = None,
+    model_group_affinity_config: dict[str, list[str]] | None = None,  # mutable-ok: Router signature
 ) -> litellm.Router:
     no_search_order, search_order = orders
     return litellm.Router(
@@ -1325,11 +1328,14 @@ def _mixed_web_search_router(
                     "api_key": "fake-key",
                     "mock_response": "hi",
                     **({} if search_order is None else {"order": search_order}),
+                    **({} if search_rpm is None else {"rpm": search_rpm}),
                 },
                 "model_info": {"id": "search"},
             },
         ],
         optional_pre_call_checks=optional_pre_call_checks,
+        model_group_affinity_config=model_group_affinity_config,
+        num_retries=0,
     )
 
 
@@ -1415,6 +1421,62 @@ async def test_pin_without_web_search_yields_to_a_web_search_request_only_when_s
 
     assert plain._hidden_params["model_id"] == "no-search"
     assert searching._hidden_params["model_id"] == searched_on
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "orders", [(None, 1), (2, 1), (None, None)], ids=["pin-unordered", "pin-in-later-tier", "same-tier"]
+)
+@pytest.mark.parametrize(
+    ("affinity_check", "per_group", "pin_key"),
+    [
+        (
+            "deployment_affinity",
+            False,
+            DeploymentAffinityCheck.get_affinity_cache_key(model_group="mixed", user_key="caller-1"),
+        ),
+        (
+            "session_affinity",
+            False,
+            DeploymentAffinityCheck.get_session_affinity_cache_key(
+                model_group="mixed", session_id="session-1", user_key="caller-1"
+            ),
+        ),
+        (
+            "deployment_affinity",
+            True,
+            DeploymentAffinityCheck.get_affinity_cache_key(model_group="mixed", user_key="caller-1"),
+        ),
+    ],
+    ids=["user-key-pin", "session-pin", "per-group-user-key-pin"],
+)
+async def test_pin_without_web_search_holds_for_a_web_search_request_once_the_earlier_search_tier_hits_its_rpm(
+    affinity_check: str,
+    per_group: bool,
+    pin_key: str,
+    orders: tuple[int | None, int | None],
+):
+    router: Final = _mixed_web_search_router(
+        ["enforce_model_rate_limits"] if per_group else [affinity_check, "enforce_model_rate_limits"],
+        orders,
+        search_rpm=1,
+        model_group_affinity_config={"mixed": [affinity_check]} if per_group else None,
+    )
+    await router.cache.async_set_cache(pin_key, {"model_id": "no-search"}, ttl=3600)
+    messages: Final = [{"role": "user", "content": "hi"}]
+
+    with patch(
+        "litellm.router_utils.pre_call_checks.model_rate_limit_check.get_utc_datetime",
+        return_value=datetime(2026, 1, 1, 12, 30, 15, tzinfo=timezone.utc),
+    ):
+        served: Final = [
+            await router.acompletion(
+                model="mixed", messages=messages, metadata=dict(_CALLER_METADATA), web_search_options={}
+            )
+            for _ in range(4)
+        ]
+
+    assert [response._hidden_params["model_id"] for response in served] == ["search", *["no-search"] * 3]
 
 
 @pytest.mark.asyncio

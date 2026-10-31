@@ -13,7 +13,7 @@ where routing to a consistent deployment is still beneficial.
 """
 
 import hashlib
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from typing import Final, TypeVar, cast
 
 from pydantic import TypeAdapter
@@ -35,6 +35,7 @@ from litellm.router_utils.common_utils import (
     deployment_ids_failed_in_request,
     prefer_web_search_deployments,
     web_search_alternatives_to_pin,
+    web_search_capable_deployments,
 )
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import CallTypes
@@ -116,6 +117,8 @@ class DeploymentAffinityCheck(CustomLogger):
         model_group_affinity_config: dict[str, list[str]] | None = None,
         is_priority_group: Callable[[str], bool] | None = None,
         session_affinity_repin_on_failover: bool = False,
+        deployment_ids_at_limit: Callable[[Sequence[dict[str, object]], Span | None], Awaitable[frozenset[str]]]
+        | None = None,
     ):
         super().__init__()
         self.cache = cache
@@ -126,6 +129,7 @@ class DeploymentAffinityCheck(CustomLogger):
         self.model_group_affinity_config: dict[str, list[str]] = model_group_affinity_config or {}
         self.is_priority_group = is_priority_group
         self.session_affinity_repin_on_failover = session_affinity_repin_on_failover
+        self.deployment_ids_at_limit = deployment_ids_at_limit
 
     def _get_effective_flags(self, model_group: str) -> tuple[bool, bool, bool]:
         """
@@ -439,10 +443,6 @@ class DeploymentAffinityCheck(CustomLogger):
         failed_deployment_ids: Final = deployment_ids_failed_in_request(
             cast(Mapping[str, object], request_kwargs)  # cast-ok: request kwargs keys are param names
         )
-        pin_candidates: Final = prefer_web_search_deployments(
-            cast(list[dict[str, object]], healthy_deployments),  # cast-ok: router deployments are plain dicts
-            request_kwargs,
-        )
         user_key: Final = (
             self.get_user_key_from_request_kwargs(request_kwargs=request_kwargs)
             if (session_affinity_active or enable_user_key)
@@ -473,8 +473,8 @@ class DeploymentAffinityCheck(CustomLogger):
                     session_model_id = session_cache_result
 
                 if session_model_id and session_model_id not in failed_deployment_ids:
-                    session_deployments: Final = self._pinned_deployments(
-                        typed_healthy_deployments, pin_candidates, session_model_id, request_kwargs
+                    session_deployments: Final = await self._pinned_deployments(
+                        typed_healthy_deployments, session_model_id, request_kwargs, parent_otel_span
                     )
                     if session_deployments is not None:
                         verbose_router_logger.debug(
@@ -509,8 +509,8 @@ class DeploymentAffinityCheck(CustomLogger):
         if not model_id or model_id in failed_deployment_ids:
             return typed_healthy_deployments
 
-        pinned_deployments: Final = self._pinned_deployments(
-            typed_healthy_deployments, pin_candidates, model_id, request_kwargs
+        pinned_deployments: Final = await self._pinned_deployments(
+            typed_healthy_deployments, model_id, request_kwargs, parent_otel_span
         )
         if pinned_deployments is None:
             verbose_router_logger.debug(
@@ -526,20 +526,35 @@ class DeploymentAffinityCheck(CustomLogger):
         )
         return list(pinned_deployments)
 
-    @classmethod
-    def _pinned_deployments(
-        cls,
-        healthy_deployments: Sequence[_DeploymentT],
-        pin_candidates: Sequence[_DeploymentT],
+    async def _pinned_deployments(
+        self,
+        healthy_deployments: list[_DeploymentT],  # mutable-ok: router deployment-list contract
         model_id: str,
         request_kwargs: Mapping[str, object],
+        parent_otel_span: Span | None,
     ) -> tuple[_DeploymentT, ...] | None:
-        pinned: Final = cls._find_deployment_by_model_id(healthy_deployments=healthy_deployments, model_id=model_id)
+        pinned: Final = self._find_deployment_by_model_id(healthy_deployments=healthy_deployments, model_id=model_id)
         if pinned is None:
             return None
-        if cls._find_deployment_by_model_id(healthy_deployments=pin_candidates, model_id=model_id) is None:
+        at_rate_limit: Final = await self._web_search_deployment_ids_at_limit(
+            healthy_deployments, request_kwargs, parent_otel_span
+        )
+        pin_candidates: Final = prefer_web_search_deployments(healthy_deployments, request_kwargs, at_rate_limit)
+        if self._find_deployment_by_model_id(healthy_deployments=pin_candidates, model_id=model_id) is None:
             return (*pin_candidates, pinned)
-        return (*web_search_alternatives_to_pin(pinned, healthy_deployments, request_kwargs), pinned)
+        return (*web_search_alternatives_to_pin(pinned, healthy_deployments, request_kwargs, at_rate_limit), pinned)
+
+    async def _web_search_deployment_ids_at_limit(
+        self,
+        deployments: Sequence[_DeploymentT],
+        request_kwargs: Mapping[str, object],
+        parent_otel_span: Span | None,
+    ) -> frozenset[str]:
+        if self.deployment_ids_at_limit is None:
+            return frozenset()
+        return await self.deployment_ids_at_limit(
+            web_search_capable_deployments(deployments, request_kwargs), parent_otel_span
+        )
 
     async def _read_shared_session_pin(self, cache_key: str, ttl_seconds: int, parent_otel_span: Span | None) -> object:
         redis_cache: Final = self.cache.redis_cache

@@ -591,9 +591,12 @@ def prefer_web_search_deployments(
 
 
 def web_search_alternatives_to_pin(
-    pinned: _DeploymentT, deployments: Sequence[_DeploymentT], request_kwargs: Mapping[str, object]
+    pinned: _DeploymentT,
+    deployments: Sequence[_DeploymentT],
+    request_kwargs: Mapping[str, object],
+    at_rate_limit: frozenset[str] = frozenset(),
 ) -> tuple[_DeploymentT, ...]:
-    tried: Final = _web_search_tried_deployment_ids(request_kwargs, frozenset())
+    tried: Final = _web_search_tried_deployment_ids(request_kwargs, at_rate_limit)
     if tried is None or _deployment_supports_web_search(pinned):
         return ()
     return tuple(d for d in deployments if _deployment_supports_web_search(d) and _deployment_id(d) not in tried)

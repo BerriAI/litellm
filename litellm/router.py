@@ -3157,6 +3157,7 @@ class Router(DeprecatedRouterMembers):
             model_group_affinity_config=self.model_group_affinity_config,
             is_priority_group=self._is_priority_routing_group,
             session_affinity_repin_on_failover=self.session_affinity_repin_on_failover,
+            deployment_ids_at_limit=self._async_deployment_ids_at_rate_limit,
         )
         self.optional_callbacks.append(affinity_callback)
         litellm.logging_callback_manager.add_litellm_callback(affinity_callback)
@@ -3204,6 +3205,7 @@ class Router(DeprecatedRouterMembers):
                     model_group_affinity_config=self.model_group_affinity_config,
                     is_priority_group=self._is_priority_routing_group,
                     session_affinity_repin_on_failover=self.session_affinity_repin_on_failover,
+                    deployment_ids_at_limit=self._async_deployment_ids_at_rate_limit,
                 )
                 self.optional_callbacks.append(affinity_callback)
                 litellm.logging_callback_manager.add_litellm_callback(affinity_callback)
@@ -10403,6 +10405,18 @@ class Router(DeprecatedRouterMembers):
     def _model_rate_limit_checks(self) -> tuple[ModelRateLimitingCheck, ...]:
         return tuple(callback for callback in self._routing_callbacks() if isinstance(callback, ModelRateLimitingCheck))
 
+    async def _async_deployment_ids_at_rate_limit(
+        self, deployments: Sequence[dict[str, object]], parent_otel_span: Span | None
+    ) -> frozenset[str]:
+        return frozenset(
+            chain.from_iterable(
+                [
+                    await check.async_deployment_ids_at_limit(deployments, parent_otel_span)
+                    for check in self._model_rate_limit_checks()
+                ]
+            )
+        )
+
     def routing_strategy_pre_call_checks(self, deployment: dict):
         """
         Mimics 'async_routing_strategy_pre_call_checks'
@@ -15828,14 +15842,7 @@ class Router(DeprecatedRouterMembers):
                 request_kwargs=routing_kwargs,
                 deployments=cast(list[dict[str, object]], healthy_deployments),  # cast-ok: str-keyed dicts
             )
-            at_rate_limit: Final = frozenset(
-                chain.from_iterable(
-                    [
-                        await check.async_deployment_ids_at_limit(web_search_capable, parent_otel_span)
-                        for check in self._model_rate_limit_checks()
-                    ]
-                )
-            )
+            at_rate_limit: Final = await self._async_deployment_ids_at_rate_limit(web_search_capable, parent_otel_span)
             if strategy == "simple-shuffle":
                 shuffled: Final = simple_shuffle(
                     resolve_model_alias=self._core_get_model_from_alias,
