@@ -870,10 +870,11 @@ def _comparison_options(data: object, nested: bool) -> Mapping[str, str]:
 @pytest.mark.asyncio
 @pytest.mark.parametrize("nested", (False, True))
 @pytest.mark.parametrize("stranger", ("user", "team"))
+@pytest.mark.parametrize("allow_unmanaged", (False, True))
 async def test_regression_comparison_id_reentry_keeps_ownership_after_owner_retry(
-    salt_key_env: str, nested: bool, stranger: str
+    salt_key_env: str, nested: bool, stranger: str, allow_unmanaged: bool
 ) -> None:
-    hook: Final = ResponsesIDSecurity(general_settings_reader=lambda: {}, signing_key_reader=lambda: salt_key_env)
+    hook: Final = _hook({"allow_unmanaged_response_ids": allow_unmanaged}, signing_key=salt_key_env)
     owner: Final = UserAPIKeyAuth(user_id="owner-user", team_id="owner-team")
     caller: Final = UserAPIKeyAuth(
         user_id="stranger-user" if stranger == "user" else owner.user_id,

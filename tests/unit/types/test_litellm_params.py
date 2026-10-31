@@ -24,7 +24,6 @@ from litellm.types import litellm_params
 from litellm.types import utils as types_utils
 from litellm.types.caching import DynamicCacheControl
 from litellm.types.litellm_params import (
-    ADDRESSED_COMPARISON_RESPONSE_ID_FIELD,
     ADDRESSED_RESPONSE_ID_FIELD,
     LITELLM_OWNED_ROOTS,
     TRUSTED_CALLBACK_VARS_FIELD,
@@ -460,10 +459,9 @@ def test_bedrock_batch_names_concatenate_as_a_tuple() -> None:
 
 
 def test_proxy_stamped_fields_keep_their_wire_names() -> None:
-    assert (TRUSTED_CALLBACK_VARS_FIELD, ADDRESSED_RESPONSE_ID_FIELD, ADDRESSED_COMPARISON_RESPONSE_ID_FIELD) == (
+    assert (TRUSTED_CALLBACK_VARS_FIELD, ADDRESSED_RESPONSE_ID_FIELD) == (
         "litellm_trusted_callback_vars",
         "_litellm_addressed_response_id",
-        "_litellm_addressed_comparison_response_id",
     )
 
 
