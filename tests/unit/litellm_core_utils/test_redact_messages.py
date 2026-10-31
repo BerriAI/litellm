@@ -12,7 +12,7 @@ import json
 import os
 import threading
 import tracemalloc
-from collections.abc import AsyncIterator, Mapping
+from collections.abc import AsyncIterator, Callable, Mapping
 from datetime import datetime
 from types import MappingProxyType, SimpleNamespace
 from typing import Final, Optional, Union
@@ -2099,6 +2099,20 @@ def test_scrub_request_text_replaces_each_way_an_error_quotes_the_prompt(quoted:
     assert "123-45-6789" not in scrubbed and "4321" not in scrubbed
     assert "redacted-by-litellm" in scrubbed
     assert scrubbed.startswith("Invalid content: <") and scrubbed.endswith("> rejected")
+
+
+@pytest.mark.parametrize(
+    "prompt",
+    ['say "hi" to Bob', "C:\\Users\\bob", "café for Bob", "tab\tfor Bob"],
+    ids=["double_quote", "backslash", "non_ascii", "control_character"],
+)
+@pytest.mark.parametrize("escaped", [json.dumps, repr], ids=["json", "repr"])
+def test_scrub_request_text_replaces_an_escaped_echo_of_a_prompt_that_escaping_changes(
+    prompt: str, escaped: Callable[[str], str]
+) -> None:
+    error: Final = f"Invalid content: <{escaped(prompt)[1:-1]}> rejected"
+
+    assert scrub_request_text(error, request_texts(prompt)) == "Invalid content: <redacted-by-litellm> rejected"
 
 
 @pytest.mark.parametrize(

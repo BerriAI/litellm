@@ -448,6 +448,7 @@ def _redacted_responses_api_response(
 _REQUEST_TEXT_KEYS: Final = ("messages", "input", "prompt", "system", "instructions")
 _STRUCTURAL_KEYS: Final = frozenset({"role", "type", "id", "tool_call_id", "name"})
 _MIN_UNQUOTED_TEXT_LENGTH: Final = 4
+_ESCAPED_CHARACTERS: Final = ('"', "\\")
 # pydantic shows a long input value as its repr's first 25 and last 24 characters around "...", quotes and
 # container keys included, so each side of the cut shows at most 24 characters of a quoted text
 _CUT_SIDE_LENGTH: Final = 24
@@ -473,9 +474,12 @@ def _next_level(level: tuple[object, ...], _: None) -> tuple[object, ...]:
 def request_texts(*values: object) -> frozenset[str]:
     """
     The non-empty strings a request carries under ``values``, skipping structural fields such as ``role``
-    and ``type``.
+    and ``type``. A value passed more than once is walked once.
     """
-    levels: Final = itertools.takewhile(bool, itertools.accumulate(itertools.repeat(None), _next_level, initial=values))
+    distinct_values: Final = tuple({id(value): value for value in values}.values())
+    levels: Final = itertools.takewhile(
+        bool, itertools.accumulate(itertools.repeat(None), _next_level, initial=distinct_values)
+    )
     return frozenset(value for value in itertools.chain.from_iterable(levels) if isinstance(value, str) and value)
 
 
@@ -490,7 +494,10 @@ def failure_request_texts(model_call_details: Mapping[str, object], *originals: 
 
 
 def _echo_forms(text: str) -> frozenset[str]:
-    """How an error can quote ``text``: verbatim, or JSON or repr escaped."""
+    """How an error can quote ``text``: verbatim, or JSON or repr escaped. Printable ASCII without a double quote
+    or a backslash escapes to itself."""
+    if text.isascii() and text.isprintable() and not any(character in text for character in _ESCAPED_CHARACTERS):
+        return frozenset((text,))
     return frozenset({text, json.dumps(text)[1:-1], json.dumps(text, ensure_ascii=False)[1:-1], repr(text)[1:-1]})
 
 
