@@ -15,6 +15,16 @@
     "base_url": "https://ai-gateway.helicone.ai/",
     "api_key_env": "HELICONE_API_KEY"
   },
+  "infercom": {
+    "base_url": "https://api.infercom.ai/v1",
+    "api_key_env": "INFERCOM_API_KEY",
+    "api_base_env": "INFERCOM_API_BASE",
+    "supported_endpoints": ["/v1/chat/completions", "/v1/responses"],
+    "constraints": {
+      "temperature_min": 0.0,
+      "temperature_max": 1.0
+    }
+  },
   "veniceai": {
     "base_url": "https://api.venice.ai/api/v1",
     "api_key_env": "VENICE_AI_API_KEY"
