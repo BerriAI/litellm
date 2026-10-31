@@ -9,7 +9,7 @@ import respx
 from pydantic import ValidationError
 
 import litellm
-from litellm.llms.custom_httpx.http_handler import HTTPHandler
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.types.llms.openai import OpenAIFileObject
 
 NATIVE_VERTEX_ROWS: Final = (
@@ -243,3 +243,40 @@ async def test_openai_file_operations_roundtrip(respx_mock: respx.MockRouter, mo
     assert delete_route.call_count == 1
     assert deleted.id == "file-abc123"
     assert deleted.deleted is True
+
+
+@pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
+@pytest.mark.asyncio
+async def test_vertex_file_content_reads_from_the_configured_bucket(is_async: bool):
+    content: Final = b"batch output\n"
+
+    def download(request: httpx.Request) -> httpx.Response:
+        assert str(request.url) == (
+            "https://storage.googleapis.com/storage/v1/b/model-bucket/"
+            "o/litellm-vertex-files%2Fuploads%2Foutput.jsonl?alt=media"
+        )
+        return httpx.Response(200, content=content)
+
+    transport: Final = httpx.MockTransport(download)
+    if is_async:
+        handler: Final = AsyncHTTPHandler(transport=transport)
+        async with handler.client:
+            result: Final = await litellm.afile_content(
+                file_id="gs://model-bucket/litellm-vertex-files/uploads/output.jsonl",
+                custom_llm_provider="vertex_ai",
+                gcs_bucket_name="model-bucket",
+                api_key="test-token",
+                client=handler,
+            )
+            assert result.content == content
+        return
+
+    with httpx.Client(transport=transport) as sync_client:
+        sync_result: Final = litellm.file_content(
+            file_id="gs://model-bucket/litellm-vertex-files/uploads/output.jsonl",
+            custom_llm_provider="vertex_ai",
+            gcs_bucket_name="model-bucket",
+            api_key="test-token",
+            client=HTTPHandler(client=sync_client),
+        )
+        assert sync_result.content == content
