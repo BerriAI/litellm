@@ -160,6 +160,51 @@ async def test_eval_namespaces_keys_and_returns_nested_replies(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ("direct", "batch", "transaction"))
+async def test_direct_eval_preserves_wire_replies_namespace_and_single_event(
+    server: fakeredis.FakeServer, raw: fakeredis.FakeAsyncRedis, mode: str
+) -> None:
+    events: Final = _RecordingEvents()
+    cache: Final = fake_redis_cache(server, namespace="ns", service_logger=events)
+    await _settle()
+    before: Final = len(events.seen)
+    transport: Final = cache.transport()
+    executor: Final = transport if mode == "direct" else transport.batch(transaction=mode == "transaction")
+
+    assert await executor.eval_direct(_ECHO, ("ns:key",), ("value", 7)) == (b"value", 7, (b"ns:key",))
+    assert await raw.get("ns:key") == b"value"
+    assert await raw.get("ns:ns:key") is None
+    await _settle()
+    assert tuple((event.outcome, event.call_type) for event in events.seen[before:]) == (
+        ("success", "eval_direct" if mode == "direct" else "redis_batch"),
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ("direct", "batch", "transaction"))
+async def test_direct_eval_never_replays_a_write_followed_by_noscript_error(
+    server: fakeredis.FakeServer, raw: fakeredis.FakeAsyncRedis, mode: str
+) -> None:
+    events: Final = _RecordingEvents()
+    cache: Final = fake_redis_cache(server, namespace="ns", service_logger=events)
+    await _settle()
+    before: Final = len(events.seen)
+    transport: Final = cache.transport()
+    executor: Final = transport if mode == "direct" else transport.batch(transaction=mode == "transaction")
+    script: Final = "redis.call('INCR', KEYS[1]); return redis.error_reply('NOSCRIPT written already')"
+
+    failure: Final = await executor.eval_direct(script, ("key",), ())
+
+    assert isinstance(failure, RedisFailure) and failure.kind == "server"
+    assert "written already" in failure.message
+    assert await raw.get("ns:key") == b"1"
+    await _settle()
+    assert tuple((event.outcome, event.call_type) for event in events.seen[before:]) == (
+        ("failure", "eval_direct") if mode == "direct" else ("success", "redis_batch"),
+    )
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("decode_responses", (False, True))
 async def test_eval_preserves_empty_arrays_and_sibling_order(
     server: fakeredis.FakeServer, decode_responses: bool

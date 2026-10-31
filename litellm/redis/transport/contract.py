@@ -84,6 +84,10 @@ class RedisCommandBatch(Protocol):
 
     def eval(self, script: str, keys: Sequence[str], args: Sequence[Arg]) -> BatchReply[EvalReply | RedisFailure]: ...
 
+    def eval_direct(
+        self, script: str, keys: Sequence[str], args: Sequence[Arg]
+    ) -> BatchReply[EvalReply | RedisFailure]: ...
+
     async def flush(self) -> None: ...
 
 
@@ -127,6 +131,8 @@ class RedisTransport(Protocol):
     async def scan(self, prefix: str, *, limit: int) -> tuple[bytes, ...] | RedisFailure: ...
 
     async def eval(self, script: str, keys: Sequence[str], args: Sequence[Arg]) -> EvalReply | RedisFailure: ...
+
+    async def eval_direct(self, script: str, keys: Sequence[str], args: Sequence[Arg]) -> EvalReply | RedisFailure: ...
 
     def batch(
         self, *, transaction: bool = False, raise_on_error: bool = False, name: str = "redis_batch"
