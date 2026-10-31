@@ -4,6 +4,7 @@ Translates from OpenAI's `/v1/chat/completions` to Databricks' `/chat/completion
 
 import os
 from collections.abc import AsyncIterator, Coroutine, Iterator, Mapping, Sequence
+from itertools import chain, takewhile
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, cast, overload
 
@@ -12,6 +13,7 @@ from pydantic import BaseModel, ConfigDict, TypeAdapter
 
 from litellm.anthropic_beta_gated_fields import log_beta_gated_strips, strip_beta_gated_thinking
 from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
+from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
 from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
     handle_invalid_parallel_tool_calls,
     should_convert_tool_call_to_json_mode,
@@ -65,7 +67,7 @@ from ...anthropic.chat.transformation import (
     tools_without_unsupported_tool_search,
 )
 from ...openai_like.chat.transformation import OpenAILikeChatConfig
-from ..common_utils import DatabricksBase, DatabricksException
+from ..common_utils import DATABRICKS_HOSTED_MODEL_PREFIXES, DatabricksBase, DatabricksException
 
 _RESPONSE_FORMAT_ADAPTER: (  # mutable-ok: mirrors the dict return contract of get_json_schema_from_pydantic_object
     Final[TypeAdapter[dict[str, object] | None]]
@@ -81,13 +83,137 @@ def _is_bare_assistant_message(message_dict: Mapping[str, object]) -> bool:
     )
 
 
+_CONTENT_BLOCKS: Final = TypeAdapter(tuple[object, ...])
+
+
+def _content_blocks(message: object) -> tuple[object, ...]:
+    match message.model_dump(exclude_none=True) if isinstance(message, BaseModel) else message:
+        case {"content": list() as content}:
+            return _CONTENT_BLOCKS.validate_python(content)
+        case _:
+            return ()
+
+
+def _plain_text(block: object) -> str | None:
+    match block:
+        case {"type": "text", "text": str() as text} if block == {"type": "text", "text": text}:
+            return text
+        case _:
+            return None
+
+
+def _plain_texts(message: Mapping[str, object]) -> tuple[str, ...]:
+    blocks: Final = _content_blocks(message)
+    texts: Final = tuple(text for block in blocks if (text := _plain_text(block)) is not None)
+    return texts if len(texts) == len(blocks) else ()
+
+
 def _collapse_single_text_block(message: Mapping[str, object]) -> Mapping[str, object]:
-    content: Final = message.get("content")
-    match content:
-        case [{"type": "text", "text": str() as text}] if content == [{"type": "text", "text": text}]:
+    match _plain_texts(message):
+        case (text,):
             return {**message, "content": text}
         case _:
             return message
+
+
+def _without_text_cache_control(block: object) -> object:
+    match block:
+        case {"type": "text", "text": str() as text, "cache_control": object() as cache_control} if block == {
+            "type": "text",
+            "text": text,
+            "cache_control": cache_control,
+        }:
+            return {"type": "text", "text": text}
+        case _:
+            return block
+
+
+def _without_cache_control(message: AllMessageValues) -> AllMessageValues:
+    uncached: Final = {key: value for key, value in message.items() if key != "cache_control"}
+    match content := uncached.get("content"):
+        case list():
+            blocks: Final = [_without_text_cache_control(block) for block in _CONTENT_BLOCKS.validate_python(content)]
+            return cast(AllMessageValues, {**uncached, "content": blocks})  # cast-ok: spread keeps the shape
+        case _:
+            return cast(AllMessageValues, uncached)  # cast-ok: only cache_control was left out
+
+
+def _has_string_content(message: Mapping[str, object]) -> bool:
+    return isinstance(message.get("content"), str)
+
+
+def _is_system(message: Mapping[str, object]) -> bool:
+    return message.get("role") == "system"
+
+
+def _json_mode_message(message: AllMessageValues, drop_params: bool) -> AllMessageValues:
+    candidate: Final = _without_cache_control(message) if drop_params else message
+    texts: Final = _plain_texts(candidate)
+    if "cache_control" in candidate or not (texts or _has_string_content(candidate)):
+        return message
+    if sum(1 for text in texts if text.strip()) < 2:
+        return candidate
+    return cast(AllMessageValues, {**candidate, "content": "".join(texts)})  # cast-ok: spread keeps the shape
+
+
+def _is_dropped_on_send(message: Mapping[str, object]) -> bool:
+    sanitized: Final = {**message}
+    _sanitize_empty_content(sanitized)
+    return _is_bare_assistant_message(sanitized)
+
+
+def _is_system_or_dropped(message: Mapping[str, object]) -> bool:
+    return _is_system(message) or _is_dropped_on_send(message)
+
+
+def _json_checked_start(messages: Sequence[AllMessageValues]) -> int:
+    trailing: Final = tuple(takewhile(_is_system_or_dropped, reversed(messages)))
+    last_sent_offset: Final = 0 if any(_is_system(message) for message in trailing) else 1
+    return max(len(messages) - len(trailing) - last_sent_offset, 0)
+
+
+def _json_object_ready_messages(
+    model: str,
+    messages: list[AllMessageValues],  # mutable-ok: inherited transform_request contract
+    response_format: object,
+    drop_params: bool,
+) -> list[AllMessageValues]:  # mutable-ok: inherited transform_request contract
+    match response_format:
+        case {"type": "json_object"} if "claude" not in model and model.startswith(DATABRICKS_HOSTED_MODEL_PREFIXES):
+            checked_start: Final = _json_checked_start(messages)
+            return [
+                *messages[:checked_start],
+                *(_json_mode_message(message, drop_params) for message in messages[checked_start:]),
+            ]
+        case _:
+            return messages
+
+
+def _is_empty_text_block(block: object) -> bool:
+    match block:
+        case {"type": "text", "text": str() as text}:
+            return not text.strip()
+        case {"type": "text", "text": object() as text}:
+            return not text
+        case {"type": "text"}:
+            return True
+        case _:
+            return False
+
+
+def _non_string_text_type(block: object) -> str | None:
+    match block:
+        case {"type": "text", "text": str()}:
+            return None
+        case {"type": "text", "text": object() as text} if text:
+            return type(text).__name__
+        case _:
+            return None
+
+
+def _first_non_string_text_type(messages: Sequence[AllMessageValues]) -> str | None:
+    blocks: Final = chain.from_iterable(map(_content_blocks, messages))
+    return next((type_name for block in blocks if (type_name := _non_string_text_type(block))), None)
 
 
 def _sanitize_empty_content(message_dict: dict[str, object]) -> None:
@@ -108,9 +234,7 @@ def _sanitize_empty_content(message_dict: dict[str, object]) -> None:
             message_dict.pop("content")
             return
         filtered: Final = [
-            block
-            for block in content
-            if not (isinstance(block, dict) and block.get("type") == "text" and not (block.get("text") or "").strip())
+            block for block in _CONTENT_BLOCKS.validate_python(content) if not _is_empty_text_block(block)
         ]
         if not filtered:
             message_dict.pop("content")
@@ -534,6 +658,35 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
             return True
 
         return False
+
+    def transform_request(
+        self,
+        model: str,
+        messages: list[AllMessageValues],  # mutable-ok: inherited contract
+        optional_params: dict[str, object],  # mutable-ok: inherited contract
+        litellm_params: dict[str, object],  # mutable-ok: inherited contract
+        headers: dict[str, object],  # mutable-ok: inherited contract
+    ) -> dict[str, object]:  # mutable-ok: inherited contract
+        match _first_non_string_text_type(messages):
+            case str() as type_name:
+                raise DatabricksException(
+                    status_code=400,
+                    message=f"A text content block needs a string 'text', got {type_name}",
+                )
+            case None:
+                pass
+        return super().transform_request(
+            model=model,
+            messages=_json_object_ready_messages(
+                model,
+                messages,
+                optional_params.get("response_format"),
+                drop_params=drops_unsupported_params(litellm_params.get("drop_params")),
+            ),
+            optional_params=optional_params,
+            litellm_params=litellm_params,
+            headers=headers,
+        )
 
     @overload
     def _transform_messages(
