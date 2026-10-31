@@ -10,7 +10,7 @@ describe("legacyPageRedirectHref", () => {
     expect(redirect("page=models")).toBe("/ui/models-and-endpoints");
     expect(redirect("page=llm-playground")).toBe("/ui/playground");
     expect(redirect("page=new_usage")).toBe("/ui/usage");
-    expect(redirect("page=usage")).toBe("/ui/old-usage");
+    expect(redirect("page=usage")).toBe("/ui/usage");
   });
 
   it("keeps the older aliases for renamed pages", () => {
