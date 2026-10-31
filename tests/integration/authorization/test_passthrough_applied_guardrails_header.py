@@ -19,6 +19,8 @@ from pydantic import JsonValue, TypeAdapter
 PRE_CALL: Final = "passthrough-header-pre"
 POST_CALL: Final = "passthrough-header-post"
 NON_LATIN1: Final = "passthrough-header-pre\u2014em"
+BLOCKER: Final = "passthrough-header-block"
+MISSING_MODEL: Final = "passthrough-header-missing-model"
 HEADER: Final = "x-litellm-applied-guardrails"
 OPENAI_ROUTE: Final = "/openai/v1/chat/completions"
 ANTHROPIC_ROUTE: Final = "/anthropic/v1/messages"
@@ -41,9 +43,18 @@ def _allow(_request: Request) -> Reply:
     return Reply(body=json.dumps({"action": "NONE"}).encode())
 
 
+def _block(_request: Request) -> Reply:
+    return Reply(body=json.dumps({"action": "BLOCKED", "blocked_reason": "synthetic block"}).encode())
+
+
 def _openai_reply(request: Request) -> Reply:
-    streaming: Final = _JSON.validate_json(request.body).get("stream") is True
-    return chat_reply("chatcmpl-passthrough-header", "gpt-5.6", "Hello", stream=streaming)
+    payload: Final = _JSON.validate_json(request.body)
+    if payload.get("model") == MISSING_MODEL:
+        return Reply(
+            status=404,
+            body=json.dumps({"error": {"message": "model not found", "type": "invalid_request_error"}}).encode(),
+        )
+    return chat_reply("chatcmpl-passthrough-header", "gpt-5.6", "Hello", stream=payload.get("stream") is True)
 
 
 def _anthropic_reply(_request: Request) -> Reply:
@@ -72,6 +83,7 @@ def rig(session_gateway: Gateway, tmp_path_factory: pytest.TempPathFactory) -> I
     directory: Final = tmp_path_factory.mktemp("passthrough-applied-guardrails-header")
     with ExitStack() as stack:
         vendor: Final = stack.enter_context(wire_server(_allow))
+        blocking_vendor: Final = stack.enter_context(wire_server(_block))
         upstreams: Final = MappingProxyType(
             {
                 OPENAI_ROUTE: stack.enter_context(wire_server(_openai_reply)),
@@ -92,11 +104,16 @@ def rig(session_gateway: Gateway, tmp_path_factory: pytest.TempPathFactory) -> I
                                 "guardrail": "generic_guardrail_api",
                                 "mode": mode,
                                 "default_on": False,
-                                "api_base": vendor.url,
+                                "api_base": api_base,
                                 "api_key": "synthetic-guardrail-key",
                             },
                         }
-                        for name, mode in ((PRE_CALL, "pre_call"), (POST_CALL, "post_call"), (NON_LATIN1, "pre_call"))
+                        for name, mode, api_base in (
+                            (PRE_CALL, "pre_call", vendor.url),
+                            (POST_CALL, "post_call", vendor.url),
+                            (NON_LATIN1, "pre_call", vendor.url),
+                            (BLOCKER, "pre_call", blocking_vendor.url),
+                        )
                     ],
                 }
             )
@@ -174,3 +191,52 @@ def test_guardrail_name_a_header_cannot_carry_is_left_out(rig: HeaderRig) -> Non
 
     assert response.status_code == 200, response.text
     assert HEADER not in response.headers
+
+
+@pytest.mark.parametrize("stream", [False, True])
+def test_upstream_error_names_the_guardrail_that_ran(rig: HeaderRig, stream: bool) -> None:
+    gateway: Final = rig.owned.gateway
+    body: Final = {**_route_body(OPENAI_ROUTE), "model": MISSING_MODEL, "stream": stream}
+    with gateway.scenario() as scenario:
+        response: Final = _send(gateway, scenario, OPENAI_ROUTE, body, PRE_CALL)
+
+    assert response.status_code == 404, response.text
+    assert response.headers.get(HEADER) == PRE_CALL
+
+
+def test_blocked_request_names_the_blocking_guardrail(rig: HeaderRig) -> None:
+    gateway: Final = rig.owned.gateway
+    upstream: Final = rig.upstreams[OPENAI_ROUTE]
+    upstream.drain()
+    with gateway.scenario() as scenario:
+        response: Final = _send(gateway, scenario, OPENAI_ROUTE, _route_body(OPENAI_ROUTE), PRE_CALL, BLOCKER)
+
+    assert response.status_code == 400, response.text
+    assert response.headers.get(HEADER) == f"{PRE_CALL},{BLOCKER}"
+    assert upstream.drain() == ()
+
+
+@pytest.mark.parametrize("field", ["metadata", "litellm_metadata"])
+def test_client_claims_beside_a_real_guardrail_are_dropped(rig: HeaderRig, field: str) -> None:
+    gateway: Final = rig.owned.gateway
+    claim: Final[dict[str, JsonValue]] = {
+        "applied_guardrails": ["forged-guardrail"],
+        "guardrail_scan_ids": ["forged-scan"],
+    }
+    with gateway.scenario() as scenario:
+        response: Final = _send(gateway, scenario, OPENAI_ROUTE, {**_route_body(OPENAI_ROUTE), field: claim}, PRE_CALL)
+
+    assert response.status_code == 200, response.text
+    assert response.headers.get(HEADER) == PRE_CALL
+    assert "forged-scan" not in response.headers.get("x-litellm-guardrail-scan-id", "")
+
+
+@pytest.mark.parametrize("claim", ["none", 7, ""])
+def test_non_list_client_claim_does_not_fail_a_guarded_request(rig: HeaderRig, claim: JsonValue) -> None:
+    gateway: Final = rig.owned.gateway
+    body: Final = {**_route_body(OPENAI_ROUTE), "metadata": {"applied_guardrails": claim}}
+    with gateway.scenario() as scenario:
+        response: Final = _send(gateway, scenario, OPENAI_ROUTE, body, PRE_CALL)
+
+    assert response.status_code == 200, response.text
+    assert response.headers.get(HEADER) == PRE_CALL

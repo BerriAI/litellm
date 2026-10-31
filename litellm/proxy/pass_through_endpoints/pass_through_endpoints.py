@@ -226,7 +226,12 @@ def _strip_client_guardrail_fields(
 
 
 def _merged_metadata_entry(prior: object, value: object) -> object:
-    """``value``, or both combined without repeats when ``prior`` and ``value`` are lists or tuples."""
+    """``value``, or both combined: lists and tuples without repeats, and mappings with ``value``'s keys winning, as
+    ``add_policy_sources_to_metadata`` combines policy sources on one request."""
+    prior_mapping: Final = as_str_mapping(prior)
+    value_mapping: Final = as_str_mapping(value)
+    if prior_mapping is not None and value_mapping is not None:
+        return {**prior_mapping, **value_mapping}
     if not isinstance(prior, list | tuple) or not isinstance(value, list | tuple):
         return value
     entries: Final = (*_GUARDRAIL_ENTRIES.validate_python(prior), *_GUARDRAIL_ENTRIES.validate_python(value))
@@ -1274,6 +1279,26 @@ async def _log_passthrough_upstream_failure(
     return relay_response
 
 
+async def _log_passthrough_upstream_failure_keeping_guardrail_headers(
+    response: httpx.Response,
+    user_api_key_dict: UserAPIKeyAuth,
+    request_payload: dict[str, object],  # mutable-ok: the failure hooks lift fields onto request_data in place
+    logging_obj: LiteLLMLoggingObj,
+    parsed_body: Mapping[str, object] | None,
+    kwargs: Mapping[str, object] | None,
+) -> Mapping[str, str]:
+    """Log an upstream error like ``_log_passthrough_upstream_failure`` and return the guardrail response headers,
+    read before the failure hooks rebuild ``kwargs``' metadata without the guardrail fields."""
+    guardrail_headers: Final = _guardrail_response_headers(parsed_body, kwargs)
+    await _log_passthrough_upstream_failure(
+        response=response,
+        user_api_key_dict=user_api_key_dict,
+        request_payload=request_payload,
+        logging_obj=logging_obj,
+    )
+    return guardrail_headers
+
+
 async def _relay_reporting_failures(
     stream: AsyncGenerator[bytes, None],
     upstream_status: int,
@@ -1823,6 +1848,13 @@ async def pass_through_request(
             )
             apply_upstream_reported_operation(logging_obj, response.headers)
 
+            # Built before the failure hooks rebuild kwargs' metadata without the guardrail fields. The relay
+            # response differs only in body-framing headers, which get_response_headers drops anyway.
+            _response_headers = HttpPassThroughEndpointHelpers.get_response_headers(
+                headers=response.headers,
+                litellm_call_id=litellm_call_id,
+                guardrail_request_data=(_parsed_body, kwargs),  # pyright: ignore[reportUnknownArgumentType]  # untyped request dicts
+            )
             relay_response: Final = await _log_passthrough_upstream_failure(
                 response=response,
                 user_api_key_dict=user_api_key_dict,
@@ -1840,11 +1872,6 @@ async def pass_through_request(
             )
 
             # Call response headers hook for streaming pass-through
-            _response_headers = HttpPassThroughEndpointHelpers.get_response_headers(
-                headers=relay_response.headers,
-                litellm_call_id=litellm_call_id,
-                guardrail_request_data=(_parsed_body, kwargs),  # pyright: ignore[reportUnknownArgumentType]  # untyped request dicts
-            )
             callback_headers = await proxy_logging_obj.post_call_response_headers_hook(
                 data=_parsed_body or {},
                 user_api_key_dict=user_api_key_dict,
@@ -1926,6 +1953,13 @@ async def pass_through_request(
             logging_obj.stream = True
             logging_obj.model_call_details["stream"] = True
 
+            # Built before the failure hooks rebuild kwargs' metadata without the guardrail fields. The relay
+            # response differs only in body-framing headers, which get_response_headers drops anyway.
+            _response_headers = HttpPassThroughEndpointHelpers.get_response_headers(
+                headers=response.headers,
+                litellm_call_id=litellm_call_id,
+                guardrail_request_data=(_parsed_body, kwargs),  # pyright: ignore[reportUnknownArgumentType]  # untyped request dicts
+            )
             detected_relay_response: Final = await _log_passthrough_upstream_failure(
                 response=response,
                 user_api_key_dict=user_api_key_dict,
@@ -1943,11 +1977,6 @@ async def pass_through_request(
             )
 
             # Call response headers hook for detected streaming pass-through
-            _response_headers = HttpPassThroughEndpointHelpers.get_response_headers(
-                headers=detected_relay_response.headers,
-                litellm_call_id=litellm_call_id,
-                guardrail_request_data=(_parsed_body, kwargs),  # pyright: ignore[reportUnknownArgumentType]  # untyped request dicts
-            )
             callback_headers = await proxy_logging_obj.post_call_response_headers_hook(
                 data=_parsed_body or {},
                 user_api_key_dict=user_api_key_dict,
@@ -2047,11 +2076,13 @@ async def pass_through_request(
             upstream_model=upstream_model,
         )
         failure_request_payload["response_body"] = response_body
-        await _log_passthrough_upstream_failure(
+        upstream_guardrail_headers: Final = await _log_passthrough_upstream_failure_keeping_guardrail_headers(
             response=response,
             user_api_key_dict=user_api_key_dict,
-            request_payload=failure_request_payload,
+            request_payload=failure_request_payload,  # pyright: ignore[reportUnknownArgumentType]  # untyped request dicts
             logging_obj=logging_obj,
+            parsed_body=_parsed_body,  # pyright: ignore[reportUnknownArgumentType]  # untyped request dicts
+            kwargs=kwargs,  # pyright: ignore[reportUnknownArgumentType]  # untyped request dicts
         )
 
         if response.status_code < 400 and response_body is not None and post_call_guardrails:
@@ -2191,7 +2222,7 @@ async def pass_through_request(
 
         response_headers: Final = HttpPassThroughEndpointHelpers.get_response_headers(
             headers=response.headers,
-            custom_headers=custom_headers,
+            custom_headers={**custom_headers, **upstream_guardrail_headers},
             guardrail_request_data=(_parsed_body, kwargs, post_call_guardrail_data),  # pyright: ignore[reportUnknownArgumentType]  # untyped request dicts
         )
         emitted_call_id: Final = (

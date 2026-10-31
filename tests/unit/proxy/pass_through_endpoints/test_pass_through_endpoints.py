@@ -11980,6 +11980,18 @@ class TestGuardrailResponseHeaders:
 
         assert headers["x-litellm-guardrail-scan-id"] == "pre-scan,post-scan"
 
+    def test_policy_sources_recorded_before_and_after_the_call_are_both_kept(self):
+        headers: Final = HttpPassThroughEndpointHelpers.get_response_headers(
+            headers=httpx.Headers({"content-type": "application/json"}),
+            guardrail_request_data=(
+                {},
+                {"litellm_params": {"metadata": {"policy_sources": {"pre-policy": "key", "shared": "team"}}}},
+                {"metadata": {"policy_sources": {"post-policy": "tag", "shared": "key"}}},
+            ),
+        )
+
+        assert headers["x-litellm-policy-sources"] == "pre-policy=key; shared=key; post-policy=tag"
+
     def test_a_litellm_params_object_in_the_request_body_is_never_read(self):
         forged: Final = {"metadata": {"applied_guardrails": ["forged"], "guardrail_scan_ids": ["fake"]}}
 
