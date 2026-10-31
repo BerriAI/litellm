@@ -99,8 +99,21 @@ def _compact(content: Mapping[str, JsonValue]) -> bytes:
     return json.dumps(content, separators=(",", ":")).encode()
 
 
-def _refusal(agent: str) -> bytes:
-    return _compact({"detail": f"Agent '{agent}' is not allowed for your key/team. Contact proxy admin for access."})
+def _refusal(agent: str, response: httpx.Response | None = None) -> bytes:
+    message: Final = f"Agent '{agent}' is not allowed for your key/team. Contact proxy admin for access."
+    if response is None:
+        return _compact({"detail": message})
+    return _compact(
+        {
+            "jsonrpc": "2.0",
+            "id": JSON_OBJECT.validate_json(response.request.content)["id"],
+            "error": {
+                "code": -32000,
+                "message": message,
+                "data": {"type": "permission_error", "param": None, "code": "403"},
+            },
+        }
+    )
 
 
 def _not_found(request_id: JsonValue, agent: str) -> bytes:
@@ -415,7 +428,7 @@ def test_denied_agent_keeps_its_403_logs_one_zero_spend_failure_for_the_caller_a
         response: Final = _send(
             rig, caller.key, route.format(target.agent_id), method=method, version=version, message_id=message
         )
-        assert (response.status_code, response.content) == (403, _refusal(target.agent_id))
+        assert (response.status_code, response.content) == (403, _refusal(target.agent_id, response))
         assert response.headers["content-type"] == "application/json"
         _assert_never_dispatched(rig, scenario, message)
         _assert_one_failure(rig, caller, status=403, agent_id=target.agent_id, model=f"a2a_agent/{target.name}")
@@ -430,7 +443,7 @@ def test_denied_agent_failure_is_attributed_to_the_authenticated_key_for_every_g
         granted: Final = _send(rig, caller.key, f"/a2a/{rig.allowed.agent_id}", method="message/send", version=None)
         assert granted.status_code == 200, granted.text
         response: Final = _send(rig, caller.key, f"/a2a/{rig.denied.agent_id}")
-        assert (response.status_code, response.content) == (403, _refusal(rig.denied.agent_id))
+        assert (response.status_code, response.content) == (403, _refusal(rig.denied.agent_id, response))
         events: Final = held(
             lambda: rig.events.of(caller.alias),
             lambda found: _hooks(found) == tuple(sorted((*_ONE_FAILURE, "async_success"))),
@@ -455,7 +468,7 @@ def test_denied_completion_bridge_agent_logs_one_failure_and_never_reaches_the_b
         response: Final = _send(
             rig, caller.key, f"/a2a/{rig.bridge.agent_id}", method="message/send", version=None, message_id=message
         )
-        assert (response.status_code, response.content) == (403, _refusal(rig.bridge.agent_id))
+        assert (response.status_code, response.content) == (403, _refusal(rig.bridge.agent_id, response))
         _assert_never_dispatched(rig, scenario, message)
         _assert_one_failure(rig, caller, status=403, agent_id=rig.bridge.agent_id, model=f"a2a_agent/{rig.bridge.name}")
 
@@ -540,7 +553,7 @@ def test_client_supplied_attribution_cannot_rewrite_a_denial_failure_row(rig: _R
         response: Final = rig.proxy.client.post(
             f"/a2a/{target}", headers={"Authorization": f"Bearer {caller.key}", "A2A-Version": "1.0"}, json=body
         )
-        expected: Final = _refusal(target) if outcome == "denied" else _not_found(request_id, unknown)
+        expected: Final = _refusal(target, response) if outcome == "denied" else _not_found(request_id, unknown)
         assert (response.status_code, response.content) == (403 if outcome == "denied" else 404, expected)
         model: Final = f"a2a_agent/{rig.denied.name}" if outcome == "denied" else f"a2a_agent/{unknown}"
         row: Final = _assert_one_failure(rig, caller, status=response.status_code, agent_id=target, model=model)
@@ -558,7 +571,7 @@ def test_two_keys_reusing_one_jsonrpc_id_get_one_denial_row_each(rig: _Rig) -> N
         callers: Final = (_caller(rig, scenario), _caller(rig, scenario))
         for caller in callers:
             response = _send(rig, caller.key, f"/a2a/{rig.denied.agent_id}", request_id=shared_id)
-            assert (response.status_code, response.content) == (403, _refusal(rig.denied.agent_id))
+            assert (response.status_code, response.content) == (403, _refusal(rig.denied.agent_id, response))
         rows: Final = tuple(
             _assert_one_failure(
                 rig, caller, status=403, agent_id=rig.denied.agent_id, model=f"a2a_agent/{rig.denied.name}"
@@ -578,7 +591,7 @@ def test_failing_or_transforming_failure_callbacks_never_change_the_denial_respo
     with hostile.proxy.scenario() as scenario:
         caller: Final = _caller(hostile, scenario)
         response: Final = _send(hostile, caller.key, f"/a2a/{target}", request_id=request_id)
-        expected: Final = (403, _refusal(target)) if outcome == "denied" else (404, _not_found(request_id, unknown))
+        expected: Final = (403, _refusal(target, response)) if outcome == "denied" else (404, _not_found(request_id, unknown))
         assert (response.status_code, response.content) == expected
 
 
@@ -615,7 +628,7 @@ def test_denials_follow_the_model_denied_chat_logging_under_error_log_flags(flag
         )
         assert chat.status_code in {401, 403}, chat.text
         denied: Final = _send(flagged, denied_caller.key, f"/a2a/{flagged.denied.agent_id}")
-        assert (denied.status_code, denied.content) == (403, _refusal(flagged.denied.agent_id))
+        assert (denied.status_code, denied.content) == (403, _refusal(flagged.denied.agent_id, denied))
         missing: Final = _send(flagged, unknown_caller.key, f"/a2a/{unknown}", request_id=request_id)
         assert (missing.status_code, missing.content) == (404, _not_found(request_id, unknown))
         _assert_never_dispatched(flagged, scenario, "never-sent")

@@ -20,6 +20,7 @@ import httpx
 import pytest
 import respx
 from fastapi import HTTPException
+from fastapi.testclient import TestClient
 from pydantic import BaseModel, ConfigDict
 
 import litellm
@@ -3119,3 +3120,56 @@ async def test_unknown_agent_rejection_echoes_the_jsonrpc_id(monkeypatch: pytest
     )
 
     assert isinstance(got_body, dict) and got_body["id"] == request_id and type(got_body["id"]) is type(request_id)
+
+
+def _a2a_app_refusing_with(refusal: Exception) -> TestClient:
+    from fastapi import FastAPI
+
+    from litellm.proxy.agent_endpoints.a2a_endpoints import router
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+    def refuse() -> UserAPIKeyAuth:
+        raise refusal
+
+    app: Final = FastAPI()
+    app.include_router(router)
+    app.dependency_overrides[user_api_key_auth] = refuse
+    return TestClient(app)
+
+
+@pytest.mark.parametrize("path", ["/a2a/agent-1", "/a2a/agent-1/message/send", "/v1/a2a/agent-1/message/send"])
+def test_a2a_auth_refusals_answer_as_jsonrpc_errors_with_the_callers_id(path: str):
+    from litellm.proxy._types import ProxyException
+
+    client: Final = _a2a_app_refusing_with(
+        ProxyException(message="Budget has been exceeded!", type="budget_exceeded", param=None, code=422)
+    )
+
+    response: Final = client.post(path, json={"jsonrpc": "2.0", "id": "req-7", "method": "message/send"})
+
+    assert response.status_code == 422
+    assert response.json() == {
+        "jsonrpc": "2.0",
+        "id": "req-7",
+        "error": {
+            "code": -32000,
+            "message": "Budget has been exceeded!",
+            "data": {"type": "budget_exceeded", "param": None, "code": "422"},
+        },
+    }
+
+
+def test_a2a_http_refusals_answer_as_jsonrpc_errors_with_a_null_id_for_unparseable_bodies():
+    from fastapi import HTTPException
+
+    client: Final = _a2a_app_refusing_with(HTTPException(status_code=403, detail="Agent 'agent-1' is not allowed"))
+
+    response: Final = client.post("/a2a/agent-1", content=b"not json")
+
+    assert response.status_code == 403
+    body: Final = response.json()
+    assert body["jsonrpc"] == "2.0"
+    assert body["id"] is None
+    assert body["error"]["code"] == -32000
+    assert body["error"]["message"] == "Agent 'agent-1' is not allowed"
+    assert body["error"]["data"]["code"] == "403"
