@@ -5,16 +5,18 @@ PR checklist requires at least one test in tests/test_litellm/.
 Additional tests live in tests/guardrails_tests/test_lakera_v2.py.
 """
 
-import importlib, logging, os
-from collections.abc import Mapping
+import importlib, json, logging, os
+from collections.abc import Mapping, Sequence
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 from fastapi import HTTPException
 
 import litellm
 from litellm.caching.caching import DualCache
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.base_llm.guardrail_translation.utils import (
     filter_messages_by_skip_flags,
 )
@@ -1713,6 +1715,135 @@ class TestAdvisoryModePostCall:
             )
 
         assert result is llm_response, "Response must pass through unmodified, matching monitor mode"
+
+
+def _gemini_request() -> dict[str, object]:
+    return {
+        "systemInstruction": {"parts": [{"text": "be nice"}]},
+        "contents": [
+            {
+                "role": "user",
+                "parts": [{"text": "hello world"}, {"inlineData": {"mimeType": "image/png", "data": "AA"}}],
+            },
+            {"role": "model", "parts": [{"text": "hi"}]},
+            {"role": "user", "parts": [{"functionResponse": {"name": "lookup", "response": {}}}]},
+        ],
+    }
+
+
+GEMINI_INSPECTION_MESSAGES: Final = [
+    {"role": "system", "content": "be nice"},
+    {"role": "user", "content": "hello world"},
+    {"role": "assistant", "content": "hi"},
+]
+PROMPT_ATTACK_ONLY_LAKERA_RESPONSE: Final = {
+    "flagged": True,
+    "breakdown": [{"detector_type": "prompt_attack", "detected": True, "message_id": 1}],
+}
+
+
+async def _run_gemini_pre_call(
+    guardrail: LakeraAIGuardrail, lakera_response: Mapping[str, object], data: dict[str, object]
+) -> Sequence[object]:
+    """Run the pre-call hook against a Lakera double and return the messages each guard request carried."""
+    sent: Final = list[object]()  # mutable-ok: the Lakera double records each guard request it receives
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        sent.append(json.loads(request.content)["messages"])
+        return httpx.Response(200, json={"payload": [], **lakera_response})
+
+    guardrail.async_handler = AsyncHTTPHandler(transport=httpx.MockTransport(respond))
+    await guardrail.async_pre_call_hook(
+        user_api_key_dict=UserAPIKeyAuth(api_key="test_key"),
+        cache=MagicMock(),
+        data=data,
+        call_type="pass_through_endpoint",
+    )
+    return sent
+
+
+def _without_metadata(data: Mapping[str, object]) -> Mapping[str, object]:
+    """The request body as forwarded, without the guardrail logging the hook records under ``metadata``."""
+    return {key: value for key, value in data.items() if key != "metadata"}
+
+
+class TestGeminiContents:
+    def test_reads_system_instruction_and_text_parts(self):
+        assert _build_lakera_inspection_messages(_gemini_request()) == GEMINI_INSPECTION_MESSAGES
+
+    def test_reads_a_single_contents_object_with_a_single_parts_object(self):
+        data: Final = {"contents": {"role": "user", "parts": {"text": "hello world"}}}
+        assert _build_lakera_inspection_messages(data) == [{"role": "user", "content": "hello world"}]
+
+    def test_reads_snake_case_system_instruction_and_joins_text_parts(self):
+        data: Final = {
+            "system_instruction": {"parts": [{"text": "a"}, {"text": "b"}]},
+            "contents": [{"parts": [{"text": "c"}]}, {"role": "function", "parts": [{"text": "d"}]}],
+        }
+        assert _build_lakera_inspection_messages(data) == [
+            {"role": "system", "content": "a\nb"},
+            {"role": "user", "content": "c"},
+            {"role": "tool", "content": "d"},
+        ]
+
+    @pytest.mark.parametrize("chat_field", ["messages", "input"])
+    def test_a_chat_field_next_to_contents_does_not_hide_the_contents(self, chat_field: str):
+        data: Final = {chat_field: [], "contents": [{"parts": [{"text": "card"}]}]}
+        assert _build_lakera_inspection_messages(data) == [{"role": "user", "content": "card"}]
+
+    @pytest.mark.asyncio
+    async def test_a_body_with_messages_and_contents_is_blocked_rather_than_masked(self):
+        data: Final = {
+            "messages": [{"role": "user", "content": "alice@example.com"}],
+            "contents": [{"parts": [{"text": "hello"}]}],
+        }
+        with pytest.raises(HTTPException) as blocked:
+            await _run_gemini_pre_call(
+                LakeraAIGuardrail(api_key="test_key", on_flagged="mask"), PII_ONLY_LAKERA_RESPONSE, data
+            )
+        assert blocked.value.status_code == 400
+        assert data["messages"] == [{"role": "user", "content": "alice@example.com"}]
+
+    @pytest.mark.asyncio
+    async def test_clean_body_reaches_lakera_and_is_forwarded_unchanged(self):
+        data: Final = _gemini_request()
+        sent: Final = await _run_gemini_pre_call(LakeraAIGuardrail(api_key="test_key"), {"flagged": False}, data)
+        assert sent == [GEMINI_INSPECTION_MESSAGES]
+        assert _without_metadata(data) == _gemini_request()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("on_flagged", ["block", "mask"])
+    async def test_pii_is_blocked_since_contents_cannot_be_masked(self, on_flagged: str):
+        data: Final = _gemini_request()
+        with pytest.raises(HTTPException) as blocked:
+            await _run_gemini_pre_call(
+                LakeraAIGuardrail(api_key="test_key", on_flagged=on_flagged), PII_ONLY_LAKERA_RESPONSE, data
+            )
+        assert blocked.value.status_code == 400
+        assert _without_metadata(data) == _gemini_request()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("lakera_response", [PROMPT_ATTACK_ONLY_LAKERA_RESPONSE, PII_ONLY_LAKERA_RESPONSE])
+    async def test_advisory_blocks_instead_of_adding_a_messages_field(self, lakera_response: Mapping[str, object]):
+        data: Final = _gemini_request()
+        with pytest.raises(HTTPException) as blocked:
+            await _run_gemini_pre_call(
+                LakeraAIGuardrail(api_key="test_key", on_flagged="inject_system_message"), lakera_response, data
+            )
+        assert blocked.value.status_code == 400
+        assert _without_metadata(data) == _gemini_request()
+
+    @pytest.mark.asyncio
+    async def test_monitor_forwards_the_body_and_logs_why_it_was_not_masked(self):
+        data: Final = _gemini_request()
+        with patch("litellm.proxy.guardrails.guardrail_hooks.lakera_ai_v2.verbose_proxy_logger") as logger:
+            await _run_gemini_pre_call(
+                LakeraAIGuardrail(api_key="test_key", on_flagged="monitor"), PII_ONLY_LAKERA_RESPONSE, data
+            )
+        assert _without_metadata(data) == _gemini_request()
+        assert logger.error.call_args.args[1] == (
+            "Gemini contents, which have no write-back path for the redacted content"
+        )
 
 
 @pytest.fixture()
