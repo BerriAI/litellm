@@ -504,8 +504,7 @@ class NomaGuardrail(CustomGuardrail):
                 messages[i]["content"] = anonymized_content
                 break
 
-    def _replace_llm_response_content(self, response: LLMResponse, anonymized_content: str, position: int):
-        """Replace the content of the choice at ``position`` with its anonymized version."""
+    def _replace_llm_response_content(self, response: LLMResponse, anonymized_content: str, position: int) -> None:
         if not isinstance(response, litellm.ModelResponse):
             return
 

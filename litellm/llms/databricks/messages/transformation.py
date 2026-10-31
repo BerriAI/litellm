@@ -192,7 +192,7 @@ class DatabricksAnthropicMessagesConfig(DatabricksBase, AnthropicMessagesConfig)
             headers=headers,
         )
         self._normalize_system_role_messages(  # pyright: ignore[reportUnknownMemberType]  # the shared helper takes a bare dict
-            anthropic_messages_request, model=model, drop_params=getattr(litellm_params, "drop_params", None)
+            anthropic_messages_request, model=model, drop_params=litellm_params.drop_params
         )
         self._remove_scope_from_cache_control(anthropic_messages_request)  # pyright: ignore[reportUnknownMemberType]  # the shared helper takes a bare dict
         return anthropic_messages_request

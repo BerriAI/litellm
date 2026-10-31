@@ -30,7 +30,7 @@ class TextCompletionStreamWrapper:
     def __aiter__(self):
         return self
 
-    def convert_to_text_completion_object(self, chunk: ModelResponse | ModelResponseStream):
+    def convert_to_text_completion_object(self, chunk: ModelResponse | ModelResponseStream) -> TextCompletionResponse:
         try:
             response: Final = TextCompletionResponse()
             response["id"] = chunk.get("id", None)

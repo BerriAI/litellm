@@ -3086,7 +3086,7 @@ class Router(DeprecatedRouterMembers):
         self._initialize_core_endpoints()
         self._initialize_specialized_endpoints()
 
-    def validate_fallbacks(self, fallback_param: Sequence[Mapping[str, object]] | None):
+    def validate_fallbacks(self, fallback_param: Sequence[Mapping[str, object]] | None) -> None:
         """
         Validate the fallbacks parameter.
         """
