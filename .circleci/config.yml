@@ -1433,7 +1433,7 @@ jobs:
             ROUTING_PARITY_BASE: << pipeline.parameters.routing_parity_base >>
           command: |
             [[ "$ROUTING_PARITY_BASE" =~ ^[0-9a-f]{40}$ ]] || exit 1
-            git fetch --depth 1 origin "$ROUTING_PARITY_BASE"
+            git fetch --depth 1 --no-filter origin "$ROUTING_PARITY_BASE"
             git rm -r -f --quiet litellm enterprise litellm-proxy-extras
             git checkout "$ROUTING_PARITY_BASE" -- litellm enterprise litellm-proxy-extras
             git reset --quiet

@@ -15,6 +15,7 @@ CONFIG: Final = CIRCLECI / "config.yml"
 PUBLIC_REPO: Final = "https://github.com/BerriAI/litellm.git"
 LINUX_SHELL: Final = ("bash", "-eo", "pipefail", "-c")
 WINDOWS_SHELL: Final = ("bash", "-c")
+PRODUCT_DIRS: Final = ("litellm", "enterprise", "litellm-proxy-extras")
 
 
 class _Run(BaseModel):
@@ -37,9 +38,37 @@ class _Commands(BaseModel):
     checkout_over_https: _Command
 
 
+class _NamedRun(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    name: str = ""
+    command: str
+
+
+class _JobStep(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    run: _NamedRun | str | None = None
+
+
+class _Job(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    steps: tuple[_JobStep | str, ...]
+
+
+class _Jobs(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    routing_parity: _Job
+
+
 class _Config(BaseModel):
     model_config = ConfigDict(frozen=True)
     commands: _Commands
+    jobs: _Jobs
+
+
+class _TraceEvent(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    event: str
+    name: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -68,12 +97,30 @@ def _step_names(node: object) -> Iterator[str]:
             yield from _step_names(item)
 
 
+def _config() -> _Config:
+    return _Config.model_validate(yaml.safe_load(CONFIG.read_text()))
+
+
+def _routing_parity_step(name: str) -> str:
+    return next(
+        step.run.command
+        for step in _config().jobs.routing_parity.steps
+        if isinstance(step, _JobStep) and isinstance(step.run, _NamedRun) and step.run.name == name
+    )
+
+
+def _fetches(trace: Path) -> int:
+    events: Final = tuple(map(_TraceEvent.model_validate_json, trace.read_text().splitlines()))
+    return sum(event.event == "cmd_name" and event.name == "fetch" for event in events)
+
+
 def _git(cwd: Path, *args: str) -> str:
     return subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True, text=True).stdout.strip()
 
 
 def _commit(work: Path, files: Mapping[str, str], message: str) -> str:
     for name, content in files.items():
+        (work / name).parent.mkdir(parents=True, exist_ok=True)
         (work / name).write_text(content)
     _git(work, "add", "-A")
     _git(work, "commit", "-q", "--allow-empty", "-m", message)
@@ -109,6 +156,21 @@ def _publish_docs_only_pr(tmp_path: Path) -> _Upstream:
     return _Upstream(url=remote.as_uri(), older=main, newer=head)
 
 
+def _product(version: str) -> dict[str, str]:
+    return {f"{directory}/code.py": f"{version} {directory}\n" for directory in PRODUCT_DIRS}
+
+
+def _publish_parity_base(tmp_path: Path, base_on_main: bool) -> _Upstream:
+    remote, work = _new_upstream(tmp_path)
+    fork_point: Final = _commit(work, _product("fork point"), "fork point")
+    base: Final = _commit(work, _product("base"), "release")
+    _git(work, "branch", "-q", "stable")
+    _git(work, "reset", "-q", "--hard", base if base_on_main else fork_point)
+    head: Final = _commit(work, _product("head"), "pipeline commit")
+    _git(work, "push", "-q", str(remote), "main", "stable")
+    return _Upstream(url=remote.as_uri(), older=base, newer=head)
+
+
 def _stub(bin_dir: Path, name: str, script: str) -> None:
     bin_dir.mkdir(exist_ok=True)
     (bin_dir / name).write_text(f"#!/usr/bin/env bash\n{script}\n")
@@ -136,7 +198,7 @@ def _run_checkout(
 ) -> subprocess.CompletedProcess[str]:
     job: Final = tmp_path / "job"
     job.mkdir()
-    command: Final = _Config.model_validate(yaml.safe_load(CONFIG.read_text())).commands.checkout_over_https
+    command: Final = _config().commands.checkout_over_https
     return subprocess.run(
         [*shell, command.steps[0].run.command],
         cwd=job,
@@ -222,3 +284,27 @@ exec "{shutil.which("git")}" "$@"''',
     assert steps.count("checkout") == checkouts
     head: Final = subprocess.run(["git", "rev-parse", "HEAD"], cwd=tmp_path / "job", capture_output=True, text=True)
     assert (head.stdout.strip() == upstream.older) is checked_out
+
+
+@pytest.mark.parametrize("base_on_main", (True, False), ids=("main-commit", "release-branch-commit"))
+def test_routing_parity_downloads_the_base_files_in_one_fetch_instead_of_one_per_missing_file(
+    tmp_path: Path, base_on_main: bool
+) -> None:
+    upstream: Final = _publish_parity_base(tmp_path, base_on_main)
+    checkout: Final = _run_checkout(tmp_path, upstream, {"CIRCLE_SHA1": upstream.newer})
+    assert checkout.returncode == 0, checkout.stderr
+    job: Final = tmp_path / "job"
+    (job / "litellm" / "rust_bridge").mkdir()
+    (job / "litellm" / "rust_bridge" / "_native.abi3.so").write_text("built for this job\n")
+    trace: Final = tmp_path / "trace.json"
+    result: Final = subprocess.run(
+        [*LINUX_SHELL, _routing_parity_step("Check out base product code")],
+        cwd=job,
+        env={**_job_env(tmp_path, upstream), "ROUTING_PARITY_BASE": upstream.older, "GIT_TRACE2_EVENT": str(trace)},
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    assert tuple((job / name).read_text() for name in _product("base")) == tuple(_product("base").values())
+    assert _fetches(trace) == 1
+    assert _git(job, "rev-parse", "HEAD") == upstream.newer
