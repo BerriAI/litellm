@@ -62,7 +62,7 @@ import websockets.exceptions
 from pydantic import BaseModel, ConfigDict, Json, JsonValue, TypeAdapter, ValidationError, with_config
 from pydantic.fields import FieldInfo, PydanticUndefined
 from pydantic.main import IncEx
-from pydantic_core import PydanticSerializationError, to_json
+from pydantic_core import PydanticSerializationError, to_jsonable_python
 from typing_extensions import NotRequired, ReadOnly, TypedDict, assert_never
 
 from litellm._uuid import uuid
@@ -10047,6 +10047,8 @@ def _event_with_restamped_nested_model(event: Mapping[str, object], target_model
 _SSE_DATA_FIELD: Final = b"data:"
 _SSE_NESTED_RESPONSE_MARKER: Final = b'"response"'
 _SSE_EVENT_OBJECT: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
+_JSON_OBJECT: Final[TypeAdapter[dict[str, object]]] = TypeAdapter(dict[str, object])
+_JSON_ARRAY: Final[TypeAdapter[tuple[object, ...]]] = TypeAdapter(tuple[object, ...])
 
 
 def _restamp_nested_response_model_in_sse_frame(frame: bytes, target_model: str) -> bytes:
@@ -10074,32 +10076,46 @@ def _restamp_nested_response_model_in_sse_line(line: bytes, target_model: str) -
 
 def _json_encodes(value: object) -> bool:
     try:
-        to_json(value)
-    except PydanticSerializationError:
+        to_jsonable_python(value)
+    except ValueError:
         return False
     return True
 
 
-def _unencodable_fields(model: BaseModel, nested_field: str | None) -> dict[str, bool]:
-    return {key: True for key, value in model if key != nested_field and not _json_encodes(value)}
+def _unencodable_part(value: object, ancestors: frozenset[int]) -> IncEx | bool:
+    if id(value) in ancestors:
+        return True
+    lineage: Final = ancestors | {id(value)}
+    if isinstance(value, BaseModel):
+        return _unencodable_keys(iter(value), lineage) or True
+    if isinstance(value, Mapping):
+        return _unencodable_keys(_JSON_OBJECT.validate_python(value).items(), lineage) or True
+    if isinstance(value, (list, tuple)):
+        return _unencodable_indexes(_JSON_ARRAY.validate_python(value), lineage) or True
+    return True
 
 
-def _unencodable_choice_fields(choice: StreamingChoices) -> Mapping[str, IncEx | bool]:
-    return {**_unencodable_fields(choice, "delta"), "delta": _unencodable_fields(choice.delta, None)}
+def _unencodable_keys(items: Iterable[tuple[str, object]], lineage: frozenset[int]) -> Mapping[str, IncEx | bool]:
+    return {key: _unencodable_part(item, lineage) for key, item in items if not _json_encodes(item)}
 
 
-def _serialize_chat_chunk_without_unencodable_fields(chunk: ModelResponseStream) -> bytes:
-    choices: Final = {index: _unencodable_choice_fields(choice) for index, choice in enumerate(chunk.choices)}
-    exclude: Final = {**_unencodable_fields(chunk, "choices"), "choices": choices}
-    verbose_proxy_logger.warning("Dropping streamed chunk fields that JSON cannot encode: %s", exclude)
-    return chunk.model_dump_json(exclude_none=True, exclude_unset=True, exclude=exclude).encode()
+def _unencodable_indexes(items: Sequence[object], lineage: frozenset[int]) -> Mapping[int, IncEx | bool]:
+    return {index: _unencodable_part(item, lineage) for index, item in enumerate(items) if not _json_encodes(item)}
+
+
+def _serialize_chat_chunk_leniently(chunk: ModelResponseStream) -> bytes:
+    exclude: Final = _unencodable_keys(iter(chunk), frozenset({id(chunk)}))
+    if exclude:
+        verbose_proxy_logger.warning("Dropping streamed chunk fields that JSON cannot encode: %s", exclude)
+    jsonable: Final = chunk.model_dump(mode="json", exclude_none=True, exclude_unset=True, exclude=exclude)
+    return json.dumps(jsonable, ensure_ascii=True, separators=(",", ":")).encode()
 
 
 def _serialize_chat_chunk(chunk: ModelResponseStream) -> bytes:
     try:
         return chunk.model_dump_json(exclude_none=True, exclude_unset=True).encode()
     except PydanticSerializationError:
-        return _serialize_chat_chunk_without_unencodable_fields(chunk)
+        return _serialize_chat_chunk_leniently(chunk)
 
 
 def _serialize_streaming_chunk(chunk: BaseModel) -> bytes:

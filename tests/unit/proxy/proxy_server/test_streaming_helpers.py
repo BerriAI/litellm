@@ -55,7 +55,14 @@ from litellm.types.llms.openai import (
     ResponseFailedEvent,
     ResponsesAPIResponse,
 )
-from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+from litellm.types.utils import (
+    ChatCompletionDeltaToolCall,
+    Delta,
+    Function,
+    ModelResponseStream,
+    StreamingChoices,
+    Usage,
+)
 from tests._support.clock_loops import AutojumpClockLoop
 
 from .conftest import normalize
@@ -771,7 +778,7 @@ async def test_async_data_generator_sse_frame_keeps_provider_fields_on_a_text_ch
 
 
 def _circular_dict() -> dict[str, object]:
-    looped: Final[dict[str, object]] = {}  # mutable-ok: a circular dict has to be inserted into itself
+    looped: Final[dict[str, object]] = {"keep": 1}  # mutable-ok: a circular dict has to be inserted into itself
     looped["self"] = looped
     return looped
 
@@ -782,8 +789,6 @@ def _circular_dict() -> dict[str, object]:
     [
         pytest.param(object(), id="unknown-type"),
         pytest.param(hashlib.sha256(b"trace").digest(), id="invalid-utf8-bytes"),
-        pytest.param("\ud800", id="lone-surrogate"),
-        pytest.param(_circular_dict(), id="circular-dict"),
     ],
 )
 async def test_async_data_generator_streams_a_text_chunk_a_hook_tagged_with_a_value_json_cannot_encode(
@@ -812,6 +817,55 @@ async def test_async_data_generator_streams_a_text_chunk_a_hook_tagged_with_a_va
     assert "trace_chunk" not in payload
     assert "trace_choice" not in payload["choices"][0]
     assert all(name in caplog.text for name in ("trace_chunk", "trace_choice", "trace_delta"))
+
+
+def test_serialize_streaming_chunk_keeps_lone_surrogates_a_provider_split_across_frames(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    tool_call: Final = ChatCompletionDeltaToolCall(
+        id="call_1", index=0, type="function", function=Function(name="get_weather", arguments='{"city": "Par\udc00is"}')
+    )
+    chunk: Final = ModelResponseStream(
+        id="chatcmpl-split",
+        choices=[StreamingChoices(index=0, delta=Delta(content="Hi \ud83d", tool_calls=[tool_call]))],
+        created=0,
+        model="gpt-4",
+        object="chat.completion.chunk",
+    )
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        delta: Final = json.loads(_serialize_streaming_chunk(chunk))["choices"][0]["delta"]
+
+    assert caplog.text == ""
+    assert delta["content"] == "Hi \ud83d"
+    assert delta["tool_calls"][0]["id"] == "call_1"
+    assert delta["tool_calls"][0]["function"] == {"name": "get_weather", "arguments": '{"city": "Par\udc00is"}'}
+
+
+def test_serialize_streaming_chunk_drops_only_the_nested_value_json_cannot_encode() -> None:
+    digest: Final = hashlib.sha256(b"trace").digest()
+    chunk: Final = ModelResponseStream(
+        id="chatcmpl-nested",
+        choices=[
+            StreamingChoices(index=0, delta=Delta(content="a")),
+            StreamingChoices(
+                index=1, delta=Delta(content="b", provider_specific_fields={"citations": ["ok"], "raw": digest})
+            ),
+        ],
+        created=0,
+        model="gpt-4",
+        object="chat.completion.chunk",
+        usage=Usage(prompt_tokens=3, completion_tokens=2, total_tokens=5),
+    )
+    setattr(chunk.usage, "raw", digest)
+    setattr(chunk, "trace_chunk", _circular_dict())
+
+    payload: Final = json.loads(_serialize_streaming_chunk(chunk))
+
+    assert payload["choices"][0]["delta"] == {"content": "a"}
+    assert payload["choices"][1]["delta"] == {"content": "b", "provider_specific_fields": {"citations": ["ok"]}}
+    assert payload["usage"] == {"prompt_tokens": 3, "completion_tokens": 2, "total_tokens": 5}
+    assert payload["trace_chunk"] == {"keep": 1}
 
 
 @pytest.mark.asyncio
