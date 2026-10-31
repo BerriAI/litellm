@@ -680,6 +680,7 @@ _RESOLVED_RETRY_POLICY_ADAPTER: Final = TypeAdapter(RetryPolicy | None)
 _ROUTING_KWARGS_ADAPTER: Final[TypeAdapter[Mapping[str, object] | None]] = TypeAdapter(Mapping[str, object] | None)
 _FALLBACK_HOP_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _REQUEST_KWARGS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+_FALLBACK_CHAIN_ADAPTER: Final = TypeAdapter(tuple[Mapping[str, list[str]], ...])
 _DEPLOYMENT_PARAMS_ADAPTER: Final[TypeAdapter[Mapping[str, object] | GenericLiteLLMParams]] = TypeAdapter(
     Mapping[str, object] | GenericLiteLLMParams
 )
@@ -10383,18 +10384,23 @@ class Router(DeprecatedRouterMembers):
             )
         )
 
-    def _stream_can_fall_back_on_overflow(self, model_group: str, kwargs: Mapping[str, Any]) -> bool:
+    def _stream_can_fall_back_on_overflow(self, model_group: str, kwargs: Mapping[str, object]) -> bool:
         """Whether a context window overflow before content could still reach a fallback, which context_window_fallbacks
-        can serve as well as every route _stream_can_fall_back counts."""
+        can serve as well as every route _stream_can_fall_back counts. A chain in a shape other than group-keyed lists
+        errs toward True, as _stream_can_fall_back does for non-standard fallbacks."""
         if fallbacks_disabled_for_request(kwargs):
             return False
         if self._stream_can_fall_back(model_group, kwargs):
             return True
-        context_window_fallbacks: Final = kwargs.get("context_window_fallbacks", self._core_context_window_fallbacks)
-        if not context_window_fallbacks:
+        configured: Final = kwargs.get("context_window_fallbacks", self._core_context_window_fallbacks)
+        if not configured:
             return False
+        try:
+            chain: Final = _FALLBACK_CHAIN_ADAPTER.validate_python(configured)
+        except ValidationError:
+            return True
         resolved, _ = get_fallback_model_group_for_lookup_groups(
-            fallbacks=context_window_fallbacks,
+            fallbacks=chain,
             lookup_groups=fallback_lookup_groups(kwargs, model_group),
         )
         return has_unattempted_fallback_target(resolved, kwargs)

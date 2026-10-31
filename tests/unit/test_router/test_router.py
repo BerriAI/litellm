@@ -19265,7 +19265,7 @@ async def test_anthropic_messages_retry_raising_a_context_window_error_takes_the
     assert [model for model, _, _ in provider.calls][-1] == "anthropic/cw-model"
 
 
-def _anthropic_messages_overflow_before_content():
+def _anthropic_messages_overflow_before_content() -> _AnthropicMessagesRaisingByteStream:
     return _AnthropicMessagesRaisingByteStream(
         [_anthropic_messages_message_start_chunk()],
         litellm.ContextWindowExceededError(
@@ -19275,7 +19275,7 @@ def _anthropic_messages_overflow_before_content():
 
 
 @pytest.mark.asyncio
-async def test_anthropic_messages_stream_overflow_before_content_takes_the_context_window_fallback():
+async def test_anthropic_messages_stream_overflow_before_content_takes_the_context_window_fallback() -> None:
     router: Final = _anthropic_messages_retry_router(num_retries=0, context_window_fallbacks=[{"glm": ["cw"]}])
     provider: Final = _AnthropicMessagesScriptedProvider(
         _anthropic_messages_overflow_before_content,
@@ -19320,6 +19320,7 @@ async def test_anthropic_messages_stream_overflow_surfaces_when_no_fallback_can_
         pytest.param(None, {"context_window_fallbacks": [{"glm": ["cw"]}]}, True, id="request-context-window-fallback"),
         pytest.param(None, {}, False, id="no-fallback-configured"),
         pytest.param([{"glm": ["cw"]}], {"disable_fallbacks": True}, False, id="fallbacks-disabled-for-the-request"),
+        pytest.param(None, {"context_window_fallbacks": ["cw"]}, True, id="request-chain-in-a-non-standard-shape"),
     ],
 )
 def test_stream_can_fall_back_on_overflow_counts_context_window_fallbacks(
