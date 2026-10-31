@@ -1194,12 +1194,10 @@ def _json_object(value: object) -> Mapping[str, object]:
 
 
 def _anthropic_user_id_to_forward(
-    body: Mapping[str, object] | None,
+    body: Mapping[str, object],
     url: str,
     has_pre_call_guardrails: Callable[[Mapping[str, object]], bool],
 ) -> str | None:
-    if body is None:
-        return None
     user_id: Final = _json_object(body.get("metadata")).get("user_id")
     if not isinstance(user_id, str):
         return None
@@ -1454,7 +1452,7 @@ async def pass_through_request(
             request_method=getattr(request, "method", None),
             cost_per_request=cost_per_request,
         )
-        hooked_body: Final = cast("Mapping[str, object] | None", _parsed_body)  # cast-ok: json
+        hooked_body: Final = _json_object(_parsed_body)
         client_user_id: Final = _anthropic_user_id_to_forward(
             hooked_body, str(url), proxy_logging_obj.request_has_pre_call_guardrails
         )
