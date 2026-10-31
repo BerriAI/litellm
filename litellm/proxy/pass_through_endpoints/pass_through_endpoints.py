@@ -501,8 +501,6 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
         custom_headers: Mapping[str, str] | None = None,
         guardrail_request_data: Sequence[object] = (),
     ) -> dict:
-        """The upstream response headers to relay, plus the call id, ``custom_headers`` and the guardrail headers
-        for what guardrails recorded in ``guardrail_request_data``."""
         # Exclude headers that uvicorn writes itself (server, date) and
         # encoding/length headers that don't survive re-serialization.
         # If we forward the upstream's Server header, uvicorn adds its
