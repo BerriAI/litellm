@@ -12,6 +12,11 @@ from litellm.llms.custom_httpx.http_handler import (
 from litellm.proxy._types import CommonProxyErrors, LitellmUserRoles, UserAPIKeyAuth
 
 
+class OAuth2TokenValidationError(ValueError):
+    """The token-info or introspection endpoint did not vouch for the token: it rejected it, reported it
+    inactive, or could not be reached."""
+
+
 class Oauth2Handler:
     """
     Handles OAuth2 token validation.
@@ -207,7 +212,7 @@ class Oauth2Handler:
             )
         except httpx.HTTPStatusError as e:
             # This will catch any 4xx or 5xx errors
-            raise ValueError(f"Oauth 2.0 Token validation failed: {e}")
+            raise OAuth2TokenValidationError(f"Oauth 2.0 Token validation failed: {e}")
         except Exception as e:
             # This will catch any other errors (like network issues)
-            raise ValueError(f"An error occurred during token validation: {e}")
+            raise OAuth2TokenValidationError(f"An error occurred during token validation: {e}")
