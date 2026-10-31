@@ -26474,13 +26474,16 @@
         },
         "OutputText": {
           "additionalProperties": true,
-          "description": "Text output content from an assistant message",
+          "type": "object"
+        },
+        "OutputTextLogprob": {
+          "additionalProperties": true,
           "properties": {
-            "annotations": {
+            "bytes": {
               "anyOf": [
                 {
                   "items": {
-                    "$ref": "#/components/schemas/GenericResponseOutputItemContentAnnotation"
+                    "type": "integer"
                   },
                   "type": "array"
                 },
@@ -26488,37 +26491,65 @@
                   "type": "null"
                 }
               ],
-              "title": "Annotations"
+              "title": "Bytes"
             },
-            "text": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Text"
+            "logprob": {
+              "title": "Logprob",
+              "type": "number"
             },
-            "type": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Type"
+            "token": {
+              "title": "Token",
+              "type": "string"
+            },
+            "top_logprobs": {
+              "items": {
+                "$ref": "#/components/schemas/OutputTextTopLogprob"
+              },
+              "title": "Top Logprobs",
+              "type": "array"
             }
           },
           "required": [
-            "type",
-            "text",
-            "annotations"
+            "token",
+            "logprob",
+            "bytes",
+            "top_logprobs"
           ],
-          "title": "OutputText",
+          "title": "OutputTextLogprob",
+          "type": "object"
+        },
+        "OutputTextTopLogprob": {
+          "additionalProperties": true,
+          "properties": {
+            "bytes": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "integer"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Bytes"
+            },
+            "logprob": {
+              "title": "Logprob",
+              "type": "number"
+            },
+            "token": {
+              "title": "Token",
+              "type": "string"
+            }
+          },
+          "required": [
+            "token",
+            "logprob",
+            "bytes"
+          ],
+          "title": "OutputTextTopLogprob",
           "type": "object"
         },
         "OutputTokensDetails": {
