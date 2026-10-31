@@ -206,6 +206,7 @@ class PillarGuardrail(CustomGuardrail):
         include_evidence: bool | None = None,
         fallback_on_error: str | None = None,
         timeout: float | None = None,
+        async_handler: _PillarProtectHTTPClient | None = None,
         **kwargs,
     ) -> None:
         """
@@ -224,8 +225,10 @@ class PillarGuardrail(CustomGuardrail):
             LiteLLM virtual key context (user_id, team_id, key_alias, etc.) is always
             automatically passed as X-LiteLLM-* headers to enable application/user tracking.
         """
-        self.async_handler: _PillarProtectHTTPClient = get_async_httpx_client(
-            llm_provider=httpxSpecialProvider.GuardrailCallback
+        self.async_handler: _PillarProtectHTTPClient = (
+            async_handler
+            if async_handler is not None
+            else get_async_httpx_client(llm_provider=httpxSpecialProvider.GuardrailCallback)
         )
         self.api_key = api_key or os.environ.get("PILLAR_API_KEY")
 

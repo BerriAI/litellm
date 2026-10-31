@@ -40,6 +40,14 @@ from tests.unit.proxy.guardrails.guardrail_hooks._cisco_ai_defense_test_utils im
     patch,
     pytest,
 )
+from typing import Final
+
+from openai.types.responses import ResponseFunctionWebSearch
+from openai.types.responses.response_function_web_search import (
+    Action,
+    ActionOpenPage,
+    ActionSearch,
+)
 
 
 def test_cisco_ai_defense_config_via_init_v2_chat(monkeypatch):
@@ -404,15 +412,13 @@ class TestCiscoAIDefenseChatMode:
                 )
 
 
-_CLAUDE_HOSTED_WEB_ACTIONS = (
-    {"type": "search", "query": "ssn 123-45-6789"},
-    {"type": "open_page", "url": "https://example.com/?ssn=123-45-6789"},
+_CLAUDE_HOSTED_WEB_ACTIONS: Final = (
+    ActionSearch(type="search", query="ssn 123-45-6789"),
+    ActionOpenPage(type="open_page", url="https://example.com/?ssn=123-45-6789"),
 )
 
 
-def _claude_hosted_web_call_response(action: dict):
-    from openai.types.responses import ResponseFunctionWebSearch
-
+def _claude_hosted_web_call_response(action: Action):
     from litellm.types.llms.openai import ResponsesAPIResponse
 
     return ResponsesAPIResponse(
@@ -631,7 +637,7 @@ class TestCiscoAIDefenseResponsesAPIOutputRedaction:
             )
 
         call = result.output[0]
-        assert (call.id, call.action.type) == ("ws_srvtoolu_01", action["type"])
+        assert (call.id, call.action.type) == ("ws_srvtoolu_01", action.type)
         assert "123-45-6789" not in call.action.model_dump_json()
 
 

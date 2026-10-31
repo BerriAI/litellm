@@ -672,7 +672,7 @@ async def test_post_call_hook_with_tool_calls(
 
 @pytest.mark.asyncio
 async def test_post_call_hook_blocks_a_flagged_claude_server_tool_call(
-    pillar_guardrail_instance,
+    env_setup,
     sample_request_data,
     user_api_key_dict,
     pillar_clean_response,
@@ -695,20 +695,25 @@ async def test_post_call_hook_blocks_a_flagged_claude_server_tool_call(
         ]
     )
 
-    async def _pillar_flags_the_server_call(*_args, **kwargs):
-        scanned_tool_calls = kwargs["json"]["messages"][-1].get("tool_calls") or []
-        return pillar_flagged_response if server_call in scanned_tool_calls else pillar_clean_response
+    class _PillarFlagsTheServerCall:
+        async def post(self, *, json, **_request):
+            scanned_tool_calls = json["messages"][-1].get("tool_calls") or []
+            return pillar_flagged_response if server_call in scanned_tool_calls else pillar_clean_response
 
-    with patch(
-        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
-        side_effect=_pillar_flags_the_server_call,
-    ):
-        with pytest.raises(HTTPException) as excinfo:
-            await pillar_guardrail_instance.async_post_call_success_hook(
-                data=sample_request_data,
-                user_api_key_dict=user_api_key_dict,
-                response=response,
-            )
+    guardrail = PillarGuardrail(
+        guardrail_name="pillar-test",
+        api_key="test-pillar-key",
+        api_base="https://api.pillar.security",
+        on_flagged_action="block",
+        async_handler=_PillarFlagsTheServerCall(),
+    )
+
+    with pytest.raises(HTTPException) as excinfo:
+        await guardrail.async_post_call_success_hook(
+            data=sample_request_data,
+            user_api_key_dict=user_api_key_dict,
+            response=response,
+        )
 
     assert excinfo.value.status_code == 400
 
