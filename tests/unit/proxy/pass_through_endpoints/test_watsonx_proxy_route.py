@@ -540,7 +540,11 @@ async def test_watsonx_route_falls_back_to_env_when_no_deployment_is_flagged(mon
     target, authorization, iam_apikey = await _route_target_and_iam_apikey(
         monkeypatch,
         llm_router,
-        env={"WATSONX_API_KEY": "wx-env-key", "WATSONX_API_BASE": "https://us-south.ml.cloud.ibm.com"},
+        env={
+            "WX_API_KEY": "wx-env-key",
+            "WATSONX_API_KEY": "watsonx-env-key",
+            "WATSONX_API_BASE": "https://us-south.ml.cloud.ibm.com",
+        },
     )
 
     assert target == "https://us-south.ml.cloud.ibm.com/ml/v1/text/generation"

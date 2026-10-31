@@ -4474,7 +4474,9 @@ async def watsonx_proxy_route(
     if provider_config is None:
         raise HTTPException(status_code=404, detail="Watsonx passthrough config not found")
 
-    watsonx_credentials: Final = passthrough_endpoint_router.get_proxy_wide_credentials(custom_llm_provider="watsonx")
+    watsonx_credentials: Final = passthrough_endpoint_router.get_proxy_wide_deployment_credentials(
+        custom_llm_provider="watsonx"
+    )
     api_key: Final = watsonx_credentials.api_key if watsonx_credentials is not None else None
     api_base: Final = watsonx_credentials.api_base if watsonx_credentials is not None else None
 
