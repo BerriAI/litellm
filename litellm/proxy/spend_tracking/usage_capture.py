@@ -1155,12 +1155,23 @@ def _realtime_pricing_models(value: Mapping[str, JsonValue]) -> Iterator[str]:
         pending.extend(nested for key in _REALTIME_CHILDREN if isinstance(nested := fields.get(key), dict))
 
 
+def _image_cost_dimensions(image: object) -> Mapping[str, object]:
+    fields: Final = _fields(_response_fields(image).get("provider_specific_fields"))
+    return {
+        "provider_specific_fields": {
+            name: value
+            for name, value in fields.items()
+            if name in {"width", "height"} and isinstance(value, int) and not isinstance(value, bool)
+        }
+    }
+
+
 def _pricing_inputs(kwargs: Mapping[str, object], logging_obj: object, response: object) -> Mapping[str, object]:
     from litellm.litellm_core_utils.litellm_logging import Logging
 
     return {
         "image_response": {
-            "data": tuple(dict[str, JsonValue]() for _ in response.data or ()),
+            "data": tuple(_image_cost_dimensions(image) for image in response.data or ()),
             "usage": _response_fields(response.usage) if response.usage is not None else None,
             "size": response.size,
             "quality": response.quality,

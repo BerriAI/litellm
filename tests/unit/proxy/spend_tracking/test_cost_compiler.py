@@ -1609,9 +1609,12 @@ async def test_live_adjustment_reload_is_captured_and_replay_remains_frozen(monk
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("token_pricing", (True, False))
+@pytest.mark.parametrize(
+    ("pricing", "width", "expected"),
+    (("tokens", 2048, 0.2), ("images", 2048, 0.5), ("pixels", 2048, 0.4), ("pixels", 2049, 0.6)),
+)
 async def test_image_capture_replays_the_existing_image_calculator(
-    monkeypatch: pytest.MonkeyPatch, token_pricing: bool
+    monkeypatch: pytest.MonkeyPatch, pricing: str, width: int, expected: float
 ) -> None:
     import litellm
     from litellm.proxy.spend_tracking.usage_capture import capture_logging_usage
@@ -1622,30 +1625,42 @@ async def test_image_capture_replays_the_existing_image_calculator(
 
     monkeypatch.setattr(litellm, "cost_discount_config", {"openai": 0.1})
     monkeypatch.setattr(litellm, "cost_margin_config", {"global": {"fixed_amount": 0.2}})
-    model: Final = "gpt-image-capture" if token_pricing else "dall-e-capture"
+    model: Final = {"tokens": "gpt-image-capture", "images": "dall-e-capture", "pixels": "fal-ai/flux/dev"}[pricing]
+    provider: Final = "fal_ai" if pricing == "pixels" else "openai"
+    catalog_key: Final = f"{provider}/{model}" if pricing == "pixels" else model
     monkeypatch.setitem(
         litellm.model_cost,
-        model,
+        catalog_key,
         {
-            "litellm_provider": "openai",
+            "litellm_provider": provider,
             "mode": "image_generation",
-            **(
-                {"input_cost_per_token": 0.01, "output_cost_per_image_token": 0.02}
-                if token_pricing
-                else {"output_cost_per_image": 0.25}
-            ),
+            **{
+                "tokens": {"input_cost_per_token": 0.01, "output_cost_per_image_token": 0.02},
+                "images": {"output_cost_per_image": 0.25},
+                "pixels": {"output_cost_per_image": 0.1, "output_cost_per_pixel": 0.1 / (1024 * 1024)},
+            }[pricing],
         },
     )
     logger: Final = _logger("aimage_generation")
     logger.model = model
     logger.update_environment_variables(
-        model=model, custom_llm_provider="openai", litellm_params={}, optional_params={}
+        model=model, custom_llm_provider=provider, litellm_params={}, optional_params={}
     )
     response: Final = ImageResponse.model_validate(
         {
             "created": 1,
             "model": model,
-            "data": [{"b64_json": "private-image-content"}] * 2,
+            "data": [
+                {
+                    "b64_json": "private-image-content",
+                    "provider_specific_fields": {
+                        "width": width,
+                        "height": 1024,
+                        "secret": "private-image-content",
+                    },
+                }
+            ]
+            * 2,
             "size": "1024x1024",
             "quality": "standard",
             "usage": {
@@ -1654,12 +1669,12 @@ async def test_image_capture_replays_the_existing_image_calculator(
                 "total_tokens": 15,
                 "input_tokens_details": {"text_tokens": 10, "image_tokens": 0},
             }
-            if token_pricing
+            if pricing == "tokens"
             else None,
         }
     )
     source: Final = logger.response_cost_calculator(response, ignore_stamped_cost=True)
-    assert source == pytest.approx(0.2 if token_pricing else 0.5)
+    assert source == pytest.approx(expected)
     database: Final = StoredUsage()
     meter: Final = DurableUsageMeter(database.insert, UsageCaptureSettings(), wait_for_batch=_manual_flush)
     try:
@@ -1667,7 +1682,7 @@ async def test_image_capture_replays_the_existing_image_calculator(
         await meter.close()
         envelope: Final = database.rows[-1].envelope
         assert "private-image-content" not in envelope
-        monkeypatch.delitem(litellm.model_cost, model)
+        monkeypatch.delitem(litellm.model_cost, catalog_key)
         replay: Final = price_usage(envelope)
         assert isinstance(replay, PricingSnapshot)
         assert float(replay.total_cost) == pytest.approx(source)
