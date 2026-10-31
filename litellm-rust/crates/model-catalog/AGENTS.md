@@ -2,22 +2,34 @@
 
 Every price in a row lowers to one `Price { meter, channel, when }` and its `UnitPrice`. These keys come from the `FlatKey::parse` tests
 
-| JSON key | Meter | Channel | When (tier, band) |
-|---|---|---|---|
-| `input_cost_per_token` | `Input(Token(Text))` | `Online` | `Standard`, `Base` |
-| `output_cost_per_token_above_272k_tokens_priority` | `Output(Token(Text))` | `Online` | `Priority`, `OverPromptTokens(272000)` |
-| `cache_creation_input_token_cost_above_1hr_above_200k_tokens` | `CacheWrite { Text, OneHour }` | `Online` | `Standard`, `OverPromptTokens(200000)` |
-| `ocr_cost_per_page_batches` | `Feature(OcrPage)` | `Batch` | `Standard`, `Base` |
+- `input_cost_per_token`
+  - meter `Input(Token(Text))`, channel `Online`, tier `Standard`, band `Base`
+- `output_cost_per_token_above_272k_tokens_priority`
+  - meter `Output(Token(Text))`, channel `Online`
+  - `_priority` sets tier `Priority`
+  - `_above_272k_tokens` sets band `OverPromptTokens(272000)`
+- `cache_creation_input_token_cost_above_1hr_above_200k_tokens`
+  - meter `CacheWrite { Text, OneHour }`, where `_above_1hr` is the cache TTL, not a band
+  - `_above_200k_tokens` sets band `OverPromptTokens(200000)`
+  - channel `Online`, tier `Standard`
+- `ocr_cost_per_page_batches`
+  - meter `Feature(OcrPage)`, tier `Standard`, band `Base`
+  - `_batches` sets channel `Batch`
 
-A meter is what gets counted, such as text input tokens, reasoning tokens, an image of a given size or a web search. A variation only one meter has stays inside it (cache TTL, image size, resolution, `_above_Ns_interval`, `max_results_range`), which is why `_above_1hr` is a cache TTL and not a band
-
-A band is a range of prompt sizes. `_above_200k_tokens` prices a call whose prompt is over 200k tokens, and `Band::Base` is everything under the lowest edge. `Prices::band` puts the whole call in one band from its prompt token count, and `Billing::band_edge` says whether a prompt of exactly 200k is in it
-
-`When` is the request's condition, its service tier and band. `Channel` is the billing route. Batch and decisions are channels and not tiers because Python bills them with their own rules
-
-Off-peak and `Adjustments` are never prices. Off-peak swaps in other token rates while a UTC window is open, and `Adjustments` multiplies a priced call for region, residency, geo or `speed: fast`
-
-`Billing` on `Prices` holds the row attributes that change how its prices apply without being prices (text unit, band edge, cache-read fallback, wall clock, web search unit, tier scope). `lower.rs` derives it from the row and its `litellm_provider`, so `litellm-cost` holds no provider list
+- Meter is what gets counted, such as text input tokens, reasoning tokens, an image of a given size or a web search
+  - A variation only one meter has stays inside it (cache TTL, image size, resolution, `_above_Ns_interval`, `max_results_range`)
+- Band is a range of prompt sizes
+  - `_above_200k_tokens` prices a call whose prompt is over 200k tokens, and `Band::Base` is everything under the lowest edge
+  - `Prices::band` puts the whole call in one band from its prompt token count
+  - `Billing::band_edge` says whether a prompt of exactly 200k is in that band
+- `When` is the request's condition, its service tier and band
+- `Channel` is the billing route
+  - Batch and decisions are channels and not tiers because Python bills them with their own rules
+- Off-peak and `Adjustments` are never prices
+  - Off-peak swaps in other token rates while a UTC window is open
+  - `Adjustments` multiplies a priced call for region, residency, geo or `speed: fast`
+- `Billing` on `Prices` holds row attributes that change how its prices apply (text unit, band edge, cache-read fallback, wall clock, web search unit, tier scope)
+  - `lower.rs` derives it from the row and its `litellm_provider`, so `litellm-cost` holds no provider list
 
 ## Layout
 
