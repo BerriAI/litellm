@@ -2,8 +2,9 @@ import importlib.util
 import os
 import re
 import sys
-from collections.abc import Collection, Iterator, Mapping, Sequence
-from functools import lru_cache
+from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
+from dataclasses import dataclass
+from functools import cache, lru_cache
 from itertools import accumulate, chain, repeat
 from logging import Logger
 from types import MappingProxyType
@@ -546,16 +547,63 @@ def _opt_in_model_groups(
     return routed | frozenset(registry.resolve(name, kind="alias") or name for name in fallbacks)
 
 
+_MAX_OPT_IN_FALLBACK_MODELS: Final = 100
+
+
+@dataclass(frozen=True, slots=True)
+class _OptInGroups:
+    every: tuple[str, ...]
+    vertex_target: tuple[str, ...]
+
+
+def _deployment_id(deployment: Mapping[str, object]) -> str | None:
+    match deployment.get("model_info"):
+        case {"id": str(deployment_id)} if deployment_id:
+            return deployment_id
+        case _:
+            return None
+
+
+def _same_deployments_key(model_group: str, llm_router: Router) -> frozenset[tuple[str | None, str | None]] | str:
+    deployments: Final = _model_group_deployments(model_group, llm_router)
+    key: Final = tuple(
+        (_deployment_id(deployment), _deployment_provider(deployment["litellm_params"])) for deployment in deployments
+    )
+    return frozenset(key) if key and all(deployment_id for deployment_id, _ in key) else model_group
+
+
+def _distinct_opt_in_groups(model_groups: frozenset[str], llm_router: Router | None) -> tuple[str, ...]:
+    if llm_router is None:
+        return tuple(sorted(model_groups))
+    return tuple(
+        {_same_deployments_key(model_group, llm_router): model_group for model_group in sorted(model_groups)}.values()
+    )
+
+
+def _resolve_opt_in_groups(
+    model: str, also_requested_models: tuple[str, ...], llm_router: Router | None
+) -> _OptInGroups:
+    if len(frozenset(also_requested_models)) > _MAX_OPT_IN_FALLBACK_MODELS:
+        raise ValueError(
+            f"Rejected Request: the request names more than {_MAX_OPT_IN_FALLBACK_MODELS} fallback models, "
+            "too many to check against configurable_clientside_auth_params."
+        )
+    every: Final = _distinct_opt_in_groups(_opt_in_model_groups(model, also_requested_models, llm_router), llm_router)
+    return _OptInGroups(
+        every=every,
+        vertex_target=tuple(group for group in every if _model_group_reads_vertex_target(group, llm_router)),
+    )
+
+
 def _check_banned_params(
     body: Mapping[str, object],
     general_settings: dict,
     llm_router: Router | None,
-    model: str,
     *,
     manages_deployments: bool = False,
     mcp_server_fields_allowed: bool = False,
     banned_params: tuple[str, ...] = _BANNED_REQUEST_BODY_PARAMS,
-    also_requested_models: tuple[str, ...] = (),
+    opt_in_groups: Callable[[], _OptInGroups],
 ) -> None:
     """Raise ``ValueError`` if ``body`` carries a banned param without admin opt-in.
 
@@ -585,8 +633,9 @@ def _check_banned_params(
                 llm_router=llm_router,
             )
             is True
-            for model_group in _opt_in_model_groups(model, also_requested_models, llm_router)
-            if param not in VERTEX_TARGET_PARAMS or _model_group_reads_vertex_target(model_group, llm_router)
+            for model_group in (
+                opt_in_groups().vertex_target if param in VERTEX_TARGET_PARAMS else opt_in_groups().every
+            )
         ):
             # Per-param opt-in: only THIS param is permitted by the
             # deployment's ``configurable_clientside_auth_params``. Skip
@@ -780,14 +829,14 @@ def is_request_body_safe(
         *request_fallback_model_names(root_body),
         *((route_model,) if route_model else ()),
     )
+    opt_in_groups: Final = cache(lambda: _resolve_opt_in_groups(model, also_requested_models, llm_router))
     _check_banned_params(
         root_body,
         general_settings,
         llm_router,
-        model,
         manages_deployments=manages_deployments,
         mcp_server_fields_allowed=route_manages_mcp_servers(route),
-        also_requested_models=also_requested_models,
+        opt_in_groups=opt_in_groups,
     )
     for nested_key in _NESTED_CONFIG_KEYS:
         nested = _coerce_metadata_to_dict(request_body.get(nested_key))
@@ -796,9 +845,8 @@ def is_request_body_safe(
                 nested,
                 general_settings,
                 llm_router,
-                model,
                 manages_deployments=manages_deployments,
-                also_requested_models=also_requested_models,
+                opt_in_groups=opt_in_groups,
             )
     for metadata_key in _NESTED_METADATA_KEYS:
         metadata = _coerce_metadata_to_dict(request_body.get(metadata_key))
@@ -807,20 +855,18 @@ def is_request_body_safe(
                 metadata,
                 general_settings,
                 llm_router,
-                model,
                 manages_deployments=manages_deployments,
                 banned_params=_BANNED_METADATA_PARAMS,
-                also_requested_models=also_requested_models,
+                opt_in_groups=opt_in_groups,
             )
         if any(isinstance(key, str) and key.startswith(f"{metadata_key}[") for key in request_body):
             _check_banned_params(
                 extract_nested_form_metadata(form_data=request_body, prefix=f"{metadata_key}["),
                 general_settings,
                 llm_router,
-                model,
                 manages_deployments=manages_deployments,
                 banned_params=_BANNED_METADATA_PARAMS,
-                also_requested_models=also_requested_models,
+                opt_in_groups=opt_in_groups,
             )
     for target in iter_request_fallback_targets(request_body):
         if isinstance(target, dict):
@@ -828,9 +874,8 @@ def is_request_body_safe(
                 target,
                 general_settings,
                 llm_router,
-                model,
                 manages_deployments=manages_deployments,
-                also_requested_models=also_requested_models,
+                opt_in_groups=opt_in_groups,
             )
             target_model = target.get("model")
             if isinstance(target_model, str):
@@ -848,10 +893,9 @@ def is_request_body_safe(
                 litellm_params_metadata,
                 general_settings,
                 llm_router,
-                model,
                 manages_deployments=manages_deployments,
                 banned_params=_BANNED_METADATA_PARAMS,
-                also_requested_models=also_requested_models,
+                opt_in_groups=opt_in_groups,
             )
     for user_config_params in _user_config_litellm_params(request_body):  # pyright: ignore[reportUnknownArgumentType]  # request_body is an untyped dict
         reject_api_key_secret_reference(user_config_params)

@@ -234,6 +234,14 @@ def _corpus_on_configured_project(vector_store_config: Mapping[str, object]) -> 
     )
 
 
+async def _authorize_rewritten_corpus(
+    requested: Mapping[str, object], rewritten: Mapping[str, object], user_api_key_dict: UserAPIKeyAuth
+) -> None:
+    rewritten_id: Final = rewritten.get("vector_store_id")
+    if isinstance(rewritten_id, str) and rewritten_id != requested.get("vector_store_id"):
+        await assert_user_can_access_vector_store_id(vector_store_id=rewritten_id, user_api_key_dict=user_api_key_dict)
+
+
 def _vertex_target_error(vector_store_config: Mapping[str, object]) -> str | None:
     corpus_name: Final = vector_store_config.get("vector_store_id")
     corpus: Final = _clean_vertex_corpus_name(corpus_name)
@@ -793,6 +801,7 @@ async def rag_ingest(
             requested_base, user_api_key_dict, general_settings_view()
         ) and not await _admin_set_store_target(managed_store, prisma_client)
         base: Final = _corpus_on_configured_project(requested_base) if vertex_target_checked else requested_base
+        await _authorize_rewritten_corpus(requested_base, base, user_api_key_dict)
         vertex_target_error: Final = _vertex_target_error(base) if vertex_target_checked else None
         if vertex_target_error is not None:
             raise HTTPException(status_code=400, detail={"error": vertex_target_error})

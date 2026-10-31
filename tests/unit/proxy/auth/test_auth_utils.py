@@ -4,6 +4,7 @@ Unit tests for auth_utils functions related to rate limiting and customer ID ext
 
 import base64
 import logging
+import time
 from collections.abc import Callable
 from typing import Final, Optional
 from unittest.mock import MagicMock, patch
@@ -5264,6 +5265,39 @@ class TestIsRequestBodySafeBlocksVertexTargetOverrides:
             return
         with pytest.raises(ValueError, match=r"vertex_location|api_base"):
             is_request_body_safe(request_body, {}, router, model, route="/v1/chat/completions")
+
+    def test_many_fallback_entries_on_one_wildcard_are_checked_in_linear_time(self) -> None:
+        router: Final = Router(model_list=[{"model_name": "*", "litellm_params": {"model": "openai/*", "api_key": "k"}}])
+        request_body: Final = {
+            "model": "gpt-4o-mini",
+            "fallbacks": [{"model": f"model-{index % 100}", "vertex_location": f"r{index}"} for index in range(5000)],
+        }
+
+        started: Final = time.perf_counter()
+        assert is_request_body_safe(request_body, {}, router, "gpt-4o-mini", route="/v1/chat/completions") is True
+        assert time.perf_counter() - started < 10
+
+    def test_too_many_fallback_models_for_an_opt_in_check_are_rejected(self) -> None:
+        router: Final = Router(model_list=[{"model_name": "*", "litellm_params": {"model": "openai/*", "api_key": "k"}}])
+        request_body: Final = {
+            "model": "gpt-4o-mini",
+            "vertex_location": "us-central1",
+            "fallbacks": [f"model-{index}" for index in range(101)],
+        }
+
+        with pytest.raises(ValueError, match="more than 100 fallback models"):
+            is_request_body_safe(request_body, {}, router, "gpt-4o-mini", route="/v1/chat/completions")
+
+    def test_one_wildcard_serving_two_providers_checks_the_google_one(self) -> None:
+        router: Final = Router(model_list=[{"model_name": "*", "litellm_params": {"model": "*"}}])
+        request_body: Final = {
+            "model": "vertex_ai/gemini-2.5-flash",
+            "vertex_location": "us-central1",
+            "fallbacks": ["xai/grok-3"],
+        }
+
+        with pytest.raises(ValueError, match="vertex_location"):
+            is_request_body_safe(request_body, {}, router, "vertex_ai/gemini-2.5-flash", route="/v1/chat/completions")
 
     @pytest.mark.parametrize(
         "model, is_allowed", [("public-alias", True), ("gemini-optin", False)], ids=["alias", "aliased_target"]

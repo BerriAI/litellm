@@ -1143,6 +1143,41 @@ _PROXY_CORPUS_PREFIX: Final = f"projects/{_PROXY_VERTEX_PROJECT}/locations/{_PRO
 _FOREIGN_CORPUS: Final = f"projects/other-project/locations/{_PROXY_VERTEX_LOCATION}/ragCorpora/1"
 
 
+@pytest.mark.usefixtures("proxy_vertex_target")
+def test_rag_ingest_refuses_another_teams_store_named_by_a_project_number(client_internal_user):
+    other_teams_store: Final = LiteLLM_ManagedVectorStore(
+        vector_store_id=f"{_PROXY_CORPUS_PREFIX}/1",
+        custom_llm_provider="vertex_ai",
+        litellm_params={},
+        user_id="other-user",
+        team_id="other-team",
+    )
+    registry: Final = MagicMock()
+    registry.get_litellm_managed_vector_store_from_registry.side_effect = lambda vector_store_id: (
+        other_teams_store if vector_store_id == other_teams_store["vector_store_id"] else None
+    )
+    with (
+        patch(  # test-quality-ok: aingest is the endpoint's downstream boundary; the test asserts it is never called
+            "litellm.proxy.rag_endpoints.endpoints.litellm.aingest",
+            new=AsyncMock(return_value={"vector_store_id": f"{_PROXY_CORPUS_PREFIX}/1", "file_id": "file_123"}),
+        ) as mock_aingest,
+        patch.object(litellm, "vector_store_registry", registry),  # test-quality-ok: seeds the saved stores by id
+        _patched_prisma_client(None),
+    ):
+        response = client_internal_user.post(
+            "/v1/rag/ingest",
+            **_ingest_form(
+                {
+                    "custom_llm_provider": "vertex_ai",
+                    "vector_store_id": f"projects/0/locations/{_PROXY_VERTEX_LOCATION}/ragCorpora/1",
+                }
+            ),
+        )
+
+    assert response.status_code == 403, response.json()
+    mock_aingest.assert_not_awaited()
+
+
 @pytest.mark.parametrize(
     "vector_store_id",
     [
