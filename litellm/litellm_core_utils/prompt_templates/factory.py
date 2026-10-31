@@ -1935,7 +1935,7 @@ def convert_to_anthropic_tool_result(
     ) = ""
     if isinstance(message["content"], str):
         anthropic_content = message["content"]
-    elif isinstance(message["content"], Mapping):
+    elif isinstance(message["content"], (Mapping, int, float)):
         anthropic_content = json.dumps(message["content"])
     elif isinstance(message["content"], list):
         content_list: Final = message["content"]

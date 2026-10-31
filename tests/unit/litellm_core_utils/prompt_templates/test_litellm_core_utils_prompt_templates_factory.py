@@ -3191,17 +3191,16 @@ def test_convert_to_anthropic_tool_result_image_with_cache_control():
     assert result["content"][1]["cache_control"]["type"] == "ephemeral"
 
 
-def test_convert_to_anthropic_tool_result_serializes_mapping_content():
+@pytest.mark.parametrize("tool_output", [{"result_key": "result_value"}, 42, 0, 3.5, True, False])
+def test_convert_to_anthropic_tool_result_serializes_non_string_content(tool_output):
     from litellm.litellm_core_utils.prompt_templates.factory import (
         convert_to_anthropic_tool_result,
     )
 
-    result = convert_to_anthropic_tool_result(
-        {"role": "tool", "tool_call_id": "call_dict", "content": {"result_key": "result_value"}}
-    )
+    result = convert_to_anthropic_tool_result({"role": "tool", "tool_call_id": "call_value", "content": tool_output})
 
     assert result["type"] == "tool_result"
-    assert json.loads(result["content"]) == {"result_key": "result_value"}
+    assert json.loads(result["content"]) == tool_output
 
 
 def test_convert_to_anthropic_tool_result_image_without_cache_control():
