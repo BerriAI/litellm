@@ -1874,7 +1874,7 @@ class Router(DeprecatedRouterMembers):
             else:
                 self._core_fallbacks = [{"*": _fallbacks}]
 
-        self._core_context_window_fallbacks: list[dict[str, list[str]]] | None = (  # mutable-ok: resolver contract
+        self._core_context_window_fallbacks: list[dict[str, list[str]]] | None = (  # mutable-ok: resolvers take lists
             context_window_fallbacks or litellm.context_window_fallbacks
         )
 

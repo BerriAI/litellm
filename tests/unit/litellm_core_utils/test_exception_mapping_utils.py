@@ -1894,6 +1894,37 @@ def test_bedrock_mantle_qwen_output_budget_filling_the_window_keeps_mantles_mess
     assert "you requested 32768 output tokens" in excinfo.value.message
 
 
+_ANTHROPIC_MAX_TOKENS_OVERFLOW: Final = (
+    "input length and `max_tokens` exceed context limit: 197202 + 21333 > 200000, decrease input length or "
+    "`max_tokens` and try again"
+)
+_VLLM_MAX_TOKENS_OVERFLOW: Final = (
+    "'max_tokens' or 'max_completion_tokens' is too large: 200000. This model's maximum context length is 131072 "
+    "tokens and your request has 83 input tokens (200000 > 131072 - 83)."
+)
+
+
+@pytest.mark.parametrize(
+    "original_exception",
+    (
+        *_mantle_overflow_serializations(_ANTHROPIC_MAX_TOKENS_OVERFLOW),
+        *_mantle_overflow_serializations(_VLLM_MAX_TOKENS_OVERFLOW),
+    ),
+)
+def test_bedrock_mantle_max_tokens_overflow_keeps_mantles_message(original_exception: BaseLLMException) -> None:
+    with pytest.raises(litellm.ContextWindowExceededError) as excinfo:
+        exception_type(
+            model="anthropic.claude-haiku-4-5",
+            original_exception=original_exception,
+            custom_llm_provider="bedrock_mantle",
+        )
+
+    assert excinfo.value.status_code == 400
+    assert "prompt is too long" not in excinfo.value.message
+    assert "max_tokens" in excinfo.value.message
+    assert "200000" in excinfo.value.message
+
+
 def test_bedrock_mantle_openai_envelope_context_overflow_maps_to_context_window_exceeded():
     from litellm.llms.base_llm.chat.transformation import BaseLLMException
 
