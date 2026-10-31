@@ -18,7 +18,7 @@ pub use error::{ConfigFault, ConnectError, Error};
 pub use native::{Limits, NativeGateway, Registry, Server, ServerResolver};
 pub use relay::RelayClient;
 pub use rmcp;
-pub use routes::{HttpConfig, router};
+pub use routes::{HttpConfig, Routes, router, routes};
 pub use server::McpServer;
 pub use sessions::SessionOwner;
 

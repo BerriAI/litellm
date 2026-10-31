@@ -79,9 +79,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
         &inference.http,
     )
     .await?;
-    let mcp_router = mcp.as_ref().map(|gateway| {
+    let mcp_routes = mcp.as_ref().map(|gateway| {
         let defaults = litellm_gateway_mcp::HttpConfig::default();
-        litellm_gateway_mcp::router(
+        litellm_gateway_mcp::routes(
             gateway.operations.clone(),
             litellm_gateway_mcp::HttpConfig {
                 allowed_hosts: config
@@ -102,7 +102,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let result = axum::serve(
         listener,
-        litellm_gateway::router(inference, &config, ui, mcp_router),
+        litellm_gateway::router(inference, &config, ui, mcp_routes),
     )
     .with_graceful_shutdown(shutdown.clone().cancelled_owned())
     .await;

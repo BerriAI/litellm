@@ -6,7 +6,7 @@ use axum::{
     extract::{Request, State},
     http::Method,
     response::IntoResponse,
-    routing::any,
+    routing::{RouterIntoService, any},
 };
 use moka::future::Cache;
 use rmcp::{
@@ -31,7 +31,10 @@ struct Transport {
     owners: Cache<String, [u8; 32]>,
 }
 
-pub(crate) fn transport(server: McpServer, config: StreamableHttpServerConfig) -> Router {
+pub(crate) fn transport(
+    server: McpServer,
+    config: StreamableHttpServerConfig,
+) -> RouterIntoService<Body> {
     let manager = Arc::new(LocalSessionManager::default());
     let cleanup = manager.clone();
     let owners = Cache::builder()
@@ -55,11 +58,14 @@ pub(crate) fn transport(server: McpServer, config: StreamableHttpServerConfig) -
         Arc::new(LocalSessionManager::default()),
         config.with_legacy_session_mode(false),
     );
-    Router::new().fallback(any(dispatch)).with_state(Transport {
-        stateful: Router::new().fallback_service(stateful),
-        stateless: Router::new().fallback_service(stateless),
-        owners,
-    })
+    Router::new()
+        .fallback(any(dispatch))
+        .with_state(Transport {
+            stateful: Router::new().fallback_service(stateful),
+            stateless: Router::new().fallback_service(stateless),
+            owners,
+        })
+        .into_service()
 }
 
 async fn dispatch(

@@ -43,7 +43,17 @@ impl Default for HttpConfig {
     }
 }
 
+pub struct Routes {
+    pub protocol: Router,
+    pub rest: Router,
+}
+
 pub fn router(operations: Arc<dyn Operations>, config: HttpConfig) -> Router {
+    let Routes { protocol, rest } = routes(operations, config);
+    protocol.merge(rest)
+}
+
+pub fn routes(operations: Arc<dyn Operations>, config: HttpConfig) -> Routes {
     let server = McpServer::new(operations.clone()).with_info(config.server_info.clone());
     let legacy = crate::legacy::router(operations.clone(), server.clone(), &config);
     let transport_config = StreamableHttpServerConfig::default()
@@ -59,7 +69,7 @@ pub fn router(operations: Arc<dyn Operations>, config: HttpConfig) -> Router {
         .route_service("/{server}/mcp", service.clone())
         .route_service("/{server}/mcp/", service.clone())
         .route_layer(middleware::from_fn(scope_server));
-    Router::new()
+    let protocol = Router::new()
         .route_service("/mcp", service.clone())
         .route_service("/mcp/", service)
         .merge(scoped)
@@ -67,10 +77,12 @@ pub fn router(operations: Arc<dyn Operations>, config: HttpConfig) -> Router {
             "/mcp/enabled",
             get(|| async { Json(Enabled { enabled: true }) }),
         )
+        .merge(legacy);
+    let rest = Router::new()
         .route("/mcp-rest/tools/list", get(rest_list))
         .route("/mcp-rest/tools/call", post(rest_call))
-        .with_state(operations)
-        .merge(legacy)
+        .with_state(operations);
+    Routes { protocol, rest }
 }
 
 async fn scope_server(Path(server): Path<String>, mut request: Request, next: Next) -> Response {

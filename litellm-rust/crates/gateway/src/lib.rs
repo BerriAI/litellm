@@ -126,14 +126,19 @@ pub fn router(
     inference: Arc<Gateway>,
     config: &Config,
     ui: Option<Router>,
-    mcp: Option<Router>,
+    mcp: Option<litellm_gateway_mcp::Routes>,
 ) -> Router {
     let auth = Auth::from_config(config, inference.secrets.clone());
+    let (protocol, rest) = mcp.map(|mcp| (mcp.protocol, mcp.rest)).unzip();
     let inference = authenticated(
-        litellm_gateway_inference::router(inference),
+        litellm_gateway_inference::router(inference).merge(rest.unwrap_or_default()),
         auth.clone().with_extractor(Arc::new(BearerOrXApiKey)),
     )
-    .merge(mcp.map(|mcp| authenticated(mcp, auth)).unwrap_or_default())
+    .merge(
+        protocol
+            .map(|protocol| authenticated(protocol, auth))
+            .unwrap_or_default(),
+    )
     .layer(axum::middleware::from_fn(log_request));
     let health = Router::new().route("/health/readiness", axum::routing::get(readiness));
     match ui {
