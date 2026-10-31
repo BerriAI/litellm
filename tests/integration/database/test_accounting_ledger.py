@@ -1010,6 +1010,11 @@ async def test_failing_compilation_page_does_not_starve_later_usage(writer: _Wri
         return _cost().snapshot
 
     await LoggingCostCompiler(store, price, _TARGETS).compile_pending(limit=1)
+    _rows(
+        ledger_database,
+        'UPDATE "LiteLLM_AccountingEvent" SET compilation_retry_at = CURRENT_TIMESTAMP WHERE event_id = %s',
+        (broken.event_id,),
+    )
     await LoggingCostCompiler(store, price, _TARGETS).compile_pending(limit=1)
     assert _rows(ledger_database, "SELECT source_event_id FROM \"LiteLLM_AccountingEvent\" WHERE kind = 'cost'") == [
         (healthy.event_id,)

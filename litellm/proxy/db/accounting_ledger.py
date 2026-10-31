@@ -165,7 +165,7 @@ _PENDING_COMPILATION: Final = """
 SELECT payload::text AS payload FROM "LiteLLM_AccountingEvent"
 WHERE kind = 'outbound_usage' AND compilation_state = 'pending'
 AND (compilation_retry_at IS NULL OR compilation_retry_at <= CURRENT_TIMESTAMP)
-ORDER BY recorded_at, event_id LIMIT $1::int
+ORDER BY compilation_retry_at NULLS FIRST, recorded_at, event_id LIMIT $1::int
 """
 _COMPILATION_RESULT: Final = """
 UPDATE "LiteLLM_AccountingEvent" SET compilation_state = $2, compilation_error = $3, compilation_retry_at = NULL
