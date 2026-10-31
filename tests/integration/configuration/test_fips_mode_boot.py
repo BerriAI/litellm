@@ -6,6 +6,7 @@ from typing import Final
 import pytest
 
 from tests.integration._support.client import Gateway
+from tests.integration._support.database import scratch_database, write_rows
 from tests.integration._support.process import refused_boot_log
 
 
@@ -40,3 +41,27 @@ def test_fips_mode_refuses_to_start_on_a_value_that_is_not_a_boolean(gateway: Ga
         gateway, tmp_path, {"LITELLM_FIPS_MODE": "enforced"}, config=_config(tmp_path, gateway.upstream_url)
     )
     assert "LITELLM_FIPS_MODE='enforced' is not a boolean" in log, log
+
+
+def test_proxy_refuses_to_start_without_fips_mode_on_a_database_set_up_in_fips_mode(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    with scratch_database() as database_url:
+        write_rows(
+            'CREATE TABLE "LiteLLM_Config" (param_name TEXT NOT NULL PRIMARY KEY, param_value JSONB, '
+            "last_run_at TIMESTAMP(3), reload_revision BIGINT NOT NULL DEFAULT 0)",
+            (),
+            database_url=database_url,
+        )
+        write_rows(
+            "INSERT INTO \"LiteLLM_Config\" (param_name, param_value) VALUES ('fips_mode', 'true')",
+            (),
+            database_url=database_url,
+        )
+        log: Final = refused_boot_log(
+            gateway,
+            tmp_path,
+            {"LITELLM_FIPS_MODE": "false", "DATABASE_URL": database_url},
+            config=_config(tmp_path, gateway.upstream_url),
+        )
+    assert "This database was set up with LITELLM_FIPS_MODE=true" in log, log

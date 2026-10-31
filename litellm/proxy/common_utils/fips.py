@@ -1,6 +1,8 @@
 import os
 from typing import Final
 
+from litellm._logging import verbose_proxy_logger
+from litellm.repositories.fips_repository import FIPS_MARKER, FipsRepository
 from litellm.secret_managers.main import str_to_bool
 
 FIPS_MODE_ENV_VAR: Final = "LITELLM_FIPS_MODE"
@@ -74,3 +76,50 @@ def enforce_fips_mode() -> None:
     refusal: Final = fips_mode_refusal()
     if refusal is not None:
         raise FipsModeError(refusal)
+
+
+async def _is_marked_fips(database: FipsRepository) -> bool:
+    try:
+        return await database.is_marked_fips()
+    except Exception as error:  # noqa: BLE001  # without FIPS mode, an unreadable database starts as it did before
+        verbose_proxy_logger.warning("Could not check whether the database was set up in FIPS mode: %s", error)
+        return False
+
+
+async def fips_database_refusal(database: FipsRepository | None, *, database_is_configured: bool) -> str | None:
+    """Why the proxy must not start on its database: LITELLM_FIPS_MODE is off on a database set up in FIPS mode, or
+    on over a database that can't be checked or already holds rows written without it. None when it may start."""
+    if not is_fips_mode():
+        if database is not None and await _is_marked_fips(database):
+            return (
+                f"This database was set up with {FIPS_MODE_ENV_VAR}=true, so the proxy only starts on it in FIPS mode. "
+                f"To stop using FIPS mode on it for good, run "
+                f"DELETE FROM \"LiteLLM_Config\" WHERE param_name = '{FIPS_MARKER}'."
+            )
+        return None
+    if database is None:
+        return (
+            f"{FIPS_MODE_ENV_VAR} is on but the database can't be reached to check it."
+            if database_is_configured
+            else None
+        )
+    try:
+        state: Final = await database.state()
+    except Exception as error:  # noqa: BLE001  # a value, so FIPS mode refuses a database it can't check
+        return f"{FIPS_MODE_ENV_VAR} is on but the database could not be checked: {error}"
+    if state.holds_rows and not state.marked_fips:
+        return (
+            f"{FIPS_MODE_ENV_VAR} is on but this database already holds data written without it. "
+            "FIPS mode only starts on a new, empty database."
+        )
+    return None
+
+
+async def enforce_fips_database(database: FipsRepository | None, *, database_is_configured: bool) -> None:
+    """Raise FipsModeError with the fips_database_refusal reason, if there is one, then mark the database as set up
+    in FIPS mode when LITELLM_FIPS_MODE is on."""
+    refusal: Final = await fips_database_refusal(database, database_is_configured=database_is_configured)
+    if refusal is not None:
+        raise FipsModeError(refusal)
+    if database is not None and is_fips_mode():
+        await database.mark_fips()

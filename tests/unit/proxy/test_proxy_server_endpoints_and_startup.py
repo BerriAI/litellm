@@ -10,7 +10,7 @@ import subprocess
 import sys
 import time
 import types
-from collections.abc import Callable
+from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Final
@@ -1790,55 +1790,36 @@ async def test_proxy_startup_refuses_an_unsafe_master_key_even_when_the_database
     assert ("could not be checked" in announced[0]) == key_can_have_encrypted_the_database
 
 
-class _UsersWithOnePlaintextPassword:
-    async def find_many(self, where: object) -> tuple[types.SimpleNamespace, ...]:
-        return (types.SimpleNamespace(user_id="user-1", password="a-plaintext-password"),)
+class _DatabaseSetUpInFipsMode:
+    async def query_raw(self, query: str, *args: object) -> Sequence[Mapping[str, object]]:
+        return [{"?column?": 1}]
 
-    async def update(self, where: object, data: object) -> None:
+    async def execute_raw(self, query: str, *args: object) -> int:
         raise AssertionError("a refused boot must not write to the database")
 
 
-class _DatabaseWithOnePlaintextPassword:
+class _PrismaClientOnAFipsDatabase:
     def __init__(self) -> None:
-        self.db: Final = types.SimpleNamespace(litellm_usertable=_UsersWithOnePlaintextPassword())
+        self.writer_db: Final = _DatabaseSetUpInFipsMode()
 
     async def aclose(self) -> None:
         pass
 
 
 @pytest.mark.asyncio
-async def test_proxy_startup_refuses_fips_mode_when_the_password_migration_fails(
+async def test_proxy_startup_refuses_a_database_set_up_in_fips_mode_when_fips_mode_is_off(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    import _hashlib
-    import hashlib
-
-    from cryptography.hazmat.bindings._rust import openssl as rust_openssl
-
     from litellm.proxy.common_utils.fips import FipsModeError
     from litellm.proxy.proxy_server import proxy_startup_event
 
-    real_new: Final = _hashlib.new
-
-    def new_refusing_md5(name: str, data: bytes = b"", *, usedforsecurity: bool = True) -> _hashlib.HASH:
-        if name == "md5":
-            raise _hashlib.UnsupportedDigestmodError("unsupported hash type")
-        return real_new(name, data, usedforsecurity=usedforsecurity)
-
     _boot_with_general_settings(monkeypatch, tmp_path, {"master_key": "sk-a-safe-master-key"})
-    monkeypatch.setenv("LITELLM_FIPS_MODE", "true")
-    monkeypatch.setattr(_hashlib, "get_fips_mode", lambda: 1)
-    monkeypatch.setattr(_hashlib, "new", new_refusing_md5)
-    monkeypatch.setattr(rust_openssl, "is_fips_enabled", lambda: True)
-    scrypt_refused: Final = ValueError("[digital envelope routines] unsupported")
-    monkeypatch.setattr(hashlib, "scrypt", mock.Mock(side_effect=scrypt_refused))
-    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", _DatabaseWithOnePlaintextPassword())
+    monkeypatch.delenv("LITELLM_FIPS_MODE", raising=False)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", _PrismaClientOnAFipsDatabase())
 
-    with pytest.raises(FipsModeError, match="plaintext passwords stay unhashed") as refused:
+    with pytest.raises(FipsModeError, match="set up with LITELLM_FIPS_MODE=true"):
         async with proxy_startup_event(FastAPI()):
             pass
-
-    assert refused.value.__cause__ is scrypt_refused
 
 
 class _DatabaseWithOneStoredCredential:
