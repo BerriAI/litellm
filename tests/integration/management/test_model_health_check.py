@@ -1454,10 +1454,13 @@ def _test_model_chat_reply(request: Request, *, cached_tokens: int) -> Reply:
     tool_turn: Final = any(isinstance(message, dict) and message.get("role") == "tool" for message in messages)
     assert messages[: len(_TEST_MODEL_CHAT_REQUEST["messages"])] == _TEST_MODEL_CHAT_REQUEST["messages"], messages
     assert body["tools"] == _TEST_MODEL_CHAT_REQUEST["tools"], body["tools"]
-    if tool_turn:
-        assert isinstance(messages[-1], dict), messages
+    assert isinstance(messages[-1], dict), messages
+    if tool_turn and messages[-1]["role"] == "user":
+        assert messages[-2] == {"role": "assistant", "content": "Boston is 72F and sunny."}, messages[-2]
+        message: dict[str, JsonValue] = {"role": "assistant", "content": "Yes, 72F is warm enough for a walk."}
+    elif tool_turn:
         assert messages[-1]["tool_call_id"] == _TEST_MODEL_TOOL_CALL_ID, messages[-1]
-        message: dict[str, JsonValue] = {"role": "assistant", "content": "Boston is 72F and sunny."}
+        message = {"role": "assistant", "content": "Boston is 72F and sunny."}
     else:
         message = {
             "role": "assistant",
@@ -1526,21 +1529,23 @@ def test_health_test_model_runs_the_tool_conversation_against_a_saved_deployment
         assert endpoint_result["endpoint"] == "/v1/chat/completions", response.text
         checks: Final = _check_statuses(endpoint_result)
         assert checks["conversation"][0] == "pass", response.text
-        assert checks["prompt_caching"] == ("pass", "turn 2 read 4800 of 5000 input tokens from cache (96.0%)"), (
-            response.text
-        )
+        assert checks["prompt_caching"] == (
+            "pass",
+            "turn 2 read 4800 of 5000 input tokens from cache (96.0%), "
+            "turn 3 read 4800 of 5000 input tokens from cache (96.0%)",
+        ), response.text
         assert checks["cost_tracking"][0] == "pass", response.text
         assert "spend log rows written" in checks["cost_tracking"][1], response.text
         assert endpoint_result["cache_read_tokens"] == 4800, response.text
         requests: Final = wire.drain()
-        assert [request.headers["authorization"] for request in requests] == ["Bearer synthetic-test-model-key"] * 2, (
+        assert [request.headers["authorization"] for request in requests] == ["Bearer synthetic-test-model-key"] * 3, (
             response.text
         )
         rows: Final = gateway.rows(
             'SELECT "spend", "request_tags"::text AS tags FROM "LiteLLM_SpendLogs" WHERE "model_id" = %s',
             (model_id,),
         )
-        assert len(rows) == 2, rows
+        assert len(rows) == 3, rows
         assert all(isinstance(row["spend"], int | float) and row["spend"] > 0 for row in rows), rows
         assert all("litellm_test_model:" in string_value(row["tags"]) for row in rows), rows
 

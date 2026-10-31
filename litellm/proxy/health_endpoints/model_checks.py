@@ -1,12 +1,14 @@
 """Live checks behind ``POST /health/test_model``.
 
-One two-turn tool-call conversation per selected endpoint, read from that endpoint's file in
+One three-turn tool-call conversation per selected endpoint, read from that endpoint's file in
 ``test_model_requests/``. ``turn_1`` is the full first request body in the endpoint's native shape with no
-prompt-cache markers, so the second turn can only report cached tokens when the provider caches the repeated prefix
-on its own. ``turn_2_appended_messages`` lists what the second request adds after turn 1's messages, with
-``<turn 1 response: assistant output>`` and ``<turn 1 response: tool call id>`` filled in from the model's reply.
-Three verdicts come out of the two turns: the conversation itself (both turns parse, the tool call lands, the tool
-result is used), prompt caching, and cost tracking.
+prompt-cache markers, so later turns can only report cached tokens when the provider caches the repeated prefix on
+its own. ``turn_2_appended_messages`` lists what the second request adds after turn 1's messages (the model's tool
+call echoed back plus the tool result), ``turn_3_appended_messages`` what the third adds after that (the model's
+answer echoed back plus a user follow-up), with ``<turn 1 response: assistant output>``,
+``<turn 1 response: tool call id>`` and ``<turn 2 response: assistant output>`` filled in from the model's replies.
+Three verdicts come out of the three turns: the conversation itself (every turn parses, the tool call lands, the
+tool result is used, the follow-up is answered from the earlier turn), prompt caching, and cost tracking.
 """
 
 from __future__ import annotations
@@ -15,6 +17,7 @@ import json
 import time
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
+from functools import partial, reduce
 from itertools import chain
 from pathlib import Path
 from types import MappingProxyType
@@ -35,6 +38,7 @@ WEATHER_TOOL_RESULT: Final = "72F and sunny"
 TEST_MODEL_REQUESTS_DIR: Final = Path(__file__).resolve().parent / "test_model_requests"
 TURN_ONE_ASSISTANT_OUTPUT: Final = "<turn 1 response: assistant output>"
 TURN_ONE_TOOL_CALL_ID: Final = "<turn 1 response: tool call id>"
+TURN_TWO_ASSISTANT_OUTPUT: Final = "<turn 2 response: assistant output>"
 
 
 @dataclass(frozen=True, slots=True)
@@ -61,6 +65,7 @@ class EndpointScript:
     metadata_key: Literal["metadata", "litellm_metadata"]
     turn_one: Callable[[], Mapping[str, object]]
     turn_two: Callable[[ParsedTurn], Mapping[str, object]]
+    turn_three: Callable[[ParsedTurn, ParsedTurn], Mapping[str, object]]
     parse: Callable[[object], ParsedTurn | str]
 
 
@@ -96,6 +101,16 @@ class TurnOutcome:
     cost: float | None
     error: str | None
     call_id: str
+
+
+@dataclass(frozen=True, slots=True)
+class RepeatedTurn:
+    """A turn whose prompt repeats the earlier turns, sent once more when the provider reports no cache hit."""
+
+    number: Literal[2, 3]
+    outcome: TurnOutcome | None
+    parsed: ParsedTurn | str | None
+    attempts: int
 
 
 TurnCaller: TypeAlias = Callable[[EndpointScript, Mapping[str, object], str], Awaitable[CalledTurn]]
@@ -197,13 +212,15 @@ _EMPTY_ASSISTANT: Final[Mapping[str, object]] = MappingProxyType({"role": "assis
 
 
 class RequestFile(BaseModel):
-    """One two-turn conversation on disk: ``turn_1`` is the full first request body, ``turn_2_appended_messages``
-    are the messages the second request adds after it, with the two placeholders filled from turn 1's response."""
+    """One three-turn conversation on disk: ``turn_1`` is the full first request body, ``turn_2_appended_messages``
+    the messages the second request adds after it, ``turn_3_appended_messages`` the ones the third adds after those,
+    with the placeholders filled from the earlier responses."""
 
     model_config = ConfigDict(frozen=True)
 
     turn_1: Mapping[str, object]
     turn_2_appended_messages: Sequence[object]
+    turn_3_appended_messages: Sequence[object]
 
 
 def _request_file(name: str) -> Callable[[], RequestFile]:
@@ -216,36 +233,65 @@ _RESPONSES_FILE: Final = _request_file("responses")
 _MESSAGES_FILE: Final = _request_file("messages")
 
 
-def _fill(item: object, turn_one: ParsedTurn) -> object:
-    tool_call_id: Final = turn_one.tool_call.id if turn_one.tool_call is not None else ""
-    text: Final = (
-        json.dumps(item)
-        .replace(json.dumps(TURN_ONE_TOOL_CALL_ID), json.dumps(tool_call_id))
-        .replace(json.dumps(TURN_ONE_ASSISTANT_OUTPUT), json.dumps(turn_one.assistant_echo))
-    )
-    return _JSON_DOCUMENT.validate_json(text)
+Placeholders: TypeAlias = Mapping[str, object]
+ConversationKey: TypeAlias = Literal["messages", "input"]
 
 
-def _appended_messages(item: object, turn_one: ParsedTurn) -> Sequence[object]:
-    echo: Final = turn_one.assistant_echo
-    if item == TURN_ONE_ASSISTANT_OUTPUT and isinstance(echo, list):
+def _replace_placeholder(text: str, placeholder: tuple[str, object]) -> str:
+    return text.replace(json.dumps(placeholder[0]), json.dumps(placeholder[1]))
+
+
+def _fill(item: object, placeholders: Placeholders) -> object:
+    return _JSON_DOCUMENT.validate_json(reduce(_replace_placeholder, placeholders.items(), json.dumps(item)))
+
+
+def _appended_messages(item: object, placeholders: Placeholders) -> Sequence[object]:
+    echo: Final = placeholders.get(item) if isinstance(item, str) else None
+    if isinstance(echo, list):
         return _OBJECT_LIST.validate_python(echo)
-    return (_fill(item, turn_one),)
+    return (_fill(item, placeholders),)
+
+
+def _extended(
+    body: Mapping[str, object], key: ConversationKey, items: Sequence[object], placeholders: Placeholders
+) -> Mapping[str, object]:
+    appended: Final = chain.from_iterable(_appended_messages(item, placeholders) for item in items)
+    return {**body, key: [*_message_list(body.get(key)), *appended]}
+
+
+def _turn_one_placeholders(turn_one: ParsedTurn) -> Placeholders:
+    return MappingProxyType(
+        {
+            TURN_ONE_TOOL_CALL_ID: turn_one.tool_call.id if turn_one.tool_call is not None else "",
+            TURN_ONE_ASSISTANT_OUTPUT: turn_one.assistant_echo,
+        }
+    )
 
 
 def _turn_one(file: Callable[[], RequestFile]) -> Callable[[], Mapping[str, object]]:
     return lambda: file().turn_1
 
 
-def _turn_two(
-    file: Callable[[], RequestFile], conversation_key: Literal["messages", "input"]
-) -> Callable[[ParsedTurn], Mapping[str, object]]:
+def _turn_two(file: Callable[[], RequestFile], key: ConversationKey) -> Callable[[ParsedTurn], Mapping[str, object]]:
     def build(turn_one: ParsedTurn) -> Mapping[str, object]:
         first: Final = file()
-        appended: Final = chain.from_iterable(
-            _appended_messages(item, turn_one) for item in first.turn_2_appended_messages
+        return _extended(first.turn_1, key, first.turn_2_appended_messages, _turn_one_placeholders(turn_one))
+
+    return build
+
+
+def _turn_three(
+    file: Callable[[], RequestFile], key: ConversationKey
+) -> Callable[[ParsedTurn, ParsedTurn], Mapping[str, object]]:
+    def build(turn_one: ParsedTurn, turn_two: ParsedTurn) -> Mapping[str, object]:
+        first: Final = file()
+        second: Final = _turn_two(file, key)(turn_one)
+        return _extended(
+            second,
+            key,
+            first.turn_3_appended_messages,
+            MappingProxyType({TURN_TWO_ASSISTANT_OUTPUT: turn_two.assistant_echo}),
         )
-        return {**first.turn_1, conversation_key: [*_message_list(first.turn_1.get(conversation_key)), *appended]}
 
     return build
 
@@ -387,6 +433,7 @@ CHAT_COMPLETIONS_SCRIPT: Final = EndpointScript(
     metadata_key="metadata",
     turn_one=_turn_one(_CHAT_FILE),
     turn_two=_turn_two(_CHAT_FILE, "messages"),
+    turn_three=_turn_three(_CHAT_FILE, "messages"),
     parse=_parse_chat,
 )
 RESPONSES_SCRIPT: Final = EndpointScript(
@@ -395,6 +442,7 @@ RESPONSES_SCRIPT: Final = EndpointScript(
     metadata_key="litellm_metadata",
     turn_one=_turn_one(_RESPONSES_FILE),
     turn_two=_turn_two(_RESPONSES_FILE, "input"),
+    turn_three=_turn_three(_RESPONSES_FILE, "input"),
     parse=_parse_responses,
 )
 MESSAGES_SCRIPT: Final = EndpointScript(
@@ -403,6 +451,7 @@ MESSAGES_SCRIPT: Final = EndpointScript(
     metadata_key="litellm_metadata",
     turn_one=_turn_one(_MESSAGES_FILE),
     turn_two=_turn_two(_MESSAGES_FILE, "messages"),
+    turn_three=_turn_three(_MESSAGES_FILE, "messages"),
     parse=_parse_messages,
 )
 SCRIPTS: Final[Mapping[TestModelEndpoint, EndpointScript]] = MappingProxyType(
@@ -426,11 +475,23 @@ async def _turn(script: EndpointScript, body: Mapping[str, object], call: TurnCa
     return TurnOutcome(response=called.response, cost=called.cost, error=None, call_id=call_id)
 
 
+def _answer_failure(turn: RepeatedTurn, purpose: str, expectation: str) -> CheckResult | None:
+    if turn.outcome is None or turn.outcome.error is not None:
+        reason: Final = turn.outcome.error if turn.outcome is not None else "not sent"
+        return CheckResult("conversation", "fail", f"turn {turn.number} request with {purpose} failed: {reason}")
+    if isinstance(turn.parsed, str):
+        return CheckResult("conversation", "fail", f"turn {turn.number} {turn.parsed}")
+    if turn.parsed is None or "72" not in turn.parsed.text:
+        answer: Final = turn.parsed.text[:160] if turn.parsed is not None else ""
+        return CheckResult("conversation", "fail", f"turn {turn.number} {expectation}: {answer!r}")
+    return None
+
+
 def _conversation_check(
     turn_one: TurnOutcome,
     parsed_one: ParsedTurn | str | None,
-    turn_two: TurnOutcome | None,
-    parsed_two: ParsedTurn | str | None,
+    second: RepeatedTurn,
+    third: RepeatedTurn,
 ) -> CheckResult:
     if turn_one.error is not None:
         return CheckResult("conversation", "fail", f"turn 1 request failed: {turn_one.error}")
@@ -448,27 +509,28 @@ def _conversation_check(
         )
     if "location" not in call.arguments:
         return CheckResult("conversation", "fail", f"turn 1 tool arguments lack 'location': {call.raw_arguments!r}")
-    if turn_two is None or turn_two.error is not None:
-        reason: Final = turn_two.error if turn_two is not None else "not sent"
-        return CheckResult("conversation", "fail", f"turn 2 request with the tool result failed: {reason}")
-    if isinstance(parsed_two, str):
-        return CheckResult("conversation", "fail", f"turn 2 {parsed_two}")
-    if parsed_two is None or "72" not in parsed_two.text:
-        answer: Final = parsed_two.text[:160] if parsed_two is not None else ""
-        return CheckResult(
-            "conversation", "fail", f"turn 2 did not use the tool result {WEATHER_TOOL_RESULT!r}: {answer!r}"
-        )
-    return CheckResult(
-        "conversation",
-        "pass",
-        f"turn 1 called {WEATHER_TOOL_NAME}({call.raw_arguments}), turn 2 answered {parsed_two.text[:120]!r}",
+    second_failure: Final = _answer_failure(
+        second, "the tool result", f"did not use the tool result {WEATHER_TOOL_RESULT!r}"
     )
+    if second_failure is not None:
+        return second_failure
+    third_failure: Final = _answer_failure(
+        third, "the follow-up question", "did not carry the temperature from turn 2 into the follow-up answer"
+    )
+    if third_failure is not None:
+        return third_failure
+    answers: Final = ", ".join(
+        f"turn {turn.number} answered {turn.parsed.text[:120]!r}"
+        for turn in (second, third)
+        if isinstance(turn.parsed, ParsedTurn)
+    )
+    return CheckResult("conversation", "pass", f"turn 1 called {WEATHER_TOOL_NAME}({call.raw_arguments}), {answers}")
 
 
-def _cache_percent(parsed_two: ParsedTurn | None) -> float | None:
-    if parsed_two is None or parsed_two.input_tokens <= 0:
+def _cache_percent(parsed: ParsedTurn | None) -> float | None:
+    if parsed is None or parsed.input_tokens <= 0:
         return None
-    return round(100.0 * parsed_two.cache_read_tokens / parsed_two.input_tokens, 1)
+    return round(100.0 * parsed.cache_read_tokens / parsed.input_tokens, 1)
 
 
 def _missed_cache(parsed: ParsedTurn | str | None) -> bool:
@@ -479,24 +541,32 @@ def _hit_cache(parsed: ParsedTurn | str | None) -> bool:
     return isinstance(parsed, ParsedTurn) and parsed.cache_read_tokens > 0
 
 
-def _prompt_caching_check(parsed_two: ParsedTurn | None, attempts: int) -> CheckResult:
-    if parsed_two is None:
+def _parsed(turn: RepeatedTurn) -> ParsedTurn | None:
+    return turn.parsed if isinstance(turn.parsed, ParsedTurn) else None
+
+
+def _cache_read_note(turn: RepeatedTurn, parsed: ParsedTurn) -> str:
+    attempt_note: Final = " on the second attempt" if turn.attempts > 1 else ""
+    return (
+        f"turn {turn.number} read {parsed.cache_read_tokens} of {parsed.input_tokens} input tokens from cache "
+        f"({_cache_percent(parsed)}%){attempt_note}"
+    )
+
+
+def _prompt_caching_check(second: RepeatedTurn, third: RepeatedTurn) -> CheckResult:
+    reached: Final = tuple((turn, parsed) for turn in (second, third) if (parsed := _parsed(turn)) is not None)
+    if not reached:
         return CheckResult("prompt_caching", "fail", "not checked, the conversation did not reach turn 2")
-    percent: Final = _cache_percent(parsed_two)
-    attempt_note: Final = " on the second attempt" if attempts > 1 else ""
-    if parsed_two.cache_read_tokens > 0:
+    missed: Final = next(((turn, parsed) for turn, parsed in reached if parsed.cache_read_tokens == 0), None)
+    if missed is not None:
+        turn, parsed = missed
         return CheckResult(
             "prompt_caching",
-            "pass",
-            f"turn 2 read {parsed_two.cache_read_tokens} of {parsed_two.input_tokens} input tokens from cache "
-            f"({percent}%){attempt_note}",
+            "fail",
+            f"turn {turn.number} reported 0 cached tokens on {parsed.input_tokens} input tokens in {turn.attempts} "
+            "attempts, the provider did not reuse the repeated system prompt",
         )
-    return CheckResult(
-        "prompt_caching",
-        "fail",
-        f"turn 2 reported 0 cached tokens on {parsed_two.input_tokens} input tokens in {attempts} attempts, the "
-        "provider did not reuse the repeated system prompt",
-    )
+    return CheckResult("prompt_caching", "pass", ", ".join(_cache_read_note(turn, parsed) for turn, parsed in reached))
 
 
 def _cost_verdict(turn_number: int, cost: float | None) -> CheckResult | None:
@@ -514,10 +584,7 @@ def _cost_verdict(turn_number: int, cost: float | None) -> CheckResult | None:
     return None
 
 
-def _cost_tracking_check(
-    turn_one: TurnOutcome, turn_two: TurnOutcome | None, spend_rows: Mapping[str, float] | None
-) -> CheckResult:
-    turns: Final = tuple(turn for turn in (turn_one, turn_two) if turn is not None and turn.response is not None)
+def _cost_tracking_check(turns: Sequence[TurnOutcome], spend_rows: Mapping[str, float] | None) -> CheckResult:
     if not turns:
         return CheckResult("cost_tracking", "fail", "not checked, no turn returned a response")
     costs: Final = tuple(turn.cost for turn in turns)
@@ -555,6 +622,26 @@ def overall_status(results: Sequence[EndpointResult]) -> EndpointStatus:
     return "warning" if "warning" in statuses else "success"
 
 
+async def _repeated_turn(
+    script: EndpointScript,
+    number: Literal[2, 3],
+    build: Callable[[], Mapping[str, object]] | None,
+    call: TurnCaller,
+    new_call_id: CallIdFactory,
+) -> RepeatedTurn:
+    if build is None:
+        return RepeatedTurn(number=number, outcome=None, parsed=None, attempts=0)
+    first: Final = await _turn(script, build(), call, new_call_id())
+    first_parsed: Final = script.parse(first.response) if first.response is not None else None
+    if not _missed_cache(first_parsed):
+        return RepeatedTurn(number=number, outcome=first, parsed=first_parsed, attempts=1)
+    retry: Final = await _turn(script, build(), call, new_call_id())
+    retry_parsed: Final = script.parse(retry.response) if retry.response is not None else None
+    if _hit_cache(retry_parsed):
+        return RepeatedTurn(number=number, outcome=retry, parsed=retry_parsed, attempts=2)
+    return RepeatedTurn(number=number, outcome=first, parsed=first_parsed, attempts=2)
+
+
 async def run_endpoint_check(
     script: EndpointScript,
     call: TurnCaller,
@@ -565,46 +652,42 @@ async def run_endpoint_check(
     started: Final = time.monotonic()
     turn_one: Final = await _turn(script, script.turn_one(), call, new_call_id())
     parsed_one: Final = script.parse(turn_one.response) if turn_one.response is not None else None
-    ready_for_turn_two: Final = isinstance(parsed_one, ParsedTurn) and parsed_one.tool_call is not None
-    turn_two: Final = (
-        await _turn(script, script.turn_two(parsed_one), call, new_call_id())
-        if ready_for_turn_two and isinstance(parsed_one, ParsedTurn)
-        else None
+    second: Final = await _repeated_turn(
+        script,
+        2,
+        partial(script.turn_two, parsed_one)
+        if isinstance(parsed_one, ParsedTurn) and parsed_one.tool_call is not None
+        else None,
+        call,
+        new_call_id,
     )
-    first_parsed_two: Final = (
-        script.parse(turn_two.response) if turn_two is not None and turn_two.response is not None else None
+    parsed_two: Final = _parsed(second)
+    third: Final = await _repeated_turn(
+        script,
+        3,
+        partial(script.turn_three, parsed_one, parsed_two)
+        if isinstance(parsed_one, ParsedTurn) and parsed_two is not None
+        else None,
+        call,
+        new_call_id,
     )
-    retried_turn_two: Final = (
-        await _turn(script, script.turn_two(parsed_one), call, new_call_id())
-        if isinstance(parsed_one, ParsedTurn) and _missed_cache(first_parsed_two)
-        else None
-    )
-    retried_parsed_two: Final = (
-        script.parse(retried_turn_two.response)
-        if retried_turn_two is not None and retried_turn_two.response is not None
-        else None
-    )
-    turn_two_used: Final = retried_turn_two if _hit_cache(retried_parsed_two) else turn_two
-    parsed_two: Final = retried_parsed_two if _hit_cache(retried_parsed_two) else first_parsed_two
-    cache_attempts: Final = 1 if retried_turn_two is None else 2
     answered: Final = tuple(
-        turn for turn in (turn_one, turn_two_used) if turn is not None and turn.response is not None
+        turn for turn in (turn_one, second.outcome, third.outcome) if turn is not None and turn.response is not None
     )
     spend_rows: Final = (
         await spend_lookup(tuple(turn.call_id for turn in answered)) if spend_lookup is not None and answered else None
     )
-    second: Final = parsed_two if isinstance(parsed_two, ParsedTurn) else None
     checks: Final = (
-        _conversation_check(turn_one, parsed_one, turn_two_used, parsed_two),
-        _prompt_caching_check(second, cache_attempts),
-        _cost_tracking_check(turn_one, turn_two_used, spend_rows),
+        _conversation_check(turn_one, parsed_one, second, third),
+        _prompt_caching_check(second, third),
+        _cost_tracking_check(answered, spend_rows),
     )
     return EndpointResult(
         endpoint=script.endpoint,
         status=_status(checks),
         checks=checks,
-        cache_read_tokens=second.cache_read_tokens if second is not None else 0,
-        cache_read_percent=_cache_percent(second),
+        cache_read_tokens=parsed_two.cache_read_tokens if parsed_two is not None else 0,
+        cache_read_percent=_cache_percent(parsed_two),
         spend_usd=sum(turn.cost for turn in answered if turn.cost is not None),
         duration_ms=int((time.monotonic() - started) * 1000),
     )

@@ -2780,11 +2780,12 @@ async def test_model(
     """
     Run the live checks on a model, the way a client would use it, and report what works.
 
-    Each selected endpoint gets one two-turn conversation with a long system prompt and a tool. Turn 1 asks
-    a question the tool answers, turn 2 sends the tool result back. Three checks come out of it:
+    Each selected endpoint gets one three-turn conversation with a long system prompt and a tool. Turn 1 asks
+    a question the tool answers, turn 2 sends the tool result back, turn 3 asks a follow-up that needs the
+    answer from turn 2. Three checks come out of it:
 
-    - `conversation`: both turns parse, turn 1 calls the tool, turn 2 uses the tool result
-    - `prompt_caching`: turn 2 reports cached input tokens, with no cache markers in the request
+    - `conversation`: every turn parses, turn 1 calls the tool, turn 2 uses the tool result, turn 3 carries it on
+    - `prompt_caching`: turns 2 and 3 report cached input tokens, with no cache markers in the request
     - `cost_tracking`: every turn carries a non-zero response cost, and the spend log row lands when a
       database is connected
 

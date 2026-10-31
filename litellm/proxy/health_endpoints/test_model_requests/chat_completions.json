@@ -48,5 +48,12 @@
       "tool_call_id": "<turn 1 response: tool call id>",
       "content": "72F and sunny"
     }
+  ],
+  "turn_3_appended_messages": [
+    "<turn 2 response: assistant output>",
+    {
+      "role": "user",
+      "content": "Thanks. Is that warm enough for a short walk? Repeat the temperature you found in your answer."
+    }
   ]
 }

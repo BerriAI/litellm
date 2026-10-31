@@ -53,5 +53,15 @@
         }
       ]
     }
+  ],
+  "turn_3_appended_messages": [
+    {
+      "role": "assistant",
+      "content": "<turn 2 response: assistant output>"
+    },
+    {
+      "role": "user",
+      "content": "Thanks. Is that warm enough for a short walk? Repeat the temperature you found in your answer."
+    }
   ]
 }

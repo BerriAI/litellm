@@ -21,6 +21,8 @@ from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.types.utils import ModelResponse
 
 _TOOL_CALL_ID: Final = "call_boston"
+_TURN_TWO_ANSWER: Final = "Boston is 72F and sunny."
+_TURN_THREE_ANSWER: Final = "Yes, 72F is warm enough for a walk."
 
 
 def _chat_reply(*, tool_call: bool, text: str = "", cached_tokens: int = 0, prompt_tokens: int = 5000) -> ModelResponse:
@@ -123,29 +125,29 @@ def _messages_reply(*, tool_call: bool, text: str = "", cached_tokens: int = 0) 
 
 
 class _ScriptedProvider:
-    """Answers turn 1 with a tool call and every later turn from ``second_turns``, recording what was sent."""
+    """Answers turn 1 from ``first`` and every later request from ``later_turns`` in order, recording what was sent."""
 
     def __init__(
         self,
         first: CalledTurn,
-        second_turns: Sequence[CalledTurn | Exception],
+        later_turns: Sequence[CalledTurn | Exception],
     ) -> None:
         self.first = first
-        self.second_turns = list(second_turns)
+        self.later_turns = list(later_turns)
         self.sent: list[Mapping[str, object]] = []
 
     async def __call__(self, script: EndpointScript, body: Mapping[str, object], call_id: str) -> CalledTurn:
         self.sent.append(body)
         if len(self.sent) == 1:
             return self.first
-        outcome: Final = self.second_turns.pop(0)
+        outcome: Final = self.later_turns.pop(0)
         if isinstance(outcome, Exception):
             raise outcome
         return outcome
 
 
 def _ids() -> Sequence[str]:
-    return ("turn-1", "turn-2", "turn-2-retry")
+    return ("call-1", "call-2", "call-3", "call-4", "call-5")
 
 
 def _run(script: EndpointScript, provider: _ScriptedProvider, spend_rows: Mapping[str, float] | None = None):
@@ -169,52 +171,61 @@ def _checks(result) -> Mapping[str, tuple[str, str]]:
 
 
 @pytest.mark.parametrize(
-    ("script", "first", "second"),
+    ("script", "reply", "key"),
     [
-        (
-            CHAT_COMPLETIONS_SCRIPT,
-            _chat_reply(tool_call=True),
-            _chat_reply(tool_call=False, text="Boston is 72F and sunny.", cached_tokens=4800),
-        ),
-        (
-            RESPONSES_SCRIPT,
-            _responses_reply(tool_call=True),
-            _responses_reply(tool_call=False, text="Boston is 72F and sunny.", cached_tokens=4800),
-        ),
-        (
-            MESSAGES_SCRIPT,
-            _messages_reply(tool_call=True),
-            _messages_reply(tool_call=False, text="Boston is 72F and sunny.", cached_tokens=4800),
-        ),
+        (CHAT_COMPLETIONS_SCRIPT, _chat_reply, "messages"),
+        (RESPONSES_SCRIPT, _responses_reply, "input"),
+        (MESSAGES_SCRIPT, _messages_reply, "messages"),
     ],
     ids=["chat", "responses", "messages"],
 )
-def test_every_endpoint_passes_all_three_checks_and_feeds_turn_one_back_in_its_own_shape(script, first, second):
-    provider: Final = _ScriptedProvider(CalledTurn(first, 0.004), [CalledTurn(second, 0.0005)])
+def test_every_endpoint_passes_all_three_checks_and_feeds_each_reply_back_in_its_own_shape(script, reply, key):
+    provider: Final = _ScriptedProvider(
+        CalledTurn(reply(tool_call=True), 0.004),
+        [
+            CalledTurn(reply(tool_call=False, text=_TURN_TWO_ANSWER, cached_tokens=4800), 0.0005),
+            CalledTurn(reply(tool_call=False, text=_TURN_THREE_ANSWER, cached_tokens=4900), 0.0004),
+        ],
+    )
 
-    result: Final = _run(script, provider, spend_rows={"turn-1": 0.004, "turn-2": 0.0005})
+    result: Final = _run(script, provider, spend_rows={"call-1": 0.004, "call-2": 0.0005, "call-3": 0.0004})
 
     assert result.status == "success", result
     checks: Final = _checks(result)
-    assert checks["conversation"][0] == "pass", checks
-    assert checks["prompt_caching"] == ("pass", "turn 2 read 4800 of 5000 input tokens from cache (96.0%)"), checks
+    assert checks["conversation"] == (
+        "pass",
+        f'turn 1 called get_weather({{"location": "Boston"}}), turn 2 answered {_TURN_TWO_ANSWER!r}, '
+        f"turn 3 answered {_TURN_THREE_ANSWER!r}",
+    ), checks
+    assert checks["prompt_caching"] == (
+        "pass",
+        "turn 2 read 4800 of 5000 input tokens from cache (96.0%), "
+        "turn 3 read 4900 of 5000 input tokens from cache (98.0%)",
+    ), checks
     assert checks["cost_tracking"] == (
         "pass",
-        "turn 1 $0.004000, turn 2 $0.000500, spend log rows written ($0.004000, $0.000500)",
+        "turn 1 $0.004000, turn 2 $0.000500, turn 3 $0.000400, "
+        "spend log rows written ($0.004000, $0.000500, $0.000400)",
     ), checks
     assert result.cache_read_tokens == 4800
     assert result.cache_read_percent == 96.0
-    assert result.spend_usd == pytest.approx(0.0045)
-    assert len(provider.sent) == 2
+    assert result.spend_usd == pytest.approx(0.0049)
+    assert len(provider.sent) == 3
     turn_two: Final = provider.sent[1]
-    sent_json: Final = json.dumps(turn_two)
-    assert _TOOL_CALL_ID in sent_json and WEATHER_TOOL_RESULT in sent_json, turn_two
-    assert "cache_control" not in sent_json and "cachePoint" not in sent_json, turn_two
-    assert "<turn 1 response" not in sent_json, turn_two
+    turn_three: Final = provider.sent[2]
+    sent_json: Final = json.dumps(provider.sent[1:])
+    assert _TOOL_CALL_ID in sent_json and WEATHER_TOOL_RESULT in sent_json, sent_json
+    assert "cache_control" not in sent_json and "cachePoint" not in sent_json, sent_json
+    assert "<turn " not in sent_json, sent_json
+    assert turn_three[key][: len(turn_two[key])] == turn_two[key], turn_three
+    follow_up: Final = turn_three[key][-1]
+    assert follow_up["role"] == "user" and "Repeat the temperature" in follow_up["content"], follow_up
     if script is CHAT_COMPLETIONS_SCRIPT:
         tool_message: Final = turn_two["messages"][-1]
         assert tool_message == {"role": "tool", "tool_call_id": _TOOL_CALL_ID, "content": WEATHER_TOOL_RESULT}
         assert turn_two["messages"][-2]["tool_calls"][0]["id"] == _TOOL_CALL_ID
+        assert turn_three["messages"][-2]["role"] == "assistant", turn_three
+        assert turn_three["messages"][-2]["content"] == _TURN_TWO_ANSWER, turn_three
     elif script is RESPONSES_SCRIPT:
         assert turn_two["input"][-1] == {
             "type": "function_call_output",
@@ -222,11 +233,17 @@ def test_every_endpoint_passes_all_three_checks_and_feeds_turn_one_back_in_its_o
             "output": WEATHER_TOOL_RESULT,
         }
         assert [item["type"] for item in turn_two["input"][1:-1]] == ["reasoning", "function_call"]
+        assert turn_three["input"][-2]["type"] == "message", turn_three
+        assert turn_three["input"][-2]["content"][0]["text"] == _TURN_TWO_ANSWER, turn_three
     else:
         assert turn_two["messages"][-1]["content"] == [
             {"type": "tool_result", "tool_use_id": _TOOL_CALL_ID, "content": WEATHER_TOOL_RESULT}
         ]
         assert turn_two["messages"][-2]["content"][0]["type"] == "thinking"
+        assert turn_three["messages"][-2] == {
+            "role": "assistant",
+            "content": [{"type": "text", "text": _TURN_TWO_ANSWER}],
+        }, turn_three
 
 
 def test_a_model_that_answers_in_text_instead_of_calling_the_tool_fails_the_conversation_and_stops():
@@ -260,7 +277,10 @@ def test_a_turn_two_provider_error_is_reported_as_the_conversation_failure():
 def test_an_answer_that_ignores_the_tool_result_fails_the_conversation():
     provider: Final = _ScriptedProvider(
         CalledTurn(_chat_reply(tool_call=True), 0.004),
-        [CalledTurn(_chat_reply(tool_call=False, text="I cannot tell.", cached_tokens=4800), 0.0005)],
+        [
+            CalledTurn(_chat_reply(tool_call=False, text="I cannot tell.", cached_tokens=4800), 0.0005),
+            CalledTurn(_chat_reply(tool_call=False, text=_TURN_THREE_ANSWER, cached_tokens=4900), 0.0004),
+        ],
     )
 
     checks: Final = _checks(_run(CHAT_COMPLETIONS_SCRIPT, provider))
@@ -269,18 +289,56 @@ def test_an_answer_that_ignores_the_tool_result_fails_the_conversation():
     assert checks["prompt_caching"][0] == "pass"
 
 
+def test_a_follow_up_answer_that_forgets_the_earlier_turn_fails_the_conversation():
+    provider: Final = _ScriptedProvider(
+        CalledTurn(_chat_reply(tool_call=True), 0.004),
+        [
+            CalledTurn(_chat_reply(tool_call=False, text=_TURN_TWO_ANSWER, cached_tokens=4800), 0.0005),
+            CalledTurn(_chat_reply(tool_call=False, text="I do not know the temperature.", cached_tokens=4900), 0.0004),
+        ],
+    )
+
+    checks: Final = _checks(_run(CHAT_COMPLETIONS_SCRIPT, provider))
+
+    assert checks["conversation"] == (
+        "fail",
+        "turn 3 did not carry the temperature from turn 2 into the follow-up answer: 'I do not know the temperature.'",
+    )
+    assert checks["prompt_caching"][0] == "pass"
+    assert checks["cost_tracking"][0] == "pass"
+
+
+def test_a_turn_three_provider_error_is_reported_as_the_conversation_failure():
+    provider: Final = _ScriptedProvider(
+        CalledTurn(_chat_reply(tool_call=True), 0.004),
+        [
+            CalledTurn(_chat_reply(tool_call=False, text=_TURN_TWO_ANSWER, cached_tokens=4800), 0.0005),
+            RuntimeError("400 invalid assistant message"),
+        ],
+    )
+
+    checks: Final = _checks(_run(CHAT_COMPLETIONS_SCRIPT, provider))
+
+    assert checks["conversation"] == (
+        "fail",
+        "turn 3 request with the follow-up question failed: RuntimeError: 400 invalid assistant message",
+    )
+    assert checks["prompt_caching"] == ("pass", "turn 2 read 4800 of 5000 input tokens from cache (96.0%)")
+
+
 def test_zero_cached_tokens_is_retried_once_and_fails_when_the_retry_misses_too():
     provider: Final = _ScriptedProvider(
         CalledTurn(_chat_reply(tool_call=True), 0.004),
         [
             CalledTurn(_chat_reply(tool_call=False, text="72F", cached_tokens=0), 0.004),
             CalledTurn(_chat_reply(tool_call=False, text="72F", cached_tokens=0), 0.004),
+            CalledTurn(_chat_reply(tool_call=False, text="72F", cached_tokens=4900), 0.0004),
         ],
     )
 
     result: Final = _run(CHAT_COMPLETIONS_SCRIPT, provider)
 
-    assert len(provider.sent) == 3
+    assert len(provider.sent) == 4
     assert _checks(result)["prompt_caching"] == (
         "fail",
         "turn 2 reported 0 cached tokens on 5000 input tokens in 2 attempts, the provider did not reuse the "
@@ -296,26 +354,51 @@ def test_a_cache_hit_on_the_retry_passes_and_says_so():
         [
             CalledTurn(_chat_reply(tool_call=False, text="72F", cached_tokens=0), 0.004),
             CalledTurn(_chat_reply(tool_call=False, text="72F", cached_tokens=5000), 0.0005),
+            CalledTurn(_chat_reply(tool_call=False, text="72F", cached_tokens=0), 0.004),
+            CalledTurn(_chat_reply(tool_call=False, text="72F", cached_tokens=4900), 0.0004),
         ],
     )
 
     result: Final = _run(CHAT_COMPLETIONS_SCRIPT, provider)
 
+    assert len(provider.sent) == 5
     assert _checks(result)["prompt_caching"] == (
         "pass",
-        "turn 2 read 5000 of 5000 input tokens from cache (100.0%) on the second attempt",
+        "turn 2 read 5000 of 5000 input tokens from cache (100.0%) on the second attempt, "
+        "turn 3 read 4900 of 5000 input tokens from cache (98.0%) on the second attempt",
     )
-    assert result.spend_usd == pytest.approx(0.0045)
+    assert result.spend_usd == pytest.approx(0.0049)
+
+
+def test_a_cache_miss_on_turn_three_fails_prompt_caching_after_its_own_retry():
+    provider: Final = _ScriptedProvider(
+        CalledTurn(_chat_reply(tool_call=True), 0.004),
+        [
+            CalledTurn(_chat_reply(tool_call=False, text="72F", cached_tokens=4800), 0.0005),
+            CalledTurn(_chat_reply(tool_call=False, text="72F", cached_tokens=0), 0.004),
+            CalledTurn(_chat_reply(tool_call=False, text="72F", cached_tokens=0), 0.004),
+        ],
+    )
+
+    result: Final = _run(CHAT_COMPLETIONS_SCRIPT, provider)
+
+    assert len(provider.sent) == 4
+    assert _checks(result)["prompt_caching"] == (
+        "fail",
+        "turn 3 reported 0 cached tokens on 5000 input tokens in 2 attempts, the provider did not reuse the "
+        "repeated system prompt",
+    )
+    assert _checks(result)["conversation"][0] == "pass"
 
 
 def test_a_model_without_a_price_fails_cost_tracking_and_a_zero_priced_model_only_warns():
     unpriced: Final = _ScriptedProvider(
         CalledTurn(_chat_reply(tool_call=True), None),
-        [CalledTurn(_chat_reply(tool_call=False, text="72F", cached_tokens=4800), None)],
+        [CalledTurn(_chat_reply(tool_call=False, text="72F", cached_tokens=4800), None)] * 2,
     )
     free: Final = _ScriptedProvider(
         CalledTurn(_chat_reply(tool_call=True), 0.0),
-        [CalledTurn(_chat_reply(tool_call=False, text="72F", cached_tokens=4800), 0.0)],
+        [CalledTurn(_chat_reply(tool_call=False, text="72F", cached_tokens=4800), 0.0)] * 2,
     )
 
     unpriced_result: Final = _run(CHAT_COMPLETIONS_SCRIPT, unpriced)
@@ -339,14 +422,18 @@ def test_a_model_without_a_price_fails_cost_tracking_and_a_zero_priced_model_onl
 def test_a_missing_spend_log_row_fails_cost_tracking_even_when_the_response_was_priced():
     provider: Final = _ScriptedProvider(
         CalledTurn(_chat_reply(tool_call=True), 0.004),
-        [CalledTurn(_chat_reply(tool_call=False, text="72F", cached_tokens=4800), 0.0005)],
+        [
+            CalledTurn(_chat_reply(tool_call=False, text="72F", cached_tokens=4800), 0.0005),
+            CalledTurn(_chat_reply(tool_call=False, text="72F", cached_tokens=4900), 0.0004),
+        ],
     )
 
-    checks: Final = _checks(_run(CHAT_COMPLETIONS_SCRIPT, provider, spend_rows={"turn-1": 0.004}))
+    checks: Final = _checks(_run(CHAT_COMPLETIONS_SCRIPT, provider, spend_rows={"call-1": 0.004, "call-3": 0.0004}))
 
     assert checks["cost_tracking"] == (
         "fail",
-        "turn 1 $0.004000, turn 2 $0.000500, but no LiteLLM_SpendLogs row landed for request_id turn-2",
+        "turn 1 $0.004000, turn 2 $0.000500, turn 3 $0.000400, but no LiteLLM_SpendLogs row landed for "
+        "request_id call-2",
     )
 
 
@@ -362,7 +449,7 @@ def test_a_response_that_is_not_the_endpoint_shape_fails_the_conversation_with_t
 def test_payload_lists_the_checks_in_order_with_their_details():
     provider: Final = _ScriptedProvider(
         CalledTurn(_chat_reply(tool_call=True), 0.004),
-        [CalledTurn(_chat_reply(tool_call=False, text="72F", cached_tokens=4800), 0.0005)],
+        [CalledTurn(_chat_reply(tool_call=False, text="72F", cached_tokens=4800), 0.0005)] * 2,
     )
 
     payload: Final = endpoint_result_payload(_run(CHAT_COMPLETIONS_SCRIPT, provider)).model_dump()
@@ -382,11 +469,16 @@ def test_the_three_request_files_send_one_system_prompt_and_one_tool_so_endpoint
     chat, messages, responses = (files[name]["turn_1"] for name in ("chat_completions", "messages", "responses"))
 
     assert set(files) == {"chat_completions", "messages", "responses"}, files.keys()
-    assert all(set(file) == {"turn_1", "turn_2_appended_messages"} for file in files.values()), files
+    assert all(
+        set(file) == {"turn_1", "turn_2_appended_messages", "turn_3_appended_messages"} for file in files.values()
+    ), files
     for name, file in files.items():
         appended: Final = json.dumps(file["turn_2_appended_messages"])
         assert WEATHER_TOOL_RESULT in appended, (name, appended)
         assert "<turn 1 response: assistant output>" in appended and "<turn 1 response: tool call id>" in appended, name
+        third: Final = json.dumps(file["turn_3_appended_messages"])
+        assert "<turn 2 response: assistant output>" in third, (name, third)
+        assert file["turn_3_appended_messages"][-1]["role"] == "user", (name, third)
     assert chat["messages"][0]["content"] == responses["instructions"] == messages["system"]
     assert chat["tools"][0]["function"]["parameters"] == responses["tools"][0]["parameters"]
     assert chat["tools"][0]["function"]["parameters"] == messages["tools"][0]["input_schema"]
