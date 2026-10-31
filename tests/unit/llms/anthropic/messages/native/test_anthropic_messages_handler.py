@@ -1246,6 +1246,44 @@ async def test_bridged_messages_send_the_deployments_key_for_azure_models_served
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "entra_credential",
+    [
+        {"azure_ad_token": "entra-token"},
+        {"azure_ad_token_provider": lambda: "entra-token"},
+        {"tenant_id": "tenant", "client_id": "client", "client_secret": "secret"},
+        {"azure_username": "user", "azure_password": "password", "client_id": "client"},
+    ],
+)
+async def test_bridged_messages_keep_the_deployments_entra_credential_over_the_env_key(monkeypatch, entra_credential):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setenv("AZURE_AI_API_KEY", "azure-env-key")
+    litellm.in_memory_llm_clients_cache.flush_cache()
+
+    with (
+        patch("litellm.llms.azure.common_utils.get_azure_ad_token_from_entra_id", return_value=lambda: "entra-token"),  # test-quality-ok: stands in for the Entra token fetch so the test can see which credential reaches Azure
+        patch(
+            "litellm.llms.azure.common_utils.get_azure_ad_token_from_username_password",
+            return_value=lambda: "entra-token",
+        ),  # test-quality-ok: stands in for the Entra token fetch so the test can see which credential reaches Azure
+        respx.mock(assert_all_called=True) as respx_mock,
+    ):
+        upstream: Final = respx_mock.route().mock(side_effect=httpx.ConnectError("cut at the wire"))
+        with pytest.raises(openai.APIError):
+            await litellm.anthropic.messages.acreate(
+                max_tokens=100,
+                messages=[{"role": "user", "content": "ping"}],
+                model="azure_ai/gpt-6-luna",
+                api_base="https://example-resource.cognitiveservices.azure.com",
+                tools=[{"name": "get_weather", "input_schema": {"type": "object", "properties": {}}}],
+                **entra_credential,
+            )
+
+    assert {call.request.headers.get("authorization") for call in upstream.calls} == {"Bearer entra-token"}
+    assert {call.request.headers.get("api-key") for call in upstream.calls} == {None}
+
+
+@pytest.mark.asyncio
 async def test_bridged_messages_still_route_through_the_litellm_proxy_when_asked(monkeypatch):
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     monkeypatch.setenv("LITELLM_PROXY_API_BASE", "https://proxy.example.com")

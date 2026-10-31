@@ -133,6 +133,15 @@ def _resolve_by_model_prefix(
         return None
 
 
+def _sets_own_entra_credential(litellm_params: GenericLiteLLMParams) -> bool:
+    return bool(
+        litellm_params.azure_ad_token
+        or (litellm_params.model_extra or {}).get("azure_ad_token_provider") is not None
+        or (litellm_params.tenant_id and litellm_params.client_id and litellm_params.client_secret)
+        or (litellm_params.azure_username and litellm_params.azure_password and litellm_params.client_id)
+    )
+
+
 def _bridge_target(requested: _BridgeTarget, resolved: _BridgeTarget, custom_llm_provider: str) -> _BridgeTarget:
     requested_provider: Final = requested.model.partition("/")[0]
     if requested_provider == custom_llm_provider or requested_provider not in LlmProvidersSet:
@@ -700,7 +709,11 @@ def anthropic_messages_handler(
 
     bridge: Final = _bridge_target(
         _BridgeTarget(model=original_model, api_key=api_key, api_base=api_base),
-        _BridgeTarget(model=model, api_key=dynamic_api_key, api_base=dynamic_api_base),
+        _BridgeTarget(
+            model=model,
+            api_key=None if _sets_own_entra_credential(litellm_params) else dynamic_api_key,
+            api_base=dynamic_api_base,
+        ),
         custom_llm_provider,
     )
 
