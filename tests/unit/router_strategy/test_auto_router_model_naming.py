@@ -15,6 +15,7 @@ from litellm.router_strategy.auto_router.auto_router_model_naming import (
     validate_complexity_router_config_placement,
     validate_complexity_router_config_write,
     validate_strategy_router_model_write,
+    validate_switchyard_router_config_write,
 )
 from litellm.router_strategy.complexity_router.fuse_presets import get_fuse_presets
 from litellm.router_strategy.complexity_router.jev_classifier import DEFAULT_JEV_INSTRUCTIONS
@@ -807,3 +808,43 @@ def test_switchyard_dependencies_include_targets_and_judges():
         validate_strategy_router_model_write("auto_router/switchyard", frozenset({"switchyard_router_config"})) is None
     )
     assert validate_strategy_router_model_write("auto_router/switchyard", frozenset()) is not None
+
+
+@pytest.mark.parametrize(
+    "config",
+    [None, {"algorithm": "random", "models": {"any": ["fast", "strong"]}}],
+)
+def test_switchyard_write_accepts_valid_config_and_unrelated_patch(config: Mapping[str, object] | None):
+    assert validate_switchyard_router_config_write(config) is None
+
+
+@pytest.mark.parametrize(
+    "config, expected_location",
+    [
+        ({"algorithm": "random", "models": {"any": ["fast"]}, "weights": [-1]}, "switchyard_router_config"),
+        ({"algorithm": "capability", "models": {"efficient": ["fast"]}}, "switchyard_router_config"),
+        ({"algorithm": "random", "models": {"any": ["fast"]}, "seed": -1}, "seed"),
+    ],
+)
+def test_switchyard_write_rejects_unloadable_configuration(config: Mapping[str, object], expected_location: str):
+    violation: Final = validate_switchyard_router_config_write(config)
+    assert violation is not None
+    assert f"invalid at {expected_location}:" in violation
+
+
+@pytest.mark.parametrize("config", [None, "invalid", ["fast"], {"models": "invalid"}, {"models": None}])
+def test_switchyard_dependency_inspection_tolerates_malformed_saved_config(config: object):
+    assert strategy_router_dependencies({"model": "auto_router/switchyard", "switchyard_router_config": config}) == ()
+
+
+def test_switchyard_dependency_inspection_ignores_invalid_pool_entries():
+    dependencies: Final = strategy_router_dependencies(
+        {
+            "model": "auto_router/switchyard",
+            "switchyard_router_config": {"models": {"any": ["fast", None, 4, ""], "judge": "judge", "invalid": 5}},
+        }
+    )
+    assert tuple((dependency.model_name, dependency.role) for dependency in dependencies) == (
+        ("fast", "tier"),
+        ("judge", "classifier"),
+    )

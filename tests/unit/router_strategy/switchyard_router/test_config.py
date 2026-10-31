@@ -87,3 +87,32 @@ def test_random_registry_keeps_weighted_candidates_even_with_extra_groups() -> N
     )
     assert config.runtime_models() == groups
     assert config.weights == (0, 1, 0)
+
+
+@pytest.mark.parametrize(
+    "config",
+    [
+        {"algorithm": "capability", "models": {"efficient": ["fast"], "capable": ["strong"]}},
+        {"algorithm": "custom", "models": {"judge": ["judge"], "general": ["fast"]}},
+        {
+            "algorithm": "custom",
+            "models": {"judge": ["judge"], "general": ["fast"]},
+            "custom": {"prompt": "Route", "response_schema": {}, "selector": "/target", "default_target": "missing"},
+        },
+        {
+            "algorithm": "custom",
+            "models": {"judge": ["judge"], "general": ["fast"]},
+            "custom": {
+                "prompt": "Route",
+                "response_schema": {},
+                "selector": "/target",
+                "default_target": "general",
+                "message_hash_fallback": True,
+            },
+        },
+        {"algorithm": "stage", "models": {"efficient": ["fast"], "capable": ["strong"]}, "weights": [1]},
+    ],
+)
+def test_incomplete_or_incompatible_algorithm_configuration_is_rejected(config: dict[str, object]) -> None:
+    with pytest.raises(ValidationError):
+        SwitchyardRouterConfig.model_validate(config)

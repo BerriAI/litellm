@@ -4,7 +4,7 @@ from typing import Final
 
 import pytest
 
-from litellm.exceptions import APIError, AuthenticationError, ServiceUnavailableError
+from litellm.exceptions import APIError, AuthenticationError, ContextWindowExceededError, ServiceUnavailableError
 from litellm.router_strategy.switchyard_router import SwitchyardAutoRouter, SwitchyardRouterConfig
 from litellm.types.utils import ModelResponse
 
@@ -333,3 +333,36 @@ async def test_cancelling_judge_cancels_provider_work() -> None:
     with pytest.raises(asyncio.CancelledError):
         await task
     assert cancelled.is_set()
+
+
+@pytest.mark.asyncio
+async def test_disabling_fallback_preserves_selected_provider_failure() -> None:
+    error: Final = ServiceUnavailableError("unavailable", "fake", "fast")
+    provider: Final = ScriptedProvider({"fast": error})
+    router: Final = SwitchyardAutoRouter(classifier_config("stage", fallback_enabled=False))
+    with pytest.raises(ServiceUnavailableError) as raised:
+        await router.execute({"messages": [{"role": "user", "content": "hello"}]}, provider)
+    assert raised.value is error
+    assert tuple(model for model, _ in provider.calls) == ("fast",)
+
+
+@pytest.mark.asyncio
+async def test_escalation_context_overflow_executes_capable_without_judge() -> None:
+    answer: Final = response("strong", "fits")
+    provider: Final = ScriptedProvider(
+        {
+            "fast": ContextWindowExceededError("too large", "fast", "fake"),
+            "strong": answer,
+        }
+    )
+    router: Final = SwitchyardAutoRouter(classifier_config("escalation", escalation={"confirmations": 1}))
+    actual: Final = await router.execute({"messages": [{"role": "user", "content": "hello"}]}, provider)
+    assert actual is answer
+    assert tuple(model for model, _ in provider.calls) == ("fast", "strong")
+
+
+@pytest.mark.asyncio
+async def test_model_selection_hook_rejects_unsupported_endpoint_dispatch() -> None:
+    router: Final = SwitchyardAutoRouter(classifier_config("capability"))
+    with pytest.raises(ValueError, match="async chat completions only"):
+        await router.async_pre_routing_hook("route", {}, input="embedding input")

@@ -3,7 +3,7 @@ import json
 import re
 import time
 import traceback
-from collections.abc import AsyncIterator, Generator, Iterator, Mapping, Sequence
+from collections.abc import AsyncGenerator, Generator, Iterator, Mapping, Sequence
 from typing import Final, Literal, cast, overload
 
 from pydantic import ConfigDict, TypeAdapter, ValidationError, with_config
@@ -269,16 +269,16 @@ def _invalid_choices_message(response_object: Mapping[str, object]) -> str:
 @overload
 def convert_to_streaming_response_async(
     response_object: Mapping[str, object],
-) -> AsyncIterator[ModelResponseStream]: ...
+) -> AsyncGenerator[ModelResponseStream, None]: ...
 
 
 @overload
-def convert_to_streaming_response_async(response_object: None = None) -> AsyncIterator[ModelResponseStream]: ...
+def convert_to_streaming_response_async(response_object: None = None) -> AsyncGenerator[ModelResponseStream, None]: ...
 
 
 async def convert_to_streaming_response_async(
     response_object: Mapping | None = None,
-) -> AsyncIterator[ModelResponseStream]:
+) -> AsyncGenerator[ModelResponseStream, None]:
     """
     Asynchronously converts a response object to a streaming response.
 

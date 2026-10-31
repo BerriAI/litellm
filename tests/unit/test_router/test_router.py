@@ -31882,3 +31882,57 @@ def test_image_routing_inspects_native_request_content_without_translation(reque
     original: Final = copy.deepcopy(request_kwargs)
     assert _candidate_ids(router, request_kwargs=request_kwargs) == ["vision"]
     assert request_kwargs == original
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stream", [False, True])
+async def test_switchyard_escalation_returns_accepted_answer_through_router(stream: bool):
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "routed",
+                "litellm_params": {
+                    "model": "auto_router/switchyard_router",
+                    "switchyard_router_config": {
+                        "algorithm": "escalation",
+                        "models": {"efficient": ["fast"], "capable": ["strong"], "judge": ["judge"]},
+                        "escalation": {"confirmations": 1},
+                    },
+                },
+            },
+            *(
+                {
+                    "model_name": name,
+                    "litellm_params": {
+                        "model": "openai/gpt-4o-mini",
+                        "api_key": "test-key",
+                        "mock_response": text,
+                    },
+                }
+                for name, text in (
+                    ("fast", "accepted answer"),
+                    ("strong", "strong answer"),
+                    ("judge", '{"escalate":false,"category":"none","new_evidence":false,"reason":"progress"}'),
+                )
+            ),
+        ],
+        num_retries=0,
+    )
+    try:
+        response: Final = await router.acompletion(
+            model="routed",
+            messages=[{"role": "user", "content": "hello"}],
+            stream=stream,
+            stream_options={"include_usage": True} if stream else None,
+        )
+        if stream:
+            chunks: Final = [chunk async for chunk in response]
+            assert (
+                "".join(chunk.choices[0].delta.content or "" for chunk in chunks if chunk.choices) == "accepted answer"
+            )
+            assert chunks[-1].usage.total_tokens > 0
+        else:
+            assert response.choices[0].message.content == "accepted answer"
+            assert response.usage.total_tokens > 0
+    finally:
+        router.reset()
