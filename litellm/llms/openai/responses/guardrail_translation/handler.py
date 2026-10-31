@@ -715,7 +715,8 @@ def _next_stream_sequence_number(responses_so_far: Sequence[object] | None) -> i
 def _is_responses_input(input_data: object) -> bool:
     if isinstance(input_data, str):
         return True
-    return isinstance(input_data, list) and all(isinstance(item, Mapping) for item in cast(list[object], input_data))
+    items: Final = cast(list[object], input_data)  # cast-ok: isinstance narrows to list[Unknown] only
+    return isinstance(input_data, list) and all(isinstance(item, Mapping) for item in items)
 
 
 class OpenAIResponsesHandler(BaseTranslation):
