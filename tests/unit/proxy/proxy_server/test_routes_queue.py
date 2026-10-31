@@ -39,7 +39,7 @@ HAPPY_RESPONSE = {
 @pytest.fixture
 def patched_queue(monkeypatch):
     router = MagicMock()
-    router.split_request_priority = MagicMock(return_value=(0, {}))
+    router.health.return_value.split_priority.return_value = (0, {})
     router.schedule_acompletion = AsyncMock(return_value=dict(HAPPY_RESPONSE))
     monkeypatch.setattr(proxy_server, "llm_router", router)
     monkeypatch.setattr(
