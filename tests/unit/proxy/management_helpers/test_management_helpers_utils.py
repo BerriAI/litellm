@@ -310,6 +310,72 @@ async def test_handle_budget_for_entity_updates_only_cleared_or_supplied_fields(
 
 
 @pytest.mark.asyncio
+async def test_handle_budget_for_entity_same_budget_id_and_settings_prevents_duplicate_kwarg():
+    """
+    Regression test for #46999:
+    Ensure that when an update payload carries both `budget_id` (matching `existing_budget_id`)
+    and budget settings (e.g. max_budget), BudgetNewRequest is constructed cleanly without a
+    duplicate-kwarg TypeError.
+    Also ensure that when an update payload carries ONLY `budget_id` (matching `existing_budget_id`)
+    without any settings, no no-op update_budget is executed.
+    """
+    from unittest.mock import AsyncMock, patch
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.management_helpers.utils import handle_budget_for_entity
+    from litellm.types.tag_management import TagUpdateRequest
+
+    mock_prisma_client = AsyncMock()
+
+    # 1. Update payload containing both matching budget_id AND budget setting(s)
+    tag_with_settings = TagUpdateRequest.model_validate(
+        {
+            "name": "tag-1",
+            "budget_id": "budget-123",
+            "max_budget": 150.0,
+        }
+    )
+
+    with patch(
+        "litellm.proxy.management_endpoints.budget_management_endpoints.update_budget",
+        new_callable=AsyncMock,
+    ) as mock_update_budget:
+        result = await handle_budget_for_entity(
+            data=tag_with_settings,
+            existing_budget_id="budget-123",
+            user_api_key_dict=UserAPIKeyAuth(user_id="admin"),
+            prisma_client=mock_prisma_client,
+            litellm_proxy_admin_name="admin",
+        )
+        assert result == "budget-123"
+        mock_update_budget.assert_awaited_once()
+        budget_req = mock_update_budget.await_args.kwargs["budget_obj"]
+        assert budget_req.budget_id == "budget-123"
+        assert budget_req.max_budget == 150.0
+
+    # 2. Update payload containing ONLY matching budget_id (no settings) -> no-op update avoided
+    tag_id_only = TagUpdateRequest.model_validate(
+        {
+            "name": "tag-1",
+            "budget_id": "budget-123",
+        }
+    )
+
+    with patch(
+        "litellm.proxy.management_endpoints.budget_management_endpoints.update_budget",
+        new_callable=AsyncMock,
+    ) as mock_update_budget:
+        result = await handle_budget_for_entity(
+            data=tag_id_only,
+            existing_budget_id="budget-123",
+            user_api_key_dict=UserAPIKeyAuth(user_id="admin"),
+            prisma_client=mock_prisma_client,
+            litellm_proxy_admin_name="admin",
+        )
+        assert result == "budget-123"
+        mock_update_budget.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_add_new_member_no_budget_when_default_budget_row_is_missing():
     from litellm.proxy._types import LitellmUserRoles
 
