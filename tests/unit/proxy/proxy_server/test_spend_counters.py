@@ -41,7 +41,8 @@ from litellm._internal_context import current_service_target
 from litellm._service_logger import ServiceLogging
 from litellm.caching.dual_cache import DualCache
 from litellm.caching.in_memory_cache import InMemoryCache
-from litellm.caching.redis_cache import RedisCache, RedisCircuitBreaker
+from litellm.caching.redis_batch import request_redis_batch_scope
+from litellm.caching.redis_cache import RedisCache, RedisCircuitBreaker, RedisCircuitBreakerOpenError
 from litellm.constants import GLOBAL_PROXY_SPEND_CACHE_KEY
 from litellm.integrations.opentelemetry import OpenTelemetry, OpenTelemetryConfig
 from litellm.models.end_user import LiteLLM_EndUserTable
@@ -1808,10 +1809,10 @@ class _FakeRedisRunningIncrementIfPresent(FakeAsyncRedis):
 
 
 class _RedisCacheOnClient(RedisCache):
-    def __init__(self, client: FakeAsyncRedis) -> None:
+    def __init__(self, client: FakeAsyncRedis, breaker: RedisCircuitBreaker | None = None) -> None:
         self._injected_client: Final = client
         self.namespace = None
-        self._circuit_breaker = RedisCircuitBreaker(failure_threshold=5, recovery_timeout=30)
+        self._circuit_breaker = breaker or RedisCircuitBreaker(failure_threshold=5, recovery_timeout=30)
         self.service_logger_obj = ServiceLogging()
         self.default_ttl = None
 
@@ -2026,6 +2027,8 @@ _COLD_SEED_SOURCE: Final = "end_user_id:customer-1"
 class _SharedRedis:
     """The counter commands a cold start sends, yielding like a network call so overlapping requests interleave."""
 
+    circuit_breaker_closed: Final = True
+
     def __init__(self) -> None:
         self.values: Final[dict[str, float]] = {}  # mutable-ok: stands in for the Redis keyspace
         self.failing = False
@@ -2051,7 +2054,9 @@ class _SharedRedis:
             self.values.pop(key, None)
 
 
-def _process(monkeypatch: pytest.MonkeyPatch, redis: _SharedRedis | None, cached_spend: float) -> DualCache:
+def _process(
+    monkeypatch: pytest.MonkeyPatch, redis: _SharedRedis | RedisCache | None, cached_spend: float
+) -> DualCache:
     counters: Final = DualCache(in_memory_cache=InMemoryCache(), redis_cache=cast(RedisCache, redis))
     objects: Final = DualCache(in_memory_cache=InMemoryCache())
     objects.in_memory_cache.set_cache(key=_COLD_SEED_SOURCE, value={"spend": cached_spend})
@@ -2061,7 +2066,7 @@ def _process(monkeypatch: pytest.MonkeyPatch, redis: _SharedRedis | None, cached
     return counters
 
 
-async def _cold_start(redis: _SharedRedis | None, counter: str) -> None:
+async def _cold_start(redis: _SharedRedis | RedisCache | None, counter: str) -> None:
     with spend_counter_batch_scope(cast(RedisCache, redis) if redis is not None else None, frozenset((counter,))):
         await ps.ensure_spend_counter_initialized(counter_key=counter, source_cache_key=_COLD_SEED_SOURCE)
 
@@ -2172,7 +2177,7 @@ async def test_another_process_seeding_after_this_request_read_the_counter_still
 
 
 @pytest.mark.asyncio
-async def test_a_failed_seed_fails_the_requests_that_joined_it_and_the_next_cold_start_seeds(
+async def test_seeds_that_keep_failing_fail_every_cold_start_and_the_next_cold_start_seeds(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     counter: Final = "spend:end_user:failed-seed"
@@ -2250,3 +2255,160 @@ def test_a_cold_start_on_another_event_loop_adds_on_its_own(monkeypatch: pytest.
         other_loop.join(5)
 
     assert redis.values[counter] == 12.0
+
+
+@pytest.mark.asyncio
+async def test_a_request_that_read_the_counter_cold_after_this_process_seeded_it_still_adds_its_cached_spend(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    counter: Final = "spend:end_user:read-after-seed"
+    redis: Final = _SharedRedis()
+    _process(monkeypatch, redis, cached_spend=6.0)
+    opened: Final = asyncio.Event()
+    seeded: Final = asyncio.Event()
+
+    async def _late_reader() -> None:
+        with spend_counter_batch_scope(cast(RedisCache, redis), frozenset((counter,))):
+            opened.set()
+            await seeded.wait()
+            del redis.values[counter]
+            await _read_cold(counter)
+            redis.values[counter] = 0.5
+            await ps.ensure_spend_counter_initialized(counter_key=counter, source_cache_key=_COLD_SEED_SOURCE)
+
+    async def _first_request() -> None:
+        await opened.wait()
+        await _cold_start(redis, counter)
+        seeded.set()
+
+    await asyncio.gather(_late_reader(), _first_request())
+
+    assert redis.values[counter] == 6.5
+
+
+@pytest.mark.asyncio
+async def test_a_request_whose_pipelined_read_returned_before_this_process_seeded_the_counter_does_not_add_again(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    counter: Final = "spend:end_user:pipelined-reader"
+    client: Final = FakeAsyncRedis(server=FakeServer())
+    redis: Final = _RedisCacheOnClient(client)
+    _process(monkeypatch, redis, cached_spend=6.0)
+    read: Final = asyncio.Event()
+    seeded: Final = asyncio.Event()
+
+    async def _pipelined_request() -> None:
+        with request_redis_batch_scope() as batches, spend_counter_batch_scope(redis, frozenset((counter,))):
+            await batches.batch(redis).flush()
+            read.set()
+            await seeded.wait()
+            await ps.ensure_spend_counter_initialized(counter_key=counter, source_cache_key=_COLD_SEED_SOURCE)
+
+    async def _first_request() -> None:
+        await read.wait()
+        await _cold_start(redis, counter)
+        seeded.set()
+
+    await asyncio.gather(_pipelined_request(), _first_request())
+
+    assert float(await client.get(counter) or 0) == 6.0
+
+
+class _DroppedFirstIncrementRedis(_SharedRedis):
+    """Resets the connection that carries the first increment and answers every later one."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.dropped = False
+
+    async def async_increment(self, key: str, value: float, **_: object) -> float:
+        if not self.dropped:
+            self.dropped = True
+            await asyncio.sleep(0)
+            raise ConnectionError("connection reset by peer")
+        return await super().async_increment(key, value)
+
+
+@pytest.mark.asyncio
+async def test_requests_that_joined_a_seed_whose_connection_reset_seed_again_and_only_its_starter_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    counter: Final = "spend:end_user:reset-seed"
+    redis: Final = _DroppedFirstIncrementRedis()
+    _process(monkeypatch, redis, cached_spend=6.0)
+
+    outcomes: Final = await asyncio.gather(*(_cold_start(redis, counter) for _ in range(4)), return_exceptions=True)
+
+    failures: Final = [outcome for outcome in outcomes if outcome is not None]
+    assert [type(failure) for failure in failures] == [ConnectionError], outcomes
+    assert redis.values[counter] == 6.0
+
+
+class _StalledFirstIncrementRedis(_SharedRedis):
+    """Never answers the first increment until released, like a connection that stopped responding."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.stalled: Final = asyncio.Event()
+        self.release: Final = asyncio.Event()
+
+    async def async_increment(self, key: str, value: float, **_: object) -> float:
+        if not self.stalled.is_set():
+            self.stalled.set()
+            await self.release.wait()
+            raise TimeoutError("redis did not answer")
+        return await super().async_increment(key, value)
+
+
+@pytest.mark.asyncio
+async def test_cold_starts_stop_waiting_on_a_stalled_seed_and_add_their_own(monkeypatch: pytest.MonkeyPatch) -> None:
+    counter: Final = "spend:end_user:stalled-seed"
+    redis: Final = _StalledFirstIncrementRedis()
+    _process(monkeypatch, redis, cached_spend=6.0)
+    stalled: Final = asyncio.ensure_future(_cold_start(redis, counter))
+    await redis.stalled.wait()
+
+    try:
+        await asyncio.wait_for(asyncio.gather(*(_cold_start(redis, counter) for _ in range(3))), timeout=10)
+        seeded_while_stalled: Final = redis.values.get(counter)
+    finally:
+        redis.release.set()
+
+    with pytest.raises(TimeoutError):
+        await stalled
+    assert seeded_while_stalled == 18.0
+
+
+class _FakeRedisHoldingIncrements(FakeAsyncRedis):
+    def __init__(self, server: FakeServer) -> None:
+        super().__init__(server=server)
+        self.holding: Final = asyncio.Event()
+        self.release: Final = asyncio.Event()
+
+    async def incrbyfloat(self, name: str, amount: float = 1.0) -> float:
+        self.holding.set()
+        await self.release.wait()
+        return await super().incrbyfloat(name, amount)
+
+
+@pytest.mark.asyncio
+async def test_a_cold_start_after_the_redis_breaker_opened_fails_fast_instead_of_using_an_add_in_flight(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    counter: Final = "spend:end_user:breaker-open"
+    breaker: Final = RedisCircuitBreaker(failure_threshold=1, recovery_timeout=30)
+    client: Final = _FakeRedisHoldingIncrements(FakeServer())
+    redis: Final = _RedisCacheOnClient(client, breaker)
+    _process(monkeypatch, redis, cached_spend=6.0)
+    first: Final = asyncio.ensure_future(_cold_start(redis, counter))
+    await client.holding.wait()
+    breaker.record_failure()
+
+    later: Final = asyncio.ensure_future(_cold_start(redis, counter))
+    for _ in range(100):
+        await asyncio.sleep(0)
+    client.release.set()
+
+    outcomes: Final = await asyncio.gather(first, later, return_exceptions=True)
+
+    assert outcomes[0] is None and isinstance(outcomes[1], RedisCircuitBreakerOpenError), outcomes

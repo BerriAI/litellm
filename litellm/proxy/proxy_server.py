@@ -4086,8 +4086,8 @@ async def ensure_spend_counter_initialized(
     counter_key: str,
     source_cache_key: str | list[str],
 ) -> None:
-    read_at: Final = spend_counter_read_tick()
     is_warm: Final = await _is_spend_counter_cache_warm(counter_key=counter_key)
+    read_at: Final = spend_counter_read_tick(counter_key)
     if is_warm is False:
         # Shares the per-counter lock with get_current_spend.
         db_spend: Final = await SpendCounterReseed.coalesced(

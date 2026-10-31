@@ -709,6 +709,11 @@ class RedisCache(BaseCache):
     def _admit_async_call(self, call: Callable[[], Awaitable[_RedisCallResult]]) -> Awaitable[_RedisCallResult]:
         return call()
 
+    @property
+    def circuit_breaker_closed(self) -> bool:
+        """Whether calls reach Redis without a recovery probe. Reading it, unlike making a call, never starts one."""
+        return not self._circuit_breaker.enabled or self._circuit_breaker.state == RedisCircuitBreaker.CLOSED
+
     def _setup_health_pings(self):
         """Setup async and sync health pings for Redis."""
         # ASYNC HEALTH PING

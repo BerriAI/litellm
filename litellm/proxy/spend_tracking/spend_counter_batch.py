@@ -6,7 +6,7 @@ from collections.abc import Iterator, Mapping, Sequence
 from contextvars import ContextVar, Token
 from dataclasses import dataclass
 from types import MappingProxyType, TracebackType
-from typing import Final
+from typing import Final, TypeAlias
 
 from pydantic import TypeAdapter
 
@@ -22,6 +22,8 @@ from litellm.proxy.common_utils.user_api_key_cache import (
 
 _CounterValues: Final = TypeAdapter(dict[str, float | None])
 _NO_VALUES: Final[Mapping[str, float | None]] = MappingProxyType({})
+_NO_TICKS: Final[Mapping[str, int]] = MappingProxyType({})
+_PendingMGet: TypeAlias = tuple[BatchResult[Mapping[str, object]], "asyncio.Future[int]"]
 SPEND_COUNTERS_TARGET: Final = "spend_counters"
 _ticks: Final = itertools.count(1)
 
@@ -53,20 +55,20 @@ class SpendCounterBatch:
         "_loaded",
         "_lock",
         "_open",
+        "_read_at",
         "_redis_cache",
         "_request_batch",
-        "opened_at",
     )
 
     def __init__(self, redis_cache: RedisCache) -> None:
         self._redis_cache: Final = redis_cache
-        self.opened_at: Final = spend_counter_tick()
         self._lock: Final = asyncio.Lock()
         self._open = True
         self._keys: frozenset[str] = frozenset()
         self._fetched: frozenset[str] = frozenset()
         self._loaded: Mapping[str, float | None] = _NO_VALUES
-        self._inflight: Final[list[BatchResult[Mapping[str, object]]]] = []  # mutable-ok: drained by _load
+        self._read_at: Mapping[str, int] = _NO_TICKS
+        self._inflight: Final[list[_PendingMGet]] = []  # mutable-ok: drained by _load
         self._request_batch: Final[RedisBatch | None] = active_request_redis_batch(redis_cache)
         if self._request_batch is not None:
             self._request_batch.add_flush_hook(self._declare_pending)
@@ -96,6 +98,10 @@ class SpendCounterBatch:
             return None
         return loaded[counter_key], True
 
+    def read_tick(self, counter_key: str) -> int | None:
+        """The tick at which the MGET behind this batch's value for the counter returned, None without that value."""
+        return self._read_at.get(counter_key) if self._open and counter_key in self._loaded else None
+
     def record(self, counter_key: str, value: float) -> None:
         """A write returned the counter's new value; later reads in this scope see it instead of the MGET value."""
         if not self._open:
@@ -111,6 +117,7 @@ class SpendCounterBatch:
         self._keys = self._keys - key
         self._fetched = self._fetched - key
         self._loaded = MappingProxyType({k: v for k, v in self._loaded.items() if k != counter_key})
+        self._read_at = MappingProxyType({k: v for k, v in self._read_at.items() if k != counter_key})
 
     async def _load(self) -> Mapping[str, float | None]:
         async with self._lock:
@@ -121,9 +128,12 @@ class SpendCounterBatch:
             pending: Final = self._keys - self._fetched
             if pending:
                 self._fetched = self._fetched | pending
-                fetched: Final = await self._fetch(pending)
-                self._loaded = MappingProxyType({**fetched, **self._loaded})
+                self._merge(await self._fetch(pending), spend_counter_tick())
             return self._loaded
+
+    def _merge(self, fetched: Mapping[str, float | None], read_at: int) -> None:
+        self._loaded = MappingProxyType({**fetched, **self._loaded})
+        self._read_at = MappingProxyType({**dict.fromkeys(fetched, read_at), **self._read_at})
 
     def _declare_pending(self) -> None:
         """Flush hook: put every bound-but-unread counter on the request pipeline that is about to go out."""
@@ -133,18 +143,21 @@ class SpendCounterBatch:
         if pending:
             self._fetched = self._fetched | pending
             with service_target(SPEND_COUNTERS_TARGET):
-                self._inflight.append(self._request_batch.mget(sorted(pending)))
+                read: Final = self._request_batch.mget(sorted(pending))
+            returned_at: Final[asyncio.Future[int]] = asyncio.get_running_loop().create_future()
+            read.on_settled(lambda _: returned_at.set_result(spend_counter_tick()))
+            self._inflight.append((read, returned_at))
 
     async def _collect_inflight(self) -> None:
-        results: Final = tuple(self._inflight)
+        reads: Final = tuple(self._inflight)
         self._inflight.clear()
-        for result in results:
+        for read, returned_at in reads:
             try:
-                fetched: Mapping[str, float | None] = _CounterValues.validate_python(await result)
+                fetched: Mapping[str, float | None] = _CounterValues.validate_python(await read)
             except Exception as e:  # noqa: BLE001  # per-key reads take over and apply their own Redis fallback
                 verbose_proxy_logger.debug("spend counter batch read failed, falling back to per-key reads: %s", e)
                 continue
-            self._loaded = MappingProxyType({**fetched, **self._loaded})
+            self._merge(fetched, returned_at.result() if returned_at.done() else spend_counter_tick())
 
     async def _fetch(self, keys: frozenset[str]) -> Mapping[str, float | None]:
         try:
@@ -163,10 +176,11 @@ def active_spend_counter_batch() -> SpendCounterBatch | None:
     return _active_batch.get()
 
 
-def spend_counter_read_tick() -> int:
-    """A tick no later than this context's next spend counter read: the open batch's opening tick, else a new one."""
+def spend_counter_read_tick(counter_key: str) -> int:
+    """The tick this context last read the counter at: when the open batch's MGET for it returned, else now."""
     batch: Final = _active_batch.get()
-    return batch.opened_at if batch is not None and batch.is_open else spend_counter_tick()
+    read_at: Final = batch.read_tick(counter_key) if batch is not None else None
+    return read_at if read_at is not None else spend_counter_tick()
 
 
 class spend_counter_batch_scope:
