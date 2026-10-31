@@ -252,6 +252,9 @@ class FakeRouter:
     def registry(self) -> "FakeRegistry":
         return FakeRegistry()
 
+    def settings(self) -> "FakeSettings":
+        return FakeSettings()
+
     def get_model_group_info(self, model_group: str) -> None:
         return None
 
@@ -263,6 +266,17 @@ class FakeRegistry:
 
     def group(self, name: str, *, field: str = "info") -> None:
         return None
+
+    def resolve(self, name: str, *, kind: str = "group") -> None:
+        return None
+
+    def deployments(self, model_name: str | None = None, *, source: str = "group") -> list[object]:
+        return []
+
+
+class FakeSettings:
+    def is_set(self, name: str) -> bool:
+        return False
 
 
 class FakeStorageBackend:

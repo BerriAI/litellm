@@ -210,6 +210,12 @@ class PassthroughEndpointRouter:
         return provider
 
     def get_vertex_credentials_from_router_deployments(self, model: str | None) -> VertexPassThroughCredentials | None:
+        found: Final = self.get_vertex_deployment_from_router(model)
+        return found[1] if found is not None else None
+
+    def get_vertex_deployment_from_router(
+        self, model: str | None
+    ) -> tuple[DeploymentTypedDict, VertexPassThroughCredentials] | None:
         """
         Resolve vertex pass-through credentials from the live router deployments flagged ``use_in_pass_through``.
 
@@ -229,7 +235,7 @@ class PassthroughEndpointRouter:
         )
         matched: Final = next(
             (
-                credentials
+                (deployment, credentials)
                 for deployment, credentials in resolved
                 if model is not None and self._deployment_matches_model(deployment, model)
             ),
@@ -247,7 +253,7 @@ class PassthroughEndpointRouter:
         )
         if len(targets) != 1:
             return None
-        return resolved[0][1]
+        return resolved[0]
 
     def _resolve_vertex_deployment_credentials(
         self, litellm_params: LiteLLMParamsTypedDict
