@@ -1,6 +1,7 @@
 import base64
 import functools
 import json
+import logging
 from collections.abc import Mapping
 from types import MappingProxyType
 from typing import Any, Final, cast
@@ -2871,14 +2872,21 @@ def test_translate_completion_input_params_rejects_a_non_numeric_budget_without_
 
 @pytest.mark.parametrize("budget", ["2048", True])
 def test_translate_completion_input_params_drops_a_non_numeric_budget_under_drop_params(
-    budget: object, monkeypatch: pytest.MonkeyPatch
+    budget: object, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ):
     monkeypatch.setattr(litellm, "drop_params", False)
-    translated: Final = AnthropicAdapter().translate_completion_input_params(
-        _gemini_request_with_budget(budget, drop_params=True)
-    )
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        translated: Final = AnthropicAdapter().translate_completion_input_params(
+            _gemini_request_with_budget(budget, drop_params=True)
+        )
+    drop_warnings: Final = [record.getMessage() for record in caplog.records if "Dropping" in record.getMessage()]
     assert translated is not None
     assert not {"reasoning_effort", "thinking"} & translated.keys()
+    assert len(drop_warnings) == 1
+    assert all(
+        fragment in drop_warnings[0]
+        for fragment in (f"thinking.budget_tokens={budget!r}", "gemini-2.5-flash", "(drop_params=True)")
+    )
 
 
 def test_translate_openai_content_to_anthropic_reasoning_content_without_thinking_blocks():
@@ -4238,6 +4246,21 @@ def test_translate_anthropic_tools_to_openai_preserves_parameters_type():
     assert new_tools[0]["type"] == "function"
 
 
+def test_translate_anthropic_custom_field_does_not_change_openai_parameters():
+    input_schema: Final = {"type": "object", "properties": {"city": {"type": "string"}}}
+    tools: Final = [
+        {
+            "name": "get_weather",
+            "input_schema": input_schema,
+            "custom": {"eager_input_streaming": True},
+        }
+    ]
+
+    new_tools, _ = LiteLLMAnthropicMessagesAdapter().translate_anthropic_tools_to_openai(tools=tools)
+
+    assert new_tools[0]["function"]["parameters"] == input_schema
+
+
 def test_translate_anthropic_tools_to_openai_maps_strict_onto_function_not_parameters():
     """A tool-level `strict` lands on the OpenAI function, leaving the caller's `input_schema` untouched."""
     adapter = LiteLLMAnthropicMessagesAdapter()
@@ -5269,6 +5292,40 @@ def test_eager_input_streaming_tool_reaches_bedrock_converse_as_beta():
 
     assert data["additionalModelRequestFields"]["anthropic_beta"] == ["fine-grained-tool-streaming-2025-05-14"]
     assert data["toolConfig"]["tools"][0]["toolSpec"]["inputSchema"]["json"] == EAGER_INPUT_SCHEMA
+
+
+@pytest.mark.parametrize(
+    ("title", "expected_filename"),
+    [(None, "document.pdf"), ("Quarterly report", "Quarterly report")],
+)
+def test_user_pdf_document_reaches_openai_compatible_providers_as_file_part(
+    title: str | None, expected_filename: str
+) -> None:
+    document: Final = _base64_pdf_block() | ({"title": title} if title else {})
+    request_messages: Final = _run_chat_completions_pipeline(
+        [
+            AnthropicMessagesUserMessageParam(
+                role="user",
+                content=[document, {"type": "text", "text": "What is the codeword?"}],
+            )
+        ]
+    )
+
+    assert request_messages == [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "file",
+                    "file": {
+                        "filename": expected_filename,
+                        "file_data": f"data:application/pdf;base64,{TOOL_RESULT_PDF_B64}",
+                    },
+                },
+                {"type": "text", "text": "What is the codeword?"},
+            ],
+        }
+    ]
 
 
 _CHAT_BRIDGE_MODEL: Final = "azure/gpt-5.6"

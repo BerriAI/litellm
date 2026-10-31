@@ -8,7 +8,7 @@ import uuid
 from collections.abc import Awaitable, Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from functools import partial
-from itertools import accumulate, chain, groupby, islice
+from itertools import chain, groupby
 from types import MappingProxyType
 from typing import (
     TYPE_CHECKING,
@@ -45,7 +45,15 @@ from litellm.constants import (
     REDACTED_BY_LITELLM,
     REDACTED_TOOL_CALL_ARGUMENTS_PLACEHOLDER,
 )
-from litellm.integrations.anthropic_cache_control_hook import MAX_CACHE_CONTROL_BLOCKS, AnthropicCacheControlHook
+from litellm.integrations.anthropic_cache_control_hook import (
+    AnthropicCacheControlHook,
+    block_with_cache_control,
+    cache_control_count,
+    dropped_cache_control,
+    newest_marks_within_cache_control_limit,
+    whole_messages_within_cache_control_limit,
+    with_cache_control,
+)
 from litellm.litellm_core_utils.core_helpers import drops_unsupported_params, normalize_drop_params
 from litellm.litellm_core_utils.get_supported_openai_params import (
     get_supported_openai_params,
@@ -64,6 +72,7 @@ from litellm.llms.snowflake.chat.transformation import is_snowflake_claude_model
 from litellm.responses.bridge_check import chat_target_accepts_reasoning_summary
 from litellm.responses.litellm_completion_transformation.session_handler import (
     ResponsesSessionHandler,
+    StoredTurns,
 )
 from litellm.types.llms.anthropic import AnthropicToolSearchToolRegex
 from litellm.types.llms.base import CachedTokensDetails
@@ -124,6 +133,7 @@ from litellm.types.utils import (
     Usage,
 )
 
+from .client_tool_search import client_tool_search_chat_tool
 from .compaction_items import (
     carries_only_compaction,
     compaction_output_item,
@@ -151,16 +161,17 @@ from .custom_tools import (
 from .reasoning_items import decode_thinking_blocks, encode_thinking_blocks, mint_reasoning_item_id
 from .tool_search import (
     CompletionRoute,
+    ToolSearchRouting,
     answers_tool_search,
     anthropic_tool_search_chat_tool,
     build_tool_search_call,
     has_server_tool_search,
     holds_tool_search_use,
     is_anthropic_tool_search_chat_tool,
-    is_anthropic_tool_search_use,
     is_server_tool_search_tool,
     provider_builds_anthropic_request,
     tool_search_call_ids,
+    tool_search_routing,
     without_tool_search_calls,
     without_tool_search_uses,
 )
@@ -395,23 +406,25 @@ def tool_output_to_chat_content(
     if single_media is not None:
         return [single_media]
     if isinstance(output, list):
+        parts: Final = cast(Sequence[object], output)  # cast-ok: checked list shape, elements remain unvalidated
         normalized_blocks: Final[list[ToolMessageContentPart]] = []
         text_acc: Final[list[str]] = []
-        for part in output:
+        for part in parts:
             if not isinstance(part, dict):
                 continue
             part_type = part.get("type")
             if part_type in ("input_text", "output_text", "text"):
                 txt = part.get("text")
-                if isinstance(txt, str) and txt:
+                if isinstance(txt, str):
                     text_acc.append(txt)
-                    normalized_blocks.append({"type": "text", "text": txt})
+                    if txt:
+                        normalized_blocks.append({"type": "text", "text": txt})
             elif (media := decode_responses_media(part)) is not None:
                 normalized_blocks.append(media)
 
         if any(b.get("type") != "text" for b in normalized_blocks):
             return normalized_blocks
-        if text_acc:
+        if any(text_acc) or len(text_acc) == len(parts):
             return "".join(text_acc)
         try:
             return json.dumps(output)
@@ -598,10 +611,6 @@ def _validated_cache_control(value: object) -> ChatCompletionCachedContent | Non
         return None
 
 
-def _dropped_cache_control(_: object) -> None:
-    return None
-
-
 def _without_cache_control_key(item: object) -> object:
     if not isinstance(item, dict):
         return item
@@ -689,83 +698,6 @@ def _content_blocks_carrying(content: object, cache_control: ChatCompletionCache
     return _with_cache_control_on_last_block(_OBJECT_LIST_ADAPTER.validate_python(content), cache_control)
 
 
-_MARK_CARRYING_MESSAGE_FIELDS: Final = ("content", "tool_calls")
-
-
-def _mark_carrying_blocks(fields: Mapping[str, object]) -> Sequence[object]:
-    lists: Final = tuple(fields.get(key) for key in _MARK_CARRYING_MESSAGE_FIELDS)
-    return tuple(
-        chain.from_iterable(_OBJECT_LIST_ADAPTER.validate_python(value) for value in lists if isinstance(value, list))
-    )
-
-
-def _block_carries_cache_control(block: object) -> bool:
-    return isinstance(block, dict) and _STR_KEY_DICT_ADAPTER.validate_python(block).get("cache_control") is not None
-
-
-def _cache_control_count(message: object) -> int:
-    if not isinstance(message, dict):
-        return 0
-    fields: Final = _STR_KEY_DICT_ADAPTER.validate_python(message)
-    block_marks: Final = sum(1 for block in _mark_carrying_blocks(fields) if _block_carries_cache_control(block))
-    return int(fields.get("cache_control") is not None) + block_marks
-
-
-_CacheControlRewrite: TypeAlias = Callable[[object], ChatCompletionCachedContent | None]
-
-
-def _fields_with_cache_control(fields: Mapping[str, object], rewrite: _CacheControlRewrite) -> Mapping[str, object]:
-    others: Final = {key: value for key, value in fields.items() if key != "cache_control"}
-    if "cache_control" not in fields:
-        return others
-    cache_control: Final = rewrite(fields["cache_control"])
-    return others if cache_control is None else {**others, "cache_control": cache_control}
-
-
-def _block_with_cache_control(block: object, rewrite: _CacheControlRewrite) -> object:
-    if not isinstance(block, dict):
-        return block
-    return _fields_with_cache_control(_STR_KEY_DICT_ADAPTER.validate_python(block), rewrite)
-
-
-def _with_cache_control(message: _MessageT, rewrite: _CacheControlRewrite) -> _MessageT:
-    if not isinstance(message, dict):
-        return message
-    fields: Final = _STR_KEY_DICT_ADAPTER.validate_python(message)
-    blocks_rewritten: Final = {
-        key: (
-            [_block_with_cache_control(block, rewrite) for block in _OBJECT_LIST_ADAPTER.validate_python(value)]
-            if key in _MARK_CARRYING_MESSAGE_FIELDS and isinstance(value, list)
-            else value
-        )
-        for key, value in fields.items()
-    }
-    return cast(  # cast-ok: the same message shape with each cache marker rewritten or dropped
-        _MessageT, _fields_with_cache_control(blocks_rewritten, rewrite)
-    )
-
-
-def _kept_within_budget(state: tuple[int, bool], marks: int) -> tuple[int, bool]:
-    remaining, _ = state
-    if marks > remaining:
-        return remaining, False
-    return remaining - marks, True
-
-
-def _messages_within_cache_control_limit(messages: Sequence[_MessageT], reserved_marks: int) -> Sequence[_MessageT]:
-    budget: Final = max(MAX_CACHE_CONTROL_BLOCKS - reserved_marks, 0)
-    newest_first: Final = tuple(reversed(messages))
-    budget_after_each: Final = accumulate(
-        (_cache_control_count(message) for message in newest_first), _kept_within_budget, initial=(budget, True)
-    )
-    kept_flags: Final = tuple(kept for _, kept in islice(budget_after_each, 1, None))
-    kept_newest_first: Final = tuple(
-        message if kept else _with_cache_control(message, _dropped_cache_control)
-        for message, kept in zip(newest_first, kept_flags)
-    )
-    return tuple(reversed(kept_newest_first))
-
-
 _SYSTEM_MESSAGE_FIELDS: Final = frozenset(("content", "cache_control"))
 
 
@@ -794,7 +726,7 @@ def _without_tool_block_marks(message: _MessageT) -> _MessageT:
     if fields is None:
         return message
     if fields.get("role") == "tool":
-        return _with_cache_control(message, _dropped_cache_control)
+        return with_cache_control(message, dropped_cache_control)
     tool_calls: Final = fields.get("tool_calls")
     if not isinstance(tool_calls, list):
         return message
@@ -803,7 +735,7 @@ def _without_tool_block_marks(message: _MessageT) -> _MessageT:
         {
             **fields,
             "tool_calls": [
-                _block_with_cache_control(tool_call, _dropped_cache_control)
+                block_with_cache_control(tool_call, dropped_cache_control)
                 for tool_call in _OBJECT_LIST_ADAPTER.validate_python(tool_calls)
             ],
         },
@@ -817,7 +749,7 @@ class _ItemMarkRules:
     external_marks: int
 
     def sanitized(self, message: _MessageT) -> _MessageT:
-        valid: Final = _with_cache_control(message, _validated_cache_control)
+        valid: Final = with_cache_control(message, _validated_cache_control)
         return _without_tool_block_marks(valid) if self.refuses_tool_block_marks else valid
 
     def checked(self, message: _MessageT) -> _MessageT:
@@ -840,15 +772,15 @@ def _request_messages_for_cache_points(messages: Sequence[_MessageT], rules: _It
     as_system: Final = tuple(_developer_message_as_system_message(message) for message in messages)
     if not rules.drop_params:
         return as_system
-    return _messages_within_cache_control_limit(tuple(map(rules.checked, as_system)), rules.external_marks)
+    return newest_marks_within_cache_control_limit(tuple(map(rules.checked, as_system)), rules.external_marks)
 
 
 def _replayed_messages_for_cache_points(
     replayed_messages: Sequence[_MessageT], current_messages: Sequence[object], rules: _ItemMarkRules
 ) -> Sequence[_MessageT]:
     as_system: Final = tuple(_developer_message_as_system_message(message) for message in replayed_messages)
-    current_marks: Final = sum(_cache_control_count(message) for message in current_messages)
-    return _messages_within_cache_control_limit(
+    current_marks: Final = sum(cache_control_count(message) for message in current_messages)
+    return whole_messages_within_cache_control_limit(
         tuple(map(rules.sanitized, as_system)), current_marks + rules.external_marks
     )
 
@@ -1342,6 +1274,7 @@ class LiteLLMCompletionResponsesConfig:
         request_kwargs: Mapping[str, object] = MappingProxyType({}),
         previous_response_client_ids: tuple[str, ...] = (),
         input_replaces_history: bool = False,
+        stored_turns: StoredTurns | None = None,
     ) -> dict[str, object]:
         """
         Async hook to get the chain of previous input and output pairs and return a list of Chat Completion messages
@@ -1357,6 +1290,7 @@ class LiteLLMCompletionResponsesConfig:
             ResponsesSessionHandler.get_chat_completion_message_history_for_previous_response_id,
             item_cache_control=keeps_item_marks,
             client_response_ids=previous_response_client_ids,
+            stored_turns=stored_turns,
         )
         chat_completion_session: Final = (
             await lookup(previous_response_id)
@@ -2818,9 +2752,11 @@ class LiteLLMCompletionResponsesConfig:
         if tool_type == "custom":
             converted: Final = convert_custom_tool_to_function_tool(tool)
             return ResponsesToolChatForm(chat_tools=() if converted is None else (converted,), web_search_options=None)
-        if tool_type == "tool_search" and validated_tool_search_execution(tool.get("execution")) != "client":
+        if tool_type == "tool_search" and validated_tool_search_execution(tool.get("execution")) == "client":
+            return ResponsesToolChatForm(chat_tools=(client_tool_search_chat_tool(tool),), web_search_options=None)
+        if tool_type == "tool_search":
             return ResponsesToolChatForm(chat_tools=(anthropic_tool_search_chat_tool(),), web_search_options=None)
-        if tool_type in ("computer_use", "image_generation", "local_shell", "shell", "tool_search"):
+        if tool_type in ("computer_use", "image_generation", "local_shell", "shell"):
             verbose_logger.warning(
                 "Dropping Responses API tool of type '%s': it has no Chat Completions "
                 "equivalent and the target provider would reject the request.",
@@ -2960,7 +2896,7 @@ class LiteLLMCompletionResponsesConfig:
         request_tools: Final = responses_api_request.get("tools") if responses_api_request is not None else None
         custom_tool_names: Final = extract_custom_tool_names(request_tools)
         namespace_tool_names: Final = LiteLLMCompletionResponsesConfig.namespace_tool_name_map(request_tools)
-        tool_search_requested: Final = has_server_tool_search(request_tools)
+        tool_search: Final = tool_search_routing(request_tools)
 
         web_search_calls: Final = LiteLLMCompletionResponsesConfig._web_search_calls_by_call_id(
             chat_completion_response
@@ -2977,7 +2913,7 @@ class LiteLLMCompletionResponsesConfig:
 
                 if (
                     server_tool_call := LiteLLMCompletionResponsesConfig._server_tool_call_item(
-                        tool_id, tool_name, tool_arguments, web_search_calls, tool_search_requested
+                        tool_id, tool_name, tool_arguments, web_search_calls, tool_search
                     )
                 ) is not None:
                     responses_tools.append(server_tool_call)
@@ -3042,14 +2978,15 @@ class LiteLLMCompletionResponsesConfig:
         tool_name: str,
         tool_arguments: str,
         web_search_calls: Mapping[str, ResponseFunctionWebSearch],
-        tool_search_requested: bool,
+        tool_search: ToolSearchRouting,
     ) -> ResponseFunctionWebSearch | OutputToolSearchCall | None:
         web_search_call: Final = web_search_calls.get(tool_id)
         if web_search_call is not None:
             return web_search_call
-        if tool_search_requested and is_anthropic_tool_search_use(tool_id, tool_name):
-            return build_tool_search_call(tool_id, tool_arguments, "completed")
-        return None
+        execution: Final = tool_search.execution_of(tool_id, tool_name)
+        if execution is None:
+            return None
+        return build_tool_search_call(tool_id, tool_arguments, "completed", execution)
 
     @staticmethod
     def _web_search_calls_by_call_id(
@@ -3555,7 +3492,7 @@ class LiteLLMCompletionResponsesConfig:
                     choice=choice,
                 )
                 message_output_items.extend(image_generation_items)
-            elif choice.message.content is not None:
+            elif choice.message.content is not None or getattr(choice.message, "annotations", None):
                 message_output_items.append(
                     GenericResponseOutputItem(
                         type="message",
@@ -3629,13 +3566,13 @@ class LiteLLMCompletionResponsesConfig:
 
         return OutputText(
             type="output_text",
-            text=message.content,
+            text=message.content or "",
             annotations=transformed_annotations,
         )
 
     @staticmethod
     def transform_chat_completion_annotations_to_response_output_annotations(
-        annotations: list[ChatCompletionAnnotation] | None,
+        annotations: Sequence[ChatCompletionAnnotation] | None,
     ) -> list[GenericResponseOutputItemContentAnnotation]:
         response_output_annotations: Final[list[GenericResponseOutputItemContentAnnotation]] = []
 

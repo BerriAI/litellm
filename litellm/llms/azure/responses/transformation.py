@@ -14,6 +14,7 @@ from litellm.constants import AZURE_DEFAULT_RESPONSES_API_VERSION
 from litellm.litellm_core_utils.url_utils import encode_url_path_segment
 from litellm.llms.azure.chat.gpt_reasoning_transformation import AzureOpenAIGPT5Config
 from litellm.llms.azure.common_utils import BaseAzureLLM
+from litellm.llms.base_llm.responses.transformation import SUMMARY_ONLY_REASONING_FIELD_VALUES, ReasoningFieldValues
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.types.llms.openai import *
 from litellm.types.responses.main import *
@@ -92,6 +93,12 @@ class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
     def _effort_resolves_to_none(model: str, effort: str | None) -> bool:
         return AzureOpenAIGPT5Config.effort_resolves_to_none(model, effort)
 
+    def deployment_names_wrap_openai_models(self) -> bool:
+        return True
+
+    def unresolved_model_reasoning_field_values(self, model: str) -> ReasoningFieldValues | None:
+        return SUMMARY_ONLY_REASONING_FIELD_VALUES if self._is_gpt_5_model(model) else None
+
     def get_supported_openai_params(self, model: str) -> list:
         """
         Azure Responses API does not support context_management (compaction).
@@ -142,7 +149,9 @@ class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
                 return filtered_item
         return item
 
-    def _validate_input_param(self, input: str | ResponseInputParam) -> str | ResponseInputParam:
+    def _validate_input_param(
+        self, input: str | ResponseInputParam, *, drops_set_created_by: bool = False
+    ) -> str | ResponseInputParam:
         """
         Override parent method to also filter out 'status' field from message items.
         Azure OpenAI API does not accept 'status' field in input messages.
@@ -150,7 +159,7 @@ class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
         from typing import cast
 
         # First call parent's validation
-        validated_input: Final = super()._validate_input_param(input)
+        validated_input: Final = super()._validate_input_param(input, drops_set_created_by=drops_set_created_by)
 
         # Then filter out status from message items
         if isinstance(validated_input, list):
@@ -333,7 +342,7 @@ class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
         api_base: str,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> tuple[str, dict]:
+    ) -> tuple[str, dict[str, str]]:
         """
         Transform the get response API request into a URL and data
 
@@ -341,7 +350,7 @@ class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
         - GET /v1/responses/{response_id}
         """
         get_url: Final = self._construct_url_for_response_id_in_path(api_base=api_base, response_id=response_id)
-        data: Final[dict] = {}
+        data: Final[dict[str, str]] = {}
         verbose_logger.debug("get response url=%s", get_url)
         return get_url, data
 
