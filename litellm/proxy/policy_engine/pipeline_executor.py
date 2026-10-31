@@ -27,6 +27,7 @@ from litellm.litellm_core_utils.core_helpers import (
     get_or_create_metadata_bucket,
     independent_snapshot,
 )
+from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import is_str_keyed_dict
 from litellm.llms.base_llm.guardrail_translation.utils import UnappliableRequestRewrite
 from litellm.proxy.common_utils.callback_utils import add_guardrail_to_applied_guardrails_header
 from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail import (
@@ -730,7 +731,9 @@ def _allow_result(
     request_data: dict,  # mutable-ok: same request-payload shape as execute_steps' data
 ) -> PipelineExecutionResult:
     """Build the terminal-allow result, propagating pipeline modifications without the per-step guardrail override."""
-    restored: Final = _restore_request_guardrails(working_data, request_data)
+    restored: Final = _restore_seeded_litellm_metadata_guardrails(
+        _restore_request_guardrails(working_data, request_data), request_data
+    )
     return PipelineExecutionResult(
         terminal_action="allow",
         step_results=list(step_results),
@@ -739,9 +742,9 @@ def _allow_result(
 
 
 def _restore_request_guardrails(
-    working_data: dict,  # mutable-ok: same request-payload shape as execute_steps' data
-    request_data: dict,  # mutable-ok: same request-payload shape as execute_steps' data
-) -> dict:  # mutable-ok: merged back into the request dict, which downstream code mutates
+    working_data: dict[str, object],  # mutable-ok: same request-payload shape as execute_steps' data
+    request_data: Mapping[str, object],
+) -> dict[str, object]:  # mutable-ok: merged back into the request dict, which downstream code mutates
     """
     Restore the request's own metadata["guardrails"] activation list.
 
@@ -750,17 +753,31 @@ def _restore_request_guardrails(
     independently activated guardrail from later lifecycle stages (post_call, etc.).
     """
     working_metadata: Final = working_data.get("metadata")
-    if not isinstance(working_metadata, dict):
+    if not is_str_keyed_dict(working_metadata):
         return working_data
     request_metadata: Final = request_data.get("metadata")
-    original_guardrails: Final = request_metadata.get("guardrails") if isinstance(request_metadata, dict) else None
+    original_guardrails: Final = request_metadata.get("guardrails") if is_str_keyed_dict(request_metadata) else None
     stripped: Final = {k: v for k, v in working_metadata.items() if k != "guardrails"}
     if original_guardrails is not None:
         restored: Final = {**stripped, "guardrails": original_guardrails}
         return {**working_data, "metadata": restored}
-    if not stripped and not isinstance(request_metadata, dict):
+    if not stripped and not is_str_keyed_dict(request_metadata):
         return {k: v for k, v in working_data.items() if k != "metadata"}
     return {**working_data, "metadata": stripped}
+
+
+def _restore_seeded_litellm_metadata_guardrails(
+    working_data: dict[str, object],  # mutable-ok: same request-payload shape as execute_steps' data
+    request_data: Mapping[str, object],
+) -> dict[str, object]:  # mutable-ok: merged back into the request dict, which downstream code mutates
+    seeded: Final = working_data.get("litellm_metadata")
+    if "litellm_metadata" in request_data or not is_str_keyed_dict(seeded) or "guardrails" not in seeded:
+        return working_data
+    request_metadata: Final = request_data.get("metadata")
+    original_guardrails: Final = request_metadata.get("guardrails") if is_str_keyed_dict(request_metadata) else None
+    stripped: Final = {k: v for k, v in seeded.items() if k != "guardrails"}
+    restored: Final = stripped if original_guardrails is None else {**stripped, "guardrails": original_guardrails}
+    return {**working_data, "litellm_metadata": restored}
 
 
 _GUARDRAIL_INFORMATION_KEY: Final = "standard_logging_guardrail_information"

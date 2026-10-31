@@ -1199,6 +1199,59 @@ async def test_pipeline_step_scans_extraction_state_through_apply_guardrail_when
     assert guardrail.scanned == ("invoice from vendor",)
 
 
+
+class _RequestAndResponseNativeGuardrail(CustomGuardrail):
+    use_native_lifecycle_hooks = True
+
+    def __init__(self) -> None:
+        super().__init__(
+            guardrail_name="request-and-response",
+            event_hook=[GuardrailEventHooks.pre_call, GuardrailEventHooks.post_call],
+            default_on=False,
+        )
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: Mapping[str, object],
+        input_type: Literal["request", "response"],
+        logging_obj: object = None,
+    ) -> GenericGuardrailAPIInputs:
+        return inputs
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("requested", "runs_on_the_response"),
+    [((), False), (("request-and-response",), True)],
+    ids=["not-requested", "requested"],
+)
+async def test_request_pipeline_step_on_extraction_leaves_the_response_stage_to_the_request_s_own_guardrails(
+    monkeypatch: pytest.MonkeyPatch, requested: tuple[str, ...], runs_on_the_response: bool
+) -> None:
+    guardrail: Final = _RequestAndResponseNativeGuardrail()
+    monkeypatch.setattr(litellm, "callbacks", [guardrail])
+    data: Final[dict[str, object]] = {
+        "model": "m",
+        "state": "invoice from vendor",
+        "fields": {"total": {"type": "number"}},
+        "metadata": {"guardrails": list(requested)} if requested else {},
+    }
+
+    result: Final = await PipelineExecutor.execute_steps(
+        steps=[PipelineStep(guardrail="request-and-response", on_fail="block", on_pass="allow")],
+        mode="pre_call",
+        data=data,
+        user_api_key_dict=UserAPIKeyAuth(),
+        call_type="aextraction",
+        policy_name="request-only",
+    )
+
+    assert result.terminal_action == "allow"
+    after_the_pipeline: Final = {**data, **(result.modified_data or {})}
+    assert guardrail.should_run_guardrail(after_the_pipeline, GuardrailEventHooks.post_call) is runs_on_the_response
+
+
 class _TextReturningGuardrail(CustomGuardrail):
     def __init__(self, returned_texts):
         super().__init__(guardrail_name="masker", event_hook="post_call", default_on=True)

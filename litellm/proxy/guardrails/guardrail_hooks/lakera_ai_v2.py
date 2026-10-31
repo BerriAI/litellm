@@ -23,6 +23,7 @@ from litellm.llms.base_llm.guardrail_translation.utils import (
     merge_guardrailed_scoped_messages,
 )
 from litellm.llms.custom_httpx.http_handler import (
+    AsyncHTTPHandler,
     get_async_httpx_client,
     httpxSpecialProvider,
 )
@@ -260,6 +261,7 @@ class LakeraAIGuardrail(CustomGuardrail):
         skip_system_message_in_guardrail: bool | None = None,
         skip_tool_message_in_guardrail: bool | None = None,
         advisory_system_message: str | None = None,
+        async_handler: AsyncHTTPHandler | None = None,
         **kwargs,
     ):
         """
@@ -285,8 +287,11 @@ class LakeraAIGuardrail(CustomGuardrail):
             advisory_system_message: Optional[str] = None, custom advisory message template
                 (must contain a {reason} placeholder) used when on_flagged="inject_system_message".
                 Defaults to a generic message when unset.
+            async_handler: Optional[AsyncHTTPHandler] = None, the client that calls Lakera.
         """
-        self.async_handler = get_async_httpx_client(llm_provider=httpxSpecialProvider.GuardrailCallback)
+        self.async_handler = async_handler or get_async_httpx_client(
+            llm_provider=httpxSpecialProvider.GuardrailCallback
+        )
         self.lakera_api_key = api_key or os.environ.get("LAKERA_API_KEY") or ""
         self.project_id = project_id
         self.api_base = api_base or get_secret_str("LAKERA_API_BASE") or "https://api.lakera.ai"

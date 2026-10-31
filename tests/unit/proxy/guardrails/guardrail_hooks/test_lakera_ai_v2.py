@@ -10,6 +10,7 @@ from collections.abc import Mapping
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 from fastapi import HTTPException
 
@@ -18,6 +19,7 @@ from litellm.caching.caching import DualCache
 from litellm.llms.base_llm.guardrail_translation.utils import (
     filter_messages_by_skip_flags,
 )
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_hooks.lakera_ai_v2 import (
     LakeraAIGuardrail,
@@ -319,43 +321,54 @@ class TestAsyncPostCallSuccessHookSkipFlags:
         assert "a@b.com" not in result_dict["choices"][0]["message"]["content"]
 
 
+def _lakera_v2(transport: httpx.MockTransport) -> LakeraAIGuardrail:
+    return LakeraAIGuardrail(
+        api_key="test_key", api_base="https://lakera.test", async_handler=AsyncHTTPHandler(transport=transport)
+    )
+
+
+def _refuse_any_request(request: httpx.Request) -> httpx.Response:
+    raise AssertionError(f"unexpected Lakera request with body {request.content!r}")
+
+
 @pytest.mark.asyncio
 async def test_post_call_skips_an_extraction_response_with_no_text() -> None:
-    guardrail: Final = LakeraAIGuardrail(api_key="test_key")
+    guardrail: Final = _lakera_v2(httpx.MockTransport(_refuse_any_request))
     data: Final = {"model": "clairic", "metadata": {}}
     llm_response: Final = MagicMock()
     llm_response.model_dump.return_value = {"answer": "Berlin"}
 
-    with patch.object(guardrail, "call_v2_guard", new_callable=AsyncMock) as mock_call:
-        result: Final = await guardrail.async_post_call_success_hook(
-            data=data,
-            user_api_key_dict=UserAPIKeyAuth(api_key="test_key", request_route="/v1/extraction"),
-            response=llm_response,
-        )
+    result: Final = await guardrail.async_post_call_success_hook(
+        data=data,
+        user_api_key_dict=UserAPIKeyAuth(api_key="test_key", request_route="/v1/extraction"),
+        response=llm_response,
+    )
 
-    mock_call.assert_not_called()
     assert result is llm_response
     assert "applied_guardrails" not in data["metadata"]
 
 
-
 @pytest.mark.asyncio
 async def test_post_call_on_a_responses_request_without_text_still_reaches_lakera() -> None:
-    guardrail: Final = LakeraAIGuardrail(api_key="test_key")
+    scans: Final[list[httpx.Request]] = []
+
+    def unavailable(request: httpx.Request) -> httpx.Response:
+        scans.append(request)
+        return httpx.Response(503, text="lakera unavailable")
+
+    guardrail: Final = _lakera_v2(httpx.MockTransport(unavailable))
     llm_response: Final = MagicMock()
     llm_response.model_dump.return_value = {"output": []}
 
-    with patch.object(
-        guardrail, "call_v2_guard", new_callable=AsyncMock, side_effect=HTTPException(500, "lakera unavailable")
-    ) as mock_call:
-        with pytest.raises(HTTPException, match="lakera unavailable"):
-            await guardrail.async_post_call_success_hook(
-                data={"model": "clairic", "input": "draw a refund form", "metadata": {}},
-                user_api_key_dict=UserAPIKeyAuth(api_key="test_key", request_route="/v1/responses"),
-                response=llm_response,
-            )
+    with pytest.raises(Exception, match="503 Service Unavailable"):
+        await guardrail.async_post_call_success_hook(
+            data={"model": "clairic", "input": "draw a refund form", "metadata": {}},
+            user_api_key_dict=UserAPIKeyAuth(api_key="test_key", request_route="/v1/responses"),
+            response=llm_response,
+        )
 
-    mock_call.assert_called_once()
+    assert len(scans) == 1
+
 
 PII_ONLY_LAKERA_RESPONSE = {
     "flagged": True,

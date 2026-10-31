@@ -11,6 +11,7 @@ import sys
 sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 import json
 import sys
+from collections.abc import Mapping
 from typing import Final, Literal
 
 import httpx
@@ -85,7 +86,7 @@ class lakeraAI_Moderation(CustomGuardrail):
             return
 
         flagged: Final = _results[0].get("flagged", False)
-        category_scores: Final[dict | None] = _results[0].get("category_scores", None)
+        category_scores: Final[Mapping[str, float] | None] = _results[0].get("category_scores", None)
 
         if self.category_thresholds is not None:
             if category_scores is not None:
@@ -292,9 +293,9 @@ class lakeraAI_Moderation(CustomGuardrail):
                 }
             }
             """
-            self._check_response_flagged(response=response.json())
             if call_type in APPLY_GUARDRAIL_ONLY_CALL_TYPES:
                 add_guardrail_to_applied_guardrails_header(request_data=data, guardrail_name=self.guardrail_name)
+            self._check_response_flagged(response=response.json())
 
     @log_guardrail_information
     async def async_pre_call_hook(
