@@ -352,14 +352,13 @@ async def test_real_agent_capture_prices_retained_per_query_fee() -> None:
 async def test_real_capture_prices_upstream_cost_without_a_model_map(
     monkeypatch: pytest.MonkeyPatch, reported_cost: float, stamped: bool, adjusted: bool
 ) -> None:
+    import litellm
+    from litellm.litellm_core_utils.core_helpers import stamp_litellm_bill_on_usage
     from litellm.proxy.spend_tracking.usage_capture import capture_logging_usage
     from litellm.proxy.spend_tracking.usage_meter import DurableUsageMeter, UsageCaptureSettings
     from litellm.types.utils import ModelResponse, Usage
     from tests.unit.proxy.spend_tracking.test_usage_capture import StoredUsage, _logger
     from tests.unit.proxy.spend_tracking.test_usage_meter import _manual_flush
-
-    import litellm
-    from litellm.litellm_core_utils.core_helpers import stamp_litellm_bill_on_usage
 
     monkeypatch.setattr(litellm, "cost_discount_config", {"openai": 0.05} if adjusted else {})
     monkeypatch.setattr(
@@ -914,7 +913,10 @@ async def test_stream_replay_applies_adjustments_once_to_legacy_stamped_usage(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("amount", [0.0, 0.123])
-async def test_capture_retains_provider_header_price_without_catalog(amount: float) -> None:
+@pytest.mark.parametrize("mapped", [False, True])
+async def test_capture_retains_provider_header_price_without_catalog(
+    amount: float, mapped: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
     from litellm.proxy.spend_tracking.usage_capture import capture_logging_usage
     from litellm.proxy.spend_tracking.usage_meter import DurableUsageMeter, UsageCaptureSettings
     from litellm.types.utils import ModelResponse, Usage
@@ -928,14 +930,37 @@ async def test_capture_retains_provider_header_price_without_catalog(amount: flo
     from litellm.litellm_core_utils.core_helpers import set_response_cost_in_hidden_params
 
     set_response_cost_in_hidden_params(response, amount)
+    import litellm
+
+    logger: Final = _logger()
+    if mapped:
+        monkeypatch.setitem(
+            litellm.model_cost,
+            "mapped-cost-model",
+            {
+                "mode": "chat",
+                "litellm_provider": "openai",
+                "input_cost_per_token": 0.01,
+                "output_cost_per_token": 0.02,
+            },
+        )
+        logger.model_call_details["litellm_params"]["metadata"] = {"model_info": {"base_model": "mapped-cost-model"}}
+    expected: Final = logger.response_cost_calculator(response, ignore_stamped_cost=True)
+    expected_breakdown: Final = logger.cost_breakdown
     database: Final = StoredUsage()
     meter: Final = DurableUsageMeter(database.insert, UsageCaptureSettings(), wait_for_batch=_manual_flush)
     try:
-        capture_logging_usage(meter, _logger(), response, _AT, _AT)
+        capture_logging_usage(meter, logger, response, _AT, _AT)
         await meter.close()
+        if mapped:
+            monkeypatch.setitem(litellm.model_cost, "mapped-cost-model", {"input_cost_per_token": 99.0})
         result: Final = price_usage(database.rows[-1].envelope)
         assert isinstance(result, PricingSnapshot)
         assert result.total_cost == Decimal(str(amount))
+        assert float(result.total_cost) == expected
+        assert expected_breakdown is not None
+        assert float(result.input_cost or 0) == pytest.approx(expected_breakdown["input_cost"])
+        assert float(result.output_cost or 0) == pytest.approx(expected_breakdown["output_cost"])
         assert (result.input_cost or Decimal(0)) + (result.output_cost or Decimal(0)) == result.total_cost
         assert result.pricing_source == "upstream_header"
     finally:
@@ -961,7 +986,10 @@ def test_terminal_response_replay_prices_usage_without_changing_event_identity(c
 
 
 @pytest.mark.asyncio
-async def test_batch_terminal_capture_refreshes_row_prices_after_creation(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("freeze_pricing", [False, True])
+async def test_batch_terminal_capture_refreshes_row_prices_after_creation(
+    monkeypatch: pytest.MonkeyPatch, freeze_pricing: bool
+) -> None:
     import litellm
     from litellm.proxy.spend_tracking.usage_capture import capture_batch_callback, capture_logging_usage
     from litellm.proxy.spend_tracking.usage_meter import DurableUsageMeter, UsageCaptureSettings
@@ -998,8 +1026,11 @@ async def test_batch_terminal_capture_refreshes_row_prices_after_creation(monkey
     }
     try:
         capture_logging_usage(meter, logger, {"id": "batch", "status": "in_progress"}, _AT, _AT, freeze_only=True)
-        capture_logging_usage(meter, logger, response, _AT, _AT)
-        await capture_batch_callback(meter, database.load, logger.model_call_details, response, _AT, _AT)
+        if freeze_pricing:
+            capture_logging_usage(meter, logger, response, _AT, _AT)
+        await capture_batch_callback(
+            meter, database.load, {**logger.model_call_details, "litellm_logging_obj": logger}, response, _AT, _AT
+        )
         first_rows: Final = database.rows
         monkeypatch.setitem(litellm.model_cost, "capture-model", {**rates, "input_cost_per_token_batches": 99.0})
         capture_logging_usage(meter, logger, response, _AT, _AT)
@@ -1085,5 +1116,39 @@ async def test_failed_fixed_call_without_usage_does_not_invent_a_free_charge(cal
         assert price_usage(outbound.envelope) == Unpriced(
             usage_event_id=outbound.event.event_id, reason="usage_unknown"
         )
+    finally:
+        await meter.stop(1)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize("billable", [False, True])
+async def test_capture_preserves_completed_guardrail_fee_without_header_finalization(
+    stream: bool, billable: bool
+) -> None:
+    from litellm.proxy.spend_tracking.usage_capture import capture_logging_usage
+    from litellm.proxy.spend_tracking.usage_meter import DurableUsageMeter, UsageCaptureSettings
+    from litellm.types.utils import ModelResponse, Usage
+    from tests.unit.proxy.spend_tracking.test_usage_capture import StoredUsage
+    from tests.unit.proxy.spend_tracking.test_usage_meter import _manual_flush
+
+    logger: Final = _capture_logger(stream=stream)
+    logger.model_call_details["litellm_params"]["metadata"] = {
+        "standard_logging_guardrail_information": [
+            {"guardrail_name": "late-fee", "guardrail_cost": 0.03, "guardrail_cost_in_spend": billable}
+        ]
+    }
+    response: Final = ModelResponse(
+        id="guarded", model="capture-model", usage=Usage(prompt_tokens=10, completion_tokens=4, total_tokens=14)
+    )
+    database: Final = StoredUsage()
+    meter: Final = DurableUsageMeter(database.insert, UsageCaptureSettings(), wait_for_batch=_manual_flush)
+    try:
+        capture_logging_usage(meter, logger, response, _AT, _AT)
+        await meter.close()
+        result: Final = price_usage(database.rows[-1].envelope)
+        assert isinstance(result, PricingSnapshot)
+        assert result.guardrail_cost == Decimal("0.03" if billable else "0")
+        assert float(result.total_cost) == pytest.approx(0.18 + (0.03 if billable else 0))
     finally:
         await meter.stop(1)

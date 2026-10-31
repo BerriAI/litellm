@@ -129,10 +129,17 @@ def price_usage(envelope: str) -> PricingSnapshot | Unpriced:
         for name, snapshot in _fields(pricing.get("realtime_models")).items()
         if _fields(snapshot).get("model_map_value") is not None
     }
+    base_pricing: Final = _fields(pricing.get("base_model_information"))
+    base_key: Final = base_pricing.get("model_map_key")
     context: Final = RetainedPricing(
         _json(
             {
                 **secondary,
+                **(
+                    {base_key: _fields(base_pricing.get("model_map_value"))}
+                    if isinstance(base_key, str) and base_pricing.get("model_map_value") is not None
+                    else {}
+                ),
                 **{
                     alias: info
                     for alias in dict.fromkeys((model, key, f"{provider}/{model}", model.removeprefix(f"{provider}/")))
@@ -267,7 +274,9 @@ def price_usage(envelope: str) -> PricingSnapshot | Unpriced:
         return Unpriced(usage_event_id=event.event_id, reason="calculation_failed")
     retained_final: Final = captured.finalized_cost or {}
     breakdown: Final = _fields(retained_final.get("cost_breakdown"))
-    guardrail: Final = TypeAdapter(float).validate_python(breakdown.get("guardrail_cost", 0.0))
+    guardrail: Final = TypeAdapter(float).validate_python(
+        breakdown.get("guardrail_cost", pricing.get("guardrail_cost", 0.0))
+    )
     allowance: Final = TypeAdapter(float).validate_python(retained_final.get("allowance_discount", 0.0))
     if allowance and captured.allocation is None:
         return Unpriced(usage_event_id=event.event_id, reason="allowance_allocation_missing")

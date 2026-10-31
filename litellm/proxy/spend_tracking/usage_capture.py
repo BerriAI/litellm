@@ -281,6 +281,7 @@ def capture_context(payload: SpendLogsPayload, kwargs: Mapping[str, object], res
         mask_api_base_credentials,
     )
     from litellm.litellm_core_utils.llm_cost_calc.finalization import FinalizedCost
+    from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import guardrail_information_cost
     from litellm.proxy.hooks.search_free_tier import SearchAllowanceAllocation
     from litellm.proxy.spend_tracking.spend_tracking_utils import get_request_model_access_groups
 
@@ -336,7 +337,11 @@ def capture_context(payload: SpendLogsPayload, kwargs: Mapping[str, object], res
         else kwargs.get("_accounting_allocation")
     )
     allocation: Final = allocation_value if isinstance(allocation_value, SearchAllowanceAllocation) else None
-    pricing_snapshot: Final = kwargs.get("_accounting_pricing_snapshot")
+    pricing_snapshot: Final = (
+        _capture_pricing(logging_obj, response, kwargs)
+        if isinstance(logging_obj, Logging) and _batch_rows(response)
+        else kwargs.get("_accounting_pricing_snapshot")
+    )
     observation: Final = kwargs.get("_accounting_usage_snapshot")
     captured_pricing: Final = {
         "model_map_information": (
@@ -345,6 +350,7 @@ def capture_context(payload: SpendLogsPayload, kwargs: Mapping[str, object], res
             else metadata.get("model_map_information")
         ),
         "cost_breakdown": metadata.get("cost_breakdown"),
+        "guardrail_cost": guardrail_information_cost(metadata.get("guardrail_information")),
         **(
             _JSON_OBJECT.validate_json(pricing_snapshot.inputs)
             if isinstance(pricing_snapshot, PricingCapture)
@@ -889,6 +895,7 @@ def _capture_effective_pricing(
     import litellm
     from litellm.litellm_core_utils.cost_discount import resolve_cost_discount
     from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+    from litellm.utils import get_base_model_from_metadata
 
     params: Final = _fields(details.get("litellm_params"))
     prepared: Final = logging_obj.prepared_cost
@@ -929,6 +936,7 @@ def _capture_effective_pricing(
             else None,
         }
     )
+    base_model: Final = get_base_model_from_metadata(model_call_details=logging_obj.model_call_details)
     realtime_models: Final = tuple(
         dict.fromkeys(
             chain.from_iterable(_realtime_pricing_models(event) for event in _realtime_cost_events(normalized))
@@ -943,6 +951,14 @@ def _capture_effective_pricing(
         _json(
             {
                 **_pricing_inputs(details, logging_obj, normalized),
+                "base_model_information": StandardLoggingPayloadSetup.get_model_cost_information(
+                    base_model=base_model,
+                    custom_pricing=False,
+                    custom_llm_provider=None,
+                    init_response_obj={"model": base_model},
+                )
+                if base_model is not None
+                else None,
                 "realtime_models": {
                     model: StandardLoggingPayloadSetup.get_model_cost_information(
                         base_model=model,
