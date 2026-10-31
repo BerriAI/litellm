@@ -16,60 +16,60 @@ import {
   isOwnedByConfig,
 } from "../../../router_settings/ConfigOwned";
 import { isProxyAdminRole } from "@/utils/roles";
-import AddFallbacks from "./AddFallbacks";
-import EditFallbacks from "./EditFallbacks";
-
-type FallbackEntry = { [modelName: string]: string[] };
-type Fallbacks = FallbackEntry[];
+import AddFallbacks, {
+  type ConfiguredFallbackEntry as FallbackEntry,
+  type ConfiguredFallbacks as Fallbacks,
+  type FallbackTarget,
+} from "./AddFallbacks";
+import EditFallbacks, { type FallbackEntry as EditableFallbackEntry } from "./EditFallbacks";
 
 const modelCardClass =
-  "inline-flex items-center gap-2 px-2.5 py-1 rounded-md border border-border bg-muted text-sm font-medium text-foreground shrink-0";
+  "inline-flex max-w-full items-center gap-2 px-2.5 py-1 rounded-md border border-border bg-muted text-sm font-medium text-foreground shrink-0";
 
 const iconWrapperClass = "inline-flex shrink-0 items-center justify-center px-1.5 py-1.5";
 
-function renderModelNameCell(modelName: string, getProviderFromModel?: (modelName: string) => string): React.ReactNode {
+function renderModelNameCell(
+  modelName: string,
+  getProviderFromModel?: (modelName: string) => string,
+  hasOverrides = false,
+): React.ReactNode {
   const provider = getProviderFromModel?.(modelName) ?? modelName;
   return (
     <span className={modelCardClass}>
       <ProviderLogo provider={provider} className="w-4 h-4 shrink-0" />
-      <span className="break-words">{modelName}</span>
+      <span className="min-w-0 break-words">{modelName}</span>
+      {hasOverrides && <span className="text-xs text-muted-foreground">Overrides</span>}
     </span>
   );
 }
 
 function renderFallbacksChain(
   _primaryModel: string,
-  fallbackModels: string[],
+  fallbackModels: FallbackTarget[],
   getProviderFromModel?: (modelName: string) => string,
 ): React.ReactNode {
   const list = Array.isArray(fallbackModels) ? fallbackModels : [];
   if (list.length === 0) return null;
 
-  const ChainCard = ({ modelName }: { modelName: string }) => {
-    const provider = getProviderFromModel?.(modelName) ?? modelName;
-    return (
-      <span className={modelCardClass}>
-        <ProviderLogo provider={provider} className="w-4 h-4 shrink-0" />
-        <span className="break-words">{modelName}</span>
-      </span>
-    );
-  };
   return (
-    <span className="grid grid-cols-[auto_1fr] items-start gap-x-2 w-full min-w-0">
+    <span className="grid grid-cols-[auto_minmax(min-content,1fr)] items-start gap-x-2 w-full min-w-0">
       <span className="inline-flex items-center justify-center w-8 h-8 shrink-0 self-start text-info" aria-hidden>
         <ArrowRight className="w-5 h-5 stroke-[2.5]" />
       </span>
       <span className="flex flex-wrap items-start gap-1 min-w-0">
-        {list.map((model, i) => (
-          <React.Fragment key={model}>
-            {i > 0 && (
-              <span className={`${iconWrapperClass} text-muted-foreground`}>
-                <ArrowRight className="h-3 w-3 shrink-0" />
-              </span>
-            )}
-            <ChainCard modelName={model} />
-          </React.Fragment>
-        ))}
+        {list.map((model, i) => {
+          const modelName = typeof model === "string" ? model : model.model;
+          return (
+            <React.Fragment key={`${i}-${modelName}`}>
+              {i > 0 && (
+                <span className={`${iconWrapperClass} text-muted-foreground`}>
+                  <ArrowRight className="h-3 w-3 shrink-0" />
+                </span>
+              )}
+              {renderModelNameCell(modelName, getProviderFromModel, typeof model !== "string")}
+            </React.Fragment>
+          );
+        })}
       </span>
     </span>
   );
@@ -137,7 +137,7 @@ const Fallbacks: React.FC<FallbacksProps> = ({ accessToken, userRole, userID }) 
   const [isDeleting, setIsDeleting] = useState(false);
   const [fallbackToDelete, setFallbackToDelete] = useState<FallbackEntry | null>(null);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
-  const [fallbackToEdit, setFallbackToEdit] = useState<FallbackEntry | null>(null);
+  const [fallbackToEdit, setFallbackToEdit] = useState<EditableFallbackEntry | null>(null);
   const [routerSettingsSource, setRouterSettingsSource] = useState<RouterSettingsSource | null>(null);
 
   const { data: modelCostMapData } = useModelCostMap();
@@ -169,8 +169,9 @@ const Fallbacks: React.FC<FallbacksProps> = ({ accessToken, userRole, userID }) 
     setIsDeleteModalOpen(true);
   };
 
-  const handleEditClick = (fallbackEntry: FallbackEntry) => {
-    setFallbackToEdit(fallbackEntry);
+  const handleEditClick = (primaryModel: string, fallbackModels: FallbackTarget[]) => {
+    if (!fallbackModels.every((model): model is string => typeof model === "string")) return;
+    setFallbackToEdit({ [primaryModel]: fallbackModels });
   };
 
   const handleEditClose = () => {
@@ -270,8 +271,10 @@ const Fallbacks: React.FC<FallbacksProps> = ({ accessToken, userRole, userID }) 
   const ownedByConfig = routerSettingsSource !== null && isOwnedByConfig(routerSettingsSource, "fallbacks");
   const writeHint = fallbacksWriteHint(routerSettingsSource, ownedByConfig);
   const canWrite = canModify && writeHint === undefined;
-  const writeActionClass = (hoverClass: string) =>
-    canWrite ? `${iconWrapperClass} cursor-pointer ${hoverClass}` : `${iconWrapperClass} cursor-not-allowed opacity-50`;
+  const writeActionClass = (hoverClass: string, enabled = canWrite) =>
+    enabled ? `${iconWrapperClass} cursor-pointer ${hoverClass}` : `${iconWrapperClass} cursor-not-allowed opacity-50`;
+  const canEdit = (models: FallbackTarget[]) =>
+    canWrite && Array.isArray(models) && models.every((model) => typeof model === "string");
 
   return (
     <TooltipProvider>
@@ -335,16 +338,21 @@ const Fallbacks: React.FC<FallbacksProps> = ({ accessToken, userRole, userID }) 
                                 data-testid="edit-fallback-button"
                                 role="button"
                                 tabIndex={0}
-                                aria-disabled={!canWrite}
-                                onClick={() => canWrite && handleEditClick(item)}
-                                onKeyDown={(e) => canWrite && e.key === "Enter" && handleEditClick(item)}
-                                className={writeActionClass("hover:text-info")}
+                                aria-disabled={!canEdit(value)}
+                                onClick={() => canEdit(value) && handleEditClick(key, value)}
+                                onKeyDown={(e) => canEdit(value) && e.key === "Enter" && handleEditClick(key, value)}
+                                className={writeActionClass("hover:text-info", canEdit(value))}
                               />
                             }
                           >
                             <Pencil className="h-5 w-5 shrink-0" />
                           </TooltipTrigger>
-                          <TooltipContent>{writeHint ?? "Edit fallback"}</TooltipContent>
+                          <TooltipContent>
+                            {writeHint ??
+                              (canEdit(value)
+                                ? "Edit fallback"
+                                : "Edit parameter overrides through the API or config file")}
+                          </TooltipContent>
                         </Tooltip>
                         <Tooltip>
                           <TooltipTrigger

@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import Fallbacks from "./Fallbacks";
@@ -122,6 +122,72 @@ describe("Fallbacks", () => {
 
     await waitFor(() => {
       expect(screen.getByTestId("add-fallbacks-button")).toBeInTheDocument();
+    });
+  });
+
+  describe("fallbacks with parameter overrides", () => {
+    const override = {
+      model: "overridden-backup",
+      reasoning_effort: "none",
+      api_key: "private-fallback-key",
+      extra_headers: { Authorization: "private-authorization" },
+    };
+    const configuredFallbacks = [{ primary: ["plain-backup", override] }, { "editable-primary": ["plain-backup"] }];
+
+    beforeEach(() => {
+      vi.mocked(networkingModule.getCallbacksCall).mockResolvedValue({
+        router_settings: { fallbacks: configuredFallbacks },
+      });
+    });
+
+    it("displays mixed targets without exposing override credentials or opening the string-only editor", async () => {
+      const user = userEvent.setup();
+      renderWithQueryClient(<Fallbacks {...defaultProps} />);
+
+      const row = await screen.findByRole("row", { name: /primary.*overridden-backup/ });
+      expect(within(row).getByText("plain-backup")).toBeInTheDocument();
+      expect(within(row).getByText("overridden-backup")).toBeInTheDocument();
+      expect(within(row).getByText("Overrides")).toBeInTheDocument();
+      expect(screen.queryByText(override.api_key)).not.toBeInTheDocument();
+      expect(screen.queryByText(override.extra_headers.Authorization)).not.toBeInTheDocument();
+
+      const edit = within(row).getByTestId("edit-fallback-button");
+      expect(edit).toHaveAttribute("aria-disabled", "true");
+      await user.click(edit);
+      expect(screen.queryByText("Configure Model Fallbacks")).not.toBeInTheDocument();
+    });
+
+    it("preserves parameter overrides when saving another fallback's models", async () => {
+      const user = userEvent.setup();
+      renderWithQueryClient(<Fallbacks {...defaultProps} />);
+
+      const row = await screen.findByRole("row", { name: /editable-primary/ });
+      await user.click(within(row).getByTestId("edit-fallback-button"));
+      await user.click(await screen.findByRole("button", { name: "Save Changes" }));
+
+      await waitFor(() =>
+        expect(networkingModule.setCallbacksCall).toHaveBeenCalledWith(mockAccessToken, {
+          router_settings: { fallbacks: configuredFallbacks },
+        }),
+      );
+      expect(screen.getByText("overridden-backup")).toBeInTheDocument();
+    });
+
+    it("preserves parameter overrides when deleting another fallback", async () => {
+      const user = userEvent.setup();
+      renderWithQueryClient(<Fallbacks {...defaultProps} />);
+
+      const row = await screen.findByRole("row", { name: /editable-primary/ });
+      await user.click(within(row).getByTestId("delete-fallback-button"));
+      await user.click(screen.getByRole("button", { name: "Delete", exact: true }));
+
+      await waitFor(() =>
+        expect(networkingModule.setCallbacksCall).toHaveBeenCalledWith(mockAccessToken, {
+          router_settings: { fallbacks: [configuredFallbacks[0]] },
+        }),
+      );
+      expect(screen.getByText("overridden-backup")).toBeInTheDocument();
+      expect(screen.queryByText("editable-primary")).not.toBeInTheDocument();
     });
   });
 
