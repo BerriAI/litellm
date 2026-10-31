@@ -1,14 +1,14 @@
 import copy
 import json
 from collections.abc import AsyncIterator, Iterator
-from typing import Final
+from typing import Final, cast
 from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
 import respx
 from openai.lib.streaming.chat import ChatCompletionStreamState
-from openai.types.chat import ChatCompletionChunk
+from openai.types.chat import ChatCompletionChunk, ChatCompletionMessage
 from pydantic import TypeAdapter
 from fastapi.testclient import TestClient
 from pydantic import BaseModel, ConfigDict
@@ -714,6 +714,22 @@ def test_transform_request_rejects_a_text_block_whose_text_is_a_truthy_non_strin
         )
 
     assert error.value.status_code == 400
+
+
+def test_transform_request_accepts_an_openai_message_object_in_history() -> None:
+    earlier_answer: Final = ChatCompletionMessage(role="assistant", content="Earlier answer")
+
+    outgoing: Final = _outgoing_messages(
+        "databricks-meta-llama-3-3-70b-instruct",
+        [
+            {"role": "user", "content": "Earlier question"},
+            cast(AllMessageValues, earlier_answer),  # cast-ok: SDK callers pass response messages back as history
+            {"role": "user", "content": "Next question"},
+        ],
+        {},
+    )
+
+    assert [message.get("content") for message in outgoing] == ["Earlier question", "Earlier answer", "Next question"]
 
 
 def test_transform_request_json_object_keeps_earlier_turns_as_sent() -> None:

@@ -86,9 +86,9 @@ def _is_bare_assistant_message(message_dict: Mapping[str, object]) -> bool:
 _CONTENT_BLOCKS: Final = TypeAdapter(tuple[object, ...])
 
 
-def _content_blocks(message: Mapping[str, object]) -> tuple[object, ...]:
-    match content := message.get("content"):
-        case list():
+def _content_blocks(message: object) -> tuple[object, ...]:
+    match message.model_dump(exclude_none=True) if isinstance(message, BaseModel) else message:
+        case {"content": list() as content}:
             return _CONTENT_BLOCKS.validate_python(content)
         case _:
             return ()
