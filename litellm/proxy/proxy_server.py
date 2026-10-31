@@ -307,7 +307,7 @@ def generate_feedback_box():
 import contextlib
 from collections import defaultdict
 from contextlib import AsyncExitStack, asynccontextmanager
-from functools import lru_cache, partial
+from functools import lru_cache, partial, reduce
 
 import litellm
 import litellm._redis
@@ -5486,6 +5486,90 @@ _CONFIG_PERSISTED_SECTIONS: Final = ("general_settings", "router_settings", "lit
 _CONFIG_UNMANAGED_EXCLUSIONS: Final = frozenset(("environment_variables", "model_list"))
 _CONFIG_SECTION_VALUES: Final = TypeAdapter(Mapping[str, JsonValue])
 _CONFIG_SECTION_LOCK_SQL: Final = "SELECT 1 AS locked FROM pg_advisory_xact_lock(hashtext($1))"
+_STRING_LIST: Final = TypeAdapter(list[str])
+_CONFIG_MAPPING: Final = TypeAdapter(Mapping[str, object])
+
+
+def _listed_items(section: Mapping[str, JsonValue], key: str) -> tuple[str, ...]:
+    return tuple(_STRING_LIST.validate_python(section.get(key) or []))
+
+
+def _with_list_item(
+    section: Mapping[str, JsonValue], *, key: str, item: str, listed_as: frozenset[str]
+) -> Mapping[str, JsonValue]:
+    current: Final = _listed_items(section, key)
+    if not listed_as.isdisjoint(current):
+        return section
+    return MappingProxyType({**section, key: [*current, item]})
+
+
+def _listed_only_as_itself(item: str) -> frozenset[str]:
+    return frozenset((item,))
+
+
+def _with_list_delta(
+    section: Mapping[str, JsonValue],
+    *,
+    key: str,
+    requested: tuple[str, ...],
+    previous: frozenset[str],
+    aliases: Callable[[str], frozenset[str]],
+) -> Mapping[str, JsonValue]:
+    current: Final = _listed_items(section, key)
+    requested_ids: Final = frozenset(chain.from_iterable(aliases(item) for item in requested))
+    previous_ids: Final = frozenset(chain.from_iterable(aliases(item) for item in previous))
+    removed: Final = previous_ids.difference(requested_ids)
+    kept: Final = tuple(item for item in current if item not in removed)
+    added: Final = tuple(
+        item
+        for item in _first_of_each_alias_set(requested, aliases)
+        if aliases(item).isdisjoint(previous_ids) and aliases(item).isdisjoint(kept)
+    )
+    if (*kept, *added) == current:
+        return section
+    return MappingProxyType({**section, key: [*kept, *added]})
+
+
+def _first_of_each_alias_set(items: tuple[str, ...], aliases: Callable[[str], frozenset[str]]) -> tuple[str, ...]:
+    return tuple(
+        item
+        for index, item in enumerate(items)
+        if all(aliases(item).isdisjoint(aliases(earlier)) for earlier in items[:index])
+    )
+
+
+def _with_mapping_delta(
+    section: Mapping[str, JsonValue],
+    *,
+    key: str,
+    requested: Mapping[str, JsonValue],
+    previous: Mapping[str, JsonValue],
+) -> Mapping[str, JsonValue]:
+    current: Final = _CONFIG_SECTION_VALUES.validate_python(section.get(key) or {})
+    changed: Final = {
+        name: value for name, value in requested.items() if name not in previous or previous[name] != value
+    }
+    removed: Final = frozenset(previous).difference(requested)
+    kept: Final = {name: value for name, value in current.items() if name not in removed and name not in changed}
+    merged: Final = {**kept, **changed}
+    if merged == dict(current):
+        return section
+    return MappingProxyType({**section, key: merged})
+
+
+def _settings_db_client() -> PrismaClient | None:
+    stores_settings_in_db: Final = general_settings_view().get("store_model_in_db", False) is True or store_model_in_db
+    return prisma_client if stores_settings_in_db else None
+
+
+@dataclass(frozen=True, slots=True)
+class _SectionRewrite:
+    before: Mapping[str, JsonValue]
+    after: Mapping[str, JsonValue]
+
+    @property
+    def changed(self) -> bool:
+        return self.after != self.before
 
 
 class _ConfigParamWhere(TypedDict):
@@ -5504,6 +5588,37 @@ class _ConfigParamUpdate(TypedDict):
 class _ConfigParamUpsert(TypedDict):
     create: ReadOnly[_ConfigParamCreate]
     update: ReadOnly[_ConfigParamUpdate]
+
+
+async def _rewrite_config_section(
+    prisma_client: PrismaClient,
+    *,
+    section_name: str,
+    rewrite: Callable[[Mapping[str, JsonValue]], Mapping[str, JsonValue]],
+) -> _SectionRewrite:
+    async with prisma_client.tx() as tx:
+        await tx.query_raw(_CONFIG_SECTION_LOCK_SQL, section_name)
+        config_table: Final = cast("TableActions[_ConfigParamRow]", tx.litellm_config)
+        config_where: Final[_ConfigParamWhere] = {"param_name": section_name}
+        existing_row: Final[_ConfigParamRow | None] = await config_table.find_first(where=config_where)
+        existing_value: Final[object] = cast(object, existing_row.param_value) if existing_row is not None else None
+        existing_section: Final[Mapping[str, JsonValue]] = (
+            _CONFIG_SECTION_VALUES.validate_json(existing_value)
+            if isinstance(existing_value, str)
+            else _CONFIG_SECTION_VALUES.validate_python(existing_value)
+            if isinstance(existing_value, Mapping)
+            else MappingProxyType({})
+        )
+        section_rewrite: Final = _SectionRewrite(before=existing_section, after=rewrite(existing_section))
+        if not section_rewrite.changed:
+            return section_rewrite
+        serialized_section: Final = json.dumps(dict(section_rewrite.after))
+        config_data: Final[_ConfigParamUpsert] = {
+            "create": {"param_name": section_name, "param_value": serialized_section},
+            "update": {"param_value": serialized_section},
+        }
+        await config_table.upsert(where=config_where, data=config_data)
+        return section_rewrite
 
 
 class _EnvironmentVariablesConfigData(TypedDict):
@@ -6018,20 +6133,10 @@ class ProxyConfig:
         removed_keys: frozenset[str],
         prisma_client: PrismaClient,
     ) -> Mapping[str, JsonValue] | None:
-        async with prisma_client.tx() as tx:
-            await tx.query_raw(_CONFIG_SECTION_LOCK_SQL, section_name)
-            config_table: Final = cast("TableActions[_ConfigParamRow]", tx.litellm_config)
-            config_where: Final[_ConfigParamWhere] = {"param_name": section_name}
-            existing_row: Final[_ConfigParamRow | None] = await config_table.find_first(where=config_where)
-            existing_value: Final[object] = cast(object, existing_row.param_value) if existing_row is not None else None
-            existing_section: Final[Mapping[str, JsonValue]] = (
-                _CONFIG_SECTION_VALUES.validate_json(existing_value)
-                if isinstance(existing_value, str)
-                else _CONFIG_SECTION_VALUES.validate_python(existing_value)
-                if isinstance(existing_value, Mapping)
-                else MappingProxyType({})
-            )
-            merged_section: Final[Mapping[str, JsonValue]] = MappingProxyType(
+        section_rewrite: Final = await _rewrite_config_section(
+            prisma_client,
+            section_name=section_name,
+            rewrite=lambda existing_section: MappingProxyType(
                 {
                     key: value
                     for key, value in chain(
@@ -6039,16 +6144,114 @@ class ProxyConfig:
                         changed_keys.items(),
                     )
                 }
-            )
-            if merged_section == existing_section:
-                return None
-            serialized_section: Final = json.dumps(dict(merged_section))
-            config_data: Final[_ConfigParamUpsert] = {
-                "create": {"param_name": section_name, "param_value": serialized_section},
-                "update": {"param_value": serialized_section},
-            }
-            await config_table.upsert(where=config_where, data=config_data)
-            return merged_section
+            ),
+        )
+        return section_rewrite.after if section_rewrite.changed else None
+
+    async def append_to_list_setting(
+        self,
+        *,
+        section_name: Section,
+        key: str,
+        item: str,
+        listed_as: frozenset[str],
+        on_written: Callable[[tuple[str, ...]], None],
+    ) -> tuple[str, ...] | None:
+        section_rewrite: Final = await self._rewrite_setting(
+            section_name=section_name,
+            key=key,
+            rewrite=lambda section: _with_list_item(section, key=key, item=item, listed_as=listed_as),
+            on_written=lambda section: on_written(_listed_items(section, key)),
+        )
+        return _listed_items(section_rewrite.after, key) if section_rewrite.changed else None
+
+    async def apply_list_setting_delta(
+        self,
+        *,
+        section_name: Section,
+        key: str,
+        requested: Sequence[str],
+        previous: Sequence[str],
+        on_written: Callable[[tuple[str, ...]], None],
+        aliases: Callable[[str], frozenset[str]] = _listed_only_as_itself,
+    ) -> tuple[str, ...]:
+        section_rewrite: Final = await self._rewrite_setting(
+            section_name=section_name,
+            key=key,
+            rewrite=lambda section: _with_list_delta(
+                section, key=key, requested=tuple(requested), previous=frozenset(previous), aliases=aliases
+            ),
+            on_written=lambda section: on_written(_listed_items(section, key)),
+        )
+        return _listed_items(section_rewrite.after, key)
+
+    async def remove_from_list_setting(
+        self,
+        *,
+        section_name: Section,
+        key: str,
+        item: str,
+        on_written: Callable[[tuple[str, ...]], None],
+        aliases: Callable[[str], frozenset[str]] = _listed_only_as_itself,
+    ) -> None:
+        if _settings_db_client() is not None and self._settings_stores[section_name].owned_by_config(key):
+            return
+        await self.apply_list_setting_delta(
+            section_name=section_name, key=key, requested=(), previous=(item,), on_written=on_written, aliases=aliases
+        )
+
+    async def apply_mapping_setting_delta(
+        self,
+        *,
+        section_name: Section,
+        key: str,
+        requested: Mapping[str, JsonValue],
+        previous: Mapping[str, JsonValue],
+        on_written: Callable[[Mapping[str, JsonValue]], None],
+    ) -> Mapping[str, JsonValue]:
+        section_rewrite: Final = await self._rewrite_setting(
+            section_name=section_name,
+            key=key,
+            rewrite=lambda section: _with_mapping_delta(section, key=key, requested=requested, previous=previous),
+            on_written=lambda section: on_written(_CONFIG_SECTION_VALUES.validate_python(section.get(key) or {})),
+        )
+        return _CONFIG_SECTION_VALUES.validate_python(section_rewrite.after.get(key) or {})
+
+    async def _rewrite_setting(
+        self,
+        *,
+        section_name: Section,
+        key: str,
+        rewrite: Callable[[Mapping[str, JsonValue]], Mapping[str, JsonValue]],
+        on_written: Callable[[Mapping[str, JsonValue]], None],
+    ) -> _SectionRewrite:
+        db_client: Final = _settings_db_client()
+        if db_client is None:
+            file_rewrite: Final = await self._rewrite_file_section(section_name=section_name, rewrite=rewrite)
+            on_written(file_rewrite.after)
+            return file_rewrite
+        store: Final = self._settings_stores[section_name]
+        if store.owned_by_config(key):
+            config_section: Final[Mapping[str, JsonValue]] = MappingProxyType({key: store.get(key)})
+            if rewrite(config_section) != config_section:
+                self._raise_config_owned(section_name=section_name, rejected=(key,), store=store)
+            return _SectionRewrite(before=config_section, after=config_section)
+        section_rewrite: Final = await _rewrite_config_section(db_client, section_name=section_name, rewrite=rewrite)
+        store.apply_db_row(section_name, section_rewrite.after)
+        on_written(section_rewrite.after)
+        if section_rewrite.changed:
+            await invalidate_config_param(section_name)
+        return section_rewrite
+
+    async def _rewrite_file_section(
+        self, *, section_name: Section, rewrite: Callable[[Mapping[str, JsonValue]], Mapping[str, JsonValue]]
+    ) -> _SectionRewrite:
+        config: Final = _CONFIG_MAPPING.validate_python(await self.get_config())
+        section: Final = _CONFIG_SECTION_VALUES.validate_python(config.get(section_name) or {})
+        section_rewrite: Final = _SectionRewrite(before=section, after=rewrite(section))
+        if section_rewrite.changed:
+            await self.save_config(new_config={**config, section_name: dict(section_rewrite.after)})
+        return section_rewrite
 
     async def save_environment_variables(self, updates: dict[str, str | None]) -> None:
         """Persist specific environment variables to the DB config row.
@@ -19720,6 +19923,58 @@ async def invitation_delete(
 
 
 #### CONFIG MANAGEMENT ####
+def _with_slack_alerting(section: Mapping[str, JsonValue]) -> Mapping[str, JsonValue]:
+    if "alerting" not in section:
+        return {"alerting": ["slack"]}
+    alerting: Final = section["alerting"]
+    if isinstance(alerting, list) and "slack" not in alerting:
+        return {"alerting": [*alerting, "slack"]}
+    return {}
+
+
+def _with_general_setting(section: Mapping[str, JsonValue], setting: tuple[str, JsonValue]) -> Mapping[str, JsonValue]:
+    key, value = setting
+    return MappingProxyType(
+        {**section, **(_with_slack_alerting(section) if key == "alert_to_webhook_url" else {}), key: value}
+    )
+
+
+def _merged_litellm_settings(
+    existing: Mapping[str, JsonValue], updates: Mapping[str, JsonValue]
+) -> Mapping[str, JsonValue]:
+    incoming_callbacks: Final = updates.get("success_callback")
+    existing_callbacks: Final = existing.get("success_callback")
+    merged: Final = {**existing, **updates}
+    if not isinstance(incoming_callbacks, list):
+        return MappingProxyType(merged)
+    return _CONFIG_SECTION_VALUES.validate_python(
+        {
+            **merged,
+            "success_callback": list(
+                set(normalize_callback_names(existing_callbacks) + incoming_callbacks)
+                if isinstance(existing_callbacks, list)
+                else set(incoming_callbacks)
+            ),
+        }
+    )
+
+
+async def _update_config_section(
+    prisma_client: PrismaClient,
+    *,
+    section_name: str,
+    merge: Callable[[Mapping[str, JsonValue]], Mapping[str, JsonValue]],
+    user_api_key_dict: UserAPIKeyAuth,
+) -> None:
+    section_rewrite: Final = await _rewrite_config_section(prisma_client, section_name=section_name, rewrite=merge)
+    await invalidate_config_param(section_name)
+    asyncio.create_task(
+        create_config_audit_log(
+            section_name, "updated", dict(section_rewrite.before), dict(section_rewrite.after), user_api_key_dict
+        )
+    )
+
+
 @router.post(
     "/config/update",
     tags=["config.yaml"],
@@ -19815,106 +20070,39 @@ async def update_config(
         proxy_config.reject_config_owned_writes(section_name="litellm_settings", changed_keys=raw_litellm_settings)
         proxy_config.reject_config_owned_writes(section_name="router_settings", changed_keys=router_settings_updates)
 
-        async def _read_section(param_name: str) -> dict:
-            row: Final[_ConfigParamRow | None] = await _config_param_table(prisma_client, use_writer=True).find_first(
-                where={"param_name": param_name}
-            )
-            if row is None or row.param_value is None:
-                return {}
-            return dict(row.param_value)
-
-        async def _upsert_section(param_name: str, value: dict) -> None:
-            serialized: Final = json.dumps(value)
-            await ConfigRepository(prisma_client).table.upsert(
-                where={"param_name": param_name},
-                data={
-                    "create": {"param_name": param_name, "param_value": serialized},
-                    "update": {"param_value": serialized},
-                },
-            )
-            # invalidate the DualCache entry so the next reader (this process
-            # or any other proxy in the cluster) goes to DB.
-            await invalidate_config_param(param_name)
-
-        # general_settings: merge per-key, with the alert_to_webhook_url side
-        # effect of auto-enabling slack alerting.
         if config_info.general_settings is not None:
-            existing = await _read_section("general_settings")
-            before_general_settings: Final = copy.deepcopy(existing)
-            for k, v in requested_general_settings.items():
-                if k == "alert_to_webhook_url":
-                    if "alerting" not in existing:
-                        existing["alerting"] = ["slack"]
-                    elif isinstance(existing["alerting"], list) and "slack" not in existing["alerting"]:
-                        existing["alerting"].append("slack")
-                existing[k] = v
-            await _upsert_section("general_settings", existing)
-            asyncio.create_task(
-                create_config_audit_log(
-                    "general_settings", "updated", before_general_settings, existing, user_api_key_dict
-                )
+            await _update_config_section(
+                prisma_client,
+                section_name="general_settings",
+                merge=lambda existing: reduce(_with_general_setting, requested_general_settings.items(), existing),
+                user_api_key_dict=user_api_key_dict,
             )
 
-        # environment_variables: idempotently encrypt the request values
-        # (plaintext on first write, OR ciphertext the UI read back via
-        # /get/config/callbacks and re-submitted on save), then merge into
-        # existing. Only the sent keys are re-written; untouched keys keep
-        # their stored ciphertext byte-for-byte.
         if config_info.environment_variables is not None:
-            existing = await _read_section("environment_variables")
-            before_environment_variables: Final = copy.deepcopy(existing)
-            existing.update(
+            encrypted_environment_variables: Final = _CONFIG_SECTION_VALUES.validate_python(
                 proxy_config.encrypt_env_variables_for_db(environment_variables=config_info.environment_variables)
             )
-            await _upsert_section("environment_variables", existing)
-            asyncio.create_task(
-                create_config_audit_log(
-                    "environment_variables", "updated", before_environment_variables, existing, user_api_key_dict
-                )
+            await _update_config_section(
+                prisma_client,
+                section_name="environment_variables",
+                merge=lambda existing: MappingProxyType({**existing, **encrypted_environment_variables}),
+                user_api_key_dict=user_api_key_dict,
             )
 
-        # litellm_settings: merge existing + request, request wins (matching
-        # router_settings semantics — the caller's value for any given key is
-        # what gets persisted). success_callback is special-cased: it is
-        # always normalized + deduped, and unioned with any existing list,
-        # because callbacks are additive (callers send the new entry, not
-        # the full set). Normalizing on every write — not only when an
-        # existing entry is present — keeps the DB free of mixed-case
-        # entries that delete_callback (lowercase lookup) cannot find.
         if config_info.litellm_settings is not None:
-            existing = await _read_section("litellm_settings")
-            before_litellm_settings: Final = copy.deepcopy(existing)
-            merged: Final = {**existing, **updated_litellm_settings}
-
-            incoming_cb: Final = updated_litellm_settings.get("success_callback")
-            existing_cb: Final = existing.get("success_callback")
-            if isinstance(incoming_cb, list):
-                if isinstance(existing_cb, list):
-                    # Normalize the existing list too — a row written by a
-                    # different code path may still hold mixed-case names,
-                    # which would otherwise dedup-miss against the lowercase
-                    # incoming entries.
-                    merged["success_callback"] = list(set(normalize_callback_names(existing_cb) + incoming_cb))
-                else:
-                    merged["success_callback"] = list(set(incoming_cb))
-
-            await _upsert_section("litellm_settings", merged)
-            asyncio.create_task(
-                create_config_audit_log(
-                    "litellm_settings", "updated", before_litellm_settings, merged, user_api_key_dict
-                )
+            await _update_config_section(
+                prisma_client,
+                section_name="litellm_settings",
+                merge=lambda existing: _merged_litellm_settings(existing, updated_litellm_settings),
+                user_api_key_dict=user_api_key_dict,
             )
 
-        # router_settings: merge existing + request, request wins.
         if isinstance(raw_router_settings, dict):
-            existing = await _read_section("router_settings")
-            before_router_settings: Final = copy.deepcopy(existing)
-            new_router_settings: Final = {**existing, **router_settings_updates}
-            await _upsert_section("router_settings", new_router_settings)
-            asyncio.create_task(
-                create_config_audit_log(
-                    "router_settings", "updated", before_router_settings, new_router_settings, user_api_key_dict
-                )
+            await _update_config_section(
+                prisma_client,
+                section_name="router_settings",
+                merge=lambda existing: MappingProxyType({**existing, **router_settings_updates}),
+                user_api_key_dict=user_api_key_dict,
             )
 
         await proxy_config.add_deployment(prisma_client=prisma_client, proxy_logging_obj=proxy_logging_obj)

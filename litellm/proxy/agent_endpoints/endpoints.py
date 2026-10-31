@@ -1022,7 +1022,7 @@ async def delete_agent(
     """
     await check_feature_access_for_user(user_api_key_dict, "agents")
 
-    from litellm.proxy.proxy_server import prisma_client
+    from litellm.proxy.proxy_server import prisma_client, proxy_config
 
     _check_agent_management_permission(user_api_key_dict)
 
@@ -1040,6 +1040,13 @@ async def delete_agent(
         if existing_agent is None:
             raise HTTPException(status_code=404, detail=f"Agent with ID {agent_id} not found in DB.")
 
+        await proxy_config.remove_from_list_setting(
+            section_name="litellm_settings",
+            key="public_agent_groups",
+            item=agent_id,
+            on_written=_set_public_agent_groups,
+            aliases=AGENT_REGISTRY.ids_for_agent,
+        )
         await AGENT_REGISTRY.delete_agent_from_db(agent_id=agent_id, prisma_client=prisma_client)
 
         AGENT_REGISTRY.deregister_agent(agent_name=existing_agent.get("agent_name"))
@@ -1120,6 +1127,10 @@ async def _resolve_agent_kill_switch(agent_id: str) -> tuple[str, AgentKillSwitc
     return agent.agent_id, agent.kill_switch
 
 
+def _set_public_agent_groups(public_agent_groups: tuple[str, ...]) -> None:
+    litellm.public_agent_groups = list(public_agent_groups)
+
+
 @router.post(
     "/v1/agents/{agent_id}/make_public",
     tags=["[beta] A2A Agents"],
@@ -1163,7 +1174,6 @@ async def make_agent_public(
 
     try:
         # Update the public model groups
-        import litellm
         from litellm.proxy.agent_endpoints.agent_registry import (
             global_agent_registry as AGENT_REGISTRY,
         )
@@ -1188,24 +1198,19 @@ async def make_agent_public(
             if agent is None:
                 raise HTTPException(status_code=404, detail=f"Agent with ID {agent_id} not found")
 
-        config: Final = await proxy_config.get_config()
-
-        current_public_agent_groups: Final = list(litellm.public_agent_groups or [])
-        if not AGENT_REGISTRY.ids_for_agent(agent.agent_id).isdisjoint(current_public_agent_groups):
+        stored_public_agent_groups: Final = await proxy_config.append_to_list_setting(
+            section_name="litellm_settings",
+            key="public_agent_groups",
+            item=agent.agent_id,
+            listed_as=AGENT_REGISTRY.ids_for_agent(agent.agent_id),
+            on_written=_set_public_agent_groups,
+        )
+        if stored_public_agent_groups is None:
             raise HTTPException(
                 status_code=400,
                 detail=f"Agent with name {agent.agent_name} already in public agent groups",
             )
-        updated_public_agent_groups: Final = [*current_public_agent_groups, agent.agent_id]
-
-        if "litellm_settings" not in config or config["litellm_settings"] is None:
-            config["litellm_settings"] = {}
-
-        config["litellm_settings"]["public_agent_groups"] = updated_public_agent_groups
-
-        await proxy_config.save_config(new_config=config)
-
-        litellm.public_agent_groups = updated_public_agent_groups
+        updated_public_agent_groups: Final = list(stored_public_agent_groups)
 
         verbose_proxy_logger.debug(
             "Updated public agent groups to: %s by user: %s", updated_public_agent_groups, user_api_key_dict.user_id
@@ -1275,8 +1280,6 @@ async def make_agents_public(
         )
         from litellm.proxy.proxy_server import proxy_config
 
-        # Load existing config
-        config: Final = await proxy_config.get_config()
         # Check if user has admin permissions
         if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
             raise HTTPException(
@@ -1285,9 +1288,6 @@ async def make_agents_public(
                     "error": f"Only proxy admins can update public model groups. Your role={user_api_key_dict.user_role}"
                 },
             )
-
-        if litellm.public_agent_groups is None:
-            litellm.public_agent_groups = []
 
         for agent_id in request.agent_ids:
             agent = AGENT_REGISTRY.get_agent_by_id(agent_id=agent_id)
@@ -1300,6 +1300,23 @@ async def make_agents_public(
                 if agent is None:
                     raise HTTPException(status_code=404, detail=f"Agent with ID {agent_id} not found")
 
+        if request.previous_agent_ids is not None:
+            stored_public_agent_groups: Final = await proxy_config.apply_list_setting_delta(
+                section_name="litellm_settings",
+                key="public_agent_groups",
+                requested=request.agent_ids,
+                previous=request.previous_agent_ids,
+                on_written=_set_public_agent_groups,
+                aliases=AGENT_REGISTRY.ids_for_agent,
+            )
+            return {
+                "message": "Successfully updated public agent groups",
+                "public_agent_groups": list(stored_public_agent_groups),
+                "updated_by": user_api_key_dict.user_id,
+            }
+
+        # Load existing config
+        config: Final = await proxy_config.get_config()
         litellm.public_agent_groups = request.agent_ids
 
         # Update config with new settings

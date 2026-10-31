@@ -160,7 +160,7 @@ describe("MakeMCPPublicForm", () => {
     });
 
     await waitFor(() => {
-      expect(mockMakeMCPPublicCall).toHaveBeenCalledWith("test-token", ["server-1", "server-2"]);
+      expect(mockMakeMCPPublicCall).toHaveBeenCalledWith("test-token", ["server-1", "server-2"], ["server-2"]);
       expect(mockProps.onSuccess).toHaveBeenCalled();
       expect(mockProps.onClose).toHaveBeenCalled();
     });
@@ -202,7 +202,7 @@ describe("MakeMCPPublicForm", () => {
     fireEvent.click(screen.getByRole("button", { name: "Next" }));
     fireEvent.click(screen.getByRole("button", { name: "Save Publication List" }));
 
-    await waitFor(() => expect(mockMakeMCPPublicCall).toHaveBeenCalledWith("test-token", []));
+    await waitFor(() => expect(mockMakeMCPPublicCall).toHaveBeenCalledWith("test-token", [], ["server-2"]));
     expect(mockProps.onSuccess).toHaveBeenCalled();
   });
 
@@ -310,7 +310,7 @@ describe("MakeMCPPublicForm", () => {
     fireEvent.click(nextButton);
     fireEvent.click(screen.getByRole("button", { name: "Save Publication List" }));
 
-    await waitFor(() => expect(mockMakeMCPPublicCall).toHaveBeenCalledWith("test-token", []));
+    await waitFor(() => expect(mockMakeMCPPublicCall).toHaveBeenCalledWith("test-token", [], []));
     expect(mockProps.onSuccess).toHaveBeenCalled();
   });
 
@@ -385,6 +385,19 @@ describe("MakeMCPPublicForm", () => {
     expect(selectAllCheckbox).toBePartiallyChecked();
   });
 
+  it("sends the servers public when the modal opened next to the edited selection", async () => {
+    mockMakeMCPPublicCall.mockResolvedValueOnce({});
+    render(<MakeMCPPublicForm {...mockProps} />);
+
+    const [, server1Checkbox, server2Checkbox] = screen.getAllByRole("checkbox");
+    fireEvent.click(server1Checkbox);
+    fireEvent.click(server2Checkbox);
+    fireEvent.click(screen.getByRole("button", { name: "Next" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save Publication List" }));
+
+    await waitFor(() => expect(mockMakeMCPPublicCall).toHaveBeenCalledWith("test-token", ["server-1"], ["server-2"]));
+  });
+
   it("should display tools overflow text when server has more than 3 tools", () => {
     const serverWithManyTools = {
       ...mockProps.mcpHubData[0],
@@ -429,7 +442,7 @@ describe("MakeMCPPublicForm", () => {
 
     // Should handle error and show error notification
     await waitFor(() => {
-      expect(mockMakeMCPPublicCall).toHaveBeenCalledWith("test-token", ["server-2"]);
+      expect(mockMakeMCPPublicCall).toHaveBeenCalledWith("test-token", ["server-2"], ["server-2"]);
     });
 
     expect(toast.fromError).toHaveBeenCalledWith(error);

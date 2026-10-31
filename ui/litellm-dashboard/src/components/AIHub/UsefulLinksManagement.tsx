@@ -27,6 +27,7 @@ const UsefulLinksManagement: React.FC<UsefulLinksManagementProps> = ({ accessTok
   const [isExpanded, setIsExpanded] = useState(true);
   const [isRearranging, setIsRearranging] = useState(false);
   const [originalLinksOrder, setOriginalLinksOrder] = useState<Link[]>([]);
+  const [savedLinks, setSavedLinks] = useState<Record<string, string | { url: string; index: number }>>({});
 
   const fetchUsefulLinks = async () => {
     if (!accessToken) return;
@@ -36,6 +37,7 @@ const UsefulLinksManagement: React.FC<UsefulLinksManagementProps> = ({ accessTok
 
       if (response && response.useful_links) {
         const usefulLinks = response.useful_links || {};
+        setSavedLinks(usefulLinks);
 
         // Convert object to array of links with ids
         // Handle both old format (Dict[str, str]) and new format (Dict[str, {url, index}])
@@ -98,7 +100,8 @@ const UsefulLinksManagement: React.FC<UsefulLinksManagementProps> = ({ accessTok
         };
       });
 
-      await updateUsefulLinksCall(accessToken, linksObject);
+      await updateUsefulLinksCall(accessToken, linksObject, savedLinks);
+      setSavedLinks(linksObject);
 
       return true;
     } catch (error) {

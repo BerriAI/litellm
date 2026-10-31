@@ -10,6 +10,7 @@ from unittest import mock
 from dotenv import load_dotenv
 
 from tests._master_key import MASTER_KEY
+from tests.unit.proxy.fake_config_table import section_locked_transactions
 
 import litellm.proxy
 import litellm.proxy.proxy_server
@@ -3403,6 +3404,7 @@ async def test_update_config_success_callback_normalization(monkeypatch):
             self.db.litellm_config.find_first = AsyncMock(side_effect=fake_find_first)
             self.db.litellm_config.upsert = AsyncMock(side_effect=fake_upsert)
             self.writer_db = self.db
+            self.tx = section_locked_transactions(self.db.litellm_config)
 
     monkeypatch.setattr(proxy_server, "prisma_client", MockPrisma())
 

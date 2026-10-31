@@ -552,7 +552,11 @@ registerAuthHeaderNameGetter(getGlobalLitellmHeaderName);
 registerAuthTokenGetter(() => decodeToken(getCookie("token"))?.key ?? null);
 registerErrorHandler(handleError);
 
-export const makeModelGroupPublic = async (accessToken: string, modelGroups: string[]) => {
+export const makeModelGroupPublic = async (
+  accessToken: string,
+  modelGroups: string[],
+  previousModelGroups: string[],
+) => {
   const url = proxyBaseUrl ? `${proxyBaseUrl}/model_group/make_public` : `/model_group/make_public`;
   const response = await fetch(url, {
     method: "POST",
@@ -562,6 +566,7 @@ export const makeModelGroupPublic = async (accessToken: string, modelGroups: str
     },
     body: JSON.stringify({
       model_groups: modelGroups,
+      previous_model_groups: previousModelGroups,
     }),
   });
   return response.json();
@@ -1864,11 +1869,12 @@ export const deleteAllowedIP = async (accessToken: string, ip: string) => {
 export const updateUsefulLinksCall = async (
   accessToken: string,
   useful_links: Record<string, string | { url: string; index: number }>,
+  previous_useful_links: Record<string, string | { url: string; index: number }>,
 ) => {
   try {
     return await apiClient.post(`/model_hub/update_useful_links`, {
       accessToken,
-      body: { useful_links: useful_links },
+      body: { useful_links, previous_useful_links },
     });
   } catch (error) {
     console.error("Failed to create key:", error);
@@ -5868,7 +5874,7 @@ export const deleteAgentCall = async (accessToken: string, agentId: string) => {
   }
 };
 
-export const makeAgentsPublicCall = async (accessToken: string, agentIds: string[]) => {
+export const makeAgentsPublicCall = async (accessToken: string, agentIds: string[], previousAgentIds: string[]) => {
   try {
     const url = proxyBaseUrl ? `${proxyBaseUrl}/v1/agents/make_public` : `/v1/agents/make_public`;
 
@@ -5880,6 +5886,7 @@ export const makeAgentsPublicCall = async (accessToken: string, agentIds: string
       },
       body: JSON.stringify({
         agent_ids: agentIds,
+        previous_agent_ids: previousAgentIds,
       }),
     });
 
@@ -5897,7 +5904,11 @@ export const makeAgentsPublicCall = async (accessToken: string, agentIds: string
   }
 };
 
-export const makeMCPPublicCall = async (accessToken: string, mcpServerIds: string[]) => {
+export const makeMCPPublicCall = async (
+  accessToken: string,
+  mcpServerIds: string[],
+  previousMcpServerIds: string[],
+) => {
   try {
     const url = proxyBaseUrl ? `${proxyBaseUrl}/v1/mcp/make_public` : `/v1/mcp/make_public`;
 
@@ -5909,6 +5920,7 @@ export const makeMCPPublicCall = async (accessToken: string, mcpServerIds: strin
       },
       body: JSON.stringify({
         mcp_server_ids: mcpServerIds,
+        previous_mcp_server_ids: previousMcpServerIds,
       }),
     });
 

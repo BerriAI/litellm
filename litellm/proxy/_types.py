@@ -1579,7 +1579,17 @@ from litellm.models.mcp_server import (  # noqa: E402
 
 
 class MakeMCPServersPublicRequest(LiteLLMPydanticObjectBase):
+    model_config = ConfigDict(frozen=True)
+
     mcp_server_ids: list[str]
+    previous_mcp_server_ids: tuple[str, ...] | None = Field(
+        default=None,
+        description=(
+            "The public MCP server list the caller started from. When set, only the servers added or removed "
+            "relative to it change, so servers another admin published or unpublished meanwhile keep that change. "
+            "When omitted, mcp_server_ids replaces the stored list."
+        ),
+    )
 
 
 class MCPUserCredentialRequest(LiteLLMPydanticObjectBase):

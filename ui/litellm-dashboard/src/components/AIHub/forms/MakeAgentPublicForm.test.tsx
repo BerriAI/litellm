@@ -131,7 +131,7 @@ describe("MakeAgentPublicForm", () => {
     });
 
     await waitFor(() => {
-      expect(mockMakeAgentsPublicCall).toHaveBeenCalledWith("test-token", ["agent-1", "agent-2"]);
+      expect(mockMakeAgentsPublicCall).toHaveBeenCalledWith("test-token", ["agent-1", "agent-2"], ["agent-2"]);
       expect(mockProps.onSuccess).toHaveBeenCalled();
       expect(mockProps.onClose).toHaveBeenCalled();
     });
@@ -276,6 +276,19 @@ describe("MakeAgentPublicForm", () => {
     expect(selectAllCheckbox).toBePartiallyChecked();
   });
 
+  it("sends the agents public when the modal opened next to the edited selection", async () => {
+    mockMakeAgentsPublicCall.mockResolvedValueOnce({});
+    render(<MakeAgentPublicForm {...mockProps} />);
+
+    const [, agent1Checkbox, agent2Checkbox] = screen.getAllByRole("checkbox");
+    fireEvent.click(agent1Checkbox);
+    fireEvent.click(agent2Checkbox);
+    fireEvent.click(screen.getByRole("button", { name: "Next" }));
+    fireEvent.click(screen.getByRole("button", { name: "Make Public" }));
+
+    await waitFor(() => expect(mockMakeAgentsPublicCall).toHaveBeenCalledWith("test-token", ["agent-1"], ["agent-2"]));
+  });
+
   it("should display skills overflow text when agent has more than 3 skills", () => {
     const agentWithManySkills = {
       ...mockProps.agentHubData[0],
@@ -326,7 +339,7 @@ describe("MakeAgentPublicForm", () => {
 
     // Should handle error and show error notification
     await waitFor(() => {
-      expect(mockMakeAgentsPublicCall).toHaveBeenCalledWith("test-token", ["agent-2"]);
+      expect(mockMakeAgentsPublicCall).toHaveBeenCalledWith("test-token", ["agent-2"], ["agent-2"]);
     });
 
     // Should not call onSuccess or onClose on error
