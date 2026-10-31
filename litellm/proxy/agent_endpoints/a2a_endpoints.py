@@ -232,7 +232,7 @@ async def _log_agent_rejection(
             route="/a2a/{agent_id}",
         )
     except Exception:  # noqa: BLE001  # a logging failure must not change the rejection the caller gets
-        verbose_proxy_logger.exception("Failed to log rejected A2A request for agent '%s'", target_agent_id)
+        verbose_proxy_logger.exception("Failed to log rejected A2A request")
 
 
 def _jsonrpc_error(
