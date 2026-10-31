@@ -2622,6 +2622,8 @@ async def test_apply_to_output_streaming_anthropic_sse_bytes_led_by_a_non_object
             await anext(stream)
 
 
+_GEMINI_TEXT_FRAME: Final = b'data: {"candidates": [{"content": {"parts": [{"text": "4111"}]}}]}\n\n'
+
 STREAMS_WITH_A_NON_OBJECT_LINE_AND_NO_ANTHROPIC_FRAME: Final = {
     "lone-line": (b"data: 5\n\n",),
     "then-an-object-of-no-known-type": (b"data: 5\n\n", b'data: {"foo": 1}\n\n', b'data: {"text": "4111"}\n\n'),
@@ -2632,6 +2634,9 @@ STREAMS_WITH_A_NON_OBJECT_LINE_AND_NO_ANTHROPIC_FRAME: Final = {
     "dict-type": (b'data: {"type": {"a": 1}}\n\n', b'data: {"text": "4111"}\n\n'),
     "error-frame-with-a-list-type": (b'event: error\ndata: {"type": []}\n\n', b'data: {"text": "4111"}\n\n'),
     "cut-character-at-the-end": (b'data: [5]\xe2',),
+    "word-then-non-object-before-gemini": (b"data: hello\n\n", b"data: 5\n\n", _GEMINI_TEXT_FRAME),
+    "null-then-non-object-before-gemini": (b"data: null\n\n", b"data: 5\n\n", _GEMINI_TEXT_FRAME),
+    "word-then-list-type-before-gemini": (b"data: hello\n\n", b'data: {"type": []}\n\n', _GEMINI_TEXT_FRAME),
 }
 
 
