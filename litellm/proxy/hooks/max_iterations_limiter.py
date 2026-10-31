@@ -11,6 +11,7 @@ Follows the same pattern as parallel_request_limiter_v3.py.
 """
 
 import os
+from datetime import timedelta
 from typing import TYPE_CHECKING, Any, Final
 
 from litellm import DualCache
@@ -21,6 +22,8 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
 from litellm.proxy.hooks.rate_limiter_utils import resolve_llm_provider_for_rate_limit
+from litellm.redis.stores.iteration_count import IterationCountStore, TransportIterationCountStore, count_key
+from litellm.redis.transport.contract import RedisFailure
 
 if TYPE_CHECKING:
     from litellm.proxy.utils import InternalUsageCache as _InternalUsageCache
@@ -29,21 +32,6 @@ if TYPE_CHECKING:
 else:
     InternalUsageCache = Any
 
-
-# Redis Lua script for atomic increment with TTL.
-# Returns the new count after increment.
-# Only sets EXPIRE on first increment (when count becomes 1).
-MAX_ITERATIONS_INCREMENT_SCRIPT: Final = """
-local key = KEYS[1]
-local ttl = tonumber(ARGV[1])
-
-local current = redis.call('INCR', key)
-if current == 1 then
-    redis.call('EXPIRE', key, ttl)
-end
-
-return current
-"""
 
 # Default TTL for session iteration counters (1 hour)
 DEFAULT_MAX_ITERATIONS_TTL: Final = 3600
@@ -64,22 +52,18 @@ class _PROXY_MaxIterationsHandler(CustomLogger):
         {session_iterations:<session_id>}:count
 
     Multi-instance support:
-        Uses Redis Lua script for atomic increment (same pattern as
-        parallel_request_limiter_v3). Falls back to in-memory cache
-        when Redis is unavailable.
+        Counts in Redis through the iteration count store, falls back to
+        in-memory cache when Redis is unavailable.
     """
 
     def __init__(self, internal_usage_cache: InternalUsageCache):
         self.internal_usage_cache = internal_usage_cache
         self.ttl = int(os.getenv("LITELLM_MAX_ITERATIONS_TTL", DEFAULT_MAX_ITERATIONS_TTL))
 
-        # Register Lua script with Redis if available (same pattern as v3 limiter)
-        if self.internal_usage_cache.dual_cache.redis_cache is not None:
-            self.increment_script = self.internal_usage_cache.dual_cache.redis_cache.async_register_script(
-                MAX_ITERATIONS_INCREMENT_SCRIPT
-            )
-        else:
-            self.increment_script = None
+        redis_cache: Final = self.internal_usage_cache.dual_cache.redis_cache
+        self._store: Final[IterationCountStore | None] = (
+            TransportIterationCountStore(redis_cache.transport()) if redis_cache is not None else None
+        )
 
     @with_service_target("session_iterations")
     async def async_pre_call_hook(
@@ -111,8 +95,7 @@ class _PROXY_MaxIterationsHandler(CustomLogger):
         )
 
         # Increment and check
-        cache_key: Final = self._make_cache_key(session_id)
-        current_count: Final = await self._increment_and_get(cache_key)
+        current_count: Final = await self._increment_and_get(session_id)
 
         if current_count > max_iterations:
             resolved_model, llm_provider = resolve_llm_provider_for_rate_limit(data.get("model") if data else None)
@@ -174,36 +157,16 @@ class _PROXY_MaxIterationsHandler(CustomLogger):
         return None
 
     def _make_cache_key(self, session_id: str) -> str:
-        """
-        Create cache key for session iteration counter.
+        return count_key(session_id)
 
-        Uses Redis hash-tag pattern {session_iterations:<session_id>} so all
-        keys for a session land on the same Redis Cluster slot.
-        """
-        return f"{{session_iterations:{session_id}}}:count"
+    async def _increment_and_get(self, session_id: str) -> int:
+        """Increment the session counter in Redis, or in memory when Redis is unavailable."""
+        if self._store is not None:
+            count: Final = await self._store.increment(session_id, ttl=timedelta(seconds=self.ttl))
+            if not isinstance(count, RedisFailure):
+                return count
 
-    async def _increment_and_get(self, cache_key: str) -> int:
-        """
-        Atomically increment the session counter and return the new value.
-
-        Tries Redis first (via registered Lua script for atomicity across
-        instances), falls back to in-memory cache.
-        """
-        if self.increment_script is not None:
-            try:
-                result: Final = await self.increment_script(
-                    keys=[cache_key],
-                    args=[self.ttl],
-                )
-                return int(result)
-            except Exception as e:
-                verbose_proxy_logger.warning(
-                    "MaxIterationsHandler: Redis failed, falling back to in-memory: %s",
-                    str(e),
-                )
-
-        # Fallback: in-memory cache
-        return await self._in_memory_increment(cache_key)
+        return await self._in_memory_increment(self._make_cache_key(session_id))
 
     async def _in_memory_increment(self, cache_key: str) -> int:
         """Increment counter in in-memory cache with TTL."""

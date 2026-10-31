@@ -6,8 +6,9 @@ Tests that session-scoped iteration counting works correctly:
 - Different sessions have independent counters
 """
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
+import fakeredis
 import pytest
 from fastapi import HTTPException
 
@@ -16,6 +17,7 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.hooks.max_iterations_limiter import PROXY_MaxIterationsHandler
 from litellm.proxy.utils import InternalUsageCache
 from litellm.types.agents import AgentResponse
+from tests._support.fake_redis import fake_redis_cache
 
 
 def _make_mock_agent(max_iterations: int) -> AgentResponse:
@@ -150,3 +152,56 @@ async def test_max_iterations_no_agent_id_passes():
         call_type="",
     )
     assert result is None
+
+
+def _redis_handler(server: fakeredis.FakeServer) -> PROXY_MaxIterationsHandler:
+    cache = fake_redis_cache(server, namespace="ns")
+    return PROXY_MaxIterationsHandler(internal_usage_cache=InternalUsageCache(DualCache(redis_cache=cache)))
+
+
+async def _call(handler: PROXY_MaxIterationsHandler, session_id: str, max_iterations: int) -> None:
+    with patch("litellm.proxy.agent_endpoints.agent_registry.global_agent_registry") as mock_registry:
+        mock_registry.get_agent_by_id.return_value = _make_mock_agent(max_iterations=max_iterations)
+        await handler.async_pre_call_hook(
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-test", agent_id="agent-test-123"),
+            cache=DualCache(),
+            data={"metadata": {"session_id": session_id}},
+            call_type="",
+        )
+
+
+@pytest.mark.asyncio
+async def test_iterations_count_in_redis_with_the_ttl_and_include_an_old_pods_calls():
+    server = fakeredis.FakeServer()
+    raw = fakeredis.FakeAsyncRedis(server=server)
+    handler = _redis_handler(server)
+    await raw.incr("ns:{session_iterations:s1}:count")
+
+    await _call(handler, "s1", max_iterations=3)
+    await _call(handler, "s1", max_iterations=3)
+    with pytest.raises(HTTPException) as exc_info:
+        await _call(handler, "s1", max_iterations=3)
+
+    assert exc_info.value.status_code == 429
+    assert await raw.get("ns:{session_iterations:s1}:count") == b"4"
+
+
+@pytest.mark.asyncio
+async def test_the_first_iteration_sets_the_ttl():
+    server = fakeredis.FakeServer()
+    raw = fakeredis.FakeAsyncRedis(server=server)
+
+    await _call(_redis_handler(server), "s1", max_iterations=3)
+
+    assert 3_590_000 < await raw.pttl("ns:{session_iterations:s1}:count") <= 3_600_000
+
+
+@pytest.mark.asyncio
+async def test_an_unreachable_redis_counts_iterations_in_memory():
+    server = fakeredis.FakeServer()
+    handler = _redis_handler(server)
+    server.connected = False
+
+    await _call(handler, "s1", max_iterations=1)
+    with pytest.raises(HTTPException):
+        await _call(handler, "s1", max_iterations=1)
