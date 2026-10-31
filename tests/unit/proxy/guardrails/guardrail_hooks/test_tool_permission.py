@@ -2,11 +2,12 @@
 Unit tests for Tool Permission Guardrail (OpenAI tool_calls semantics)
 """
 
+import copy
 import json
 import logging
 import re
 from itertools import chain
-from typing import Final
+from typing import Final, Literal
 from unittest.mock import patch
 
 import pytest
@@ -26,6 +27,7 @@ from litellm.types.proxy.guardrails.guardrail_hooks.tool_permission import (
     PermissionError,
 )
 from litellm.types.utils import (
+    CallTypesLiteral,
     ChatCompletionCustomToolCallPayload,
     ChatCompletionDeltaToolCall,
     ChatCompletionMessageCustomToolCall,
@@ -1360,6 +1362,1415 @@ class TestToolPermissionGuardrailAnthropicMessages:
 
     def _tool_use(self, name, tool_id="tu_1"):
         return {"type": "tool_use", "id": tool_id, "name": name, "input": {"command": "ls"}}
+
+    def _always_on_pre_call(self, on_disallowed_action: Literal["block", "rewrite"]) -> ToolPermissionGuardrail:
+        return ToolPermissionGuardrail(
+            guardrail_name=f"anthropic-pre-call-{on_disallowed_action}",
+            rules=self.rules,
+            default_action="deny",
+            on_disallowed_action=on_disallowed_action,
+            event_hook=GuardrailEventHooks.pre_call,
+            default_on=True,
+        )
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "denied_tool",
+        [
+            {"name": "Read", "input_schema": {"type": "object", "properties": {}}},
+            {"type": "custom", "name": "Read", "input_schema": {"type": "object", "properties": {}}},
+            {"type": "function", "name": "Read", "parameters": {"type": "object", "properties": {}}},
+        ],
+        ids=["anthropic", "anthropic_custom_type", "responses_api_flat_function"],
+    )
+    async def test_pre_call_blocks_denied_request_tool_in_flat_format(self, denied_tool: dict[str, object]) -> None:
+        data = {"model": "claude-sonnet-4-5", "messages": [{"role": "user", "content": "hi"}], "tools": [denied_tool]}
+
+        with pytest.raises(HTTPException) as excinfo:
+            await self._always_on_pre_call("block").async_pre_call_hook(
+                user_api_key_dict=UserAPIKeyAuth(),
+                cache=DualCache(default_in_memory_ttl=1),
+                data=data,
+                call_type="anthropic_messages",
+            )
+
+        assert excinfo.value.status_code == 400
+        assert excinfo.value.detail["detection_message"] == "Tool 'Read' denied by rule 'deny_read'"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("tool_fields", "rule_tool_type", "call_type"),
+        [
+            ({"format": {"type": "text"}}, r"^custom$", "responses"),
+            ({"input_schema": {"type": "object", "properties": {}}}, r"^function$", "anthropic_messages"),
+            ({"input_schema": {"type": "object", "properties": {}}}, r"^function$", "pass_through_endpoint"),
+            ({"custom": {"name": "apply_patch"}, "input_schema": {"type": "object"}}, r"^custom$", "acompletion"),
+        ],
+        ids=[
+            "responses_custom_stays_custom",
+            "anthropic_custom_reads_as_function",
+            "anthropic_custom_reads_as_function_on_a_pass_through_route",
+            "chat_custom_with_a_stray_input_schema_stays_custom",
+        ],
+    )
+    async def test_pre_call_tool_type_rules_follow_the_request_format(
+        self, tool_fields: dict[str, object], rule_tool_type: str, call_type: CallTypesLiteral
+    ) -> None:
+        guardrail = ToolPermissionGuardrail(
+            guardrail_name=f"tool-type-{call_type}",
+            rules=[{"id": "deny_type", "tool_type": rule_tool_type, "decision": "deny"}],
+            default_action="allow",
+            on_disallowed_action="block",
+            event_hook=GuardrailEventHooks.pre_call,
+            default_on=True,
+        )
+        data = {
+            "model": "claude-sonnet-4-5",
+            "messages": [{"role": "user", "content": "hi"}],
+            "tools": [{"type": "custom", "name": "apply_patch", **tool_fields}],
+        }
+
+        with pytest.raises(HTTPException) as excinfo:
+            await guardrail.async_pre_call_hook(
+                user_api_key_dict=UserAPIKeyAuth(),
+                cache=DualCache(default_in_memory_ttl=1),
+                data=data,
+                call_type=call_type,
+            )
+
+        assert excinfo.value.status_code == 400
+        assert excinfo.value.detail["detection_message"] == "Tool 'apply_patch' denied by rule 'deny_type'"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("tool_shape", "tool_choice", "call_type", "expected_tool_choice"),
+        [
+            (
+                {"input_schema": {"type": "object", "properties": {}}},
+                {"type": "tool", "name": "Read"},
+                "anthropic_messages",
+                {"type": "none"},
+            ),
+            (
+                {"type": "function", "parameters": {"type": "object", "properties": {}}},
+                {"type": "function", "name": "Read"},
+                "responses",
+                "none",
+            ),
+        ],
+        ids=["anthropic", "responses_api"],
+    )
+    async def test_pre_call_rewrite_strips_denied_flat_tool_and_forced_choice(
+        self,
+        tool_shape: dict[str, object],
+        tool_choice: dict[str, str],
+        call_type: CallTypesLiteral,
+        expected_tool_choice: dict[str, str] | str,
+    ) -> None:
+        data = {
+            "model": "claude-sonnet-4-5",
+            "messages": [{"role": "user", "content": "hi"}],
+            "tools": [{"name": "Bash", **tool_shape}, {"name": "Read", **tool_shape}],
+            "tool_choice": tool_choice,
+        }
+
+        result = await self._always_on_pre_call("rewrite").async_pre_call_hook(
+            user_api_key_dict=UserAPIKeyAuth(),
+            cache=DualCache(default_in_memory_ttl=1),
+            data=data,
+            call_type=call_type,
+        )
+
+        assert [tool["name"] for tool in result["tools"]] == ["Bash"]
+        assert result["tool_choice"] == expected_tool_choice
+
+    def _pre_call(
+        self,
+        rules: list[dict[str, str]],
+        on_disallowed_action: Literal["block", "rewrite"],
+        default_action: Literal["allow", "deny"] = "allow",
+    ) -> ToolPermissionGuardrail:
+        return ToolPermissionGuardrail(
+            guardrail_name=f"request-shapes-{on_disallowed_action}",
+            rules=rules,
+            default_action=default_action,
+            on_disallowed_action=on_disallowed_action,
+            event_hook=GuardrailEventHooks.pre_call,
+            default_on=True,
+        )
+
+    async def _run_pre_call(
+        self, guardrail: ToolPermissionGuardrail, data: dict[str, object], call_type: CallTypesLiteral
+    ) -> dict[str, object]:
+        return await guardrail.async_pre_call_hook(
+            user_api_key_dict=UserAPIKeyAuth(),
+            cache=DualCache(default_in_memory_ttl=1),
+            data=data,
+            call_type=call_type,
+        )
+
+    def _namespace(self, *member_names: str) -> dict[str, object]:
+        return {
+            "type": "namespace",
+            "name": "mcp__everything",
+            "tools": [{"type": "function", "name": name, "parameters": {"type": "object"}} for name in member_names],
+        }
+
+    @pytest.mark.asyncio
+    async def test_pre_call_blocks_a_denied_tool_inside_a_responses_namespace(self) -> None:
+        guardrail = self._pre_call(
+            [{"id": "deny_sum", "tool_name": r"^mcp__everything__get_sum$", "decision": "deny"}], "block"
+        )
+        data = {"model": "gpt-5", "input": "add 2 and 3", "tools": [self._namespace("echo", "get_sum")]}
+
+        with pytest.raises(HTTPException) as excinfo:
+            await self._run_pre_call(guardrail, data, "responses")
+
+        assert excinfo.value.detail["detection_message"] == "Tool 'mcp__everything__get_sum' denied by rule 'deny_sum'"
+
+    @pytest.mark.asyncio
+    async def test_pre_call_rewrite_drops_denied_namespace_members_and_empty_namespaces(self) -> None:
+        guardrail = self._pre_call([{"id": "deny_sum", "tool_name": r"^.*get_sum$", "decision": "deny"}], "rewrite")
+        partly_denied = {**self._namespace("echo", "get_sum"), "name": "mcp__kept"}
+        data = {"model": "gpt-5", "input": "add", "tools": [partly_denied, self._namespace("get_sum")]}
+
+        result = await self._run_pre_call(guardrail, data, "responses")
+
+        assert result["tools"] == [{**partly_denied, "tools": partly_denied["tools"][:1]}]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("rule", "tool", "call_type", "detection_message"),
+        [
+            (
+                {"id": "deny_mcp", "tool_type": r"^mcp$", "decision": "deny"},
+                {"type": "mcp", "server_label": "weather", "server_url": "https://mcp.example.com"},
+                "responses",
+                "Tool 'weather' denied by rule 'deny_mcp'",
+            ),
+            (
+                {"id": "allow_bash", "tool_name": r"^Bash$", "decision": "allow"},
+                {"type": "mcp_toolset", "mcp_server_name": "weather"},
+                "anthropic_messages",
+                "Tool 'weather' denied by default action",
+            ),
+            (
+                {"id": "deny_weather", "tool_name": r"^weather$", "decision": "deny"},
+                {"type": "mcp", "server_label": "weather", "server_url": "https://mcp.example.com"},
+                "responses",
+                "Tool 'weather' denied by rule 'deny_weather'",
+            ),
+            (
+                {"id": "deny_lookup", "tool_name": r"^mcp__weather__lookup$", "decision": "deny"},
+                {"type": "namespace", "name": "mcp__weather", "tools": [{"type": "custom", "name": "lookup"}]},
+                "responses",
+                "Tool 'mcp__weather__lookup' denied by rule 'deny_lookup'",
+            ),
+            (
+                {"id": "deny_lookup", "tool_name": r"^mcp__weather__lookup$", "decision": "deny"},
+                {"functionDeclarations": [{"name": "mcp__weather__lookup"}, {"name": "get_weather"}]},
+                "agenerate_content",
+                "Tool 'mcp__weather__lookup' denied by rule 'deny_lookup'",
+            ),
+            (
+                {"id": "allow_bash", "tool_name": r"^Bash$", "decision": "allow"},
+                {"googleSearch": {}},
+                "acompletion",
+                "Tool 'googleSearch' denied by default action",
+            ),
+            (
+                {"id": "deny_custom", "tool_type": r"^custom$", "decision": "deny"},
+                {"type": "custom", "custom": {"name": "grammar_tool"}},
+                "acompletion",
+                "Tool 'grammar_tool' denied by rule 'deny_custom'",
+            ),
+            (
+                {"id": "deny_read", "tool_name": r"^Read$", "decision": "deny"},
+                {"type": "custom", "custom": {"name": "Read"}},
+                "acompletion",
+                "Tool 'Read' denied by rule 'deny_read'",
+            ),
+        ],
+        ids=[
+            "responses_mcp_by_type",
+            "anthropic_mcp_toolset_by_server_name",
+            "responses_mcp_by_server_label",
+            "responses_namespace_custom_member",
+            "gemini_function_declarations",
+            "gemini_type_only_tool_by_its_key",
+            "chat_custom_keeps_its_type",
+            "chat_custom_nested_name",
+        ],
+    )
+    async def test_pre_call_checks_tools_that_carry_no_top_level_name(
+        self, rule: dict[str, str], tool: dict[str, object], call_type: CallTypesLiteral, detection_message: str
+    ) -> None:
+        guardrail = self._pre_call([rule], "block", default_action="deny")
+        data = {"model": "m", "messages": [{"role": "user", "content": "hi"}], "input": "hi", "tools": [tool]}
+
+        with pytest.raises(HTTPException) as excinfo:
+            await self._run_pre_call(guardrail, data, call_type)
+
+        assert excinfo.value.detail["detection_message"] == detection_message
+
+    @pytest.mark.asyncio
+    async def test_pre_call_lets_a_type_rule_allow_a_gemini_tool_by_its_key(self) -> None:
+        guardrail = self._pre_call(
+            [{"id": "allow_search", "tool_type": r"^googleSearch$", "decision": "allow"}], "block", default_action="deny"
+        )
+        data = {"model": "gemini-3", "messages": [{"role": "user", "content": "hi"}], "tools": [{"googleSearch": {}}]}
+
+        result = await self._run_pre_call(guardrail, data, "acompletion")
+
+        assert result["tools"] == [{"googleSearch": {}}]
+
+    @pytest.mark.asyncio
+    async def test_pre_call_blocks_a_denied_tool_loaded_by_responses_tool_search(self) -> None:
+        guardrail = self._pre_call([{"id": "deny_mcp", "tool_name": r"^mcp__.*$", "decision": "deny"}], "block")
+        loaded = {"type": "tool_search_output", "tools": [{"type": "function", "name": "mcp__weather__lookup"}]}
+        data = {"model": "gpt-5", "input": [loaded], "tools": []}
+
+        with pytest.raises(HTTPException) as excinfo:
+            await self._run_pre_call(guardrail, data, "responses")
+
+        assert excinfo.value.detail["detection_message"] == "Tool 'mcp__weather__lookup' denied by rule 'deny_mcp'"
+
+    @pytest.mark.asyncio
+    async def test_pre_call_rewrite_keeps_the_allowed_members_of_grouped_and_loaded_tools(self) -> None:
+        guardrail = self._pre_call([{"id": "deny_mcp", "tool_name": r"^mcp__.*$", "decision": "deny"}], "rewrite")
+        get_weather = {"type": "function", "name": "get_weather"}
+        lookup = {"type": "function", "name": "mcp__weather__lookup"}
+        data = {
+            "model": "m",
+            "input": [{"role": "user", "content": "hi"}, {"type": "tool_search_output", "tools": [get_weather, lookup]}],
+            "tools": [{"functionDeclarations": [{"name": "get_weather"}, {"name": "mcp__weather__lookup"}]}],
+        }
+
+        result = await self._run_pre_call(guardrail, data, "responses")
+
+        assert result["tools"] == [{"functionDeclarations": [{"name": "get_weather"}]}]
+        assert result["input"] == [
+            {"role": "user", "content": "hi"},
+            {"type": "tool_search_output", "tools": [get_weather]},
+        ]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("call_type", "message", "rewritten"),
+        [
+            (
+                "anthropic_messages",
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "toolu_1",
+                            "content": [{"type": "tool_reference", "tool_name": "mcp__weather__lookup"}],
+                        },
+                        {"type": "text", "text": "Tool loaded."},
+                    ],
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "toolu_1",
+                            "content": [
+                                {
+                                    "type": "text",
+                                    "text": "Permission denied: tool mcp__weather__lookup is not available",
+                                }
+                            ],
+                        },
+                        {"type": "text", "text": "Tool loaded."},
+                    ],
+                },
+            ),
+            (
+                "anthropic_messages",
+                {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "tool_search_tool_result",
+                            "tool_use_id": "srvtoolu_1",
+                            "content": {
+                                "type": "tool_search_tool_search_result",
+                                "tool_references": [
+                                    {"type": "tool_reference", "tool_name": "mcp__weather__lookup"},
+                                    {"type": "tool_reference", "tool_name": "get_weather"},
+                                ],
+                            },
+                        }
+                    ],
+                },
+                {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "tool_search_tool_result",
+                            "tool_use_id": "srvtoolu_1",
+                            "content": {
+                                "type": "tool_search_tool_search_result",
+                                "tool_references": [{"type": "tool_reference", "tool_name": "get_weather"}],
+                            },
+                        }
+                    ],
+                },
+            ),
+            (
+                "acompletion",
+                {
+                    "role": "tool",
+                    "tool_call_id": "call_1",
+                    "content": [
+                        {"type": "tool_reference", "tool_name": "mcp__weather__lookup"},
+                        {"type": "tool_reference", "tool_name": "get_weather"},
+                    ],
+                },
+                {
+                    "role": "tool",
+                    "tool_call_id": "call_1",
+                    "content": [{"type": "tool_reference", "tool_name": "get_weather"}],
+                },
+            ),
+        ],
+    )
+    async def test_pre_call_rewrite_drops_references_to_a_removed_tool(self, call_type, message, rewritten) -> None:
+        guardrail = self._pre_call([{"id": "deny_mcp", "tool_name": r"^mcp__.*$", "decision": "deny"}], "rewrite")
+        data = {
+            "model": "m",
+            "messages": [{"role": "user", "content": "weather in Istanbul"}, message],
+            "tools": [
+                {"name": "get_weather", "input_schema": {"type": "object"}, "defer_loading": True},
+                {"name": "mcp__weather__lookup", "input_schema": {"type": "object"}, "defer_loading": True},
+            ],
+        }
+
+        result = await self._run_pre_call(guardrail, data, call_type)
+
+        assert [tool["name"] for tool in result["tools"]] == ["get_weather"]
+        assert result["messages"] == [{"role": "user", "content": "weather in Istanbul"}, rewritten]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("tool_choice", ["required", {"type": "function", "name": "get_weather"}])
+    async def test_pre_call_rewrite_keeps_tool_choice_when_only_loaded_tools_remain(self, tool_choice) -> None:
+        guardrail = self._pre_call([{"id": "deny_mcp", "tool_name": r"^mcp__.*$", "decision": "deny"}], "rewrite")
+        get_weather = {"type": "function", "name": "get_weather"}
+        lookup = {"type": "function", "name": "mcp__weather__lookup"}
+        data = {
+            "model": "m",
+            "input": [{"role": "user", "content": "hi"}, {"type": "tool_search_output", "tools": [get_weather, lookup]}],
+            "tools": [lookup],
+            "tool_choice": tool_choice,
+        }
+
+        result = await self._run_pre_call(guardrail, data, "responses")
+
+        assert result["tools"] == []
+        assert result["input"][1] == {"type": "tool_search_output", "tools": [get_weather]}
+        assert result["tool_choice"] == tool_choice
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("rule", "tools", "tool_choice"),
+        [
+            (
+                {"id": "deny_search", "tool_type": r"^web_search$", "decision": "deny"},
+                [{"type": "web_search"}, {"type": "function", "name": "get_weather"}],
+                {"type": "web_search"},
+            ),
+            (
+                {"id": "deny_weather", "tool_name": r"^weather$", "decision": "deny"},
+                [
+                    {"type": "mcp", "server_label": "weather", "server_url": "https://a.example.com"},
+                    {"type": "mcp", "server_label": "files", "server_url": "https://b.example.com"},
+                ],
+                {"type": "mcp", "server_label": "weather"},
+            ),
+        ],
+        ids=["hosted_tool_type", "hosted_mcp_server"],
+    )
+    async def test_pre_call_rewrite_relaxes_a_hosted_tool_choice_it_removed(
+        self, rule: dict[str, str], tools: list[dict[str, str]], tool_choice: dict[str, str]
+    ) -> None:
+        guardrail = self._pre_call([rule], "rewrite")
+        data = {"model": "gpt-5", "input": "hi", "tools": tools, "tool_choice": tool_choice}
+
+        result = await self._run_pre_call(guardrail, data, "responses")
+
+        assert result["tools"] == tools[1:]
+        assert result["tool_choice"] == "none"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("tools", "tool_choice", "call_type", "expected_tool_choice"),
+        [
+            (
+                [{"type": "custom", "name": "Bash"}, {"type": "custom", "name": "Read"}],
+                {"type": "custom", "name": "Read"},
+                "responses",
+                "none",
+            ),
+            (
+                [{"type": "function", "name": "Bash"}, {"type": "function", "name": "Read"}],
+                {
+                    "type": "allowed_tools",
+                    "mode": "required",
+                    "tools": [{"type": "function", "name": "Read"}, {"type": "function", "name": "Bash"}],
+                },
+                "responses",
+                {"type": "allowed_tools", "mode": "required", "tools": [{"type": "function", "name": "Bash"}]},
+            ),
+            (
+                [{"type": "function", "name": "Bash"}, {"type": "function", "name": "Read"}],
+                {"type": "allowed_tools", "mode": "required", "tools": [{"type": "function", "name": "Read"}]},
+                "responses",
+                "none",
+            ),
+            (
+                [
+                    {"type": "function", "function": {"name": "Bash"}},
+                    {"type": "function", "function": {"name": "Read"}},
+                ],
+                {
+                    "type": "allowed_tools",
+                    "allowed_tools": {"mode": "auto", "tools": [{"type": "function", "function": {"name": "Read"}}]},
+                },
+                "acompletion",
+                "none",
+            ),
+            (
+                [{"name": "Read", "input_schema": {"type": "object"}}],
+                {"type": "any"},
+                "anthropic_messages",
+                {"type": "none"},
+            ),
+            (
+                [
+                    {"name": "Bash", "input_schema": {"type": "object"}},
+                    {"name": "Read", "input_schema": {"type": "object"}},
+                ],
+                {"type": "any"},
+                "anthropic_messages",
+                {"type": "any"},
+            ),
+            (
+                [{"type": "custom", "custom": {"name": "Bash"}}, {"type": "custom", "custom": {"name": "Read"}}],
+                {"type": "custom", "custom": {"name": "Read"}},
+                "acompletion",
+                "none",
+            ),
+        ],
+        ids=[
+            "responses_custom_choice",
+            "responses_allowed_tools_keeps_the_rest",
+            "responses_allowed_tools_all_denied",
+            "chat_allowed_tools_all_denied",
+            "anthropic_any_with_no_tools_left",
+            "anthropic_any_with_a_tool_left",
+            "chat_custom_choice",
+        ],
+    )
+    async def test_pre_call_rewrite_leaves_no_tool_choice_that_needs_a_removed_tool(
+        self,
+        tools: list[dict[str, object]],
+        tool_choice: dict[str, object],
+        call_type: CallTypesLiteral,
+        expected_tool_choice: dict[str, object] | str,
+    ) -> None:
+        guardrail = self._pre_call(self.rules, "rewrite")
+        data = {
+            "model": "m",
+            "messages": [{"role": "user", "content": "hi"}],
+            "tools": tools,
+            "tool_choice": tool_choice,
+        }
+
+        result = await self._run_pre_call(guardrail, data, call_type)
+
+        assert result["tool_choice"] == expected_tool_choice
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("tool", "tool_choice", "call_type", "allowed_tool_type"),
+        [
+            ({"type": "custom", "name": "apply_patch"}, {"type": "custom", "name": "apply_patch"}, "responses", r"^custom$"),
+            (
+                {"type": "web_search_20250305", "name": "web_search"},
+                {"type": "tool", "name": "web_search"},
+                "anthropic_messages",
+                r"^web_search_\d+$",
+            ),
+        ],
+        ids=["responses_custom_tool", "anthropic_server_tool"],
+    )
+    async def test_pre_call_checks_a_forced_choice_with_its_tool_type(
+        self,
+        tool: dict[str, str],
+        tool_choice: dict[str, str],
+        call_type: CallTypesLiteral,
+        allowed_tool_type: str,
+    ) -> None:
+        guardrail = self._pre_call(
+            [{"id": "allow_type", "tool_type": allowed_tool_type, "decision": "allow"}], "block", default_action="deny"
+        )
+        data = {"model": "m", "input": "hi", "tools": [tool], "tool_choice": tool_choice}
+
+        result = await self._run_pre_call(guardrail, data, call_type)
+
+        assert result["tools"] == [tool]
+        assert result["tool_choice"] == tool_choice
+
+    @pytest.mark.asyncio
+    async def test_pre_call_rewrite_relaxes_a_choice_for_a_tool_a_type_rule_removed(self) -> None:
+        guardrail = self._pre_call([{"id": "deny_custom", "tool_type": r"^custom$", "decision": "deny"}], "rewrite")
+        data = {
+            "model": "gpt-5",
+            "input": "patch it",
+            "tools": [{"type": "function", "name": "Bash"}, {"type": "custom", "name": "apply_patch"}],
+            "tool_choice": {"type": "custom", "name": "apply_patch"},
+        }
+
+        result = await self._run_pre_call(guardrail, data, "responses")
+
+        assert result["tools"] == [{"type": "function", "name": "Bash"}]
+        assert result["tool_choice"] == "none"
+
+    async def _blocked_and_rewritten(
+        self, rules: list[dict[str, str]], request: dict[str, object], call_type: CallTypesLiteral
+    ) -> tuple[str, dict[str, object]]:
+        with pytest.raises(HTTPException) as excinfo:
+            await self._run_pre_call(self._pre_call(rules, "block"), copy.deepcopy(request), call_type)
+        rewritten = await self._run_pre_call(self._pre_call(rules, "rewrite"), request, call_type)
+        return excinfo.value.detail["detection_message"], rewritten
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("denied_tool", "detection_message"),
+        [
+            (
+                {"type": "function", "name": "mcp__weather__lookup"},
+                "Tool 'mcp__weather__lookup' denied by rule 'deny_mcp'",
+            ),
+            (
+                {"type": "namespace", "name": "mcp__weather", "tools": [{"type": "function", "name": "lookup"}]},
+                "Tool 'mcp__weather__lookup' denied by rule 'deny_mcp'",
+            ),
+            ({"type": "web_search"}, "Tool 'web_search' denied by rule 'deny_search'"),
+        ],
+        ids=["flat", "namespace_member", "hosted_type"],
+    )
+    async def test_pre_call_checks_and_strips_tools_in_responses_additional_tools_items(
+        self, denied_tool: dict[str, object], detection_message: str
+    ) -> None:
+        rules = [
+            {"id": "deny_mcp", "tool_name": r"^mcp__.*$", "decision": "deny"},
+            {"id": "deny_search", "tool_type": r"^web_search$", "decision": "deny"},
+        ]
+        get_weather = {"type": "function", "name": "get_weather"}
+        request = {
+            "model": "gpt-5",
+            "input": [
+                {"role": "user", "content": "hi"},
+                {"type": "additional_tools", "tools": [get_weather, denied_tool]},
+                {"type": "additional_tools", "tools": [denied_tool]},
+            ],
+            "tools": [],
+            "tool_choice": "required",
+        }
+
+        message, rewritten = await self._blocked_and_rewritten(rules, request, "responses")
+
+        assert message == detection_message
+        assert rewritten["input"] == [
+            {"role": "user", "content": "hi"},
+            {"type": "additional_tools", "tools": [get_weather]},
+        ]
+        assert rewritten["tool_choice"] == "required"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("call_type", "bash", "read"),
+        [
+            (
+                "acompletion",
+                {"type": "function", "function": {"name": "Bash"}},
+                {"type": "function", "function": {"name": "Read"}},
+            ),
+            ("responses", {"type": "function", "name": "Bash"}, {"type": "function", "name": "Read"}),
+            (
+                "anthropic_messages",
+                {"name": "Bash", "input_schema": {"type": "object"}},
+                {"name": "Read", "input_schema": {"type": "object"}},
+            ),
+        ],
+        ids=["chat", "responses", "anthropic"],
+    )
+    async def test_pre_call_checks_and_strips_tools_in_extra_body(
+        self, call_type: CallTypesLiteral, bash: dict[str, object], read: dict[str, object]
+    ) -> None:
+        request = {
+            "model": "m",
+            "messages": [{"role": "user", "content": "hi"}],
+            "input": "hi",
+            "extra_body": {"tools": [bash, read], "seed": 7},
+        }
+
+        message, rewritten = await self._blocked_and_rewritten(self.rules, request, call_type)
+
+        assert message == "Tool 'Read' denied by rule 'deny_read'"
+        assert rewritten["extra_body"] == {"tools": [bash], "seed": 7}
+
+    @pytest.mark.asyncio
+    async def test_rewrite_relaxes_an_extra_body_tool_choice_that_names_a_dropped_tool(self) -> None:
+        guardrail = self._pre_call([{"id": "deny_delete", "tool_name": r"^delete_db$", "decision": "deny"}], "rewrite")
+        weather = {"type": "function", "function": {"name": "get_weather"}}
+        delete_db = {"type": "function", "function": {"name": "delete_db"}}
+        data = {
+            "model": "m",
+            "messages": [{"role": "user", "content": "hi"}],
+            "extra_body": {
+                "tools": [weather, delete_db],
+                "tool_choice": {"type": "function", "function": {"name": "delete_db"}},
+                "seed": 7,
+            },
+        }
+
+        result = await self._run_pre_call(guardrail, data, "acompletion")
+
+        assert result["extra_body"] == {"tools": [weather], "tool_choice": "none", "seed": 7}
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "rule",
+        [
+            {"id": "deny_deepwiki", "tool_name": r"^deepwiki$", "decision": "deny"},
+            {"id": "deny_deepwiki", "tool_name": r"^deepwiki$", "tool_type": r"^mcp_toolset$", "decision": "deny"},
+        ],
+        ids=["by_server_name", "by_server_name_and_mcp_toolset_type"],
+    )
+    async def test_pre_call_checks_and_strips_anthropic_mcp_servers_like_an_mcp_toolset(
+        self, rule: dict[str, str]
+    ) -> None:
+        deepwiki = {"type": "url", "url": "https://mcp.deepwiki.com/mcp", "name": "deepwiki"}
+        files = {"type": "url", "url": "https://files.example.com/mcp", "name": "files"}
+        request = {
+            "model": "claude-sonnet-4-5",
+            "messages": [{"role": "user", "content": "hi"}],
+            "mcp_servers": [deepwiki, files],
+            "tool_choice": {"type": "any"},
+        }
+
+        message, rewritten = await self._blocked_and_rewritten([rule], request, "anthropic_messages")
+
+        assert message == "Tool 'deepwiki' denied by rule 'deny_deepwiki'"
+        assert rewritten["mcp_servers"] == [files]
+        assert rewritten["tool_choice"] == {"type": "any"}
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("rule", "tool", "detection_message", "kept_tools"),
+        [
+            (
+                {"id": "deny_code", "tool_type": r"^codeExecution$", "decision": "deny"},
+                {"googleSearch": {}, "codeExecution": {}},
+                "Tool 'codeExecution' denied by rule 'deny_code'",
+                [{"googleSearch": {}}],
+            ),
+            (
+                {"id": "deny_mcp", "tool_name": r"^mcp__.*$", "decision": "deny"},
+                {"functionDeclarations": [{"name": "mcp__weather__lookup"}], "googleSearch": {}},
+                "Tool 'mcp__weather__lookup' denied by rule 'deny_mcp'",
+                [{"googleSearch": {}}],
+            ),
+            (
+                {"id": "deny_search", "tool_type": r"^googleSearch$", "decision": "deny"},
+                {"functionDeclarations": [{"name": "get_weather"}], "googleSearch": {}},
+                "Tool 'googleSearch' denied by rule 'deny_search'",
+                [{"functionDeclarations": [{"name": "get_weather"}]}],
+            ),
+            (
+                {"id": "deny_builtin", "tool_type": r"^(googleSearch|codeExecution)$", "decision": "deny"},
+                {"googleSearch": {}, "codeExecution": {}},
+                "Tool 'googleSearch' denied by rule 'deny_builtin'",
+                [],
+            ),
+        ],
+        ids=["denied_key_beside_a_key", "every_declaration_denied", "denied_key_beside_declarations", "all_denied"],
+    )
+    async def test_pre_call_checks_and_strips_each_part_of_a_multi_key_gemini_tool(
+        self,
+        rule: dict[str, str],
+        tool: dict[str, object],
+        detection_message: str,
+        kept_tools: list[dict[str, object]],
+    ) -> None:
+        request = {"model": "gemini-3", "contents": [{"role": "user", "parts": [{"text": "hi"}]}], "tools": [tool]}
+
+        message, rewritten = await self._blocked_and_rewritten([rule], request, "agenerate_content")
+
+        assert message == detection_message
+        assert rewritten["tools"] == kept_tools
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("on_disallowed_action", ["block", "rewrite"])
+    @pytest.mark.parametrize(
+        ("tool", "call_type"),
+        [({"type": "web_search"}, "responses"), ({"googleSearch": {}}, "acompletion")],
+        ids=["responses_hosted_type", "gemini_tool_key"],
+    )
+    async def test_pre_call_matches_a_name_rule_against_a_nameless_tool_by_its_type(
+        self,
+        tool: dict[str, object],
+        call_type: CallTypesLiteral,
+        on_disallowed_action: Literal["block", "rewrite"],
+    ) -> None:
+        guardrail = self._pre_call(
+            [{"id": "allow_all", "tool_name": r".*", "decision": "allow"}], on_disallowed_action, default_action="deny"
+        )
+        data = {"model": "m", "messages": [{"role": "user", "content": "hi"}], "input": "hi", "tools": [tool]}
+
+        result = await self._run_pre_call(guardrail, data, call_type)
+
+        assert result["tools"] == [tool]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("rules", "default_action", "detection_message"),
+        [
+            (
+                [{"id": "deny_exec", "tool_name": r"^exec$", "decision": "deny"}],
+                "allow",
+                "Tool 'exec' denied by rule 'deny_exec'",
+            ),
+            ([{"id": "allow_exec", "tool_name": r"^exec$", "decision": "allow"}], "deny", None),
+            (
+                [
+                    {"id": "allow_exec", "tool_name": r"^exec$", "decision": "allow"},
+                    {"id": "deny_functions", "tool_name": r"^functions__.*$", "decision": "deny"},
+                ],
+                "allow",
+                "Tool 'functions__exec' denied by rule 'deny_functions'",
+            ),
+            (
+                [
+                    {"id": "deny_exec", "tool_name": r"^exec$", "decision": "deny"},
+                    {"id": "allow_functions", "tool_type": r"^function$", "decision": "allow"},
+                ],
+                "allow",
+                "Tool 'exec' denied by rule 'deny_exec'",
+            ),
+            (
+                [
+                    {"id": "deny_exec", "tool_name": r"^exec$", "decision": "deny"},
+                    {"id": "allow_all", "tool_name": r"^.*$", "decision": "allow"},
+                ],
+                "deny",
+                "Tool 'exec' denied by rule 'deny_exec'",
+            ),
+            (
+                [
+                    {"id": "allow_functions", "tool_name": r"^functions__.*$", "decision": "allow"},
+                    {"id": "deny_all", "tool_name": r"^.*$", "decision": "deny"},
+                ],
+                "allow",
+                None,
+            ),
+        ],
+        ids=[
+            "bare_name_deny_rule",
+            "bare_name_allow_rule",
+            "qualified_rule_wins_over_an_earlier_bare_rule",
+            "type_rule_keeps_an_earlier_bare_name_rule_in_charge",
+            "bare_name_deny_beats_a_later_catch_all_allow",
+            "qualified_allow_beats_a_later_catch_all_deny",
+        ],
+    )
+    async def test_pre_call_judges_a_namespace_member_by_its_qualified_and_bare_names(
+        self, rules: list[dict[str, str]], default_action: Literal["allow", "deny"], detection_message: str | None
+    ) -> None:
+        guardrail = self._pre_call(rules, "block", default_action=default_action)
+        namespace = {"type": "namespace", "name": "functions", "tools": [{"type": "function", "name": "exec"}]}
+        data = {"model": "gpt-5", "input": "run date", "tools": [namespace]}
+
+        if detection_message is None:
+            assert (await self._run_pre_call(guardrail, data, "responses"))["tools"] == [namespace]
+            return
+        with pytest.raises(HTTPException) as excinfo:
+            await self._run_pre_call(guardrail, data, "responses")
+        assert excinfo.value.detail["detection_message"] == detection_message
+
+    @pytest.mark.asyncio
+    async def test_pre_call_rewrite_drops_a_namespace_member_a_bare_name_rule_denies(self) -> None:
+        guardrail = self._pre_call([{"id": "deny_exec", "tool_name": r"^exec$", "decision": "deny"}], "rewrite")
+        members = [{"type": "function", "name": "exec"}, {"type": "function", "name": "read_file"}]
+        namespace = {"type": "namespace", "name": "functions", "tools": members}
+        data = {"model": "gpt-5", "input": "run date", "tools": [namespace]}
+
+        result = await self._run_pre_call(guardrail, data, "responses")
+
+        assert result["tools"] == [{"type": "namespace", "name": "functions", "tools": members[1:]}]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("placement", ["tools", "functions"])
+    @pytest.mark.parametrize("on_disallowed_action", ["block", "rewrite"])
+    @pytest.mark.parametrize(
+        ("member", "detection_message"),
+        [
+            ({"type": "function", "function": {"name": "delete_db"}}, "Tool 'delete_db' denied by rule 'deny_delete'"),
+            (
+                {"type": "function", "name": "lookup", "function": {"name": "delete_db"}},
+                "Tool 'delete_db' denied by rule 'deny_delete'",
+            ),
+            ({"googleSearch": {}}, "Tool 'googleSearch' denied by rule 'deny_search'"),
+            (
+                {
+                    "type": "namespace",
+                    "name": "inner",
+                    "tools": [{"type": "function", "name": "noop"}],
+                    "function": {"name": "delete_db"},
+                },
+                "Tool 'delete_db' denied by rule 'deny_delete'",
+            ),
+        ],
+        ids=["chat_shaped_member", "function_object_behind_another_name", "hosted_key_member", "nested_namespace"],
+    )
+    async def test_pre_call_judges_a_namespace_member_by_what_a_provider_reads_from_it(
+        self,
+        member: dict[str, object],
+        detection_message: str,
+        on_disallowed_action: Literal["block", "rewrite"],
+        placement: Literal["tools", "functions"],
+    ) -> None:
+        guardrail = self._pre_call(
+            [
+                {"id": "deny_delete", "tool_name": r"^delete_db$", "decision": "deny"},
+                {"id": "deny_search", "tool_type": r"^googleSearch$", "decision": "deny"},
+            ],
+            on_disallowed_action,
+        )
+        weather = {"type": "function", "name": "get_weather"}
+        data = {
+            "model": "gemini-3",
+            "messages": [{"role": "user", "content": "hi"}],
+            placement: [{"type": "namespace", "name": "ops", "tools": [weather, member]}],
+        }
+
+        if on_disallowed_action == "block":
+            with pytest.raises(HTTPException) as excinfo:
+                await self._run_pre_call(guardrail, data, "acompletion")
+            assert excinfo.value.detail["detection_message"] == detection_message
+            return
+
+        result = await self._run_pre_call(guardrail, data, "acompletion")
+
+        assert result[placement] == [{"type": "namespace", "name": "ops", "tools": [weather]}]
+
+    @pytest.mark.asyncio
+    async def test_pre_call_allows_a_chat_shaped_namespace_member_the_allowlist_names(self) -> None:
+        guardrail = self._pre_call(
+            [{"id": "allow_create", "tool_name": r"^github__create_issue$", "decision": "allow"}],
+            "block",
+            default_action="deny",
+        )
+        namespace = {
+            "type": "namespace",
+            "name": "github",
+            "tools": [{"type": "function", "function": {"name": "create_issue"}}],
+        }
+        data = {"model": "gemini-3", "messages": [{"role": "user", "content": "hi"}], "tools": [namespace]}
+
+        result = await self._run_pre_call(guardrail, data, "acompletion")
+
+        assert result["tools"] == [namespace]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("tool_config", "rewritten_tool_config"),
+        [
+            (
+                {
+                    "functionCallingConfig": {
+                        "mode": "ANY",
+                        "allowedFunctionNames": ["mcp__weather__lookup", "get_weather"],
+                    }
+                },
+                {"functionCallingConfig": {"mode": "ANY", "allowedFunctionNames": ["get_weather"]}},
+            ),
+            (
+                {"functionCallingConfig": {"mode": "ANY", "allowedFunctionNames": ["mcp__weather__lookup"]}},
+                {"functionCallingConfig": {"mode": "NONE"}},
+            ),
+            (
+                {"function_calling_config": {"mode": "any", "allowed_function_names": ["mcp__weather__lookup"]}},
+                {"function_calling_config": {"mode": "NONE"}},
+            ),
+            ({"functionCallingConfig": {"mode": "ANY"}}, {"functionCallingConfig": {"mode": "ANY"}}),
+            (
+                {"functionCallingConfig": {"mode": "AUTO", "allowedFunctionNames": []}},
+                {"functionCallingConfig": {"mode": "AUTO", "allowedFunctionNames": []}},
+            ),
+        ],
+        ids=[
+            "some_allowed_names_left",
+            "every_allowed_name_removed",
+            "snake_case_fields",
+            "no_allowed_names",
+            "empty_allowed_names_list",
+        ],
+    )
+    async def test_pre_call_rewrite_drops_removed_functions_from_a_gemini_tool_config(
+        self, tool_config: dict[str, object], rewritten_tool_config: dict[str, object]
+    ) -> None:
+        guardrail = self._pre_call([{"id": "deny_mcp", "tool_name": r"^mcp__.*$", "decision": "deny"}], "rewrite")
+        config_key = "tool_config" if "function_calling_config" in tool_config else "toolConfig"
+        data = {
+            "model": "gemini-3",
+            "contents": [{"role": "user", "parts": [{"text": "weather in Paris?"}]}],
+            "tools": [{"functionDeclarations": [{"name": "mcp__weather__lookup"}, {"name": "get_weather"}]}],
+            config_key: tool_config,
+        }
+
+        result = await self._run_pre_call(guardrail, data, "agenerate_content")
+
+        assert result["tools"] == [{"functionDeclarations": [{"name": "get_weather"}]}]
+        assert result[config_key] == rewritten_tool_config
+
+    @pytest.mark.asyncio
+    async def test_pre_call_rewrite_turns_off_forced_gemini_calling_when_no_function_is_left(self) -> None:
+        guardrail = self._pre_call([{"id": "deny_mcp", "tool_name": r"^mcp__.*$", "decision": "deny"}], "rewrite")
+        data = {
+            "model": "gemini-3",
+            "contents": [{"role": "user", "parts": [{"text": "weather in Paris?"}]}],
+            "tools": [{"functionDeclarations": [{"name": "mcp__weather__lookup"}]}, {"googleSearch": {}}],
+            "toolConfig": {"functionCallingConfig": {"mode": "ANY"}},
+        }
+
+        result = await self._run_pre_call(guardrail, data, "agenerate_content")
+
+        assert result["tools"] == [{"googleSearch": {}}]
+        assert result["toolConfig"] == {"functionCallingConfig": {"mode": "NONE"}}
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("on_disallowed_action", ["block", "rewrite"])
+    async def test_pre_call_judges_a_named_hosted_tool_by_its_type_as_well_as_its_name(
+        self, on_disallowed_action: Literal["block", "rewrite"]
+    ) -> None:
+        guardrail = self._pre_call(
+            [{"id": "allow_weather", "tool_name": r"^get_weather$", "decision": "allow"}],
+            on_disallowed_action,
+            default_action="deny",
+        )
+        weather = {"type": "function", "function": {"name": "get_weather"}}
+        data = {
+            "model": "gemini-3",
+            "messages": [{"role": "user", "content": "hi"}],
+            "tools": [weather, {"type": "web_search", "name": "get_weather"}],
+        }
+
+        if on_disallowed_action == "block":
+            with pytest.raises(HTTPException) as excinfo:
+                await self._run_pre_call(guardrail, data, "acompletion")
+            assert excinfo.value.detail["detection_message"] == "Tool 'web_search' denied by default action"
+            return
+
+        result = await self._run_pre_call(guardrail, data, "acompletion")
+
+        assert result["tools"] == [weather]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "rules, tool",
+        [
+            (
+                [{"id": "allow_bash", "tool_name": r"^bash$", "decision": "allow"}],
+                {"type": "bash_20250124", "name": "bash"},
+            ),
+            (
+                [{"id": "allow_edit", "tool_name": r"^str_replace_based_edit_tool$", "decision": "allow"}],
+                {"type": "text_editor_20250728", "name": "str_replace_based_edit_tool"},
+            ),
+            (
+                [{"id": "allow_search", "tool_name": r"^web_search$", "decision": "allow"}],
+                {"type": "web_search_20250305", "name": "web_search"},
+            ),
+            (
+                [
+                    {
+                        "id": "allow_search",
+                        "tool_name": r"^web_search$",
+                        "tool_type": r"^web_search_20250305$",
+                        "decision": "allow",
+                    }
+                ],
+                {"type": "web_search_20250305", "name": "web_search"},
+            ),
+        ],
+        ids=["client_tool_by_name", "client_tool_with_its_own_name", "server_tool_by_name", "name_and_type_rule"],
+    )
+    async def test_pre_call_allows_an_anthropic_defined_tool_that_an_allowlist_names(
+        self, rules: list[dict[str, object]], tool: dict[str, object]
+    ) -> None:
+        guardrail = self._pre_call(rules, "block", default_action="deny")
+        data = {"model": "claude-sonnet-4-5", "messages": [{"role": "user", "content": "hi"}], "tools": [tool]}
+
+        result = await self._run_pre_call(guardrail, data, "acompletion")
+
+        assert result["tools"] == [tool]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "tool, call_type",
+        [
+            ({"type": "web_search_20250305", "name": "get_weather"}, "anthropic_messages"),
+            (
+                {
+                    "type": "computer_20251124",
+                    "name": "get_weather",
+                    "function": {"parameters": {"display_width_px": 1024, "display_height_px": 768}},
+                },
+                "acompletion",
+            ),
+            ({"type": "computer_use", "name": "get_weather", "environment": "browser"}, "acompletion"),
+            ({"type": "text_editor_20250728", "name": "get_weather"}, "anthropic_messages"),
+        ],
+        ids=["server_tool", "anthropic_computer_tool", "gemini_computer_use", "text_editor"],
+    )
+    async def test_pre_call_blocks_a_provider_defined_tool_whose_name_is_not_its_own(
+        self, tool: dict[str, object], call_type: CallTypesLiteral
+    ) -> None:
+        guardrail = self._pre_call(
+            [{"id": "allow_weather", "tool_name": r"^get_weather$", "decision": "allow"}],
+            "block",
+            default_action="deny",
+        )
+        data = {"model": "gemini-3", "messages": [{"role": "user", "content": "hi"}], "tools": [tool]}
+
+        with pytest.raises(HTTPException) as excinfo:
+            await self._run_pre_call(guardrail, data, call_type)
+
+        assert excinfo.value.detail["detection_message"] == f"Tool '{tool['type']}' denied by default action"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("on_disallowed_action", ["block", "rewrite"])
+    @pytest.mark.parametrize(
+        "tool",
+        [
+            {"type": "function", "function": {"name": "delete_db"}, "functionDeclarations": [{"name": "get_weather"}]},
+            {"type": "function", "function": {"name": "delete_db"}, "function_declarations": [{"name": "get_weather"}]},
+            {"type": "custom", "name": "get_weather", "function": {"name": "delete_db"}},
+            {"type": "mcp", "server_label": "get_weather", "function": {"name": "delete_db"}},
+            {
+                "type": "namespace",
+                "name": "github",
+                "tools": [{"type": "function", "name": "create_issue"}],
+                "function": {"name": "delete_db"},
+            },
+            {
+                "type": "computer_20251124",
+                "name": "computer",
+                "function": {"name": "delete_db", "parameters": {"display_width_px": 1024, "display_height_px": 768}},
+            },
+        ],
+        ids=[
+            "declarations_list",
+            "snake_case_declarations_list",
+            "custom_top_level_name",
+            "mcp_server_label",
+            "namespace_with_members",
+            "computer_top_level_name",
+        ],
+    )
+    async def test_pre_call_judges_the_function_a_tool_runs_behind_an_allowed_name(
+        self, tool: dict[str, object], on_disallowed_action: Literal["block", "rewrite"]
+    ) -> None:
+        guardrail = self._pre_call(
+            [{"id": "allow_known", "tool_name": r"^(get_weather|computer|github__create_issue)$", "decision": "allow"}],
+            on_disallowed_action,
+            default_action="deny",
+        )
+        weather = {"type": "function", "function": {"name": "get_weather"}}
+        data = {"model": "gemini-3", "messages": [{"role": "user", "content": "hi"}], "tools": [weather, tool]}
+
+        if on_disallowed_action == "block":
+            with pytest.raises(HTTPException) as excinfo:
+                await self._run_pre_call(guardrail, data, "acompletion")
+            assert excinfo.value.detail["detection_message"] == "Tool 'delete_db' denied by default action"
+            return
+
+        result = await self._run_pre_call(guardrail, data, "acompletion")
+
+        assert result["tools"] == [weather]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("on_disallowed_action", ["block", "rewrite"])
+    @pytest.mark.parametrize(
+        ("tool", "hosted_key"),
+        [
+            ({"type": "get_weather", "googleSearch": {}}, "googleSearch"),
+            ({"type": "function", "codeExecution": {}}, "codeExecution"),
+            ({"type": "get_weather", "url_context": {}}, "url_context"),
+        ],
+        ids=["named_type_google_search", "function_type_code_execution", "named_type_url_context"],
+    )
+    async def test_pre_call_judges_a_gemini_hosted_tool_key_whatever_the_tool_type(
+        self, tool: dict[str, object], hosted_key: str, on_disallowed_action: Literal["block", "rewrite"]
+    ) -> None:
+        guardrail = self._pre_call(
+            [
+                {"id": "allow_weather", "tool_name": r"^get_weather$", "decision": "allow"},
+                {"id": "allow_functions", "tool_type": r"^function$", "decision": "allow"},
+            ],
+            on_disallowed_action,
+            default_action="deny",
+        )
+        weather = {"type": "function", "function": {"name": "get_weather"}}
+        data = {"model": "gemini-3", "messages": [{"role": "user", "content": "hi"}], "tools": [weather, tool]}
+
+        if on_disallowed_action == "block":
+            with pytest.raises(HTTPException) as excinfo:
+                await self._run_pre_call(guardrail, data, "acompletion")
+            assert excinfo.value.detail["detection_message"] == f"Tool '{hosted_key}' denied by default action"
+            return
+
+        result = await self._run_pre_call(guardrail, data, "acompletion")
+
+        assert result["tools"] == [weather]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("on_disallowed_action", ["block", "rewrite"])
+    async def test_pre_call_leaves_a_gemini_hosted_key_that_sits_beside_a_function(
+        self, on_disallowed_action: Literal["block", "rewrite"]
+    ) -> None:
+        guardrail = self._pre_call(
+            [{"id": "allow_weather", "tool_name": r"^get_weather$", "decision": "allow"}],
+            on_disallowed_action,
+            default_action="deny",
+        )
+        tool = {"type": "function", "function": {"name": "get_weather"}, "googleSearch": {}}
+        data = {"model": "gemini-3", "messages": [{"role": "user", "content": "hi"}], "tools": [tool]}
+
+        result = await self._run_pre_call(guardrail, data, "acompletion")
+
+        assert result["tools"] == [tool]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("on_disallowed_action", ["block", "rewrite"])
+    @pytest.mark.parametrize(
+        ("function", "denied"),
+        [
+            ({"type": "function", "function": {"name": "delete_db"}}, "delete_db"),
+            ({"name": "get_weather", "function": {"name": "delete_db"}}, "delete_db"),
+            ({"googleSearch": {}}, "googleSearch"),
+        ],
+        ids=["function_object", "function_object_behind_an_allowed_name", "gemini_hosted_key"],
+    )
+    async def test_pre_call_judges_a_legacy_functions_entry_like_a_tool(
+        self, function: dict[str, object], denied: str, on_disallowed_action: Literal["block", "rewrite"]
+    ) -> None:
+        guardrail = self._pre_call(
+            [{"id": "allow_weather", "tool_name": r"^get_weather$", "decision": "allow"}],
+            on_disallowed_action,
+            default_action="deny",
+        )
+        weather = {"name": "get_weather"}
+        data = {
+            "model": "gemini-3",
+            "messages": [{"role": "user", "content": "hi"}],
+            "functions": [weather, function],
+        }
+
+        if on_disallowed_action == "block":
+            with pytest.raises(HTTPException) as excinfo:
+                await self._run_pre_call(guardrail, data, "acompletion")
+            assert excinfo.value.detail["detection_message"] == f"Tool '{denied}' denied by default action"
+            return
+
+        result = await self._run_pre_call(guardrail, data, "acompletion")
+
+        assert result["functions"] == [weather]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("on_disallowed_action", ["block", "rewrite"])
+    async def test_pre_call_judges_a_legacy_functions_entry_as_a_function_whatever_its_type(
+        self, on_disallowed_action: Literal["block", "rewrite"]
+    ) -> None:
+        guardrail = self._pre_call(
+            [{"id": "deny_delete", "tool_name": r"^delete_db$", "tool_type": r"^function$", "decision": "deny"}],
+            on_disallowed_action,
+        )
+        weather = {"name": "get_weather"}
+        data = {
+            "model": "gemini-3",
+            "messages": [{"role": "user", "content": "hi"}],
+            "functions": [weather, {"type": "custom", "name": "delete_db"}],
+        }
+
+        if on_disallowed_action == "block":
+            with pytest.raises(HTTPException) as excinfo:
+                await self._run_pre_call(guardrail, data, "acompletion")
+            assert excinfo.value.detail["detection_message"] == "Tool 'delete_db' denied by rule 'deny_delete'"
+            return
+
+        result = await self._run_pre_call(guardrail, data, "acompletion")
+
+        assert result["functions"] == [weather]
+
+    @pytest.mark.asyncio
+    async def test_rewrite_keeps_an_allowed_function_whose_declaration_list_is_denied(self) -> None:
+        guardrail = self._pre_call(
+            [{"id": "allow_weather", "tool_name": r"^get_weather$", "decision": "allow"}],
+            "rewrite",
+            default_action="deny",
+        )
+        tool = {
+            "type": "function",
+            "function": {"name": "get_weather"},
+            "functionDeclarations": [{"name": "delete_db"}],
+        }
+        data = {"model": "gemini-3", "messages": [{"role": "user", "content": "hi"}], "tools": [tool]}
+
+        result = await self._run_pre_call(guardrail, data, "acompletion")
+
+        assert result["tools"] == [{"type": "function", "function": {"name": "get_weather"}}]
+
+    @pytest.mark.asyncio
+    async def test_pre_call_allows_a_custom_tool_by_its_function_name(self) -> None:
+        guardrail = self._pre_call(
+            [{"id": "allow_weather", "tool_name": r"^get_weather$", "decision": "allow"}],
+            "block",
+            default_action="deny",
+        )
+        tool = {"type": "custom", "function": {"name": "get_weather"}}
+        data = {"model": "claude-sonnet-4-5", "messages": [{"role": "user", "content": "hi"}], "tools": [tool]}
+
+        result = await self._run_pre_call(guardrail, data, "acompletion")
+
+        assert result["tools"] == [tool]
+
+    @pytest.mark.asyncio
+    async def test_pre_call_blocks_a_tool_whose_type_is_not_a_string_by_its_name(self) -> None:
+        guardrail = self._pre_call(
+            [
+                {"id": "allow_search", "tool_type": r"^web_search$", "decision": "allow"},
+                {"id": "deny_read", "tool_name": r"^Read$", "decision": "deny"},
+            ],
+            "block",
+        )
+        data = {
+            "model": "claude-sonnet-4-5",
+            "messages": [{"role": "user", "content": "hi"}],
+            "tools": [{"type": ["custom"], "name": "Read", "input_schema": {"type": "object"}}],
+        }
+
+        with pytest.raises(HTTPException) as excinfo:
+            await self._run_pre_call(guardrail, data, "anthropic_messages")
+
+        assert excinfo.value.status_code == 400
+        assert excinfo.value.detail["detection_message"] == "Tool 'Read' denied by rule 'deny_read'"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("malformed_tool", "tool_choice", "call_type"),
+        [
+            ({"type": ["custom"], "name": "Read", "input_schema": {"type": "object"}}, None, "anthropic_messages"),
+            ({"type": "function", "name": "Read"}, {"type": {"a": 1}}, "responses"),
+        ],
+        ids=["tool_type_is_a_list", "tool_choice_type_is_an_object"],
+    )
+    async def test_pre_call_rewrite_strips_a_denied_tool_and_leaves_malformed_fields_for_the_provider(
+        self, malformed_tool: dict[str, object], tool_choice: dict[str, object] | None, call_type: CallTypesLiteral
+    ) -> None:
+        guardrail = self._pre_call([{"id": "deny_read", "tool_name": r"^Read$", "decision": "deny"}], "rewrite")
+        bash = {"type": "function", "name": "Bash"}
+        data = {
+            "model": "m",
+            "messages": [{"role": "user", "content": "hi"}],
+            "tools": [bash, malformed_tool],
+            **({"tool_choice": tool_choice} if tool_choice is not None else {}),
+        }
+
+        result = await self._run_pre_call(guardrail, data, call_type)
+
+        assert result["tools"] == [bash]
+        assert result.get("tool_choice") == tool_choice
+
+    @pytest.mark.asyncio
+    async def test_pre_call_judges_a_tool_with_a_null_type_by_its_nested_function_name(self) -> None:
+        guardrail = self._pre_call(
+            [{"id": "allow_read", "tool_name": r"^Read$", "decision": "allow"}], "block", default_action="deny"
+        )
+        tool = {"type": None, "function": {"name": "Read", "parameters": {"type": "object"}}}
+        data = {"model": "gpt-5", "messages": [{"role": "user", "content": "hi"}], "tools": [tool]}
+
+        result = await self._run_pre_call(guardrail, data, "acompletion")
+
+        assert result["tools"] == [tool]
+
+    @pytest.mark.asyncio
+    async def test_pre_call_rewrite_drops_a_removed_hosted_tool_from_allowed_tools(self) -> None:
+        guardrail = self._pre_call([{"id": "deny_search", "tool_type": r"^web_search$", "decision": "deny"}], "rewrite")
+        weather = {"type": "function", "name": "get_weather"}
+        tool_choice = {"type": "allowed_tools", "mode": "required", "tools": [weather, {"type": "web_search"}]}
+        data = {"model": "gpt-5", "input": "hi", "tools": [weather, {"type": "web_search"}], "tool_choice": tool_choice}
+
+        result = await self._run_pre_call(guardrail, data, "responses")
+
+        assert result["tools"] == [weather]
+        assert result["tool_choice"] == {"type": "allowed_tools", "mode": "required", "tools": [weather]}
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("tools", [{"not": "a list"}, '[{"type": "function"}]'], ids=["object", "json_string"])
+    async def test_pre_call_rewrite_leaves_a_tools_field_that_is_not_a_list_for_the_provider_to_reject(
+        self, tools: object
+    ) -> None:
+        guardrail = self._pre_call([{"id": "deny_mcp", "tool_name": r"^mcp__.*$", "decision": "deny"}], "rewrite")
+        data = {
+            "model": "gpt-5",
+            "messages": [{"role": "user", "content": "hi"}],
+            "tools": tools,
+            "tool_choice": {"type": "function", "function": {"name": "mcp__weather__lookup"}},
+        }
+
+        result = await self._run_pre_call(guardrail, data, "acompletion")
+
+        assert result["tools"] == tools
+        assert result["tool_choice"] == "none"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("on_disallowed_action", ["block", "rewrite"])
+    async def test_pre_call_reads_bedrock_tool_blocks_by_name_and_skips_cache_points(
+        self, on_disallowed_action: Literal["block", "rewrite"]
+    ) -> None:
+        guardrail = self._pre_call(
+            [{"id": "allow_weather", "tool_name": r"^get_weather$", "decision": "allow"}],
+            on_disallowed_action,
+            default_action="deny",
+        )
+        weather = {"toolSpec": {"name": "get_weather", "inputSchema": {"json": {}}}}
+        tools = [weather, {"cachePoint": {"type": "default"}}]
+        data = {"model": "bedrock/claude", "messages": [{"role": "user", "content": "hi"}], "tools": tools}
+
+        result = await self._run_pre_call(guardrail, data, "acompletion")
+
+        assert result["tools"] == tools
+
+    @pytest.mark.asyncio
+    async def test_pre_call_rewrite_drops_a_denied_bedrock_tool_block_by_its_name(self) -> None:
+        guardrail = self._pre_call([{"id": "deny_mcp", "tool_name": r"^mcp__.*$", "decision": "deny"}], "rewrite")
+        kept = [{"toolSpec": {"name": "get_weather"}}, {"cachePoint": {"type": "default"}}]
+        data = {
+            "model": "bedrock/claude",
+            "messages": [{"role": "user", "content": "hi"}],
+            "tools": [{"toolSpec": {"name": "mcp__weather__lookup"}}, *kept],
+        }
+
+        result = await self._run_pre_call(guardrail, data, "acompletion")
+
+        assert result["tools"] == kept
 
     @pytest.mark.asyncio
     async def test_denied_anthropic_tool_use_is_blocked(self):
