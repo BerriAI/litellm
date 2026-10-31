@@ -26,6 +26,7 @@ from litellm.integrations.custom_guardrail import (
     log_guardrail_information,
 )
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
+from litellm.llms.anthropic.common_utils import message_dict_with_server_tool_calls
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
@@ -430,7 +431,9 @@ class PillarGuardrail(CustomGuardrail):
         # Extract response messages in the format Pillar expects
         response_dict = response.model_dump() if hasattr(response, "model_dump") else {}
         response_messages: Final = [
-            choice.get("message") for choice in response_dict.get("choices", []) if choice.get("message")
+            message_dict_with_server_tool_calls(choice["message"])
+            for choice in response_dict.get("choices", [])
+            if choice.get("message")
         ]
 
         if not response_messages:

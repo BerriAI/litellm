@@ -23,6 +23,7 @@ from litellm.proxy.db.spend_log_tool_index import (
 )
 from litellm.responses.mcp.litellm_proxy_mcp_handler import LiteLLM_Proxy_MCP_Handler
 from litellm.types.llms.openai import ResponsesAPIResponse
+from litellm.types.utils import ModelResponse
 from tests.unit.proxy.db.fake_prisma_engine import engine_call
 
 
@@ -203,6 +204,36 @@ class TestResponseToolCallNames:
 
     def test_blank_names_are_dropped(self):
         assert response_tool_call_names(_response_with_tool_calls("  ", "real_tool")) == ("real_tool",)
+
+    @pytest.mark.parametrize("as_object", [False, True], ids=["dict", "model_response"])
+    def test_server_tool_calls_of_every_choice_are_named_before_client_tool_calls(self, as_object: bool):
+        def tool_call(call_id: str, name: str) -> dict[str, object]:
+            return {"id": call_id, "type": "function", "function": {"name": name, "arguments": "{}"}}
+
+        response: dict[str, object] = {
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": None,
+                        "tool_calls": [tool_call("call_1", "get_weather")],
+                        "provider_specific_fields": {"server_tool_calls": [tool_call("srvtoolu_01", "web_search")]},
+                    },
+                },
+                {
+                    "index": 1,
+                    "message": {
+                        "role": "assistant",
+                        "content": "done",
+                        "provider_specific_fields": {"server_tool_calls": [tool_call("srvtoolu_02", "web_fetch")]},
+                    },
+                },
+            ]
+        }
+        completion_response = ModelResponse(**response) if as_object else response
+
+        assert response_tool_call_names(completion_response) == ("web_search", "web_fetch", "get_weather")
 
     def test_responses_api_output_function_calls(self):
         # Regression: /v1/responses carries invocations in output[] items of

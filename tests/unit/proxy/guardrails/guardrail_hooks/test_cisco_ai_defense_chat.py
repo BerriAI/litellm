@@ -404,6 +404,33 @@ class TestCiscoAIDefenseChatMode:
                 )
 
 
+_CLAUDE_HOSTED_WEB_ACTIONS = (
+    {"type": "search", "query": "ssn 123-45-6789"},
+    {"type": "open_page", "url": "https://example.com/?ssn=123-45-6789"},
+)
+
+
+def _claude_hosted_web_call_response(action: dict):
+    from openai.types.responses import ResponseFunctionWebSearch
+
+    from litellm.types.llms.openai import ResponsesAPIResponse
+
+    return ResponsesAPIResponse(
+        id="resp_1",
+        created_at=0,
+        output=[
+            ResponseFunctionWebSearch(
+                id="ws_srvtoolu_01", type="web_search_call", status="completed", action=action
+            )
+        ],
+        parallel_tool_calls=False,
+        tool_choice=None,
+        tools=None,
+        top_p=None,
+        usage=None,
+    )
+
+
 class TestCiscoAIDefenseResponsesAPIOutput:
 
     @staticmethod
@@ -505,6 +532,23 @@ class TestCiscoAIDefenseResponsesAPIOutput:
         joined = " ".join(m.get("content", "") for m in (sent.get("messages") or []))
         assert "4111-1111-1111-1111" in joined
 
+    @pytest.mark.parametrize("action", _CLAUDE_HOSTED_WEB_ACTIONS)
+    @pytest.mark.asyncio
+    async def test_post_call_scans_claude_hosted_web_call(self, action):
+        g = _make_guardrail(event_hook="post_call")
+        post_mock = AsyncMock(return_value=_safe_response())
+
+        with _patch_inspection_post(g, post_mock):
+            await g.async_post_call_success_hook(
+                data={"input": [{"role": "user", "content": "look it up"}]},
+                user_api_key_dict=UserAPIKeyAuth(),
+                response=_claude_hosted_web_call_response(action),
+            )
+
+        sent = post_mock.call_args.kwargs["json"]
+        joined = " ".join(m.get("content", "") for m in (sent.get("messages") or []))
+        assert "123-45-6789" in joined
+
     @pytest.mark.asyncio
     async def test_post_call_responses_api_violation_is_blocked(self):
         g = _make_guardrail(event_hook="post_call")
@@ -571,6 +615,24 @@ class TestCiscoAIDefenseResponsesAPIOutputRedaction:
                 f"sanitized_messages didn't rewrite Responses API output. "
                 f"Got: {out_text!r}"
             )
+
+
+    @pytest.mark.parametrize("action", _CLAUDE_HOSTED_WEB_ACTIONS)
+    @pytest.mark.asyncio
+    async def test_redact_clears_claude_hosted_web_call(self, action):
+        g = _make_guardrail(event_hook="post_call", on_flagged_action="monitor")
+        cisco_resp = _redact_response(sanitized_text="[REDACTED]")
+
+        with _patch_inspection_post(g, AsyncMock(return_value=cisco_resp)):
+            result = await g.async_post_call_success_hook(
+                data={"input": [{"role": "user", "content": "look it up"}]},
+                user_api_key_dict=UserAPIKeyAuth(),
+                response=_claude_hosted_web_call_response(action),
+            )
+
+        call = result.output[0]
+        assert (call.id, call.action.type) == ("ws_srvtoolu_01", action["type"])
+        assert "123-45-6789" not in call.action.model_dump_json()
 
 
 class TestCiscoAIDefenseResponsesAPIInputRedaction:
@@ -1776,6 +1838,78 @@ class TestCiscoAIDefenseToolCallBypass:
             f"Post-call scan ran but the tool-call payload wasn't "
             f"included in the scanned text. Sent: {sent!r}"
         )
+
+    @staticmethod
+    def _server_tool_call_response() -> ModelResponse:
+        from litellm.types.utils import ChatCompletionMessageToolCall, Function
+
+        return ModelResponse(
+            choices=[
+                Choices(
+                    index=0,
+                    finish_reason="tool_calls",
+                    message=Message(
+                        role="assistant",
+                        content=None,
+                        tool_calls=[
+                            ChatCompletionMessageToolCall(
+                                id="call_1",
+                                type="function",
+                                function=Function(name="get_weather", arguments='{"city": "Paris"}'),
+                            )
+                        ],
+                        provider_specific_fields={
+                            "server_tool_calls": [
+                                {
+                                    "id": "srvtoolu_01",
+                                    "type": "function",
+                                    "function": {"name": "web_search", "arguments": '{"query": "persimmon"}'},
+                                }
+                            ]
+                        },
+                    ),
+                )
+            ]
+        )
+
+    @pytest.mark.asyncio
+    async def test_post_call_scan_sends_server_tool_call_arguments_to_cisco(self):
+        g = _make_guardrail(event_hook="post_call")
+        post_mock = AsyncMock(return_value=_safe_response())
+
+        with _patch_inspection_post(g, post_mock):
+            await g.async_post_call_success_hook(
+                data={"messages": [{"role": "user", "content": "look up persimmon"}]},
+                user_api_key_dict=UserAPIKeyAuth(),
+                response=self._server_tool_call_response(),
+            )
+
+        assert [call.kwargs["json"]["messages"] for call in post_mock.call_args_list] == [
+            [
+                {"role": "user", "content": "look up persimmon"},
+                {"role": "assistant", "content": '{"query": "persimmon"} {"city": "Paris"}'},
+            ]
+        ]
+
+    @pytest.mark.asyncio
+    async def test_post_call_redact_clears_server_tool_call_arguments(self):
+        g = _make_guardrail(event_hook="post_call", on_flagged_action="monitor")
+        cisco_resp = _redact_response(sanitized_text="[REDACTED]")
+
+        with _patch_inspection_post(g, AsyncMock(return_value=cisco_resp)):
+            result = await g.async_post_call_success_hook(
+                data={"messages": [{"role": "user", "content": "look up persimmon"}]},
+                user_api_key_dict=UserAPIKeyAuth(),
+                response=self._server_tool_call_response(),
+            )
+
+        message = result.choices[0].message
+        assert message.provider_specific_fields == {
+            "server_tool_calls": [
+                {"id": "srvtoolu_01", "type": "function", "function": {"name": "web_search", "arguments": "{}"}}
+            ]
+        }
+        assert message.tool_calls[0].function.arguments == "{}"
 
 
 class TestCiscoAIDefenseToolDefinitionBypass:

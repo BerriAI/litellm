@@ -81,6 +81,59 @@ def test_native_compaction_response_roundtrip(text: str | None, count: int, expe
     assert result["stop_reason"] == expected_stop
 
 
+_SERVER_AND_CLIENT_TOOL_TURN: Final[tuple[dict[str, object], ...]] = (
+    {
+        "type": "server_tool_use",
+        "id": "srvtoolu_01Fetch",
+        "name": "web_fetch",
+        "input": {"url": "https://example.com/"},
+    },
+    {
+        "type": "web_fetch_tool_result",
+        "tool_use_id": "srvtoolu_01Fetch",
+        "content": {"type": "web_fetch_result", "url": "https://example.com/"},
+    },
+    {"type": "server_tool_use", "id": "srvtoolu_02Search", "name": "web_search", "input": {"query": "Paris"}},
+    {"type": "text", "text": "The page is titled Example."},
+    {"type": "tool_use", "id": "toolu_01Weather", "name": "get_weather", "input": {"city": "Paris"}},
+)
+
+
+def test_claude_server_tool_blocks_survive_the_round_trip_through_chat_completions() -> None:
+    from unittest.mock import MagicMock
+
+    from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+
+    anthropic_response: Final = {
+        "id": "msg_01Fetch",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-sonnet-5-5",
+        "content": list(_SERVER_AND_CLIENT_TOOL_TURN),
+        "stop_reason": "tool_use",
+        "stop_sequence": None,
+        "usage": {"input_tokens": 100, "output_tokens": 50},
+    }
+    raw_response: Final = MagicMock(spec=httpx.Response)
+    raw_response.json.return_value = anthropic_response
+    raw_response.status_code = 200
+    raw_response.headers = {}
+    chat_response: Final = AnthropicConfig().transform_parsed_response(
+        completion_response=anthropic_response,
+        raw_response=raw_response,
+        model_response=ModelResponse(),
+        json_mode=False,
+        prefix_prompt=None,
+    )
+
+    result: Final = LiteLLMAnthropicMessagesAdapter().translate_openai_response_to_anthropic(chat_response)
+
+    assert [(block["type"], block.get("id") or block.get("tool_use_id")) for block in result["content"]] == [
+        (block["type"], block.get("id") or block.get("tool_use_id")) for block in _SERVER_AND_CLIENT_TOOL_TURN
+    ]
+    assert result["stop_reason"] == "tool_use"
+
+
 def test_translate_chat_refusal_to_anthropic_response():
     response = ModelResponse(
         id="chatcmpl-refusal",

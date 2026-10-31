@@ -2072,6 +2072,63 @@ class TestCompletionResponseTextPartsToolCalls:
             sent_text = mock_check.call_args.kwargs["text"]
             assert '{"credit_card": "4111-1111-1111-1111"}' in sent_text
 
+    @pytest.mark.asyncio
+    async def test_post_call_hook_sends_server_tool_call_args_to_purview(self):
+        from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+        from litellm.types.utils import Choices, Message, ModelResponse
+
+        def graph(request: httpx.Request) -> httpx.Response:
+            if request.url.host == "login.microsoftonline.com":
+                return httpx.Response(200, json={"access_token": "graph-token", "expires_in": 3600})
+            if not request.url.path.endswith("/processContent"):
+                return httpx.Response(200, json={"value": []}, headers={"ETag": "scope-etag"})
+            return httpx.Response(200, json={"protectionScopeState": "unchanged", "policyActions": []})
+
+        transport: Final = Mock(side_effect=graph)
+        guardrail: Final = _make_guardrail()
+        guardrail.async_handler = AsyncHTTPHandler(transport=httpx.MockTransport(transport))
+        response: Final = ModelResponse(
+            choices=[
+                Choices(
+                    index=0,
+                    finish_reason="tool_calls",
+                    message=Message(
+                        role="assistant",
+                        content=None,
+                        tool_calls=[
+                            {
+                                "id": "call_1",
+                                "type": "function",
+                                "function": {"name": "get_weather", "arguments": '{"city": "Paris"}'},
+                            }
+                        ],
+                        provider_specific_fields={
+                            "server_tool_calls": [
+                                {
+                                    "id": "srvtoolu_01",
+                                    "type": "function",
+                                    "function": {"name": "web_search", "arguments": '{"query": "persimmon"}'},
+                                }
+                            ]
+                        },
+                    ),
+                )
+            ],
+        )
+
+        await guardrail.async_post_call_success_hook(
+            data={},
+            user_api_key_dict=UserAPIKeyAuth(api_key="test", user_id="user-123"),
+            response=response,
+        )
+
+        scanned: Final = [
+            json.loads(call.args[0].content)["contentToProcess"]["contentEntries"][0]["content"]["data"]
+            for call in transport.call_args_list
+            if call.args[0].url.path.endswith("/processContent")
+        ]
+        assert scanned == ['{"query": "persimmon"}\n\n---\n\n{"city": "Paris"}']
+
     def test_responses_api_function_call_args_included(self):
         """Function-call arguments in ``ResponsesAPIResponse.output`` must be DLP-scanned."""
         from litellm.types.llms.openai import ResponsesAPIResponse

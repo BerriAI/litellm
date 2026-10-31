@@ -42,6 +42,7 @@ from litellm.litellm_core_utils.service_tier_utils import (
     get_requested_service_tier,
     get_served_service_tier,
 )
+from litellm.llms.anthropic.common_utils import tool_calls_with_server_tool_calls
 from litellm.secret_managers.main import get_secret_bool, str_to_bool
 from litellm.types.integrations.otel_span_attributes import SpanAttributes
 from litellm.types.services import ServiceLoggerPayload
@@ -2736,9 +2737,8 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
                     for idx, choice in enumerate(response_obj.get("choices")):
                         if choice.get("finish_reason"):
                             message = choice.get("message")
-                            tool_calls = message.get("tool_calls")
-                            if tool_calls:
-                                kv_pairs = OpenTelemetry._tool_calls_kv_pair(tool_calls)
+                            if tool_calls := tool_calls_with_server_tool_calls(message):
+                                kv_pairs = OpenTelemetry._tool_calls_kv_pair(list(tool_calls))
                                 for key, value in kv_pairs.items():
                                     self.safe_set_attribute(
                                         span=span,

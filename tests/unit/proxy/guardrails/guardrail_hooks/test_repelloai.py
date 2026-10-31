@@ -852,6 +852,59 @@ class TestRepelloAIPostCall:
             in captured["json"]["scan_data"]["response"]
         )
 
+    @pytest.mark.asyncio
+    async def test_server_tool_call_arguments_scanned(self, monkeypatch):
+        guardrail = _guardrail(event_hook="post_call")
+        response = ModelResponse(
+            choices=[
+                Choices(
+                    index=0,
+                    finish_reason="tool_calls",
+                    message=Message(
+                        role="assistant",
+                        content=None,
+                        tool_calls=[
+                            {
+                                "id": "call_01",
+                                "type": "function",
+                                "function": {
+                                    "name": "lookup_order",
+                                    "arguments": '{"order_id": "A-17"}',
+                                },
+                            }
+                        ],
+                        provider_specific_fields={
+                            "server_tool_calls": [
+                                {
+                                    "id": "srvtoolu_01",
+                                    "type": "function",
+                                    "function": {
+                                        "name": "web_search",
+                                        "arguments": '{"query": "persimmon"}',
+                                    },
+                                }
+                            ]
+                        },
+                    ),
+                )
+            ]
+        )
+        captured = {}
+
+        async def capture(url, headers, json, **_kwargs):
+            captured["json"] = json
+            return _verdict_response("passed", url)
+
+        monkeypatch.setattr(guardrail.async_handler, "post", capture)
+        await guardrail.async_post_call_success_hook(
+            data={"messages": [{"role": "user", "content": "q"}]},
+            user_api_key_dict=UserAPIKeyAuth(),
+            response=response,
+        )
+        assert captured["json"]["scan_data"] == {
+            "response": '{"query": "persimmon"}\n{"order_id": "A-17"}'
+        }
+
 
 # ----------------------------------------------------------------------
 # verdict handling: unknown / malformed responses must not fail open

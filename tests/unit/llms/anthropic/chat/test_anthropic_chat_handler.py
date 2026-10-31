@@ -15,7 +15,9 @@ import litellm
 from litellm._uuid import uuid
 from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
 from litellm.litellm_core_utils.prompt_templates.factory import anthropic_messages_pt
+from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import message_field, parts_of
 from litellm.llms.anthropic.chat.handler import ModelResponseIterator, _envelope_verdict, make_call, make_sync_call
+from litellm.llms.anthropic.common_utils import anthropic_server_tool_call_params
 from litellm.llms.base_llm.base_utils import response_format_schema, unwrap_response_format_envelope
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.types.llms.openai import (
@@ -23,7 +25,7 @@ from litellm.types.llms.openai import (
     ChatCompletionToolCallFunctionChunk,
 )
 from litellm.types.responses.main import OutputCodeInterpreterCall
-from litellm.types.utils import ChatCompletionDeltaToolCall, ModelResponseStream
+from litellm.types.utils import ChatCompletionDeltaToolCall, ChatCompletionMessageToolCall, Choices, ModelResponseStream
 from tests.unit.llms.anthropic.anthropic_docs_refusal import ANTHROPIC_DOCS_REFUSAL_MESSAGE
 
 
@@ -1780,19 +1782,113 @@ def test_web_search_tool_result_no_extra_tool_calls():
             for tc in parsed.choices[0].delta.tool_calls:
                 tool_calls_emitted.append(tc)
 
-    # Should have exactly 2 tool calls:
-    # 1. From content_block_start (server_tool_use) with id and name
-    # 2. From content_block_delta with the actual query
-    assert len(tool_calls_emitted) == 2, f"Expected 2 tool calls, got {len(tool_calls_emitted)}"
+    assert tool_calls_emitted == []
 
-    # First tool call should have the id and name
-    assert tool_calls_emitted[0]["id"] == "srvtoolu_01ABC123"
-    assert tool_calls_emitted[0]["function"]["name"] == "web_search"
 
-    # Second tool call should have the query arguments
-    assert tool_calls_emitted[1]["function"]["arguments"] == '{"query": "test"}'
+def _server_tool_input_delta(fragment: str) -> dict[str, object]:
+    return {"type": "content_block_delta", "index": 0, "delta": {"type": "input_json_delta", "partial_json": fragment}}
 
-    # The {} chunks from web_search_tool_result should NOT have been emitted as tool calls
+
+def _server_search_then_answer(*partial_json: str) -> tuple[dict[str, object], ...]:
+    return (
+        {
+            "type": "message_start",
+            "message": {"id": "msg_01", "model": "claude-opus-5-5", "usage": {"input_tokens": 9}},
+        },
+        {
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {"type": "server_tool_use", "id": "srvtoolu_01Web", "name": "web_search", "input": {}},
+        },
+        *(_server_tool_input_delta(fragment) for fragment in partial_json),
+        {"type": "content_block_stop", "index": 0},
+        {
+            "type": "content_block_start",
+            "index": 1,
+            "content_block": {"type": "web_search_tool_result", "tool_use_id": "srvtoolu_01Web", "content": []},
+        },
+        {"type": "content_block_stop", "index": 1},
+        {"type": "content_block_start", "index": 2, "content_block": {"type": "text", "text": ""}},
+        {"type": "content_block_delta", "index": 2, "delta": {"type": "text_delta", "text": "Paris is in France."}},
+        {"type": "content_block_stop", "index": 2},
+    )
+
+
+_SERVER_SEARCH_THEN_ANSWER: Final = _server_search_then_answer('{"query": "Paris"}')
+_CLIENT_TOOL_CALL: Final[tuple[dict[str, object], ...]] = (
+    {
+        "type": "content_block_start",
+        "index": 3,
+        "content_block": {"type": "tool_use", "id": "toolu_01Weather", "name": "get_weather", "input": {}},
+    },
+    {
+        "type": "content_block_delta",
+        "index": 3,
+        "delta": {"type": "input_json_delta", "partial_json": '{"city": "Paris"}'},
+    },
+    {"type": "content_block_stop", "index": 3},
+)
+
+
+def _message_delta(stop_reason: str) -> dict[str, object]:
+    return {"type": "message_delta", "delta": {"stop_reason": stop_reason}, "usage": {"output_tokens": 20}}
+
+
+_PARIS_SEARCH: Final = ("srvtoolu_01Web", "web_search", '{"query": "Paris"}')
+
+
+@pytest.mark.parametrize(
+    ("events", "expected_tool_calls", "expected_finish_reason", "expected_server_tool_call"),
+    [
+        pytest.param(
+            (*_SERVER_SEARCH_THEN_ANSWER, _message_delta("end_turn")), [], "stop", _PARIS_SEARCH, id="server_tool_only"
+        ),
+        pytest.param(
+            (*_SERVER_SEARCH_THEN_ANSWER, *_CLIENT_TOOL_CALL, _message_delta("tool_use")),
+            [("toolu_01Weather", "get_weather", '{"city": "Paris"}')],
+            "tool_calls",
+            _PARIS_SEARCH,
+            id="server_tool_then_client_tool",
+        ),
+        pytest.param(
+            (*_server_search_then_answer('{"que', 'ry": "Pa', 'ris"}'), _message_delta("end_turn")),
+            [],
+            "stop",
+            _PARIS_SEARCH,
+            id="server_tool_input_split_across_deltas",
+        ),
+        pytest.param(
+            (*_server_search_then_answer(), _message_delta("end_turn")),
+            [],
+            "stop",
+            ("srvtoolu_01Web", "web_search", "{}"),
+            id="server_tool_with_empty_input",
+        ),
+    ],
+)
+def test_streamed_server_tool_use_is_not_returned_as_a_client_tool_call(
+    events: tuple[dict[str, object], ...],
+    expected_tool_calls: list[tuple[str, str, str]],
+    expected_finish_reason: str,
+    expected_server_tool_call: tuple[str, str, str],
+):
+    choice: Final = _assemble_stream(events).choices[0]
+    assert isinstance(choice, Choices)
+
+    assert (choice.message.tool_calls is None) == (not expected_tool_calls)
+    assert [
+        (call.id, call.function.name, call.function.arguments)
+        for call in choice.message.tool_calls or ()
+        if isinstance(call, ChatCompletionMessageToolCall)
+    ] == expected_tool_calls
+    assert choice.finish_reason == expected_finish_reason
+    assert choice.message.content == "Paris is in France."
+    assert [
+        (call["id"], call["function"].get("name"), call["function"].get("arguments"))
+        for call in anthropic_server_tool_call_params(choice.message)
+    ] == [expected_server_tool_call]
+    web_search_results: Final = message_field(choice.message.provider_specific_fields, "web_search_results")
+    assert [message_field(result, "tool_use_id") for result in parts_of(web_search_results)] == ["srvtoolu_01Web"]
 
 
 def test_current_content_block_type_tracking():

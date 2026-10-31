@@ -894,6 +894,55 @@ class TestRestoration:
         assert result.choices[0].message.content == "a@b.com"
 
     @pytest.mark.asyncio
+    async def test_server_tool_call_arguments_are_restored(self):
+        guardrail, _ = _shielded({"[EMAIL_1]": "a@b.com", "[URL_1]": "https://b.com/a"})
+        response = ModelResponse(
+            choices=[
+                Choices(
+                    index=0,
+                    finish_reason="tool_calls",
+                    message=Message(
+                        role="assistant",
+                        content=None,
+                        provider_specific_fields={
+                            "server_tool_calls": [
+                                {
+                                    "id": "srvtoolu_01",
+                                    "type": "function",
+                                    "function": {"name": "web_search", "arguments": '{"query": "[EMAIL_1] persimmon"}'},
+                                },
+                                {
+                                    "id": "srvtoolu_02",
+                                    "type": "function",
+                                    "function": {"name": "web_fetch", "arguments": '{"url": "[URL_1]"}'},
+                                },
+                            ]
+                        },
+                    ),
+                )
+            ]
+        )
+
+        result = await guardrail.async_post_call_success_hook(
+            data={"messages": []}, user_api_key_dict=None, response=response
+        )
+
+        assert result.choices[0].message.provider_specific_fields == {
+            "server_tool_calls": [
+                {
+                    "id": "srvtoolu_01",
+                    "type": "function",
+                    "function": {"name": "web_search", "arguments": '{"query": "a@b.com persimmon"}'},
+                },
+                {
+                    "id": "srvtoolu_02",
+                    "type": "function",
+                    "function": {"name": "web_fetch", "arguments": '{"url": "https://b.com/a"}'},
+                },
+            ]
+        }
+
+    @pytest.mark.asyncio
     async def test_responses_api_shape_is_restored(self):
         """The Responses API reply carries output items, not choices.
 
