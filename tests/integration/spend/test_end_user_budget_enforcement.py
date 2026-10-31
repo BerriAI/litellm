@@ -768,7 +768,15 @@ def test_a_lost_counter_keeps_spend_another_proxy_has_not_written_yet(gateway: G
         _lose_counter(cache, end_user)
         second: Final = _chat(peer, model, key, end_user)
         assert second.status_code == 200, second.text
+        expected_spend: Final = _COLD_SEED_SPEND + 2 * call_cost
+        counted: Final = eventually(
+            lambda: _counter(cache, end_user),
+            lambda value: value is not None and value == pytest.approx(expected_spend),
+            seconds=30,
+            return_last_on_timeout=True,
+        )
 
         denied: Final = _chat(gateway, model, key, end_user)
 
-        assert _refused_spend(denied, end_user) == pytest.approx(_COLD_SEED_SPEND + 2 * call_cost)
+        assert counted == pytest.approx(expected_spend)
+        assert _denial_error(denied)["type"] == "budget_exceeded", denied.text
