@@ -67,7 +67,7 @@ const AdvancedDatePicker: React.FC<AdvancedDatePickerProps> = ({
   // Validation logic - simplified for dates only
   const validateDateRange = useCallback(() => {
     if (!startDate || !endDate) {
-      return { isValid: true, error: "" };
+      return { isValid: false, error: "Start and end dates are required" };
     }
 
     const start = moment(startDate, "YYYY-MM-DD");
