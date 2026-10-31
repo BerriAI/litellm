@@ -11,9 +11,9 @@ from typing import TYPE_CHECKING, Any, Final, Literal, cast, overload
 import httpx
 from pydantic import BaseModel, ConfigDict, TypeAdapter
 
-import litellm
 from litellm.anthropic_beta_gated_fields import log_beta_gated_strips, strip_beta_gated_thinking
 from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
+from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
 from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
     handle_invalid_parallel_tool_calls,
     should_convert_tool_call_to_json_mode,
@@ -67,7 +67,7 @@ from ...anthropic.chat.transformation import (
     tools_without_unsupported_tool_search,
 )
 from ...openai_like.chat.transformation import OpenAILikeChatConfig
-from ..common_utils import DatabricksBase, DatabricksException
+from ..common_utils import DATABRICKS_HOSTED_MODEL_PREFIXES, DatabricksBase, DatabricksException
 
 _RESPONSE_FORMAT_ADAPTER: (  # mutable-ok: mirrors the dict return contract of get_json_schema_from_pydantic_object
     Final[TypeAdapter[dict[str, object] | None]]
@@ -175,7 +175,7 @@ def _json_object_ready_messages(
     drop_params: bool,
 ) -> list[AllMessageValues]:  # mutable-ok: inherited transform_request contract
     match response_format:
-        case {"type": "json_object"} if "claude" not in model:
+        case {"type": "json_object"} if "claude" not in model and model.startswith(DATABRICKS_HOSTED_MODEL_PREFIXES):
             checked_start: Final = _json_checked_start(messages)
             return [
                 *messages[:checked_start],
@@ -654,7 +654,7 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
                 model,
                 messages,
                 optional_params.get("response_format"),
-                drop_params=litellm.drop_params is True or litellm_params.get("drop_params") is True,
+                drop_params=drops_unsupported_params(litellm_params.get("drop_params")),
             ),
             optional_params=optional_params,
             litellm_params=litellm_params,

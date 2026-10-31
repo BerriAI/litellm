@@ -676,15 +676,39 @@ def _outgoing_messages(
             _TWO_TEXT_BLOCKS,
             id="json-object-claude-stays-list",
         ),
+        pytest.param(
+            "system.ai.deepseek-v4-flash-0731",
+            [{"role": "user", "content": _TWO_TEXT_BLOCKS}],
+            _JSON_OBJECT,
+            "Reply in JSON",
+            id="json-object-ai-gateway-model-joined",
+        ),
+        pytest.param(
+            "openai-gpt-external",
+            [{"role": "user", "content": _TWO_TEXT_BLOCKS}],
+            _JSON_OBJECT,
+            _TWO_TEXT_BLOCKS,
+            id="json-object-external-endpoint-stays-list",
+        ),
     ],
 )
-def test_transform_request_joins_plain_text_blocks_only_for_non_claude_json_object(
+def test_transform_request_joins_plain_text_blocks_only_for_hosted_non_claude_json_object(
     model: str,
     messages: list[AllMessageValues],
     optional_params: dict[str, object],
     expected_content: object,
 ) -> None:
     assert _outgoing_messages(model, messages, optional_params) == [{"role": "user", "content": expected_content}]
+
+
+def test_transform_request_keeps_a_text_block_whose_text_is_a_truthy_non_string() -> None:
+    block: Final = {"type": "text", "text": 7}
+
+    assert _outgoing_messages(
+        "databricks-meta-llama-3-3-70b-instruct",
+        [{"role": "user", "content": [block]}],
+        {},
+    ) == [{"role": "user", "content": [block]}]
 
 
 def test_transform_request_json_object_keeps_earlier_turns_as_sent() -> None:

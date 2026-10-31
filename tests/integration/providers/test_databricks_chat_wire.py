@@ -465,6 +465,21 @@ def _shape_reply(identity: str, stream: bool) -> Reply:
             id="A8d-chat-json-object-trailing-thinking-turn-dropped",
         ),
         pytest.param(
+            "json-object-external-endpoint",
+            "/v1/chat/completions",
+            "openai-gpt-external",
+            {
+                "messages": [
+                    {"role": "user", "content": [{"type": "text", "text": "Reply"}, {"type": "text", "text": " in JSON"}]}
+                ],
+                "response_format": {"type": "json_object"},
+            },
+            [{"role": "user", "content": [{"type": "text", "text": "Reply"}, {"type": "text", "text": " in JSON"}]}],
+            False,
+            "/chat/completions",
+            id="A8e-chat-json-object-external-endpoint-kept-as-sent",
+        ),
+        pytest.param(
             "json-object-responses-two-parts",
             "/v1/responses",
             "databricks-qwen35-122b-a10b",
