@@ -25,15 +25,15 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     strip_litellm_internal_message_fields,
     strip_none_values_from_message,
 )
+from litellm.litellm_core_utils.reasoning_effort_capability import (
+    declared_reasoning_efforts_for_model,
+    nearest_declared_reasoning_effort,
+)
 from litellm.litellm_core_utils.reasoning_effort_utils import reasoning_effort_from_thinking, warn_dropped_reasoning
 from litellm.litellm_core_utils.url_utils import ensure_api_route
 from litellm.llms.openai.chat.gpt_transformation import (
     OpenAIChatCompletionStreamingHandler,
     OpenAIGPTConfig,
-)
-from litellm.router_utils.reasoning_effort_capability import (
-    declared_reasoning_efforts_for_model,
-    nearest_declared_reasoning_effort,
 )
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.mistral import (

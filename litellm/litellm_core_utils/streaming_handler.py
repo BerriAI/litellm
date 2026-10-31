@@ -277,6 +277,7 @@ class _VertexChunkLike(Protocol):
 
 class _ParsedChunkHiddenParams(LiteLLMBaseModel):
     provider_specific_fields: Mapping[str, object] | None = None
+    upstream_provider: str | None = None
 
 
 def _provider_response_model(chunk: object) -> str | None:
@@ -293,9 +294,17 @@ def _parsed_provider_hidden_params(hidden: object) -> _ParsedChunkHiddenParams |
         return None
 
 
+def _provider_upstream_provider(chunk: object) -> str | None:
+    parsed: Final = _parsed_provider_hidden_params(get_hidden_params(chunk))
+    if parsed is None or not parsed.upstream_provider:
+        return None
+    return parsed.upstream_provider
+
+
 def _provider_hidden_params(
     chunk: object,
     provider_response_model: str | None,
+    upstream_provider: str | None,
 ) -> Mapping[str, object] | None:
     hidden: Final = get_hidden_params(chunk)
     parsed: Final = _parsed_provider_hidden_params(hidden)
@@ -308,6 +317,10 @@ def _provider_hidden_params(
             for key, value in (
                 ("provider_response_model", provider_response_model),
                 ("provider_specific_fields", provider_specific_fields),
+                (
+                    "upstream_provider",
+                    parsed.upstream_provider if parsed is not None and parsed.upstream_provider else upstream_provider,
+                ),
             )
             if value is not None
         }
@@ -360,6 +373,7 @@ class CustomStreamWrapper:
 
         self.system_fingerprint: str | None = None
         self._provider_response_model: str | None = None
+        self._upstream_provider: str | None = None
         self.received_finish_reason: str | None = None
         self.intermittent_finish_reason: str | None = None  # finish reasons that show up mid-stream
         self.special_tokens = [
@@ -1653,10 +1667,17 @@ class CustomStreamWrapper:
         provider_response_model: Final = _provider_response_model(chunk)
         if provider_response_model is not None:
             self._provider_response_model = provider_response_model
+        upstream_provider: Final = _provider_upstream_provider(chunk)
+        if self._upstream_provider is None and upstream_provider is not None:
+            self._upstream_provider = upstream_provider
         prebuilt_delta: Final = self._prebuilt_plain_delta(chunk)
         plain_delta_created: bool = prebuilt_delta is not None  # rebind-ok: the first chunk builds its delta below
         model_response = self.model_response_creator(
-            hidden_params=_provider_hidden_params(chunk, self._provider_response_model),
+            hidden_params=_provider_hidden_params(
+                chunk,
+                self._provider_response_model,
+                self._upstream_provider,
+            ),
             delta=prebuilt_delta,
         )
         response_obj: dict[str, Any] = {}
