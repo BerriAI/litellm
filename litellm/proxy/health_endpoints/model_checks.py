@@ -1,7 +1,6 @@
 """Live checks behind ``POST /health/test_model``.
 
-One three-turn tool-call conversation per selected endpoint, read from that endpoint's file in
-``test_model_requests/``. ``turn_1`` is the full first request body in the endpoint's native shape, with
+One three-turn tool-call conversation per selected endpoint, defined in ``test_model_requests.py``. ``turn_1`` is the full first request body in the endpoint's native shape, with
 ``<system prompt>`` standing for the long shared prompt in ``system_prompt.txt``. Chat Completions
 and Responses carry no prompt-cache markers, so later turns can only report cached tokens when the provider caches
 the repeated prefix on its own. Messages mirrors Claude Code: ``cache_control`` on the latest user message and a
@@ -22,13 +21,22 @@ from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from functools import partial, reduce
 from itertools import chain
-from pathlib import Path
 from types import MappingProxyType
 from typing import Final, Literal, TypeAlias
 
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 
 from litellm.litellm_core_utils.add_retry_fallback_headers import get_hidden_params_dict
+from litellm.proxy.health_endpoints.test_model_requests import (
+    CHAT_COMPLETIONS,
+    MESSAGES,
+    RESPONSES,
+    TURN_ONE_ASSISTANT_OUTPUT,
+    TURN_ONE_TOOL_CALL_ID,
+    TURN_TWO_ASSISTANT_OUTPUT,
+    WEATHER_TOOL_RESULT,
+    RequestFile,
+)
 
 TestModelEndpoint: TypeAlias = Literal["/v1/chat/completions", "/v1/responses", "/v1/messages"]
 TestModelRouteType: TypeAlias = Literal["acompletion", "aresponses", "anthropic_messages"]
@@ -37,11 +45,6 @@ EndpointStatus: TypeAlias = Literal["success", "warning", "error"]
 
 TEST_MODEL_ENDPOINTS: Final[tuple[TestModelEndpoint, ...]] = ("/v1/chat/completions", "/v1/responses", "/v1/messages")
 WEATHER_TOOL_NAME: Final = "get_weather"
-WEATHER_TOOL_RESULT: Final = "72F and sunny"
-TEST_MODEL_REQUESTS_DIR: Final = Path(__file__).resolve().parent / "test_model_requests"
-TURN_ONE_ASSISTANT_OUTPUT: Final = "<turn 1 response: assistant output>"
-TURN_ONE_TOOL_CALL_ID: Final = "<turn 1 response: tool call id>"
-TURN_TWO_ASSISTANT_OUTPUT: Final = "<turn 2 response: assistant output>"
 
 
 @dataclass(frozen=True, slots=True)
@@ -214,36 +217,9 @@ _JSON_DOCUMENT: Final = TypeAdapter(object)
 _EMPTY_ASSISTANT: Final[Mapping[str, object]] = MappingProxyType({"role": "assistant", "content": None})
 
 
-class RequestFile(BaseModel):
-    """One three-turn conversation on disk: ``turn_1`` is the full first request body, ``turn_2_appended_messages``
-    the messages the second request adds after it, ``turn_3_appended_messages`` the ones the third adds after those,
-    with the placeholders filled from the earlier responses."""
-
-    model_config = ConfigDict(frozen=True)
-
-    turn_1: Mapping[str, object]
-    turn_2_appended_messages: Sequence[object]
-    turn_3_appended_messages: Sequence[object]
-
-
-SYSTEM_PROMPT_PLACEHOLDER: Final = "<system prompt>"
-
-
-def load_request_file(name: str) -> RequestFile:
-    """The named request file with ``<system prompt>`` filled from ``system_prompt.txt`` beside it."""
-    prompt: Final = (TEST_MODEL_REQUESTS_DIR / "system_prompt.txt").read_text(encoding="utf-8")
-    text: Final = (TEST_MODEL_REQUESTS_DIR / f"{name}.json").read_text(encoding="utf-8")
-    return RequestFile.model_validate_json(text.replace(json.dumps(SYSTEM_PROMPT_PLACEHOLDER), json.dumps(prompt)))
-
-
-def _request_file(name: str) -> Callable[[], RequestFile]:
-    file: Final = load_request_file(name)
-    return lambda: file
-
-
-_CHAT_FILE: Final = _request_file("chat_completions")
-_RESPONSES_FILE: Final = _request_file("responses")
-_MESSAGES_FILE: Final = _request_file("messages")
+_CHAT_FILE: Final = lambda: CHAT_COMPLETIONS  # noqa: E731  # the scripts take a zero-arg loader
+_RESPONSES_FILE: Final = lambda: RESPONSES  # noqa: E731  # the scripts take a zero-arg loader
+_MESSAGES_FILE: Final = lambda: MESSAGES  # noqa: E731  # the scripts take a zero-arg loader
 
 
 Placeholders: TypeAlias = Mapping[str, object]

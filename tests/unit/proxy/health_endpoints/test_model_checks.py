@@ -9,15 +9,14 @@ from litellm.proxy.health_endpoints.model_checks import (
     CHAT_COMPLETIONS_SCRIPT,
     MESSAGES_SCRIPT,
     RESPONSES_SCRIPT,
-    TEST_MODEL_REQUESTS_DIR,
     WEATHER_TOOL_RESULT,
     CalledTurn,
     EndpointScript,
     endpoint_result_payload,
-    load_request_file,
     overall_status,
     run_endpoint_check,
 )
+from litellm.proxy.health_endpoints.test_model_requests import REQUEST_FILES
 from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.types.utils import ModelResponse
 
@@ -492,28 +491,21 @@ def test_payload_lists_the_checks_in_order_with_their_details():
 
 
 def test_the_three_request_files_send_one_system_prompt_and_one_tool_so_endpoint_verdicts_are_comparable():
-    files: Final = {
-        path.stem: json.loads(path.read_text(encoding="utf-8")) for path in TEST_MODEL_REQUESTS_DIR.glob("*.json")
-    }
-    chat, messages, responses = (files[name]["turn_1"] for name in ("chat_completions", "messages", "responses"))
+    chat, responses, messages = (REQUEST_FILES[name] for name in ("chat_completions", "responses", "messages"))
 
-    assert set(files) == {"chat_completions", "messages", "responses"}, files.keys()
-    assert all(
-        set(file) == {"turn_1", "turn_2_appended_messages", "turn_3_appended_messages"} for file in files.values()
-    ), files
-    for name, file in files.items():
-        appended: Final = json.dumps(file["turn_2_appended_messages"])
+    assert set(REQUEST_FILES) == {"chat_completions", "messages", "responses"}
+    for name, file in REQUEST_FILES.items():
+        appended: Final = json.dumps(file.turn_2_appended_messages)
         assert WEATHER_TOOL_RESULT in appended, (name, appended)
         assert "<turn 1 response: assistant output>" in appended and "<turn 1 response: tool call id>" in appended, name
-        third: Final = json.dumps(file["turn_3_appended_messages"])
+        third: Final = json.dumps(file.turn_3_appended_messages)
         assert "<turn 2 response: assistant output>" in third, (name, third)
-        assert "user" in {m["role"] for m in file["turn_3_appended_messages"][-2:]}, (name, third)
-    assert chat["messages"][0]["content"] == responses["instructions"] == messages["system"] == "<system prompt>"
-    assert len((TEST_MODEL_REQUESTS_DIR / "system_prompt.txt").read_text(encoding="utf-8")) > 20000
-    assert load_request_file("messages").turn_1["system"] != "<system prompt>"
-    assert messages["messages"][-1]["content"][0]["cache_control"] == {"type": "ephemeral"}, messages["messages"][-1]
-    assert chat["tools"][0]["function"]["parameters"] == responses["tools"][0]["parameters"]
-    assert chat["tools"][0]["function"]["parameters"] == messages["tools"][0]["input_schema"]
-    assert CHAT_COMPLETIONS_SCRIPT.turn_one() == load_request_file("chat_completions").turn_1
-    assert RESPONSES_SCRIPT.turn_one() == load_request_file("responses").turn_1
-    assert MESSAGES_SCRIPT.turn_one() == load_request_file("messages").turn_1
+        assert "<system-reminder>" in third, (name, third)
+    assert chat.turn_1["messages"][0]["content"] == responses.turn_1["instructions"] == messages.turn_1["system"]
+    assert len(messages.turn_1["system"]) > 20000
+    assert messages.turn_1["messages"][-1]["content"][0]["cache_control"] == {"type": "ephemeral"}
+    assert chat.turn_1["tools"][0]["function"]["parameters"] == responses.turn_1["tools"][0]["parameters"]
+    assert chat.turn_1["tools"][0]["function"]["parameters"] == messages.turn_1["tools"][0]["input_schema"]
+    assert CHAT_COMPLETIONS_SCRIPT.turn_one() == chat.turn_1
+    assert RESPONSES_SCRIPT.turn_one() == responses.turn_1
+    assert MESSAGES_SCRIPT.turn_one() == messages.turn_1
