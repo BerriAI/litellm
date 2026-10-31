@@ -38,9 +38,10 @@ from itertools import accumulate, chain, groupby, repeat
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, NamedTuple, Protocol, TypeVar, Union, cast
 
+from openai.types.responses.response_compaction_item import ResponseCompactionItem
 from openai.types.responses.response_output_refusal import ResponseOutputRefusal
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
-from typing_extensions import ReadOnly, TypedDict
+from typing_extensions import ReadOnly, TypedDict, TypeIs
 
 from litellm._logging import verbose_proxy_logger
 from litellm.completion_extras.litellm_responses_transformation.transformation import (
@@ -712,11 +713,13 @@ def _next_stream_sequence_number(responses_so_far: Sequence[object] | None) -> i
     return next((n + 1 for n in sequence_numbers if isinstance(n, int)), 0)
 
 
-def _is_responses_input(input_data: object) -> bool:
+def _is_responses_input(
+    input_data: object,
+) -> TypeIs["str | ResponseInputParam"]:  # guard-ok: str, or a list of Mapping items
     if isinstance(input_data, str):
         return True
     items: Final = cast(list[object], input_data)  # cast-ok: isinstance narrows to list[Unknown] only
-    return isinstance(input_data, list) and all(isinstance(item, Mapping) for item in items)
+    return isinstance(input_data, list) and all(isinstance(item, (Mapping, ResponseCompactionItem)) for item in items)
 
 
 class OpenAIResponsesHandler(BaseTranslation):
@@ -740,7 +743,7 @@ class OpenAIResponsesHandler(BaseTranslation):
         Transforms `input` (string or ResponseInputParam) and optional
         `instructions` into chat completion messages.
         """
-        input_data: Final = data.get("input")
+        input_data: Final[object] = data.get("input")
         if not _is_responses_input(input_data):
             return None
         messages: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
