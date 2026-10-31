@@ -1388,6 +1388,55 @@ async def test_finalizer_with_running_loop_schedules_close_and_holds_task_ref():
     assert not (AsyncHTTPHandler._finalizer_close_tasks & scheduled)
 
 
+async def _drop_unused_handler() -> None:
+    AsyncHTTPHandler(timeout=61.0)
+    gc.collect()
+
+
+def test_finalizer_close_does_not_keep_a_loop_closed_right_after_it_alive():
+    loop: Final = asyncio.new_event_loop()
+    loop.run_until_complete(_drop_unused_handler())
+    loop.close()
+    closed_loop: Final = weakref.ref(loop)
+    del loop
+    gc.collect()
+
+    assert closed_loop() is None
+
+
+class _TransportFailingToClose(httpx.AsyncBaseTransport):
+    async def aclose(self) -> None:
+        raise RuntimeError("close failed")
+
+
+async def _drop_handler_whose_close_fails() -> None:
+    AsyncHTTPHandler(timeout=61.0, transport=_TransportFailingToClose())
+    gc.collect()
+
+
+def test_failed_finalizer_close_in_a_loops_last_step_reports_no_unretrieved_exception():
+    loop: Final = asyncio.new_event_loop()
+    exception_handler: Final = MagicMock()
+    loop.set_exception_handler(exception_handler)
+    loop.run_until_complete(_drop_handler_whose_close_fails())
+    loop.close()
+    del loop
+    gc.collect()
+
+    exception_handler.assert_not_called()
+
+
+async def _sync_client_with_timeout_62() -> HTTPHandler:
+    return get_httpx_client(params={"timeout": 62.0})
+
+
+def test_sync_client_is_shared_by_short_lived_loops_and_callers_outside_a_loop():
+    built_in_first_loop: Final = asyncio.run(_sync_client_with_timeout_62())
+
+    assert asyncio.run(_sync_client_with_timeout_62()) is built_in_first_loop
+    assert get_httpx_client(params={"timeout": 62.0}) is built_in_first_loop
+
+
 @pytest.mark.asyncio
 async def test_sync_close_helper_respects_session_ownership():
     """The loop-less fallback closes only sessions the transport owns; a
@@ -1476,13 +1525,13 @@ class _RetryClientHandler(AsyncHTTPHandler):
 @pytest.mark.asyncio
 @pytest.mark.parametrize("method", ["post", "put", "patch", "delete"])
 async def test_connection_error_retry_forwards_content(method: str):
-    captured: list[bytes] = []  # mutable-ok: async closure capture buffer
+    captured: Final[list[tuple[str, bytes]]] = []  # mutable-ok: async closure capture buffer
 
     async def raise_connection_error(request: httpx.Request) -> httpx.Response:
-        raise httpx.RemoteProtocolError("connection dropped", request=request)
+        raise httpx.ConnectError("connection dropped", request=request)
 
     async def capture_and_succeed(request: httpx.Request) -> httpx.Response:
-        captured.append(request.content)
+        captured.append((request.method, request.content))
         return httpx.Response(200, request=request)
 
     first: Final = httpx.AsyncClient(transport=httpx.MockTransport(raise_connection_error))
@@ -1490,10 +1539,59 @@ async def test_connection_error_retry_forwards_content(method: str):
     async with first, retry:
         handler: Final = _RetryClientHandler(first=first, retry=retry)
 
-        body = b'{"post": ["run1"]}'
+        body: Final = b'{"post": ["run1"]}'
         await getattr(handler, method)("https://api.example.com/runs/batch", content=body)
 
-        assert captured == [body], "the retried request must carry the same content= body"
+        assert captured == [(method.upper(), body)]
+        await handler.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method", ["post", "patch"])
+async def test_disconnect_after_send_is_not_replayed(method: str) -> None:
+    retried_requests: Final[list[httpx.Request]] = []  # mutable-ok: async closure capture buffer
+
+    async def raise_disconnect(request: httpx.Request) -> httpx.Response:
+        raise httpx.RemoteProtocolError("connection dropped after send", request=request)
+
+    async def capture_retry(request: httpx.Request) -> httpx.Response:
+        retried_requests.append(request)
+        return httpx.Response(200, request=request)
+
+    first: Final = httpx.AsyncClient(transport=httpx.MockTransport(raise_disconnect))
+    retry: Final = httpx.AsyncClient(transport=httpx.MockTransport(capture_retry))
+    async with first, retry:
+        handler: Final = _RetryClientHandler(first=first, retry=retry)
+
+        with pytest.raises(httpx.RemoteProtocolError):
+            await getattr(handler, method)("https://api.example.com/runs/batch", content=b'{"a":1}')
+
+        assert retried_requests == []
+        await handler.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method", ["put", "delete"])
+async def test_idempotent_disconnect_is_replayed(method: str) -> None:
+    captured: Final[list[tuple[str, bytes]]] = []  # mutable-ok: async closure capture buffer
+
+    async def raise_disconnect(request: httpx.Request) -> httpx.Response:
+        raise httpx.RemoteProtocolError("connection dropped after send", request=request)
+
+    async def capture_retry(request: httpx.Request) -> httpx.Response:
+        captured.append((request.method, request.content))
+        return httpx.Response(200, request=request)
+
+    first: Final = httpx.AsyncClient(transport=httpx.MockTransport(raise_disconnect))
+    retry: Final = httpx.AsyncClient(transport=httpx.MockTransport(capture_retry))
+    async with first, retry:
+        handler: Final = _RetryClientHandler(first=first, retry=retry)
+
+        body: Final = b'{"a":1}'
+        response: Final = await getattr(handler, method)("https://api.example.com/runs/batch", content=body)
+
+        assert response.status_code == 200
+        assert captured == [(method.upper(), body)]
         await handler.close()
 
 
@@ -1868,12 +1966,12 @@ async def test_http2_flag_bypasses_aiohttp_transport(monkeypatch: pytest.MonkeyP
 
     monkeypatch.setattr(litellm, "http2", True)
     assert AsyncHTTPHandler.should_use_aiohttp_transport() is False
-    assert AsyncHTTPHandler.create_async_transport() is None
+    assert not isinstance(AsyncHTTPHandler.create_async_transport(), LiteLLMAiohttpTransport)
 
     monkeypatch.setattr(litellm, "http2", False)
     monkeypatch.setenv("LITELLM_HTTP2", "True")
     assert AsyncHTTPHandler.should_use_aiohttp_transport() is False
-    assert AsyncHTTPHandler.create_async_transport() is None
+    assert not isinstance(AsyncHTTPHandler.create_async_transport(), LiteLLMAiohttpTransport)
 
 
 @pytest.mark.asyncio
@@ -2123,3 +2221,86 @@ async def test_async_ollama_ssl_verify_false_builds_a_client_that_skips_certific
     assert route.call_count == 1
     assert text == "Sunny"
     assert _cached_clients_verify_modes(client_cache, AsyncHTTPHandler) == (ssl.CERT_NONE,)
+
+
+_TIMEOUT_CLIENT_LIMITS: Final = httpx.Timeout(42.0, connect=7.0)
+_TIMEOUT_PHASES: Final = (
+    (httpx.ConnectTimeout, "Connection timed out", "Timeout passed=7.0"),
+    (httpx.ReadTimeout, "Read timed out", "Timeout passed=42.0"),
+    (httpx.WriteTimeout, "Write timed out", "Timeout passed=42.0"),
+    (httpx.PoolTimeout, "Connection pool timed out", "Timeout passed=42.0"),
+)
+
+
+def _timing_out(kind: type[httpx.TimeoutException]) -> httpx.MockTransport:
+    def _raise(request: httpx.Request) -> httpx.Response:
+        raise kind("simulated", request=request)
+
+    return httpx.MockTransport(_raise)
+
+
+@pytest.mark.parametrize("verb", ["post", "put", "patch", "delete"])
+@pytest.mark.parametrize(("kind", "label", "limit"), _TIMEOUT_PHASES)
+def test_sync_timeout_without_a_per_call_timeout_names_the_phase_and_the_limit_that_fired(
+    verb: str, kind: type[httpx.TimeoutException], label: str, limit: str
+) -> None:
+    """Issue #14635: the handler used to print the caller's absent argument as 'after None seconds'."""
+    handler: Final = HTTPHandler()
+    handler.client.close()
+    handler.client = httpx.Client(transport=_timing_out(kind), timeout=_TIMEOUT_CLIENT_LIMITS)
+    try:
+        with pytest.raises(LitellmTimeout) as raised:
+            getattr(handler, verb)("https://example.com/v1/embeddings", json={"input": "hi"})
+    finally:
+        handler.close()
+
+    message: Final = str(raised.value)
+    assert label in message, message
+    assert limit in message, message
+    assert "None" not in message, message
+
+
+@pytest.mark.parametrize("verb", ["post", "put", "patch"])
+@pytest.mark.parametrize(("kind", "label", "limit"), _TIMEOUT_PHASES)
+async def test_async_timeout_without_a_per_call_timeout_names_the_phase_and_the_limit_that_fired(
+    verb: str, kind: type[httpx.TimeoutException], label: str, limit: str
+) -> None:
+    handler: Final = AsyncHTTPHandler(timeout=_TIMEOUT_CLIENT_LIMITS)
+    await handler.client.aclose()
+    handler.client = httpx.AsyncClient(transport=_timing_out(kind), timeout=_TIMEOUT_CLIENT_LIMITS)
+    try:
+        with pytest.raises(LitellmTimeout) as raised:
+            await getattr(handler, verb)("https://example.com/v1/embeddings", json={"input": "hi"})
+    finally:
+        await handler.close()
+
+    message: Final = str(raised.value)
+    assert label in message, message
+    assert limit in message, message
+    assert "None" not in message, message
+
+
+def test_sync_timeout_reports_the_per_call_timeout_as_a_float_when_one_is_given() -> None:
+    handler: Final = HTTPHandler()
+    handler.client.close()
+    handler.client = httpx.Client(transport=_timing_out(httpx.ReadTimeout), timeout=_TIMEOUT_CLIENT_LIMITS)
+    try:
+        with pytest.raises(LitellmTimeout) as raised:
+            handler.post("https://example.com/v1/embeddings", json={"input": "hi"}, timeout=30)
+    finally:
+        handler.close()
+
+    assert "Read timed out. Timeout passed=30.0, time taken=" in str(raised.value), str(raised.value)
+
+
+async def test_async_timeout_reports_the_per_call_timeout_as_a_float_when_one_is_given() -> None:
+    handler: Final = AsyncHTTPHandler(timeout=_TIMEOUT_CLIENT_LIMITS)
+    await handler.client.aclose()
+    handler.client = httpx.AsyncClient(transport=_timing_out(httpx.ReadTimeout), timeout=_TIMEOUT_CLIENT_LIMITS)
+    try:
+        with pytest.raises(LitellmTimeout) as raised:
+            await handler.post("https://example.com/v1/embeddings", json={"input": "hi"}, timeout=30)
+    finally:
+        await handler.close()
+
+    assert "Read timed out. Timeout passed=30.0, time taken=" in str(raised.value), str(raised.value)

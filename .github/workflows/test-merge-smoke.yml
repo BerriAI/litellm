@@ -33,7 +33,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
+        python-version: ["3.10", "3.11", "3.12", "3.13", "3.14", "3.15"]
     env:
       LITELLM_LOCAL_MODEL_COST_MAP: "True"
     steps:
@@ -75,6 +75,12 @@ jobs:
 
       - name: Import and CLI checks
         run: $IN_NETNS .venv/bin/python .github/scripts/run_merge_smoke.py cli
+
+      - name: Routing and UUID compatibility
+        run: >-
+          $IN_NETNS .venv/bin/python -m pytest
+          tests/unit/router_strategy/test_complexity_router.py::TestCustomDimensions
+          tests/unit/test_uuid_helper.py -q
 
       - name: Proxy startup check
         run: $IN_NETNS .venv/bin/python .github/scripts/run_merge_smoke.py proxy-startup --diagnostics-dir "${RUNNER_TEMP}/smoke-diagnostics"
@@ -126,7 +132,7 @@ jobs:
   windows-sdk:
     name: windows-sdk
     runs-on: windows-2025
-    timeout-minutes: 10
+    timeout-minutes: 30
     env:
       LITELLM_LOCAL_MODEL_COST_MAP: "True"
     defaults:
@@ -148,8 +154,11 @@ jobs:
         with:
           version: "0.10.9"
 
+      - name: Set up the Rust bridge
+        uses: ./.github/actions/rust-bridge
+
       - name: Install dependencies
-        run: .github/scripts/uv_sync_with_retries.sh --frozen --no-install-workspace --group dev --python 3.11
+        run: .github/scripts/uv_sync_with_retries.sh --frozen --group dev --python 3.11
 
       - name: Run the Windows tests
         run: uv run --no-sync python -m pytest --tb=short -v tests/windows_tests
@@ -234,7 +243,30 @@ jobs:
           exit 1
 
       - name: Run the startup tests
-        run: .venv/bin/python -m pytest --tb=short -vv tests/basic_proxy_startup_tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          base_url=http://localhost:4000
+          readiness_response="$(curl -sS --fail-with-body --write-out $'\n%{http_code}' "${base_url}/health/readiness")"
+          readiness_status="${readiness_response##*$'\n'}"
+          readiness_body="${readiness_response%$'\n'*}"
+          [[ "${readiness_status}" == "200" ]]
+          jq -e '.status == "healthy" or .status == "connected"' <<< "${readiness_body}" > /dev/null
+          liveness_status="$(curl -sS --fail-with-body --output /dev/null --write-out '%{http_code}' "${base_url}/health/liveness")"
+          [[ "${liveness_status}" == "200" ]]
+          completion_response="$(curl -sS --fail-with-body --write-out $'\n%{http_code}' \
+            --header "Authorization: Bearer ${LITELLM_MASTER_KEY}" \
+            --header 'Content-Type: application/json' \
+            --data '{"model":"gpt-4","messages":[{"role":"system","content":"You are a helpful assistant."},{"role":"user","content":"Hello!"}]}' \
+            "${base_url}/chat/completions")"
+          completion_status="${completion_response##*$'\n'}"
+          completion_body="${completion_response%$'\n'*}"
+          [[ "${completion_status}" == "200" ]]
+          jq -e '
+            (.choices | length) == 1 and
+            .choices[0].message.role == "assistant" and
+            .choices[0].message.content == "Hello! This is a mock response from the fake OpenAI endpoint."
+          ' <<< "${completion_body}" > /dev/null
 
       - name: Show the proxy logs
         if: always()

@@ -1,11 +1,13 @@
 import { resolveLogoSrc } from "@/lib/assetPaths";
 import a2aAgentLogo from "../../public/assets/logos/a2a_agent.png";
 import ai21Logo from "../../public/assets/logos/ai21.svg";
+import aiandLogo from "../../public/assets/logos/aiand.svg";
 import aimlApiLogo from "../../public/assets/logos/aiml_api.svg";
 import anthropicLogo from "../../public/assets/logos/anthropic.svg";
 import assemblyaiSmallLogo from "../../public/assets/logos/assemblyai_small.png";
 import basetenLogo from "../../public/assets/logos/baseten.svg";
 import bedrockLogo from "../../public/assets/logos/bedrock.svg";
+import bigmodelLogo from "../../public/assets/logos/bigmodel.png";
 import cerebrasLogo from "../../public/assets/logos/cerebras.svg";
 import cloudflareLogo from "../../public/assets/logos/cloudflare.svg";
 import cohereLogo from "../../public/assets/logos/cohere.svg";
@@ -14,6 +16,7 @@ import cursorLogo from "../../public/assets/logos/cursor.svg";
 import databricksLogo from "../../public/assets/logos/databricks.svg";
 import deepgramLogo from "../../public/assets/logos/deepgram.png";
 import deepinfraLogo from "../../public/assets/logos/deepinfra.png";
+import opencodeLogo from "../../public/assets/moyai/logos/opencode.svg";
 import deepseekLogo from "../../public/assets/logos/deepseek.svg";
 import edenaiLogo from "../../public/assets/logos/edenai.svg";
 import elevenlabsLogo from "../../public/assets/logos/elevenlabs.png";
@@ -74,6 +77,7 @@ export enum Providers {
   A2A_Agent = "A2A Agent",
   AI21 = "Ai21",
   AI21_CHAT = "Ai21 Chat",
+  AIAND = "ai&",
   AIML = "AI/ML API",
   AIOHTTP_OPENAI = "Aiohttp Openai",
   Anthropic = "Anthropic",
@@ -88,6 +92,7 @@ export enum Providers {
   Azure_Speech = "Azure AI Speech",
   AZURE_TEXT = "Azure Text",
   BASETEN = "Baseten",
+  Bespoke = "Bespoke Nimble",
   BYTEZ = "Bytez",
   Cerebras = "Cerebras",
   CHATGPT = "ChatGPT Subscription",
@@ -99,6 +104,7 @@ export enum Providers {
   COHERE_CHAT = "Cohere Chat",
   COMETAPI = "Cometapi",
   COMPACTIFAI = "Compactifai",
+  CORALBRICKS = "CoralBricks",
   Cursor = "Cursor",
   Dashscope = "Dashscope",
   Databricks = "Databricks (Qwen API)",
@@ -127,11 +133,14 @@ export enum Providers {
   HYPERBOLIC = "Hyperbolic",
   Infinity = "Infinity",
   JinaAI = "Jina AI",
+  OPENCODE_GO = "OpenCode Go",
   LAMBDA_AI = "Lambda Ai",
+  Laya = "Laya",
   LEMONADE = "Lemonade",
   LLAMAFILE = "Llamafile",
   LM_STUDIO = "Lm Studio",
   LLAMA = "Meta Llama",
+  META = "Meta Model API",
   MARITALK = "Maritalk",
   MICROSOFT_365_COPILOT = "Microsoft 365 Copilot",
   MiniMax = "MiniMax",
@@ -172,12 +181,14 @@ export enum Providers {
   Snowflake = "Snowflake",
   Soniox = "Soniox",
   StrandsDecider = "Strands Decider",
+  StreamLake = "StreamLake",
   TEXT_COMPLETION_CODESTRAL = "Text-Completion-Codestral",
   Tencent = "Tencent",
   TogetherAI = "TogetherAI",
   TOPAZ = "Topaz",
   Triton = "Triton",
   TypeSafe = "TypeSafe",
+  Nace = "Nace",
   V0 = "V0",
   VERCEL_AI_GATEWAY = "Vercel Ai Gateway",
   Vertex_AI = "Vertex AI (Anthropic, Gemini, etc.)",
@@ -191,12 +202,15 @@ export enum Providers {
   xAI = "xAI",
   XINFERENCE = "Xinference",
   ZAI = "Z.AI (Zhipu AI)",
+  BIGMODEL = "BigModel (Zhipu AI)",
+  ZeroGPU = "ZeroGPU",
 }
 
 export const provider_map: Record<string, string> = {
   A2A_Agent: "a2a_agent",
   AI21: "ai21",
   AI21_CHAT: "ai21_chat",
+  AIAND: "aiand",
   AIML: "aiml",
   AIOHTTP_OPENAI: "aiohttp_openai",
   Anthropic: "anthropic",
@@ -210,6 +224,7 @@ export const provider_map: Record<string, string> = {
   BASETEN: "baseten",
   Bedrock: "bedrock",
   BedrockMantle: "bedrock_mantle",
+  Bespoke: "bespoke",
   BYTEZ: "bytez",
   Cerebras: "cerebras",
   CHATGPT: "chatgpt",
@@ -221,6 +236,7 @@ export const provider_map: Record<string, string> = {
   COHERE_CHAT: "cohere_chat",
   COMETAPI: "cometapi",
   COMPACTIFAI: "compactifai",
+  CORALBRICKS: "coralbricks",
   Cursor: "cursor",
   Dashscope: "dashscope",
   Databricks: "databricks",
@@ -249,10 +265,13 @@ export const provider_map: Record<string, string> = {
   HYPERBOLIC: "hyperbolic",
   Infinity: "infinity",
   JinaAI: "jina_ai",
+  OPENCODE_GO: "opencode_go",
   LAMBDA_AI: "lambda_ai",
+  Laya: "laya",
   LEMONADE: "lemonade",
   LLAMAFILE: "llamafile",
   LLAMA: "meta_llama",
+  META: "meta",
   LM_STUDIO: "lm_studio",
   MICROSOFT_365_COPILOT: "microsoft_365_copilot",
   MARITALK: "maritalk",
@@ -295,12 +314,14 @@ export const provider_map: Record<string, string> = {
   Snowflake: "snowflake",
   Soniox: "soniox",
   StrandsDecider: "strands_decider",
+  StreamLake: "streamlake",
   TEXT_COMPLETION_CODESTRAL: "text-completion-codestral",
   Tencent: "tencent",
   TogetherAI: "together_ai",
   TOPAZ: "topaz",
   Triton: "triton",
   TypeSafe: "typesafe",
+  Nace: "nace",
   V0: "v0",
   VERCEL_AI_GATEWAY: "vercel_ai_gateway",
   Vertex_AI: "vertex_ai",
@@ -314,17 +335,21 @@ export const provider_map: Record<string, string> = {
   xAI: "xai",
   XINFERENCE: "xinference",
   ZAI: "zai",
+  BIGMODEL: "bigmodel",
+  ZeroGPU: "zerogpu",
 };
 
-const standaloneSubproviderSlugs = new Set<string>(["bedrock_mantle"]);
+const standaloneSubproviderSlugs = new Set<string>(["bedrock_mantle", "meta_llama"]);
 
 export const resolveLitellmProviderSlug = (provider: string): string =>
   provider_map[provider] ?? provider.toLowerCase();
 
 export const providerLogoMap: Partial<Record<Providers, string>> = {
+  [Providers.BIGMODEL]: bigmodelLogo.src,
   [Providers.A2A_Agent]: a2aAgentLogo.src,
   [Providers.AI21]: ai21Logo.src,
   [Providers.AI21_CHAT]: ai21Logo.src,
+  [Providers.AIAND]: aiandLogo.src,
   [Providers.AIML]: aimlApiLogo.src,
   [Providers.AIOHTTP_OPENAI]: openaiSmallLogo.src,
   [Providers.Anthropic]: anthropicLogo.src,
@@ -366,9 +391,11 @@ export const providerLogoMap: Partial<Record<Providers, string>> = {
   [Providers.HYPERBOLIC]: hyperbolicLogo.src,
   [Providers.Infinity]: infinityLogo.src,
   [Providers.JinaAI]: jinaLogo.src,
+  [Providers.OPENCODE_GO]: opencodeLogo.src,
   [Providers.LAMBDA_AI]: lambdaLogo.src,
   [Providers.LM_STUDIO]: lmstudioLogo.src,
   [Providers.LLAMA]: metaLlamaLogo.src,
+  [Providers.META]: metaLlamaLogo.src,
   [Providers.MiniMax]: minimaxLogo.src,
   [Providers.MICROSOFT_365_COPILOT]: microsoft365CopilotLogo.src,
   [Providers.MistralAI]: mistralLogo.src,
@@ -452,6 +479,7 @@ export const getProviderLogoAndName = (providerValue: string): { logo: string; d
 
 const providerPlaceholderMap: Partial<Record<Providers, string>> = {
   [Providers.AIML]: "aiml/flux-pro/v1.1",
+  [Providers.AIAND]: "aiand/openai/gpt-oss-120b",
   [Providers.Anthropic]: "claude-3-opus",
   [Providers.Azure]: "my-deployment",
   [Providers.Azure_AI_Studio]: "azure_ai/command-r-plus",
@@ -459,12 +487,14 @@ const providerPlaceholderMap: Partial<Record<Providers, string>> = {
   [Providers.Bedrock]: "claude-3-opus",
   [Providers.CHATGPT]: "chatgpt/gpt-5.4",
   [Providers.Cognition]: "cognition/swe-1.7",
+  [Providers.CORALBRICKS]: "coralbricks/glm-5.3-fast",
   [Providers.Cursor]: "cursor/claude-4-sonnet",
   [Providers.DeepInfra]: "deepinfra/<any-model-on-deepinfra>",
   [Providers.EDENAI]: "edenai/openai/gpt-mini-latest",
   [Providers.FalAI]: "fal_ai/fal-ai/flux-pro/v1.1-ultra",
   [Providers.Google_AI_Studio]: "gemini-pro",
   [Providers.JinaAI]: "jina_ai/",
+  [Providers.META]: "meta/muse-spark-1.1",
   [Providers.MICROSOFT_365_COPILOT]: "microsoft_365_copilot/chat",
   [Providers.NVIDIA_RIVA]: "nvidia_riva/nvidia/parakeet-ctc-1_1b-asr",
   [Providers.Oracle]: "oci/xai.grok-4",
@@ -472,15 +502,21 @@ const providerPlaceholderMap: Partial<Record<Providers, string>> = {
   [Providers.SageMaker]: "sagemaker/jumpstart-dft-meta-textgeneration-llama-2-7b",
   [Providers.Sail]: "sail/openai/gpt-oss-120b",
   [Providers.SCX_AI]: "scx-ai/GLM-5.2",
+  [Providers.Bespoke]: "bespoke/nimble",
+  [Providers.Laya]: "laya/english",
   [Providers.Snowflake]: "snowflake/mistral-7b",
   [Providers.StrandsDecider]: "strands_decider/strands-decider-2B-hobson-v19",
   [Providers.Tencent]: "tencent/deepseek-v4-pro",
   [Providers.TypeSafe]: "typesafe/jev-latest",
+  [Providers.Nace]: "nace/drex-latest",
+  [Providers.StreamLake]: "streamlake/<model-or-endpoint>",
   [Providers.Vertex_AI]: "gemini-pro",
   [Providers.VolcEngine]: "volcengine/<any-model-on-volcengine>",
   [Providers.Voyage]: "voyage/",
   [Providers.WATSONX]: "watsonx/ibm/granite-3-3-8b-instruct",
   [Providers.ZAI]: "zai/glm-4.5",
+  [Providers.BIGMODEL]: "bigmodel/glm-5.3",
+  [Providers.ZeroGPU]: "zerogpu/gpt-oss-120b",
 };
 
 export const getPlaceholder = (selectedProvider: string): string => {

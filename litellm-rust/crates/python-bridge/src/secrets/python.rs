@@ -2,12 +2,16 @@ use std::sync::Arc;
 
 use futures_util::future::BoxFuture;
 use litellm_host_python::{PythonContext, attach_blocking};
-use litellm_secrets::{Error, SecretValue, source::SecretSource};
+use litellm_secret_value::SecretValue;
+use litellm_secrets::{Error, source::SecretSource};
+
 use pyo3::prelude::*;
 
 use super::error::external_error;
 
-/// Reads each secret through Python's `get_secret_str`, so the configured manager, the key
+const SECRET_MANAGER_MODULE: &str = "litellm.rust_bridge.host.secret_manager";
+
+/// Reads each secret through the host module's `read_secret_str`, so the configured manager, the key
 /// management settings and the environment fallback behave exactly as they do in Python.
 pub(super) struct PythonSecrets {
     get_secret_str: Arc<Py<PyAny>>,
@@ -17,8 +21,8 @@ pub(super) struct PythonSecrets {
 impl PythonSecrets {
     pub(super) fn new(py: Python<'_>) -> PyResult<Self> {
         Ok(Self::reading_with(
-            py.import("litellm.secret_managers.main")?
-                .getattr("get_secret_str")?
+            py.import(SECRET_MANAGER_MODULE)?
+                .getattr("read_secret_str")?
                 .unbind(),
             PythonContext::capture(py)?,
         ))

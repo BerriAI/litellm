@@ -22,7 +22,7 @@ import shlex
 import uuid
 from collections.abc import Awaitable, Callable, Coroutine, Iterator, Mapping, Sequence
 from types import MappingProxyType
-from typing import Any, Final, TypeVar
+from typing import Final, TypeVar
 
 from deepagents.backends.protocol import (
     DeleteResult,
@@ -171,7 +171,7 @@ class SandboxBackend(SandboxBackendProtocol):  # pyright: ignore[reportUntypedBa
 
     # -- sync bridge (deepagents only calls these outside the event loop) ---
 
-    def _sync(self, coro: Coroutine[Any, Any, T]) -> T:
+    def _sync(self, coro: Coroutine[object, object, T]) -> T:
         try:
             running = asyncio.get_running_loop()
         except RuntimeError:

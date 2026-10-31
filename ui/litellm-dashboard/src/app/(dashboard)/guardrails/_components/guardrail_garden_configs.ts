@@ -379,4 +379,18 @@ export const GUARDRAIL_PRESETS: Record<string, GuardrailPreset> = {
     mode: "pre_call",
     defaultOn: false,
   },
+  wingback: {
+    provider: "Wingback",
+    guardrailNameSuggestion: "Wingback Runtime Security",
+    mode: "pre_call",
+    defaultOn: false,
+  },
+  airia: {
+    provider: "Airia",
+    guardrailNameSuggestion: "Airia Guardrail",
+    // Airia checks prompts and responses; the docs example seeds both halves so a
+    // response-side redaction is not silently left out.
+    mode: ["pre_call", "post_call"],
+    defaultOn: false,
+  },
 };

@@ -1,6 +1,7 @@
 import base64
 import io
 import json
+import logging
 import sys
 from typing import Final
 from unittest.mock import MagicMock, patch
@@ -10,6 +11,7 @@ import pytest
 import respx
 
 import litellm
+from litellm._logging import verbose_logger
 from litellm._uuid import uuid
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.ollama.completion.transformation import (
@@ -889,6 +891,59 @@ def test_transform_request_leaves_unreadable_images_untouched(payload: str) -> N
     assert data["images"] == [payload]
 
 
+async def _complete_in_json_mode(response_text: str) -> ModelResponse:
+    def respond(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"model": "llama3", "response": response_text, "done": True})
+
+    return await litellm.acompletion(
+        model="ollama/llama3",
+        messages=[{"role": "user", "content": "hi"}],
+        api_base="http://ollama.example:11434",
+        format="json",
+        client=AsyncHTTPHandler(transport=httpx.MockTransport(respond)),
+    )
+
+
+@pytest.mark.parametrize(
+    ("response_text", "expected_content"),
+    [
+        ('[{"name": "f", "arguments": {}}]', '[{"name": "f", "arguments": {}}]'),
+        ('["name", "arguments"]', '["name", "arguments"]'),
+        ('"name arguments"', '"name arguments"'),
+        ('{"name": "f"}', '{"name": "f"}'),
+        ('{"b": 1,"a": 2}', '{"b": 1, "a": 2}'),
+        ("1.50", "1.5"),
+        ("true", "true"),
+        ("null", "null"),
+    ],
+    ids=["list_of_calls", "list_of_key_names", "text_with_key_names", "name_only", "object", "number", "bool", "null"],
+)
+async def test_ollama_json_mode_completion_reserializes_json_that_is_not_a_function_call(
+    response_text: str, expected_content: str
+) -> None:
+    response = await _complete_in_json_mode(response_text)
+
+    assert response.choices[0].message.content == expected_content
+    assert response.choices[0].message.tool_calls is None
+    assert response.choices[0].finish_reason == "stop"
+
+
+@pytest.mark.parametrize(
+    ("arguments_json", "expected_arguments"),
+    [('{"city":"Paris"}', '{"city": "Paris"}'), ("[1,2]", "[1, 2]"), ('"{}"', '"{}"'), ("null", "null")],
+    ids=["object", "list", "text", "null"],
+)
+async def test_ollama_json_mode_completion_turns_a_name_and_arguments_object_into_a_tool_call(
+    arguments_json: str, expected_arguments: str
+) -> None:
+    response = await _complete_in_json_mode(f'{{"name": "get_weather", "arguments": {arguments_json}}}')
+
+    (tool_call,) = response.choices[0].message.tool_calls
+    assert (tool_call.function.name, tool_call.function.arguments) == ("get_weather", expected_arguments)
+    assert response.choices[0].message.content is None
+    assert response.choices[0].finish_reason == "tool_calls"
+
+
 def test_ollama_vision_model_sends_the_image_beside_the_user_prompt(respx_mock: respx.MockRouter) -> None:
     image_base64: Final = _image_base64("PNG")
     route: Final = respx_mock.post("http://ollama.test:11434/api/generate").respond(
@@ -920,3 +975,57 @@ def test_ollama_vision_model_sends_the_image_beside_the_user_prompt(respx_mock: 
     assert body["images"] == [image_base64]
     assert body["prompt"] == "### User:\nWhats in this image?\n\n"
     assert response.choices[0].message.content == "A white square"
+
+
+@pytest.mark.parametrize(
+    "api_base",
+    [
+        "http://gateway.example.com/ollama",
+        "http://gateway.example.com/ollama/",
+        "http://gateway.example.com/ollama/api/generate/",
+    ],
+)
+def test_get_complete_url_ignores_a_trailing_slash_on_api_base(api_base: str):
+    assert (
+        OllamaConfig().get_complete_url(
+            api_base=api_base, api_key=None, model="llama3", optional_params={}, litellm_params={}
+        )
+        == "http://gateway.example.com/ollama/api/generate"
+    )
+
+def _reasoning_effort_warnings(caplog: pytest.LogCaptureFixture) -> tuple[str, ...]:
+    return tuple(
+        r.getMessage()
+        for r in caplog.records
+        if r.levelno == logging.WARNING and "Dropping reasoning_effort=" in r.getMessage()
+    )
+
+
+@pytest.mark.parametrize("effort", ("minimal", "xhigh"))
+def test_reasoning_effort_mapped_to_think_off_warns_once(effort: str, caplog: pytest.LogCaptureFixture) -> None:
+    with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
+        result: Final = OllamaConfig().map_openai_params(
+            non_default_params={"reasoning_effort": effort}, optional_params={}, model="qwen3:0.6b", drop_params=False
+        )
+
+    warnings: Final = _reasoning_effort_warnings(caplog)
+    assert result["think"] is False
+    assert len(warnings) == 1
+    assert f"reasoning_effort={effort!r}" in warnings[0]
+    assert "qwen3:0.6b" in warnings[0]
+
+
+@pytest.mark.parametrize(
+    "model, effort, think",
+    (("qwen3:0.6b", "none", False), ("qwen3:0.6b", "high", True), ("gpt-oss:20b", "xhigh", "xhigh")),
+)
+def test_reasoning_effort_ollama_honors_does_not_warn(
+    model: str, effort: str, think: object, caplog: pytest.LogCaptureFixture
+) -> None:
+    with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
+        result: Final = OllamaConfig().map_openai_params(
+            non_default_params={"reasoning_effort": effort}, optional_params={}, model=model, drop_params=False
+        )
+
+    assert result["think"] == think
+    assert _reasoning_effort_warnings(caplog) == ()

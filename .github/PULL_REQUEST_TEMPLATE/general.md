@@ -4,6 +4,13 @@
      Drop every section you have nothing to put in, heading included: a bare "## Relevant issues" or
      "## Affected release" with nothing under it must not appear in the final description -->
 
+<!-- Two or three plain sentences a teammate can read in 10 seconds, written the way you'd explain it in Slack
+     Say what the PR does for users and why, then anything that keeps it working over time (a sync job, a config someone owns)
+     No headings, bullets, tables, or code names here. Everything else goes inside the Details block below -->
+
+<details>
+<summary>Details</summary>
+
 ## TLDR
 
 <!-- Fill in the bullets below and keep each one short and concrete: one line per bullet, roughly 10 words max
@@ -68,7 +75,7 @@ After: the same request comes back with real token counts, so the dashboard show
 - [ ] The handful of test files covering my change pass locally, e.g. `uv run pytest tests/unit/<your_test_file>.py -v`. Leave the suites (`make test-unit-*`, `make test-unit`) to CI: it finishes in ~15 minutes where a laptop takes an hour or more
 - [ ] My PR passes all required CI/CD checks (e.g., lint, schema.d.ts sync check, etc.)
 - [ ] My PR's scope is as isolated as possible; it only solves 1 specific problem
-- [ ] I have received a Greptile **Confidence Score of at least 4/5** before requesting a maintainer review (Greptile reviews automatically once the PR is opened; only comment `@greptileai` to re-request a review after pushing changes)
+- [ ] Every automated review on my PR's latest commit has finished, and I have addressed or replied to each of its findings before requesting a maintainer review
 
 ## Delays in PR merge?
 
@@ -77,9 +84,10 @@ If you're seeing a delay in your PR being merged, ping the LiteLLM Team on [Slac
 ## Screenshots / Proof of Fix
 
 <!-- Include screenshots, screen recordings, or command (e.g., curl) + output demonstrating that your changes work as expected
-     The proof must be completely e2e with no mocks, using actual LLM calls costing real $$$ if applicable. `pytest` commands are not enough
-     Show ONLY the latest run: capture Before at the merge base and After at the PR's current tip, and when new commits change behavior, replace this whole section with the fresh run instead of stacking it on top of older ones. The run must be up to date. As soon as a new commit is made and it makes this PR description's after sha stale (it's no longer tip of PR), you must re-run the QA
-     Structure the section exactly as below: Before and After one heading level below this section, each naming the commit hash it was captured at, one lower-level heading per case inside each, the same case names in the same order on both sides, and numbered steps (command, observed output) under every case, never loose prose; shared setup (config, payloads) goes above Before, and with a single case, drop the case headings and number the steps directly
+     Simple PR exception (2026-10-28, #49030). A mechanical change fully proven by focused checks may skip before/after e2e. Follow AGENTS.md's eligibility rule, trace callers, and verify bug-fix regression sensitivity. Record E2E exception at <tip SHA>, scope, rationale, commands and results here. Tests/static checks suffice only for this exception. Keep CI and bot gates, reassess changed diffs, and honor explicit e2e requests. Omit the Before/After scaffold for an exception
+     Otherwise proof must be fully e2e, no mocks, with real provider calls where applicable. Pytest alone is insufficient. The following format applies to live proof
+     Show only the latest proof. Before uses the merge base and After the tested tip. Rerun affected QA after behavior changes. Verified neutral diffs may carry proof with the tested SHA, current tip, equivalence reason and focused checks, following AGENTS.md and /qa
+     Use matching Before/After case headings with numbered commands and observed output. Put shared setup above them. For one case, omit case headings
 
 ### Before (<hash>)
 
@@ -164,3 +172,5 @@ Example checklists:
 ## Final Attestation
 
 - [ ] The tests check the right things, including the edge cases, and regressions in the respective real-world customer use-cases are not possible after this PR
+
+</details>

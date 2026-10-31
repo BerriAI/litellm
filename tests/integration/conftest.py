@@ -4,27 +4,34 @@ import hashlib
 import json
 import os
 import re
-from collections.abc import Generator, Iterator, Mapping, Sequence
-from contextlib import ExitStack
+from collections.abc import AsyncIterator, Generator, Iterator, Mapping, Sequence
+from contextlib import ExitStack, contextmanager
 from copy import copy
+from functools import partial
 from importlib.metadata import version
 from pathlib import Path
-from typing import Final, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Final, Protocol, runtime_checkable
 
 import httpx
 import pytest
+import pytest_asyncio
 from execnet import XSpec
 from pydantic import TypeAdapter
 from redis import Redis
 
-from tests.integration._support.client import Gateway, eventually, gateway_from_environment
+from tests.integration._support.client import Gateway, Scenario, eventually, gateway_from_environment
 from tests.integration._support.generation import LIFECYCLE_SETTINGS
 from tests.integration._support.manifest import OWNED_DIRECTORIES
 from tests.integration._support.ordering import collected_case, fixture_groups, scheduling_groups
+from tests.integration._support.process import OWNED_STATE_VARIABLE, OwnedState
 from tests.integration._support.provider import SharedProvider, shared_provider
 from tests.integration._support.routing import RoutingPlugin
-from tests.integration._support.workers import worker_endpoints, worker_gateway
+from tests.integration._support.sdk_models import build_sdk_models
+from tests.integration._support.workers import gateway_profile, start_worker_stacks, worker_stack
 from tests.integration.run import GITHUB_FILES
+
+if TYPE_CHECKING:
+    from tests.integration._support.actors import ActorSet, GatewayClient, ManagementDatabase, ScratchResources
 
 COLLECTED: Final = pytest.StashKey[tuple[str, ...]]()
 INVENTORY: Final = pytest.StashKey[tuple[str, ...]]()
@@ -32,6 +39,7 @@ REPORTS: Final = pytest.StashKey[list[pytest.TestReport]]()
 WORKER_INVENTORY: Final = TypeAdapter(tuple[str, ...])
 SHARD_PATH: Final[TypeAdapter[Path | None]] = TypeAdapter(Path | None)
 SHARD_FILES: Final = pytest.StashKey[frozenset[str] | None]()
+FAILED_COLLECTIONS: Final = pytest.StashKey[frozenset[str]]()
 GROUP_SUFFIX: Final = re.compile(r"@integration_fixture_[0-9a-f]{64}$")
 INTEGER_OPTION: Final = TypeAdapter(int)
 STRING_ENVIRONMENT: Final = TypeAdapter(dict[str, str])
@@ -62,9 +70,11 @@ def pytest_addoption(parser: pytest.Parser) -> None:
 def pytest_configure(config: pytest.Config) -> None:
     config.addinivalue_line("markers", "integration: owned real-service integration contracts")
     config.addinivalue_line("markers", "covers(*ids): legacy contract IDs kept for existing tests, not enforced")
+    config.addinivalue_line("markers", "shares_worker_state: owned proxies here share the worker DB and Redis")
     config.stash[REPORTS] = []
     config.stash[SHARD_FILES] = _shard_files(SHARD_PATH.validate_python(config.getoption("integration_shard_files")))
     config.pluginmanager.register(IntegrationReportPlugin(config))
+    build_sdk_models()
     if os.environ.get("INTEGRATION_ROUTING"):
         config.pluginmanager.register(RoutingPlugin(config))
 
@@ -80,24 +90,14 @@ def pytest_xdist_setupnodes(config: pytest.Config, specs: Sequence[XSpec]) -> No
     resources: Final = ExitStack()
     config.add_cleanup(resources.close)
     destination: Final = Path(os.environ["INTEGRATION_RESULTS_DIR"])
-    peer_needed: Final = bool(os.environ.get("INTEGRATION_PEER_URL"))
-    replica_needed: Final = bool(os.environ.get("INTEGRATION_PROXY_READ_REPLICA_URL"))
-    for index, spec in enumerate(specs):
-        results: Final = destination / f"gw{index}"
-        endpoints: Final = worker_endpoints()
-        with pytest.MonkeyPatch.context() as environment:
-            for name, value in endpoints.items():
-                environment.setenv(name, value)
-            environment.setenv("INTEGRATION_RESULTS_DIR", str(results))
-            services: Final = resources.enter_context(
-                worker_gateway(results / "runtime", peer=peer_needed, replica=replica_needed)
-            )
-        spec.env = {
-            **STRING_ENVIRONMENT.validate_python(spec.env),
-            **endpoints,
-            **services,
-            "INTEGRATION_RESULTS_DIR": str(results),
-        }
+    stacks: Final = start_worker_stacks(
+        tuple(destination / f"gw{index}" for index in range(len(specs))),
+        partial(worker_stack, profile=gateway_profile(os.environ)),
+        resources,
+        os.cpu_count() or 1,
+    )
+    for spec, stack in zip(specs, stacks, strict=True):
+        spec.env = {**STRING_ENVIRONMENT.validate_python(spec.env), **stack}
 
 
 class IntegrationReportPlugin:
@@ -106,6 +106,12 @@ class IntegrationReportPlugin:
 
     def pytest_runtest_logreport(self, report: pytest.TestReport) -> None:
         self.config.stash[REPORTS].append(report)
+
+    def pytest_collectreport(self, report: pytest.CollectReport) -> None:
+        if report.failed:
+            self.config.stash[FAILED_COLLECTIONS] = self.config.stash.get(FAILED_COLLECTIONS, frozenset()) | {
+                report.nodeid.split("::", 1)[0]
+            }
 
     @pytest.hookimpl(optionalhook=True)
     def pytest_xdist_node_collection_finished(self, node: object, ids: Sequence[str]) -> None:
@@ -227,8 +233,12 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
         raise pytest.UsageError("Parallel integration runs require CircleCI's shard file selection")
     if files is not None:
         available: Final = frozenset(item.nodeid.split("::", 1)[0] for item in owned)
-        if files - available:
-            raise pytest.UsageError(f"Integration shard selected uncollected files: {sorted(files - available)}")
+        for file in sorted(files - available - config.stash.get(FAILED_COLLECTIONS, frozenset())):
+            config.hook.pytest_collectreport(
+                report=pytest.CollectReport(
+                    file, "failed", f"Integration shard selected {file}, which has no tests", []
+                )
+            )
         selected: Final = tuple(item for item in items if item not in owned or item.nodeid.split("::", 1)[0] in files)
         deselected: Final = tuple(item for item in owned if item.nodeid.split("::", 1)[0] not in files)
         config.hook.pytest_deselected(items=deselected)
@@ -287,9 +297,91 @@ def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
         session.exitstatus = pytest.ExitCode.OK
 
 
+@contextmanager
+def _owned_state(item: pytest.Item) -> Iterator[None]:
+    with pytest.MonkeyPatch.context() as environment:
+        if item.get_closest_marker("shares_worker_state") is not None:
+            environment.setenv(OWNED_STATE_VARIABLE, OwnedState.SHARED_WITH_WORKER.value)
+        yield
+
+
+@pytest.hookimpl(wrapper=True)
+def pytest_runtest_setup(item: pytest.Item) -> Generator[None, None, None]:
+    with _owned_state(item):
+        return (yield)
+
+
+@pytest.hookimpl(wrapper=True)
+def pytest_runtest_call(item: pytest.Item) -> Generator[None, None, None]:
+    with _owned_state(item):
+        return (yield)
+
+
+@pytest.hookimpl(wrapper=True)
+def pytest_runtest_teardown(item: pytest.Item, nextitem: pytest.Item | None) -> Generator[None, None, None]:
+    with _owned_state(item):
+        return (yield)
+
+
+@pytest.fixture(autouse=True)
+def _reset_upstream_observations() -> None:
+    upstream: Final = os.environ.get("INTEGRATION_UPSTREAM_URL")
+    if upstream is not None:
+        httpx.delete(f"{upstream}/__observations", timeout=5, trust_env=False).raise_for_status()
+
+
 @pytest.fixture
 def gateway() -> Iterator[Gateway]:
     with gateway_from_environment() as value:
+        yield value
+
+
+@pytest.fixture(scope="session")
+def session_gateway() -> Iterator[Gateway]:
+    with gateway_from_environment() as value:
+        yield value
+
+
+@pytest.fixture
+def scenario(gateway: Gateway) -> Iterator[Scenario]:
+    value: Final[Scenario]
+    with gateway.scenario() as value:
+        yield value
+
+
+@pytest_asyncio.fixture(scope="session", loop_scope="session")
+async def actors(
+    session_gateway: Gateway, db: ManagementDatabase
+) -> AsyncIterator[ActorSet]:
+    with session_gateway.scenario() as scenario:
+        from tests.integration._support.actors import create_actor_set
+
+        value: Final[ActorSet] = await create_actor_set(session_gateway, scenario, db)
+        yield value
+
+
+@pytest.fixture(scope="session")
+def gateway_client(session_gateway: Gateway, actors: ActorSet) -> GatewayClient:
+    from tests.integration._support.actors import create_gateway_client
+
+    return create_gateway_client(session_gateway, actors)
+
+
+@pytest_asyncio.fixture(scope="session", loop_scope="session")
+async def db(session_gateway: Gateway) -> AsyncIterator[ManagementDatabase]:
+    from tests.integration._support.actors import management_database
+
+    value: Final[ManagementDatabase]
+    async with management_database(session_gateway) as value:
+        yield value
+
+
+@pytest_asyncio.fixture(scope="function", loop_scope="session")
+async def resources(db: ManagementDatabase) -> AsyncIterator[ScratchResources]:
+    from tests.integration._support.actors import scratch_resources
+
+    value: Final[ScratchResources]
+    async with scratch_resources(db) as value:
         yield value
 
 

@@ -41,6 +41,9 @@ _GRPC_STATUS_CODE_TO_HTTP: Final[dict] = {
 }
 
 
+_GRPC_MESSAGE_TOO_LARGE: Final = "message larger than max"
+
+
 def _extract_grpc_status_name(error: object) -> str | None:
     """
     Best-effort extraction of a gRPC StatusCode name from an arbitrary error.
@@ -79,8 +82,16 @@ def grpc_error_to_litellm_exception(error: Exception) -> NvidiaRivaException:
     a ``NvidiaRivaException`` with an appropriate HTTP-equivalent status code.
     """
     status_name: Final = _extract_grpc_status_name(error)
-    http_status: Final = _GRPC_STATUS_CODE_TO_HTTP.get(status_name or "", 500)
-
     detail: Final = _extract_grpc_details(error) or str(error)
+    if status_name == "RESOURCE_EXHAUSTED" and _GRPC_MESSAGE_TOO_LARGE in detail:
+        return NvidiaRivaException(
+            status_code=413,
+            message=(
+                f"NVIDIA Riva gRPC error ({status_name}): {detail}. The audio is too large for one offline "
+                "request to this Riva server: send shorter audio, or drop riva_offline on models that support streaming."
+            ),
+        )
+
+    http_status: Final = _GRPC_STATUS_CODE_TO_HTTP.get(status_name or "", 500)
     message = f"NVIDIA Riva gRPC error ({status_name}): {detail}" if status_name else f"NVIDIA Riva error: {detail}"
     return NvidiaRivaException(status_code=http_status, message=message)

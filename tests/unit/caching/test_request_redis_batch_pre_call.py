@@ -6,6 +6,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+from datetime import datetime, timezone
 from itertools import chain
 from typing import Any, Final
 from unittest.mock import AsyncMock, MagicMock
@@ -28,6 +29,7 @@ from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     PROXY_MaxParallelRequestsHandler_v3,
 )
 from litellm.proxy.utils import InternalUsageCache
+from litellm.router_api import RoutingContext
 from litellm.router_utils.cooldown_cache import ROUTER_COOLDOWNS_TARGET, CooldownCache
 from litellm.router_utils.routing_read_batch import (
     ROUTER_COOLDOWNS_USAGE_TARGET,
@@ -389,7 +391,7 @@ async def test_a_prefetch_with_incomplete_usage_keys_releases_cooldown_reservati
     )
 
     with request_redis_batch_scope():
-        RoutingPrefetch.arm(router, router.lowesttpm_logger_v2, router.model_list[:1])
+        RoutingPrefetch.arm(RoutingContext(router), router.lowesttpm_logger_v2, router.model_list[:1])
         deployment: Final = await router.async_get_available_deployment(
             model=_MODEL_GROUP, messages=[{"role": "user", "content": "ping"}], request_kwargs={}
         )
@@ -837,7 +839,12 @@ async def test_the_prefetch_reads_cooldowns_again_once_the_read_interval_elapses
 @pytest.mark.asyncio
 async def test_the_prefetch_mget_carries_only_the_keys_whose_read_is_due(monkeypatch):
     first_time: Final = 1_000_000.0
+    pinned: Final = datetime(2026, 1, 1, 12, 0, 30, tzinfo=timezone.utc)
     monkeypatch.setattr(dual_cache_module.time, "time", lambda: first_time)
+    monkeypatch.setattr(
+        "litellm.router_strategy.lowest_tpm_rpm_v2.get_utc_datetime",
+        lambda: pinned,
+    )
     client = FakeClient(_lua_ok_replies)
     redis_cache = FakeRedisCache(client)
     router = _router(redis_cache, routing_strategy="usage-based-routing-v2")

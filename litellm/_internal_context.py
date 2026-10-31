@@ -36,6 +36,18 @@ REDIS_FAMILIES_METADATA_KEY: Final = "families"
 
 _service_caller: Final[ContextVar[str | None]] = ContextVar("service_caller", default=None)
 
+_mirrored_call: Final[ContextVar[bool]] = ContextVar("mirrored_call", default=False)
+
+
+@contextmanager
+def internal_sub_call() -> Generator[None]:
+    """A nested call the parent call logs and bills, so the parent must fold this call's cost into its own."""
+    token: Final = is_internal_call.set(True)
+    try:
+        yield
+    finally:
+        is_internal_call.reset(token)
+
 
 @contextmanager
 def post_response_phase() -> Generator[None]:
@@ -111,6 +123,30 @@ def service_caller(caller: str | None) -> Generator[None]:
 
 def current_service_caller() -> str | None:
     return _service_caller.get()
+
+
+@contextmanager
+def mirrored_call() -> Generator[None]:
+    """A silent_model mirror of a request: every litellm call inside, its retries and fallbacks included."""
+    token: Final = _mirrored_call.set(True)
+    try:
+        yield
+    finally:
+        _restore(_mirrored_call, token)
+
+
+def in_mirrored_call() -> bool:
+    return _mirrored_call.get()
+
+
+@contextmanager
+def outside_mirrored_call() -> Generator[None]:
+    """Logging a mirrored call: the calls its callbacks start are not mirrors themselves."""
+    token: Final = _mirrored_call.set(False)
+    try:
+        yield
+    finally:
+        _restore(_mirrored_call, token)
 
 
 @contextmanager

@@ -1,7 +1,8 @@
 use litellm_auth::CredentialPlacement;
 use litellm_llms_types::{
     formats::messages::{
-        ContextEdit, ContextManagement, Message, MessagesOptionalParams, MessagesRequest, Speed,
+        ContentBlock, ContentBlockType, ContextEdit, ContextManagement, Message,
+        MessagesOptionalParams, MessagesRequest, Speed, ThinkingConfig, ThinkingDisplay,
     },
     providers::anthropic::{AnthropicBeta, BetaProvider, BetaSet, DEFAULT_HEADERS},
     recognized::Recognized,
@@ -74,6 +75,7 @@ impl BaseMessagesConfig for AnthropicMessagesConfig {
         headers: Headers,
         api_key: Option<&str>,
         _model: &str,
+        _optional_params: &MessagesOptionalParams,
         _litellm_params: &LitellmParams,
         env_lookup: &dyn Fn(&str) -> Option<String>,
     ) -> Result<ValidatedEnvironment, Error> {
@@ -109,7 +111,10 @@ impl BaseMessagesConfig for AnthropicMessagesConfig {
     }
 
     fn request_headers(&self, headers: Headers, request: &MessagesRequest) -> Headers {
-        update_headers_with_anthropic_beta(headers, request)
+        merge_beta_headers(
+            headers,
+            provider_feature_betas(request, BetaProvider::Anthropic),
+        )
     }
 }
 
@@ -136,10 +141,18 @@ pub(crate) fn transform_messages_request(
         messages: strip_encrypted_reasoning_blocks(messages),
         params: MessagesOptionalParams {
             context_management,
+            extra: without_null_safeguards(request.params.extra),
             ..request.params
         },
         ..request
     })
+}
+
+fn without_null_safeguards(extra: Map<String, Value>) -> Map<String, Value> {
+    extra
+        .into_iter()
+        .filter(|(key, value)| key != "safeguards" || !value.is_null())
+        .collect()
 }
 
 pub(crate) fn update_headers_with_anthropic_beta(
@@ -149,12 +162,34 @@ pub(crate) fn update_headers_with_anthropic_beta(
     merge_beta_headers(headers, feature_betas(request))
 }
 
-/// The betas a request needs on a host other than the first-party API: the Anthropic set
-/// filtered and renamed through the host's `BetaProvider` policy.
+pub(crate) fn update_headers_with_safeguards_beta(
+    headers: Headers,
+    request: &MessagesRequest,
+    provider: BetaProvider,
+) -> Headers {
+    merge_beta_headers(
+        headers,
+        feature_betas(request).union(on_provider(mapped_host_betas(&request.params), provider)),
+    )
+}
+
+/// The betas a request needs on a host with a column in the beta map, filtered and renamed
+/// through that column.
 pub(crate) fn provider_feature_betas(request: &MessagesRequest, provider: BetaProvider) -> BetaSet {
-    feature_betas(request)
-        .iter()
-        .filter_map(|beta| beta.on(provider))
+    on_provider(
+        feature_betas(request).union(mapped_host_betas(&request.params)),
+        provider,
+    )
+}
+
+fn on_provider(betas: BetaSet, provider: BetaProvider) -> BetaSet {
+    betas.iter().filter_map(|beta| beta.on(provider)).collect()
+}
+
+fn mapped_host_betas(params: &MessagesOptionalParams) -> BetaSet {
+    carries_safeguards(params)
+        .then_some(AnthropicBeta::DangerousToolUse20260903)
+        .into_iter()
         .collect()
 }
 
@@ -169,6 +204,10 @@ fn feature_betas(request: &MessagesRequest) -> BetaSet {
             .then_some(AnthropicBeta::FastMode20260201),
         messages_carry_output_config(&request.messages)
             .then_some(AnthropicBeta::PerTurnControl20260701),
+        uses_thinking_display_updates(params)
+            .then_some(AnthropicBeta::ThinkingDisplayUpdates20260818),
+        messages_carry_tool_changes(&request.messages)
+            .then_some(AnthropicBeta::MidConversationToolChanges20260701),
         has_advisor_tool(tools).then_some(AnthropicBeta::AdvisorTool20260301),
         is_tool_search_used(tools).then_some(AnthropicBeta::AdvancedToolUse20251120),
     ]
@@ -206,10 +245,47 @@ fn uses_structured_output(params: &MessagesOptionalParams) -> bool {
             .is_some_and(|config| config.format.is_some())
 }
 
+fn carries_safeguards(params: &MessagesOptionalParams) -> bool {
+    params
+        .extra
+        .get("safeguards")
+        .is_some_and(|value| !value.is_null())
+}
+
 fn messages_carry_output_config(messages: &[Message]) -> bool {
     messages
         .iter()
         .any(|message| message.extra.contains_key("output_config"))
+}
+
+fn uses_thinking_display_updates(params: &MessagesOptionalParams) -> bool {
+    let display = match params.thinking.as_ref().and_then(Recognized::known) {
+        Some(ThinkingConfig::Enabled(thinking)) => thinking.display.as_ref(),
+        Some(ThinkingConfig::Adaptive(thinking)) => thinking.display.as_ref(),
+        _ => None,
+    };
+    display.and_then(Recognized::known) == Some(&ThinkingDisplay::Updates)
+}
+
+fn is_tool_reference_change(block: &ContentBlock) -> bool {
+    matches!(
+        &block.block_type,
+        Some(ContentBlockType::Other(block_type))
+            if block_type == "tool_addition" || block_type == "tool_removal"
+    ) && block
+        .extra
+        .get("tool")
+        .and_then(|tool| tool.get("type"))
+        .and_then(Value::as_str)
+        == Some("tool_reference")
+}
+
+fn messages_carry_tool_changes(messages: &[Message]) -> bool {
+    messages
+        .iter()
+        .filter(|message| message.role == "system")
+        .flat_map(Message::blocks)
+        .any(is_tool_reference_change)
 }
 
 fn unsupported_param(model: &str, param: &str, value: &str, hint: &str) -> Error {
@@ -847,6 +923,7 @@ mod tests {
             headers(forwarded),
             api_key,
             "claude",
+            &MessagesOptionalParams::default(),
             &LitellmParams::default(),
             &env(vars),
         )
@@ -1025,8 +1102,104 @@ mod tests {
         json!({"messages": [{"role": "user", "content": "hi", "output_config": null}]}),
         &["per-turn-control-2026-07-01"]
     )]
+    #[case::safeguards(
+        json!({"safeguards": [{"type": "dangerous_tool_use", "classifier_context": {"v": 1, "permission_mode": "auto"}}]}),
+        &[]
+    )]
+    #[case::adaptive_display_updates(
+        json!({"thinking": {"type": "adaptive", "display": "updates"}}),
+        &["thinking-display-updates-2026-08-18"]
+    )]
+    #[case::enabled_display_updates(
+        json!({"thinking": {"type": "enabled", "budget_tokens": 2048, "display": "updates"}}),
+        &["thinking-display-updates-2026-08-18"]
+    )]
+    #[case::summarized_display(json!({"thinking": {"type": "adaptive", "display": "summarized"}}), &[])]
+    #[case::disabled_thinking(json!({"thinking": {"type": "disabled"}}), &[])]
+    #[case::system_tool_addition(
+        json!({"messages": [
+            {"role": "user", "content": "Use the ping tool"},
+            {"role": "system", "content": [{"type": "tool_addition", "tool": {"type": "tool_reference", "name": "ping"}}]},
+        ]}),
+        &["mid-conversation-tool-changes-2026-07-01"]
+    )]
+    #[case::system_tool_removal(
+        json!({"messages": [
+            {"role": "system", "content": [{"type": "tool_removal", "tool": {"type": "tool_reference", "name": "ping"}}]},
+        ]}),
+        &["mid-conversation-tool-changes-2026-07-01"]
+    )]
+    #[case::user_tool_addition(
+        json!({"messages": [
+            {"role": "user", "content": [{"type": "tool_addition", "tool": {"type": "tool_reference", "name": "ping"}}]},
+        ]}),
+        &[]
+    )]
+    #[case::tool_addition_without_a_tool_reference(
+        json!({"messages": [
+            {"role": "system", "content": [{"type": "tool_addition", "tool": {"type": "tool_definition"}}]},
+        ]}),
+        &[]
+    )]
     fn feature_betas_follow_the_request(#[case] fields: Value, #[case] expected: &[&str]) {
         assert_eq!(feature_betas(&request(fields)), betas(expected));
+    }
+
+    #[rstest]
+    #[case::anthropic(BetaProvider::Anthropic, json!([{"type": "dangerous_tool_use"}]), &["dangerous-tool-use-2026-09-03"])]
+    #[case::vertex_ai(BetaProvider::VertexAi, json!([{"type": "dangerous_tool_use"}]), &["dangerous-tool-use-2026-09-03"])]
+    #[case::empty_list(BetaProvider::Anthropic, json!([]), &["dangerous-tool-use-2026-09-03"])]
+    #[case::not_a_list(BetaProvider::Anthropic, json!(1), &["dangerous-tool-use-2026-09-03"])]
+    #[case::null(BetaProvider::Anthropic, Value::Null, &[])]
+    #[case::bedrock_converse_has_a_null_cell(BetaProvider::BedrockConverse, json!([{"type": "dangerous_tool_use"}]), &[])]
+    fn safeguards_add_the_dangerous_tool_use_beta_where_the_beta_map_has_a_cell(
+        #[case] provider: BetaProvider,
+        #[case] safeguards: Value,
+        #[case] expected: &[&str],
+    ) {
+        assert_eq!(
+            provider_feature_betas(&request(json!({"safeguards": safeguards})), provider),
+            betas(expected)
+        );
+    }
+
+    #[rstest]
+    #[case::vertex_ai(
+        BetaProvider::VertexAi,
+        &["mid-conversation-tool-changes-2026-07-01", "thinking-display-updates-2026-08-18"]
+    )]
+    #[case::azure_ai(
+        BetaProvider::AzureAi,
+        &["mid-conversation-tool-changes-2026-07-01", "thinking-display-updates-2026-08-18"]
+    )]
+    #[case::bedrock_converse(BetaProvider::BedrockConverse, &["thinking-display-updates-2026-08-18"])]
+    #[case::databricks(BetaProvider::Databricks, &["thinking-display-updates-2026-08-18"])]
+    fn tool_change_and_display_betas_reach_the_providers_that_accept_them(
+        #[case] provider: BetaProvider,
+        #[case] expected: &[&str],
+    ) {
+        let fields = json!({
+            "thinking": {"type": "adaptive", "display": "updates"},
+            "messages": [
+                {"role": "system", "content": [{"type": "tool_addition", "tool": {"type": "tool_reference", "name": "ping"}}]},
+            ],
+        });
+        assert_eq!(
+            provider_feature_betas(&request(fields), provider),
+            betas(expected)
+        );
+    }
+
+    #[rstest]
+    fn hosts_without_a_beta_map_column_get_safeguards_without_a_derived_beta() {
+        let client = headers(&[("anthropic-beta", "claude-code-20250219")]);
+        assert_eq!(
+            update_headers_with_anthropic_beta(
+                client.clone(),
+                &request(json!({"safeguards": [{"type": "dangerous_tool_use"}]}))
+            ),
+            client
+        );
     }
 
     #[rstest]
@@ -1066,6 +1239,11 @@ mod tests {
         &[("anthropic-beta", "claude-code-20250219,interleaved-thinking-2025-05-14,context-management-2025-06-27,per-turn-control-2026-07-01,effort-2025-11-24")],
         json!({"messages": [{"role": "user", "content": "hi", "output_config": {"effort": "low"}}]}),
         &[("anthropic-beta", "claude-code-20250219,context-management-2025-06-27,effort-2025-11-24,interleaved-thinking-2025-05-14,per-turn-control-2026-07-01")],
+    )]
+    #[case::safeguards_add_the_dangerous_tool_use_beta_to_the_client_betas(
+        &[("anthropic-beta", "claude-code-20250219,interleaved-thinking-2025-05-14")],
+        json!({"safeguards": [{"type": "dangerous_tool_use"}]}),
+        &[("anthropic-beta", "claude-code-20250219,dangerous-tool-use-2026-09-03,interleaved-thinking-2025-05-14")],
     )]
     fn request_headers_merge_the_feature_betas(
         #[case] input: &[(&str, &str)],
@@ -1127,6 +1305,7 @@ mod tests {
             Vec::new(),
             None,
             "claude",
+            &MessagesOptionalParams::default(),
             &LitellmParams::default(),
             &record,
         );

@@ -4,13 +4,16 @@ Azure AI Anthropic CountTokens API handler.
 Uses httpx for HTTP requests with Azure authentication.
 """
 
-from typing import Any, Final
+from collections.abc import Mapping
+from typing import Final
 
 import httpx
+from pydantic import JsonValue
 
 import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.asyncify import asyncify
+from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
 from litellm.llms.anthropic.common_utils import AnthropicError
 from litellm.llms.azure_ai.anthropic.count_tokens.transformation import (
     AzureAIAnthropicCountTokensConfig,
@@ -28,14 +31,15 @@ class AzureAIAnthropicCountTokensHandler(AzureAIAnthropicCountTokensConfig):
     async def handle_count_tokens_request(
         self,
         model: str,
-        messages: list[dict[str, Any]],
-        api_key: str,
+        messages: list[dict[str, JsonValue]],
+        api_key: str | None,
         api_base: str,
         litellm_params: dict[str, object] | None = None,
         timeout: float | httpx.Timeout | None = None,
-        tools: list[dict[str, Any]] | None = None,
+        tools: list[dict[str, JsonValue]] | None = None,
         system: object = None,
-    ) -> dict[str, Any]:
+        optional_params: Mapping[str, JsonValue] | None = None,
+    ) -> dict[str, object]:
         """
         Handle a CountTokens request using httpx with Azure authentication.
 
@@ -65,6 +69,8 @@ class AzureAIAnthropicCountTokensHandler(AzureAIAnthropicCountTokensConfig):
                 messages=messages,
                 tools=tools,
                 system=system,
+                optional_params=optional_params,
+                drop_params=drops_unsupported_params((litellm_params or {}).get("drop_params")),
             )
 
             verbose_logger.debug("Transformed request: %s", request_body)
@@ -78,7 +84,17 @@ class AzureAIAnthropicCountTokensHandler(AzureAIAnthropicCountTokensConfig):
             headers: Final = self.get_required_headers(
                 api_key=api_key,
                 litellm_params=litellm_params,
+                messages=messages,
             )
+            if not {"x-api-key", "Authorization"} & headers.keys():
+                raise AnthropicError(
+                    status_code=401,
+                    message=(
+                        f"No Azure AI API key or Entra ID credential is set for model {model}, so tokens can't be "
+                        "counted. Set api_key or an Entra ID credential on the deployment, or AZURE_AI_API_KEY or "
+                        "AZURE_API_KEY in the proxy environment."
+                    ),
+                )
 
             # Use LiteLLM's async httpx client
             async_client: Final = get_async_httpx_client(llm_provider=litellm.LlmProviders.AZURE_AI)

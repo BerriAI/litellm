@@ -4,9 +4,13 @@ Azure AI Anthropic CountTokens API transformation logic.
 Extends the base Anthropic CountTokens transformation with Azure authentication.
 """
 
+from collections.abc import Sequence
 from typing import Final
+from urllib.parse import urlsplit
 
 from litellm.constants import ANTHROPIC_TOKEN_COUNTING_BETA_VERSION
+from litellm.litellm_core_utils.url_utils import join_api_base
+from litellm.llms.anthropic.common_utils import count_tokens_feature_betas, merge_anthropic_beta_headers
 from litellm.llms.anthropic.count_tokens.transformation import (
     AnthropicCountTokensConfig,
 )
@@ -24,8 +28,9 @@ class AzureAIAnthropicCountTokensConfig(AnthropicCountTokensConfig):
 
     def get_required_headers(
         self,
-        api_key: str,
+        api_key: str | None,
         litellm_params: dict[str, object] | None = None,
+        messages: Sequence[object] = (),
     ) -> dict[str, str]:
         """
         Get the required headers for the Azure AI Anthropic CountTokens API.
@@ -36,6 +41,7 @@ class AzureAIAnthropicCountTokensConfig(AnthropicCountTokensConfig):
         Args:
             api_key: The Azure AI API key
             litellm_params: Optional LiteLLM parameters for additional auth config
+            messages: The request messages, read for betas the counted features need
 
         Returns:
             Dictionary of required headers with both x-api-key and Azure authentication
@@ -44,13 +50,15 @@ class AzureAIAnthropicCountTokensConfig(AnthropicCountTokensConfig):
         headers: Final = {
             "Content-Type": "application/json",
             "anthropic-version": "2023-06-01",
-            "anthropic-beta": ANTHROPIC_TOKEN_COUNTING_BETA_VERSION,
-            "x-api-key": api_key,  # Azure AI Anthropic requires this header
+            "anthropic-beta": merge_anthropic_beta_headers(
+                ANTHROPIC_TOKEN_COUNTING_BETA_VERSION, count_tokens_feature_betas("azure_ai", {}, messages)
+            ),
+            **({"x-api-key": api_key} if api_key else {}),
         }
 
         # Also set up Azure auth headers for flexibility
         litellm_params = litellm_params or {}
-        if "api_key" not in litellm_params:
+        if api_key and "api_key" not in litellm_params:
             litellm_params["api_key"] = api_key
 
         litellm_params_obj: Final = GenericLiteLLMParams.model_validate(litellm_params)
@@ -58,8 +66,9 @@ class AzureAIAnthropicCountTokensConfig(AnthropicCountTokensConfig):
         # Get Azure auth headers (api-key or Authorization)
         azure_headers = BaseAzureLLM.base_validate_azure_environment(headers={}, litellm_params=litellm_params_obj)
 
-        # Merge Azure auth headers
         headers.update(azure_headers)
+        if "api-key" in azure_headers:
+            headers.setdefault("x-api-key", azure_headers["api-key"])
 
         return headers
 
@@ -75,14 +84,8 @@ class AzureAIAnthropicCountTokensConfig(AnthropicCountTokensConfig):
         Returns:
             The endpoint URL for the CountTokens API
         """
-        # Azure AI Anthropic endpoint format:
-        # https://<resource>.services.ai.azure.com/anthropic/v1/messages/count_tokens
-        api_base = api_base.rstrip("/")
-
-        # Ensure the URL has /anthropic path
-        if not api_base.endswith("/anthropic"):
-            if "/anthropic" not in api_base:
-                api_base = f"{api_base}/anthropic"
-
-        # Add the count_tokens path
-        return f"{api_base}/v1/messages/count_tokens"
+        base: Final = api_base.rstrip("/")
+        if base.endswith("/v1/messages"):
+            return join_api_base(base, "count_tokens")
+        anthropic_base: Final = base if "/anthropic" in urlsplit(base).path else join_api_base(base, "anthropic")
+        return join_api_base(anthropic_base, "v1/messages/count_tokens")

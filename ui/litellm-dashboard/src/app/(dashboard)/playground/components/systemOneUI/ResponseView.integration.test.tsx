@@ -106,7 +106,7 @@ describe("ResponseView integration", () => {
     expect(screen.getByText("99% yes")).toBeInTheDocument();
     expect(screen.getByRole("meter", { name: "Yes probability" })).toHaveAttribute("aria-valuenow", "99");
     expect(screen.getByRole("meter", { name: "2: angry probability" })).toBeInTheDocument();
-    expect(screen.getByText("378 input / 63 output tokens")).toBeInTheDocument();
+    expect(screen.getByText("378 in / 63 out")).toBeInTheDocument();
   });
 
   it("selects the score level nearest a fractional calibrated score", () => {

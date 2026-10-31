@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, Any, Final, Protocol, TypedDict
 import httpx
 from typing_extensions import ReadOnly
 
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.prompt_templates.factory import (
     anthropic_process_openai_file_message,
     convert_to_anthropic_tool_result,
@@ -24,6 +25,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     select_anthropic_content_block_type_for_file,
 )
 from litellm.litellm_core_utils.prompt_templates.image_handling import async_inline_remote_media
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.anthropic.chat.handler import ModelResponseIterator as AnthropicStreamParser
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 from litellm.llms.anthropic.common_utils import normalize_cache_control_in_anthropic_payload
@@ -96,7 +98,7 @@ def _decoded_messages(response: _MessagesResponse) -> _AnthropicMessagesResponse
     return response.json()
 
 
-def _is_claude_model(model: str) -> bool:
+def is_snowflake_claude_model(model: str) -> bool:
     """Return True if model name (after stripping snowflake/ prefix) is a Claude model."""
     name: Final = model.lower().removeprefix("snowflake/")
     return any(name.startswith(p) for p in _CLAUDE_MODEL_PREFIXES)
@@ -110,7 +112,7 @@ def _convert_image_url_to_anthropic(block: Mapping[str, object]) -> object:
     pdf/text data URIs become document blocks rather than malformed image blocks.
     """
     image_url: Final = block.get("image_url")
-    url: Final = image_url if isinstance(image_url, str) else _image_url_field(image_url, "url")
+    url: Final = image_url if isinstance(image_url, str) else _str_field(image_url, "url")
     if not url:
         return block
 
@@ -119,18 +121,31 @@ def _convert_image_url_to_anthropic(block: Mapping[str, object]) -> object:
         if select_anthropic_content_block_type_for_file(_data_uri_media_type(url)) == "document"
         else create_anthropic_image_param(
             image_url if isinstance(image_url, dict) else url,
-            format=_image_url_field(image_url, "format"),
+            format=_str_field(image_url, "format"),
             is_bedrock_invoke=True,
         )
     )
+    return _with_cache_control(converted, block)
+
+
+def _convert_file_to_anthropic(block: Mapping[str, object]) -> object:
+    file_data: Final = _str_field(block.get("file"), "file_data")
+    if not file_data:
+        return block
+    return _with_cache_control(
+        anthropic_process_openai_file_message({"type": "file", "file": {"file_data": file_data}}), block
+    )
+
+
+def _with_cache_control(converted: Mapping[str, object], block: Mapping[str, object]) -> Mapping[str, object]:
     cache_control: Final = block.get("cache_control")
     if cache_control is None:
         return converted
     return {**converted, "cache_control": cache_control}
 
 
-def _image_url_field(image_url: object, key: str) -> str | None:
-    value: Final = image_url.get(key) if isinstance(image_url, dict) else None
+def _str_field(container: object, key: str) -> str | None:
+    value: Final = container.get(key) if isinstance(container, dict) else None
     return value if isinstance(value, str) else None
 
 
@@ -139,15 +154,23 @@ def _data_uri_media_type(url: str) -> str:
     return match.group(1) if match else ""
 
 
-def _convert_image_url_blocks_to_anthropic(content: object) -> object:
+def _convert_media_block_to_anthropic(block: object) -> object:
+    mapping: Final = as_str_mapping(block)
+    if mapping is None:
+        return block
+    match mapping.get("type"):
+        case "image_url":
+            return _convert_image_url_to_anthropic(mapping)
+        case "file":
+            return _convert_file_to_anthropic(mapping)
+        case _:
+            return block
+
+
+def _convert_media_blocks_to_anthropic(content: object) -> object:
     if not isinstance(content, list):
         return content
-    return [
-        _convert_image_url_to_anthropic(block)
-        if isinstance(block, Mapping) and block.get("type") == "image_url"
-        else block
-        for block in content
-    ]
+    return [_convert_media_block_to_anthropic(block) for block in content]
 
 
 def _convert_tool_result_to_anthropic(
@@ -184,10 +207,11 @@ def _signed_thinking_blocks(msg: object) -> list[dict[str, object]]:  # mutable-
     blocks: Final = msg.get("thinking_blocks") if isinstance(msg, dict) else getattr(msg, "thinking_blocks", None)
     if not isinstance(blocks, list):
         return []
+    mappings: Final = tuple(filter(None, map(as_str_mapping, blocks)))
     return [
-        dict(block)
-        for block in blocks
-        if isinstance(block, Mapping) and (block.get("signature") or block.get("type") == "redacted_thinking")
+        {key: value for key, value in block.items() if key != "index"}
+        for block in mappings
+        if block.get("signature") or block.get("type") == "redacted_thinking"
     ]
 
 
@@ -222,7 +246,7 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
             "tools",
             "tool_choice",
         ]
-        if _is_claude_model(model):
+        if is_snowflake_claude_model(model):
             params.append("thinking")
         return params
 
@@ -236,9 +260,9 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
         stream: bool | None = None,
     ) -> str:
         api_base = self._get_api_base(api_base, optional_params)
-        if _is_claude_model(model):
-            return f"{api_base}/cortex/v1/messages"
-        return f"{api_base}/cortex/v1/chat/completions"
+        if is_snowflake_claude_model(model):
+            return join_api_base(api_base, "cortex/v1/messages")
+        return join_api_base(api_base, "cortex/v1/chat/completions")
 
     def validate_environment(
         self,
@@ -259,7 +283,7 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
             api_key=api_key,
             api_base=api_base,
         )
-        if _is_claude_model(model):
+        if is_snowflake_claude_model(model):
             headers["anthropic-version"] = ANTHROPIC_VERSION
         return headers
 
@@ -388,7 +412,7 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
                 conversation.append(
                     {
                         "role": role,
-                        "content": _convert_image_url_blocks_to_anthropic(content),
+                        "content": _convert_media_blocks_to_anthropic(content),
                     }
                 )
 
@@ -406,7 +430,7 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
         stream: Final[bool] = optional_params.pop("stream", False) or False
         extra_body: Final = optional_params.pop("extra_body", {})
 
-        if _is_claude_model(model):
+        if is_snowflake_claude_model(model):
             return self._transform_request_anthropic(model, messages, optional_params, stream, extra_body)
         return self._transform_request_openai(model, messages, optional_params, stream, extra_body)
 
@@ -422,7 +446,9 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
         litellm_params: dict[str, object],  # mutable-ok: BaseConfig signature
         headers: dict[str, object],  # mutable-ok: BaseConfig signature
     ) -> dict[str, object]:  # mutable-ok: BaseConfig signature
-        inlined_messages: Final = await async_inline_remote_media(messages) if _is_claude_model(model) else messages
+        inlined_messages: Final = (
+            await async_inline_remote_media(messages) if is_snowflake_claude_model(model) else messages
+        )
         return self.transform_request(model, inlined_messages, optional_params, litellm_params, headers)
 
     def _transform_request_openai(
@@ -529,7 +555,7 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:
-        if _is_claude_model(model):
+        if is_snowflake_claude_model(model):
             return self._transform_response_anthropic(
                 model, raw_response, model_response, logging_obj, request_data, messages
             )
