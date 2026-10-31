@@ -110,8 +110,9 @@ async def test_pre_call_hook_counts_a_cli_session_under_the_per_user_alias_not_t
         ),
     ],
 )
+@pytest.mark.parametrize("opened_this_minute", [True, False], ids=["opened-this-minute", "opened-last-minute"])
 @pytest.mark.asyncio
-async def test_async_log_success_event_counts_non_chat_response_tokens(response_obj):
+async def test_async_log_success_event_counts_non_chat_response_tokens(response_obj, opened_this_minute):
     """
     Embedding and text completion responses must increment the per key, user,
     team, and end user TPM counters, not just chat completion ModelResponse
@@ -129,7 +130,7 @@ async def test_async_log_success_event_counts_non_chat_response_tokens(response_
     precise_minute = FROZEN_INSTANT.strftime("%Y-%m-%d-%H-%M")
 
     scope_ids = [_api_key, user_id, team_id, end_user_id]
-    for scope_id in scope_ids:
+    for scope_id in scope_ids if opened_this_minute else ():
         await parallel_request_handler.internal_usage_cache.async_set_cache(
             key=f"{scope_id}::{precise_minute}::request_count",
             value={"current_requests": 1, "current_tpm": 0, "current_rpm": 1},
@@ -178,23 +179,13 @@ def _socket_turn_events(input_tokens: int, output_tokens: int) -> list[dict[str,
     ]
 
 
-def _realtime_session_events(input_tokens: int, output_tokens: int) -> list[dict[str, object]]:
-    usage: Final = {
-        "input_tokens": input_tokens,
-        "output_tokens": output_tokens,
-        "total_tokens": input_tokens + output_tokens,
-    }
-    return [{"type": "session.created", "session": {}}, {"type": "response.done", "response": {"usage": usage}}]
-
-
 @pytest.mark.parametrize(
     "call_type, events, tokens",
     [
         (CallTypes.aresponses_websocket.value, _socket_turn_events(input_tokens=590, output_tokens=10), 600),
-        (CallTypes.arealtime.value, _realtime_session_events(input_tokens=590, output_tokens=10), 600),
         (CallTypes.aresponses.value, _socket_turn_events(input_tokens=590, output_tokens=10), 0),
     ],
-    ids=["responses-websocket-turn", "realtime-session", "events-of-a-non-socket-call"],
+    ids=["responses-websocket-turn", "events-of-a-non-socket-call"],
 )
 @pytest.mark.parametrize("opened_this_minute", [True, False], ids=["opened-this-minute", "opened-last-minute"])
 @pytest.mark.asyncio

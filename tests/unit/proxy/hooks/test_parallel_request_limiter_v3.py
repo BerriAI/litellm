@@ -7,12 +7,12 @@ import contextvars
 import logging
 import sys
 import time
-from collections.abc import AsyncGenerator, Coroutine, Iterator, Sequence
+from collections.abc import AsyncGenerator, Iterator, Sequence
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from functools import partial
 from typing import Any, Dict, Final, List, Optional
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import httpx
 import pytest
@@ -28,7 +28,6 @@ from litellm.integrations.custom_secret_manager import CustomSecretManager
 from litellm.litellm_core_utils import ptu_pricing
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.ptu_shares import PTUTeamCeiling
-from litellm.litellm_core_utils.realtime_streaming import RealTimeStreaming
 from litellm.llms.azure.ptu_capacity import AZURE_PTU_CAPACITY
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
@@ -4135,62 +4134,6 @@ async def test_a_native_socket_turn_that_fails_counts_the_usage_its_failed_respo
 
     assert await _tokens_counted(handler, local_cache, "api_key", api_key) == counted
     assert await _tokens_counted(handler, local_cache, "tag", _SOCKET_TURN_TAG) == counted
-
-class _InlineLoggingWorker:
-    def __init__(self) -> None:
-        self.enqueued: tuple[Coroutine[object, object, None], ...] = ()
-
-    def ensure_initialized_and_enqueue(self, async_coroutine: Coroutine[object, object, None]) -> None:
-        self.enqueued = (*self.enqueued, async_coroutine)
-
-    async def drain(self) -> None:
-        for coroutine in self.enqueued:
-            await coroutine
-
-
-@pytest.mark.asyncio
-async def test_a_realtime_sessions_usage_counts_toward_the_keys_tpm_window_v3(monkeypatch) -> None:
-    api_key: Final = hash_token("sk-realtime-session")
-    local_cache: Final = DualCache()
-    handler: Final = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(local_cache))
-    monkeypatch.setattr(litellm, "callbacks", [handler])
-    monkeypatch.setattr(litellm, "success_callback", [])
-    monkeypatch.setattr(litellm, "_async_success_callback", [handler])
-    logging_obj: Final = LiteLLMLoggingObj(
-        model="gpt-realtime",
-        messages=[],
-        stream=False,
-        call_type=CallTypes.arealtime.value,
-        start_time=datetime.now(),
-        litellm_call_id="realtime-session",
-        function_id="realtime-session",
-    )
-    logging_obj.update_environment_variables(
-        model="gpt-realtime",
-        optional_params={},
-        litellm_params={"metadata": {"user_api_key_hash": api_key}},
-        custom_llm_provider="openai",
-    )
-    worker: Final = _InlineLoggingWorker()
-    streaming: Final = RealTimeStreaming(MagicMock(), MagicMock(), logging_obj, logging_worker=worker)
-    for input_tokens, output_tokens in ((120, 30), (200, 50)):
-        streaming.store_message(
-            {
-                "type": "response.done",
-                "response": {
-                    "usage": {
-                        "input_tokens": input_tokens,
-                        "output_tokens": output_tokens,
-                        "total_tokens": input_tokens + output_tokens,
-                    }
-                },
-            }
-        )
-
-    await streaming.log_messages()
-    await worker.drain()
-
-    assert await _tokens_counted(handler, local_cache, "api_key", api_key) == 400
 
 @pytest.mark.asyncio
 async def test_failure_event_settles_project_itpm_otpm_at_recovered_partial_usage_v3():
@@ -9421,32 +9364,22 @@ def test_usage_that_only_reports_a_total_charges_that_total_to_the_ptu_counter()
 
 
 
-@pytest.mark.parametrize(
-    "call_type, session_events",
-    [
-        (CallTypes.aresponses_websocket.value, _responses_websocket_turn_events(total_tokens=150)),
-        (
-            CallTypes.arealtime.value,
-            [{"type": "response.done", "response": {"usage": {"input_tokens": 100, "output_tokens": 50, "total_tokens": 150}}}],
-        ),
-    ],
-    ids=["responses-websocket-turn", "realtime-session"],
-)
-def test_a_socket_sessions_usage_charges_the_key_but_leaves_the_team_ptu_counter_alone(
-    call_type: str, session_events: list[dict[str, object]]
-) -> None:
+def test_a_socket_turns_usage_charges_the_key_but_leaves_the_team_ptu_counter_alone() -> None:
     resolve, _ = _ptu_ceiling_for("t", "test-model", tpm_limit=500, ratio=4.0)
     handler: Final = _PROXY_MaxParallelRequestsHandler(
         internal_usage_cache=InternalUsageCache(DualCache()), ptu_team_ceiling_resolver=resolve
     )
 
     ops: Final = handler._build_success_event_pipeline_operations(
-        kwargs={**_ptu_success_kwargs(), "call_type": call_type}, response_obj=session_events, rate_limit_type="total"
+        kwargs={**_ptu_success_kwargs(), "call_type": CallTypes.aresponses_websocket.value},
+        response_obj=_responses_websocket_turn_events(total_tokens=150),
+        rate_limit_type="total",
     )
 
     key_window: Final = handler.create_rate_limit_keys("api_key", hash_token("sk-ptu"), "tokens")
     assert next(op["increment_value"] for op in ops if op["key"] == key_window) == 150
     assert not _ptu_increment(handler, ops)
+
 
 def test_success_accounting_charges_no_ptu_counter_without_a_ceiling():
     resolve, _ = _ptu_ceiling_for("u", "test-model", tpm_limit=500, ratio=4.0)

@@ -884,8 +884,6 @@ def _is_socket_turn(kwargs: Mapping[str, object]) -> bool:
     )
 
 
-_NATIVE_SOCKET_CALL_TYPES: Final = frozenset({CallTypes.aresponses_websocket.value, CallTypes.arealtime.value})
-
 _AGENT_DESCRIPTOR_KEYS: Final = frozenset({"agent", "agent_session"})
 
 _SOCKET_TURN_UNCOUNTED_DESCRIPTOR_KEYS: Final = frozenset(
@@ -5449,7 +5447,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 reserved_tokens=reserved_tokens,
             )
         )
-        ptu_skips_socket_usage: Final = kwargs.get("call_type") in _NATIVE_SOCKET_CALL_TYPES
+        ptu_skips_socket_usage: Final = kwargs.get("call_type") == CallTypes.aresponses_websocket.value
         pipeline_operations.extend(
             self._build_team_ptu_tpm_ops(
                 standard_logging_metadata,  # pyright: ignore[reportUnknownArgumentType]  # untyped logging metadata

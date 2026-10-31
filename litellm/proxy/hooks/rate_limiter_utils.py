@@ -3,16 +3,15 @@ Shared utility functions for rate limiter hooks.
 """
 
 from collections.abc import Mapping
-from typing import Final, cast  # noqa: TID251  # validating into the realtime event union rejects types it lacks
+from typing import Final
 
 from pydantic import TypeAdapter
 
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import PROXY_LLM_PROVIDER_FALLBACK
-from litellm.cost_calculator import RealtimeAPITokenUsageProcessor, ResponsesWebSocketTokenUsageProcessor
+from litellm.cost_calculator import ResponsesWebSocketTokenUsageProcessor
 from litellm.litellm_core_utils.core_helpers import iter_items
-from litellm.types.llms.openai import OpenAIRealtimeStreamList
 from litellm.types.router import ModelGroupInfo
 from litellm.types.utils import CallTypes, PriorityReservationDict, Usage
 
@@ -26,12 +25,6 @@ def socket_session_usage(kwargs: Mapping[str, object], response_obj: object) -> 
         case CallTypes.aresponses_websocket.value:
             return ResponsesWebSocketTokenUsageProcessor.collect_and_combine_usage_from_responses_ws_results(
                 _SOCKET_SESSION_EVENTS.validate_python(response_obj)
-            )
-        case CallTypes.arealtime.value:
-            return RealtimeAPITokenUsageProcessor.collect_and_combine_usage_from_realtime_stream_results(
-                cast(  # cast-ok: the combiner reads only each event's type and a response.done event's usage
-                    OpenAIRealtimeStreamList, list(_SOCKET_SESSION_EVENTS.validate_python(response_obj))
-                )
             )
         case _:
             return None
