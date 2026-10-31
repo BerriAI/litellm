@@ -23,7 +23,11 @@ from litellm.proxy.management_endpoints.daily_activity_routes import (
     router,
 )
 from litellm.router import Router
-from litellm.types.proxy.management_endpoints.common_daily_activity import KeySpendMetrics, SpendMetrics
+from litellm.types.proxy.management_endpoints.common_daily_activity import (
+    KeySpendMetrics,
+    SpendAnalyticsPaginatedResponse,
+    SpendMetrics,
+)
 from litellm.types.repositories.daily_activity import (
     AggregatedRows,
     DailyActivityScope,
@@ -600,6 +604,7 @@ def daily_activity_client() -> Iterator[tuple[TestClient, _FakeRepository]]:
 
     app.dependency_overrides[get_daily_activity_repository] = lambda: repository
     app.dependency_overrides[get_daily_activity_prisma_client] = lambda: prisma_client
+    app.dependency_overrides[get_daily_activity_llm_router] = lambda: None
     app.dependency_overrides[user_api_key_auth] = resolve_auth
     with TestClient(app) as client:
         yield client, repository
@@ -908,6 +913,59 @@ def test_key_page_route_rejects_invalid_bounds(
 
     assert response.status_code == 422, response.text
     repository.key_page.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    ("headers", "expected_users"),
+    (
+        ({}, {"2025-01-01": {"user-a": 12.5, "user-b": 100.0}, "2025-01-02": {"user-a": 2.0}}),
+        (
+            {"x-user-role": LitellmUserRoles.INTERNAL_USER.value, "x-user-id": "user-a"},
+            {"2025-01-01": {"user-a": 12.5}, "2025-01-02": {"user-a": 2.0}},
+        ),
+    ),
+)
+def test_user_aggregate_returns_scoped_spend_per_user_with_labels(
+    daily_activity_client: tuple[TestClient, _FakeRepository],
+    headers: dict[str, str],
+    expected_users: dict[str, dict[str, float]],
+) -> None:
+    client, _ = daily_activity_client
+    response: Final = client.get("/user/daily/activity/aggregated", params=_DATE_PARAMS, headers=headers)
+
+    assert response.status_code == 200, response.text
+    body: Final = SpendAnalyticsPaginatedResponse.model_validate_json(response.content)
+    assert {
+        day.date.isoformat(): {user_id: entity.metrics.spend for user_id, entity in day.breakdown.entities.items()}
+        for day in body.results
+    } == expected_users, response.text
+    labels: Final = {
+        "user-a": {"user_email": "user@example.test", "user_alias": "Alias A"},
+        "user-b": {"user_email": "other-user@example.test", "user_alias": None},
+    }
+    for day in body.results:
+        assert {user_id: entity.metadata for user_id, entity in day.breakdown.entities.items()} == {
+            user_id: labels[user_id] for user_id in expected_users[day.date.isoformat()]
+        }, response.text
+    assert sum(sum(users.values()) for users in expected_users.values()) == body.metadata.total_spend
+
+
+def test_user_aggregate_preserves_spend_when_user_metadata_is_missing(
+    daily_activity_client: tuple[TestClient, _FakeRepository],
+) -> None:
+    client, repository = daily_activity_client
+    repository.user_metadata.return_value = {}
+    repository.user_metadata.side_effect = None
+    response: Final = client.get("/user/daily/activity/aggregated", params={**_DATE_PARAMS, "user_id": "user-a"})
+
+    assert response.status_code == 200, response.text
+    body: Final = SpendAnalyticsPaginatedResponse.model_validate_json(response.content)
+    assert {
+        day.date.isoformat(): {
+            user_id: (entity.metrics.spend, entity.metadata) for user_id, entity in day.breakdown.entities.items()
+        }
+        for day in body.results
+    } == {"2025-01-01": {"user-a": (12.5, {})}, "2025-01-02": {"user-a": (2.0, {})}}, response.text
 
 
 def test_user_page_route_ranks_users_by_spend_and_attaches_metadata(
