@@ -398,3 +398,52 @@ def test_provider_config_manager_returns_valkey_config():
     config = ProviderConfigManager.get_provider_vector_stores_config(provider=LlmProviders.VALKEY, api_type=None)
 
     assert isinstance(config, ValkeyVectorStoreConfig)
+
+
+class _RecordingRedisFactory:
+    """Stands in for the redis-py client class so the search path's from_url kwargs can be asserted."""
+
+    def __init__(self, client):
+        self.client = client
+        self.from_url_kwargs = None
+
+    def from_url(self, url, **kwargs):
+        self.from_url_kwargs = kwargs
+        return self.client
+
+
+class _ClosableFakeRedis(FakeRedis):
+    def close(self):
+        pass
+
+
+class _ClosableFakeAsyncRedis(FakeAsyncRedis):
+    async def aclose(self):
+        pass
+
+
+def test_sync_search_identifies_connection_as_litellm_via_lib_name(monkeypatch):
+    factory = _RecordingRedisFactory(_ClosableFakeRedis())
+    monkeypatch.setattr("litellm.llms.valkey.vector_stores.transformation._import_sync_redis", lambda: factory)
+    config = ValkeyVectorStoreConfig(embedding_fn=FakeEmbeddingFn([1.0]))
+
+    _search(config, litellm_params={"valkey_host": "valkey-host"})
+
+    assert factory.from_url_kwargs["lib_name"] == "redis-py(litellm)"
+
+
+@pytest.mark.asyncio
+async def test_async_search_identifies_connection_as_litellm_via_lib_name(monkeypatch):
+    factory = _RecordingRedisFactory(_ClosableFakeAsyncRedis())
+    monkeypatch.setattr("litellm.llms.valkey.vector_stores.transformation._import_async_redis", lambda: factory)
+    config = ValkeyVectorStoreConfig(aembedding_fn=FakeAsyncEmbeddingFn([1.0]))
+
+    await config.aexecute_search_vector_store_request(
+        vector_store_id="my_index",
+        query="q",
+        vector_store_search_optional_params={},
+        litellm_logging_obj=MagicMock(),
+        litellm_params={"litellm_embedding_model": "openai/text-embedding-3-small", "valkey_host": "valkey-host"},
+    )
+
+    assert factory.from_url_kwargs["lib_name"] == "redis-py(litellm)"
