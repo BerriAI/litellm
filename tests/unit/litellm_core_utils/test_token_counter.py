@@ -1962,6 +1962,97 @@ def test_token_counter_with_redacted_thinking_content():
 
     assert token_counter(model=model, messages=with_block) == token_counter(model=model, messages=without_block)
 
+
+def test_token_counter_with_compaction_block():
+    """
+    A replayed on-demand compaction block (Anthropic's signed summary of the earlier turns) counts its
+    summary text like a text block and nothing for its signature. It used to raise, which turned every
+    /v1/messages/count_tokens call on a compacted history into a 500 once the provider count fell back here.
+    """
+    model = "anthropic/claude-sonnet-5-5"
+    summary = "The user is building a recipe app in Python and asked for one-sentence class descriptions."
+    follow_up = {"role": "user", "content": [{"type": "text", "text": "Now do the same for Ingredient."}]}
+    signed_block = {"type": "compaction", "content": summary, "signature": "EqQBCkYIBRgCKkBjZ2xhc3M" * 40}
+
+    as_compaction = [{"role": "assistant", "content": [signed_block]}, follow_up]
+    unsigned = [{"role": "assistant", "content": [{"type": "compaction", "content": summary}]}, follow_up]
+    as_text = [{"role": "assistant", "content": [{"type": "text", "text": summary}]}, follow_up]
+
+    assert token_counter(model=model, messages=as_compaction) == token_counter(model=model, messages=as_text)
+    assert token_counter(model=model, messages=unsigned) == token_counter(model=model, messages=as_text)
+
+
+def test_token_counter_counts_chat_compaction_blocks_like_their_summary_text():
+    """
+    Chat clients replay a compaction block in the assistant message's provider_specific_fields, and inference
+    sends it to Anthropic as a content block, so the local count includes its summary text and skips its signature.
+    """
+    model = "anthropic/claude-sonnet-5-5"
+    summary = "The user is building a recipe app in Python and asked for one-sentence class descriptions."
+    follow_up = {"role": "user", "content": "Now do the same for Ingredient."}
+    signed_block = {"type": "compaction", "content": summary, "signature": "EqQBCkYIBRgCKkBjZ2xhc3M" * 40}
+
+    replayed = [
+        {"role": "assistant", "content": None, "provider_specific_fields": {"compaction_blocks": [signed_block]}},
+        follow_up,
+    ]
+    as_text = [{"role": "assistant", "content": summary}, follow_up]
+
+    assert token_counter(model=model, messages=replayed) == token_counter(model=model, messages=as_text)
+
+
+class _BosEncoder:
+    def encode_batch_fast(self, texts: list[str]) -> list[list[int]]:
+        return [[0] * (len(text.split()) + 1) for text in texts]
+
+
+def test_token_counter_charges_nothing_for_a_chat_compaction_block_with_no_summary():
+    """
+    A tokenizer that prepends a BOS token charges one token for the empty string, so a replayed
+    compaction block with an empty summary must not reach it, like an empty thinking block.
+    """
+    model = "anthropic/claude-sonnet-5-5"
+    tokenizer = {"type": "huggingface_tokenizer", "tokenizer": _BosEncoder()}
+    follow_up = {"role": "user", "content": "Now do the same for Ingredient."}
+    replayed = [
+        {
+            "role": "assistant",
+            "content": None,
+            "provider_specific_fields": {"compaction_blocks": [{"type": "compaction", "content": ""}]},
+        },
+        follow_up,
+    ]
+    bare = [{"role": "assistant", "content": None}, follow_up]
+
+    assert token_counter(model=model, messages=replayed, custom_tokenizer=tokenizer) == token_counter(
+        model=model, messages=bare, custom_tokenizer=tokenizer
+    )
+
+
+def test_count_content_list_skips_the_tokenizer_for_empty_block_text():
+    """
+    An empty thinking block, a redacted_thinking block (no thinking text at all) and a compaction
+    block with no summary carry no tokens, even under a tokenizer that charges for the empty string
+    (the llama-2 tokenizer prepends its BOS token to every encode call). Counting them through the
+    tokenizer added one token per block on such models.
+    """
+    from litellm.litellm_core_utils.token_counter import _count_content_list
+
+    def charges_for_empty_text(text: str) -> int:
+        return len(text.split()) + 1
+
+    empty_blocks = [
+        {"type": "thinking", "thinking": "", "signature": "EqcLCkYICxgCKkCrqu6lP..."},
+        {"type": "thinking", "thinking": None, "signature": "EqcLCkYICxgCKkCrqu6lP..."},
+        {"type": "redacted_thinking", "data": "EmwKAhgBEgy3va3pzix/LafPsn4aDFIT2Xlxh0L5L8rLVyIw"},
+        {"type": "compaction", "content": ""},
+        {"type": "text", "text": ""},
+    ]
+
+    assert _count_content_list(charges_for_empty_text, empty_blocks, False, None) == 0
+    assert _count_content_list(charges_for_empty_text, [{"type": "thinking", "thinking": "two words"}], False, None) == 3
+
+
 def test_token_counter_with_tool_reference_block():
     """
     Regression test: a message containing an Anthropic tool-search

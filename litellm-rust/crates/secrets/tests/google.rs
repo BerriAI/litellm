@@ -7,10 +7,12 @@ use std::sync::Arc;
 #[case::failure(503)]
 #[tokio::test]
 async fn google_resolver_distinguishes_absence_from_failure(#[case] status: u16) {
+    use litellm_secret_value::SecretValue;
     use litellm_secrets::{
         Error, FailurePolicy, KeyManagementSettings, OidcResolver, SecretManager,
-        SecretManagerState, SecretResolver, SecretValue, google::GoogleSecretManager,
+        SecretManagerState, SecretResolver, google::GoogleSecretManager,
     };
+
     use wiremock::{Mock, MockServer, ResponseTemplate, matchers::method};
     let server = MockServer::start().await;
     Mock::given(method("GET"))

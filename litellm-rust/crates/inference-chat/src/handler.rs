@@ -58,7 +58,7 @@ pub(super) async fn execute(
         custom_llm_provider: provider_name.to_owned(),
         optional_params: Value::Object(call.optional_params),
         secret_fields: Vec::new(),
-        api_key: call.api_key.map(litellm_auth::SecretValue::new),
+        api_key: call.api_key.map(litellm_secret_value::SecretValue::new),
     };
     let authenticated = resolve_auth(auth, environment, &|key| secrets.get(key)).await?;
     let identity = litellm_host::interceptors::ProviderIdentity {

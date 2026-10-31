@@ -699,8 +699,8 @@ export interface paths {
          * @description Update an access group's model names.
          *
          *     This will:
-         *     1. Remove the access group from all current deployments
-         *     2. Add the access group to all deployments for the new model_names list
+         *     1. Add the access group to all deployments for the new model_names list
+         *     2. Remove the access group from every other deployment
          *
          *     Example:
          *     ```bash
@@ -722,6 +722,7 @@ export interface paths {
          *     Raises:
          *     - HTTPException 400: If any model names don't exist
          *     - HTTPException 404: If access group not found
+         *     - HTTPException 409: If another edit holds the group or one of its models for 30 s
          */
         put: operations["update_access_group_access_group__access_group__update_put"];
         post?: never;
@@ -8952,7 +8953,7 @@ export interface paths {
          *     - user_id: Optional[str] - User ID associated with key
          *     - team_id: Optional[str] - Team ID associated with key
          *     - agent_id: Optional[str] - The agent id associated with the key.
-         *     - project_id: Optional[str] - Omit to retain the project, or send null to detach. A different project ID is rejected.
+         *     - project_id: Optional[str] - Omit to retain the project, send null to detach, or send a project id to assign an unassigned key to a project on the key's team. Moving a key between projects is rejected.
          *     - organization_id: Optional[str] - The organization id of the key.
          *     - budget_id: Optional[str] - The budget id associated with the key. Created by calling `/budget/new`.
          *     - end_user_budget_id: Optional[str] - Proxy admin only. Budget id applied to end users first seen through this key that carry no budget of their own. Omit to keep the current value, pass an empty string to clear it.
@@ -16151,6 +16152,90 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/subscription_accounts/delete": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Delete Subscription Account
+         * @description Stop tracking a subscription account's fee; its requests stay marked as subscription-covered.
+         */
+        post: operations["delete_subscription_account_subscription_accounts_delete_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/subscription_accounts/new": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * New Subscription Account
+         * @description Record the monthly fee of one subscription-backed provider account.
+         */
+        post: operations["new_subscription_account_subscription_accounts_new_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/subscription_accounts/update": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Update Subscription Account
+         * @description Change the fee, currency, billing period start, or label of a subscription account.
+         *     Only the fields named in the request are written, so two admins changing different
+         *     fields at the same time both land.
+         */
+        post: operations["update_subscription_account_subscription_accounts_update_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/subscription_accounts/usage": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Subscription Usage
+         * @description Subscription-backed accounts behind the proxy's deployments or carrying a stored fee, each with
+         *     its configured monthly fee and the fixed cost attributed to the date range: the fee once per billing
+         *     period whose start date falls inside the range, however many deployments share the account.
+         */
+        get: operations["get_subscription_usage_subscription_accounts_usage_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/systemone": {
         parameters: {
             query?: never;
@@ -18069,9 +18154,9 @@ export interface paths {
          * @description Namespace a toolset as its own MCP endpoint.
          *
          *     Connecting to /toolset/<name>/mcp exposes exactly the tools defined in
-         *     the toolset. Access is enforced: non-admin API keys must have the toolset
-         *     listed in their object_permission.mcp_toolsets grant list, or the request
-         *     will be rejected with a 403.
+         *     the toolset. Access is enforced: API keys other than an admin's key with no
+         *     team must hold the toolset through one of their grant sources, or the
+         *     request will be rejected with a 403.
          */
         get: operations["toolset_mcp_route_toolset__toolset_name__mcp_get"];
         /**
@@ -18079,9 +18164,9 @@ export interface paths {
          * @description Namespace a toolset as its own MCP endpoint.
          *
          *     Connecting to /toolset/<name>/mcp exposes exactly the tools defined in
-         *     the toolset. Access is enforced: non-admin API keys must have the toolset
-         *     listed in their object_permission.mcp_toolsets grant list, or the request
-         *     will be rejected with a 403.
+         *     the toolset. Access is enforced: API keys other than an admin's key with no
+         *     team must hold the toolset through one of their grant sources, or the
+         *     request will be rejected with a 403.
          */
         put: operations["toolset_mcp_route_toolset__toolset_name__mcp_put"];
         /**
@@ -18089,9 +18174,9 @@ export interface paths {
          * @description Namespace a toolset as its own MCP endpoint.
          *
          *     Connecting to /toolset/<name>/mcp exposes exactly the tools defined in
-         *     the toolset. Access is enforced: non-admin API keys must have the toolset
-         *     listed in their object_permission.mcp_toolsets grant list, or the request
-         *     will be rejected with a 403.
+         *     the toolset. Access is enforced: API keys other than an admin's key with no
+         *     team must hold the toolset through one of their grant sources, or the
+         *     request will be rejected with a 403.
          */
         post: operations["toolset_mcp_route_toolset__toolset_name__mcp_post"];
         /**
@@ -18099,9 +18184,9 @@ export interface paths {
          * @description Namespace a toolset as its own MCP endpoint.
          *
          *     Connecting to /toolset/<name>/mcp exposes exactly the tools defined in
-         *     the toolset. Access is enforced: non-admin API keys must have the toolset
-         *     listed in their object_permission.mcp_toolsets grant list, or the request
-         *     will be rejected with a 403.
+         *     the toolset. Access is enforced: API keys other than an admin's key with no
+         *     team must hold the toolset through one of their grant sources, or the
+         *     request will be rejected with a 403.
          */
         delete: operations["toolset_mcp_route_toolset__toolset_name__mcp_delete"];
         /**
@@ -18109,9 +18194,9 @@ export interface paths {
          * @description Namespace a toolset as its own MCP endpoint.
          *
          *     Connecting to /toolset/<name>/mcp exposes exactly the tools defined in
-         *     the toolset. Access is enforced: non-admin API keys must have the toolset
-         *     listed in their object_permission.mcp_toolsets grant list, or the request
-         *     will be rejected with a 403.
+         *     the toolset. Access is enforced: API keys other than an admin's key with no
+         *     team must hold the toolset through one of their grant sources, or the
+         *     request will be rejected with a 403.
          */
         options: operations["toolset_mcp_route_toolset__toolset_name__mcp_options"];
         /**
@@ -18119,9 +18204,9 @@ export interface paths {
          * @description Namespace a toolset as its own MCP endpoint.
          *
          *     Connecting to /toolset/<name>/mcp exposes exactly the tools defined in
-         *     the toolset. Access is enforced: non-admin API keys must have the toolset
-         *     listed in their object_permission.mcp_toolsets grant list, or the request
-         *     will be rejected with a 403.
+         *     the toolset. Access is enforced: API keys other than an admin's key with no
+         *     team must hold the toolset through one of their grant sources, or the
+         *     request will be rejected with a 403.
          */
         head: operations["toolset_mcp_route_toolset__toolset_name__mcp_head"];
         /**
@@ -18129,9 +18214,9 @@ export interface paths {
          * @description Namespace a toolset as its own MCP endpoint.
          *
          *     Connecting to /toolset/<name>/mcp exposes exactly the tools defined in
-         *     the toolset. Access is enforced: non-admin API keys must have the toolset
-         *     listed in their object_permission.mcp_toolsets grant list, or the request
-         *     will be rejected with a 403.
+         *     the toolset. Access is enforced: API keys other than an admin's key with no
+         *     team must hold the toolset through one of their grant sources, or the
+         *     request will be rejected with a 403.
          */
         patch: operations["toolset_mcp_route_toolset__toolset_name__mcp_patch"];
         trace?: never;
@@ -27539,6 +27624,19 @@ export interface components {
             /** Entities */
             entities: components["schemas"]["BedrockChecksSensitiveInformationEntityItem"][];
         };
+        /** BillingPeriod */
+        BillingPeriod: {
+            /**
+             * End
+             * Format: date
+             */
+            end: string;
+            /**
+             * Start
+             * Format: date
+             */
+            start: string;
+        };
         /** BlockKeyRequest */
         BlockKeyRequest: {
             /** Key */
@@ -27910,7 +28008,10 @@ export interface components {
             entities?: {
                 [key: string]: components["schemas"]["MetricWithMetadata"];
             };
-            /** Guardrails */
+            /**
+             * Guardrails
+             * @description Spend by guardrail ID, already included in key and model spend. Populated on user, team and organization aggregated activity only, without a model filter
+             */
             guardrails?: {
                 [key: string]: components["schemas"]["GuardrailMetric"];
             };
@@ -28681,7 +28782,7 @@ export interface components {
          * CallTypes
          * @enum {string}
          */
-        CallTypes: "embedding" | "aembedding" | "completion" | "acompletion" | "atext_completion" | "text_completion" | "image_generation" | "aimage_generation" | "image_edit" | "aimage_edit" | "moderation" | "amoderation" | "atranscription" | "transcription" | "aspeech" | "speech" | "rerank" | "arerank" | "search" | "asearch" | "decisions" | "adecisions" | "systemone" | "asystemone" | "extraction" | "aextraction" | "_arealtime" | "_aresponses_websocket" | "acreate_realtime_client_secret" | "arealtime_calls" | "acreate_realtime_transcription_session" | "acreate_realtime_translation_client_secret" | "arealtime_translation_calls" | "create_batch" | "acreate_batch" | "aretrieve_batch" | "retrieve_batch" | "acancel_batch" | "cancel_batch" | "pass_through_endpoint" | "anthropic_messages" | "aanthropic_messages" | "get_assistants" | "aget_assistants" | "create_assistants" | "acreate_assistants" | "delete_assistant" | "adelete_assistant" | "acreate_thread" | "create_thread" | "aget_thread" | "get_thread" | "a_add_message" | "add_message" | "aget_messages" | "get_messages" | "arun_thread" | "run_thread" | "arun_thread_stream" | "run_thread_stream" | "afile_retrieve" | "file_retrieve" | "afile_delete" | "file_delete" | "afile_list" | "file_list" | "acreate_file" | "create_file" | "afile_content" | "file_content" | "create_fine_tuning_job" | "acreate_fine_tuning_job" | "create_video" | "acreate_video" | "video_generation" | "avideo_generation" | "avideo_retrieve" | "video_retrieve" | "avideo_content" | "video_content" | "video_remix" | "avideo_remix" | "video_list" | "avideo_list" | "video_retrieve_job" | "avideo_retrieve_job" | "video_delete" | "avideo_delete" | "video_create_character" | "avideo_create_character" | "video_get_character" | "avideo_get_character" | "video_edit" | "avideo_edit" | "video_extension" | "avideo_extension" | "vector_store_file_create" | "avector_store_file_create" | "vector_store_file_list" | "avector_store_file_list" | "vector_store_file_retrieve" | "avector_store_file_retrieve" | "vector_store_file_content" | "avector_store_file_content" | "vector_store_file_update" | "avector_store_file_update" | "vector_store_file_delete" | "avector_store_file_delete" | "vector_store_create" | "avector_store_create" | "vector_store_search" | "avector_store_search" | "ingest" | "aingest" | "query" | "aquery" | "create_interaction" | "acreate_interaction" | "create_container" | "acreate_container" | "list_containers" | "alist_containers" | "retrieve_container" | "aretrieve_container" | "delete_container" | "adelete_container" | "list_container_files" | "alist_container_files" | "upload_container_file" | "aupload_container_file" | "create_sandbox" | "acreate_sandbox" | "delete_sandbox" | "adelete_sandbox" | "run_code" | "arun_code" | "code_interpreter_tool" | "acode_interpreter_tool" | "acancel_fine_tuning_job" | "cancel_fine_tuning_job" | "alist_fine_tuning_jobs" | "list_fine_tuning_jobs" | "aretrieve_fine_tuning_job" | "retrieve_fine_tuning_job" | "responses" | "aresponses" | "alist_input_items" | "llm_passthrough_route" | "allm_passthrough_route" | "generate_content" | "agenerate_content" | "generate_content_stream" | "agenerate_content_stream" | "ocr" | "aocr" | "call_mcp_tool" | "list_mcp_tools" | "asend_message" | "send_message" | "acreate_skill";
+        CallTypes: "embedding" | "aembedding" | "completion" | "acompletion" | "atext_completion" | "text_completion" | "image_generation" | "aimage_generation" | "image_edit" | "aimage_edit" | "moderation" | "amoderation" | "atranscription" | "transcription" | "aspeech" | "speech" | "rerank" | "arerank" | "search" | "asearch" | "decisions" | "adecisions" | "systemone" | "asystemone" | "extraction" | "aextraction" | "_arealtime" | "_aresponses_websocket" | "acreate_realtime_client_secret" | "arealtime_calls" | "acreate_realtime_transcription_session" | "acreate_realtime_translation_client_secret" | "arealtime_translation_calls" | "create_batch" | "acreate_batch" | "aretrieve_batch" | "retrieve_batch" | "acancel_batch" | "cancel_batch" | "pass_through_endpoint" | "anthropic_messages" | "aanthropic_messages" | "get_assistants" | "aget_assistants" | "create_assistants" | "acreate_assistants" | "delete_assistant" | "adelete_assistant" | "acreate_thread" | "create_thread" | "aget_thread" | "get_thread" | "a_add_message" | "add_message" | "aget_messages" | "get_messages" | "arun_thread" | "run_thread" | "arun_thread_stream" | "run_thread_stream" | "afile_retrieve" | "file_retrieve" | "afile_delete" | "file_delete" | "afile_list" | "file_list" | "acreate_file" | "create_file" | "afile_content" | "file_content" | "create_fine_tuning_job" | "acreate_fine_tuning_job" | "create_video" | "acreate_video" | "video_generation" | "avideo_generation" | "avideo_retrieve" | "video_retrieve" | "avideo_content" | "video_content" | "video_remix" | "avideo_remix" | "video_list" | "avideo_list" | "video_retrieve_job" | "avideo_retrieve_job" | "video_delete" | "avideo_delete" | "video_create_character" | "avideo_create_character" | "video_get_character" | "avideo_get_character" | "video_edit" | "avideo_edit" | "video_extension" | "avideo_extension" | "vector_store_file_create" | "avector_store_file_create" | "vector_store_file_list" | "avector_store_file_list" | "vector_store_file_retrieve" | "avector_store_file_retrieve" | "vector_store_file_content" | "avector_store_file_content" | "vector_store_file_update" | "avector_store_file_update" | "vector_store_file_delete" | "avector_store_file_delete" | "vector_store_create" | "avector_store_create" | "vector_store_search" | "avector_store_search" | "ingest" | "aingest" | "query" | "aquery" | "create_interaction" | "acreate_interaction" | "create_container" | "acreate_container" | "list_containers" | "alist_containers" | "retrieve_container" | "aretrieve_container" | "delete_container" | "adelete_container" | "list_container_files" | "alist_container_files" | "upload_container_file" | "aupload_container_file" | "create_sandbox" | "acreate_sandbox" | "delete_sandbox" | "adelete_sandbox" | "run_code" | "arun_code" | "code_interpreter_tool" | "acode_interpreter_tool" | "acancel_fine_tuning_job" | "cancel_fine_tuning_job" | "alist_fine_tuning_jobs" | "list_fine_tuning_jobs" | "aretrieve_fine_tuning_job" | "retrieve_fine_tuning_job" | "responses" | "aresponses" | "get_responses" | "aget_responses" | "delete_responses" | "adelete_responses" | "cancel_responses" | "acancel_responses" | "alist_input_items" | "llm_passthrough_route" | "allm_passthrough_route" | "generate_content" | "agenerate_content" | "generate_content_stream" | "agenerate_content_stream" | "ocr" | "aocr" | "call_mcp_tool" | "list_mcp_tools" | "asend_message" | "send_message" | "acreate_skill";
         /** CallbackDelete */
         CallbackDelete: {
             /** Callback Name */
@@ -29201,7 +29302,7 @@ export interface components {
             /** Token */
             token: string;
             /** Top Logprobs */
-            top_logprobs: components["schemas"]["TopLogprob"][];
+            top_logprobs?: components["schemas"]["TopLogprob"][];
         } & {
             [key: string]: unknown;
         };
@@ -29332,6 +29433,8 @@ export interface components {
         ChoiceLogprobs: {
             /** Content */
             content?: components["schemas"]["ChatCompletionTokenLogprob"][] | null;
+            /** Refusal */
+            refusal?: components["schemas"]["ChatCompletionTokenLogprob"][] | null;
         } & {
             [key: string]: unknown;
         };
@@ -29977,6 +30080,27 @@ export interface components {
          * @description Documents all the fields supported by `general_settings` in config.yaml
          */
         ConfigGeneralSettings: {
+            /** @description Opt-in durable usage capture. Legacy spend updates remain active. Requires local Prisma writes. */
+            accounting_capture?: components["schemas"]["UsageCaptureSettings"] | null;
+            /**
+             * Accounting Sync Ack
+             * @description Wait for usage commit on foreground non-stream chat, text, embedding and Responses requests. Other requests remain supported with asynchronous usage capture.
+             * @default false
+             */
+            accounting_sync_ack: boolean;
+            /**
+             * Accounting Sync Ack Failure Policy
+             * @description Return 503 or log the persistence failure after the response wait expires
+             * @default fail_closed
+             * @enum {string}
+             */
+            accounting_sync_ack_failure_policy: "fail_closed" | "log";
+            /**
+             * Accounting Sync Ack Timeout Seconds
+             * @description Maximum response wait for usage commit, including the batch flush interval
+             * @default 20
+             */
+            accounting_sync_ack_timeout_seconds: number;
             /**
              * Admission Queue Timeout Seconds
              * @description maximum time a request waits for a worker slot
@@ -32019,6 +32143,11 @@ export interface components {
              */
             type: string;
         };
+        /** DeleteSubscriptionAccountRequest */
+        DeleteSubscriptionAccountRequest: {
+            /** Subscription Account Id */
+            subscription_account_id: string;
+        };
         /** DeleteTeamRequest */
         DeleteTeamRequest: {
             /** Team Ids */
@@ -33367,7 +33496,7 @@ export interface components {
          */
         GenericResponseOutputItem: {
             /** Content */
-            content: components["schemas"]["OutputText"][];
+            content: (components["schemas"]["OutputText"] | components["schemas"]["ResponseOutputRefusal"])[];
             /** Id */
             id: string;
             /** Phase */
@@ -33481,32 +33610,44 @@ export interface components {
         };
         /** GuardrailKeyMetric */
         GuardrailKeyMetric: {
+            /** @description API key alias and existence information */
             metadata: components["schemas"]["KeyMetadata"];
+            /** @description Guardrail spend and unpriced units for this API key */
             metrics: components["schemas"]["GuardrailSpendMetrics"];
         };
         /** GuardrailMetadata */
         GuardrailMetadata: {
-            /** Guardrail Name */
+            /**
+             * Guardrail Name
+             * @description Guardrail display name, falling back to the guardrail ID
+             */
             guardrail_name: string;
         };
         /** GuardrailMetric */
         GuardrailMetric: {
-            /** Api Key Breakdown */
+            /**
+             * Api Key Breakdown
+             * @description Per-key guardrail spend and unpriced units, limited to keys in the day's API key breakdown
+             */
             api_key_breakdown?: {
                 [key: string]: components["schemas"]["GuardrailKeyMetric"];
             };
+            /** @description Guardrail name information */
             metadata: components["schemas"]["GuardrailMetadata"];
+            /** @description Guardrail spend and unpriced units across all matching API keys */
             metrics: components["schemas"]["GuardrailSpendMetrics"];
         };
         /** GuardrailSpendMetrics */
         GuardrailSpendMetrics: {
             /**
              * Spend
+             * @description Guardrail spend in USD, already included in key and model spend
              * @default 0
              */
             spend: number;
             /**
              * Untracked Units
+             * @description Guardrail units with no known price, excluded from spend
              * @default 0
              */
             untracked_units: number;
@@ -35912,6 +36053,8 @@ export interface components {
             search_context_cost_per_query?: {
                 [key: string]: unknown;
             } | null;
+            /** Search Queries Cost Per Query */
+            search_queries_cost_per_query?: number | components["schemas"]["SearchContextCostPerQuery"] | null;
             /** Stream Timeout */
             stream_timeout?: number | string | null;
             /** Stream Timeout By Service Tier */
@@ -35924,6 +36067,8 @@ export interface components {
             tags?: string[] | null;
             /** Tenant Id */
             tenant_id?: string | null;
+            /** Thought Signature In Tool Call Id */
+            thought_signature_in_tool_call_id?: boolean | null;
             /** Tiered Pricing */
             tiered_pricing?: {
                 [key: string]: unknown;
@@ -36153,6 +36298,37 @@ export interface components {
              * @default
              */
             user: string | null;
+        };
+        /** LiteLLM_SubscriptionAccountTable */
+        LiteLLM_SubscriptionAccountTable: {
+            /** Account Id */
+            account_id: string;
+            /** Billing Period Start */
+            billing_period_start: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Created By */
+            created_by: string;
+            /** Currency */
+            currency: string;
+            /** Custom Llm Provider */
+            custom_llm_provider: string;
+            /** Label */
+            label?: string | null;
+            /** Monthly Fee */
+            monthly_fee: number;
+            /** Subscription Account Id */
+            subscription_account_id: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+            /** Updated By */
+            updated_by: string;
         };
         /** LiteLLM_TeamMembership */
         LiteLLM_TeamMembership: {
@@ -45432,6 +45608,17 @@ export interface components {
         } & {
             [key: string]: unknown;
         };
+        /** SearchContextCostPerQuery */
+        SearchContextCostPerQuery: {
+            /** Search Context Size High */
+            search_context_size_high?: number;
+            /** Search Context Size Low */
+            search_context_size_low?: number;
+            /** Search Context Size Medium */
+            search_context_size_medium?: number;
+        } & {
+            [key: string]: unknown;
+        };
         /**
          * SearchTool
          * @description Search tool configuration.
@@ -46192,6 +46379,16 @@ export interface components {
              * @enum {string}
              */
             classifier_failure_reason?: "timeout" | "circuit_open" | "not_configured" | "unsupported_input" | "invalid_response" | "declined" | "classifier_error";
+            /** Classifier Input Budget Status */
+            classifier_input_budget_status?: string;
+            /** Classifier Input Budget Tokens */
+            classifier_input_budget_tokens?: number;
+            /** Classifier Input Count Method */
+            classifier_input_count_method?: string;
+            /** Classifier Input Tokens */
+            classifier_input_tokens?: number;
+            /** Classifier Input Truncated */
+            classifier_input_truncated?: boolean;
             /** Classifier Max Quality Gap */
             classifier_max_quality_gap?: number;
             /** Classifier Model */
@@ -46361,6 +46558,55 @@ export interface components {
             window_end: number;
             /** Window Start */
             window_start: number;
+        };
+        /** SubscriptionAccountFeeRequest */
+        SubscriptionAccountFeeRequest: {
+            /** Account Id */
+            account_id: string;
+            /**
+             * Billing Period Start
+             * Format: date
+             */
+            billing_period_start: string;
+            /** Currency */
+            currency: string;
+            /** Custom Llm Provider */
+            custom_llm_provider: string;
+            /** Label */
+            label?: string | null;
+            /** Monthly Fee */
+            monthly_fee: number;
+        };
+        /** SubscriptionAccountUsage */
+        SubscriptionAccountUsage: {
+            /** Account Id */
+            account_id: string | null;
+            /** Billing Periods */
+            billing_periods: components["schemas"]["BillingPeriod"][];
+            /** Custom Llm Provider */
+            custom_llm_provider: string;
+            /** Deployments */
+            deployments: string[];
+            fee: components["schemas"]["LiteLLM_SubscriptionAccountTable"] | null;
+            /** Fixed Cost */
+            fixed_cost: number | null;
+        };
+        /** SubscriptionUsageResponse */
+        SubscriptionUsageResponse: {
+            /** Accounts */
+            accounts: components["schemas"]["SubscriptionAccountUsage"][];
+            /**
+             * End Date
+             * Format: date
+             */
+            end_date: string;
+            /**
+             * Start Date
+             * Format: date
+             */
+            start_date: string;
+            /** Subscription Providers */
+            subscription_providers: string[];
         };
         /**
          * SuccessfulKeyUpdate
@@ -48690,7 +48936,7 @@ export interface components {
             policies?: string[] | null;
             /**
              * Project Id
-             * @description Omit to retain the project, or send null to detach. Assigning a different project is not supported.
+             * @description Omit to retain the project, send null to detach, or send a project id to assign an unassigned key to a project on the key's team. Moving a key between projects is not supported.
              */
             project_id?: string | null;
             /** Prompts */
@@ -49020,6 +49266,12 @@ export interface components {
         UpdateRouterConfig: {
             /** Allowed Fails */
             allowed_fails?: number | null;
+            /** Content Policy Fallbacks */
+            content_policy_fallbacks?: {
+                [key: string]: (string | {
+                    [key: string]: components["schemas"]["JsonValue"];
+                })[];
+            }[] | null;
             /** Context Window Fallbacks */
             context_window_fallbacks?: {
                 [key: string]: unknown;
@@ -49082,6 +49334,19 @@ export interface components {
         /** UpdateSearchToolRequest */
         UpdateSearchToolRequest: {
             search_tool: components["schemas"]["SearchTool"];
+        };
+        /** UpdateSubscriptionAccountFeeRequest */
+        UpdateSubscriptionAccountFeeRequest: {
+            /** Billing Period Start */
+            billing_period_start?: string | null;
+            /** Currency */
+            currency?: string | null;
+            /** Label */
+            label?: string | null;
+            /** Monthly Fee */
+            monthly_fee?: number | null;
+            /** Subscription Account Id */
+            subscription_account_id: string;
         };
         /**
          * UpdateTeamMemberPermissionsRequest
@@ -49444,6 +49709,29 @@ export interface components {
             user_id?: string | null;
             /** User Role */
             user_role?: ("proxy_admin" | "proxy_admin_viewer" | "internal_user" | "internal_user_viewer") | null;
+        };
+        /** UsageCaptureSettings */
+        UsageCaptureSettings: {
+            /**
+             * Batch Size
+             * @default 1000
+             */
+            batch_size: number;
+            /**
+             * Flush Interval Seconds
+             * @default 5
+             */
+            flush_interval_seconds: number;
+            /**
+             * Max Pending Bytes
+             * @default 16777216
+             */
+            max_pending_bytes: number;
+            /**
+             * Max Pending Records
+             * @default 10000
+             */
+            max_pending_records: number;
         };
         /** UsageChartPoint */
         UsageChartPoint: {
@@ -51366,6 +51654,8 @@ export interface components {
             search_context_cost_per_query?: {
                 [key: string]: unknown;
             } | null;
+            /** Search Queries Cost Per Query */
+            search_queries_cost_per_query?: number | components["schemas"]["SearchContextCostPerQuery"] | null;
             /** Stream Timeout */
             stream_timeout?: number | string | null;
             /** Stream Timeout By Service Tier */
@@ -51378,6 +51668,8 @@ export interface components {
             tags?: string[] | null;
             /** Tenant Id */
             tenant_id?: string | null;
+            /** Thought Signature In Tool Call Id */
+            thought_signature_in_tool_call_id?: boolean | null;
             /** Tiered Pricing */
             tiered_pricing?: {
                 [key: string]: unknown;
@@ -73341,6 +73633,139 @@ export interface operations {
             };
         };
     };
+    delete_subscription_account_subscription_accounts_delete_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DeleteSubscriptionAccountRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LiteLLM_SubscriptionAccountTable"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    new_subscription_account_subscription_accounts_new_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SubscriptionAccountFeeRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LiteLLM_SubscriptionAccountTable"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_subscription_account_subscription_accounts_update_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateSubscriptionAccountFeeRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LiteLLM_SubscriptionAccountTable"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_subscription_usage_subscription_accounts_usage_get: {
+        parameters: {
+            query: {
+                /** @description First day of the Usage page filter, YYYY-MM-DD */
+                start_date: string;
+                /** @description Last day of the Usage page filter, YYYY-MM-DD */
+                end_date: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SubscriptionUsageResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     systemone_systemone_post: {
         parameters: {
             query?: never;
@@ -76650,7 +77075,7 @@ export interface operations {
                 end_date?: string | null;
                 /** @description Filter by specific model */
                 model?: string | null;
-                /** @description Filter by specific API key */
+                /** @description Filter by reporting API key ID. Missing keys are reported as unattributed. For a literal key unattributed or a key starting with raw:, add an extra raw: prefix */
                 api_key?: string | null;
                 /** @description Filter by specific user ID. Admins can filter by any user or omit for global view. Non-admins must provide their own user_id. */
                 user_id?: string | null;
@@ -76699,7 +77124,7 @@ export interface operations {
                 end_date?: string | null;
                 /** @description Filter by specific model */
                 model?: string | null;
-                /** @description Filter by specific API key */
+                /** @description Filter by reporting API key ID. Missing keys are reported as unattributed. For a literal key unattributed or a key starting with raw:, add an extra raw: prefix */
                 api_key?: string | null;
                 /** @description Filter by specific user ID. Admins can filter by any user or omit for global view. Non-admins must provide their own user_id. */
                 user_id?: string | null;
@@ -76744,7 +77169,7 @@ export interface operations {
                 end_date?: string | null;
                 /** @description Filter by specific model */
                 model?: string | null;
-                /** @description Filter by specific API key */
+                /** @description Filter by reporting API key ID. Missing keys are reported as unattributed. For a literal key unattributed or a key starting with raw:, add an extra raw: prefix */
                 api_key?: string | null;
                 /** @description Filter by specific user ID. Admins can filter by any user or omit for global view. Non-admins must provide their own user_id. */
                 user_id?: string | null;
@@ -76790,7 +77215,7 @@ export interface operations {
                 end_date?: string | null;
                 /** @description Filter by specific model */
                 model?: string | null;
-                /** @description Filter by specific API key */
+                /** @description Filter by reporting API key ID. Missing keys are reported as unattributed. For a literal key unattributed or a key starting with raw:, add an extra raw: prefix */
                 api_key?: string | null;
                 /** @description Filter by specific user ID. Admins can filter by any user or omit for global view. Non-admins must provide their own user_id. */
                 user_id?: string | null;
@@ -76837,7 +77262,7 @@ export interface operations {
                 end_date?: string | null;
                 /** @description Filter by specific model */
                 model?: string | null;
-                /** @description Filter by specific API key */
+                /** @description Filter by reporting API key ID. Missing keys are reported as unattributed. For a literal key unattributed or a key starting with raw:, add an extra raw: prefix */
                 api_key?: string | null;
                 /** @description Filter by specific user ID. Admins can filter by any user or omit for global view. Non-admins must provide their own user_id. */
                 user_id?: string | null;
@@ -76883,7 +77308,7 @@ export interface operations {
                 end_date?: string | null;
                 /** @description Filter by specific model */
                 model?: string | null;
-                /** @description Filter by specific API key */
+                /** @description Filter by reporting API key ID. Missing keys are reported as unattributed. For a literal key unattributed or a key starting with raw:, add an extra raw: prefix */
                 api_key?: string | null;
                 /** @description Filter by specific user ID. Admins can filter by any user or omit for global view. Non-admins must provide their own user_id. */
                 user_id?: string | null;
@@ -76929,7 +77354,7 @@ export interface operations {
                 end_date?: string | null;
                 /** @description Filter by specific model */
                 model?: string | null;
-                /** @description Filter by specific API key */
+                /** @description Filter by reporting API key ID. Missing keys are reported as unattributed. For a literal key unattributed or a key starting with raw:, add an extra raw: prefix */
                 api_key?: string | null;
                 /** @description Filter by specific user ID. Admins can filter by any user or omit for global view. Non-admins must provide their own user_id. */
                 user_id?: string | null;
@@ -76975,7 +77400,7 @@ export interface operations {
                 end_date?: string | null;
                 /** @description Filter by specific model */
                 model?: string | null;
-                /** @description Filter by specific API key */
+                /** @description Filter by reporting API key ID. Missing keys are reported as unattributed. For a literal key unattributed or a key starting with raw:, add an extra raw: prefix */
                 api_key?: string | null;
                 /** @description Filter by specific user ID. Admins can filter by any user or omit for global view. Non-admins must provide their own user_id. */
                 user_id?: string | null;

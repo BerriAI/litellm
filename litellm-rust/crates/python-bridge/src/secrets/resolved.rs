@@ -4,10 +4,9 @@ use futures_util::future::BoxFuture;
 use litellm_core_utils::settings::ProcessEnvironment;
 use litellm_host_python::PythonContext;
 use litellm_http::Client;
+use litellm_secret_value::SecretValue;
 use litellm_secrets::source::SecretSource;
-use litellm_secrets::{
-    Error, FailurePolicy, OidcResolver, SecretManagerState, SecretResolver, SecretValue,
-};
+use litellm_secrets::{Error, FailurePolicy, OidcResolver, SecretManagerState, SecretResolver};
 
 use super::config::SecretManagerSnapshot;
 

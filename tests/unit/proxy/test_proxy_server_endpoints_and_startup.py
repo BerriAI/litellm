@@ -10,6 +10,7 @@ import subprocess
 import sys
 import time
 import types
+from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Final
@@ -1654,6 +1655,15 @@ class MockPrisma:
     async def disconnect(self):
         pass
 
+    async def stop_background_tasks(self):
+        pass
+
+    async def aclose(self):
+        try:
+            await self.stop_background_tasks()
+        finally:
+            await self.disconnect()
+
 
 mock_prisma = MockPrisma()
 
@@ -1764,7 +1774,7 @@ async def test_proxy_startup_refuses_an_unsafe_master_key_even_when_the_database
     from litellm.proxy.auth.master_key_boot_check import UnsafeMasterKeyError
     from litellm.proxy.proxy_server import proxy_startup_event
 
-    async def unreachable():
+    async def unreachable(resources):
         raise ConnectionError("database is down")
 
     _, announced = _boot_with_general_settings(monkeypatch, tmp_path, general_settings)
@@ -1809,7 +1819,7 @@ async def test_proxy_startup_asks_to_migrate_only_when_the_database_holds_values
 
     database = _DatabaseWithOneStoredCredential(encrypt_value_helper("sk-provider", new_encryption_key=encrypted_with))
 
-    async def connected():
+    async def connected(resources):
         return database
 
     _, announced = _boot_with_general_settings(monkeypatch, tmp_path, {"master_key": PUBLICLY_KNOWN_KEY})
@@ -1844,6 +1854,21 @@ async def test_proxy_startup_says_a_lingering_migrate_from_variable_can_be_delet
 
 
 class _PrismaClientWhoseDatabaseRejectsQueries:
+    def __init__(self) -> None:
+        self.disconnect_calls = 0
+
+    async def disconnect(self) -> None:
+        self.disconnect_calls += 1
+
+    async def stop_background_tasks(self) -> None:
+        pass
+
+    async def aclose(self) -> None:
+        try:
+            await self.stop_background_tasks()
+        finally:
+            await self.disconnect()
+
     class _Database:
         async def query_raw(self, query, *args):
             raise RuntimeError("permission denied for table LiteLLM_CredentialsTable")
@@ -1858,7 +1883,8 @@ async def test_proxy_startup_stops_when_the_requested_migration_fails(monkeypatc
     from litellm.proxy.proxy_server import proxy_startup_event
 
     _boot_with_general_settings(monkeypatch, tmp_path, {"master_key": "sk-a-safe-master-key"})
-    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", _PrismaClientWhoseDatabaseRejectsQueries())
+    prisma: Final = _PrismaClientWhoseDatabaseRejectsQueries()
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", prisma)
     monkeypatch.setenv("LITELLM_MIGRATE_FROM_MASTER_KEY", PUBLICLY_KNOWN_KEY)
 
     with (
@@ -1871,6 +1897,25 @@ async def test_proxy_startup_stops_when_the_requested_migration_fails(monkeypatc
     notices = [record.getMessage() for record in caplog.records if "LITELLM_MIGRATE_FROM_MASTER_KEY" in record.message]
     assert len(notices) == 1
     assert "Could not migrate stored values" in notices[0]
+    assert prisma.disconnect_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_proxy_startup_after_a_failed_migration_does_not_reuse_the_closed_client(monkeypatch, tmp_path):
+    from fastapi import FastAPI
+
+    from litellm.proxy.proxy_server import proxy_startup_event
+
+    _boot_with_general_settings(monkeypatch, tmp_path, {"master_key": "sk-a-safe-master-key"})
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", _PrismaClientWhoseDatabaseRejectsQueries())
+    monkeypatch.setenv("LITELLM_MIGRATE_FROM_MASTER_KEY", PUBLICLY_KNOWN_KEY)
+    with pytest.raises(RuntimeError, match="permission denied"):
+        async with proxy_startup_event(FastAPI()):
+            pass
+
+    monkeypatch.setenv("LITELLM_MIGRATE_FROM_MASTER_KEY", "")
+    async with proxy_startup_event(FastAPI()) as state:
+        assert state["database"] is None
 
 
 @pytest.mark.asyncio
@@ -1917,11 +1962,11 @@ async def test_proxy_startup_boots_an_unsafe_master_key_under_the_override(monke
 class _ShutdownAwarePrisma(MockPrisma):
     def __init__(self):
         super().__init__()
-        self.stop_view_setup_task = AsyncMock()
+        self.stop_background_tasks = AsyncMock()
 
 
 @pytest.mark.asyncio
-async def test_proxy_shutdown_stops_the_view_setup_task(monkeypatch, tmp_path):
+async def test_proxy_shutdown_stops_database_background_tasks(monkeypatch, tmp_path):
     import yaml
     from fastapi import FastAPI
 
@@ -1936,11 +1981,11 @@ async def test_proxy_shutdown_stops_the_view_setup_task(monkeypatch, tmp_path):
     monkeypatch.setattr(proxy_server_module, "store_model_in_db", False)
 
     async with proxy_startup_event(FastAPI()):
-        stopped_while_serving = fake_prisma.stop_view_setup_task.await_count
+        stopped_while_serving = fake_prisma.stop_background_tasks.await_count
 
     actual = {
         "stopped_while_serving": stopped_while_serving,
-        "stopped_after_shutdown": fake_prisma.stop_view_setup_task.await_count,
+        "stopped_after_shutdown": fake_prisma.stop_background_tasks.await_count,
     }
     assert actual == {"stopped_while_serving": 0, "stopped_after_shutdown": 1}
 
@@ -5584,6 +5629,215 @@ async def test_valid_db_routing_groups_still_replace_router_groups():
     assert router._get_routing_context("m2", None)[0] == "least-busy"
 
 
+def _content_policy_router(**router_kwargs: object) -> litellm.Router:
+    return litellm.Router(
+        model_list=[
+            {
+                "model_name": "primary",
+                "litellm_params": {"model": "openai/gpt-5.4-mini", "api_key": "fake", "mock_response": "primary answered"},
+            },
+            {
+                "model_name": "secondary",
+                "litellm_params": {"model": "openai/gpt-5.4-mini", "api_key": "fake", "mock_response": "secondary answered"},
+            },
+            {
+                "model_name": "backup",
+                "litellm_params": {"model": "openai/gpt-5.4-nano", "api_key": "fake", "mock_response": "backup answered"},
+            },
+        ],
+        num_retries=0,
+        **router_kwargs,
+    )
+
+
+def _router_settings_row(content_policy_fallbacks: object) -> MagicMock:
+    row: Final = MagicMock()
+    row.param_value = {"allowed_fails": 7, "content_policy_fallbacks": content_policy_fallbacks}
+    prisma: Final = MagicMock()
+    prisma.db.litellm_config.find_first = AsyncMock(return_value=row)
+    return prisma
+
+
+async def _answer_after_content_policy_refusal(router: litellm.Router, model: str = "primary") -> str | None:
+    response: Final = await router.acompletion(
+        model=model, messages=[{"role": "user", "content": "hi"}], mock_testing_content_policy_fallbacks=True
+    )
+    return response.choices[0].message.content
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stored_target", ["backup", {"model": "backup"}])
+async def test_db_content_policy_fallbacks_reach_the_router(stored_target: str | dict[str, str]):
+    router: Final = _content_policy_router()
+
+    await proxy_server_module.ProxyConfig()._add_router_settings_from_db_config(
+        llm_router=router, prisma_client=_router_settings_row([{"primary": [stored_target]}])
+    )
+
+    assert await _answer_after_content_policy_refusal(router) == "backup answered"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stored_rules", [[], [{"primary": "backup"}]])
+async def test_a_saved_content_policy_list_with_no_valid_rule_leaves_refusals_to_the_general_fallbacks(
+    monkeypatch: pytest.MonkeyPatch, stored_rules: list[object]
+):
+    monkeypatch.setattr(litellm, "content_policy_fallbacks", None)
+    router: Final = _content_policy_router(fallbacks=[{"primary": ["backup"]}])
+
+    await proxy_server_module.ProxyConfig()._add_router_settings_from_db_config(
+        llm_router=router, prisma_client=_router_settings_row(stored_rules)
+    )
+
+    assert await _answer_after_content_policy_refusal(router) == "backup answered"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("litellm_settings_rules", "stored_rules", "refused_model"),
+    [
+        ([{"secondary": ["backup"]}], [{"primary": ["backup"]}], "secondary"),
+        ([{"*": ["secondary"]}], [{"*": ["backup"]}], "primary"),
+        ([{"primary": ["backup"]}], [], "primary"),
+    ],
+)
+async def test_db_content_policy_fallbacks_layer_over_the_litellm_settings_rules(
+    monkeypatch: pytest.MonkeyPatch,
+    litellm_settings_rules: list[dict[str, list[str]]],
+    stored_rules: list[dict[str, list[str]]],
+    refused_model: str,
+):
+    monkeypatch.setattr(litellm, "content_policy_fallbacks", litellm_settings_rules)
+    router: Final = _content_policy_router()
+
+    await proxy_server_module.ProxyConfig()._add_router_settings_from_db_config(
+        llm_router=router, prisma_client=_router_settings_row(stored_rules)
+    )
+
+    assert await _answer_after_content_policy_refusal(router, refused_model) == "backup answered"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "invalid_rule",
+    [{"secondary": "backup"}, ["backup"], dict[str, list[str]](), {"secondary": ["backup"], "primary": ["secondary"]}],
+)
+async def test_an_invalid_db_content_policy_rule_skips_only_itself(monkeypatch: pytest.MonkeyPatch, invalid_rule: object):
+    monkeypatch.setattr(litellm, "content_policy_fallbacks", [{"primary": ["backup"]}])
+    router: Final = _content_policy_router()
+
+    await proxy_server_module.ProxyConfig()._add_router_settings_from_db_config(
+        llm_router=router, prisma_client=_router_settings_row([invalid_rule, {"secondary": ["backup"]}])
+    )
+
+    assert router.allowed_fails == 7
+    assert await _answer_after_content_policy_refusal(router) == "backup answered"
+    assert await _answer_after_content_policy_refusal(router, "secondary") == "backup answered"
+
+
+@pytest.mark.asyncio
+async def test_a_db_content_policy_value_that_is_not_a_list_keeps_the_litellm_settings_rules(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(litellm, "content_policy_fallbacks", [{"primary": ["backup"]}])
+    router: Final = _content_policy_router()
+
+    await proxy_server_module.ProxyConfig()._add_router_settings_from_db_config(
+        llm_router=router, prisma_client=_router_settings_row("oops")
+    )
+
+    assert router.allowed_fails == 7
+    assert await _answer_after_content_policy_refusal(router) == "backup answered"
+
+
+@pytest.mark.asyncio
+async def test_a_db_sync_keeps_a_litellm_settings_rule_with_a_target_router_init_accepted(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(litellm, "content_policy_fallbacks", [{"primary": ["backup", 5]}])
+    router: Final = _content_policy_router()
+
+    await proxy_server_module.ProxyConfig()._add_router_settings_from_db_config(
+        llm_router=router, prisma_client=_router_settings_row([{"secondary": ["backup"]}])
+    )
+
+    assert await _answer_after_content_policy_refusal(router) == "backup answered"
+    assert await _answer_after_content_policy_refusal(router, "secondary") == "backup answered"
+
+
+@pytest.mark.asyncio
+async def test_an_invalid_db_content_policy_rule_is_logged_once_per_change_of_the_rules(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+):
+    monkeypatch.setattr(litellm, "content_policy_fallbacks", [])
+    router: Final = _content_policy_router()
+    proxy_config: Final = proxy_server_module.ProxyConfig()
+    stored_rules: Final = [{"secondary": "backup"}, {"primary": ["backup"]}]
+    changed_rules: Final = [{"secondary": "backup"}, {"secondary": ["backup"]}]
+
+    with caplog.at_level(logging.ERROR, logger="LiteLLM Proxy"):
+        await proxy_config._add_router_settings_from_db_config(
+            llm_router=router, prisma_client=_router_settings_row(stored_rules)
+        )
+        await proxy_config._add_router_settings_from_db_config(
+            llm_router=router, prisma_client=_router_settings_row(stored_rules)
+        )
+        await proxy_config._add_router_settings_from_db_config(
+            llm_router=router, prisma_client=_router_settings_row(changed_rules)
+        )
+
+    notices: Final = [
+        record for record in caplog.records if "Ignoring invalid content_policy_fallbacks" in record.getMessage()
+    ]
+    assert len(notices) == 2
+    assert await _answer_after_content_policy_refusal(router, "secondary") == "backup answered"
+
+
+@pytest.mark.asyncio
+async def test_a_db_sync_logs_a_new_invalid_content_policy_rule_when_no_valid_rule_changes(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+):
+    monkeypatch.setattr(litellm, "content_policy_fallbacks", [])
+    router: Final = _content_policy_router()
+    proxy_config: Final = proxy_server_module.ProxyConfig()
+
+    with caplog.at_level(logging.ERROR, logger="LiteLLM Proxy"):
+        await proxy_config._add_router_settings_from_db_config(
+            llm_router=router, prisma_client=_router_settings_row([{"secondary": "backup"}])
+        )
+        await proxy_config._add_router_settings_from_db_config(
+            llm_router=router, prisma_client=_router_settings_row([{"secondary": "backup"}, {"primary": "backup"}])
+        )
+
+    notices: Final = [
+        record.getMessage()
+        for record in caplog.records
+        if "Ignoring invalid content_policy_fallbacks" in record.getMessage()
+    ]
+    assert len(notices) == 3
+    assert "{'primary': 'backup'}" in notices[-1]
+
+
+@pytest.mark.asyncio
+async def test_config_file_content_policy_fallbacks_stay_the_only_rules_after_a_db_sync(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(litellm, "content_policy_fallbacks", [{"secondary": ["backup"]}])
+    file_rules: Final = [{"primary": ["backup"]}]
+    router: Final = _content_policy_router(content_policy_fallbacks=file_rules)
+    proxy_config: Final = proxy_server_module.ProxyConfig()
+    proxy_config.router_settings.load_yaml({"content_policy_fallbacks": file_rules})
+
+    await proxy_config._add_router_settings_from_db_config(
+        llm_router=router, prisma_client=_router_settings_row([{"secondary": ["backup"]}])
+    )
+
+    assert router.allowed_fails == 7
+    assert await _answer_after_content_policy_refusal(router) == "backup answered"
+    with pytest.raises(litellm.ContentPolicyViolationError):
+        await _answer_after_content_policy_refusal(router, "secondary")
+
+
 @pytest.mark.asyncio
 async def test_add_router_settings_from_db_config_empty_db_lists_do_not_clobber_config_fallbacks():
     """
@@ -5592,6 +5846,7 @@ async def test_add_router_settings_from_db_config_empty_db_lists_do_not_clobber_
     empty lists are "no value" and must not clobber config.yaml fallbacks,
     matching _deep_merge_dicts semantics. Non-empty DB lists still win.
     """
+    from collections import ChainMap
     from unittest.mock import AsyncMock, MagicMock
 
     from litellm.proxy.proxy_server import ProxyConfig
@@ -5626,10 +5881,10 @@ async def test_add_router_settings_from_db_config_empty_db_lists_do_not_clobber_
         prisma_client=mock_prisma_client,
     )
 
-    combined_settings = mock_router.update_settings.call_args.kwargs
+    combined_settings = ChainMap(*(call.kwargs for call in reversed(mock_router.update_settings.call_args_list)))
     assert combined_settings["fallbacks"] == [{"gpt-oss-120b": ["granite-4-h-small"]}]
     assert combined_settings["context_window_fallbacks"] == [{"gpt-oss-120b": ["granite-4-h-small"]}]
-    assert combined_settings["content_policy_fallbacks"] == [{"gpt-oss-120b": ["granite-4-h-small"]}]
+    assert combined_settings.get("content_policy_fallbacks") != [{"gpt-oss-120b": ["other-model"]}]
     assert combined_settings["num_retries"] == 3
 
 
@@ -9998,6 +10253,34 @@ def test_update_config_accepts_disjoint_routing_groups(_update_config_setup):
         restore()
 
 
+def test_update_config_validates_content_policy_fallbacks_like_fallbacks(
+    _update_config_setup: Callable[..., tuple[TestClient, _FakePrismaClient, Callable[[], None]]],
+):
+    client, prisma, restore = _update_config_setup(initial_rows={"router_settings": {"num_retries": 2}})
+    rule: Final = [{"gpt-5.4-mini": ["gpt-5.4-nano", {"model": "gpt-5.4-nano", "temperature": 1}]}]
+    malformed: Final = (
+        "oops",
+        5,
+        [1, 2],
+        [{"gpt-5.4-mini": "gpt-5.4-nano"}],
+        [{"gpt-5.4-mini": ["gpt-5.4-nano", 7]}],
+        [dict[str, list[str]]()],
+        [{"gpt-5.4-mini": ["gpt-5.4-nano"], "gpt-5.4": ["gpt-5.4-nano"]}],
+    )
+    try:
+        rejected: Final = tuple(
+            client.post("/config/update", json={"router_settings": {"content_policy_fallbacks": value}}).status_code
+            for value in malformed
+        )
+        assert rejected == (422,) * len(malformed)
+        assert prisma.db.litellm_config.rows["router_settings"] == {"num_retries": 2}
+        accepted: Final = client.post("/config/update", json={"router_settings": {"content_policy_fallbacks": rule}})
+        assert accepted.status_code == 200
+        assert prisma.db.litellm_config.rows["router_settings"] == {"num_retries": 2, "content_policy_fallbacks": rule}
+    finally:
+        restore()
+
+
 def test_update_config_env_var_round_trip_not_double_encrypted(_update_config_setup, monkeypatch):
     """Endpoint-level regression for the /config/update double-encryption bug.
 
@@ -13999,12 +14282,22 @@ async def test_team_window_spend_row_carries_the_request_start_time():
 def _mock_startup_prisma_client(health_check_error=None, connect_error=None):
     client = MagicMock()
     client.connect = AsyncMock(side_effect=connect_error)
+    client.disconnect = AsyncMock()
+    client.stop_background_tasks = AsyncMock()
     client.db.start_token_refresh_task = AsyncMock()
     client.check_view_exists = AsyncMock()
     client._set_spend_logs_row_count_in_proxy_state = AsyncMock()
     client.start_view_setup_task = MagicMock()
     client.start_db_health_watchdog_task = AsyncMock()
     client.health_check = AsyncMock(side_effect=health_check_error)
+
+    async def close_client() -> None:
+        try:
+            await client.stop_background_tasks()
+        finally:
+            await client.disconnect()
+
+    client.aclose = AsyncMock(side_effect=close_client)
     return client
 
 
@@ -14111,6 +14404,8 @@ async def test_setup_prisma_client_raises_when_db_unavailable_is_not_allowed(mon
     mock_client = _mock_startup_prisma_client(health_check_error=httpx.ReadTimeout("startup health check timed out"))
     with pytest.raises(httpx.ReadTimeout):
         await _run_setup_prisma_client(mock_client)
+    mock_client.stop_background_tasks.assert_awaited_once()
+    mock_client.disconnect.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -14131,6 +14426,31 @@ async def test_setup_prisma_client_returns_none_when_connect_itself_fails(monkey
     assert result is None
     assert mock_client.start_db_health_watchdog_task.await_count == 0
     assert mock_client.health_check.await_count == 0
+    mock_client.stop_background_tasks.assert_awaited_once()
+    mock_client.disconnect.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_cancelling_prisma_setup_closes_the_client_before_publishing_it(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DISABLE_PRISMA_HEALTH_CHECK_ON_STARTUP", "False")
+    checking: Final = asyncio.Event()
+    client: Final = _mock_startup_prisma_client()
+
+    async def health_check() -> None:
+        checking.set()
+        await asyncio.Event().wait()
+
+    client.health_check = health_check
+    setup: Final = asyncio.create_task(_run_setup_prisma_client(client))
+    try:
+        await asyncio.wait_for(checking.wait(), timeout=2)
+    finally:
+        setup.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await setup
+
+    client.stop_background_tasks.assert_awaited_once()
+    client.disconnect.assert_awaited_once()
 
 
 async def _run_scheduled_background_jobs():
@@ -15085,12 +15405,12 @@ async def test_load_config_router_budget_checks_fallback_targets_against_the_cal
 
     # on by default: an over-budget caller is refused the paid fallback with no config at all
     monkeypatch.setattr(proxy_server, "general_settings", {}, raising=False)
-    assert await router.fallback_budget_check(model="m", request_kwargs=over_budget, llm_router=router) is False
-    assert await router.fallback_budget_check(model="m", request_kwargs=under_budget, llm_router=router) is True
+    assert await router.fallback_budget_check(model="m", request_kwargs=over_budget, ctx=router._core_ctx) is False
+    assert await router.fallback_budget_check(model="m", request_kwargs=under_budget, ctx=router._core_ctx) is True
 
     # explicit opt-out restores the unguarded behaviour
     monkeypatch.setattr(proxy_server, "general_settings", {"enforce_fallback_budget": False}, raising=False)
-    assert await router.fallback_budget_check(model="m", request_kwargs=over_budget, llm_router=router) is True
+    assert await router.fallback_budget_check(model="m", request_kwargs=over_budget, ctx=router._core_ctx) is True
 
 
 @pytest.mark.asyncio

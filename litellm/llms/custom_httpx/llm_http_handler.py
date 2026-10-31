@@ -131,6 +131,8 @@ from litellm.responses.streaming_iterator import (
     ResponsesAPIStreamingIterator,
     ResponsesWebSocketStreaming,
     SyncResponsesAPIStreamingIterator,
+    TokenLimitCallback,
+    with_token_limit_checks,
 )
 from litellm.types.containers.main import (
     ContainerFileListResponse,
@@ -249,7 +251,7 @@ if TYPE_CHECKING:
         FakeAnthropicMessagesStreamIterator,
     )
     from litellm.llms.base_llm.passthrough.transformation import BasePassthroughConfig
-    from litellm.responses.streaming_iterator import ResponsesWsFrameGuard
+    from litellm.responses.streaming_iterator import ResponsesWsFrameGuard, ResponsesWsTurnAdmission
     from litellm.types.google_genai.main import GenerateContentResponse
     from litellm.types.llms.openai_evals import (
         CancelEvalResponse,
@@ -598,10 +600,10 @@ def _decoded_body_headers(response: httpx.Response) -> httpx.Headers:
     )
 
 
-def _collect_ws_project_quota_callbacks() -> tuple[ProjectQuotaCallback, ...]:
-    """Duck-type discover proxy hooks exposing per-frame project ITPM/OTPM
-    enforcement, so the Responses WebSocket loop can charge every
-    ``response.create`` frame, not just the connection's first one.
+def _ws_callbacks_exposing(method_name: str) -> tuple[object, ...]:
+    """Duck-type discover proxy hooks exposing a per-frame check, so the
+    Responses WebSocket loop can run it on every ``response.create`` frame,
+    not just the connection's first one.
 
     Uses duck-typing on ``litellm.callbacks`` (rather than importing the
     proxy hook directly) to avoid a layering violation (SDK importing from
@@ -612,11 +614,26 @@ def _collect_ws_project_quota_callbacks() -> tuple[ProjectQuotaCallback, ...]:
     callbacks: Final = cast(  # cast-ok: callback registry is inspected before protocol use
         Sequence[object], _litellm.callbacks
     )
+    return tuple(callback for callback in callbacks if callable(getattr(callback, method_name, None)))
+
+
+def _collect_ws_project_quota_callbacks() -> tuple[ProjectQuotaCallback, ...]:
     return tuple(
         cast(ProjectQuotaCallback, callback)  # cast-ok: required callback method is callable
-        for callback in callbacks
-        if callable(getattr(callback, "enforce_project_io_token_quota_for_frame", None))
+        for callback in _ws_callbacks_exposing("enforce_project_io_token_quota_for_frame")
     )
+
+
+def _collect_ws_token_limit_callbacks() -> tuple[TokenLimitCallback, ...]:
+    return tuple(
+        cast(TokenLimitCallback, callback)  # cast-ok: required callback method is callable
+        for callback in _ws_callbacks_exposing("enforce_token_limits_for_frame")
+    )
+
+
+def _ws_model_group(litellm_metadata: Mapping[str, object] | None, model: str) -> str:
+    model_group: Final = (litellm_metadata or {}).get("model_group")
+    return model_group if isinstance(model_group, str) and model_group else model
 
 
 def _unwrap_provider_error(error: Exception) -> Exception:
@@ -6973,14 +6990,19 @@ class BaseLLMHTTPHandler:
                     ),
                 )
 
-                # Auto-send session setup if the provider requires it (e.g.
-                # Gemini/Vertex AI Live needs a `setup` before any realtime_input).
+                # Auto-send session setup at connect unless the provider builds it from the
+                # client's first session.update (Gemini/Vertex AI Live accept exactly one
+                # setup, so RealTimeStreaming sends theirs on the first client message).
                 # Build the streaming handler first so a transcription guardrail's
                 # auto-response disable can be folded into this one setup: Gemini
                 # rejects a second setup, so a follow-up disable would be dropped
                 # and the guardrail bypassed.
                 _session_config: str | None = None
-                if provider_config.requires_session_configuration():
+                sends_setup_at_connect: Final = (
+                    provider_config.requires_session_configuration()
+                    and not provider_config.builds_setup_from_session_update()
+                )
+                if sends_setup_at_connect:
                     _session_config = provider_config.session_configuration_request(model)
                     if _session_config:
                         _session_config = realtime_streaming.maybe_inject_guardrail_auto_response_disable(
@@ -7313,7 +7335,7 @@ class BaseLLMHTTPHandler:
         custom_llm_provider: str | None = None,
         first_message: str | None = None,
         request_defaults: ResponsesWebSocketRequestDefaults | None = None,
-        turn_admission: Callable[[], Awaitable[None]] | None = None,
+        turn_admission: "ResponsesWsTurnAdmission | None" = None,
         frame_guard: "ResponsesWsFrameGuard | None" = None,
         **kwargs: object,
     ) -> Exception | None:
@@ -7329,6 +7351,12 @@ class BaseLLMHTTPHandler:
         - Forwards events over the websocket connection
         """
         _ws_quota_callbacks: Final = _collect_ws_project_quota_callbacks()
+        _ws_turn_admission: Final = with_token_limit_checks(
+            turn_admission,
+            _collect_ws_token_limit_callbacks(),
+            user_api_key_dict,
+            _ws_model_group(litellm_metadata, model),
+        )
 
         _ws_guardrail_callbacks: list = []
         _ws_output_guardrail_callbacks: list = []
@@ -7376,7 +7404,7 @@ class BaseLLMHTTPHandler:
                 custom_llm_provider=custom_llm_provider,
                 first_message=first_message,
                 quota_callbacks=_ws_quota_callbacks,
-                turn_admission=turn_admission,
+                turn_admission=_ws_turn_admission,
                 guardrail_callbacks=_ws_guardrail_callbacks,  # pyright: ignore[reportUnknownArgumentType]  # duck-typed callbacks from litellm.callbacks
                 frame_guard=frame_guard,
                 **kwargs,
@@ -7473,7 +7501,7 @@ class BaseLLMHTTPHandler:
                     authorized_model=model,
                     custom_llm_provider=custom_llm_provider,
                     request_defaults=request_defaults,
-                    turn_admission=turn_admission,
+                    turn_admission=_ws_turn_admission,
                     frame_guard=frame_guard,
                 )
                 return await streaming.bidirectional_forward()

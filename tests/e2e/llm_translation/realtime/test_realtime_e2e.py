@@ -146,7 +146,8 @@ def test_text_conversation(
         session.send(
             SessionUpdate(
                 session=SessionConfig(
-                    instructions="You are a terse assistant. Reply in one short sentence."
+                    modalities=list(provider.modalities),
+                    instructions="You are a terse assistant. Reply in one short sentence.",
                 )
             )
         )
@@ -181,6 +182,7 @@ def test_tool_call_round_trip(
         session.send(
             SessionUpdate(
                 session=SessionConfig(
+                    modalities=list(provider.modalities),
                     tools=[WEATHER_TOOL],
                     tool_choice="auto",
                     instructions=(

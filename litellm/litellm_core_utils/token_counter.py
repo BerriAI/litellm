@@ -17,6 +17,7 @@ import anyio
 import anyio.lowlevel
 import httpx
 import tiktoken
+from pydantic import TypeAdapter
 from tiktoken.model import MODEL_TO_ENCODING
 from typing_extensions import ParamSpec, TypeVar
 
@@ -55,9 +56,9 @@ from litellm.litellm_core_utils.tokenizer import HuggingFaceTokenizer, OpenAIEnc
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.tokenizer import Encoding, HuggingFace
+from litellm.litellm_core_utils.deployment_pricing import deployment_pricing_models
 from litellm.litellm_core_utils.url_utils import safe_get
 from litellm.llms.custom_httpx.http_handler import get_httpx_client, header_value
-from litellm.router_utils.deployment_pricing import deployment_pricing_models
 from litellm.rust_bridge.tokenizer import get_encoding
 from litellm.types.llms.anthropic import (
     AnthropicContentParamSource,
@@ -69,6 +70,7 @@ from litellm.types.llms.anthropic import (
     AnthropicMessagesToolResultParam,
     AnthropicMessagesToolUseParam,
     AnthropicSearchResultParam,
+    CompactionBlock,
 )
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -937,6 +939,8 @@ def _count_messages(
                     default_token_count,
                     params.pdf_pricing,
                 )
+            elif key == "provider_specific_fields":
+                num_tokens += sum(map(params.count_function, _compaction_summaries(value)))
             elif key == "search_results" and isinstance(value, list):
                 from litellm.litellm_core_utils.prompt_templates.common_utils import (
                     extract_search_results_text,
@@ -949,6 +953,25 @@ def _count_messages(
                 # Skip unsupported keys instead of raising an error
                 continue
     return num_tokens
+
+
+_OBJECT_LIST: Final = TypeAdapter(list[object])
+
+
+def _compaction_summaries(provider_specific_fields: object) -> tuple[str, ...]:
+    fields: Final = as_str_mapping(provider_specific_fields)
+    blocks: Final = fields.get("compaction_blocks") if fields is not None else None
+    block_fields: Final = (
+        tuple(map(as_str_mapping, _OBJECT_LIST.validate_python(blocks))) if isinstance(blocks, list) else ()
+    )
+    return tuple(
+        content
+        for block in block_fields
+        if block is not None
+        and block.get("type") == "compaction"
+        and isinstance(content := block.get("content"), str)
+        and content
+    )
 
 
 def _count_extra(
@@ -1648,6 +1671,11 @@ def _count_anthropic_content(
     return tokens
 
 
+_TEXT_FIELD_BY_BLOCK_TYPE: Final = MappingProxyType(
+    {"text": "text", "thinking": "thinking", "redacted_thinking": "thinking", "compaction": "content"}
+)
+
+
 def _count_content_list(
     count_function: TokenCounterFunction,
     content_list: str
@@ -1659,6 +1687,7 @@ def _count_content_list(
         | AnthropicMessagesImageParam
         | AnthropicMessagesDocumentParam
         | AnthropicSearchResultParam
+        | CompactionBlock
     ],
     use_default_image_token_count: bool,
     default_token_count: int | None,
@@ -1670,8 +1699,10 @@ def _count_content_list(
         for c in content_list:
             if isinstance(c, str):
                 num_tokens += count_function(c)
-            elif c["type"] == "text":
-                num_tokens += count_function(str(c.get("text", "")))
+            elif c["type"] in _TEXT_FIELD_BY_BLOCK_TYPE:
+                block_text = str(c.get(_TEXT_FIELD_BY_BLOCK_TYPE[c["type"]]) or "")
+                if block_text:
+                    num_tokens += count_function(block_text)
             elif c["type"] == "image_url":
                 image_url = c.get("image_url")
                 num_tokens += _count_image_tokens(image_url, use_default_image_token_count)
@@ -1704,12 +1735,6 @@ def _count_content_list(
                     default_token_count,
                     pdf_pricing,
                 )
-            elif c["type"] in ("thinking", "redacted_thinking"):
-                # Claude extended thinking content block
-                # Count the thinking text and skip the opaque blobs (signature, redacted data)
-                thinking_text = str(c.get("thinking", ""))
-                if thinking_text:
-                    num_tokens += count_function(thinking_text)
             elif c["type"] == "tool_reference":
                 # Anthropic tool-search reference block: a lightweight pointer to
                 # a deferred tool, e.g. {"type": "tool_reference", "tool_name": ...}.
@@ -1727,7 +1752,7 @@ def _count_content_list(
                     f"Invalid content item type: {content_type}. "
                     f"Expected str or dict with 'type' field "
                     f"(text, image_url, image, document, file, tool_use, tool_result, thinking, redacted_thinking, "
-                    f"tool_reference, search_result)."
+                    f"compaction, tool_reference, search_result)."
                 )
         return num_tokens
     except Exception as e:

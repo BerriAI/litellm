@@ -130,7 +130,8 @@ class DeepInfraConfig(OpenAIGPTConfig):
         - Input:  {"role": "tool", "content": [{"type": "text", "text": "result"}]}
         - Output: {"role": "tool", "content": "[{\"type\": \"text\", \"text\": \"result\"}]"}
         """
-        for message in messages:
+        copied_messages: Final = [message.copy() for message in messages]
+        for message in copied_messages:
             if message.get("role") == "tool":
                 content = message.get("content")
 
@@ -149,7 +150,7 @@ class DeepInfraConfig(OpenAIGPTConfig):
                         # For complex content, serialize the entire array as JSON string
                         message["content"] = json.dumps(content)
 
-        return messages
+        return copied_messages
 
     @overload
     def _transform_messages(

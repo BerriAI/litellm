@@ -21,7 +21,7 @@ from pydantic import TypeAdapter, ValidationError
 
 import litellm
 from litellm.constants import CLAUDE_CODE_CLIENT, CLAUDE_CODE_PICKER_PATTERN, GATEWAY_CLIENT_HEADER
-from litellm.router_utils.common_utils import resolve_model_group_alias
+from litellm.litellm_core_utils.routing_common_utils import resolve_model_group_alias
 
 if TYPE_CHECKING:
     from litellm.router import Router
@@ -219,7 +219,7 @@ def caller_alias_maps(
 
 def alias_map(aliases: object) -> Mapping[str, str]:
     try:
-        entries: Final = _ALIAS_ENTRIES.validate_python(aliases, strict=True)
+        entries: Final = _ALIAS_ENTRIES.validate_python(aliases)
     except ValidationError:
         return _NO_ALIASES
     return MappingProxyType(
@@ -285,6 +285,15 @@ def _dispatch(model_id: str, layers: Sequence[_AliasLayer]) -> tuple[str, bool]:
     """The model `/chat/completions` sends `model_id` to, and whether auth checks the caller's
     access to that model instead of `model_id`."""
     return reduce(_through_layer, layers, (model_id, False))
+
+
+def dispatched_model(model_id: str, aliases: CallerAliases) -> str:
+    target, _ = _dispatch(model_id, _alias_layers(aliases))
+    return target
+
+
+def requestable_alias_names(aliases: CallerAliases) -> frozenset[str]:
+    return frozenset(chain.from_iterable(layer.aliases for layer in _alias_layers(aliases)))
 
 
 def _lookup_id(name: str, lookup_by_response: Mapping[str, str], lookup_ids: Container[str]) -> str | None:

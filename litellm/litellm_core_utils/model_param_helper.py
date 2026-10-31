@@ -17,6 +17,7 @@ from openai.types.responses.response_create_params import (
     ResponseCreateParamsNonStreaming,
     ResponseCreateParamsStreaming,
 )
+from pydantic import TypeAdapter, ValidationError
 
 from litellm._logging import verbose_logger
 from litellm.types.llms.anthropic import AnthropicMessagesRequest
@@ -40,6 +41,16 @@ def peek_reasoning_summary_aliases(optional_params: Mapping[str, object]) -> obj
         if "reasoning_summary" in extra_body:
             return extra_body["reasoning_summary"]
     return None
+
+
+_OPTIONAL_BOOL: Final = TypeAdapter[bool | None](bool | None)
+
+
+def embeds_thought_signature_in_tool_call_id(litellm_params: Mapping[str, object]) -> bool:
+    try:
+        return _OPTIONAL_BOOL.validate_python(litellm_params.get("thought_signature_in_tool_call_id")) is not False
+    except ValidationError:
+        return True
 
 
 class ModelParamHelper:

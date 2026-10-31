@@ -117,7 +117,7 @@ async def test_admin_mcp_failure_still_closes_proxy_resources(
     message: Final = "LITELLM_LICENSE" if failure_phase == "license" else f"{failure_phase} failed"
     async def run_lifespan() -> None:
         async with admin_mcp_proxy.router.lifespan_context(admin_mcp_proxy) as state:
-            assert state == {"tracing_receiver": None}
+            assert state == {"tracing_receiver": None, "database": None}
             if failure_phase == "serving":
                 raise RuntimeError("serving failed")
             if failure_phase == "cancelled":
@@ -169,7 +169,7 @@ async def test_proxy_shutdown_drains_active_admin_tool_before_closing_connector(
         transport=httpx2.ASGITransport(app=admin_mcp_proxy), base_url="http://localhost:4000"
     ) as client:
         async with admin_mcp_proxy.router.lifespan_context(admin_mcp_proxy) as state:
-            assert state == {"tracing_receiver": None}
+            assert state == {"tracing_receiver": None, "database": None}
             request: Final = asyncio.create_task(client.post(
                 "/admin/mcp",
                 headers={"Authorization": "Bearer admin", "Accept": "application/json, text/event-stream"},
@@ -269,8 +269,15 @@ token = MASTER_KEY
 
 
 @pytest.mark.asyncio
-async def test_shutdown_persists_accounting_from_worker_callbacks_before_returning() -> None:
+async def test_shutdown_persists_accounting_from_worker_callbacks_before_returning(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from datetime import datetime
+
     from litellm.litellm_core_utils.logging_worker import LoggingWorker
+    from litellm.proxy.db.accounting_ledger import UsageWrite
+    from litellm.proxy.spend_tracking.usage_capture import UsageCaptureRuntime, capture_callback
+    from litellm.proxy.spend_tracking.usage_meter import UsageCaptureSettings
     from litellm.responses.streaming_iterator import spawn_logging_task
 
     worker: Final = LoggingWorker()
@@ -280,7 +287,25 @@ async def test_shutdown_persists_accounting_from_worker_callbacks_before_returni
     pending: Final[asyncio.Queue[str]] = asyncio.Queue()
     persisted: Final[asyncio.Queue[str]] = asyncio.Queue()
 
+    captured: Final[asyncio.Queue[str]] = asyncio.Queue()
+
+    async def persist_usage(writes: tuple[UsageWrite, ...]) -> None:
+        for write in writes:
+            captured.put_nowait(write.event.event_id)
+
+    capture: Final = UsageCaptureRuntime()
+    capture.start(persist_usage, UsageCaptureSettings(flush_interval_seconds=10))
+    monkeypatch.setattr(litellm.proxy.proxy_server, "usage_capture", capture)
+
     async def enqueue_spend() -> None:
+        assert capture.meter is not None
+        capture_callback(
+            capture.meter,
+            {"call_type": "acompletion", "litellm_call_id": "shutdown-usage", "litellm_params": {}},
+            {"id": "shutdown-attempt", "usage": {"total_tokens": 3}},
+            datetime(2026, 1, 1),
+            datetime(2026, 1, 1),
+        )
         pending.put_nowait("accounted request")
 
     async def callback() -> None:
@@ -306,10 +331,13 @@ async def test_shutdown_persists_accounting_from_worker_callbacks_before_returni
         assert waited_for_callback, "Shutdown returned while accounting callbacks were still running"
         assert persisted.get_nowait() == "accounted request"
         assert pending.empty()
+        assert (captured.get_nowait(), captured.get_nowait()) == ("shutdown-usage:inbound", "shutdown-attempt")
+        assert capture.meter is None
     finally:
         release.set()
         await worker.flush()
         await worker.stop()
+        await capture.stop(0)
 
 
 @pytest.mark.asyncio
@@ -4347,3 +4375,275 @@ async def test_shutdown_waits_for_enqueue_producers_before_stopping_worker() -> 
         assert worker.pending_count == 0
     finally:
         await worker.stop(discard_pending=True)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("unsupported", ["database", "collector", "remote", "free_tier"])
+async def test_capture_enablement_rejects_unrecoverable_writer_modes(
+    unsupported: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import litellm
+    from litellm.proxy import proxy_server
+    from litellm.proxy.spend_tracking.usage_capture import UsageCaptureRuntime
+
+    monkeypatch.setattr(proxy_server, "usage_capture", UsageCaptureRuntime())
+    monkeypatch.setattr(proxy_server, "general_settings", {"accounting_capture": {}})
+    monkeypatch.setattr(proxy_server, "prisma_client", None if unsupported == "database" else object())
+    monkeypatch.setattr(litellm, "apply_search_free_tier", unsupported == "free_tier")
+    monkeypatch.setenv("LITELLM_COLLECTOR_ENABLED", "true" if unsupported == "collector" else "false")
+    monkeypatch.delenv("SPEND_LOGS_URL", raising=False)
+    if unsupported == "remote":
+        monkeypatch.setenv("SPEND_LOGS_URL", "https://writer.invalid")
+    with pytest.raises(ValueError, match="requires local Prisma"):
+        proxy_server._configure_usage_capture()
+    assert proxy_server.usage_capture.meter is None
+
+
+@pytest.mark.asyncio
+async def test_capture_configuration_requires_restart_without_replacing_the_active_writer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy.spend_tracking.usage_capture import UsageCaptureRuntime
+    from litellm.proxy.utils import PrismaClient
+
+    runtime: Final = UsageCaptureRuntime()
+    monkeypatch.setattr(proxy_server, "usage_capture", runtime)
+    monkeypatch.setattr(proxy_server, "general_settings", {"accounting_sync_ack": True})
+    with pytest.raises(ValueError, match="requires accounting_capture"):
+        proxy_server._configure_usage_capture()
+    client: Final = PrismaClient("postgresql://localhost/unused", ProxyLogging(UserApiKeyCache()))
+    monkeypatch.setattr(proxy_server, "prisma_client", client)
+    monkeypatch.setattr(litellm, "apply_search_free_tier", False)
+    monkeypatch.setenv("LITELLM_COLLECTOR_ENABLED", "false")
+    monkeypatch.delenv("SPEND_LOGS_URL", raising=False)
+    monkeypatch.setattr(proxy_server, "general_settings", {"accounting_capture": {"batch_size": 4}})
+    try:
+        proxy_server._configure_usage_capture()
+        active: Final = runtime.meter
+        assert active is not None
+        assert active.settings.batch_size == 4
+        proxy_server._configure_usage_capture()
+        assert runtime.meter is active
+        monkeypatch.setattr(proxy_server, "general_settings", {"accounting_capture": {"batch_size": 6}})
+        with pytest.raises(ValueError, match="Changing accounting_capture requires a worker restart"):
+            proxy_server._configure_usage_capture()
+        monkeypatch.setattr(proxy_server, "general_settings", {})
+        with pytest.raises(ValueError, match="Disabling accounting_capture requires a worker restart"):
+            proxy_server._configure_usage_capture()
+        assert runtime.meter is active
+        assert active.settings.batch_size == 4
+    finally:
+        await runtime.stop(1)
+    assert runtime.meter is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sync_ack", [False, True])
+@pytest.mark.parametrize(
+    ("path", "payload"),
+    [
+        (
+            "/v1/chat/completions",
+            {"model": "openai/gpt-5-mini", "messages": [{"role": "user", "content": "hi"}], "stream": True},
+        ),
+        ("/v1/responses", {"model": "openai/gpt-5-mini", "input": "hi", "background": True}),
+        (
+            "/v1/messages",
+            {"model": "openai/gpt-5-mini", "messages": [{"role": "user", "content": "hi"}], "max_tokens": 1},
+        ),
+    ],
+)
+async def test_sync_ack_preserves_async_request_support(
+    sync_ack: bool,
+    path: str,
+    payload: dict[str, object],
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    from fastapi import Request
+
+    from litellm.proxy import proxy_server
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.db.accounting_ledger import UsageWrite
+    from litellm.proxy.hooks.proxy_track_cost_callback import ProxyDBLogger
+    from litellm.proxy.spend_tracking.usage_capture import UsageCaptureRuntime
+    from litellm.proxy.spend_tracking.usage_meter import UsageCaptureSettings
+
+    persisted: Final[asyncio.Queue[UsageWrite]] = asyncio.Queue()
+
+    async def persist(writes: tuple[UsageWrite, ...]) -> None:
+        for write in writes:
+            persisted.put_nowait(write)
+
+    async def authorize(request: Request) -> UserAPIKeyAuth:
+        return UserAPIKeyAuth(api_key="test-key", request_route=request.url.path)
+
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setenv("OPENAI_API_KEY", "test-provider-key")
+    upstream: Final = {
+        "id": "provider-result",
+        "object": "chat.completion",
+        "created": 1,
+        "model": "gpt-5-mini",
+        "choices": [{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": "hi"}}],
+        "usage": {"prompt_tokens": 3, "completion_tokens": 2, "total_tokens": 5},
+    }
+    if payload.get("stream"):
+        chunk: Final = {
+            **upstream,
+            "object": "chat.completion.chunk",
+            "choices": [{"index": 0, "finish_reason": "stop", "delta": {"role": "assistant", "content": "hi"}}],
+        }
+        respx_mock.post().respond(
+            200, text=f"data: {json.dumps(chunk)}\n\ndata: [DONE]\n\n", headers={"content-type": "text/event-stream"}
+        )
+    elif path == "/v1/responses":
+        respx_mock.post().respond(
+            200,
+            json={
+                "id": "resp_background",
+                "object": "response",
+                "created_at": 1,
+                "model": "gpt-5-mini",
+                "status": "in_progress",
+                "background": True,
+                "output": [],
+                "usage": None,
+            },
+        )
+    else:
+        respx_mock.post(url__regex=r".*/responses$").respond(
+            200,
+            json={
+                "id": "resp_message",
+                "object": "response",
+                "created_at": 1,
+                "model": "gpt-5-mini",
+                "status": "completed",
+                "output": [
+                    {
+                        "id": "msg_reply",
+                        "type": "message",
+                        "role": "assistant",
+                        "status": "completed",
+                        "content": [{"type": "output_text", "text": "hi", "annotations": []}],
+                    }
+                ],
+                "usage": {"input_tokens": 3, "output_tokens": 2, "total_tokens": 5},
+            },
+        )
+        respx_mock.post(url__regex=r".*/chat/completions$").respond(200, json=upstream)
+    runtime: Final = UsageCaptureRuntime()
+    monkeypatch.setattr(proxy_server, "usage_capture", runtime)
+    monkeypatch.setattr(
+        proxy_server, "general_settings", {"accounting_sync_ack": sync_ack, "accounting_sync_ack_timeout_seconds": 0}
+    )
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    monkeypatch.setattr(
+        proxy_server,
+        "llm_router",
+        litellm.Router(
+            model_list=[
+                {
+                    "model_name": payload["model"],
+                    "litellm_params": {"model": payload["model"], "api_key": "test-provider-key"},
+                }
+            ],
+            num_retries=0,
+        ),
+    )
+    monkeypatch.setattr(proxy_server, "proxy_logging_obj", ProxyLogging(UserApiKeyCache()))
+    monkeypatch.setattr(litellm, "callbacks", [ProxyDBLogger()])
+    monkeypatch.setitem(proxy_server.app.dependency_overrides, proxy_server.user_api_key_auth, authorize)
+    runtime.start(persist, UsageCaptureSettings())
+    try:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=proxy_server.app), base_url="http://test"
+        ) as client:
+            response: Final = await client.post(path, json=payload)
+    finally:
+        await runtime.stop(1)
+    assert response.status_code == 200, response.text
+    assert len(respx_mock.calls) == 1
+    if payload.get("background"):
+        assert response.json()["status"] == "in_progress"
+    else:
+        assert "hi" in response.text
+        assert not persisted.empty(), "Terminal usage must still be captured"
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sync_ack", [False, True])
+async def test_text_completion_provider_rejection_captures_unknown_usage(
+    sync_ack: bool, monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    from fastapi import Request
+
+    from litellm.accounting import Outcome
+    from litellm.proxy import proxy_server
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.db.accounting_ledger import UsageWrite
+    from litellm.proxy.hooks.proxy_track_cost_callback import ProxyDBLogger
+    from litellm.proxy.spend_tracking.usage_capture import UsageCaptureRuntime
+    from litellm.proxy.spend_tracking.usage_meter import UsageCaptureSettings
+
+    persisted: Final[asyncio.Queue[UsageWrite]] = asyncio.Queue()
+
+    async def persist(writes: tuple[UsageWrite, ...]) -> None:
+        for write in writes:
+            persisted.put_nowait(write)
+
+    async def authorize(request: Request) -> UserAPIKeyAuth:
+        return UserAPIKeyAuth(api_key="test-key", request_route=request.url.path)
+
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setenv("OPENAI_API_KEY", "test-provider-key")
+    respx_mock.post().respond(
+        404,
+        json={
+            "error": {"message": "The model is unavailable", "type": "invalid_request_error", "code": "model_not_found"}
+        },
+    )
+    runtime: Final = UsageCaptureRuntime()
+    monkeypatch.setattr(proxy_server, "usage_capture", runtime)
+    monkeypatch.setattr(proxy_server, "general_settings", {"accounting_sync_ack": sync_ack})
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    monkeypatch.setattr(
+        proxy_server,
+        "llm_router",
+        litellm.Router(
+            model_list=[
+                {
+                    "model_name": "instruct",
+                    "litellm_params": {"model": "openai/gpt-3.5-turbo-instruct", "api_key": "test-provider-key"},
+                }
+            ],
+            num_retries=0,
+        ),
+    )
+    monkeypatch.setattr(proxy_server, "proxy_logging_obj", ProxyLogging(UserApiKeyCache()))
+    monkeypatch.setattr(litellm, "callbacks", [ProxyDBLogger()])
+    monkeypatch.setitem(proxy_server.app.dependency_overrides, proxy_server.user_api_key_auth, authorize)
+    runtime.start(persist, UsageCaptureSettings())
+    try:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=proxy_server.app), base_url="http://test"
+        ) as client:
+            response: Final = await client.post(
+                "/v1/completions", json={"model": "instruct", "prompt": "hi", "max_tokens": 1}
+            )
+    finally:
+        await runtime.stop(1)
+    assert response.status_code == 404, response.text
+    assert len(respx_mock.calls) == 1
+    assert persisted.qsize() == 2
+    inbound: Final = persisted.get_nowait()
+    outbound: Final = persisted.get_nowait()
+    assert outbound.event.outcome is Outcome.FAILED
+    assert outbound.event.call_type.value == "atext_completion"
+    assert outbound.event.metrics is None
+    assert inbound.event.request_id == outbound.event.request_id
+    envelope: Final = json.loads(outbound.envelope)
+    assert envelope["usage"] is None
+    assert envelope["usage_source"] == "unknown"
+    assert envelope["pricing"]["reported_cost"] is None

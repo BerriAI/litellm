@@ -16,7 +16,6 @@ from openai.types.audio import (
 from pydantic import TypeAdapter, ValidationError
 
 from litellm.litellm_core_utils.core_helpers import process_response_headers
-from litellm.litellm_core_utils.exception_mapping_utils import exception_type, with_deployment_api_base
 from litellm.types.utils import TranscriptionResponse
 
 TRANSCRIPTION_RAN_UNSTREAMED: Final = "transcription_ran_unstreamed"
@@ -46,6 +45,8 @@ TranscriptionStreamExceptionMapper = Callable[[Exception], Exception]
 
 
 def litellm_exception_mapper(call_details: Mapping[str, object]) -> TranscriptionStreamExceptionMapper:
+    from litellm.litellm_core_utils.exception_mapping_utils import exception_type, with_deployment_api_base
+
     model: Final = call_details.get("model")
     custom_llm_provider: Final = call_details.get("custom_llm_provider")
     extra_kwargs: Final = with_deployment_api_base(call_details.get("litellm_params"))
