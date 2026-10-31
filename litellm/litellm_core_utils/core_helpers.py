@@ -315,6 +315,8 @@ _FINISH_REASON_MAP: Final[dict[str, OpenAIChatCompletionFinishReason]] = {
     "model_context_window_exceeded": "length",
     # Cohere
     "COMPLETE": "stop",
+    "STOP_SEQUENCE": "stop",
+    "TOOL_CALL": "tool_calls",
     "ERROR_TOXIC": "content_filter",
     "ERROR": "stop",
     # HuggingFace / Together AI
