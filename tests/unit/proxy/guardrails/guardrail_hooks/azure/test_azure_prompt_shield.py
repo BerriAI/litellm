@@ -530,8 +530,11 @@ async def test_prompt_shield_messages_less_embeddings_return_data_and_log_allow(
         ),
     ],
 )
+@pytest.mark.parametrize("call_type", ["aresponses", "acompact_responses"])
 @pytest.mark.asyncio
-async def test_responses_input_is_scanned_and_billing_is_logged(responses_input: object, expected_prompt: str) -> None:
+async def test_responses_input_is_scanned_and_billing_is_logged(
+    responses_input: object, expected_prompt: str, call_type: str
+) -> None:
     guardrail: Final = _priced_shield_guardrail(cost_tier="paid", price_per_1000_text_records=0.38)
     data: Final[dict[str, object]] = {"input": responses_input}
 
@@ -540,7 +543,7 @@ async def test_responses_input_is_scanned_and_billing_is_logged(responses_input:
             user_api_key_dict=UserAPIKeyAuth(api_key="k"),
             cache=None,
             data=data,
-            call_type="aresponses",
+            call_type=call_type,
         )
 
     mock_post.assert_called_once()

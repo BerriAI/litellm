@@ -55,6 +55,7 @@ from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 from litellm.proxy.utils import is_valid_api_key
 from litellm.responses.main import aresponses, responses
 from litellm.types.caching import CachingSupportedCallTypes
+from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.integrations.custom_logger import HEADROOM_CONVERTED_STREAM_KEY, STREAM_OPTIONS_STASH_KEYS
 from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.types.router import CredentialLiteLLMParams, GenericLiteLLMParams, LiteLLM_Params
@@ -10918,6 +10919,34 @@ async def test_client_passes_stored_response_call_types_to_both_deployment_hooks
     await client(stored_response_call)(model="gpt-4o", response_id="resp_abc")
 
     assert callback.hook_calls == (("pre", CallTypes(call_type)), ("post", CallTypes(call_type)))
+
+
+@pytest.mark.parametrize("call_type", ["aget_responses", "acompact_responses"])
+@pytest.mark.asyncio
+async def test_a_deployment_post_call_guardrail_blocks_a_stored_response_reply(
+    call_type: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class NoPineappleGuardrail(CustomGuardrail):
+        async def async_post_call_success_hook(
+            self, data: dict[str, object], user_api_key_dict: object, response: object
+        ) -> object:
+            if "pineapple" in str(response):
+                raise ValueError("pineapple is not allowed")
+            return response
+
+    monkeypatch.setattr(
+        litellm,
+        "callbacks",
+        [NoPineappleGuardrail(guardrail_name="no-pineapple", event_hook=GuardrailEventHooks.post_call)],
+    )
+
+    async def stored_response_call(**kwargs: object) -> dict[str, str]:
+        return {"id": "resp_abc", "output_text": "I like pineapple"}
+
+    stored_response_call.__name__ = call_type
+
+    with pytest.raises(ValueError, match="pineapple is not allowed"):
+        await client(stored_response_call)(model="gpt-4o", response_id="resp_abc", guardrails=["no-pineapple"])
 
 
 @pytest.mark.parametrize(

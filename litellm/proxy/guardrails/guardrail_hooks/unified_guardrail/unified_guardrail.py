@@ -110,6 +110,19 @@ def _translated_call_type(call_type: object, mappings: Mapping[CallTypes, object
     return known_call_type if known_call_type in mappings else None
 
 
+def _warn_untranslated_call_type(
+    guardrail_name: str | None, request_route: str | None, call_type: object, stage: str
+) -> None:
+    verbose_proxy_logger.warning(
+        "Guardrail '%s' selected for route '%s' but call type '%s' has no guardrail translation handler; "
+        "skipping %s scanning.",
+        guardrail_name,
+        request_route,
+        call_type,
+        stage,
+    )
+
+
 def resolve_endpoint_translation(
     user_api_key_dict: UserAPIKeyAuth, first_response_item: object | None
 ) -> "tuple[str, BaseTranslation] | None":
@@ -269,7 +282,9 @@ class UnifiedLLMGuardrails(CustomLogger):
 
         verbose_proxy_logger.debug("Running UnifiedLLMGuardrails pre-call hook")
 
-        guardrail_to_apply: Final[CustomGuardrail] = data.pop("guardrail_to_apply", None)
+        guardrail_to_apply: Final = cast(  # cast-ok: the proxy stores the selected CustomGuardrail under this key
+            "CustomGuardrail | None", data.pop("guardrail_to_apply", None)
+        )
         if guardrail_to_apply is None:
             return data
 
@@ -287,6 +302,9 @@ class UnifiedLLMGuardrails(CustomLogger):
         mappings: Final = load_guardrail_translation_mappings()
         input_call_type: Final = _translated_call_type(call_type, mappings)
         if input_call_type is None:
+            _warn_untranslated_call_type(
+                guardrail_to_apply.guardrail_name, user_api_key_dict.request_route, call_type, "pre-call"
+            )
             return data
 
         endpoint_translation: Final = _as_endpoint_translation(mappings[input_call_type]())
@@ -318,7 +336,9 @@ class UnifiedLLMGuardrails(CustomLogger):
         """
         verbose_proxy_logger.debug("Running UnifiedLLMGuardrails moderation hook")
 
-        guardrail_to_apply: Final[CustomGuardrail] = data.pop("guardrail_to_apply", None)
+        guardrail_to_apply: Final = cast(  # cast-ok: the proxy stores the selected CustomGuardrail under this key
+            "CustomGuardrail | None", data.pop("guardrail_to_apply", None)
+        )
         if guardrail_to_apply is None:
             return data
 
@@ -336,6 +356,9 @@ class UnifiedLLMGuardrails(CustomLogger):
         mappings: Final = load_guardrail_translation_mappings()
         input_call_type: Final = _translated_call_type(call_type, mappings)
         if input_call_type is None:
+            _warn_untranslated_call_type(
+                guardrail_to_apply.guardrail_name, user_api_key_dict.request_route, call_type, "during-call"
+            )
             return data
 
         endpoint_translation: Final = _as_endpoint_translation(mappings[input_call_type]())
@@ -369,7 +392,9 @@ class UnifiedLLMGuardrails(CustomLogger):
         )
         from litellm.types.guardrails import GuardrailEventHooks
 
-        guardrail_to_apply: Final[CustomGuardrail] = data.pop("guardrail_to_apply", None)
+        guardrail_to_apply: Final = cast(  # cast-ok: the proxy stores the selected CustomGuardrail under this key
+            "CustomGuardrail | None", data.pop("guardrail_to_apply", None)
+        )
 
         if guardrail_to_apply is None:
             return
@@ -412,12 +437,8 @@ class UnifiedLLMGuardrails(CustomLogger):
         mappings: Final = load_guardrail_translation_mappings()
 
         if CallTypes(call_type) not in mappings:
-            verbose_proxy_logger.warning(
-                "Guardrail '%s' selected for route '%s' but call type '%s' has no guardrail translation handler; "
-                "skipping post-call scanning.",
-                guardrail_to_apply.guardrail_name,
-                user_api_key_dict.request_route,
-                call_type,
+            _warn_untranslated_call_type(
+                guardrail_to_apply.guardrail_name, user_api_key_dict.request_route, call_type, "post-call"
             )
             return response
 

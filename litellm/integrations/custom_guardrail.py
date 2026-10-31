@@ -33,6 +33,7 @@ from litellm.types.guardrails import (
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
 from litellm.types.utils import (
+    RESPONSES_INPUT_CALL_TYPES,
     CallTypes,
     GenericGuardrailAPIInputs,
     GuardrailStatus,
@@ -1632,7 +1633,7 @@ class CustomGuardrail(CustomLogger):
         # /responses
         # User/System messages are stored in the "input" key, use litellm transformation to get the messages
         #########################################################
-        if call_type == CallTypes.responses.value or call_type == CallTypes.aresponses.value:
+        if call_type in RESPONSES_INPUT_CALL_TYPES:
             from typing import cast
 
             from litellm.responses.litellm_completion_transformation.transformation import (

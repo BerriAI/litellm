@@ -3128,22 +3128,28 @@ async def test_compact_input_is_guardrailed_like_create_while_stored_response_lo
 @pytest.mark.parametrize("route_call_type", ["avector_store_list", "not_a_call_type"])
 @pytest.mark.asyncio
 async def test_a_route_without_a_call_type_passes_input_guardrails_unscanned(
-    monkeypatch: pytest.MonkeyPatch, hook: str, route_call_type: str
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, hook: str, route_call_type: str
 ) -> None:
     _patch_translation_mappings(monkeypatch, load_guardrail_translation_mappings())
     guardrail: Final = RecordingGuardrail()
     data: Final = {"model": "gpt-4o", "input": "Remember forbiddenword", "guardrail_to_apply": guardrail}
-    user_api_key_dict: Final = UserAPIKeyAuth(token="hashed-key")
+    user_api_key_dict: Final = UserAPIKeyAuth(token="hashed-key", request_route="/v1/vector_stores")
 
-    result: Final = (
-        await UnifiedLLMGuardrails().async_pre_call_hook(
-            user_api_key_dict=user_api_key_dict, cache=DualCache(), data=data, call_type=route_call_type
+    with caplog.at_level(logging.WARNING):
+        result: Final = (
+            await UnifiedLLMGuardrails().async_pre_call_hook(
+                user_api_key_dict=user_api_key_dict, cache=DualCache(), data=data, call_type=route_call_type
+            )
+            if hook == "async_pre_call_hook"
+            else await UnifiedLLMGuardrails().async_moderation_hook(
+                data=data, user_api_key_dict=user_api_key_dict, call_type=route_call_type
+            )
         )
-        if hook == "async_pre_call_hook"
-        else await UnifiedLLMGuardrails().async_moderation_hook(
-            data=data, user_api_key_dict=user_api_key_dict, call_type=route_call_type
-        )
-    )
 
     assert guardrail.apply_calls == []
     assert result == {"model": "gpt-4o", "input": "Remember forbiddenword"}
+    stage: Final = "pre-call" if hook == "async_pre_call_hook" else "during-call"
+    assert (
+        f"route '/v1/vector_stores' but call type '{route_call_type}' has no guardrail translation handler; "
+        f"skipping {stage} scanning" in caplog.text
+    )

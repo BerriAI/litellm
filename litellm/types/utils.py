@@ -797,6 +797,15 @@ MCP_GUARDRAIL_CALL_TYPES: Final[frozenset[str]] = frozenset(
     {CallTypes.call_mcp_tool.value, CallTypes.list_mcp_tools.value}
 )
 
+RESPONSES_INPUT_CALL_TYPES: Final[frozenset[str]] = frozenset(
+    {
+        CallTypes.responses.value,
+        CallTypes.aresponses.value,
+        CallTypes.compact_responses.value,
+        CallTypes.acompact_responses.value,
+    }
+)
+
 # Mapping of API routes to their corresponding call types
 API_ROUTE_TO_CALL_TYPES: Final[Mapping[str, Sequence[CallTypes]]] = {
     # Chat Completions

@@ -1652,11 +1652,12 @@ async def test_a_client_sent_response_key_cannot_skip_recording_or_tool_call_che
     assert calls["/v1/chat/completions"].get("ingest_data") == "true", "the reply is still recorded"
 
 
-def test_a_decoy_messages_key_cannot_replace_the_responses_api_input(akto_post_call):
+@pytest.mark.parametrize("call_type", ["aresponses", "acompact_responses"])
+def test_a_decoy_messages_key_cannot_replace_the_responses_api_input(akto_post_call, call_type):
     request_data = {
         "input": [{"role": "user", "content": "the real prompt"}],
         "messages": [{"role": "user", "content": "hello"}],
-        "litellm_logging_obj": SimpleNamespace(call_type="aresponses", model_call_details={}),
+        "litellm_logging_obj": SimpleNamespace(call_type=call_type, model_call_details={}),
     }
 
     payload = akto_post_call.build_akto_payload(

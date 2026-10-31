@@ -14,7 +14,7 @@ from litellm.llms.custom_httpx.http_handler import (
 )
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.llms.openai import AllMessageValues, ResponseInputParam
-from litellm.types.utils import CallTypes, CallTypesLiteral
+from litellm.types.utils import RESPONSES_INPUT_CALL_TYPES, CallTypesLiteral
 
 # Azure Content Safety APIs have a 10,000 character limit per request.
 AZURE_CONTENT_SAFETY_MAX_TEXT_LENGTH: Final = 10000
@@ -26,7 +26,7 @@ AZURE_CONTENT_SAFETY_TEXT_RECORD_LENGTH: Final = 1000
 AZURE_CONTENT_SAFETY_DEFAULT_API_VERSION: Final = "2024-09-01"
 JAVELIN_API_VERSION_STORED_BY_OLDER_RELEASES: Final = "v1"
 
-RESPONSES_API_CALL_TYPES: Final = frozenset({CallTypes.responses, CallTypes.aresponses})
+RESPONSES_API_CALL_TYPES: Final = RESPONSES_INPUT_CALL_TYPES
 
 _RESPONSES_API_CALL_TYPES: Final = RESPONSES_API_CALL_TYPES
 

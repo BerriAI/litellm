@@ -54,8 +54,9 @@ async def test_azure_text_moderation_guardrail_pre_call_hook():
         assert mock_async_make_request.call_args.kwargs["text"] == "Hello, how are you?"
 
 
+@pytest.mark.parametrize("call_type", ["aresponses", "acompact_responses"])
 @pytest.mark.asyncio
-async def test_azure_text_moderation_scans_responses_input() -> None:
+async def test_azure_text_moderation_scans_responses_input(call_type: str) -> None:
     guardrail: Final = AzureContentSafetyTextModerationGuardrail(
         guardrail_name="azure_text_moderation",
         api_key="azure_text_moderation_api_key",
@@ -78,7 +79,7 @@ async def test_azure_text_moderation_scans_responses_input() -> None:
                 user_api_key_dict=UserAPIKeyAuth(api_key="azure_text_moderation_api_key"),
                 cache=None,
                 data={"input": "Review this response input"},
-                call_type="aresponses",
+                call_type=call_type,
             )
 
     assert exc_info.value.status_code == 400
