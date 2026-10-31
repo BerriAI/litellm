@@ -328,9 +328,7 @@ class ImageFetchError(BadRequestError):
         max_retries: int | None = None,
         num_retries: int | None = None,
         body: Mapping[str, object] | None = None,
-        url_status_code: int | None = None,
     ):
-        self.url_status_code = url_status_code
         super().__init__(
             message=message,
             model=model,

@@ -4,7 +4,6 @@ Tests for OpenAI GPT transformation (litellm/llms/openai/chat/gpt_transformation
 import asyncio
 import base64
 import copy
-import itertools
 import json
 import threading
 from collections.abc import Callable
@@ -1475,25 +1474,24 @@ async def test_async_transform_request_downloads_a_pdf_too_large_for_the_url_cac
 @pytest.mark.usefixtures("pdf_urls_reachable")
 @pytest.mark.respx(assert_all_called=True)
 @pytest.mark.asyncio
-async def test_async_transform_request_downloads_the_pdf_urls_of_one_request_at_the_same_time(
+async def test_async_transform_request_downloads_pdf_urls_one_at_a_time_for_a_host_that_refuses_bursts(
     respx_mock: respx.MockRouter,
 ) -> None:
-    pdf_urls: Final = tuple(f"https://files.example.test/together-{index}.pdf" for index in range(3))
+    pdf_urls: Final = tuple(f"https://files.example.test/in-turn-{index}.pdf" for index in range(3))
     for pdf_url in pdf_urls:
         in_memory_cache.delete_cache(pdf_url)
-    started_downloads: Final = itertools.count(1)
-    every_download_started: Final = asyncio.Event()
+    download_running: Final = asyncio.Lock()
 
-    async def serve_pdf_once_every_download_started(request: Request) -> Response:
-        if next(started_downloads) == len(pdf_urls):
-            every_download_started.set()
-        try:
-            await asyncio.wait_for(every_download_started.wait(), timeout=5)
-        except TimeoutError as error:
-            raise litellm.ImageFetchError("the PDF URLs were downloaded one after another") from error
-        return await _serve_pdf_to_async_clients_only(request)
+    async def refuse_a_second_download_at_once(request: Request) -> Response:
+        if download_running.locked():
+            return Response(429)
+        async with download_running:
+            await asyncio.sleep(0.05)
+            return await _serve_pdf_to_async_clients_only(request)
 
-    respx_mock.route(method="GET", host="files.example.test").mock(side_effect=serve_pdf_once_every_download_started)
+    downloads: Final = respx_mock.route(method="GET", host="files.example.test").mock(
+        side_effect=refuse_a_second_download_at_once
+    )
 
     request: Final = await OpenAIGPTConfig().async_transform_request(
         model="gpt-4.1",
@@ -1504,6 +1502,7 @@ async def test_async_transform_request_downloads_the_pdf_urls_of_one_request_at_
     )
 
     assert request["messages"] == [{"role": "user", "content": [_SUMMARIZE, *[_DOWNLOADED_PDF_PART] * 3]}]
+    assert downloads.call_count == len(pdf_urls)
 
 
 @pytest.mark.usefixtures("pdf_urls_reachable")
@@ -1702,6 +1701,10 @@ def _answer_not_found(request: Request) -> Response:
     return Response(404)
 
 
+def _answer_too_many_requests(request: Request) -> Response:
+    return Response(429)
+
+
 def _refuse_connection(request: Request) -> Response:
     raise httpx.ConnectError("connection refused", request=request)
 
@@ -1771,7 +1774,12 @@ async def test_async_transform_request_matches_the_sync_request_downloads_and_ca
 @pytest.mark.respx(assert_all_called=True)
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "dead_url_answer", [pytest.param(_answer_not_found, id="not_found"), pytest.param(_refuse_connection, id="refused")]
+    "dead_url_answer",
+    [
+        pytest.param(_answer_not_found, id="not_found"),
+        pytest.param(_answer_too_many_requests, id="rate_limited"),
+        pytest.param(_refuse_connection, id="refused"),
+    ],
 )
 async def test_async_transform_request_fails_a_dead_pdf_url_with_the_sync_error_and_download_count(
     respx_mock: respx.MockRouter, dead_url_answer: Callable[[Request], Response]
@@ -1801,72 +1809,26 @@ async def test_async_transform_request_fails_a_dead_pdf_url_with_the_sync_error_
 @pytest.mark.usefixtures("pdf_urls_reachable")
 @pytest.mark.respx(assert_all_called=False)
 @pytest.mark.asyncio
-async def test_async_transform_request_fails_a_dead_pdf_url_without_waiting_for_or_cancelling_the_downloads_after_it(
+async def test_async_transform_request_fails_a_dead_pdf_url_without_downloading_the_pdf_urls_after_it(
     respx_mock: respx.MockRouter,
 ) -> None:
     dead_url: Final = "https://files.example.test/dead-first.pdf"
-    slow_url: Final = "https://files.example.test/slow-after-dead.pdf"
-    in_memory_cache.delete_cache(slow_url)
-    slow_download_started: Final = asyncio.Event()
-    slow_download_released: Final = asyncio.Event()
-    slow_download_served: Final = asyncio.Event()
-
-    async def answer_not_found_once_the_slow_download_started(request: Request) -> Response:
-        await asyncio.wait_for(slow_download_started.wait(), timeout=5)
-        return Response(404)
-
-    async def serve_pdf_once_released(request: Request) -> Response:
-        slow_download_started.set()
-        await slow_download_released.wait()
-        slow_download_served.set()
-        return _serve_pdf(request)
-
-    respx_mock.get(dead_url).mock(side_effect=answer_not_found_once_the_slow_download_started)
-    respx_mock.get(slow_url).mock(side_effect=serve_pdf_once_released)
+    later_url: Final = "https://files.example.test/after-dead.pdf"
+    in_memory_cache.delete_cache(later_url)
+    respx_mock.get(dead_url).mock(return_value=Response(404))
+    later: Final = respx_mock.get(later_url).mock(side_effect=_serve_pdf_to_async_clients_only)
 
     with pytest.raises(litellm.ImageFetchError):
-        await asyncio.wait_for(
-            OpenAIGPTConfig().async_transform_request(
-                model="gpt-4.1",
-                messages=[{"role": "user", "content": [_SUMMARIZE, _pdf_url_part(dead_url), _pdf_url_part(slow_url)]}],
-                optional_params={},
-                litellm_params={},
-                headers={},
-            ),
-            timeout=5,
+        await OpenAIGPTConfig().async_transform_request(
+            model="gpt-4.1",
+            messages=[{"role": "user", "content": [_SUMMARIZE, _pdf_url_part(dead_url), _pdf_url_part(later_url)]}],
+            optional_params={},
+            litellm_params={},
+            headers={},
         )
-    slow_download_released.set()
-    await asyncio.wait_for(slow_download_served.wait(), timeout=5)
     await asyncio.wait_for(asyncio.gather(*(asyncio.all_tasks() - {asyncio.current_task()})), timeout=5)
 
-    assert in_memory_cache.get_cache(slow_url) is not None
-
-
-@pytest.mark.usefixtures("pdf_urls_reachable")
-@pytest.mark.respx(assert_all_called=True)
-@pytest.mark.asyncio
-async def test_async_transform_request_downloads_rate_limited_pdf_urls_again_one_at_a_time(
-    respx_mock: respx.MockRouter,
-) -> None:
-    pdf_urls: Final = tuple(f"https://files.example.test/rate-limited-{index}.pdf" for index in range(2))
-    downloads: Final = tuple(
-        respx_mock.get(url).mock(side_effect=[Response(429), _serve_pdf(Request("GET", url))]) for url in pdf_urls
-    )
-    for url in pdf_urls:
-        in_memory_cache.delete_cache(url)
-
-    request: Final = await OpenAIGPTConfig().async_transform_request(
-        model="gpt-4.1",
-        messages=[{"role": "user", "content": [_SUMMARIZE, *(_pdf_url_part(url) for url in pdf_urls)]}],
-        optional_params={},
-        litellm_params={},
-        headers={},
-    )
-
-    assert request["messages"] == [
-        {"role": "user", "content": [_SUMMARIZE, _DOWNLOADED_PDF_PART, _DOWNLOADED_PDF_PART]}
-    ]
-    assert [download.call_count for download in downloads] == [2, 2]
+    assert later.call_count == 0
 
 
 @pytest.mark.asyncio
