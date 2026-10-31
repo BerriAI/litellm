@@ -15,7 +15,6 @@ from prisma.models import LiteLLM_AgentsTable
 from litellm.constants import REDACTED_BY_LITELM_STRING
 from litellm.proxy._types import (
     LiteLLM_AuditLogs,
-    LiteLLM_ObjectPermissionTable,
     LitellmTableNames,
     LitellmUserRoles,
     UserAPIKeyAuth,
@@ -1052,6 +1051,14 @@ def _client_with_agent_card(
     registry.ids_for_agent = MagicMock(return_value=(agent.agent_id,))
     monkeypatch.setattr(agent_endpoints, "AGENT_REGISTRY", registry)
     monkeypatch.setattr(agent_registry, "global_agent_registry", registry)
+    monkeypatch.setattr(
+        "litellm.proxy.agent_endpoints.auth.agent_permission_handler.AgentRequestHandler.resolve_agent_access",
+        AsyncMock(return_value=RestrictedAgentAccess(frozenset({agent.agent_id}))),
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.agent_endpoints.auth.agent_permission_handler.AgentRequestHandler.is_agent_allowed",
+        AsyncMock(return_value=True),
+    )
     prisma: Final = MagicMock()
     prisma.db.litellm_agentstable.find_many = AsyncMock(return_value=[])
     prisma.db.litellm_agentstable.find_unique = AsyncMock(return_value=None)
@@ -1062,11 +1069,6 @@ def _client_with_agent_card(
     test_app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
         user_id="test-user",
         user_role=role,
-        object_permission=(
-            LiteLLM_ObjectPermissionTable(object_permission_id="test-agent-access", agents=[agent.agent_id])
-            if role == LitellmUserRoles.INTERNAL_USER
-            else None
-        ),
     )
     return TestClient(test_app)
 
