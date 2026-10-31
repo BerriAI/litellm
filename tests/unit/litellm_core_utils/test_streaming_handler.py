@@ -4,11 +4,12 @@ import itertools
 import json
 import os
 import queue
+import selectors
 import subprocess
 import sys
 import threading
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Coroutine, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from types import CodeType, FrameType, MappingProxyType, TracebackType
@@ -3529,6 +3530,36 @@ class _FailureLogMasker(CustomGuardrail):
         return kwargs, result
 
 
+class _VirtualClockSelector(selectors.DefaultSelector):
+    now: float = 0.0
+
+    def select(self, timeout: float | None = None) -> list[tuple[selectors.SelectorKey, int]]:
+        if timeout is None:
+            return super().select(None)
+        ready: Final = super().select(0)
+        if not ready:
+            self.now += timeout
+        return ready
+
+
+class _VirtualClockLoop(asyncio.SelectorEventLoop):
+    def __init__(self) -> None:
+        self.clock: Final = _VirtualClockSelector()
+        super().__init__(self.clock)
+
+    def time(self) -> float:
+        return self.clock.now
+
+
+def _on_virtual_clock(scenario: Coroutine[object, object, float]) -> float:
+    loop: Final = _VirtualClockLoop()
+    try:
+        return loop.run_until_complete(scenario)
+    finally:
+        loop.run_until_complete(loop.shutdown_default_executor())
+        loop.close()
+
+
 async def _seconds_waited_for_a_blocked_failure_log(masker: CustomGuardrail | None) -> float:
     release: Final = asyncio.Event()
     wrapper: Final = _stuck_stream_wrapper(
@@ -3537,22 +3568,22 @@ async def _seconds_waited_for_a_blocked_failure_log(masker: CustomGuardrail | No
     with pytest.raises(Exception, match="repeating the same chunk"):
         async for _ in wrapper:
             pass
-    started: Final = time.monotonic()
+    clock: Final = asyncio.get_running_loop()
+    started: Final = clock.time()
     await wrapper.wait_for_failure_logging(timeout=0.1)
-    waited: Final = time.monotonic() - started
+    waited: Final = clock.time() - started
     release.set()
     await wrapper.wait_for_failure_logging(timeout=None)
     return waited
 
 
-@pytest.mark.asyncio
-async def test_mid_stream_failure_wait_extends_by_the_mask_time_only_when_the_failure_log_is_masked() -> None:
-    _ = await _seconds_waited_for_a_blocked_failure_log(None)
-
-    assert await _seconds_waited_for_a_blocked_failure_log(None) < FAILURE_LOG_MASK_TIMEOUT_SECONDS
-    assert await _seconds_waited_for_a_blocked_failure_log(
-        _FailureLogMasker(guardrail_name="failure-log-masker", event_hook=GuardrailEventHooks.logging_only)
-    ) >= FAILURE_LOG_MASK_TIMEOUT_SECONDS
+def test_mid_stream_failure_wait_extends_by_the_mask_time_only_when_the_failure_log_is_masked() -> None:
+    assert _on_virtual_clock(_seconds_waited_for_a_blocked_failure_log(None)) == pytest.approx(0.1)
+    assert _on_virtual_clock(
+        _seconds_waited_for_a_blocked_failure_log(
+            _FailureLogMasker(guardrail_name="failure-log-masker", event_hook=GuardrailEventHooks.logging_only)
+        )
+    ) == pytest.approx(0.1 + FAILURE_LOG_MASK_TIMEOUT_SECONDS)
 
 
 @pytest.mark.asyncio

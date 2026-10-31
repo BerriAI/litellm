@@ -652,7 +652,7 @@ async def test_failure_hooks_get_the_request_body_the_failure_log_carried_after_
     logging_obj, _ = litellm.utils.function_setup(
         original_function="acompletion",
         rules_obj=litellm.utils.Rules(),
-        start_time=datetime.now(),
+        start_time=datetime(2026, 1, 1),
         model="internal-model",
         messages=messages,
         litellm_call_id="retried-call",
