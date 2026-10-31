@@ -116,7 +116,6 @@ describe("/ui/chat request metrics", () => {
 
     const call = mockMakeOpenAIResponsesRequest.mock.calls[0];
     expect(call).toHaveLength(ONE_TURN_ARG_COUNT);
-    expect(call[28]).toBeUndefined();
     expect(typeof call[ON_TIMING_DATA_INDEX]).toBe("function");
     expect(typeof call[ON_USAGE_DATA_INDEX]).toBe("function");
     expect(typeof call[ON_TOTAL_LATENCY_INDEX]).toBe("function");

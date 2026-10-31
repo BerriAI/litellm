@@ -192,6 +192,7 @@ it("should continue an ordinary chat without MCP tools after closing and reopeni
   await waitFor(() => expect(saved()[0]?.messages.at(-1)?.backgroundRun?.id).toBe("litellm_poll_research"));
   expect(requests[0]).toMatchObject({ background: true, stream: false });
   expect(requests[0]).not.toHaveProperty("tools");
+  expect(requests[0]).not.toHaveProperty("instructions");
   const id = saved()[0].id;
   first.unmount();
   status = "completed";
@@ -222,6 +223,8 @@ it("should retain ordinary streaming when background support is unavailable", as
   expect(await screen.findByText("Foreground answer")).toBeVisible();
   expect(requests[0]).toMatchObject({ stream: true });
   expect(requests[0]).not.toHaveProperty("background");
+  expect(requests[0]).not.toHaveProperty("instructions");
+  expect(requests[0].tools).not.toContainEqual(expect.objectContaining({ type: "web_search" }));
   expect(screen.getByText("Keep this tab open. Background runs are not available for this chat.")).toBeVisible();
 });
 
