@@ -46255,7 +46255,11 @@
         "litellm_provider": "parallel_ai",
         "max_input_tokens": 32000,
         "mode": "evaluation",
-        "source": "https://docs.parallel.ai/getting-started/pricing#decisions-api"
+        "source": "https://docs.parallel.ai/getting-started/pricing#decisions-api",
+        "supported_endpoints": [
+            "/v1/decisions",
+            "/v1/systemone"
+        ]
     },
     "parallel_ai/search": {
         "input_cost_per_query": 0.005,
