@@ -93,6 +93,7 @@ if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
 from litellm.types.utils import (
+    RESPONSES_INPUT_CALL_TYPES,
     CallTypes,
     CallTypesLiteral,
     Choices,
@@ -227,9 +228,6 @@ def _redact_assessment_match_fields(assessments: list[dict]) -> list[dict]:
     return redacted if isinstance(redacted, list) else assessments
 
 
-_RESPONSES_API_CALL_TYPES: Final = frozenset({CallTypes.responses, CallTypes.aresponses})
-
-
 def _without_image_bytes(content: Sequence[BedrockContentItem]) -> tuple[BedrockContentItem, ...]:
     return tuple(
         BedrockContentItem(
@@ -256,7 +254,7 @@ def _is_responses_api_route(request_route: str | None) -> bool:
     if request_route is None:
         return False
     call_types: Final = get_call_types_for_route(request_route)
-    return call_types is not None and any(call_type in _RESPONSES_API_CALL_TYPES for call_type in call_types)
+    return call_types is not None and any(call_type in RESPONSES_INPUT_CALL_TYPES for call_type in call_types)
 
 
 class _JsonResponse(Protocol):

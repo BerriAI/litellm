@@ -14,6 +14,7 @@ import anyio
 import pytest
 
 import litellm
+from litellm._logging import verbose_proxy_logger
 from litellm.caching import DualCache
 from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
@@ -3269,3 +3270,100 @@ async def test_pass_through_guardrail_text_is_the_client_body_without_the_inject
     texts: Final = [call["inputs"]["texts"] for call in guardrail.apply_calls]
     assert [[json.loads(text) for text in call_texts] for call_texts in texts] == [[body]], texts
     assert data["litellm_metadata"]["user_api_key_user_email"] == "someone@example.com", data["litellm_metadata"]
+
+
+@pytest.mark.parametrize("hook", ["async_pre_call_hook", "async_moderation_hook"])
+@pytest.mark.parametrize(
+    ("call_type", "request_body", "scanned_texts"),
+    [
+        (CallTypes.acompact_responses, {"input": [{"role": "user", "content": "Remember forbiddenword"}]}, [["Remember forbiddenword"]]),
+        (CallTypes.compact_responses, {"input": [{"role": "user", "content": "Remember forbiddenword"}]}, [["Remember forbiddenword"]]),
+        (CallTypes.aget_responses, {"response_id": "resp_abc"}, []),
+        (CallTypes.adelete_responses, {"response_id": "resp_abc"}, []),
+        (CallTypes.acancel_responses, {"response_id": "resp_abc"}, []),
+    ],
+)
+@pytest.mark.asyncio
+async def test_compact_input_is_guardrailed_like_create_while_stored_response_lookups_pass(
+    monkeypatch: pytest.MonkeyPatch,
+    hook: str,
+    call_type: CallTypes,
+    request_body: dict[str, object],
+    scanned_texts: list[list[str]],
+) -> None:
+    _patch_translation_mappings(monkeypatch, load_guardrail_translation_mappings())
+    guardrail: Final = RecordingGuardrail()
+    data: Final = {"model": "gpt-4o", **request_body, "guardrail_to_apply": guardrail}
+    user_api_key_dict: Final = UserAPIKeyAuth(token="hashed-key")
+
+    if hook == "async_pre_call_hook":
+        await UnifiedLLMGuardrails().async_pre_call_hook(
+            user_api_key_dict=user_api_key_dict, cache=DualCache(), data=data, call_type=call_type.value
+        )
+    else:
+        await UnifiedLLMGuardrails().async_moderation_hook(
+            data=data, user_api_key_dict=user_api_key_dict, call_type=call_type.value
+        )
+
+    assert [call["inputs"]["texts"] for call in guardrail.apply_calls] == scanned_texts
+
+
+@pytest.mark.parametrize("hook", ["async_pre_call_hook", "async_moderation_hook"])
+@pytest.mark.parametrize("route_call_type", ["avector_store_list", "not_a_call_type"])
+@pytest.mark.asyncio
+async def test_a_route_without_a_call_type_passes_input_guardrails_unscanned(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, hook: str, route_call_type: str
+) -> None:
+    _patch_translation_mappings(monkeypatch, load_guardrail_translation_mappings())
+    guardrail: Final = RecordingGuardrail()
+    data: Final = {"model": "gpt-4o", "input": "Remember forbiddenword", "guardrail_to_apply": guardrail}
+    user_api_key_dict: Final = UserAPIKeyAuth(token="hashed-key", request_route="/v1/vector_stores")
+
+    with caplog.at_level(logging.WARNING):
+        result: Final = (
+            await UnifiedLLMGuardrails().async_pre_call_hook(
+                user_api_key_dict=user_api_key_dict, cache=DualCache(), data=data, call_type=route_call_type
+            )
+            if hook == "async_pre_call_hook"
+            else await UnifiedLLMGuardrails().async_moderation_hook(
+                data=data, user_api_key_dict=user_api_key_dict, call_type=route_call_type
+            )
+        )
+
+    assert guardrail.apply_calls == []
+    assert result == {"model": "gpt-4o", "input": "Remember forbiddenword"}
+    stage: Final = "pre-call" if hook == "async_pre_call_hook" else "during-call"
+    assert (
+        f"route '/v1/vector_stores' but call type '{route_call_type}' has no guardrail translation handler; "
+        f"skipping {stage} scanning" in caplog.text
+    )
+
+
+@pytest.mark.parametrize("hook", ["async_pre_call_hook", "async_moderation_hook"])
+@pytest.mark.parametrize(
+    ("call_type", "request_route"),
+    [("amoderation", "/v1/moderations"), ("aget_responses", "/v1/responses/resp_abc")],
+)
+@pytest.mark.asyncio
+async def test_a_call_type_without_an_input_handler_passes_input_guardrails_unscanned_without_a_warning(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, hook: str, call_type: str, request_route: str
+) -> None:
+    _patch_translation_mappings(monkeypatch, load_guardrail_translation_mappings())
+    guardrail: Final = RecordingGuardrail()
+    data: Final = {"model": "gpt-4o", "input": "Remember forbiddenword", "guardrail_to_apply": guardrail}
+    user_api_key_dict: Final = UserAPIKeyAuth(token="hashed-key", request_route=request_route)
+
+    with caplog.at_level(logging.WARNING, logger=verbose_proxy_logger.name):
+        result: Final = (
+            await UnifiedLLMGuardrails().async_pre_call_hook(
+                user_api_key_dict=user_api_key_dict, cache=DualCache(), data=data, call_type=call_type
+            )
+            if hook == "async_pre_call_hook"
+            else await UnifiedLLMGuardrails().async_moderation_hook(
+                data=data, user_api_key_dict=user_api_key_dict, call_type=call_type
+            )
+        )
+
+    assert guardrail.apply_calls == []
+    assert result == {"model": "gpt-4o", "input": "Remember forbiddenword"}
+    assert [r.getMessage() for r in caplog.records if r.name == verbose_proxy_logger.name] == []

@@ -3802,6 +3802,21 @@ def test_default_on_guardrail() -> None:
     )
 
 
+@pytest.mark.parametrize(
+    "call_type",
+    [CallTypes.responses, CallTypes.aresponses, CallTypes.compact_responses, CallTypes.acompact_responses],
+)
+def test_guardrail_messages_for_responses_and_compact_come_from_input(call_type: CallTypes) -> None:
+    guardrail: Final = CustomGuardrail(guardrail_name="test-guardrail")
+
+    messages: Final = guardrail.get_guardrails_messages_for_call_type(
+        call_type=call_type,
+        data={"input": "Remember forbiddenword", "messages": [{"role": "user", "content": "decoy"}]},
+    )
+
+    assert messages == [{"role": "user", "content": "Remember forbiddenword"}]
+
+
 def test_merged_guardrail_entries_names_each_guardrail_once_preferring_its_first_entry_with_settings():
     from litellm.integrations.custom_guardrail import merged_guardrail_entries
 

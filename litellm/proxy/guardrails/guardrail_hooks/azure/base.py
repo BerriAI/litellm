@@ -14,7 +14,7 @@ from litellm.llms.custom_httpx.http_handler import (
 )
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.llms.openai import AllMessageValues, ResponseInputParam
-from litellm.types.utils import CallTypes, CallTypesLiteral
+from litellm.types.utils import RESPONSES_INPUT_CALL_TYPES, CallTypes, CallTypesLiteral
 
 # Azure Content Safety APIs have a 10,000 character limit per request.
 AZURE_CONTENT_SAFETY_MAX_TEXT_LENGTH: Final = 10000
@@ -26,7 +26,8 @@ AZURE_CONTENT_SAFETY_TEXT_RECORD_LENGTH: Final = 1000
 AZURE_CONTENT_SAFETY_DEFAULT_API_VERSION: Final = "2024-09-01"
 JAVELIN_API_VERSION_STORED_BY_OLDER_RELEASES: Final = "v1"
 
-RESPONSES_API_CALL_TYPES: Final = frozenset({CallTypes.responses, CallTypes.aresponses})
+RESPONSES_API_CALL_TYPES: Final = RESPONSES_INPUT_CALL_TYPES
+COMPACT_RESPONSES_CALL_TYPES: Final = frozenset({CallTypes.compact_responses.value, CallTypes.acompact_responses.value})
 
 _RESPONSES_API_CALL_TYPES: Final = RESPONSES_API_CALL_TYPES
 
@@ -162,7 +163,13 @@ class AzureGuardrailBase:
             if not isinstance(responses_input, (str, list)):
                 return None
             validated_input: Final = cast(ResponseInputParam, responses_input)  # cast-ok: narrowed to str | list
-            return get_last_user_message(ResponsesAPIRequestUtils.responses_input_to_chat_messages(validated_input))
+            chat_messages: Final = ResponsesAPIRequestUtils.responses_input_to_chat_messages(validated_input)
+            if call_type not in COMPACT_RESPONSES_CALL_TYPES:
+                return get_last_user_message(chat_messages)
+            last_user_index: Final = max(
+                (index for index, message in enumerate(chat_messages) if message.get("role") == "user"), default=-1
+            )
+            return get_last_user_message(chat_messages[: last_user_index + 1])
 
         messages: Final = data.get("messages")
         if messages is None:

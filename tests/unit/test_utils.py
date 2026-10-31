@@ -59,6 +59,7 @@ from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 from litellm.proxy.utils import is_valid_api_key
 from litellm.responses.main import aresponses, responses
 from litellm.types.caching import CachingSupportedCallTypes
+from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.integrations.custom_logger import HEADROOM_CONVERTED_STREAM_KEY, STREAM_OPTIONS_STASH_KEYS
 from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.types.router import CredentialLiteLLMParams, GenericLiteLLMParams, LiteLLM_Params
@@ -104,6 +105,7 @@ from litellm.utils import (
     _snapshot_exception_for_hook,
     async_post_call_failure_deployment_hook,
     async_post_call_success_deployment_hook,
+    async_pre_call_deployment_hook,
     calculate_max_parallel_requests,
     client,
     get_non_default_completion_params,
@@ -11364,6 +11366,102 @@ def test_get_optional_params_forwards_a_tool_config_cache_point_to_a_downstream_
 
     assert optional_params["extra_body"] == {"kept": True, "cache_control_injection_points": [point]}
 
+
+@pytest.mark.parametrize("call_type", ["aget_responses", "adelete_responses", "acancel_responses", "acompact_responses"])
+@pytest.mark.asyncio
+async def test_client_passes_stored_response_call_types_to_both_deployment_hooks(
+    call_type: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class RecordingLogger(CustomLogger):
+        def __init__(self) -> None:
+            super().__init__()
+            self.hook_calls: tuple[tuple[str, CallTypes | None], ...] = ()
+
+        async def async_pre_call_deployment_hook(
+            self, kwargs: dict[str, object], call_type: CallTypes | None
+        ) -> dict[str, object] | None:
+            self.hook_calls = (*self.hook_calls, ("pre", call_type))
+            return None
+
+        async def async_post_call_success_deployment_hook(
+            self, request_data: dict, response: object, call_type: CallTypes | None
+        ) -> object:
+            self.hook_calls = (*self.hook_calls, ("post", call_type))
+            return None
+
+    callback: Final = RecordingLogger()
+    monkeypatch.setattr(litellm, "callbacks", [callback])
+
+    async def stored_response_call(**kwargs: object) -> dict[str, str]:
+        return {"id": "resp_abc"}
+
+    stored_response_call.__name__ = call_type
+
+    await client(stored_response_call)(model="gpt-4o", response_id="resp_abc")
+
+    assert callback.hook_calls == (("pre", CallTypes(call_type)), ("post", CallTypes(call_type)))
+
+
+@pytest.mark.parametrize("call_type", ["aget_responses", "acompact_responses"])
+@pytest.mark.asyncio
+async def test_a_deployment_post_call_guardrail_blocks_a_stored_response_reply(
+    call_type: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class NoPineappleGuardrail(CustomGuardrail):
+        async def async_post_call_success_hook(
+            self, data: dict[str, object], user_api_key_dict: object, response: object
+        ) -> object:
+            if "pineapple" in str(response):
+                raise ValueError("pineapple is not allowed")
+            return response
+
+    monkeypatch.setattr(
+        litellm,
+        "callbacks",
+        [NoPineappleGuardrail(guardrail_name="no-pineapple", event_hook=GuardrailEventHooks.post_call)],
+    )
+
+    async def stored_response_call(**kwargs: object) -> dict[str, str]:
+        return {"id": "resp_abc", "output_text": "I like pineapple"}
+
+    stored_response_call.__name__ = call_type
+
+    with pytest.raises(ValueError, match="pineapple is not allowed"):
+        await client(stored_response_call)(model="gpt-4o", response_id="resp_abc", guardrails=["no-pineapple"])
+
+
+@pytest.mark.parametrize(
+    "call_type",
+    [
+        "get_responses",
+        "aget_responses",
+        "delete_responses",
+        "adelete_responses",
+        "cancel_responses",
+        "acancel_responses",
+        "compact_responses",
+        "acompact_responses",
+    ],
+)
+@pytest.mark.asyncio
+async def test_async_pre_call_deployment_hook_passes_responses_call_type(
+    call_type: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class RecordingLogger(CustomLogger):
+        received_call_type: CallTypes | None = None
+
+        async def async_pre_call_deployment_hook(
+            self, kwargs: dict[str, object], call_type: CallTypes | None
+        ) -> dict[str, object] | None:
+            self.received_call_type = call_type
+            return None
+
+    callback: Final = RecordingLogger()
+    monkeypatch.setattr(litellm, "callbacks", [callback])
+
+    await async_pre_call_deployment_hook({}, call_type)
+
+    assert callback.received_call_type == call_type
 
 
 @pytest.mark.parametrize(

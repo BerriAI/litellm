@@ -678,6 +678,14 @@ class CallTypes(str, Enum):
     responses = "responses"
     aresponses = "aresponses"
     alist_input_items = "alist_input_items"
+    get_responses = "get_responses"
+    aget_responses = "aget_responses"
+    delete_responses = "delete_responses"
+    adelete_responses = "adelete_responses"
+    cancel_responses = "cancel_responses"
+    acancel_responses = "acancel_responses"
+    compact_responses = "compact_responses"
+    acompact_responses = "acompact_responses"
     llm_passthrough_route = "llm_passthrough_route"
     allm_passthrough_route = "allm_passthrough_route"
 
@@ -780,6 +788,14 @@ CallTypesLiteral = Literal[
     "send_message",
     "aresponses",
     "responses",
+    "get_responses",
+    "aget_responses",
+    "delete_responses",
+    "adelete_responses",
+    "cancel_responses",
+    "acancel_responses",
+    "compact_responses",
+    "acompact_responses",
     "acreate_skill",
     "acreate_realtime_client_secret",
     "arealtime_calls",
@@ -788,6 +804,15 @@ CallTypesLiteral = Literal[
 
 MCP_GUARDRAIL_CALL_TYPES: Final[frozenset[str]] = frozenset(
     {CallTypes.call_mcp_tool.value, CallTypes.list_mcp_tools.value}
+)
+
+RESPONSES_INPUT_CALL_TYPES: Final[frozenset[str]] = frozenset(
+    {
+        CallTypes.responses.value,
+        CallTypes.aresponses.value,
+        CallTypes.compact_responses.value,
+        CallTypes.acompact_responses.value,
+    }
 )
 
 # Mapping of API routes to their corresponding call types
