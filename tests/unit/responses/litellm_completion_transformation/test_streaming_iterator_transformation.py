@@ -1212,6 +1212,30 @@ async def test_signature_only_thinking_streams_a_replayable_reasoning_item(sync_
     assert json.loads(reasoning_items[0].encrypted_content)[0]["signature"] == "sig_only"
 
 
+@pytest.mark.parametrize(
+    "stream_chunks",
+    [_reasoning_then_text_chunks, _signed_thinking_and_text_in_one_chunk],
+    ids=["gemini-thought-text", "signature-only-thinking"],
+)
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_streamed_reasoning_item_carries_a_summary_list_from_added_to_completed(
+    stream_chunks: StreamChunks, sync_mode: bool
+):
+    events: Final = await _collect_events(_build_iterator(stream_chunks()), sync_mode)
+
+    added: Final = next(
+        event.item
+        for event in events
+        if getattr(event, "type", None) == ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED and event.item.type == "reasoning"
+    )
+    completed: Final = next(
+        event for event in events if getattr(event, "type", None) == ResponsesAPIStreamEvents.RESPONSE_COMPLETED
+    )
+    assert added.summary == []
+    assert [item.summary for item in completed.response.output if item.type == "reasoning"] == [[]]
+
+
 @REASONING_THEN_TEXT_STREAMS
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio
