@@ -29,6 +29,23 @@ gcloud services enable \
   artifactregistry.googleapis.com
 ```
 
+## Enable VM Manager (OS Config) on existing projects
+
+Skip this on a brand-new project created after
+`constraints/compute.managed.requireOsConfig` is already enforced.
+Existing projects that later get that org policy need this metadata, or
+`terraform apply` fails while creating the Serverless VPC Access
+connector and Terraform's error is vague. Cloud operation logs then
+report an OS Config org-policy violation.
+
+```bash
+gcloud compute project-info add-metadata \
+  --project <your-project-id> \
+  --metadata=enable-osconfig=TRUE
+```
+
+See https://docs.cloud.google.com/compute/vm-manager/docs/setup#set_metadata_values
+
 ## Create the Artifact Registry passthrough to GHCR
 
 Cloud Run only pulls from Artifact Registry, `gcr.io`, or `docker.io`; it rejects `ghcr.io` URIs at apply time. The four LiteLLM images live on GHCR, so the stack needs a remote Artifact Registry repo pointed at GHCR. This is a one-time setup per project.
