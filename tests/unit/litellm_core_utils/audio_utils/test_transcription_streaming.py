@@ -1,5 +1,8 @@
 import datetime
-from collections.abc import AsyncIterator
+import io
+import math
+import wave
+from collections.abc import AsyncIterator, Iterator
 from typing import Final
 
 import anyio
@@ -7,7 +10,7 @@ import anyio.lowlevel
 import httpx
 import pytest
 import respx
-from openai import AsyncOpenAI
+from openai import AsyncOpenAI, OpenAI
 
 import litellm
 from litellm import Router
@@ -221,3 +224,96 @@ async def test_an_async_stream_that_fails_mid_transcript_is_logged_as_one_failur
             pass
 
     assert counter.failures == ("async_failure",)
+
+
+class _FirstDeltaThenResetSync(httpx.SyncByteStream):
+    def __iter__(self) -> Iterator[bytes]:
+        yield b'data: {"type":"transcript.text.delta","delta":"Good"}\n\n'
+        raise httpx.ReadError("connection reset")
+
+
+class _FailureCostRecorder(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.costs: tuple[object, ...] = ()
+
+    def log_failure_event(self, kwargs: object, response_obj: object, start_time: object, end_time: object) -> None:
+        self.costs = (*self.costs, kwargs.get("response_cost") if isinstance(kwargs, dict) else None)
+
+    async def async_log_failure_event(
+        self, kwargs: object, response_obj: object, start_time: object, end_time: object
+    ) -> None:
+        self.costs = (*self.costs, kwargs.get("response_cost") if isinstance(kwargs, dict) else None)
+
+
+def _silent_wav(seconds: int) -> bytes:
+    buffer: Final = io.BytesIO()
+    with wave.open(buffer, "wb") as wav:
+        wav.setnchannels(1)
+        wav.setsampwidth(2)
+        wav.setframerate(16_000)
+        wav.writeframes(b"\x00\x00" * 16_000 * seconds)
+    return buffer.getvalue()
+
+
+def _reset_mid_transcript(request: httpx.Request) -> httpx.Response:
+    return httpx.Response(
+        200,
+        headers={"content-type": "text/event-stream"},
+        stream=_FirstDeltaThenFails(httpx.ReadError("connection reset")),
+    )
+
+
+def _reset_mid_transcript_sync(request: httpx.Request) -> httpx.Response:
+    return httpx.Response(200, headers={"content-type": "text/event-stream"}, stream=_FirstDeltaThenResetSync())
+
+
+def _per_second_rate(model: str) -> float:
+    rate: Final = litellm.model_cost[model]["input_cost_per_second"]
+    assert isinstance(rate, float)
+    return rate
+
+
+@pytest.mark.asyncio
+async def test_an_async_stream_that_fails_mid_transcript_bills_the_uploaded_seconds(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    recorder: Final = _FailureCostRecorder()
+    monkeypatch.setattr(litellm, "callbacks", [recorder])
+    upstream: Final = AsyncOpenAI(
+        api_key="sk-test",
+        base_url="https://upstream.example/v1",
+        http_client=httpx.AsyncClient(transport=httpx.MockTransport(_reset_mid_transcript)),
+    )
+    stream: Final = await litellm.atranscription(
+        model="openai/gpt-transcribe", file=("sample.wav", _silent_wav(4)), stream=True, client=upstream
+    )
+
+    with pytest.raises(litellm.APIConnectionError):
+        async for _ in stream:
+            pass
+
+    assert len(recorder.costs) == 1
+    assert isinstance(recorder.costs[0], float)
+    assert math.isclose(recorder.costs[0], 4 * _per_second_rate("gpt-transcribe"))
+
+
+def test_a_sync_stream_that_fails_mid_transcript_bills_the_uploaded_seconds(monkeypatch: pytest.MonkeyPatch) -> None:
+    recorder: Final = _FailureCostRecorder()
+    monkeypatch.setattr(litellm, "callbacks", [recorder])
+    upstream: Final = OpenAI(
+        api_key="sk-test",
+        base_url="https://upstream.example/v1",
+        http_client=httpx.Client(transport=httpx.MockTransport(_reset_mid_transcript_sync)),
+    )
+    stream: Final = litellm.transcription(
+        model="openai/gpt-transcribe", file=("sample.wav", _silent_wav(4)), stream=True, client=upstream
+    )
+
+    with pytest.raises(litellm.APIConnectionError):
+        for _ in stream:
+            pass
+
+    assert len(recorder.costs) == 1
+    assert isinstance(recorder.costs[0], float)
+    assert math.isclose(recorder.costs[0], 4 * _per_second_rate("gpt-transcribe"))

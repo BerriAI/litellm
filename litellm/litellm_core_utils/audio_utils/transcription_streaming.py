@@ -16,7 +16,10 @@ from openai.types.audio import (
 from pydantic import TypeAdapter, ValidationError
 
 from litellm.litellm_core_utils.core_helpers import process_response_headers
-from litellm.types.utils import TranscriptionResponse
+from litellm.litellm_core_utils.llm_cost_calc.usage_object_transformation import (
+    TranscriptionUsageObjectTransformation,
+)
+from litellm.types.utils import TranscriptionResponse, TranscriptionUsageTokensObject, Usage
 
 TRANSCRIPTION_RAN_UNSTREAMED: Final = "transcription_ran_unstreamed"
 
@@ -125,6 +128,10 @@ class TranscriptionStreamLogging(Protocol):
         end_time: datetime.datetime,
     ) -> None: ...
 
+    def response_cost_calculator(self, result: TranscriptionResponse) -> float | None: ...
+
+    def record_partial_usage_for_failure(self, usage: Usage, response_cost: float) -> None: ...
+
 
 class _TranscriptionEventCollector:
     def __init__(self, duration: float | None) -> None:
@@ -148,6 +155,26 @@ class _TranscriptionEventCollector:
         if self.duration is not None:
             response.set_audio_transcription_duration(self.duration)
         return response
+
+
+def _billed_usage(response: TranscriptionResponse) -> Usage:
+    usage: Final[object] = getattr(response, "usage", None)
+    token_usage: Final = (
+        TranscriptionUsageObjectTransformation.transform_transcription_usage_object(usage)
+        if isinstance(usage, TranscriptionUsageTokensObject)
+        else None
+    )
+    return token_usage or Usage(prompt_tokens=0, completion_tokens=0, total_tokens=0)
+
+
+def _record_billable_partial_spend(
+    logging_obj: TranscriptionStreamLogging, collector: _TranscriptionEventCollector
+) -> None:
+    partial_response: Final = collector.response()
+    partial_cost: Final = logging_obj.response_cost_calculator(result=partial_response) or 0.0
+    if partial_cost <= 0:
+        return
+    logging_obj.record_partial_usage_for_failure(_billed_usage(partial_response), partial_cost)
 
 
 class LoggingTranscriptionStream(Stream[TranscriptionStreamEvent]):
@@ -180,6 +207,7 @@ class LoggingTranscriptionStream(Stream[TranscriptionStreamEvent]):
                 yield event
         except Exception as exception:
             self._failed = True
+            _record_billable_partial_spend(self._logging_obj, self._collector)
             mapped_exception: Final = self._map_exception(exception)
             end_time: Final = datetime.datetime.now()  # noqa: DTZ005  # callback timestamps use the legacy naive contract
             self._logging_obj.failure_handler(mapped_exception, traceback.format_exc(), self._start_time, end_time)
@@ -238,6 +266,7 @@ class LoggingAsyncTranscriptionStream(AsyncStream[TranscriptionStreamEvent]):
                 yield event
         except Exception as exception:
             self._failed = True
+            _record_billable_partial_spend(self._logging_obj, self._collector)
             mapped_exception: Final = self._map_exception(exception)
             end_time: Final = datetime.datetime.now()  # noqa: DTZ005  # callback timestamps use the legacy naive contract
             self._logging_obj.failure_handler(
