@@ -1165,6 +1165,7 @@ openai_compatible_providers: Final[list[str]] = [
     "cortecs",
     "scx-ai",
     "prism",
+    "hostinger_router",
     "sail",
     "reka",
     "streamlake",
