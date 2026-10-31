@@ -11876,6 +11876,20 @@ class TestInheritAuthGuardrails:
         assert post_call.call_args.kwargs["data"]["metadata"]["guardrails"] == ["global-post"]
 
     @pytest.mark.asyncio
+    async def test_post_call_guardrails_get_the_request_logging_object(self):
+        auth: Final = UserAPIKeyAuth(api_key="sk-test", metadata={"guardrails": ["key-post"]})
+
+        _, post_call = await self._run(
+            self._chat_body(),
+            inherit=True,
+            user_api_key_dict=auth,
+            guardrails=(self._guardrail("key-post", GuardrailEventHooks.post_call),),
+        )
+
+        post_call.assert_awaited_once()
+        assert isinstance(post_call.call_args.kwargs["data"]["litellm_logging_obj"], LiteLLMLoggingObj)
+
+    @pytest.mark.asyncio
     async def test_request_body_guardrails_are_added_to_the_key_guardrails(self):
         auth: Final = UserAPIKeyAuth(api_key="sk-test", metadata={"guardrails": ["key-guard"]})
 
