@@ -59,6 +59,7 @@ from litellm.proxy.hooks.max_iterations_limiter import PROXY_MaxIterationsHandle
 from litellm.proxy.hooks.parallel_request_limiter_v3 import PROXY_MaxParallelRequestsHandler_v3
 from litellm.proxy.utils import InternalUsageCache
 from litellm.types.llms.openai import ResponseAPIUsage, ResponseCompletedEvent, ResponsesAPIResponse
+from litellm.types.rerank import RerankResponse
 from litellm.types.utils import (
     CallTypes,
     CostBreakdown,
@@ -4512,6 +4513,105 @@ def test_logging_preserves_missing_usage_without_accepting_request_metadata(
     assert payload is not None
     assert payload["metadata"]["usage_object"] == (response.usage.model_dump() if usage is not None else {})
     assert (payload["prompt_tokens"], payload["completion_tokens"], payload["total_tokens"]) == (0, 0, 0)
+
+
+@pytest.mark.parametrize(
+    ("meta", "expected"),
+    [
+        ({"tokens": {"input_tokens": 7, "output_tokens": 3}}, (7, 3, 10)),
+        ({"tokens": {}, "billed_units": {"total_tokens": 42}}, (42, 0, 42)),
+        ({"tokens": {"output_tokens": 3}, "billed_units": {"total_tokens": 12}}, (9, 3, 12)),
+        ({"tokens": {"input_tokens": 7, "output_tokens": 3}, "billed_units": {"total_tokens": 0}}, (7, 3, 0)),
+        ({"billed_units": {"input_tokens": 7, "output_tokens": 3}}, (7, 3, 10)),
+        (
+            {
+                "tokens": {"input_tokens": 7, "output_tokens": 3},
+                "billed_units": {"input_tokens": 90, "output_tokens": 10, "total_tokens": 12},
+            },
+            (7, 3, 12),
+        ),
+        (
+            {
+                "tokens": {"input_tokens": 0, "output_tokens": 0},
+                "billed_units": {"input_tokens": 90, "output_tokens": 10, "total_tokens": 12},
+            },
+            (0, 0, 12),
+        ),
+        (
+            {
+                "tokens": {"input_tokens": None, "output_tokens": None},
+                "billed_units": {"input_tokens": 7, "output_tokens": 3, "total_tokens": None},
+            },
+            (7, 3, 10),
+        ),
+        ({"tokens": {"input_tokens": 0}}, (0, 0, 0)),
+        (None, None),
+        ({}, None),
+        ({"tokens": None, "billed_units": None}, None),
+        ({"billed_units": {"search_units": 3}}, None),
+    ],
+)
+def test_rerank_metadata_reaches_standard_and_spend_logs(
+    logging_obj: Logging, meta: dict[str, object] | None, expected: tuple[int, int, int] | None
+) -> None:
+    from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
+
+    now: Final = datetime_unit_test(2026, 1, 1, 12, 0, 0)
+    native: Final = {"id": "rerank-usage", "results": [{"index": 0, "relevance_score": 0.9}], "meta": meta}
+    response: Final = RerankResponse.model_validate(native)
+    counts: Final = expected if expected is not None else (0, 0, 0)
+    expected_usage: Final = dict(zip(("prompt_tokens", "completion_tokens", "total_tokens"), counts))
+    assert response.model_dump() == native
+    usage: Final = StandardLoggingPayloadSetup.get_usage_from_response_obj(response.model_dump())
+    assert (usage.prompt_tokens, usage.completion_tokens, usage.total_tokens) == counts
+    assert StandardLoggingPayloadSetup.get_usage_as_dict(response.model_dump()) == (
+        expected_usage if expected is not None else {}
+    )
+    kwargs: Final = {"model": "rerank-model", "call_type": "arerank", "litellm_params": {"metadata": {}}}
+    standard: Final = get_standard_logging_object_payload(
+        kwargs=kwargs,
+        init_response_obj=response,
+        start_time=now,
+        end_time=now,
+        logging_obj=logging_obj,
+        status="success",
+    )
+    assert standard is not None
+    assert (standard["prompt_tokens"], standard["completion_tokens"], standard["total_tokens"]) == counts
+    assert standard["metadata"]["usage_object"] == (expected_usage if expected is not None else {})
+    spend: Final = get_logging_payload(
+        kwargs={**kwargs, "standard_logging_object": standard}, response_obj=response, start_time=now, end_time=now
+    )
+    assert (spend["prompt_tokens"], spend["completion_tokens"], spend["total_tokens"]) == counts
+
+
+@pytest.mark.parametrize("combined", [None, Usage(prompt_tokens=11, completion_tokens=2, total_tokens=13)])
+@pytest.mark.parametrize("explicit_usage", [{}, {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}])
+def test_rerank_metadata_does_not_override_explicit_or_combined_usage(
+    combined: Usage | None, explicit_usage: dict[str, int]
+) -> None:
+    response: Final = {"results": [], "meta": {"tokens": {"input_tokens": 42}}, "usage": explicit_usage}
+    expected: Final = combined.model_dump() if combined is not None else explicit_usage
+    assert StandardLoggingPayloadSetup.get_usage_as_dict(response, combined) == expected
+    usage: Final = StandardLoggingPayloadSetup.get_usage_from_response_obj(response, combined)
+    assert (usage.prompt_tokens, usage.completion_tokens, usage.total_tokens) == (
+        expected.get("prompt_tokens", 0),
+        expected.get("completion_tokens", 0),
+        expected.get("total_tokens", 0),
+    )
+
+
+@pytest.mark.parametrize(
+    "response",
+    [
+        {"meta": {"tokens": {"input_tokens": 42}}},
+        {"results": [], "meta": {"tokens": {"input_tokens": "invalid"}}},
+    ],
+)
+def test_rerank_metadata_ignores_unrelated_and_invalid_responses(response: dict[str, object]) -> None:
+    assert StandardLoggingPayloadSetup.get_usage_as_dict(response) == {}
+    usage: Final = StandardLoggingPayloadSetup.get_usage_from_response_obj(response)
+    assert (usage.prompt_tokens, usage.completion_tokens, usage.total_tokens) == (0, 0, 0)
 
 
 def test_append_system_prompt_messages():
@@ -12574,9 +12674,10 @@ def test_get_hidden_params():
     assert result["api_base"] is None
     assert result["response_cost"] is None
     assert result["additional_headers"] is None
+    assert result.get("upstream_provider") is None
 
     # assert all fields in StandardLoggingHiddenParams are present
-    assert all(field in result for field in StandardLoggingHiddenParams.__annotations__)
+    assert all(field in result for field in StandardLoggingHiddenParams.__annotations__ if field != "upstream_provider")
 
     # Test with valid params
     hidden_params = {
@@ -12584,6 +12685,7 @@ def test_get_hidden_params():
         "cache_key": "test-cache",
         "api_base": "https://api.test.com",
         "response_cost": 0.001,
+        "upstream_provider": "serving-site-a",
         "additional_headers": {
             "x-ratelimit-limit-requests": "2000",
             "x-ratelimit-remaining-requests": "1999",
@@ -12596,8 +12698,9 @@ def test_get_hidden_params():
     assert result["response_cost"] == 0.001
     assert result["additional_headers"] is not None
     assert result["additional_headers"]["x_ratelimit_limit_requests"] == 2000
+    assert result.get("upstream_provider") == "serving-site-a"
     # assert all fields in StandardLoggingHiddenParams are present
-    assert all(field in result for field in StandardLoggingHiddenParams.__annotations__)
+    assert all(field in result for field in StandardLoggingHiddenParams.__annotations__ if field != "upstream_provider")
 
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "drain_logging_worker", "isolate_litellm_state", "setup_and_teardown")

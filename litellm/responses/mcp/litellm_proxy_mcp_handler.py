@@ -23,6 +23,7 @@ from litellm.responses.mcp.tool_precheck import (
     LITELLM_PROXY_MCP_SERVER_URL_PREFIX,
     may_name_litellm_mcp_gateway,
     names_gateway_explicitly,
+    names_whole_gateway,
     proxy_path_mcp_name,
 )
 from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
@@ -182,8 +183,8 @@ class LiteLLM_Proxy_MCP_Handler:
 
     @staticmethod
     async def _apply_toolset_permissions(
-        resolved_toolset_ids: list[str],
-        resolved_mcp_servers: list[str],
+        resolved_toolset_ids: Sequence[str],
+        resolved_mcp_servers: Sequence[str],
         user_api_key_auth: "UserAPIKeyAuth",
     ) -> "UserAPIKeyAuth":
         """Apply resolved toolset permissions to user_api_key_auth and return updated auth."""
@@ -195,7 +196,7 @@ class LiteLLM_Proxy_MCP_Handler:
             )
 
             tool_permissions: Final = await global_mcp_server_manager.resolve_toolset_tool_permissions(
-                toolset_ids=resolved_toolset_ids
+                toolset_ids=list(resolved_toolset_ids)
             )
             all_server_ids: Final = list(set(tool_permissions.keys()) | set(resolved_mcp_servers))
             existing_op: Final = user_api_key_auth.object_permission
@@ -223,6 +224,62 @@ class LiteLLM_Proxy_MCP_Handler:
         except Exception as _e:
             verbose_logger.debug("Could not apply toolset permissions: %s", _e)
             return user_api_key_auth
+
+    @staticmethod
+    async def _resolve_proxy_mcp_name(
+        name: str,
+        user_api_key_auth: "UserAPIKeyAuth | None",
+        granted_toolsets: "GrantedToolsetIds | None",
+    ) -> tuple[Literal["server", "toolset", "denied_toolset"], str]:
+        from litellm.proxy.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
+
+        if global_mcp_server_manager.get_mcp_server_by_name(name):
+            return ("server", name)
+        try:
+            from litellm.proxy.proxy_server import prisma_client
+
+            if prisma_client is None:
+                return ("server", name)
+            toolset: Final = await global_mcp_server_manager.get_toolset_by_name_cached(prisma_client, name)
+            if toolset is None:
+                return ("server", name)
+            from litellm.proxy.mcp_server.auth.user_api_key_auth_mcp import (
+                has_team_unbound_mcp_admin_view,
+            )
+            from litellm.proxy.mcp_server.ui_session_utils import (
+                granted_toolset_ids,
+            )
+
+            denied: Final = (
+                user_api_key_auth is not None
+                and not has_team_unbound_mcp_admin_view(user_api_key_auth)
+                and toolset.toolset_id not in await (granted_toolsets or granted_toolset_ids)(user_api_key_auth)
+            )
+        except Exception as _e:
+            verbose_logger.debug("Could not resolve '%s' as toolset: %s", name, _e)
+            return ("server", name)
+        if not denied:
+            return ("toolset", toolset.toolset_id)
+        if await LiteLLM_Proxy_MCP_Handler._holds_access_group_named(name, user_api_key_auth):
+            return ("server", name)
+        verbose_logger.debug("Key does not have access to toolset '%s', denying it.", name)
+        return ("denied_toolset", name)
+
+    @staticmethod
+    async def _holds_access_group_named(name: str, user_api_key_auth: "UserAPIKeyAuth | None") -> bool:
+        from litellm.proxy.mcp_server.auth.user_api_key_auth_mcp import (
+            MCPRequestHandler,
+        )
+        from litellm.proxy.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
+
+        group_server_ids: Final = await MCPRequestHandler.get_mcp_servers_from_access_groups([name])
+        return bool(group_server_ids) and not frozenset(group_server_ids).isdisjoint(
+            await global_mcp_server_manager.get_allowed_mcp_servers(user_api_key_auth)
+        )
 
     @staticmethod
     @catalog_operation(global_manager)
@@ -256,6 +313,7 @@ class LiteLLM_Proxy_MCP_Handler:
         from litellm.proxy.mcp_server.server import (
             _get_allowed_mcp_servers_from_mcp_server_names,
             _get_tools_from_mcp_servers,
+            raise_generic_mcp_access_denial,
         )
 
         mcp_servers: Final = [
@@ -268,36 +326,15 @@ class LiteLLM_Proxy_MCP_Handler:
         # Resolve toolset names: collect all toolset IDs first, then apply their
         # combined permissions in a single pass so multiple toolsets are unioned
         # rather than the last one overwriting the others.
-        resolved_mcp_servers: Final[list[str]] = []
-        resolved_toolset_ids: Final[list[str]] = []
-        for name in mcp_servers:
-            if not global_mcp_server_manager.get_mcp_server_by_name(name):
-                try:
-                    from litellm.proxy.proxy_server import prisma_client
-
-                    if prisma_client is not None:
-                        toolset = await global_mcp_server_manager.get_toolset_by_name_cached(prisma_client, name)
-                        if toolset is not None:
-                            if user_api_key_auth is not None:
-                                from litellm.proxy.management_endpoints.common_utils import (
-                                    user_api_key_has_admin_view,
-                                )
-                                from litellm.proxy.mcp_server.ui_session_utils import (
-                                    granted_toolset_ids,
-                                )
-
-                                if not user_api_key_has_admin_view(user_api_key_auth) and toolset.toolset_id not in (
-                                    await (granted_toolsets or granted_toolset_ids)(user_api_key_auth)
-                                ):
-                                    verbose_logger.debug("Key does not have access to toolset '%s', skipping.", name)
-                                    continue
-                            resolved_toolset_ids.append(toolset.toolset_id)
-                            # Don't add to resolved_mcp_servers — toolset scope
-                            # restricts via object_permission, not server name filter.
-                            continue
-                except Exception as _e:
-                    verbose_logger.debug("Could not resolve '%s' as toolset: %s", name, _e)
-            resolved_mcp_servers.append(name)
+        resolutions: Final = tuple(
+            [
+                await LiteLLM_Proxy_MCP_Handler._resolve_proxy_mcp_name(name, user_api_key_auth, granted_toolsets)
+                for name in mcp_servers
+            ]
+        )
+        resolved_mcp_servers: Final = tuple(value for kind, value in resolutions if kind == "server")
+        resolved_toolset_ids: Final = tuple(value for kind, value in resolutions if kind == "toolset")
+        denied_toolset_names: Final = tuple(value for kind, value in resolutions if kind == "denied_toolset")
 
         # Apply all resolved toolsets at once (union), avoiding permission overwrite.
         if resolved_toolset_ids and user_api_key_auth is not None:
@@ -311,7 +348,10 @@ class LiteLLM_Proxy_MCP_Handler:
         # full union (toolset server IDs + direct server names).  Passing a name-based
         # filter here would exclude those toolset server IDs (which are UUIDs, not
         # names), so use None and let the auth object's mcp_servers do the filtering.
-        effective_server_filter: Final = None if resolved_toolset_ids else (resolved_mcp_servers or None)
+        asks_whole_gateway: Final = any(map(names_whole_gateway, mcp_tools_with_litellm_proxy or ()))
+        if denied_toolset_names and not (asks_whole_gateway or resolved_mcp_servers or resolved_toolset_ids):
+            raise_generic_mcp_access_denial(denied_toolset_names)
+        effective_server_filter: Final = None if resolved_toolset_ids else (list(resolved_mcp_servers) or None)
 
         listing: Final = await _get_tools_from_mcp_servers(
             user_api_key_auth=user_api_key_auth,
