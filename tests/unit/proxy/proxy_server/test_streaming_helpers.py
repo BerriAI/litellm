@@ -19,7 +19,7 @@ import asyncio
 import functools
 import itertools
 import json
-from collections import Counter, OrderedDict
+from collections import Counter, OrderedDict, defaultdict
 from collections.abc import AsyncIterator, Callable, ItemsView, Iterable, Iterator, KeysView, Mapping
 from datetime import datetime, timezone
 from enum import Enum
@@ -496,6 +496,114 @@ def test_responses_error_event_prints_each_proxy_item_once() -> None:
     assert json.loads(frame.split("data: ", 1)[1])["error"]["provider_specific_fields"] == {"v": "'***'"}
 
 
+def _dict_holding_itself(value: str) -> dict[str, object]:
+    held: Final[dict[str, object]] = {"v": value}
+    held["me"] = held  # mutable-ok: a self-reference needs the dict to exist before it can hold itself
+    return held
+
+
+def _defaultdict_holding_itself(value: str) -> defaultdict[str, object]:
+    held: Final[defaultdict[str, object]] = defaultdict(list, v=value)
+    held["me"] = held  # mutable-ok: a self-reference needs the dict to exist before it can hold itself
+    return held
+
+
+def _ordered_dict_holding_itself(value: str) -> OrderedDict[str, object]:
+    held: Final[OrderedDict[str, object]] = OrderedDict(v=value)
+    held["me"] = held  # mutable-ok: a self-reference needs the dict to exist before it can hold itself
+    return held
+
+
+def _list_holding_itself(value: str) -> list[object]:
+    held: Final[list[object]] = [value]
+    held.append(held)  # mutable-ok: a self-reference needs the list to exist before it can hold itself
+    return held
+
+
+def _proxy_whose_mapping_holds_it(value: str) -> Mapping[str, object]:
+    held: Final[dict[str, object]] = {"type": "response.output_text.delta", "v": value}
+    held["me"] = MappingProxyType(held)  # mutable-ok: a self-reference needs the dict to exist before it can hold itself
+    return MappingProxyType(held)
+
+
+_SELF_HOLDING_PLACEMENTS: Final[tuple[tuple[Callable[[str], object], Mapping[str, object]], ...]] = (
+    (
+        lambda value: {"type": "response.output_text.delta", "meta": MappingProxyType(_dict_holding_itself(value))},
+        {"type": "response.output_text.delta", "meta": {"v": "'***'", "me": "{...}"}},
+    ),
+    (
+        lambda value: {"type": "response.output_text.delta", "meta": _dict_holding_itself(value)},
+        {"type": "response.output_text.delta", "meta": {"v": "'***'", "me": "{...}"}},
+    ),
+    (
+        lambda value: {"type": "response.output_text.delta", "meta": _defaultdict_holding_itself(value)},
+        {"type": "response.output_text.delta", "meta": {"v": "'***'", "me": "defaultdict(<class 'list'>, {...})"}},
+    ),
+    (
+        lambda value: {"type": "response.output_text.delta", "meta": _ordered_dict_holding_itself(value)},
+        {"type": "response.output_text.delta", "meta": {"v": "'***'", "me": "..."}},
+    ),
+    (
+        lambda value: {"type": "response.output_text.delta", "meta": _list_holding_itself(value)},
+        {"type": "response.output_text.delta", "meta": ["'***'", "[...]"]},
+    ),
+    (
+        _proxy_whose_mapping_holds_it,
+        {"type": "response.output_text.delta", "v": "'***'", "me": "mappingproxy({...})"},
+    ),
+)
+
+
+@pytest.mark.parametrize(
+    ("place", "expected"),
+    _SELF_HOLDING_PLACEMENTS,
+    ids=["proxy_over_dict", "dict", "defaultdict", "ordered_dict", "list", "proxy_held_by_its_mapping"],
+)
+def test_responses_sse_chunk_prints_a_container_that_holds_itself_as_its_repr_marker(
+    place: Callable[[str], object], expected: Mapping[str, object]
+) -> None:
+    frame: Final = _format_responses_sse_chunk(chunk=place(_AlternatingReprString("hook-canary")))
+
+    assert isinstance(frame, str)
+    assert "hook-canary" not in frame
+    assert json.loads(frame.removeprefix("data: ")) == expected
+
+
+class _ParentGrower:
+    def __init__(self, parent: dict[str, object]) -> None:
+        self.parent: Final = parent
+
+    def __repr__(self) -> str:
+        self.parent["added"] = 1  # mutable-ok: the hook value's repr grows the dict that holds it
+        return "_ParentGrower()"
+
+
+def test_responses_sse_chunk_keeps_printing_a_dict_whose_item_repr_adds_a_key() -> None:
+    parent: Final[dict[str, object]] = {"v": _AlternatingReprString("hook-canary")}
+    parent["m"] = _ParentGrower(parent)  # mutable-ok: the grower needs the dict it adds a key to
+
+    frame: Final = _format_responses_sse_chunk(chunk={"type": "response.output_text.delta", "meta": parent})
+
+    assert isinstance(frame, str)
+    assert "hook-canary" not in frame
+    assert json.loads(frame.removeprefix("data: "))["meta"] == {"v": "'***'", "m": "_ParentGrower()", "added": 1}
+
+
+class _StrFailsOnceDict(dict[str, str]):
+    failed: bool = False
+
+    def __str__(self) -> str:
+        if self.failed:
+            return dict.__repr__(self)
+        self.failed = True
+        raise RuntimeError("rig str fails on its first call")
+
+
+def test_responses_sse_chunk_raises_when_a_whole_proxy_fails_its_only_print() -> None:
+    with pytest.raises(RuntimeError, match="rig str fails on its first call"):
+        _format_responses_sse_chunk(chunk=MappingProxyType(_StrFailsOnceDict(_DELTA_STORAGE)))
+
+
 @pytest.mark.parametrize(
     ("make_underlying", "printed"),
     [
@@ -775,10 +883,10 @@ def _self_referencing_chunk() -> Mapping[str, object]:
     return chunk
 
 
-def test_responses_stream_frames_print_a_value_that_holds_itself_as_its_text() -> None:
+def test_responses_stream_frames_print_a_value_that_holds_itself_as_its_repr_marker() -> None:
     nested: Final = _self_referencing_chunk()
 
-    assert _responses_frame_payload(nested)["nested"] == {"type": "response.output_text.delta", "self": repr(nested)}
+    assert _responses_frame_payload(nested)["nested"] == {"type": "response.output_text.delta", "self": "{...}"}
 
 
 class _UnprintableValue:

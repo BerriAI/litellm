@@ -4,9 +4,10 @@ import re
 import time
 from collections import Counter, OrderedDict, defaultdict
 from collections.abc import Iterable, Iterator, Mapping, Sequence
+from contextlib import suppress
 from enum import Enum
 from http import HTTPStatus
-from itertools import chain, groupby, zip_longest
+from itertools import chain, groupby, islice, zip_longest
 from types import MappingProxyType
 from typing import Final
 
@@ -133,6 +134,14 @@ def _is_proxy(value: object) -> TypeIs[Mapping[object, object]]:  # guard-ok: ma
     return isinstance(value, MappingProxyType)
 
 
+def _is_defaultdict(value: object) -> TypeIs[defaultdict[object, object]]:  # guard-ok: dict items as object
+    return isinstance(value, defaultdict)
+
+
+def _proxied(proxy: Mapping[object, object]) -> object:
+    return gc.get_referents(proxy)[0]
+
+
 def _repr_prints_its_fields(model: BaseModel) -> bool:
     kind: Final = type(model)
     return kind.__repr__ is BaseModel.__repr__ and kind.__repr_str__ is BaseModel.__repr_str__
@@ -187,6 +196,16 @@ def _stored_items(value: Mapping[object, object]) -> Iterable[tuple[object, obje
     return dict[object, object].items(value) if isinstance(value, dict) else value.items()
 
 
+def _live_items(value: Mapping[object, object]) -> Iterator[tuple[object, object]]:
+    shown = 0  # rebind-ok: a repr that resizes its dict resumes after the items shown, the way dict's repr does
+    while True:
+        with suppress(RuntimeError):
+            for pair in islice(_stored_items(value), shown, None):
+                shown += 1
+                yield pair
+            return
+
+
 def _dumps_shown(kind: type[object], shown: Iterable[object], stored: Iterable[object]) -> bool:
     return _str_prints_every_item(kind) or any(left is not right for left, right in zip_longest(shown, stored))
 
@@ -210,14 +229,14 @@ def _shown_items(value: object, form: _BaseForm) -> Iterable[tuple[object, objec
     if not _repr_prints_every_item(type(value)):
         return None
     if isinstance(value, OrderedDict):
-        return OrderedDict[object, object].items(value)
+        return tuple(OrderedDict[object, object].items(value))
     if isinstance(value, Counter):
         return Counter[object].most_common(value)
-    return _stored_items(value)
+    return _live_items(value)
 
 
 def _proxy_items(proxy: Mapping[object, object], form: _BaseForm) -> Iterable[tuple[object, object]] | None:
-    mapping: Final[object] = gc.get_referents(proxy)[0]
+    mapping: Final = _proxied(proxy)
     if form is _BaseForm.DUMPED and not _str_prints_every_item(type(mapping)):
         return None
     return _shown_items(mapping, _BaseForm.PRINTED)
@@ -235,12 +254,42 @@ def _expansion(value: object, form: _BaseForm) -> tuple[Iterable[tuple[object, o
     return None
 
 
+def _walked_ids(value: object) -> frozenset[int]:
+    return frozenset((id(value), id(_proxied(value)))) if _is_proxy(value) else frozenset((id(value),))
+
+
+def _container_marker(value: object) -> object:
+    if isinstance(value, list):
+        return "[...]"
+    if isinstance(value, tuple):
+        return "(...)"
+    if isinstance(value, OrderedDict):
+        return "..."
+    if _is_defaultdict(value):
+        factory: Final = _text(value.default_factory, _BaseForm.PRINTED)
+        return factory if factory is _DROPPED else f"{type(value).__name__}({factory}, {{...}})"
+    return "{...}" if _is_dict(value) and not isinstance(value, Counter) else None
+
+
+def _cycle_marker(value: object) -> object:
+    if not _is_proxy(value):
+        return _container_marker(value)
+    inner: Final = _container_marker(_proxied(value))
+    return inner if inner is None or inner is _DROPPED else f"mappingproxy({inner})"
+
+
+def _cycle_text(value: object, form: _BaseForm) -> object:
+    marker: Final = _cycle_marker(value)
+    return _text(value, form) if marker is None else marker
+
+
 def _json_safe(value: object, form: _BaseForm, path: frozenset[int]) -> object:
     if value is None or type(value) in (str, int, float, bool):
         return value
-    if id(value) in path:
-        return _text(value, form)
-    inner_path: Final = path | frozenset((id(value),))
+    walked: Final = _walked_ids(value)
+    if not walked.isdisjoint(path):
+        return _cycle_text(value, form)
+    inner_path: Final = path | walked
     try:
         sequence: Final = _shown_sequence(value, form)
         if sequence is not None:
@@ -264,7 +313,8 @@ def _chunk_json(shown: object) -> str | None:
 
 def responses_chunk_data(chunk: object) -> str | None:
     if _is_proxy(chunk):
-        return _chunk_json(_json_safe(chunk, _BaseForm.DUMPED, frozenset()))
+        expandable: Final = _proxy_items(chunk, _BaseForm.DUMPED) is not None
+        return _chunk_json(_json_safe(chunk, _BaseForm.DUMPED, frozenset())) if expandable else None
     if not _is_dict(chunk) or not _format_prints_every_item(type(chunk)):
         return None
     return _chunk_json(_json_safe(chunk, _BaseForm.PRINTED, frozenset()))
@@ -401,20 +451,27 @@ def _names_an_error_object(event: _FramedEvent, lines: Sequence[str]) -> bool:
     return _is_dict(event.error) and bool(event.error) and _field_values(lines, "event")[-1:] == ("error",)
 
 
+def _block_data(lines: Sequence[str]) -> str:
+    return "\n".join(_field_values(lines, "data"))
+
+
 def _block_event(lines: Sequence[str]) -> _StreamEvent:
-    parsed: Final = _in_range_sequence(_parsed_event("\n".join(_field_values(lines, "data"))))
+    parsed: Final = _in_range_sequence(_parsed_event(_block_data(lines)))
     if parsed.type in _TERMINAL_EVENT_TYPES or not _names_an_error_object(parsed, lines):
         return parsed
     return parsed.model_copy(update={"type": "error"})
 
 
+def _blocks(frames: str) -> Iterator[tuple[str, ...]]:
+    return (tuple(lines) for filled, lines in groupby(SSE_LINE_BREAK.split(frames), key=bool) if filled)
+
+
 def _frame_events(frames: str) -> tuple[_StreamEvent, ...]:
-    blocks: Final = groupby(SSE_LINE_BREAK.split(frames), key=bool)
-    return tuple(_block_event(tuple(lines)) for filled, lines in blocks if filled)
+    return tuple(_block_event(lines) for lines in _blocks(frames))
 
 
-def frame_event_type(frame: str) -> str | None:
-    return next((event.type for event in _frame_events(frame)), None)
+def frame_error_data(frame: str) -> str | None:
+    return next((_block_data(lines) for lines in _blocks(frame) if _block_event(lines).type == "error"), None)
 
 
 class ResponsesStreamErrorState:

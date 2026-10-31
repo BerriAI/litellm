@@ -1614,6 +1614,74 @@ class TestBackgroundStreamingTerminalEvents:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
+        ("chunks", "expected_status", "expected_error", "expected_usage"),
+        [
+            (
+                (
+                    'data: {"type": "response.output_text.delta", "delta": "hi"}\n\n'
+                    'event: error\ndata: {"error": {"code": "400", "message": "output blocked by policy"}}\n\n',
+                ),
+                "failed",
+                {"code": "invalid_request_error", "message": "output blocked by policy"},
+                None,
+            ),
+            (
+                (
+                    'event: error\ndata: {"error": {"code": "400", "message": "output blocked by policy"}}\n\n',
+                    'data: {"type": "response.completed", "response": {"status": "completed", "usage": {"input_tokens": 3}}}\n\n',
+                ),
+                "completed",
+                None,
+                {"input_tokens": 3},
+            ),
+            (
+                (
+                    'data:{"type": "response.output_text.delta", "delta": "hi"}\n\n'
+                    'data: {"type": "response.completed", "response": {"status": "completed", "usage": {"input_tokens": 3}}}\n\n',
+                ),
+                "completed",
+                None,
+                {"input_tokens": 3},
+            ),
+        ],
+        ids=["error_frame_after_a_delta", "error_frame_then_completed", "unspaced_delta_then_completed"],
+    )
+    async def test_a_poll_stores_what_its_stream_ended_with(
+        self,
+        chunks: tuple[str, ...],
+        expected_status: str,
+        expected_error: Mapping[str, str] | None,
+        expected_usage: Mapping[str, int] | None,
+    ):
+        from litellm.proxy.response_polling.background_streaming import (
+            background_streaming_task,
+        )
+
+        async def _body_iterator():
+            yield b'data: {"type": "response.in_progress"}\n\n'
+            for chunk in chunks:
+                yield chunk.encode()
+
+        mock_response: Final = Mock()
+        mock_response.body_iterator = _body_iterator()
+        handler: Final = AsyncMock(spec=ResponsePollingHandler)
+        kwargs: Final = _make_background_streaming_kwargs("poll_stream_end", handler)
+
+        with patch(  # test-quality-ok: the processor is built inside the task, same idiom as the sibling tests
+            "litellm.proxy.response_polling.background_streaming.ProxyBaseLLMRequestProcessing"
+        ) as MockProcessor:
+            MockProcessor.return_value.base_process_llm_request = AsyncMock(
+                return_value=mock_response
+            )
+            await background_streaming_task(**kwargs)
+
+        final_call: Final = handler.update_state.call_args_list[-1]
+        assert final_call.kwargs["status"] == expected_status
+        assert final_call.kwargs["error"] == expected_error
+        assert final_call.kwargs["usage"] == expected_usage
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
         ("status_code", "body", "expected_error"),
         [
             (

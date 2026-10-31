@@ -24,7 +24,7 @@ from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 from litellm.proxy.common_request_processing import RESPONSES_SSE_FRAMING, ProxyBaseLLMRequestProcessing
 from litellm.proxy.common_utils.responses_stream_errors import (
     event_error_object,
-    frame_event_type,
+    frame_error_data,
     responses_error_fields,
     sse_error_object,
 )
@@ -224,6 +224,7 @@ async def background_streaming_task(
             None  # Will be set by response.completed/failed/incomplete/cancelled
         )
         terminal_error = None
+        frame_failure: Mapping[str, object] | None = None  # rebind-ok: set once by the first error frame
         _event_to_status: Final[Mapping[str, ResponsesAPIStatus]] = {
             "response.completed": "completed",
             "response.failed": "failed",
@@ -259,13 +260,20 @@ async def background_streaming_task(
                 if isinstance(chunk, bytes):
                     chunk = chunk.decode("utf-8")
 
+                if (
+                    isinstance(chunk, str)
+                    and frame_failure is None
+                    and (error_data := frame_error_data(chunk)) is not None
+                ):
+                    frame_failure = responses_error_fields(_event_error(_StreamEventParser.parse(error_data)))
+
                 if isinstance(chunk, str) and (chunk_data := _sse_frame_data(chunk)) is not None:
                     if chunk_data == "[DONE]":
                         break
 
                     try:
                         event: _StreamEvent = _StreamEventParser.parse(chunk_data)
-                        event_type = frame_event_type(chunk) or event.get("type", "")
+                        event_type = event.get("type", "")
 
                         # Process different event types based on OpenAI streaming spec
                         if event_type == "response.output_item.added":
@@ -351,10 +359,6 @@ async def background_streaming_task(
                                 status="in_progress",
                             )
 
-                        elif event_type == "error":
-                            terminal_status = "failed"
-                            terminal_error = responses_error_fields(_event_error(event))
-
                         elif event_type in (
                             "response.completed",
                             "response.failed",
@@ -412,8 +416,10 @@ async def background_streaming_task(
             await flush_state_if_needed(force=True)
 
         early_error: Final = _first_chunk_error(response)
-        final_error: Final = terminal_error if early_error is None else early_error
-        final_status: Final = "failed" if early_error is not None else terminal_status or "completed"
+        stream_failure: Final = frame_failure if terminal_status is None else None
+        failure: Final = stream_failure if early_error is None else early_error
+        final_error: Final = terminal_error if failure is None else failure
+        final_status: Final = (terminal_status or "completed") if failure is None else "failed"
 
         await polling_handler.update_state(
             polling_id=polling_id,
