@@ -141,6 +141,7 @@ class GenAIMapper:
         LiteLLM.GUARDRAIL_CONFIDENCE_SCORE: lambda d: d.confidence_score,
         LiteLLM.GUARDRAIL_RISK_SCORE: lambda d: d.risk_score,
         LiteLLM.GUARDRAIL_MASKED_ENTITY_COUNT: lambda d: d.masked_entity_count,
+        LiteLLM.GUARDRAIL_CHOICE_INDEX: lambda d: d.choice_index,
         LiteLLM.GUARDRAIL_DURATION: lambda d: d.duration,
         LiteLLM.GUARDRAIL_ID: lambda d: d.guardrail_id,
         LiteLLM.GUARDRAIL_POLICY_TEMPLATE: lambda d: d.policy_template,

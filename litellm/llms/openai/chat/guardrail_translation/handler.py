@@ -14,13 +14,16 @@ Pattern Overview:
 This pattern can be replicated for other message formats (e.g., Anthropic).
 """
 
+import copy
 import json
 import time
 import uuid
 from collections.abc import Iterator, Mapping, Sequence
+from itertools import chain
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Union, cast
 
+from pydantic import TypeAdapter
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 import litellm
@@ -50,7 +53,7 @@ from litellm.llms.base_llm.guardrail_translation.utils import (
     stream_item_items,
     unappliable_request_rewrite,
 )
-from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolParam
+from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolCallChunk, ChatCompletionToolParam
 from litellm.types.proxy.guardrails.guardrail_hooks.generic_guardrail_api import (
     coerce_stream_holdback_value,
 )
@@ -172,8 +175,8 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                 logging_obj=litellm_logging_obj,
             )
 
-            guardrailed_texts: Final = guardrailed_inputs.get("texts", [])
-            guardrailed_tool_calls: Final = guardrailed_inputs.get("tool_calls", [])
+            guardrailed_texts: Final = guardrailed_inputs.get("texts", ())
+            guardrailed_tool_calls: Final = guardrailed_inputs.get("tool_calls", ())
             guardrailed_tools: Final = guardrailed_inputs.get("tools")
             if guardrailed_tools is not None:
                 data["tools"] = (
@@ -392,7 +395,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: "LiteLLMLoggingObj | None" = None,
         user_api_key_dict: "UserAPIKeyAuth | None" = None,
-        request_data: dict | None = None,
+        request_data: dict[str, object] | None = None,
     ) -> ModelResponse:
         """
         Process output response by applying guardrails to text content.
@@ -443,9 +446,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
             # create a standalone dict (SDK / direct-call path).
             if request_data is None:
                 request_data = {"response": response}
-            else:
-                if "response" not in request_data:
-                    request_data["response"] = response
+            request_data.setdefault("response", response)
 
             self.merge_user_api_key_metadata_into_request(request_data, user_api_key_dict)
 
@@ -465,7 +466,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                 logging_obj=litellm_logging_obj,
             )
 
-            guardrailed_texts: Final = guardrailed_inputs.get("texts", [])
+            guardrailed_texts: Final = guardrailed_inputs.get("texts", ())
             returned_tool_calls: Final = guardrailed_inputs.get("tool_calls")
             guardrailed_tool_calls: Final[list[dict[str, object]]] = (
                 cast(list[dict[str, object]], returned_tool_calls)
@@ -499,7 +500,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: "LiteLLMLoggingObj | None" = None,
         user_api_key_dict: "UserAPIKeyAuth | None" = None,
-        request_data: dict | None = None,
+        request_data: dict[str, object] | None = None,
         stream_transform_sink: StreamTransformSink | None = None,
         deliver_ended_stream_rewrites: bool = False,
     ) -> list["ModelResponseStream"]:
@@ -555,14 +556,14 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: "LiteLLMLoggingObj | None",
         user_api_key_dict: "UserAPIKeyAuth | None",
-        request_data: dict | None,
+        request_data: dict[str, object] | None,
         deliver_ended_stream_rewrites: bool = False,
     ) -> list["ModelResponseStream"]:
         """Block-only streaming path: run the guardrail so an in-flight BLOCK can
         terminate the stream. Text rewrites are not propagated to the client here
         (see ``_process_streaming_transform`` for the incremental_diff path) unless
         ``deliver_ended_stream_rewrites`` opts the ended-stream branch in."""
-        has_stream_ended: Final = self._first_choice_has_finished(responses_so_far)
+        has_stream_ended: Final = deliver_ended_stream_rewrites or self._first_choice_has_finished(responses_so_far)
 
         if has_stream_ended:
             await self._process_ended_stream(
@@ -628,7 +629,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                 logging_obj=litellm_logging_obj,
             )
 
-            guardrailed_texts: Final = guardrailed_inputs.get("texts", [])
+            guardrailed_texts: Final = guardrailed_inputs.get("texts", ())
 
             # Step 4: Apply guardrailed text back to all streaming chunks
             # For each choice, replace the combined text across all chunks
@@ -661,13 +662,62 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         model_response: Final = self._rebuild_ended_stream_per_choice(responses_so_far, litellm_logging_obj)
         pre_guardrail_texts: Final = self._string_choice_contents(model_response)
         pre_guardrail_tool_calls: Final = self._function_tool_call_shapes(model_response)
-        await self.process_output_response(
-            response=model_response,
-            guardrail_to_apply=guardrail_to_apply,
-            litellm_logging_obj=litellm_logging_obj,
-            user_api_key_dict=user_api_key_dict,
-            request_data=request_data,
+        inspection_responses: Final = (
+            tuple(
+                model_response.model_copy(update=MappingProxyType({"choices": [choice]}))
+                for choice in model_response.choices
+            )
+            if pre_guardrail_tool_calls and len(model_response.choices) > 1
+            else (model_response,)
         )
+        from litellm.proxy.policy_engine.pipeline_executor import UndeliverableStreamRewrite
+
+        inspection_request_data: Final = request_data if request_data is not None else {}
+        missing: Final = object()
+        prior_response: Final = inspection_request_data.get("response", missing)
+        prior_responses: Final = inspection_request_data.get("responses", missing)
+        prior_choice_index: Final = inspection_request_data.get("guardrail_choice_index", missing)
+        undeliverable: UndeliverableStreamRewrite | None = None  # rebind-ok: keeps the first failure
+        try:
+            for inspection_response in inspection_responses:
+                inspection_request_data["response"] = inspection_response
+                inspection_request_data["guardrail_choice_index"] = (
+                    inspection_response.choices[0].index if len(inspection_response.choices) == 1 else None
+                )
+                inspection_request_data["responses"] = (
+                    [
+                        self._narrowed_to_choice(chunk, inspection_response.choices[0].index)
+                        for chunk in responses_so_far
+                    ]
+                    if len(inspection_response.choices) == 1
+                    else responses_so_far
+                )
+                try:
+                    await self.process_output_response(
+                        response=inspection_response,
+                        guardrail_to_apply=guardrail_to_apply,
+                        litellm_logging_obj=litellm_logging_obj,
+                        user_api_key_dict=user_api_key_dict,
+                        request_data=inspection_request_data,
+                    )
+                except UndeliverableStreamRewrite as exc:
+                    if undeliverable is None:
+                        undeliverable = exc
+        finally:
+            if prior_response is missing:
+                inspection_request_data.pop("response", None)
+            else:
+                inspection_request_data["response"] = prior_response
+            if prior_responses is missing:
+                inspection_request_data.pop("responses", None)
+            else:
+                inspection_request_data["responses"] = prior_responses
+            if prior_choice_index is missing:
+                inspection_request_data.pop("guardrail_choice_index", None)
+            else:
+                inspection_request_data["guardrail_choice_index"] = prior_choice_index
+        if undeliverable is not None:
+            raise undeliverable
         if not deliver_ended_stream_rewrites:
             return
         await self._write_ended_stream_text_rewrites(
@@ -681,6 +731,79 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
             pre_guardrail_tool_calls=pre_guardrail_tool_calls,
             guardrail_name=guardrail_to_apply.guardrail_name or "unknown",
         )
+
+    @staticmethod
+    def _streamed_choice_indices(responses_so_far: Sequence["ModelResponseStream"]) -> Iterator[int]:
+        for chunk in responses_so_far:
+            for choice in chunk.choices:
+                yield choice.index
+
+    @staticmethod
+    def _streamed_argument_fragments(
+        responses_so_far: Sequence["ModelResponseStream"],
+    ) -> Iterator[tuple[tuple[int, int], str]]:
+        for chunk in responses_so_far:
+            for choice in chunk.choices:
+                for call in choice.delta.tool_calls or ():
+                    arguments = getattr(getattr(call, "function", None), "arguments", None)
+                    yield (choice.index, call.index or 0), arguments if isinstance(arguments, str) else ""
+
+    @staticmethod
+    def _parses_as_json(arguments: str) -> bool:
+        if not arguments:
+            return False
+        try:
+            json.loads(arguments)
+        except ValueError:
+            return False
+        return True
+
+    @staticmethod
+    def _joined_streamed_arguments(
+        responses_so_far: Sequence["ModelResponseStream"],
+    ) -> Mapping[tuple[int, int], str]:
+        """The argument text streamed so far per (choice index, tool call index)."""
+        fragments: Final = tuple(OpenAIChatCompletionsHandler._streamed_argument_fragments(responses_so_far))
+        return MappingProxyType(
+            {
+                call: "".join(text for other, text in fragments if other == call)
+                for call in frozenset(call for call, _ in fragments)
+            }
+        )
+
+    @staticmethod
+    def _streamed_tool_arguments_are_complete(responses_so_far: Sequence["ModelResponseStream"]) -> bool:
+        """Whether every streamed tool call now carries arguments that parse as JSON.
+
+        A call that has announced itself but emitted no argument text yet is still in flight, so a
+        parallel call finishing first does not make the whole set complete.
+        """
+        joined: Final = OpenAIChatCompletionsHandler._joined_streamed_arguments(responses_so_far)
+        if not joined:
+            return False
+        return all(OpenAIChatCompletionsHandler._parses_as_json(arguments) for arguments in joined.values())
+
+    @staticmethod
+    def _without_unfinished_tool_calls(
+        assembled: "ModelResponse", responses_so_far: Sequence["ModelResponseStream"]
+    ) -> "ModelResponse":
+        """Copy of the rebuilt response without the calls still in flight when the stream ended.
+
+        Rebuilding gives a call that never streamed any argument text an empty JSON object, which
+        reads to a guardrail as a real call taking no arguments rather than an unfinished one.
+        """
+        joined: Final = OpenAIChatCompletionsHandler._joined_streamed_arguments(responses_so_far)
+        pruned: Final = copy.deepcopy(assembled)
+        for choice in pruned.choices:
+            streamed = choice.message.tool_calls or ()
+            kept = [
+                call
+                for position, call in enumerate(streamed)
+                if OpenAIChatCompletionsHandler._parses_as_json(joined.get((choice.index, position), ""))
+            ]
+            if len(kept) != len(streamed):
+                choice.message.tool_calls = kept or None
+        return pruned
 
     @staticmethod
     def _rebuild_ended_stream_per_choice(
@@ -763,7 +886,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: "LiteLLMLoggingObj | None",
         user_api_key_dict: "UserAPIKeyAuth | None",
-        request_data: dict | None,
+        request_data: dict[str, object] | None,
         sink: StreamTransformSink,
     ) -> None:
         """Run the guardrail over the raw accumulated text and report the
@@ -775,8 +898,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         """
         raw_by_index: Final = self._accumulate_string_content_by_choice_index(responses_so_far)
         if not raw_by_index:
-            sink.mutated_text_per_choice = {}
-            sink.holdback_per_choice = {}
+            sink.record(MappingProxyType({}), MappingProxyType({}))
             return
 
         # Fix #2 — sort by StreamingChoices.index so an n>1 stream that emits
@@ -788,18 +910,98 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         indices: Final = sorted(raw_by_index.keys())
         texts_to_check: Final = [raw_by_index[i] for i in indices]
 
-        if request_data is None:
-            request_data = {"responses": responses_so_far}
-        elif "responses" not in request_data:
-            request_data["responses"] = responses_so_far
-        self.merge_user_api_key_metadata_into_request(request_data, user_api_key_dict)
+        resolved_request_data: Final[dict[str, object]] = (
+            request_data if request_data is not None else {"responses": responses_so_far}
+        )
+        if "responses" not in resolved_request_data:
+            resolved_request_data["responses"] = responses_so_far
+        self.merge_user_api_key_metadata_into_request(resolved_request_data, user_api_key_dict)
 
         inputs: Final = GenericGuardrailAPIInputs(texts=texts_to_check)
+        if self._streamed_tool_call_fingerprints(responses_so_far):
+            stream_ended: Final = self._first_choice_has_finished(responses_so_far)
+            streamed_choice_indices: Final = frozenset(self._streamed_choice_indices(responses_so_far))
+            tool_arguments_complete: Final = self._streamed_tool_arguments_are_complete(responses_so_far)
+            assembled: Final = (
+                None
+                if len(streamed_choice_indices) == 1 and not stream_ended and not tool_arguments_complete
+                else self._rebuild_ended_stream_per_choice(responses_so_far, litellm_logging_obj)
+            )
+            if assembled is not None:
+                resolved_request_data["response"] = (
+                    assembled
+                    if tool_arguments_complete
+                    else self._without_unfinished_tool_calls(assembled, responses_so_far)
+                )
+            if assembled is not None and len(assembled.choices) > 1:
+                choice_rounds: Final = tuple(
+                    (
+                        choice,
+                        StreamTransformSink(),
+                        [self._narrowed_to_choice(chunk, choice.index) for chunk in responses_so_far],
+                    )
+                    for choice in assembled.choices
+                )
+                from litellm.proxy.policy_engine.pipeline_executor import (
+                    UndeliverableStreamRewrite,
+                )
+
+                transform_undeliverable: UndeliverableStreamRewrite | None = None  # rebind-ok: keeps the first failure
+                try:
+                    for choice, choice_sink, choice_chunks in choice_rounds:
+                        resolved_request_data["response"] = assembled.model_copy(
+                            update=MappingProxyType({"choices": [choice]})
+                        )
+                        resolved_request_data["responses"] = choice_chunks
+                        resolved_request_data["guardrail_choice_index"] = choice.index
+                        try:
+                            await self._process_streaming_transform(
+                                responses_so_far=choice_chunks,
+                                guardrail_to_apply=guardrail_to_apply,
+                                litellm_logging_obj=litellm_logging_obj,
+                                user_api_key_dict=user_api_key_dict,
+                                request_data=resolved_request_data,
+                                sink=choice_sink,
+                            )
+                        except UndeliverableStreamRewrite as exc:
+                            if transform_undeliverable is None:
+                                transform_undeliverable = exc
+                finally:
+                    resolved_request_data["response"] = assembled
+                    resolved_request_data["responses"] = responses_so_far
+                    resolved_request_data.pop("guardrail_choice_index", None)
+                if transform_undeliverable is not None:
+                    raise transform_undeliverable
+                merged_texts: Final = MappingProxyType(
+                    dict(
+                        chain.from_iterable(
+                            choice_sink.mutated_text_per_choice.items() for _, choice_sink, _ in choice_rounds
+                        )
+                    )
+                )
+                merged_holdback: Final = MappingProxyType(
+                    dict(
+                        chain.from_iterable(
+                            choice_sink.holdback_per_choice.items() for _, choice_sink, _ in choice_rounds
+                        )
+                    )
+                )
+                sink.record(merged_texts, merged_holdback)
+                return
+            if assembled is not None and tool_arguments_complete:
+                tool_calls: Final = chain.from_iterable(choice.message.tool_calls or () for choice in assembled.choices)
+                inputs["tool_calls"] = TypeAdapter(list[ChatCompletionToolCallChunk]).validate_python(
+                    tuple(
+                        MappingProxyType({"index": index, **converted})
+                        for index, tool_call in enumerate(tool_calls)
+                        if (converted := self._convert_tool_call_to_dict(tool_call)) is not None
+                    )
+                )
         if responses_so_far and getattr(responses_so_far[0], "model", None):
             inputs["model"] = responses_so_far[0].model
         guardrailed_inputs: Final = await guardrail_to_apply.apply_guardrail(
             inputs=inputs,
-            request_data=request_data,
+            request_data=resolved_request_data,
             input_type="response",
             logging_obj=litellm_logging_obj,
         )
@@ -819,13 +1021,14 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                 len(texts_to_check),
             )
 
-        holdback: Final = guardrailed_inputs.get("stream_holdback_chars") or []
-        sink.mutated_text_per_choice = {
-            idx: returned_texts[i] for i, idx in enumerate(indices) if i < len(returned_texts)
-        }
-        sink.holdback_per_choice = {
-            indices[i]: coerce_stream_holdback_value(holdback[i]) for i in range(len(indices)) if i < len(holdback)
-        }
+        holdback: Final = guardrailed_inputs.get("stream_holdback_chars") or ()
+        transformed_texts: Final = MappingProxyType(
+            {idx: returned_texts[i] for i, idx in enumerate(indices) if i < len(returned_texts)}
+        )
+        transformed_holdback: Final = MappingProxyType(
+            {indices[i]: coerce_stream_holdback_value(holdback[i]) for i in range(len(indices)) if i < len(holdback)}
+        )
+        sink.record(transformed_texts, transformed_holdback)
 
     def get_streaming_scan_key(self, responses_so_far: Sequence[object]) -> StreamingScanKey | None:
         chunks: Final = tuple(chunk for chunk in responses_so_far if isinstance(chunk, ModelResponseStream))
@@ -1142,20 +1345,18 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
     def _function_tool_call_fragments(
         responses_so_far: Sequence["ModelResponseStream"],
     ) -> tuple[tuple[ChatCompletionDeltaToolCall, ...], ...]:
-        """Group the stream's function tool-call fragments by their tool-call index, in
-        the index order ``stream_chunk_builder`` lists the rebuilt tool calls, keeping
-        only the indices the builder keeps (an id and a name somewhere in the stream)."""
         fragments: Final = tuple(
-            tool_call
+            (choice.index, tool_call)
             for response in responses_so_far
             for choice in response.choices
             for tool_call in choice.delta.tool_calls or ()
             if isinstance(tool_call, ChatCompletionDeltaToolCall)
         )
-        identified: Final = frozenset(fragment.index for fragment in fragments if fragment.id)
-        named: Final = frozenset(fragment.index for fragment in fragments if fragment.function.name)
+        identified: Final = frozenset((choice, fragment.index) for choice, fragment in fragments if fragment.id)
+        named: Final = frozenset((choice, fragment.index) for choice, fragment in fragments if fragment.function.name)
         return tuple(
-            tuple(fragment for fragment in fragments if fragment.index == index) for index in sorted(identified & named)
+            tuple(fragment for choice, fragment in fragments if (choice, fragment.index) == key)
+            for key in sorted(identified & named)
         )
 
     def _write_ended_stream_tool_call_rewrites(
@@ -1165,28 +1366,10 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         pre_guardrail_tool_calls: tuple[tuple[str | None, str], ...],
         guardrail_name: str,
     ) -> None:
-        """Write ended-stream guardrail tool-call rewrites back across the buffered
-        chunks: the rewritten name and full arguments land in the tool call's first
-        fragment and the arguments of its later fragments are blanked, mirroring the
-        text write-back. A rewrite on a stream carrying more than one distinct choice
-        index, or whose fragments do not line up with the rebuilt tool calls, is
-        reported as undeliverable, so the pipeline executor discards it and releases
-        the original chunks."""
         post_guardrail_tool_calls: Final = self._function_tool_call_shapes(guardrailed_response)
         if post_guardrail_tool_calls == pre_guardrail_tool_calls:
             return
-        stream_choice_indices: Final = frozenset(
-            choice.index for response in responses_so_far for choice in response.choices
-        )
         fragments_by_tool_call: Final = self._function_tool_call_fragments(responses_so_far)
-        if len(stream_choice_indices) != 1:
-            from litellm.proxy.policy_engine.pipeline_executor import UndeliverableStreamRewrite
-
-            raise UndeliverableStreamRewrite(
-                guardrail_name,
-                f"the stream carries {len(stream_choice_indices)} choices and tool-call rewrites are only written "
-                "back on single-choice streams",
-            )
         if len(fragments_by_tool_call) != len(post_guardrail_tool_calls):
             from litellm.proxy.policy_engine.pipeline_executor import UndeliverableStreamRewrite
 
@@ -1195,21 +1378,41 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                 f"the guardrail returned {len(post_guardrail_tool_calls)} tool calls for a stream that carried "
                 f"{len(fragments_by_tool_call)}",
             )
-        for before, (name, arguments), fragments in zip(
-            pre_guardrail_tool_calls, post_guardrail_tool_calls, fragments_by_tool_call
-        ):
-            if (name, arguments) == before:
-                continue
-            head, *tail = fragments
+        rewritten: Final = tuple(
+            (fragments, shape)
+            for before, shape, fragments in zip(
+                pre_guardrail_tool_calls, post_guardrail_tool_calls, fragments_by_tool_call
+            )
+            if shape != before
+        )
+        for fragments, (name, arguments) in rewritten:
+            head, last = fragments[0], fragments[-1]
             head.function.name = name
-            head.function.arguments = arguments
-            for fragment in tail:
-                fragment.function.arguments = ""
+            if head is not last:
+                head.function.arguments = ""
+            last.function.arguments = arguments
+        superseded: Final = chain.from_iterable(fragments[1:-1] for fragments, _ in rewritten)
+        self._drop_tool_call_fragments(responses_so_far, frozenset(id(fragment) for fragment in superseded))
+
+    @staticmethod
+    def _drop_tool_call_fragments(
+        responses_so_far: list["ModelResponseStream"],  # mutable-ok: strips the caller's buffered chunks in place
+        superseded: frozenset[int],
+    ) -> None:
+        """Remove fragments a rewrite superseded, so the stream carries no empty-argument tool deltas."""
+        if not superseded:
+            return
+        for response in responses_so_far:
+            for choice in response.choices:
+                present = choice.delta.tool_calls or ()
+                kept = [call for call in present if id(call) not in superseded]
+                if len(kept) != len(present):
+                    choice.delta.tool_calls = kept or None
 
     async def _apply_guardrail_responses_to_output_streaming(
         self,
         responses: list["ModelResponseStream"],
-        guardrailed_texts: list[str],
+        guardrailed_texts: Sequence[str],
         task_mappings: list[tuple[int, int | None]],
     ) -> None:
         """
@@ -1227,12 +1430,9 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         Override this method to customize how responses are applied to streaming responses.
         """
         # Build a mapping of what guardrailed text to use for each (choice_idx, content_idx)
-        guardrail_map: Final[dict[tuple[int, int | None], str]] = {}
-        for task_idx, guardrail_response in enumerate(guardrailed_texts):
-            mapping = task_mappings[task_idx]
-            choice_idx = cast(int, mapping[0])
-            content_idx_optional = cast(int | None, mapping[1])
-            guardrail_map[(choice_idx, content_idx_optional)] = guardrail_response
+        guardrail_map: Final = MappingProxyType(
+            {task_mappings[index]: text for index, text in enumerate(guardrailed_texts)}
+        )
 
         # Track which choices we've already set the guardrailed text for
         # Key: (choice_idx, content_idx), Value: boolean (True if already set)
@@ -1242,34 +1442,20 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         # choice by its index field: on n>1 streams a chunk usually carries one
         # choice at list position 0 whose index names the logical choice.
         for response in responses:
-            for choice in response.choices:
-                if isinstance(choice, litellm.StreamingChoices):
-                    content = choice.delta.content
-                elif isinstance(choice, litellm.Choices):
-                    content = choice.message.content
-                else:
-                    continue
-
+            for choice, message in (
+                (choice, choice.delta if isinstance(choice, StreamingChoices) else choice.message)
+                for choice in response.choices
+                if isinstance(choice, (StreamingChoices, Choices))
+            ):
+                content = message.content
                 if content is None:
                     continue
 
                 if isinstance(content, str):
-                    # String content
                     str_key: tuple[int, int | None] = (choice.index, None)
                     if str_key in guardrail_map:
-                        if str_key not in already_set:
-                            # First chunk - set the complete guardrailed text
-                            if isinstance(choice, litellm.StreamingChoices):
-                                choice.delta.content = guardrail_map[str_key]
-                            elif isinstance(choice, litellm.Choices):
-                                choice.message.content = guardrail_map[str_key]
-                            already_set[str_key] = True
-                        else:
-                            # Subsequent chunks - clear the content
-                            if isinstance(choice, litellm.StreamingChoices):
-                                choice.delta.content = ""
-                            elif isinstance(choice, litellm.Choices):
-                                choice.message.content = ""
+                        message.content = guardrail_map[str_key] if str_key not in already_set else ""
+                        already_set[str_key] = True
 
                 elif isinstance(content, list):
                     # List content - handle each content item

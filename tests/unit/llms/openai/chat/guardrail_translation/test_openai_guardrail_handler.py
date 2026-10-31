@@ -7,7 +7,7 @@ with guardrail transformations, including tool calls.
 
 import json
 from collections.abc import Mapping
-from typing import Any, Literal, Optional
+from typing import Any, Final, Literal, Optional
 
 import pytest
 
@@ -1146,10 +1146,12 @@ class TestOpenAIChatCompletionsHandlerStreamingOutput:
         )
 
         assert result is chunks
-        fragments = [chunk.choices[0].delta.tool_calls for chunk in chunks[:3]]
-        assert [fragment[0].function.arguments for fragment in fragments] == ['{"fruit": "PERSIMMON"}', "", ""]
-        assert fragments[0][0].function.name == "lookup_fruit"
-        assert fragments[0][0].id == "call_1"
+        fragments = [call for chunk in chunks for call in chunk.choices[0].delta.tool_calls or ()]
+        arguments = [fragment.function.arguments for fragment in fragments]
+        assert "".join(arguments) == '{"fruit": "PERSIMMON"}'
+        assert arguments.count("") <= 1
+        assert fragments[0].function.name == "lookup_fruit"
+        assert fragments[0].id == "call_1"
         assert chunks[3].choices[0].delta.tool_calls is None
         assert chunks[3].choices[0].finish_reason == "tool_calls"
 
@@ -1171,8 +1173,10 @@ class TestOpenAIChatCompletionsHandlerStreamingOutput:
             deliver_ended_stream_rewrites=True,
         )
 
-        fragments = [chunk.choices[0].delta.tool_calls[0] for chunk in chunks[:3]]
-        assert [fragment.function.name for fragment in fragments] == ["lookup_fruit_reviewed", None, None]
+        fragments = [call for chunk in chunks for call in chunk.choices[0].delta.tool_calls or ()]
+        assert [fragment.function.name for fragment in fragments if fragment.function.name] == [
+            "lookup_fruit_reviewed"
+        ]
         assert json.loads("".join(fragment.function.arguments for fragment in fragments)) == {"fruit": "persimmon"}
         assert fragments[0].id == "call_1"
 
@@ -1395,29 +1399,349 @@ class TestOpenAIChatCompletionsHandlerStreamingOutput:
         )
 
         assert [
-            (tool_call["id"], tool_call["function"]["arguments"])
-            for tool_call in guardrail.seen_inputs[-1]["tool_calls"]
-        ] == [("call_1", '{"fruit": "persimmon"}'), ("call_2", '{"fruit": "durian"}')]
+            [(tool_call["id"], tool_call["function"]["arguments"]) for tool_call in inputs["tool_calls"]]
+            for inputs in guardrail.seen_inputs
+        ] == [[("call_1", '{"fruit": "persimmon"}')], [("call_2", '{"fruit": "durian"}')]]
 
     @pytest.mark.asyncio
-    async def test_deliver_ended_stream_tool_call_rewrite_on_multi_choice_stream_fails_closed(self):
-        from litellm.proxy.policy_engine.pipeline_executor import UndeliverableStreamRewrite
+    @pytest.mark.parametrize("transform", [False, True])
+    async def test_each_choice_refreshes_shared_guardrail_response_context(self, transform: bool) -> None:
+        from fastapi import HTTPException
+        from litellm.llms.base_llm.guardrail_translation.base_translation import StreamTransformSink
+        from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
 
-        handler = OpenAIChatCompletionsHandler()
-        chunks = self._two_choice_tool_call_stream_chunks()
+        class ContextGuardrail(CustomGuardrail):
+            async def apply_guardrail(
+                self, inputs: GenericGuardrailAPIInputs, request_data: dict[str, object],
+                input_type: Literal["request", "response"], logging_obj: object = None,
+            ) -> GenericGuardrailAPIInputs:
+                response: Final = request_data["response"]
+                assert isinstance(response, ModelResponse)
+                request_data["visited_choices"] = (*request_data.get("visited_choices", ()), response.choices[0].index)
+                if response.choices[0].message.content == "forbidden":
+                    raise HTTPException(status_code=400, detail="later choice blocked")
+                return inputs
 
-        with pytest.raises(UndeliverableStreamRewrite, match="the stream carries 2 choices") as raised:
-            await handler.process_output_streaming_response(
-                responses_so_far=chunks,
-                guardrail_to_apply=MockGuardrail(guardrail_name="test"),
-                litellm_logging_obj=None,
-                deliver_ended_stream_rewrites=True,
+        chunks: Final = [ModelResponseStream(choices=[StreamingChoices(
+            index=index, delta=Delta(content=text, tool_calls=[{
+                "index": 0, "id": f"call_{index}", "type": "function",
+                "function": {"name": "contact", "arguments": "{}"},
+            }]), finish_reason="tool_calls",
+        ) for index, text in enumerate(("allowed", "forbidden"))])]
+        request_data: Final = {"metadata": {"trace": "retained"}}
+        with pytest.raises(HTTPException, match="later choice blocked"):
+            await OpenAIChatCompletionsHandler().process_output_streaming_response(
+                responses_so_far=chunks, guardrail_to_apply=ContextGuardrail(guardrail_name="context"),
+                request_data=request_data, deliver_ended_stream_rewrites=True,
+                stream_transform_sink=StreamTransformSink() if transform else None,
             )
+        assert request_data["visited_choices"] == (0, 1)
+        assert request_data["metadata"]["trace"] == "retained"
+        if transform:
+            assert request_data["responses"] is chunks
+            restored: Final = request_data["response"]
+            assert isinstance(restored, ModelResponse)
+            assert tuple(choice.index for choice in restored.choices) == (0, 1)
+        else:
+            assert "response" not in request_data
+            assert "responses" not in request_data
 
-        assert raised.value.guardrail_name == "test"
-        assert raised.value.reason == (
-            "the stream carries 2 choices and tool-call rewrites are only written back on single-choice streams"
+    @pytest.mark.asyncio
+    async def test_undeliverable_rewrite_still_inspects_the_remaining_choices(self) -> None:
+        """An undeliverable rewrite on one choice must not leave later choices uninspected.
+
+        The caller releases the original chunks when it catches UndeliverableStreamRewrite, so
+        bailing out of the loop would let a request with n > 1 pair a redactable choice with a
+        prohibited one and have the whole response delivered unchecked.
+        """
+        from litellm.proxy.policy_engine.pipeline_executor import UndeliverableStreamRewrite
+        from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+
+        class UndeliverableOnFirstChoice(CustomGuardrail):
+            async def apply_guardrail(
+                self, inputs: GenericGuardrailAPIInputs, request_data: dict[str, object],
+                input_type: Literal["request", "response"], logging_obj: object = None,
+            ) -> GenericGuardrailAPIInputs:
+                response: Final = request_data["response"]
+                assert isinstance(response, ModelResponse)
+                index: Final = response.choices[0].index
+                request_data["visited_choices"] = (*request_data.get("visited_choices", ()), index)
+                if index == 0:
+                    raise UndeliverableStreamRewrite("undeliverable", "tool_call_mismatch")
+                return inputs
+
+        chunks: Final = [ModelResponseStream(choices=[StreamingChoices(
+            index=index, delta=Delta(content=text, tool_calls=[{
+                "index": 0, "id": f"call_{index}", "type": "function",
+                "function": {"name": "contact", "arguments": "{}"},
+            }]), finish_reason="tool_calls",
+        ) for index, text in enumerate(("redacted", "prohibited"))])]
+        request_data: Final = {}
+        with pytest.raises(UndeliverableStreamRewrite):
+            await OpenAIChatCompletionsHandler().process_output_streaming_response(
+                responses_so_far=chunks, guardrail_to_apply=UndeliverableOnFirstChoice(guardrail_name="undeliverable"),
+                request_data=request_data, deliver_ended_stream_rewrites=True,
+            )
+        assert request_data["visited_choices"] == (0, 1)
+
+    @pytest.mark.asyncio
+    async def test_undeliverable_rewrite_in_transform_mode_still_inspects_remaining_choices(self) -> None:
+        """The transform path runs its own per-choice loop and needs the same rule."""
+        from litellm.llms.base_llm.guardrail_translation.base_translation import StreamTransformSink
+        from litellm.proxy.policy_engine.pipeline_executor import UndeliverableStreamRewrite
+        from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+
+        class UndeliverableOnFirstChoice(CustomGuardrail):
+            async def apply_guardrail(
+                self, inputs: GenericGuardrailAPIInputs, request_data: dict[str, object],
+                input_type: Literal["request", "response"], logging_obj: object = None,
+            ) -> GenericGuardrailAPIInputs:
+                response: Final = request_data["response"]
+                assert isinstance(response, ModelResponse)
+                index: Final = response.choices[0].index
+                request_data["visited_choices"] = (*request_data.get("visited_choices", ()), index)
+                if index == 0:
+                    raise UndeliverableStreamRewrite("undeliverable", "tool_call_mismatch")
+                return inputs
+
+        chunks: Final = [ModelResponseStream(choices=[StreamingChoices(
+            index=index, delta=Delta(content=text, tool_calls=[{
+                "index": 0, "id": f"call_{index}", "type": "function",
+                "function": {"name": "contact", "arguments": "{}"},
+            }]), finish_reason="tool_calls",
+        ) for index, text in enumerate(("redacted", "prohibited"))])]
+        request_data: Final = {}
+        with pytest.raises(UndeliverableStreamRewrite):
+            await OpenAIChatCompletionsHandler().process_output_streaming_response(
+                responses_so_far=chunks, guardrail_to_apply=UndeliverableOnFirstChoice(guardrail_name="undeliverable"),
+                request_data=request_data, deliver_ended_stream_rewrites=True,
+                stream_transform_sink=StreamTransformSink(),
+            )
+        assert request_data["visited_choices"] == (0, 1)
+
+    @pytest.mark.asyncio
+    async def test_buffered_stream_without_finish_reason_takes_the_ended_path(self) -> None:
+        """A buffered stream has no finish_reason yet, so the ended path must key off the opt-in.
+
+        Dropping ``deliver_ended_stream_rewrites`` from that condition leaves the buffered
+        caller on the in-flight path, where rewrites are never written back.
+        """
+        from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+
+        class PathProbe(CustomGuardrail):
+            saw_assembled_response: bool = False
+
+            async def apply_guardrail(
+                self, inputs: GenericGuardrailAPIInputs, request_data: dict[str, object],
+                input_type: Literal["request", "response"], logging_obj: object = None,
+            ) -> GenericGuardrailAPIInputs:
+                type(self).saw_assembled_response = isinstance(request_data.get("response"), ModelResponse)
+                return inputs
+
+        chunks: Final = [
+            ModelResponseStream(
+                choices=[StreamingChoices(index=0, delta=Delta(content="secret"), finish_reason=None)]
+            )
+        ]
+        assert OpenAIChatCompletionsHandler()._first_choice_has_finished(chunks) is False
+        await OpenAIChatCompletionsHandler().process_output_streaming_response(
+            responses_so_far=chunks,
+            guardrail_to_apply=PathProbe(guardrail_name="probe"),
+            litellm_logging_obj=None,
+            deliver_ended_stream_rewrites=True,
         )
+        assert PathProbe.saw_assembled_response is True
+
+    @pytest.mark.asyncio
+    async def test_diff_mode_keeps_each_choice_holdback_with_two_choices(self) -> None:
+        """The per-choice sinks are merged, so an n=2 diff round must keep both holdbacks.
+
+        Reporting an empty holdback here would release text the guardrail asked to withhold.
+        """
+        from litellm.llms.base_llm.guardrail_translation.base_translation import StreamTransformSink
+        from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+
+        class HoldingGuardrail(CustomGuardrail):
+            async def apply_guardrail(
+                self, inputs: GenericGuardrailAPIInputs, request_data: dict[str, object],
+                input_type: Literal["request", "response"], logging_obj: object = None,
+            ) -> GenericGuardrailAPIInputs:
+                texts: Final = inputs.get("texts") or ()
+                return {**inputs, "stream_holdback_chars": [len(text) for text in texts]}
+
+        chunks: Final = [ModelResponseStream(choices=[StreamingChoices(
+            index=index, delta=Delta(content=text, tool_calls=[{
+                "index": 0, "id": f"call_{index}", "type": "function",
+                "function": {"name": "contact", "arguments": "{}"},
+            }]), finish_reason="tool_calls",
+        ) for index, text in enumerate(("alpha", "bravo-long"))])]
+        sink: Final = StreamTransformSink()
+        await OpenAIChatCompletionsHandler().process_output_streaming_response(
+            responses_so_far=chunks,
+            guardrail_to_apply=HoldingGuardrail(guardrail_name="holding"),
+            litellm_logging_obj=None,
+            stream_transform_sink=sink,
+        )
+        assert sink.holdback_per_choice == {0: len("alpha"), 1: len("bravo-long")}
+
+    @pytest.mark.asyncio
+    async def test_diff_mode_withholds_tool_calls_until_their_arguments_are_complete(self) -> None:
+        """Mid-round the assembled arguments are a truncated JSON fragment, so they are not sent.
+
+        Sending them would hand the guardrail something like `{"ci`, which main never did.
+        """
+        from litellm.llms.base_llm.guardrail_translation.base_translation import StreamTransformSink
+        from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+
+        class RecordingGuardrail(CustomGuardrail):
+            seen: list[object] = []
+
+            async def apply_guardrail(
+                self, inputs: GenericGuardrailAPIInputs, request_data: dict[str, object],
+                input_type: Literal["request", "response"], logging_obj: object = None,
+            ) -> GenericGuardrailAPIInputs:
+                type(self).seen.append(inputs.get("tool_calls"))
+                return inputs
+
+        def chunk(text: str, arguments: str, finish_reason: str | None) -> ModelResponseStream:
+            return ModelResponseStream(choices=[StreamingChoices(
+                index=0, delta=Delta(content=text, tool_calls=[{
+                    "index": 0, "id": "call_0", "type": "function",
+                    "function": {"name": "weather", "arguments": arguments},
+                }]), finish_reason=finish_reason,
+            )])
+
+        RecordingGuardrail.seen = []
+        handler: Final = OpenAIChatCompletionsHandler()
+        guardrail: Final = RecordingGuardrail(guardrail_name="recording")
+        partial: Final = [chunk("looking", '{"ci', None)]
+        await handler.process_output_streaming_response(
+            responses_so_far=partial, guardrail_to_apply=guardrail,
+            litellm_logging_obj=None, stream_transform_sink=StreamTransformSink(),
+        )
+        assert RecordingGuardrail.seen == [None]
+
+        RecordingGuardrail.seen = []
+        complete: Final = [chunk("looking", '{"ci', None), chunk(" it up", 'ty": "Paris"}', "tool_calls")]
+        await handler.process_output_streaming_response(
+            responses_so_far=complete, guardrail_to_apply=guardrail,
+            litellm_logging_obj=None, stream_transform_sink=StreamTransformSink(),
+        )
+        sent: Final = RecordingGuardrail.seen[-1]
+        assert sent is not None
+        assert [call["function"]["arguments"] for call in sent] == ['{"city": "Paris"}']
+
+    @pytest.mark.asyncio
+    async def test_diff_mode_withholds_parallel_tool_calls_until_every_one_is_complete(self) -> None:
+        from litellm.llms.base_llm.guardrail_translation.base_translation import StreamTransformSink
+        from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+
+        class RecordingGuardrail(CustomGuardrail):
+            seen: list[object] = []
+
+            async def apply_guardrail(
+                self, inputs: GenericGuardrailAPIInputs, request_data: dict[str, object],
+                input_type: Literal["request", "response"], logging_obj: object = None,
+            ) -> GenericGuardrailAPIInputs:
+                type(self).seen.append(inputs.get("tool_calls"))
+                return inputs
+
+        def call(index: int, arguments: str) -> dict[str, object]:
+            return {
+                "index": index, "id": f"call_{index}", "type": "function",
+                "function": {"name": "weather", "arguments": arguments},
+            }
+
+        RecordingGuardrail.seen = []
+        handler: Final = OpenAIChatCompletionsHandler()
+        guardrail: Final = RecordingGuardrail(guardrail_name="recording")
+        one_still_empty: Final = [ModelResponseStream(choices=[StreamingChoices(
+            index=0, delta=Delta(content="looking", tool_calls=[call(0, '{"city": "Paris"}'), call(1, "")]),
+            finish_reason=None,
+        )])]
+        await handler.process_output_streaming_response(
+            responses_so_far=one_still_empty, guardrail_to_apply=guardrail,
+            litellm_logging_obj=None, stream_transform_sink=StreamTransformSink(),
+        )
+        assert RecordingGuardrail.seen == [None]
+
+        RecordingGuardrail.seen = []
+        both_complete: Final = [ModelResponseStream(choices=[StreamingChoices(
+            index=0,
+            delta=Delta(content="looking", tool_calls=[call(0, '{"city": "Paris"}'), call(1, '{"city": "Rome"}')]),
+            finish_reason="tool_calls",
+        )])]
+        await handler.process_output_streaming_response(
+            responses_so_far=both_complete, guardrail_to_apply=guardrail,
+            litellm_logging_obj=None, stream_transform_sink=StreamTransformSink(),
+        )
+        sent: Final = RecordingGuardrail.seen[-1]
+        assert sent is not None
+        assert [c["function"]["arguments"] for c in sent] == ['{"city": "Paris"}', '{"city": "Rome"}']
+
+    @pytest.mark.asyncio
+    async def test_an_unfinished_parallel_call_is_kept_out_of_what_the_guardrail_reads(self) -> None:
+        """A call that only announced its name must not reach the guardrail, by either route."""
+        from litellm.llms.base_llm.guardrail_translation.base_translation import StreamTransformSink
+        from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+
+        class RecordingGuardrail(CustomGuardrail):
+            seen_calls: list[object] = []
+            seen_response: list[object] = []
+
+            async def apply_guardrail(
+                self, inputs: GenericGuardrailAPIInputs, request_data: dict[str, object],
+                input_type: Literal["request", "response"], logging_obj: object = None,
+            ) -> GenericGuardrailAPIInputs:
+                type(self).seen_calls.append(inputs.get("tool_calls"))
+                type(self).seen_response.append(request_data.get("response"))
+                return inputs
+
+        def call(index: int, arguments: str) -> dict[str, object]:
+            return {
+                "index": index, "id": f"call_{index}", "type": "function",
+                "function": {"name": "weather", "arguments": arguments},
+            }
+
+        RecordingGuardrail.seen_calls = []
+        RecordingGuardrail.seen_response = []
+        handler: Final = OpenAIChatCompletionsHandler()
+        request_data: Final[dict[str, object]] = {}
+        ended_with_one_unfinished: Final = [ModelResponseStream(choices=[StreamingChoices(
+            index=0, delta=Delta(content="looking", tool_calls=[call(0, '{"city": "Paris"}'), call(1, "")]),
+            finish_reason="tool_calls",
+        )])]
+        await handler.process_output_streaming_response(
+            responses_so_far=ended_with_one_unfinished,
+            guardrail_to_apply=RecordingGuardrail(guardrail_name="recording"),
+            litellm_logging_obj=None, request_data=request_data,
+            stream_transform_sink=StreamTransformSink(),
+        )
+        assert RecordingGuardrail.seen_calls == [None]
+        inspected: Final = RecordingGuardrail.seen_response[-1]
+        arguments: Final = tuple(
+            tool_call.function.arguments
+            for choice in getattr(inspected, "choices", None) or ()
+            for tool_call in choice.message.tool_calls or ()
+        )
+        assert arguments == ('{"city": "Paris"}',)
+
+    @pytest.mark.asyncio
+    async def test_deliver_ended_stream_tool_rewrites_keep_choice_indices(self) -> None:
+        handler: Final = OpenAIChatCompletionsHandler()
+        chunks: Final = self._two_choice_tool_call_stream_chunks()
+        await handler.process_output_streaming_response(
+            responses_so_far=chunks,
+            guardrail_to_apply=MockGuardrail(guardrail_name="test"),
+            litellm_logging_obj=None,
+            deliver_ended_stream_rewrites=True,
+        )
+        arguments: Final = tuple(
+            "".join(call.function.arguments for chunk in chunks for choice in chunk.choices
+                    if choice.index == index for call in choice.delta.tool_calls or ())
+            for index in range(2)
+        )
+        assert arguments == ('{"fruit": "PERSIMMON"}', '{"fruit": "DURIAN"}')
 
     @pytest.mark.asyncio
     async def test_deliver_ended_stream_clean_multi_choice_stream_released_untouched(self):
