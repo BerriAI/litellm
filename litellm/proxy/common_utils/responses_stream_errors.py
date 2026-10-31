@@ -1,5 +1,6 @@
 import json
 import time
+from collections import Counter, OrderedDict, defaultdict
 from collections.abc import Iterable, Mapping, Sequence
 from enum import Enum
 from http import HTTPStatus
@@ -7,7 +8,7 @@ from types import MappingProxyType
 from typing import Final
 
 from pydantic import BaseModel, ConfigDict, ValidationError, field_validator
-from typing_extensions import TypeIs  # noqa: TID251  # exact-type checks keep subclasses out, isinstance cannot
+from typing_extensions import TypeIs  # noqa: TID251  # the guards narrow hook values to object items, isinstance cannot
 
 from litellm._logging import redact_internal_details_from_client_message
 from litellm._uuid import uuid
@@ -77,12 +78,19 @@ class _BaseForm(Enum):
     DUMPED = "dumped"
 
 
-def _is_plain_dict(value: object) -> TypeIs[Mapping[object, object]]:  # guard-ok: exact type check
-    return type(value) is dict
+def _prints_every_item(kind: type[object]) -> bool:
+    repr_owner: Final = next((owner for owner in kind.__mro__ if "__repr__" in owner.__dict__), object)
+    return kind.__str__ is object.__str__ and repr_owner in (dict, list, tuple, OrderedDict, defaultdict, Counter)
 
 
-def _is_plain_sequence(value: object) -> TypeIs[Sequence[object]]:  # guard-ok: exact type check
-    return type(value) in (list, tuple)
+def _is_shown_mapping(value: object) -> TypeIs[Mapping[object, object]]:  # guard-ok: narrows dicts to object items
+    kind: Final = type(value)
+    return isinstance(value, dict) and _prints_every_item(kind)
+
+
+def _is_shown_sequence(value: object) -> TypeIs[Sequence[object]]:  # guard-ok: narrows lists and tuples to object items
+    kind: Final = type(value)
+    return isinstance(value, (list, tuple)) and _prints_every_item(kind)
 
 
 def _is_proxy(value: object) -> TypeIs[Mapping[object, object]]:  # guard-ok: mappingproxy cannot be subclassed
@@ -93,13 +101,9 @@ def _prints_as_dict(proxy: Mapping[object, object]) -> bool:
     return repr(proxy) == f"mappingproxy({dict(proxy)!r})"
 
 
-def _prints_its_fields(model: BaseModel) -> bool:
+def _repr_prints_its_fields(model: BaseModel) -> bool:
     kind: Final = type(model)
-    return (
-        kind.__repr__ is BaseModel.__repr__
-        and kind.__str__ is BaseModel.__str__
-        and kind.__repr_str__ is BaseModel.__repr_str__
-    )
+    return kind.__repr__ is BaseModel.__repr__ and kind.__repr_str__ is BaseModel.__repr_str__
 
 
 def _str_skips_its_repr(model: BaseModel) -> bool:
@@ -140,11 +144,11 @@ def _json_key(key: object, form: _BaseForm) -> object:
 
 
 def _expansion(value: object, form: _BaseForm) -> tuple[Iterable[tuple[object, object]], _BaseForm] | None:
-    if _is_plain_dict(value):
+    if _is_shown_mapping(value):
         return value.items(), form
     if _is_proxy(value) and _prints_as_dict(value):
         return value.items(), _BaseForm.PRINTED
-    if isinstance(value, BaseModel) and _prints_its_fields(value):
+    if form is _BaseForm.PRINTED and isinstance(value, BaseModel) and _repr_prints_its_fields(value):
         return value.__repr_args__(), _BaseForm.PRINTED
     return None
 
@@ -156,7 +160,7 @@ def _json_safe(value: object, form: _BaseForm, path: frozenset[int]) -> object:
         return _text(value, form)
     inner_path: Final = path | frozenset((id(value),))
     try:
-        if _is_plain_sequence(value):
+        if _is_shown_sequence(value):
             shown_items: Final = [_json_safe(item, form, inner_path) for item in value]
             return [item for item in shown_items if item is not _DROPPED]
         expansion: Final = _expansion(value, form)
@@ -170,7 +174,7 @@ def _json_safe(value: object, form: _BaseForm, path: frozenset[int]) -> object:
 
 
 def responses_chunk_json(chunk: object) -> str | None:
-    if not _is_plain_dict(chunk) and not _is_proxy(chunk):
+    if not _is_shown_mapping(chunk) and not _is_proxy(chunk):
         return None
     shown: Final = _json_safe(chunk, _BaseForm.PRINTED, frozenset())
     return None if isinstance(shown, str) or shown is _DROPPED else json.dumps(shown)

@@ -18,6 +18,7 @@ from __future__ import annotations
 import asyncio
 import functools
 import json
+from collections import OrderedDict
 from collections.abc import AsyncIterator, Callable, Iterable, Mapping
 from datetime import datetime, timezone
 from enum import Enum
@@ -31,6 +32,7 @@ import pytest
 from fastapi import HTTPException, Response
 from fastapi.responses import JSONResponse, StreamingResponse
 from openai import APIError as OpenAIAPIError
+from openai.types.responses import ResponseOutputMessage, ResponseOutputText
 from pydantic import BaseModel, Field
 
 import litellm
@@ -333,6 +335,28 @@ def test_responses_error_event_never_shows_what_a_nested_value_hides_from_its_st
     assert "hook-canary" not in frame
 
 
+class _RigTuple(tuple[object, ...]):
+    pass
+
+
+@pytest.mark.parametrize(
+    "detail",
+    [
+        OrderedDict(member=_MaskedStrModel(token="hook-canary")),
+        _RigTuple((_MaskedStrModel(token="hook-canary"),)),
+        _HookOutputItem(id="msg_nested", type="message"),
+    ],
+    ids=["dict_subclass", "tuple_subclass", "model"],
+)
+def test_responses_error_event_sends_a_detail_the_way_base_json_dumps_did(detail: object) -> None:
+    frame: Final = ResponsesStreamErrorState().format_error(
+        {"message": "blocked", "provider_specific_fields": {"detail": detail}}
+    )
+
+    payload: Final = json.loads(frame.split("data: ", 1)[1])
+    assert payload["error"]["provider_specific_fields"]["detail"] == json.loads(json.dumps(detail, default=str))
+
+
 class _RigColor(Enum):
     RED = 1
 
@@ -404,6 +428,35 @@ def test_responses_sse_chunk_a_hook_dumped_from_an_event_streams_as_that_event(
 
     assert isinstance(frame, str)
     assert json.loads(frame.removeprefix("data: ")) == json.loads(_DUMPED_DELTA.model_dump_json())
+
+
+_COMPLETED_WITH_SDK_OUTPUT: Final = ResponseCompletedEvent(
+    type=ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
+    sequence_number=4,
+    response=ResponsesAPIResponse(
+        id="resp_1",
+        object="response",
+        created_at=0,
+        model="gpt-x",
+        status="completed",
+        output=[
+            ResponseOutputMessage(
+                id="msg_1",
+                type="message",
+                role="assistant",
+                status="completed",
+                content=[ResponseOutputText(type="output_text", text="hi", annotations=[])],
+            )
+        ],
+    ),
+)
+
+
+def test_responses_sse_chunk_a_hook_copied_from_an_event_streams_as_that_event() -> None:
+    frame: Final = _format_responses_sse_chunk(chunk=dict(_COMPLETED_WITH_SDK_OUTPUT))
+
+    assert isinstance(frame, str)
+    assert json.loads(frame.removeprefix("data: ")) == json.loads(_COMPLETED_WITH_SDK_OUTPUT.model_dump_json())
 
 
 @pytest.mark.parametrize("mapping", [dict, MappingProxyType], ids=["dict", "mapping_proxy"])
