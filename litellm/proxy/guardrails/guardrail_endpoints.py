@@ -9,15 +9,16 @@ import os
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from datetime import datetime, timezone
 from types import MappingProxyType, UnionType
-from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypeVar, Union, cast, get_args, get_origin
+from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypeAlias, TypeVar, Union, cast, get_args, get_origin
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel, TypeAdapter, ValidationError
+from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter, ValidationError
 
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
 from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.litellm_core_utils.core_helpers import get_metadata_variable_name_from_kwargs
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -60,6 +61,7 @@ from litellm.types.guardrails import (
     Guardrail,
     GuardrailEventHooks,
     GuardrailInfoResponse,
+    GuardrailResponseFormat,
     GuardrailUIAddGuardrailSettings,
     LakeraV2GuardrailConfigModel,
     ListGuardrailsResponse,
@@ -2350,13 +2352,56 @@ async def _run_test_guardrail(execute_guardrail: Callable[[], object], timeout: 
     return await await_with_timeout(raw_result, remaining, label="test")
 
 
-def _resolve_guardrail_input_type(active_guardrail: CustomGuardrail, input_type: str) -> Literal["request", "response"]:
+def _resolve_guardrail_input_type(
+    active_guardrail: CustomGuardrail, input_type: str, *, auto_detect: bool = True
+) -> Literal["request", "response"]:
     """Return the effective input_type, auto-upgrading to 'response' for post_call guardrails."""
-    if input_type == "request":
+    if input_type == "request" and auto_detect:
         hook: Final = getattr(active_guardrail, "event_hook", None)
         if hook == GuardrailEventHooks.post_call or hook == "post_call":
             return "response"
     return "response" if input_type == "response" else "request"
+
+
+class _NativeGuardrailRecord(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    guardrail_name: str | None = None
+    guardrail_response: JsonValue = None
+
+
+class _NativeGuardrailMetadata(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    standard_logging_guardrail_information: tuple[_NativeGuardrailRecord, ...] = ()
+
+
+_GuardrailResult: TypeAlias = Mapping[str, JsonValue] | Sequence[JsonValue]
+_GuardrailEndpointResponse: TypeAlias = ApplyGuardrailResponse | _GuardrailResult
+
+
+def _native_guardrail_records(request_data: Mapping[str, object]) -> tuple[_NativeGuardrailRecord, ...]:
+    metadata: Final = request_data.get(get_metadata_variable_name_from_kwargs(request_data))
+    return _NativeGuardrailMetadata.model_validate_json(
+        safe_dumps(metadata if metadata is not None else {})
+    ).standard_logging_guardrail_information
+
+
+def _native_guardrail_response(
+    request_data: Mapping[str, object], guardrail_name: str, previous_record_count: int
+) -> _GuardrailResult:
+    records: Final = _native_guardrail_records(request_data)[previous_record_count:]
+    results: Final = tuple(
+        record.guardrail_response
+        for record in records
+        if record.guardrail_name == guardrail_name and isinstance(record.guardrail_response, (dict, list))
+    )
+    if not results:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Guardrail '{guardrail_name}' did not report structured native findings.",
+        )
+    return results[0] if len(results) == 1 else results
 
 
 class _GuardrailLoggingObj(Protocol):
@@ -2389,9 +2434,9 @@ async def _emit_guardrail_success_logs(
     litellm_logging_obj: _GuardrailLoggingObj | None,
     data: dict,
     user_api_key_dict: UserAPIKeyAuth,
-    response: ApplyGuardrailResponse,
+    response: _GuardrailEndpointResponse,
     start_time: datetime,
-) -> ApplyGuardrailResponse:
+) -> _GuardrailEndpointResponse:
     """Fire proxy and LiteLLM success hooks after a successful guardrail run.
 
     Each hook is wrapped defensively so a callback failure never prevents the
@@ -2412,7 +2457,9 @@ async def _emit_guardrail_success_logs(
     # Build the logging payload after post_call_success_hook so that logged
     # data matches what the caller actually receives if the hook modified
     # the response.
-    response_for_logging: Final = {"response": response.model_dump(exclude_none=True)}
+    response_for_logging: Final = {
+        "response": response.model_dump(exclude_none=True) if isinstance(response, ApplyGuardrailResponse) else response
+    }
 
     if litellm_logging_obj is not None:
         end_time: Final = datetime.now(timezone.utc)
@@ -2429,8 +2476,8 @@ async def _emit_guardrail_success_logs(
     return response
 
 
-@router.post("/guardrails/apply_guardrail", response_model=ApplyGuardrailResponse)
-@router.post("/apply_guardrail", response_model=ApplyGuardrailResponse)
+@router.post("/guardrails/apply_guardrail", response_model=_GuardrailEndpointResponse)
+@router.post("/apply_guardrail", response_model=_GuardrailEndpointResponse)
 async def apply_guardrail(
     fastapi_request: Request,
     request: ApplyGuardrailRequest,
@@ -2495,18 +2542,29 @@ async def apply_guardrail(
         if litellm_logging_obj is not None:
             _patch_logging_obj_for_guardrail(litellm_logging_obj, request)
 
-        request_data: Final[dict] = {
+        request_data: Final[dict[str, object]] = {
             **({"messages": request.messages} if request.messages is not None else {}),
             **({"metadata": request.metadata} if request.metadata is not None else {}),
         }
-        _input_type: Final = _resolve_guardrail_input_type(active_guardrail, request.input_type)
+        previous_record_count: Final = (
+            len(_native_guardrail_records(request_data))
+            if request.response_format == GuardrailResponseFormat.NATIVE
+            else 0
+        )
+        _input_type: Final = _resolve_guardrail_input_type(
+            active_guardrail, request.input_type, auto_detect=request.response_format != GuardrailResponseFormat.NATIVE
+        )
         guardrailed_inputs: Final = await active_guardrail.apply_guardrail(
             inputs={"texts": [request.text]},
             request_data=request_data,
             input_type=_input_type,
         )
         response_text: Final = guardrailed_inputs.get("texts", [])
-        response = ApplyGuardrailResponse(response_text=response_text[0] if response_text else request.text)
+        response: Final[_GuardrailEndpointResponse] = (
+            _native_guardrail_response(request_data, request.guardrail_name, previous_record_count)
+            if request.response_format == GuardrailResponseFormat.NATIVE
+            else ApplyGuardrailResponse(response_text=response_text[0] if response_text else request.text)
+        )
     except Exception as e:
         if litellm_logging_obj is not None and not isinstance(e, HTTPException):
             try:
@@ -2537,7 +2595,7 @@ async def apply_guardrail(
         raise handle_exception_on_proxy(status_typed_proxy_exception(e) if isinstance(e, HTTPException) else e)
 
     # Success logging outside except so a hook error never triggers failure handlers.
-    response = await _emit_guardrail_success_logs(
+    logged_response: Final = await _emit_guardrail_success_logs(
         proxy_logging_obj=proxy_logging_obj,
         litellm_logging_obj=litellm_logging_obj,
         data=data,
@@ -2545,7 +2603,7 @@ async def apply_guardrail(
         response=response,
         start_time=start_time,
     )
-    return response
+    return logged_response
 
 
 # Usage (dashboard) endpoints: overview, detail, logs

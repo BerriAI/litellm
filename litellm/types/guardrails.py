@@ -1540,6 +1540,11 @@ class PresidioPerRequestConfig(LiteLLMBaseModel):
     entities: list[PiiEntityType] | None = None
 
 
+class GuardrailResponseFormat(Enum):
+    STANDARD = "standard"
+    NATIVE = "native"
+
+
 class ApplyGuardrailRequest(LiteLLMBaseModel):
     guardrail_name: str
     text: str
@@ -1548,6 +1553,7 @@ class ApplyGuardrailRequest(LiteLLMBaseModel):
     input_type: str = "request"
     messages: list[dict[str, object]] | None = None
     metadata: dict[str, object] | None = None
+    response_format: GuardrailResponseFormat = GuardrailResponseFormat.STANDARD
 
 
 class ApplyGuardrailResponse(LiteLLMBaseModel):

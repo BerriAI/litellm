@@ -26412,6 +26412,8 @@ export interface components {
             metadata?: {
                 [key: string]: unknown;
             } | null;
+            /** @default standard */
+            response_format: components["schemas"]["GuardrailResponseFormat"];
             /** Text */
             text: string;
         };
@@ -33499,6 +33501,11 @@ export interface components {
             /** @description Guardrail spend and unpriced units across all matching API keys */
             metrics: components["schemas"]["GuardrailSpendMetrics"];
         };
+        /**
+         * GuardrailResponseFormat
+         * @enum {string}
+         */
+        GuardrailResponseFormat: "standard" | "native";
         /** GuardrailSpendMetrics */
         GuardrailSpendMetrics: {
             /**
@@ -52895,7 +52902,9 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ApplyGuardrailResponse"];
+                    "application/json": components["schemas"]["ApplyGuardrailResponse"] | {
+                        [key: string]: components["schemas"]["JsonValue"];
+                    } | components["schemas"]["JsonValue"][];
                 };
             };
             /** @description Validation Error */
@@ -62022,7 +62031,9 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ApplyGuardrailResponse"];
+                    "application/json": components["schemas"]["ApplyGuardrailResponse"] | {
+                        [key: string]: components["schemas"]["JsonValue"];
+                    } | components["schemas"]["JsonValue"][];
                 };
             };
             /** @description Validation Error */
