@@ -21,6 +21,7 @@ from litellm._logging import verbose_logger
 from litellm.constants import DEFAULT_OCI_CHAT_MAX_TOKENS
 from litellm.litellm_core_utils.logging_utils import track_llm_api_timing
 from litellm.litellm_core_utils.prompt_templates.common_utils import messages_with_file_parts_as_image_urls
+from litellm.litellm_core_utils.reasoning_effort_capability import declared_reasoning_efforts_for_model
 from litellm.litellm_core_utils.reasoning_effort_utils import warn_dropped_reasoning
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.litellm_core_utils.url_utils import join_api_base
@@ -54,7 +55,6 @@ from litellm.llms.oci.common_utils import (
     sign_oci_request,
     validate_oci_environment,
 )
-from litellm.router_utils.reasoning_effort_capability import declared_reasoning_efforts_for_model
 from litellm.types.llms.oci import (
     CohereChatRequest,
     OCIChatRequestPayload,

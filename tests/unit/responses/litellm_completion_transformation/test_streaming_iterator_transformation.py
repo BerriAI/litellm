@@ -2009,8 +2009,20 @@ def _text_then_tool_call_chunks() -> tuple[ModelResponseStream, ...]:
         _reasoning_and_text_in_one_chunk,
         _reasoning_citation_then_tool_call_finishing_chunks,
         lambda: (_tool_call_chunk(), _chunk("", finish_reason="tool_calls")),
+        lambda: (_refusal_chunk("I can't "), _refusal_chunk("help."), _chunk("", finish_reason="stop")),
+        lambda: (_chunk("Sure. "), _refusal_chunk("I can't help."), _chunk("", finish_reason="stop")),
     ],
-    ids=["text", "long_text", "text_then_tool", "reasoning_then_text", "reasoning_and_text", "citation_tool", "tool"],
+    ids=[
+        "text",
+        "long_text",
+        "text_then_tool",
+        "reasoning_then_text",
+        "reasoning_and_text",
+        "citation_tool",
+        "tool",
+        "refusal",
+        "text_then_refusal",
+    ],
 )
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio
@@ -2028,3 +2040,41 @@ def test_bridged_events_answer_dict_reads_of_their_number():
     assert [event["sequence_number"] for event in events] == positions
     assert [event.get("sequence_number") for event in events] == positions
     assert all("sequence_number" in event for event in events)
+
+
+def _refusal_chunk(refusal: str, finish_reason: str | None = None) -> ModelResponseStream:
+    return ModelResponseStream(
+        id=CHAT_COMPLETION_ID,
+        created=1748575031,
+        model="gpt-5.5",
+        object="chat.completion.chunk",
+        choices=[
+            StreamingChoices(
+                index=0,
+                delta=Delta(role="assistant", content=None, refusal=refusal),
+                finish_reason=finish_reason,
+            )
+        ],
+    )
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_streamed_refusal_deltas_become_one_refusal_part_of_the_message(sync_mode: bool):
+    iterator: Final = _build_iterator(
+        [_refusal_chunk("I'm sorry, "), _refusal_chunk("I can't help with that."), _chunk("", finish_reason="stop")]
+    )
+
+    events: Final = await _collect_events(iterator, sync_mode)
+
+    parts_added: Final = [
+        event.model_dump()["part"] for event in events if event.type == ResponsesAPIStreamEvents.CONTENT_PART_ADDED
+    ]
+    refusal_done: Final = [event for event in events if event.type == ResponsesAPIStreamEvents.REFUSAL_DONE]
+    message_done: Final = [event.item for event in events if event.type == ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE]
+    finished: Final = events[-1]
+    expected_content: Final = [{"type": "refusal", "refusal": "I'm sorry, I can't help with that."}]
+    assert parts_added == [{"type": "refusal", "refusal": ""}]
+    assert [event.refusal for event in refusal_done] == [expected_content[0]["refusal"]]
+    assert [item.model_dump()["content"] for item in message_done] == [expected_content]
+    assert [item.model_dump()["content"] for item in finished.response.output] == [expected_content]
