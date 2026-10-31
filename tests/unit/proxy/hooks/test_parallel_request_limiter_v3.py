@@ -24,6 +24,7 @@ from litellm import Router
 from litellm.caching.caching import DualCache
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.constants import INTERNAL_CALL_ORIGIN_METADATA_KEY, RESPONSES_WEBSOCKET_CALL_ID_METADATA_KEY
+from litellm.exceptions import ServiceUnavailableError
 from litellm.integrations.custom_secret_manager import CustomSecretManager
 from litellm.litellm_core_utils import ptu_pricing
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -7924,6 +7925,22 @@ async def test_fail_closed_read_only_check_rejects_with_503_when_redis_counters_
 
     response = await _read_only_check(_handler_with_redis(_UnreachableRedis(), fail_closed=False), auth)
     assert response["overall_code"] == "OK"
+
+
+@pytest.mark.asyncio
+async def test_fail_closed_socket_turn_check_refuses_with_503_when_redis_counters_are_unreachable():
+    auth: Final = UserAPIKeyAuth(api_key=hash_token("sk-fail-closed-socket-turn"), tpm_limit=1000)
+
+    with pytest.raises(ServiceUnavailableError) as exc:
+        await _handler_with_redis(_UnreachableRedis(), fail_closed=True).enforce_token_limits_for_frame(
+            user_api_key_dict=auth, requested_model="gpt-5.4"
+        )
+    assert exc.value.status_code == 503
+    assert "fail_closed_rate_limit_enforcement" in str(exc.value)
+
+    await _handler_with_redis(_UnreachableRedis(), fail_closed=False).enforce_token_limits_for_frame(
+        user_api_key_dict=auth, requested_model="gpt-5.4"
+    )
 
 
 @pytest.mark.parametrize("stored_counter_value, expected_code", [(1, "OK"), (2, "OVER_LIMIT"), (3, "OVER_LIMIT")])

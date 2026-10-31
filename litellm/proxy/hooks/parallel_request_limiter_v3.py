@@ -49,6 +49,7 @@ from litellm.constants import (
     RESPONSES_WEBSOCKET_CALL_ID_METADATA_KEY,
 )
 from litellm.cost_calculator import get_usage_object
+from litellm.exceptions import ServiceUnavailableError
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.add_retry_fallback_headers import (
     ensure_response_additional_headers,
@@ -3045,9 +3046,17 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         tpm_windows: Final = _socket_turn_tpm_windows(
             (*descriptors, *(d for d in agent_windows if (d["key"], d["value"]) not in built_scopes))
         )
-        response: Final = await self.should_rate_limit(
-            tpm_windows, parent_otel_span=user_api_key_dict.parent_otel_span, read_only=True, skip_parallel_check=True
-        )
+        try:
+            response: Final = await self.should_rate_limit(
+                tpm_windows,
+                parent_otel_span=user_api_key_dict.parent_otel_span,
+                read_only=True,
+                skip_parallel_check=True,
+            )
+        except RateLimitUnverifiableError as unverifiable:
+            raise ServiceUnavailableError(
+                message=RATE_LIMIT_UNVERIFIABLE_MESSAGE, llm_provider="litellm_proxy", model=requested_model or ""
+            ) from unverifiable
         if response["overall_code"] == "OVER_LIMIT":
             self._handle_rate_limit_error(response, tpm_windows, requested_model)
 

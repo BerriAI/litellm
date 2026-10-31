@@ -38,7 +38,7 @@ from litellm.constants import (
     RESPONSES_WEBSOCKET_CALL_ID_METADATA_KEY,
     STREAM_SSE_DONE_STRING,
 )
-from litellm.exceptions import MidStreamFallbackError, RateLimitError
+from litellm.exceptions import MidStreamFallbackError, RateLimitError, ServiceUnavailableError
 from litellm.litellm_core_utils.asyncify import run_async_function
 from litellm.litellm_core_utils.core_helpers import (
     process_response_headers,
@@ -2205,16 +2205,18 @@ def turn_refusal_frame(refusal: RateLimitError) -> str:
     )
 
 
-def _turn_admission_error_frame(failure: Exception) -> str:
-    return json.dumps({"type": "error", "status": 500, "error": {"type": "server_error", "message": str(failure)}})
+def _turn_admission_error_frame(failure: Exception, status: int) -> str:
+    return json.dumps({"type": "error", "status": status, "error": {"type": "server_error", "message": str(failure)}})
 
 
 def _turn_rejection_frame(rejection: Exception) -> str:
     match rejection:
         case RateLimitError():
             return turn_refusal_frame(rejection)
+        case ServiceUnavailableError():
+            return _turn_admission_error_frame(rejection, rejection.status_code)
         case _:
-            return _turn_admission_error_frame(rejection)
+            return _turn_admission_error_frame(rejection, 500)
 
 
 RESPONSES_WS_LOGGED_EVENT_TYPES: Final = [

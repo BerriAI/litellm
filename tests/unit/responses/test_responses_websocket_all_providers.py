@@ -1627,6 +1627,19 @@ def _out_of_tokens() -> Exception:
     return RateLimitError(message="key is out of tokens", llm_provider="", model="")
 
 
+def _counters_unverifiable() -> Exception:
+    from litellm.exceptions import ServiceUnavailableError
+
+    return ServiceUnavailableError(message="counters could not be verified", llm_provider="litellm_proxy", model="")
+
+
+_TURN_REFUSALS: Final = pytest.mark.parametrize(
+    "refusal, refusal_frame",
+    [(_out_of_tokens(), (429, "rate_limit_exceeded")), (_counters_unverifiable(), (503, "server_error"))],
+    ids=["out-of-tokens", "counters-unverifiable"],
+)
+
+
 class _ClientSocket:
     """A client socket that, like Starlette's, stops receiving once the server closes it."""
 
@@ -2225,8 +2238,9 @@ class TestWebSocketTurnAdmission:
 
 
     @pytest.mark.asyncio
+    @_TURN_REFUSALS
     async def test_managed_socket_checks_token_limits_before_every_later_turn_and_marks_each_turn(
-        self, monkeypatch: pytest.MonkeyPatch
+        self, monkeypatch: pytest.MonkeyPatch, refusal: Exception, refusal_frame: tuple[int, str]
     ) -> None:
         import litellm
         from litellm.constants import RESPONSES_WEBSOCKET_CALL_ID_METADATA_KEY
@@ -2253,7 +2267,7 @@ class TestWebSocketTurnAdmission:
             return _empty()
 
         monkeypatch.setattr(litellm, "aresponses", fake_aresponses)
-        token_limits: Final = _TokenLimits(_out_of_tokens(), None)
+        token_limits: Final = _TokenLimits(refusal, None)
         monkeypatch.setattr(litellm, "callbacks", [token_limits])
         deployment_admission: Final = AsyncMock(return_value={})
         user_api_key_dict: Final = UserAPIKeyAuth(api_key="hashed-key", tpm_limit=1000)
@@ -2286,12 +2300,13 @@ class TestWebSocketTurnAdmission:
         assert [socket_call_id for _, socket_call_id in answered] == ["socket-open", "socket-open"]
         assert token_limits.checked == [(user_api_key_dict, "claude-ws"), (user_api_key_dict, "claude-ws")]
         assert deployment_admission.await_count == 1
-        assert [(status, error["type"]) for status, error in _errors(websocket)] == [(429, "rate_limit_exceeded")]
+        assert [(status, error["type"]) for status, error in _errors(websocket)] == [refusal_frame]
 
     @pytest.mark.asyncio
+    @_TURN_REFUSALS
     @pytest.mark.parametrize(
-        "keyed, forwarded, refusals",
-        [(True, ["one", "three"], [(429, "rate_limit_exceeded")]), (False, ["one", "two", "three"], [])],
+        "keyed, forwarded, refused",
+        [(True, ["one", "three"], True), (False, ["one", "two", "three"], False)],
         ids=["keyed", "keyless"],
     )
     async def test_native_socket_checks_token_limits_before_every_later_turn_of_a_keyed_socket(
@@ -2299,7 +2314,9 @@ class TestWebSocketTurnAdmission:
         monkeypatch: pytest.MonkeyPatch,
         keyed: bool,
         forwarded: list[str],
-        refusals: list[tuple[int, str]],
+        refused: bool,
+        refusal: Exception,
+        refusal_frame: tuple[int, str],
     ) -> None:
         from unittest.mock import patch
 
@@ -2307,7 +2324,7 @@ class TestWebSocketTurnAdmission:
         from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
         from litellm.proxy._types import UserAPIKeyAuth
 
-        token_limits: Final = _TokenLimits(_out_of_tokens(), None)
+        token_limits: Final = _TokenLimits(refusal, None)
         monkeypatch.setattr(litellm, "callbacks", [token_limits])
         provider: Final = _ProviderResponsesSocket()
         config: Final = MagicMock(spec=OpenAIResponsesAPIConfig)
@@ -2335,7 +2352,7 @@ class TestWebSocketTurnAdmission:
 
         assert [frame["input"] for frame in provider.sent] == forwarded
         assert token_limits.checked == ([(user_api_key_dict, "gpt-5.4")] * 2 if keyed else [])
-        assert [(status, error["type"]) for status, error in _errors(websocket)] == refusals
+        assert [(status, error["type"]) for status, error in _errors(websocket)] == ([refusal_frame] if refused else [])
 
     @pytest.mark.asyncio
     async def test_native_relay_runs_the_guardrail_before_the_deployment_counts_a_turn(self):
