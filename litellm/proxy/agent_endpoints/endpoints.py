@@ -22,6 +22,7 @@ from typing_extensions import ReadOnly, Required, assert_never
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import AGENT_HEALTH_CHECK_GATHER_TIMEOUT_SECONDS, AGENT_HEALTH_CHECK_TIMEOUT_SECONDS
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, iter_items
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.proxy._types import (
     CommonProxyErrors,
@@ -181,6 +182,31 @@ def _redact_agent_litellm_params_dict(
     return dict(parse_agent_litellm_params(redact_sensitive_agent_litellm_params(litellm_params)))
 
 
+def _non_admin_agent_card(
+    card: Mapping[str, object], proxy_url: str
+) -> dict[str, object]:  # mutable-ok: AgentResponse.agent_card_params requires a mutable dictionary
+    pointed_card: Final = point_agent_card_at_proxy(card, proxy_url)
+    interfaces: Final = pointed_card.get("supportedInterfaces")
+    interface_items: Final = (
+        tuple(iter_items(pointed_card.get("supportedInterfaces"))) if isinstance(interfaces, list) else ()
+    )
+    first_interface: Final[object] = interface_items[0] if interface_items else None
+    first_mapping: Final = as_str_mapping(first_interface)
+    proxy_interface: Final = (
+        {"supportedInterfaces": [{**first_mapping, "url": proxy_url}]}
+        if isinstance(first_interface, dict) and first_mapping is not None and first_mapping.get("url") == proxy_url
+        else {}
+    )
+    return {
+        **{
+            key: value
+            for key, value in pointed_card.items()
+            if key not in ("additionalInterfaces", "supportedInterfaces")
+        },
+        **proxy_interface,
+    }
+
+
 def _redact_sensitive_agent_fields(
     agents: Sequence[AgentResponse],
     *,
@@ -210,7 +236,7 @@ def _redact_sensitive_agent_fields(
             copy.kill_switch = None
             copy.identity = None
             if copy.agent_card_params:
-                copy.agent_card_params = point_agent_card_at_proxy(
+                copy.agent_card_params = _non_admin_agent_card(
                     copy.agent_card_params,
                     get_custom_url(request_base_url, route=f"a2a/{copy.agent_id}"),
                 )
