@@ -153,7 +153,7 @@ def _bridge_target(requested: _BridgeTarget, resolved: _BridgeTarget, custom_llm
         return requested
     return _BridgeTarget(
         model=f"{custom_llm_provider}/{resolved.model}",
-        api_key=requested.api_key or resolved.api_key,
+        api_key=requested.api_key if requested.api_base else requested.api_key or resolved.api_key,
         api_base=resolved.api_base,
     )
 

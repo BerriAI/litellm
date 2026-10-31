@@ -1279,10 +1279,15 @@ async def test_bridged_messages_send_the_deployments_key_for_azure_models_served
         {"azure_username": "user", "azure_password": "password", "client_id": "client"},
     ],
 )
-async def test_bridged_messages_keep_the_deployments_entra_credential_over_the_env_key(monkeypatch, entra_credential):
+@pytest.mark.parametrize("api_base_from_env", [False, True], ids=["api_base_in_params", "api_base_from_env"])
+async def test_bridged_messages_keep_the_deployments_entra_credential_over_the_env_key(
+    monkeypatch, entra_credential, api_base_from_env
+):
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setenv("AZURE_AI_API_BASE", "https://example-resource.cognitiveservices.azure.com")
     monkeypatch.setenv("AZURE_AI_API_KEY", "azure-env-key")
     litellm.in_memory_llm_clients_cache.flush_cache()
+    api_base: Final = {} if api_base_from_env else {"api_base": "https://example-resource.cognitiveservices.azure.com"}
 
     with (
         patch("litellm.llms.azure.common_utils.get_azure_ad_token_from_entra_id", return_value=lambda: "entra-token"),  # test-quality-ok: stands in for the Entra token fetch so the test can see which credential reaches Azure
@@ -1298,13 +1303,54 @@ async def test_bridged_messages_keep_the_deployments_entra_credential_over_the_e
                 max_tokens=100,
                 messages=[{"role": "user", "content": "ping"}],
                 model="azure_ai/gpt-6-luna",
-                api_base="https://example-resource.cognitiveservices.azure.com",
                 tools=[{"name": "get_weather", "input_schema": {"type": "object", "properties": {}}}],
+                **api_base,
                 **entra_credential,
             )
 
     assert {call.request.headers.get("authorization") for call in upstream.calls} == {"Bearer entra-token"}
     assert {call.request.headers.get("api-key") for call in upstream.calls} == {None}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "azure_env_credential, expected_header, expected_value",
+    [
+        ({"AZURE_API_KEY": "azure-env-key"}, "api-key", "azure-env-key"),
+        (
+            {"AZURE_TENANT_ID": "tenant", "AZURE_CLIENT_ID": "client", "AZURE_CLIENT_SECRET": "secret"},
+            "authorization",
+            "Bearer entra-token",
+        ),
+    ],
+    ids=["azure_env_key", "azure_env_entra"],
+)
+async def test_bridged_messages_keep_the_azure_env_credential_when_the_deployment_sets_its_own_api_base(
+    azure_env_credential, expected_header, expected_value, monkeypatch
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    for name in ("AZURE_API_KEY", "AZURE_OPENAI_API_KEY", "AZURE_AD_TOKEN", "AZURE_TENANT_ID", "AZURE_CLIENT_ID"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("AZURE_AI_API_KEY", "key-for-another-resource")
+    for name, value in azure_env_credential.items():
+        monkeypatch.setenv(name, value)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+
+    with (
+        patch("litellm.llms.azure.common_utils.get_azure_ad_token_from_entra_id", return_value=lambda: "entra-token"),  # test-quality-ok: stands in for the Entra token fetch so the test can see which credential reaches Azure
+        respx.mock(assert_all_called=True) as respx_mock,
+    ):
+        upstream: Final = respx_mock.route().mock(side_effect=httpx.ConnectError("cut at the wire"))
+        with pytest.raises(openai.APIError):
+            await litellm.anthropic.messages.acreate(
+                max_tokens=100,
+                messages=[{"role": "user", "content": "ping"}],
+                model="azure_ai/gpt-6-luna",
+                api_base="https://example-resource.cognitiveservices.azure.com",
+                tools=[{"name": "get_weather", "input_schema": {"type": "object", "properties": {}}}],
+            )
+
+    assert {call.request.headers.get(expected_header) for call in upstream.calls} == {expected_value}
 
 
 @pytest.mark.asyncio
