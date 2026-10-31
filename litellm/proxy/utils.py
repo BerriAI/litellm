@@ -160,10 +160,12 @@ from litellm.litellm_core_utils.core_helpers import (
     independent_snapshot,
     is_expected_client_error,
 )
+from litellm.litellm_core_utils.deployment_pricing import pricing_models
 from litellm.litellm_core_utils.duration_parser import get_budget_window_start
 from litellm.litellm_core_utils.env_utils import get_env_float, get_env_int
 from litellm.litellm_core_utils.litellm_logging import BilledRoundsDispatch, Logging, deployment_pricing_model_info
 from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
+from litellm.litellm_core_utils.routing_common_utils import resolve_model_group_alias
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.litellm_core_utils.served_output_texts import (
@@ -278,8 +280,6 @@ from litellm.repositories.user_repository import UserRepository
 from litellm.repositories.verification_token_repository import (
     VerificationTokenRepository,
 )
-from litellm.router_utils.common_utils import resolve_model_group_alias
-from litellm.router_utils.deployment_pricing import pricing_models
 from litellm.secret_managers.main import str_to_bool
 from litellm.types.integrations.slack_alerting import DEFAULT_ALERT_TYPES
 from litellm.types.llms.openai import ResponsesAPIResponse
@@ -3031,14 +3031,21 @@ class ProxyLogging:
         hook to consult, but it judges the payload the same way, so a proxy configured only with
         one of those still has something to say about every record.
         """
-        if request_metadata.get("_guardrail_pipelines"):
+        return self.request_has_pre_call_guardrails({"metadata": dict(request_metadata)}, event_type)
+
+    def request_has_pre_call_guardrails(
+        self,
+        request_data: Mapping[str, object],
+        event_type: GuardrailEventHooks = GuardrailEventHooks.pre_call,
+    ) -> bool:
+        if _policy_state_metadata(request_data).get("_guardrail_pipelines"):
             return True
         caps: Final = ProxyLogging.callback_capabilities()
         if caps.has_content_enforcer:
             return True
-        probe: Final = {"metadata": dict(request_metadata)}
         return any(
-            isinstance(callback, CustomGuardrail) and callback.should_run_guardrail(data=probe, event_type=event_type)
+            isinstance(callback, CustomGuardrail)
+            and callback.should_run_guardrail(data=request_data, event_type=event_type)
             for callback in caps.resolved_callbacks
         )
 
