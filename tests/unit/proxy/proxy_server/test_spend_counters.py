@@ -2019,8 +2019,6 @@ async def test_update_cache_still_adds_spend_to_the_others_when_one_cached_objec
     )
 
 
-# Overlapping cold starts of one spend counter inside one process add that process's cached spend once.
-
 _COLD_SEED_SOURCE: Final = "end_user_id:customer-1"
 
 
