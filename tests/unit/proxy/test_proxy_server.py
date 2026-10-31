@@ -4353,6 +4353,7 @@ async def test_capture_configuration_requires_restart_without_replacing_the_acti
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("sync_ack", [False, True])
 @pytest.mark.parametrize(
     ("path", "payload"),
     [
@@ -4362,23 +4363,16 @@ async def test_capture_configuration_requires_restart_without_replacing_the_acti
         ),
         ("/v1/responses", {"model": "openai/gpt-5-mini", "input": "hi", "background": True}),
         (
-            "/v1/ocr",
-            {
-                "model": "mistral/mistral-ocr-latest",
-                "document": {"type": "document_url", "document_url": "https://example.com/test.pdf"},
-            },
-        ),
-        (
             "/v1/messages",
             {"model": "openai/gpt-5-mini", "messages": [{"role": "user", "content": "hi"}], "max_tokens": 1},
         ),
     ],
 )
-async def test_sync_ack_policy_rejection_never_captures_usage(
+async def test_sync_ack_preserves_async_request_support(
+    sync_ack: bool,
     path: str,
     payload: dict[str, object],
     monkeypatch: pytest.MonkeyPatch,
-    caplog: pytest.LogCaptureFixture,
     respx_mock: respx.MockRouter,
 ) -> None:
     from fastapi import Request
@@ -4399,11 +4393,60 @@ async def test_sync_ack_policy_rejection_never_captures_usage(
     async def authorize(request: Request) -> UserAPIKeyAuth:
         return UserAPIKeyAuth(api_key="test-key", request_route=request.url.path)
 
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setenv("OPENAI_API_KEY", "test-provider-key")
+    upstream: Final = {
+        "id": "provider-result",
+        "object": "chat.completion",
+        "created": 1,
+        "model": "gpt-5-mini",
+        "choices": [{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": "hi"}}],
+        "usage": {"prompt_tokens": 3, "completion_tokens": 2, "total_tokens": 5},
+    }
+    if payload.get("stream"):
+        chunk: Final = {
+            **upstream,
+            "object": "chat.completion.chunk",
+            "choices": [{"index": 0, "finish_reason": "stop", "delta": {"role": "assistant", "content": "hi"}}],
+        }
+        respx_mock.post().respond(
+            200, text=f"data: {json.dumps(chunk)}\n\ndata: [DONE]\n\n", headers={"content-type": "text/event-stream"}
+        )
+    elif path == "/v1/responses":
+        respx_mock.post().respond(
+            200,
+            json={
+                "id": "resp_background",
+                "object": "response",
+                "created_at": 1,
+                "model": "gpt-5-mini",
+                "status": "in_progress",
+                "background": True,
+                "output": [],
+                "usage": None,
+            },
+        )
+    else:
+        respx_mock.post().respond(200, json=upstream)
     runtime: Final = UsageCaptureRuntime()
     monkeypatch.setattr(proxy_server, "usage_capture", runtime)
-    monkeypatch.setattr(proxy_server, "general_settings", {"accounting_sync_ack": True})
+    monkeypatch.setattr(
+        proxy_server, "general_settings", {"accounting_sync_ack": sync_ack, "accounting_sync_ack_timeout_seconds": 0}
+    )
     monkeypatch.setattr(proxy_server, "prisma_client", None)
-    monkeypatch.setattr(proxy_server, "llm_router", None)
+    monkeypatch.setattr(
+        proxy_server,
+        "llm_router",
+        litellm.Router(
+            model_list=[
+                {
+                    "model_name": payload["model"],
+                    "litellm_params": {"model": payload["model"], "api_key": "test-provider-key"},
+                }
+            ],
+            num_retries=0,
+        ),
+    )
     monkeypatch.setattr(proxy_server, "proxy_logging_obj", ProxyLogging(UserApiKeyCache()))
     monkeypatch.setattr(litellm, "callbacks", [ProxyDBLogger()])
     monkeypatch.setitem(proxy_server.app.dependency_overrides, proxy_server.user_api_key_auth, authorize)
@@ -4415,8 +4458,10 @@ async def test_sync_ack_policy_rejection_never_captures_usage(
             response: Final = await client.post(path, json=payload)
     finally:
         await runtime.stop(1)
-    assert response.status_code == 400
-    assert "accounting_sync_ack supports foreground non-stream" in response.text
-    assert len(respx_mock.calls) == 0
-    assert persisted.empty()
-    assert "Usage capture failed" not in caplog.text
+    assert response.status_code == 200, response.text
+    assert len(respx_mock.calls) == 1
+    if payload.get("background"):
+        assert response.json()["status"] == "in_progress"
+    else:
+        assert "hi" in response.text
+        assert not persisted.empty(), "Terminal usage must still be captured"

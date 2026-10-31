@@ -345,6 +345,37 @@ async def test_stream_capture_ignores_chunks_and_preserves_terminal_usage_extras
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("call_type", ["acompletion", "atext_completion", "aembedding", "aresponses"])
+async def test_supported_sync_ack_waits_for_commit(call_type: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy.spend_tracking.usage_capture import UsageCaptureRuntime, capture_proxy_response
+    from litellm.types.utils import ModelResponse, Usage
+
+    database: Final = CommitBarrier()
+    runtime: Final = UsageCaptureRuntime()
+    runtime.start(database.write, UsageCaptureSettings(batch_size=2))
+    monkeypatch.setattr(proxy_server, "usage_capture", runtime)
+    monkeypatch.setattr(proxy_server, "general_settings", {"accounting_sync_ack": True})
+    response: Final = asyncio.create_task(
+        capture_proxy_response(
+            _logger(call_type),
+            ModelResponse(id="provider", usage=Usage(prompt_tokens=3)),
+        )
+    )
+    try:
+        await database.entered.wait()
+        assert not response.done()
+        assert database.committed == ()
+        database.release.set()
+        await response
+        assert database.committed == ("caller:inbound", "provider")
+    finally:
+        database.release.set()
+        await runtime.stop(1)
+        await response
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("failure_policy", ["fail_closed", "log"])
 async def test_sync_ack_commit_failure_follows_response_policy(
     failure_policy: str, monkeypatch: pytest.MonkeyPatch
@@ -734,25 +765,47 @@ async def test_callback_overload_is_visible_without_suppressing_legacy_tracking(
     assert database.committed == ("one:inbound", "one")
 
 
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("call_type", "streaming", "background"),
-    [
-        ("acompletion", True, False),
-        ("aresponses", False, True),
-        ("arealtime", False, False),
-    ],
+    [("acompletion", True, False), ("aresponses", False, True), ("aocr", False, False)],
 )
-def test_strict_ack_rejects_requests_without_a_terminal_response_boundary(
-    call_type: str, streaming: bool, background: bool
+@pytest.mark.parametrize("overloaded", [False, True])
+async def test_async_capture_preserves_response_without_commit_ack(
+    call_type: str, streaming: bool, background: bool, overloaded: bool, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from fastapi import HTTPException
+    from litellm.proxy import proxy_server
+    from litellm.proxy.spend_tracking.usage_capture import UsageCaptureRuntime, capture_proxy_response
+    from litellm.types.utils import ModelResponse, Usage
 
-    from litellm.proxy.spend_tracking.usage_capture import validate_sync_ack_request
-
-    validate_sync_ack_request({}, call_type, streaming, background)
-    with pytest.raises(HTTPException) as error:
-        validate_sync_ack_request({"accounting_sync_ack": True}, call_type, streaming, background)
-    assert error.value.status_code == 400
+    database: Final = CommitBarrier()
+    runtime: Final = UsageCaptureRuntime()
+    runtime.start(database.write, UsageCaptureSettings(batch_size=2, max_pending_records=2))
+    monkeypatch.setattr(proxy_server, "usage_capture", runtime)
+    monkeypatch.setattr(
+        proxy_server,
+        "general_settings",
+        {
+            "accounting_sync_ack": True,
+            "accounting_sync_ack_timeout_seconds": 0,
+        },
+    )
+    meter: Final = runtime.meter
+    assert meter is not None
+    if overloaded:
+        meter.submit((_write("occupied-one"), _write("occupied-two")))
+    try:
+        await capture_proxy_response(
+            _logger(call_type, stream=streaming),
+            ModelResponse(id="provider", usage=Usage(prompt_tokens=3)),
+            background=background,
+        )
+        assert database.committed == ()
+        assert meter.pending_records == 2
+    finally:
+        database.release.set()
+        await runtime.stop(1)
+    assert database.committed == (("occupied-one", "occupied-two") if overloaded else ("caller:inbound", "provider"))
 
 
 @pytest.mark.asyncio

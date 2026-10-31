@@ -137,7 +137,7 @@ from litellm.proxy.route_llm_request import (
     route_request,
 )
 from litellm.proxy.spend_tracking.cost_finalization import finalize_proxy_response_cost, prepare_response_cost
-from litellm.proxy.spend_tracking.usage_capture import capture_proxy_response, validate_sync_ack_request
+from litellm.proxy.spend_tracking.usage_capture import capture_proxy_response
 from litellm.proxy.telemetry.request_context import bind_call_id as bind_telemetry_call_id
 from litellm.proxy.utils import (  # noqa: F401  # legacy module exports
     ProxyLogging,
@@ -2460,12 +2460,6 @@ class ProxyBaseLLMRequestProcessing:
         skip_guardrails: bool = False,
         logging_auth: UserAPIKeyAuth | None = None,
     ) -> tuple[dict, LiteLLMLoggingObj]:
-        validate_sync_ack_request(
-            _REQUEST_FIELDS.validate_python(general_settings),
-            route_type,
-            _REQUEST_FIELDS.validate_python(self.data).get("stream") is True,
-            _REQUEST_FIELDS.validate_python(self.data).get("background") is True,
-        )
         start_time: Final = datetime.now()  # start before calling guardrail hooks
 
         requested_model: Final = self.data.get("model")
@@ -3045,12 +3039,6 @@ class ProxyBaseLLMRequestProcessing:
         self._debug_log_request_payload()
 
         if skip_pre_call_logic:
-            validate_sync_ack_request(
-                general_settings,
-                route_type,
-                _REQUEST_FIELDS.validate_python(self.data).get("stream") is True,
-                _REQUEST_FIELDS.validate_python(self.data).get("background") is True,
-            )
             logging_obj = (
                 cast(  # cast-ok: pre-call processing stores Logging; preserve the existing duck-typed boundary
                     LiteLLMLoggingObj | None, _REQUEST_FIELDS.validate_python(self.data).get("litellm_logging_obj")
@@ -3379,7 +3367,9 @@ class ProxyBaseLLMRequestProcessing:
                     )
                 ),
             )
-            await capture_proxy_response(logging_obj, response)
+            await capture_proxy_response(
+                logging_obj, response, background=_REQUEST_FIELDS.validate_python(self.data).get("background") is True
+            )
         except (Exception, asyncio.CancelledError) as exc:
             _exception_raised = True
             if logging_obj.prepared_cost is not None:

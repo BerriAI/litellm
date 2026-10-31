@@ -37,10 +37,6 @@ if TYPE_CHECKING:
 from litellm.proxy.db.accounting_ledger import AccountingConflictError, UsageWrite
 
 
-class UnsupportedUsageAcknowledgementError(UsageCaptureError):
-    pass
-
-
 class UsageAcknowledgementError(UsageCaptureError):
     def __init__(self, cause: Exception) -> None:
         super().__init__("Usage persistence did not acknowledge commit")
@@ -509,21 +505,7 @@ def captured_callback_kwargs(
         return kwargs
 
 
-def validate_sync_ack_request(
-    settings: Mapping[str, object], call_type: str, streaming: bool, background: bool = False
-) -> None:
-    if settings.get("accounting_sync_ack") is not True:
-        return
-    if streaming or background or call_type not in {"acompletion", "atext_completion", "aembedding", "aresponses"}:
-        from fastapi import HTTPException
-
-        rejection: Final = UnsupportedUsageAcknowledgementError(
-            "accounting_sync_ack supports foreground non-stream chat, text, embedding and Responses requests"
-        )
-        raise HTTPException(400, str(rejection)) from rejection
-
-
-async def capture_proxy_response(logging_obj: object, response: object) -> None:
+async def capture_proxy_response(logging_obj: object, response: object, *, background: bool = False) -> None:
     from fastapi import HTTPException
 
     from litellm.litellm_core_utils.litellm_logging import Logging
@@ -534,10 +516,16 @@ async def capture_proxy_response(logging_obj: object, response: object) -> None:
 
     if usage_meter is None or not isinstance(logging_obj, Logging):
         return
+    sync_ack: Final = (
+        settings.get("accounting_sync_ack") is True
+        and logging_obj.stream is not True
+        and not background
+        and logging_obj.call_type in {"acompletion", "atext_completion", "aembedding", "aresponses"}
+    )
     try:
         capture_logging_usage(usage_meter, logging_obj, response, logging_obj.start_time, datetime.now(timezone.utc))
         captured: Final = logging_obj.model_call_details.get("_accounting_capture")
-        if settings.get("accounting_sync_ack") is True:
+        if sync_ack:
             if not isinstance(captured, CapturedUsage):
                 raise UsageCaptureError("Usage capture was not admitted")
             timeout: Final = TypeAdapter(float).validate_python(
@@ -546,10 +534,7 @@ async def capture_proxy_response(logging_obj: object, response: object) -> None:
             await asyncio.wait_for(asyncio.shield(captured.receipt), timeout=timeout)
     except Exception as error:  # noqa: BLE001  # the configured response policy owns every capture failure
         verbose_proxy_logger.exception("Usage capture failed before the response boundary")
-        if (
-            settings.get("accounting_sync_ack") is True
-            and settings.get("accounting_sync_ack_failure_policy", "fail_closed") == "fail_closed"
-        ):
+        if sync_ack and settings.get("accounting_sync_ack_failure_policy", "fail_closed") == "fail_closed":
             acknowledgement: Final = UsageAcknowledgementError(error)
             raise HTTPException(503, str(acknowledgement)) from acknowledgement
 

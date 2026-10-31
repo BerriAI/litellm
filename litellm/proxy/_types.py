@@ -2475,7 +2475,11 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         None,
         description="Opt-in durable usage capture. Legacy spend updates remain active. Requires local Prisma writes.",
     )
-    accounting_sync_ack: bool = Field(False, description="Wait for usage commit before a supported non-stream response")
+    accounting_sync_ack: bool = Field(
+        False,
+        description="Wait for usage commit on foreground non-stream chat, text, embedding and Responses requests. "
+        "Other requests remain supported with asynchronous usage capture.",
+    )
     accounting_sync_ack_timeout_seconds: float = Field(5.0, gt=0, description="Maximum response wait for usage commit")
     accounting_sync_ack_failure_policy: Literal["fail_closed", "log"] = Field(
         "fail_closed", description="Return 503 or log the persistence failure after the response wait expires"

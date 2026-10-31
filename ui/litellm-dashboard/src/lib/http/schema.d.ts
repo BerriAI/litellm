@@ -29946,7 +29946,7 @@ export interface components {
             accounting_capture?: components["schemas"]["UsageCaptureSettings"] | null;
             /**
              * Accounting Sync Ack
-             * @description Wait for usage commit before a supported non-stream response
+             * @description Wait for usage commit on foreground non-stream chat, text, embedding and Responses requests. Other requests remain supported with asynchronous usage capture.
              * @default false
              */
             accounting_sync_ack: boolean;
