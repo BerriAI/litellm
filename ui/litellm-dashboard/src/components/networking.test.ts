@@ -30,12 +30,13 @@ describe("member budget window requests", () => {
     const fetchMock = vi.fn().mockResolvedValue(Response.json({}));
     vi.stubGlobal("fetch", fetchMock);
     await Networking.teamMemberUpdateCall("test-session", "team", { user_id: "member", role: "user", budget_limits });
-    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({
+    const expected = {
       team_id: "team",
       user_id: "member",
       role: "user",
       budget_limits,
-    });
+    };
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual(expected);
   });
 
   it("should omit windows when an older caller does not supply them", async () => {
