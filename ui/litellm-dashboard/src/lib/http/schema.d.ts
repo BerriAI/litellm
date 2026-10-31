@@ -37086,6 +37086,11 @@ export interface components {
              */
             fail_on_error: boolean | null;
             /**
+             * File Checkpoint Id
+             * @description File-checkpoint ID for the Ovalix Tracker service (falls back to pre/post).
+             */
+            file_checkpoint_id?: string | null;
+            /**
              * File Guardrail Timeout
              * @description HTTP timeout in seconds for checking attached files. Default: 10.
              */
