@@ -3855,8 +3855,12 @@ def _socket_with_tpm_limited_tag() -> None:
     )
 
 
-def _handler_with_socket_tag_limit(local_cache: DualCache) -> PROXY_MaxParallelRequestsHandler_v3:
-    resolver, _ = _static_tag_limits({_SOCKET_TURN_TAG: TagRateLimit(rpm_limit=None, tpm_limit=_SOCKET_TURN_TPM_LIMIT)})
+def _handler_with_socket_tag_limit(
+    local_cache: DualCache, tag_tpm_limit: int | None
+) -> PROXY_MaxParallelRequestsHandler_v3:
+    resolver, _ = _static_tag_limits(
+        {} if tag_tpm_limit is None else {_SOCKET_TURN_TAG: TagRateLimit(rpm_limit=None, tpm_limit=tag_tpm_limit)}
+    )
     return _PROXY_MaxParallelRequestsHandler(
         internal_usage_cache=InternalUsageCache(local_cache), tag_rate_limit_resolver=resolver
     )
@@ -3864,27 +3868,32 @@ def _handler_with_socket_tag_limit(local_cache: DualCache) -> PROXY_MaxParallelR
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "auth_limits",
+    ("auth_limits", "tag_tpm_limit"),
     [
-        {"tpm_limit": _SOCKET_TURN_TPM_LIMIT},
-        {"team_id": "team-ws", "team_tpm_limit": _SOCKET_TURN_TPM_LIMIT},
-        {"user_id": "user-ws", "user_tpm_limit": _SOCKET_TURN_TPM_LIMIT},
-        {},
+        ({"tpm_limit": _SOCKET_TURN_TPM_LIMIT}, None),
+        ({"team_id": "team-ws", "team_tpm_limit": _SOCKET_TURN_TPM_LIMIT}, None),
+        ({"user_id": "user-ws", "user_tpm_limit": _SOCKET_TURN_TPM_LIMIT}, None),
+        ({"org_id": "org-ws", "organization_tpm_limit": _SOCKET_TURN_TPM_LIMIT}, None),
+        ({"team_id": "team-ws", "user_id": "user-ws", "team_member_tpm_limit": _SOCKET_TURN_TPM_LIMIT}, None),
+        ({"end_user_id": "end-user-ws", "end_user_tpm_limit": _SOCKET_TURN_TPM_LIMIT}, None),
+        ({}, _SOCKET_TURN_TPM_LIMIT),
     ],
-    ids=["key", "team", "user", "tag"],
+    ids=["key", "team", "user", "org", "team-member", "end-user", "tag"],
 )
 async def test_a_later_socket_turn_is_refused_once_a_tpm_window_it_counts_toward_has_no_tokens_left_v3(
-    auth_limits: dict[str, object],
+    auth_limits: dict[str, object], tag_tpm_limit: int | None
 ) -> None:
     api_key: Final = hash_token("sk-socket-turn-check")
     local_cache: Final = DualCache()
-    handler: Final = _handler_with_socket_tag_limit(local_cache)
+    handler: Final = _handler_with_socket_tag_limit(local_cache, tag_tpm_limit)
     _socket_with_tpm_limited_tag()
     user_api_key_dict: Final = UserAPIKeyAuth(api_key=api_key, **auth_limits)
     turn_metadata: Final = {
         "user_api_key_hash": api_key,
         "user_api_key_team_id": "team-ws",
         "user_api_key_user_id": "user-ws",
+        "user_api_key_org_id": "org-ws",
+        "user_api_key_end_user_id": "end-user-ws",
     }
 
     async def log_turn(call_id: str) -> None:
