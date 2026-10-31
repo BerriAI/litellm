@@ -120,3 +120,102 @@ async def test_post_call_block_names_the_blocking_guardrail_in_applied_guardrail
             data=data, response=MagicMock(), user_api_key_dict=make_user_api_key_auth()
         )
     assert data["metadata"]["applied_guardrails"] == ["passer", "blocker"]
+
+
+def _vllm_chat_response(content: str) -> litellm.ModelResponse:
+    from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
+        convert_to_model_response_object,
+    )
+
+    return convert_to_model_response_object(
+        response_object={
+            "id": "chatcmpl-vllm",
+            "object": "chat.completion",
+            "created": 1,
+            "model": "Qwen/Qwen3-0.6B",
+            "choices": [
+                {
+                    "index": 0,
+                    "finish_reason": "stop",
+                    "token_ids": [785, 6722, 315, 9625, 374, 12095, 13],
+                    "message": {"role": "assistant", "content": content},
+                }
+            ],
+            "usage": {"prompt_tokens": 5, "completion_tokens": 7, "total_tokens": 12},
+        },
+        model_response_object=litellm.ModelResponse(),
+    )
+
+
+def _vllm_text_completion_response(text: str) -> litellm.TextCompletionResponse:
+    return litellm.TextCompletionResponse(
+        id="cmpl-vllm",
+        object="text_completion",
+        created=1,
+        model="Qwen/Qwen3-0.6B",
+        choices=[{"index": 0, "text": text, "finish_reason": "length", "logprobs": None, "token_ids": [12095, 13]}],
+        usage={"prompt_tokens": 5, "completion_tokens": 2, "total_tokens": 7},
+    )
+
+
+def _chat_token_ids(response: litellm.ModelResponse) -> object:
+    return response.choices[0].provider_specific_fields["token_ids"]
+
+
+def _text_token_ids(response: litellm.TextCompletionResponse) -> object:
+    return response.choices[0].token_ids
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("response", "data", "token_ids_of", "kept"),
+    [
+        (
+            _vllm_chat_response("The capital of France is Paris."),
+            {"model": "m", "messages": [{"role": "user", "content": "capital of France?"}]},
+            _chat_token_ids,
+            None,
+        ),
+        (
+            _vllm_chat_response("The capital of France is Lyon."),
+            {"model": "m", "messages": [{"role": "user", "content": "capital of France?"}]},
+            _chat_token_ids,
+            [785, 6722, 315, 9625, 374, 12095, 13],
+        ),
+        (
+            _vllm_text_completion_response(" Paris."),
+            {"model": "m", "prompt": "The capital of France is"},
+            _text_token_ids,
+            None,
+        ),
+        (
+            _vllm_text_completion_response(" Lyon."),
+            {"model": "m", "prompt": "The capital of France is"},
+            _text_token_ids,
+            [12095, 13],
+        ),
+    ],
+    ids=["chat-masked", "chat-untouched", "completion-masked", "completion-untouched"],
+)
+async def test_post_call_success_hook_drops_token_ids_only_from_choices_a_guardrail_rewrote(
+    proxy_logging, make_user_api_key_auth, monkeypatch, response, data, token_ids_of, kept
+):
+    from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.content_filter import (
+        ContentFilterGuardrail,
+    )
+    from litellm.types.guardrails import BlockedWord, ContentFilterAction
+
+    mask_paris = ContentFilterGuardrail(
+        guardrail_name="mask-paris",
+        blocked_words=[BlockedWord(keyword="Paris", action=ContentFilterAction.MASK)],
+        event_hook=GuardrailEventHooks.post_call,
+        default_on=True,
+    )
+    monkeypatch.setattr(litellm, "callbacks", [mask_paris])
+
+    served = await proxy_logging.post_call_success_hook(
+        data=data, response=response, user_api_key_dict=make_user_api_key_auth()
+    )
+
+    assert served is response
+    assert token_ids_of(served) == kept

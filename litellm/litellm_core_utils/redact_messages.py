@@ -227,6 +227,19 @@ def _redact_provider_specific_fields(message: object) -> None:
         setattr(message, "provider_specific_fields", _redacted_provider_specific_fields(fields))  # noqa: B010  # typed as object
 
 
+def _drop_provider_specific_token_ids(holder: object) -> None:
+    fields: Final = _as_mapping(getattr(holder, "provider_specific_fields", None))
+    if fields is not None and fields.get("token_ids") is not None:
+        setattr(holder, "provider_specific_fields", {**fields, "token_ids": None})  # noqa: B010  # typed as object
+
+
+def drop_token_ids(choice: object) -> None:
+    if getattr(choice, "token_ids", None) is not None:
+        setattr(choice, "token_ids", None)  # noqa: B010  # pydantic extra, not a declared field
+    for holder in (choice, getattr(choice, "delta", None), getattr(choice, "message", None)):
+        _drop_provider_specific_token_ids(holder)
+
+
 def _redact_provider_specific_fields_dict(choice: Mapping[str, object]) -> None:
     for message in (choice.get("message"), choice.get("delta")):
         if (

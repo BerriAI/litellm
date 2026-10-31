@@ -164,6 +164,7 @@ from litellm.litellm_core_utils.duration_parser import get_budget_window_start
 from litellm.litellm_core_utils.env_utils import get_env_float, get_env_int
 from litellm.litellm_core_utils.litellm_logging import BilledRoundsDispatch, Logging, deployment_pricing_model_info
 from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
+from litellm.litellm_core_utils.redact_messages import drop_token_ids
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.litellm_core_utils.served_output_texts import (
@@ -172,6 +173,7 @@ from litellm.litellm_core_utils.served_output_texts import (
 )
 from litellm.litellm_core_utils.token_counter import offload_token_count, usage_tokenizer_model
 from litellm.llms import load_guardrail_translation_mappings
+from litellm.llms.base_llm.guardrail_translation.utils import stream_item_field, stream_item_items
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.proxy._types import (
     AlertType,
@@ -700,6 +702,34 @@ def _pipeline_step_streams_live(step: "PipelineStep") -> bool:
     if callback is None or callback.mask_response_content:
         return False
     return not unified_guardrail.resolve_streaming_flag(callback, "streaming_buffer_until_moderated", True)
+
+
+def _choice_output(choice: object) -> tuple[object, object]:
+    message: Final = getattr(choice, "message", None)
+    return (message.model_dump() if isinstance(message, BaseModel) else message, getattr(choice, "text", None))
+
+
+def _carries_token_ids(choice: object) -> bool:
+    return getattr(choice, "token_ids", None) is not None or any(
+        stream_item_field(stream_item_field(holder, "provider_specific_fields"), "token_ids") is not None
+        for holder in (choice, getattr(choice, "message", None))
+    )
+
+
+def _token_id_choice_outputs(response: object) -> Mapping[int, tuple[object, object]]:
+    return MappingProxyType(
+        {
+            index: _choice_output(choice)
+            for index, choice in enumerate(stream_item_items(response, "choices"))
+            if _carries_token_ids(choice)
+        }
+    )
+
+
+def _drop_token_ids_of_rewritten_choices(response: object, outputs_before: Mapping[int, tuple[object, object]]) -> None:
+    for index, choice in enumerate(stream_item_items(response, "choices")):
+        if index in outputs_before and _choice_output(choice) != outputs_before[index]:
+            drop_token_ids(choice)
 
 
 def _pipelines_stream_live(pipelines: Sequence[tuple[str, "GuardrailPipeline"]]) -> bool:
@@ -4142,6 +4172,7 @@ class ProxyLogging:
         from litellm.proxy.proxy_server import llm_router
         from litellm.types.guardrails import GuardrailEventHooks
 
+        token_id_outputs: Final = _token_id_choice_outputs(response)
         pipeline_response: Final = await self._run_post_call_pipelines(
             data=data,
             user_api_key_dict=user_api_key_dict,
@@ -4230,6 +4261,7 @@ class ProxyLogging:
                     response = callback_response
         except Exception as e:
             raise e
+        _drop_token_ids_of_rewritten_choices(response, token_id_outputs)
         return response
 
     async def _run_parallel_post_call_guardrails(
