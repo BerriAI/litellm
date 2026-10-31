@@ -1732,10 +1732,10 @@
       "count": 5
     },
     "no-restricted-syntax": {
-      "count": 139
+      "count": 133
     },
     "prefer-const": {
-      "count": 28
+      "count": 26
     }
   },
   "src/components/object_permissions_view.tsx": {
