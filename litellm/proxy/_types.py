@@ -45,6 +45,7 @@ from litellm.types.agents import (
 from litellm.types.agents import (
     AgentResponse as AgentResponse,  # noqa: PLC0414  # public re-export
 )
+from litellm.types.decisions import OpenAIDecisionResponse
 from litellm.types.integrations.compression_interception import (
     CompressionSavingsMetadata,
 )
@@ -4601,6 +4602,7 @@ PassThroughEndpointLoggingResultValues = (
     | StandardPassThroughResponseObject
     | ResponsesAPIResponse
     | TranscriptionResponse
+    | OpenAIDecisionResponse
 )
 
 
