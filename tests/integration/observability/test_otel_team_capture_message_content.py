@@ -302,6 +302,23 @@ def _with_content(url: str, since: int, sent: Sent) -> tuple[Span, ...]:
     )
 
 
+def _is_root(span: Span) -> bool:
+    return span["kind"] == SERVER and span["name"].startswith("POST")
+
+
+def _with_root(url: str, since: int, sent: Sent) -> tuple[Span, ...]:
+    """The copy of ``sent`` at ``url`` once its model span, the marker and its server span arrived."""
+    return eventually(
+        lambda: _of_request(url, since, sent),
+        lambda spans: (
+            bool(_model_spans(spans))
+            and any(_carries(span, sent.marker) for span in spans)
+            and any(_is_root(span) for span in spans)
+        ),
+        seconds=40,
+    )
+
+
 def _arrived(
     url: str, since: int, sent: Sent, expected: frozenset[str], credential: Credential | None = None
 ) -> tuple[Span, ...]:
@@ -605,11 +622,7 @@ def test_stalled_tenant_during_a_mixed_burst_keeps_serving_and_each_teams_policy
         configure_sink(rig.sinks.tenant, paused=False)
     assert [result.status for result in sent] == [200] * 30, [result.text for result in sent if result.status != 200]
     for (key, _, _), result in zip(plan, sent, strict=True):
-        roots = [
-            span
-            for span in _with_content(rig.sinks.operator, cursors.operator, result)
-            if span["kind"] == SERVER and span["name"].startswith("POST ")
-        ]
+        roots = [span for span in _with_root(rig.sinks.operator, cursors.operator, result) if _is_root(span)]
         assert len(roots) == 1, roots
         if key == restricted:
             _assert_redacted_twin(rig, result, cursors, rig.sinks.tenant, cursors.tenant)
