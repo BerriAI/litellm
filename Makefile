@@ -279,6 +279,8 @@ pre-commit:
 	@$(MAKE) check
 
 # Testing targets
+PYTEST_REPORT_ARGS ?=
+
 test-rust-extension:
 	@temporary=$$(mktemp -d) && \
 	trap 'rm -rf "$$temporary"' EXIT HUP INT TERM && \
@@ -291,7 +293,7 @@ test-rust-extension:
 		--mypy-config-file tests/unit/rust_bridge/stubtest.ini \
 		litellm.rust_bridge._native && \
 	LITELLM_LOCAL_MODEL_COST_MAP=True \
-	"$$temporary/venv/bin/python" -I -m pytest --import-mode=importlib -m requires_rust_extension tests/test_litellm_rust
+	"$$temporary/venv/bin/python" -I -m pytest --import-mode=importlib -m requires_rust_extension $(PYTEST_REPORT_ARGS) tests/test_litellm_rust
 
 rust-sqlx-prepare:
 	cd litellm-rust && cargo run -p litellm-db-testing --bin sqlx-prepare
