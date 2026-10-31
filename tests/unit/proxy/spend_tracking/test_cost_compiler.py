@@ -936,6 +936,7 @@ async def test_capture_retains_provider_header_price_without_catalog(amount: flo
         result: Final = price_usage(database.rows[-1].envelope)
         assert isinstance(result, PricingSnapshot)
         assert result.total_cost == Decimal(str(amount))
+        assert (result.input_cost or Decimal(0)) + (result.output_cost or Decimal(0)) == result.total_cost
         assert result.pricing_source == "upstream_header"
     finally:
         await meter.stop(1)

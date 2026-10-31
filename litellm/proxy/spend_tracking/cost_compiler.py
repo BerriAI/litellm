@@ -19,6 +19,7 @@ from litellm.accounting import (
     Unpriced,
 )
 from litellm.cost_calculator import batch_cost_calculator
+from litellm.litellm_core_utils.hidden_params import set_hidden_param
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.llm_cost_calc.finalization import finalize_cost
 from litellm.litellm_core_utils.llm_cost_calc.pricing_context import RetainedPricing, retained_pricing
@@ -230,11 +231,8 @@ def price_usage(envelope: str) -> PricingSnapshot | Unpriced:
             "file_search": adjustments.get("file_search") or None,
         }
     )
-    logger.record_provider_reported_cost(
-        TypeAdapter[float | None](float | None).validate_python(
-            logged.get("provider_reported_cost") if upstream else None
-        )
-    )
+    if upstream and logged.get("provider_reported_cost") is not None:
+        set_hidden_param(response, "additional_headers", {"llm_provider-x-litellm-response-cost": reported})
     billed_at: Final = TypeAdapter(datetime).validate_python(logged.get("current_billing_time", event.ended_at))
     if event.call_type is CallTypes.arealtime and captured.usage and captured.usage.get("metered_usage") is not None:
         from litellm.constants import REALTIME_METERED_USAGE_KEY
