@@ -832,9 +832,11 @@ def _with_router_resolved_session_model(session: object, model_name: str) -> Map
         typed_session: Final = _SESSION_ADAPTER.validate_python(session)
     except ValidationError:
         return _NO_SESSION_KWARGS
-    if "model" not in typed_session:
+    if "model" not in typed_session and typed_session.get("type") != "transcription":
         return _NO_SESSION_KWARGS
-    return MappingProxyType({"session": {**typed_session, "model": model_name}})
+    from litellm.realtime_api.main import with_resolved_session_model
+
+    return MappingProxyType({"session": with_resolved_session_model(dict(typed_session), model_name)})
 
 
 # Router._aanthropic_messages_streaming_iterator buffers lifecycle chunks
@@ -2849,6 +2851,14 @@ class PythonCore(DeprecatedRouterMembers):
         self.acreate_realtime_transcription_session = self.factory_function(
             self._host.invoke("acreate_realtime_transcription_session"),
             call_type="acreate_realtime_transcription_session",
+        )
+        self.acreate_realtime_translation_client_secret = self.factory_function(
+            self._host.invoke("acreate_realtime_translation_client_secret"),
+            call_type="acreate_realtime_translation_client_secret",
+        )
+        self.arealtime_translation_calls = self.factory_function(
+            self._host.invoke("arealtime_translation_calls"),
+            call_type="arealtime_translation_calls",
         )
         self._aresponses_websocket = self.factory_function(
             self._host.invoke("_aresponses_websocket"), call_type="_aresponses_websocket"
@@ -8406,6 +8416,8 @@ class PythonCore(DeprecatedRouterMembers):
             "acreate_realtime_client_secret",
             "arealtime_calls",
             "acreate_realtime_transcription_session",
+            "acreate_realtime_translation_client_secret",
+            "arealtime_translation_calls",
             "_aresponses_websocket",
             "acreate_fine_tuning_job",
             "acancel_fine_tuning_job",
@@ -8676,6 +8688,8 @@ class PythonCore(DeprecatedRouterMembers):
                 "acreate_realtime_client_secret",
                 "arealtime_calls",
                 "acreate_realtime_transcription_session",
+                "acreate_realtime_translation_client_secret",
+                "arealtime_translation_calls",
             ):
                 return await self._ageneric_api_call_with_fallbacks(
                     original_function=original_function,

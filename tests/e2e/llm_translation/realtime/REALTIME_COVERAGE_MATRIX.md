@@ -19,6 +19,15 @@ a matching `function_call` output item, the test sends a `function_call_output`
 back, and the follow-up response incorporates the result (the temperature 72
 appears). That raw-websocket tool path is the source of truth for tool calling.
 
+The audio surfaces provision their own OpenAI and Azure deployments.
+`TestRealtimeTranslation` streams the spoken weather question into
+`/v1/realtime/translations` with French as the target and asserts translated
+audio, a French transcript, and a billed spend row. `TestRealtimeLiveTranscription`
+streams it into `/v1/realtime?intent=transcription` on gpt-live-transcribe and
+asserts the deltas add up to the completed transcript and the session is billed.
+`test_azure_ga_text_turn_is_answered_and_billed` guards a plain text turn over
+the Azure GA deployment, spend row included
+
 `test_pipecat_tool_smoke` is a realism layer through pipecat for openai, azure,
 and gemini only (not vertex_ai: native-audio live is flaky under pipecat tool
 calling while raw-ws tools pass; see pipecat-ai/pipecat#2544). Assertions are

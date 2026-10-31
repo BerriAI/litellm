@@ -28,6 +28,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.staticfiles import StaticFiles
 from fastapi.testclient import TestClient
+from starlette.datastructures import URL
 
 import litellm
 import litellm.proxy.proxy_server as proxy_server_module
@@ -11092,7 +11093,7 @@ async def test_get_current_spend_redis_error_falls_back_to_in_memory():
 
 
 def test_realtime_websocket_route_aliases_registered():
-    """Realtime sessions reach the proxy via three path aliases stacked on
+    """Realtime sessions reach the proxy via five path aliases stacked on
     `realtime_websocket_endpoint`. Dropping any of them silently 405s
     WebSocket upgrades because the catch-all `/openai/{endpoint:path}`
     HTTP passthrough only declares HTTP methods. The aliases must also be
@@ -11108,7 +11109,13 @@ def test_realtime_websocket_route_aliases_registered():
     websocket_paths = {route.path for route in app.routes if isinstance(route, WebSocketRoute)}
     openai_routes = LiteLLMRoutes.openai_routes.value
 
-    for expected in ("/openai/v1/realtime", "/v1/realtime", "/realtime"):
+    for expected in (
+        "/openai/v1/realtime",
+        "/v1/realtime",
+        "/realtime",
+        "/v1/realtime/translations",
+        "/realtime/translations",
+    ):
         assert expected in websocket_paths, (
             f"{expected!r} missing from registered WebSocket routes; the "
             f"realtime endpoint will 405 for clients hitting this path."
@@ -11127,7 +11134,7 @@ def _lit6973_fake_realtime_ws() -> MagicMock:
     ws = MagicMock()
     ws.headers = {}
     ws.scope = {"headers": [], "type": "websocket"}
-    ws.url = "ws://testserver/v1/realtime"
+    ws.url = URL("ws://testserver/v1/realtime")
     ws.accept = AsyncMock()
     ws.send_text = AsyncMock()
     ws.close = AsyncMock()

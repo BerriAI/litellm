@@ -6127,6 +6127,65 @@ async def test_groq_atranscription_honors_base_url_alias(respx_mock: respx.MockR
     assert response.text == "hello"
 
 
+@pytest.mark.parametrize(
+    "provider_body,expected_upload_measurements",
+    [({"text": "hello", "duration": 2.5}, 0), ({"text": "hello"}, 1)],
+    ids=["provider_reports_duration", "provider_omits_duration"],
+)
+def test_transcription_measures_the_upload_only_when_the_provider_omits_the_duration(
+    respx_mock: respx.MockRouter, provider_body: Mapping[str, object], expected_upload_measurements: int
+):
+    respx_mock.post(f"{GROQ_INTERNAL_BASE}/audio/transcriptions").mock(
+        return_value=httpx.Response(200, json=provider_body)
+    )
+
+    with patch.object(
+        litellm_main, "calculate_request_duration", wraps=litellm_main.calculate_request_duration
+    ) as measure_upload:
+        response: Final = litellm.transcription(
+            model="groq/whisper-large-v3", file=GROQ_WAV_FILE, base_url=GROQ_INTERNAL_BASE, api_key="fake-key"
+        )
+
+    assert response.text == "hello"
+    assert measure_upload.call_count == expected_upload_measurements
+
+
+@pytest.mark.parametrize("model_name", ("whisper-1", "gpt-4o-transcribe", "gpt-transcribe"))
+def test_openai_compatible_transcription_with_an_openai_model_name_reaches_the_server(
+    respx_mock: respx.MockRouter, model_name: str
+):
+    route: Final = respx_mock.post("https://vllm.internal/v1/audio/transcriptions").mock(
+        return_value=httpx.Response(200, json={"text": "served by vllm"})
+    )
+
+    response: Final = litellm.transcription(
+        model=f"hosted_vllm/{model_name}",
+        file=GROQ_WAV_FILE,
+        api_base="https://vllm.internal/v1",
+        api_key="fake-key",
+        response_format="verbose_json",
+    )
+
+    assert route.called
+    assert response.text == "served by vllm"
+
+
+def test_openai_gpt_transcribe_still_rejects_non_json_response_formats(respx_mock: respx.MockRouter):
+    route: Final = respx_mock.post("https://api.openai.com/v1/audio/transcriptions").mock(
+        return_value=httpx.Response(200, json={"text": "should not be sent"})
+    )
+
+    with pytest.raises(litellm.UnsupportedParamsError, match="only supports response_format 'json' or 'text'"):
+        litellm.transcription(
+            model="openai/gpt-transcribe",
+            file=GROQ_WAV_FILE,
+            api_key="fake-key",
+            response_format="srt",
+        )
+
+    assert not route.called
+
+
 def test_groq_speech_honors_base_url_alias(respx_mock: respx.MockRouter):
     route: Final = respx_mock.post(f"{GROQ_INTERNAL_BASE}/audio/speech").mock(
         return_value=httpx.Response(200, content=b"mp3-bytes")

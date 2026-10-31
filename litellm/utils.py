@@ -1115,6 +1115,40 @@ def _is_streaming_response_for_correlation(result: object) -> bool:
     return isinstance(result, CustomStreamWrapper)
 
 
+def _returns_requested_stream(kwargs: dict[str, object], call_type: CallTypes | str, result: object) -> bool:
+    if call_type in (CallTypes.transcription, CallTypes.atranscription):
+        return isinstance(result, (openai.Stream, openai.AsyncStream))
+    return _is_streaming_request(kwargs=kwargs, call_type=call_type)
+
+
+def _transcription_runs_unstreamed(
+    call_type: str, requested_kwargs: Mapping[str, object], call_kwargs: Mapping[str, object]
+) -> bool:
+    from litellm.litellm_core_utils.audio_utils.transcription_streaming import transcription_stream_requested
+
+    return (
+        call_type == CallTypes.atranscription.value
+        and transcription_stream_requested(requested_kwargs.get("stream"))
+        and call_kwargs.get("stream") is False
+    )
+
+
+def _guardrail_view_of_requested_stream(call_kwargs: Mapping[str, object]) -> dict[str, object]:
+    from litellm.integrations.custom_guardrail import guardrail_request_data_with_streaming
+
+    return guardrail_request_data_with_streaming(call_kwargs, is_streaming=True)
+
+
+def _marked_when_run_unstreamed(result: object, runs_unstreamed: bool) -> object:
+    from litellm.litellm_core_utils.audio_utils.transcription_streaming import TRANSCRIPTION_RAN_UNSTREAMED
+
+    if not runs_unstreamed or not isinstance(result, TranscriptionResponse):
+        return result
+    marked: Final = result.model_copy()
+    marked.hidden_params = {**result.hidden_params, TRANSCRIPTION_RAN_UNSTREAMED: True}
+    return marked
+
+
 def _is_converted_stream_result(result: object) -> bool:
     from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
     from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
@@ -1550,7 +1584,6 @@ def function_setup(
             applied_guardrails=applied_guardrails,
             supports_correlation_logging=is_async_call,
         )
-
         ## check if metadata is passed in
         litellm_params: Final[dict[str, object]] = {"api_base": ""}
         if "metadata" in kwargs:
@@ -1798,7 +1831,28 @@ async def async_pre_call_deployment_hook(kwargs: Mapping[str, object], call_type
             if result is not None:
                 modified_kwargs = result
 
-    return modified_kwargs
+    return _unstreamed_when_post_call_guardrails_apply(modified_kwargs, typed_call_type)
+
+
+def _unstreamed_when_post_call_guardrails_apply(
+    kwargs: dict[str, object], call_type: CallTypes | None
+) -> dict[str, object]:
+    from litellm.litellm_core_utils.audio_utils.transcription_streaming import transcription_stream_requested
+
+    if (
+        call_type is not CallTypes.atranscription
+        or not transcription_stream_requested(kwargs.get("stream"))
+        or _deployment_provider(kwargs) not in (LlmProviders.OPENAI.value, LlmProviders.AZURE.value)
+    ):
+        return kwargs
+    streamed_request: Final = _guardrail_view_of_requested_stream(kwargs)
+    custom_guardrail_class: Final = _get_cached_custom_guardrail()
+    if not any(
+        isinstance(callback, custom_guardrail_class) and callback.runs_post_call_deployment_hook(streamed_request)
+        for callback in litellm.callbacks
+    ):
+        return kwargs
+    return {**kwargs, "stream": False}
 
 
 async def async_post_call_success_deployment_hook(
@@ -2146,7 +2200,7 @@ def client(original_function):
             # MODEL CALL
             result = original_function(*args, **kwargs)
             end_time = datetime.datetime.now()
-            if _is_streaming_request(kwargs=kwargs, call_type=call_type) or _is_converted_stream_result(result):
+            if _returns_requested_stream(kwargs, call_type, result) or _is_converted_stream_result(result):
                 if "complete_response" in kwargs and kwargs["complete_response"] is True:
                     chunks = []
                     for idx, chunk in enumerate(result):
@@ -2155,6 +2209,15 @@ def client(original_function):
                 else:
                     logging_obj.stream = True
                     logging_obj.model_call_details["stream"] = True
+                    if call_type == CallTypes.transcription.value and isinstance(result, openai.Stream):
+                        from litellm.litellm_core_utils.audio_utils.transcription_streaming import (
+                            litellm_exception_mapper,
+                            wrap_transcription_stream,
+                        )
+
+                        result = wrap_transcription_stream(
+                            result, logging_obj, start_time, litellm_exception_mapper(logging_obj.model_call_details)
+                        )
                     # RETURN RESULT
                     update_response_metadata: _ResponseMetadataUpdater = litellm_utils.update_response_metadata
                     update_response_metadata(
@@ -2330,6 +2393,7 @@ def client(original_function):
 
             kwargs["litellm_logging_obj"] = logging_obj
             modified_kwargs: Final = await async_pre_call_deployment_hook(kwargs, call_type)
+            transcription_runs_unstreamed: Final = _transcription_runs_unstreamed(call_type, kwargs, modified_kwargs)
             if modified_kwargs is not None:
                 kwargs = modified_kwargs
 
@@ -2380,7 +2444,9 @@ def client(original_function):
                     if _is_converted_stream_result(_caching_handler_response.cached_result):
                         logging_obj.stream = True
                         logging_obj.model_call_details["stream"] = True
-                    return _caching_handler_response.cached_result
+                    return _marked_when_run_unstreamed(
+                        _caching_handler_response.cached_result, transcription_runs_unstreamed
+                    )
 
                 elif _caching_handler_response.embedding_all_elements_cache_hit is True:
                     return _caching_handler_response.final_embedding_cached_response
@@ -2443,7 +2509,7 @@ def client(original_function):
                 raise
             end_time = datetime.datetime.now()
 
-            streaming_requested: Final = _is_streaming_request(kwargs=kwargs, call_type=call_type)
+            streaming_requested: Final = _returns_requested_stream(kwargs, call_type, result)
             if streaming_requested or _is_converted_stream_result(result):
                 logging_obj.stream = True
                 logging_obj.model_call_details["stream"] = True
@@ -2457,6 +2523,15 @@ def client(original_function):
                         chunks.append(chunk)
                     return litellm.stream_chunk_builder(chunks, messages=kwargs.get("messages", None))
                 else:
+                    if call_type == CallTypes.atranscription.value and isinstance(result, openai.AsyncStream):
+                        from litellm.litellm_core_utils.audio_utils.transcription_streaming import (
+                            litellm_exception_mapper,
+                            wrap_transcription_stream,
+                        )
+
+                        result = wrap_transcription_stream(
+                            result, logging_obj, start_time, litellm_exception_mapper(logging_obj.model_call_details)
+                        )
                     _update_response_metadata(
                         result=result,
                         logging_obj=logging_obj,
@@ -2482,10 +2557,15 @@ def client(original_function):
             # Only run if call_type is a valid value in CallTypes
             _call_type_enum: Final = _CALL_TYPE_ENUM_MAP.get(call_type)
             if _call_type_enum is not None:
-                result = await async_post_call_success_deployment_hook(
-                    request_data=call_kwargs,
-                    response=result,
-                    call_type=_call_type_enum,
+                result = _marked_when_run_unstreamed(
+                    await async_post_call_success_deployment_hook(
+                        request_data=_guardrail_view_of_requested_stream(call_kwargs)
+                        if transcription_runs_unstreamed
+                        else call_kwargs,
+                        response=result,
+                        call_type=_call_type_enum,
+                    ),
+                    transcription_runs_unstreamed,
                 )
 
             ## Add response to cache
@@ -4316,40 +4396,61 @@ def _get_non_default_params(passed_params: dict, default_params: dict, additiona
     return non_default_params
 
 
+_OPENAI_SDK_ONLY_TRANSCRIPTION_PARAMS: Final = frozenset(("languages", "keywords", "stream"))
+
+
 def get_optional_params_transcription(
     model: str,
     custom_llm_provider: str,
     language: str | None = None,
+    languages: Sequence[str] | None = None,
+    keywords: Sequence[str] | None = None,
     prompt: str | None = None,
     response_format: str | None = None,
     temperature: int | None = None,
     timestamp_granularities: list[Literal["word", "segment"]] | None = None,
+    stream: bool | None = None,
     drop_params: bool | None = None,
     **kwargs,
 ):
     from litellm.constants import OPENAI_TRANSCRIPTION_PARAMS
 
     # retrieve all parameters passed to the function
-    passed_params: Final = locals()
+    passed_params: Final = locals().copy()
 
     passed_params.pop("OPENAI_TRANSCRIPTION_PARAMS")
-    passed_params.pop("custom_llm_provider")
-    passed_params.pop("drop_params")
-    drop_params = normalize_drop_params(drop_params)
+    passed_params.pop("model")
+    custom_llm_provider = passed_params.pop("custom_llm_provider")
+    drop_params = normalize_drop_params(passed_params.pop("drop_params"))
     special_params: Final[Mapping[str, object]] = passed_params.pop("kwargs")
+    from litellm.litellm_core_utils.audio_utils.transcription_streaming import (
+        transcription_stream_flag,
+        transcription_stream_unset,
+    )
+
     for k, v in special_params.items():
         passed_params[k] = v
 
-    default_params: Final = {
-        "language": None,
-        "prompt": None,
-        "response_format": None,
-        "temperature": None,  # openai defaults this to 0
-        "timestamp_granularities": None,
-    }
+    sends_through_openai_sdk: Final = custom_llm_provider in ("openai", "azure")
+    drops_unsupported_params: Final = drop_params is True or litellm.drop_params is True
+    transcription_params: Final = (
+        OPENAI_TRANSCRIPTION_PARAMS
+        if sends_through_openai_sdk or drops_unsupported_params
+        else [param for param in OPENAI_TRANSCRIPTION_PARAMS if param not in _OPENAI_SDK_ONLY_TRANSCRIPTION_PARAMS]
+    )
+    default_params: Final = {param: None for param in (*transcription_params, "prompt", "temperature")}
+    stream_unset: Final = transcription_stream_unset(stream)
+    malformed_stream: Final = not stream_unset and transcription_stream_flag(stream) is None
+    if malformed_stream and not drops_unsupported_params:
+        raise UnsupportedParamsError(
+            status_code=400,
+            message="`stream` must be a boolean. To drop it from the call, set `litellm.drop_params = True`.",
+        )
 
     non_default_params: Final = {
-        k: v for k, v in passed_params.items() if (k in default_params and v != default_params[k])
+        k: v
+        for k, v in passed_params.items()
+        if k in default_params and v != default_params[k] and not (k == "stream" and (stream_unset or malformed_stream))
     }
     optional_params = {}
 
@@ -4358,9 +4459,7 @@ def get_optional_params_transcription(
         if len(non_default_params.keys()) > 0:
             keys: Final = list(non_default_params.keys())
             for k in keys:
-                if (
-                    drop_params is True or litellm.drop_params is True
-                ) and k not in supported_params:  # drop the unsupported non-default values
+                if drops_unsupported_params and k not in supported_params:
                     non_default_params.pop(k, None)
                 elif k not in supported_params:
                     raise UnsupportedParamsError(
@@ -4414,9 +4513,12 @@ def get_optional_params_transcription(
         optional_params=optional_params,
         passed_params=passed_params,
         custom_llm_provider=custom_llm_provider,
-        openai_params=list(default_params) if custom_llm_provider == "bedrock" else OPENAI_TRANSCRIPTION_PARAMS,
+        openai_params=list(default_params) if custom_llm_provider == "bedrock" else transcription_params,
         additional_drop_params=kwargs.get("additional_drop_params", None),
     )
+    extra_body: Final = optional_params.get("extra_body")
+    if isinstance(extra_body, dict) and not extra_body:
+        optional_params.pop("extra_body")
 
     return optional_params
 
@@ -7152,6 +7254,7 @@ def get_model_info_helper(
                     "cache_read_input_audio_token_cost_batches", None
                 ),
                 explicit_cache_read_input_token_cost=_model_info.get("explicit_cache_read_input_token_cost", None),
+                cache_read_input_image_token_cost=_model_info.get("cache_read_input_image_token_cost", None),
                 prompt_cache_min_tokens=_model_info.get("prompt_cache_min_tokens", None),
                 cache_read_input_token_cost_above_200k_tokens=_model_info.get(
                     "cache_read_input_token_cost_above_200k_tokens", None
@@ -10178,6 +10281,7 @@ class ProviderConfigManager:
     def get_provider_audio_transcription_config(
         model: str,
         provider: LlmProviders,
+        base_model: str | None = None,
     ) -> BaseAudioTranscriptionConfig | None:
         model_cost_entry: Final = _get_model_cost_entry_for_provider_config(
             model=model,
@@ -10205,7 +10309,13 @@ class ProviderConfigManager:
 
             return XAIAudioTranscriptionConfig()
         elif litellm.LlmProviders.OPENAI == provider:
-            if "gpt-4o" in model or (model.startswith("gpt-") and "transcribe" in model):
+            if "gpt-transcribe" in (model, base_model):
+                from litellm.llms.openai.transcriptions.gpt_transformation import (
+                    OpenAIGPTTranscribeAudioTranscriptionConfig,
+                )
+
+                return OpenAIGPTTranscribeAudioTranscriptionConfig()
+            elif "gpt-4o" in model or (model.startswith("gpt-") and "transcribe" in model):
                 return litellm.OpenAIGPTAudioTranscriptionConfig()
             else:
                 return litellm.OpenAIWhisperAudioTranscriptionConfig()
