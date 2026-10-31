@@ -1,5 +1,29 @@
 import { SSOSettingsValues } from "@/app/(dashboard)/hooks/sso/useSSOSettings";
 
+export const CLEARED_SSO_SETTINGS = {
+  google_client_id: null,
+  google_client_secret: null,
+  microsoft_client_id: null,
+  microsoft_client_secret: null,
+  microsoft_tenant: null,
+  generic_client_id: null,
+  generic_client_secret: null,
+  generic_authorization_endpoint: null,
+  generic_token_endpoint: null,
+  generic_userinfo_endpoint: null,
+  generic_scope: null,
+  saml_idp_metadata_url: null,
+  saml_idp_metadata_xml: null,
+  saml_sp_entity_id: null,
+  saml_allow_unsolicited: null,
+  proxy_base_url: null,
+  user_email: null,
+  sso_provider: null,
+  role_mappings: null,
+  team_mappings: null,
+  ui_access_mode: null,
+} as const;
+
 /**
  * Processes SSO settings form values and transforms them into the payload format expected by the API
  * Handles role mappings transformation and field extraction

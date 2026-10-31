@@ -4,7 +4,7 @@ import React from "react";
 import DeleteResourceModal from "../../../../common_components/DeleteResourceModal";
 import { toast } from "@/lib/toast";
 import { parseErrorMessage } from "../../../../shared/errorUtils";
-import { detectSSOProvider } from "../utils";
+import { CLEARED_SSO_SETTINGS, detectSSOProvider } from "../utils";
 
 interface DeleteSSOSettingsModalProps {
   isVisible: boolean;
@@ -18,30 +18,7 @@ const DeleteSSOSettingsModal: React.FC<DeleteSSOSettingsModalProps> = ({ isVisib
 
   // Handle clearing SSO settings
   const handleClearSSO = async () => {
-    const clearSettings = {
-      google_client_id: null,
-      google_client_secret: null,
-      microsoft_client_id: null,
-      microsoft_client_secret: null,
-      microsoft_tenant: null,
-      generic_client_id: null,
-      generic_client_secret: null,
-      generic_authorization_endpoint: null,
-      generic_token_endpoint: null,
-      generic_userinfo_endpoint: null,
-      saml_idp_metadata_url: null,
-      saml_idp_metadata_xml: null,
-      saml_sp_entity_id: null,
-      saml_allow_unsolicited: null,
-      proxy_base_url: null,
-      user_email: null,
-      sso_provider: null,
-      role_mappings: null,
-      team_mappings: null,
-      ui_access_mode: null,
-    };
-
-    await editSSOSettings(clearSettings, {
+    await editSSOSettings(CLEARED_SSO_SETTINGS, {
       onSuccess: () => {
         toast.success("SSO settings cleared successfully");
         onCancel();

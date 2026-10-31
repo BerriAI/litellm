@@ -415,6 +415,59 @@ describe("SSOModals", () => {
     expect(mockHandleShowInstructions).toHaveBeenCalled();
   });
 
+  it("clears stored role mappings when the admin unchecks them and saves", async () => {
+    vi.mocked(updateSSOSettings).mockResolvedValue({});
+    const storedSettings = {
+      values: {
+        generic_client_id: "test-client-id",
+        generic_client_secret: "test-client-secret",
+        generic_authorization_endpoint: "https://idp.example.com/authorize",
+        generic_token_endpoint: "https://idp.example.com/token",
+        generic_userinfo_endpoint: "https://idp.example.com/userinfo",
+        proxy_base_url: "https://example.com",
+        user_email: "admin@example.com",
+        role_mappings: {
+          group_claim: "groups",
+          default_role: "internal_user",
+          roles: { proxy_admin: ["admin-group"] },
+        },
+      },
+    };
+    vi.mocked(getSSOSettings).mockResolvedValue(storedSettings);
+
+    const TestWrapper = () => {
+      const form = useSSOSettingsForm("admin-panel");
+
+      return (
+        <SSOModals
+          isAddSSOModalVisible={true}
+          isInstructionsModalVisible={false}
+          handleAddSSOOk={() => {}}
+          handleAddSSOCancel={() => {}}
+          handleShowInstructions={() => {}}
+          handleInstructionsOk={() => {}}
+          handleInstructionsCancel={() => {}}
+          form={form}
+          accessToken="test-token"
+          ssoConfigured={true}
+        />
+      );
+    };
+
+    render(<TestWrapper />);
+
+    await waitFor(() => {
+      expect((screen.getByLabelText("Group Claim") as HTMLInputElement).value).toBe("groups");
+    });
+    await user().click(screen.getAllByLabelText("Use Role Mappings")[0]);
+    fireEvent.click(screen.getByText("Save"));
+
+    const expected = { sso_provider: "generic", generic_client_id: "test-client-id", role_mappings: null };
+    await waitFor(() => {
+      expect(updateSSOSettings).toHaveBeenCalledWith("test-token", expect.objectContaining(expected));
+    });
+  });
+
   it("should submit SAML settings with the unsolicited toggle mapped to a 'true'/'false' string", async () => {
     const mockHandleShowInstructions = vi.fn();
     vi.mocked(updateSSOSettings).mockResolvedValue({});

@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { FormProvider, useWatch, type UseFormReturn } from "react-hook-form";
 import { getSSOSettings, updateSSOSettings } from "./networking";
+import { CLEARED_SSO_SETTINGS } from "./Settings/AdminSettings/SSOSettings/utils";
 import { toast } from "@/lib/toast";
 import { parseErrorMessage } from "./shared/errorUtils";
 import { Button } from "@/components/ui/button";
@@ -183,6 +184,8 @@ const SSOModals: React.FC<SSOModalsProps> = ({
             internal_user_viewer: splitTeams(internal_viewer_teams),
           },
         };
+      } else {
+        payload.role_mappings = null;
       }
 
       // Save SSO settings using the new API
@@ -203,32 +206,7 @@ const SSOModals: React.FC<SSOModalsProps> = ({
     }
 
     try {
-      // Clear all SSO settings
-      const clearSettings = {
-        google_client_id: null,
-        google_client_secret: null,
-        microsoft_client_id: null,
-        microsoft_client_secret: null,
-        microsoft_tenant: null,
-        generic_client_id: null,
-        generic_client_secret: null,
-        generic_authorization_endpoint: null,
-        generic_token_endpoint: null,
-        generic_userinfo_endpoint: null,
-        saml_idp_metadata_url: null,
-        saml_idp_metadata_xml: null,
-        saml_sp_entity_id: null,
-        saml_allow_unsolicited: null,
-        generic_scope: null,
-        proxy_base_url: null,
-        user_email: null,
-        sso_provider: null,
-        role_mappings: null,
-        team_mappings: null,
-        ui_access_mode: null,
-      };
-
-      await updateSSOSettings(accessToken, clearSettings);
+      await updateSSOSettings(accessToken, CLEARED_SSO_SETTINGS);
 
       // Clear the form
       form.reset(emptySSOSettingsFormValues);

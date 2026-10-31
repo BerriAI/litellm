@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import DeleteSSOSettingsModal from "./DeleteSSOSettingsModal";
 
@@ -13,9 +13,11 @@ vi.mock("@/app/(dashboard)/hooks/sso/useSSOSettings", () => ({
   })),
 }));
 
+const mutateAsync = vi.hoisted(() => vi.fn());
+
 vi.mock("@/app/(dashboard)/hooks/sso/useEditSSOSettings", () => ({
   useEditSSOSettings: vi.fn(() => ({
-    mutateAsync: vi.fn(),
+    mutateAsync,
     isPending: false,
   })),
 }));
@@ -56,5 +58,27 @@ describe("DeleteSSOSettingsModal", () => {
         "Are you sure you want to clear all SSO settings? Users will no longer be able to login using SSO after this change.",
       ),
     ).toBeInTheDocument();
+  });
+
+  it("nulls every stored field so nothing survives a clear", async () => {
+    const queryClient = createQueryClient();
+    const clearedFields = {
+      generic_scope: null,
+      generic_client_secret: null,
+      role_mappings: null,
+      team_mappings: null,
+      ui_access_mode: null,
+    };
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <DeleteSSOSettingsModal isVisible={true} onCancel={vi.fn()} onSuccess={vi.fn()} />
+      </QueryClientProvider>,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+
+    await waitFor(() =>
+      expect(mutateAsync).toHaveBeenCalledWith(expect.objectContaining(clearedFields), expect.anything()),
+    );
   });
 });
