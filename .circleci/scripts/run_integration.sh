@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-if [ "${GITHUB_ACTIONS:-}" = true ]; then
-  echo "Integration contracts are owned by CircleCI" >&2
-  exit 1
-fi
-
 suite="${1:?integration suite required}"
 mode="${2:-standard}"
 side="${3:-}"
+requested_workers="${INTEGRATION_WORKERS:-}"
+license_env=()
+if [ -n "${LITELLM_LICENSE:-}" ]; then
+  license_env=("LITELLM_LICENSE=$LITELLM_LICENSE")
+fi
 if [ "$mode" = replica ]; then
   results="test-results/integration-${suite}-replica"
 elif [ "$mode" = parity ]; then
@@ -72,7 +72,7 @@ export PATH="$PWD/.venv/bin:$PATH"
 export PYTHONPATH="$PWD:$PWD/tests:$PWD/tests/e2e"
 export DATABASE_URL="postgresql://postgres:postgres@127.0.0.1:5432/circle_test"
 export REDIS_HOST=127.0.0.1 REDIS_PORT=6379
-export LITELLM_MASTER_KEY=sk-integration-master LITELLM_SALT_KEY=sk-integration-salt
+export LITELLM_MASTER_KEY="sk-$(openssl rand -hex 16)" LITELLM_SALT_KEY=sk-integration-salt
 export LITELLM_MODE=PRODUCTION LITELLM_LOCAL_MODEL_COST_MAP=True
 export STORE_MODEL_IN_DB=True AWS_EC2_METADATA_DISABLED=true DO_NOT_TRACK=1
 export INTEGRATION_PROXY_URL=http://127.0.0.1:4000
@@ -84,7 +84,7 @@ if [ "$suite" = browser ]; then
   export LITELLM_UI_PATH="$PWD/ui/litellm-dashboard/out"
   test -f "$LITELLM_UI_PATH/index.html"
 fi
-export INTEGRATION_SEED="$(.venv/bin/python -c 'import hashlib,os; print(int(hashlib.sha256((os.environ.get("CIRCLE_SHA1", "local") + os.environ.get("CIRCLE_WORKFLOW_ID", "local")).encode()).hexdigest()[:8],16))')"
+export INTEGRATION_SEED="$(.venv/bin/python -c 'import hashlib,os; print(int(hashlib.sha256(((os.environ.get("CIRCLE_SHA1") or os.environ.get("GITHUB_SHA") or "local") + (os.environ.get("CIRCLE_WORKFLOW_ID") or os.environ.get("GITHUB_RUN_ID") or "local")).encode()).hexdigest()[:8],16))')"
 export INTEGRATION_ORDER_SEED="$INTEGRATION_SEED"
 
 uv run --no-sync prisma generate --schema litellm/proxy/schema.prisma > "$results/prisma-generate.log" 2>&1
@@ -107,7 +107,7 @@ sudo iptables -N integration_only
 guard_created=true
 sudo iptables -A integration_only -o lo -j ACCEPT
 sudo iptables -A integration_only -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
-for service in postgres-db redis-cache; do
+for service in "${INTEGRATION_POSTGRES_CONTAINER:-postgres-db}" "${INTEGRATION_REDIS_CONTAINER:-redis-cache}"; do
   address="$(docker inspect --format '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$service")"
   sudo iptables -A integration_only -d "$address" -j ACCEPT
 done
@@ -128,14 +128,34 @@ fi
 sudo iptables -L integration_only -n -v -x > "$results/egress-guard.txt"
 awk '$3 == "REJECT" && $1 > 0 { rejected=1 } END { exit !rejected }' "$results/egress-guard.txt"
 
-setsid env -i PATH="$PATH" HOME="$HOME" PYTHONPATH="$PYTHONPATH" INTEGRATION_RUN_ID="$integration_identity" \
-  .venv/bin/python -m integration._support.upstream > "$results/upstream.log" 2>&1 &
-upstream_pid=$!
+if [ "$mode" = parity ]; then
+  export INTEGRATION_WORKERS=1
+else
+  case "$suite" in
+    management|accounting) export INTEGRATION_WORKERS=2 ;;
+    providers|extensions) export INTEGRATION_WORKERS=4 ;;
+  esac
+fi
 if [ "$suite" = cost ]; then
   export INTEGRATION_WORKERS=8
 fi
+if [ "$suite" = security ]; then
+  export INTEGRATION_WORKERS=4
+fi
 if [ "$suite" = mcp ]; then
-  export INTEGRATION_WORKERS=4 INTEGRATION_COVERAGE=1
+  export INTEGRATION_WORKERS=2 INTEGRATION_COVERAGE=1
+fi
+if [ -n "$requested_workers" ]; then
+  export INTEGRATION_WORKERS="$requested_workers"
+fi
+isolated_workers=false
+if [ "${INTEGRATION_WORKERS:-1}" -gt 1 ]; then
+  isolated_workers=true
+fi
+if [ "$isolated_workers" = false ]; then
+  setsid env -i PATH="$PATH" HOME="$HOME" PYTHONPATH="$PYTHONPATH" INTEGRATION_RUN_ID="$integration_identity" \
+    .venv/bin/python -m integration._support.upstream > "$results/upstream.log" 2>&1 &
+  upstream_pid=$!
 fi
 coverage_data="$PWD/$results/coverage/data"
 proxy_command=(.venv/bin/python -m integration._support.proxy)
@@ -168,7 +188,7 @@ start_proxy() {
     "${database_env[@]}" REDIS_HOST="$REDIS_HOST" REDIS_PORT="$REDIS_PORT" \
     INTEGRATION_UPSTREAM_URL="$INTEGRATION_UPSTREAM_URL" \
     LITELLM_MASTER_KEY="$LITELLM_MASTER_KEY" LITELLM_SALT_KEY="$LITELLM_SALT_KEY" LITELLM_UI_PATH="$LITELLM_UI_PATH" PROXY_BASE_URL="http://127.0.0.1:$port" \
-    LITELLM_LICENSE="${LITELLM_LICENSE:-}" \
+    "${license_env[@]}" \
     LITELLM_MODE=PRODUCTION STORE_MODEL_IN_DB=True LITELLM_ENABLE_MCP_STDIO=true "${cost_map_env[@]}" \
     AWS_EC2_METADATA_DISABLED=true DO_NOT_TRACK=1 COVERAGE_FILE="$coverage_data" \
     "${proxy_command[@]}" --config tests/integration/proxy_config.yaml \
@@ -177,26 +197,28 @@ start_proxy() {
     > "$results/$log_name" 2>&1 &
   launched_pid=$!
 }
-start_proxy 4000 proxy.log
-proxy_pid="$launched_pid"
-.venv/bin/python .circleci/scripts/wait_integration_services.py
-curl --noproxy '*' -sSf -X POST "$INTEGRATION_PROXY_URL/config/update" \
-  -H "Authorization: Bearer $LITELLM_MASTER_KEY" -H 'Content-Type: application/json' \
-  -d '{"router_settings": {"num_retries": 0}}' > "$results/seed-router-settings.json"
-if [ "$suite" = management ] || [ "$suite" = mcp ]; then
-  export INTEGRATION_PEER_URL=http://127.0.0.1:4001
-  start_proxy 4001 peer.log
-  peer_pid="$launched_pid"
+if [ "$isolated_workers" = false ]; then
+  start_proxy 4000 proxy.log
+  proxy_pid="$launched_pid"
   .venv/bin/python .circleci/scripts/wait_integration_services.py
+  curl --noproxy '*' -sSf -X POST "$INTEGRATION_PROXY_URL/config/update" \
+    -H "Authorization: Bearer $LITELLM_MASTER_KEY" -H 'Content-Type: application/json' \
+    -d '{"router_settings": {"num_retries": 0}}' > "$results/seed-router-settings.json"
+  if [ "$suite" = management ] || [ "$suite" = mcp ] || [ "$suite" = accounting ]; then
+    export INTEGRATION_PEER_URL=http://127.0.0.1:4001
+    start_proxy 4001 peer.log
+    peer_pid="$launched_pid"
+    .venv/bin/python .circleci/scripts/wait_integration_services.py
+  fi
 fi
 
 if [ "$suite" = providers ]; then
   INTEGRATION_RUN_ID="$integration_identity" .venv/bin/python -m pytest --tb=short --noconftest -o addopts= \
     --strict-markers --strict-config -p no:pytest-retry -p no:rerunfailures --timeout=30 \
-    tests/e2e/test_provider_edge.py::TestReplayMode::test_content_drift_returns_the_miss_status_naming_both_keys \
-    tests/e2e/test_provider_edge.py::TestReplayMode::test_exhausted_key_returns_the_miss_status \
-    tests/e2e/test_provider_edge.py::TestReplayLeftover::test_partially_consumed_recording_names_the_leftover \
-    tests/e2e/test_provider_edge.py::TestStreamingFidelity::test_replay_of_a_stream_makes_no_provider_connection \
+    tests/e2e_harness/test_provider_edge.py::TestReplayMode::test_content_drift_returns_the_miss_status_naming_both_keys \
+    tests/e2e_harness/test_provider_edge.py::TestReplayMode::test_exhausted_key_returns_the_miss_status \
+    tests/e2e_harness/test_provider_edge.py::TestReplayLeftover::test_partially_consumed_recording_names_the_leftover \
+    tests/e2e_harness/test_provider_edge.py::TestStreamingFidelity::test_replay_of_a_stream_makes_no_provider_connection \
     --junitxml="$results/replay-controls.xml"
 fi
 
@@ -213,30 +235,42 @@ if [ "$suite" = browser ]; then
   exit 0
 fi
 
-node_files=()
+shard_arguments=()
 if [ "${CIRCLE_NODE_TOTAL:-1}" -gt 1 ]; then
-  split="$(.venv/bin/python tests/integration/run.py "$suite" --list \
-    | circleci tests split --split-by=timings --timings-type=filename)"
-  read -r -a node_files <<< "$(printf '%s' "$split" | tr '\n' ' ')"
-  test "${#node_files[@]}" -gt 0
-  printf '%s\n' "${node_files[@]}" > "$results/node-files.txt"
+  .venv/bin/python tests/integration/run.py "$suite" --list \
+    | circleci tests split --split-by=timings --timings-type=filename > "$results/node-files.txt"
+  shard_arguments=(--shard-files "$results/node-files.txt")
+fi
+
+shared_services=()
+worker_coverage=()
+if [ "$isolated_workers" = false ]; then
+  shared_services=(
+    "REDIS_HOST=$REDIS_HOST" "REDIS_PORT=$REDIS_PORT"
+    "INTEGRATION_PROXY_URL=$INTEGRATION_PROXY_URL" "INTEGRATION_PEER_URL=$INTEGRATION_PEER_URL"
+    "INTEGRATION_UPSTREAM_URL=$INTEGRATION_UPSTREAM_URL" "INTEGRATION_MASTER_KEY=$INTEGRATION_MASTER_KEY"
+  )
+elif [ "${INTEGRATION_COVERAGE:-0}" = 1 ]; then
+  worker_coverage=("INTEGRATION_COVERAGE_FILE=$coverage_data")
 fi
 
 env -i PATH="$PATH" HOME="$HOME" PYTHONPATH="$PYTHONPATH" \
   INTEGRATION_RUN_ID="$integration_identity" \
-  DATABASE_URL="$DATABASE_URL" REDIS_HOST="$REDIS_HOST" REDIS_PORT="$REDIS_PORT" \
-  INTEGRATION_PROXY_URL="$INTEGRATION_PROXY_URL" INTEGRATION_PEER_URL="$INTEGRATION_PEER_URL" \
-  INTEGRATION_UPSTREAM_URL="$INTEGRATION_UPSTREAM_URL" \
+  DATABASE_URL="$DATABASE_URL" \
+  "${shared_services[@]}" "${worker_coverage[@]}" \
   INTEGRATION_WORKERS="${INTEGRATION_WORKERS:-1}" \
-  INTEGRATION_MASTER_KEY="$INTEGRATION_MASTER_KEY" LITELLM_MODE=PRODUCTION \
-  LITELLM_LICENSE="${LITELLM_LICENSE:-}" \
+  LITELLM_MODE=PRODUCTION \
+  "${license_env[@]}" \
   INTEGRATION_SEED="$INTEGRATION_SEED" \
   INTEGRATION_ORDER_SEED="$INTEGRATION_ORDER_SEED" \
+  INTEGRATION_CASE_SHARDS="${CIRCLE_NODE_TOTAL:-1}" INTEGRATION_CASE_SHARD_INDEX="${CIRCLE_NODE_INDEX:-0}" \
   LITELLM_LOCAL_MODEL_COST_MAP=True AWS_EC2_METADATA_DISABLED=true DO_NOT_TRACK=1 \
   INTEGRATION_PROXY_DATABASE_URL="$INTEGRATION_PROXY_DATABASE_URL" \
   INTEGRATION_PROXY_READ_REPLICA_URL="$INTEGRATION_PROXY_READ_REPLICA_URL" \
   INTEGRATION_ROUTING="$INTEGRATION_ROUTING" \
-  .venv/bin/python tests/integration/run.py "$suite" --results "$results" "${node_files[@]}"
+  MCP_TEST_PEER_PYTHON="${MCP_TEST_PEER_PYTHON:-}" \
+  .venv/bin/python tests/integration/run.py "$suite" --results "$results" \
+  "${shard_arguments[@]}"
 
 if [ "${INTEGRATION_COVERAGE:-0}" = 1 ]; then
   for covered_pid in "$proxy_pid" "$peer_pid"; do

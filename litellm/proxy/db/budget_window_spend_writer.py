@@ -19,6 +19,8 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Final, Protocol
 
+from typing_extensions import LiteralString, ReadOnly, TypedDict
+
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import Litellm_EntityType
 from litellm.proxy.db.db_span import db_span
@@ -62,6 +64,16 @@ _ROLL_WINDOW_SPEND_SQL: Final = (
     "AND window_start < ($4::timestamptz AT TIME ZONE 'UTC')"
 )
 
+_OPEN_WINDOW_SPEND_SQL: Final = (
+    'INSERT INTO "LiteLLM_BudgetWindowSpend" '
+    "(entity_type, entity_id, window_duration, window_start, spend, created_at, updated_at) "
+    "VALUES ($1, $2, $3, ($4::timestamptz AT TIME ZONE 'UTC'), 0, "
+    "($4::timestamptz AT TIME ZONE 'UTC'), ($4::timestamptz AT TIME ZONE 'UTC')) "
+    "ON CONFLICT (entity_type, entity_id, window_duration) DO UPDATE SET "
+    "window_start = EXCLUDED.window_start, spend = 0, updated_at = EXCLUDED.updated_at "
+    "WHERE \"LiteLLM_BudgetWindowSpend\".window_start <= ($5::timestamptz AT TIME ZONE 'UTC')"
+)
+
 _SEED_FROM_SPEND_LOGS_KEY_SQL: Final = (
     "SELECT COALESCE(SUM(spend), 0.0) AS total, "
     "COALESCE(SUM(spend) FILTER (WHERE \"startTime\" < ($3::timestamptz AT TIME ZONE 'UTC')), 0.0) AS before_batch "
@@ -89,6 +101,57 @@ _SEED_FROM_SPEND_LOGS_TEAM_UNBOUNDED_SQL: Final = (
 )
 
 _UPSERT_TRANSACTION_TIMEOUT: Final = timedelta(seconds=60)
+
+
+class _SeedTotalsRow(TypedDict):
+    total: ReadOnly[float | None]
+    before_batch: ReadOnly[float | None]
+
+
+class _ExistingKeyRow(TypedDict):
+    entity_type: ReadOnly[str]
+    entity_id: ReadOnly[str]
+    window_duration: ReadOnly[str]
+
+
+class _SeedTotalsQuery(Protocol):
+    async def __call__(self, query: LiteralString, *args: object) -> Sequence[_SeedTotalsRow]: ...
+
+
+class _ExistingKeysQuery(Protocol):
+    async def __call__(self, query: LiteralString, *args: object) -> Sequence[_ExistingKeyRow]: ...
+
+
+class _UpsertBatch(Protocol):
+    def execute_raw(self, query: LiteralString, *args: object) -> None: ...
+
+
+class _UpsertBatchManager(Protocol):
+    async def __aenter__(self) -> _UpsertBatch: ...
+
+    async def __aexit__(self, exc_type: object, exc_value: object, traceback: object) -> bool | None: ...
+
+
+class _UpsertTransaction(Protocol):
+    def batch_(self) -> _UpsertBatchManager: ...
+
+
+class _UpsertTransactionManager(Protocol):
+    async def __aenter__(self) -> _UpsertTransaction: ...
+
+    async def __aexit__(self, exc_type: object, exc_value: object, traceback: object) -> bool | None: ...
+
+
+def _seed_totals_query(prisma_client: "PrismaClient") -> _SeedTotalsQuery:
+    return prisma_client.db.query_raw
+
+
+def _existing_keys_query(prisma_client: "PrismaClient") -> _ExistingKeysQuery:
+    return prisma_client.db.query_raw
+
+
+def _upsert_transaction(prisma_client: "PrismaClient") -> _UpsertTransactionManager:
+    return prisma_client.db.tx(timeout=_UPSERT_TRANSACTION_TIMEOUT)
 
 
 @dataclass(frozen=True, slots=True)
@@ -149,9 +212,9 @@ async def spend_logs_seed_totals(
         return None
     async with db_span("seed_window_spend", "LiteLLM_SpendLogs"):
         rows: Final = (
-            await prisma_client.db.query_raw(unbounded_sql, entity_id, window_start)
+            await _seed_totals_query(prisma_client)(unbounded_sql, entity_id, window_start)
             if batch_started_at is None
-            else await prisma_client.db.query_raw(
+            else await _seed_totals_query(prisma_client)(
                 bounded_sql,
                 entity_id,
                 window_start,
@@ -185,7 +248,7 @@ async def _existing_primary_keys(
     transactions: tuple[WindowSpendTransaction, ...],
 ) -> frozenset[tuple[str, str, str]]:
     async with db_span("select_window_spend_rows", "LiteLLM_BudgetWindowSpend"):
-        rows: Final = await prisma_client.db.query_raw(
+        rows: Final = await _existing_keys_query(prisma_client)(
             _SELECT_EXISTING_ROWS_SQL,
             tuple(transaction["entity_type"] for transaction in transactions),
             tuple(transaction["entity_id"] for transaction in transactions),
@@ -304,7 +367,7 @@ async def commit_window_spend_updates(
     )
     async with (
         db_span("commit_window_spend_updates", "LiteLLM_BudgetWindowSpend"),
-        prisma_client.db.tx(timeout=_UPSERT_TRANSACTION_TIMEOUT) as db_transaction,
+        _upsert_transaction(prisma_client) as db_transaction,
         db_transaction.batch_() as batcher,
     ):
         for transaction, seed_base in zip(ordered, seed_bases):
@@ -335,4 +398,30 @@ async def roll_window_spend_row(
             window_duration,
             to_naive_utc(new_window_start),
             to_naive_utc(datetime.now(timezone.utc)),
+        )
+
+
+async def open_window_spend_row(
+    prisma_client: "PrismaClient",
+    entity_type: str,
+    entity_id: str,
+    window_duration: str,
+    window_start: datetime,
+    replaces_window_start: datetime | None,
+) -> None:
+    """Start a window at `window_start` unless another writer already started one.
+
+    The row is created when it does not exist, and moved onto the new window only
+    while it still holds `replaces_window_start`, the ended window the caller saw.
+    A writer that lost the race leaves the winner's window in place, so reading
+    the row back gives every writer the same window start.
+    """
+    async with db_span("open_window_spend_row", "LiteLLM_BudgetWindowSpend"):
+        await prisma_client.db.execute_raw(
+            _OPEN_WINDOW_SPEND_SQL,
+            entity_type,
+            entity_id,
+            window_duration,
+            to_naive_utc(window_start),
+            None if replaces_window_start is None else to_naive_utc(replaces_window_start),
         )

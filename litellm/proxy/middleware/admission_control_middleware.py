@@ -11,6 +11,8 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 
 from litellm._logging import verbose_proxy_logger
 
+ADMISSION_LEASE_SCOPE_KEY: Final = "litellm.admission_lease"
+
 _EXEMPT_PATHS: Final[frozenset[str]] = frozenset(
     {
         "/health/liveliness",
@@ -130,6 +132,12 @@ class AdmissionControlState:
         return self._metrics
 
 
+class _AdmissionLease:
+    def __init__(self, state: AdmissionControlState) -> None:
+        self.state: Final = state
+        self.active: bool = True
+
+
 class AdmissionControlMiddleware:
     def __init__(
         self,
@@ -143,6 +151,15 @@ class AdmissionControlMiddleware:
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        inherited_lease: Final = scope.get(ADMISSION_LEASE_SCOPE_KEY)
+        if (
+            isinstance(inherited_lease, _AdmissionLease)
+            and inherited_lease.state is self.state
+            and inherited_lease.active
+        ):
             await self.app(scope, receive, send)
             return
 
@@ -178,9 +195,13 @@ class AdmissionControlMiddleware:
             state.record_dequeue()
             state.record_admission()
 
+        lease: Final = _AdmissionLease(state)
+        scope[ADMISSION_LEASE_SCOPE_KEY] = lease  # rebind-ok: outer ASGI wrappers must see downstream route metadata
         try:
             await self.app(scope, receive, send)
         finally:
+            lease.active = False
+            scope.pop(ADMISSION_LEASE_SCOPE_KEY, None)
             semaphore.release()
             state.record_release()
 

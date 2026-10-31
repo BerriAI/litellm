@@ -9,8 +9,9 @@ import hashlib
 import os
 from collections.abc import Mapping
 from contextlib import ExitStack
-from typing import TYPE_CHECKING, Final
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
+from typing import TYPE_CHECKING, Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -53,6 +54,7 @@ from litellm.proxy.auth.login_utils import (
     is_env_credential_login_enabled,
     screen_login_password_for_breach,
 )
+from tests._master_key import MASTER_KEY
 
 # Successful DB-user logins schedule the background HIBP screen; disable it so
 # no test ever does live network I/O to haveibeenpwned.com from CI.
@@ -94,9 +96,9 @@ def test_get_ui_credentials_requires_password():
 @pytest.mark.asyncio
 async def test_authenticate_user_admin_login_with_ui_credentials():
     """Test admin login using UI_USERNAME and UI_PASSWORD"""
-    master_key = "sk-1234"
+    master_key = MASTER_KEY
     ui_username = "admin"
-    ui_password = "sk-1234"
+    ui_password = MASTER_KEY
 
     mock_prisma_client = MagicMock()
     mock_prisma_client.db.litellm_usertable.find_first = AsyncMock(return_value=None)
@@ -146,7 +148,7 @@ async def test_authenticate_user_admin_login_with_ui_credentials():
 @pytest.mark.asyncio
 async def test_authenticate_user_admin_login_with_master_key_as_password(monkeypatch):
     """Test admin login when UI_PASSWORD is not set, should use master_key"""
-    master_key = "sk-1234"
+    master_key = MASTER_KEY
     ui_username = "admin"
 
     mock_prisma_client = MagicMock()
@@ -201,7 +203,7 @@ async def test_authenticate_user_admin_login_with_master_key_as_password(monkeyp
 @pytest.mark.asyncio
 async def test_authenticate_user_invalid_credentials():
     """Test authentication failure with invalid credentials"""
-    master_key = "sk-1234"
+    master_key = MASTER_KEY
     ui_username = "admin"
     wrong_password = "wrong-password"
 
@@ -246,7 +248,7 @@ async def test_authenticate_user_missing_master_key():
 @pytest.mark.asyncio
 async def test_authenticate_user_wrong_password():
     """Test authentication failure with wrong password for database user"""
-    master_key = "sk-1234"
+    master_key = MASTER_KEY
     user_email = "test@example.com"
     correct_password = "correct-password"
     wrong_password = "wrong-password"
@@ -287,7 +289,7 @@ async def test_authenticate_user_wrong_password():
 @pytest.mark.asyncio
 async def test_authenticate_user_email_case_insensitive_login():
     """Test that email lookup is case-insensitive during login"""
-    master_key = "sk-1234"
+    master_key = MASTER_KEY
     stored_email = "testemail@test.com"
     login_email_mixed_case = "testEmail@test.com"
     correct_password = "correct-password"
@@ -361,9 +363,9 @@ async def test_authenticate_user_email_case_insensitive_login():
 @pytest.mark.asyncio
 async def test_authenticate_user_database_required_for_admin(monkeypatch):
     """Test that database is required for admin login"""
-    master_key = "sk-1234"
+    master_key = MASTER_KEY
     ui_username = "admin"
-    ui_password = "sk-1234"
+    ui_password = MASTER_KEY
 
     mock_prisma_client = MagicMock()
     mock_prisma_client.db.litellm_usertable.find_first = AsyncMock(return_value=None)
@@ -400,9 +402,9 @@ async def test_authenticate_user_database_required_for_admin(monkeypatch):
 @pytest.mark.asyncio
 async def test_authenticate_user_admin_login_with_non_ascii_characters():
     """Test admin login with non-ASCII characters in password (issue #19559)"""
-    master_key = "sk-1234"
+    master_key = MASTER_KEY
     ui_username = "admin£test"
-    ui_password = "sk-1234£pass"
+    ui_password = "sk-9876£pass"
 
     mock_prisma_client = MagicMock()
     mock_prisma_client.db.litellm_usertable.find_first = AsyncMock(return_value=None)
@@ -474,9 +476,9 @@ async def test_authenticate_user_multiple_logins_generate_unique_tokens():
     This test verifies that users can have multiple concurrent UI sessions.
     Previous UI session tokens should NOT be expired/blocked when a new session is created.
     """
-    master_key = "sk-1234"
+    master_key = MASTER_KEY
     ui_username = "admin"
-    ui_password = "sk-1234"
+    ui_password = MASTER_KEY
 
     mock_prisma_client = MagicMock()
     mock_prisma_client.db.litellm_usertable.find_first = AsyncMock(return_value=None)
@@ -547,7 +549,7 @@ async def test_authenticate_user_multiple_logins_generate_unique_tokens():
 @pytest.mark.asyncio
 async def test_authenticate_user_database_login_with_non_ascii_password():
     """Test database user login with non-ASCII characters in password (issue #19559)"""
-    master_key = "sk-1234"
+    master_key = MASTER_KEY
     user_email = "test@example.com"
     password_with_special_char = "correct£password"
     hashed_password = hash_token(token=password_with_special_char)
@@ -637,10 +639,10 @@ class TestEncodeUiSessionJwt:
         this helper must now be accepted."""
         from unittest.mock import MagicMock
 
-        from litellm.proxy._experimental.mcp_server.byok_oauth_endpoints import (
-            _user_id_from_session_cookie,
-        )
         from litellm.proxy.auth.login_utils import encode_ui_session_jwt
+        from litellm.proxy.mcp_server.byok_oauth_endpoints import (
+            user_id_from_session_cookie,
+        )
 
         token_object = {"user_id": "cornell-user", "key": "sk-abc", "login_method": "sso"}
         with patch("litellm.proxy.auth.login_utils.LITELLM_UI_SESSION_DURATION", "24h"):
@@ -648,7 +650,7 @@ class TestEncodeUiSessionJwt:
         request = MagicMock()
         request.cookies = {"token": token}
         with patch("litellm.proxy.proxy_server.master_key", "sk-master-for-tests"):
-            assert _user_id_from_session_cookie(request) == "cornell-user"
+            assert user_id_from_session_cookie(request) == "cornell-user"
 
 
 def _throttle(
@@ -675,6 +677,12 @@ def _throttle(
         blocks=blocks,
         redis_cache=redis_cache,
     )
+
+
+def _set_throttle_clock(monkeypatch: pytest.MonkeyPatch, now: float) -> None:
+    from litellm.proxy.auth import login_throttle
+
+    monkeypatch.setattr(login_throttle, "time", SimpleNamespace(time=lambda: now))
 
 
 def _stores():
@@ -755,12 +763,14 @@ async def test_too_many_failures_for_one_username_block_that_pair_and_carry_retr
 
     monkeypatch.setenv("UI_USERNAME", "admin")
     monkeypatch.setenv("UI_PASSWORD", "right")
+    _set_throttle_clock(monkeypatch, 1_000.0)
     throttle = _throttle(user_limit=2, block_seconds=77)
     keys = throttle._keys("admin")
 
     assert [await _fail(throttle) for _ in range(3)] == ["401", "401", "401"], "the limit itself is a plain 401"
     assert throttle._local_block_ttl(keys.pair_block) == 77
 
+    _set_throttle_clock(monkeypatch, 1_000.6)
     with pytest.raises(ProxyException) as blocked:
         await _guess(throttle)
     assert blocked.value.code == "429"
@@ -813,10 +823,12 @@ async def test_a_correct_password_is_refused_while_its_pair_is_blocked(monkeypat
     monkeypatch.setenv("UI_USERNAME", "admin")
     monkeypatch.setenv("UI_PASSWORD", "right")
     monkeypatch.setenv("DATABASE_URL", "postgresql://stub")
+    _set_throttle_clock(monkeypatch, 1_000.0)
     throttle = _throttle(user_limit=1, block_seconds=90)
 
     assert [await _fail(throttle, username="user@corp.com") for _ in range(3)] == ["401", "401", "429"]
 
+    _set_throttle_clock(monkeypatch, 1_000.6)
     with pytest.raises(ProxyException) as refused:
         await _db_login(throttle, "user@corp.com", "right", correct=True)
     assert refused.value.code == "429"
@@ -1327,12 +1339,14 @@ async def test_a_source_block_outranks_a_pair_block_in_the_retry_after(monkeypat
 
     monkeypatch.setenv("UI_USERNAME", "admin")
     monkeypatch.setenv("UI_PASSWORD", "right")
+    _set_throttle_clock(monkeypatch, 1_000.0)
     throttle = _throttle(user_limit=1, source_limit=3, block_seconds=120, client_ip="203.0.113.45")
     assert [await _fail(throttle) for _ in range(2)] == ["401", "401"], "the admin pair is now blocked"
     throttle.blocks.set_cache(throttle._keys("admin").pair_block, 1, ttl=30)
     assert [await _fail(throttle, username=f"spray-{i}@corp.com") for i in range(3)] == ["401"] * 3
     assert throttle._local_block_ttl(throttle._keys("admin").source_block) == 120, "the source is now blocked too"
 
+    _set_throttle_clock(monkeypatch, 1_000.6)
     for name in ("admin", "spray-0@corp.com", "never-seen@corp.com"):
         with pytest.raises(ProxyException) as refused:
             await _guess(throttle, username=name)
@@ -1456,6 +1470,7 @@ async def test_a_redis_outage_falls_back_to_this_workers_own_counter(monkeypatch
 
     monkeypatch.setenv("UI_USERNAME", "admin")
     monkeypatch.setenv("UI_PASSWORD", "right")
+    _set_throttle_clock(monkeypatch, 1_000.0)
     throttle = _throttle(user_limit=2, block_seconds=300, redis_cache=_DownRedis())
 
     records: list[logging.LogRecord] = []
@@ -1464,6 +1479,7 @@ async def test_a_redis_outage_falls_back_to_this_workers_own_counter(monkeypatch
     verbose_proxy_logger.addHandler(handler)
     try:
         assert [await _fail(throttle) for _ in range(3)] == ["401"] * 3
+        _set_throttle_clock(monkeypatch, 1_000.6)
         with pytest.raises(ProxyException) as blocked:
             await _guess(throttle)
     finally:
@@ -1764,7 +1780,7 @@ class TestDisablePasswordLoginWhenSSOEnabled:
 
     @pytest.mark.asyncio
     async def test_rejects_correct_admin_credentials_when_sso_configured(self):
-        master_key = "sk-1234"
+        master_key = MASTER_KEY
         ui_username = "admin"
 
         mock_prisma_client = MagicMock()
@@ -1790,7 +1806,7 @@ class TestDisablePasswordLoginWhenSSOEnabled:
 
     @pytest.mark.asyncio
     async def test_rejects_correct_db_user_credentials_when_sso_configured(self):
-        master_key = "sk-1234"
+        master_key = MASTER_KEY
         user_email = "test@example.com"
         password = "correct-password"
 
@@ -1823,7 +1839,7 @@ class TestDisablePasswordLoginWhenSSOEnabled:
     async def test_allows_password_login_when_setting_enabled_but_sso_not_configured(self):
         """The setting alone must not lock out an admin who has not actually
         configured SSO — there would be no fallback left."""
-        master_key = "sk-1234"
+        master_key = MASTER_KEY
         ui_username = "admin"
 
         mock_prisma_client = MagicMock()
@@ -1860,7 +1876,7 @@ class TestDisablePasswordLoginWhenSSOEnabled:
         fail. The gate must read the real env (no is_sso_provider_fully_configured
         mock here) and still let password login through, or an admin who set
         one env var by mistake is locked out with no way in."""
-        master_key = "sk-1234"
+        master_key = MASTER_KEY
         ui_username = "admin"
 
         mock_prisma_client = MagicMock()
@@ -1894,7 +1910,7 @@ class TestDisablePasswordLoginWhenSSOEnabled:
     async def test_allows_password_login_when_sso_configured_but_setting_not_enabled(self):
         """SSO being configured must not, by itself, disable the password
         fallback: the setting is opt-in."""
-        master_key = "sk-1234"
+        master_key = MASTER_KEY
         ui_username = "admin"
 
         mock_prisma_client = MagicMock()
@@ -1933,7 +1949,7 @@ class TestDisableEnvCredentialLogin:
 
     @pytest.mark.asyncio
     async def test_rejects_correct_env_credentials_when_disabled(self):
-        master_key = "sk-1234"
+        master_key = MASTER_KEY
         ui_username = "admin"
         ui_password = "env-only-password"
 
@@ -1960,7 +1976,7 @@ class TestDisableEnvCredentialLogin:
     async def test_rejects_master_key_fallback_when_disabled(self):
         """With UI_PASSWORD unset, the master key IS the env password, so the
         setting must reject it too or it protects nothing by default."""
-        master_key = "sk-1234"
+        master_key = MASTER_KEY
 
         mock_prisma_client = MagicMock()
         mock_prisma_client.db.litellm_usertable.find_first = AsyncMock(return_value=None)
@@ -1981,7 +1997,7 @@ class TestDisableEnvCredentialLogin:
     @pytest.mark.asyncio
     @respx.mock
     async def test_db_user_login_still_works_when_disabled(self, httpx_transport):
-        master_key = "sk-1234"
+        master_key = MASTER_KEY
         user_email = "admin@example.com"
         password = "Str0ng!Passw0rd"
         sha1 = hashlib.sha1(password.encode("utf-8"), usedforsecurity=False).hexdigest().upper()
@@ -2032,7 +2048,7 @@ class TestDisableEnvCredentialLogin:
     async def test_env_login_still_works_when_setting_absent(self):
         """Env-credential login is the bootstrap path on a fresh install and
         must stay on by default."""
-        master_key = "sk-1234"
+        master_key = MASTER_KEY
         ui_username = "admin"
 
         mock_prisma_client = MagicMock()
@@ -2131,7 +2147,7 @@ class TestPasswordResetRequiredSessionMinting:
                 result = await authenticate_user(
                     username="reset@example.com",
                     password="Str0ng!Passw0rd",
-                    master_key="sk-1234",
+                    master_key=MASTER_KEY,
                     prisma_client=mock_prisma_client,
                     throttle=_unlimited_throttle(),
                     general_settings=_POLICY_NO_BREACH_CHECK,
@@ -2143,7 +2159,7 @@ class TestPasswordResetRequiredSessionMinting:
         row = _db_user_row(password="Str0ng!Passw0rd", password_reset_required=True)
         result, key_kwargs = await self._login(_prisma_with_user(row))
 
-        assert key_kwargs["allowed_routes"] == ["/user/password/change", "/session/logout"]
+        assert key_kwargs["allowed_routes"] == ["/user/password/change", "/session/logout", "/management/v1/users/me"]
         assert key_kwargs["metadata"] == {"login_method": "username_password", "password_reset_required": True}
         assert result.password_reset_required is True
 
@@ -2173,7 +2189,7 @@ class TestPasswordResetRequiredSessionMinting:
                     result = await authenticate_user(
                         username="reset@example.com",
                         password="Str0ng!Passw0rd",
-                        master_key="sk-1234",
+                        master_key=MASTER_KEY,
                         prisma_client=mock_prisma_client,
                         throttle=_unlimited_throttle(),
                         general_settings=_POLICY_NO_BREACH_CHECK,
@@ -2204,7 +2220,7 @@ class TestPasswordResetRequiredSessionMinting:
 
         result, key_kwargs, _ = await self._login_with_screen_result(mock_prisma_client, breached=True)
 
-        assert key_kwargs["allowed_routes"] == ["/user/password/change", "/session/logout"]
+        assert key_kwargs["allowed_routes"] == ["/user/password/change", "/session/logout", "/management/v1/users/me"]
         assert key_kwargs["metadata"] == {"login_method": "username_password", "password_reset_required": True}
         assert result.password_reset_required is True
 

@@ -28,12 +28,14 @@ Response format:
 """
 
 from collections.abc import Iterable, Mapping
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, Final, cast
 
 import httpx
 from pydantic import ConfigDict, TypeAdapter
 
 import litellm
+from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR, set_hidden_params
+from litellm.litellm_core_utils.url_utils import ensure_api_route
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.image_generation.transformation import (
     BaseImageGenerationConfig,
@@ -57,6 +59,7 @@ if TYPE_CHECKING:
 else:
     LiteLLMLoggingObj = Any
 
+_DECODED_JSON: Final = TypeAdapter(object)
 _JSON_DICT: Final = TypeAdapter(dict[str, object], config=ConfigDict(hide_input_in_errors=True))
 _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
 _JSON_OBJECTS: Final = TypeAdapter(Iterable[Mapping[str, object]], config=ConfigDict(hide_input_in_errors=True))
@@ -226,21 +229,31 @@ class OpenRouterImageGenerationConfig(BaseImageGenerationConfig):
 
             cost: Final = usage_data.get("cost")
             if cost is not None:
-                if not hasattr(model_response, "_hidden_params"):
-                    model_response._hidden_params = {}
-                if "additional_headers" not in model_response._hidden_params:
-                    model_response._hidden_params["additional_headers"] = {}
-                model_response._hidden_params["additional_headers"]["llm_provider-x-litellm-response-cost"] = float(
-                    cost
+                if not hasattr(model_response, HIDDEN_PARAMS_ATTR):
+                    set_hidden_params(model_response, {})
+                hidden_params: Final = cast(  # cast-ok: preserve mapping operations on dynamic response metadata
+                    dict[str, object], getattr(model_response, HIDDEN_PARAMS_ATTR)
                 )
+                if "additional_headers" not in hidden_params:
+                    hidden_params["additional_headers"] = {}
+                additional_headers: Final = cast(  # cast-ok: preserve mapping operations on response metadata
+                    dict[str, object], hidden_params["additional_headers"]
+                )
+                additional_headers["llm_provider-x-litellm-response-cost"] = float(cost)
 
             cost_details: Final = usage_data.get("cost_details", {})
             if cost_details:
-                if "response_cost_details" not in model_response._hidden_params:
-                    model_response._hidden_params["response_cost_details"] = {}
-                model_response._hidden_params["response_cost_details"].update(cost_details)
+                cost_details_hidden_params: Final = cast(  # cast-ok: preserve dynamic mapping behavior
+                    dict[str, object], getattr(model_response, HIDDEN_PARAMS_ATTR)
+                )
+                if "response_cost_details" not in cost_details_hidden_params:
+                    cost_details_hidden_params["response_cost_details"] = {}
+                response_cost_details: Final = cast(  # cast-ok: preserve mapping operations on response metadata
+                    dict[str, object], cost_details_hidden_params["response_cost_details"]
+                )
+                response_cost_details.update(cost_details)
 
-        model_response._hidden_params["model"] = response_json.get("model", model)
+        model_response.hidden_params["model"] = response_json.get("model", model)
 
     def get_complete_url(
         self,
@@ -258,10 +271,7 @@ class OpenRouterImageGenerationConfig(BaseImageGenerationConfig):
         Default: https://openrouter.ai/api/v1/chat/completions
         """
         if api_base:
-            if not api_base.endswith("/chat/completions"):
-                api_base = api_base.rstrip("/")
-                return f"{api_base}/chat/completions"
-            return api_base
+            return ensure_api_route(api_base, "chat/completions")
 
         return "https://openrouter.ai/api/v1/chat/completions"
 
@@ -350,7 +360,7 @@ class OpenRouterImageGenerationConfig(BaseImageGenerationConfig):
             ImageResponse: Populated image response
         """
         try:
-            response_json: Final = raw_response.json()
+            response_json: Final = _DECODED_JSON.validate_python(raw_response.json())
         except Exception as e:
             raise OpenRouterException(
                 message=f"Error parsing OpenRouter response: {e}",

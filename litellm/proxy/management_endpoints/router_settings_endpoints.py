@@ -10,16 +10,18 @@ GET /router/fields - Get router settings field definitions without values (for U
 import inspect
 from collections.abc import Mapping
 from types import MappingProxyType
-from typing import Any, Final, get_args
+from typing import Final, get_args
 
 from fastapi import APIRouter, Depends
-from pydantic import BaseModel, Field
+from pydantic import Field
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.config_resolvers import FieldSource, SettingsStore, source_for
 from litellm.router import Router
+from litellm.router_api import SETTING_FIELDS
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.management_endpoints import (
     ROUTER_SETTINGS_FIELDS,
     ROUTING_STRATEGY_DESCRIPTIONS,
@@ -29,9 +31,9 @@ from litellm.types.management_endpoints import (
 router: Final = APIRouter()
 
 
-class RouterSettingsResponse(BaseModel):
+class RouterSettingsResponse(LiteLLMBaseModel):
     fields: list[RouterSettingsField] = Field(description="List of all configurable router settings with metadata")
-    current_values: dict[str, Any] = Field(description="Current values of router settings")
+    current_values: dict[str, object] = Field(description="Current values of router settings")
     routing_strategy_descriptions: dict[str, str] = Field(description="Descriptions for each routing strategy option")
     routing_group_strategies: tuple[str, ...] = Field(
         description="Strategies supported when constructing a routing group"
@@ -39,7 +41,7 @@ class RouterSettingsResponse(BaseModel):
     source: dict[str, FieldSource] = Field(description="Source of each current router setting")
 
 
-class RouterFieldsResponse(BaseModel):
+class RouterFieldsResponse(LiteLLMBaseModel):
     fields: list[RouterSettingsField] = Field(
         description="List of all configurable router settings with metadata (without field values)"
     )
@@ -70,10 +72,11 @@ def _get_routing_strategies_from_router_class() -> list[str]:
 
     # Get the routing_strategy parameter
     routing_strategy_param: Final = sig.parameters.get("routing_strategy")
+    routing_strategy_annotation: Final[object] = routing_strategy_param.annotation if routing_strategy_param else None
 
-    if routing_strategy_param and routing_strategy_param.annotation:
+    if routing_strategy_param and routing_strategy_annotation:
         # Extract Literal values using get_args
-        literal_values: Final = get_args(routing_strategy_param.annotation)
+        literal_values: Final = get_args(routing_strategy_annotation)
         if literal_values:
             return list(literal_values)
 
@@ -122,14 +125,19 @@ async def get_router_settings(
             # generic `hasattr` loop below would miss them.
             current_values["routing_groups"] = [
                 group.model_dump(exclude=frozenset(("model_priorities",)) if group.model_priorities is None else None)
-                for group in llm_router._routing_groups.values()
+                for group in llm_router.registry().routing_groups().values()
             ]
+            router_settings: Final = llm_router.settings()
             for field in router_fields:
                 if field.field_name == "routing_groups":
                     continue
-                if hasattr(llm_router, field.field_name):
-                    value = getattr(llm_router, field.field_name)
-                    current_values[field.field_name] = value
+                if field.field_name in SETTING_FIELDS:
+                    if router_settings.is_set(field.field_name):
+                        current_values[field.field_name] = getattr(router_settings, field.field_name)
+                elif field.field_name == "model_group_alias":
+                    current_values[field.field_name] = llm_router.registry().aliases()
+                elif hasattr(llm_router, field.field_name):
+                    current_values[field.field_name] = getattr(llm_router, field.field_name, None)
 
         # Merge with config values (config takes precedence)
         current_values.update(router_settings_from_config)

@@ -117,6 +117,17 @@ async def embeddings(request: Request):
     }
 
 
+@app.post("/v1/systemone")
+async def systemone(request: Request):
+    body = await request.json()
+    noul_keys = [key for key, question in body.get("questions", {}).items() if question.get("type") == "noul"]
+    return {
+        "model": body.get("model", "mock-decisions"),
+        "answers": {key: {"type": "noul", "noul": 0.9} for key in noul_keys},
+        "usage": {"input_tokens": 12, "output_tokens": 3},
+    }
+
+
 if __name__ == "__main__":
     # The port is overridable so two checkouts can run the harness at the same
     # time; the default keeps every existing caller (run_e2e.sh, the CircleCI

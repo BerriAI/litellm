@@ -68,8 +68,7 @@ test.describe("Public model hub (/ui/model_hub_table)", () => {
     // The page expects the proxy key as the `key` query param. Use the master
     // key the e2e runner already exports — this matches what the AI Hub copy
     // button hands out.
-    const masterKey = process.env.LITELLM_MASTER_KEY || "sk-1234";
-    await page.goto(`/ui/model_hub_table?key=${masterKey}`);
+    await page.goto(`/ui/model_hub_table?key=${masterKey()}`);
 
     // Dismiss the feedback popup before asserting on the tab, so a popup
     // race can't briefly mask the tab while we're evaluating visibility.

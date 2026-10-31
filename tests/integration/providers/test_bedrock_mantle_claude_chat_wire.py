@@ -1,6 +1,7 @@
 import json
 import re
 from collections.abc import Callable, Mapping
+from itertools import chain
 from typing import Final
 from uuid import uuid4
 
@@ -23,6 +24,7 @@ _ACCESS_KEY: Final = "AKIAINTEGRATION000009"
 _SECRET_KEY: Final = "synthetic-secret-key-for-testing"
 _MESSAGES_PATH: Final = "/anthropic/v1/messages"
 _BRIDGE_VERSION: Final = "bedrock-2023-05-31"
+_HEALTH_PROMPTS: Final = ("Hey how's it going?", "What's 1 + 1?")
 _INPUT_TOKENS: Final = 23
 _OUTPUT_TOKENS: Final = 7
 _USAGE: Final = (_INPUT_TOKENS, _OUTPUT_TOKENS, _INPUT_TOKENS + _OUTPUT_TOKENS)
@@ -262,13 +264,17 @@ def _assert_chunk_envelope(chunks: tuple[dict[str, JsonValue], ...], model: str,
     return next(iter(identities))
 
 
+def _content_chunks(chunks: tuple[dict[str, JsonValue], ...]) -> tuple[dict[str, JsonValue], ...]:
+    return tuple(chunk for chunk in chunks if chunk.get("usage") is None)
+
+
 def _finish_reasons(chunks: tuple[dict[str, JsonValue], ...]) -> list[JsonValue]:
-    reasons: Final = (_only_choice(chunk).get("finish_reason") for chunk in chunks)
+    reasons: Final = (_only_choice(chunk).get("finish_reason") for chunk in _content_chunks(chunks))
     return [reason for reason in reasons if reason is not None]
 
 
 def _deltas(chunks: tuple[dict[str, JsonValue], ...]) -> tuple[dict[str, JsonValue], ...]:
-    return tuple(object_value(_only_choice(chunk)["delta"]) for chunk in chunks)
+    return tuple(object_value(_only_choice(chunk)["delta"]) for chunk in _content_chunks(chunks))
 
 
 def _sdk_base(gateway: Gateway) -> str:
@@ -300,12 +306,12 @@ def test_chat_completion_on_a_mantle_claude_id_posts_native_messages_and_spends_
 @pytest.mark.parametrize(
     ("stream_options", "usage_chunks"),
     [
-        pytest.param({"stream_options": {"include_usage": True}}, [_USAGE], id="include_usage"),
+        pytest.param({"stream_options": {"include_usage": True}}, [(True, *_USAGE)], id="include_usage"),
         pytest.param({}, [], id="no_usage"),
     ],
 )
 def test_chat_stream_on_a_mantle_claude_id_relays_openai_chunks_from_the_native_stream(
-    gateway: Gateway, stream_options: dict[str, JsonValue], usage_chunks: list[tuple[int, int, int]]
+    gateway: Gateway, stream_options: dict[str, JsonValue], usage_chunks: list[tuple[JsonValue, ...]]
 ) -> None:
     marker: Final = uuid4().hex
     expected: Final = _outbound(_HAIKU, [_user_turn(marker)], stream=True)
@@ -321,9 +327,9 @@ def test_chat_stream_on_a_mantle_claude_id_relays_openai_chunks_from_the_native_
         identity: Final = _assert_chunk_envelope(chunks, model, response.text)
         assert "".join(str(delta.get("content") or "") for delta in _deltas(chunks)) == _answer(marker), response.text
         assert _finish_reasons(chunks) == ["stop"], response.text
-        assert [_token_usage(chunk) for chunk in chunks if chunk.get("usage") is not None] == usage_chunks, (
-            response.text
-        )
+        assert [
+            (chunk["choices"] == [], *_token_usage(chunk)) for chunk in chunks if chunk.get("usage") is not None
+        ] == usage_chunks, response.text
         _assert_success_row(
             _spend_row(_BY_REQUEST_ID, identity), model, _HAIKU, "acompletion", _mantle_cost(gateway, _HAIKU)
         )
@@ -619,15 +625,14 @@ def test_openai_sdk_chat_stream_on_a_mantle_claude_id(gateway: Gateway) -> None:
             )
         identities: Final = {chunk.id for chunk in chunks}
         assert len(identities) == 1 and {chunk.model for chunk in chunks} == {model}, chunks
-        assert "".join(chunk.choices[0].delta.content or "" for chunk in chunks) == _answer(marker), chunks
-        assert [chunk.choices[0].finish_reason for chunk in chunks if chunk.choices[0].finish_reason] == ["stop"], (
-            chunks
-        )
+        choices: Final = tuple(chain.from_iterable(chunk.choices for chunk in chunks))
+        assert "".join(choice.delta.content or "" for choice in choices) == _answer(marker), chunks
+        assert [choice.finish_reason for choice in choices if choice.finish_reason] == ["stop"], chunks
         assert [
-            (chunk.usage.prompt_tokens, chunk.usage.completion_tokens, chunk.usage.total_tokens)
+            (len(chunk.choices), chunk.usage.prompt_tokens, chunk.usage.completion_tokens, chunk.usage.total_tokens)
             for chunk in chunks
             if chunk.usage is not None
-        ] == [_USAGE], chunks
+        ] == [(0, *_USAGE)], chunks
         _assert_success_row(
             _spend_row(_BY_REQUEST_ID, next(iter(identities))),
             model,
@@ -687,15 +692,14 @@ async def test_async_openai_sdk_chat_stream_on_a_mantle_claude_id(gateway: Gatew
             chunks: Final = tuple([chunk async for chunk in stream])
         identities: Final = {chunk.id for chunk in chunks}
         assert len(identities) == 1 and {chunk.model for chunk in chunks} == {model}, chunks
-        assert "".join(chunk.choices[0].delta.content or "" for chunk in chunks) == _answer(marker), chunks
-        assert [chunk.choices[0].finish_reason for chunk in chunks if chunk.choices[0].finish_reason] == ["stop"], (
-            chunks
-        )
+        choices: Final = tuple(chain.from_iterable(chunk.choices for chunk in chunks))
+        assert "".join(choice.delta.content or "" for choice in choices) == _answer(marker), chunks
+        assert [choice.finish_reason for choice in choices if choice.finish_reason] == ["stop"], chunks
         assert [
-            (chunk.usage.prompt_tokens, chunk.usage.completion_tokens, chunk.usage.total_tokens)
+            (len(chunk.choices), chunk.usage.prompt_tokens, chunk.usage.completion_tokens, chunk.usage.total_tokens)
             for chunk in chunks
             if chunk.usage is not None
-        ] == [_USAGE], chunks
+        ] == [(0, *_USAGE)], chunks
         _assert_success_row(
             _spend_row(_BY_REQUEST_ID, next(iter(identities))),
             model,
@@ -869,8 +873,12 @@ def test_responses_api_stream_on_a_mantle_claude_id_bridges_to_the_native_stream
 def _health_peer(request: Request) -> Reply:
     assert (request.method, request.target) == ("POST", _MESSAGES_PATH), request.target
     assert request.headers["authorization"] == f"Bearer {_API_KEY}", sorted(request.headers)
+    assert request.headers["anthropic-version"] == "2023-06-01", sorted(request.headers)
     body: Final = _JSON_OBJECT.validate_json(request.body)
-    assert (body["model"], body["anthropic_version"]) == (_HAIKU, _BRIDGE_VERSION), request.body
+    assert body in tuple(
+        {"model": _HAIKU, "max_tokens": 16, "messages": [{"role": "user", "content": prompt}]}
+        for prompt in _HEALTH_PROMPTS
+    ), request.body
     return _text_reply(uuid4().hex)
 
 

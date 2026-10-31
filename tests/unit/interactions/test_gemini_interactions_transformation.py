@@ -422,7 +422,7 @@ class TestInteractionOperationUrls:
             (
                 "transform_cancel_interaction_request",
                 "interaction-789",
-                "interaction-789:cancel",
+                "interaction-789/cancel",
             ),
         ],
     )
@@ -450,7 +450,7 @@ class TestInteractionOperationUrls:
 
         assert (
             url
-            == "https://generativelanguage.googleapis.com/v1beta/interactions/..%2F..%2Finteractions%2Fother%3Fx%3D1%23frag:cancel"
+            == "https://generativelanguage.googleapis.com/v1beta/interactions/..%2F..%2Finteractions%2Fother%3Fx%3D1%23frag/cancel"
         )
         assert params == {}
 

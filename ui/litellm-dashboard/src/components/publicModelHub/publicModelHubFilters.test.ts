@@ -26,6 +26,12 @@ describe("serializePublicModelHubFilters", () => {
     });
   });
 
+  it("asks the route for every stored spelling of a decision model when decisions is picked", () => {
+    const filters: ColumnFiltersState = [{ id: MODE_FILTER_ID, value: ["chat", "decisions"] }];
+
+    expect(serializePublicModelHubFilters(filters)).toEqual({ "filter[mode][in]": "chat,evaluation,decisions" });
+  });
+
   it("omits blank filters rather than sending parameters the route rejects", () => {
     const filters: ColumnFiltersState = [
       { id: MODE_FILTER_ID, value: [] },

@@ -23,7 +23,7 @@ from typing import TYPE_CHECKING, Final, Protocol, TypeAlias
 from urllib.parse import unquote, unquote_plus, urlencode, urlsplit, urlunsplit
 
 import httpx
-from pydantic import BaseModel, SecretStr, TypeAdapter, ValidationError
+from pydantic import SecretStr, TypeAdapter, ValidationError
 from typing_extensions import assert_never
 
 from litellm._logging import verbose_logger
@@ -44,6 +44,7 @@ from litellm.llms.base_llm.auth.types import (
     TokenExchangeSpec,
     TokenTransportError,
 )
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.services import ServiceTypes
 
 if TYPE_CHECKING:
@@ -86,7 +87,7 @@ _CREDENTIAL_CHARS: Final = re.compile(r"[^A-Za-z0-9._~+/=-]")
 _SENTINEL_BODY_MESSAGES: Final = frozenset({_OVERSIZED_BODY_MESSAGE, _NON_OBJECT_BODY_MESSAGE})
 
 
-class _TokenExchangeResponse(BaseModel):
+class _TokenExchangeResponse(LiteLLMBaseModel):
     access_token: str
     expires_in: int | None = None
     token_type: str | None = None

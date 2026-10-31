@@ -26,6 +26,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
+from starlette.requests import Request
 
 
 from litellm.proxy._types import PassThroughGenericEndpoint, ProxyException
@@ -105,14 +106,14 @@ async def test_runtime_check_treats_missing_auth_key_as_authenticated():
         request=request,
         route="/forwarder",
         pass_through_endpoints=[raw_endpoint_no_auth_key],
-        api_key="sk-1234",
+        api_key="sk-9876",
     )
 
     # Result is the api_key string (auth is REQUIRED for this endpoint
     # — flow continues to normal key validation), NOT an empty
     # ``UserAPIKeyAuth()`` (which was the unauthenticated-forwarder
     # bug).
-    assert result == "sk-1234"
+    assert result == "sk-9876"
 
 
 @pytest.mark.asyncio
@@ -137,3 +138,15 @@ async def test_runtime_check_explicit_auth_false_still_skips_validation():
     )
 
     assert isinstance(result, UserAPIKeyAuth)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("route", ["/eu_jev/v1/systemone", "/eu_jev/v1/systemone/extra", "/eu_jev/v1/systemone2"])
+async def test_no_eu_jev_route_reads_the_litellm_user_api_key_header(route: str) -> None:
+    request: Final = Request({"type": "http", "headers": [(b"litellm_user_api_key", b"sk-from-header")]})
+
+    result: Final = await check_api_key_for_custom_headers_or_pass_through_endpoints(
+        request=request, route=route, pass_through_endpoints=None, api_key="sk-from-bearer"
+    )
+
+    assert result == "sk-from-bearer"

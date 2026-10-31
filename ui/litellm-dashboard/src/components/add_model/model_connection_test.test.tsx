@@ -93,6 +93,19 @@ describe("ModelConnectionTest", () => {
     expect(toast.success).toHaveBeenCalledWith("Copied to clipboard");
   });
 
+  it("asks for the required fields instead of crashing when nothing could be prepared", async () => {
+    vi.mocked(prepareModelAddRequest).mockResolvedValue([] as never);
+
+    render(<ModelConnectionTest formValues={{}} accessToken="sk-test" testMode="chat" />);
+    await finishConnectionTest();
+
+    expect(screen.getByTestId("connection-failure-msg")).toHaveTextContent("Connection to this model failed");
+    expect(
+      screen.getByText("Required fields are not filled in. Fill them in and test the connection again."),
+    ).toBeInTheDocument();
+    expect(testConnectionRequest).not.toHaveBeenCalled();
+  });
+
   it("shows a preparation failure without sending a connection request", async () => {
     vi.mocked(prepareModelAddRequest).mockResolvedValue(null as never);
 

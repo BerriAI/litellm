@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from typing import Final, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import ConfigDict, Field
+
+from litellm.types.llms.base import LiteLLMBaseModel
 
 from .base import GuardrailConfigModel
 
@@ -13,18 +15,18 @@ StraikerWebhookAction = Literal["NONE", "BLOCKED", "GUARDRAIL_INTERVENED"]
 STRAIKER_WEBHOOK_SCHEMA_VERSION: Final = "1"
 
 
-class StraikerWebhookStream(BaseModel):
+class StraikerWebhookStream(LiteLLMBaseModel):
     phase: StraikerWebhookStreamPhase = "none"
     index: int | None = None
 
 
-class StraikerWebhookEvent(BaseModel):
+class StraikerWebhookEvent(LiteLLMBaseModel):
     type: StraikerWebhookEventType
     id: str
     stream: StraikerWebhookStream = Field(default_factory=StraikerWebhookStream)
 
 
-class StraikerWebhookContent(BaseModel):
+class StraikerWebhookContent(LiteLLMBaseModel):
     model_config = ConfigDict(extra="ignore")
 
     texts: list[str] = Field(default_factory=list)
@@ -35,12 +37,12 @@ class StraikerWebhookContent(BaseModel):
     finish_reason: str | None = None
 
 
-class StraikerWebhookUsage(BaseModel):
+class StraikerWebhookUsage(LiteLLMBaseModel):
     input_tokens: int | None = None
     output_tokens: int | None = None
 
 
-class StraikerWebhookContext(BaseModel):
+class StraikerWebhookContext(LiteLLMBaseModel):
     call_surface: str
     mode: list[str] | None = None
     model: str | None = None
@@ -52,7 +54,7 @@ class StraikerWebhookContext(BaseModel):
     litellm_version: str | None = None
 
 
-class StraikerWebhookIdentity(BaseModel):
+class StraikerWebhookIdentity(LiteLLMBaseModel):
     litellm_key: str | None = None
     litellm_team: str | None = None
     litellm_user_id: str | None = None
@@ -61,12 +63,12 @@ class StraikerWebhookIdentity(BaseModel):
     end_user_id: str | None = None
 
 
-class StraikerWebhookApplication(BaseModel):
+class StraikerWebhookApplication(LiteLLMBaseModel):
     source: str
     name: str | None = None
 
 
-class StraikerWebhookRequest(BaseModel):
+class StraikerWebhookRequest(LiteLLMBaseModel):
     schema_version: str = STRAIKER_WEBHOOK_SCHEMA_VERSION
     event: StraikerWebhookEvent
     request: StraikerWebhookContent
@@ -78,7 +80,7 @@ class StraikerWebhookRequest(BaseModel):
     metadata: dict[str, object] | None = None
 
 
-class StraikerWebhookResponse(BaseModel):
+class StraikerWebhookResponse(LiteLLMBaseModel):
     model_config = ConfigDict(extra="allow")
 
     action: StraikerWebhookAction = "NONE"
@@ -91,7 +93,7 @@ class StraikerWebhookResponse(BaseModel):
     turn_id: str | None = Field(default=None, alias="turnId")
 
 
-class StraikerGuardrailConfigModelOptionalParams(BaseModel):
+class StraikerGuardrailConfigModelOptionalParams(LiteLLMBaseModel):
     timeout: float | None = Field(
         default=5.0,
         gt=0.0,

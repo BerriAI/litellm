@@ -4,8 +4,10 @@ from typing import Dict, Optional
 
 import pytest
 
+from litellm.constants import INVALID_API_KEY_ERROR_MESSAGE
 from litellm.proxy._types import UserAPIKeyAuth, hash_token
 from litellm.proxy.auth.resolvers.exceptions import (
+    KeyNotFoundError,
     NoDatabaseConnectionError,
     PrincipalMissingSourceKeyError,
 )
@@ -26,6 +28,14 @@ class _FakeCache:
         return self._entries.get(key)
 
     async def async_set_cache(self, *args, **kwargs):
+        return None
+
+
+class _FakeEmptyKeyTable:
+    """Stands in for the PrismaClient the store reads the key row through. Returning
+    no row is what a submitted key that was never issued looks like."""
+
+    async def get_data(self, *args, **kwargs):
         return None
 
 
@@ -68,3 +78,17 @@ async def test_resolve_raises_without_a_db_connection():
     store = IdentityStore(None, _FakeCache())
     with pytest.raises(NoDatabaseConnectionError):
         await store.resolve(hashed_token="missing")
+
+
+async def test_resolve_raises_a_generic_key_not_found_carrying_the_hash_when_no_key_row_exists():
+    """The 401 message stays generic for the caller, while the hash rides on the
+    exception so the auth failure log line can still name it for the operator."""
+    missing = hash_token("sk-live-not-a-key")
+    store = IdentityStore(_FakeEmptyKeyTable(), _FakeCache())
+
+    with pytest.raises(KeyNotFoundError) as exc_info:
+        await store.resolve(hashed_token=missing)
+
+    assert exc_info.value.message == INVALID_API_KEY_ERROR_MESSAGE
+    assert missing not in str(exc_info.value)
+    assert exc_info.value.hashed_token == missing

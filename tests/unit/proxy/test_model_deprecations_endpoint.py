@@ -9,6 +9,7 @@ from litellm.proxy import proxy_server
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.proxy_server import app
+from tests.unit.proxy.router_entry_point_stubs import route_entry_points_to_stubs
 
 client = TestClient(app)
 
@@ -16,7 +17,7 @@ client = TestClient(app)
 @pytest.fixture
 def authenticated_client(monkeypatch):
     app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
-        user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-1234"
+        user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-9876"
     )
     monkeypatch.setattr(
         litellm,
@@ -32,7 +33,7 @@ def authenticated_client(monkeypatch):
             },
         },
     )
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.get_model_list.return_value = [
         {
             "model_name": "sunset-alias",

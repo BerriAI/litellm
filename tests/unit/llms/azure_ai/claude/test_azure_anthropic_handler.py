@@ -6,10 +6,14 @@ sys.path.insert(
 )
 
 import json
+from typing import Final
 from unittest.mock import MagicMock, patch
 
 import pytest
+import respx
+from httpx import Response
 
+import litellm
 from litellm.llms.azure_ai.anthropic.handler import AzureAnthropicChatCompletion
 from litellm.types.utils import ModelResponse
 
@@ -158,12 +162,10 @@ class TestAzureAnthropicChatCompletion:
         mock_make_sync_call.assert_called_once()
         assert result is not None
 
-    @patch("litellm.llms.custom_httpx.http_handler._get_httpx_client")
+    @patch("litellm.llms.custom_httpx.http_handler.get_httpx_client")
     @patch("litellm.utils.ProviderConfigManager")
     @patch("litellm.llms.azure_ai.anthropic.handler.AzureAnthropicConfig")
-    def test_completion_non_streaming(
-        self, mock_azure_config, mock_provider_manager, mock_get_client
-    ):
+    def test_completion_non_streaming(self, mock_azure_config, mock_provider_manager, mock_get_client):
         # Note: decorators are applied in reverse order
         """Test completion without streaming"""
         handler = AzureAnthropicChatCompletion()
@@ -248,3 +250,94 @@ class TestAzureAnthropicChatCompletion:
         mock_get_client.assert_called_once_with(params={"timeout": timeout})
         assert mock_client.post.call_args.kwargs["timeout"] == timeout
         assert result is not None
+
+
+@respx.mock
+def test_completion_surfaces_the_status_and_headers_of_a_rejected_request():
+    respx.post("https://example-resource.services.ai.azure.com/anthropic/v1/messages").mock(
+        return_value=Response(
+            400,
+            json={"type": "error", "error": {"type": "invalid_request_error", "message": "max_tokens too large"}},
+            headers={"x-request-id": "req-1"},
+        )
+    )
+
+    with pytest.raises(litellm.BadRequestError) as rejected:
+        litellm.completion(
+            model="azure_ai/claude-sonnet-4-5",
+            messages=[{"role": "user", "content": "hi"}],
+            api_base="https://example-resource.services.ai.azure.com/anthropic",
+            api_key="azure-test-key",
+        )
+
+    assert rejected.value.status_code == 400
+    assert rejected.value.litellm_response_headers["x-request-id"] == "req-1"
+    assert "max_tokens too large" in str(rejected.value)
+
+
+@respx.mock
+@pytest.mark.parametrize("drop_params", [True, False])
+def test_completion_adds_the_binding_beta_so_block_binding_is_kept(
+    drop_params: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    route: Final = respx.post("https://example-resource.services.ai.azure.com/anthropic/v1/messages").mock(
+        return_value=Response(
+            200,
+            json={
+                "id": "msg_bound",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-sonnet-4-6",
+                "content": [{"type": "text", "text": "Hello"}],
+                "stop_reason": "end_turn",
+                "stop_sequence": None,
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+            },
+        )
+    )
+    block_binding: Final = {"prefix_mismatch_behavior": "error"}
+
+    litellm.completion(
+        model="azure_ai/claude-sonnet-4-6",
+        messages=[{"role": "user", "content": "hi"}],
+        api_base="https://example-resource.services.ai.azure.com/anthropic",
+        api_key="azure-test-key",
+        thinking={"type": "enabled", "budget_tokens": 1024, "block_binding": block_binding},
+        drop_params=drop_params,
+    )
+
+    sent: Final = json.loads(route.calls.last.request.content)
+    assert sent["thinking"] == {"type": "enabled", "budget_tokens": 1024, "block_binding": block_binding}
+    assert "thinking-binding-controls-2026-08-01" in route.calls.last.request.headers["anthropic-beta"].split(",")
+
+
+@respx.mock
+def test_completion_sends_the_binding_beta_next_to_the_callers_own_betas(local_beta_headers_config: None) -> None:
+    route: Final = respx.post("https://example-resource.services.ai.azure.com/anthropic/v1/messages").mock(
+        return_value=Response(
+            200,
+            json={
+                "id": "msg_bound",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-sonnet-4-6",
+                "content": [{"type": "text", "text": "Hello"}],
+                "stop_reason": "end_turn",
+                "stop_sequence": None,
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+            },
+        )
+    )
+
+    litellm.completion(
+        model="azure_ai/claude-sonnet-4-6",
+        messages=[{"role": "user", "content": "hi"}],
+        api_base="https://example-resource.services.ai.azure.com/anthropic",
+        api_key="azure-test-key",
+        thinking={"type": "enabled", "budget_tokens": 1024, "block_binding": {"prefix_mismatch_behavior": "error"}},
+        extra_headers={"anthropic-beta": "context-1m-2025-08-07"},
+    )
+
+    sent_betas: Final = set(route.calls.last.request.headers["anthropic-beta"].split(","))
+    assert {"context-1m-2025-08-07", "thinking-binding-controls-2026-08-01"} <= sent_betas

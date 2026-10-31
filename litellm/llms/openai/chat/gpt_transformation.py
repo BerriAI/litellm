@@ -4,20 +4,21 @@ Support for gpt model family
 
 import json
 import os
-from collections.abc import AsyncIterator, Coroutine, Iterator, Mapping
+from collections.abc import AsyncIterator, Coroutine, Iterator, Mapping, Sequence
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional, cast, overload
 from urllib.parse import urlparse
 
 import httpx
+from pydantic import TypeAdapter, ValidationError
 
 import litellm
 from litellm.constants import OPENAI_SYSTEM_MESSAGES_FIRST_PROVIDERS
-from litellm.litellm_core_utils.core_helpers import map_finish_reason
+from litellm.litellm_core_utils.core_helpers import drops_unsupported_params, map_finish_reason
 from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
-    _extract_reasoning_content,
-    _handle_invalid_parallel_tool_calls,
-    _should_convert_tool_call_to_json_mode,
+    extract_reasoning_content,
+    handle_invalid_parallel_tool_calls,
+    should_convert_tool_call_to_json_mode,
 )
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     drop_non_python_regex_patterns,
@@ -27,13 +28,19 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     hoist_images_from_tool_messages,
     system_messages_first,
     tool_with_sanitized_parameters,
+    without_prompt_cache_breakpoints,
 )
 from litellm.litellm_core_utils.prompt_templates.image_handling import (
     async_convert_url_to_base64,
     convert_url_to_base64,
 )
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
-from litellm.llms.base_llm.base_utils import BaseLLMModelInfo
+from litellm.llms.base_llm.base_utils import (
+    BaseLLMModelInfo,
+    hoist_developer_messages_into_leading_system_message,
+    map_developer_role_to_system_role,
+)
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import (
@@ -55,9 +62,9 @@ from litellm.types.utils import (
     ModelResponseStream,
     chat_completion_tool_call_from_dict,
 )
-from litellm.utils import convert_to_model_response_object
+from litellm.utils import convert_to_model_response_object, declared_mid_conversation_system_support
 
-from ..common_utils import OpenAIError
+from ..common_utils import OpenAIError, without_cache_control
 from ..workload_identity import get_workload_identity_bearer_token, resolve_openai_workload_identity_config
 
 if TYPE_CHECKING:
@@ -74,9 +81,82 @@ else:
 _NO_TOOLS_UPDATE: Final[Mapping[str, object]] = MappingProxyType({})
 
 
+def targets_openai_hosted_endpoint(custom_llm_provider: str | None, api_base: str | None) -> bool:
+    if custom_llm_provider != "openai":
+        return False
+    resolved_api_base: Final = (
+        api_base or litellm.api_base or os.getenv("OPENAI_BASE_URL") or os.getenv("OPENAI_API_BASE")
+    )
+    if not resolved_api_base:
+        return True
+    hostname: Final = urlparse(resolved_api_base).hostname
+    if hostname is None:
+        return True
+    return hostname == "openai.com" or hostname.endswith(".openai.com")
+
+
+def _roles(messages: Sequence[AllMessageValues]) -> tuple[str, ...]:
+    return tuple(message["role"] for message in messages)
+
+
+def translate_developer_role_for_openai_compatible_endpoint(
+    messages: Sequence[AllMessageValues],
+    *,
+    model: str,
+    custom_llm_provider: str | None,
+    api_base: str | None,
+    model_info: object,
+) -> Sequence[AllMessageValues]:
+    in_place: Final = map_developer_role_to_system_role(messages=messages)
+    if targets_openai_hosted_endpoint(custom_llm_provider, api_base):
+        return in_place
+    placed: Final = hoist_developer_messages_into_leading_system_message(messages=messages)
+    if _roles(placed) == _roles(in_place):
+        return in_place
+    if declared_mid_conversation_system_support(model, custom_llm_provider, model_info) is not False:
+        return in_place
+    return placed
+
+
+_OBJECT_MAPPING: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
+_CHOICE_MAPPINGS: Final = TypeAdapter(tuple[Mapping[str, object], ...])
+_DECODED_JSON: Final = TypeAdapter(object)
+
+
 def _litellm_params_str(litellm_params: Mapping[str, object] | None, key: str) -> str | None:
     value: Final = litellm_params.get(key) if litellm_params is not None else None
     return value if isinstance(value, str) else None
+
+
+def _drops_params(litellm_params: Mapping[str, object]) -> bool:
+    return drops_unsupported_params(litellm_params.get("drop_params"))
+
+
+def _names_claude(model: str, litellm_params: Mapping[str, object]) -> bool:
+    base_model: Final = litellm_params.get("base_model")
+    return "claude" in model.lower() or (isinstance(base_model, str) and "claude" in base_model.lower())
+
+
+def _claude_messages_within_cache_control_cap(
+    model: str,
+    messages: Sequence[AllMessageValues],
+    tools: Sequence["ChatCompletionToolParam"] | None,
+    litellm_params: Mapping[str, object],
+    request_params: Mapping[str, object],
+) -> Sequence[AllMessageValues]:
+    if not _names_claude(model, litellm_params) or not _drops_params(litellm_params):
+        return messages
+    from litellm.integrations.anthropic_cache_control_hook import messages_within_cache_control_cap
+
+    return list(messages_within_cache_control_cap(messages, tools, request_params.get("cache_control"), request_params))
+
+
+def _prompt_cache_options(optional_params: Mapping[str, object]) -> object | None:
+    try:
+        extra_body: Final = _OBJECT_MAPPING.validate_python(optional_params.get("extra_body"))
+    except ValidationError:
+        return None
+    return extra_body.get("prompt_cache_options")
 
 
 class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
@@ -135,7 +215,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         top_p: int | None = None,
         response_format: dict | None = None,
     ) -> None:
-        locals_: Final = locals().copy()
+        locals_: Final[Mapping[str, object]] = dict(locals())
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
@@ -254,51 +334,58 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         return content_copy
 
     async def _async_handle_pdf_url(self, content_item: ChatCompletionFileObjectFile) -> ChatCompletionFileObjectFile:
-        file_id: Final = content_item.get("file_id")
+        content_copy: Final = content_item.copy()
+        file_id: Final = content_copy.get("file_id")
         if file_id is not None:  # check for file id being url done in _handle_pdf_url
             base64_data: Final = await async_convert_url_to_base64(file_id)
-            content_item["file_data"] = base64_data
-            content_item["filename"] = "my_file.pdf"
-            content_item.pop("file_id")
-        return content_item
+            content_copy["file_data"] = base64_data
+            content_copy["filename"] = "my_file.pdf"
+            content_copy.pop("file_id")
+        return content_copy
 
     def _common_file_data_check(self, content_item: ChatCompletionFileObjectFile) -> ChatCompletionFileObjectFile:
         file_data: Final = content_item.get("file_data")
         filename: Final = content_item.get("filename")
         if file_data is not None and filename is None:
-            content_item["filename"] = "my_file.pdf"
+            return {**content_item, "filename": "my_file.pdf"}
         return content_item
+
+    @staticmethod
+    def _image_item_for_openai(content_item: ChatCompletionImageObject) -> ChatCompletionImageObject:
+        image_url: Final = content_item["image_url"]
+        if isinstance(image_url, str):
+            return {**content_item, "image_url": {"url": image_url}}
+        if not isinstance(image_url, dict):
+            return content_item
+        new_image_url_obj: Final = cast(
+            ChatCompletionImageUrlObject,
+            {k: v for k, v in image_url.items() if k not in {"format", "video_metadata"}},
+        )
+        return {**content_item, "image_url": new_image_url_obj}
+
+    @staticmethod
+    def _file_item_for_openai(content_item: ChatCompletionFileObject) -> ChatCompletionFileObject:
+        litellm_specific_params: Final = {"format", "detail", "video_metadata"}
+        file_obj: Final = content_item.get("file")
+        if file_obj is None:
+            raise litellm.BadRequestError(
+                message="Content block has type='file' but is missing the required 'file' field",
+                model=None,
+                llm_provider="openai",
+            )
+        new_file_obj: Final = ChatCompletionFileObjectFile(
+            **{k: v for k, v in file_obj.items() if k not in litellm_specific_params}
+        )
+        return {**content_item, "file": new_file_obj}
 
     def _apply_common_transform_content_item(
         self,
         content_item: OpenAIMessageContentListBlock,
     ) -> OpenAIMessageContentListBlock:
-        litellm_specific_params: Final = {"format"}
         if content_item.get("type") == "image_url":
-            content_item = cast(ChatCompletionImageObject, content_item)
-            if isinstance(content_item["image_url"], str):
-                content_item["image_url"] = {
-                    "url": content_item["image_url"],
-                }
-            elif isinstance(content_item["image_url"], dict):
-                new_image_url_obj: Final = ChatCompletionImageUrlObject(
-                    **{k: v for k, v in content_item["image_url"].items() if k not in litellm_specific_params}
-                )
-                content_item["image_url"] = new_image_url_obj
-        elif content_item.get("type") == "file":
-            content_item = cast(ChatCompletionFileObject, content_item)
-            file_obj: Final = content_item.get("file")
-            if file_obj is None:
-                raise litellm.BadRequestError(
-                    message="Content block has type='file' but is missing the required 'file' field",
-                    model=None,
-                    llm_provider="openai",
-                )
-            new_file_obj: Final = ChatCompletionFileObjectFile(
-                **{k: v for k, v in file_obj.items() if k not in litellm_specific_params}
-            )
-            content_item["file"] = new_file_obj
-
+            return self._image_item_for_openai(cast(ChatCompletionImageObject, content_item))
+        if content_item.get("type") == "file":
+            return self._file_item_for_openai(cast(ChatCompletionFileObject, content_item))
         return content_item
 
     def _transform_content_item(
@@ -361,31 +448,45 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         hoisted_messages: Final = hoist_images_from_tool_messages(stripped_messages)
 
         async def _async_transform():
-            for message in hoisted_messages:
-                message_content = message.get("content")
-                message_role = message.get("role")
-
-                if message_role == "user" and message_content and isinstance(message_content, list):
-                    message_content_types = cast(list[OpenAIMessageContentListBlock], message_content)
-                    for i, content_item in enumerate(message_content_types):
-                        message_content_types[i] = await self._async_transform_content_item(
-                            cast(OpenAIMessageContentListBlock, content_item),
-                        )
-            return hoisted_messages
+            return [await self._async_user_message_for_openai(message) for message in hoisted_messages]
 
         if is_async:
             return _async_transform()
-        else:
-            for message in hoisted_messages:
-                message_content = message.get("content")
-                message_role = message.get("role")
-                if message_role == "user" and message_content and isinstance(message_content, list):
-                    message_content_types = cast(list[OpenAIMessageContentListBlock], message_content)
-                    for i, content_item in enumerate(message_content):
-                        message_content_types[i] = self._transform_content_item(
-                            cast(OpenAIMessageContentListBlock, content_item)
-                        )
-            return hoisted_messages
+        return [self._user_message_for_openai(message) for message in hoisted_messages]
+
+    @staticmethod
+    def _user_content_parts(message: AllMessageValues) -> Sequence[OpenAIMessageContentListBlock] | None:
+        message_content: Final = message.get("content")
+        if message.get("role") != "user" or not message_content or not isinstance(message_content, list):
+            return None
+        return cast(Sequence[OpenAIMessageContentListBlock], message_content)
+
+    def _user_message_for_openai(self, message: AllMessageValues) -> AllMessageValues:
+        parts: Final = self._user_content_parts(message)
+        if parts is None:
+            return message
+        return cast(  # cast-ok: the same user message with each content part rebuilt for OpenAI
+            AllMessageValues, {**message, "content": [self._transform_content_item(part) for part in parts]}
+        )
+
+    async def _async_user_message_for_openai(self, message: AllMessageValues) -> AllMessageValues:
+        parts: Final = self._user_content_parts(message)
+        if parts is None:
+            return message
+        return cast(  # cast-ok: the same user message with each content part rebuilt for OpenAI
+            AllMessageValues, {**message, "content": [await self._async_transform_content_item(part) for part in parts]}
+        )
+
+    def transform_messages(
+        self,
+        messages: list[AllMessageValues],  # mutable-ok: mirrors override contract
+        model: str,
+        is_async: bool = False,
+    ) -> (
+        list[AllMessageValues]  # mutable-ok: mirrors override contract
+        | Coroutine[object, object, list[AllMessageValues]]
+    ):
+        return self._transform_messages(messages, model, is_async)
 
     def remove_cache_control_flag_from_messages_and_tools(
         self,
@@ -393,38 +494,40 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         messages: list[AllMessageValues],
         tools: list["ChatCompletionToolParam"] | None = None,
     ) -> tuple[list[AllMessageValues], list["ChatCompletionToolParam"] | None]:
-        from litellm.litellm_core_utils.prompt_templates.common_utils import (
-            filter_value_from_dict,
-        )
         from litellm.types.llms.openai import ChatCompletionToolParam
 
-        for i, message in enumerate(messages):
-            messages[i] = cast(
-                AllMessageValues,
-                filter_value_from_dict(message, "cache_control"),
-            )
-        if tools is not None:
-            for i, tool in enumerate(tools):
-                tools[i] = cast(
-                    ChatCompletionToolParam,
-                    filter_value_from_dict(tool, "cache_control"),
-                )
-        return messages, tools
+        new_messages: Final = [cast(AllMessageValues, without_cache_control(message)) for message in messages]
+        new_tools: Final = (
+            [cast(ChatCompletionToolParam, without_cache_control(tool)) for tool in tools]
+            if tools is not None
+            else None
+        )
+        return new_messages, new_tools
+
+    def translate_developer_role_to_system_role(
+        self,
+        messages: Sequence[AllMessageValues],
+        *,
+        model: str,
+        custom_llm_provider: str | None,
+        api_base: str | None,
+        model_info: object,
+    ) -> Sequence[AllMessageValues]:
+        """
+        A developer message only changes role, except on a model whose deployment or cost
+        map declares `supports_mid_conversation_system` false, where the instructions are
+        placed in one leading system message for its chat template.
+        """
+        return translate_developer_role_for_openai_compatible_endpoint(
+            messages, model=model, custom_llm_provider=custom_llm_provider, api_base=api_base, model_info=model_info
+        )
 
     def _targets_openai_hosted_endpoint(
         self,
         custom_llm_provider: str | None,
         api_base: str | None,
     ) -> bool:
-        if custom_llm_provider != "openai":
-            return False
-        resolved_api_base = api_base or litellm.api_base or os.getenv("OPENAI_BASE_URL") or os.getenv("OPENAI_API_BASE")
-        if not resolved_api_base:
-            return True
-        hostname: Final = urlparse(resolved_api_base).hostname
-        if hostname is None:
-            return True
-        return hostname == "openai.com" or hostname.endswith(".openai.com")
+        return targets_openai_hosted_endpoint(custom_llm_provider, api_base)
 
     def _should_preserve_cache_control_for_endpoint(
         self,
@@ -439,6 +542,57 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         """
         return custom_llm_provider == "openai" and not self._targets_openai_hosted_endpoint(
             custom_llm_provider, api_base
+        )
+
+    def _messages_and_tools_in_cache_mark_dialect(
+        self,
+        model: str,
+        messages: Sequence[AllMessageValues],
+        tools: Sequence["ChatCompletionToolParam"] | None,
+        prompt_cache_options: object,
+        litellm_params: Mapping[str, object],
+        request_params: Mapping[str, object],
+    ) -> tuple[Sequence[AllMessageValues], Sequence["ChatCompletionToolParam"] | None]:
+        """
+        A deployment that reads OpenAI's ``prompt_cache_breakpoint`` (gpt-5.6+ on
+        api.openai.com, or one opted in through ``prompt_cache_options`` or the cost
+        map) gets each Anthropic ``cache_control`` mark rewritten in place. Any other
+        endpoint keeps or strips the marks as before, and under drop_params also loses
+        every ``prompt_cache_breakpoint`` it cannot read.
+        """
+        from litellm.integrations.anthropic_cache_control_hook import AnthropicCacheControlHook
+
+        custom_llm_provider: Final = _litellm_params_str(litellm_params, "custom_llm_provider")
+        api_base: Final = _litellm_params_str(litellm_params, "api_base")
+        reads_breakpoints: Final = AnthropicCacheControlHook.targets_openai_prompt_cache_breakpoint(
+            model, custom_llm_provider, api_base, prompt_cache_options
+        )
+        if not reads_breakpoints and self._should_preserve_cache_control_for_endpoint(custom_llm_provider, api_base):
+            return (
+                _claude_messages_within_cache_control_cap(model, messages, tools, litellm_params, request_params),
+                tools,
+            )
+        drops_breakpoints: Final = not reads_breakpoints and _drops_params(litellm_params)
+        renamed: Final = (
+            [AnthropicCacheControlHook.cache_control_as_prompt_cache_breakpoints(message) for message in messages]
+            if reads_breakpoints
+            else [without_prompt_cache_breakpoints(message) for message in messages]
+            if drops_breakpoints
+            else list(messages)
+        )
+        kept_tools: Final = (
+            None
+            if tools is None
+            else [without_prompt_cache_breakpoints(tool) for tool in tools]
+            if drops_breakpoints
+            else list(tools)
+        )
+        sent_messages, sent_tools = self.remove_cache_control_flag_from_messages_and_tools(
+            model=model, messages=renamed, tools=kept_tools
+        )
+        return (
+            _claude_messages_within_cache_control_cap(model, sent_messages, sent_tools, litellm_params, request_params),
+            sent_tools,
         )
 
     def _sanitized_tools_update_for_openai(
@@ -493,17 +647,18 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         Returns:
             dict: The transformed request. Sent as the body of the API call.
         """
-        messages = self._transform_messages(
-            messages=self._prompt_cache_ordered_messages(messages, litellm_params), model=model
+        transformed_messages, tools = self._messages_and_tools_in_cache_mark_dialect(
+            model=model,
+            messages=self._transform_messages(
+                messages=self._prompt_cache_ordered_messages(messages, litellm_params), model=model
+            ),
+            tools=optional_params.get("tools", []),
+            prompt_cache_options=_prompt_cache_options(optional_params),
+            litellm_params=litellm_params,
+            request_params=optional_params,
         )
-        if not self._should_preserve_cache_control_for_endpoint(
-            litellm_params.get("custom_llm_provider"), litellm_params.get("api_base")
-        ):
-            messages, tools = self.remove_cache_control_flag_from_messages_and_tools(
-                model=model, messages=messages, tools=optional_params.get("tools", [])
-            )
-            if tools is not None and len(tools) > 0:
-                optional_params["tools"] = tools
+        if tools is not None and len(tools) > 0:
+            optional_params["tools"] = tools
 
         optional_params.pop("max_retries", None)
         if not optional_params.get("tools") and not optional_params.get("functions"):
@@ -511,7 +666,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
 
         return {
             "model": model,
-            "messages": messages,
+            "messages": transformed_messages,
             **optional_params,
             **self._sanitized_tools_update_for_openai(optional_params, litellm_params),
         }
@@ -524,22 +679,18 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         litellm_params: dict,
         headers: dict,
     ) -> dict:
-        transformed_messages = await self._transform_messages(
-            messages=self._prompt_cache_ordered_messages(messages, litellm_params), model=model, is_async=True
+        transformed_messages, tools = self._messages_and_tools_in_cache_mark_dialect(
+            model=model,
+            messages=await self._transform_messages(
+                messages=self._prompt_cache_ordered_messages(messages, litellm_params), model=model, is_async=True
+            ),
+            tools=optional_params.get("tools", []),
+            prompt_cache_options=_prompt_cache_options(optional_params),
+            litellm_params=litellm_params,
+            request_params=optional_params,
         )
-        if not self._should_preserve_cache_control_for_endpoint(
-            litellm_params.get("custom_llm_provider"), litellm_params.get("api_base")
-        ):
-            (
-                transformed_messages,
-                tools,
-            ) = self.remove_cache_control_flag_from_messages_and_tools(
-                model=model,
-                messages=transformed_messages,
-                tools=optional_params.get("tools", []),
-            )
-            if tools is not None and len(tools) > 0:
-                optional_params["tools"] = tools
+        if tools is not None and len(tools) > 0:
+            optional_params["tools"] = tools
         if self.__class__._is_base_class:
             if not optional_params.get("tools") and not optional_params.get("functions"):
                 optional_params.pop("tool_choice", None)
@@ -568,7 +719,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
             return None
         tool_call_names: Final = get_tool_call_names(optional_params.get("tools", []))
         try:
-            json_content: Final[object] = json.loads(content)
+            json_content: Final[object] = _DECODED_JSON.validate_python(json.loads(content))
             if (
                 isinstance(json_content, dict)
                 and json_content.get("type") == "function"
@@ -609,7 +760,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
                 for _tc in tool_calls:
                     _openai_tc = chat_completion_tool_call_from_dict(_tc)
                     _openai_tool_calls.append(_openai_tc)
-                fixed_tool_calls = _handle_invalid_parallel_tool_calls(_openai_tool_calls)
+                fixed_tool_calls = handle_invalid_parallel_tool_calls(_openai_tool_calls)
 
                 if fixed_tool_calls is not None:
                     new_tool_calls = fixed_tool_calls
@@ -621,7 +772,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
 
             translated_message: Message | None = None
             finish_reason: str | None = None
-            if new_tool_calls and _should_convert_tool_call_to_json_mode(
+            if new_tool_calls and should_convert_tool_call_to_json_mode(
                 tool_calls=new_tool_calls,
                 convert_tool_call_to_json_mode=json_mode,
             ):
@@ -636,7 +787,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
                 (
                     reasoning_content,
                     content_str,
-                ) = _extract_reasoning_content(cast(dict, choice["message"]))
+                ) = extract_reasoning_content(cast(dict, choice["message"]))
 
                 translated_message = Message(
                     role="assistant",
@@ -746,7 +897,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         if endpoint in api_base:
             return api_base
 
-        return f"{api_base}/{endpoint}"
+        return join_api_base(api_base, endpoint)
 
     def validate_environment(
         self,
@@ -835,7 +986,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         streaming_response: Iterator[str] | AsyncIterator[str] | ModelResponse,
         sync_stream: bool,
         json_mode: bool | None = False,
-    ) -> Any:
+    ) -> object:
         return OpenAIChatCompletionStreamingHandler(
             streaming_response=streaming_response,
             sync_stream=sync_stream,
@@ -895,11 +1046,18 @@ class OpenAIChatCompletionStreamingHandler(BaseModelResponseIterator):
                     status_code=error_status_code,
                     message=error_message,
                 )
-            choices = chunk.get("choices", [])
-            choices = self._map_reasoning_to_reasoning_content(choices)
+            raw_choices: Final = chunk.get("choices") or []
+            if any(choice.get("finish_reason") == "abort" for choice in _CHOICE_MAPPINGS.validate_python(raw_choices)):
+                raise OpenAIError(
+                    status_code=500,
+                    message="Upstream generation aborted (finish_reason=abort)",
+                )
+            choices: Final = self._map_reasoning_to_reasoning_content(raw_choices)
+            fingerprint: Final = _OBJECT_MAPPING.validate_python(chunk).get("system_fingerprint")
 
             kwargs: Final[dict[str, Any]] = {
                 "id": chunk.get("id"),
+                "system_fingerprint": fingerprint,
                 "object": "chat.completion.chunk",
                 "created": chunk.get("created"),
                 "model": chunk.get("model"),

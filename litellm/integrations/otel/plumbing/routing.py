@@ -163,10 +163,12 @@ class TenantTracerCache:
         config: OpenTelemetryV2Config,
         callback_name: str | None,
         tracer_name: str,
+        console_default: bool = False,
     ) -> None:
         self._config = config
         self._callback_name = callback_name
         self._tracer_name = tracer_name
+        self._console_default = console_default
         # Guards the three mutable structures below: ``pre_call`` can run on
         # thread-pool workers concurrently with the event loop, so cache
         # updates, span counts, and retirement must be atomic.
@@ -282,7 +284,9 @@ class TenantTracerCache:
             self._providers.move_to_end(cache_key)
             return cached
         built: Final = build_tracer_provider(
-            self._routed_config(credential_headers, project_headers, endpoint, service_name)
+            self._routed_config(credential_headers, project_headers, endpoint, service_name),
+            strip_message_content=not self._config.capture_span_content,
+            console_default=self._console_default,
         )
         self._providers[cache_key] = built
         return built

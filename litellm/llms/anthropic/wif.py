@@ -10,11 +10,12 @@ from types import MappingProxyType
 from typing import Final, NoReturn, TypeVar
 from urllib.parse import urlsplit, urlunsplit
 
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import ConfigDict, ValidationError
 from typing_extensions import assert_never
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.auth.client_credentials import keycloak_assertion_source
 from litellm.llms.base_llm.auth.identity_source import (
     AnthropicIdentitySourceKind,
@@ -42,6 +43,7 @@ from litellm.llms.base_llm.auth.types import (
     TokenTransportError,
 )
 from litellm.types.llms.anthropic import ANTHROPIC_TOKEN_EXCHANGE_PATH
+from litellm.types.llms.base import LiteLLMBaseModel
 
 _JWT_BEARER_GRANT_TYPE: Final = "urn:ietf:params:oauth:grant-type:jwt-bearer"
 _DEFAULT_API_BASE: Final = "https://api.anthropic.com"
@@ -64,6 +66,7 @@ _IDENTITY_SOURCE_PARAM: Final = "anthropic_identity_source"
 _IDENTITY_SOURCE_ENV: Final = "ANTHROPIC_IDENTITY_SOURCE"
 _IDENTITY_TOKEN_FILE_PARAM: Final = "anthropic_identity_token_file"
 _IDENTITY_TOKEN_PARAM: Final = "anthropic_identity_token"
+_LEGACY_REF_PARAMS: Final = (_IDENTITY_TOKEN_FILE_PARAM, _IDENTITY_TOKEN_PARAM)
 
 # litellm_params key -> InternalIssuerSource/KeycloakSource field name. Every key here must
 # also be listed in ANTHROPIC_WIF_KWARGS_KEYS (types/workload_identity.py), which is what makes it
@@ -119,7 +122,7 @@ _EMPTY_PARAMS: Final[Mapping[str, object]] = MappingProxyType({})
 _IdentitySourceVariant = TypeVar("_IdentitySourceVariant", bound="InternalIssuerSource | KeycloakSource")
 
 
-class AnthropicWifParams(BaseModel):
+class AnthropicWifParams(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     federation_rule_id: str
@@ -138,7 +141,7 @@ def resolve_anthropic_wif_params(litellm_params: Mapping[str, object] | None) ->
     )
     organization_id: Final = _config_value(litellm_params, "anthropic_organization_id", "ANTHROPIC_ORGANIZATION_ID")
     if federation_rule_id is None or organization_id is None:
-        _raise_if_identity_source_configured(litellm_params, federation_rule_id, organization_id)
+        _raise_if_federation_requested(litellm_params, federation_rule_id, organization_id)
         return None
     identity_source: Final = _resolve_identity_source(litellm_params)
     if identity_source is None:
@@ -203,17 +206,15 @@ def _raise_unknown_source_kind(source_kind: str) -> NoReturn:
     )
 
 
-def _raise_if_identity_source_configured(
+def _raise_if_federation_requested(
     litellm_params: Mapping[str, object] | None, federation_rule_id: str | None, organization_id: str | None
 ) -> None:
-    """A configured identity source is an explicit request to federate, so a missing rule or
-    organization id fails closed with the ids named, rather than silently skipping federation
-    and surfacing later as a missing API key."""
-    source_kind: Final = _resolve_source_kind(litellm_params)
-    if source_kind is None:
+    """A configured identity source, or a token file or inline token set on the deployment, is an
+    explicit request to federate, so a missing rule or organization id fails closed with the ids
+    named, rather than silently skipping federation and surfacing later as a missing API key."""
+    request: Final = _explicit_federation_request(litellm_params)
+    if request is None:
         return
-    if source_kind not in {kind.value for kind in AnthropicIdentitySourceKind}:
-        _raise_unknown_source_kind(source_kind)
     missing: Final = tuple(
         param
         for param, value in (
@@ -224,7 +225,7 @@ def _raise_if_identity_source_configured(
     )
     raise litellm.AuthenticationError(
         message=(
-            f"{_IDENTITY_SOURCE_PARAM} is {source_kind!r}, but {' and '.join(missing)} "
+            f"{request}, but {' and '.join(missing)} "
             f"{'is' if len(missing) == 1 else 'are'} not set. {_MISSING_IDS_HINT}"
         ),
         llm_provider="anthropic",
@@ -232,14 +233,25 @@ def _raise_if_identity_source_configured(
     )
 
 
+def _explicit_federation_request(litellm_params: Mapping[str, object] | None) -> str | None:
+    source_kind: Final = _resolve_source_kind(litellm_params)
+    if source_kind is None:
+        legacy_ref_param: Final = _legacy_ref_param(litellm_params)
+        return None if legacy_ref_param is None else f"{legacy_ref_param} is set"
+    if source_kind not in {kind.value for kind in AnthropicIdentitySourceKind}:
+        _raise_unknown_source_kind(source_kind)
+    return f"{_IDENTITY_SOURCE_PARAM} is {source_kind!r}"
+
+
 def _resolve_source_kind(litellm_params: Mapping[str, object] | None) -> str | None:
     param_kind: Final = _param_str(litellm_params, _IDENTITY_SOURCE_PARAM)
     if param_kind is not None:
         return param_kind
-    has_param_legacy_ref: Final = any(
-        _param_str(litellm_params, key) is not None for key in (_IDENTITY_TOKEN_FILE_PARAM, _IDENTITY_TOKEN_PARAM)
-    )
-    return None if has_param_legacy_ref else _env_str(_IDENTITY_SOURCE_ENV)
+    return None if _legacy_ref_param(litellm_params) is not None else _env_str(_IDENTITY_SOURCE_ENV)
+
+
+def _legacy_ref_param(litellm_params: Mapping[str, object] | None) -> str | None:
+    return next((key for key in _LEGACY_REF_PARAMS if _param_str(litellm_params, key) is not None), None)
 
 
 def _reject_foreign_variant_fields(
@@ -313,7 +325,7 @@ def anthropic_internal_issuer_jwks(credential_values: Mapping[str, object]) -> A
 
 def build_anthropic_wif_spec(params: AnthropicWifParams, api_base: str) -> TokenExchangeSpec:
     return TokenExchangeSpec(
-        token_url=api_base.rstrip("/") + ANTHROPIC_TOKEN_EXCHANGE_PATH,
+        token_url=join_api_base(api_base, ANTHROPIC_TOKEN_EXCHANGE_PATH),
         assertion_ref=params.assertion_ref,
         assertion_field="assertion",
         static_body=MappingProxyType(

@@ -14,7 +14,7 @@ from urllib.parse import quote
 
 import httpx
 import soundfile
-from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
+from pydantic import ConfigDict, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, TypedDict
 
 import litellm
@@ -45,6 +45,7 @@ from litellm.proxy.common_utils.resource_ownership import (
     is_proxy_admin,
     user_can_access_resource_owner,
 )
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.custom_http import httpxSpecialProvider
 from litellm.types.utils import StandardPassThroughResponseObject
 
@@ -72,18 +73,18 @@ class GetTranscriptionJobRequest(TypedDict):
     TranscriptionJobName: ReadOnly[str]
 
 
-class _MediaRef(BaseModel):
+class _MediaRef(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
     MediaFileUri: str | None = None
 
 
-class _JobTag(BaseModel):
+class _JobTag(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
     Key: str | None = None
     Value: str | None = None
 
 
-class TranscriptionJobRecord(BaseModel):
+class TranscriptionJobRecord(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
     TranscriptionJobStatus: str | None = None
     CreationTime: float | None = None
@@ -91,7 +92,7 @@ class TranscriptionJobRecord(BaseModel):
     Tags: tuple[_JobTag, ...] = ()
 
 
-class _TranscriptionJobResponse(BaseModel):
+class _TranscriptionJobResponse(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
     TranscriptionJob: TranscriptionJobRecord | None = None
 
@@ -105,7 +106,7 @@ StartedJob: TypeAlias = TranscriptionJobRecord | None
 JobPricer: TypeAlias = Callable[[str, str, float, StartedJob], Awaitable[float]]
 
 
-class _PricedCostMapEntry(BaseModel):
+class _PricedCostMapEntry(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, strict=True)
     input_cost_per_second: float
 
@@ -491,6 +492,10 @@ def s3_media_url(media_uri: str, aws_region_name: str) -> str | None:
     return f"https://{bucket}.s3.{aws_region_name}.{dns_suffix}/{quote(key)}"
 
 
+def _header_or_default(headers: Mapping[str, str], name: str, default: str) -> str:
+    return headers.get(name, default)
+
+
 def media_predates_job(headers: Mapping[str, str], job_created_at: float) -> bool:
     try:
         modified_at: Final = parsedate_to_datetime(headers["last-modified"]).timestamp()
@@ -500,7 +505,7 @@ def media_predates_job(headers: Mapping[str, str], job_created_at: float) -> boo
 
 
 async def write_media_within_limit(response: httpx.Response, media_file: IO[bytes], max_bytes: int) -> bool:
-    if int(response.headers.get("content-length", "0")) > max_bytes:
+    if int(_header_or_default(response.headers, "content-length", "0")) > max_bytes:
         return False
     async for chunk in response.aiter_bytes():
         _ = media_file.write(chunk)
@@ -590,8 +595,7 @@ class TranscribePassthroughLoggingHandler:
 
     @staticmethod
     def _operation_from_response(httpx_response: httpx.Response) -> str:
-        headers: Final[Mapping[str, str]] = httpx_response.request.headers
-        target: Final = headers.get("x-amz-target", "")
+        target: Final = _header_or_default(httpx_response.request.headers, "x-amz-target", "")
         return target.split(".")[-1]
 
     @staticmethod

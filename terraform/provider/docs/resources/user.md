@@ -50,7 +50,7 @@ resource "litellm_user" "alice" {
 - `permissions` (Optional) - Map of permission values for the user
 - `model_max_budget` (Optional) - JSON string of per-model budget config, e.g. `jsonencode({"gpt-4o" = {max_budget = 10.0}})`
 - `guardrails` (Optional) - List of guardrails applied to the user's requests
-- `blocked` (Optional, Default `false`) - Whether the user is blocked from making requests
+- `blocked` (Optional, Default `false`) - Whether to block the key auto-created with the user. Only sent on creation, so changing it afterwards has no effect. The proxy has no user-level block; use `litellm_key_block` to block keys
 
 ## Attribute Reference
 
