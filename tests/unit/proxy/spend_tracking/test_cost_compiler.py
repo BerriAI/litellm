@@ -149,8 +149,16 @@ def test_retained_token_pricing_preserves_cache_reasoning_and_service_tier() -> 
     assert float(result.total_cost) == pytest.approx(60 * 0.03 + 40 * 0.002 + 15 * 0.05 + 5 * 0.07)
 
 
-def test_upstream_reported_price_takes_precedence_without_custom_pricing() -> None:
-    result: Final = price_usage(json.dumps(_retained_envelope(logging={"provider_reported_cost": 0.037})))
+@pytest.mark.parametrize("stamped_cost", [None, 0.9])
+def test_upstream_reported_price_takes_precedence_without_custom_pricing(stamped_cost: float | None) -> None:
+    result: Final = price_usage(
+        json.dumps(
+            _retained_envelope(
+                logging={"provider_reported_cost": 0.037},
+                usage={"prompt_tokens": 10, "completion_tokens": 4, "cost": stamped_cost},
+            )
+        )
+    )
     assert isinstance(result, PricingSnapshot)
     assert float(result.total_cost) == pytest.approx(0.037)
 
@@ -847,3 +855,43 @@ def test_explicit_zero_retained_token_rates_are_known_free() -> None:
     assert isinstance(result, PricingSnapshot)
     assert result.total_cost == Decimal("0")
     assert result.pricing_source == "cost_map"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("completion_tokens", [1, 4])
+async def test_stream_replay_applies_adjustments_once_to_legacy_stamped_usage(
+    monkeypatch: pytest.MonkeyPatch, completion_tokens: int
+) -> None:
+    import litellm
+    from litellm.proxy.spend_tracking.usage_capture import capture_logging_usage
+    from litellm.proxy.spend_tracking.usage_meter import DurableUsageMeter, UsageCaptureSettings
+    from litellm.types.utils import ModelResponse, Usage
+    from tests.unit.proxy.spend_tracking.test_usage_capture import StoredUsage, _logger
+    from tests.unit.proxy.spend_tracking.test_usage_meter import _manual_flush
+
+    monkeypatch.setattr(litellm, "cost_discount_config", {"openai": 0.05})
+    monkeypatch.setattr(litellm, "cost_margin_config", {"global": {"percentage": 0.1, "fixed_amount": 0.001}})
+    retained: Final = _capture_logger().request_pricing
+    assert retained is not None
+    monkeypatch.setitem(litellm.model_cost, "openai/capture-model", retained.models()["capture-model"])
+    monkeypatch.setitem(litellm.model_cost, "capture-model", retained.models()["capture-model"])
+    logger: Final = _logger(stream=True)
+    response: Final = ModelResponse(
+        id="terminal", model="capture-model", usage=Usage(prompt_tokens=10, completion_tokens=completion_tokens)
+    )
+    expected: Final = _logger(stream=True).response_cost_calculator(response, ignore_stamped_cost=True)
+    assert expected is not None
+    stamped: Final = response.model_copy(
+        update={"usage": Usage(prompt_tokens=10, completion_tokens=completion_tokens, cost=expected)}
+    )
+    database: Final = StoredUsage()
+    meter: Final = DurableUsageMeter(database.insert, UsageCaptureSettings(), wait_for_batch=_manual_flush)
+    try:
+        capture_logging_usage(meter, logger, stamped, _AT, _AT)
+        await meter.close()
+        priced: Final = price_usage(database.rows[-1].envelope)
+        assert isinstance(priced, PricingSnapshot)
+        assert float(priced.total_cost) == pytest.approx(expected)
+        assert float(priced.original_cost or 0) == pytest.approx(0.1 + completion_tokens * 0.02)
+    finally:
+        await meter.stop(1)

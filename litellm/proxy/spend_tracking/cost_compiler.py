@@ -136,7 +136,7 @@ def price_usage(envelope: str) -> PricingSnapshot | Unpriced:
                 }
             }
         ],
-        usage=Usage.model_validate(captured.usage or {}),
+        usage=Usage.model_validate({name: value for name, value in (captured.usage or {}).items() if name != "cost"}),
         service_tier=response_inputs.get("service_tier"),
         meta={"billed_units": response_inputs.get("billed_units")},
         hidden_params={
@@ -182,7 +182,7 @@ def price_usage(envelope: str) -> PricingSnapshot | Unpriced:
         custom_llm_provider=provider,
         litellm_params={**deployment, **request, "metadata": {"model_info": _fields(pricing.get("model_info"))}},
         additional_response_cost=request.get("additional_response_cost"),
-        usage=Usage.model_validate(captured.usage or {}),
+        usage=Usage.model_validate({name: value for name, value in (captured.usage or {}).items() if name != "cost"}),
         end_time=event.ended_at,
         mcp_tool_call_metadata={
             "name": _fields(pricing.get("tool")).get("name"),
