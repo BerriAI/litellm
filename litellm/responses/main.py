@@ -437,7 +437,7 @@ async def aresponses_api_with_mcp(
     #########################################################
     if isinstance(logging_obj, LiteLLMLoggingObj):
         logging_obj.carry_failed_attempt_usage()
-    with internal_sub_call():
+    with internal_sub_call(logging_obj.litellm_call_id if isinstance(logging_obj, LiteLLMLoggingObj) else None):
         response: Final = await aresponses(
             input=input,
             model=model,
@@ -514,7 +514,9 @@ async def aresponses_api_with_mcp(
                             tool_calls=tool_calls, tool_results=tool_results
                         )
 
-                    with internal_sub_call():
+                    with internal_sub_call(
+                        logging_obj.litellm_call_id if isinstance(logging_obj, LiteLLMLoggingObj) else None
+                    ):
                         final_response = await LiteLLM_Proxy_MCP_Handler.make_follow_up_call(
                             follow_up_input=follow_up_input,
                             model=model,

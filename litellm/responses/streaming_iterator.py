@@ -41,6 +41,7 @@ from litellm.constants import (
 from litellm.exceptions import MidStreamFallbackError, RateLimitError, ServiceUnavailableError
 from litellm.litellm_core_utils.asyncify import run_async_function
 from litellm.litellm_core_utils.core_helpers import (
+    UPSTREAM_USAGE_COST,
     process_response_headers,
     provider_reported_usage_cost,
     set_response_cost_in_hidden_params,
@@ -184,6 +185,7 @@ def _typed_gets_litellm_params(fn: _GetsLitellmParams) -> _GetsLitellmParams:
 _SHOULD_STORE_RESULT_IN_CACHE_ATTR: Final = "_should_store_result_in_cache"
 _UNMASK_PII_TEXT_ATTR: Final = "_unmask_pii_text"
 _DECODED_JSON: Final = TypeAdapter(object)
+_HIDDEN_PARAMS: Final = TypeAdapter(dict[str, object])
 
 
 def _load_json_object(payload: str | bytes) -> dict[str, object]:
@@ -231,6 +233,11 @@ def spawn_logging_task(
 
 
 async def drain_logging_tasks(timeout: float = 5.0) -> None:
+    # A task that finished as its loop closed never ran its discard callback, and a
+    # task from another loop cannot be awaited here: forget both, wait on the rest.
+    running_loop: Final = asyncio.get_running_loop()
+    stale: Final = {task for task in _PENDING_LOGGING_TASKS if task.done() or task.get_loop() is not running_loop}
+    _PENDING_LOGGING_TASKS.difference_update(stale)
     if not _PENDING_LOGGING_TASKS:
         return
     _, pending = await asyncio.wait(tuple(_PENDING_LOGGING_TASKS), timeout=timeout)
@@ -693,7 +700,9 @@ class BaseResponsesAPIStreamingIterator:
         source_hidden: Final[object] = getattr(
             getattr(self.completed_response, "response", None), "_hidden_params", None
         )
-        source: Final[Mapping[str, object]] = source_hidden if isinstance(source_hidden, Mapping) else EMPTY_MAPPING
+        source: Final[Mapping[str, object]] = (
+            _HIDDEN_PARAMS.validate_python(source_hidden) if isinstance(source_hidden, Mapping) else {}
+        )
         processed: Final[object] = source.get("additional_headers") or self._hidden_params.get("additional_headers")
         raw: Final[object] = source.get("headers") or self._raw_response_headers
         headers: Final[Mapping[str, object]] = processed if isinstance(processed, Mapping) else EMPTY_MAPPING
@@ -703,6 +712,7 @@ class BaseResponsesAPIStreamingIterator:
         target.hidden_params = {
             "additional_headers": {**headers},
             "headers": {**raw_headers},
+            **_stamped_bill_hidden_params(source),
             **existing,
         }
 
@@ -1747,6 +1757,11 @@ def _dump_json_safely(response: BaseModel) -> str | None:
     except Exception as exc:
         verbose_logger.debug("could not serialize completed response for cache: %s", exc)
         return None
+
+
+def _stamped_bill_hidden_params(source: Mapping[str, object]) -> Mapping[str, object]:
+    stamped: Final = UPSTREAM_USAGE_COST in source
+    return {key: source[key] for key in (UPSTREAM_USAGE_COST, "response_cost") if stamped and key in source}
 
 
 def _logging_copy(event: object) -> object:
