@@ -59,7 +59,7 @@ class ExpiredLockTransport:
     async def scan(self, prefix: str, *, limit: int) -> NoReturn:
         raise AssertionError("unexpected scan")
 
-    def batch(self, *, transaction: bool = False) -> NoReturn:
+    def batch(self, *, transaction: bool = False, raise_on_error: bool = False, name: str = "redis_batch") -> NoReturn:
         raise AssertionError("unexpected batch")
 
     def request_batch(self) -> NoReturn:

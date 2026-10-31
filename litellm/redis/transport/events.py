@@ -55,7 +55,7 @@ class RedisServiceEvents:
             lambda: self.service_logging.async_service_failure_hook(
                 service=ServiceTypes.REDIS,
                 duration=end_time - start_time,
-                error=result.message,
+                error=result.exception if result.exception is not None else result.message,
                 call_type=call_type,
                 start_time=start_time,
                 end_time=end_time,
