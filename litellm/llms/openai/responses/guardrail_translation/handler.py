@@ -45,7 +45,9 @@ from litellm._logging import verbose_proxy_logger
 from litellm.completion_extras.litellm_responses_transformation.transformation import (
     LiteLLMResponsesTransformationHandler,
     OpenAiResponsesToChatCompletionStreamIterator,
+    input_tool_search_tools,
     tool_call_dict_from_output_item,
+    with_namespace_members,
 )
 from litellm.litellm_core_utils.core_helpers import has_attributes
 from litellm.llms.base_llm.guardrail_translation.base_translation import (
@@ -71,6 +73,7 @@ from litellm.llms.openai.responses.guardrail_translation.tool_merge import (
     append_returned_tools,
     merge_guardrailed_tools,
 )
+from litellm.responses.additional_tools import additional_tools_in_input
 from litellm.responses.litellm_completion_transformation.compaction_items import (
     compaction_summary,
     decode_compaction_item,
@@ -929,9 +932,12 @@ class OpenAIResponsesHandler(BaseTranslation):
 
     def extract_request_tool_names(self, data: Mapping[str, object]) -> list[str]:
         """Extract tool names from Responses API request (tools[].name for function
-        and custom, tools[].server_label for mcp)."""
+        and custom, tools[].server_label for mcp), including the tools additional_tools
+        items in input[] carry, opening namespace tools into their members and adding
+        the tools a tool_search_output in input[] loads."""
         names: Final[list[str]] = []
-        for tool in list_field(data, "tools"):
+        request_tools: Final = (*list_field(data, "tools"), *additional_tools_in_input(data.get("input")))
+        for tool in (*with_namespace_members(request_tools), *input_tool_search_tools(data)):
             if not isinstance(tool, dict):
                 continue
             if tool.get("type") in ("function", "custom") and tool.get("name"):

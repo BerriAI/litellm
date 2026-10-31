@@ -411,6 +411,17 @@ def replayed_tool_search_tool_names(request: object) -> tuple[str, ...]:
     return tuple(chain.from_iterable(_tool_definition_name(tool) for tool in replayed_tool_search_tools(request)))
 
 
+def with_namespace_members(tools: Sequence[object]) -> tuple[object, ...]:
+    """A Responses ``namespace`` tool stands for its member tools, as in a replayed search."""
+    return tuple(chain.from_iterable(_namespace_members(tool) for tool in tools))
+
+
+def input_tool_search_tools(request: object) -> tuple[object, ...]:
+    """The tools a ``tool_search_output`` item in a Responses ``input`` loads."""
+    items: Final = _tool_search_items_from_output_items(_json_field(request, "input"))
+    return with_namespace_members(tuple(chain.from_iterable(_loaded_tools(item) for item in items)))
+
+
 def _loads_any_tool(message: object, names: frozenset[str]) -> bool:
     loaded_names: Final = chain.from_iterable(_tool_definition_name(tool) for tool in _message_loaded_tools(message))
     return any(name in names for name in loaded_names)
