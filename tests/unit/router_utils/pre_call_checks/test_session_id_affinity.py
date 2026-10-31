@@ -160,6 +160,7 @@ async def test_repin_session_after_success_reads_split_metadata(route_bucket: st
                 session_bucket: {"session_id": "repin-session", "user_api_key_hash": "caller-1"},
             },
             {"status": "completed"},
+            {},
         )
         assert await router.cache.async_get_cache(_repin_key()) == {"model_id": "replacement"}
     finally:
@@ -349,6 +350,7 @@ async def test_repin_cooldown_reads_are_limited_to_active_session_route(case: st
                 },
             },
             {"status": "completed"},
+            {},
         )
         expected: Final = (
             {

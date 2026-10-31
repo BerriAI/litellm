@@ -597,12 +597,17 @@ class DeploymentAffinityCheck(CustomLogger):
         request_kwargs: Mapping[str, object],
         model_group: str,
         eligible_deployment_ids: frozenset[str],
+        request_params: Mapping[str, object],
     ) -> None:
         marker_ttl: Final = self._get_marker_session_affinity_ttl(request_kwargs)
         if not self._get_effective_flags(model_group)[2] and marker_ttl is None:
             return
         session_id: Final = self._get_session_id_from_request_kwargs(request_kwargs)
         if session_id is None:
+            return
+        if self.model_group_deployments is not None and web_search_preference_can_narrow(
+            self.model_group_deployments(model_group), request_params
+        ):
             return
         model_info: Final = TypeAdapter(Mapping[str, object]).validate_python(request_kwargs.get("model_info") or {})
         model_id: Final = model_info.get("id")

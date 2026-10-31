@@ -5,7 +5,7 @@ from itertools import chain
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, TypeVar
 
-from pydantic import TypeAdapter, ValidationError
+from pydantic import BaseModel, TypeAdapter, ValidationError
 
 if TYPE_CHECKING:
     from litellm.types.llms.openai import OpenAIFileObject
@@ -440,8 +440,9 @@ def _deployment_supports_web_search(deployment: Mapping[str, object]) -> bool:
     model_prices_and_context_window.json doesn't have supports_web_search
     tags on all models yet. TODO: backfill and add fallback.
     """
-    model_info: Final = as_str_mapping(deployment.get("model_info")) or {}
-    return bool(model_info.get("supports_web_search", True))
+    model_info: Final = deployment.get("model_info")
+    fields: Final = as_str_mapping(model_info.model_dump() if isinstance(model_info, BaseModel) else model_info) or {}
+    return bool(fields.get("supports_web_search", True))
 
 
 def _is_web_search_tool(tool: object) -> bool:
@@ -578,6 +579,9 @@ def prefer_web_search_deployments(
     if not orders_with_an_untried_capable_deployment:
         if not untried or not any(_deployment_supports_web_search(d) for d in deployments):
             verbose_router_logger.debug("No untried deployment for this web search request can search, so all stay")
+            return deployments
+        if any(_deployment_supports_web_search(d) and _deployment_id(d) in at_rate_limit for d in deployments):
+            verbose_router_logger.debug("A deployment that can search is only at its limit, so all stay")
             return deployments
         verbose_router_logger.debug("Every deployment that can search was tried, so the untried ones stay")
         return untried

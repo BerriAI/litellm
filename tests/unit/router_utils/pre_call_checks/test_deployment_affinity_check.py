@@ -1703,6 +1703,7 @@ def _web_search_group_router(
     optional_pre_call_checks: list[str],  # mutable-ok: Router signature
     heavy_can_search: bool,
     heavy_weight: int,
+    session_affinity_repin_on_failover: bool = False,
 ) -> litellm.Router:
     return litellm.Router(
         model_list=[
@@ -1723,6 +1724,7 @@ def _web_search_group_router(
             },
         ],
         optional_pre_call_checks=optional_pre_call_checks,
+        session_affinity_repin_on_failover=session_affinity_repin_on_failover,
         num_retries=0,
     )
 
@@ -1766,3 +1768,49 @@ async def test_a_first_web_search_request_still_pins_a_group_where_every_deploym
     for caller in range(10):
         searched_on = await _served_by(router, caller, web_search_options={})
         assert {await _served_by(router, caller) for _ in range(3)} == {searched_on}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("optional_params", "session_pin"),
+    [
+        ({"web_search_options": {}}, None),
+        ({"tools": [{"type": "web_search_20250305", "name": "web_search"}]}, None),
+        ({}, {"model_id": "light"}),
+    ],
+    ids=["web-search-options", "web-search-tool", "plain"],
+)
+async def test_a_successful_web_search_request_does_not_repin_a_session_in_a_mixed_group(
+    optional_params: dict[str, object],  # mutable-ok: logging kwargs shape
+    session_pin: dict[str, str] | None,  # mutable-ok: cache value shape
+):
+    router: Final = _web_search_group_router(
+        ["session_affinity"], heavy_can_search=False, heavy_weight=1, session_affinity_repin_on_failover=True
+    )
+    timestamp: Final = datetime(2026, 1, 1, tzinfo=timezone.utc)
+
+    await router.deployment_callback_on_success(
+        {
+            "litellm_params": {
+                "model_info": {"id": "light"},
+                "metadata": {
+                    "model_group": "group",
+                    "deployment_model_name": "group",
+                    "session_id": "session-1",
+                    "user_api_key_hash": "caller-1",
+                },
+            },
+            "optional_params": optional_params,
+            "standard_logging_object": {"total_tokens": 0},
+        },
+        {"choices": [{"message": {"content": "ok"}}]},
+        timestamp,
+        timestamp,
+    )
+
+    assert (
+        await router.cache.async_get_cache(
+            DeploymentAffinityCheck.get_session_affinity_cache_key("group", "session-1", "caller-1")
+        )
+        == session_pin
+    )

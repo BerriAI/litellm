@@ -246,6 +246,11 @@ class TestDeploymentSupportsWebSearch:
         deployment = {"litellm_params": {"model": "gpt-4"}}
         assert _deployment_supports_web_search(deployment) is True
 
+    @pytest.mark.parametrize("supports_web_search", [True, False])
+    def test_model_info_object_setting_is_read(self, supports_web_search: bool) -> None:
+        deployment: Final = {"model_info": ModelInfo(id="1", supports_web_search=supports_web_search)}
+        assert _deployment_supports_web_search(deployment) is supports_web_search
+
 
 class TestFilterWebSearchDeployments:
     """Test cases for filter_web_search_deployments function"""
@@ -772,6 +777,25 @@ def test_web_search_retry_prefers_untried_deployments_only_after_one_that_can_se
         "metadata": {"previous_models": tuple({"deployment_id": d, "exception_type": "Timeout"} for d in failed)},
     }
     kept: Final = prefer_web_search_deployments([{"model_info": info} for info in deployments], request_kwargs)
+    assert tuple(d["model_info"]["id"] for d in kept) == expected
+
+
+@pytest.mark.parametrize(
+    ("failed", "at_limit", "expected"),
+    [((), ("search",), ("search", "flag")), (("search",), (), ("flag",))],
+    ids=["at-its-limit-keeps-all", "failed-keeps-the-untried-one"],
+)
+def test_a_web_search_deployment_only_at_its_limit_leaves_every_deployment_to_the_weights_and_fallbacks(
+    failed: tuple[str, ...], at_limit: tuple[str, ...], expected: tuple[str, ...]
+) -> None:
+    request_kwargs: Final = {
+        **_ANTHROPIC_WEB_SEARCH_REQUEST,
+        "metadata": {"previous_models": tuple({"deployment_id": d, "exception_type": "Timeout"} for d in failed)},
+    }
+    infos: Final = ({"id": "search"}, {"id": "flag", "supports_web_search": False})
+    kept: Final = prefer_web_search_deployments(
+        [{"model_info": info} for info in infos], request_kwargs, frozenset(at_limit)
+    )
     assert tuple(d["model_info"]["id"] for d in kept) == expected
 
 @pytest.mark.asyncio

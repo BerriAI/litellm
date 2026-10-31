@@ -9855,6 +9855,7 @@ class Router(DeprecatedRouterMembers):
                 await self._repin_session_after_success(
                     _LITELLM_PARAMS_ADAPTER.validate_python(litellm_params),
                     _OPAQUE_VALUE_ADAPTER.validate_python(completion_response),
+                    _OPAQUE_VALUE_ADAPTER.validate_python(kwargs.get("optional_params")),
                 )
 
             # Always track deployment successes for cooldown logic, regardless of TPM/RPM limits
@@ -9880,7 +9881,9 @@ class Router(DeprecatedRouterMembers):
                 "litellm.router.Router::deployment_callback_on_success(): Exception occured - %s", e
             )
 
-    async def _repin_session_after_success(self, litellm_params: Mapping[str, object], response: object) -> None:
+    async def _repin_session_after_success(
+        self, litellm_params: Mapping[str, object], response: object, optional_params: object
+    ) -> None:
         if not self.session_affinity_repin_on_failover:
             return
         try:
@@ -9906,7 +9909,12 @@ class Router(DeprecatedRouterMembers):
                     model_ids=list(registered_ids), parent_otel_span=None
                 )
             )
-            await callback.async_repin_session_after_success(litellm_params, model_group, registered_ids - cooldown_ids)
+            await callback.async_repin_session_after_success(
+                litellm_params,
+                model_group,
+                registered_ids - cooldown_ids,
+                _LITELLM_PARAMS_ADAPTER.validate_python(optional_params or {}),
+            )
         except Exception as error:  # noqa: BLE001  # Optional pin updates must not interrupt success accounting
             verbose_router_logger.debug("Session re-pinning failed: %s", error)
 
