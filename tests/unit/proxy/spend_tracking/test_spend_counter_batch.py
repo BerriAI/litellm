@@ -539,9 +539,8 @@ async def test_a_failed_post_call_pipeline_invalidates_every_counter_it_carried_
         )
 
     assert [c.split()[0] for c in redis.commands] == ["MGET"], redis.commands
-    assert {call.kwargs["key"] for call in redis.async_delete_cache.await_args_list} == RESERVED_KEYS | {
-        "spend:user:user"
-    }
+    invalidated = RESERVED_KEYS | {"spend:user:user"}
+    assert {call.kwargs["key"] for call in redis.async_delete_cache.await_args_list} == invalidated
     assert all("applied_adjustment" not in entry for entry in reservation["entries"])
     assert {key: redis.store[key] for key in POST_CALL_KEYS} == {key: 1.0 for key in POST_CALL_KEYS}
 

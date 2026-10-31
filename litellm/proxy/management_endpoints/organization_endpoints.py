@@ -66,6 +66,7 @@ from litellm.proxy.management_helpers.utils import (
     get_new_internal_user_defaults,
     management_endpoint_wrapper,
 )
+from litellm.proxy.spend_tracking.committed_spend import drop_committed_spend
 from litellm.proxy.utils import PrismaClient, ProxyLogging
 from litellm.repositories.budget_repository import BudgetRepository
 from litellm.repositories.chunked_in import find_many_in
@@ -816,6 +817,11 @@ async def update_organization(
         data=updated_organization_row,
         include={"members": True, "teams": True, "litellm_budget_table": True},
     )
+
+    if data.spend is not None:
+        from litellm.proxy.proxy_server import spend_counter_cache
+
+        await drop_committed_spend(spend_counter_cache, (f"spend:org:{data.organization_id}",))
 
     return response
 

@@ -16,6 +16,7 @@ from litellm.types.agents import AgentCaller, AgentResponse
 from litellm.types.proxy.agent_identity import ManagedAgentContext
 from litellm.types.proxy.auth.user_roles import LitellmUserRoles
 from litellm.types.proxy.carried_budget_state import (
+    CommittedBudgetSpend,
     OrgBudgetSnapshot,
     TeamBudgetSnapshot,
     UserBudgetSnapshot,
@@ -206,6 +207,7 @@ class UserAPIKeyAuth(LiteLLM_VerificationTokenView):  # the expected response ob
     team_budget_snapshot: TeamBudgetSnapshot | None = Field(default=None, exclude=True)
     user_budget_snapshot: UserBudgetSnapshot | None = Field(default=None, exclude=True)
     org_budget_snapshot: OrgBudgetSnapshot | None = Field(default=None, exclude=True)
+    committed_budget_spend: CommittedBudgetSpend | None = Field(default=None, exclude=True)
     matched_model_access_groups: list[str] | None = Field(default=None, exclude=True)
     budget_throttle_pct: float | None = Field(default=None, exclude=True)
     user: object | None = None  # Expanded user object when expand=user is used
@@ -327,6 +329,13 @@ class UserAPIKeyAuth(LiteLLM_VerificationTokenView):  # the expected response ob
             and bool(self.metadata)  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # untyped base field
             and self.metadata.get("service_account_id") is not None  # pyright: ignore[reportUnknownMemberType]  # untyped base field
         )
+
+
+def committed_budget_spend_from_metadata(metadata: Mapping[str, object]) -> CommittedBudgetSpend:
+    auth: Final = metadata.get("user_api_key_auth")
+    if isinstance(auth, UserAPIKeyAuth) and auth.committed_budget_spend is not None:
+        return auth.committed_budget_spend
+    return CommittedBudgetSpend()
 
 
 def user_api_key_has_admin_view(user_api_key_dict: UserAPIKeyAuth) -> bool:

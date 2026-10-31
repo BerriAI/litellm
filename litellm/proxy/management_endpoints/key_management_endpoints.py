@@ -157,6 +157,7 @@ from litellm.proxy.mcp_server.outbound_credentials.sso_assertion_store import (
 )
 from litellm.proxy.search_endpoints.search_tool_registry import rotate_search_tools_master_key
 from litellm.proxy.spend_tracking.budget_reservation import get_budget_window_start
+from litellm.proxy.spend_tracking.committed_spend import committed_spend_key
 from litellm.proxy.spend_tracking.spend_counter_batch import SPEND_COUNTERS_TARGET
 from litellm.proxy.spend_tracking.spend_tracking_utils import (  # noqa: F401  # legacy module exports
     _is_master_key,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
@@ -4263,7 +4264,7 @@ async def update_key_fn(
         )
 
         if data.spend is not None:
-            from litellm.proxy.proxy_server import spend_counter_cache
+            from litellm.proxy.proxy_server import invalidate_spend_counter, spend_counter_cache
 
             counter_key: Final = f"spend:key:{hash_token_if_needed(key)}"
             spend_counter_cache.in_memory_cache.set_cache(key=counter_key, value=data.spend, ttl=60)
@@ -4278,6 +4279,7 @@ async def update_key_fn(
                         counter_key,
                         redis_err,
                     )
+            await invalidate_spend_counter(counter_key=committed_spend_key(counter_key))
 
         asyncio.create_task(
             KeyManagementEventHooks.async_key_updated_hook(
@@ -6964,6 +6966,7 @@ async def reset_key_spend_fn(
     try:
         from litellm.proxy.proxy_server import (
             hash_token,
+            invalidate_spend_counter,
             prisma_client,
             proxy_logging_obj,
             user_api_key_cache,
@@ -7018,6 +7021,7 @@ async def reset_key_spend_fn(
         # pre-reset value.
         _counter_key: Final = f"spend:key:{hashed_api_key}"
         await _set_spend_counter_with_floor_and_broadcast(counter_key=_counter_key, value=reset_to)
+        await invalidate_spend_counter(counter_key=committed_spend_key(_counter_key))
         await _reset_key_budget_windows(
             prisma_client=prisma_client,
             hashed_api_key=hashed_api_key,
