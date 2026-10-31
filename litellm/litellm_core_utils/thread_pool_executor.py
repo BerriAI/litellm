@@ -80,3 +80,7 @@ executor: Final = BoundedLoggingThreadPoolExecutor(
     max_workers=MAX_THREADS,
     max_pending_tasks=LOGGING_EXECUTOR_MAX_PENDING_TASKS,
 )
+failure_log_mask_executor: Final = BoundedLoggingThreadPoolExecutor(
+    max_workers=MAX_THREADS,
+    max_pending_tasks=LOGGING_EXECUTOR_MAX_PENDING_TASKS,
+)

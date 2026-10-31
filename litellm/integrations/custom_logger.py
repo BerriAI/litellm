@@ -504,7 +504,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         """For masking logged request/response. Return a modified version of the request/result."""
         return kwargs, result
 
-    def logging_hook(self, kwargs: dict, result: object, call_type: str) -> tuple[dict, object]:
+    def logging_hook(self, kwargs: dict, result: object, call_type: str) -> tuple[dict[str, object], object]:
         """For masking logged request/response. Return a modified version of the request/result."""
         return kwargs, result
 

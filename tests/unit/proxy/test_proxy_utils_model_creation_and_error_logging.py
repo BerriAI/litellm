@@ -4,7 +4,7 @@ import json
 import smtplib
 import traceback
 from collections.abc import Mapping
-from typing import Final
+from typing import ClassVar, Final
 
 import httpx
 import pytest
@@ -3377,6 +3377,36 @@ def _dispatched_failure_logging_obj(model: str, litellm_params: dict) -> object:
     logging_obj.model_call_details["messages"] = ONE_USER_MESSAGE
     logging_obj.model_call_details["call_type"] = "acompletion"
     return logging_obj
+
+
+class _LongPlaceholderMaskingGuardrail(CustomGuardrail):
+    masks_logged_request: ClassVar[bool] = True
+
+    async def async_logging_hook(
+        self, kwargs: dict[str, object], result: object, call_type: str
+    ) -> tuple[dict[str, object], object]:
+        return {**kwargs, "messages": [{"role": "user", "content": "<PERSON> " * 40}]}, result
+
+
+@pytest.mark.asyncio
+async def test_a_billed_failure_is_estimated_on_the_prompt_sent_not_the_masked_failure_log(monkeypatch):
+    from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
+
+    def billed_prompt_tokens(logging_obj: object) -> int:
+        lifted: Final = _failure_fields_to_lift({"litellm_logging_obj": logging_obj}, provider_billed=True)
+        return lifted["combined_usage_object"].prompt_tokens
+
+    unmasked: Final = _dispatched_failure_logging_obj(FAILURE_USAGE_MODEL, get_litellm_params(metadata={}))
+    masked: Final = _dispatched_failure_logging_obj(FAILURE_USAGE_MODEL, get_litellm_params(metadata={}))
+    monkeypatch.setattr(
+        litellm,
+        "_async_failure_callback",
+        [_LongPlaceholderMaskingGuardrail(guardrail_name="masker", event_hook=GuardrailEventHooks.logging_only)],
+    )
+    await masked.async_mask_failure_log_request()
+
+    assert masked.model_call_details["messages"] != ONE_USER_MESSAGE
+    assert billed_prompt_tokens(masked) == billed_prompt_tokens(unmasked)
 
 
 def test_the_deployment_rate_is_found_on_the_logging_objects_real_litellm_params(monkeypatch):

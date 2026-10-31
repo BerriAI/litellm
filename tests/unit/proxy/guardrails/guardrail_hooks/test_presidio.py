@@ -11,7 +11,7 @@ import re
 from collections.abc import Iterable, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
-from typing import Final, Literal
+from typing import Final, Literal, cast
 from unittest.mock import MagicMock, patch
 
 import aiohttp
@@ -26,6 +26,7 @@ import litellm
 from litellm import mock_completion
 from litellm.caching.caching import DualCache
 from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_hooks.presidio import (
     OPTIONAL_PresidioPIIMasking,
@@ -33,7 +34,7 @@ from litellm.proxy.guardrails.guardrail_hooks.presidio import (
 )
 from litellm.types.guardrails import LitellmParams, PiiAction, PiiEntityType
 from litellm.types.proxy.guardrails.guardrail_hooks.presidio import PresidioAnalyzeRequest, PresidioAnalyzeResponseItem
-from litellm.types.utils import Choices, Delta, Message, ModelResponse, StreamingChoices
+from litellm.types.utils import Choices, Delta, Message, ModelResponse, StandardLoggingPayload, StreamingChoices
 
 
 def _make_mock_session_iterator(json_response, status=200, content_type="application/json", text_response=""):
@@ -4425,6 +4426,45 @@ async def test_pii_masking_replays_a_byte_identical_prefix_across_turns(mock_use
     assert later[3]["content"] == "Now compare against <PERSON> too."
 
 
+class _FailureLogRecorder(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.logged: list[tuple[object, object]] = []
+
+    async def async_log_failure_event(
+        self, kwargs: dict[str, object], response_obj: object, start_time: object, end_time: object
+    ) -> None:
+        payload: Final = cast(StandardLoggingPayload, kwargs["standard_logging_object"])
+        self.logged.append((copy.deepcopy(kwargs["messages"]), copy.deepcopy(payload["messages"])))
+
+
+async def test_logging_only_presidio_masks_the_prompt_in_the_failure_log(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A failed call is logged with the prompt a logging_only Presidio guardrail masked, the same as a
+    successful one. The analyzer and anonymizer are the in-process fake handed over through api_base."""
+    recorder: Final = _FailureLogRecorder()
+    for name in ("input_callback", "success_callback", "failure_callback", "_async_success_callback"):
+        monkeypatch.setattr(litellm, name, [])
+    monkeypatch.setattr(litellm, "_async_failure_callback", [])
+    async with TestServer(_fake_presidio_app()) as server:
+        guardrail: Final = OPTIONAL_PresidioPIIMasking(
+            presidio_analyzer_api_base=str(server.make_url("/")),
+            presidio_anonymizer_api_base=str(server.make_url("/")),
+            pii_entities_config={PiiEntityType.PERSON: PiiAction.MASK},
+            logging_only=True,
+        )
+        monkeypatch.setattr(litellm, "callbacks", [guardrail, recorder])
+        with pytest.raises(litellm.AuthenticationError):
+            await litellm.acompletion(
+                model="gpt-4o-mini",
+                messages=[{"role": "user", "content": "My name is John Smith"}],
+                mock_response=litellm.AuthenticationError(message="bad key", llm_provider="openai", model="gpt-4o-mini"),
+            )
+        await guardrail._close_http_session()
+
+    masked: Final = [{"role": "user", "content": "My name is <PERSON>"}]
+    assert recorder.logged == [(masked, masked)]
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("surface", ["mcp_arguments", "mcp_result", "llm_output"])
 @pytest.mark.parametrize("action", [PiiAction.MASK, PiiAction.BLOCK])
@@ -4857,11 +4897,17 @@ def _card_and_email_spans(text: str) -> tuple[PresidioAnalyzeResponseItem, ...]:
     )
 
 
+_PENDING_PRESIDIO_REPLIES: Final[set[asyncio.Task[None]]] = set()  # mutable-ok: keeps pending replies alive
+
+
 class _InMemoryPresidioTransport(asyncio.Transport):
-    def __init__(self, protocol: ResponseHandler, analyzed: asyncio.Queue[PresidioAnalyzeRequest]) -> None:
+    def __init__(
+        self, protocol: ResponseHandler, analyzed: asyncio.Queue[PresidioAnalyzeRequest], replies_wait_for: int
+    ) -> None:
         super().__init__()
         self._protocol: Final = protocol
         self._analyzed: Final = analyzed
+        self._replies_wait_for: Final = replies_wait_for
         self._received = b""
         self._closing = False
 
@@ -4881,7 +4927,12 @@ class _InMemoryPresidioTransport(asyncio.Transport):
             + f"Content-Length: {len(reply)}\r\n\r\n".encode()
             + reply
         )
-        asyncio.get_running_loop().call_soon(self._protocol.data_received, response)
+        _PENDING_PRESIDIO_REPLIES.add(asyncio.get_running_loop().create_task(self._reply_once_analyzed(response)))
+
+    async def _reply_once_analyzed(self, response: bytes) -> None:
+        while self._analyzed.qsize() < self._replies_wait_for:
+            await asyncio.sleep(0.01)
+        self._protocol.data_received(response)
 
     def _reply(self, path: str, body: bytes) -> tuple[PresidioAnalyzeResponseItem, ...] | _PresidioAnonymizeReply:
         if path == "/analyze":
@@ -4922,15 +4973,16 @@ class _InMemoryPresidioTransport(asyncio.Transport):
 
 
 class _InMemoryPresidioConnector(aiohttp.BaseConnector):
-    def __init__(self, analyzed: asyncio.Queue[PresidioAnalyzeRequest]) -> None:
+    def __init__(self, analyzed: asyncio.Queue[PresidioAnalyzeRequest], replies_wait_for: int) -> None:
         super().__init__()
         self._analyzed: Final = analyzed
+        self._replies_wait_for: Final = replies_wait_for
 
     async def _create_connection(  # pyright: ignore[reportImplicitOverride]  # aiohttp's connector extension point
         self, req: aiohttp.ClientRequest, traces: Sequence[object], timeout: aiohttp.ClientTimeout
     ) -> ResponseHandler:
         protocol: Final = ResponseHandler(asyncio.get_running_loop())
-        protocol.connection_made(_InMemoryPresidioTransport(protocol, self._analyzed))
+        protocol.connection_made(_InMemoryPresidioTransport(protocol, self._analyzed, self._replies_wait_for))
         return protocol
 
 
@@ -4939,15 +4991,35 @@ def _drain(analyzed: asyncio.Queue[PresidioAnalyzeRequest]) -> tuple[PresidioAna
 
 
 def _guardrail_with_in_memory_presidio(
-    analyzed: asyncio.Queue[PresidioAnalyzeRequest],
+    analyzed: asyncio.Queue[PresidioAnalyzeRequest], replies_wait_for: int = 0
 ) -> OPTIONAL_PresidioPIIMasking:
     guardrail: Final = OPTIONAL_PresidioPIIMasking(
         pii_entities_config=_BLOCK_CARD_MASK_EMAIL,
         presidio_analyzer_api_base="http://presidio-analyzer.test/",
         presidio_anonymizer_api_base="http://presidio-anonymizer.test/",
     )
-    guardrail._http_session = aiohttp.ClientSession(connector=_InMemoryPresidioConnector(analyzed))
+    guardrail._http_session = aiohttp.ClientSession(connector=_InMemoryPresidioConnector(analyzed, replies_wait_for))
     return guardrail
+
+
+@pytest.mark.asyncio
+async def test_presidio_scans_every_message_of_a_request_at_once() -> None:
+    texts: Final = (f"My email is {_EMAIL}", f"Write to {_EMAIL} today")
+    analyzed: Final[asyncio.Queue[PresidioAnalyzeRequest]] = asyncio.Queue()
+    guardrail: Final = _guardrail_with_in_memory_presidio(analyzed, replies_wait_for=len(texts))
+    try:
+        _ = await asyncio.wait_for(
+            guardrail.async_logging_hook(
+                kwargs={"messages": [{"role": "user", "content": text} for text in texts]},
+                result=None,
+                call_type="acompletion",
+            ),
+            timeout=5,
+        )
+    finally:
+        await guardrail._close_http_session()
+
+    assert sorted(request.get("text") or "" for request in _drain(analyzed)) == sorted(texts)
 
 
 @pytest.mark.asyncio

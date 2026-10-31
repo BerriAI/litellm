@@ -52,6 +52,7 @@ def _make_logging_obj(
     logging_obj.get_chat_completion_prompt.return_value = prompt_return
     logging_obj.async_get_chat_completion_prompt = AsyncMock(return_value=prompt_return)
     logging_obj.async_failure_handler = AsyncMock()
+    logging_obj.async_mask_failure_log_request = AsyncMock()
     logging_obj.model_call_details = {}
     return logging_obj
 
