@@ -13,7 +13,7 @@ import yaml
 from fastapi import HTTPException
 
 from litellm.integrations.custom_guardrail import CustomGuardrail
-from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+from litellm.proxy._types import LitellmUserRoles, ProxyException, UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_endpoints import (
     CreateGuardrailRequest,
     ListGuardrailsResponse,
@@ -124,6 +124,7 @@ def test_get_guardrails_list_response() -> None:
     assert isinstance(minimal_response, ListGuardrailsResponse)
     assert minimal_response.guardrails[0].guardrail_name == "minimal-guard"
     assert minimal_response.guardrails[0].guardrail_info is None
+
 
 _INVALID_SCOPE_LITELLM_PARAMS: Final = MappingProxyType(
     {
@@ -655,6 +656,8 @@ async def test_get_guardrail_info_tolerates_invalid_stored_stream_scope(mocker, 
     response = await get_guardrail_info("test-db-guardrail")
 
     assert response.litellm_params.stream_scope is None
+
+
 async def test_get_guardrail_info_normalizes_invalid_scope_from_db(
     mocker, mock_guardrail_registry, mock_in_memory_handler
 ):
@@ -2159,7 +2162,6 @@ async def test_apply_guardrail_invokes_logging_pipeline(mocker):
     mock_proxy_logging.post_call_success_hook.assert_awaited_once()
     mock_logging_obj.async_success_handler.assert_awaited_once()
     assert mock_logging_obj.call_type == "pass_through_endpoint"
-    mock_executor.submit.assert_called_once()
     assert mock_logging_obj.async_success_handler.await_args.kwargs["result"] == {
         "response": {"response_text": "masked"}
     }
@@ -2194,6 +2196,39 @@ def _patch_apply_guardrail_env(mocker, guardrail_result):
     mocker.patch("litellm.litellm_core_utils.thread_pool_executor.executor")
 
     return mock_guardrail
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("vendor_status", "expected_type"),
+    [(401, "authentication_error"), (403, "permission_error")],
+)
+async def test_a_guardrail_vendors_rejection_is_labelled_the_way_chat_labels_it(
+    mocker, vendor_status: int, expected_type: str
+):
+    """A vendor refusing the guardrail's own credentials is not the caller's key being rejected,
+    so it must not read as the proxy's auth_error the way a 401 the proxy raises does."""
+    mock_guardrail: Final = _patch_apply_guardrail_env(mocker, None)
+    mock_guardrail.apply_guardrail.side_effect = HTTPException(
+        status_code=vendor_status, detail="vendor refused the request"
+    )
+    mocker.patch(
+        "litellm.proxy.proxy_server.proxy_logging_obj.post_call_failure_hook", AsyncMock(return_value=None)
+    )
+
+    with pytest.raises(ProxyException) as raised:
+        await apply_guardrail(
+            fastapi_request=mocker.Mock(),
+            request=ApplyGuardrailRequest(guardrail_name="test-guardrail", text="hello"),
+            user_api_key_dict=UserAPIKeyAuth(),
+        )
+
+    assert raised.value.to_dict() == {
+        "message": "vendor refused the request",
+        "type": expected_type,
+        "param": None,
+        "code": str(vendor_status),
+    }
 
 
 @pytest.mark.asyncio
@@ -3624,3 +3659,68 @@ async def test_patch_guardrail_rejects_encrypted_marker_values(mocker, mock_guar
 
     assert exc_info.value.status_code == 400
     mock_guardrail_registry.update_guardrail_in_db.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_guardrail_success_delivers_sync_callback_once_with_overlapping_workers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier
+    from unittest.mock import Mock
+
+    import litellm
+    from litellm.integrations.custom_logger import CustomLogger
+    from litellm.litellm_core_utils import litellm_logging, thread_pool_executor
+    from litellm.proxy.guardrails.guardrail_endpoints import _emit_guardrail_success_logs
+    from litellm.types.guardrails import ApplyGuardrailResponse
+
+    class OverlappingHook(CustomLogger):
+        barrier: Barrier
+
+        def logging_hook(
+            self, kwargs: dict[str, object], result: object, call_type: str
+        ) -> tuple[dict[str, object], object]:
+            self.barrier.wait(timeout=5)
+            return kwargs, result
+
+    hook: Final = OverlappingHook()
+    callback: Final = Mock()
+    queued_executor: Final = Mock()
+    proxy_logging: Final = Mock(post_call_success_hook=AsyncMock(return_value=None))
+
+    def sync_callback(kwargs: dict[str, object], response_obj: object, start_time: object, end_time: object) -> None:
+        callback(response_obj)
+
+    monkeypatch.setattr(litellm, "success_callback", [hook, sync_callback])
+    monkeypatch.setattr(litellm, "_async_success_callback", [])
+    monkeypatch.setattr(litellm_logging, "customLogger", CustomLogger())
+    monkeypatch.setattr(litellm_logging, "executor", queued_executor)
+    monkeypatch.setattr(thread_pool_executor, "executor", queued_executor)
+    start: Final = datetime(2026, 1, 1)
+    logging_obj: Final = litellm_logging.Logging(
+        model="guardrail",
+        messages=[],
+        stream=False,
+        call_type="pass_through_endpoint",
+        start_time=start,
+        litellm_call_id="guardrail-success",
+        function_id="guardrail-success",
+    )
+    logging_obj.update_environment_variables(litellm_params={"metadata": {}}, optional_params={})
+    response: Final = ApplyGuardrailResponse(response_text="masked")
+
+    returned: Final = await _emit_guardrail_success_logs(
+        proxy_logging, logging_obj, {}, UserAPIKeyAuth(), response, start
+    )
+    submissions: Final = tuple(queued_executor.submit.call_args_list)
+    assert submissions
+    hook.barrier = Barrier(len(submissions))
+    with ThreadPoolExecutor(max_workers=len(submissions)) as pool:
+        futures: Final = tuple(pool.submit(call.args[0], *call.args[1:], **call.kwargs) for call in submissions)
+        for future in futures:
+            future.result(timeout=10)
+
+    assert returned is response
+    callback.assert_called_once()
+    assert callback.call_args.args[0] == {"response": {"response_text": "masked"}}

@@ -17,6 +17,7 @@ deterministic stand-ins so the arithmetic under test is the only variable.
 import asyncio, json, time
 import logging
 from types import MappingProxyType
+from typing import Final, Literal
 
 import httpx
 import pytest
@@ -694,7 +695,7 @@ async def test_calculate_vertex_disable_transform_path(monkeypatch):
     monkeypatch.setattr(
         bu,
         "calculate_vertex_ai_batch_cost_and_usage",
-        lambda content, model, model_info=None: bu.BatchCostUsageResult(
+        lambda content, model, model_info=None, vertex_location=None: bu.BatchCostUsageResult(
             cost=9.9,
             usage=Usage(prompt_tokens=1, completion_tokens=2, total_tokens=3),
             models=["gemini-2.0-flash-001"],
@@ -725,7 +726,7 @@ async def test_calculate_vertex_disable_transform_needs_model_name(monkeypatch):
     monkeypatch.setattr(
         bu,
         "calculate_vertex_ai_batch_cost_and_usage",
-        lambda content, model, model_info=None: pytest.fail("raw vertex path should not run"),
+        lambda content, model, model_info=None, vertex_location=None: pytest.fail("raw vertex path should not run"),
     )
 
     result = await bu.calculate_batch_cost_and_usage(file_content_dictionary=[], custom_llm_provider="vertex_ai")
@@ -1167,6 +1168,36 @@ async def test_handle_completed_vertex_batch_computes_cost_usage_and_models(monk
 
 
 @pytest.mark.asyncio
+async def test_handle_completed_vertex_batch_regional_location_costs_uplift_over_global(monkeypatch: pytest.MonkeyPatch) -> None:
+    import litellm.files.main as files_main
+
+    rows = [_vertex_openai_row("request-1", "gemini-3.6-flash", 10, 5)]
+
+    async def fake_afile_content(**kw):
+        return type("R", (), {"content": _vertex_jsonl(rows)})()
+
+    monkeypatch.setattr(files_main, "afile_content", fake_afile_content)
+
+    global_result = await bu.handle_completed_batch(
+        _batch("gs://litellm-bucket/output/predictions.jsonl"),
+        custom_llm_provider="vertex_ai",
+        litellm_params={"vertex_project": "proj-1", "vertex_location": "global"},
+        vertex_location="global",
+    )
+    regional_result = await bu.handle_completed_batch(
+        _batch("gs://litellm-bucket/output/predictions.jsonl"),
+        custom_llm_provider="vertex_ai",
+        litellm_params={"vertex_project": "proj-1", "vertex_location": "us-central1"},
+        vertex_location="us-central1",
+    )
+
+    uplift = litellm.model_cost["vertex_ai/gemini-3.6-flash"]["regional_endpoint_uplift_multiplier"]
+    assert global_result.cost > 0
+    assert regional_result.cost == pytest.approx(global_result.cost * uplift, rel=1e-9)
+    assert regional_result.usage == global_result.usage
+
+
+@pytest.mark.asyncio
 async def test_output_file_content_no_output_file_id_raises():
     with pytest.raises(ValueError, match="Output file id is None"):
         await bu._fetch_batch_output_file_content(_batch(None), custom_llm_provider="openai")
@@ -1395,7 +1426,7 @@ async def test_handle_completed_batch_vertex_disable_transform_path(monkeypatch)
     monkeypatch.setattr(litellm, "disable_vertex_batch_output_transformation", True, raising=False)
     seen: dict = {}
 
-    def fake_vertex_calc(content, model, model_info=None):
+    def fake_vertex_calc(content, model, model_info=None, vertex_location=None):
         seen["content"] = content
         seen["model"] = model
         return bu.BatchCostUsageResult(
@@ -2280,6 +2311,36 @@ async def test_native_vertex_rows_route_to_vertex_cost_path_without_flag(monkeyp
 
 
 @pytest.mark.asyncio
+async def test_raw_vertex_claude_rows_are_priced_like_with_the_native_output_flag(monkeypatch):
+    claude_message: Final = {
+        "id": "msg_1",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-sonnet-4-6",
+        "content": [{"type": "text", "text": "Blue."}],
+        "stop_reason": "end_turn",
+        "usage": {"input_tokens": 12, "output_tokens": 5},
+    }
+    rows: Final = [
+        {"custom_id": "ok", "processed_time": "2026-10-29T03:00:00Z", "response": claude_message, "status": ""},
+        {"custom_id": "bad", "processed_time": "2026-10-29T03:00:00Z", "response": {}, "status": "Bad Request"},
+    ]
+
+    async def cost_with_flag(flag: bool) -> bu.BatchCostUsageResult:
+        monkeypatch.setattr(litellm, "disable_vertex_batch_output_transformation", flag, raising=False)
+        return await bu.calculate_batch_cost_and_usage(
+            file_content_dictionary=rows, custom_llm_provider="vertex_ai", model_name="vertex_ai/claude-sonnet-4-6"
+        )
+
+    unflagged: Final = await cost_with_flag(False)
+    flagged: Final = await cost_with_flag(True)
+
+    assert unflagged.cost > 0
+    assert (unflagged.successful_requests, unflagged.failed_requests) == (1, 1)
+    assert (unflagged.cost, unflagged.usage.total_tokens) == (flagged.cost, flagged.usage.total_tokens)
+
+
+@pytest.mark.asyncio
 async def test_openai_shaped_vertex_rows_keep_the_generic_path_without_flag(monkeypatch):
     monkeypatch.setattr(litellm, "disable_vertex_batch_output_transformation", False, raising=False)
     monkeypatch.setattr(
@@ -2732,6 +2793,7 @@ def test_batch_cost_calculator_applies_data_residency_uplift(data_residency, mon
         assert regional_completion == pytest.approx(base_completion * 1.10, rel=1e-9)
     finally:
         litellm.model_cost = prev_model_cost
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 @pytest.mark.asyncio
@@ -3347,3 +3409,30 @@ async def test_batch_retrieve_cost_tracking_with_partial_explicit_data():
         assert mock_batch._hidden_params["batch_successful_requests"] == 8
         assert mock_batch._hidden_params["batch_failed_requests"] == 0
         assert mock_batch.usage == expected_usage
+
+
+@pytest.mark.parametrize("provider", ("openai", "anthropic"))
+@pytest.mark.parametrize("envelope", (1, "invalid", [1], None, {}))
+@pytest.mark.parametrize("include_valid", (True, False))
+def test_invalid_batch_envelopes_preserve_recoverable_cost(
+    provider: Literal["openai", "anthropic"], envelope: object, include_valid: bool
+) -> None:
+    invalid: Final[dict[str, object]] = {"response" if provider == "openai" else "result": envelope}
+    valid: Final[dict[str, object]] = (
+        _success_row(model="batch-accounting-control", usage=_usage(100, 20))
+        if provider == "openai"
+        else {
+            "result": {
+                "type": "succeeded",
+                "message": {"model": "batch-accounting-control", "usage": {"input_tokens": 100, "output_tokens": 20}},
+            }
+        }
+    )
+    entries: Final = (valid, invalid, valid) if include_valid else (invalid,)
+    result: Final = bu._aggregate_batch_cost_usage_models(
+        entries, provider, model_info={"input_cost_per_token_batches": 0.001, "output_cost_per_token_batches": 0.002}
+    )
+    assert result.cost == pytest.approx(0.28 if include_valid else 0)
+    assert result.usage.prompt_tokens == (200 if include_valid else 0)
+    assert result.usage.completion_tokens == (40 if include_valid else 0)
+    assert (result.successful_requests, result.failed_requests) == (2 if include_valid else 0, 1)

@@ -16,6 +16,7 @@ import Papa from "papaparse";
 import { CheckCircleIcon, XCircleIcon, ExclamationIcon } from "@heroicons/react/outline";
 import { CopyToClipboard } from "react-copy-to-clipboard";
 import { toast } from "@/lib/toast";
+import { downloadBlob } from "@/components/EntityUsageExport/utils";
 
 interface BulkCreateUsersProps {
   accessToken: string;
@@ -86,6 +87,15 @@ const BulkCreateUsersButton: React.FC<BulkCreateUsersProps> = ({
     const base = new URL("/", window.location.href);
     setBaseUrl(base.toString());
   }, [accessToken]);
+
+  const downloadTemplate = () => {
+    const template = [
+      ["user_email", "user_role", "teams", "max_budget", "budget_duration", "models"],
+      ["user@example.com", "internal_user", "team-id-1,team-id-2", "100", "30d", "gpt-3.5-turbo,gpt-4"],
+    ];
+
+    downloadBlob(new Blob([Papa.unparse(template)], { type: "text/csv" }), "bulk_users_template.csv");
+  };
 
   const handleFileUpload = (file: File) => {
     // Reset all error states
@@ -609,7 +619,7 @@ const BulkCreateUsersButton: React.FC<BulkCreateUsersProps> = ({
                     </div>
                   </div>
 
-                  <Button size="lg" className="w-full md:w-auto">
+                  <Button size="lg" className="w-full md:w-auto" onClick={downloadTemplate}>
                     <Download className="size-4" />
                     Download CSV Template
                   </Button>

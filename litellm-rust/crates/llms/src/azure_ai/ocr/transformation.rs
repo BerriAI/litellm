@@ -169,7 +169,10 @@ impl AzureAiOcrConfig {
         }
         let key = super::common_utils::resolve_entra(auth, config, env_lookup)
             .await?
-            .ok_or(Error::MissingAzureAiCredentials)?;
+            .ok_or(Error::MissingCredential {
+                credential: "Azure AI credentials",
+                guidance: "set AZURE_AI_API_KEY or configure Entra ID",
+            })?;
         super::common_utils::validate_destination(connection, key.source())?;
         Ok(bearer_headers(connection, key.value()))
     }
@@ -183,9 +186,7 @@ impl AzureAiOcrConfig {
         ApiUrl::parse(&base)
             .and_then(|url| url.complete_path(&AZURE_AI_OCR_PATH))
             .map(|url| url.into_string())
-            .map_err(|_| Error::RequestField {
-                path: "api_base".into(),
-            })
+            .map_err(|error| Error::request_field("api_base", error))
     }
 }
 
@@ -210,7 +211,7 @@ mod tests {
     #[fixture]
     fn connection() -> OcrConnection {
         OcrConnection {
-            api_key: Some(litellm_auth::SecretValue::new("request-key")),
+            api_key: Some(litellm_secret_value::SecretValue::new("request-key")),
             api_base: Some("https://example.com".into()),
             ..Default::default()
         }
@@ -302,7 +303,7 @@ mod tests {
             .unwrap_err();
 
         assert!(
-            error
+            litellm_error::Report::new(&error)
                 .to_string()
                 .contains("request-controlled Azure endpoint")
         );
@@ -311,7 +312,7 @@ mod tests {
     #[tokio::test]
     async fn request_endpoint_accepts_request_owned_key() {
         let connection = OcrConnection {
-            api_key: Some(litellm_auth::SecretValue::new("request-key")),
+            api_key: Some(litellm_secret_value::SecretValue::new("request-key")),
             api_key_source: InputSource::Request,
             api_base: Some("https://request.example".into()),
             api_base_source: InputSource::Request,

@@ -31,6 +31,8 @@ from pydantic import JsonValue, TypeAdapter
 
 from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_if_encrypted_with
 
+pytestmark: Final = pytest.mark.shares_worker_state
+
 _KIMI_US: Final = "us.moonshotai.kimi-k3"
 _KIMI_GLOBAL: Final = "global.moonshotai.kimi-k3"
 _KIMI_BASE: Final = "moonshotai.kimi-k3"
@@ -1035,7 +1037,7 @@ def test_s07_a_5kb_caller_model_under_the_wildcard_is_a_bounded_4xx_and_liveline
     error: Final = _JSON.validate_python(_JSON.validate_python(json.loads(outcome.raw))["error"])
     assert "a" * 5120 in str(error["message"]), outcome.raw[:300]
     assert_within_factor_of_control(oversized.seconds, control=control.seconds, factor=20)
-    assert rig.wire.drain() == ()
+    assert len(rig.wire.drain()) == 1
     _failure_row(outcome.call_id)
 
 
@@ -1323,7 +1325,9 @@ def test_x01_flipping_the_flag_to_true_through_a_patch_update_turns_cache_points
 
 
 @pytest.mark.timeout(600)
-def test_x06_the_legacy_post_update_answers_200_and_leaves_the_stored_flag_alone(gateway: Gateway) -> None:
+def test_x06_flipping_the_flag_to_true_through_the_legacy_post_update_turns_cache_points_back_on(
+    gateway: Gateway,
+) -> None:
     arn: Final = _arn("legacy")
     with wire_server(_peer()) as wire, gateway.scenario() as scenario:
         name: Final = _deployment(
@@ -1331,6 +1335,7 @@ def test_x06_the_legacy_post_update_answers_200_and_leaves_the_stored_flag_alone
         )
         before, before_received = _observe_at(gateway, wire, "chat", _chat_body(name, _prompt(), _SYSTEM_AND_USER))
         _assert_answered(before)
+        assert before_received.cache_points == 0, before_received.body
         identity: Final = _model_id(name)
         updated: Final = gateway.request(
             "POST",
@@ -1342,13 +1347,14 @@ def test_x06_the_legacy_post_update_answers_200_and_leaves_the_stored_flag_alone
             },
         )
         assert updated.status_code == 200, updated.text
-        assert _stored_flag(identity) is False
-        _settled(gateway, name, wire)
-        after, after_received = _observe_at(gateway, wire, "chat", _chat_body(name, _prompt(), _SYSTEM_AND_USER))
-        _assert_answered(after)
-        assert after_received.cache_points == before_received.cache_points, (before_received.body, after_received.body)
+        assert _stored_flag(identity) is True
+        points: Final = eventually(
+            lambda: _six_cache_point_counts(gateway, wire, name),
+            lambda counts: len(counts) == 6 and all(count == 2 for count in counts),
+            seconds=60,
+        )
+        assert points == (2,) * 6, points
         _success_row(before.response_id)
-        _success_row(after.response_id)
 
 
 @dataclass(frozen=True, slots=True)

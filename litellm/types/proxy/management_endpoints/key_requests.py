@@ -1,20 +1,26 @@
 import enum
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from datetime import datetime
 from types import MappingProxyType
-from typing import Any, Literal  # noqa: TID251  # allowed_routes and metadata stay Any for existing callers
+from typing import Any, Final, Literal  # noqa: TID251  # allowed_routes and metadata stay Any for existing callers
 
 from pydantic import Field, PositiveInt, field_validator, model_validator
 from typing_extensions import TypeIs  # noqa: TID251  # narrows the raw payload a before-validator receives
 
 from litellm.types.proxy.management_endpoints.request_base import GenerateRequestBase
-from litellm.types.router import UpdateRouterConfig
+from litellm.types.router import ContentPolicyFallbackRules, UpdateRouterConfig
 from litellm.types.utils import LiteLLMPydanticObjectBase
 
 
 class AllowedVectorStoreIndexItem(LiteLLMPydanticObjectBase):
     index_name: str
     index_permissions: list[Literal["read", "write"]]
+
+
+def _fallback_targets(rules: ContentPolicyFallbackRules) -> Iterator[object]:
+    for rule in rules:
+        for targets in rule.values():
+            yield from targets
 
 
 class KeyRequestBase(GenerateRequestBase):
@@ -42,6 +48,18 @@ class KeyRequestBase(GenerateRequestBase):
     router_settings: UpdateRouterConfig | None = None
     access_group_ids: list[str] | None = None
 
+    @field_validator("router_settings")
+    @classmethod
+    def content_policy_fallbacks_name_models(
+        cls, router_settings: UpdateRouterConfig | None
+    ) -> UpdateRouterConfig | None:
+        rules: Final = None if router_settings is None else router_settings.content_policy_fallbacks
+        if rules is not None and not all(isinstance(target, str) for target in _fallback_targets(rules)):
+            raise ValueError(
+                'A key\'s content_policy_fallbacks targets must be model names, e.g. [{"gpt-4": ["gpt-4o"]}]'
+            )
+        return router_settings
+
 
 class LiteLLMKeyType(str, enum.Enum):
     """
@@ -55,6 +73,8 @@ class LiteLLMKeyType(str, enum.Enum):
 
 
 class GenerateKeyRequest(KeyRequestBase):
+    tpm_limit: int | None = Field(default=None, ge=0)
+    rpm_limit: int | None = Field(default=None, ge=0)
     soft_budget: float | None = None
     send_invite_email: bool | None = None
     key_type: LiteLLMKeyType | None = Field(
@@ -82,6 +102,8 @@ def _is_mapping(value: object) -> TypeIs[Mapping[object, object]]:  # guard-ok: 
 
 
 class UpdateKeyRequest(KeyRequestBase):
+    tpm_limit: int | None = Field(default=None, ge=0)
+    rpm_limit: int | None = Field(default=None, ge=0)
     # Note: the defaults of all Params here MUST BE NONE
     # else they will get overwritten
     duration: str | None = None
@@ -96,7 +118,7 @@ class UpdateKeyRequest(KeyRequestBase):
 
     project_id: str | None = Field(
         default=None,
-        description="Omit to retain the project, or send null to detach. Assigning a different project is not supported.",
+        description="Omit to retain the project, send null to detach, or send a project id to assign an unassigned key to a project on the key's team. Moving a key between projects is not supported.",
     )
 
     @model_validator(mode="before")

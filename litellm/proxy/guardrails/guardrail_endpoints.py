@@ -22,6 +22,7 @@ from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.callback_utils import CALLBACK_VAR_ENCRYPTED_PREFIX
+from litellm.proxy.common_utils.openai_error_payload import status_typed_proxy_exception
 from litellm.proxy.common_utils.path_utils import is_within, safe_join
 from litellm.proxy.guardrails.content_filter_data import CATEGORIES_DIR, DATA_ROOTS, category_dirs, find_category_file
 from litellm.proxy.guardrails.guardrail_hooks.custom_code.bounded_execution import (
@@ -90,6 +91,7 @@ if TYPE_CHECKING:
 router: Final = APIRouter()
 GUARDRAIL_REGISTRY: Final = GuardrailRegistry()
 _DECODED_JSON: Final = TypeAdapter(object)
+_DECODED_YAML: Final = TypeAdapter(object)
 
 
 def _as_str_object_mapping(mapping: Mapping[str, object]) -> Mapping[str, object]:
@@ -1682,7 +1684,7 @@ async def validate_blocked_words_file(request: dict[str, str]):
         if not file_content:
             return {"valid": False, "error": "No file content provided"}
 
-        data: Final = yaml.safe_load(file_content)
+        data: Final = _DECODED_YAML.validate_python(yaml.safe_load(file_content))
 
         if not isinstance(data, dict) or "blocked_words" not in data:
             return {
@@ -2367,9 +2369,6 @@ class _GuardrailLoggingObj(Protocol):
     @property
     def async_success_handler(self) -> "Callable[..., Awaitable[object]]": ...
 
-    @property
-    def success_handler(self) -> "Callable[..., object]": ...
-
 
 class _GuardrailProxyLogging(Protocol):
     @property
@@ -2399,10 +2398,6 @@ async def _emit_guardrail_success_logs(
     caller from receiving the guardrail response.  Returns the (possibly
     hook-modified) response.
     """
-    from litellm.litellm_core_utils.thread_pool_executor import (
-        executor as thread_pool_executor,
-    )
-
     try:
         modified: Final = await proxy_logging_obj.post_call_success_hook(
             data=data,
@@ -2430,16 +2425,6 @@ async def _emit_guardrail_success_logs(
             )
         except Exception:
             verbose_proxy_logger.exception("apply_guardrail: async_success_handler failed")
-        try:
-            thread_pool_executor.submit(
-                litellm_logging_obj.success_handler,
-                response_for_logging,
-                start_time,
-                end_time,
-                False,
-            )
-        except Exception:
-            verbose_proxy_logger.exception("apply_guardrail: success_handler submit failed")
 
     return response
 
@@ -2549,7 +2534,7 @@ async def apply_guardrail(
                 e = transformed_exception
         except Exception:
             verbose_proxy_logger.exception("apply_guardrail: post_call_failure_hook failed")
-        raise handle_exception_on_proxy(e)
+        raise handle_exception_on_proxy(status_typed_proxy_exception(e) if isinstance(e, HTTPException) else e)
 
     # Success logging outside except so a hook error never triggers failure handlers.
     response = await _emit_guardrail_success_logs(

@@ -9,7 +9,7 @@ This file is a wrapper around caching.py
 
 This class is used to handle caching logic specific for LLM API requests (completion / embedding / text_completion / transcription etc)
 
-It utilizes the (RedisCache, s3Cache, RedisSemanticCache, QdrantSemanticCache, InMemoryCache, DiskCache) based on what the user has setup
+It utilizes the (RedisCache, s3Cache, RedisSemanticCache, QdrantSemanticCache, InMemoryCache) based on what the user has setup
 
 In each method it will call the appropriate method from caching.py
 """
@@ -56,7 +56,7 @@ from litellm.types.utils import (
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-    from litellm.llms.anthropic.pass_through.messages.response_cache import (
+    from litellm.llms.anthropic.messages.native.response_cache import (
         AnthropicMessagesStreamCacheWriter,
     )
     from litellm.types.utils import PromptTokensDetailsWrapper
@@ -182,7 +182,7 @@ def _should_defer_streaming_cache_hit_callbacks(*, cached_result: object) -> boo
     spend and callback records. A plain (non-stream) replay logs here, since nothing
     else will.
     """
-    from litellm.llms.anthropic.pass_through.messages.response_cache import (
+    from litellm.llms.anthropic.messages.native.response_cache import (
         CachedAnthropicMessagesStreamIterator,
     )
     from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
@@ -346,6 +346,7 @@ class LLMCachingHandler:
 
             if litellm.cache is not None and self._is_call_type_supported_by_cache(original_function=original_function):
                 verbose_logger.debug("Checking Async Cache")
+                logging_obj.reset_caching_details()
                 cached_result = await self._retrieve_from_cache(
                     call_type=call_type,
                     kwargs=kwargs,
@@ -357,7 +358,7 @@ class LLMCachingHandler:
                     verbose_logger.debug("Cache Hit!")
                     cache_hit: Final = True
                     end_time: Final = datetime.datetime.now()
-                    model, custom_llm_provider, _, _ = litellm.get_llm_provider(
+                    provider_model, custom_llm_provider, _, _ = litellm.get_llm_provider(
                         model=model,
                         custom_llm_provider=kwargs.get("custom_llm_provider", None),
                         api_base=kwargs.get("api_base", None),
@@ -366,7 +367,7 @@ class LLMCachingHandler:
                     cache_duration_ms: Final = (cache_check_end_time - cache_check_start_time) * 1000
                     self._update_litellm_logging_obj_environment(
                         logging_obj=logging_obj,
-                        model=model,
+                        model=provider_model,
                         kwargs=kwargs,
                         cached_result=cached_result,
                         is_async=True,
@@ -381,7 +382,7 @@ class LLMCachingHandler:
                         call_type=call_type,
                         kwargs=kwargs,
                         logging_obj=logging_obj,
-                        model=model,
+                        model=provider_model,
                         custom_llm_provider=kwargs.get("custom_llm_provider", None),
                         args=args,
                     )
@@ -467,6 +468,7 @@ class LLMCachingHandler:
                 new_kwargs["cache_key"] = litellm.cache.get_cache_key(**new_kwargs)
             self.request_kwargs = _drop_logging_obj_from_kwargs(new_kwargs)
             print_verbose("Checking Sync Cache")
+            logging_obj.reset_caching_details()
             with response_cache_phase("get"):
                 cached_result = litellm.cache.get_cache(**new_kwargs)
             if is_response_without_output(cached_result):
@@ -828,6 +830,13 @@ class LLMCachingHandler:
         if is_internal_call.get():
             return
 
+        if logging_obj.defer_async_logging and not logging_obj.stream:
+            from litellm.utils import dispatch_success_logging
+
+            logging_obj.model_call_details["cache_hit"] = cache_hit  # rebind-ok: capture cache status before deferring
+            dispatch_success_logging(logging_obj, cached_result, start_time, end_time, False, False)
+            return
+
         from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 
         GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(
@@ -1038,7 +1047,7 @@ class LLMCachingHandler:
         elif (
             call_type == CallTypes.anthropic_messages.value or call_type == CallTypes.aanthropic_messages.value
         ) and isinstance(cached_result, dict):
-            from litellm.llms.anthropic.pass_through.messages.response_cache import (
+            from litellm.llms.anthropic.messages.native.response_cache import (
                 convert_cached_anthropic_messages_result,
             )
 
@@ -1268,7 +1277,7 @@ class LLMCachingHandler:
             return result
         if not isinstance(result, AsyncIterator):
             return result
-        from litellm.llms.anthropic.pass_through.messages.response_cache import (
+        from litellm.llms.anthropic.messages.native.response_cache import (
             AnthropicMessagesStreamCacheWriter,
         )
 

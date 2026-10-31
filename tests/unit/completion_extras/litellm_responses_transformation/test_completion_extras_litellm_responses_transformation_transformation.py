@@ -82,6 +82,115 @@ def test_completion_over_responses_maps_anthropic_search_tool_to_openai_tool_sea
     assert request_body["tools"][0] == {"type": "tool_search", "execution": "server"}
 
 
+_MANTLE_RESPONSES_URL: Final = "https://bedrock-mantle.us-east-1.api.aws/openai/v1/responses"
+
+
+@pytest.mark.parametrize(
+    "extra_body",
+    [
+        {"reasoning_effort": "low", "reasoningSummary": "auto"},
+        {"reasoning_effort": {"effort": "low"}, "reasoning_summary": "auto"},
+    ],
+    ids=["string-effort", "dict-effort"],
+)
+@pytest.mark.parametrize(
+    ("model", "url", "model_info"),
+    [
+        ("openai/gpt-5.4", "https://api.openai.com/v1/responses", None),
+        ("bedrock_mantle/openai.gpt-5.6-terra", _MANTLE_RESPONSES_URL, {"mode": "chat"}),
+    ],
+    ids=["openai", "mantle-chat-pin"],
+)
+def test_a_summary_alias_beside_an_extra_body_effort_reaches_the_responses_api(
+    monkeypatch: pytest.MonkeyPatch,
+    extra_body: Mapping[str, object],
+    model: str,
+    url: str,
+    model_info: Mapping[str, object] | None,
+) -> None:
+    monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
+    response_body: Final = {
+        "id": "resp_nested_effort_summary",
+        "object": "response",
+        "created_at": 1789788253,
+        "status": "completed",
+        "model": model.rsplit("/", 1)[-1],
+        "output": [
+            {
+                "type": "message",
+                "id": "msg_nested_effort_summary",
+                "status": "completed",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "ok", "annotations": []}],
+            }
+        ],
+        "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+    }
+
+    with respx.mock(assert_all_called=True) as router:
+        upstream: Final = router.post(url).mock(return_value=httpx.Response(200, json=response_body))
+        litellm.completion(
+            model=model,
+            messages=[{"role": "user", "content": "ping"}],
+            extra_body=dict(extra_body),
+            model_info=model_info,
+            api_key="test-key",
+            aws_region_name="us-east-1",
+        )
+
+    assert json.loads(upstream.calls.last.request.content)["reasoning"] == {"effort": "low", "summary": "auto"}
+
+
+@pytest.mark.parametrize(
+    ("model", "url", "expected_summary"),
+    [
+        ("bedrock_mantle/openai.gpt-5.6-terra", _MANTLE_RESPONSES_URL, "auto"),
+        ("openai/responses/gpt-5.5", "https://api.openai.com/v1/responses", "detailed"),
+    ],
+)
+@pytest.mark.parametrize("endpoint", ["chat_completions", "responses"])
+def test_auto_summary_sends_the_level_the_target_accepts(
+    monkeypatch: pytest.MonkeyPatch, model: str, url: str, expected_summary: str, endpoint: str
+) -> None:
+    monkeypatch.setattr(litellm, "reasoning_auto_summary", True)
+    monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
+    response_body: Final = {
+        "id": "resp_auto_summary",
+        "object": "response",
+        "created_at": 1789788253,
+        "status": "completed",
+        "model": model.rsplit("/", 1)[-1],
+        "output": [
+            {
+                "type": "message",
+                "id": "msg_auto_summary",
+                "status": "completed",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "ok", "annotations": []}],
+            }
+        ],
+        "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+    }
+
+    with respx.mock(assert_all_called=True) as router:
+        upstream: Final = router.post(url).mock(return_value=httpx.Response(200, json=response_body))
+        if endpoint == "chat_completions":
+            litellm.completion(
+                model=model,
+                messages=[{"role": "user", "content": "ping"}],
+                reasoning_effort="low",
+                api_key="test-key",
+                aws_region_name="us-east-1",
+            )
+        else:
+            litellm.responses(
+                model=model, input="ping", reasoning_effort="low", api_key="test-key", aws_region_name="us-east-1"
+            )
+
+    request_body: Final = json.loads(upstream.calls[0].request.content)
+    assert request_body["reasoning"] == {"effort": "low", "summary": expected_summary}
+
+
 def test_convert_chat_completion_messages_to_responses_api_image_input():
     from litellm.completion_extras.litellm_responses_transformation.transformation import (
         LiteLLMResponsesTransformationHandler,
@@ -307,6 +416,45 @@ def test_openai_responses_chunk_parser_reasoning_summary():
     assert delta.reasoning_content == "**Compar"
     assert delta.tool_calls is None
     assert delta.function_call is None
+
+
+def test_bridged_reasoning_summary_parts_rebuild_into_the_one_choice_they_streamed_on():
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+
+    iterator = OpenAiResponsesToChatCompletionStreamIterator(streaming_response=None, sync_stream=True)
+    events = (
+        {"type": "response.reasoning_summary_part.added", "output_index": 0, "summary_index": 0},
+        {
+            "type": "response.reasoning_summary_text.delta",
+            "delta": "First part.",
+            "output_index": 0,
+            "summary_index": 0,
+        },
+        {"type": "response.reasoning_summary_part.done", "output_index": 0, "summary_index": 0},
+        {"type": "response.reasoning_summary_part.added", "output_index": 0, "summary_index": 1},
+        {
+            "type": "response.reasoning_summary_text.delta",
+            "delta": "Second part.",
+            "output_index": 0,
+            "summary_index": 1,
+        },
+        {"type": "response.reasoning_summary_part.added", "output_index": 1, "summary_index": 0},
+        {
+            "type": "response.reasoning_summary_text.delta",
+            "delta": "Next item.",
+            "output_index": 1,
+            "summary_index": 0,
+        },
+        {"type": "response.output_text.delta", "delta": "Answer", "output_index": 2, "content_index": 0},
+    )
+
+    rebuilt = litellm.stream_chunk_builder(chunks=[iterator.chunk_parser(event) for event in events])
+
+    assert [(choice.index, choice.message.reasoning_content, choice.message.content) for choice in rebuilt.choices] == [
+        (0, "First part. Second part. Next item.", "Answer")
+    ]
 
 
 def test_chunk_parser_string_output_text_delta_produces_text():
@@ -559,6 +707,41 @@ def test_streamed_tool_search_turn_replays_with_its_reasoning_item():
     ]
     assert request["input"][2] == {key: value for key, value in tool_search_call.items() if value is not None}
     assert request["input"][5]["namespace"] == "get_weather"
+
+
+@pytest.mark.parametrize(
+    "answer_item",
+    [
+        ResponseFunctionToolCall(
+            type="function_call", id="fc_1", call_id="call_weather", name="get_weather", arguments="{}"
+        ),
+        ResponseOutputMessage(
+            type="message",
+            id="msg_1",
+            role="assistant",
+            status="completed",
+            content=[ResponseOutputText(type="output_text", text="Rain.", annotations=[])],
+        ),
+    ],
+    ids=["tool-call", "message"],
+)
+def test_every_reasoning_item_before_an_answer_reaches_an_openai_chat_message(answer_item: object) -> None:
+    reasoning: Final = tuple(
+        ResponseReasoningItem(
+            type="reasoning",
+            id=f"rs_{name}",
+            summary=[Summary(type="summary_text", text=f"{name.title()}.")],
+            encrypted_content=f"enc_{name}",
+        )
+        for name in ("first", "second")
+    )
+
+    message: Final = LiteLLMResponsesTransformationHandler._convert_response_output_to_choices(
+        [*reasoning, answer_item], replay_openai_history=True
+    )[0].message
+
+    assert [item["id"] for item in message.reasoning_items] == ["rs_first", "rs_second"]
+    assert message.reasoning_content == "First. Second."
 
 
 def test_transform_response_with_reasoning_and_output():
@@ -993,6 +1176,24 @@ def test_recover_output_items_merges_text_only_items_at_distinct_indices():
     assert recovered[1]["content"][0]["text"] == "From OUTPUT_TEXT_DONE only"
 
 
+def test_recover_output_items_keeps_an_item_whose_text_holds_unicode_line_separators() -> None:
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+
+    item: Final = {
+        "type": "message",
+        "id": "msg_item_0",
+        "role": "assistant",
+        "status": "completed",
+        "content": [{"type": "output_text", "text": "From\u2028OUTPUT_ITEM\u2029DONE", "annotations": []}],
+    }
+    event: Final = {"type": "response.output_item.done", "output_index": 0, "item": item}
+    raw_sse: Final = f"data: {json.dumps(event, ensure_ascii=False)}\ndata: [DONE]\n"
+
+    assert LiteLLMResponsesTransformationHandler._recover_output_items_from_raw_sse(raw_sse) == [item]
+
+
 def test_transform_response_prefers_completed_output_from_raw_sse():
     from litellm.completion_extras.litellm_responses_transformation.transformation import (
         LiteLLMResponsesTransformationHandler,
@@ -1143,9 +1344,7 @@ def test_transform_request_forwards_defer_loading_only_beside_tool_search(
     [{"type": "tool_search", "execution": "client"}, {"type": "tool_search"}],
     ids=["client-only", "hosted-and-client"],
 )
-def test_transform_request_drops_defer_loading_beside_client_tool_search(
-    deferred_tool, drop_params, tool_search_tool
-):
+def test_transform_request_drops_defer_loading_beside_client_tool_search(deferred_tool, drop_params, tool_search_tool):
     tool_search_tools: Final = (
         [tool_search_tool]
         if tool_search_tool.get("execution") == "client"
@@ -4269,7 +4468,11 @@ def test_tool_search_items_replay_only_to_a_request_that_carries_tool_search(too
             "provider_specific_fields": {
                 "tool_search_items": [
                     {"type": "tool_search_call", "id": "tsc_1", "arguments": {"paths": ["get_weather"]}},
-                    {"type": "tool_search_output", "id": "tso_1", "tools": [{"type": "function", "name": "get_weather"}]},
+                    {
+                        "type": "tool_search_output",
+                        "id": "tso_1",
+                        "tools": [{"type": "function", "name": "get_weather"}],
+                    },
                 ]
             },
         },

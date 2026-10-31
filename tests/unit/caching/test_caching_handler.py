@@ -15,6 +15,7 @@ from pydantic import TypeAdapter
 
 import litellm
 from litellm import aembedding, completion, embedding, aresponses, responses
+from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.caching.caching import Cache
 from litellm.responses.streaming_iterator import CachedResponsesAPIStreamingIterator
 
@@ -41,6 +42,7 @@ from litellm.types.utils import (
     Embedding,
 )
 from litellm.types.llms.openai import ResponsesAPIResponse
+from collections import Counter
 from collections.abc import Awaitable, Callable, Mapping
 from datetime import timedelta, datetime
 from typing import Final, cast
@@ -103,7 +105,7 @@ def test_sync_cache_hits_reach_sync_custom_logger(
         call(**request_kwargs)
 
     assert all_logged.wait(timeout=10)
-    assert logged_cache_hits == [None, True, True]
+    assert Counter(logged_cache_hits) == Counter({None: 1, True: 2}), logged_cache_hits
 
 
 @pytest.fixture
@@ -301,6 +303,93 @@ async def test_cache_hit_reports_zero_response_cost(copilot_response_cache: Cach
     assert first._hidden_params["response_cost"] > 0
     assert second._hidden_params["cache_hit"] is True
     assert second._hidden_params["response_cost"] == 0
+
+
+@pytest.mark.asyncio
+async def test_async_cache_hits_never_use_up_a_deployment_tpm_limit(copilot_response_cache: Cache) -> None:
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "tpm-limited",
+                "litellm_params": {
+                    "model": "openai/gpt-4o-mini",
+                    "api_key": "sk-test",
+                    "mock_response": "cached answer",
+                    "tpm": 100,
+                },
+            }
+        ],
+        routing_strategy="usage-based-routing-v2",
+        num_retries=0,
+    )
+    messages: Final = [{"role": "user", "content": "tpm limit and cache hits"}]
+
+    async def call_and_settle() -> litellm.ModelResponse:
+        response: Final = await router.acompletion(model="tpm-limited", messages=messages, caching=True)
+        await asyncio.gather(*_PENDING_CACHE_WRITES)
+        await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=10)
+        return response
+
+    first: Final = await call_and_settle()
+    hits: Final = [await call_and_settle() for _ in range(8)]
+
+    assert first.usage.total_tokens * len(hits) > 100
+    assert all(hit._hidden_params["cache_hit"] is True for hit in hits)
+
+
+def _logging_obj_left_with_a_cache_hit(messages: list[dict[str, str]]) -> LiteLLMLogging:
+    logging_obj: Final = LiteLLMLogging(
+        litellm_call_id=str(uuid.uuid4()),
+        call_type=CallTypes.acompletion.value,
+        model="gpt-4o-mini",
+        messages=messages,
+        function_id=str(uuid.uuid4()),
+        stream=False,
+        start_time=datetime.now(),
+    )
+    logging_obj.caching_details = {"cache_hit": True, "cache_duration_ms": 1.0}
+    return logging_obj
+
+
+@pytest.mark.asyncio
+async def test_async_cache_miss_clears_the_hit_an_earlier_lookup_left_on_the_call(
+    copilot_response_cache: Cache,
+) -> None:
+    messages: Final = [{"role": "user", "content": f"never cached {uuid.uuid4()}"}]
+    logging_obj: Final = _logging_obj_left_with_a_cache_hit(messages)
+    handler: Final = LLMCachingHandler(
+        original_function=litellm.acompletion, request_kwargs={}, start_time=datetime.now()
+    )
+
+    response: Final = await handler.async_get_cache(
+        model="gpt-4o-mini",
+        original_function=litellm.acompletion,
+        logging_obj=logging_obj,
+        start_time=datetime.now(),
+        call_type=CallTypes.acompletion.value,
+        kwargs={"model": "gpt-4o-mini", "messages": messages, "caching": True},
+    )
+
+    assert response is not None and response.cached_result is None
+    assert logging_obj.caching_details is None
+
+
+def test_sync_cache_miss_clears_the_hit_an_earlier_lookup_left_on_the_call(copilot_response_cache: Cache) -> None:
+    messages: Final = [{"role": "user", "content": f"never cached {uuid.uuid4()}"}]
+    logging_obj: Final = _logging_obj_left_with_a_cache_hit(messages)
+    handler: Final = LLMCachingHandler(original_function=completion, request_kwargs={}, start_time=datetime.now())
+
+    response: Final = handler.sync_get_cache(
+        model="gpt-4o-mini",
+        original_function=completion,
+        logging_obj=logging_obj,
+        start_time=datetime.now(),
+        call_type=CallTypes.completion.value,
+        kwargs={"model": "gpt-4o-mini", "messages": messages, "caching": True},
+    )
+
+    assert response.cached_result is None
+    assert logging_obj.caching_details is None
 
 
 chat_completion_response = litellm.ModelResponse(

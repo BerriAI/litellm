@@ -23,6 +23,8 @@ from tests.integration._support.database import read_rows, scratch_database
 from tests.integration._support.process import owned_proxy
 from tests.integration._support.wire import Reply, Request, Wire, wire_server
 
+pytestmark: Final = pytest.mark.shares_worker_state
+
 _JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
 
 
@@ -866,7 +868,7 @@ def test_saved_retry_setting_controls_real_attempts_and_restores(gateway: Gatewa
                 assert object_value(gateway.get("/router/settings")["current_values"])["num_retries"] == retries
                 configured: Final = upstream.post(f"/__scripts/{provider_model}", json={"statuses": [500, 200]})
                 assert configured.status_code == 200, configured.text
-                upstream.get("/__observations").raise_for_status()
+                upstream.delete("/__observations").raise_for_status()
                 response: Final = gateway.request(
                     "POST",
                     "/v1/chat/completions",
@@ -1108,7 +1110,7 @@ def test_credential_value_update_and_model_reload_reach_provider(gateway: Gatewa
                         "PATCH", f"/model/{identity}/update", {"model_info": {"description": value}}
                     )
                     assert response.status_code == 200, response.text
-                upstream.get("/__observations").raise_for_status()
+                upstream.delete("/__observations").raise_for_status()
                 assert (
                     object_value(gateway.chat(model, text=f"{name} {value} reload={reload}")["usage"])["total_tokens"]
                     == 40
@@ -1545,8 +1547,8 @@ def test_an_sso_client_removed_from_db_environment_variables_stops_sign_in_on_ev
             "DATABASE_URL_READ_REPLICA",
             "GENERIC_CLIENT_ID",
             "GOOGLE_CLIENT_ID",
-            "GOOGLE_CLIENT_SECRET",
             "MICROSOFT_CLIENT_ID",
+            "MICROSOFT_CLIENT_SECRET",
             "PROXY_BASE_URL",
         )
         with (
@@ -1565,7 +1567,7 @@ def test_an_sso_client_removed_from_db_environment_variables_stops_sign_in_on_ev
                 response: Final = first.request(
                     "POST",
                     "/config/update",
-                    {"environment_variables": {"GOOGLE_CLIENT_ID": client_id, "GOOGLE_CLIENT_SECRET": secret}},
+                    {"environment_variables": {"MICROSOFT_CLIENT_ID": client_id, "MICROSOFT_CLIENT_SECRET": secret}},
                 )
                 assert response.status_code == 200, response.text
 
@@ -1582,7 +1584,7 @@ def test_an_sso_client_removed_from_db_environment_variables_stops_sign_in_on_ev
             moved: Final = first.request(
                 "PATCH",
                 "/update/sso_settings",
-                {"google_client_id": sso_table_client, "google_client_secret": "sso-table-secret"},
+                {"microsoft_client_id": sso_table_client, "microsoft_client_secret": "sso-table-secret"},
             )
             assert moved.status_code == 200, moved.text
             eventually(sign_in_clients, lambda clients: clients == (sso_table_client,) * 2, seconds=30)

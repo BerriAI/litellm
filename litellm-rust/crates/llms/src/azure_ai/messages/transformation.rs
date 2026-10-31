@@ -1,10 +1,10 @@
-use litellm_auth::SecretValue;
 use litellm_http::request::{has_bearer_auth, has_header};
 use litellm_llms_types::{
-    formats::messages::MessagesRequest,
+    formats::messages::{MessagesOptionalParams, MessagesRequest},
     providers::anthropic::{BetaProvider, DEFAULT_HEADERS, MESSAGES_PATH},
 };
 use litellm_router_types::LitellmParams;
+use litellm_secret_value::SecretValue;
 
 use crate::{
     Error,
@@ -83,6 +83,7 @@ impl BaseMessagesConfig for AzureAnthropicMessagesConfig {
         headers: Headers,
         api_key: Option<&str>,
         _model: &str,
+        _optional_params: &MessagesOptionalParams,
         _litellm_params: &LitellmParams,
         env_lookup: &dyn Fn(&str) -> Option<String>,
     ) -> Result<ValidatedEnvironment, Error> {
@@ -237,6 +238,7 @@ mod tests {
                     .collect(),
                 api_key,
                 "claude",
+                &MessagesOptionalParams::default(),
                 &LitellmParams::default(),
                 &|_| None,
             )
@@ -543,6 +545,11 @@ mod tests {
         &[("anthropic-beta", "web-search-2025-03-05")],
         &[("x-api-key", "k"), ("anthropic-beta", "structured-outputs-2025-11-13,web-search-2025-03-05")]
     )]
+    #[case::compaction_needs_the_compact_2026_09_04_beta(
+        json!({"compaction": {"type": "summarize"}}),
+        &[],
+        &[("x-api-key", "k"), ("anthropic-beta", "compact-2026-09-04")]
+    )]
     #[case::no_feature_needs_a_beta(json!({}), &[], &[("x-api-key", "k")])]
     #[case::safeguards_need_the_dangerous_tool_use_beta(
         json!({"safeguards": [{"type": "dangerous_tool_use"}]}),
@@ -622,6 +629,7 @@ mod tests {
             Vec::new(),
             None,
             "claude",
+            &MessagesOptionalParams::default(),
             &LitellmParams::default(),
             &record,
         );
