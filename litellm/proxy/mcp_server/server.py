@@ -80,6 +80,11 @@ from litellm.proxy.mcp_server.oauth_utils import (
     redact_mcp_resource_url,
     well_known_root_suffix,
 )
+from litellm.proxy.mcp_server.protocol_error_logging import (
+    EMPTY_MCP_PROTOCOL_PARAMS,
+    parse_jsonrpc_request_for_logging,
+    wrap_send_for_protocol_error_logging,
+)
 from litellm.proxy.mcp_server.scope_challenge import (
     SCOPE_RESPONSE_KEY,
     OAuthScopeResponse,
@@ -2750,6 +2755,19 @@ if MCP_AVAILABLE:
             ) -> None:
                 _increment_active_request_session(initialized_session_id)
 
+            # Parse the (already-peeked) JSON-RPC request so we can emit a
+            # standard_logging_object if the MCP SDK rejects it at the protocol
+            # layer (unknown method / malformed params). The SDK writes that
+            # error directly to ``send``, bypassing call_mcp_tool's logging, so
+            # we wrap ``send`` below. See issue #28929.
+            protocol_log_context: Final = (
+                parse_jsonrpc_request_for_logging(body)
+                if body and request_method == "POST" and not is_jsonrpc_response
+                else (None, EMPTY_MCP_PROTOCOL_PARAMS, None)
+            )
+            _protocol_log_method, _protocol_log_params, _protocol_log_id = protocol_log_context
+            _protocol_log_start_time: Final = datetime.now()  # noqa: DTZ005  # logging pipeline uses naive datetimes
+
             async def _dispatch() -> None:
                 _otel_publish_transport_span_on_scope(scope)
                 _otel_publish_request_destinations_on_scope(scope)
@@ -2766,6 +2784,18 @@ if MCP_AVAILABLE:
                     copy_existing_session_auth_context=is_initialize or is_cancellation,
                 )
                 local_send = scope_response or send
+                # Additively observe protocol-level JSON-RPC rejections (#28929)
+                # without touching the success path. Applied first so the
+                # stateful-session wrapper (below) still wraps the outermost send.
+                local_send = wrap_send_for_protocol_error_logging(  # rebind-ok: layers the logging wrapper onto the per-request send
+                    local_send,
+                    request_method=_protocol_log_method,
+                    params=_protocol_log_params,
+                    request_id=_protocol_log_id,
+                    user_api_key_auth=user_api_key_auth,
+                    raw_headers=raw_headers,
+                    start_time=_protocol_log_start_time,
+                )
                 if use_stateful and is_initialize:
                     local_send = _wrap_send_with_stateful_session_auth_context(
                         local_send,
