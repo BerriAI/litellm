@@ -5,16 +5,18 @@ PR checklist requires at least one test in tests/test_litellm/.
 Additional tests live in tests/guardrails_tests/test_lakera_v2.py.
 """
 
-import importlib, logging, os
-from collections.abc import Mapping
+import importlib, json, logging, os
+from collections.abc import Mapping, Sequence
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 from fastapi import HTTPException
 
 import litellm
 from litellm.caching.caching import DualCache
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.base_llm.guardrail_translation.utils import (
     filter_messages_by_skip_flags,
 )
@@ -2461,3 +2463,142 @@ async def test_lakera_post_call_masks_pii_and_allows():
         result_dict = result.model_dump()
         assert result_dict["choices"][0]["message"]["content"] != "Your email is test@example.com"
         assert "[MASKED" in result_dict["choices"][0]["message"]["content"]
+
+
+def _bedrock_data(body: Mapping[str, object]) -> dict[str, object]:
+    return {
+        "model": "bedrock-claude",
+        "method": "POST",
+        "endpoint": "/model/bedrock-claude/converse",
+        "data": dict(body),
+        "custom_llm_provider": "bedrock",
+    }
+
+
+def _converse_body() -> dict[str, object]:
+    return {
+        "system": [{"text": "be nice"}],
+        "messages": [
+            {
+                "role": "user",
+                "content": [{"text": "hello world"}, {"image": {"format": "png", "source": {"bytes": "AA"}}}],
+            },
+            {"role": "assistant", "content": [{"text": "hi"}, {"toolUse": {"toolUseId": "t1", "name": "f", "input": {}}}]},
+            {"role": "user", "content": [{"toolResult": {"toolUseId": "t1", "content": [{"text": "card on file"}]}}]},
+        ],
+    }
+
+
+def _invoke_body() -> dict[str, object]:
+    return {
+        "anthropic_version": "bedrock-2023-05-31",
+        "max_tokens": 16,
+        "system": "be nice",
+        "messages": [
+            {"role": "user", "content": "hello world"},
+            {"role": "assistant", "content": [{"type": "text", "text": "hi"}]},
+            {
+                "role": "user",
+                "content": [
+                    {"type": "tool_result", "tool_use_id": "t1", "content": "card on file"},
+                    {"type": "text", "text": "thanks"},
+                ],
+            },
+        ],
+    }
+
+
+BEDROCK_PII_LAKERA_RESPONSE: Final = {
+    "flagged": True,
+    "breakdown": [{"detector_type": "pii/credit_card", "detected": True, "message_id": 1}],
+    "payload": [{"detector_type": "pii/credit_card", "start": 0, "end": 5, "message_id": 1}],
+}
+BEDROCK_PROMPT_ATTACK_LAKERA_RESPONSE: Final = {
+    "flagged": True,
+    "breakdown": [{"detector_type": "prompt_attack", "detected": True, "message_id": 1}],
+}
+
+
+async def _run_bedrock_pre_call(
+    guardrail: LakeraAIGuardrail, lakera_response: Mapping[str, object], data: dict[str, object]
+) -> Sequence[object]:
+    """Run the pre-call hook against a Lakera double and return the messages each guard request carried."""
+    sent: Final = list[object]()  # mutable-ok: the Lakera double records each guard request it receives
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        sent.append(json.loads(request.content)["messages"])
+        return httpx.Response(200, json={"payload": [], **lakera_response})
+
+    guardrail.async_handler = AsyncHTTPHandler(transport=httpx.MockTransport(respond))
+    await guardrail.async_pre_call_hook(
+        user_api_key_dict=UserAPIKeyAuth(api_key="test_key"),
+        cache=MagicMock(),
+        data=data,
+        call_type="allm_passthrough_route",
+    )
+    return sent
+
+
+class TestBedrockPassthroughBody:
+    def test_reads_converse_system_text_and_tool_results(self):
+        assert _build_lakera_inspection_messages(_bedrock_data(_converse_body())) == [
+            {"role": "system", "content": "be nice"},
+            {"role": "user", "content": "hello world"},
+            {"role": "assistant", "content": "hi"},
+            {"role": "tool", "content": "card on file"},
+        ]
+
+    def test_reads_anthropic_invoke_system_text_and_tool_results(self):
+        assert _build_lakera_inspection_messages(_bedrock_data(_invoke_body())) == [
+            {"role": "system", "content": "be nice"},
+            {"role": "user", "content": "hello world"},
+            {"role": "assistant", "content": "hi"},
+            {"role": "tool", "content": "card on file"},
+            {"role": "user", "content": "thanks"},
+        ]
+
+    def test_a_nested_body_for_another_provider_is_not_read(self):
+        data: Final = {**_bedrock_data(_invoke_body()), "custom_llm_provider": "vertex_ai"}
+        assert _build_lakera_inspection_messages(data) == []
+
+    @pytest.mark.asyncio
+    async def test_clean_body_reaches_lakera_and_is_forwarded_unchanged(self):
+        data: Final = _bedrock_data(_converse_body())
+        sent: Final = await _run_bedrock_pre_call(LakeraAIGuardrail(api_key="test_key"), {"flagged": False}, data)
+        assert sent == [_build_lakera_inspection_messages(_bedrock_data(_converse_body()))]
+        assert data["data"] == _converse_body()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("on_flagged", ["block", "mask"])
+    async def test_pii_is_blocked_since_the_body_cannot_be_masked(self, on_flagged: str):
+        data: Final = _bedrock_data(_invoke_body())
+        with pytest.raises(HTTPException) as blocked:
+            await _run_bedrock_pre_call(
+                LakeraAIGuardrail(api_key="test_key", on_flagged=on_flagged), BEDROCK_PII_LAKERA_RESPONSE, data
+            )
+        assert blocked.value.status_code == 400
+        assert data["data"] == _invoke_body()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("lakera_response", [BEDROCK_PROMPT_ATTACK_LAKERA_RESPONSE, BEDROCK_PII_LAKERA_RESPONSE])
+    async def test_advisory_blocks_instead_of_adding_a_message(self, lakera_response: Mapping[str, object]):
+        data: Final = _bedrock_data(_converse_body())
+        with pytest.raises(HTTPException) as blocked:
+            await _run_bedrock_pre_call(
+                LakeraAIGuardrail(api_key="test_key", on_flagged="inject_system_message"), lakera_response, data
+            )
+        assert blocked.value.status_code == 400
+        assert "messages" not in data
+        assert data["data"] == _converse_body()
+
+    @pytest.mark.asyncio
+    async def test_monitor_forwards_the_body_and_logs_why_it_was_not_masked(self):
+        data: Final = _bedrock_data(_invoke_body())
+        with patch("litellm.proxy.guardrails.guardrail_hooks.lakera_ai_v2.verbose_proxy_logger") as logger:
+            await _run_bedrock_pre_call(
+                LakeraAIGuardrail(api_key="test_key", on_flagged="monitor"), BEDROCK_PII_LAKERA_RESPONSE, data
+            )
+        assert data["data"] == _invoke_body()
+        assert logger.error.call_args.args[1] == (
+            "a /bedrock pass-through body, which has no write-back path for the redacted content"
+        )
