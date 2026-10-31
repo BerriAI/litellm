@@ -61,6 +61,7 @@ from litellm.proxy.auth.user_api_key_auth import (
     user_api_key_auth_websocket,
 )
 from litellm.proxy.common_request_processing import (
+    RESPONSES_SSE_FRAMING,
     ProxyBaseLLMRequestProcessing,
     cost_headers,
     create_response,
@@ -483,6 +484,7 @@ async def responses_api(
                 if requests_background(_PROXY_SERVER_REQUEST_ADAPTER.validate_python(data))
                 else native_data_generator
             ),
+            sse_framing=RESPONSES_SSE_FRAMING,
             model=None,
             user_model=user_model,
             user_temperature=user_temperature,
@@ -541,7 +543,6 @@ async def responses_api(
             async def _blocked_stream() -> AsyncGenerator[str, None]:
                 for chunk in block_chunks:
                     yield chunk.decode()
-                yield "data: [DONE]\n\n"
 
             return await create_response(generator=_blocked_stream(), media_type="text/event-stream", headers={})
         return build_blocked_response(e)
@@ -908,6 +909,7 @@ async def get_response(
                 response_id,
                 read_settles_billing,
             ),
+            sse_framing=RESPONSES_SSE_FRAMING,
             model=None,
             user_model=user_model,
             user_temperature=user_temperature,

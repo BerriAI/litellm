@@ -256,8 +256,10 @@ def _responses_frames(gateway: Gateway, stream: tuple[bytes, ...]) -> tuple[http
     )
     _assert_one_attempt(served.wire, marker)
     assert served.response.status_code == 200, served.response.text
-    assert served.response.text.rstrip().endswith("data: [DONE]"), served.response.text
+    assert "data: [DONE]" not in served.response.text, served.response.text
     frames: Final = data_frames(served.response.text)
+    names: Final = tuple(name for name, _ in sse_events(served.response.text))
+    assert names == tuple(item["type"] for item in frames), served.response.text
     assert frames[-1]["type"] == "response.failed", served.response.text
     return served.response, object_value(object_value(frames[-1]["response"])["error"])
 

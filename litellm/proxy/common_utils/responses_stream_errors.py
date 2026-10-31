@@ -1,10 +1,18 @@
+import gc
+import json
+import re
 import time
-from collections.abc import Mapping
+from collections import Counter, OrderedDict, defaultdict
+from collections.abc import Iterable, Iterator, Mapping, Sequence
+from contextlib import suppress
+from enum import Enum
 from http import HTTPStatus
+from itertools import chain, groupby, takewhile, zip_longest
 from types import MappingProxyType
 from typing import Final
 
-from pydantic import BaseModel, ConfigDict, field_validator
+from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError, field_validator
+from typing_extensions import TypeIs  # noqa: TID251  # the guards narrow hook values to object items, isinstance cannot
 
 from litellm._logging import redact_internal_details_from_client_message
 from litellm._uuid import uuid
@@ -29,6 +37,13 @@ class _StreamEvent(LiteLLMBaseModel):
     response: _ResponseIdentity | None = None
 
 
+class _FramedEvent(_StreamEvent):
+    error: object = None
+
+
+_LAX_INT: Final = TypeAdapter(int)
+
+
 class _FailureDetails(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
@@ -36,6 +51,16 @@ class _FailureDetails(LiteLLMBaseModel):
     code: str | int | None = None
     type: str | None = None
     status_code: int | None = None
+
+    @field_validator("status_code", mode="before")
+    @classmethod
+    def normalize_status_code(cls, value: object) -> int | None:
+        if isinstance(value, bool):
+            return None
+        try:
+            return _LAX_INT.validate_python(value)
+        except ValidationError:
+            return None
 
     @field_validator("message", mode="before")
     @classmethod
@@ -55,6 +80,265 @@ class _FailureDetails(LiteLLMBaseModel):
     @classmethod
     def of_exception(cls, exception: Exception) -> "_FailureDetails":
         return cls.model_validate({field: getattr(exception, field, None) for field in cls.model_fields})
+
+
+class _ErrorPayload(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    error: Mapping[str, object] | str
+
+    def error_object(self) -> Mapping[str, object]:
+        return {"message": self.error} if isinstance(self.error, str) else self.error
+
+
+_DROPPED: Final = object()
+
+
+class _BaseForm(Enum):
+    PRINTED = "printed"
+    DUMPED = "dumped"
+
+
+def _repr_owner(kind: type[object]) -> type[object]:
+    return next((owner for owner in kind.__mro__ if "__repr__" in owner.__dict__), object)
+
+
+def _repr_prints_every_item(kind: type[object]) -> bool:
+    return kind in (OrderedDict, Counter) or _repr_owner(kind) in (dict, list, tuple, defaultdict)
+
+
+def _format_prints_every_item(kind: type[object]) -> bool:
+    return kind.__str__ is object.__str__ and kind.__format__ is object.__format__ and _repr_prints_every_item(kind)
+
+
+def _str_prints_every_item(kind: type[object]) -> bool:
+    return kind.__str__ is object.__str__ and _repr_owner(kind) in (
+        dict,
+        list,
+        tuple,
+        OrderedDict,
+        defaultdict,
+        Counter,
+    )
+
+
+def _is_dict(value: object) -> TypeIs[Mapping[object, object]]:  # guard-ok: dict items as object
+    return isinstance(value, dict)
+
+
+def _is_sequence(value: object) -> TypeIs[Sequence[object]]:  # guard-ok: items as object
+    return isinstance(value, (list, tuple))
+
+
+def _is_proxy(value: object) -> TypeIs[Mapping[object, object]]:  # guard-ok: mappingproxy cannot be subclassed
+    return isinstance(value, MappingProxyType)
+
+
+def _is_defaultdict(value: object) -> TypeIs[defaultdict[object, object]]:  # guard-ok: dict items as object
+    return isinstance(value, defaultdict)
+
+
+def _proxied(proxy: Mapping[object, object]) -> object:
+    return gc.get_referents(proxy)[0]
+
+
+def _repr_prints_its_fields(model: BaseModel) -> bool:
+    kind: Final = type(model)
+    return kind.__repr__ is BaseModel.__repr__ and kind.__repr_str__ is BaseModel.__repr_str__
+
+
+def _plain_scalar(value: str | float) -> str | float:
+    if isinstance(value, str):
+        return str.__str__(value)
+    if isinstance(value, int):
+        return int.__int__(value)
+    return float.__float__(value)
+
+
+def _repr_shows_its_value(value: str | float, printed: str) -> bool:
+    plain: Final = _plain_scalar(value)
+    if isinstance(value, Enum):
+        return printed == f"<{type(value).__name__}.{value.name}: {plain!r}>"
+    return printed == repr(plain)
+
+
+def _printed_text(value: object) -> object:
+    printed: Final = repr(value)
+    if isinstance(value, (str, int, float)) and _repr_shows_its_value(value, printed):
+        return _plain_scalar(value)
+    return printed
+
+
+def _dumped_text(value: object) -> object:
+    return _plain_scalar(value) if isinstance(value, (str, int, float)) else str(value)
+
+
+def _text(value: object, form: _BaseForm) -> object:
+    try:
+        return _printed_text(value) if form is _BaseForm.PRINTED else _dumped_text(value)
+    except Exception:  # noqa: BLE001  # hook values run their own __repr__ and __str__, so a failure drops the value
+        return _DROPPED
+
+
+def _json_key(key: object, form: _BaseForm) -> object:
+    return key if key is None or type(key) in (str, int, float, bool) else _text(key, form)
+
+
+def _stored_sequence(value: Sequence[object]) -> Iterator[object]:
+    if isinstance(value, list):
+        return list[object].__iter__(value)
+    if isinstance(value, tuple):
+        return tuple[object, ...].__iter__(value)
+    return iter(value)
+
+
+def _stored_items(value: Mapping[object, object]) -> Iterable[tuple[object, object]]:
+    return dict[object, object].items(value) if isinstance(value, dict) else value.items()
+
+
+def _live_items(value: Mapping[object, object]) -> Iterator[tuple[object, object]]:
+    shown: Final = dict[int, object]()
+    while True:
+        with suppress(RuntimeError):
+            for key, item in _stored_items(value):
+                if id(key) not in shown:
+                    shown[id(key)] = key
+                    yield key, item
+            return
+
+
+def _dumps_shown(kind: type[object], shown: Iterable[object], stored: Iterable[object]) -> bool:
+    return _str_prints_every_item(kind) or any(left is not right for left, right in zip_longest(shown, stored))
+
+
+def _shown_sequence(value: object, form: _BaseForm) -> Iterable[object] | None:
+    if not _is_sequence(value):
+        return None
+    if form is _BaseForm.PRINTED:
+        return _stored_sequence(value) if _repr_prints_every_item(type(value)) else None
+    dumped: Final = tuple(value)
+    return dumped if _dumps_shown(type(value), dumped, _stored_sequence(value)) else None
+
+
+def _shown_items(value: object, form: _BaseForm) -> Iterable[tuple[object, object]] | None:
+    if not _is_dict(value):
+        return None
+    if form is _BaseForm.DUMPED:
+        dumped: Final = tuple(value.items())
+        stored: Final = chain.from_iterable(_stored_items(value))
+        return dumped if _dumps_shown(type(value), chain.from_iterable(dumped), stored) else None
+    if not _repr_prints_every_item(type(value)):
+        return None
+    if isinstance(value, OrderedDict):
+        return tuple(OrderedDict[object, object].items(value))
+    if isinstance(value, Counter):
+        return Counter[object].most_common(value)
+    return _live_items(value)
+
+
+def _proxy_items(proxy: Mapping[object, object], form: _BaseForm) -> Iterable[tuple[object, object]] | None:
+    mapping: Final = _proxied(proxy)
+    if form is _BaseForm.DUMPED and not _str_prints_every_item(type(mapping)):
+        return None
+    return _shown_items(mapping, _BaseForm.PRINTED)
+
+
+def _expansion(value: object, form: _BaseForm) -> tuple[Iterable[tuple[object, object]], _BaseForm] | None:
+    if _is_proxy(value):
+        proxy_items: Final = _proxy_items(value, form)
+        return None if proxy_items is None else (proxy_items, _BaseForm.PRINTED)
+    shown_items: Final = _shown_items(value, form)
+    if shown_items is not None:
+        return shown_items, form
+    if form is _BaseForm.PRINTED and isinstance(value, BaseModel) and _repr_prints_its_fields(value):
+        return value.__repr_args__(), _BaseForm.PRINTED
+    return None
+
+
+def _walked_ids(value: object) -> frozenset[int]:
+    return frozenset((id(value), id(_proxied(value)))) if _is_proxy(value) else frozenset((id(value),))
+
+
+def _container_marker(value: object) -> object:
+    if isinstance(value, list):
+        return "[...]"
+    if isinstance(value, tuple):
+        return "(...)"
+    if isinstance(value, OrderedDict):
+        return "..."
+    if _is_defaultdict(value):
+        factory: Final = _text(value.default_factory, _BaseForm.PRINTED)
+        return factory if factory is _DROPPED else f"{type(value).__name__}({factory}, {{...}})"
+    return "{...}" if _is_dict(value) and not isinstance(value, Counter) else None
+
+
+def _cycle_marker(value: object) -> object:
+    if not _is_proxy(value):
+        return _container_marker(value)
+    inner: Final = _container_marker(_proxied(value))
+    return inner if inner is None or inner is _DROPPED else f"mappingproxy({inner})"
+
+
+def _cycle_text(value: object, form: _BaseForm) -> object:
+    marker: Final = _cycle_marker(value)
+    return _text(value, form) if marker is None else marker
+
+
+def _json_safe(value: object, form: _BaseForm, path: frozenset[int]) -> object:
+    if value is None or type(value) in (str, int, float, bool):
+        return value
+    walked: Final = _walked_ids(value)
+    if not walked.isdisjoint(path):
+        return _cycle_text(value, form)
+    inner_path: Final = path | walked
+    try:
+        sequence: Final = _shown_sequence(value, form)
+        if sequence is not None:
+            shown_items: Final = [_json_safe(item, form, inner_path) for item in sequence]
+            return [item for item in shown_items if item is not _DROPPED]
+        expansion: Final = _expansion(value, form)
+        if expansion is None:
+            return _text(value, form)
+        items, inner = expansion
+        pairs: Final = [(_json_key(key, inner), _json_safe(item, inner, inner_path)) for key, item in items]
+        return {key: item for key, item in pairs if key is not _DROPPED and item is not _DROPPED}
+    except Exception:  # noqa: BLE001  # hook values run their own printers and can nest past the recursion limit
+        return _text(value, form)
+
+
+def _chunk_json(shown: object) -> str | None:
+    if isinstance(shown, str):
+        return shown
+    return None if shown is _DROPPED else json.dumps(shown)
+
+
+def responses_chunk_data(chunk: object) -> str | None:
+    if _is_proxy(chunk):
+        expandable: Final = _proxy_items(chunk, _BaseForm.DUMPED) is not None
+        return _chunk_json(_json_safe(chunk, _BaseForm.DUMPED, frozenset())) if expandable else None
+    if not _is_dict(chunk) or not _format_prints_every_item(type(chunk)):
+        return None
+    return _chunk_json(_json_safe(chunk, _BaseForm.PRINTED, frozenset()))
+
+
+def _dumped_detail(error: Mapping[str, object]) -> Mapping[str, object]:
+    path: Final = frozenset((id(error),))
+    shown: Final = [(key, _json_safe(value, _BaseForm.DUMPED, path)) for key, value in error.items()]
+    return {key: value for key, value in shown if value is not _DROPPED}
+
+
+def sse_error_object(data: str | bytes) -> Mapping[str, object] | None:
+    try:
+        return _ErrorPayload.model_validate_json(data).error_object()
+    except ValidationError:
+        return None
+
+
+def event_error_object(event: Mapping[str, object]) -> Mapping[str, object] | None:
+    try:
+        return _ErrorPayload.model_validate(event).error_object() or None
+    except ValidationError:
+        return None
 
 
 def _original_failure(exception: Exception) -> Exception:
@@ -95,6 +379,16 @@ def _status_error_code(status_code: int | None) -> str:
     return _CLIENT_ERROR_CODES.get(status_code, "invalid_request_error")
 
 
+def _status_of(code: str | int | None) -> int | None:
+    if isinstance(code, int):
+        return code
+    if code is None or not code.isdecimal():
+        return None
+    with suppress(ValueError):
+        return int(code)
+    return None
+
+
 def _response_error_code(details: _FailureDetails) -> str:
     for value in (details.code, details.type):
         if value == "insufficient_quota":
@@ -106,6 +400,115 @@ def _response_error_code(details: _FailureDetails) -> str:
     return _status_error_code(details.status_code)
 
 
+_STATUS_PHRASES: Final = MappingProxyType({int(status): status.phrase for status in HTTPStatus})
+
+
+def _status_phrase(status_code: int | None) -> str:
+    return _STATUS_PHRASES.get(status_code, "Unknown error") if status_code is not None else "Unknown error"
+
+
+def responses_error_fields(error: Mapping[str, object]) -> Mapping[str, object]:
+    details: Final = _FailureDetails.model_validate(error)
+    status_code: Final = _status_of(details.code)
+    return {
+        "code": _response_error_code(details.model_copy(update={"status_code": status_code})),
+        "message": details.message or _status_phrase(status_code),
+    }
+
+
+def _error_event(
+    fields: Mapping[str, object], error: Mapping[str, object], sequence_number: int
+) -> Mapping[str, object]:
+    return {
+        "type": ResponsesAPIStreamEvents.ERROR.value,
+        **fields,
+        "param": error.get("param"),
+        "sequence_number": sequence_number,
+        "error": error,
+    }
+
+
+SSE_LINE_BREAK: Final = re.compile(r"\r\n|\r|\n")
+_TERMINAL_EVENT_TYPES: Final = frozenset(("response.completed", "response.failed", "response.incomplete", "error"))
+_MAX_SEQUENCE_NUMBER: Final = 2**63 - 1
+
+
+def _field_values(lines: Sequence[str], name: str) -> tuple[str, ...]:
+    prefix: Final = f"{name}:"
+    return tuple(line.removeprefix(prefix).removeprefix(" ") for line in lines if line.startswith(prefix))
+
+
+def _parsed_event(data: str) -> _FramedEvent:
+    try:
+        return _FramedEvent.model_validate_json(data)
+    except ValidationError:
+        return _FramedEvent()
+
+
+def _in_range_sequence(event: _FramedEvent) -> _FramedEvent:
+    sequence_number: Final = event.sequence_number
+    if sequence_number is None or 0 <= sequence_number < _MAX_SEQUENCE_NUMBER:
+        return event
+    return event.model_copy(update={"sequence_number": None})
+
+
+def _names_an_error_object(event: _FramedEvent, lines: Sequence[str]) -> bool:
+    return _is_dict(event.error) and bool(event.error) and _field_values(lines, "event")[-1:] == ("error",)
+
+
+def _block_data(lines: Sequence[str]) -> str:
+    return "\n".join(_field_values(lines, "data"))
+
+
+def _block_event(lines: Sequence[str]) -> _StreamEvent:
+    parsed: Final = _in_range_sequence(_parsed_event(_block_data(lines)))
+    if parsed.type in _TERMINAL_EVENT_TYPES or not _names_an_error_object(parsed, lines):
+        return parsed
+    return parsed.model_copy(update={"type": "error"})
+
+
+def _blocks(frames: str) -> Iterator[tuple[str, ...]]:
+    return (tuple(lines) for filled, lines in groupby(SSE_LINE_BREAK.split(frames), key=bool) if filled)
+
+
+def _frame_events(frames: str) -> tuple[_StreamEvent, ...]:
+    return tuple(_block_event(lines) for lines in _blocks(frames))
+
+
+def _before_done(lines: Sequence[str]) -> bool:
+    return _block_data(lines).strip() != "[DONE]"
+
+
+def _terminal_blocks(frame: str) -> tuple[tuple[tuple[str, ...], _StreamEvent], ...]:
+    read: Final = ((lines, _block_event(lines)) for lines in takewhile(_before_done, _blocks(frame)))
+    return tuple((lines, event) for lines, event in read if event.type in _TERMINAL_EVENT_TYPES)
+
+
+def frame_error_data(frame: str) -> str | None:
+    terminal: Final = _terminal_blocks(frame)
+    if not terminal:
+        return None
+    lines, event = terminal[-1]
+    return _block_data(lines) if event.type == "error" else None
+
+
+def _observed_event(chunk: object) -> _StreamEvent | None:
+    if not isinstance(chunk, (BaseModel, Mapping)):
+        return None
+    try:
+        return _StreamEvent.model_validate(chunk)
+    except ValidationError:
+        return None
+
+
+def _wire_event(frame: str | bytes) -> _StreamEvent | None:
+    text: Final = frame.decode("utf-8", errors="replace") if isinstance(frame, bytes) else frame
+    try:
+        return _StreamEvent.model_validate_json(text.removeprefix("data: "))
+    except ValidationError:
+        return None
+
+
 class ResponsesStreamErrorState:
     def __init__(self) -> None:
         self.response_id: str | None = None
@@ -114,14 +517,13 @@ class ResponsesStreamErrorState:
         self.sequence_number = -1
         self.terminal_emitted = False
         self._pending_event: _StreamEvent | None = None
+        self._pending_on_wire = False
 
     def observe_chunk(self, chunk: object) -> None:
-        self._pending_event = _StreamEvent.model_validate(chunk) if isinstance(chunk, (BaseModel, Mapping)) else None
+        self._pending_event = _observed_event(chunk)
+        self._pending_on_wire = isinstance(chunk, Mapping)
 
-    def mark_emitted(self, frame: str | bytes) -> str | bytes:
-        event: Final = self._pending_event
-        if event is None:
-            return frame
+    def _record(self, event: _StreamEvent) -> None:
         if event.sequence_number is not None:
             self.sequence_number = max(self.sequence_number, event.sequence_number)
         if event.response is not None:
@@ -129,9 +531,34 @@ class ResponsesStreamErrorState:
             self.model = event.response.model or self.model
             if event.response.created_at is not None:
                 self.created_at = event.response.created_at
-        if event.type in ("response.completed", "response.failed", "response.incomplete"):
+        if event.type in _TERMINAL_EVENT_TYPES:
             self.terminal_emitted = True
-        return frame
+
+    def observe_frames(self, frames: str) -> str:
+        for event in _frame_events(frames):
+            self._record(event)
+        return frames
+
+    def mark_emitted(self, frame: str | bytes) -> str | bytes:
+        observed: Final = self._pending_event
+        if observed is None:
+            return frame
+        event: Final = _wire_event(frame) if self._pending_on_wire else observed
+        self._record(observed if event is None else event)
+        if event is None or not event.type or "\n" in event.type or "\r" in event.type:
+            return frame
+        prefix: Final = f"event: {event.type}\n"
+        return prefix.encode("utf-8") + frame if isinstance(frame, bytes) else prefix + frame
+
+    def format_error(self, error: Mapping[str, object]) -> str:
+        fields: Final = responses_error_fields(error)
+        sequence_number: Final = self.sequence_number + 1
+        payload: Final = json.dumps(_error_event(fields, _dumped_detail(error), sequence_number))
+        return f"event: error\ndata: {payload}\n\n"
+
+    def format_error_message(self, frame: str) -> str:
+        error: Final = sse_error_object(frame.removeprefix("data: "))
+        return frame if error is None else self.format_error(error)
 
     def format_failure(self, exception: Exception) -> str | None:
         if self.terminal_emitted:

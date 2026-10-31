@@ -763,7 +763,10 @@ def test_restamp_streaming_chunk_rewrites_nested_model_in_guardrail_block_frames
         )[0]
         for frame in frames
     ]
-    events = [json.loads(frame.decode().removeprefix("data: ")) for frame in client_frames]
+    events = [
+        json.loads(next(line[6:] for line in frame.decode().splitlines() if line.startswith("data: ")))
+        for frame in client_frames
+    ]
 
     assert all(frame.endswith(b"\n\n") for frame in client_frames)
     assert events[-1]["type"] == "response.completed"

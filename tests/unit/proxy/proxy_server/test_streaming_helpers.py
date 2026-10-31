@@ -16,8 +16,15 @@ Pins covered:
 from __future__ import annotations
 
 import asyncio
+import functools
+import itertools
 import json
-from collections.abc import AsyncIterator, Callable
+from collections import Counter, OrderedDict, defaultdict
+from collections.abc import AsyncIterator, Callable, ItemsView, Iterable, Iterator, KeysView, Mapping
+from datetime import datetime, timezone
+from enum import Enum
+from http import HTTPStatus
+from types import MappingProxyType
 from typing import Final, Literal
 from unittest.mock import AsyncMock, MagicMock
 
@@ -26,7 +33,8 @@ import pytest
 from fastapi import HTTPException, Response
 from fastapi.responses import JSONResponse, StreamingResponse
 from openai import APIError as OpenAIAPIError
-from pydantic import BaseModel
+from openai.types.responses import ResponseOutputMessage, ResponseOutputText
+from pydantic import BaseModel, Field, PrivateAttr
 
 import litellm
 import litellm.proxy.proxy_server as ps
@@ -34,10 +42,12 @@ from litellm.constants import RETURN_RAW_MODEL_NAME_METADATA_KEY
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 from litellm.proxy.common_request_processing import create_response
+from litellm.proxy.common_utils.responses_stream_errors import ResponsesStreamErrorState
 from litellm.proxy.proxy_server import (
     _apply_streaming_chunk_hooks,
     _fast_serialize_simple_model_response_stream,
     _format_fallback_metadata_sse_event,
+    _format_responses_sse_chunk,
     _format_streaming_sse_chunk,
     _get_client_requested_model_for_streaming,
     _get_streaming_fallback_metadata,
@@ -50,11 +60,16 @@ from litellm.proxy.proxy_server import (
     select_data_generator,
 )
 from litellm.types.llms.openai import (
+    ErrorEvent,
+    OutputTextDeltaEvent,
     ResponseCompletedEvent,
     ResponseCreatedEvent,
     ResponseFailedEvent,
+    ResponseIncompleteEvent,
     ResponsesAPIResponse,
+    ResponsesAPIStreamEvents,
 )
+from litellm.types.proxy.litellm_pre_call_utils import RedactedDict
 from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices, Usage
 from tests._support.clock_loops import AutojumpClockLoop
 
@@ -90,6 +105,1009 @@ async def _async_iter_raises(exc: Exception):
     # yield once then raise — exercises the mid-stream failure branch
     yield _simple_chunk(content="partial")
     raise exc
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("terminal_type", ["response.completed", "response.failed", "response.incomplete", "error"])
+async def test_responses_stream_dispatches_named_events_without_a_chat_done_sentinel(terminal_type: str) -> None:
+    response: Final = ResponsesAPIResponse(id="resp_framing", created_at=1, model="local-model", output=[])
+    created: Final = ResponseCreatedEvent.model_validate(
+        {"type": "response.created", "sequence_number": 0, "response": response}
+    )
+    delta: Final = OutputTextDeltaEvent.model_validate(
+        {
+            "type": "response.output_text.delta",
+            "sequence_number": 1,
+            "item_id": "msg_framing",
+            "output_index": 0,
+            "content_index": 0,
+            "delta": "hello",
+        }
+    )
+    terminal_models: Final = {
+        "response.completed": ResponseCompletedEvent,
+        "response.failed": ResponseFailedEvent,
+        "response.incomplete": ResponseIncompleteEvent,
+        "error": ErrorEvent,
+    }
+    terminal: Final = terminal_models[terminal_type].model_validate(
+        {"type": terminal_type, "sequence_number": 2, "response": response}
+    )
+
+    async def upstream() -> AsyncIterator[BaseModel]:
+        for event in (created, delta, terminal):
+            yield event
+
+    frames: Final = tuple(
+        [
+            frame.decode() if isinstance(frame, bytes) else frame
+            async for frame in select_data_generator(
+                response=upstream(), user_api_key_dict=_user_auth(), request_data={}, responses_stream_errors=True
+            )
+        ]
+    )
+    assert len(frames) == 3
+    for frame, event_type in zip(
+        frames, ("response.created", "response.output_text.delta", terminal_type), strict=True
+    ):
+        assert frame.startswith(f"event: {event_type}\n")
+        payload: Final = json.loads(
+            next(line.removeprefix("data: ") for line in frame.splitlines() if line.startswith("data: "))
+        )
+        assert payload["type"] == event_type
+    assert json.loads(frames[1].split("data: ", 1)[1])["delta"] == "hello"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "as_chunk",
+    [lambda event: event, lambda event: event.model_dump(), lambda event: MappingProxyType(event.model_dump())],
+    ids=["model", "dict", "mapping_proxy"],
+)
+async def test_responses_stream_sends_no_failure_event_after_an_upstream_error_event(
+    as_chunk: Callable[[ErrorEvent], BaseModel | Mapping[str, object]],
+) -> None:
+    response: Final = ResponsesAPIResponse(id="resp_error_then_raise", created_at=1, model="local-model", output=[])
+    created: Final = ResponseCreatedEvent.model_validate(
+        {"type": "response.created", "sequence_number": 0, "response": response}
+    )
+    error_event: Final = ErrorEvent.model_validate(
+        {"type": "error", "sequence_number": 1, "code": "server_error", "message": "upstream failed", "param": None}
+    )
+
+    async def upstream() -> AsyncIterator[BaseModel | Mapping[str, object]]:
+        yield created
+        yield as_chunk(error_event)
+        raise litellm.APIError(status_code=500, message="Stream close failed", llm_provider="openai", model="local-model")
+
+    frames: Final = tuple(
+        [
+            frame.decode() if isinstance(frame, bytes) else frame
+            async for frame in select_data_generator(
+                response=upstream(), user_api_key_dict=_user_auth(), request_data={}, responses_stream_errors=True
+            )
+        ]
+    )
+
+    assert tuple(frame.split("\n", 1)[0] for frame in frames) == ("event: response.created", "event: error")
+    assert json.loads(frames[-1].split("data: ", 1)[1])["message"] == "upstream failed"
+
+
+class _MaskedEverywhereString(str):
+    def __repr__(self) -> str:
+        return "'***'"
+
+    def __str__(self) -> str:
+        return "***"
+
+    def __format__(self, format_spec: str) -> str:
+        return "***"
+
+
+async def _responses_frames(chunks: Iterable[Mapping[str, object]]) -> tuple[str, ...]:
+    async def upstream() -> AsyncIterator[Mapping[str, object]]:
+        for chunk in chunks:
+            yield chunk
+
+    return tuple(
+        [
+            frame.decode() if isinstance(frame, bytes) else frame
+            async for frame in select_data_generator(
+                response=upstream(), user_api_key_dict=_user_auth(), request_data={}, responses_stream_errors=True
+            )
+        ]
+    )
+
+
+@pytest.mark.asyncio
+async def test_responses_stream_never_writes_a_masked_type_value_on_its_event_line() -> None:
+    frames: Final = await _responses_frames(({"type": _MaskedEverywhereString("hook-canary"), "delta": "hi"},))
+
+    assert len(frames) == 1
+    assert "hook-canary" not in frames[0]
+    assert json.loads(frames[0].split("data: ", 1)[1])["delta"] == "hi"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "chunk",
+    [{"type": 5}, {"type": "response.completed", "response": "hook-text"}],
+    ids=["non_string_type", "string_response"],
+)
+async def test_responses_stream_sends_a_hook_chunk_its_event_model_cannot_read_as_a_data_frame(
+    chunk: Mapping[str, object],
+) -> None:
+    frames: Final = await _responses_frames((chunk,))
+
+    assert frames == (f"data: {json.dumps(chunk)}\n\n",)
+
+
+class _HookOutputItem(BaseModel, frozen=True):
+    id: str
+    type: str
+
+
+@pytest.mark.parametrize(
+    "item",
+    [
+        MappingProxyType({"id": "msg_nested", "type": "message"}),
+        _HookOutputItem(id="msg_nested", type="message"),
+    ],
+    ids=["mapping_proxy", "model"],
+)
+def test_responses_sse_chunk_encodes_values_nested_in_a_hook_chunk_as_json_objects(
+    item: Mapping[str, object] | BaseModel,
+) -> None:
+    frame: Final = _format_responses_sse_chunk(
+        chunk=MappingProxyType({"type": "response.output_item.added", "output_index": 0, "item": item})
+    )
+
+    assert isinstance(frame, str)
+    assert json.loads(frame.removeprefix("data: "))["item"] == {"id": "msg_nested", "type": "message"}
+
+
+def test_responses_error_event_encodes_nested_error_fields_as_json_objects() -> None:
+    frame: Final = ResponsesStreamErrorState().format_error(
+        {
+            "message": "overloaded",
+            "provider_specific_fields": MappingProxyType({"upstream": MappingProxyType({"type": "overloaded_error"})}),
+        }
+    )
+
+    payload: Final = json.loads(frame.split("data: ", 1)[1])
+    assert payload["error"]["provider_specific_fields"] == {"upstream": {"type": "overloaded_error"}}
+
+
+_UPSTREAM_HEADERS: Final = httpx.Headers({"authorization": "Bearer hook-canary", "x-request-id": "req_1"})
+
+
+def _responses_frame_payload(nested: object) -> Mapping[str, object]:
+    chunk_frame: Final = _format_responses_sse_chunk(
+        chunk=MappingProxyType({"type": "response.output_text.delta", "nested": nested})
+    )
+    error_frame: Final = ResponsesStreamErrorState().format_error({"message": "blocked", "nested": nested})
+    assert isinstance(chunk_frame, str)
+    chunk_payload: Final = json.loads(chunk_frame.removeprefix("data: "))
+    error_payload: Final = json.loads(error_frame.split("data: ", 1)[1])
+    assert chunk_payload["nested"] == error_payload["error"]["nested"]
+    return chunk_payload
+
+
+class _HiddenFieldModel(BaseModel, frozen=True):
+    user: str
+    password: str = Field(repr=False)
+
+
+class _MaskedReprModel(BaseModel, frozen=True):
+    token: str
+
+    def __repr__(self) -> str:
+        return "_MaskedReprModel(token=[secure])"
+
+
+class _MaskedReprStrModel(BaseModel, frozen=True):
+    token: str
+
+    def __repr_str__(self, join_str: str) -> str:
+        return "token=[secure]"
+
+
+class _MaskedReprArgsModel(BaseModel, frozen=True):
+    token: str
+
+    def __repr_args__(self) -> Iterable[tuple[str | None, object]]:
+        return (("token", "[secure]"),)
+
+
+class _MaskedStrModel(BaseModel, frozen=True):
+    token: str
+
+    def __str__(self) -> str:
+        return "_MaskedStrModel(token=[secure])"
+
+
+class _MaskedReprString(str):
+    def __repr__(self) -> str:
+        return "_MaskedReprString([secure])"
+
+
+_REDACTED_HEADERS: Final = RedactedDict({"authorization": "Bearer hook-canary"})
+
+_MASKED_IN_EVERY_FRAME: Final = (
+    _UPSTREAM_HEADERS,
+    _REDACTED_HEADERS,
+    MappingProxyType({"headers": _REDACTED_HEADERS}),
+    MappingProxyType(_REDACTED_HEADERS),
+    _HiddenFieldModel(user="rig", password="hook-canary"),
+    _MaskedReprStrModel(token="hook-canary"),
+    _MaskedReprArgsModel(token="hook-canary"),
+)
+_MASKED_IN_EVERY_FRAME_IDS: Final = (
+    "header_mapping",
+    "redacted_dict",
+    "proxy_over_dict_holding_redacted_dict",
+    "proxy_wrapping_redacted_dict",
+    "repr_false_field",
+    "masked_repr_str_model",
+    "masked_repr_args_model",
+)
+
+
+class _UnmaskingDict(dict[str, str]):
+    def items(self) -> ItemsView[str, str]:  # pyright: ignore[reportIncompatibleMethodOverride]  # rig hides storage
+        return {key: "hook-canary" for key in dict.keys(self)}.items()
+
+
+class _UnmaskingList(list[str]):
+    def __iter__(self) -> Iterator[str]:
+        return iter(("hook-canary",))
+
+
+class _MostCommonMaskedCounter(Counter[str]):
+    def most_common(self, n: int | None = None) -> list[tuple[str, int]]:
+        return [(key, count) for key, count in super().most_common(n) if key != "hook-canary"]
+
+
+@pytest.mark.parametrize(
+    "nested",
+    [
+        *_MASKED_IN_EVERY_FRAME,
+        _MaskedReprModel(token="hook-canary"),
+        _MaskedReprString("hook-canary"),
+        _UnmaskingDict(token="enc:MASKED"),
+        _UnmaskingList(("enc:MASKED",)),
+        _MostCommonMaskedCounter(("shown", "hook-canary")),
+    ],
+    ids=[
+        *_MASKED_IN_EVERY_FRAME_IDS,
+        "masked_repr_model",
+        "masked_repr_string",
+        "dict_items_differ_from_storage",
+        "list_iter_differs_from_storage",
+        "counter_most_common_masks",
+    ],
+)
+def test_responses_sse_chunk_never_shows_what_a_nested_value_hides_from_its_repr(nested: object) -> None:
+    frame: Final = _format_responses_sse_chunk(
+        chunk=MappingProxyType({"type": "response.output_text.delta", "nested": nested})
+    )
+
+    assert isinstance(frame, str)
+    assert json.loads(frame.removeprefix("data: "))["type"] == "response.output_text.delta"
+    assert "hook-canary" not in frame
+
+
+class _OnceMaskedReprString(str):
+    def __init__(self, value: str) -> None:
+        super().__init__()
+        self.reprs: Final = itertools.count()
+
+    def __repr__(self) -> str:
+        return "'***'" if next(self.reprs) == 0 else super().__repr__()
+
+
+@pytest.mark.parametrize(
+    "wrap,printed",
+    [
+        (lambda value: value, "'***'"),
+        (lambda value: MappingProxyType({"v": value}), {"v": "'***'"}),
+    ],
+    ids=["dict_value", "nested_mapping_proxy"],
+)
+def test_responses_sse_chunk_prints_a_nested_string_once_the_way_base_printed_it(
+    wrap: Callable[[str], object], printed: object
+) -> None:
+    frame: Final = _format_responses_sse_chunk(
+        chunk={"type": "response.output_text.delta", "v": wrap(_OnceMaskedReprString("hook-canary"))}
+    )
+
+    assert isinstance(frame, str)
+    assert json.loads(frame.removeprefix("data: "))["v"] == printed
+
+
+@pytest.mark.parametrize(
+    "nested",
+    [*_MASKED_IN_EVERY_FRAME, _MaskedStrModel(token="hook-canary")],
+    ids=[*_MASKED_IN_EVERY_FRAME_IDS, "masked_str_model"],
+)
+def test_responses_error_event_never_shows_what_a_nested_value_hides_from_its_string_form(nested: object) -> None:
+    frame: Final = ResponsesStreamErrorState().format_error(
+        {"message": "blocked", "provider_specific_fields": {"guardrail": "rig-guard", "detail": nested}}
+    )
+
+    payload: Final = json.loads(frame.split("data: ", 1)[1])
+    assert payload["error"]["provider_specific_fields"]["guardrail"] == "rig-guard"
+    assert "hook-canary" not in frame
+
+
+class _OwnFormatDict(dict[str, str]):
+    def __format__(self, format_spec: str) -> str:
+        return json.dumps({"type": "response.output_text.delta", "token": "MASKED"})
+
+
+class _MaskedStrDict(dict[str, str]):
+    def __str__(self) -> str:
+        return "{'type': 'response.output_text.delta', 'token': 'MASKED'}"
+
+
+@pytest.mark.parametrize(
+    "chunk",
+    [
+        _OwnFormatDict(type="response.output_text.delta", token="hook-canary"),
+        MappingProxyType(_MaskedStrDict(type="response.output_text.delta", token="hook-canary")),
+    ],
+    ids=["own_format", "proxy_over_masked_str"],
+)
+def test_responses_sse_chunk_sends_a_whole_chunk_as_the_text_its_printer_gave(chunk: object) -> None:
+    frame: Final = _format_responses_sse_chunk(chunk=chunk)
+
+    assert isinstance(frame, str)
+    assert "hook-canary" not in frame
+
+
+class _RaisingRepr:
+    def __repr__(self) -> str:
+        raise RuntimeError("rig repr failure")
+
+
+class _MaskedStrHolder(dict[str, object]):
+    def __str__(self) -> str:
+        return "{'type': 'response.output_text.delta', 'member': 'MASKED'}"
+
+
+class _KeysRefusedDict(dict[str, str]):
+    def keys(self) -> KeysView[str]:  # pyright: ignore[reportIncompatibleMethodOverride]  # rig refuses its keys
+        raise RuntimeError("rig keys refused")
+
+
+class _ItemRefusedDict(dict[str, str]):
+    def __getitem__(self, key: str) -> str:
+        raise RuntimeError("rig item refused")
+
+
+class _PrintsOnceDict(dict[str, str]):
+    printed: bool = False
+
+    def __str__(self) -> str:
+        if self.printed:
+            raise RuntimeError("rig prints once")
+        self.printed = True
+        return "{'type': 'response.output_text.delta', 'token': 'MASKED'}"
+
+
+_DELTA_STORAGE: Final = {"type": "response.output_text.delta", "token": "shown"}
+
+
+class _AlternatingReprString(str):
+    def __init__(self, value: str) -> None:
+        super().__init__()
+        self.reprs: Final = itertools.count()
+
+    def __repr__(self) -> str:
+        return "'***'" if next(self.reprs) % 2 == 0 else super().__repr__()
+
+
+class _ReprOnceString(str):
+    def __init__(self, value: str) -> None:
+        super().__init__()
+        self.reprs: Final = itertools.count()
+
+    def __repr__(self) -> str:
+        if next(self.reprs):
+            raise RuntimeError("rig repr works once")
+        return super().__repr__()
+
+
+_PROXY_PLACEMENTS: Final[tuple[Callable[[str], object], ...]] = (
+    lambda value: {"type": "response.output_text.delta", "meta": MappingProxyType({"v": value})},
+    lambda value: MappingProxyType({"type": "response.output_text.delta", "v": value}),
+    lambda value: {"type": "response.output_text.delta", "meta": [MappingProxyType({"v": value})]},
+)
+
+
+@pytest.mark.parametrize("place", _PROXY_PLACEMENTS, ids=["nested_proxy", "whole_proxy", "proxy_in_list"])
+def test_responses_sse_chunk_prints_each_proxy_item_once(place: Callable[[str], object]) -> None:
+    masked: Final = _format_responses_sse_chunk(chunk=place(_AlternatingReprString("hook-canary")))
+    shown: Final = _format_responses_sse_chunk(chunk=place(_ReprOnceString("hook-value")))
+
+    assert isinstance(masked, str)
+    assert isinstance(shown, str)
+    assert "'***'" in masked
+    assert "hook-canary" not in masked
+    assert "hook-value" in shown
+
+
+def test_responses_error_event_prints_each_proxy_item_once() -> None:
+    frame: Final = ResponsesStreamErrorState().format_error(
+        {"message": "blocked", "provider_specific_fields": MappingProxyType({"v": _AlternatingReprString("hook-canary")})}
+    )
+
+    assert json.loads(frame.split("data: ", 1)[1])["error"]["provider_specific_fields"] == {"v": "'***'"}
+
+
+def _dict_holding_itself(value: str) -> dict[str, object]:
+    held: Final[dict[str, object]] = {"v": value}
+    held["me"] = held  # mutable-ok: a self-reference needs the dict to exist before it can hold itself
+    return held
+
+
+def _defaultdict_holding_itself(value: str) -> defaultdict[str, object]:
+    held: Final[defaultdict[str, object]] = defaultdict(list, v=value)
+    held["me"] = held  # mutable-ok: a self-reference needs the dict to exist before it can hold itself
+    return held
+
+
+def _ordered_dict_holding_itself(value: str) -> OrderedDict[str, object]:
+    held: Final[OrderedDict[str, object]] = OrderedDict(v=value)
+    held["me"] = held  # mutable-ok: a self-reference needs the dict to exist before it can hold itself
+    return held
+
+
+def _list_holding_itself(value: str) -> list[object]:
+    held: Final[list[object]] = [value]
+    held.append(held)  # mutable-ok: a self-reference needs the list to exist before it can hold itself
+    return held
+
+
+def _proxy_whose_mapping_holds_it(value: str) -> Mapping[str, object]:
+    held: Final[dict[str, object]] = {"type": "response.output_text.delta", "v": value}
+    held["me"] = MappingProxyType(held)  # mutable-ok: a self-reference needs the dict to exist before it can hold itself
+    return MappingProxyType(held)
+
+
+_SELF_HOLDING_PLACEMENTS: Final[tuple[tuple[Callable[[str], object], Mapping[str, object]], ...]] = (
+    (
+        lambda value: {"type": "response.output_text.delta", "meta": MappingProxyType(_dict_holding_itself(value))},
+        {"type": "response.output_text.delta", "meta": {"v": "'***'", "me": "{...}"}},
+    ),
+    (
+        lambda value: {"type": "response.output_text.delta", "meta": _dict_holding_itself(value)},
+        {"type": "response.output_text.delta", "meta": {"v": "'***'", "me": "{...}"}},
+    ),
+    (
+        lambda value: {"type": "response.output_text.delta", "meta": _defaultdict_holding_itself(value)},
+        {"type": "response.output_text.delta", "meta": {"v": "'***'", "me": "defaultdict(<class 'list'>, {...})"}},
+    ),
+    (
+        lambda value: {"type": "response.output_text.delta", "meta": _ordered_dict_holding_itself(value)},
+        {"type": "response.output_text.delta", "meta": {"v": "'***'", "me": "..."}},
+    ),
+    (
+        lambda value: {"type": "response.output_text.delta", "meta": _list_holding_itself(value)},
+        {"type": "response.output_text.delta", "meta": ["'***'", "[...]"]},
+    ),
+    (
+        _proxy_whose_mapping_holds_it,
+        {"type": "response.output_text.delta", "v": "'***'", "me": "mappingproxy({...})"},
+    ),
+)
+
+
+@pytest.mark.parametrize(
+    ("place", "expected"),
+    _SELF_HOLDING_PLACEMENTS,
+    ids=["proxy_over_dict", "dict", "defaultdict", "ordered_dict", "list", "proxy_held_by_its_mapping"],
+)
+def test_responses_sse_chunk_prints_a_container_that_holds_itself_as_its_repr_marker(
+    place: Callable[[str], object], expected: Mapping[str, object]
+) -> None:
+    frame: Final = _format_responses_sse_chunk(chunk=place(_AlternatingReprString("hook-canary")))
+
+    assert isinstance(frame, str)
+    assert "hook-canary" not in frame
+    assert json.loads(frame.removeprefix("data: ")) == expected
+
+
+class _ParentGrower:
+    def __init__(self, parent: dict[str, object]) -> None:
+        self.parent: Final = parent
+
+    def __repr__(self) -> str:
+        self.parent["added"] = 1  # mutable-ok: the hook value's repr grows the dict that holds it
+        return "_ParentGrower()"
+
+
+def test_responses_sse_chunk_keeps_printing_a_dict_whose_item_repr_adds_a_key() -> None:
+    parent: Final[dict[str, object]] = {"v": _AlternatingReprString("hook-canary")}
+    parent["m"] = _ParentGrower(parent)  # mutable-ok: the grower needs the dict it adds a key to
+
+    frame: Final = _format_responses_sse_chunk(chunk={"type": "response.output_text.delta", "meta": parent})
+
+    assert isinstance(frame, str)
+    assert "hook-canary" not in frame
+    assert json.loads(frame.removeprefix("data: "))["meta"] == {"v": "'***'", "m": "_ParentGrower()", "added": 1}
+
+
+class _KeySwapper:
+    def __init__(self, parent: dict[str, object], removed: str, added: Mapping[str, object]) -> None:
+        self.parent: Final = parent
+        self.removed: Final = removed
+        self.added: Final = added
+
+    def __repr__(self) -> str:
+        del self.parent[self.removed]  # mutable-ok: the hook value's repr resizes the dict that holds it
+        self.parent.update(self.added)  # mutable-ok: the hook value's repr resizes the dict that holds it
+        return "_KeySwapper()"
+
+
+@pytest.mark.parametrize(
+    ("added", "later", "expected"),
+    [
+        ({}, {"z1": "one", "z2": "two"}, {"a": "first", "d": "_KeySwapper()", "z1": "one", "z2": "two"}),
+        ({"z": "zed"}, {}, {"a": "first", "d": "_KeySwapper()", "z": "zed"}),
+    ],
+    ids=["removes_a_shown_key", "removes_a_shown_key_and_adds_one"],
+)
+def test_responses_sse_chunk_keeps_every_key_repr_prints_when_an_item_repr_resizes_its_dict(
+    added: Mapping[str, object], later: Mapping[str, object], expected: Mapping[str, object]
+) -> None:
+    parent: Final[dict[str, object]] = {"a": "first"}
+    parent["d"] = _KeySwapper(parent, "a", added)  # mutable-ok: the swapper needs the dict it resizes
+    parent.update(later)  # mutable-ok: keys stored after the swapper
+
+    frame: Final = _format_responses_sse_chunk(chunk={"type": "response.output_text.delta", "meta": parent})
+
+    assert isinstance(frame, str)
+    assert json.loads(frame.removeprefix("data: "))["meta"] == expected
+
+
+class _StrFailsOnceDict(dict[str, str]):
+    failed: bool = False
+
+    def __str__(self) -> str:
+        if self.failed:
+            return dict.__repr__(self)
+        self.failed = True
+        raise RuntimeError("rig str fails on its first call")
+
+
+def test_responses_sse_chunk_raises_when_a_whole_proxy_fails_its_only_print() -> None:
+    with pytest.raises(RuntimeError, match="rig str fails on its first call"):
+        _format_responses_sse_chunk(chunk=MappingProxyType(_StrFailsOnceDict(_DELTA_STORAGE)))
+
+
+@pytest.mark.parametrize(
+    ("make_underlying", "printed"),
+    [
+        (
+            lambda: _MaskedStrHolder(type="response.output_text.delta", member=_RaisingRepr()),
+            "{'type': 'response.output_text.delta', 'member': 'MASKED'}",
+        ),
+        (lambda: _KeysRefusedDict(_DELTA_STORAGE), json.dumps(_DELTA_STORAGE)),
+        (lambda: _ItemRefusedDict(_DELTA_STORAGE), json.dumps(_DELTA_STORAGE)),
+        (
+            lambda: _PrintsOnceDict(type="response.output_text.delta", token="hook-canary"),
+            "{'type': 'response.output_text.delta', 'token': 'MASKED'}",
+        ),
+    ],
+    ids=["member_repr_raises", "keys_raise", "item_lookup_raises", "str_works_once"],
+)
+def test_responses_sse_chunk_sends_a_whole_proxy_as_its_mapping_printed_once(
+    make_underlying: Callable[[], Mapping[str, object]], printed: str
+) -> None:
+    frame: Final = _format_responses_sse_chunk(chunk=MappingProxyType(make_underlying()))
+
+    assert frame == f"data: {printed}\n\n"
+
+
+class _OwnFormatHolder(dict[str, str]):
+    def __format__(self, format_spec: str) -> str:
+        return "MASKED"
+
+
+def _reordered() -> OrderedDict[str, int]:
+    ordered: Final = OrderedDict(first=1, second=2)
+    ordered.move_to_end("first")
+    return ordered
+
+
+@pytest.mark.parametrize(
+    "nested",
+    [
+        _reordered(),
+        Counter(rare=1, common=3),
+        _OwnFormatHolder(token="shown"),
+        _MaskedStrDict(token="shown"),
+    ],
+    ids=["reordered_ordered_dict", "counter", "own_format", "own_str"],
+)
+def test_responses_sse_chunk_sends_a_nested_mapping_with_the_items_and_order_its_repr_printed(
+    nested: Mapping[str, object],
+) -> None:
+    frame: Final = _format_responses_sse_chunk(chunk={"type": "response.output_text.delta", "nested": nested})
+
+    assert isinstance(frame, str)
+    shown: Final = json.loads(frame.removeprefix("data: "))["nested"]
+    assert repr(shown) in repr(nested)
+
+
+class _RigTuple(tuple[object, ...]):
+    pass
+
+
+class _ItemsHideAliasDict(dict[str, str]):
+    __repr__ = dict.__repr__
+
+    def items(self) -> ItemsView[str, str]:  # pyright: ignore[reportIncompatibleMethodOverride]  # rig hides an entry
+        return {key: value for key, value in dict.items(self) if key != "h"}.items()
+
+
+class _ItemsHideRevealingDict(_ItemsHideAliasDict):
+    def __repr__(self) -> str:
+        return dict.__repr__(self)
+
+
+class _IterHideRevealingList(list[str]):
+    def __repr__(self) -> str:
+        return list.__repr__(self)
+
+    def __iter__(self) -> Iterator[str]:
+        return (item for item in list.__iter__(self) if item != "hook-canary")
+
+
+class _RevealingReprModel(BaseModel, frozen=True):
+    a: int
+    _note: str = PrivateAttr(default="hook-canary")
+
+    def __repr__(self) -> str:
+        return f"_RevealingReprModel(note={self._note})"
+
+
+@pytest.mark.parametrize(
+    "detail",
+    [
+        OrderedDict(member=_MaskedStrModel(token="hook-canary")),
+        _RigTuple((_MaskedStrModel(token="hook-canary"),)),
+        _HookOutputItem(id="msg_nested", type="message"),
+        _RevealingReprModel(a=1),
+        _ItemsHideAliasDict(k="shown", h="hook-canary"),
+        _ItemsHideRevealingDict(k="shown", h="hook-canary"),
+        _IterHideRevealingList(("shown", "hook-canary")),
+    ],
+    ids=[
+        "dict_subclass",
+        "tuple_subclass",
+        "model",
+        "model_with_own_repr",
+        "items_hide_with_dict_repr_alias",
+        "items_hide_with_own_revealing_repr",
+        "iter_hides_with_own_revealing_repr",
+    ],
+)
+def test_responses_error_event_sends_a_detail_the_way_base_json_dumps_did(detail: object) -> None:
+    frame: Final = ResponsesStreamErrorState().format_error(
+        {"message": "blocked", "provider_specific_fields": {"detail": detail}}
+    )
+
+    payload: Final = json.loads(frame.split("data: ", 1)[1])
+    assert payload["error"]["provider_specific_fields"]["detail"] == json.loads(json.dumps(detail, default=str))
+
+
+@pytest.mark.parametrize("status_code", ["abc", 1.5, True, None], ids=["string", "float", "bool", "null"])
+def test_responses_hook_error_frame_keeps_its_message_whatever_status_code_it_carries(status_code: object) -> None:
+    hook_frame: Final = json.dumps(
+        {"error": {"message": "rig status", "type": "guardrail_scan_error", "status_code": status_code}}
+    )
+
+    frame: Final = ResponsesStreamErrorState().format_error_message(f"data: {hook_frame}\n\n")
+
+    assert frame.startswith("event: error\n")
+    assert json.loads(frame.split("data: ", 1)[1])["message"] == "rig status"
+
+
+class _StatusCarryingError(Exception):
+    def __init__(self, status_code: object) -> None:
+        super().__init__("rig status")
+        self.status_code: Final = status_code
+
+
+@pytest.mark.parametrize(
+    ("status_code", "code"),
+    [
+        (429, "rate_limit_exceeded"),
+        ("429", "rate_limit_exceeded"),
+        (429.0, "rate_limit_exceeded"),
+        ("abc", "server_error"),
+        (429.5, "server_error"),
+    ],
+    ids=["int", "decimal_string", "integral_float", "word", "fractional_float"],
+)
+def test_responses_failure_event_reads_a_numeric_status_code_the_way_base_did(status_code: object, code: str) -> None:
+    frame: Final = ResponsesStreamErrorState().format_failure(_StatusCarryingError(status_code))
+
+    assert frame is not None
+    failure: Final = ResponseFailedEvent.model_validate_json(frame.split("data: ", 1)[1])
+    assert failure.response.error is not None
+    assert failure.response.error["code"] == code
+
+
+class _RigColor(Enum):
+    RED = 1
+
+
+class _Score(float):
+    pass
+
+
+class _MaskedCount(int):
+    def __repr__(self) -> str:
+        return "_MaskedCount([secure])"
+
+
+_WHEN: Final = datetime(2026, 10, 30, 12, 0, tzinfo=timezone.utc)
+
+
+@pytest.mark.parametrize(
+    ("nested", "printed", "dumped"),
+    [
+        (_WHEN, repr(_WHEN), str(_WHEN)),
+        (_RigColor.RED, repr(_RigColor.RED), str(_RigColor.RED)),
+        (_MaskedCount(7), repr(_MaskedCount(7)), 7),
+    ],
+    ids=["datetime", "enum", "number_subclass_with_its_own_repr"],
+)
+def test_responses_stream_frames_print_values_json_cannot_take_as_base_printed_them(
+    nested: object, printed: str, dumped: object
+) -> None:
+    chunk_frame: Final = _format_responses_sse_chunk(
+        chunk=MappingProxyType({"type": "response.output_text.delta", "nested": nested})
+    )
+    error_frame: Final = ResponsesStreamErrorState().format_error({"message": "blocked", "nested": nested})
+
+    assert isinstance(chunk_frame, str)
+    assert json.loads(chunk_frame.removeprefix("data: "))["nested"] == printed
+    assert json.loads(error_frame.split("data: ", 1)[1])["error"]["nested"] == dumped
+
+
+class _RigCode(str, Enum):
+    BLOCKED = "blocked_by_rig"
+
+
+@pytest.mark.parametrize(
+    ("nested", "plain"),
+    [(_RigCode.BLOCKED, "blocked_by_rig"), (HTTPStatus.BAD_REQUEST, 400), (_Score(0.5), 0.5)],
+    ids=["str_enum", "int_enum", "float_subclass"],
+)
+def test_responses_stream_frames_send_string_and_number_subclasses_as_their_plain_value(
+    nested: object, plain: object
+) -> None:
+    assert _responses_frame_payload(nested)["nested"] == plain
+
+
+_DUMPED_DELTA: Final = OutputTextDeltaEvent(
+    type=ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA,
+    item_id="msg_1",
+    output_index=0,
+    content_index=0,
+    delta="hi",
+    sequence_number=3,
+)
+
+
+@pytest.mark.parametrize("mapping", [dict, MappingProxyType], ids=["dict", "mapping_proxy"])
+def test_responses_sse_chunk_a_hook_dumped_from_an_event_streams_as_that_event(
+    mapping: Callable[[Mapping[str, object]], Mapping[str, object]],
+) -> None:
+    frame: Final = _format_responses_sse_chunk(chunk=mapping(_DUMPED_DELTA.model_dump()))
+
+    assert isinstance(frame, str)
+    assert json.loads(frame.removeprefix("data: ")) == json.loads(_DUMPED_DELTA.model_dump_json())
+
+
+_COMPLETED_WITH_SDK_OUTPUT: Final = ResponseCompletedEvent(
+    type=ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
+    sequence_number=4,
+    response=ResponsesAPIResponse(
+        id="resp_1",
+        object="response",
+        created_at=0,
+        model="gpt-x",
+        status="completed",
+        output=[
+            ResponseOutputMessage(
+                id="msg_1",
+                type="message",
+                role="assistant",
+                status="completed",
+                content=[ResponseOutputText(type="output_text", text="hi", annotations=[])],
+            )
+        ],
+    ),
+)
+
+
+def test_responses_sse_chunk_a_hook_copied_from_an_event_streams_as_that_event() -> None:
+    frame: Final = _format_responses_sse_chunk(chunk=dict(_COMPLETED_WITH_SDK_OUTPUT))
+
+    assert isinstance(frame, str)
+    assert json.loads(frame.removeprefix("data: ")) == json.loads(_COMPLETED_WITH_SDK_OUTPUT.model_dump_json())
+
+
+@pytest.mark.parametrize("mapping", [dict, MappingProxyType], ids=["dict", "mapping_proxy"])
+def test_responses_stream_frames_turn_mapping_keys_json_cannot_take_into_strings(
+    mapping: Callable[[Mapping[object, object]], Mapping[object, object]],
+) -> None:
+    assert _responses_frame_payload(mapping({("a", "b"): 1}))["nested"] == {repr(("a", "b")): 1}
+
+
+def test_responses_sse_chunk_turns_top_level_keys_json_cannot_take_into_strings() -> None:
+    frame: Final = _format_responses_sse_chunk(
+        chunk=MappingProxyType({"type": "response.output_text.delta", ("a", "b"): "x"})
+    )
+
+    assert isinstance(frame, str)
+    assert json.loads(frame.removeprefix("data: ")) == {"type": "response.output_text.delta", repr(("a", "b")): "x"}
+
+
+def _self_referencing_chunk() -> Mapping[str, object]:
+    chunk: Final[dict[str, object]] = {"type": "response.output_text.delta"}
+    chunk["self"] = chunk  # mutable-ok: a self-reference needs the dict to exist before it can hold itself
+    return chunk
+
+
+def test_responses_stream_frames_print_a_value_that_holds_itself_as_its_repr_marker() -> None:
+    nested: Final = _self_referencing_chunk()
+
+    assert _responses_frame_payload(nested)["nested"] == {"type": "response.output_text.delta", "self": "{...}"}
+
+
+class _UnprintableValue:
+    def __repr__(self) -> str:
+        raise RuntimeError("no string form")
+
+
+def test_responses_stream_frames_leave_out_only_the_nested_value_with_no_string_form() -> None:
+    chunk_frame: Final = _format_responses_sse_chunk(
+        chunk={"type": "response.output_text.delta", "meta": {"guardrail": "rig-guard", "bad": _UnprintableValue()}}
+    )
+    error_frame: Final = ResponsesStreamErrorState().format_error(
+        {
+            "message": "blocked",
+            "code": "400",
+            "type": "guardrail_error",
+            "provider_specific_fields": {"guardrail": "rig-guard", "bad": _UnprintableValue()},
+        }
+    )
+
+    assert isinstance(chunk_frame, str)
+    assert json.loads(chunk_frame.removeprefix("data: "))["meta"] == {"guardrail": "rig-guard"}
+    assert json.loads(error_frame.split("data: ", 1)[1])["error"] == {
+        "message": "blocked",
+        "code": "400",
+        "type": "guardrail_error",
+        "provider_specific_fields": {"guardrail": "rig-guard"},
+    }
+
+
+def test_responses_error_event_keeps_a_detail_nested_past_the_recursion_limit() -> None:
+    nested: Final = functools.reduce(lambda inner, _: {"x": inner}, range(5000), {"leaf": 1})
+    frame: Final = ResponsesStreamErrorState().format_error(
+        {"message": "blocked", "provider_specific_fields": {"guardrail": "rig-guard", "detail": nested}}
+    )
+
+    payload: Final = json.loads(frame.split("data: ", 1)[1])
+    assert payload["error"]["provider_specific_fields"]["guardrail"] == "rig-guard"
+    assert "'leaf': 1" in frame
+
+
+@pytest.mark.parametrize("mapping", [dict, MappingProxyType], ids=["dict", "mapping_proxy"])
+def test_responses_stream_frames_keep_a_value_nested_700_levels_deep_as_json(
+    mapping: Callable[[Mapping[str, object]], Mapping[str, object]],
+) -> None:
+    nested: Final = functools.reduce(lambda inner, _: mapping({"x": inner}), range(700), mapping({"leaf": 1}))
+
+    chunk_frame: Final = _format_responses_sse_chunk(chunk={"type": "response.output_text.delta", "nested": nested})
+    error_frame: Final = ResponsesStreamErrorState().format_error(
+        {"message": "blocked", "provider_specific_fields": {"detail": nested}}
+    )
+
+    assert isinstance(chunk_frame, str)
+    assert json.loads(chunk_frame.removeprefix("data: "))["nested"] == nested
+    assert json.loads(error_frame.split("data: ", 1)[1])["error"]["provider_specific_fields"]["detail"] == nested
+
+
+@pytest.mark.parametrize(
+    "chunk",
+    [
+        _UPSTREAM_HEADERS,
+        RedactedDict({"type": "response.output_text.delta", "authorization": "Bearer hook-canary"}),
+        MappingProxyType(RedactedDict({"type": "response.output_text.delta", "authorization": "Bearer hook-canary"})),
+    ],
+    ids=["header_mapping_chunk", "redacted_dict_chunk", "proxy_wrapping_redacted_dict_chunk"],
+)
+def test_responses_sse_chunk_that_is_not_a_plain_mapping_streams_as_the_plain_data_frame(
+    chunk: Mapping[str, object],
+) -> None:
+    assert _format_responses_sse_chunk(chunk=chunk) == _format_streaming_sse_chunk(chunk=chunk)
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("guardrail_error", "error_object"),
+    [
+        (
+            {"message": "response withheld", "type": "guardrail_scan_error", "code": 500},
+            {"message": "response withheld", "type": "guardrail_scan_error", "code": 500},
+        ),
+        ("response withheld", {"message": "response withheld"}),
+    ],
+)
+async def test_a_guardrail_error_string_mid_responses_stream_ends_it_as_a_named_error_event(
+    guardrail_error: Mapping[str, object] | str, error_object: Mapping[str, object]
+) -> None:
+    response: Final = ResponsesAPIResponse(id="resp_hook_error", created_at=1, model="local-model", output=[])
+    created: Final = ResponseCreatedEvent.model_validate(
+        {"type": "response.created", "sequence_number": 0, "response": response}
+    )
+
+    async def upstream() -> AsyncIterator[object]:
+        yield created
+        yield f"data: {json.dumps({'error': guardrail_error})}\n\n"
+
+    frames: Final = tuple(
+        [
+            frame.decode() if isinstance(frame, bytes) else frame
+            async for frame in select_data_generator(
+                response=upstream(), user_api_key_dict=_user_auth(), request_data={}, responses_stream_errors=True
+            )
+        ]
+    )
+    event_line, data_line = frames[-1].strip().split("\n")
+
+    assert "data: [DONE]" not in "".join(frames)
+    assert event_line == "event: error"
+    assert json.loads(data_line.removeprefix("data: ")) == {
+        "type": "error",
+        "code": "server_error",
+        "message": "response withheld",
+        "param": None,
+        "sequence_number": 1,
+        "error": error_object,
+    }
+
+
+@pytest.mark.parametrize("binary", [False, True])
+@pytest.mark.parametrize(
+    ("event_type", "event_line"),
+    [
+        (None, ""),
+        ("", ""),
+        ("response.delta\ninjected", ""),
+        ("response.delta\rinjected", ""),
+        ("response.delta\r\ninjected", ""),
+        ("response.vendor_delta", "event: response.vendor_delta\n"),
+    ],
+)
+def test_responses_event_names_preserve_payload_without_injecting_sse_lines(
+    event_type: str | None, event_line: str, binary: bool
+) -> None:
+    payload: Final = {"type": event_type, "sequence_number": 0}
+    data_line: Final = f"data: {json.dumps(payload)}\n\n"
+    frame: Final = data_line.encode("utf-8") if binary else data_line
+    expected: Final = (event_line + data_line).encode("utf-8") if binary else event_line + data_line
+    state: Final = ResponsesStreamErrorState()
+    state.observe_chunk(payload)
+
+    assert state.mark_emitted(frame) == expected
 
 
 class _FakeStream:
@@ -1165,14 +2183,15 @@ async def test_responses_stream_failure_sends_the_failure_hook_replacement(monke
         ]
     )
     failure: Final = ResponseFailedEvent.model_validate_json(
-        next(line.removeprefix("data: ") for line in frames[-2].splitlines() if line.startswith("data: "))
+        next(line.removeprefix("data: ") for line in frames[-1].splitlines() if line.startswith("data: "))
     )
 
     assert _BLOCK_MESSAGE not in "".join(frames)
     assert failure.response.error is not None
     assert failure.response.error["code"] == "permission_error"
     assert "Request blocked by policy" in failure.response.error["message"]
-    assert frames[-1] == "data: [DONE]\n\n"
+    assert frames[-1].startswith("event: response.failed\n")
+    assert "data: [DONE]\n\n" not in frames
 
 
 @pytest.mark.asyncio
@@ -1368,8 +2387,8 @@ async def test_responses_stream_keeps_tool_deltas_and_only_emits_a_valid_termina
         for frame in event_frames
     )
 
-    assert decoded[-1] == "data: [DONE]\n\n"
-    assert len(decoded) == len(event_frames) + 1
+    assert len(decoded) == len(event_frames)
+    assert "data: [DONE]\n\n" not in decoded
     assert payloads[0]["response"]["id"] == "resp_visible"
     assert payloads[1] == tool_delta.model_dump()
     assert len(payloads) == 3
@@ -1393,6 +2412,127 @@ async def test_responses_stream_keeps_tool_deltas_and_only_emits_a_valid_termina
         assert payloads[-1]["type"] == "response.completed"
         assert payloads[-1]["sequence_number"] == 2
         assert "error" not in payloads[-1]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("raw_sse_stream", [False, True])
+@pytest.mark.parametrize("newline", ["\n", "\r\n"])
+@pytest.mark.parametrize(
+    "event_name,data,terminal",
+    [
+        (
+            "response.output_text.delta",
+            {"type": "response.output_text.delta", "sequence_number": 4, "delta": "hi"},
+            False,
+        ),
+        (
+            "response.completed",
+            {"type": "response.completed", "sequence_number": 4, "response": {"id": "resp_raw", "model": "gpt-6"}},
+            True,
+        ),
+        ("error", {"error": {"message": "denied", "code": "529"}}, True),
+        ("response.completed", {"sequence_number": 4, "note": "typeless"}, False),
+        ("error", {"sequence_number": 4, "note": "no error object"}, False),
+        ("error", {"sequence_number": 4, "error": "denied"}, False),
+        ("error", {"sequence_number": 4, "error": ["denied"]}, False),
+    ],
+)
+async def test_a_responses_stream_failing_after_a_pre_framed_event_adds_a_failure_only_without_a_terminal(
+    raw_sse_stream: bool, newline: str, event_name: str, data: Mapping[str, object], terminal: bool
+) -> None:
+    pre_framed: Final = f"event: {event_name}{newline}data: {json.dumps(data)}{newline}{newline}"
+
+    async def upstream() -> AsyncIterator[bytes]:
+        yield pre_framed.encode()
+        raise litellm.APIError(status_code=500, message="Stream closed", llm_provider="openai", model="gpt-6")
+
+    frames: Final = [
+        frame.decode() if isinstance(frame, bytes) else frame
+        async for frame in select_data_generator(
+            response=upstream(),
+            user_api_key_dict=_user_auth(),
+            request_data={"_litellm_raw_sse_stream": True} if raw_sse_stream else {},
+            responses_stream_errors=True,
+        )
+    ]
+
+    assert frames[0] == pre_framed
+    assert len(frames) == (1 if terminal else 2)
+    if not terminal:
+        failure: Final = ResponseFailedEvent.model_validate_json(frames[1].split("data: ", 1)[1])
+        assert frames[1].startswith("event: response.failed\n")
+        assert failure.sequence_number == 5
+
+
+@pytest.mark.parametrize(
+    "sequence_number",
+    ["9" * 4300, "-7", str(2**63), str(2**63 - 1)],
+    ids=["4300_digits", "negative", "past_int64", "int64_max"],
+)
+def test_responses_error_event_after_an_out_of_range_pre_framed_sequence_number_stays_parseable(
+    sequence_number: str,
+) -> None:
+    state: Final = ResponsesStreamErrorState()
+    state.observe_frames(
+        'data: {"type": "response.output_text.delta", "sequence_number": 4}\n\n'
+        f'data: {{"type": "response.output_text.delta", "sequence_number": {sequence_number}}}\n\n'
+    )
+
+    error_frame: Final = state.format_error_message('data: {"error": {"message": "scan failed"}}\n\n')
+    failure_frame: Final = state.format_failure(RuntimeError("stream closed"))
+
+    error_event: Final = json.loads(error_frame.split("data: ", 1)[1])
+    assert failure_frame is not None
+    assert error_event["message"] == "scan failed"
+    assert error_event["sequence_number"] == 5
+    assert json.loads(failure_frame.split("data: ", 1)[1])["sequence_number"] == 5
+
+
+class _UnreadableErrorModel(BaseModel, frozen=True):
+    type: str = "response.output_text.delta"
+    sequence_number: int = 4
+
+    @property
+    def error(self) -> object:
+        raise RuntimeError("error is not readable")
+
+
+class _UnreadableErrorMapping(Mapping[str, object]):
+    def __init__(self, data: Mapping[str, object]) -> None:
+        self.data: Final = data
+
+    def __getitem__(self, key: str) -> object:
+        if key == "error":
+            raise RuntimeError("error is not readable")
+        return self.data[key]
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(self.data)
+
+    def __len__(self) -> int:
+        return len(self.data)
+
+
+@pytest.mark.parametrize(
+    "chunk,next_sequence_number",
+    [
+        (_UnreadableErrorModel(), 5),
+        (_UnreadableErrorMapping({"type": "response.output_text.delta", "sequence_number": 4}), 5),
+        ({"type": "response.output_text.delta", "sequence_number": 2**63}, 2**63 + 1),
+    ],
+    ids=["unreadable_error_property", "unreadable_error_item", "past_int64"],
+)
+def test_responses_failure_after_a_hook_chunk_continues_its_sequence_number_like_base(
+    chunk: object, next_sequence_number: int
+) -> None:
+    state: Final = ResponsesStreamErrorState()
+    state.observe_chunk(chunk)
+    state.mark_emitted(_format_responses_sse_chunk(chunk=chunk))
+
+    failure_frame: Final = state.format_failure(RuntimeError("stream closed"))
+
+    assert failure_frame is not None
+    assert json.loads(failure_frame.split("data: ", 1)[1])["sequence_number"] == next_sequence_number
 
 
 # ---------------------------------------------------------------------------

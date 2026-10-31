@@ -11,6 +11,7 @@ https://platform.openai.com/docs/api-reference/responses-streaming
 import asyncio
 import json
 from collections.abc import AsyncIterable, Callable, Mapping, Sequence
+from http import HTTPStatus
 from typing import TYPE_CHECKING, Final, Protocol, TypeAlias, runtime_checkable
 
 from fastapi import Request, Response
@@ -20,7 +21,13 @@ from typing_extensions import ReadOnly, TypedDict
 from litellm._logging import verbose_proxy_logger
 from litellm.llms.custom_httpx.sse_lines import split_sse_lines
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth
-from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+from litellm.proxy.common_request_processing import RESPONSES_SSE_FRAMING, ProxyBaseLLMRequestProcessing
+from litellm.proxy.common_utils.responses_stream_errors import (
+    event_error_object,
+    frame_error_data,
+    responses_error_fields,
+    sse_error_object,
+)
 from litellm.proxy.response_polling.polling_handler import ResponsePollingHandler
 from litellm.types.llms.openai import ResponsesAPIStatus
 
@@ -69,6 +76,7 @@ class _StreamEvent(TypedDict, total=False):
     delta: ReadOnly[str]
     part: ReadOnly[object]
     response: ReadOnly[_TerminalResponse]
+    error: ReadOnly[_JsonDict]
 
 
 class _StreamEventParser:
@@ -83,6 +91,22 @@ class _StreamsBody(Protocol):
 
 def _sse_frame_data(frame: str) -> str | None:
     return next((line[6:].strip() for line in split_sse_lines(frame) if line.startswith("data: ")), None)
+
+
+def _event_error(event: Mapping[str, object]) -> Mapping[str, object]:
+    match event.get("error"):
+        case str() as message if message:
+            return {**event, "message": message}
+        case _:
+            return event_error_object(event) or event
+
+
+def _first_chunk_error(response: object) -> Mapping[str, object] | None:
+    if isinstance(response, _StreamsBody) or not isinstance(response, Response):
+        return None
+    if response.status_code < HTTPStatus.BAD_REQUEST:
+        return None
+    return responses_error_fields(sse_error_object(bytes(response.body)) or {"code": response.status_code})
 
 
 async def _never_receive() -> Message:
@@ -165,6 +189,7 @@ async def background_streaming_task(
             user_api_base=user_api_base,
             version=version,
             skip_pre_call_logic=True,
+            sse_framing=RESPONSES_SSE_FRAMING,
         )
 
         # Process streaming response following OpenAI events format
@@ -199,6 +224,7 @@ async def background_streaming_task(
             None  # Will be set by response.completed/failed/incomplete/cancelled
         )
         terminal_error = None
+        frame_failure: Mapping[str, object] | None = None  # rebind-ok: set once by the first error frame
         _event_to_status: Final[Mapping[str, ResponsesAPIStatus]] = {
             "response.completed": "completed",
             "response.failed": "failed",
@@ -233,6 +259,13 @@ async def background_streaming_task(
                 # Parse chunk
                 if isinstance(chunk, bytes):
                     chunk = chunk.decode("utf-8")
+
+                if (
+                    isinstance(chunk, str)
+                    and frame_failure is None
+                    and (error_data := frame_error_data(chunk)) is not None
+                ):
+                    frame_failure = responses_error_fields(_event_error(_StreamEventParser.parse(error_data)))
 
                 if isinstance(chunk, str) and (chunk_data := _sse_frame_data(chunk)) is not None:
                     if chunk_data == "[DONE]":
@@ -373,23 +406,25 @@ async def background_streaming_task(
                                         output_items[item_id] = item
                                 state_dirty = True
 
-                        # Flush state to Redis if interval elapsed
-                        await flush_state_if_needed()
-
-                    except json.JSONDecodeError as e:
+                    except (json.JSONDecodeError, AttributeError, TypeError) as e:
                         verbose_proxy_logger.warning("Failed to parse streaming chunk: %s", e)
+                    else:
+                        await flush_state_if_needed()
 
             # Final flush to ensure all accumulated state is saved
             await flush_state_if_needed(force=True)
 
-        # Use the terminal status from the stream, default to "completed"
-        final_status: Final = terminal_status or "completed"
+        early_error: Final = _first_chunk_error(response)
+        stream_failure: Final = frame_failure if terminal_status is None else None
+        failure: Final = stream_failure if early_error is None else early_error
+        final_error: Final = terminal_error if failure is None else failure
+        final_status: Final = (terminal_status or "completed") if failure is None else "failed"
 
         await polling_handler.update_state(
             polling_id=polling_id,
             status=final_status,
             usage=usage_data,
-            error=terminal_error,
+            error=final_error,
             reasoning=reasoning_data,
             tool_choice=tool_choice_data,
             tools=tools_data,
@@ -411,7 +446,7 @@ async def background_streaming_task(
             "Finished background streaming for %s, status=%s, error=%s, incomplete_details=%s, output_items=%s",
             polling_id,
             final_status,
-            terminal_error,
+            final_error,
             incomplete_details_data,
             len(output_items),
         )

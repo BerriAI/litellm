@@ -846,7 +846,12 @@ def test_responses_api_stream_on_a_mantle_claude_id_bridges_to_the_native_stream
             "POST", "/v1/responses", {"model": model, "input": _prompt(marker), "stream": True}
         )
         assert response.status_code == 200, response.text
-        events: Final = _sse_objects(response.text)
+        assert "data: [DONE]" not in response.text, response.text
+        events: Final = tuple(
+            _JSON_OBJECT.validate_json(line.removeprefix("data: "))
+            for line in response.text.splitlines()
+            if line.startswith("data: ")
+        )
         kinds: Final = [event["type"] for event in events]
         assert (kinds[0], kinds[-1]) == ("response.created", "response.completed"), kinds
         assert "".join(
