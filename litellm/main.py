@@ -67,6 +67,7 @@ from litellm.constants import (
     DEFAULT_MOCK_RESPONSE_PROMPT_TOKEN_COUNT,
     NADIR_DEFAULT_API_BASE,
     OPENAI_AUDIO_TRANSCRIPTION_PROVIDERS,
+    PLACEHOLDER_API_KEYS,
 )
 from litellm.exceptions import LiteLLMUnknownProvider
 from litellm.integrations.custom_logger import CustomLogger
@@ -97,6 +98,7 @@ from litellm.litellm_core_utils.get_provider_specific_headers import (
     ProviderSpecificHeaderUtils,
 )
 from litellm.litellm_core_utils.health_check_utils import (
+    OPTIONAL_STR,
     _filter_model_params,
     create_health_check_response,
 )
@@ -246,6 +248,7 @@ from .llms.anthropic.common_utils import is_claude_tool_target
 from .llms.azure.audio_transcriptions import AzureAudioTranscription
 from .llms.azure.azure import AzureChatCompletion, check_dynamic_azure_params
 from .llms.azure.chat.o_series_handler import AzureOpenAIO1ChatCompletion
+from .llms.azure.common_utils import uses_azure_entra_id_auth
 from .llms.azure.completion.handler import AzureTextCompletion
 from .llms.azure_ai.anthropic.handler import AzureAnthropicChatCompletion
 from .llms.azure_ai.anthropic.transformation import azure_anthropic_messages_url
@@ -8913,6 +8916,7 @@ def speech(
     model, custom_llm_provider, dynamic_api_key, api_base = get_llm_provider(
         model=model, custom_llm_provider=custom_llm_provider, api_base=caller_api_base
     )
+    provider_api_key: Final = None if dynamic_api_key in PLACEHOLDER_API_KEYS else dynamic_api_key
     kwargs.pop("tags", [])
 
     optional_params = {}
@@ -9002,9 +9006,11 @@ def speech(
         # set API KEY
         api_key = (
             api_key
-            or litellm.api_key  # for deepinfra/perplexity/anyscale we check in get_llm_provider and pass in the api key from there
+            or provider_api_key  # for deepinfra/perplexity/anyscale we check in get_llm_provider and pass in the api key from there
+            or litellm.api_key
             or litellm.openai_key
             or get_secret("OPENAI_API_KEY")
+            or dynamic_api_key
         )
 
         organization = (
@@ -9085,18 +9091,24 @@ def speech(
 
             api_version = api_version or litellm.api_version or get_secret("AZURE_API_VERSION")
 
+            request_azure_ad_token: Final = OPTIONAL_STR.validate_python(
+                optional_params.get("extra_body", {}).pop("azure_ad_token", None)
+            )
+            request_kwargs: Final = _REQUEST_KWARGS_ADAPTER.validate_python(kwargs)
+            uses_entra_id: Final = request_azure_ad_token is not None or uses_azure_entra_id_auth(
+                request_kwargs, os.environ, litellm.enable_azure_ad_token_refresh is True
+            )
+
             api_key = (
                 api_key
+                or (None if uses_entra_id else provider_api_key)
                 or litellm.api_key
                 or litellm.azure_key
                 or get_secret("AZURE_OPENAI_API_KEY")
                 or get_secret("AZURE_API_KEY")
             )
 
-            azure_ad_token: Final[str | None] = optional_params.get("extra_body", {}).pop(
-                "azure_ad_token", None
-            ) or get_secret("AZURE_AD_TOKEN")
-            azure_ad_token_provider: Final = kwargs.get("azure_ad_token_provider", None)
+            azure_ad_token: Final[str | None] = request_azure_ad_token or get_secret("AZURE_AD_TOKEN")
 
             if extra_headers:
                 optional_params["extra_headers"] = extra_headers
@@ -9110,7 +9122,7 @@ def speech(
                 api_base=api_base,
                 api_version=api_version,
                 azure_ad_token=azure_ad_token,
-                azure_ad_token_provider=azure_ad_token_provider,
+                azure_ad_token_provider=kwargs.get("azure_ad_token_provider", None),
                 organization=organization,
                 max_retries=max_retries,
                 timeout=http_timeout,
@@ -9394,7 +9406,6 @@ async def ahealth_check(
     """
     from litellm.litellm_core_utils.cached_imports import get_litellm_logging_class
     from litellm.litellm_core_utils.health_check_helpers import HealthCheckHelpers, default_health_check_mode
-    from litellm.litellm_core_utils.health_check_utils import OPTIONAL_STR
 
     # Use cached import helper to lazy-load Logging class (only loads when function is called)
     Logging: Final = get_litellm_logging_class()
