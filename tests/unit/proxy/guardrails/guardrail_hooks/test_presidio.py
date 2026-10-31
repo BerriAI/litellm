@@ -5438,3 +5438,40 @@ def test_get_session_iterator_reuses_one_session_per_background_loop(
     assert len(sessions) == 10
     assert all(session is sessions[0] for session in sessions)
     assert presidio_guardrail._http_session is None
+
+
+@pytest.mark.asyncio
+async def test_session_lock_is_not_held_while_request_uses_session(
+    presidio_guardrail: OPTIONAL_PresidioPIIMasking,
+) -> None:
+    """
+    The shared session lock must only protect session creation.
+
+    If it is held while callers use the session, every Presidio HTTP request in
+    a proxy process is serialized even though async_pre_call_hook fans out with
+    asyncio.gather.
+    """
+
+    class DummySession:
+        closed = False
+
+        async def close(self):
+            self.closed = True
+
+    presidio_guardrail._http_session = DummySession()
+
+    entered = 0
+    both_entered = asyncio.Event()
+
+    async def use_session():
+        nonlocal entered
+        async with presidio_guardrail._get_session_iterator() as session:
+            assert session is presidio_guardrail._http_session
+            entered += 1
+            if entered == 2:
+                both_entered.set()
+            await asyncio.wait_for(both_entered.wait(), timeout=1.0)
+
+    await asyncio.gather(use_session(), use_session())
+
+    await presidio_guardrail._close_http_session()
