@@ -38,10 +38,10 @@ from itertools import accumulate, chain, groupby, repeat
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, NamedTuple, Protocol, TypeVar, Union, cast
 
-from openai.types.responses.response_compaction_item import ResponseCompactionItem
 from openai.types.responses.response_output_refusal import ResponseOutputRefusal
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
-from typing_extensions import ReadOnly, TypedDict, TypeIs
+from typing_extensions import ReadOnly, TypedDict
+from typing_extensions import TypeIs  # noqa: TID251  # TypeIs reaches typing only on 3.13
 
 from litellm._logging import verbose_proxy_logger
 from litellm.completion_extras.litellm_responses_transformation.transformation import (
@@ -87,6 +87,7 @@ from litellm.responses.litellm_completion_transformation.transformation import (
 )
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.openai import (
+    ResponseCompactionItem,
     AllMessageValues,
     BaseLiteLLMOpenAIResponseObject,
     ChatCompletionToolCallChunk,
