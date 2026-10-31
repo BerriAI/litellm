@@ -254,8 +254,10 @@ def test_exchange_auth_failures_raise_caller_auth_error_and_evict(status):
     with github_http(_exchange_responder(status=status)):
         with pytest.raises(CallerCredentialAuthenticationError) as exc:
             exchange_github_token("user-a", "gh-token", "copilot-cred", _GITHUB_ENDPOINTS)
-        assert "Reconnect GitHub Copilot for credential 'copilot-cred' in the LiteLLM UI (LLM Credentials)" in str(
-            exc.value
+        assert str(exc.value) == (
+            "litellm.AuthenticationError: GitHub rejected the GitHub Copilot connection for credential 'copilot-cred'. "
+            "Reconnect GitHub Copilot for credential 'copilot-cred' in the LiteLLM UI (LLM Credentials) "
+            "or run `lite credentials connect copilot-cred`"
         )
         assert (
             _SESSION_CACHE.get_cache(_session_cache_key("user-a", "copilot-cred", GITHUB_COPILOT_DEFAULT_HOST)) is None
@@ -346,7 +348,11 @@ def test_attach_per_user_without_connection_raises_connect_401(per_user_credenti
     kwargs = {"litellm_credential_name": "copilot-cred", "secret_fields": {}}
     with pytest.raises(CallerCredentialAuthenticationError) as exc:
         attach_github_copilot_user_session(kwargs)
-    assert "Connect GitHub Copilot for credential 'copilot-cred' in the LiteLLM UI (LLM Credentials)" in str(exc.value)
+    assert str(exc.value) == (
+        "litellm.AuthenticationError: Connect GitHub Copilot for credential 'copilot-cred' "
+        "in the LiteLLM UI (LLM Credentials) "
+        "or run `lite credentials connect copilot-cred`"
+    )
 
 
 @pytest.mark.parametrize(
@@ -362,8 +368,24 @@ def test_attach_rejects_connection_from_a_different_github_host(
         with github_http(lambda request: pytest.fail(f"unexpected token exchange at {request.url}")) as requests:
             with pytest.raises(CallerCredentialAuthenticationError) as exc:
                 attach_github_copilot_user_session(kwargs)
-    assert "Connect GitHub Copilot for credential 'copilot-cred'" in str(exc.value)
+    assert str(exc.value) == (
+        "litellm.AuthenticationError: Connect GitHub Copilot for credential 'copilot-cred' "
+        "in the LiteLLM UI (LLM Credentials) "
+        "or run `lite credentials connect copilot-cred`"
+    )
     assert not requests
+
+
+def test_exchange_auth_failure_quotes_credential_name_in_cli_hint():
+    with github_http(_exchange_responder(status=401)):
+        with pytest.raises(CallerCredentialAuthenticationError) as exc:
+            exchange_github_token("user-a", "gh-token", "my cred", _GITHUB_ENDPOINTS)
+
+    assert str(exc.value) == (
+        "litellm.AuthenticationError: GitHub rejected the GitHub Copilot connection for credential 'my cred'. "
+        "Reconnect GitHub Copilot for credential 'my cred' in the LiteLLM UI (LLM Credentials) "
+        "or run `lite credentials connect 'my cred'`"
+    )
 
 
 def test_legacy_connection_without_host_uses_github_com(per_user_credential):
