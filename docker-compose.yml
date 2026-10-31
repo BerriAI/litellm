@@ -44,7 +44,7 @@ services:
       POSTGRES_USER: llmproxy
       POSTGRES_PASSWORD: dbpassword9090
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432" # Only reachable from this machine. Remove this mapping if nothing on the host needs the database
     volumes:
       - postgres_data:/var/lib/postgresql/data # Persists Postgres data across container restarts
     healthcheck:
