@@ -29,6 +29,7 @@ from litellm.proxy._types import Litellm_EntityType
 from litellm.proxy.db.db_lookup_gate import bounded_db_lookup, db_lookup_gate
 from litellm.proxy.spend_tracking.spend_counter_batch import (
     SPEND_COUNTERS_TARGET,
+    SpendCounterRead,
     forget_spend_counter,
     read_batched_spend_counter,
     record_spend_counter_value,
@@ -156,15 +157,15 @@ class SpendCounterReseed:
     async def add_cached_spend_once(
         spend_counter_cache: "DualCache",
         counter_key: str,
-        read_at: int,
+        read: SpendCounterRead,
         add: Callable[[], Awaitable[float | None]],
         is_warm: Callable[[], Awaitable[bool]],
     ) -> None:
         """Run ``add``, this process adding its cached spend to a cold counter, once for all of this process's
-        requests that read the counter cold (at tick ``read_at``) before that add landed. A request joins an add that
-        started after its read and gets its result, and starts or joins another add when that one fails. When an add
-        landed after its read, or one that started before its read finishes, the request re-reads the counter and adds
-        again only if the counter is gone. A request waits on other requests' adds for at most
+        requests that read the counter cold before that add landed. A request joins an add that started after its read
+        came back and gets its result, and starts or joins another add when that one fails. When an add landed after
+        its read went out, or one that started before its read came back finishes, the request re-reads the counter
+        and adds again only if the counter is gone. A request waits on other requests' adds for at most
         ``SPEND_COUNTER_COLD_SEED_JOIN_SECONDS`` in all and then adds its own. A request on another event loop than
         the add in flight, one that finds the Redis circuit breaker not closed, and each other process, still add their
         own cached spend."""
@@ -172,24 +173,27 @@ class SpendCounterReseed:
         loop: Final = asyncio.get_running_loop()
         join_by: Final = loop.time() + SPEND_COUNTER_COLD_SEED_JOIN_SECONDS
 
-        async def add_unless_covered(cold_at: int) -> float | None:
+        async def add_unless_covered(cold: SpendCounterRead) -> float | None:
             in_flight: Final = seed.in_flight
             if not seed.on_this_loop() or not _redis_breaker_closed(spend_counter_cache):
                 return await add()
             if in_flight is None:
-                if seed.landed_at <= cold_at:
+                if seed.landed_at < cold.sent_at:
                     return await asyncio.shield(seed.start(add))
                 forget_spend_counter(counter_key)
-                return None if await is_warm() else await add_unless_covered(spend_counter_tick())
-            covers: Final = seed.started_at > cold_at
+                sent_at: Final = spend_counter_tick()
+                if await is_warm():
+                    return None
+                return await add_unless_covered(SpendCounterRead(sent_at=sent_at, returned_at=spend_counter_tick()))
+            covers: Final = seed.started_at > cold.returned_at
             await asyncio.wait((in_flight,), timeout=max(0.0, join_by - loop.time()))
             if not in_flight.done():
                 return await asyncio.shield(seed.start(add))
             if covers and not in_flight.cancelled() and in_flight.exception() is None:
                 return in_flight.result()
-            return await add_unless_covered(cold_at)
+            return await add_unless_covered(cold)
 
-        added: Final = await add_unless_covered(read_at)
+        added: Final = await add_unless_covered(read)
         if added is not None:
             record_spend_counter_value(counter_key, added)
 

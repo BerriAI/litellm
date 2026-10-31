@@ -2412,3 +2412,163 @@ async def test_a_cold_start_after_the_redis_breaker_opened_fails_fast_instead_of
     outcomes: Final = await asyncio.gather(first, later, return_exceptions=True)
 
     assert outcomes[0] is None and isinstance(outcomes[1], RedisCircuitBreakerOpenError), outcomes
+
+
+class _HeldFirstMGetRedis(_SharedRedis):
+    """Reads the first MGET's keys at once but holds its reply until released, like a slow network round trip."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.mget_read: Final = asyncio.Event()
+        self.release_mget: Final = asyncio.Event()
+
+    async def async_batch_get_cache(self, key_list: list[str], **_: object) -> dict[str, float | None]:
+        values: Final = {key: self.values.get(key) for key in key_list}
+        if not self.mget_read.is_set():
+            self.mget_read.set()
+            await self.release_mget.wait()
+        return values
+
+
+@pytest.mark.asyncio
+async def test_a_seed_that_lands_while_a_cold_read_is_on_its_way_back_is_not_added_again(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    counter: Final = "spend:end_user:seed-during-read"
+    redis: Final = _HeldFirstMGetRedis()
+    _process(monkeypatch, redis, cached_spend=6.0)
+
+    async def _first_request() -> None:
+        await redis.mget_read.wait()
+        await _cold_start(redis, counter)
+        redis.release_mget.set()
+
+    await asyncio.gather(_cold_start(redis, counter), _first_request())
+
+    assert redis.values[counter] == 6.0
+
+
+class _HeldReadRedis(_SharedRedis):
+    """Answers an MGET with the values its keys had when it arrived, holding the reply while ``hold_reads`` is set."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.hold_reads = False
+        self.read_arrived: Final = asyncio.Event()
+        self.release_read: Final = asyncio.Event()
+
+    async def async_batch_get_cache(self, key_list: list[str], **_: object) -> dict[str, float | None]:
+        values: Final = {key: self.values.get(key) for key in key_list}
+        if self.hold_reads:
+            self.read_arrived.set()
+            await self.release_read.wait()
+        return values
+
+
+@pytest.mark.asyncio
+async def test_a_seed_that_lands_while_a_request_re_reads_the_counter_is_not_added_again(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    counter: Final = "spend:end_user:seed-during-reread"
+    redis: Final = _HeldReadRedis()
+    _process(monkeypatch, redis, cached_spend=6.0)
+    read: Final = asyncio.Event()
+    seeded: Final = asyncio.Event()
+
+    async def _stale_request() -> None:
+        with spend_counter_batch_scope(cast(RedisCache, redis), frozenset((counter,))):
+            await _read_cold(counter)
+            read.set()
+            await seeded.wait()
+            del redis.values[counter]
+            redis.hold_reads = True
+            await ps.ensure_spend_counter_initialized(counter_key=counter, source_cache_key=_COLD_SEED_SOURCE)
+
+    async def _first_request() -> None:
+        await read.wait()
+        await _cold_start(redis, counter)
+        seeded.set()
+
+    async def _request_seeding_during_the_re_read() -> None:
+        await redis.read_arrived.wait()
+        redis.hold_reads = False
+        await _cold_start(redis, counter)
+        redis.release_read.set()
+
+    await asyncio.gather(_stale_request(), _first_request(), _request_seeding_during_the_re_read())
+
+    assert redis.values[counter] == 6.0
+
+
+class _HeldGetRedis(_SharedRedis):
+    """Answers the first GET with the value its key had when it arrived, holding the reply until released."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.get_arrived: Final = asyncio.Event()
+        self.release_get: Final = asyncio.Event()
+
+    async def async_get_cache(self, key: str, **_: object) -> float | None:
+        value: Final = self.values.get(key)
+        if not self.get_arrived.is_set():
+            self.get_arrived.set()
+            await self.release_get.wait()
+        return value
+
+
+@pytest.mark.asyncio
+async def test_a_seed_that_lands_while_an_unbatched_cold_read_is_on_its_way_back_is_not_added_again(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    counter: Final = "spend:end_user:seed-during-unbatched-read"
+    redis: Final = _HeldGetRedis()
+    _process(monkeypatch, redis, cached_spend=6.0)
+
+    async def _first_request() -> None:
+        await redis.get_arrived.wait()
+        await _cold_start(redis, counter)
+        redis.release_get.set()
+
+    await asyncio.gather(
+        ps.ensure_spend_counter_initialized(counter_key=counter, source_cache_key=_COLD_SEED_SOURCE),
+        _first_request(),
+    )
+
+    assert redis.values[counter] == 6.0
+
+
+class _QueuedReadRedis(_HeldReplyRedis):
+    """Holds the first MGET before Redis runs it, while increments apply at once and hold their replies."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.read_sent: Final = asyncio.Event()
+        self.run_read: Final = asyncio.Event()
+
+    async def async_batch_get_cache(self, key_list: list[str], **_: object) -> dict[str, float | None]:
+        if not self.read_sent.is_set():
+            self.read_sent.set()
+            await self.run_read.wait()
+        return {key: self.values.get(key) for key in key_list}
+
+
+@pytest.mark.asyncio
+async def test_a_cold_read_sent_before_an_add_started_does_not_join_it_when_the_counter_was_deleted_after_it_landed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    counter: Final = "spend:end_user:deleted-while-read-queued"
+    redis: Final = _QueuedReadRedis()
+    _process(monkeypatch, redis, cached_spend=6.0)
+
+    reader: Final = asyncio.ensure_future(_cold_start(redis, counter))
+    await redis.read_sent.wait()
+    first: Final = asyncio.ensure_future(_cold_start(redis, counter))
+    await redis.applied.wait()
+    del redis.values[counter]
+    redis.run_read.set()
+    for _ in range(20):
+        await asyncio.sleep(0)
+    redis.release.set()
+    await asyncio.gather(reader, first)
+
+    assert redis.values.get(counter) == 6.0

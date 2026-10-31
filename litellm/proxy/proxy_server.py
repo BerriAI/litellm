@@ -936,7 +936,8 @@ from litellm.proxy.spend_tracking.spend_counter_batch import (
     read_batched_spend_counter,
     record_spend_counter_value,
     spend_counter_batch_scope,
-    spend_counter_read_tick,
+    spend_counter_read,
+    spend_counter_tick,
 )
 from litellm.proxy.spend_tracking.spend_management_endpoints import (
     router as spend_management_router,
@@ -4086,8 +4087,9 @@ async def ensure_spend_counter_initialized(
     counter_key: str,
     source_cache_key: str | list[str],
 ) -> None:
+    sent_at: Final = spend_counter_tick()
     is_warm: Final = await _is_spend_counter_cache_warm(counter_key=counter_key)
-    read_at: Final = spend_counter_read_tick(counter_key)
+    read: Final = spend_counter_read(counter_key, sent_at)
     if is_warm is False:
         # Shares the per-counter lock with get_current_spend.
         db_spend: Final = await SpendCounterReseed.coalesced(
@@ -4103,7 +4105,7 @@ async def ensure_spend_counter_initialized(
                 await SpendCounterReseed.add_cached_spend_once(
                     spend_counter_cache=spend_counter_cache,
                     counter_key=counter_key,
-                    read_at=read_at,
+                    read=read,
                     add=lambda: increment_spend_counter_cache(counter_key=counter_key, increment=base_spend),
                     is_warm=lambda: _is_spend_counter_cache_warm(counter_key=counter_key),
                 )
