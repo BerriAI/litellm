@@ -18,6 +18,7 @@ from integration._support.wire import Reply, Request, Wire, wire_server
 from pydantic import JsonValue, TypeAdapter
 
 GUARDRAIL: Final = "passthrough-auth-guardrail"
+GLOBAL_POST_CALL: Final = "passthrough-global-post-call"
 BLOCK_MARKER: Final = "block-this-prompt"
 OPENAI_ROUTE: Final = "/openai/v1/chat/completions"
 ANTHROPIC_ROUTE: Final = "/anthropic/v1/messages"
@@ -43,8 +44,17 @@ def _verdict(request: Request) -> Reply:
     return Reply(body=json.dumps({"action": action, "blocked_reason": "synthetic block"}).encode())
 
 
+_OPENAI_BODY: Final = json.dumps(
+    _JSON.validate_json(chat_reply("chatcmpl-passthrough-auth", "gpt-5.6", "Hi", stream=False).body), indent=2
+).encode()
+
+
 def _openai_reply(_request: Request) -> Reply:
-    return chat_reply("chatcmpl-passthrough-auth", "gpt-5.6", "Hi", stream=False)
+    return Reply(body=_OPENAI_BODY)
+
+
+def _vendor_down(_request: Request) -> Reply:
+    return Reply(status=500, body=b'{"error": "guardrail vendor down"}')
 
 
 def _anthropic_reply(_request: Request) -> Reply:
@@ -66,6 +76,7 @@ def _gemini_reply(_request: Request) -> Reply:
 class AuthGuardrailRig:
     owned: OwnedProxy
     vendor: Wire
+    post_call_vendor: Wire
     upstreams: Mapping[str, Wire]
 
 
@@ -74,6 +85,7 @@ def rig(session_gateway: Gateway, tmp_path_factory: pytest.TempPathFactory) -> I
     directory: Final = tmp_path_factory.mktemp("passthrough-auth-guardrails")
     with ExitStack() as stack:
         vendor: Final = stack.enter_context(wire_server(_verdict))
+        post_call_vendor: Final = stack.enter_context(wire_server(_vendor_down))
         upstreams: Final = MappingProxyType(
             {
                 OPENAI_ROUTE: stack.enter_context(wire_server(_openai_reply)),
@@ -97,7 +109,17 @@ def rig(session_gateway: Gateway, tmp_path_factory: pytest.TempPathFactory) -> I
                                 "api_base": vendor.url,
                                 "api_key": "synthetic-guardrail-key",
                             },
-                        }
+                        },
+                        {
+                            "guardrail_name": GLOBAL_POST_CALL,
+                            "litellm_params": {
+                                "guardrail": "generic_guardrail_api",
+                                "mode": "post_call",
+                                "default_on": True,
+                                "api_base": post_call_vendor.url,
+                                "api_key": "synthetic-guardrail-key",
+                            },
+                        },
                     ],
                 }
             )
@@ -111,7 +133,7 @@ def rig(session_gateway: Gateway, tmp_path_factory: pytest.TempPathFactory) -> I
             "GEMINI_API_KEY": "synthetic-gemini-key",
         }
         owned: Final = stack.enter_context(owned_proxy_process(session_gateway, directory, environment, config=path))
-        yield AuthGuardrailRig(owned, vendor, upstreams)
+        yield AuthGuardrailRig(owned, vendor, post_call_vendor, upstreams)
 
 
 def _key_with_guardrail(scenario: Scenario, level: Level) -> str:
@@ -132,6 +154,7 @@ def _send(gateway: Gateway, route: str, body: Mapping[str, JsonValue], key: str)
 
 def _drain(rig: AuthGuardrailRig) -> None:
     rig.vendor.drain()
+    rig.post_call_vendor.drain()
     for upstream in rig.upstreams.values():
         upstream.drain()
 
@@ -191,3 +214,17 @@ def test_request_without_a_body_is_not_sent_to_the_guardrail(rig: AuthGuardrailR
         assert response.status_code == 200, response.text
         assert rig.vendor.drain() == ()
         assert len(rig.upstreams[OPENAI_ROUTE].drain()) == 1
+
+
+def test_pre_call_guardrail_relays_the_provider_reply_untouched(rig: AuthGuardrailRig) -> None:
+    gateway: Final = rig.owned.gateway
+    with gateway.scenario() as scenario:
+        key: Final = _key_with_guardrail(scenario, "key")
+        _drain(rig)
+
+        response: Final = _send(gateway, OPENAI_ROUTE, _route_body(OPENAI_ROUTE, "What is the capital of France?"), key)
+
+        assert response.status_code == 200, response.text
+        assert response.content == _OPENAI_BODY
+        assert len(rig.vendor.drain()) == 1
+        assert rig.post_call_vendor.drain() == ()

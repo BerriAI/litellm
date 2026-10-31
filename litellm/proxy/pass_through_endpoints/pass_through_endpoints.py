@@ -141,6 +141,7 @@ from litellm.proxy.utils import normalize_route_for_root_path
 from litellm.repositories.team_repository import TeamRepository
 from litellm.secret_managers.main import get_secret_str
 from litellm.types import utils as types_utils
+from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.litellm_params import ProxyRequestState, wire_names
 from litellm.types.llms.custom_http import httpxSpecialProvider
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
@@ -863,11 +864,11 @@ async def _inherit_auth_guardrails(
     configured_guardrails: Mapping[str, bool] | None,
     inherit: bool,
 ) -> Mapping[str, bool] | Sequence[object] | None:
-    """Return the guardrails a pass-through request runs.
+    """Return the guardrails a pass-through request runs after the provider responds.
 
     The endpoint's configured guardrails win. Without any, and with ``inherit`` and a JSON body, the key, team,
-    project, policy and request-body guardrails are merged into ``parsed_body["metadata"]`` and returned, or None
-    when there are none.
+    project, policy and request-body guardrails are merged into ``parsed_body["metadata"]`` for the pre-call hook,
+    and returned only when at least one of them runs post_call, so the response is relayed untouched otherwise.
     """
     if configured_guardrails or not inherit or not parsed_body:
         return configured_guardrails
@@ -879,7 +880,18 @@ async def _inherit_auth_guardrails(
         user_api_key_dict=user_api_key_dict,
     )
     merged: Final = (as_str_mapping(parsed_body["metadata"]) or {}).get("guardrails")
-    return tuple(_GUARDRAIL_ENTRIES.validate_python(merged)) if isinstance(merged, list) and merged else None
+    if not isinstance(merged, list) or not merged or not _named_guardrail_runs_post_call(parsed_body):
+        return None
+    return tuple(_GUARDRAIL_ENTRIES.validate_python(merged))
+
+
+def _named_guardrail_runs_post_call(data: dict[str, object]) -> bool:
+    return any(
+        guardrail.default_on is not True
+        and guardrail.should_run_guardrail(data=data, event_type=GuardrailEventHooks.post_call)
+        for guardrail in litellm.logging_callback_manager.get_custom_loggers_for_type(callback_type=CustomGuardrail)
+        if isinstance(guardrail, CustomGuardrail)
+    )
 
 
 def _carry_guardrail_logging_info(request_data: dict, guardrail_data: dict | None) -> None:
