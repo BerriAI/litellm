@@ -24,6 +24,7 @@ from litellm._logging import verbose_logger
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
 from litellm.exceptions import AuthenticationError
 from litellm.litellm_core_utils.url_utils import join_api_base
+from litellm.llms.base_llm.responses.transformation import STANDARD_MODE_REASONING_FIELD_VALUES, ReasoningFieldValues
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.types.llms.openai import (
     ResponseInputParam,
@@ -436,6 +437,12 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
                 )
 
         return False
+
+    def reasoning_field_values(self) -> ReasoningFieldValues:
+        return STANDARD_MODE_REASONING_FIELD_VALUES
+
+    def ignores_unsupported_reasoning_fields(self) -> bool:
+        return True
 
     def supports_native_websocket(self) -> bool:
         """GitHub Copilot does not support native WebSocket for Responses API"""

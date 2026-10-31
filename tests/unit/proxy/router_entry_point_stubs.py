@@ -75,7 +75,7 @@ def route_entry_points_to_stubs(router: _RouterDouble) -> _RouterDouble:
         if kind == "deployment_names":
             return router.deployment_names
         if kind == "team_public":
-            return router.team_public_model_names
+            return router.team_public_model_names if team_id is None else router.team_public_model_names_of(team_id)
         if kind == "litellm_models":
             return router.resolved_litellm_models(model_name, **_given(team_id=team_id))
         if kind == "route_candidates":
@@ -143,6 +143,10 @@ def route_entry_points_to_stubs(router: _RouterDouble) -> _RouterDouble:
     registry.deployment_dict.side_effect = lambda id: router.get_model_info(id=id)
     registry.has_deployment.side_effect = lambda id: router.has_model_id(id)
     registry.discovered_model_info.side_effect = lambda id: router.get_discovered_model_info(id)
+    registry.routing_group.side_effect = lambda name: router.get_routing_group(name)
+    registry.client.side_effect = lambda deployment, *, client_type=None: router._get_client(
+        deployment=deployment, kwargs={}, client_type=client_type
+    )
 
     def _credentials(id, *, form="params", **team):
         # Old call sites passed team_id (even None) exactly when the new ones do, so pass it on as given.
@@ -159,6 +163,9 @@ def route_entry_points_to_stubs(router: _RouterDouble) -> _RouterDouble:
     registry.plugins.side_effect = lambda kind: getattr(router, f"{kind}_routers")
     health.fully_blocked_model_names.side_effect = lambda: router.get_fully_blocked_model_names()
     health.split_priority.side_effect = lambda model, kwargs: router.split_request_priority(model=model, kwargs=kwargs)
+    health.priority_header_fields.side_effect = lambda model, kwargs, header: router.priority_header_update(
+        model=model, kwargs=kwargs, header=header
+    )
     registry.index.side_effect = lambda name: getattr(router, f"{name}_to_deployment_indices")
     registry.patterns.side_effect = lambda team=False: router.team_pattern_routers if team else router.pattern_router
     health.is_blocked.side_effect = lambda deployment: router.is_deployment_blocked(deployment)
