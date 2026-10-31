@@ -26,6 +26,7 @@ from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.constants import INTERNAL_CALL_ORIGIN_METADATA_KEY
 from litellm.integrations.custom_secret_manager import CustomSecretManager
 from litellm.litellm_core_utils import ptu_pricing
+from litellm.litellm_core_utils.ptu_shares import PTUTeamCeiling
 from litellm.llms.azure.ptu_capacity import AZURE_PTU_CAPACITY
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
@@ -49,7 +50,6 @@ from litellm.proxy.hooks.parallel_request_limiter_v3 import (
 from litellm.proxy.spend_tracking.input_tokens import models_counted_for
 from litellm.proxy.spend_tracking.ptu_feature_flag import PTU_COST_ATTRIBUTION_ENV_VAR
 from litellm.proxy.utils import InternalUsageCache, ProxyLogging, hash_token
-from litellm.router_utils.ptu_shares import PTUTeamCeiling
 from litellm.types.caching import RedisPipelineIncrementOperation
 from litellm.types.extraction import ExtractionResponse
 from litellm.types.llms.openai import ResponsesAPIResponse
