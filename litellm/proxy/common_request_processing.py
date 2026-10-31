@@ -46,6 +46,7 @@ from litellm.constants import (
     MAX_LITELLM_CALL_ID_LENGTH,
     MAX_PAYLOAD_SIZE_FOR_DEBUG_LOG,
     NON_INFERENCE_CALL_TYPES,
+    REDACTED_BY_LITELLM,
     RETURN_RAW_MODEL_NAME_METADATA_KEY,
     STREAM_SSE_DATA_PREFIX,
     STREAM_SSE_KEEPALIVE_PING_BYTES,
@@ -2672,11 +2673,14 @@ class ProxyBaseLLMRequestProcessing:
         return self.data, logging_obj
 
     def _redact_request_its_skipped_guardrails_never_scanned(self) -> None:
-        """Redact the request body and its logged snapshot, so failure callbacks never see content a skipped
-        masking guardrail would have rewritten.
+        """Redact the request body, its logged snapshot and the logged messages, so failure callbacks never see
+        content a skipped masking guardrail would have rewritten.
         """
         self.data.update(without_unscanned_content(self.data))  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # self.data is the untyped request dict
         refresh_proxy_server_request_body_snapshot(self.data)  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # self.data is the untyped request dict
+        logging_obj: Final = self.data.get("litellm_logging_obj")  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # self.data is the untyped request dict
+        if isinstance(logging_obj, LiteLLMLoggingObj):
+            logging_obj.update_messages([{"role": "user", "content": REDACTED_BY_LITELLM}])
 
     async def _pre_call_with_fallbacks(
         self,

@@ -13359,6 +13359,29 @@ class TestUnroutableModelFailureLogHidesUnscannedContent:
         assert _shows_no_raw_content(sent), sent.failure_dumps
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("route_type", "body"),
+        [
+            pytest.param(
+                "aresponses", {"input": [{"role": "user", "content": f"email {_RAW_EMAIL}"}]}, id="responses-list"
+            ),
+            pytest.param(
+                "aresponses",
+                {"input": [{"role": "user", "content": [{"type": "input_text", "text": f"email {_RAW_EMAIL}"}]}]},
+                id="responses-input-text-parts",
+            ),
+            pytest.param("aresponses", {}, id="responses-string"),
+            pytest.param("aembedding", {"input": [f"email {_RAW_EMAIL}"]}, id="embeddings-list"),
+            pytest.param("atext_completion", {}, id="completions"),
+        ],
+    )
+    async def test_failure_log_hides_the_input_of_other_routes(self, monkeypatch, route_type, body):
+        sent: Final = await _send(monkeypatch, [_VendorGuardrail(behavior="mask")], route_type=route_type, body=body)
+
+        assert sent.status == 400
+        assert _shows_no_raw_content(sent), sent.failure_dumps
+
+    @pytest.mark.asyncio
     async def test_failure_log_hides_content_a_skipped_parallel_guardrail_would_have_scanned(
         self, monkeypatch: pytest.MonkeyPatch
     ):
