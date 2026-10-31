@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import os
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Iterator, Mapping
 from pathlib import Path
 from typing import Final, Literal
 from urllib.parse import urlsplit
@@ -16,7 +16,7 @@ from integration._support.process import owned_proxy
 from integration._support.responses_vendor import same_response
 from integration._support.wire import Reply, Request, Wire, wire_server
 from integration._support.worker_readiness import wait_for_worker_readiness
-from openai.types.responses import ResponseInputParam
+from openai.types.responses import ResponseCompletedEvent, ResponseInputParam
 from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter
 
 pytestmark: Final = pytest.mark.shares_worker_state
@@ -49,12 +49,6 @@ class _DeleteResponse(BaseModel):
     id: str
     object: Literal["response"]
     deleted: bool
-
-
-def _deployments_in_group(gateway: Gateway, group: str) -> int:
-    entries: Final = gateway.get("/model/info")["data"]
-    assert isinstance(entries, list), entries
-    return sum(object_value(entry).get("model_name") == group for entry in entries)
 
 
 def _wait_for_workers(gateway: Gateway, group: str, deployments: int) -> None:
@@ -136,6 +130,378 @@ def _every_id_route(client: openai.OpenAI, model: str, response_id: str) -> tupl
         lambda: client.responses.input_items.list(response_id),
         lambda: client.responses.create(model=model, input="cross-tenant follow-up", previous_response_id=response_id),
     )
+
+
+def _comparison_body(response_id: str, nested: bool) -> Mapping[str, object]:
+    options: Final = {"comparison_response_id": response_id}
+    if nested:
+        return {
+            "prompt_cache_options": {"mode": "explicit", "ttl": "12h"},
+            "extra_body": {"prompt_cache_options": options},
+        }
+    return {"prompt_cache_options": options}
+
+
+@pytest.mark.parametrize(
+    ("prefix", "nested", "stream"),
+    (("/v1", False, False), ("", True, False), ("/openai/v1", False, True), ("/v1", True, True)),
+)
+def test_regression_comparison_response_id_owner_repeated_requests_reach_raw_provider_id(
+    gateway: Gateway, prefix: str, nested: bool, stream: bool
+) -> None:
+    raw_id: Final = f"resp_comparison_{uuid.uuid4().hex}"
+
+    def respond(request: Request) -> Reply:
+        if request.target == "/v1/models":
+            return _model_discovery_reply()
+        assert (request.method, request.target) == ("POST", "/v1/responses")
+        body: Final = _JSON_OBJECT.validate_json(request.body)
+        if body["input"] == "create comparison response":
+            assert body == {"model": _MODEL, "input": "create comparison response"}, request.body
+            return Reply(body=_response(raw_id))
+        assert body == {
+            "model": _MODEL,
+            "input": "compare owned response",
+            "stream": stream,
+            "prompt_cache_options": {"comparison_response_id": raw_id},
+        }, request.body
+        if stream:
+            return Reply(
+                content_type="text/event-stream",
+                chunks=(
+                    b"data: "
+                    + json.dumps({"type": "response.completed", "response": json.loads(_response(raw_id))}).encode()
+                    + b"\n\n",
+                    b"data: [DONE]\n\n",
+                ),
+            )
+        return Reply(body=_response(raw_id))
+
+    with wire_server(respond) as wire, gateway.scenario() as scenario:
+        model: Final = _deployment(scenario, wire)
+        team: Final = scenario.team(models=[model])
+        user: Final = scenario.member(team)
+        with _client(gateway, _key(scenario, team, user, model), prefix) as client:
+            created: Final = client.responses.create(model=model, input="create comparison response")
+            assert created.id != raw_id, created.model_dump_json()
+            assert len(_contract_requests(wire)) == 1
+
+            def compare_again() -> None:
+                result: Final = client.responses.create(
+                    model=model,
+                    input="compare owned response",
+                    stream=stream,
+                    extra_body=_comparison_body(created.id, nested),
+                )
+                if isinstance(result, openai.Stream):
+                    events: Final = tuple(result)
+                    assert isinstance(events[-1], ResponseCompletedEvent), events
+                    assert events[-1].response.status == "completed", events
+                else:
+                    assert result.status == "completed", result.model_dump_json()
+
+            for _ in range(2):
+                compare_again()
+            assert len(_contract_requests(wire)) == 2
+
+
+@pytest.mark.parametrize("nested", (False, True))
+@pytest.mark.parametrize("stranger", ("user", "team"))
+@pytest.mark.parametrize("retained", (False, True), ids=("ordinary", "client-internal-field"))
+def test_regression_comparison_response_id_other_identity_is_denied_before_dispatch(
+    gateway: Gateway, nested: bool, stranger: str, retained: bool
+) -> None:
+    raw_id: Final = f"resp_comparison_{uuid.uuid4().hex}"
+
+    def respond(request: Request) -> Reply:
+        if request.target == "/v1/models":
+            return _model_discovery_reply()
+        return Reply(body=_response(raw_id))
+
+    with wire_server(respond) as wire, gateway.scenario() as scenario:
+        model: Final = _deployment(scenario, wire)
+        team_a: Final = scenario.team(models=[model])
+        team_b: Final = scenario.team(models=[model])
+        user_a: Final = scenario.member(team_a)
+        user_b: Final = scenario.member(team_a)
+        gateway.post("/team/member_add", {"team_id": team_b, "member": {"role": "user", "user_id": user_a}})
+        with (
+            _client(gateway, _key(scenario, team_a, user_a, model), "/v1") as owner,
+            _client(
+                gateway,
+                _key(
+                    scenario, team_a if stranger == "user" else team_b, user_b if stranger == "user" else user_a, model
+                ),
+                "/v1",
+            ) as other,
+        ):
+            created: Final = owner.responses.create(model=model, input="create private comparison")
+            assert created.id != raw_id
+            assert len(_contract_requests(wire)) == 1
+            _refused(
+                lambda: other.responses.create(
+                    model=model,
+                    input="compare another identity",
+                    extra_body={
+                        **_comparison_body(created.id, nested),
+                        **(
+                            {"_litellm_addressed_comparison_response_id": "resp_unmanaged_comparison"}
+                            if retained
+                            else {}
+                        ),
+                    },
+                ),
+                _OTHER_USER_DETAIL if stranger == "user" else _OTHER_TEAM_DETAIL,
+            )
+            assert _contract_requests(wire) == (), "A cross-identity comparison reached the provider"
+
+
+@pytest.mark.parametrize("nested", (False, True))
+@pytest.mark.parametrize("comparison_id", ("resp_unmanaged_comparison", "resp_!!!not-base64", "cmF3X3ZlbmRvcl9pZA=="))
+def test_regression_unmanaged_comparison_response_id_is_denied_by_default(
+    gateway: Gateway, nested: bool, comparison_id: str
+) -> None:
+    def respond(request: Request) -> Reply:
+        if request.target == "/v1/models":
+            return _model_discovery_reply()
+        return Reply(body=_response(f"resp_result_{uuid.uuid4().hex}"))
+
+    with wire_server(respond) as wire, gateway.scenario() as scenario:
+        model: Final = _deployment(scenario, wire)
+        team: Final = scenario.team(models=[model])
+        user: Final = scenario.member(team)
+        with _client(gateway, _key(scenario, team, user, model), "/v1") as client:
+            _refused(
+                lambda: client.responses.create(
+                    model=model, input="unmanaged comparison", extra_body=_comparison_body(comparison_id, nested)
+                ),
+                _UNMANAGED_DETAIL,
+            )
+            assert _contract_requests(wire) == ()
+
+
+def test_comparison_extra_body_owned_id_overrides_foreign_top_level(gateway: Gateway) -> None:
+    foreign_raw_id: Final = f"resp_ignored_{uuid.uuid4().hex}"
+    owner_raw_id: Final = f"resp_effective_{uuid.uuid4().hex}"
+
+    def respond(request: Request) -> Reply:
+        if request.target == "/v1/models":
+            return _model_discovery_reply()
+        assert (request.method, request.target) == ("POST", "/v1/responses")
+        body: Final = _JSON_OBJECT.validate_json(request.body)
+        if body["input"] in ("seed ignored comparison", "seed effective comparison"):
+            assert body == {"model": _MODEL, "input": body["input"]}, request.body
+            return Reply(body=_response(foreign_raw_id if body["input"] == "seed ignored comparison" else owner_raw_id))
+        assert body == {
+            "model": _MODEL,
+            "input": "compare effective options",
+            "prompt_cache_options": {"comparison_response_id": owner_raw_id},
+        }, request.body
+        return Reply(body=_response(owner_raw_id))
+
+    with wire_server(respond) as wire, gateway.scenario() as scenario:
+        model: Final = _deployment(scenario, wire)
+        team: Final = scenario.team(models=[model])
+        owner_user: Final = scenario.member(team)
+        foreign_user: Final = scenario.member(team)
+        with (
+            _client(gateway, _key(scenario, team, owner_user, model), "/v1") as owner,
+            _client(gateway, _key(scenario, team, foreign_user, model), "/v1") as foreign,
+        ):
+            foreign_response: Final = foreign.responses.create(model=model, input="seed ignored comparison")
+            assert foreign_response.id != foreign_raw_id
+            owner_response: Final = owner.responses.create(model=model, input="seed effective comparison")
+            assert owner_response.id != owner_raw_id
+            assert len(_contract_requests(wire)) == 2
+            compared: Final = owner.responses.create(
+                model=model,
+                input="compare effective options",
+                extra_body={
+                    "prompt_cache_options": {
+                        "comparison_response_id": foreign_response.id,
+                        "mode": "explicit",
+                        "ttl": "12h",
+                    },
+                    "extra_body": {"prompt_cache_options": {"comparison_response_id": owner_response.id}},
+                },
+            )
+            assert compared.status == "completed", compared.model_dump_json()
+            assert len(_contract_requests(wire)) == 1
+
+
+def test_regression_comparison_extra_body_raw_id_overrides_foreign_top_level(gateway: Gateway) -> None:
+    raw_id: Final = "resp_raw_effective_comparison"
+
+    def respond(request: Request) -> Reply:
+        if request.target == "/v1/models":
+            return _model_discovery_reply()
+        return Reply(body=_response("resp_foreign_seed"))
+
+    with wire_server(respond) as wire, gateway.scenario() as scenario:
+        model: Final = _deployment(scenario, wire)
+        team: Final = scenario.team(models=[model])
+        owner_user: Final = scenario.member(team)
+        foreign_user: Final = scenario.member(team)
+        with (
+            _client(gateway, _key(scenario, team, owner_user, model), "/v1") as owner,
+            _client(gateway, _key(scenario, team, foreign_user, model), "/v1") as foreign,
+        ):
+            foreign_response: Final = foreign.responses.create(model=model, input="seed ignored comparison")
+            assert foreign_response.id != "resp_foreign_seed"
+            assert len(_contract_requests(wire)) == 1
+            _refused(
+                lambda: owner.responses.create(
+                    model=model,
+                    input="compare effective options",
+                    extra_body={
+                        "prompt_cache_options": {
+                            "comparison_response_id": foreign_response.id,
+                            "mode": "explicit",
+                            "ttl": "12h",
+                        },
+                        "extra_body": {"prompt_cache_options": {"comparison_response_id": raw_id}},
+                    },
+                ),
+                _UNMANAGED_DETAIL,
+            )
+            assert _contract_requests(wire) == ()
+
+
+@pytest.fixture(scope="module")
+def allowed_comparison_gateway(
+    session_gateway: Gateway, tmp_path_factory: pytest.TempPathFactory
+) -> Iterator[tuple[Gateway, Wire]]:
+    directory: Final = tmp_path_factory.mktemp("allowed_comparison")
+    config: Final = directory / "config.yaml"
+    config.write_text("general_settings:\n  allow_unmanaged_response_ids: true\n")
+    with wire_server(lambda request: Reply(body=_response("resp_decoy"))) as decoy:
+        with owned_proxy(
+            session_gateway,
+            directory,
+            {
+                "INTEGRATION_PROXY_WORKERS": "1",
+                "OPENAI_BASE_URL": f"{decoy.url}/v1",
+                "OPENAI_API_KEY": "synthetic-env-fallback-key",
+            },
+            config=config,
+        ) as allowed:
+            yield allowed, decoy
+
+
+@pytest.mark.parametrize("nested", (False, True))
+@pytest.mark.parametrize("comparison_id", ("resp_unmanaged_comparison", "resp_!!!not-base64", "cmF3X3ZlbmRvcl9pZA=="))
+def test_guard_opt_in_forwards_unmanaged_comparison_id(
+    allowed_comparison_gateway: tuple[Gateway, Wire], nested: bool, comparison_id: str
+) -> None:
+    allowed, decoy = allowed_comparison_gateway
+    result_id: Final = f"resp_result_{uuid.uuid4().hex}"
+
+    def respond(request: Request) -> Reply:
+        if request.target == "/v1/models":
+            return _model_discovery_reply()
+        return Reply(body=_response(result_id))
+
+    with wire_server(respond) as wire, allowed.scenario() as scenario:
+        model: Final = _deployment(scenario, wire)
+        team: Final = scenario.team(models=[model])
+        user: Final = scenario.member(team)
+        with _client(allowed, _key(scenario, team, user, model), "/v1") as client:
+            compared: Final = client.responses.create(
+                model=model, input="unmanaged comparison", extra_body=_comparison_body(comparison_id, nested)
+            )
+            assert compared.model_dump(mode="json", exclude_none=True) == {
+                "id": compared.id,
+                "object": "response",
+                "created_at": 1.0,
+                "status": "completed",
+                "model": model,
+                "output": [],
+                "parallel_tool_calls": False,
+                "tool_choice": "auto",
+                "tools": [],
+            }, compared.model_dump_json()
+            assert compared.id != result_id
+            requests: Final = _contract_requests(wire)
+            assert len(requests) == 1
+            assert (requests[0].method, requests[0].target) == ("POST", "/v1/responses")
+            assert _JSON_OBJECT.validate_json(requests[0].body) == {
+                "model": _MODEL,
+                "input": "unmanaged comparison",
+                "prompt_cache_options": {"comparison_response_id": comparison_id},
+            }, requests[0].body
+            assert decoy.drain() == ()
+
+
+@pytest.mark.parametrize("stranger", ("user", "team"))
+def test_regression_echoed_raw_comparison_id_is_denied_to_other_identity(gateway: Gateway, stranger: str) -> None:
+    raw_id: Final = f"resp_echo_{uuid.uuid4().hex}"
+
+    def respond(request: Request) -> Reply:
+        if request.target == "/v1/models":
+            return _model_discovery_reply()
+        body: Final = _JSON_OBJECT.validate_json(request.body)
+        if body["input"] == "create response":
+            assert body == {"model": _MODEL, "input": "create response"}, request.body
+            return Reply(body=_response(raw_id))
+        assert body == {
+            "model": _MODEL,
+            "input": "compare owned response",
+            "prompt_cache_options": {"comparison_response_id": raw_id},
+        }, request.body
+        return Reply(
+            body=json.dumps(
+                {**json.loads(_response(raw_id)), "prompt_cache_options": {"comparison_response_id": raw_id}}
+            ).encode()
+        )
+
+    with wire_server(respond) as wire, gateway.scenario() as scenario:
+        model: Final = _deployment(scenario, wire)
+        team_a: Final = scenario.team(models=[model])
+        team_b: Final = scenario.team(models=[model])
+        user_a: Final = scenario.member(team_a)
+        user_b: Final = scenario.member(team_a)
+        gateway.post("/team/member_add", {"team_id": team_b, "member": {"role": "user", "user_id": user_a}})
+        with (
+            _client(gateway, _key(scenario, team_a, user_a, model), "/v1") as owner,
+            _client(
+                gateway,
+                _key(
+                    scenario, team_a if stranger == "user" else team_b, user_b if stranger == "user" else user_a, model
+                ),
+                "/v1",
+            ) as other,
+        ):
+            created: Final = owner.responses.create(model=model, input="create response")
+            assert created.id != raw_id
+            assert len(_contract_requests(wire)) == 1
+            echoed: Final = owner.responses.create(
+                model=model, input="compare owned response", extra_body=_comparison_body(created.id, False)
+            )
+            echo_body: Final = _JSON_OBJECT.validate_json(echoed.model_dump_json(exclude_none=True))
+            assert echo_body == {
+                "id": echoed.id,
+                "object": "response",
+                "created_at": 1.0,
+                "status": "completed",
+                "model": model,
+                "output": [],
+                "parallel_tool_calls": False,
+                "tool_choice": "auto",
+                "tools": [],
+                "prompt_cache_options": {"comparison_response_id": raw_id},
+            }, echo_body
+            options: Final = object_value(echo_body["prompt_cache_options"])
+            leaked_id: Final = options["comparison_response_id"]
+            assert leaked_id == raw_id
+            assert isinstance(leaked_id, str)
+            assert len(_contract_requests(wire)) == 1
+            _refused(
+                lambda: other.responses.create(
+                    model=model, input="compare owned response", extra_body=_comparison_body(leaked_id, False)
+                ),
+                _UNMANAGED_DETAIL,
+            )
+            assert _contract_requests(wire) == ()
 
 
 @pytest.mark.parametrize("prefix", _ALIASES)
