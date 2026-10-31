@@ -255,6 +255,7 @@ from litellm.router_utils.clientside_credential_handler import (
 from litellm.router_utils.common_utils import (
     MID_STREAM_CONTINUATION_KWARG,
     as_retry_skipped_deployment_ids,
+    deployment_model_id_pin,
     deployments_the_caller_may_use,
     filter_team_based_models,
     filter_web_search_deployments,
@@ -377,6 +378,7 @@ from litellm.router_utils.pre_call_checks.encrypted_content_affinity_check impor
     EncryptedContentAffinityCheck,
 )
 from litellm.router_utils.pre_call_checks.io_token_rate_limit_check import (
+    async_admit_io_token_turn,
     async_io_token_refund_failure,
     build_io_token_rate_limit_headers,
     deployment_has_io_token_limits,
@@ -502,6 +504,7 @@ from litellm.utils import (
     ProviderConfigManager,
     Rules,
     TextCompletionResponse,
+    _restore_correlation_context_if_supported,  # pyright: ignore[reportPrivateUsage]  # same task-local cleanup as the SDK wrapper
     aresolve_api_key_secret_reference,
     function_setup,
     get_llm_provider,
@@ -893,6 +896,23 @@ def _stream_pre_content_error(
         original_exception=error,
         is_pre_first_chunk=True,
     )
+
+
+def _context_window_stream_fallback_error(
+    error: "MidStreamFallbackError | litellm.ContextWindowExceededError",
+    model: object,
+    llm_provider: str,
+    has_output: bool,
+) -> "MidStreamFallbackError":
+    if isinstance(error, litellm.ContextWindowExceededError):
+        if has_output:
+            raise error
+        return _stream_pre_content_error(error, model if isinstance(model, str) else "", llm_provider)
+    if isinstance(error.original_exception, litellm.ContextWindowExceededError) and (
+        has_output or error.generated_content or error.emitted_disqualifying_content
+    ):
+        raise error.original_exception
+    return error
 
 
 def _deployment_num_retries(deployment: "Deployment | None") -> int | None:
@@ -3843,7 +3863,19 @@ class Router(DeprecatedRouterMembers):
             try:
                 async for item in _achunks_with_first(model_response, first_chunk):
                     yield item
-            except MidStreamFallbackError as e:
+            except (MidStreamFallbackError, litellm.ContextWindowExceededError) as stream_error:
+                e: Final = (
+                    _context_window_stream_fallback_error(
+                        stream_error,
+                        getattr(model_response, "model", ""),
+                        model_response.custom_llm_provider or "",
+                        bool(getattr(model_response, "response_uptil_now", ""))
+                        or _stream_chunks_have_generated_content(model_response.chunks),
+                    )
+                    if isinstance(stream_error, litellm.ContextWindowExceededError)
+                    or isinstance(stream_error.original_exception, litellm.ContextWindowExceededError)
+                    else stream_error
+                )
                 with anyio.CancelScope(shield=True):
                     await close_model_response()
                     await held_slot.aclose()
@@ -3915,7 +3947,9 @@ class Router(DeprecatedRouterMembers):
                         initial_kwargs["messages"] = messages
                     self._update_kwargs_before_fallbacks(model=model_group, kwargs=initial_kwargs)
                     fallback_response = await self.async_function_with_fallbacks_common_utils(
-                        e=e,
+                        e=e.original_exception
+                        if isinstance(e.original_exception, litellm.ContextWindowExceededError)
+                        else e,
                         disable_fallbacks=fallbacks_disabled_for_request(initial_kwargs),
                         fallbacks=fallbacks,
                         context_window_fallbacks=context_window_fallbacks,
@@ -3983,10 +4017,10 @@ class Router(DeprecatedRouterMembers):
                     if fallback_response is not None and hasattr(fallback_response, "aclose"):
                         try:
                             await fallback_response.aclose()
-                        except BaseException as e:
+                        except BaseException as close_error:
                             verbose_router_logger.debug(
                                 "stream_with_fallbacks: error closing fallback_response: %s",
-                                e,
+                                close_error,
                             )
 
         wrapped_response: Final = FallbackStreamWrapper(stream_with_fallbacks())
@@ -4346,6 +4380,10 @@ class Router(DeprecatedRouterMembers):
             def __aiter__(self):
                 return self
 
+            @property
+            def yielded_first_chunk(self) -> bool:
+                return self._yielded_first_chunk
+
             async def __anext__(self):
                 try:
                     chunk: Final = await self._async_generator.__anext__()
@@ -4373,6 +4411,7 @@ class Router(DeprecatedRouterMembers):
                 # the very key that created the container (#30210).
                 if self.completed_response is None and getattr(chunk, "type", None) in _RESPONSES_TERMINAL_EVENT_TYPES:
                     self.completed_response = chunk
+                self._yielded_first_chunk = True
                 return chunk
 
             async def aclose(self):
@@ -4399,7 +4438,18 @@ class Router(DeprecatedRouterMembers):
                     yield item
                 for held_event in held_lifecycle_events:
                     yield held_event
-            except MidStreamFallbackError as e:
+            except (MidStreamFallbackError, litellm.ContextWindowExceededError) as stream_error:
+                e: Final = (
+                    _context_window_stream_fallback_error(
+                        stream_error,
+                        source_iterator.model or "",
+                        source_iterator.custom_llm_provider or "",
+                        wrapper.yielded_first_chunk,
+                    )
+                    if isinstance(stream_error, litellm.ContextWindowExceededError)
+                    or isinstance(stream_error.original_exception, litellm.ContextWindowExceededError)
+                    else stream_error
+                )
                 if response_id_exposed:
                     self._raise_released_stream_error(e, initial_kwargs)
                 async with contextlib.aclosing(
@@ -4570,7 +4620,11 @@ class Router(DeprecatedRouterMembers):
             # The content-policy dispatch branch matches on the trigger's own type, so a refusal's
             # MidStreamFallbackError envelope is unwrapped here or the wrong fallback list is consulted.
             fallback_trigger: Final[Exception] = (
-                e.original_exception if isinstance(e.original_exception, litellm.ContentPolicyViolationError) else e
+                e.original_exception
+                if isinstance(
+                    e.original_exception, (litellm.ContentPolicyViolationError, litellm.ContextWindowExceededError)
+                )
+                else e
             )
             fallback_response = await self.async_function_with_fallbacks_common_utils(  # rebind-ok: set on success
                 e=fallback_trigger,
@@ -4656,7 +4710,19 @@ class Router(DeprecatedRouterMembers):
             try:
                 for item in _chunks_with_first(model_response, first_chunk):
                     yield item
-            except MidStreamFallbackError as e:
+            except (MidStreamFallbackError, litellm.ContextWindowExceededError) as stream_error:
+                e: Final = (
+                    _context_window_stream_fallback_error(
+                        stream_error,
+                        getattr(model_response, "model", ""),
+                        model_response.custom_llm_provider or "",
+                        bool(getattr(model_response, "response_uptil_now", ""))
+                        or _stream_chunks_have_generated_content(model_response.chunks),
+                    )
+                    if isinstance(stream_error, litellm.ContextWindowExceededError)
+                    or isinstance(stream_error.original_exception, litellm.ContextWindowExceededError)
+                    else stream_error
+                )
                 if fallbacks_disabled_for_request(initial_kwargs) or (
                     not e.is_pre_first_chunk
                     and (e.generated_content or _stream_chunks_have_generated_content(model_response.chunks))
@@ -4681,7 +4747,9 @@ class Router(DeprecatedRouterMembers):
                     router_self._update_kwargs_before_fallbacks(model=model_group, kwargs=initial_kwargs)
                     fallback_response = run_async_function(
                         router_self.async_function_with_fallbacks_common_utils,
-                        e=e,
+                        e=e.original_exception
+                        if isinstance(e.original_exception, litellm.ContextWindowExceededError)
+                        else e,
                         disable_fallbacks=fallbacks_disabled_for_request(initial_kwargs),
                         fallbacks=fallbacks,
                         context_window_fallbacks=context_window_fallbacks,
@@ -5112,6 +5180,7 @@ class Router(DeprecatedRouterMembers):
         kwargs: dict,
         function_name: str | None = None,
         splits_stream_timeout: bool = False,
+        opens_responses_socket: bool = False,
     ) -> None:
         """
         5 jobs:
@@ -5201,7 +5270,12 @@ class Router(DeprecatedRouterMembers):
         # here before it's wiped below, instead of relying on that attempt's
         # (possibly still-pending) failure event to do it.
         refund_stale_reservation_before_retry(self._core_cache, kwargs)
-        set_io_token_rate_limit_request_kwargs(kwargs, store_in_context=deployment_has_io_token_limits(deployment))
+        set_io_token_rate_limit_request_kwargs(
+            kwargs,
+            store_in_context=deployment_has_io_token_limits(deployment),
+            opens_responses_socket=opens_responses_socket,
+            metadata_channel=metadata_variable_name,
+        )
 
         kwargs[metadata_variable_name].setdefault(
             ROUTING_REQUEST_TAGS_METADATA_KEY,
@@ -5316,6 +5390,9 @@ class Router(DeprecatedRouterMembers):
         ):
             kwargs[STREAM_USAGE_INJECTED_FIELD] = True
         self._update_kwargs_with_default_litellm_params(kwargs=kwargs, metadata_variable_name=metadata_variable_name)
+        pinned_model_id: Final = deployment_model_id_pin(deployment_context)
+        if pinned_model_id is not None:
+            kwargs["model_id"] = pinned_model_id  # rebind-ok: this method's contract is filling the caller's kwargs
         hop_kwargs: Final = _FALLBACK_HOP_ADAPTER.validate_python(kwargs)
         if _is_fallback_hop(hop_kwargs):
             EncryptedContentAffinityCheck.strip_reasoning_the_targets_cannot_decrypt(
@@ -5935,15 +6012,42 @@ class Router(DeprecatedRouterMembers):
 
     async def _aimage_generation(self, prompt: str, model: str, **kwargs):
         model_name = model
+        start_time: Final = datetime.now()  # noqa: DTZ005  # SDK logging uses naive local timestamps
         try:
             verbose_router_logger.debug("Inside _image_generation()- model: %s", model)
             parent_otel_span: Final = get_parent_otel_span_from_kwargs(kwargs)
-            deployment: Final = await self._core_async_get_available_deployment(
-                model=model,
-                messages=[{"role": "user", "content": "prompt"}],
-                specific_deployment=kwargs.pop("specific_deployment", None),
-                request_kwargs=kwargs,
-            )
+            try:
+                deployment: Final = await self._core_async_get_available_deployment(
+                    model=model,
+                    messages=[{"role": "user", "content": "prompt"}],
+                    specific_deployment=kwargs.pop("specific_deployment", None),
+                    request_kwargs=kwargs,
+                )
+            except Exception as selection_error:
+                # Admitted attempts keep SDK-owned logging, including deployment callbacks and retry state
+                request_kwargs: Final = cast(  # cast-ok: Python kwargs have string keys and opaque values
+                    Mapping[str, object], kwargs
+                )
+                if request_kwargs.get("litellm_logging_obj") is None:
+                    refusal_kwargs: Final = {**request_kwargs, "model": model, "prompt": prompt}
+                    refusal_kwargs.setdefault("litellm_call_id", str(uuid.uuid4()))
+                    logging_obj, _ = function_setup(
+                        "aimage_generation",
+                        Rules(),
+                        start_time,
+                        **refusal_kwargs,  # pyright: ignore[reportArgumentType]  # preserve opaque SDK options, including is_async_call
+                    )
+                    try:
+                        asyncio.create_task(
+                            logging_obj.dispatch_failure_handlers(
+                                exception=selection_error,
+                                traceback_exception=traceback.format_exc(),
+                                prefer_async_handlers=True,
+                            )
+                        )
+                    finally:
+                        _restore_correlation_context_if_supported(logging_obj)
+                raise
             self._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs)
 
             data: Final = deployment["litellm_params"].copy()
@@ -6242,6 +6346,9 @@ class Router(DeprecatedRouterMembers):
                     kwargs[k] = v
                 elif k == "metadata":
                     kwargs[k].update(v)
+            pinned_model_id: Final = deployment_model_id_pin(_LITELLM_PARAMS_ADAPTER.validate_python(data))
+            if pinned_model_id is not None:
+                kwargs["model_id"] = pinned_model_id  # rebind-ok: this call's own kwargs, filled like the defaults
 
             # call via litellm.completion()
             return litellm.text_completion(
@@ -6608,6 +6715,7 @@ class Router(DeprecatedRouterMembers):
                 kwargs=kwargs,
                 function_name=function_name,
                 splits_stream_timeout=handler_name in _STREAM_TIMEOUT_AWARE_GENERIC_HANDLERS,
+                opens_responses_socket=handler_name == "_aresponses_websocket",
             )
 
             data: Final = deployment["litellm_params"].copy()
@@ -10458,9 +10566,20 @@ class Router(DeprecatedRouterMembers):
         return deployment if current is None else current.model_dump(exclude_none=True)
 
     async def async_admit_deployment_turn(
-        self, model_group: str, opened_on: Mapping[str, object], request_kwargs: Mapping[str, object]
-    ) -> None:
+        self,
+        model_group: str,
+        opened_on: Mapping[str, object],
+        request_kwargs: Mapping[str, object],
+    ) -> Mapping[str, object]:
         deployment: Final = self._deployment_as_configured_now(opened_on)
+        rate_limit_check: Final = next(
+            (callback for callback in self._routing_callbacks() if isinstance(callback, ModelRateLimitingCheck)), None
+        )
+        io_token_admission: Final[Mapping[str, object]] = (
+            MappingProxyType({})
+            if rate_limit_check is None
+            else await async_admit_io_token_turn(rate_limit_check.dual_cache, deployment, get_utc_datetime())
+        )
         budget_limiter: Final = self._core_get_router_deployment_budget_limiter()
         if budget_limiter is not None:
             try:
@@ -10481,6 +10600,7 @@ class Router(DeprecatedRouterMembers):
         await self.async_routing_strategy_pre_call_checks(  # pyright: ignore[reportUnknownMemberType]  # legacy signature takes an untyped deployment dict
             deployment=dict(without_io_token_limits(deployment)), parent_otel_span=None
         )
+        return io_token_admission
 
     async def _admit_turn_through_routing_strategy(
         self, model_group: str, deployment: Mapping[str, object], request_kwargs: Mapping[str, object]
