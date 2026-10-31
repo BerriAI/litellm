@@ -177,6 +177,8 @@ MID_STREAM_FAILURE_LOG_WAIT_SECONDS: Final = 1.0
 # Set to 0 to disable truncation.
 MAX_BASE64_LENGTH_FOR_LOGGING: Final = get_env_int("MAX_BASE64_LENGTH_FOR_LOGGING", 64)
 BASE64_TRUNCATION_OFFLOAD_THRESHOLD_CHARS: Final = 256 * 1024
+BASE64_TRUNCATION_OFFLOAD_THRESHOLD_STRINGS: Final = 256
+BASE64_TRUNCATION_INLINE_COPY_MAX_CHARS: Final = 8 * 1024 * 1024
 REDACTED_BY_LITELLM: Final = "redacted-by-litellm"
 # in-memory stand-in handed to provider converters for redacted arguments; never stored
 REDACTED_TOOL_CALL_ARGUMENTS_PLACEHOLDER: Final = "{}"
