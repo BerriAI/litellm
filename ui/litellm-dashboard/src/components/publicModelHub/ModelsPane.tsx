@@ -148,10 +148,15 @@ function ModelsToolbar({ hub }: { hub: HubData }) {
   );
 }
 
-const prices = (model: ModelGroupInfo) => [
-  model.input_cost_per_token ? `${formatPerMillion(model.input_cost_per_token)} / 1M in` : null,
-  model.output_cost_per_token ? `${formatPerMillion(model.output_cost_per_token)} / 1M out` : null,
-];
+const price = (cost: number | null | undefined, direction: "input" | "output") => {
+  if (cost === 0) return `Free ${direction}`;
+  return cost ? `${formatPerMillion(cost)} / 1M ${direction === "input" ? "in" : "out"}` : null;
+};
+
+const prices = (model: ModelGroupInfo) =>
+  model.input_cost_per_token === 0 && model.output_cost_per_token === 0
+    ? ["Free", null]
+    : [price(model.input_cost_per_token, "input"), price(model.output_cost_per_token, "output")];
 
 function ModelRow({ model }: { model: ModelGroupInfo }) {
   const [input, output] = prices(model);

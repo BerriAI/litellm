@@ -23,7 +23,7 @@ export function useHubUrlState() {
     },
     [setUrlTab, setOpen],
   );
-  return { tab, setTab, open, setOpen };
+  return { tab, setTab, open: open || null, setOpen };
 }
 
 export function useOpenHref() {

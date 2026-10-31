@@ -99,6 +99,33 @@ function Rows<T>({
   );
 }
 
+const resolveSelection = <T,>(
+  rows: T[],
+  selectedKey: string | null,
+  opened: T | undefined,
+  getKey: (row: T) => string,
+) => {
+  const chosen = selectedKey === null ? undefined : opened ?? rows.find((row) => getKey(row) === selectedKey);
+  return { chosen, selected: selectedKey === null ? rows[0] : chosen };
+};
+
+function useSheet<T>(
+  chosen: T | undefined,
+  missingKey: string | undefined,
+  getKey: (row: T) => string,
+  renderDetail: (row: T) => React.ReactNode,
+) {
+  const [content, setContent] = React.useState<{ row?: T; missingKey?: string }>({ row: chosen });
+  if (chosen !== undefined && chosen !== content.row) setContent({ row: chosen });
+  if (missingKey !== undefined && missingKey !== content.missingKey) setContent({ missingKey });
+  const { row } = content;
+  return {
+    open: chosen !== undefined || missingKey !== undefined,
+    title: row ? getKey(row) : content.missingKey ?? "Details",
+    body: row ? renderDetail(row) : content.missingKey && <NotListed name={content.missingKey} />,
+  };
+}
+
 export function HubMasterDetail<T>({
   switcher,
   toolbar,
@@ -129,11 +156,12 @@ export function HubMasterDetail<T>({
   footer?: React.ReactNode;
 }) {
   const narrow = useIsNarrow();
-  const chosen = selectedKey === null ? undefined : opened ?? rows.find((row) => getKey(row) === selectedKey);
-  const selected = selectedKey === null ? rows[0] : chosen;
-  const [sheetRow, setSheetRow] = React.useState<T | undefined>(chosen);
-  if (chosen !== undefined && chosen !== sheetRow) setSheetRow(chosen);
+  const { chosen, selected } = resolveSelection(rows, selectedKey, opened, getKey);
   const isEmpty = !loading && rows.length === 0;
+  const settled = !loading && !openPending && !isEmpty;
+  const missingKey = selectedKey !== null && chosen === undefined && settled ? selectedKey : undefined;
+  const sheet = useSheet(chosen, missingKey, getKey, renderDetail);
+  const listOnly = isEmpty && chosen === undefined && !openPending;
   const detail = () => {
     if (loading || (selected === undefined && openPending)) return <DetailSkeleton />;
     if (selected === undefined) return selectedKey && <NotListed name={selectedKey} />;
@@ -158,23 +186,19 @@ export function HubMasterDetail<T>({
     <div
       className={cn(
         "grid min-h-0 grid-cols-1 overflow-hidden rounded-xl border border-border lg:h-[calc(100dvh-18.875rem)] lg:min-h-[560px]",
-        !isEmpty && "lg:grid-cols-[minmax(0,5fr)_minmax(0,6fr)]",
+        !listOnly && "lg:grid-cols-[minmax(0,5fr)_minmax(0,6fr)]",
       )}
     >
-      <div className={cn("flex min-h-0 flex-col", !isEmpty && "lg:border-r lg:border-border")}>
+      <div className={cn("flex min-h-0 flex-col", !listOnly && "lg:border-r lg:border-border")}>
         <div className="flex flex-col gap-3 border-b border-border p-3">
           {switcher}
           <div className="flex flex-col gap-2">{toolbar}</div>
         </div>
         <ScrollArea className="min-h-0 flex-1">{loading ? <ListSkeleton /> : list}</ScrollArea>
       </div>
-      {!isEmpty && <ScrollArea className="hidden min-h-0 lg:block">{detail()}</ScrollArea>}
-      <DetailSheet
-        open={narrow && chosen !== undefined}
-        title={sheetRow ? getKey(sheetRow) : "Details"}
-        onClose={() => onSelect(null)}
-      >
-        {sheetRow && renderDetail(sheetRow)}
+      {!listOnly && <ScrollArea className="hidden min-h-0 lg:block">{detail()}</ScrollArea>}
+      <DetailSheet open={narrow && sheet.open} title={sheet.title} onClose={() => onSelect(null)}>
+        {sheet.body}
       </DetailSheet>
     </div>
   );

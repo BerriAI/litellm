@@ -30,7 +30,8 @@ function sourceValue(source: Plugin["source"]) {
 
 export function SkillInspector({ skill }: { skill: Plugin }) {
   const keywords = skill.keywords ?? [];
-  const added = skill.created_at ? new Date(skill.created_at).toLocaleDateString() : null;
+  const addedAt = skill.created_at ? new Date(skill.created_at) : null;
+  const added = addedAt && !Number.isNaN(addedAt.getTime()) ? addedAt.toLocaleDateString() : null;
   return (
     <div className="flex flex-col gap-6 p-6">
       <InspectorHeader title={skill.name} copyLabel="Copy skill name" description={skill.description} />
