@@ -10,7 +10,6 @@ import pytest
 import litellm
 from litellm.caching.caching import DualCache
 from litellm.caching.redis_cache import RedisCache
-from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.proxy._types import Litellm_EntityType, UserAPIKeyAuth
 from litellm.proxy.hooks.model_max_budget_limiter import (
     PROXY_VirtualKeyModelMaxBudgetLimiter,
@@ -20,6 +19,7 @@ from litellm.proxy.hooks.model_max_budget_limiter import (
     model_budget_start_time_cache_key,
     resolve_model_budget,
 )
+from litellm.router_strategy.budget_limiter import budget_window_seconds
 from litellm.types.caching import RedisPipelineIncrementOperation
 
 
@@ -31,7 +31,7 @@ async def _reset_at_of_open_window(
             entity_type=entity_type, entity_id=entity_id, budget_model=budget_model, budget_duration=period
         )
     )
-    return datetime.fromtimestamp(started_at + duration_in_seconds(period), tz=timezone.utc).isoformat()
+    return datetime.fromtimestamp(started_at + budget_window_seconds(started_at, period), tz=timezone.utc).isoformat()
 
 
 # Test class setup
@@ -973,7 +973,7 @@ async def test_user_model_budget_window_resets_when_the_period_elapses():
 
     # Age the window past its period. The next charge opens a new window rather
     # than adding to the exhausted one.
-    elapsed = duration_in_seconds("1mo") + 60
+    elapsed = int(timedelta(days=31, minutes=1).total_seconds())
     await dual_cache.async_set_cache(
         key=start_time_key,
         value=datetime.now(timezone.utc).timestamp() - elapsed,
