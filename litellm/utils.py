@@ -11285,6 +11285,12 @@ class ProviderConfigManager:
             )
 
             return AWSPollyTextToSpeechConfig()
+        elif litellm.LlmProviders.SPEECHIFY == provider:
+            from litellm.llms.speechify.text_to_speech.transformation import (
+                SpeechifyTextToSpeechConfig,
+            )
+
+            return SpeechifyTextToSpeechConfig()
         elif litellm.LlmProviders.EDENAI == provider:
             return litellm.EdenAITextToSpeechConfig()
         elif litellm.LlmProviders.DASHSCOPE == provider:
