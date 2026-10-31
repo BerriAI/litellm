@@ -125,13 +125,13 @@ class ResponsePollingHandler:
         self,
         polling_id: str,
         status: ResponsesAPIStatus | None = None,
-        usage: dict | None = None,
-        error: dict | None = None,
-        incomplete_details: dict | None = None,
-        reasoning: dict | None = None,
+        usage: Mapping[str, object] | None = None,
+        error: Mapping[str, object] | None = None,
+        incomplete_details: Mapping[str, object] | None = None,
+        reasoning: Mapping[str, object] | None = None,
         tool_choice: object | None = None,
         tools: Sequence[object] | None = None,
-        output: list | None = None,
+        output: Sequence[object] | None = None,
         # Additional ResponsesAPIResponse fields
         model: str | None = None,
         instructions: str | None = None,
@@ -139,7 +139,7 @@ class ResponsePollingHandler:
         top_p: float | None = None,
         max_output_tokens: int | None = None,
         previous_response_id: str | None = None,
-        text: dict | None = None,
+        text: Mapping[str, object] | None = None,
         truncation: str | None = None,
         parallel_tool_calls: bool | None = None,
         user: str | None = None,
@@ -244,7 +244,8 @@ class ResponsePollingHandler:
         try:
             written: Final = _SCRIPT_REPLY.validate_python(
                 await write_unless_cancelled(
-                    keys=(cache_key,), args=(_encoded_state(state), int(self.ttl), _CANCELLED_PREFIX)
+                    keys=(cache_key,),
+                    args=(_encoded_state(state), self.redis_cache.get_ttl(ttl=self.ttl), _CANCELLED_PREFIX),
                 )
             )
         except Exception as write_error:  # noqa: BLE001  # a Redis fault must not end the background stream

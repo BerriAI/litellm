@@ -1,4 +1,5 @@
 import asyncio
+import collections.abc
 import contextvars
 import copy
 import datetime
@@ -10782,6 +10783,33 @@ async def test_a_late_failure_is_reported_to_the_failure_hook():
     assert [type(exc).__name__ for exc in audited] == ["HTTPException"]
     assert getattr(audited[0], "detail", None) == "upstream exploded"
     assert collected[-1] == b"data: [DONE]\n\n"
+
+
+@pytest.mark.asyncio
+async def test_a_failure_that_lands_as_the_reader_leaves_is_reported_instead_of_a_disconnect():
+    may_fail: Final = asyncio.Event()
+    audited: Final = asyncio.Queue[Exception]()
+
+    async def fails_between_pings() -> StreamingResponse:
+        await may_fail.wait()
+        raise HTTPException(status_code=429, detail="rate limited")
+
+    async def record(exc: Exception) -> None:
+        await audited.put(exc)
+
+    response: Final = await open_sse_before_first_byte(
+        fails_between_pings(), ping_interval_seconds=0.05, on_late_failure=record
+    )
+    body: Final = response.body_iterator
+    assert isinstance(body, collections.abc.AsyncGenerator)
+    assert await body.__anext__() == TTFT_PING
+    may_fail.set()
+    await asyncio.sleep(0.01)
+    await body.aclose()
+
+    reported: Final = audited.get_nowait()
+    assert isinstance(reported, HTTPException) and reported.status_code == 429
+    assert audited.empty()
 
 
 @pytest.mark.asyncio

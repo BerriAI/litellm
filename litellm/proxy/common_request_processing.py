@@ -1389,6 +1389,13 @@ async def _abandon_late_producer(produce_task: "asyncio.Future[_LateResponseT]")
                 await aclose_streaming_response(produce_task.result())
 
 
+def _abandoned_producer_failure(produce_task: "asyncio.Future[_LateResponseT]") -> Exception:
+    failure: Final = None if produce_task.cancelled() else produce_task.exception()
+    if isinstance(failure, Exception):
+        return failure
+    return HTTPException(status_code=LITELLM_HTTP_STATUS_CLIENT_DISCONNECTED, detail=LITELLM_CLIENT_DISCONNECT_DETAIL)
+
+
 async def _relay_late_response(produced: Response) -> AsyncGenerator[bytes, None]:
     """Replay a Response that was built after a keepalive had already opened the wire."""
     if not isinstance(produced, StreamingResponse):
@@ -1476,6 +1483,12 @@ async def open_sse_before_first_byte(
             while not produce_task.done():
                 yield SSE_COMMENT_PING_BYTES
                 await asyncio.wait((produce_task,), timeout=interval)
+        except BaseException:
+            await _abandon_late_producer(produce_task)
+            with anyio.CancelScope(shield=True):
+                await _sanitized_late_failure(_abandoned_producer_failure(produce_task), on_late_failure)
+            raise
+        try:
             try:
                 produced: Final = produce_task.result()
             except Exception as exc:  # noqa: BLE001  # the status line is already sent; surface it as a frame

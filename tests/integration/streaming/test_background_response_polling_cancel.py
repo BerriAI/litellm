@@ -1,14 +1,15 @@
 import threading
 import uuid
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Mapping
 from contextlib import ExitStack, contextmanager
 from pathlib import Path
+from types import MappingProxyType
 from typing import Final
 
 import pytest
 import yaml
 from integration._support.client import Gateway, eventually, held, object_value, string_value
-from integration._support.process import graceful_stop_seconds, owned_proxy
+from integration._support.process import DB_PUSH, graceful_stop_seconds, owned_proxy
 from integration._support.redis_process import owned_redis
 from integration._support.responses_stream import OPENAI_TARGET, completed, created, delta, frame, response_object
 from integration._support.wire import Reply, Request, Wire, wire_server
@@ -22,9 +23,11 @@ _STREAM_SECONDS: Final = _DELTAS * _DELTA_PAUSE_SECONDS
 _OWNED_PROXY_SECONDS: Final = 2 * graceful_stop_seconds() + 240
 _MODEL_DISCOVERY: Final = ("GET", "/v1/models")
 _NO_MODELS: Final = Reply(body=b'{"object":"list","data":[]}')
+_POLLING_VIA_CACHE: Final = MappingProxyType({"responses": {"background_mode": {"polling_via_cache": "all"}}})
+_KEEPALIVE_SECONDS: Final = 0.05
 
 
-def _config(directory: Path, wire: Wire) -> Path:
+def _config(directory: Path, wire: Wire, litellm_settings: Mapping[str, JsonValue] = _POLLING_VIA_CACHE) -> Path:
     path: Final = directory / f"background-polling-cancel-{uuid.uuid4().hex}.yaml"
     path.write_text(
         yaml.safe_dump(
@@ -43,7 +46,7 @@ def _config(directory: Path, wire: Wire) -> Path:
                     "master_key": "os.environ/LITELLM_MASTER_KEY",
                     "coordination_redis": {"host": "os.environ/REDIS_HOST", "port": "os.environ/REDIS_PORT"},
                 },
-                "litellm_settings": {"responses": {"background_mode": {"polling_via_cache": "all"}}},
+                "litellm_settings": dict(litellm_settings),
             }
         )
     )
@@ -52,15 +55,14 @@ def _config(directory: Path, wire: Wire) -> Path:
 
 @contextmanager
 def _proxies_sharing_one_redis(
-    gateway: Gateway, directory: Path, wire: Wire, count: int
+    gateway: Gateway, directory: Path, config: Path, count: int, *, with_database: bool = False
 ) -> Iterator[tuple[Gateway, ...]]:
-    config: Final = _config(directory, wire)
     with owned_redis(directory / "redis") as cache, ExitStack() as proxies:
         overrides: Final = {
             "REDIS_HOST": cache.host,
             "REDIS_PORT": str(cache.port),
             "STORE_MODEL_IN_DB": "False",
-            "DISABLE_SCHEMA_UPDATE": "true",
+            "DISABLE_SCHEMA_UPDATE": str(not with_database).lower(),
         }
         yield tuple(
             proxies.enter_context(
@@ -69,8 +71,8 @@ def _proxies_sharing_one_redis(
                     directory / f"proxy-{index}",
                     overrides,
                     config=config,
-                    database_setup=(),
-                    remove_environment=_NO_DATABASE,
+                    database_setup=DB_PUSH if with_database else (),
+                    remove_environment=() if with_database else _NO_DATABASE,
                 )
             )
             for index in range(count)
@@ -88,9 +90,9 @@ def _serving(reply: Reply, requested: threading.Event) -> Callable[[Request], Re
     return respond
 
 
-def _create_background_response(proxy: Gateway) -> str:
+def _create_background_response(proxy: Gateway, key: str | None = None) -> str:
     created_response: Final = proxy.request(
-        "POST", "/v1/responses", {"model": _MODEL, "input": uuid.uuid4().hex, "background": True}
+        "POST", "/v1/responses", {"model": _MODEL, "input": uuid.uuid4().hex, "background": True}, key=key
     )
     assert created_response.status_code == 200, created_response.text
     body: Final = object_value(created_response.json())
@@ -127,7 +129,7 @@ def test_a_cancel_sent_to_another_proxy_stops_the_background_stream_and_the_resp
     )
     with (
         wire_server(_serving(slow_stream, requested)) as wire,
-        _proxies_sharing_one_redis(gateway, tmp_path, wire, 2) as (streaming, cancelling),
+        _proxies_sharing_one_redis(gateway, tmp_path, _config(tmp_path, wire), 2) as (streaming, cancelling),
     ):
         polling_id: Final = _create_background_response(streaming)
         eventually(requested.is_set, lambda seen: seen, seconds=30)
@@ -160,7 +162,7 @@ def test_a_background_response_cancelled_just_before_its_stream_finishes_stays_c
     )
     with (
         wire_server(_serving(held_stream, requested)) as wire,
-        _proxies_sharing_one_redis(gateway, tmp_path, wire, 1) as (proxy,),
+        _proxies_sharing_one_redis(gateway, tmp_path, _config(tmp_path, wire), 1) as (proxy,),
     ):
         polling_id: Final = _create_background_response(proxy)
         eventually(requested.is_set, lambda seen: seen, seconds=30)
@@ -186,7 +188,7 @@ def test_a_delete_sent_to_another_proxy_stops_the_background_stream_and_the_resp
     )
     with (
         wire_server(_serving(slow_stream, requested)) as wire,
-        _proxies_sharing_one_redis(gateway, tmp_path, wire, 2) as (streaming, deleting),
+        _proxies_sharing_one_redis(gateway, tmp_path, _config(tmp_path, wire), 2) as (streaming, deleting),
     ):
         polling_id: Final = _create_background_response(streaming)
         eventually(requested.is_set, lambda seen: seen, seconds=30)
@@ -199,3 +201,56 @@ def test_a_delete_sent_to_another_proxy_stops_the_background_stream_and_the_resp
             holding=_STREAM_SECONDS,
             seconds=2 * _STREAM_SECONDS,
         )
+
+
+def _streamed_response_status(proxy: Gateway, key: str) -> int:
+    return proxy.request(
+        "POST", "/v1/responses", {"model": _MODEL, "input": uuid.uuid4().hex, "stream": True}, key=key
+    ).status_code
+
+
+@pytest.mark.timeout(_OWNED_PROXY_SECONDS + 90)
+def test_a_background_response_cancelled_during_keepalive_pings_frees_its_parallel_slot(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    identity: Final = f"resp_{uuid.uuid4().hex}"
+    requested: Final = threading.Event()
+    answer: Final = threading.Event()
+    quick_stream: Final = Reply(
+        content_type="text/event-stream",
+        chunks=(frame(created(identity)), frame(delta(identity, "done")), frame(completed(identity, "done"))),
+    )
+
+    def respond(request: Request) -> Reply:
+        if (request.method, request.target) == _MODEL_DISCOVERY:
+            return _NO_MODELS
+        assert request.method == "POST" and request.target.startswith(OPENAI_TARGET), request.target
+        if not requested.is_set():
+            requested.set()
+            answer.wait()
+        return quick_stream
+
+    with (
+        wire_server(respond) as wire,
+        _proxies_sharing_one_redis(
+            gateway,
+            tmp_path,
+            _config(tmp_path, wire, {**_POLLING_VIA_CACHE, "sse_keepalive_ping_interval_seconds": _KEEPALIVE_SECONDS}),
+            1,
+            with_database=True,
+        ) as (proxy,),
+        proxy.scenario() as scenario,
+    ):
+        try:
+            key: Final = scenario.key(max_parallel_requests=1)
+            polling_id: Final = _create_background_response(proxy, key)
+            eventually(requested.is_set, lambda seen: seen, seconds=30)
+            held(lambda: _status(proxy, polling_id), lambda status: status == "in_progress", holding=1)
+            assert _streamed_response_status(proxy, key) == 429
+            _cancel(proxy, polling_id)
+            eventually(
+                lambda: _streamed_response_status(proxy, key), lambda status_code: status_code == 200, seconds=20
+            )
+            assert _status(proxy, polling_id) == "cancelled"
+        finally:
+            answer.set()
