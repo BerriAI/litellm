@@ -12,6 +12,7 @@ const identity = {
   tenant_id: "11111111-1111-4111-8111-111111111111",
   client_id: "22222222-2222-4222-8222-222222222222",
   service_principal_id: "33333333-3333-4333-8333-333333333333",
+  blueprint_id: null,
   required_roles: ["Agent.Invoke"],
   required_scopes: ["user_impersonation"],
 } satisfies import("./agent_identity").EntraAgentIdentity;
@@ -79,5 +80,36 @@ describe("agent identity configuration", () => {
     );
     expect(entraTenantFromIssuer("https://attacker.example/tenant/v2.0")).toBeNull();
     expect(entraTenantFromIssuer("https://login.microsoftonline.com/common/v2.0")).toBeNull();
+  });
+});
+
+const blueprint = "55555555-5555-4555-8555-555555555555";
+
+describe("agent identity blueprint", () => {
+  it("normalizes a pasted blueprint id and clears an empty one", () => {
+    const values = {
+      identity_provider: "microsoft_entra",
+      identity_tenant_id: identity.tenant_id,
+      identity_client_id: identity.client_id,
+      identity_service_principal_id: identity.service_principal_id,
+      identity_blueprint_id: `  ${blueprint.toUpperCase()} `,
+      execution_mode: "autonomous",
+    };
+    expect(buildIdentityParams(values).identity?.blueprint_id).toBe(blueprint);
+    expect(buildIdentityParams({ ...values, identity_blueprint_id: "   " }).identity?.blueprint_id).toBeNull();
+  });
+  it("round trips the blueprint through the form fields", () => {
+    const values = parseIdentityForForm({
+      identity: {
+        ...identity,
+        blueprint_id: blueprint,
+        agent_id: "stable",
+        active: true,
+        revision: "rev",
+        issuer: "https://issuer.example",
+      },
+    });
+    expect(values.identity_blueprint_id).toBe(blueprint);
+    expect(buildIdentityParams(values).identity?.blueprint_id).toBe(blueprint);
   });
 });

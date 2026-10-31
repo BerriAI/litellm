@@ -103,6 +103,7 @@ model LiteLLM_AgentIdentity {
   tenant_id String
   client_id String
   service_principal_id String?
+  blueprint_id String?
   required_roles String[] @default([])
   required_scopes String[] @default(["user_impersonation"])
   revision String @default(uuid())
