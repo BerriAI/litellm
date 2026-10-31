@@ -1,6 +1,7 @@
 # What is this?
 ## Translates OpenAI call to Anthropic `/v1/messages` format
 import copy
+import io
 import itertools
 import json
 import traceback
@@ -22,6 +23,7 @@ from typing import (
 from pydantic import TypeAdapter
 from typing_extensions import assert_never
 
+import litellm
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
 from litellm.exceptions import ContextWindowExceededError, MidStreamFallbackError
@@ -41,19 +43,25 @@ from litellm.types.llms.anthropic import (
     UsageDelta,
     UsageIteration,
 )
-from litellm.types.llms.openai import ChatCompletionRedactedThinkingBlock, ChatCompletionThinkingBlock
+from litellm.types.llms.openai import (
+    AllMessageValues,
+    ChatCompletionRedactedThinkingBlock,
+    ChatCompletionThinkingBlock,
+    ChatCompletionToolParam,
+)
 from litellm.types.utils import AdapterCompletionStreamWrapper, ChatCompletionDeltaToolCall, Delta, Function
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObject
     from litellm.llms.anthropic.messages.safeguards import SafeguardsEvaluator
-    from litellm.types.llms.openai import AllMessageValues
     from litellm.types.utils import ModelResponseStream
 
 
 _STREAMING_DELTA_TYPES: Final = frozenset(get_args(StreamingContentBlockDeltaType))
 _SSE_EVENT: Final = TypeAdapter(Mapping[str, object])
 _THINKING_BLOCK: Final = TypeAdapter(ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock)
+_PROMPT_MESSAGES: Final = TypeAdapter(list[AllMessageValues])
+_PROMPT_TOOLS: Final = TypeAdapter(list[ChatCompletionToolParam])
 
 
 class _UsageDeltaWithIterations(UsageDelta, total=False):
@@ -174,6 +182,44 @@ class _ToolCallPart:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class _ThinkingPiece:
+    text: str
+    signature: str
+    index: int | None
+
+    @staticmethod
+    def of(chunk: "ModelResponseStream") -> "_ThinkingPiece | None":
+        choices: Final = _optional_attr_sequence(chunk, "choices")
+        if len(choices) != 1 or _optional_attr(choices[0], "finish_reason") is not None:
+            return None
+        delta: Final = _optional_attr(choices[0], "delta")
+        if _optional_attr(delta, "content") or _optional_attr(delta, "tool_calls"):
+            return None
+        blocks: Final = _optional_attr_sequence(delta, "thinking_blocks")
+        if not blocks:
+            reasoning: Final = _optional_str_attr(delta, "reasoning_content")
+            return _ThinkingPiece(text=reasoning, signature="", index=None) if reasoning else None
+        block: Final = as_str_mapping(blocks[0]) if len(blocks) == 1 else None
+        if block is None or block.get("type") != "thinking":
+            return None
+        text: Final = block.get("thinking")
+        signature: Final = block.get("signature")
+        index: Final = block.get("index")
+        return _ThinkingPiece(
+            text=text if isinstance(text, str) else "",
+            signature=signature if isinstance(signature, str) else "",
+            index=index if isinstance(index, int) else None,
+        )
+
+    def block(self, *, text: str, signature: str) -> ChatCompletionThinkingBlock:
+        if self.index is None:
+            return ChatCompletionThinkingBlock(type="thinking", thinking=text, signature=signature or None)
+        return ChatCompletionThinkingBlock(
+            type="thinking", thinking=text, signature=signature or None, index=self.index
+        )
+
+
 class _CombinedChunkSplitter:
     """
     Splits a streaming chunk that carries BOTH response content and a
@@ -202,6 +248,10 @@ class _CombinedChunkSplitter:
         self._buffer: deque[ModelResponseStream] = deque()
         self._held_calls: Mapping[int, tuple[ModelResponseStream, _ToolCallPart]] = MappingProxyType({})
         self._live_call_index: int | None = None
+        self._held_signature: ModelResponseStream | None = None
+        self._unsigned_thinking = io.StringIO()
+        self._unsigned_thinking_length = 0
+        self._thinking_index: int | None = None
         self._closed = False
 
     async def aclose(self) -> None:
@@ -451,7 +501,45 @@ class _CombinedChunkSplitter:
             for split_chunk in self._split_by_payload_kind(combined_chunk)  # comprehension-ok: flattens nested splits
         )
         block_chunks: Final = tuple(itertools.chain.from_iterable(map(self._split_thinking_blocks, split_chunks)))
-        return tuple(itertools.chain.from_iterable(map(self._route_tool_calls, block_chunks)))
+        signed_chunks: Final = tuple(itertools.chain.from_iterable(map(self._defer_signature, block_chunks)))
+        return tuple(itertools.chain.from_iterable(map(self._route_tool_calls, signed_chunks)))
+
+    def _end_thinking_run(self) -> "tuple[ModelResponseStream, ...]":
+        held: Final = self._held_signature
+        self._held_signature = None
+        self._unsigned_thinking = io.StringIO()
+        self._unsigned_thinking_length = 0
+        self._thinking_index = None
+        return (held,) if held is not None else ()
+
+    def _defer_signature(self, chunk: "ModelResponseStream") -> "tuple[ModelResponseStream, ...]":
+        """Stream a signed thinking chunk's new text as thinking and send its signature once, when the block ends.
+
+        Anthropic-shaped producers stream unsigned text and then sign it, either with no text or
+        restating the unsigned text, which passes through untouched. Mistral signs every chunk while
+        each one still carries new text, which would otherwise collapse into ``signature_delta``
+        events and lose the text.
+        """
+        piece: Final = _ThinkingPiece.of(chunk)
+        released: Final = self._end_thinking_run() if piece is None or piece.index != self._thinking_index else ()
+        if piece is None:
+            return (*released, chunk)
+        self._thinking_index = piece.index
+        if not piece.signature:
+            self._unsigned_thinking_length += self._unsigned_thinking.write(piece.text)
+            return (*released, chunk)
+        self._held_signature = None
+        if not piece.text or self._restates_unsigned_thinking(piece.text):
+            return (*released, chunk)
+        signature_chunk: Final = self._with_thinking_block(
+            chunk, piece.block(text="", signature=piece.signature), keep_role=False
+        )
+        self._clear_usage(signature_chunk)
+        self._held_signature = signature_chunk
+        return (*released, self._with_thinking_block(chunk, piece.block(text=piece.text, signature=""), keep_role=True))
+
+    def _restates_unsigned_thinking(self, text: str) -> bool:
+        return len(text) == self._unsigned_thinking_length and text == self._unsigned_thinking.getvalue()
 
     def __iter__(self) -> "Iterator[ModelResponseStream]":
         return self
@@ -486,7 +574,7 @@ class _CombinedChunkSplitter:
             try:
                 chunk = next(self._sync_iter)
             except StopIteration:
-                self._buffer.extend(self._release_held_calls())
+                self._buffer.extend((*self._end_thinking_run(), *self._release_held_calls()))
                 if not self._buffer:
                     raise
                 break
@@ -505,7 +593,7 @@ class _CombinedChunkSplitter:
             try:
                 chunk = await self._async_iter.__anext__()
             except StopAsyncIteration:
-                self._buffer.extend(self._release_held_calls())
+                self._buffer.extend((*self._end_thinking_run(), *self._release_held_calls()))
                 if not self._buffer:
                     raise
                 break
@@ -548,6 +636,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
         iterations_usage: list[UsageIteration] | None = None,
         litellm_logging_obj: "LiteLLMLoggingObject | None" = None,
         safeguards_evaluator: "SafeguardsEvaluator | None" = None,
+        completion_request: Mapping[str, object] | None = None,
     ):
         # Wrap the upstream stream so chunks that carry both content and a
         # finish_reason (fake-streamed providers) are split into two — see
@@ -556,6 +645,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
         super().__init__(combined_chunk_splitter)
         self._combined_chunk_splitter: Final = combined_chunk_splitter
         self.model = model
+        self.completion_request: Final = completion_request
         self._message_id: str = f"msg_{uuid.uuid4()}"
         if litellm_logging_obj is not None:
             litellm_logging_obj.record_streamed_anthropic_message_id(self._message_id)
@@ -752,24 +842,41 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
 
     def _create_initial_usage_delta(self) -> UsageDelta:
         """
-        Create the initial UsageDelta for the message_start event.
+        Optionally estimate prompt tokens without consuming upstream chunks.
 
-        Initializes cache token fields (cache_creation_input_tokens, cache_read_input_tokens)
-        to 0 to indicate to clients (like Claude Code) that prompt caching is supported.
-
-        The actual cache token values will be provided in the message_delta event at the
-        end of the stream, since Bedrock Converse API only returns usage data in the final
-        response chunk.
-
-        Returns:
-            UsageDelta with all token counts initialized to 0.
+        Output and cache counts start at zero. Provider usage in message_delta
+        remains authoritative. Failed estimates fall back to zero.
         """
         return UsageDelta(
-            input_tokens=0,
+            input_tokens=(
+                self._estimate_initial_input_tokens()
+                if litellm.anthropic_messages_estimate_initial_input_tokens is True
+                else 0
+            ),
             output_tokens=0,
             cache_creation_input_tokens=0,
             cache_read_input_tokens=0,
         )
+
+    def _estimate_initial_input_tokens(self) -> int:
+        try:
+            request: Final = self.completion_request or {}
+            messages: Final = _PROMPT_MESSAGES.validate_python(request.get("messages", self.messages))
+            if not messages:
+                return 0
+            materialized_messages: Final = cast(  # cast-ok: JSON-mode serialization preserves validated message types and materializes iterable content
+                list[AllMessageValues], _PROMPT_MESSAGES.dump_python(messages, mode="json")
+            )
+            model: Final = request.get("model", self.model)
+            tools: Final = request.get("tools")
+            return litellm.token_counter(  # pyright: ignore[reportUnknownMemberType]  # token_counter's public signature is partially untyped
+                model=model if isinstance(model, str) else self.model,
+                messages=materialized_messages,
+                tools=_PROMPT_TOOLS.validate_python(tools) if tools is not None else None,
+                use_default_image_token_count=True,
+            )
+        except Exception:  # noqa: BLE001  # prompt estimation must not interrupt the stream
+            return 0
 
     def __next__(self):
         from .transformation import LiteLLMAnthropicMessagesAdapter

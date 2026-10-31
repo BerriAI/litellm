@@ -20,6 +20,7 @@ from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.exception_mapping_utils import exception_type
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.anthropic.common_utils import (
+    AnthropicModelInfo,
     strip_provider_specific_fields_from_anthropic_messages,
     tools_marked_for_a_tool_config_point,
 )
@@ -36,7 +37,6 @@ from litellm.router_utils.reasoning_effort_capability import (
     keeps_effort,
     model_group_from_metadata,
     resolve_deployment_reasoning_effort,
-    with_adaptive_thinking_as_effort,
 )
 from litellm.types.llms.anthropic import AllAnthropicToolsValues
 from litellm.types.llms.anthropic_messages.anthropic_request import AnthropicMetadata
@@ -185,9 +185,11 @@ def _with_deployment_output_effort(
         ).value
 
     def translate(source: Mapping[str, object]) -> Mapping[str, object]:
-        return with_adaptive_thinking_as_effort(
-            source, model=model, custom_llm_provider=custom_llm_provider, drop_params=drop_params
+        translated: Final = dict(source)
+        AnthropicModelInfo.translate_legacy_thinking_for_adaptive_model(
+            model=model, optional_params=translated, custom_llm_provider=custom_llm_provider, drop_params=drop_params
         )
+        return translated
 
     requested_output: Final = as_str_mapping(params.get("output_config"))
     caller_output: Final = None if requested_output is None else resolve(requested_output)
