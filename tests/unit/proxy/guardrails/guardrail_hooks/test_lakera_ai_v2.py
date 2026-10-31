@@ -1786,6 +1786,23 @@ class TestGeminiContents:
             {"role": "tool", "content": "d"},
         ]
 
+    @pytest.mark.parametrize("chat_field", ["messages", "input"])
+    def test_a_chat_body_with_a_stray_contents_field_is_read_as_chat(self, chat_field: str):
+        data: Final = {
+            chat_field: [{"role": "user", "content": "hello"}],
+            "contents": [{"parts": [{"text": "stray"}]}],
+            "system_instruction": {"parts": [{"text": "stray"}]},
+        }
+        assert _build_lakera_inspection_messages(data) == [{"role": "user", "content": "hello"}]
+
+    @pytest.mark.asyncio
+    async def test_a_chat_body_with_a_stray_contents_field_is_still_masked(self):
+        data: Final = {"messages": [{"role": "user", "content": "alice@example.com"}], "contents": []}
+        await _run_gemini_pre_call(
+            LakeraAIGuardrail(api_key="test_key", on_flagged="mask"), PII_ONLY_LAKERA_RESPONSE, data
+        )
+        assert data["messages"] == [{"role": "user", "content": "[MASKED EMAIL]@example.com"}]
+
     @pytest.mark.asyncio
     async def test_clean_body_reaches_lakera_and_is_forwarded_unchanged(self):
         data: Final = _gemini_request()
