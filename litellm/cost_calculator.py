@@ -38,11 +38,11 @@ from litellm.litellm_core_utils.llm_cost_calc.utils import (
     BilledTokenRates,
     CostCalculatorUtils,
     calculate_cache_writing_cost,
-    calculate_cost_component,
     generic_cost_per_character,
     generic_cost_per_token,
     get_batch_cost_rates,
     get_billable_input_tokens,
+    get_cost_per_unit,
     get_regional_uplift_multiplier,
     get_service_tier_cost_key,
     get_token_type_cost_breakdown,
@@ -3102,7 +3102,10 @@ def batch_cost_calculator(
 
         # Add cache read cost if applicable
         cache_read_cost_key: Final = get_service_tier_cost_key("cache_read_input_token_cost", None)
-        total_prompt_cost += calculate_cost_component(model_info, cache_read_cost_key, cache_read_tokens) / 2
+        cache_read_cost: Final = get_cost_per_unit(model_info, cache_read_cost_key, None)
+        total_prompt_cost += (
+            cache_read_tokens * (input_cost_per_token if cache_read_cost is None else cache_read_cost) / 2
+        )
 
         configured_cache_creation_cost: Final = model_info.get("cache_creation_input_token_cost")
         cache_creation_cost: Final = (
