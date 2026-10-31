@@ -8,7 +8,9 @@ from datetime import datetime, timezone
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
+import httpx
 import pytest
+import respx
 from fakeredis import FakeRedis, FakeServer
 from fakeredis.aioredis import FakeRedis as FakeAsyncRedis
 
@@ -45,6 +47,7 @@ from litellm.types.llms.openai import InputTokensDetails, ResponseAPIUsage, Resp
 from litellm.types.router import RouterCacheEnum
 from litellm.types.utils import ModelResponse, Usage
 from litellm.utils import get_utc_datetime
+from tests.unit.proxy.conftest import httpx_transport
 
 MANTLE_OPUS = "bedrock_mantle/anthropic.claude-opus-4-7"
 MANTLE_OPUS_MAX_OUTPUT = litellm.get_model_info(model=MANTLE_OPUS)["max_output_tokens"]
@@ -1268,12 +1271,12 @@ ROUTER_IO_MODEL: Final = "anthropic/claude-haiku-5-5"
 RouterCall = Callable[[Router, str | Exception], Awaitable[tuple[int, int]]]
 
 
-def _router_with_io_limits() -> Router:
+def _router_with_io_limits(model: str = ROUTER_IO_MODEL) -> Router:
     return Router(
         model_list=[
             {
                 "model_name": "limited",
-                "litellm_params": {"model": ROUTER_IO_MODEL, "api_key": "sk-test", "itpm": 50000, "otpm": 50000},
+                "litellm_params": {"model": model, "api_key": "sk-test", "itpm": 50000, "otpm": 50000},
             }
         ],
         optional_pre_call_checks=["enforce_model_rate_limits"],
@@ -1491,6 +1494,116 @@ class TestRouterIOTokenIntegration:
         assert info is not None
         assert info.itpm == 100
         assert info.otpm == 20
+
+
+BRIDGED_IO_MODEL: Final = "openai/responses/gpt-6.1-sol"
+OPENAI_RESPONSES_URL: Final = "https://api.openai.com/v1/responses"
+
+
+def _responses_reply(input_tokens: int, output_tokens: int) -> dict[str, object]:
+    return {
+        "id": "resp_bridged",
+        "object": "response",
+        "created_at": 1,
+        "status": "completed",
+        "model": "gpt-6.1-sol",
+        "output": [
+            {
+                "type": "message",
+                "id": "msg_bridged",
+                "status": "completed",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "hi", "annotations": []}],
+            }
+        ],
+        "usage": {
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+            "total_tokens": input_tokens + output_tokens,
+        },
+    }
+
+
+BridgedCall = Callable[[Router], Awaitable[object]]
+BRIDGED_INPUT_TOKENS: Final = 9
+BRIDGED_OUTPUT_TOKENS: Final = 3
+
+
+async def _bridged_chat(router: Router) -> object:
+    return await router.acompletion(
+        model="limited", messages=PROXY_MESSAGES, max_tokens=100, metadata={"user_api_key_hash": "hashed-key"}
+    )
+
+
+async def _bridged_chat_stream(router: Router) -> object:
+    response: Final = await router.acompletion(
+        model="limited",
+        messages=PROXY_MESSAGES,
+        max_tokens=100,
+        metadata={"user_api_key_hash": "hashed-key"},
+        stream=True,
+    )
+    return [chunk async for chunk in response]
+
+
+async def _bridged_generate_content(router: Router) -> object:
+    return await router.agenerate_content(
+        model="limited",
+        contents=[{"role": "user", "parts": [{"text": "hello there"}]}],
+        litellm_metadata={"user_api_key_hash": "hashed-key"},
+    )
+
+
+async def _bridged_generate_content_from_proxy(router: Router) -> object:
+    return await router.agenerate_content(
+        model="limited",
+        contents=[{"role": "user", "parts": [{"text": "hello there"}]}],
+        metadata={"user_api_key_hash": "hashed-key"},
+    )
+
+
+@pytest.mark.usefixtures(httpx_transport.__name__)
+class TestChatToResponsesBridgeIOTokens:
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "call",
+        [_bridged_chat, _bridged_chat_stream, _bridged_generate_content, _bridged_generate_content_from_proxy],
+        ids=["chat_metadata", "chat_stream_metadata", "generate_content_litellm_metadata", "generate_content_metadata"],
+    )
+    async def test_a_failed_bridged_call_refunds_its_io_reservation_once(self, call: BridgedCall) -> None:
+        router: Final = _router_with_io_limits(BRIDGED_IO_MODEL)
+        first_minute: Final = _current_minute()
+
+        with respx.mock() as mock_router:
+            mock_router.post(OPENAI_RESPONSES_URL).mock(
+                return_value=httpx.Response(401, json={"error": {"message": "bad key", "type": "invalid_request_error"}})
+            )
+            with pytest.raises(litellm.AuthenticationError):
+                await call(router)
+
+        assert await _io_counters_since(router, first_minute) == (0, 0)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "call",
+        [_bridged_chat, _bridged_generate_content, _bridged_generate_content_from_proxy],
+        ids=["chat_metadata", "generate_content_litellm_metadata", "generate_content_metadata"],
+    )
+    async def test_a_successful_bridged_call_counts_one_request_and_its_tokens_once(self, call: BridgedCall) -> None:
+        router: Final = _router_with_io_limits(BRIDGED_IO_MODEL)
+        first_minute: Final = _current_minute()
+
+        with respx.mock() as mock_router:
+            mock_router.post(OPENAI_RESPONSES_URL).mock(
+                return_value=httpx.Response(200, json=_responses_reply(BRIDGED_INPUT_TOKENS, BRIDGED_OUTPUT_TOKENS))
+            )
+            await call(router)
+
+        io_counters: Final = await _io_counters_since(router, first_minute)
+        minutes: Final = frozenset({first_minute, _current_minute()})
+        assert io_counters == (BRIDGED_INPUT_TOKENS, BRIDGED_OUTPUT_TOKENS)
+        assert _counter(router, RouterCacheEnum.RPM, minutes) == 1
+        assert _counter(router, RouterCacheEnum.TPM, minutes) == BRIDGED_INPUT_TOKENS + BRIDGED_OUTPUT_TOKENS
 
 
 class TestContextSlotRetention:

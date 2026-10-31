@@ -20,6 +20,7 @@ from openai.types.responses.tool_choice_custom_param import ToolChoiceCustomPara
 from openai.types.responses.tool_choice_function_param import ToolChoiceFunctionParam
 from openai.types.responses.tool_param import FunctionToolParam
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
+from typing_extensions import TypeIs  # noqa: TID251  # TypeIs reaches typing only on 3.13
 
 import litellm
 from litellm import ModelResponse
@@ -765,6 +766,23 @@ def _without_dropped_defer_loading(
     return {**{key: value for key, value in tool.items() if key != "defer_loading"}, **kept}
 
 
+def _is_metadata_dict(
+    value: object,
+) -> TypeIs[dict[str, object]]:  # guard-ok: metadata keys are str  # mutable-ok: callers share it by identity
+    return isinstance(value, dict)
+
+
+def _litellm_metadata_shared_with_router(
+    legacy_metadata: object, litellm_metadata: object
+) -> Mapping[str, object] | None:
+    legacy: Final = legacy_metadata if _is_metadata_dict(legacy_metadata) and legacy_metadata else None
+    if not _is_metadata_dict(litellm_metadata) or not litellm_metadata:
+        return legacy
+    missing_from_router: Final = {key: value for key, value in (legacy or {}).items() if key not in litellm_metadata}
+    litellm_metadata.update(missing_from_router)
+    return litellm_metadata
+
+
 class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
     """
     Handler for transforming /chat/completions api requests to litellm.responses requests
@@ -1078,20 +1096,14 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         """Build sanitized litellm_params with merged metadata."""
         responses_optional_param_keys: Final = set(ResponsesAPIOptionalRequestParams.__annotations__.keys())
         sanitized: Final[dict[str, object]] = {
-            key: value for key, value in litellm_params.items() if key not in responses_optional_param_keys
+            key: value
+            for key, value in litellm_params.items()
+            if key not in responses_optional_param_keys and key != "litellm_metadata"
         }
-        legacy_metadata: Final = litellm_params.get("metadata")
-        existing_litellm_metadata: Final = litellm_params.get("litellm_metadata")
-        merged_litellm_metadata: Final[dict[str, object]] = {}
-        if isinstance(legacy_metadata, dict):
-            merged_litellm_metadata.update(legacy_metadata)
-        if isinstance(existing_litellm_metadata, dict):
-            merged_litellm_metadata.update(existing_litellm_metadata)
-        if merged_litellm_metadata:
-            sanitized["litellm_metadata"] = merged_litellm_metadata
-        else:
-            sanitized.pop("litellm_metadata", None)
-        return sanitized
+        litellm_metadata: Final = _litellm_metadata_shared_with_router(
+            litellm_params.get("metadata"), litellm_params.get("litellm_metadata")
+        )
+        return sanitized if litellm_metadata is None else {**sanitized, "litellm_metadata": litellm_metadata}
 
     def _merge_responses_api_request_into_request_data(
         self,
