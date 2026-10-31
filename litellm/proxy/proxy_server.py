@@ -68,6 +68,8 @@ from litellm.constants import (
     AIOHTTP_CONNECTOR_LIMIT,
     AIOHTTP_CONNECTOR_LIMIT_PER_HOST,
     AIOHTTP_KEEPALIVE_TIMEOUT,
+    AIOHTTP_MAX_FIELD_SIZE,
+    AIOHTTP_MAX_LINE_SIZE,
     AIOHTTP_NEEDS_CLEANUP_CLOSED,
     AIOHTTP_TTL_DNS_CACHE,
     AUDIO_SPEECH_CHUNK_SIZE,
@@ -1456,7 +1458,12 @@ async def initialize_shared_aiohttp_session() -> "ClientSession | None":
             connector_kwargs["socket_factory"] = socket_factory
 
         connector: Final = TCPConnector(**connector_kwargs)
-        session: Final = ClientSession(connector=connector, cookie_jar=DummyCookieJar())
+        session: Final = ClientSession(
+            connector=connector,
+            cookie_jar=DummyCookieJar(),
+            max_field_size=AIOHTTP_MAX_FIELD_SIZE,
+            max_line_size=AIOHTTP_MAX_LINE_SIZE,
+        )
 
         verbose_proxy_logger.info(
             "SESSION REUSE: Created shared aiohttp session for connection pooling (ID: %s, limit=%s, limit_per_host=%s)",
