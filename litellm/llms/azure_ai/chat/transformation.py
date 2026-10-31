@@ -20,6 +20,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     prompt_cache_breakpoint_for_wire,
     with_prompt_cache_breakpoint,
 )
+from litellm.litellm_core_utils.reasoning_effort_utils import warn_dropped_reasoning_params
 from litellm.llms.azure.common_utils import BaseAzureLLM
 from litellm.llms.azure_ai.common_utils import (
     api_key_header_for_base,
@@ -38,6 +39,14 @@ from litellm.utils import add_path_to_api_base, supports_tool_choice
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
+
+
+_REQUEST_BODY: Final = TypeAdapter(dict[str, object])
+
+
+def _request_model(request: Mapping[str, object]) -> str | None:
+    model: Final = request.get("model")
+    return model if isinstance(model, str) else None
 
 
 class AzureFoundryErrorStrings(str, enum.Enum):
@@ -510,7 +519,13 @@ class AzureAIStudioConfig(OpenAIConfig):
             request_data = self._drop_extra_params_from_request_data(request_data, error_text)
         if "Extra inputs are not permitted" in error_text and self._error_has_tool_level_extra_fields(error_text):
             request_data = self._drop_tool_level_extra_fields(request_data, error_text)
-        data: Final = drop_params_from_unprocessable_entity_error(e=e, data=request_data)
+        data: Final = drop_params_from_unprocessable_entity_error(
+            e=e,
+            data=request_data,
+            model=_request_model(_REQUEST_BODY.validate_python(request_data)),
+            drop_params_gated="Extra inputs are not permitted" in error_text
+            and not self._error_has_tool_level_extra_fields(error_text),
+        )
         return data
 
     def _drop_tool_level_extra_fields(self, request_data: dict, error_text: str) -> dict:
@@ -526,6 +541,14 @@ class AzureAIStudioConfig(OpenAIConfig):
     def _drop_extra_params_from_request_data(self, request_data: dict, error_text: str) -> dict:
         params_to_drop: Final = self._extract_params_to_drop_from_error_text(error_text)
         if params_to_drop:
+            request: Final = _REQUEST_BODY.validate_python(request_data)
+            warn_dropped_reasoning_params(
+                params_to_drop,
+                request,
+                _request_model(request),
+                "Azure AI rejected it as an extra parameter its deployment does not pass through.",
+                drop_params_gated=False,
+            )
             for param in params_to_drop:
                 if param in request_data:
                     request_data.pop(param, None)

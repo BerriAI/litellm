@@ -40,11 +40,11 @@ if TYPE_CHECKING:
 
     from litellm.caching.caching import RedisCache
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
+    from litellm.litellm_core_utils.ptu_shares import PTUTeamCeiling
     from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
     from litellm.router import Router
     from litellm.router_strategy.budget_limiter import RouterBudgetLimiting
     from litellm.router_utils.kubernetes_pod_discovery import KubernetesPodDiscovery
-    from litellm.router_utils.ptu_shares import PTUTeamCeiling
     from litellm.types.router import (
         CustomRoutingStrategyBase,
         Deployment,
@@ -836,6 +836,109 @@ class DeprecatedRouterMembers:
     def log_retry(self, kwargs: dict, e: Exception) -> dict:  # mutable-ok: the old signature, unchanged
         _note("log_retry", "RoutingContext.log_retry")
         return _as_router(self)._core_log_retry(kwargs=kwargs, e=e)
+
+
+# Router-family functions and classes that took the Router (``litellm_router_instance=``,
+# ``router=``, ...) take its RoutingContext now. These keep the old spellings working.
+
+_RoutingCallable: Final = TypeVar("_RoutingCallable", bound=Callable[..., object])
+
+
+@functools.cache
+def _router_class() -> "type[Router]":
+    from litellm.router import Router
+
+    return Router
+
+
+def _note_renamed(label: str, old: str, instead: str, *, stacklevel: int = 3) -> None:
+    DEPRECATED_ROUTER_MEMBER_USES[label] += 1
+    warnings.warn(
+        f"{label}: {old} is deprecated; {instead} (the Router's RoutingContext) instead",
+        DeprecationWarning,
+        stacklevel=stacklevel,  # the caller of the wrapper or descriptor that noted it
+    )
+
+
+def _routing_context_of(value: object) -> object:
+    """The Router's RoutingContext when ``value`` is a Router, else ``value`` as given."""
+    return value._core_ctx if isinstance(value, _router_class()) else value
+
+
+def renamed_router_param(old: str, new: str = "ctx") -> Callable[[_RoutingCallable], _RoutingCallable]:
+    """
+    Keep a router parameter that became a RoutingContext (``new``) callable the old way: ``old=``
+    still works, and so does a Router passed where ``new`` goes. Either gets the Router's
+    RoutingContext and a DeprecationWarning that names ``new``.
+    """
+
+    def decorate(fn: _RoutingCallable) -> _RoutingCallable:
+        index: Final = list(inspect.signature(fn).parameters).index(new)
+        label: Final = f"{fn.__module__}.{fn.__qualname__}"
+
+        def convert(
+            args: tuple[object, ...],
+            kwargs: dict[str, object],  # mutable-ok: the call's own kwargs
+        ) -> tuple[object, ...]:
+            if old in kwargs:
+                if new in kwargs:
+                    raise TypeError(f"{fn.__qualname__}() got both {old}= and {new}=")
+                _note_renamed(label, f"{old}=", f"pass {new}=", stacklevel=4)
+                kwargs[new] = _routing_context_of(kwargs.pop(old))
+            elif new in kwargs:
+                if isinstance(kwargs[new], _router_class()):
+                    _note_renamed(label, f"a Router as {new}=", f"pass {new}=", stacklevel=4)
+                    kwargs[new] = _routing_context_of(kwargs[new])
+            elif len(args) > index and isinstance(args[index], _router_class()):
+                _note_renamed(label, "passing a Router", f"pass {new}", stacklevel=4)
+                return (*args[:index], _routing_context_of(args[index]), *args[index + 1 :])
+            return args
+
+        # An async fn keeps an async wrapper, so iscoroutinefunction (and mock.patch's AsyncMock pick) still sees it
+        if inspect.iscoroutinefunction(fn):
+
+            @functools.wraps(fn)
+            async def acall(*args: object, **kwargs: object) -> object:  # kwargs-ok: forwarded to fn as given
+                return await fn(*convert(args, kwargs), **kwargs)  # pyright: ignore[reportAny]  # fn's own result
+
+            return acall  # pyright: ignore[reportReturnType]  # same call shape as fn, see functools.wraps
+
+        @functools.wraps(fn)
+        def call(*args: object, **kwargs: object) -> object:  # kwargs-ok: forwarded to fn as given
+            return fn(*convert(args, kwargs), **kwargs)
+
+        return call  # pyright: ignore[reportReturnType]  # same call shape as fn, see functools.wraps
+
+    return decorate
+
+
+class RenamedRouterAttribute:
+    """
+    A class attribute that keeps an old router attribute (``self.router``, ``self.litellm_router_instance``)
+    readable after it became the RoutingContext attribute ``new``: reading it returns that
+    RoutingContext, writing a Router stores the Router's RoutingContext, each with a DeprecationWarning.
+    """
+
+    def __init__(self, new: str = "ctx") -> None:
+        self.new: Final = new
+        self.label = ""
+
+    def __set_name__(self, owner: type, name: str) -> None:
+        self.label = f"{owner.__module__}.{owner.__qualname__}.{name}"
+
+    @overload
+    def __get__(self, obj: None, owner: type | None = None) -> "RenamedRouterAttribute": ...
+    @overload
+    def __get__(self, obj: object, owner: type | None = None) -> object: ...
+    def __get__(self, obj: object | None, owner: type | None = None) -> object:
+        if obj is None:
+            return self
+        _note_renamed(self.label, "reading this attribute", f"read .{self.new}")
+        return getattr(obj, self.new)  # pyright: ignore[reportAny]  # the attribute named ``new`` holds the RoutingContext
+
+    def __set__(self, obj: object, value: object) -> None:
+        _note_renamed(self.label, "setting this attribute", f"set .{self.new}")
+        setattr(obj, self.new, _routing_context_of(value))
 
 
 def _name_members_after_router() -> None:
