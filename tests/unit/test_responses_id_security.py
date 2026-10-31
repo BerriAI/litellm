@@ -4,11 +4,16 @@ Tests for ResponsesIDSecurity hook.
 Tests the security hook that prevents user B from seeing response from user A.
 """
 
+from collections.abc import Mapping
+from typing import Final
 from unittest.mock import MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
+from pydantic import TypeAdapter
 
+from litellm.caching.caching import DualCache
+from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.hooks.responses_id_security import (
     ResponsesIDSecurity,
     _streams_response_ids,
@@ -852,6 +857,57 @@ def _issue_managed_id(hook, owner, provider_response_id=_FABRICATED_PROVIDER_RES
         owner,
     )
     return issued.id
+
+
+def _comparison_options(data: object, nested: bool) -> Mapping[str, str]:
+    request: Final = TypeAdapter(dict[str, object]).validate_python(data)
+    container: Final = TypeAdapter(dict[str, object]).validate_python(request["extra_body"]) if nested else request
+    return TypeAdapter(dict[str, str]).validate_python(container["prompt_cache_options"])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("nested", (False, True))
+@pytest.mark.parametrize("stranger", ("user", "team"))
+async def test_regression_comparison_id_reentry_keeps_ownership_after_owner_retry(
+    salt_key_env: str, nested: bool, stranger: str
+) -> None:
+    hook: Final = ResponsesIDSecurity(general_settings_reader=lambda: {}, signing_key_reader=lambda: salt_key_env)
+    owner: Final = UserAPIKeyAuth(user_id="owner-user", team_id="owner-team")
+    caller: Final = UserAPIKeyAuth(
+        user_id="stranger-user" if stranger == "user" else owner.user_id,
+        team_id="stranger-team" if stranger == "team" else owner.team_id,
+    )
+    cache: Final = DualCache()
+    issued: Final = ResponsesAPIResponse.model_validate(
+        await hook.async_post_call_success_hook(  # pyright: ignore[reportUnknownMemberType]  # Legacy dict boundary
+            data={},
+            user_api_key_dict=owner,
+            response=ResponsesAPIResponse(
+                id=_FABRICATED_PROVIDER_RESPONSE_ID, created_at=1234567890, output=[], status="completed"
+            ),
+        )
+    )
+    assert issued.id != _FABRICATED_PROVIDER_RESPONSE_ID
+    options: Final = {"comparison_response_id": issued.id}
+    request: Final = {"extra_body": {"prompt_cache_options": options}} if nested else {"prompt_cache_options": options}
+    first: Final = TypeAdapter(dict[str, object]).validate_python(
+        await hook.async_pre_call_hook(  # pyright: ignore[reportUnknownMemberType]  # Legacy dict boundary
+            user_api_key_dict=owner, cache=cache, data=request, call_type="aresponses"
+        )
+    )
+    retried: Final = TypeAdapter(dict[str, object]).validate_python(
+        await hook.async_pre_call_hook(  # pyright: ignore[reportUnknownMemberType]  # Legacy dict boundary
+            user_api_key_dict=owner, cache=cache, data=request, call_type="aresponses"
+        )
+    )
+    with pytest.raises(HTTPException) as refusal:
+        await hook.async_pre_call_hook(  # pyright: ignore[reportUnknownMemberType]  # Legacy dict boundary
+            user_api_key_dict=caller, cache=cache, data=request, call_type="aresponses"
+        )
+    assert refusal.value.status_code == 403
+    assert f"not associated with the {stranger}" in refusal.value.detail
+    assert _comparison_options(first, nested) == {"comparison_response_id": _FABRICATED_PROVIDER_RESPONSE_ID}
+    assert _comparison_options(retried, nested) == {"comparison_response_id": _FABRICATED_PROVIDER_RESPONSE_ID}
 
 
 class TestUnrecognizedResponseIdIsRejected:
