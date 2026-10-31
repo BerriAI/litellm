@@ -76,6 +76,11 @@
   "dependencies": {
     "openai": "^7.18.0"
   },
+  "overrides": {
+    "@azure/identity": {
+      "@azure/msal-node": "7.1.1"
+    }
+  },
   "devDependencies": {
     "@types/node": "^22.20.3",
     "@types/vscode": "1.115.0",
