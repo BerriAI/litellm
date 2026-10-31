@@ -36666,6 +36666,57 @@
           "title": "MCPEnvVarScope",
           "type": "string"
         },
+        "MCPToolCallRequest": {
+          "additionalProperties": true,
+          "description": "Request body for `POST /mcp-rest/tools/call`.\n\nFields stay optional here on purpose: the endpoint answers a missing\n`server_id` or `name` with its 400 `missing_parameter` response rather\nthan a framework 422, and unknown fields pass through to the pre-call\npipeline, matching the previous untyped `request.json()` handling.",
+          "properties": {
+            "arguments": {
+              "additionalProperties": true,
+              "description": "Arguments to pass to the tool.",
+              "title": "Arguments",
+              "type": "object"
+            },
+            "metadata": {
+              "anyOf": [
+                {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional request metadata, forwarded to logging and guardrails.",
+              "title": "Metadata"
+            },
+            "name": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Required. The name of the tool to call.",
+              "title": "Name"
+            },
+            "server_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Required. The id of the MCP server that owns the tool to call.",
+              "title": "Server Id"
+            }
+          },
+          "title": "MCPToolCallRequest",
+          "type": "object"
+        },
         "NewMCPServerRequest": {
           "properties": {
             "alias": {
@@ -37431,6 +37482,23 @@
         "post": {
           "description": "REST API to call a specific MCP tool with the provided arguments",
           "operationId": "call_tool_rest_api_mcp_rest_tools_call_post_2",
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/MCPToolCallRequest"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "title": "Body"
+                }
+              }
+            }
+          },
           "responses": {
             "200": {
               "content": {
@@ -37439,6 +37507,16 @@
                 }
               },
               "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
             }
           },
           "security": [
@@ -47001,6 +47079,57 @@
           "title": "MCPEnvVarScope",
           "type": "string"
         },
+        "MCPToolCallRequest": {
+          "additionalProperties": true,
+          "description": "Request body for `POST /mcp-rest/tools/call`.\n\nFields stay optional here on purpose: the endpoint answers a missing\n`server_id` or `name` with its 400 `missing_parameter` response rather\nthan a framework 422, and unknown fields pass through to the pre-call\npipeline, matching the previous untyped `request.json()` handling.",
+          "properties": {
+            "arguments": {
+              "additionalProperties": true,
+              "description": "Arguments to pass to the tool.",
+              "title": "Arguments",
+              "type": "object"
+            },
+            "metadata": {
+              "anyOf": [
+                {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional request metadata, forwarded to logging and guardrails.",
+              "title": "Metadata"
+            },
+            "name": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Required. The name of the tool to call.",
+              "title": "Name"
+            },
+            "server_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Required. The id of the MCP server that owns the tool to call.",
+              "title": "Server Id"
+            }
+          },
+          "title": "MCPToolCallRequest",
+          "type": "object"
+        },
         "NewMCPServerRequest": {
           "properties": {
             "alias": {
@@ -47638,6 +47767,23 @@
         "post": {
           "description": "REST API to call a specific MCP tool with the provided arguments",
           "operationId": "call_tool_rest_api_mcp_rest_tools_call_post",
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/MCPToolCallRequest"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "title": "Body"
+                }
+              }
+            }
+          },
           "responses": {
             "200": {
               "content": {
@@ -47646,6 +47792,16 @@
                 }
               },
               "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
             }
           },
           "security": [

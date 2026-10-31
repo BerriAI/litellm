@@ -38150,6 +38150,43 @@ export interface components {
             total: number;
         };
         /**
+         * MCPToolCallRequest
+         * @description Request body for `POST /mcp-rest/tools/call`.
+         *
+         *     Fields stay optional here on purpose: the endpoint answers a missing
+         *     `server_id` or `name` with its 400 `missing_parameter` response rather
+         *     than a framework 422, and unknown fields pass through to the pre-call
+         *     pipeline, matching the previous untyped `request.json()` handling.
+         */
+        MCPToolCallRequest: {
+            /**
+             * Arguments
+             * @description Arguments to pass to the tool.
+             */
+            arguments?: {
+                [key: string]: unknown;
+            };
+            /**
+             * Metadata
+             * @description Optional request metadata, forwarded to logging and guardrails.
+             */
+            metadata?: {
+                [key: string]: unknown;
+            } | null;
+            /**
+             * Name
+             * @description Required. The name of the tool to call.
+             */
+            name?: string | null;
+            /**
+             * Server Id
+             * @description Required. The id of the MCP server that owns the tool to call.
+             */
+            server_id?: string | null;
+        } & {
+            [key: string]: unknown;
+        };
+        /**
          * MCPToolSearchSettings
          * @description `litellm_settings.mcp_tool_search`: how the native `mcp_tool_search` virtual tool ranks the caller's tools.
          */
@@ -65235,7 +65272,11 @@ export interface operations {
             path?: never;
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["MCPToolCallRequest"] | null;
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {
@@ -65244,6 +65285,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
