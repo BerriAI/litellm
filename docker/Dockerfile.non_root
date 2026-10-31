@@ -135,7 +135,7 @@ RUN for i in 1 2 3; do \
       apk upgrade --no-cache && break || sleep 5; \
     done && \
     for i in 1 2 3; do \
-      apk add --no-cache python-3.13 bash openssl libssl3 tzdata libsndfile nodejs libevent && break || sleep 5; \
+      apk add --no-cache python-3.13 bash openssl libssl3 tzdata libsndfile nodejs libevent tini && break || sleep 5; \
     done
 COPY --from=pgbouncer-builder /usr/local/bin/pgbouncer /usr/local/bin/pgbouncer
 
@@ -204,5 +204,5 @@ USER 65534
 
 EXPOSE 4000/tcp
 
-ENTRYPOINT ["/app/docker/prod_entrypoint.sh"]
+ENTRYPOINT ["/usr/bin/tini", "--", "/app/docker/prod_entrypoint.sh"]
 CMD ["--port", "4000"]
