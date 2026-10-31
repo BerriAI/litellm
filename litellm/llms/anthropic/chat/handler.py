@@ -511,6 +511,7 @@ class AnthropicChatCompletion(BaseLLM):
                 headers=headers,
                 request_data=request_data,
                 provider=custom_llm_provider,
+                api_base=api_base,
             )
             data: Final = dict(
                 strip_beta_gated_request_body(
@@ -1176,6 +1177,9 @@ class ModelResponseIterator:
                 start_message: Final = message_start_block["message"]
                 if "model" in start_message:
                     self.served_model = start_message["model"]
+                input_transformations: Final = start_message.get("input_transformations")
+                if input_transformations is not None:
+                    provider_specific_fields["input_transformations"] = input_transformations
                 if "usage" in message_start_block["message"]:
                     usage = self._handle_usage(anthropic_usage_chunk=message_start_block["message"]["usage"])
             elif type_chunk == "error":
