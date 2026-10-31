@@ -307,7 +307,8 @@ def capture_context(payload: SpendLogsPayload, kwargs: Mapping[str, object], res
     }
     deferred: Final = billed_id.endswith(("_batch_cost", "_background_cost")) and terminal
     management: Final = (
-        (billed_id.endswith(("_batch_cost", "_background_cost")) and not terminal)
+        payload["call_type"] in {CallTypes.create_batch.value, CallTypes.acreate_batch.value}
+        or (billed_id.endswith(("_batch_cost", "_background_cost")) and not terminal)
         or (is_background_response(response) and not terminal)
         or is_unbilled_non_inference_call(payload["call_type"], request_metadata, response)
     )
@@ -836,8 +837,8 @@ def capture_logging_usage(
         existing_pricing: Final = details.get("_accounting_pricing_snapshot")
         pricing: Final = (
             existing_pricing
-            if isinstance(existing_pricing, PricingCapture) and not internal
-            else _capture_pricing(logging_obj, normalized, details)
+            if isinstance(existing_pricing, PricingCapture) and not internal and not _batch_rows(normalized)
+            else _capture_pricing(logging_obj, normalized_result, details)
         )
         if freeze_only or _batch_rows(normalized):
             if not internal:

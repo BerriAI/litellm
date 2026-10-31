@@ -61,6 +61,7 @@ from litellm.constants import (
 from litellm.cost_calculator import (
     RealtimeAPITokenUsageProcessor,
     ResponsesWebSocketTokenUsageProcessor,
+    get_response_cost_from_hidden_params,
     get_usage_object,
     pricing_entry_for_cost_calc,
     select_model_name_for_cost_calc,
@@ -3076,7 +3077,9 @@ class Logging(LiteLLMLoggingBaseClass):
         return TypeAdapter(dict[str, JsonValue]).validate_python(
             {
                 "response_ms": getattr(result, "_response_ms", None),
-                "provider_reported_cost": self._provider_reported_cost,
+                "provider_reported_cost": self._provider_reported_cost
+                if self._provider_reported_cost is not None
+                else get_response_cost_from_hidden_params(dict(get_hidden_params(result) or {})),
                 "provider_usage_cost": billed_usage_cost(result, self.custom_llm_provider),
                 "current_billing_time": self.billing_time_for_cost().isoformat(),
                 "custom_pricing": self.custom_pricing_for(result),

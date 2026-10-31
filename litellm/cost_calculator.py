@@ -2368,15 +2368,15 @@ def completion_cost(
 
 
 def get_response_cost_from_hidden_params(
-    hidden_params: dict | BaseModel,
+    hidden_params: Mapping[str, object] | BaseModel,
 ) -> float | None:
     if isinstance(hidden_params, BaseModel):
         _hidden_params_dict = hidden_params.model_dump()
     else:
         _hidden_params_dict = hidden_params
 
-    additional_headers: Final = _hidden_params_dict.get("additional_headers", {})
-    if additional_headers and "llm_provider-x-litellm-response-cost" in additional_headers:
+    additional_headers: Final = as_str_mapping(_hidden_params_dict.get("additional_headers"))
+    if additional_headers is not None and "llm_provider-x-litellm-response-cost" in additional_headers:
         return _billable_header_cost(additional_headers["llm_provider-x-litellm-response-cost"])
     return None
 

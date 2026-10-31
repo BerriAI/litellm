@@ -889,8 +889,9 @@ async def test_restarted_compiler_recovers_transient_failures_without_revisiting
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("sync_ack", (False, True))
+@pytest.mark.parametrize("provider_header", (False, True))
 async def test_proxy_capture_and_background_compiler_converge_on_final_header_charge(
-    writer: _Writer, ledger_database: str, monkeypatch: pytest.MonkeyPatch, sync_ack: bool
+    writer: _Writer, ledger_database: str, monkeypatch: pytest.MonkeyPatch, sync_ack: bool, provider_header: bool
 ) -> None:
     import litellm
     from litellm.litellm_core_utils.litellm_logging import Logging
@@ -929,12 +930,17 @@ async def test_proxy_capture_and_background_compiler_converge_on_final_header_ch
     logger.update_environment_variables(
         model="capture-priced-model", custom_llm_provider="openai", litellm_params={}, optional_params={}
     )
-    logger.set_request_pricing(
-        "capture-priced-model", "openai", {"input_cost_per_token": 0.01, "output_cost_per_token": 0.02}
-    )
+    if not provider_header:
+        logger.set_request_pricing(
+            "capture-priced-model", "openai", {"input_cost_per_token": 0.01, "output_cost_per_token": 0.02}
+        )
     response: Final = ModelResponse(
         id="gateway-provider", model="capture-priced-model", usage=Usage(prompt_tokens=10, completion_tokens=4)
     )
+    if provider_header:
+        from litellm.litellm_core_utils.core_helpers import set_response_cost_in_hidden_params
+
+        set_response_cost_in_hidden_params(response, 0.18)
     try:
         finalized: Final = await finalize_response_cost(logger, response, None, _AT, guardrail_cost=0.03)
         assert finalized is not None
