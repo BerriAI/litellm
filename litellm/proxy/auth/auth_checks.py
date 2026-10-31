@@ -1091,8 +1091,18 @@ def route_skips_budget_checks(route: str) -> bool:
     )
 
 
-def request_skips_budget_checks(route: str, model: str | list[str] | None, llm_router: Router | None) -> bool:
-    return route_skips_budget_checks(route=route) or is_model_cost_zero(model=model, llm_router=llm_router)
+def request_skips_budget_checks(
+    route: str,
+    model: str | list[str] | None,
+    llm_router: Router | None,
+    *,
+    request_body: Mapping[str, object] | None = None,
+) -> bool:
+    if route_skips_budget_checks(route=route):
+        return True
+    if request_body is not None and is_mcp_discovery_request(route=route, request_body=request_body):
+        return True
+    return is_model_cost_zero(model=model, llm_router=llm_router)
 
 
 async def common_checks(
@@ -1142,10 +1152,11 @@ async def common_checks(
         team_id=valid_token.team_id if valid_token is not None else None,
     )
 
-    skip_all_budget_checks: Final = (
-        skip_budget_checks
-        or route_skips_budget_checks(route=route)
-        or is_mcp_discovery_request(route=route, request_body=_typed_request_body(request_body))
+    skip_all_budget_checks: Final = skip_budget_checks or request_skips_budget_checks(
+        route=route,
+        model=_model,
+        llm_router=llm_router,
+        request_body=_typed_request_body(request_body),
     )
 
     membership_user_id: Final = (
