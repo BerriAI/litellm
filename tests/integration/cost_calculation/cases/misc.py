@@ -493,8 +493,8 @@ OPENROUTER_ANTHROPIC_CLAUDE_SONNET_5_PROVIDER_REPORTED_COST: Final = CostTrackin
     ),
     expected=ExactExpected(
         spend=0.0421,
-        input_cost=0.0,
-        output_cost=0.0421,
+        input_cost=0.0421 * (1840 * 3.2e-06) / (1840 * 3.2e-06 + 412 * 1.6e-05),
+        output_cost=0.0421 * (412 * 1.6e-05) / (1840 * 3.2e-06 + 412 * 1.6e-05),
         prompt_tokens=1840,
         completion_tokens=412,
         breakdown_persisted=False,
