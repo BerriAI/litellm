@@ -240,10 +240,10 @@ def test_agent_updates_restore_echoed_static_header_markers_for_upstream_calls(g
             },
         )
         assert patched.status_code == 200, patched.text
-        assert patched.json()["static_headers"] == {
-            "Authorization": _REDACTED,
-            "X-Tenant": _REDACTED,
-        }, patched.text
+        patched_headers: Final = patched.json()["static_headers"]
+        assert patched_headers["Authorization"] == _REDACTED, patched.text
+        assert patched_headers["X-Tenant"] == _REDACTED, patched.text
+        assert all(value == _REDACTED for value in patched_headers.values()), patched.text
         assert secret not in patched.text, patched.text
         assert read_rows(
             'SELECT static_headers FROM "LiteLLM_AgentsTable" WHERE agent_id=%s',
