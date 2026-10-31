@@ -50761,6 +50761,24 @@ export interface components {
             /** Status */
             status?: ("pending" | "running" | "paused" | "completed" | "failed") | null;
         };
+        /** _A2AJsonRpcResponse */
+        _A2AJsonRpcResponse: {
+            /** Error */
+            error?: {
+                [key: string]: unknown;
+            } | null;
+            /** Id */
+            id: string | number | null;
+            /**
+             * Jsonrpc
+             * @constant
+             */
+            jsonrpc: "2.0";
+            /** Result */
+            result?: unknown | null;
+        } & {
+            [key: string]: unknown;
+        };
         /** ModelInfo */
         litellm__proxy___types__ModelInfo: {
             /** Base Model */
@@ -52129,7 +52147,47 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody: {
+            content: {
+                /**
+                 * @example {
+                 *       "id": "stream-1",
+                 *       "jsonrpc": "2.0",
+                 *       "method": "message/stream",
+                 *       "params": {
+                 *         "message": {
+                 *           "kind": "message",
+                 *           "messageId": "message-1",
+                 *           "parts": [
+                 *             {
+                 *               "kind": "text",
+                 *               "text": "Hello"
+                 *             }
+                 *           ],
+                 *           "role": "user"
+                 *         }
+                 *       }
+                 *     }
+                 */
+                "application/json": {
+                    /** Id */
+                    id?: string | number | null;
+                    /**
+                     * Jsonrpc
+                     * @constant
+                     */
+                    jsonrpc: "2.0";
+                    /** Method */
+                    method: string;
+                    /** Params */
+                    params: {
+                        [key: string]: unknown;
+                    };
+                } & {
+                    [key: string]: unknown;
+                };
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {
@@ -52137,7 +52195,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["_A2AJsonRpcResponse"];
                 };
             };
             /** @description Validation Error */
@@ -77740,7 +77798,47 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody: {
+            content: {
+                /**
+                 * @example {
+                 *       "id": "stream-1",
+                 *       "jsonrpc": "2.0",
+                 *       "method": "message/stream",
+                 *       "params": {
+                 *         "message": {
+                 *           "kind": "message",
+                 *           "messageId": "message-1",
+                 *           "parts": [
+                 *             {
+                 *               "kind": "text",
+                 *               "text": "Hello"
+                 *             }
+                 *           ],
+                 *           "role": "user"
+                 *         }
+                 *       }
+                 *     }
+                 */
+                "application/json": {
+                    /** Id */
+                    id?: string | number | null;
+                    /**
+                     * Jsonrpc
+                     * @constant
+                     */
+                    jsonrpc: "2.0";
+                    /** Method */
+                    method: string;
+                    /** Params */
+                    params: {
+                        [key: string]: unknown;
+                    };
+                } & {
+                    [key: string]: unknown;
+                };
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {
@@ -77748,7 +77846,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["_A2AJsonRpcResponse"];
                 };
             };
             /** @description Validation Error */
