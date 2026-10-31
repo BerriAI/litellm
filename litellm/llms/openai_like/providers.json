@@ -1,4 +1,8 @@
 {
+  "monet": {
+    "base_url": "https://monet.gg/api/v1",
+    "api_key_env": "MONET_API_KEY"
+  },
   "publicai": {
     "base_url": "https://api.publicai.co/v1",
     "api_key_env": "PUBLICAI_API_KEY",
