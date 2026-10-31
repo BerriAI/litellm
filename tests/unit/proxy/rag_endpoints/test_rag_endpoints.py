@@ -1164,9 +1164,12 @@ def test_rag_ingest_refuses_a_vertex_corpus_name_with_path_tricks(client_interna
     mock_aingest.assert_not_awaited()
 
 
-def _foreign_vertex_store(created_by: str | None) -> LiteLLM_ManagedVectorStore:
+_FOREIGN_CORPUS_BY_NUMBER: Final = f"projects/987654321/locations/{_PROXY_VERTEX_LOCATION}/ragCorpora/1"
+
+
+def _foreign_vertex_store(created_by: str | None, corpus: str = _FOREIGN_CORPUS) -> LiteLLM_ManagedVectorStore:
     return LiteLLM_ManagedVectorStore(
-        vector_store_id=_FOREIGN_CORPUS, custom_llm_provider="vertex_ai", litellm_params={}, user_id=created_by
+        vector_store_id=corpus, custom_llm_provider="vertex_ai", litellm_params={}, user_id=created_by
     )
 
 
@@ -1215,27 +1218,27 @@ def test_rag_ingest_refuses_a_saved_vertex_store_a_non_admin_pointed_elsewhere(c
     mock_aingest.assert_not_awaited()
 
 
+@pytest.mark.parametrize("corpus", [_FOREIGN_CORPUS, _FOREIGN_CORPUS_BY_NUMBER], ids=["by_id", "by_number"])
 @pytest.mark.parametrize(
-    "store, creator_row",
+    "created_by, is_config, creator_row",
     [
-        (_foreign_vertex_store(LITELLM_PROXY_ADMIN_NAME), None),
-        (
-            _foreign_vertex_store("admin-user"),
-            LiteLLM_UserTable(user_id="admin-user", user_role=LitellmUserRoles.PROXY_ADMIN.value),
-        ),
-        (LiteLLM_ManagedVectorStore(**_foreign_vertex_store(None), is_config=True), None),
+        (LITELLM_PROXY_ADMIN_NAME, False, None),
+        ("admin-user", False, LiteLLM_UserTable(user_id="admin-user", user_role=LitellmUserRoles.PROXY_ADMIN.value)),
+        (None, True, None),
     ],
     ids=["master_key_created", "admin_user_created", "config_store"],
 )
 @pytest.mark.usefixtures("proxy_vertex_target")
 def test_rag_ingest_lets_a_key_use_a_vertex_store_an_admin_pointed_elsewhere(
-    store: LiteLLM_ManagedVectorStore, creator_row: LiteLLM_UserTable | None
+    corpus: str, created_by: str | None, is_config: bool, creator_row: LiteLLM_UserTable | None
 ):
+    store: Final = LiteLLM_ManagedVectorStore(**_foreign_vertex_store(created_by, corpus), is_config=is_config)
+
     response, mock_aingest = _ingest_into_saved_store(store, creator_row)
 
     assert response.status_code == 200, response.json()
     assert mock_aingest.await_args.kwargs["ingest_options"]["vector_store"] == {
-        "vector_store_id": _FOREIGN_CORPUS,
+        "vector_store_id": corpus,
         "custom_llm_provider": "vertex_ai",
     }
 

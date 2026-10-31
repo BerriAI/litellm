@@ -791,10 +791,10 @@ async def rag_ingest(
         }
         vertex_target_checked: Final = _vertex_target_is_checked(
             requested_base, user_api_key_dict, general_settings_view()
-        )
+        ) and not await _admin_set_store_target(managed_store, prisma_client)
         base: Final = _corpus_on_configured_project(requested_base) if vertex_target_checked else requested_base
         vertex_target_error: Final = _vertex_target_error(base) if vertex_target_checked else None
-        if vertex_target_error is not None and not await _admin_set_store_target(managed_store, prisma_client):
+        if vertex_target_error is not None:
             raise HTTPException(status_code=400, detail={"error": vertex_target_error})
         request_data: Final[dict[str, Any]] = await add_litellm_data_to_request(
             data={},
