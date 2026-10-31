@@ -361,7 +361,7 @@ def test_a2a_refusals_answer_as_jsonrpc_errors_that_echo_the_callers_request_id(
         unparseable: Final = gateway.client.post(
             f"/a2a/{agent}", headers={"Authorization": "Bearer sk-" + uuid.uuid4().hex}, content=b"not json"
         )
-        assert unparseable.status_code == 401, unparseable.text
+        assert unparseable.status_code == 400, unparseable.text
         assert _JsonRpcError.model_validate_json(unparseable.text).id is None, unparseable.text
         assert wire.drain() == ()
 

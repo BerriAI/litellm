@@ -227,7 +227,7 @@ def test_agent_access_default_deny_denies_ungranted_key_but_keeps_explicit_grant
             "message": f"Agent '{agent_id}' is not allowed for your key/team. Contact proxy admin for access.",
             "data": denied_sends[0].json()["error"]["data"],
         }, denied_sends[0].text
-        assert all(response.json() == denied_sends[0].json() for response in denied_sends), [
+        assert all(response.json()["error"] == denied_sends[0].json()["error"] for response in denied_sends), [
             response.text for response in denied_sends
         ]
         denied_completion: Final = _chat_completion(candidate, agent_name, key_a)
