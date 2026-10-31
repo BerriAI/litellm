@@ -392,9 +392,11 @@ def _resolve_constraint_only_pool(
 
 def _all_deployments_or_fallback(
     ctx: "RoutingContext",
-    model: str,
+    model: str | None,
     fallback: _DeploymentPool,
 ) -> Sequence[_DeploymentLike | DeploymentTypedDict] | Mapping[_DeploymentLike, object]:
+    if model is None:  # a group of no name has no deployments, it is not a failed lookup
+        return ()
     try:
         return ctx.registry().deployments(model, source="all")
     except Exception:  # noqa: BLE001  # fail safe toward today's healthy-only behavior on lookup errors
@@ -456,13 +458,15 @@ def _tags_that_route(request_tags: Sequence[str], metadata: object, routing_pref
 
 def _tag_known_to_group(
     ctx: "RoutingContext",
-    model: str,
+    model: str | None,
     positive_tags: Sequence[str],
     routing_confirmed: frozenset[str],
 ) -> bool:
     tag_set: Final = frozenset(positive_tags)
     if tag_set & routing_confirmed:
         return True
+    if model is None:
+        return False
     try:
         all_deployments: Final = ctx.registry().deployments(model, source="all")
     except Exception:  # noqa: BLE001  # fail safe toward "unrecognized" so lookup errors preserve the existing silent-fallback behavior

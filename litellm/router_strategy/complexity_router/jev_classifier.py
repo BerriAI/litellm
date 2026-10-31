@@ -68,6 +68,7 @@ class JevBudgetedRequest:
     telemetry: StandardLoggingRoutingDecision
 
 
+@renamed_router_param("router", "context")
 def jev_input_targets(context: "RoutingContext", config: "OpenSourceClassifierConfig") -> tuple[JevInputTarget, ...]:
     from litellm.types.router import Deployment
 

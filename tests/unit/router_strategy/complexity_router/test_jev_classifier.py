@@ -1316,3 +1316,24 @@ async def test_jev_open_breaker_preserves_input_budget_in_fallback_decision(fall
         transport.handle_async_request.assert_awaited_once()
     finally:
         await handler.client.aclose()
+
+
+def test_jev_input_targets_still_takes_a_router_with_a_deprecation_warning() -> None:
+    from litellm.router_strategy.complexity_router.jev_classifier import jev_input_targets
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "decision-deployment",
+                "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "sk-test"},
+                "model_info": {"id": "d1", "max_input_tokens": 1234},
+            }
+        ]
+    )
+    config = JevClassifierConfig.model_validate({"deployment_name": "decision-deployment"})
+
+    with pytest.warns(DeprecationWarning, match="pass context"):
+        old_way = jev_input_targets(router, config)
+
+    assert old_way == jev_input_targets(router._core_ctx, config)
+    assert [target.max_tokens for target in old_way] == [1234]
