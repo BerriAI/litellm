@@ -9218,6 +9218,30 @@ def test_anthropic_messages_pt_text_document_keeps_charset_named_by_the_data_uri
     ]
 
 
+@pytest.mark.parametrize(
+    ("charset", "text"),
+    [("shift_jis", "日本語"), ("windows-1252", "café"), ("KOI8-R", "привет"), ("utf-16", "naïve")],
+)
+def test_anthropic_messages_pt_reads_a_text_attachment_in_a_legacy_encoding_its_data_uri_names(charset, text):
+    data_uri: Final = f"data:text/plain;charset={charset};base64," + base64.b64encode(text.encode(charset)).decode()
+    messages = [{"role": "user", "content": [{"type": "file", "file": {"file_data": data_uri}}]}]
+
+    result = anthropic_messages_pt(messages=messages, model="claude-sonnet-5", llm_provider="anthropic")
+
+    assert result[0]["content"] == [
+        {"type": "document", "source": {"type": "text", "media_type": "text/plain", "data": text}}
+    ]
+
+
+@pytest.mark.parametrize("charset", ["punycode", "utf-7"])
+def test_anthropic_messages_pt_rejects_a_text_attachment_charset_that_is_not_a_supported_text_encoding(charset):
+    data_uri: Final = f"data:text/plain;charset={charset};base64," + base64.b64encode(b"abc").decode()
+    messages = [{"role": "user", "content": [{"type": "file", "file": {"file_data": data_uri}}]}]
+
+    with pytest.raises(litellm.BadRequestError, match=f"unsupported encoding: {charset}"):
+        anthropic_messages_pt(messages=messages, model="claude-sonnet-5", llm_provider="anthropic")
+
+
 def test_anthropic_messages_pt_native_tool_use_input_survives_guardrail_redaction():
     messages = [
         {"role": "user", "content": "hi"},

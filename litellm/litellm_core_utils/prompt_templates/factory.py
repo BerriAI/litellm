@@ -1,4 +1,5 @@
 import base64
+import codecs
 import copy
 import hashlib
 import itertools
@@ -1842,6 +1843,39 @@ def anthropic_document_media_type_for_data_uri(url: str, format_override: str | 
     return declared if declared in _ANTHROPIC_DOCUMENT_BASE64_MEDIA_TYPES else None
 
 
+_TEXT_ATTACHMENT_ENCODINGS: Final = frozenset(
+    codecs.lookup(label).name
+    for label in (
+        "utf-8",
+        "utf-16",
+        "utf-16-le",
+        "utf-16-be",
+        "ascii",
+        "latin-1",
+        *(f"iso8859-{part}" for part in (2, 3, 4, 5, 6, 7, 8, 10, 13, 14, 15, 16)),
+        *(f"cp{code_page}" for code_page in (866, 874, *range(1250, 1259))),
+        "koi8-r",
+        "koi8-u",
+        "mac-roman",
+        "mac-cyrillic",
+        "gbk",
+        "gb18030",
+        "big5",
+        "euc-jp",
+        "iso2022-jp",
+        "shift-jis",
+        "euc-kr",
+    )
+)
+
+
+def _text_attachment_encoding(charset: str) -> str:
+    encoding: Final = codecs.lookup(charset).name
+    if encoding not in _TEXT_ATTACHMENT_ENCODINGS:
+        raise LookupError(f"unsupported encoding: {charset}")
+    return encoding
+
+
 def _anthropic_text_document_source(
     media_type_with_parameters: str, data: str
 ) -> AnthropicContentParamSourceText | None:
@@ -1852,7 +1886,7 @@ def _anthropic_text_document_source(
     content_type_header["content-type"] = media_type_with_parameters
     charset: Final = content_type_header.get_content_charset("utf-8")
     try:
-        text: Final = base64.b64decode(data).decode(charset)
+        text: Final = base64.b64decode(data).decode(_text_attachment_encoding(charset))
     except (LookupError, UnicodeDecodeError) as decode_error:
         raise litellm.BadRequestError(
             message=f"Text attachment could not be read as {charset!r}: {decode_error}. "
