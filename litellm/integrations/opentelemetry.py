@@ -117,6 +117,13 @@ class _FailureKwargsView(TypedDict, total=False):
 
 _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
 
+# Metadata keys dropped from spans when `litellm.redact_user_api_key_info` is set.
+_USER_API_KEY_METADATA_KEYS: Final = frozenset(
+    key
+    for key in StandardLoggingMetadata.__required_keys__ | StandardLoggingMetadata.__optional_keys__
+    if key.startswith("user_api_key")
+)
+
 
 def _text_as_stored_on_span(span: Span, key: str, text: str) -> str:
     from opentelemetry.sdk.trace import ReadableSpan
@@ -1549,6 +1556,8 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         in ``standard_logging_object.metadata``; propagating that to every
         span only adds noise that makes traces look mis-instrumented.
         """
+        if litellm.redact_user_api_key_info is True:
+            return
         if team_id:
             self.safe_set_attribute(
                 span=span,
@@ -2457,7 +2466,10 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             metadata: Final = cast(  # cast-ok: payload metadata follows the standard logging contract
                 StandardLoggingMetadata, standard_logging_payload["metadata"]
             )
+            redact_user_api_key_info: Final = litellm.redact_user_api_key_info is True
             for key, value in metadata.items():
+                if redact_user_api_key_info and key in _USER_API_KEY_METADATA_KEYS:
+                    continue
                 self.safe_set_attribute(
                     span=span,
                     key=f"metadata.{key}",
