@@ -436,12 +436,16 @@ def test_gemini_context_cache_takes_the_system_message_with_the_marked_ask(
         assert status == 200, text
         received: Final = wire.drain()
     targets: Final = [(request.method, request.target.split("?")[0]) for request in received]
+    cache_writes: Final = [
+        request.body for request in received if request.method == "POST" and "cachedContents" in request.target
+    ]
     generate: Final = _JSON_OBJECT.validate_json(received[-1].body)
-    assert (targets, generate.get("cachedContent"), "system_instruction" in generate) == (
-        _GEMINI_CACHE_WRITE,
-        "cachedContents/census",
-        False,
-    ), generate
+    assert (
+        targets,
+        [b"lorem lorem" in body for body in cache_writes],
+        generate.get("cachedContent"),
+        "system_instruction" in generate,
+    ) == (_GEMINI_CACHE_WRITE, [True], "cachedContents/census", False), (cache_writes, generate)
 
 
 def _openai_marks(request: Request) -> list[str]:
