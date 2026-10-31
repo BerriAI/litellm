@@ -1107,6 +1107,7 @@ def test_boundary_key_accepts_pydantic_litellm_params_instance():
         == (
             "https://mateo-resource.openai.azure.com",
             "fake-azure-resource-key-a",
+            frozenset(),
         )
     )
 
@@ -1132,14 +1133,29 @@ def test_boundary_key_resolves_missing_values_from_named_credential():
     ):
         boundary = EncryptedContentAffinityCheck._encryption_boundary_key({"litellm_credential_name": "account-a"})
 
-    assert boundary == ("https://account-a.example.com", "credential-key-a")
+    assert boundary == ("https://account-a.example.com", "credential-key-a", frozenset())
 
 
-def test_boundary_key_matches_named_credential_precedence():
+@pytest.mark.parametrize(
+    "deployment_values",
+    [
+        pytest.param({"api_base": "https://deployment.example.com", "api_key": "deployment-key"}, id="set values"),
+        pytest.param({"api_base": "", "api_key": ""}, id="empty values"),
+    ],
+)
+@pytest.mark.usefixtures("no_process_wide_api_base")
+def test_boundary_key_resolves_named_credential_values_the_way_the_request_does(
+    monkeypatch: pytest.MonkeyPatch, deployment_values: dict[str, str]
+):
     from litellm.router_utils.pre_call_checks.encrypted_content_affinity_check import (
         EncryptedContentAffinityCheck,
     )
+    from litellm.utils import with_named_credential
 
+    monkeypatch.setattr(litellm, "api_key", None)
+    monkeypatch.setattr(litellm, "openai_key", None)
+    monkeypatch.setenv("OPENAI_API_KEY", "env-key")
+    deployment: Final = {"model": "openai/gpt-5.5", **deployment_values, "litellm_credential_name": "account-a"}
     with patch.object(
         litellm,
         "credential_list",
@@ -1154,45 +1170,13 @@ def test_boundary_key_matches_named_credential_precedence():
             )
         ],
     ):
-        boundary = EncryptedContentAffinityCheck._encryption_boundary_key(
-            {
-                "api_base": "https://deployment.example.com",
-                "api_key": "deployment-key",
-                "litellm_credential_name": "account-a",
-            }
-        )
+        boundary = EncryptedContentAffinityCheck._encryption_boundary_key(deployment)
+        sent_params = with_named_credential(deployment)
 
-    assert boundary == ("https://credential.example.com", "credential-key-a")
-
-
-def test_boundary_key_resolves_credential_when_explicit_values_are_empty():
-    from litellm.router_utils.pre_call_checks.encrypted_content_affinity_check import (
-        EncryptedContentAffinityCheck,
+    assert boundary is not None
+    assert boundary == EncryptedContentAffinityCheck._encryption_boundary_key(
+        {key: value for key, value in sent_params.items() if key != "litellm_credential_name"}
     )
-
-    with patch.object(
-        litellm,
-        "credential_list",
-        [
-            CredentialItem(
-                credential_name="account-a",
-                credential_values={
-                    "api_base": "https://credential.example.com",
-                    "api_key": "credential-key-a",
-                },
-                credential_info={},
-            )
-        ],
-    ):
-        boundary = EncryptedContentAffinityCheck._encryption_boundary_key(
-            {
-                "api_base": "",
-                "api_key": "",
-                "litellm_credential_name": "account-a",
-            }
-        )
-
-    assert boundary == ("https://credential.example.com", "credential-key-a")
 
 
 def test_boundary_fallback_matches_deployments_with_same_named_credential_values():
@@ -2774,6 +2758,18 @@ def no_process_wide_api_base(monkeypatch: pytest.MonkeyPatch) -> None:
             id="same key in different Mantle regions",
         ),
         pytest.param(
+            {**MANTLE_SHARED_KEY, "model": "bedrock_mantle/us-west-2/openai.gpt-6-astra"},
+            {**MANTLE_SHARED_KEY, "model": "bedrock_mantle/us-east-1/openai.gpt-6-astra"},
+            False,
+            id="same key in different Mantle regions named in the model",
+        ),
+        pytest.param(
+            {**MANTLE_SHARED_KEY, "model": "bedrock_mantle/us-west-2/openai.gpt-6-astra"},
+            {**MANTLE_SHARED_KEY, "model": "bedrock_mantle/us-west-2/openai.gpt-6-astra"},
+            True,
+            id="same key in one Mantle region named in the model",
+        ),
+        pytest.param(
             {"model": "anthropic/claude-opus-5-5", "api_key": "shared-key"},
             {"model": "anthropic/claude-opus-5-5", "api_key": "shared-key"},
             False,
@@ -2786,10 +2782,52 @@ def no_process_wide_api_base(monkeypatch: pytest.MonkeyPatch) -> None:
             id="provider whose builder needs an api_base",
         ),
         pytest.param(
+            {"model": "github_copilot/gpt-5.5", "api_key": "shared-key"},
+            {"model": "github_copilot/gpt-5.5", "api_key": "shared-key"},
+            False,
+            id="same key on a provider that authenticates with its own token",
+        ),
+        pytest.param(
+            {"model": "groq/llama-4-scout"},
+            {"model": "groq/llama-4-scout"},
+            False,
+            id="provider with no default key",
+        ),
+        pytest.param(
+            {"model": "vertex_ai/gemini-3-pro"},
+            {"model": "vertex_ai/gemini-3-pro"},
+            False,
+            id="provider whose default key is a credentials file",
+        ),
+        pytest.param(
             {**OPENAI_SHARED_KEY, "api_base": "https://openai-proxy.example.com/v1"},
             OPENAI_SHARED_KEY,
             False,
             id="explicit api_base beside the default endpoint",
+        ),
+        pytest.param(
+            {**OPENAI_SHARED_KEY, "extra_headers": {"OpenAI-Organization": "org-a"}},
+            {**OPENAI_SHARED_KEY, "extra_headers": {"openai-organization": "org-b"}},
+            False,
+            id="same key sent to different OpenAI organizations",
+        ),
+        pytest.param(
+            {**OPENAI_SHARED_KEY, "extra_headers": {"OpenAI-Project": "proj-a"}},
+            OPENAI_SHARED_KEY,
+            False,
+            id="same key with an OpenAI project beside one without",
+        ),
+        pytest.param(
+            {**OPENAI_SHARED_KEY, "organization": "org-a"},
+            {**OPENAI_SHARED_KEY, "headers": {"OpenAI-Organization": "org-a"}},
+            True,
+            id="same OpenAI organization set two ways",
+        ),
+        pytest.param(
+            {**OPENAI_SHARED_KEY, "extra_headers": {"x-team": "a", "OpenAI-Organization": "org-a"}},
+            {**OPENAI_SHARED_KEY, "extra_headers": {"x-team": "b", "OpenAI-Organization": "org-a"}},
+            True,
+            id="same OpenAI organization beside unrelated headers",
         ),
     ],
 )
@@ -2822,6 +2860,44 @@ def test_hop_strip_keeps_reasoning_between_same_key_deployments_on_the_default_e
     assert request_input[0] == (original_reasoning if target_can_decrypt else SUMMARY_ONLY_REASONING)
 
 
+@pytest.mark.usefixtures("no_process_wide_api_base")
+@pytest.mark.parametrize(
+    "target_api_key, target_can_decrypt",
+    [
+        pytest.param(None, True, id="both on the environment key"),
+        pytest.param("env-key", True, id="explicit key equal to the environment key"),
+        pytest.param("other-key", False, id="explicit key other than the environment key"),
+    ],
+)
+def test_hop_strip_resolves_a_missing_key_from_the_environment(
+    monkeypatch: pytest.MonkeyPatch, target_api_key: str | None, target_can_decrypt: bool
+):
+    from litellm.router_utils.pre_call_checks.encrypted_content_affinity_check import (
+        EncryptedContentAffinityCheck,
+    )
+
+    monkeypatch.setattr(litellm, "api_key", None)
+    monkeypatch.setattr(litellm, "openai_key", None)
+    monkeypatch.setenv("OPENAI_API_KEY", "env-key")
+    target_params: Final = {"model": "openai/gpt-5.5", **({"api_key": target_api_key} if target_api_key else {})}
+    router: Final = litellm.Router(
+        model_list=[
+            _default_endpoint_deployment("origin", {"model": "openai/gpt-5.5"}),
+            _default_endpoint_deployment("target", target_params),
+        ]
+    )
+    ctx: Final = RoutingContext(router)
+    reasoning: Final = _reasoning_input_minted_by("origin")[0]
+    original_reasoning: Final = dict(reasoning)
+    request_input: Final = [reasoning, {"role": "user", "content": "and sunsets?"}]
+
+    EncryptedContentAffinityCheck.strip_reasoning_the_targets_cannot_decrypt(
+        ctx, request_input, None, (_deployment_of(ctx, "target"),), unmarked_origin=None
+    )
+
+    assert request_input[0] == (original_reasoning if target_can_decrypt else SUMMARY_ONLY_REASONING)
+
+
 def test_boundary_key_puts_pydantic_and_plain_params_on_one_default_endpoint_boundary():
     from litellm.router_utils.pre_call_checks.encrypted_content_affinity_check import (
         EncryptedContentAffinityCheck,
@@ -2842,6 +2918,17 @@ def test_boundary_key_has_no_default_endpoint_for_a_model_no_provider_claims():
     unmapped: Final = {"model": "unmapped-model-name", "api_key": "shared-key"}
 
     assert EncryptedContentAffinityCheck._encryption_boundary_key(unmapped) is None
+
+
+def test_boundary_key_has_no_default_key_for_a_custom_provider(monkeypatch: pytest.MonkeyPatch):
+    from litellm.router_utils.pre_call_checks.encrypted_content_affinity_check import (
+        EncryptedContentAffinityCheck,
+    )
+
+    monkeypatch.setattr(litellm, "provider_list", [*litellm.provider_list, "qa-custom"])
+    monkeypatch.setattr(litellm, "_custom_providers", ["qa-custom"])
+
+    assert EncryptedContentAffinityCheck._encryption_boundary_key({"model": "qa-custom/some-model"}) is None
 
 
 @pytest.mark.asyncio

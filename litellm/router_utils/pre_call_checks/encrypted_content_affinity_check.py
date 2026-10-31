@@ -37,6 +37,7 @@ Safe to enable globally:
 """
 
 from collections.abc import Iterator, Mapping, Sequence
+from dataclasses import dataclass
 from functools import cache
 from typing import TYPE_CHECKING, Final, Optional, cast
 
@@ -45,8 +46,7 @@ from pydantic import BaseModel, TypeAdapter
 from litellm._logging import verbose_router_logger
 from litellm.exceptions import AuthenticationError, BadRequestError
 from litellm.integrations.custom_logger import CustomLogger, Span
-from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
-from litellm.litellm_core_utils.get_llm_provider_logic import resolve_model_and_provider_for_metadata
+from litellm.litellm_core_utils.get_llm_provider_logic import declared_authenticating_provider, get_llm_provider
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     anthropic_content_lists,
     encrypted_content_of_block,
@@ -57,13 +57,23 @@ from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.router_deprecated import RenamedRouterAttribute, renamed_router_param
 from litellm.types.llms.openai import AllMessageValues
-from litellm.types.router import Deployment
-from litellm.utils import ProviderConfigManager, get_order_filtered_deployments
+from litellm.types.router import Deployment, GenericLiteLLMParams
+from litellm.types.utils import LlmProviders
+from litellm.utils import ProviderConfigManager, get_order_filtered_deployments, with_named_credential
 
 if TYPE_CHECKING:
     from litellm.router_api import RoutingContext
 
 _REQUEST_KWARGS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+_ACCOUNT_SCOPE_HEADERS: Final = frozenset({"openai-organization", "openai-project"})
+_PROVIDER_NAMES: Final = frozenset(provider.value for provider in LlmProviders)
+
+
+@dataclass(frozen=True, slots=True)
+class _ProviderRoute:
+    model: str
+    provider: str
+    api_base: str | None
 
 
 class EncryptedContentAffinityCheck(CustomLogger):
@@ -212,12 +222,13 @@ class EncryptedContentAffinityCheck(CustomLogger):
     @staticmethod
     def _encryption_boundary_key(
         litellm_params: object,
-    ) -> tuple[object, object] | None:
+    ) -> tuple[object, object, frozenset[tuple[str, object]]] | None:
         """
-        ``(api_base, api_key)`` identifies an upstream encryption boundary.
-        The values are resolved from the deployment and its named credential
-        without modifying the deployment, and a deployment with no ``api_base``
-        takes the endpoint its provider's Responses URL builder resolves for it.
+        ``(api_base, api_key, account scope)`` identifies an upstream encryption boundary.
+        The values are resolved the way the request resolves them, the deployment's own values
+        winning over its named credential's, without modifying the deployment. A deployment with
+        no ``api_key`` takes its provider's default key, and one with no ``api_base`` takes the
+        endpoint its provider's Responses URL builder resolves for it.
 
         Accepts plain dicts (the common case in ``healthy_deployments``) as
         well as ``LiteLLM_Params`` Pydantic instances. A stricter
@@ -228,22 +239,24 @@ class EncryptedContentAffinityCheck(CustomLogger):
         params: Final = EncryptedContentAffinityCheck._params_mapping(litellm_params)
         if params is None:
             return None
-        credential_name: Final = params.get("litellm_credential_name")
-        credential_values: Final[Mapping[str, object]] = (
-            CredentialAccessor.get_credential_values(credential_name)
-            if isinstance(credential_name, str) and credential_name
-            else {}
-        )
-        effective_params: Final = {**params, **credential_values}
-        effective_api_key: Final = effective_params.get("api_key")
-        if not effective_api_key:
+        effective_params: Final = with_named_credential(params)
+        account_scope: Final = EncryptedContentAffinityCheck._account_scope(effective_params)
+        explicit_api_key: Final = effective_params.get("api_key")
+        explicit_api_base: Final = effective_params.get("api_base")
+        if explicit_api_key and explicit_api_base:
+            return (explicit_api_base, explicit_api_key, account_scope)
+        route: Final = EncryptedContentAffinityCheck._provider_route(effective_params)
+        if route is None:
             return None
-        api_base: Final = effective_params.get("api_base") or EncryptedContentAffinityCheck._default_responses_endpoint(
-            effective_params
+        api_key: Final = explicit_api_key or EncryptedContentAffinityCheck._default_api_key(route)
+        if not api_key:
+            return None
+        api_base: Final = explicit_api_base or EncryptedContentAffinityCheck._default_responses_endpoint(
+            route, effective_params
         )
         if not api_base:
             return None
-        return (api_base, effective_api_key)
+        return (api_base, api_key, account_scope)
 
     @staticmethod
     def _params_mapping(litellm_params: object) -> Mapping[str, object] | None:
@@ -254,25 +267,65 @@ class EncryptedContentAffinityCheck(CustomLogger):
         return None
 
     @staticmethod
-    def _default_responses_endpoint(litellm_params: Mapping[str, object]) -> str | None:
+    def _account_scope(litellm_params: Mapping[str, object]) -> frozenset[tuple[str, object]]:
+        organization: Final = litellm_params.get("organization")
+        header_scope: Final = frozenset(
+            (name.lower(), value)
+            for name, value in EncryptedContentAffinityCheck._header_items(litellm_params)
+            if name.lower() in _ACCOUNT_SCOPE_HEADERS
+        )
+        if not organization:
+            return header_scope
+        return header_scope | {("openai-organization", organization)}
+
+    @staticmethod
+    def _header_items(litellm_params: Mapping[str, object]) -> Iterator[tuple[str, object]]:
+        for headers in (litellm_params.get("headers"), litellm_params.get("extra_headers")):
+            if isinstance(headers, Mapping):
+                yield from _REQUEST_KWARGS_ADAPTER.validate_python(headers).items()
+
+    @staticmethod
+    def _provider_route(litellm_params: Mapping[str, object]) -> _ProviderRoute | None:
         model: Final = litellm_params.get("model")
-        custom_llm_provider: Final = litellm_params.get("custom_llm_provider")
         if not isinstance(model, str):
             return None
+        custom_llm_provider: Final = litellm_params.get("custom_llm_provider")
+        if declared_authenticating_provider(
+            model, custom_llm_provider if isinstance(custom_llm_provider, str) else None
+        ):
+            return None
         try:
-            provider_model, provider = resolve_model_and_provider_for_metadata(
-                model, custom_llm_provider if isinstance(custom_llm_provider, str) else None
+            provider_model, provider, _, provider_api_base = get_llm_provider(
+                model=model, litellm_params=GenericLiteLLMParams.model_validate(dict(litellm_params))
             )
         except BadRequestError:
             return None
+        return _ProviderRoute(provider_model, provider, provider_api_base)
+
+    @staticmethod
+    def _default_api_key(route: _ProviderRoute) -> str | None:
+        if route.provider not in _PROVIDER_NAMES:
+            return None
+        model_info: Final = ProviderConfigManager.get_provider_model_info(
+            model=route.model, provider=LlmProviders(route.provider)
+        )
+        if model_info is None:
+            return None
+        try:
+            return model_info.get_api_key()
+        except NotImplementedError:
+            return None
+
+    @staticmethod
+    def _default_responses_endpoint(route: _ProviderRoute, litellm_params: Mapping[str, object]) -> str | None:
         responses_config: Final = ProviderConfigManager.get_provider_responses_api_config(
-            provider=provider, model=provider_model
+            provider=route.provider, model=route.model
         )
         if responses_config is None:
             return None
         try:
             return responses_config.get_complete_url(  # pyright: ignore[reportUnknownMemberType]  # the base types litellm_params as a bare dict
-                api_base=None, litellm_params=dict(litellm_params)
+                api_base=route.api_base, litellm_params=dict(litellm_params)
             )
         except (ValueError, BaseLLMException, AuthenticationError):
             return None
