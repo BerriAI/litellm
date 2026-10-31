@@ -938,6 +938,7 @@ from litellm.proxy.spend_tracking.spend_counter_batch import (
     read_batched_spend_counter,
     record_spend_counter_value,
     spend_counter_batch_scope,
+    spend_counter_read_tick,
 )
 from litellm.proxy.spend_tracking.spend_management_endpoints import (
     router as spend_management_router,
@@ -4118,6 +4119,7 @@ async def ensure_spend_counter_initialized(
     counter_key: str,
     source_cache_key: str | list[str],
 ) -> None:
+    read_at: Final = spend_counter_read_tick()
     is_warm: Final = await _is_spend_counter_cache_warm(counter_key=counter_key)
     if is_warm is False:
         # Shares the per-counter lock with get_current_spend.
@@ -4131,7 +4133,13 @@ async def ensure_spend_counter_initialized(
             # DB unavailable - fall back to in-process cache (may be stale).
             base_spend: Final = await _get_source_cache_base_spend(source_cache_key=source_cache_key)
             if base_spend > 0:
-                await increment_spend_counter_cache(counter_key=counter_key, increment=base_spend)
+                await SpendCounterReseed.add_cached_spend_once(
+                    spend_counter_cache=spend_counter_cache,
+                    counter_key=counter_key,
+                    read_at=read_at,
+                    add=lambda: increment_spend_counter_cache(counter_key=counter_key, increment=base_spend),
+                    is_warm=lambda: _is_spend_counter_cache_warm(counter_key=counter_key),
+                )
 
 
 _ensure_spend_counter_initialized: Final = ensure_spend_counter_initialized
