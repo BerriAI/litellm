@@ -1618,6 +1618,7 @@ async def test_live_adjustment_reload_is_captured_and_replay_remains_frozen(monk
         ("pixels", 2049, 0.6),
         ("tiered", 2048, 1.5),
         ("tiered-request", 2048, 1.5),
+        ("azure-tiered", 2048, 1.5),
     ),
 )
 async def test_image_capture_replays_the_existing_image_calculator(
@@ -1638,30 +1639,41 @@ async def test_image_capture_replays_the_existing_image_calculator(
         "pixels": "fal-ai/flux/dev",
         "tiered": "dall-e-capture",
         "tiered-request": "dall-e-capture",
+        "azure-tiered": "dall-e-3",
     }[pricing]
-    provider: Final = "fal_ai" if pricing == "pixels" else "openai"
+    provider: Final = "fal_ai" if pricing == "pixels" else "azure" if pricing == "azure-tiered" else "openai"
+    catalog_provider: Final = provider
     catalog_key: Final = f"{provider}/{model}" if pricing == "pixels" else model
     monkeypatch.setitem(
         litellm.model_cost,
         catalog_key,
         {
-            "litellm_provider": provider,
+            "litellm_provider": catalog_provider,
             "mode": "image_generation",
             **{
                 "tokens": {"input_cost_per_token": 0.01, "output_cost_per_image_token": 0.02},
                 "images": {"output_cost_per_image": 0.25},
                 "tiered": {"output_cost_per_image": 0.25},
                 "tiered-request": {"output_cost_per_image": 0.25},
+                "azure-tiered": {"input_cost_per_token": 0.0, "output_cost_per_token": 0.0},
                 "pixels": {"output_cost_per_image": 0.1, "output_cost_per_pixel": 0.1 / (1024 * 1024)},
             }[pricing],
         },
     )
-    tier_key: Final = f"hd/1024-x-1024/{model}"
-    if pricing.startswith("tiered"):
+    tier_key: Final = f"{provider}/hd/1024-x-1024/{model}" if pricing == "azure-tiered" else f"hd/1024-x-1024/{model}"
+    if "tiered" in pricing:
         monkeypatch.setitem(
             litellm.model_cost,
             tier_key,
-            {"litellm_provider": provider, "mode": "image_generation", "output_cost_per_image": 0.75},
+            {
+                "litellm_provider": catalog_provider,
+                "mode": "image_generation",
+                **(
+                    {"input_cost_per_pixel": 0.75 / (1024 * 1024)}
+                    if pricing == "azure-tiered"
+                    else {"output_cost_per_image": 0.75}
+                ),
+            },
         )
     logger: Final = _logger("aimage_generation")
     logger.model = model
@@ -1687,7 +1699,7 @@ async def test_image_capture_replays_the_existing_image_calculator(
             ]
             * 2,
             "size": None if pricing == "tiered-request" else "1024x1024",
-            "quality": None if pricing == "tiered-request" else "hd" if pricing == "tiered" else "standard",
+            "quality": None if pricing == "tiered-request" else "hd" if "tiered" in pricing else "standard",
             "usage": {
                 "input_tokens": 10,
                 "output_tokens": 5,
