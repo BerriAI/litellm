@@ -4,6 +4,7 @@ Handler for transforming responses api requests to litellm.completion requests
 
 from collections.abc import Coroutine, Mapping, Sequence
 from dataclasses import dataclass
+from types import MappingProxyType
 from typing import Final
 
 from pydantic import TypeAdapter
@@ -31,6 +32,13 @@ from litellm.types.llms.openai import (
 from litellm.types.utils import ModelResponse
 
 _REQUEST_KWARGS_ADAPTER: Final = TypeAdapter(dict[str, object])
+_BRIDGE_TRANSFORM_KEYWORDS: Final = frozenset({"caller_input", "names_non_string_fields"})
+
+
+def _without_bridge_transform_keywords(request_kwargs: Mapping[str, object]) -> Mapping[str, object]:
+    return MappingProxyType(
+        {key: value for key, value in request_kwargs.items() if key not in _BRIDGE_TRANSFORM_KEYWORDS}
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -106,7 +114,7 @@ class LiteLLMCompletionTransformationHandler:
                 custom_llm_provider=custom_llm_provider,
                 stream=stream,
                 extra_headers=extra_headers,
-                **kwargs,
+                **_without_bridge_transform_keywords(_REQUEST_KWARGS_ADAPTER.validate_python(kwargs)),
             )
         )
 
@@ -183,7 +191,7 @@ class LiteLLMCompletionTransformationHandler:
                     custom_llm_provider=custom_llm_provider,
                     stream=stream,
                     extra_headers=extra_headers,
-                    **request_kwargs,
+                    **_without_bridge_transform_keywords(request_kwargs),
                 )
             ),
             request_input=bridged.input,
