@@ -10059,6 +10059,27 @@ def test_chat_transform_request_answers_400_naming_a_non_string_role_or_tool_cal
     )
 
 
+@pytest.mark.parametrize(("role", "type_name"), [(["user"], "list"), ({"name": "user"}, "dict"), ([], "list")])
+def test_chat_transform_request_names_a_non_string_role_on_a_cache_marked_message_under_drop_params(
+    local_model_cost_map, role: object, type_name: str
+):
+    marked: Final = {"role": role, "content": [{"type": "text", "text": "ok"}], "cache_control": {"type": "ephemeral"}}
+
+    with pytest.raises(AnthropicError) as raised:
+        AnthropicConfig().transform_request(
+            model=UNFLAGGED_CLAUDE,
+            messages=[_ASK, marked],
+            optional_params={},
+            litellm_params={"drop_params": True},
+            headers={},
+        )
+
+    assert (raised.value.status_code, raised.value.message) == (
+        400,
+        f"Invalid type for 'messages[1].role': expected a string, got {type_name}",
+    )
+
+
 @pytest.mark.parametrize(
     ("malformed", "well_formed", "modify_params"),
     [
