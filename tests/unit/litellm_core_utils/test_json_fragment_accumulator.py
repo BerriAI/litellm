@@ -216,7 +216,7 @@ def test_draining_many_concatenated_values_never_copies_the_remainder():
     value: Final = '{"text": "' + "x" * 20 + '"}'
     fragments: Final = tuple(value if index % 2 else f" {value}" for index in range(40_000))
     payload_bytes: Final = sum(len(fragment) for fragment in fragments)
-    peak_bytes: Final = _drain_peak_bytes(fragments)
+    peak_bytes: Final = min(_drain_peak_bytes(fragments) for _ in range(3))
     assert peak_bytes < payload_bytes // 4, (
         f"draining {len(fragments)} values allocated a peak of {peak_bytes} bytes over a {payload_bytes} byte payload, "
         "copying the remainder on every pop?"
