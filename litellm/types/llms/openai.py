@@ -3,7 +3,7 @@ import math
 from collections.abc import Iterable, Mapping, Sequence
 from enum import Enum
 from os import PathLike
-from typing import IO, TYPE_CHECKING, Any, Final, Generic, Literal, Optional, TypeAlias, Union
+from typing import IO, TYPE_CHECKING, Any, Final, Generic, Literal, Optional, TypeAlias, Union, cast
 
 import httpx
 from openai import Omit
@@ -86,7 +86,12 @@ from typing_extensions import (
 )
 
 from litellm._logging import verbose_logger
-from litellm.types.llms.base import BaseLiteLLMOpenAIResponseObject, LiteLLMBaseModel
+from litellm.types.llms.base import (
+    BaseLiteLLMOpenAIResponseObject,
+    CarriesOutputTextLogprobs,
+    LiteLLMBaseModel,
+    OutputTextLogprob,
+)
 from litellm.types.responses.main import (
     CustomToolCallOutputItem,
     GenericResponseOutputItem,
@@ -1863,7 +1868,7 @@ class ContentPartDonePartOutputText(BaseLiteLLMOpenAIResponseObject):
     type: Literal["output_text"]
     text: str
     annotations: list[BaseLiteLLMOpenAIResponseObject]
-    logprobs: list[OpenAIChatCompletionLogprobsContent] | None = None
+    logprobs: list[OutputTextLogprob] | None = None
 
 
 class ContentPartDonePartRefusal(BaseLiteLLMOpenAIResponseObject):
@@ -1887,7 +1892,7 @@ class ContentPartDoneEvent(BaseLiteLLMOpenAIResponseObject):
     part: PART_UNION_TYPES
 
 
-class OutputTextDeltaEvent(BaseLiteLLMOpenAIResponseObject):
+class OutputTextDeltaEvent(CarriesOutputTextLogprobs):
     type: Literal[ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA]
     item_id: str
     output_index: int
@@ -1904,7 +1909,7 @@ class OutputTextAnnotationAddedEvent(BaseLiteLLMOpenAIResponseObject):
     annotation: dict
 
 
-class OutputTextDoneEvent(BaseLiteLLMOpenAIResponseObject):
+class OutputTextDoneEvent(CarriesOutputTextLogprobs):
     type: Literal[ResponsesAPIStreamEvents.OUTPUT_TEXT_DONE]
     item_id: str
     output_index: int

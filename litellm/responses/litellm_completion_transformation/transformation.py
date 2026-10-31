@@ -111,6 +111,7 @@ from litellm.types.llms.openai import (
     OpenAIMcpServerTool,
     OpenAIWebSearchOptions,
     OpenAIWebSearchUserLocation,
+    OutputTextLogprob,
     OutputTokensDetails,
     Reasoning,
     ResponseAPIUsage,
@@ -167,6 +168,7 @@ from .custom_tools import (
     validated_tool_search_execution,
     without_malformed_tool_flags,
 )
+from .logprobs import output_text_logprobs
 from .reasoning_items import decode_thinking_blocks, encode_thinking_blocks, mint_reasoning_item_id
 from .tool_search import (
     CompletionRoute,
@@ -950,6 +952,7 @@ class LiteLLMCompletionResponsesConfig:
             "text",
             "tool_choice",
             "tools",
+            "top_logprobs",
             "top_p",
             "user",
         ]
@@ -1289,6 +1292,8 @@ class LiteLLMCompletionResponsesConfig:
             ),
             "tools": tools,
             "top_p": responses_api_request.get("top_p"),
+            "top_logprobs": responses_api_request.get("top_logprobs"),
+            "logprobs": True if responses_api_request.get("top_logprobs") is not None else None,
             "user": responses_api_request.get("user"),
             "temperature": responses_api_request.get("temperature"),
             "parallel_tool_calls": responses_api_request.get("parallel_tool_calls"),
@@ -3695,7 +3700,9 @@ class LiteLLMCompletionResponsesConfig:
                     choice=choice,
                 )
                 message_output_items.extend(image_generation_items)
-            elif content := LiteLLMCompletionResponsesConfig._message_output_content(choice.message):
+            elif content := LiteLLMCompletionResponsesConfig._message_output_content(
+                choice.message, output_text_logprobs(getattr(choice, "logprobs", None))
+            ):
                 message_output_items.append(
                     GenericResponseOutputItem(
                         type="message",
@@ -3708,7 +3715,9 @@ class LiteLLMCompletionResponsesConfig:
         return message_output_items
 
     @staticmethod
-    def _message_output_content(message: Message) -> tuple[OutputText | ResponseOutputRefusal, ...]:
+    def _message_output_content(
+        message: Message, logprobs: list[OutputTextLogprob] | None = None
+    ) -> tuple[OutputText | ResponseOutputRefusal, ...]:
         refusal: Final = openai_chat_refusal_text(message)
         refusal_parts: Final = (ResponseOutputRefusal(type="refusal", refusal=refusal),) if refusal is not None else ()
         has_text_part: Final = (
@@ -3717,7 +3726,7 @@ class LiteLLMCompletionResponsesConfig:
             or (message.content is not None and not refusal_parts)
         )
         text_parts: Final = (
-            (LiteLLMCompletionResponsesConfig._transform_chat_message_to_response_output_text(message),)
+            (LiteLLMCompletionResponsesConfig._transform_chat_message_to_response_output_text(message, logprobs),)
             if has_text_part
             else ()
         )
@@ -3769,6 +3778,7 @@ class LiteLLMCompletionResponsesConfig:
     @staticmethod
     def _transform_chat_message_to_response_output_text(
         message: Message,
+        logprobs: list[OutputTextLogprob] | None = None,
     ) -> OutputText:
         annotations: Final = getattr(message, "annotations", None)
         transformed_annotations: Final = (
@@ -3781,6 +3791,7 @@ class LiteLLMCompletionResponsesConfig:
             type="output_text",
             text=message.content or "",
             annotations=transformed_annotations,
+            logprobs=logprobs,
         )
 
     @staticmethod

@@ -18,7 +18,6 @@ from openai.types.responses.response_function_web_search import (
 from pydantic import TypeAdapter, ValidationError
 
 import litellm
-from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import message_field
 from litellm.constants import CALLER_SESSION_ID_METADATA_KEY
 from litellm.integrations.anthropic_cache_control_hook import MAX_CACHE_CONTROL_BLOCKS, AnthropicCacheControlHook
 from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR
@@ -26,6 +25,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     _bedrock_converse_messages_pt,
     anthropic_messages_pt,
 )
+from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import message_field
 from litellm.responses.litellm_completion_transformation.reasoning_items import encode_thinking_blocks
 from litellm.responses.litellm_completion_transformation.tool_search import tool_search_routing
 from litellm.responses.litellm_completion_transformation.transformation import (
@@ -38,12 +38,15 @@ from litellm.types.llms.openai import ResponsesAPIOptionalRequestParams
 from litellm.types.responses.main import OutputToolSearchCall, build_web_search_call
 from litellm.types.utils import (
     ChatCompletionMessageToolCall,
+    ChatCompletionTokenLogprob,
+    ChoiceLogprobs,
     Choices,
     CompletionTokensDetailsWrapper,
     Function,
     Message,
     ModelResponse,
     PromptTokensDetailsWrapper,
+    TopLogprob,
     Usage,
 )
 
@@ -6876,7 +6879,11 @@ def test_a_new_message_after_a_paused_search_turn_replays_only_that_turn_without
             [
                 {"role": "user", "content": "Plan a Tokyo trip."},
                 _reasoning_item("rs_tokyo", tokyo_thinking),
-                {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "Tokyo is sunny."}]},
+                {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "Tokyo is sunny."}],
+                },
                 _hosted_search("ws_srvtoolu_01Tokyo", "completed"),
                 {"role": "user", "content": "Now Osaka."},
                 _reasoning_item("rs_osaka", _ANSWERED_THINKING),
@@ -7216,7 +7223,11 @@ def test_a_tool_output_with_an_unhashable_call_id_is_a_400_naming_its_input_item
 ) -> None:
     history: Final = cast(
         ResponseInputParam,
-        [_WEATHER_ASK, _weather_call(call_id="call_weather"), {"type": output_type, "call_id": call_id, "output": "sunny"}],
+        [
+            _WEATHER_ASK,
+            _weather_call(call_id="call_weather"),
+            {"type": output_type, "call_id": call_id, "output": "sunny"},
+        ],
     )
 
     with pytest.raises(litellm.BadRequestError) as raised:
@@ -7320,7 +7331,11 @@ def test_a_non_string_role_still_converts_for_a_target_that_judges_it_itself() -
             id="dict_function_call_id",
         ),
         pytest.param(
-            [_WEATHER_ASK, _weather_call(call_id=7), {"type": "function_call_output", "call_id": "7", "output": "sunny"}],
+            [
+                _WEATHER_ASK,
+                _weather_call(call_id=7),
+                {"type": "function_call_output", "call_id": "7", "output": "sunny"},
+            ],
             "input[1].call_id",
             "int",
             id="int_function_call_id",
@@ -7394,3 +7409,89 @@ def test_a_malformed_item_after_a_codex_additional_tools_item_is_named_by_its_in
         )
 
     assert f"'{field_path}'" in raised.value.message
+
+
+_HELLO_LOGPROBS: Final = ChoiceLogprobs(
+    content=[
+        ChatCompletionTokenLogprob(
+            token="Hello",
+            logprob=-1.3113013e-06,
+            top_logprobs=[
+                TopLogprob(token="Hello", logprob=-1.3113013e-06),
+                TopLogprob(token="Hi", logprob=-15.149978),
+            ],
+        ),
+        ChatCompletionTokenLogprob(token=".", logprob=-3.0994368e-06, bytes=[46]),
+    ]
+)
+
+
+def _hello_chat_response(logprobs: ChoiceLogprobs | None) -> ModelResponse:
+    return ModelResponse(
+        id="chatcmpl-hello",
+        created=1793489000,
+        model="gemini-3.5-flash",
+        object="chat.completion",
+        choices=[
+            Choices(
+                finish_reason="stop", index=0, message=Message(content="Hello.", role="assistant"), logprobs=logprobs
+            )
+        ],
+    )
+
+
+def test_bridged_chat_logprobs_become_output_text_logprobs() -> None:
+    response: Final = LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+        request_input="Say hello.",
+        responses_api_request={"top_logprobs": 2},
+        chat_completion_response=_hello_chat_response(_HELLO_LOGPROBS),
+    )
+
+    assert response.model_dump()["output"][0]["content"] == [
+        {
+            "type": "output_text",
+            "text": "Hello.",
+            "annotations": [],
+            "logprobs": [
+                {
+                    "token": "Hello",
+                    "logprob": -1.3113013e-06,
+                    "bytes": None,
+                    "top_logprobs": [
+                        {"token": "Hello", "logprob": -1.3113013e-06, "bytes": None},
+                        {"token": "Hi", "logprob": -15.149978, "bytes": None},
+                    ],
+                },
+                {"token": ".", "logprob": -3.0994368e-06, "bytes": [46], "top_logprobs": []},
+            ],
+        }
+    ]
+
+
+def test_bridged_chat_response_without_logprobs_emits_no_logprobs_key() -> None:
+    response: Final = LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+        request_input="Say hello.", responses_api_request={}, chat_completion_response=_hello_chat_response(None)
+    )
+
+    assert response.model_dump()["output"][0]["content"] == [
+        {"type": "output_text", "text": "Hello.", "annotations": []}
+    ]
+
+
+def test_responses_top_logprobs_bridges_to_chat_logprobs() -> None:
+    request: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+        model="gemini-3.5-flash",
+        input="Say hello.",
+        responses_api_request={"top_logprobs": 2},
+        custom_llm_provider="vertex_ai",
+    )
+
+    assert (request["top_logprobs"], request["logprobs"]) == (2, True)
+
+
+def test_responses_without_top_logprobs_bridges_without_chat_logprobs() -> None:
+    request: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+        model="gemini-3.5-flash", input="Say hello.", responses_api_request={}, custom_llm_provider="vertex_ai"
+    )
+
+    assert "top_logprobs" not in request and "logprobs" not in request
