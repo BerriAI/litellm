@@ -85,12 +85,13 @@ from litellm.proxy._types import (
 from litellm.proxy.bug_report_config import build_proxy_bug_report
 from litellm.proxy.common_utils.openai_error_payload import (
     attribute_of,
-    litellm_call_id_headers,
-    openai_error_param,
+    error_status_code,
+    openai_shaped_proxy_exception,
     with_litellm_call_id,
 )
 from litellm.proxy.spend_tracking.spend_log_error_logger import spend_log_error
 from litellm.responses.litellm_completion_transformation.compaction_items import messages_since_newest_compaction
+from litellm.responses.mcp.parked_stream_dispatch import held_round_spend
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.proxy.model_listing import ModelInfoResponse
 from litellm.types.utils import MCP_GUARDRAIL_CALL_TYPES, CallTypes, CallTypesLiteral, ModelInfo, Usage
@@ -146,6 +147,7 @@ from litellm.exceptions import (
 from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     ModifyResponseException,
+    merged_guardrail_entries,
 )
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.prometheus import PrometheusLogger
@@ -250,7 +252,11 @@ from litellm.proxy.hooks.sensitive_data_routing import (  # noqa: F401, RUF100  
     PROXY_SensitiveDataRoutingHandler,
     _PROXY_SensitiveDataRoutingHandler,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
 )
-from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup, add_guardrails_from_auth_metadata
+from litellm.proxy.litellm_pre_call_utils import (
+    LiteLLMProxyRequestSetup,
+    add_guardrails_from_auth_metadata,
+    normalized_metadata_slot,
+)
 from litellm.proxy.management_helpers.key_settings_audit import with_settings_updated_at
 from litellm.proxy.policy_engine.pipeline_executor import (
     PipelineExecutor,
@@ -628,6 +634,8 @@ def _is_client_error_exception(exc: Exception) -> bool:
         return exc.status_code < 500
     if isinstance(exc, ProxyException):
         return not (exc.code.isdigit() and int(exc.code) >= 500)
+    if isinstance(exc, litellm.BudgetExceededError):
+        return exc.status_code < 500
     return False
 
 
@@ -704,6 +712,38 @@ def pipeline_managed_guardrail_names(
     return _pipeline_step_guardrail_names(
         tuple((policy_name, pipeline) for policy_name, pipeline in _policy_pipelines(data) if pipeline.mode == mode)
     )
+
+
+def _ran_or_runs_outside_pipelines(
+    callback: CustomGuardrail | None,
+    data: Mapping[str, object],
+    pipeline_modes: frozenset[str],
+) -> bool:
+    return callback is not None and (
+        callback.pre_call_hook_ran_or_raised(data)
+        or callback.deployment_hook_ran(data)
+        or any(
+            callback._event_hook_is_event_type(hook)  # pyright: ignore[reportPrivateUsage]  # no public hook check
+            for hook in GuardrailEventHooks
+            if hook.value not in pipeline_modes
+        )
+    )
+
+
+def _runs_only_in_pipelines(
+    name: str, data: Mapping[str, object], pre_call: frozenset[str], post_call: frozenset[str]
+) -> bool:
+    return not _ran_or_runs_outside_pipelines(
+        PipelineExecutor.find_guardrail_callback(name),
+        data,
+        frozenset(mode for mode, names in (("pre_call", pre_call), ("post_call", post_call)) if name in names),
+    )
+
+
+def _request_steps_that_have_not_run(data: Mapping[str, object]) -> frozenset[str]:
+    """Pre_call policy pipeline steps a pipeline skipped, whose guardrail nothing else ran or runs for this request."""
+    pre_call: Final = pipeline_managed_guardrail_names(data, "pre_call")
+    return frozenset(name for name in pre_call if _runs_only_in_pipelines(name, data, pre_call, frozenset()))
 
 
 def _partition_post_call_callbacks() -> tuple[tuple[CustomGuardrail, ...], tuple[CustomLogger, ...]]:
@@ -1427,7 +1467,7 @@ def _deployment_attribution_for_model_group(model_group: object, team_id: str | 
 
     if llm_router is None:
         return _EMPTY_LIFT
-    deployments: Final = llm_router.get_model_list(model_name=model_group, team_id=team_id)
+    deployments: Final = llm_router.registry().deployments(model_name=model_group, team_id=team_id)
     if not deployments:
         return _EMPTY_LIFT
 
@@ -2342,10 +2382,13 @@ class ProxyLogging:
         """
         from litellm.proxy.proxy_server import llm_router
 
-        if llm_router is None or not hasattr(llm_router, "guardrail_list"):
+        if llm_router is None:
+            return False
+        router_settings: Final = llm_router.settings()
+        if not router_settings.is_set("guardrail_list"):
             return False
 
-        matching: Final = [g for g in llm_router.guardrail_list if g.get("guardrail_name") == guardrail_name]
+        matching: Final = [g for g in router_settings.guardrail_list if g.get("guardrail_name") == guardrail_name]
         return len(matching) > 1
 
     async def _execute_guardrail_hook(
@@ -2434,7 +2477,7 @@ class ProxyLogging:
             raise ValueError("Router not initialized")
 
         # Select guardrail using router's load balancing
-        selected_guardrail: Final = llm_router.get_available_guardrail(guardrail_name=guardrail_name)
+        selected_guardrail: Final = llm_router.settings().guardrail(guardrail_name)
 
         callback: Final[CustomGuardrail | None] = selected_guardrail.get("callback")
         if callback is None:
@@ -2700,8 +2743,12 @@ class ProxyLogging:
             data.pop("prompt_version", None)
             data.pop("prompt_environment", None)
 
-    def _process_guardrail_metadata(self, data: dict) -> None:
-        """Process guardrails from metadata and add to applied_guardrails."""
+    def _process_guardrail_metadata(self, data: dict, *, skip_guardrails: bool = False) -> None:
+        """
+        Process guardrails from metadata and add to applied_guardrails, leaving out the pre_call
+        policy pipeline steps that have not run. With ``skip_guardrails`` the pipelines run on
+        another request, so every step is added.
+        """
         from litellm.proxy.common_utils.callback_utils import (
             add_guardrail_to_applied_guardrails_header,
         )
@@ -2725,8 +2772,17 @@ class ProxyLogging:
             if not isinstance(applied_guardrails, list):
                 applied_guardrails = []
 
+            not_run: Final = (
+                frozenset[str]()
+                if skip_guardrails
+                else _request_steps_that_have_not_run(cast(dict[str, object], data))  # cast-ok: request payload
+            )
             for guardrail_name in guardrails_in_metadata:
-                if isinstance(guardrail_name, str) and guardrail_name not in applied_guardrails:
+                if (
+                    isinstance(guardrail_name, str)
+                    and guardrail_name not in applied_guardrails
+                    and guardrail_name not in not_run
+                ):
                     add_guardrail_to_applied_guardrails_header(request_data=data, guardrail_name=guardrail_name)
 
     async def _maybe_execute_pipelines(
@@ -3016,7 +3072,7 @@ class ProxyLogging:
                 and (guardrails_only or not caps.has_pre_call_override)
             ):
                 if data is not None:
-                    self._process_guardrail_metadata(data)
+                    self._process_guardrail_metadata(data, skip_guardrails=skip_guardrails)
                 return data
 
             parallel_guardrails: Final[tuple[CustomGuardrail, ...]] = (
@@ -3120,17 +3176,17 @@ class ProxyLogging:
                 )
 
             if data is not None:
-                self._process_guardrail_metadata(data)
+                self._process_guardrail_metadata(data, skip_guardrails=skip_guardrails)
 
             return data
         except SensitiveDataRouteException as e:
             data = await self._handle_sensitive_data_route_exception(e, data, user_api_key_dict)
             if data is not None:
-                self._process_guardrail_metadata(data)
+                self._process_guardrail_metadata(data, skip_guardrails=skip_guardrails)
             return data
         except Exception:
             if data is not None:
-                self._process_guardrail_metadata(data)
+                self._process_guardrail_metadata(data, skip_guardrails=skip_guardrails)
             raise
 
     async def _run_parallel_pre_call_guardrails(
@@ -3496,6 +3552,7 @@ class ProxyLogging:
         data: dict,
         user_api_key_dict: UserAPIKeyAuth | None,
         call_type: CallTypesLiteral,
+        guardrails_only: bool = False,
     ):
         caps: Final = ProxyLogging.callback_capabilities()
         if not caps.has_guardrail and not caps.has_moderation_override:
@@ -3507,6 +3564,7 @@ class ProxyLogging:
             if (
                 isinstance(callback, CustomLogger)
                 and not isinstance(callback, CustomGuardrail)
+                and (not guardrails_only or callback.enforces_request_content)
                 and _overrides_moderation_hook(callback)
                 and user_api_key_dict is not None
             ):
@@ -3831,7 +3889,9 @@ class ProxyLogging:
         request_data.pop("standard_logging_object", None)
 
         ### LOGGING ###
-        if self._is_proxy_only_llm_api_error(
+        if isinstance(logging_obj, Logging) and logging_obj.prepared_cost is not None:
+            await self._dispatch_proxy_only_failure_handlers(logging_obj, original_exception)
+        elif self._is_proxy_only_llm_api_error(
             original_exception=original_exception,
             error_type=error_type,
             route=user_api_key_dict.request_route,
@@ -3968,9 +4028,7 @@ class ProxyLogging:
             )
             request_data["litellm_logging_obj"] = litellm_logging_obj  # rebind-ok: lifted then popped by the caller
             request_data.update({REJECTED_BEFORE_REQUEST_SETUP_KEY: REJECTED_BEFORE_REQUEST_SETUP})
-            if "metadata" not in request_data:
-                request_data["metadata"] = {}
-            request_data["metadata"].update(user_api_key_logged_metadata)
+            normalized_metadata_slot(request_data, "metadata").update(user_api_key_logged_metadata)
 
         if litellm_logging_obj is not None:
             ## UPDATE LOGGING INPUT
@@ -4936,6 +4994,8 @@ class ProxyLogging:
         if not isinstance(error, _PROXY_ONLY_LLM_API_ERRORS):
             return False
         match _args:
+            case (ModelResponse(), *_) if (held := held_round_spend(logging_obj)) is not None:
+                logging_obj.record_billed_rounds_for_failure(held)
             case (ModelResponse() as assembled, *_):
                 logging_obj.record_assembled_response_for_failure(assembled)
             case (BilledRoundsDispatch() as billed,):
@@ -5182,6 +5242,8 @@ async def prefetch_config_params(prisma_client: "PrismaClient | None", param_nam
 _WRITER_WRITABILITY_PROBE_SQL: Final = "SELECT current_setting('transaction_read_only') AS transaction_read_only"
 _WRITER_WRITABILITY_PROBE_ROWS: Final = TypeAdapter(list[dict[str, object]])
 _READ_ONLY_RECREATE_BACKOFF_CAP_SECONDS: Final = 600
+_SHUTDOWN_RECONNECT_WAIT_SECONDS: Final = 5.0
+_SHUTDOWN_ENGINE_EXIT_WAIT_SECONDS: Final = 5.0
 
 
 class _ForcedRecreateDeclined(Exception):
@@ -5266,6 +5328,7 @@ class PrismaClient:
         database_url: str,
         proxy_logging_obj: ProxyLogging,
         http_client: "HttpConfig | None" = None,
+        engine_exit_wait_seconds: float = _SHUTDOWN_ENGINE_EXIT_WAIT_SECONDS,
     ):
         ## init logging object
         self.baseline_accounting_transactions: list[BaselineAccountingRecord] = []
@@ -5367,6 +5430,9 @@ class PrismaClient:
         else:
             self.db = writer_wrapper  # Client to connect to Prisma db
         self._db_reconnect_lock = asyncio.Lock()
+        self._closing: bool = False
+        self._engine_exit_wait_seconds: Final = engine_exit_wait_seconds
+        self._engine_tasks: frozenset[asyncio.Task[object]] = frozenset()
         self._db_health_watchdog_task: asyncio.Task | None = None
         self._view_setup_task: asyncio.Task[_ViewSetupOutcome] | None = None
         self._db_last_reconnect_attempt_ts: float = 0.0
@@ -5408,6 +5474,7 @@ class PrismaClient:
         self._watching_engine: bool = False
         self._engine_confirmed_dead: bool = False
         self._engine_wait_thread: threading.Thread | None = None
+        self._engine_wait_threads: tuple[threading.Thread, ...] = ()
         verbose_proxy_logger.debug("Success - Created Prisma Client")
 
     @property
@@ -6616,6 +6683,14 @@ class PrismaClient:
         start_time: Final = time.time()
         try:
             await self.db.disconnect()
+            if self._closing:
+                await asyncio.gather(
+                    *(
+                        asyncio.to_thread(thread.join, self._engine_exit_wait_seconds)
+                        for thread in self._engine_wait_threads
+                    )
+                )
+                self._engine_wait_threads = ()
         except Exception as e:
             import traceback
 
@@ -6633,6 +6708,54 @@ class PrismaClient:
                 )
             )
             raise e
+
+    def _spawn_engine_task(self, work: Coroutine[object, object, object]) -> None:
+        if self._closing:
+            work.close()
+            return
+        task: Final = asyncio.create_task(work)
+        self._engine_tasks = self._engine_tasks | {task}
+        task.add_done_callback(self._engine_task_finished)
+
+    def _engine_task_finished(self, task: asyncio.Task[object]) -> None:
+        self._engine_tasks = self._engine_tasks - {task}
+        if not task.cancelled() and (error := task.exception()) is not None:
+            verbose_proxy_logger.error("Prisma engine background task failed: %s", error)
+
+    async def _stop_engine_tasks(self) -> None:
+        tasks: Final = tuple(self._engine_tasks)
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        await self._wait_for_inflight_reconnect()
+
+    async def _wait_for_inflight_reconnect(self) -> None:
+        waiter: Final = asyncio.ensure_future(self._db_reconnect_lock.acquire())
+        waiter.add_done_callback(lambda acquired: acquired.cancelled() or self._db_reconnect_lock.release())
+        done, _pending = await asyncio.wait({waiter}, timeout=_SHUTDOWN_RECONNECT_WAIT_SECONDS)
+        if waiter not in done:
+            waiter.cancel()
+            verbose_proxy_logger.warning("Shutdown stopped waiting for an in-flight DB reconnect")
+
+    async def aclose(self) -> None:
+        verbose_proxy_logger.debug("Disconnecting from Prisma")
+        try:
+            await self.stop_background_tasks()
+        except Exception:
+            verbose_proxy_logger.exception("Stopping database background tasks failed")
+        try:
+            await self.disconnect()
+        except Exception:
+            verbose_proxy_logger.exception("Database disconnect failed")
+
+    async def stop_background_tasks(self) -> None:
+        self._closing = True
+        self._stop_engine_watcher()
+        async with contextlib.AsyncExitStack() as cleanup:
+            cleanup.push_async_callback(self._stop_engine_tasks)
+            cleanup.push_async_callback(self.db.stop_token_refresh_task)
+            cleanup.push_async_callback(self.stop_view_setup_task)
+            cleanup.push_async_callback(self.stop_db_health_watchdog_task)
 
     def _get_engine_pid(self) -> int:
         """Get the PID of the writer's engine subprocess, or 0 if unavailable.
@@ -6727,7 +6850,7 @@ class PrismaClient:
             self._engine_confirmed_dead = True
             self._reap_all_zombies()
             self._cleanup_engine_watcher()
-            asyncio.create_task(
+            self._spawn_engine_task(
                 self.attempt_db_reconnect(
                     reason="engine_process_death",
                     force=True,
@@ -6747,6 +6870,9 @@ class PrismaClient:
             name=f"prisma-engine-waitpid-{pid}",
         )
         thread.start()
+        self._engine_wait_threads = tuple(thread for thread in self._engine_wait_threads if thread.is_alive()) + (
+            thread,
+        )
         self._engine_wait_thread = thread
         return True
 
@@ -6808,7 +6934,7 @@ class PrismaClient:
         self._engine_confirmed_dead = True
         self._reap_all_zombies()
         self._cleanup_engine_watcher()
-        asyncio.create_task(
+        self._spawn_engine_task(
             self.attempt_db_reconnect(
                 reason="engine_process_death",
                 force=True,
@@ -6870,7 +6996,7 @@ class PrismaClient:
         self._engine_confirmed_dead = True
         self._reap_all_zombies()
         self._cleanup_engine_watcher()
-        asyncio.create_task(
+        self._spawn_engine_task(
             self.attempt_db_reconnect(
                 reason="engine_process_death",
                 force=True,
@@ -6943,7 +7069,7 @@ class PrismaClient:
            waitpid thread nor pidfd are available.
 
         """
-        if self._watching_engine or self._engine_pidfd >= 0 or self._engine_wait_thread is not None:
+        if self._closing or self._watching_engine or self._engine_pidfd >= 0 or self._engine_wait_thread is not None:
             return
         pid: Final = self._get_engine_pid()
         if pid == 0:
@@ -6970,7 +7096,7 @@ class PrismaClient:
                 pid,
             )
             self._watching_engine = True
-            asyncio.create_task(self._poll_engine_proc())
+            self._spawn_engine_task(self._poll_engine_proc())
 
     def _stop_engine_watcher(self) -> None:
         """Stop watching the engine process and clean up all resources."""
@@ -6992,7 +7118,7 @@ class PrismaClient:
         """
         self._engine_confirmed_dead = False
         self._cleanup_engine_watcher()
-        asyncio.create_task(self._start_engine_watcher())
+        self._spawn_engine_task(self._start_engine_watcher())
 
     async def _run_reconnect_cycle(
         self,
@@ -7199,6 +7325,8 @@ class PrismaClient:
         force_recreate: bool = False,
         stale_read_engine: "_StaleReadEngine | None" = None,
     ) -> bool:
+        if self._closing:
+            return False
         now: Final = time.time()
         if (
             force is False
@@ -7389,7 +7517,7 @@ class PrismaClient:
         - A periodic SELECT 1 probe that triggers reconnect on network/connection failure.
         - A process-level watcher that detects engine death via waitpid thread, pidfd, or os.kill polling.
         """
-        if self._db_health_watchdog_enabled is not True:
+        if self._closing or self._db_health_watchdog_enabled is not True:
             verbose_proxy_logger.debug("Prisma DB health watchdog disabled via PRISMA_HEALTH_WATCHDOG_ENABLED")
             return
         if self._db_health_watchdog_task is not None:
@@ -7423,7 +7551,7 @@ class PrismaClient:
         verbose_proxy_logger.info("Stopped Prisma DB health watchdog")
 
     def start_view_setup_task(self) -> None:
-        if self._view_setup_task is not None:
+        if self._closing or self._view_setup_task is not None:
             return
         self._view_setup_task = asyncio.create_task(self._run_view_setup())
 
@@ -9015,7 +9143,7 @@ def check_and_merge_model_level_guardrails(
 
     model_level_guardrails: list[object] | None = None
     if model_id is not None:
-        deployment: Final = llm_router.get_deployment(model_id=model_id)
+        deployment: Final = llm_router.registry().deployment(model_id)
         if deployment is None:
             return data
         deployment_guardrails: Final = deployment.litellm_params.get("guardrails")
@@ -9038,7 +9166,7 @@ def check_and_merge_model_level_guardrails(
         # Pass team_id so team-scoped public model names resolve the same way
         # route_request resolves them; otherwise team-scoped deployments are
         # invisible to this lookup and their guardrails are silently dropped.
-        deployments: Final = llm_router.get_model_list(model_name=alias, team_id=team_id) or []
+        deployments: Final = llm_router.registry().deployments(model_name=alias, team_id=team_id) or []
         seen: Final[set] = set()
         union: Final[list] = []
         for dep in deployments:
@@ -9088,8 +9216,7 @@ def _merge_guardrails_with_existing(data: dict, model_level_guardrails: object) 
     if not isinstance(model_level_guardrails, list):
         model_level_guardrails = [model_level_guardrails] if model_level_guardrails else []
 
-    # Combine existing and model-level guardrails
-    metadata["guardrails"] = list(set(existing_guardrails + model_level_guardrails))
+    metadata["guardrails"] = merged_guardrail_entries(existing_guardrails, model_level_guardrails)
     return modified_data
 
 
@@ -9179,39 +9306,30 @@ def _recreate_writer_on_read_only_transaction(prisma_client: "PrismaClient | Non
     asyncio.create_task(prisma_client.recreate_read_only_writer(reason="postgres_read_only_transaction"))
 
 
+def _client_message(e: Exception) -> str:
+    status_is_none: Final = hasattr(e, "status_code") and attribute_of(e, "status_code") is None
+    return "Internal server error" if status_is_none else strip_bug_report_notice(str(e))
+
+
 def handle_exception_on_proxy(e: Exception, litellm_call_id: str | None = None) -> ProxyException:
     """
     Returns an Exception as ProxyException, this ensures all exceptions are OpenAI API compatible
     """
-    from fastapi import status
-
     verbose_proxy_logger.exception("Exception: %s", e)
     if PrismaDBExceptionHandler.is_read_only_transaction_error(e):
         from litellm.proxy.proxy_server import prisma_client
 
         _recreate_writer_on_read_only_transaction(prisma_client)
 
-    headers: Final = litellm_call_id_headers(litellm_call_id)
-    if isinstance(e, HTTPException):
-        return ProxyException(
-            message=getattr(e, "detail", f"error({e})"),
-            type=ProxyErrorTypes.internal_server_error,
-            param=openai_error_param(e),
-            headers=headers,
-            code=getattr(e, "status_code", status.HTTP_500_INTERNAL_SERVER_ERROR),
-        )
-    elif isinstance(e, ProxyException):
+    if isinstance(e, ProxyException):
         return with_litellm_call_id(e, litellm_call_id)
-    _status_code: Final = getattr(e, "status_code", status.HTTP_500_INTERNAL_SERVER_ERROR)
+    if isinstance(e, HTTPException):
+        return with_litellm_call_id(openai_shaped_proxy_exception(e, str(e.detail), e.status_code), litellm_call_id)
     if should_report_bug(e):
         verbose_proxy_logger.error(bug_report_notice(build_proxy_bug_report(e)))
-    return ProxyException(
-        message=strip_bug_report_notice(str(e)),
-        type=ProxyErrorTypes.internal_server_error,
-        param=openai_error_param(e),
-        headers=headers,
-        code=_status_code,
-    )
+    message: Final = _client_message(e)
+    status_code: Final = error_status_code(e, status.HTTP_500_INTERNAL_SERVER_ERROR)
+    return with_litellm_call_id(openai_shaped_proxy_exception(e, message, status_code), litellm_call_id)
 
 
 def require_enterprise_license(feature: str | None = None) -> None:
@@ -9245,7 +9363,7 @@ def is_known_model(model: str | None, llm_router: Router | None) -> bool:
     """
     if model is None or llm_router is None:
         return False
-    model_names: Final = llm_router.get_model_names()
+    model_names: Final = llm_router.registry().names()
 
     model_names_set: Final = set(model_names)
 
@@ -9499,7 +9617,7 @@ async def _agent_access_group_visible_models(
 ) -> frozenset[str] | None:
     """Models an agent key may still list once its attached access groups cap it, ``None`` when
     nothing caps it, so ``/v1/models`` never advertises a model the same key would be denied on."""
-    from litellm.proxy.auth.model_checks import get_complete_model_list, get_team_models
+    from litellm.proxy.auth.model_checks import get_complete_model_list, get_team_models, run_model_listing
 
     if not user_api_key_dict.agent_id:
         return None
@@ -9508,8 +9626,9 @@ async def _agent_access_group_visible_models(
         return None
     if llm_router is None:
         return ceiling.models
-    proxy_model_list: Final = llm_router.get_model_names()
-    model_access_groups: Final = llm_router.get_model_access_groups()
+    registry: Final = llm_router.registry()
+    proxy_model_list: Final = registry.names()
+    model_access_groups: Final = registry.access_groups()
     granted: Final = get_team_models(
         team_models=sorted(ceiling.models),
         proxy_model_list=proxy_model_list,
@@ -9519,17 +9638,20 @@ async def _agent_access_group_visible_models(
     if not granted:
         return frozenset()
     return frozenset(
-        get_complete_model_list(
-            key_models=granted,
-            team_models=(),
-            proxy_model_list=proxy_model_list,
-            user_model=None,
-            infer_model_from_keys=False,
-            return_wildcard_routes=return_wildcard_routes,
-            llm_router=llm_router,
-            model_access_groups=model_access_groups,
-            include_model_access_groups=include_model_access_groups,
-            team_id=team_id,
+        await run_model_listing(
+            partial(
+                get_complete_model_list,
+                key_models=granted,
+                team_models=(),
+                proxy_model_list=proxy_model_list,
+                user_model=None,
+                infer_model_from_keys=False,
+                return_wildcard_routes=return_wildcard_routes,
+                llm_router=llm_router,
+                model_access_groups=model_access_groups,
+                include_model_access_groups=include_model_access_groups,
+                team_id=team_id,
+            )
         )
     )
 
@@ -9574,6 +9696,7 @@ async def get_available_models_for_user(
         get_complete_model_list,
         get_key_models,
         get_team_models,
+        run_model_listing,
     )
 
     # Get proxy model list and access groups
@@ -9581,8 +9704,8 @@ async def get_available_models_for_user(
         proxy_model_list = []
         model_access_groups = {}
     else:
-        proxy_model_list = llm_router.get_model_names()
-        model_access_groups = llm_router.get_model_access_groups()
+        proxy_model_list = llm_router.registry().names()
+        model_access_groups = llm_router.registry().access_groups()
 
     requested_team_object: Final = (
         await _get_validated_team_object(
@@ -9654,18 +9777,21 @@ async def get_available_models_for_user(
     )
 
     # Get complete model list
-    complete_models: Final = get_complete_model_list(
-        key_models=granted_key_models,
-        team_models=granted_team_models,
-        proxy_model_list=proxy_model_list,
-        user_model=user_model,
-        infer_model_from_keys=general_settings.get("infer_model_from_keys", False),
-        return_wildcard_routes=return_wildcard_routes,
-        llm_router=llm_router,
-        model_access_groups=model_access_groups,
-        include_model_access_groups=include_model_access_groups,
-        only_model_access_groups=only_model_access_groups,
-        team_id=effective_team_id,
+    complete_models: Final = await run_model_listing(
+        partial(
+            get_complete_model_list,
+            key_models=granted_key_models,
+            team_models=granted_team_models,
+            proxy_model_list=proxy_model_list,
+            user_model=user_model,
+            infer_model_from_keys=general_settings.get("infer_model_from_keys", False),
+            return_wildcard_routes=return_wildcard_routes,
+            llm_router=llm_router,
+            model_access_groups=model_access_groups,
+            include_model_access_groups=include_model_access_groups,
+            only_model_access_groups=only_model_access_groups,
+            team_id=effective_team_id,
+        )
     )
     all_models: Final = (
         list(
@@ -9803,11 +9929,13 @@ def create_model_info_response(
     }
 
     alias_target: Final = (
-        resolve_model_group_alias(llm_router.model_group_alias, model_id) if llm_router is not None else None
+        resolve_model_group_alias(llm_router.registry().aliases(), model_id) if llm_router is not None else None
     )
     lookup_model: Final = alias_target if alias_target is not None else model_id
 
-    listing_info: Final = llm_router.get_model_listing_info(lookup_model) if llm_router is not None else None
+    listing_info: Final = (
+        llm_router.registry().group(lookup_model, field="listing_info") if llm_router is not None else None
+    )
 
     # One entry per distinct model behind the listed name; (None,) when the router knows
     # nothing about it, so the listed name is resolved on its own as before.
@@ -9849,7 +9977,7 @@ def create_model_info_response(
             max_output_tokens = listing_info.max_output_tokens
 
     if llm_router is not None:
-        configured_mode: Final = llm_router.get_configured_mode(lookup_model)
+        configured_mode: Final = llm_router.registry().group(lookup_model, field="mode")
         if isinstance(configured_mode, str):
             base["mode"] = configured_mode
 
