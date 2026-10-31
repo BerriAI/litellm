@@ -2665,10 +2665,9 @@ class ProxyBaseLLMRequestProcessing:
                 skip_guardrails=skip_guardrails,
                 routing_probe=routing_probe,
             )
-        except Exception:
+        finally:
             if routing_probe is not None and routing_probe.refusal is not None:
                 self._redact_request_its_skipped_guardrails_never_scanned()
-            raise
         await _enforce_guardrail_added_tag_budgets(
             data=self.data,
             tags_before_guardrails=self._tags_before_guardrails,
@@ -3107,7 +3106,6 @@ class ProxyBaseLLMRequestProcessing:
             phase_event("litellm.request.pre_call_completed")
             refusal: Final = None if self._routing_probe is None else self._routing_probe.refusal
             if refusal is not None:
-                self._redact_request_its_skipped_guardrails_never_scanned()
                 raise refusal
 
         _post_call_guardrails_active: Final = self._has_post_call_guardrails()
