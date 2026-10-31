@@ -1775,24 +1775,6 @@ async def test_proxy_startup_refuses_an_unsafe_master_key_even_when_the_database
     assert ("could not be checked" in announced[0]) == key_can_have_encrypted_the_database
 
 
-@pytest.mark.asyncio
-async def test_proxy_startup_refuses_fips_mode_when_the_config_disables_tls_verification(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    from litellm.proxy.common_utils.fips import FipsModeError
-    from litellm.proxy.proxy_server import proxy_startup_event
-
-    config_path, _ = _boot_with_general_settings(monkeypatch, tmp_path, {"master_key": "sk-a-safe-master-key"})
-    config_path.write_text(yaml.dump({"litellm_settings": {"ssl_verify": False}}))
-    monkeypatch.setattr(litellm, "ssl_verify", True)
-    monkeypatch.delenv("SSL_VERIFY", raising=False)
-    monkeypatch.setenv("LITELLM_FIPS_MODE", "true")
-
-    with pytest.raises(FipsModeError, match="TLS certificate verification is disabled"):
-        async with proxy_startup_event(FastAPI()):
-            pass
-
-
 class _UsersWithOnePlaintextPassword:
     async def find_many(self, where: object) -> tuple[types.SimpleNamespace, ...]:
         return (types.SimpleNamespace(user_id="user-1", password="a-plaintext-password"),)
@@ -1826,8 +1808,6 @@ async def test_proxy_startup_refuses_fips_mode_when_the_password_migration_fails
         return real_new(name, data, usedforsecurity=usedforsecurity)
 
     _boot_with_general_settings(monkeypatch, tmp_path, {"master_key": "sk-a-safe-master-key"})
-    monkeypatch.setattr(litellm, "ssl_verify", True)
-    monkeypatch.delenv("SSL_VERIFY", raising=False)
     monkeypatch.setenv("LITELLM_FIPS_MODE", "true")
     monkeypatch.setattr(_hashlib, "get_fips_mode", lambda: 1)
     monkeypatch.setattr(_hashlib, "new", new_refusing_md5)

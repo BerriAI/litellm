@@ -337,21 +337,6 @@ def _create_ssl_context(
 def get_ssl_verify(
     ssl_verify: bool | str | None = None,
 ) -> bool | str:
-    """resolve_ssl_verify, refusing disabled TLS verification under LITELLM_FIPS_MODE."""
-    resolved: Final = resolve_ssl_verify(ssl_verify)
-    if resolved is not False:
-        return resolved
-
-    from litellm.proxy.common_utils.fips import TLS_VERIFICATION_DISABLED, FipsModeError, is_fips_mode
-
-    if is_fips_mode():
-        raise FipsModeError(TLS_VERIFICATION_DISABLED)
-    return resolved
-
-
-def resolve_ssl_verify(
-    ssl_verify: bool | str | None = None,
-) -> bool | str:
     """
     Common utility to resolve the SSL verification setting.
     Prioritizes:
