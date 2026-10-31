@@ -1302,8 +1302,8 @@ class CustomStreamWrapper:
             if _is_delta_empty:
                 model_response.choices[0].delta = Delta(content=self._close_open_think_block())
                 # get any function call arguments
-                model_response.choices[0].finish_reason = map_finish_reason(
-                    finish_reason=self.received_finish_reason
+                model_response.choices[0].finish_reason = self._normalize_tool_call_finish_reason(
+                    map_finish_reason(finish_reason=self.received_finish_reason)
                 )  # ensure consistent output to openai
 
                 self.sent_last_chunk = True
@@ -1737,6 +1737,8 @@ class CustomStreamWrapper:
                                         # if function returned but type set to None - mistral's api returns type: None
                                         tool["type"] = "function"
                             model_response.choices[0].delta = Delta(**_json_delta)
+                            if model_response.choices[0].delta.tool_calls:
+                                self.tool_call = True
                         except Exception as e:
                             verbose_logger.exception(
                                 "litellm.CustomStreamWrapper.chunk_creator(): Exception occured - %s", e
@@ -1966,6 +1968,11 @@ class CustomStreamWrapper:
         if self.logging_obj.is_sync_litellm_request(litellm_params):
             self.logging_obj.success_handler(processed_chunk, None, None, cache_hit)
 
+    def _normalize_tool_call_finish_reason(self, finish_reason: str) -> str:
+        if finish_reason == "stop" and self.tool_call:
+            return "tool_calls"
+        return finish_reason
+
     def finish_reason_handler(self):
         model_response: Final = self.model_response_creator(
             hidden_params=None if self.received_model_id is None else {"received_model_id": self.received_model_id}
@@ -1981,16 +1988,9 @@ class CustomStreamWrapper:
         if served_tier is not None:
             setattr(model_response, "service_tier", served_tier)  # noqa: B010  # pydantic extra, not a declared field
         _finish_reason: Final = self.received_finish_reason or self.intermittent_finish_reason
-        if _finish_reason is not None:
-            model_response.choices[0].finish_reason = _finish_reason
-        else:
-            model_response.choices[0].finish_reason = "stop"
-
-        ## if tool use
-        if (
-            model_response.choices[0].finish_reason == "stop" and self.tool_call
-        ):  # don't overwrite for other - potential error finish reasons
-            model_response.choices[0].finish_reason = "tool_calls"
+        model_response.choices[0].finish_reason = self._normalize_tool_call_finish_reason(
+            _finish_reason if _finish_reason is not None else "stop"
+        )
         close_tag: Final = self._close_open_think_block()
         if close_tag is not None:
             model_response.choices[0].delta.content = close_tag
