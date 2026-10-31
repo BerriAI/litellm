@@ -665,15 +665,15 @@ def test_cohere_v2_error_handling(respx_mock: respx.MockRouter) -> None:
     assert "invalid request: model 'invalid-model' not found" in error.value.message
 
 
-def test_cohere_v2_stream_tool_calls_are_emitted_with_index() -> None:
-    events: Final = [
+def _cohere_v2_tool_call_events(index: int, call_id: str, city: str) -> tuple[dict[str, object], ...]:
+    return (
         {
             "type": "tool-call-start",
-            "index": 0,
+            "index": index,
             "delta": {
                 "message": {
                     "tool_calls": {
-                        "id": "get_weather_a1",
+                        "id": call_id,
                         "type": "function",
                         "function": {"name": "get_weather", "arguments": ""},
                     }
@@ -682,49 +682,58 @@ def test_cohere_v2_stream_tool_calls_are_emitted_with_index() -> None:
         },
         {
             "type": "tool-call-delta",
-            "index": 0,
+            "index": index,
             "delta": {"message": {"tool_calls": {"function": {"arguments": '{"city": '}}}},
         },
         {
             "type": "tool-call-delta",
-            "index": 0,
-            "delta": {"message": {"tool_calls": {"function": {"arguments": '"Paris"}'}}}},
+            "index": index,
+            "delta": {"message": {"tool_calls": {"function": {"arguments": json.dumps(city) + "}"}}}},
         },
-        {"type": "tool-call-end", "index": 0},
-        {
-            "type": "tool-call-start",
-            "index": 1,
-            "delta": {
-                "message": {
-                    "tool_calls": {
-                        "id": "get_time_b2",
-                        "type": "function",
-                        "function": {"name": "get_time", "arguments": ""},
-                    }
-                }
-            },
-        },
-        {
-            "type": "tool-call-delta",
-            "index": 1,
-            "delta": {"message": {"tool_calls": {"function": {"arguments": "{}"}}}},
-        },
-    ]
-    iterator: Final = CohereV2ChatConfig().get_model_response_iterator(
-        streaming_response=iter(json.dumps(event) for event in events), sync_stream=True
+        {"type": "tool-call-end", "index": index},
     )
 
-    calls: Final[dict[int, dict[str, str]]] = {}
-    for parsed in iterator:
-        tool_use = parsed["tool_use"]
-        if tool_use is None:
-            continue
-        call = calls.setdefault(tool_use["index"], {"id": "", "name": "", "arguments": ""})
-        call["id"] += tool_use["id"] or ""
-        call["name"] += tool_use["function"]["name"] or ""
-        call["arguments"] += tool_use["function"]["arguments"] or ""
 
-    assert calls == {
-        0: {"id": "get_weather_a1", "name": "get_weather", "arguments": '{"city": "Paris"}'},
-        1: {"id": "get_time_b2", "name": "get_time", "arguments": "{}"},
-    }
+@pytest.mark.usefixtures("_cohere_httpx_transport")
+@pytest.mark.respx(assert_all_called=True)
+async def test_cohere_v2_stream_returns_parallel_tool_calls(respx_mock: respx.MockRouter) -> None:
+    stream_events: Final = (
+        {"type": "message-start", "id": "c0a2b6e1", "delta": {"message": {"role": "assistant"}}},
+        *_cohere_v2_tool_call_events(0, "get_weather_paris", "Paris"),
+        *_cohere_v2_tool_call_events(1, "get_weather_tokyo", "Tokyo"),
+        {
+            "type": "message-end",
+            "delta": {"finish_reason": "TOOL_CALL", "usage": {"tokens": {"input_tokens": 40, "output_tokens": 30}}},
+        },
+    )
+    respx_mock.post(COHERE_V2_CHAT_URL).mock(
+        return_value=httpx.Response(200, content="".join(json.dumps(event) + "\n" for event in stream_events).encode())
+    )
+
+    response: Final = await litellm.acompletion(
+        model="cohere_chat/v2/command-a-plus-05-2026",
+        messages=[{"role": "user", "content": "What is the weather in Paris and in Tokyo?"}],
+        tools=[
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_weather",
+                    "parameters": {"type": "object", "properties": {"city": {"type": "string"}}},
+                },
+            }
+        ],
+        stream=True,
+        api_key="cohere-test-key",
+    )
+    chunks: Final = [chunk async for chunk in response]
+    rebuilt: Final = litellm.stream_chunk_builder(chunks)
+
+    assert rebuilt is not None
+    assert [
+        (call.id, call.function.name, json.loads(call.function.arguments))
+        for call in rebuilt.choices[0].message.tool_calls
+    ] == [
+        ("get_weather_paris", "get_weather", {"city": "Paris"}),
+        ("get_weather_tokyo", "get_weather", {"city": "Tokyo"}),
+    ]
+    assert chunks[-1].choices[0].finish_reason == "tool_calls"

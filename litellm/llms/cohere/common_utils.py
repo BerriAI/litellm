@@ -1,8 +1,9 @@
 import json
-from typing import Final, Literal, cast
+from typing import Final, Literal
 
 from litellm.llms.base_llm.base_utils import BaseLLMModelInfo
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
+from litellm.types.llms.cohere import CohereV2StreamedToolCall
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import (
     ChatCompletionToolCallChunk,
@@ -234,19 +235,13 @@ class CohereV2ModelResponseIterator:
             return content
         return ""
 
-    def _parse_tool_call_delta(self, chunk: dict, index: int) -> ChatCompletionToolCallChunk | None:
+    def _parse_tool_call_delta(self, chunk: dict, index: int) -> ChatCompletionToolCallChunk:
         """Parse tool-call-start and tool-call-delta chunks to extract tool calls."""
-        delta: Final = cast("dict[str, dict[str, object]]", chunk.get("delta") or {})
-        raw: Final = delta.get("message", {}).get("tool_calls") or {}
-        tool_call: Final = cast("dict[str, object]", (raw[0] if raw else {}) if isinstance(raw, list) else raw)
-        function: Final = cast("dict[str, str]", tool_call.get("function") or {})
+        tool_call: Final = CohereV2StreamedToolCall.model_validate(chunk)
         return {
-            "id": cast("str", tool_call.get("id")),
+            "id": tool_call.id,
             "type": "function",
-            "function": {
-                "name": function.get("name"),
-                "arguments": function.get("arguments", ""),
-            },
+            "function": {"name": tool_call.name, "arguments": tool_call.arguments},
             "index": index,
         }
 
