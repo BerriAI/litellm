@@ -216,16 +216,14 @@ _RESPONSES_FILE: Final = _request_file("responses")
 _MESSAGES_FILE: Final = _request_file("messages")
 
 
-def _fill(value: object, turn_one: ParsedTurn) -> object:
-    if value == TURN_ONE_TOOL_CALL_ID:
-        return turn_one.tool_call.id if turn_one.tool_call is not None else ""
-    if value == TURN_ONE_ASSISTANT_OUTPUT:
-        return turn_one.assistant_echo
-    if isinstance(value, dict):
-        return {key: _fill(item, turn_one) for key, item in _PLAIN_OBJECT.validate_python(value).items()}
-    if isinstance(value, list):
-        return [_fill(item, turn_one) for item in _OBJECT_LIST.validate_python(value)]
-    return value
+def _fill(item: object, turn_one: ParsedTurn) -> object:
+    tool_call_id: Final = turn_one.tool_call.id if turn_one.tool_call is not None else ""
+    text: Final = (
+        json.dumps(item)
+        .replace(json.dumps(TURN_ONE_TOOL_CALL_ID), json.dumps(tool_call_id))
+        .replace(json.dumps(TURN_ONE_ASSISTANT_OUTPUT), json.dumps(turn_one.assistant_echo))
+    )
+    return _JSON_DOCUMENT.validate_json(text)
 
 
 def _appended_messages(item: object, turn_one: ParsedTurn) -> Sequence[object]:
