@@ -31,6 +31,7 @@ from litellm.llms.openai.chat.gpt_transformation import (
     OpenAIChatCompletionStreamingHandler,
     OpenAIGPTConfig,
 )
+from litellm.llms.openai.chat.o_series_transformation import OpenAIOSeriesConfig
 from litellm.llms.openai_like.dynamic_config import create_config_class
 from litellm.llms.openai_like.json_loader import SimpleProviderConfig
 from litellm.llms.sambanova.chat import SambanovaConfig
@@ -1629,8 +1630,28 @@ async def test_async_transform_request_does_not_download_a_pdf_url_for_a_provide
 @pytest.mark.usefixtures("pdf_urls_reachable")
 @pytest.mark.respx(assert_all_called=True)
 @pytest.mark.asyncio
-async def test_async_transform_request_downloads_a_pdf_only_message_off_the_event_loop_for_a_provider_that_sends_only_text(
+@pytest.mark.parametrize(
+    ("config", "messages", "expected_messages"),
+    [
+        pytest.param(
+            HerokuChatConfig(),
+            [{"role": "user", "content": [_pdf_url_part(_ONCE_URL)]}],
+            [{"role": "user", "content": [_DOWNLOADED_PDF_PART]}],
+            id="pdf_only_message_for_a_provider_that_sends_only_text",
+        ),
+        pytest.param(
+            OpenAIOSeriesConfig(),
+            [{"role": "system", "content": [_pdf_url_part(_ONCE_URL)]}, {"role": "user", "content": [_SUMMARIZE]}],
+            [{"role": "user", "content": [_DOWNLOADED_PDF_PART]}, {"role": "user", "content": [_SUMMARIZE]}],
+            id="system_message_for_a_model_without_system_messages",
+        ),
+    ],
+)
+async def test_async_transform_request_downloads_a_pdf_the_sync_transform_reaches_off_the_event_loop(
     respx_mock: respx.MockRouter,
+    config: OpenAIGPTConfig,
+    messages: list[dict[str, object]],
+    expected_messages: list[dict[str, object]],
 ) -> None:
     in_memory_cache.delete_cache(_ONCE_URL)
     event_loop_thread: Final = threading.get_ident()
@@ -1642,15 +1663,15 @@ async def test_async_transform_request_downloads_a_pdf_only_message_off_the_even
 
     respx_mock.get(_ONCE_URL).mock(side_effect=serve_pdf_off_the_event_loop_only)
 
-    request: Final = await HerokuChatConfig().async_transform_request(
-        model="test-model",
-        messages=[{"role": "user", "content": [_pdf_url_part(_ONCE_URL)]}],
+    request: Final = await config.async_transform_request(
+        model="test-model-without-system-messages",
+        messages=copy.deepcopy(messages),
         optional_params={},
         litellm_params={},
         headers={},
     )
 
-    assert request["messages"] == [{"role": "user", "content": [_DOWNLOADED_PDF_PART]}]
+    assert request["messages"] == expected_messages
 
 
 @pytest.mark.usefixtures("pdf_urls_reachable")
@@ -1775,6 +1796,48 @@ async def test_async_transform_request_fails_a_dead_pdf_url_with_the_sync_error_
 
     assert str(async_error.value) == str(sync_error.value)
     assert healthy.call_count + dead.call_count - sync_downloads == sync_downloads
+
+
+@pytest.mark.usefixtures("pdf_urls_reachable")
+@pytest.mark.respx(assert_all_called=False)
+@pytest.mark.asyncio
+async def test_async_transform_request_fails_a_dead_pdf_url_without_waiting_for_the_downloads_after_it(
+    respx_mock: respx.MockRouter,
+) -> None:
+    dead_url: Final = "https://files.example.test/dead-first.pdf"
+    slow_url: Final = "https://files.example.test/slow-after-dead.pdf"
+    in_memory_cache.delete_cache(slow_url)
+    slow_download_started: Final = asyncio.Event()
+    slow_download_stopped: Final = asyncio.Event()
+
+    async def answer_not_found_once_the_slow_download_started(request: Request) -> Response:
+        await asyncio.wait_for(slow_download_started.wait(), timeout=5)
+        return Response(404)
+
+    async def serve_pdf_never(request: Request) -> Response:
+        slow_download_started.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            slow_download_stopped.set()
+        return _serve_pdf(request)
+
+    respx_mock.get(dead_url).mock(side_effect=answer_not_found_once_the_slow_download_started)
+    respx_mock.get(slow_url).mock(side_effect=serve_pdf_never)
+
+    with pytest.raises(litellm.ImageFetchError):
+        await asyncio.wait_for(
+            OpenAIGPTConfig().async_transform_request(
+                model="gpt-4.1",
+                messages=[{"role": "user", "content": [_SUMMARIZE, _pdf_url_part(dead_url), _pdf_url_part(slow_url)]}],
+                optional_params={},
+                litellm_params={},
+                headers={},
+            ),
+            timeout=5,
+        )
+
+    assert slow_download_stopped.is_set()
 
 
 @pytest.mark.usefixtures("pdf_urls_reachable")

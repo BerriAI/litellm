@@ -36,6 +36,7 @@ from litellm.litellm_core_utils.prompt_templates.image_handling import (
     async_convert_url_to_base64,
     async_fetch_urls_to_base64,
     convert_url_to_base64,
+    has_remote_file_urls,
     remote_file_urls,
 )
 from litellm.litellm_core_utils.url_utils import join_api_base
@@ -694,11 +695,11 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         litellm_params: dict,
         headers: dict,
     ) -> dict:
+        if not has_remote_file_urls(messages):
+            return self.transform_request(model, messages, optional_params, litellm_params, headers)
         pdf_urls: Final = remote_file_urls(
             message for message in messages if message.get("role") in _ROLES_WHOSE_FILES_ARE_DOWNLOADED
         )
-        if not pdf_urls:
-            return self.transform_request(model, messages, optional_params, litellm_params, headers)
         prefetched: Final = (
             _NOTHING_PREFETCHED if self._flattens_content_lists() else await async_fetch_urls_to_base64(pdf_urls)
         )

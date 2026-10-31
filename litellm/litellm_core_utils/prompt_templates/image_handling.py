@@ -5,7 +5,7 @@ Helper functions to handle images passed in messages
 import asyncio
 import base64
 import time
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import AsyncIterator, Callable, Iterable, Mapping
 from dataclasses import dataclass
 from itertools import chain, takewhile
 from types import MappingProxyType
@@ -335,12 +335,27 @@ async def _fetch_outcome(
         return error
 
 
+async def _outcomes_through_first_failure(
+    downloads: "tuple[asyncio.Task[str | litellm.ImageFetchError], ...]",
+) -> "AsyncIterator[str | litellm.ImageFetchError]":
+    for download in downloads:
+        yield await download
+        if isinstance(download.result(), litellm.ImageFetchError):
+            return
+
+
 async def async_fetch_urls_to_base64(
     remote_urls: tuple[str, ...], timeout: float | httpx.Timeout | None = None
 ) -> "Mapping[str, str | litellm.ImageFetchError]":
     in_flight: Final = asyncio.Semaphore(MAX_CONCURRENT_REMOTE_MEDIA_FETCHES)
-    outcomes: Final = await asyncio.gather(*(_fetch_outcome(url, in_flight, timeout) for url in remote_urls))
-    return MappingProxyType(dict(zip(remote_urls, outcomes, strict=True)))
+    downloads: Final = tuple(asyncio.create_task(_fetch_outcome(url, in_flight, timeout)) for url in remote_urls)
+    try:
+        outcomes: Final = tuple([outcome async for outcome in _outcomes_through_first_failure(downloads)])
+    finally:
+        for download in downloads:
+            download.cancel()
+        await asyncio.gather(*downloads, return_exceptions=True)
+    return MappingProxyType(dict(zip(remote_urls[: len(outcomes)], outcomes, strict=True)))
 
 
 def _remote_urls_in_parts(parts: Iterable[object], should_inline: Callable[[RemoteMedia], bool]) -> tuple[str, ...]:
@@ -357,6 +372,10 @@ def _remote_urls_to_inline(
 def _is_not_a_file_part_missing_its_file(part: object) -> bool:
     fields: Final = _as_mapping(part)
     return fields is None or fields.get("type") != "file" or fields.get("file") is not None
+
+
+def has_remote_file_urls(messages: Iterable[AllMessageValues]) -> bool:
+    return bool(_remote_urls_to_inline(messages, inline_remote_file_urls))
 
 
 def remote_file_urls(messages: Iterable[AllMessageValues]) -> tuple[str, ...]:
