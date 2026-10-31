@@ -794,7 +794,15 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                 )
 
             if headers:
-                inference_params["extra_headers"] = headers
+                # merge, don't replace: optional_params["extra_headers"] already
+                # holds the provider's own headers (github_copilot puts its
+                # editor-version set there) plus whatever the caller passed as
+                # extra_headers=. Letting headers= overwrite the dict drops all of
+                # that, and the caller's values win on a genuine clash.
+                inference_params["extra_headers"] = {
+                    **cast("dict[str, str]", inference_params.get("extra_headers") or {}),
+                    **headers,
+                }
             if model is None or messages is None:
                 raise OpenAIError(status_code=422, message="Missing model or messages")
 
