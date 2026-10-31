@@ -689,16 +689,11 @@ class TestProxySettingEndpoints:
         # Verify settings were updated
         settings = data["settings"]
         assert settings["google_client_id"] == new_sso_settings["google_client_id"]
-        assert (
-            settings["google_client_secret"] == new_sso_settings["google_client_secret"]
-        )
+        assert settings["google_client_secret"] == "new_****************cret"
         assert (
             settings["microsoft_client_id"] == new_sso_settings["microsoft_client_id"]
         )
-        assert (
-            settings["microsoft_client_secret"]
-            == new_sso_settings["microsoft_client_secret"]
-        )
+        assert settings["microsoft_client_secret"] == "new_*******************cret"
         assert settings["proxy_base_url"] == new_sso_settings["proxy_base_url"]
         assert settings["user_email"] == new_sso_settings["user_email"]
 
@@ -830,6 +825,20 @@ class TestProxySettingEndpoints:
         assert saved["user_email"] == "admin@example.com"
         assert saved["generic_client_secret"] is None
         assert os.environ["GENERIC_CLIENT_SECRET"] == "env-only-secret"
+
+    def test_update_sso_settings_response_masks_stored_secrets(
+        self, mock_proxy_config, mock_auth, monkeypatch
+    ):
+        response, saved = self._patch_sso_settings(
+            monkeypatch, self._STORED_GENERIC_SSO, {}
+        )
+
+        assert response.status_code == 200
+        assert saved["generic_client_secret"] == "stored-client-secret"
+        returned = response.json()["settings"]
+        assert returned["generic_client_id"] == "stored-client-id"
+        assert returned["generic_client_secret"] != "stored-client-secret"
+        assert "stored-client-secret" not in response.text
 
     def test_update_sso_settings_maps_saml_fields_to_env_vars(
         self, mock_proxy_config, mock_auth, monkeypatch

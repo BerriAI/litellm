@@ -1390,7 +1390,7 @@ async def update_sso_settings(
     return {
         "message": "SSO settings updated successfully",
         "status": "success",
-        "settings": sso_data,
+        "settings": mask_sensitive_keys(sso_data, set(SSO_SECRET_FIELDS)),
     }
 
 
