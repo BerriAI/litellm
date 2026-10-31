@@ -131,6 +131,7 @@ describe("HealthCheckComponent", () => {
       expect(screen.getByText("skipped")).toBeInTheDocument();
       expect(screen.queryByText("healthy")).not.toBeInTheDocument();
       expect(screen.getByText(warning)).toBeInTheDocument();
+      expect(screen.getByText(warning)).not.toHaveClass("text-destructive");
     }
   });
 

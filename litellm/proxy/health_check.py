@@ -197,7 +197,7 @@ def _get_process_rss_mb() -> float | None:
         if sys.platform == "darwin":
             return float(ru_maxrss) / (1024 * 1024)
         return float(ru_maxrss) / 1024
-    except Exception:
+    except (ImportError, OSError):
         return None
 
 
@@ -346,9 +346,17 @@ def _fallback_probe_mode(probe_params: Mapping[str, object]) -> str | None:
     )
 
 
-def _priced_per_generated_clip(model: object) -> bool:
-    entry: Final = cost_map_entry(model) if isinstance(model, str) else MappingProxyType({})
+def _bills_per_generated_clip(entry: Mapping[str, object]) -> bool:
     return bool(entry.get("output_cost_per_image")) and not entry.get("output_cost_per_token")
+
+
+def _priced_per_generated_clip(probe_params: Mapping[str, object]) -> bool:
+    model: Final = probe_params.get("model")
+    provider: Final = probe_params.get("custom_llm_provider")
+    if not isinstance(model, str):
+        return False
+    names: Final = (model, f"{provider}/{model}") if isinstance(provider, str) else (model,)
+    return any(_bills_per_generated_clip(cost_map_entry(name)) for name in names)
 
 
 def _probe_generates_billed_media(model_info: Mapping[str, object], litellm_params: Mapping[str, object]) -> bool:
@@ -357,36 +365,51 @@ def _probe_generates_billed_media(model_info: Mapping[str, object], litellm_para
         return True
     if not isinstance(litellm_params.get("model"), str):
         return False
-    try:
-        probe_params: Final = _PROBE_PARAMS_ADAPTER.validate_python(
-            update_litellm_params_for_health_check(dict(model_info), dict(litellm_params))
-        )
-    except (TypeError, ValueError):
-        return False
+    probe_params: Final = _PROBE_PARAMS_ADAPTER.validate_python(
+        update_litellm_params_for_health_check(dict(model_info), dict(litellm_params))
+    )
     return (mode is None and _fallback_probe_mode(probe_params) in _BILLED_MEDIA_GENERATION_MODES) or (
-        _priced_per_generated_clip(probe_params.get("model"))
+        _priced_per_generated_clip(probe_params)
     )
 
 
+def _disable_background_flag(deployment: Mapping[str, object]) -> object:
+    model_info: Final = deployment.get("model_info")
+    return model_info.get("disable_background_health_check") if isinstance(model_info, Mapping) else None
+
+
 def bills_media_on_probe(deployment: Mapping[str, object]) -> bool:
-    model_info: Final = _str_key_mapping(deployment.get("model_info"))
-    explicit: Final = model_info.get("disable_background_health_check")
+    explicit: Final = _disable_background_flag(deployment)
     if explicit is not None and not explicit:
         return False
-    return _probe_generates_billed_media(model_info, _str_key_mapping(deployment.get("litellm_params")))
+    try:
+        return _probe_generates_billed_media(
+            _str_key_mapping(deployment.get("model_info")), _str_key_mapping(deployment.get("litellm_params"))
+        )
+    except Exception:
+        logger.debug("Could not work out the health check for %s", _deployment_id(deployment))
+        return False
 
 
 def skips_background_health_check(deployment: Mapping[str, object]) -> bool:
-    disabled: Final = _str_key_mapping(deployment.get("model_info")).get("disable_background_health_check")
-    return bool(disabled) or bills_media_on_probe(deployment)
+    return bool(_disable_background_flag(deployment)) or bills_media_on_probe(deployment)
 
 
 def background_check_deployments(model_list: Sequence[Mapping[str, object]]) -> tuple[Mapping[str, object], ...]:
     return tuple(deployment for deployment in model_list if not skips_background_health_check(deployment))
 
 
-def all_bill_media_on_probe(deployments: Sequence[Mapping[str, object]], ids: AbstractSet[object]) -> bool:
-    targets: Final = tuple(d for d in deployments if _deployment_id(d) in ids)
+def all_bill_media_on_probe(
+    deployments: Sequence[Mapping[str, object]],
+    ids: AbstractSet[object],
+    health_check_skip_disabled_background_models: bool,
+) -> bool:
+    targets: Final = tuple(
+        d
+        for d in deployments
+        if _deployment_id(d) in ids
+        and not (health_check_skip_disabled_background_models and _disable_background_flag(d))
+    )
     return bool(targets) and all(bills_media_on_probe(d) for d in targets)
 
 

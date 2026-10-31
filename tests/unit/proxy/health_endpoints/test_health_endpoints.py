@@ -2722,6 +2722,46 @@ async def test_targeted_health_answers_without_probing_billed_media(use_backgrou
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("model_info", "expected_status"),
+    [
+        ({"id": "image-1", "mode": "image_generation", "disable_background_health_check": True}, 503),
+        ({"id": "image-1", "mode": "image_generation"}, 200),
+    ],
+)
+async def test_skip_disabled_setting_keeps_the_503_for_an_opted_out_media_model(model_info, expected_status):
+    from fastapi import Response
+
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.health_endpoints._health_endpoints import health_endpoint
+
+    model_list = [
+        {"model_name": "image", "litellm_params": {"model": "gemini/gemini-3-pro-image"}, "model_info": model_info}
+    ]
+    response = Response()
+    with (
+        _proxy_health_globals(
+            model_list,
+            litellm.Router(model_list=copy.deepcopy(model_list)),
+            use_background_health_checks=True,
+            health_check_results={"healthy_endpoints": [], "unhealthy_endpoints": []},
+        ),
+        patch(  # test-quality-ok: proxy module global, no injection seam
+            "litellm.proxy.proxy_server.general_settings",
+            {"health_check_skip_disabled_background_models": True},
+        ),
+    ):
+        await health_endpoint(
+            response=response,
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, token="admin-token"),
+            model=None,
+            model_id="image-1",
+        )
+
+    assert response.status_code == expected_status
+
+
+@pytest.mark.asyncio
 async def test_health_endpoint_filters_background_cache_by_user_access():
     """
     When background_health_checks is enabled, health_endpoint() should also

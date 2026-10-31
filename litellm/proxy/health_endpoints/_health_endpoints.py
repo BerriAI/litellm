@@ -1694,7 +1694,9 @@ async def health_endpoint(
                 },
             )
         if targeted_ids is not None and all_bill_media_on_probe(
-            DEPLOYMENTS_ADAPTER.validate_python(_llm_model_list), MODEL_IDS_ADAPTER.validate_python(targeted_ids)
+            DEPLOYMENTS_ADAPTER.validate_python(_llm_model_list),
+            MODEL_IDS_ADAPTER.validate_python(targeted_ids),
+            **_hc_filter,
         ):
             return {
                 "healthy_endpoints": [],

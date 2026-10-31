@@ -1271,6 +1271,44 @@ def test_health_checks_skip_billed_media_by_the_mode_the_probe_would_run():
     )
 
 
+@pytest.mark.parametrize(
+    ("litellm_params", "billed"),
+    [
+        ({"model": "lyria-002", "custom_llm_provider": "vertex_ai"}, True),
+        ({"model": "lyria-3-clip-preview", "custom_llm_provider": "gemini"}, True),
+        ({"model": "gemini-3.1-pro-preview", "custom_llm_provider": "gemini"}, False),
+        ({"model": "my-fine-tune", "custom_llm_provider": "vertex_ai"}, False),
+    ],
+)
+def test_per_clip_price_is_found_when_the_provider_is_set_apart_from_the_model(
+    litellm_params: dict[str, str], billed: bool
+):
+    """Prices as model_prices_and_context_window.json listed them on 2026-10-31: the Lyria entries bill per clip with
+    no token price under their provider prefix alone, and gemini/gemini-3.1-pro-preview also has a token price."""
+    deployment = {"litellm_params": litellm_params, "model_info": {"id": "clip", "mode": "audio_speech"}}
+
+    assert hc_module.bills_media_on_probe(deployment) is billed
+
+
+@pytest.mark.parametrize(
+    "model_info",
+    [
+        {"health_check_max_tokens": float("inf")},
+        {"health_check_max_tokens": "many"},
+        {"health_check_model": 123},
+        {1: "not a string key"},
+    ],
+)
+def test_one_bad_model_info_value_cannot_stop_the_health_checks(model_info: dict[object, object]):
+    bad = {"litellm_params": {"model": "openai/gpt-4o-mini"}, "model_info": {"id": "bad", **model_info}}
+    control = {"litellm_params": {"model": "openai/gpt-4o-mini"}, "model_info": {"id": "control"}}
+
+    assert hc_module.background_check_deployments([bad, control]) == (bad, control)
+    assert hc_module._health_check_eligible([bad, control], skip_disabled=True) == (bad, control)
+    assert hc_module._health_check_eligible([bad, control], skip_disabled=False) == (bad, control)
+    assert hc_module.all_bill_media_on_probe([bad, control], {"bad"}, False) is False
+
+
 def test_narrowing_by_an_id_that_matches_nothing_keeps_the_whole_list():
     """Pinned because the disabled-dependency fix moved this filter into its own helper."""
     deployments = [{"model_name": "a", "litellm_params": {"model": "openai/a"}, "model_info": {"id": "a-1"}}]

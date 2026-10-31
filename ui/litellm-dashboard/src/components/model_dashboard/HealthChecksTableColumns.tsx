@@ -340,6 +340,15 @@ export const getHealthChecksTableColumns = ({
       }
 
       const cleanedError = healthStatus.error;
+
+      if (healthStatus.status === "skipped") {
+        return (
+          <span className="block max-w-50 truncate text-sm text-muted-foreground" title={cleanedError}>
+            {cleanedError}
+          </span>
+        );
+      }
+
       const fullError = healthStatus.fullError || healthStatus.error;
       const displayName = getDisplayModelName(model) || model.model_name;
 
