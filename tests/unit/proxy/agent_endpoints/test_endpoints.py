@@ -1139,13 +1139,18 @@ def test_non_admin_health_check_probes_backend_and_returns_proxy_card(monkeypatc
         agent_card_params=_sample_agent_card_params_with_backend_url(),
     )
     test_client: Final = _client_with_agent_card(monkeypatch, LitellmUserRoles.INTERNAL_USER, agent)
-    health_check: Final = AsyncMock(return_value={"agent_id": agent.agent_id, "healthy": True})
-    monkeypatch.setattr(agent_endpoints, "_check_agent_url_health", health_check)
+    http_get: Final = AsyncMock(return_value=httpx.Response(200))
+    http_client: Final = MagicMock(get=http_get)
+    monkeypatch.setattr(
+        agent_endpoints,
+        "get_async_httpx_client",
+        MagicMock(return_value=http_client),
+    )
 
     response: Final = test_client.get("/v1/agents?health_check=true", headers={"Authorization": "Bearer k"})
 
     assert response.status_code == 200, response.text
-    assert health_check.await_args.args[0].agent_card_params["url"] == _AGENT_CARD_BACKEND_URL
+    assert http_get.await_args.args[0] == _AGENT_CARD_BACKEND_URL
     assert response.json()[0]["agent_card_params"]["url"] == "http://testserver/a2a/agent-123"
 
 
