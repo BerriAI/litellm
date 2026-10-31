@@ -122,6 +122,15 @@ class OpenAIOSeriesConfig(OpenAIGPTConfig):
 
         return super()._map_openai_params(non_default_params, optional_params, model, drop_params)
 
+    def _with_provider_roles(self, messages: Sequence[AllMessageValues], model: str) -> Sequence[AllMessageValues]:
+        keeps_system_messages: Final = supports_system_messages(model, "openai")
+        return tuple(
+            message
+            if keeps_system_messages or message["role"] != "system"
+            else ChatCompletionUserMessage(content=message["content"], role="user")
+            for message in messages
+        )
+
     def is_model_o_series_model(self, model: str) -> bool:
         model = model.split("/")[-1]  # could be "openai/o3" or "o3"
         return (
@@ -152,13 +161,7 @@ class OpenAIOSeriesConfig(OpenAIGPTConfig):
         - modalities: image => drop param (if user opts in to dropping param)
         - role: system ==> translate to role 'user'
         """
-        _supports_system_messages: Final = supports_system_messages(model, "openai")
-        transformed_messages: Final = list(messages)
-        for i, message in enumerate(transformed_messages):
-            if message["role"] == "system" and not _supports_system_messages:
-                new_message = ChatCompletionUserMessage(content=message["content"], role="user")
-                transformed_messages[i] = new_message  # Replace the old message with the new one
-
+        transformed_messages: Final = list(self._with_provider_roles(messages, model))
         if is_async:
             return super()._transform_messages(transformed_messages, model, is_async=cast(Literal[True], True))
         else:

@@ -2,9 +2,11 @@
 Support for gpt model family
 """
 
+import asyncio
 import json
 import os
 from collections.abc import AsyncIterator, Coroutine, Iterator, Mapping, Sequence
+from contextvars import ContextVar
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional, cast, overload
 from urllib.parse import urlparse
@@ -32,7 +34,10 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 )
 from litellm.litellm_core_utils.prompt_templates.image_handling import (
     async_convert_url_to_base64,
+    async_fetch_urls_to_base64,
     convert_url_to_base64,
+    file_id_urls_before_an_unreadable_part,
+    has_file_id_urls,
 )
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
@@ -79,6 +84,20 @@ else:
 
 
 _NO_TOOLS_UPDATE: Final[Mapping[str, object]] = MappingProxyType({})
+
+_ROLES_WHOSE_FILES_ARE_DOWNLOADED: Final = ("user", "tool")
+_PDF_URL_STARTS: Final = ("https://", "http://", "www.")
+_NOTHING_PREFETCHED: Final[Mapping[str, "str | litellm.ImageFetchError"]] = MappingProxyType({})
+_prefetched_pdf_urls: Final[ContextVar[Mapping[str, "str | litellm.ImageFetchError"]]] = ContextVar(
+    "prefetched_pdf_urls"
+)
+
+
+def _pdf_data_url(url: str) -> str:
+    prefetched: Final = _prefetched_pdf_urls.get(_NOTHING_PREFETCHED).get(url)
+    if isinstance(prefetched, litellm.ImageFetchError):
+        raise prefetched
+    return prefetched if prefetched is not None else convert_url_to_base64(url)
 
 
 def targets_openai_hosted_endpoint(custom_llm_provider: str | None, api_base: str | None) -> bool:
@@ -186,9 +205,6 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
     - `top_p` (number or null): An alternative to sampling with temperature, used for nucleus sampling.
     """
 
-    # Add a class variable to track if this is the base class
-    _is_base_class = True
-
     frequency_penalty: int | None = None
     function_call: str | dict | None = None
     functions: list | None = None
@@ -219,8 +235,6 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
-
-        self.__class__._is_base_class = False
 
     @classmethod
     def get_config(cls):
@@ -317,9 +331,8 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         )
 
     def contains_pdf_url(self, content_item: ChatCompletionFileObjectFile) -> bool:
-        potential_pdf_url_starts: Final = ["https://", "http://", "www."]
         file_id: Final = content_item.get("file_id")
-        if file_id and any(file_id.startswith(start) for start in potential_pdf_url_starts):
+        if file_id and any(file_id.startswith(start) for start in _PDF_URL_STARTS):
             return True
         return False
 
@@ -327,7 +340,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         content_copy: Final = content_item.copy()
         file_id: Final = content_copy.get("file_id")
         if file_id is not None:
-            base64_data: Final = convert_url_to_base64(file_id)
+            base64_data: Final = _pdf_data_url(file_id)
             content_copy["file_data"] = base64_data
             content_copy["filename"] = "my_file.pdf"
             content_copy.pop("file_id")
@@ -671,6 +684,12 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
             **self._sanitized_tools_update_for_openai(optional_params, litellm_params),
         }
 
+    def _flattens_content_lists(self) -> bool:
+        return False
+
+    def _with_provider_roles(self, messages: Sequence[AllMessageValues], model: str) -> Sequence[AllMessageValues]:
+        return messages
+
     async def async_transform_request(
         self,
         model: str,
@@ -679,30 +698,25 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         litellm_params: dict,
         headers: dict,
     ) -> dict:
-        transformed_messages, tools = self._messages_and_tools_in_cache_mark_dialect(
-            model=model,
-            messages=await self._transform_messages(
-                messages=self._prompt_cache_ordered_messages(messages, litellm_params), model=model, is_async=True
-            ),
-            tools=optional_params.get("tools", []),
-            prompt_cache_options=_prompt_cache_options(optional_params),
-            litellm_params=litellm_params,
-            request_params=optional_params,
-        )
-        if tools is not None and len(tools) > 0:
-            optional_params["tools"] = tools
-        if self.__class__._is_base_class:
-            if not optional_params.get("tools") and not optional_params.get("functions"):
-                optional_params.pop("tool_choice", None)
-            return {
-                "model": model,
-                "messages": transformed_messages,
-                **optional_params,
-                **self._sanitized_tools_update_for_openai(optional_params, litellm_params),
-            }
-        else:
-            ## allow for any object specific behaviour to be handled
+        if not has_file_id_urls(messages, _PDF_URL_STARTS):
             return self.transform_request(model, messages, optional_params, litellm_params, headers)
+        sent_messages: Final = self._with_provider_roles(
+            self._prompt_cache_ordered_messages(messages, litellm_params), model
+        )
+        pdf_urls: Final = file_id_urls_before_an_unreadable_part(
+            (message for message in sent_messages if message.get("role") in _ROLES_WHOSE_FILES_ARE_DOWNLOADED),
+            _PDF_URL_STARTS,
+        )
+        prefetched: Final = (
+            _NOTHING_PREFETCHED if self._flattens_content_lists() else await async_fetch_urls_to_base64(pdf_urls)
+        )
+        reset_token: Final = _prefetched_pdf_urls.set(prefetched)
+        try:
+            return await asyncio.to_thread(
+                self.transform_request, model, messages, optional_params, litellm_params, headers
+            )
+        finally:
+            _prefetched_pdf_urls.reset(reset_token)
 
     def _passed_in_tools(self, optional_params: dict) -> bool:
         return optional_params.get("tools", None) is not None
