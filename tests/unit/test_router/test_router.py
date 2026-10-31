@@ -3883,6 +3883,9 @@ _AGENTIC_FIRST_CALL_BODY: Final = {
 }
 
 
+_CRASH_THE_PLAN: Final = "crash the plan"
+
+
 class _ScriptedAgenticFollowUps(CustomLogger):
     def __init__(self, follow_ups: tuple[str, ...]) -> None:
         super().__init__()
@@ -3909,6 +3912,8 @@ class _ScriptedAgenticFollowUps(CustomLogger):
     ) -> AgenticLoopPlan:
         follow_up: Final = self._follow_ups[min(self.plans_built, len(self._follow_ups) - 1)]
         self.plans_built += 1
+        if follow_up == _CRASH_THE_PLAN:
+            raise ValueError("the agentic plan build crashed")
         return AgenticLoopPlan(
             run_agentic_loop=True,
             request_patch=AgenticLoopRequestPatch(
@@ -3986,7 +3991,7 @@ async def _route_agentic_request(
         outcome: object = await router.acompletion(
             model=model, messages=messages, litellm_call_id="shared-agentic-call", litellm_logging_obj=shared_logging
         )
-    except litellm.RateLimitError as error:
+    except (litellm.RateLimitError, litellm.APIConnectionError) as error:
         outcome = error
     return outcome, shared_logging, first_calls, hook
 
@@ -4016,6 +4021,17 @@ async def test_agentic_request_whose_follow_up_fails_is_not_retried_and_bills_it
     assert lifted["combined_usage_object"].prompt_tokens == _AGENTIC_FIRST_CALL_USAGE["prompt_tokens"]
     assert lifted["combined_usage_object"].completion_tokens == _AGENTIC_FIRST_CALL_USAGE["completion_tokens"]
     assert lifted["response_cost"] == pytest.approx(_gpt_4o_mini_cost(_AGENTIC_FIRST_CALL_USAGE))
+
+
+@pytest.mark.asyncio
+async def test_agentic_request_whose_plan_build_crashes_after_the_first_call_is_not_retried(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    outcome, _, first_calls, hook = await _route_agentic_request(monkeypatch, respx_mock, (_CRASH_THE_PLAN,))
+
+    assert isinstance(outcome, litellm.APIConnectionError)
+    assert first_calls.call_count == 1
+    assert hook.plans_built == 1
 
 
 @pytest.mark.asyncio

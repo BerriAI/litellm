@@ -150,7 +150,7 @@ class _ReadySandbox:
 
 @dataclass(frozen=True, slots=True)
 class _SandboxUnavailable:
-    pass
+    output: str
 
 
 _Sandbox: TypeAlias = _ReadySandbox | _SandboxUnavailable
@@ -163,14 +163,16 @@ class _ToolRun:
 
 
 _SANDBOX_UNAVAILABLE_OUTPUT: Final = "The code did not run because the code execution sandbox is unavailable."
-_FAILED_TOOL_RUN: Final = _ToolRun(output=_SANDBOX_UNAVAILABLE_OUTPUT, status="failed")
+_SANDBOX_LOST_RESULT_OUTPUT: Final = (
+    "The code execution sandbox failed while running the code, so the code may have run but its result is lost."
+)
 
 
-def _sandbox_unavailable(step: str, error: Exception) -> _SandboxUnavailable:
+def _sandbox_unavailable(step: str, error: Exception, output: str = _SANDBOX_UNAVAILABLE_OUTPUT) -> _SandboxUnavailable:
     verbose_logger.warning(
         "CodeInterpreterInterception: %s failed, answering the tool call with the failure: %s", step, error
     )
-    return _SandboxUnavailable()
+    return _SandboxUnavailable(output=output)
 
 
 def _output_item_type(item: object) -> object:
@@ -753,12 +755,12 @@ class CodeInterpreterInterceptionLogger(CustomLogger):
 
     async def _sandbox_tool_output(self, sandbox: _Sandbox, arguments: str) -> _ToolRun:
         match sandbox:
-            case _SandboxUnavailable():
-                return _FAILED_TOOL_RUN
+            case _SandboxUnavailable(output=output):
+                return _ToolRun(output=output, status="failed")
             case _ReadySandbox(container=container, params=params):
                 match await self._run_tool_call(container=container, params=params, arguments=arguments):
-                    case _SandboxUnavailable():
-                        return _FAILED_TOOL_RUN
+                    case _SandboxUnavailable(output=output):
+                        return _ToolRun(output=output, status="failed")
                     case str() as output:
                         return _ToolRun(output=output, status="completed")
 
@@ -773,7 +775,7 @@ class CodeInterpreterInterceptionLogger(CustomLogger):
         try:
             result: Final = await self._run_code(container=container, params=params, code=code)
         except Exception as e:
-            return _sandbox_unavailable("running the code", e)
+            return _sandbox_unavailable("running the code", e, _SANDBOX_LOST_RESULT_OUTPUT)
         if getattr(result, "error", None):
             error: Final = result.error
             message: Final = error.get("value") or error.get("name") if isinstance(error, dict) else str(error)

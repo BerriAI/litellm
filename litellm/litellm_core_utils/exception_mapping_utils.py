@@ -11,6 +11,7 @@ from pydantic import TypeAdapter, ValidationError
 
 import litellm
 from litellm._logging import _ENABLE_SECRET_REDACTION, redact_string, verbose_logger
+from litellm.litellm_core_utils.agentic_followup_failure import carry_agentic_followup_mark
 from litellm.litellm_core_utils.bug_report import (
     bug_report_notice,
     build_bug_report,
@@ -2894,6 +2895,7 @@ def exception_type(
                     request=httpx.Request(method="POST", url="https://api.openai.com/v1/"),  # stub the request
                 )
     except Exception as e:
+        carry_agentic_followup_mark(source=original_exception, mapped=e)
         # LOGGING
         exception_logging(
             logger_fn=None,
@@ -2919,6 +2921,7 @@ def exception_type(
                 model="",
             )
             setattr(raised_exc, "litellm_response_headers", litellm_response_headers)
+            carry_agentic_followup_mark(source=original_exception, mapped=raised_exc)
             raise raised_exc
 
 

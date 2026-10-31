@@ -1,27 +1,36 @@
-import weakref
+from dataclasses import dataclass
 from typing import Final, TypeAlias
 
 from litellm.types.utils import Usage
 
 ServedRound: TypeAlias = tuple[Usage, float]
 
-_followup_failures: Final[weakref.WeakKeyDictionary[BaseException, tuple[ServedRound, ...]]] = (
-    weakref.WeakKeyDictionary()
-)
+_MARK_ATTRIBUTE: Final = "_litellm_agentic_followup_mark"
 
 
-def _can_be_marked(error: BaseException) -> bool:
-    return type(error).__weakrefoffset__ != 0
+@dataclass(frozen=True, slots=True)
+class _FollowUpMark:
+    served_rounds: tuple[ServedRound, ...]
+
+
+def _mark_of(error: BaseException) -> _FollowUpMark | None:
+    mark: Final[object] = getattr(error, _MARK_ATTRIBUTE, None)
+    return mark if isinstance(mark, _FollowUpMark) else None
 
 
 def mark_agentic_followup_failure(error: BaseException, served_rounds: tuple[ServedRound, ...]) -> None:
-    if _can_be_marked(error):
-        _followup_failures[error] = served_rounds
+    setattr(error, _MARK_ATTRIBUTE, _FollowUpMark(served_rounds))
 
 
 def is_agentic_followup_failure(error: BaseException) -> bool:
-    return _can_be_marked(error) and error in _followup_failures
+    return _mark_of(error) is not None
 
 
 def rounds_served_before(error: BaseException) -> tuple[ServedRound, ...]:
-    return _followup_failures.get(error, ()) if _can_be_marked(error) else ()
+    mark: Final = _mark_of(error)
+    return () if mark is None else mark.served_rounds
+
+
+def carry_agentic_followup_mark(source: BaseException, mapped: BaseException) -> None:
+    if mapped is not source and is_agentic_followup_failure(source):
+        mark_agentic_followup_failure(mapped, rounds_served_before(source))

@@ -2641,6 +2641,7 @@ class Logging(LiteLLMLoggingBaseClass):
         usage: Final = self._model_call_details_view.get("combined_usage_object")
         response_cost: Final = self._model_call_details_view.get("response_cost")
         billed_by_continuation: Final = self.model_call_details.pop("stash_billed_by_continuation", False) is True
+        owed_on_success: Final = self.model_call_details.pop("stash_owed_on_success", False) is True
         self.model_call_details.pop("combined_usage_object", None)
         self.model_call_details.pop("response_cost", None)
         if not isinstance(usage, Usage):
@@ -2651,7 +2652,7 @@ class Logging(LiteLLMLoggingBaseClass):
             *self.model_call_details.get("failed_attempts_usage", ()),
             attempt,
         )
-        if not billed_by_continuation:
+        if owed_on_success and not billed_by_continuation:
             self.model_call_details["failed_attempts_owed_on_success"] = (
                 *self.model_call_details.get("failed_attempts_owed_on_success", ()),
                 attempt,
@@ -2732,6 +2733,7 @@ class Logging(LiteLLMLoggingBaseClass):
     def record_served_rounds_for_failure(self, served_rounds: tuple[ServedRound, ...]) -> None:
         if not served_rounds:
             return
+        self.model_call_details["stash_owed_on_success"] = True
         self.record_partial_usage_for_failure(
             served_rounds[0][0]
             if len(served_rounds) == 1

@@ -25,6 +25,7 @@ from litellm.integrations.websearch_interception.handler import (
     WebSearchInterceptionLogger,
 )
 from litellm.integrations.websearch_interception.tools import get_litellm_web_search_tool
+from litellm.litellm_core_utils.agentic_followup_failure import is_agentic_followup_failure
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.agentic_loop_settings import DEFAULT_MAX_AGENTIC_LOOPS
 from litellm.llms.anthropic.messages.native.fake_stream_iterator import (
@@ -720,6 +721,29 @@ class TestFailedFollowUpCallReachesTheClient:
                 kwargs={"_agentic_loop_depth": 0, "max_agentic_loops": 3, WEBSEARCH_EMIT_NATIVE_BLOCKS_KEY: True},
             )
 
+        _assert_first_call_billed(logging_obj, input_tokens=10, output_tokens=5)
+
+    @pytest.mark.asyncio
+    async def test_a_crashed_plan_build_is_not_retried_and_bills_the_first_call(self):
+        logging_obj = _request_logging_obj("anthropic_messages", self.logger)
+
+        with (
+            patch.object(self.logger, "async_build_agentic_loop_plan", side_effect=ValueError("the plan crashed")),
+            pytest.raises(ValueError, match="the plan crashed") as raised,
+        ):
+            await self.handler._call_agentic_completion_hooks(
+                response=_response_asking_for_searches("who won the world cup"),
+                model="claude-sonnet-4-5",
+                messages=[{"role": "user", "content": "who won the world cup"}],
+                anthropic_messages_provider_config=MagicMock(),
+                anthropic_messages_optional_request_params={"tools": [get_litellm_web_search_tool()]},
+                logging_obj=logging_obj,
+                stream=False,
+                custom_llm_provider="anthropic",
+                kwargs={"_agentic_loop_depth": 0, "max_agentic_loops": 3, WEBSEARCH_EMIT_NATIVE_BLOCKS_KEY: True},
+            )
+
+        assert is_agentic_followup_failure(raised.value)
         _assert_first_call_billed(logging_obj, input_tokens=10, output_tokens=5)
 
     @pytest.mark.asyncio

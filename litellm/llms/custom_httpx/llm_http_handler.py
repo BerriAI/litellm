@@ -6435,16 +6435,21 @@ class BaseLLMHTTPHandler:
                 )
                 return self._maybe_wrap_in_fake_stream(agentic_result, logging_obj, api_surface)
 
-            plan = await callback.async_build_agentic_loop_plan(
-                tools=tool_calls,
-                model=model,
-                messages=messages,
-                response=response,
-                anthropic_messages_provider_config=anthropic_messages_provider_config,
-                anthropic_messages_optional_request_params=anthropic_messages_optional_request_params,
+            plan = await bill_first_round_on_failure(
+                callback.async_build_agentic_loop_plan(
+                    tools=tool_calls,
+                    model=model,
+                    messages=messages,
+                    response=response,
+                    anthropic_messages_provider_config=anthropic_messages_provider_config,
+                    anthropic_messages_optional_request_params=anthropic_messages_optional_request_params,
+                    logging_obj=logging_obj,
+                    stream=stream,
+                    kwargs=kwargs_with_provider,
+                ),
                 logging_obj=logging_obj,
+                response=response,
                 stream=stream,
-                kwargs=kwargs_with_provider,
             )
 
             if plan.response_override is not None:

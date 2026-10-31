@@ -21,6 +21,7 @@ from litellm.integrations.code_interpreter_interception.handler import (
 )
 from litellm.integrations.code_interpreter_interception.handler import (
     _SANDBOX_KEY,
+    _SANDBOX_LOST_RESULT_OUTPUT,
     _SANDBOX_UNAVAILABLE_OUTPUT,
     _SESSION_SCOPED_KEY,
     LITELLM_CODE_EXECUTION_TOOL_NAME,
@@ -1463,26 +1464,26 @@ class _SandboxThatCannotRunCode(FakeSandbox):
 
 
 _SANDBOX_FAILURES: Final = (
-    pytest.param(None, id="no_sandbox"),
-    pytest.param(_SandboxThatCannotStart(), id="create_fails"),
-    pytest.param(_SandboxThatCannotRunCode(), id="run_fails"),
+    pytest.param(None, _SANDBOX_UNAVAILABLE_OUTPUT, id="no_sandbox"),
+    pytest.param(_SandboxThatCannotStart(), _SANDBOX_UNAVAILABLE_OUTPUT, id="create_fails"),
+    pytest.param(_SandboxThatCannotRunCode(), _SANDBOX_LOST_RESULT_OUTPUT, id="run_fails"),
 )
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("sandbox", _SANDBOX_FAILURES)
-async def test_a_sandbox_failure_answers_the_responses_tool_call_with_a_fixed_failure(sandbox):
+@pytest.mark.parametrize(("sandbox", "expected_output"), _SANDBOX_FAILURES)
+async def test_a_sandbox_failure_answers_the_responses_tool_call_with_a_fixed_failure(sandbox, expected_output):
     plan: Final = await _build_plan(CodeInterpreterInterceptionLogger(sandbox_config=sandbox), sandbox)
 
     outputs: Final = [message for message in _iter_messages(plan) if message.get("type") == "function_call_output"]
     assert plan.run_agentic_loop is True
-    assert [(output["call_id"], output["output"]) for output in outputs] == [("c1", _SANDBOX_UNAVAILABLE_OUTPUT)]
+    assert [(output["call_id"], output["output"]) for output in outputs] == [("c1", expected_output)]
     assert [call["status"] for call in plan.metadata["code_interpreter_calls"]] == ["failed"]
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("sandbox", _SANDBOX_FAILURES)
-async def test_a_sandbox_failure_answers_the_chat_tool_call_with_a_fixed_failure(sandbox):
+@pytest.mark.parametrize(("sandbox", "expected_output"), _SANDBOX_FAILURES)
+async def test_a_sandbox_failure_answers_the_chat_tool_call_with_a_fixed_failure(sandbox, expected_output):
     logger: Final = CodeInterpreterInterceptionLogger(sandbox_config=sandbox)
 
     plan: Final = await logger.async_build_agentic_loop_plan(
@@ -1509,7 +1510,7 @@ async def test_a_sandbox_failure_answers_the_chat_tool_call_with_a_fixed_failure
     tool_messages: Final = [message for message in _iter_messages(plan) if message.get("role") == "tool"]
     assert plan.run_agentic_loop is True
     assert [(message["tool_call_id"], message["content"]) for message in tool_messages] == [
-        ("call_1", _SANDBOX_UNAVAILABLE_OUTPUT)
+        ("call_1", expected_output)
     ]
     assert [call["status"] for call in plan.metadata["code_interpreter_calls"]] == ["failed"]
 

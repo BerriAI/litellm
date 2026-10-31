@@ -14314,3 +14314,45 @@ def test_record_native_bedrock_guardrail_bills_each_call_its_own_trace_when_call
     (first_cost, second_cost) = costs
     assert second_cost == pytest.approx(2 * first_cost)
     assert shared_metadata == {"tag": "x"}
+
+
+_FAILED_ATTEMPT: Final = (Usage(prompt_tokens=1000, completion_tokens=500, total_tokens=1500), 0.5)
+
+
+async def _success_row_cost_after_a_failed_attempt(stash: Callable[[LitellmLogging], None]) -> float:
+    logging_obj: Final = LitellmLogging(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=False,
+        call_type="acompletion",
+        start_time=time.time(),
+        litellm_call_id="recovered-attempt",
+        function_id="recovered-attempt",
+    )
+    logging_obj.update_environment_variables(
+        model="gpt-4o-mini", user="", optional_params={}, litellm_params={"metadata": {}}, custom_llm_provider="openai"
+    )
+    stash(logging_obj)
+    logging_obj.carry_failed_attempt_usage()
+    now: Final = datetime.datetime.now()
+    await logging_obj.async_success_handler(
+        ModelResponse(model="gpt-4o-mini", usage=Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15)),
+        now,
+        now,
+    )
+    return logging_obj.model_call_details["standard_logging_object"]["response_cost"]
+
+
+@pytest.mark.asyncio
+async def test_a_recovered_attempt_bills_a_failed_agentic_follow_up_but_not_a_failure_that_logged_its_own_row() -> None:
+    own_cost: Final = await _success_row_cost_after_a_failed_attempt(lambda logging_obj: None)
+    after_a_dropped_stream: Final = await _success_row_cost_after_a_failed_attempt(
+        lambda logging_obj: logging_obj.record_partial_usage_for_failure(*_FAILED_ATTEMPT)
+    )
+    after_a_failed_follow_up: Final = await _success_row_cost_after_a_failed_attempt(
+        lambda logging_obj: logging_obj.record_served_rounds_for_failure((_FAILED_ATTEMPT,))
+    )
+
+    assert own_cost > 0
+    assert after_a_dropped_stream == pytest.approx(own_cost)
+    assert after_a_failed_follow_up == pytest.approx(own_cost + _FAILED_ATTEMPT[1])
