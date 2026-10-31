@@ -576,6 +576,35 @@ def test_cohere_v2_tool_calling(respx_mock: respx.MockRouter) -> None:
     assert [(call.id, call.function.name, call.function.arguments) for call in tool_calls] == [
         ("get_weather_k9q2xw1n", "get_weather", '{"location":"New York, NY"}')
     ]
+    assert response.choices[0].finish_reason == "tool_calls"
+
+
+@pytest.mark.usefixtures("_cohere_httpx_transport")
+@pytest.mark.respx(assert_all_called=True)
+@pytest.mark.parametrize(
+    ("cohere_finish_reason", "expected_finish_reason"),
+    [("COMPLETE", "stop"), ("MAX_TOKENS", "length"), ("STOP_SEQUENCE", "stop")],
+)
+def test_cohere_v2_maps_finish_reason(
+    respx_mock: respx.MockRouter, cohere_finish_reason: str, expected_finish_reason: str
+) -> None:
+    respx_mock.post(COHERE_V2_CHAT_URL).mock(
+        return_value=httpx.Response(
+            200,
+            json=_cohere_v2_response(
+                {"content": [{"type": "text", "text": "Hello"}]},
+                finish_reason=cohere_finish_reason,
+            ),
+        )
+    )
+
+    response: Final = litellm.completion(
+        model="cohere_chat/v2/command-a-03-2025",
+        messages=[{"role": "user", "content": "Say hello"}],
+        api_key="cohere-test-key",
+    )
+
+    assert response.choices[0].finish_reason == expected_finish_reason
 
 
 @pytest.mark.usefixtures("_cohere_httpx_transport")
