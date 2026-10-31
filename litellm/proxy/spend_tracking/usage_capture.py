@@ -8,7 +8,7 @@ from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from decimal import Decimal
 from hashlib import sha256
-from itertools import chain, islice
+from itertools import chain, groupby, islice, repeat
 from typing import TYPE_CHECKING, Final
 
 from pydantic import BaseModel, JsonValue, TypeAdapter
@@ -644,22 +644,28 @@ def _prepare_batch_capture(
     return _BatchCapture(
         payload,
         _batch_root(builder.writes[0], rows),
-        b"\n".join(_json(row).encode("utf-8") for row in rows),
+        b"\n".join(_json((row, sum(1 for _ in group))).encode("utf-8") for row, group in groupby(map(_json, rows))),
         tuple(prior.receipt for prior in _prior_captures(kwargs)),
     )
 
 
+def _batch_groups(rows: bytes) -> Iterator[tuple[str, int]]:
+    return (TypeAdapter(tuple[str, int]).validate_json(match.group()) for match in re.finditer(rb"[^\n]+", rows))
+
+
 def _batch_writes(root: UsageWrite, rows: bytes) -> Iterator[UsageWrite]:
-    return (
-        _batch_row_write(root, _JSON_OBJECT.validate_json(match.group()), index)
-        for index, match in enumerate(re.finditer(rb"[^\n]+", rows))
-    )
+    expanded: Final = chain.from_iterable(repeat(row, count) for row, count in _batch_groups(rows))
+    return (_batch_row_write(root, _JSON_OBJECT.validate_json(row), index) for index, row in enumerate(expanded))
 
 
 def _batch_write_bound(root: UsageWrite, rows: bytes) -> int:
+    last_index: Final = sum(count for _, count in _batch_groups(rows)) - 1
     return max(
         len(root.envelope.encode("utf-8")),
-        max(len(write.envelope.encode("utf-8")) for write in _batch_writes(root, rows)),
+        max(
+            len(_batch_row_write(root, _JSON_OBJECT.validate_json(row), last_index).envelope.encode("utf-8"))
+            for row, _ in _batch_groups(rows)
+        ),
     )
 
 
@@ -671,7 +677,7 @@ def _batch_capacity(
     chunk_bytes: Final = max(
         bound,
         min(
-            bound * min(meter.settings.batch_size, rows.count(b"\n") + 1),
+            bound * min(meter.settings.batch_size, sum(count for _, count in _batch_groups(rows))),
             meter.settings.max_pending_bytes // 4,
             (meter.settings.max_pending_bytes - retained) // 2,
         ),

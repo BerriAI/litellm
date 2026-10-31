@@ -1624,32 +1624,51 @@ async def test_batch_producers_share_byte_capacity_and_release_it_after_drain() 
         await database.insert(writes)
 
     runtime.start(persist, UsageCaptureSettings(batch_size=32, max_pending_bytes=65536), load=database.load)
-    rows: Final = tuple(
-        {"model": "capture-model" if index % 7 else None, "usage": {"prompt_tokens": 2} if index % 7 else None}
-        for index in range(1000)
+    from litellm.batches.batch_utils import batch_cost_and_usage
+
+    parsed: Final = batch_cost_and_usage(
+        [
+            {
+                "response": {
+                    "status_code": 200,
+                    "body": {
+                        "model": "capture-model",
+                        "usage": {"prompt_tokens": 2, "completion_tokens": 1, "total_tokens": 3},
+                    },
+                }
+            }
+            for _ in range(1000)
+        ],
+        "openai",
+        model_info={},
     )
-    response: Final = {"id": "batch", "status": "completed", "usage": {"batch_usage_by_request": rows}}
+    rows: Final = ({"model": "capture-model", "usage": {"prompt_tokens": 2}},)
+    response: Final = {"id": "batch", "status": "completed", "usage": parsed.usage}
     kwargs: Final = {"call_type": "aretrieve_batch", "litellm_call_id": "poll", "litellm_params": {}}
     try:
-        first: Final = runtime.submit_batch(kwargs, response, NOW, NOW)
-        assert runtime.meter is not None
-        assert 49000 < runtime.meter.pending_bytes <= 65536
-        with pytest.raises(UsageCaptureError, match="producer byte capacity"):
-            runtime.submit_batch(kwargs, {**response, "id": "other-batch"}, NOW, NOW)
+        large: Final = asyncio.Queue[asyncio.Future[None]]()
+        for index in range(100):
+            try:
+                captured: Final = runtime.submit_batch(kwargs, {**response, "id": f"batch-{index}"}, NOW, NOW)
+            except UsageCaptureError:
+                break
+            large.put_nowait(captured.receipt)
+        large_count: Final = large.qsize()
+        assert 0 < large_count < 100
+        assert runtime.meter is not None and 0 < runtime.meter.pending_bytes <= 65536
         release.set()
-        await asyncio.shield(first.receipt)
-        assert len(database.rows) == 1001
-        assert runtime.meter.pending_bytes == 0
-        second: Final = runtime.submit_batch(kwargs, {**response, "id": "other-batch"}, NOW, NOW)
-        await asyncio.shield(second.receipt)
-        assert len(database.rows) == 2002
+        await asyncio.gather(*(large.get_nowait() for _ in range(large_count)))
+        assert len(database.rows) == 1001 * large_count
+        observations: Final = tuple(json.loads(write.envelope) for write in database.rows)
+        assert sum(row["usage"].get("prompt_tokens", 0) for row in observations) == 2000 * large_count
+        assert sum(row["usage"].get("completion_tokens", 0) for row in observations) == 1000 * large_count
         assert runtime.meter.pending_bytes == 0
         admitted: Final = asyncio.Queue[asyncio.Future[None]]()
         for index in range(100):
             try:
                 small: Final = runtime.submit_batch(
                     kwargs,
-                    {**response, "id": f"small-{index}", "usage": {"batch_usage_by_request": rows[1:2]}},
+                    {**response, "id": f"small-{index}", "usage": {"batch_usage_by_request": rows}},
                     NOW,
                     NOW,
                 )
@@ -1659,7 +1678,7 @@ async def test_batch_producers_share_byte_capacity_and_release_it_after_drain() 
         count: Final = admitted.qsize()
         assert 1 < count < 100
         await asyncio.gather(*(admitted.get_nowait() for _ in range(count)))
-        assert len(database.rows) == 2002 + 2 * count
+        assert len(database.rows) == 1001 * large_count + 2 * count
         assert runtime.meter.pending_bytes == 0
     finally:
         release.set()
