@@ -9940,6 +9940,41 @@ def test_claude_cache_control_cap_keeps_a_cached_tool_and_drops_the_oldest_messa
 
     assert body["tools"][0]["cache_control"] == {"type": "ephemeral"}
     assert sorted(_cached_texts(body["messages"])) == ["answer 1", "turn 2", "turn 3"]
+
+
+def test_claude_cache_control_cap_drops_a_string_assistant_turns_text_hint_before_its_tool_call_hints(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", True)
+    hint: Final = {"type": "ephemeral"}
+    tool_calls: Final = [
+        {"id": f"call_{name}", "type": "function", "function": {"name": name, "arguments": "{}"}, "cache_control": hint}
+        for name in ("lookup", "search")
+    ]
+    follow_up: Final = [
+        {"type": "text", "text": "follow-up", "cache_control": hint},
+        {"type": "text", "text": "and more", "cache_control": hint},
+    ]
+    messages: Final = [
+        {"role": "user", "content": "question"},
+        {"role": "assistant", "content": "checking both", "cache_control": hint, "tool_calls": tool_calls},
+        {"role": "tool", "tool_call_id": "call_lookup", "content": "found"},
+        {"role": "tool", "tool_call_id": "call_search", "content": "none"},
+        {"role": "user", "content": follow_up},
+    ]
+
+    body: Final = AnthropicConfig().transform_request(
+        model="claude-haiku-5-5",
+        messages=messages,
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+
+    assistant_blocks: Final = body["messages"][1]["content"]
+    assert [block["type"] for block in assistant_blocks] == ["text", "tool_use", "tool_use"]
+    assert ["cache_control" in block for block in assistant_blocks] == [False, True, True]
+    assert json.dumps(body).count('"cache_control"') == 4
     assert json.dumps(body).count('"cache_control"') == 4
 
 

@@ -10,7 +10,6 @@ Supported for both `v1/chat/completions` (via the prompt-management hook) and
 """
 
 import copy
-import functools
 import itertools
 import os
 import re
@@ -183,28 +182,48 @@ def _first_marked_index(value: object) -> int | None:
     return next((index for index, block in enumerate(blocks) if _block_carries_cache_control(block)), None)
 
 
-def _without_oldest_mark(message: _MessageT, _: int) -> _MessageT:
-    if not isinstance(message, dict):
+_MarkSlot: TypeAlias = tuple[str, int]
+_MESSAGE_MARK_SLOT: Final[_MarkSlot] = ("cache_control", -1)
+
+
+def _block_mark_slots(fields: Mapping[str, object], key: str) -> tuple[_MarkSlot, ...]:
+    value: Final = fields.get(key)
+    if not isinstance(value, list):
+        return ()
+    blocks: Final = _OBJECT_LIST_ADAPTER.validate_python(value)
+    return tuple((key, index) for index, block in enumerate(blocks) if _block_carries_cache_control(block))
+
+
+def _mark_slots_in_wire_order(fields: Mapping[str, object]) -> tuple[_MarkSlot, ...]:
+    content_slots: Final = _block_mark_slots(fields, "content")
+    tool_call_slots: Final = _block_mark_slots(fields, "tool_calls")
+    if not _message_mark_reaches_provider(fields):
+        return content_slots + tool_call_slots
+    if isinstance(fields.get("content"), list):
+        return content_slots + (_MESSAGE_MARK_SLOT,) + tool_call_slots
+    return (_MESSAGE_MARK_SLOT,) + content_slots + tool_call_slots
+
+
+def _blocks_without_marks(key: str, value: object, dropped_slots: frozenset[_MarkSlot]) -> object:
+    if key not in _MARK_CARRYING_MESSAGE_FIELDS or not isinstance(value, list):
+        return value
+    return [
+        block_with_cache_control(block, dropped_cache_control) if (key, index) in dropped_slots else block
+        for index, block in enumerate(_OBJECT_LIST_ADAPTER.validate_python(value))
+    ]
+
+
+def _without_oldest_marks(message: _MessageT, dropped: int) -> _MessageT:
+    if dropped == 0 or not isinstance(message, dict):
         return message
     fields: Final = _CONTENT_PART_ADAPTER.validate_python(message)
-    marked_field: Final = next(
-        (key for key in _MARK_CARRYING_MESSAGE_FIELDS if _first_marked_index(fields.get(key)) is not None), None
-    )
-    if marked_field is None:
-        return cast(  # cast-ok: the same message without its own cache marker
-            _MessageT, _fields_with_cache_control(fields, dropped_cache_control)
-        )
-    oldest: Final = _first_marked_index(fields[marked_field])
-    blocks: Final = _OBJECT_LIST_ADAPTER.validate_python(fields[marked_field])
-    return cast(  # cast-ok: the same message with its first marked block unmarked
+    dropped_slots: Final = frozenset(_mark_slots_in_wire_order(fields)[:dropped])
+    blocks_unmarked: Final = {key: _blocks_without_marks(key, value, dropped_slots) for key, value in fields.items()}
+    return cast(  # cast-ok: the same message with its oldest wire-order marks dropped
         _MessageT,
-        {
-            **fields,
-            marked_field: [
-                block_with_cache_control(block, dropped_cache_control) if index == oldest else block
-                for index, block in enumerate(blocks)
-            ],
-        },
+        _fields_with_cache_control(blocks_unmarked, dropped_cache_control)
+        if _MESSAGE_MARK_SLOT in dropped_slots
+        else blocks_unmarked,
     )
 
 
@@ -254,8 +273,7 @@ def _messages_within_budget(
     )
     dropped_counts: Final = tuple(dropped for _, dropped in itertools.islice(budget_after_each, 1, None))
     kept_newest_first: Final = tuple(
-        functools.reduce(_without_oldest_mark, range(dropped), message)
-        for message, dropped in zip(newest_first, dropped_counts)
+        _without_oldest_marks(message, dropped) for message, dropped in zip(newest_first, dropped_counts)
     )
     return tuple(reversed(kept_newest_first))
 

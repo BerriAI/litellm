@@ -142,12 +142,13 @@ def _claude_messages_within_cache_control_cap(
     messages: Sequence[AllMessageValues],
     tools: Sequence["ChatCompletionToolParam"] | None,
     litellm_params: Mapping[str, object],
+    request_params: Mapping[str, object],
 ) -> Sequence[AllMessageValues]:
     if not _names_claude(model, litellm_params) or not _drops_params(litellm_params):
         return messages
     from litellm.integrations.anthropic_cache_control_hook import messages_within_cache_control_cap
 
-    return list(messages_within_cache_control_cap(messages, tools))
+    return list(messages_within_cache_control_cap(messages, tools, request_params.get("cache_control"), request_params))
 
 
 def _prompt_cache_options(optional_params: Mapping[str, object]) -> object | None:
@@ -550,6 +551,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         tools: Sequence["ChatCompletionToolParam"] | None,
         prompt_cache_options: object,
         litellm_params: Mapping[str, object],
+        request_params: Mapping[str, object],
     ) -> tuple[Sequence[AllMessageValues], Sequence["ChatCompletionToolParam"] | None]:
         """
         A deployment that reads OpenAI's ``prompt_cache_breakpoint`` (gpt-5.6+ on
@@ -566,7 +568,10 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
             model, custom_llm_provider, api_base, prompt_cache_options
         )
         if not reads_breakpoints and self._should_preserve_cache_control_for_endpoint(custom_llm_provider, api_base):
-            return _claude_messages_within_cache_control_cap(model, messages, tools, litellm_params), tools
+            return (
+                _claude_messages_within_cache_control_cap(model, messages, tools, litellm_params, request_params),
+                tools,
+            )
         drops_breakpoints: Final = not reads_breakpoints and _drops_params(litellm_params)
         renamed: Final = (
             [AnthropicCacheControlHook.cache_control_as_prompt_cache_breakpoints(message) for message in messages]
@@ -585,7 +590,10 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         sent_messages, sent_tools = self.remove_cache_control_flag_from_messages_and_tools(
             model=model, messages=renamed, tools=kept_tools
         )
-        return _claude_messages_within_cache_control_cap(model, sent_messages, sent_tools, litellm_params), sent_tools
+        return (
+            _claude_messages_within_cache_control_cap(model, sent_messages, sent_tools, litellm_params, request_params),
+            sent_tools,
+        )
 
     def _sanitized_tools_update_for_openai(
         self,
@@ -647,6 +655,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
             tools=optional_params.get("tools", []),
             prompt_cache_options=_prompt_cache_options(optional_params),
             litellm_params=litellm_params,
+            request_params=optional_params,
         )
         if tools is not None and len(tools) > 0:
             optional_params["tools"] = tools
@@ -678,6 +687,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
             tools=optional_params.get("tools", []),
             prompt_cache_options=_prompt_cache_options(optional_params),
             litellm_params=litellm_params,
+            request_params=optional_params,
         )
         if tools is not None and len(tools) > 0:
             optional_params["tools"] = tools
