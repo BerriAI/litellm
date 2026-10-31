@@ -489,7 +489,7 @@ def _nested_once(inner: object, _: int) -> object:
     return [inner]
 
 
-def test_input_has_no_text_stops_walking_a_state_nested_past_the_stack() -> None:
-    deepest_state: Final = reduce(_nested_once, range(sys.getrecursionlimit() * 2), "")
+def test_input_has_no_text_counts_a_state_nested_past_the_stack_as_no_text() -> None:
+    deepest_state: Final = reduce(_nested_once, range(sys.getrecursionlimit() * 2), "Product photo")
 
-    assert input_has_no_text(DecisionsIRState(state=deepest_state, images=())) is False
+    assert input_has_no_text(DecisionsIRState(state=deepest_state, images=())) is True
