@@ -3949,3 +3949,140 @@ async def test_async_post_call_failure_hook_disable_pre_routing_error_logs(
             user_api_key_dict=user_api_key_dict,
         )
     assert len(writer.rows) == rows_written
+
+
+@pytest.mark.asyncio
+async def test_failure_capture_overload_does_not_skip_budget_release(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy.spend_tracking.usage_capture import UsageCaptureRuntime
+    from litellm.proxy.spend_tracking.usage_meter import UsageCaptureSettings
+    from tests.unit.proxy.spend_tracking.test_usage_meter import CommitBarrier, _write
+
+    database: Final = CommitBarrier()
+    runtime: Final = UsageCaptureRuntime()
+    runtime.start(database.write, UsageCaptureSettings(batch_size=2, max_pending_records=2))
+    monkeypatch.setattr(proxy_server, "usage_capture", runtime)
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    meter: Final = runtime.meter
+    assert meter is not None
+    receipt: Final = meter.submit((_write("occupied-one"), _write("occupied-two")))
+    auth: Final = UserAPIKeyAuth(budget_reservation={"reserved_cost": 0.5, "entries": [], "finalized": False})
+    request: Final = {
+        "call_type": "acompletion",
+        "litellm_call_id": "failed",
+        "model": "capture-model",
+        "start_time": _CALL_START,
+        "litellm_params": {},
+    }
+    try:
+        await database.entered.wait()
+        await ProxyDBLogger().async_post_call_failure_hook(request, RuntimeError("provider failed"), auth)
+        assert auth.budget_reservation is not None and auth.budget_reservation["finalized"] is True
+        assert "Usage capture failed on the request failure path" in caplog.text
+        assert "_accounting_capture" not in request
+    finally:
+        database.release.set()
+        await runtime.stop(1)
+    await receipt
+    assert database.committed == ("occupied-one", "occupied-two")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", [False, True])
+@pytest.mark.parametrize("complete", [False, True])
+@pytest.mark.parametrize("deferred", [False, True])
+async def test_capture_and_legacy_share_resolved_key_attribution(
+    failure: bool, complete: bool, deferred: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from pydantic import TypeAdapter
+
+    from litellm.accounting import DeliveryTarget, DimensionName
+    from litellm.proxy import proxy_server
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.proxy.hooks.proxy_track_cost_callback import track_batch_accounting
+    from litellm.proxy.spend_tracking.usage_capture import UsageCaptureRuntime
+    from litellm.proxy.spend_tracking.usage_meter import UsageCaptureSettings
+    from tests.unit.proxy.spend_tracking.test_usage_capture import StoredUsage
+
+    key: Final = UserAPIKeyAuth(
+        api_key="a" * 64,
+        user_id="owner",
+        team_id="team",
+        org_id="org",
+        project_id="project",
+        key_alias="key",
+        team_alias="team-alias",
+        request_route="/v1/chat/completions",
+    )
+    cache: Final = UserApiKeyCache()
+    await cache.async_set_cache(key="a" * 64, value=key)
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", cache)
+    monkeypatch.setattr(proxy_server, "prisma_client", object())
+    writer: Final = _RecordingSpendWriter()
+    monkeypatch.setattr(proxy_server, "proxy_logging_obj", SimpleNamespace(db_spend_update_writer=writer))
+    database: Final = StoredUsage()
+    runtime: Final = UsageCaptureRuntime()
+    runtime.start(database.insert, UsageCaptureSettings())
+    monkeypatch.setattr(proxy_server, "usage_capture", runtime)
+    rejected: Final = failure and deferred and not complete
+    owner: Final = "original-owner" if deferred and not rejected else "owner"
+    metadata: Final = {
+        "user_api_key": "b" * 64 if rejected else "a" * 64,
+        **(
+            {
+                "user_api_key_user_id": "forged-owner" if rejected else owner,
+                "user_api_key_team_id": "forged-team" if rejected else "team",
+                "user_api_key_org_id": "forged-org" if rejected else "org",
+                "user_api_key_project_id": None if deferred and not complete else "project",
+                "user_api_key_alias": "key",
+                "user_api_key_team_alias": "team-alias",
+            }
+            if complete or deferred
+            else {}
+        ),
+    }
+    kwargs: Final = {
+        "call_type": "aretrieve_batch" if deferred else "call_mcp_tool",
+        "litellm_call_id": "attributed",
+        "model": "MCP: echo",
+        "response_cost": 0.25,
+        "start_time": _CALL_START,
+        "litellm_params": {"metadata": metadata},
+    }
+    if rejected:
+        from litellm.proxy.utils import REJECTED_BEFORE_REQUEST_SETUP, REJECTED_BEFORE_REQUEST_SETUP_KEY
+
+        kwargs[REJECTED_BEFORE_REQUEST_SETUP_KEY] = REJECTED_BEFORE_REQUEST_SETUP
+    logger: Final = ProxyDBLogger(spend_writer=lambda: cast(DBSpendUpdateWriter, writer))
+    try:
+        with track_batch_accounting("attributed" if deferred and not rejected else "other"):
+            if failure:
+                await logger.async_post_call_failure_hook(
+                    kwargs,
+                    HTTPException(401, "model not allowed"),
+                    key if complete else UserAPIKeyAuth(api_key="a" * 64, request_route="/v1/chat/completions"),
+                )
+            else:
+                await logger.async_log_success_event(kwargs, {"id": "tool"}, _CALL_START, _CALL_START)
+    finally:
+        await runtime.stop(1)
+    assert len(writer.rows) == 1
+    assert len(database.rows) == 2
+    dimensions: Final = {item.name: item.value for item in database.rows[-1].event.dimensions}
+    if rejected:
+        assert dimensions.get(DimensionName.KEY) == key.api_key
+    assert {
+        name: dimensions.get(name)
+        for name in (DimensionName.USER, DimensionName.TEAM, DimensionName.ORGANIZATION, DimensionName.PROJECT)
+    } == {
+        DimensionName.USER: owner,
+        DimensionName.TEAM: "team",
+        DimensionName.ORGANIZATION: "org",
+        DimensionName.PROJECT: None if deferred and not complete and not rejected else "project",
+    }
+    assert set(database.rows[-1].targets) >= {DeliveryTarget.DAILY_TEAM_SPEND, DeliveryTarget.DAILY_ORGANIZATION_SPEND}
+    legacy: Final = TypeAdapter(dict[str, object]).validate_python(writer.rows[0]["kwargs"])
+    payload: Final = get_logging_payload(legacy, {"id": "tool"}, _CALL_START, _CALL_START)
+    assert (payload["user"], payload["team_id"], payload["organization_id"]) == (owner, "team", "org")
