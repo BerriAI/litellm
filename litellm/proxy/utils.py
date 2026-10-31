@@ -716,6 +716,14 @@ def _drop_built_stream_token_ids(request_data: Mapping[str, object]) -> None:
         logging_obj.drops_stream_token_ids = True
 
 
+def _drop_token_ids_ahead_of_chunk_check(
+    callback: CustomLogger, chunk: object, request_data: Mapping[str, object]
+) -> None:
+    if _overrides_hook(callback, "async_post_call_streaming_hook"):
+        _drop_stream_chunk_token_ids(chunk)
+        _drop_built_stream_token_ids(request_data)
+
+
 _PLAIN_STREAM_FIELDS: Final = TypeAdapter(dict[str, object])
 _EMPTY_STREAM_VALUES: Final[tuple[object, ...]] = (None, "", [], {})
 
@@ -4707,6 +4715,7 @@ class ProxyLogging:
                     else:
                         _callback = callback
                     if _callback is not None and isinstance(_callback, CustomLogger):
+                        _drop_token_ids_ahead_of_chunk_check(_callback, response, data)
                         if str_so_far is not None:
                             complete_response = str_so_far + response_str
                         else:

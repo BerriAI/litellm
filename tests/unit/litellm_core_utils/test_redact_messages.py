@@ -589,6 +589,25 @@ class TestPerformRedaction:
         assert logged_choices[0]["message"]["provider_specific_fields"]["token_ids"] is None
         assert details["complete_streaming_response"].choices[0].get("token_ids") is None
 
+    def test_redacts_text_completion_stream_text_and_the_token_ids_that_decode_to_it(self):
+        details = {
+            "stream": True,
+            "async_complete_streaming_response": litellm.TextCompletionResponse(
+                choices=[
+                    litellm.utils.TextChoices(
+                        index=0, text=" Paris.", reasoning_content="thinking", token_ids=[20, 11], finish_reason="stop"
+                    )
+                ]
+            ),
+        }
+
+        perform_redaction(details, None)
+
+        logged_choice = details["async_complete_streaming_response"].choices[0]
+        assert (logged_choice.text, logged_choice.reasoning_content) == ("redacted-by-litellm", "redacted-by-litellm")
+        assert logged_choice.get("token_ids") is None
+        assert logged_choice.finish_reason == "stop"
+
     def test_redacts_token_ids_a_cache_hit_keeps_on_the_choice_provider_specific_fields(self):
         result = litellm.ModelResponse(
             choices=[

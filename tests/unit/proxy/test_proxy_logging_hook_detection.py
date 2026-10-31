@@ -400,6 +400,52 @@ async def test_post_call_stream_keeps_token_ids_when_no_guardrail_runs_on_the_re
     assert served_token_ids == ([1, 2, 3], [4])
 
 
+class _ChecksEachChunkText(CustomGuardrail):
+    async def async_post_call_streaming_hook(self, user_api_key_dict, response):
+        return None
+
+
+async def _per_chunk_hook_token_ids(monkeypatch, guardrail_default_on: bool) -> tuple[object, bool]:
+    import time
+
+    from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+
+    monkeypatch.setattr(
+        litellm,
+        "callbacks",
+        [_ChecksEachChunkText(guardrail_name="chunk-check", event_hook="post_call", default_on=guardrail_default_on)],
+    )
+    logging_obj = Logging(
+        model="m",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        call_type="acompletion",
+        start_time=time.time(),
+        litellm_call_id="per-chunk-call",
+        function_id="per-chunk-call",
+    )
+    held_back_text_chunk = ModelResponseStream(choices=[StreamingChoices(index=0, delta=Delta(content=""))])
+    setattr(held_back_text_chunk.choices[0], "token_ids", [220, 19, 11])
+
+    served = await ProxyLogging(user_api_key_cache=DualCache()).async_post_call_streaming_hook(
+        data={"model": "m", "metadata": {}, "litellm_logging_obj": logging_obj},
+        response=held_back_text_chunk,
+        user_api_key_dict=UserAPIKeyAuth(api_key="sk-9876", request_route="/chat/completions"),
+    )
+    return getattr(served.choices[0], "token_ids", None), logging_obj.drops_stream_token_ids
+
+
+@pytest.mark.asyncio
+async def test_per_chunk_stream_check_drops_token_ids_served_ahead_of_the_text_it_checks(monkeypatch):
+    assert await _per_chunk_hook_token_ids(monkeypatch, guardrail_default_on=True) == (None, True)
+
+
+@pytest.mark.asyncio
+async def test_per_chunk_stream_keeps_token_ids_when_its_check_does_not_run_on_the_request(monkeypatch):
+    assert await _per_chunk_hook_token_ids(monkeypatch, guardrail_default_on=False) == ([220, 19, 11], False)
+
+
 class _ScansWholeStreamFirst(CustomGuardrail):
     async def async_post_call_streaming_iterator_hook(self, user_api_key_dict, response, request_data):
         for chunk in [chunk async for chunk in response]:
