@@ -13,6 +13,7 @@ from litellm.completion_extras.litellm_responses_transformation.handler import (
     ResponsesToCompletionBridgeHandler,
 )
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.types.utils import ModelResponse
 
 MODEL = "openai.gpt-5.5"
@@ -193,3 +194,33 @@ async def test_acompletion_without_cache_field_is_served_from_cache(_bridged_cac
 
     assert len(_bridged_cache_edge.calls) == 1
     assert [first.id, second.id] == ["resp_1", "resp_1"]
+
+
+@pytest.mark.parametrize(
+    "bridged_request",
+    [
+        {"model": "openai/gpt-5.5-pro"},
+        {"model": "azure/gpt-5-pro", "api_version": "2025-04-01-preview"},
+        {**_GPT_6_REQUEST, "reasoning_effort": "low"},
+    ],
+    ids=["openai_responses_mode", "azure_responses_mode", "azure_tools_with_reasoning"],
+)
+async def test_async_bridged_call_is_sent_through_the_callers_client(bridged_request):
+    sent: Final[list[httpx.Request]] = []
+
+    async def handle(request: httpx.Request) -> httpx.Response:
+        sent.append(request)
+        return httpx.Response(200, json=_responses_api_body(1))
+
+    response = await litellm.acompletion(
+        **{
+            "messages": [{"role": "user", "content": "hi"}],
+            "api_key": "x",
+            **bridged_request,
+            "api_base": "http://127.0.0.1:9",
+        },
+        client=AsyncHTTPHandler(transport=httpx.MockTransport(handle)),
+    )
+
+    assert [(request.url.host, request.url.path.endswith("/responses")) for request in sent] == [("127.0.0.1", True)]
+    assert response.choices[0].message.content == "hi 1"

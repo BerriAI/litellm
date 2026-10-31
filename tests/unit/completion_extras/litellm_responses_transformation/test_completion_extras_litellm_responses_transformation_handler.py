@@ -10,6 +10,9 @@ from litellm.completion_extras.litellm_responses_transformation.handler import (
 )
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+from litellm.responses.litellm_completion_transformation.streaming_iterator import (
+    LiteLLMCompletionStreamingIterator,
+)
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import ModelResponse
 
@@ -265,6 +268,54 @@ def test_completion_streams_completed_model_response():
         f"completed response did not stream its content: {chunks}"
     )
 
+
+
+def _chat_stream_behind_responses() -> LiteLLMCompletionStreamingIterator:
+    return LiteLLMCompletionStreamingIterator(
+        model="claude-haiku-5-5",
+        litellm_custom_stream_wrapper=litellm.completion(
+            model="anthropic/claude-haiku-5-5",
+            messages=[{"role": "user", "content": "hi"}],
+            mock_response="pong",
+            stream=True,
+        ),
+        request_input="hi",
+        responses_api_request={},
+        custom_llm_provider="anthropic",
+    )
+
+
+def test_completion_streams_a_chat_stream_bridged_back_from_responses():
+    bridge = ResponsesToCompletionBridgeHandler()
+
+    with (
+        patch.object(
+            bridge.transformation_handler,
+            "transform_request",
+            return_value={"model": "claude-haiku-5-5", "input": "hi"},
+        ),
+        patch("litellm.responses", return_value=_chat_stream_behind_responses()),
+    ):
+        result = bridge.completion(**_bridge_kwargs(stream=True))
+
+    assert "".join(chunk.choices[0].delta.content or "" for chunk in result) == "pong"
+
+
+@pytest.mark.asyncio
+async def test_acompletion_streams_a_chat_stream_bridged_back_from_responses():
+    bridge = ResponsesToCompletionBridgeHandler()
+
+    with (
+        patch.object(
+            bridge.transformation_handler,
+            "transform_request",
+            return_value={"model": "claude-haiku-5-5", "input": "hi"},
+        ),
+        patch("litellm.aresponses", new=AsyncMock(return_value=_chat_stream_behind_responses())),
+    ):
+        result = await bridge.acompletion(**_bridge_kwargs(stream=True))
+
+    assert "".join([chunk.choices[0].delta.content or "" async for chunk in result]) == "pong"
 
 _PROVIDER_NATIVE_MODEL_CASES = [
     ("perplexity", "perplexity/kimi-k3", "perplexity/kimi-k3"),
