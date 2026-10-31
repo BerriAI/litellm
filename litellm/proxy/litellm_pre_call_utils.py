@@ -378,6 +378,8 @@ LITELLM_METADATA_ROUTES: Final = (
     "responses",
     "files",
     "interactions",
+    "/decisions",
+    "/systemone",
 )
 
 CURSOR_CHAT_COMPLETIONS_ROUTE: Final = "/cursor/chat/completions"
