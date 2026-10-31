@@ -136,6 +136,7 @@ describe("TeamMembersComponent", () => {
     );
 
     expect(screen.getByRole("table")).toBeInTheDocument();
+    expect(screen.queryByRole("columnheader", { name: "Budget windows" })).not.toBeInTheDocument();
   });
 
   it("should render team members table with headers", () => {

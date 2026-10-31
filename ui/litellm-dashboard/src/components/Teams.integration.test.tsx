@@ -53,7 +53,7 @@ describe("Teams creation integration", () => {
     await user.click(screen.getAllByRole("button", { name: /create team/i })[0]);
     await screen.findByLabelText(/team name/i);
     await user.click(screen.getByText("Additional Settings"));
-    await user.click(screen.getByRole("button", { name: /Add Budget Window/i }));
+    await user.click(screen.getByRole("switch", { name: "Enable budget windows" }));
     await act(async () => {
       fireEvent.change(screen.getByRole("spinbutton", { name: "Window 1 budget (USD)" }), { target: { value: "20" } });
     });

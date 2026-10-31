@@ -169,26 +169,37 @@ export default function TeamMemberTab({
     );
   };
 
+  const showBudgetWindows =
+    Boolean(teamData.team_info.team_member_budget_limits?.length) ||
+    teamData.team_memberships.some((membership) => Boolean(membership.budget_limits?.length));
+
   const extraColumns: NonNullable<ComponentProps<typeof MemberTable>["extraColumns"]> = [
-    {
-      title: "Budget windows",
-      key: "budget_windows",
-      render: (record: Member) => {
-        const override = findMembership(record.user_id)?.budget_limits;
-        const windows = effectiveMemberBudgetWindows(teamData.team_info.team_member_budget_limits, override);
-        if (!windows.length) return <span className="text-muted-foreground">Not set</span>;
-        return (
-          <div className="space-y-1">
-            {windows.map((window) => (
-              <div key={window.budget_duration}>
-                ${formatNumberWithCommas(window.max_budget ?? 0, 2)} {getBudgetDurationLabel(window.budget_duration)}
-              </div>
-            ))}
-            <div className="text-xs text-muted-foreground">{override?.length ? "Member override" : "Team default"}</div>
-          </div>
-        );
-      },
-    },
+    ...(showBudgetWindows
+      ? [
+          {
+            title: "Budget windows",
+            key: "budget_windows",
+            render: (record: Member) => {
+              const override = findMembership(record.user_id)?.budget_limits;
+              const windows = effectiveMemberBudgetWindows(teamData.team_info.team_member_budget_limits, override);
+              if (!windows.length) return <span className="text-muted-foreground">Not set</span>;
+              return (
+                <div className="space-y-1">
+                  {windows.map((window) => (
+                    <div key={window.budget_duration}>
+                      ${formatNumberWithCommas(window.max_budget ?? 0, 2)}{" "}
+                      {getBudgetDurationLabel(window.budget_duration)}
+                    </div>
+                  ))}
+                  <div className="text-xs text-muted-foreground">
+                    {override?.length ? "Member override" : "Team default"}
+                  </div>
+                </div>
+              );
+            },
+          },
+        ]
+      : []),
     {
       title: (
         <span className="flex items-center gap-1">

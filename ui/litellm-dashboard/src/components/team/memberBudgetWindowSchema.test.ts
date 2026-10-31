@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { effectiveMemberBudgetWindows, memberBudgetWindowsSchema } from "./memberBudgetWindowSchema";
+import {
+  effectiveMemberBudgetWindows,
+  memberBudgetWindowsSchema,
+  memberBudgetWindowsUpdate,
+} from "./memberBudgetWindowSchema";
 
 const windows = [
   { budget_duration: "24h", max_budget: 20 },
@@ -32,5 +36,11 @@ describe("member budget windows", () => {
   it("should replace all default windows with the member override", () => {
     const override = [{ budget_duration: "24h", max_budget: 5 }];
     expect(effectiveMemberBudgetWindows(windows, override)).toEqual(override);
+  });
+  it("should omit unused windows and send an empty list only when clearing an existing override", () => {
+    expect(memberBudgetWindowsUpdate(undefined)).toBeUndefined();
+    expect(memberBudgetWindowsUpdate([])).toBeUndefined();
+    expect(memberBudgetWindowsUpdate([], windows)).toEqual([]);
+    expect(memberBudgetWindowsUpdate(windows)).toEqual(windows);
   });
 });

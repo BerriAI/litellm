@@ -1,6 +1,10 @@
 import type { BudgetWindowEntry } from "../key_team_helpers/BudgetWindowsEditor";
 import { MemberBudgetWindows } from "./MemberBudgetWindows";
-import { memberBudgetWindowsSchema, type MemberBudgetWindow } from "./memberBudgetWindowSchema";
+import {
+  memberBudgetWindowsSchema,
+  memberBudgetWindowsUpdate,
+  type MemberBudgetWindow,
+} from "./memberBudgetWindowSchema";
 import { getBudgetDurationLabel } from "../common_components/budget_duration_dropdown";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import type { components } from "@/lib/http/schema";
@@ -837,7 +841,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         user_email: values.user_email,
         user_id: values.user_id,
         role: values.role,
-        budget_limits: values.budget_limits ?? [],
+        budget_limits: memberBudgetWindowsUpdate(values.budget_limits),
       };
 
       await teamMemberAddCall(accessToken, teamId, member);
@@ -877,7 +881,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         user_email: values.user_email,
         user_id: values.user_id,
         role: values.role,
-        budget_limits: values.budget_limits ?? [],
+        budget_limits: memberBudgetWindowsUpdate(values.budget_limits, selectedEditMember?.budget_limits),
         max_budget_in_team: values.max_budget_in_team,
         tpm_limit: values.tpm_limit,
         rpm_limit: values.rpm_limit,
@@ -2437,12 +2441,14 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                     <Info className="ml-1 inline size-3.5 align-text-bottom" />
                   </SimpleTooltip>
                 </p>
-                <div>
-                  Default member budget windows:{" "}
-                  {(info.team_member_budget_limits ?? [])
-                    .map((window) => `$${window.max_budget} ${getBudgetDurationLabel(window.budget_duration)}`)
-                    .join(", ") || "Not set"}
-                </div>
+                {Boolean(info.team_member_budget_limits?.length) && (
+                  <div>
+                    Default member budget windows:{" "}
+                    {(info.team_member_budget_limits ?? [])
+                      .map((window) => `$${window.max_budget} ${getBudgetDurationLabel(window.budget_duration)}`)
+                      .join(", ")}
+                  </div>
+                )}
                 <div>Max Budget: {info.team_member_budget_table?.max_budget ?? "No Limit"}</div>
                 <div>Budget Duration: {info.team_member_budget_table?.budget_duration || "No Limit"}</div>
                 {modelMaxBudgetToEntries(

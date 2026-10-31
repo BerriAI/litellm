@@ -144,7 +144,7 @@ describe("UserSearchModal submit payload", () => {
       { budget_duration: "30d", max_budget: 200 },
     ];
     const { user, onSubmit } = setup(windows);
-    await user.click(screen.getByRole("radio", { name: "Custom budget windows" }));
+    await user.click(screen.getByRole("switch", { name: "Custom budget windows" }));
     await act(async () => {
       fireEvent.change(screen.getByRole("spinbutton", { name: "Window 1 budget (USD)" }), { target: { value: "5" } });
     });
@@ -152,7 +152,7 @@ describe("UserSearchModal submit payload", () => {
     await user.click(save());
     await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
     expect(onSubmit.mock.calls[0][0].budget_limits).toEqual([{ ...windows[0], max_budget: 5 }, windows[1]]);
-    expect(screen.getByRole("radio", { name: "Use team defaults" })).toBeChecked();
+    expect(screen.getByRole("switch", { name: "Custom budget windows" })).not.toBeChecked();
     expect(screen.getByText("$20 daily, $200 monthly")).toBeInTheDocument();
     expect(save()).toBeDisabled();
   });

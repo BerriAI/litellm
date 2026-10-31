@@ -35,15 +35,25 @@ describe("member budget windows form", () => {
     renderMember();
     expect(screen.getByRole("spinbutton", { name: "Window 1 budget (USD)" })).toHaveValue(20);
     expect(screen.getByRole("spinbutton", { name: "Window 2 budget (USD)" })).toHaveValue(200);
-    expect(screen.getByRole("radio", { name: "Custom budget windows" })).toBeChecked();
+    expect(screen.getByRole("switch", { name: "Custom budget windows" })).toBeChecked();
   });
 
+  it("should keep windows off and save an unrelated member edit without requiring a budget", async () => {
+    const onSubmit = renderMember([], []);
+    expect(screen.getByRole("switch", { name: "Custom budget windows" })).not.toBeChecked();
+    expect(screen.getByRole("img", { name: /20 dollar daily cap/ })).toBeInTheDocument();
+    expect(screen.queryByRole("spinbutton", { name: "Window 1 budget (USD)" })).not.toBeInTheDocument();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
+    });
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ budget_limits: [] })));
+  });
   it("should inherit team defaults, then save a custom zero-dollar cap without changing the single budget", async () => {
     const onSubmit = renderMember([]);
     expect(screen.getByText("$20 daily, $200 monthly")).toBeInTheDocument();
     expect(screen.queryByRole("spinbutton", { name: "Window 1 budget (USD)" })).not.toBeInTheDocument();
     await act(async () => {
-      fireEvent.click(screen.getByRole("radio", { name: "Custom budget windows" }));
+      fireEvent.click(screen.getByRole("switch", { name: "Custom budget windows" }));
     });
     await act(async () => {
       fireEvent.change(screen.getByRole("spinbutton", { name: "Window 1 budget (USD)" }), { target: { value: "0" } });
@@ -61,7 +71,7 @@ describe("member budget windows form", () => {
   it("should send an empty override to restore inheritance", async () => {
     const onSubmit = renderMember();
     await act(async () => {
-      fireEvent.click(screen.getByRole("radio", { name: "Use team defaults" }));
+      fireEvent.click(screen.getByRole("switch", { name: "Custom budget windows" }));
       fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
     });
     await waitFor(() => expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ budget_limits: [] })));
@@ -70,7 +80,7 @@ describe("member budget windows form", () => {
   it("should explain an incomplete custom window and prevent saving it", async () => {
     const onSubmit = renderMember([], []);
     await act(async () => {
-      fireEvent.click(screen.getByRole("radio", { name: "Custom budget windows" }));
+      fireEvent.click(screen.getByRole("switch", { name: "Custom budget windows" }));
       fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
     });
     expect(await screen.findByText("Enter a budget")).toBeInTheDocument();

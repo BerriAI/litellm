@@ -33,3 +33,12 @@ export const effectiveMemberBudgetWindows = (
   defaults: BudgetWindowEntry[] | null | undefined,
   override: BudgetWindowEntry[] | null | undefined,
 ): BudgetWindowEntry[] => (override?.length ? override : defaults ?? []);
+
+export const memberBudgetWindowsUpdate = (
+  windows: BudgetWindowEntry[] | undefined,
+  previous?: BudgetWindowEntry[] | null,
+): BudgetWindowEntry[] | undefined => {
+  if (windows?.length) return windows;
+  if (previous?.length) return [];
+  return undefined;
+};
