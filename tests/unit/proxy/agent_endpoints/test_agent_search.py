@@ -264,14 +264,14 @@ class TestSearchAgents:
     @pytest.mark.parametrize("embedding_model", ("", "   "), ids=("empty", "whitespace"))
     @pytest.mark.asyncio
     async def test_empty_embedding_model_is_not_configured(self, embedding_model: str) -> None:
-        router = MagicMock()
+        router: Final = MagicMock()
         router.aembedding = AsyncMock(
             side_effect=lambda model, input, metadata: litellm.EmbeddingResponse(
                 model=model,
                 data=[{"object": "embedding", "index": i, "embedding": list(VECTORS[t])} for i, t in enumerate(input)],
             )
         )
-        not_configured = await search_agents(
+        not_configured: Final = await search_agents(
             "language translation",
             AGENTS,
             5,
@@ -281,7 +281,7 @@ class TestSearchAgents:
             user_api_key_dict=CALLER,
             proxy_logging_obj=_pass_through_key_limits(),
         )
-        outcome = await search_agents(
+        outcome: Final = await search_agents(
             "language translation",
             AGENTS,
             5,

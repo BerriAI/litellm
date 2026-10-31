@@ -263,6 +263,7 @@ def test_empty_skill_embedding_setting_returns_not_configured_through_mcp(empty_
 
 
 def test_configured_agent_embedding_model_returns_search_score(configured_search_proxy: _SearchProxy) -> None:
+    configured_search_proxy.wire.drain()
     response: Final = configured_search_proxy.owned.gateway.request("GET", "/v1/agents?query=echo")
     assert response.status_code == 200, response.text
     agents: Final = _JSON_ARRAY.validate_json(response.content)
@@ -270,9 +271,16 @@ def test_configured_agent_embedding_model_returns_search_score(configured_search
     agent: Final = object_value(agents[0])
     assert string_value(agent["agent_name"]) == "plain"
     assert isinstance(agent["search_score"], (int, float))
+    embedding_requests: Final = tuple(
+        request
+        for request in configured_search_proxy.wire.drain()
+        if request.method == "POST" and request.target == "/v1/embeddings"
+    )
+    assert embedding_requests
 
 
 def test_configured_skill_embedding_model_returns_search_score(configured_search_proxy: _SearchProxy) -> None:
+    configured_search_proxy.wire.drain()
     response: Final = configured_search_proxy.owned.gateway.request(
         "GET", "/v1/skills?custom_llm_provider=litellm_proxy&query=echo"
     )

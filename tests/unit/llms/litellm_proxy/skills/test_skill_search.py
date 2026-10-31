@@ -284,8 +284,8 @@ class TestSearchSkills:
     @pytest.mark.parametrize("embedding_model", ("", "   "), ids=("empty", "whitespace"))
     @pytest.mark.asyncio
     async def test_empty_embedding_model_is_not_configured(self, embedding_model: str) -> None:
-        router = _embedding_router()
-        not_configured = await search_skills(
+        router: Final = _embedding_router()
+        not_configured: Final = await search_skills(
             "language translation",
             SKILLS,
             5,
@@ -295,7 +295,7 @@ class TestSearchSkills:
             user_api_key_dict=CALLER,
             proxy_logging_obj=_pass_through_key_limits(),
         )
-        outcome = await search_skills(
+        outcome: Final = await search_skills(
             "language translation",
             SKILLS,
             5,
