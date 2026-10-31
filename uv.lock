@@ -5262,7 +5262,7 @@ requires-dist = [
     { name = "httpx", extras = ["http2"], specifier = ">=0.28.0,<1.0" },
     { name = "httpx2", marker = "extra == 'mcp'", specifier = ">=2.10.0,<3" },
     { name = "httpx2", marker = "extra == 'proxy'", specifier = ">=2.10.0,<3" },
-    { name = "huggingface-hub", specifier = ">=0.34.0,<2.0" },
+    { name = "huggingface-hub", specifier = ">=0.34.0,<3.0" },
     { name = "importlib-metadata", specifier = ">=8.0.0,<9.0" },
     { name = "inquirerpy", marker = "extra == 'cli'", specifier = ">=0.3.4,<1.0" },
     { name = "inquirerpy", marker = "extra == 'proxy'", specifier = ">=0.3.4,<1.0" },
