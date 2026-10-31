@@ -1,7 +1,9 @@
 "use client";
 
 import { ColumnDef } from "@tanstack/react-table";
+import type { TFunction } from "i18next";
 import { Copy, MoreHorizontal, Trash2 } from "lucide-react";
+import { useTranslation } from "react-i18next";
 
 import { StatusBadge, type StatusTone } from "@/components/shared/table_cells";
 import { buttonVariants } from "@/components/ui/button";
@@ -30,10 +32,11 @@ function formatFileSize(bytes?: number): string {
 }
 
 function DocumentRowActions({ document, onRemove }: { document: DocumentUpload; onRemove: (uid: string) => void }) {
+  const { t } = useTranslation();
   return (
     <DropdownMenu>
       <DropdownMenuTrigger
-        aria-label="Open document actions"
+        aria-label={t("vectorStores.documents.actions.open")}
         data-testid={`document-actions-${document.uid}`}
         className={cn(buttonVariants({ variant: "ghost", size: "icon-sm" }), "text-muted-foreground")}
       >
@@ -42,10 +45,10 @@ function DocumentRowActions({ document, onRemove }: { document: DocumentUpload; 
       <DropdownMenuContent align="end" className="w-52">
         <DropdownMenuItem
           data-testid="document-action-copy"
-          onClick={() => void copyToClipboard(document.uid, "Document ID copied to clipboard")}
+          onClick={() => void copyToClipboard(document.uid, t("vectorStores.documents.actions.idCopied"))}
         >
           <Copy />
-          Copy document ID
+          {t("vectorStores.documents.actions.copyId")}
         </DropdownMenuItem>
         <DropdownMenuItem
           variant="destructive"
@@ -53,7 +56,7 @@ function DocumentRowActions({ document, onRemove }: { document: DocumentUpload; 
           onClick={() => onRemove(document.uid)}
         >
           <Trash2 />
-          Remove
+          {t("vectorStores.documents.actions.remove")}
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
@@ -64,12 +67,15 @@ interface DocumentsTableColumnsDeps {
   onRemove: (uid: string) => void;
 }
 
-export const getDocumentsTableColumns = ({ onRemove }: DocumentsTableColumnsDeps): ColumnDef<DocumentUpload>[] => [
+export const getDocumentsTableColumns = (
+  { onRemove }: DocumentsTableColumnsDeps,
+  t: TFunction,
+): ColumnDef<DocumentUpload>[] => [
   {
     id: "name",
     accessorKey: "name",
-    meta: { title: "Name" },
-    header: "Name",
+    meta: { title: t("vectorStores.documents.columns.name") },
+    header: t("vectorStores.documents.columns.name"),
     enableSorting: false,
     cell: ({ row }) => (
       <div className="flex items-center gap-2">
@@ -85,8 +91,8 @@ export const getDocumentsTableColumns = ({ onRemove }: DocumentsTableColumnsDeps
   {
     id: "status",
     accessorKey: "status",
-    meta: { title: "Status", skeleton: "badge" },
-    header: "Status",
+    meta: { title: t("vectorStores.documents.columns.status"), skeleton: "badge" },
+    header: t("vectorStores.documents.columns.status"),
     size: 150,
     enableSorting: false,
     cell: ({ row }) => {
@@ -97,7 +103,7 @@ export const getDocumentsTableColumns = ({ onRemove }: DocumentsTableColumnsDeps
   {
     id: "actions",
     meta: { className: "text-right", headerClassName: "text-right" },
-    header: () => <span className="sr-only">Actions</span>,
+    header: () => <span className="sr-only">{t("vectorStores.documents.columns.actions")}</span>,
     size: 64,
     enableSorting: false,
     enableHiding: false,
