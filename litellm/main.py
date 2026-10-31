@@ -6680,21 +6680,24 @@ def completion(
         )
 
 
-def completion_with_retries(*args, **kwargs):
+def completion_with_retries(
+    *args: object,
+    num_retries: int = 3,
+    retry_strategy: RetryStrategy = "constant_retry",
+    original_function: Callable[..., object] | None = None,
+    **kwargs: object,
+) -> object:
     """
-    Executes a litellm.completion() with 3 retries
+    Retry completion or a supplied SDK call.
     """
     try:
         import tenacity
     except Exception as e:
         raise Exception(f"tenacity import failed please run `pip install tenacity`. Error{e}")
 
-    num_retries: Final = kwargs.pop("num_retries", 3)
     # reset retries in .completion()
     kwargs["max_retries"] = 0
     kwargs["num_retries"] = 0
-    retry_strategy: Final[RetryStrategy] = kwargs.pop("retry_strategy", "constant_retry")
-    original_function: Final = kwargs.pop("original_function", completion)
     if retry_strategy == "exponential_backoff_retry":
         retryer = tenacity.Retrying(
             wait=tenacity.wait_exponential(multiplier=1, max=10),
@@ -6703,24 +6706,28 @@ def completion_with_retries(*args, **kwargs):
         )
     else:
         retryer = tenacity.Retrying(stop=tenacity.stop_after_attempt(num_retries), reraise=True)
-    return retryer(original_function, *args, **kwargs)
+    retry_target: Final[Callable[..., object]] = completion if original_function is None else original_function
+    return retryer(retry_target, *args, **kwargs)
 
 
-async def acompletion_with_retries(*args, **kwargs):
+async def acompletion_with_retries(
+    *args: object,
+    num_retries: int = 3,
+    retry_strategy: RetryStrategy = "constant_retry",
+    original_function: Callable[..., object] | None = None,
+    **kwargs: object,
+) -> object:
     """
     [DEPRECATED]. Use 'acompletion' or router.acompletion instead!
-    Executes a litellm.completion() with 3 retries
+    Retry completion or a supplied SDK call.
     """
     try:
         import tenacity
     except Exception as e:
         raise Exception(f"tenacity import failed please run `pip install tenacity`. Error{e}")
 
-    num_retries: Final = kwargs.pop("num_retries", 3)
     kwargs["max_retries"] = 0
     kwargs["num_retries"] = 0
-    retry_strategy: Final[RetryStrategy] = kwargs.pop("retry_strategy", "constant_retry")
-    original_function: Final = kwargs.pop("original_function", completion)
     if retry_strategy == "exponential_backoff_retry":
         retryer = tenacity.AsyncRetrying(
             wait=tenacity.wait_exponential(multiplier=1, max=10),
@@ -6729,7 +6736,8 @@ async def acompletion_with_retries(*args, **kwargs):
         )
     else:
         retryer = tenacity.AsyncRetrying(stop=tenacity.stop_after_attempt(num_retries), reraise=True)
-    return await retryer(original_function, *args, **kwargs)
+    retry_target: Final[Callable[..., object]] = completion if original_function is None else original_function
+    return await retryer(retry_target, *args, **kwargs)
 
 
 def responses_with_retries(*args, **kwargs):
