@@ -302,5 +302,10 @@
       "preserve_cache_control": true
     },
     "supported_endpoints": ["/v1/chat/completions"]
+  },
+  "runcrate": {
+    "base_url": "https://api.runcrate.ai/v1",
+    "api_key_env": "RUNCRATE_API_KEY",
+    "api_base_env": "RUNCRATE_API_BASE"
   }
 }
