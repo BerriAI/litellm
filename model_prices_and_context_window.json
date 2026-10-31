@@ -29429,6 +29429,7 @@
         "web_search_billing_unit": "per_query"
     },
     "gemini-3.1-flash-lite-image": {
+        "deprecation_date": "2027-06-28",
         "cache_read_input_token_cost": 2.5e-08,
         "cache_read_input_token_cost_batches": 1.25e-08,
         "cache_read_input_token_cost_flex": 1.25e-08,
@@ -30428,6 +30429,7 @@
         "google_maps_grounding_cost_per_query": 0.014
     },
     "vertex_ai/gemini-3.8-flash": {
+        "deprecation_date": "2027-09-02",
         "cache_read_input_token_cost": 7.5e-08,
         "cache_read_input_token_cost_batches": 3.75e-08,
         "cache_read_input_token_cost_flex": 3.75e-08,
@@ -30534,6 +30536,7 @@
         "supports_native_streaming": true
     },
     "vertex_ai/gemini-3.8-live": {
+        "deprecation_date": "2027-09-25",
         "gemini_audio_only_live": true,
         "input_cost_per_audio_token": 3e-06,
         "input_cost_per_image_token": 1e-06,
@@ -32706,6 +32709,7 @@
         "google_maps_grounding_cost_per_query": 0.014
     },
     "gemini-3.8-flash": {
+        "deprecation_date": "2027-09-02",
         "cache_read_input_token_cost": 7.5e-08,
         "cache_read_input_token_cost_batches": 3.75e-08,
         "cache_read_input_token_cost_flex": 3.75e-08,
@@ -48964,6 +48968,7 @@
         "source": "https://api.together.ai/v1/models"
     },
     "together_ai/Qwen/Qwen3.8-2.4T-A95B": {
+        "deprecation_date": "2026-11-04",
         "cache_read_input_token_cost": 2.5e-07,
         "input_cost_per_token": 2e-06,
         "litellm_provider": "together_ai",
@@ -52683,6 +52688,7 @@
 
     },
     "vertex_ai/gemini-3.1-flash-lite-image": {
+        "deprecation_date": "2027-06-28",
         "cache_read_input_token_cost": 2.5e-08,
         "cache_read_input_token_cost_batches": 1.25e-08,
         "cache_read_input_token_cost_flex": 1.25e-08,
@@ -76783,6 +76789,7 @@
         "web_search_billing_unit": "per_query"
     },
     "vertex_ai/gemini-4-argon": {
+        "deprecation_date": "2027-10-13",
         "cache_read_input_token_cost": 1e-07,
         "cache_read_input_token_cost_batches": 5e-08,
         "cache_read_input_token_cost_flex": 5e-08,
