@@ -684,6 +684,73 @@ async def test_organization_member_add_budget_omission_and_null_leave_budget_uns
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
+    "existing_org_id, match_count",
+    [(None, 1), ("other-org", 1), (None, 2)],
+    ids=["unassigned", "other-org", "duplicate-email"],
+)
+async def test_organization_member_add_by_email_preserves_existing_user(
+    monkeypatch: pytest.MonkeyPatch, existing_org_id: str | None, match_count: int,
+) -> None:
+    from datetime import datetime, timezone
+
+    from fastapi import Request
+    from prisma.models import LiteLLM_OrganizationMembership, LiteLLM_UserTable
+
+    from litellm.proxy import proxy_server
+    from litellm.proxy._types import LitellmUserRoles, OrganizationMemberAddRequest, ProxyException, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.organization_endpoints import organization_member_add
+
+    timestamp: Final = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    existing_memberships: Final = [] if existing_org_id is None else [LiteLLM_OrganizationMembership(
+        user_id="existing-user", organization_id=existing_org_id, user_role="internal_user", spend=0,
+        created_at=timestamp, updated_at=timestamp,
+    )]
+    user: Final = LiteLLM_UserTable.model_validate({
+        "user_id": "existing-user", "user_email": "existing@example.test", "user_role": "internal_user",
+        "teams": [], "spend": 0, "models": [], "metadata": "{}", "allowed_cache_controls": [], "policies": [],
+        "model_spend": "{}", "model_max_budget": "{}", "organization_memberships": existing_memberships,
+    })
+    membership: Final = LiteLLM_OrganizationMembership(
+        user_id=user.user_id, organization_id="target-org", user_role="internal_user", spend=0,
+        created_at=timestamp, updated_at=timestamp,
+    )
+    matches: Final = [user] if match_count == 1 else [user, user.model_copy(update={"user_id": "duplicate-user"})]
+    find_user: Final = AsyncMock(return_value=matches)
+    create_membership: Final = AsyncMock(return_value=membership)
+    insert_user: Final = AsyncMock()
+    database: Final = SimpleNamespace(
+        litellm_organizationtable=SimpleNamespace(find_unique=AsyncMock(return_value=SimpleNamespace())),
+        litellm_usertable=SimpleNamespace(find_many=find_user),
+        litellm_organizationmembership=SimpleNamespace(create=create_membership),
+    )
+    monkeypatch.setattr(proxy_server, "prisma_client", SimpleNamespace(db=database, insert_data=insert_user))
+
+    request_data: Final = OrganizationMemberAddRequest(
+        organization_id=membership.organization_id,
+        member={"role": "internal_user", "user_email": "EXISTING@example.test"},
+    )
+    request: Final = Request({"type": "http", "method": "POST", "path": "/organization/member_add", "headers": []})
+    caller: Final = UserAPIKeyAuth(user_id="proxy-admin", user_role=LitellmUserRoles.PROXY_ADMIN)
+    if match_count > 1:
+        with pytest.raises(ProxyException) as exc:
+            await organization_member_add(data=request_data, http_request=request, user_api_key_dict=caller)
+        assert int(exc.value.code) == 400
+        create_membership.assert_not_awaited()
+        insert_user.assert_not_awaited()
+        return
+
+    response: Final = await organization_member_add(data=request_data, http_request=request, user_api_key_dict=caller)
+
+    assert [row.user_id for row in response.updated_users] == [user.user_id]
+    assert response.updated_organization_memberships[0].organization_id == membership.organization_id
+    create_membership.assert_awaited_once_with(data={
+        "organization_id": membership.organization_id, "user_id": user.user_id, "user_role": "internal_user",
+    })
+    insert_user.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
     "budget_payload",
     [{"max_budget_in_organization": None}, {}],
     ids=["explicit-null", "omitted"],
