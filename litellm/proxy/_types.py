@@ -2480,7 +2480,9 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         description="Wait for usage commit on foreground non-stream chat, text, embedding and Responses requests. "
         "Other requests remain supported with asynchronous usage capture.",
     )
-    accounting_sync_ack_timeout_seconds: float = Field(5.0, gt=0, description="Maximum response wait for usage commit")
+    accounting_sync_ack_timeout_seconds: float = Field(
+        20.0, gt=0, description="Maximum response wait for usage commit, including the batch flush interval"
+    )
     accounting_sync_ack_failure_policy: Literal["fail_closed", "log"] = Field(
         "fail_closed", description="Return 503 or log the persistence failure after the response wait expires"
     )

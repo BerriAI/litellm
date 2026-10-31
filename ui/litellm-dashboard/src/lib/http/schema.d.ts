@@ -29959,8 +29959,8 @@ export interface components {
             accounting_sync_ack_failure_policy: "fail_closed" | "log";
             /**
              * Accounting Sync Ack Timeout Seconds
-             * @description Maximum response wait for usage commit
-             * @default 5
+             * @description Maximum response wait for usage commit, including the batch flush interval
+             * @default 20
              */
             accounting_sync_ack_timeout_seconds: number;
             /**
@@ -49531,7 +49531,7 @@ export interface components {
             batch_size: number;
             /**
              * Flush Interval Seconds
-             * @default 0.2
+             * @default 5
              */
             flush_interval_seconds: number;
             /**

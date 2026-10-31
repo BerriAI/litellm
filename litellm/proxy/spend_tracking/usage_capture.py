@@ -131,6 +131,19 @@ class UsageCaptureContext:
     included_attempt_ids: tuple[str, ...] = ()
 
 
+def _database_usage_write(event: InboundUsageEvent | OutboundUsageEvent, envelope: Mapping[str, object]) -> UsageWrite:
+    from sys import maxsize
+
+    from litellm.litellm_core_utils.safe_json_dumps import safe_json_structure
+
+    normalized: Final = _FIELDS.validate_python(safe_json_structure(envelope, max_depth=maxsize))
+    if normalized.get("event") != event.model_dump(mode="json"):
+        raise UsageCaptureError("Usage event text cannot be normalized without changing identity or attribution")
+    serialized: Final = _json(normalized)
+    _JSON_OBJECT.validate_json(serialized)
+    return UsageWrite(event, serialized, usage_delivery_targets(event.dimensions))
+
+
 def usage_writes(
     payload: SpendLogsPayload, usage_json: str | None, context: UsageCaptureContext
 ) -> tuple[UsageWrite, ...]:
@@ -157,27 +170,25 @@ def usage_writes(
         dimensions=dimensions,
         metrics=_usage_metrics(None if context.usage_source == "unknown" else usage),
     )
-    envelope: Final = _json(
-        {
-            "event": outbound.model_dump(mode="json"),
-            "usage": usage,
-            "usage_source": "unknown" if usage is None else context.usage_source,
-            "included_attempt_ids": context.included_attempt_ids,
-            "pricing": _JSON_OBJECT.validate_json(context.pricing),
-            "charge_eligible": context.charge_eligible,
-            "request_count_eligible": context.request_count_eligible,
-            "ownership": context.ownership,
-            "parent_request_id": context.parent_request_id,
-            "job_id": context.job_id,
-            "phase": context.phase,
-            "provider_timestamps": _JSON_OBJECT.validate_json(context.provider_timestamps),
-            "finalized_cost": None
-            if context.finalized_cost is None
-            else _JSON_OBJECT.validate_json(context.finalized_cost),
-            "allocation": None if context.allocation is None else _JSON_OBJECT.validate_json(context.allocation),
-        }
-    )
-    outbound_write: Final = UsageWrite(outbound, envelope, usage_delivery_targets(dimensions))
+    envelope: Final = {
+        "event": outbound.model_dump(mode="json"),
+        "usage": usage,
+        "usage_source": "unknown" if usage is None else context.usage_source,
+        "included_attempt_ids": context.included_attempt_ids,
+        "pricing": _JSON_OBJECT.validate_json(context.pricing),
+        "charge_eligible": context.charge_eligible,
+        "request_count_eligible": context.request_count_eligible,
+        "ownership": context.ownership,
+        "parent_request_id": context.parent_request_id,
+        "job_id": context.job_id,
+        "phase": context.phase,
+        "provider_timestamps": _JSON_OBJECT.validate_json(context.provider_timestamps),
+        "finalized_cost": None
+        if context.finalized_cost is None
+        else _JSON_OBJECT.validate_json(context.finalized_cost),
+        "allocation": None if context.allocation is None else _JSON_OBJECT.validate_json(context.allocation),
+    }
+    outbound_write: Final = _database_usage_write(outbound, envelope)
     if not context.request_count_eligible or context.caller_id is None:
         return (outbound_write,)
     inbound: Final = InboundUsageEvent(
@@ -195,7 +206,7 @@ def usage_writes(
         ),
     )
     return (
-        UsageWrite(inbound, _json({"event": inbound.model_dump(mode="json")}), usage_delivery_targets(dimensions)),
+        _database_usage_write(inbound, {"event": inbound.model_dump(mode="json")}),
         outbound_write,
     )
 
@@ -529,7 +540,7 @@ async def capture_proxy_response(logging_obj: object, response: object, *, backg
             if not isinstance(captured, CapturedUsage):
                 raise UsageCaptureError("Usage capture was not admitted")
             timeout: Final = TypeAdapter(float).validate_python(
-                settings.get("accounting_sync_ack_timeout_seconds", 5.0)
+                settings.get("accounting_sync_ack_timeout_seconds", 20.0)
             )
             await asyncio.wait_for(asyncio.shield(captured.receipt), timeout=timeout)
     except Exception as error:  # noqa: BLE001  # the configured response policy owns every capture failure

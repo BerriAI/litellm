@@ -1,6 +1,6 @@
 import asyncio
 import json
-from collections.abc import Mapping
+from collections.abc import Awaitable, Mapping
 from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Final
@@ -134,6 +134,86 @@ class StoredUsage:
         if any(existing.get(row.event.event_id, row) != row for row in writes):
             raise AccountingConflictError("Same identity has different content")
         self.rows += tuple(row for row in writes if row.event.event_id not in existing)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("text", ["parent\x00value", "pärent-✓-日本", r"\u0000"])
+async def test_capture_normalizes_database_text_without_poisoning_neighbors(text: str) -> None:
+    from litellm.proxy.spend_tracking.usage_capture import PricingCapture, capture_callback
+
+    database: Final = StoredUsage()
+    batches: Final = asyncio.Queue[tuple[UsageWrite, ...]]()
+
+    async def persist(writes: tuple[UsageWrite, ...]) -> None:
+        assert all("\x00" not in (json.loads(write.envelope).get("parent_request_id") or "") for write in writes)
+        batches.put_nowait(writes)
+        await database.insert(writes)
+
+    meter: Final = DurableUsageMeter(persist, UsageCaptureSettings(), wait_for_batch=_manual_flush)
+    nested: Final = json.loads("[" * 100 + "3" + "]" * 100)
+    kwargs: Final = {
+        "call_type": "acompletion",
+        "litellm_call_id": "caller",
+        "model": "capture-model",
+        "search_context_size": text,
+        "_accounting_pricing_snapshot": PricingCapture(
+            "{}", "{}", json.dumps({"request": {"search_context_size": text}, "nested": nested})
+        ),
+        "litellm_params": {"metadata": {"parent_request_id": text}},
+    }
+    response: Final = {"id": "provider", "usage": {"prompt_tokens": 3, "completion_tokens": 2, "total_tokens": 5}}
+    captured: Final = capture_callback(meter, kwargs, response, NOW, NOW)
+    neighbor: Final = capture_callback(
+        meter,
+        {**kwargs, "litellm_call_id": "neighbor", "litellm_params": {}},
+        {**response, "id": "neighbor-provider"},
+        NOW,
+        NOW,
+    )
+    try:
+        await meter.flush()
+        await asyncio.gather(captured.receipt, neighbor.receipt)
+        assert batches.qsize() == 1
+        assert len(batches.get_nowait()) == 4
+        envelope: Final = json.loads(captured.writes[-1].envelope)
+        assert envelope["parent_request_id"] == text.replace("\x00", "")
+        assert envelope["pricing"]["request"]["search_context_size"] == text.replace("\x00", "")
+        assert envelope["pricing"]["nested"] == nested
+        assert envelope["event"] == captured.writes[-1].event.model_dump(mode="json")
+        assert envelope["usage"] == response["usage"]
+        assert kwargs["litellm_params"] == {"metadata": {"parent_request_id": text}}
+        repeated: Final = capture_callback(meter, kwargs, response, NOW, NOW)
+        await meter.flush()
+        await repeated.receipt
+        assert repeated.writes == captured.writes
+        assert len(database.rows) == 4
+    finally:
+        await meter.stop(0)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("invalid_field", ["identity", "context"])
+async def test_invalid_capture_text_is_rejected_before_admission(invalid_field: str) -> None:
+    from litellm.proxy.spend_tracking.usage_capture import capture_callback
+
+    database: Final = StoredUsage()
+    meter: Final = DurableUsageMeter(database.insert, UsageCaptureSettings(), wait_for_batch=_manual_flush)
+    kwargs: Final = {"call_type": "acompletion", "litellm_call_id": "caller", "litellm_params": {}}
+    try:
+        accepted: Final = capture_callback(meter, kwargs, {"id": "provider"}, NOW, NOW)
+        invalid: Final = (
+            {**kwargs, "litellm_call_id": "caller\x00"}
+            if invalid_field == "identity"
+            else {**kwargs, "litellm_params": {"metadata": {"parent_request_id": "parent\ud800"}}}
+        )
+        with pytest.raises((UsageCaptureError, ValueError)):
+            capture_callback(meter, invalid, {"id": "other"}, NOW, NOW)
+        assert meter.pending_records == 2
+        await meter.flush()
+        await accepted.receipt
+        assert tuple(write.event.event_id for write in database.rows) == ("caller:inbound", "provider")
+    finally:
+        await meter.stop(0)
 
 
 def _logger(call_type: str = "acompletion", *, stream: bool = False) -> Logging:
@@ -348,6 +428,7 @@ async def test_stream_capture_ignores_chunks_and_preserves_terminal_usage_extras
 @pytest.mark.parametrize("call_type", ["acompletion", "atext_completion", "aembedding", "aresponses"])
 async def test_supported_sync_ack_waits_for_commit(call_type: str, monkeypatch: pytest.MonkeyPatch) -> None:
     from litellm.proxy import proxy_server
+    from litellm.proxy._types import ConfigGeneralSettings
     from litellm.proxy.spend_tracking.usage_capture import UsageCaptureRuntime, capture_proxy_response
     from litellm.types.utils import ModelResponse, Usage
 
@@ -356,6 +437,14 @@ async def test_supported_sync_ack_waits_for_commit(call_type: str, monkeypatch: 
     runtime.start(database.write, UsageCaptureSettings(batch_size=2))
     monkeypatch.setattr(proxy_server, "usage_capture", runtime)
     monkeypatch.setattr(proxy_server, "general_settings", {"accounting_sync_ack": True})
+    deadlines: Final = asyncio.Queue[float | None]()
+    original_wait: Final = asyncio.wait_for
+
+    async def wait_with_deadline(awaitable: Awaitable[object], timeout: float | None) -> object:
+        deadlines.put_nowait(timeout)
+        return await original_wait(awaitable, timeout)
+
+    monkeypatch.setattr(asyncio, "wait_for", wait_with_deadline)
     response: Final = asyncio.create_task(
         capture_proxy_response(
             _logger(call_type),
@@ -364,6 +453,9 @@ async def test_supported_sync_ack_waits_for_commit(call_type: str, monkeypatch: 
     )
     try:
         await database.entered.wait()
+        deadline: Final = deadlines.get_nowait()
+        assert deadline == ConfigGeneralSettings().accounting_sync_ack_timeout_seconds
+        assert deadline is not None and deadline > UsageCaptureSettings().flush_interval_seconds + 10
         assert not response.done()
         assert database.committed == ()
         database.release.set()
