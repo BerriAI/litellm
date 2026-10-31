@@ -94,3 +94,33 @@ class TestPydanticAITransformation:
         assert result["result"]["kind"] == "message"
         assert result["result"]["role"] == "agent"
         assert result["result"]["parts"][0]["text"] == "The answer is 4."
+
+
+def test_transform_echoes_the_context_id_the_caller_sent():
+    """A caller that keeps conversations apart by contextId must get its own id back."""
+    response = {
+        "result": {
+            "history": [{"role": "agent", "parts": [{"kind": "text", "text": "hi"}], "messageId": "msg-1"}],
+            "artifacts": [],
+        }
+    }
+
+    result = PydanticAITransformation._transform_to_a2a_response(
+        response_data=response,
+        request_id="req-1",
+        params={"message": {"role": "user", "parts": [{"kind": "text", "text": "hello"}], "contextId": "ctx-1"}},
+    )
+
+    assert result["result"]["contextId"] == "ctx-1"
+
+
+def test_transform_omits_context_id_when_the_caller_sent_none():
+    response = {"result": {"history": [], "artifacts": []}}
+
+    result = PydanticAITransformation._transform_to_a2a_response(
+        response_data=response,
+        request_id="req-1",
+        params={"message": {"role": "user", "parts": [{"kind": "text", "text": "hello"}]}},
+    )
+
+    assert "contextId" not in result["result"]

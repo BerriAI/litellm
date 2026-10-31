@@ -2995,3 +2995,111 @@ def test_a2a_http_refusals_answer_as_jsonrpc_errors_with_a_null_id_for_unparseab
     assert body["error"]["code"] == -32000
     assert body["error"]["message"] == "Agent 'agent-1' is not allowed"
     assert body["error"]["data"]["code"] == "403"
+
+
+def _scoped_agent() -> MagicMock:
+    agent = _make_agent_mock()
+    agent.agent_card_params["litellm_context_scope"] = "caller"
+    return agent
+
+
+@pytest.mark.asyncio
+async def test_send_message_scopes_context_id_to_the_calling_key():
+    """Two keys sending the same contextId must reach the agent as two ids."""
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    captured: list[object] = []
+
+    async def capture_asend_message(request, **kwargs):
+        captured.append(request.params.message.model_dump(mode="json")["contextId"])
+        response = MagicMock()
+        response.model_dump.return_value = {"jsonrpc": "2.0", "id": request.id, "result": {"kind": "message"}}
+        return response
+
+    def _params(context_id: str) -> dict[str, object]:
+        return {
+            "message": {"messageId": "msg-1", "role": "ROLE_USER", "parts": [{"text": "hi"}], "contextId": context_id}
+        }
+
+    with ExitStack() as stack:
+        for p in _base_patches(_scoped_agent()):
+            stack.enter_context(p)
+        stack.enter_context(patch("litellm.a2a_protocol.main.A2A_SDK_AVAILABLE", True))
+        stack.enter_context(
+            patch("litellm.a2a_protocol.asend_message", new=AsyncMock(side_effect=capture_asend_message))
+        )
+
+        from litellm.proxy.agent_endpoints.a2a_endpoints import invoke_agent_a2a
+
+        for api_key in ("sk-alice", "sk-bob"):
+            await invoke_agent_a2a(
+                agent_id="test-agent",
+                request=_make_request_mock("SendMessage", _params("ctx-shared-1")),
+                fastapi_response=MagicMock(),
+                user_api_key_dict=UserAPIKeyAuth(api_key=api_key, user_id=api_key, team_id="t1"),
+            )
+
+    alice, bob = captured
+    assert isinstance(alice, str) and isinstance(bob, str)
+    assert alice != bob
+    # the client's own id stays readable as a suffix, for operators
+    assert alice.endswith("-ctx-shared-1") and bob.endswith("-ctx-shared-1")
+
+
+@pytest.mark.asyncio
+async def test_send_message_leaves_context_id_alone_without_the_opt_in():
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    captured: list[object] = []
+
+    async def capture_asend_message(request, **kwargs):
+        captured.append(request.params.message.model_dump(mode="json")["contextId"])
+        response = MagicMock()
+        response.model_dump.return_value = {"jsonrpc": "2.0", "id": request.id, "result": {"kind": "message"}}
+        return response
+
+    params = {
+        "message": {"messageId": "msg-1", "role": "ROLE_USER", "parts": [{"text": "hi"}], "contextId": "ctx-1"}
+    }
+    with ExitStack() as stack:
+        for p in _base_patches(_make_agent_mock()):
+            stack.enter_context(p)
+        stack.enter_context(patch("litellm.a2a_protocol.main.A2A_SDK_AVAILABLE", True))
+        stack.enter_context(
+            patch("litellm.a2a_protocol.asend_message", new=AsyncMock(side_effect=capture_asend_message))
+        )
+
+        from litellm.proxy.agent_endpoints.a2a_endpoints import invoke_agent_a2a
+
+        await invoke_agent_a2a(
+            agent_id="test-agent",
+            request=_make_request_mock("SendMessage", params),
+            fastapi_response=MagicMock(),
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-alice", user_id="alice", team_id="t1"),
+        )
+
+    assert captured == ["ctx-1"]
+
+
+@pytest.mark.asyncio
+async def test_get_agent_card_hides_the_context_scope_setting():
+    """litellm_context_scope is a proxy setting, not part of the A2A card."""
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    mock_request = MagicMock()
+    mock_request.base_url = "http://localhost:4000/"
+    mock_request.headers = {}
+
+    with ExitStack() as stack:
+        for p in _base_patches(_scoped_agent()):
+            stack.enter_context(p)
+
+        from litellm.proxy.agent_endpoints.a2a_endpoints import get_agent_card
+
+        response = await get_agent_card(
+            agent_id="test-agent",
+            request=mock_request,
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-test", user_id="u1", team_id="t1"),
+        )
+
+    assert "litellm_context_scope" not in json.loads(response.body.decode())

@@ -29,6 +29,11 @@ from litellm.litellm_core_utils.url_utils import SSRFError, validate_url
 from litellm.llms.a2a.common_utils import resolve_a2a_hop_auth_header
 from litellm.llms.custom_httpx.sse_lines import aiter_sse_lines
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
+from litellm.proxy.a2a.agent_card import (
+    CONTEXT_SCOPE_CARD_KEY,
+    known_context_scope,
+    scope_context_ids,
+)
 from litellm.proxy.a2a.version_convert import (
     A2AVersion,
     normalize_agent_card,
@@ -686,6 +691,8 @@ async def get_agent_card(
         proxy_url: Final = get_custom_url(str(request.base_url), route=f"a2a/{agent_id}")
         agent_card = deepcopy(agent.agent_card_params)
         agent_card["url"] = proxy_url
+        # Admin-only proxy setting, not part of the A2A card schema.
+        agent_card.pop(CONTEXT_SCOPE_CARD_KEY, None)
         interfaces: Final = agent_card.get("supportedInterfaces")
         if isinstance(interfaces, list) and interfaces:
             interfaces[0]["url"] = proxy_url
@@ -915,6 +922,15 @@ async def invoke_agent_a2a(
             if not isinstance(_existing_guardrails, list):
                 _existing_guardrails = [_existing_guardrails]
             data["guardrails"] = _existing_guardrails + [g for g in _agent_guardrails if g not in _existing_guardrails]
+
+        # Agents can ask for the A2A contextId to be bound to the calling key, so two
+        # keys that happen to send the same id don't end up in one conversation on an
+        # agent that keys its memory by contextId. Opt-in per agent, never for
+        # tasks/* — those already reference ids the proxy handed out.
+        if method in ("message/send", "message/stream") and isinstance(params, dict):
+            card_params: Final = agent.agent_card_params
+            if card_params and known_context_scope(card_params.get(CONTEXT_SCOPE_CARD_KEY)) == "caller":
+                params = scope_context_ids(params, card_params, user_api_key_dict.api_key)
 
         # Route through SDK functions
         if method == "message/send":
