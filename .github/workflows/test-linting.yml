@@ -208,7 +208,7 @@ jobs:
             exit 0
           fi
           retry() { "$@" || { sleep 15; "$@"; } || { sleep 30; "$@"; }; }
-          CLAUDE_VERSION="$(retry uv run --no-sync python tests/e2e/claude_code/pr_gate_version_resolver.py)"
+          CLAUDE_VERSION="$(retry uv run --no-sync python tests/e2e/cli_harness/npm_version_resolver.py @anthropic-ai/claude-code)"
           tests/e2e/claude_code/cron_vm/install_claude_code.sh "$CLAUDE_VERSION" "$RUNNER_TEMP/claude-cli"
           PATH="$RUNNER_TEMP/claude-cli:$PATH" uv run --no-sync pytest -q tests/e2e_harness
           uv run --no-sync pytest --tb=short -q --noconftest -o addopts= -o "pythonpath=tests/e2e tests/e2e_harness" -p no:rerunfailures \

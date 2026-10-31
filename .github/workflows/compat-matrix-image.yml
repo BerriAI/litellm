@@ -4,7 +4,7 @@ on:
   pull_request:
     paths:
       - tests/e2e/claude_code/cron_vm/**
-      - tests/e2e/claude_code/pr_gate_version_resolver.py
+      - tests/e2e/cli_harness/npm_version_resolver.py
       - .github/workflows/compat-matrix-image.yml
   workflow_dispatch:
 
@@ -36,7 +36,7 @@ jobs:
             whoami
             gh --version
             uv --version
-            version="$(uv run --no-project --python 3.12 python /opt/litellm/tests/e2e/claude_code/pr_gate_version_resolver.py)"
+            version="$(uv run --no-project --python 3.12 python /opt/litellm/tests/e2e/cli_harness/npm_version_resolver.py @anthropic-ai/claude-code)"
             /opt/litellm/tests/e2e/claude_code/cron_vm/install_claude_code.sh "${version}" /tmp/claude-cli
             /tmp/claude-cli/claude --version
           '
