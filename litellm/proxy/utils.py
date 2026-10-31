@@ -815,6 +815,29 @@ def _drop_response_steps_that_did_not_run(
         _drop_applied_guardrails_in_place(data.get(bucket_key), not_run)
 
 
+def _add_applied_guardrails_in_place(
+    data: dict[str, object],  # mutable-ok: the names are recorded in the live request body's metadata
+    names: Sequence[str],
+) -> None:
+    """Adds each name the way add_guardrail_to_applied_guardrails_header does, in time linear in the names"""
+    from litellm.proxy.common_utils.callback_utils import add_guardrail_to_applied_guardrails_header
+
+    if not names:
+        return
+    metadata: Final = cast("dict[str, object]", get_or_create_metadata_bucket(data)[1])  # cast-ok: str-keyed bucket
+    if "applied_guardrails" not in metadata:
+        metadata["applied_guardrails"] = list(dict.fromkeys(names))
+        return
+    applied: Final = metadata["applied_guardrails"]
+    if not isinstance(applied, list):
+        for name in names:
+            add_guardrail_to_applied_guardrails_header(request_data=data, guardrail_name=name)
+        return
+    entries: Final = cast("list[object]", applied)  # cast-ok: entries are only compared with names
+    present: Final = frozenset(name for name in entries if isinstance(name, str))
+    entries.extend(dict.fromkeys(name for name in names if name not in present))
+
+
 def _drop_applied_guardrails_in_place(bucket: object, names: frozenset[str]) -> None:
     if not isinstance(bucket, dict):
         return
@@ -2831,10 +2854,6 @@ class ProxyLogging:
         policy pipeline steps that have not run. With ``skip_guardrails`` the pipelines run on
         another request, so every step is added.
         """
-        from litellm.proxy.common_utils.callback_utils import (
-            add_guardrail_to_applied_guardrails_header,
-        )
-
         metadata_standard: Final = data.get("metadata") or {}
         metadata_litellm: Final = data.get("litellm_metadata") or {}
 
@@ -2854,18 +2873,21 @@ class ProxyLogging:
             if not isinstance(applied_guardrails, list):
                 applied_guardrails = []
 
-            not_run: Final = (
-                frozenset[str]()
-                if skip_guardrails
-                else _request_steps_that_have_not_run(cast(dict[str, object], data))  # cast-ok: request payload
+            request: Final = cast("dict[str, object]", data)  # cast-ok: request payload
+            not_run: Final = frozenset[str]() if skip_guardrails else _request_steps_that_have_not_run(request)
+            already_applied: Final = frozenset(
+                name
+                for name in cast("Sequence[object]", applied_guardrails)  # cast-ok: checked to be a list above
+                if isinstance(name, str)
             )
-            for guardrail_name in guardrails_in_metadata:
-                if (
-                    isinstance(guardrail_name, str)
-                    and guardrail_name not in applied_guardrails
-                    and guardrail_name not in not_run
-                ):
-                    add_guardrail_to_applied_guardrails_header(request_data=data, guardrail_name=guardrail_name)
+            _add_applied_guardrails_in_place(
+                request,
+                [
+                    name
+                    for name in guardrails_in_metadata
+                    if isinstance(name, str) and name not in already_applied and name not in not_run
+                ],
+            )
 
     async def _maybe_execute_pipelines(
         self,
