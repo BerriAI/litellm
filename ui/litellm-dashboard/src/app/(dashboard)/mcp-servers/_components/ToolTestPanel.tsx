@@ -1,5 +1,6 @@
 import React from "react";
 import { CircleHelp, X } from "lucide-react";
+import { useTranslation } from "react-i18next";
 
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
@@ -24,6 +25,7 @@ export function ToolTestPanel({
   error: Error | null;
   onClose: () => void;
 }) {
+  const { t } = useTranslation();
   const [viewMode, setViewMode] = React.useState<"formatted" | "json">("formatted");
   const [startTime, setStartTime] = React.useState<number | null>(null);
   const [duration, setDuration] = React.useState<number | null>(null);
@@ -37,14 +39,14 @@ export function ToolTestPanel({
         properties: {
           input: {
             type: "string",
-            description: "Input for this tool",
+            description: t("mcpServers.toolTestPanel.defaultInputDescription"),
           },
         },
         required: ["input"],
       };
     }
     return tool.inputSchema as InputSchema;
-  }, [tool.inputSchema]);
+  }, [tool.inputSchema, t]);
 
   // Check if this is a nested params structure and extract the actual parameters
   const actualSchema: InputSchema = React.useMemo(() => {
@@ -118,18 +120,18 @@ export function ToolTestPanel({
   const handleCopyResult = async () => {
     const success = await copyToClipboard(JSON.stringify(result, null, 2));
     if (success) {
-      toast.success("Result copied to clipboard");
+      toast.success(t("mcpServers.toolTestPanel.toasts.resultCopied"));
     } else {
-      toast.fromError("Failed to copy result");
+      toast.fromError(t("mcpServers.toolTestPanel.toasts.resultCopyFailed"));
     }
   };
 
   const handleCopyToolName = async () => {
     const success = await copyToClipboard(tool.name);
     if (success) {
-      toast.success("Tool name copied to clipboard");
+      toast.success(t("mcpServers.toolTestPanel.toasts.toolNameCopied"));
     } else {
-      toast.fromError("Failed to copy tool name");
+      toast.fromError(t("mcpServers.toolTestPanel.toasts.toolNameCopyFailed"));
     }
   };
 
@@ -142,17 +144,17 @@ export function ToolTestPanel({
             // eslint-disable-next-line @next/next/no-img-element
             <img
               src={resolveLogoSrc(tool.mcp_info.logo_url)}
-              alt={`${tool.mcp_info.server_name} logo`}
+              alt={t("mcpServers.toolTestPanel.logoAlt", { serverName: tool.mcp_info.server_name })}
               className="w-6 h-6 object-contain"
             />
           )}
           <div className="flex-1 min-w-0">
             <div className="flex items-center space-x-2 mb-1">
-              <h2 className="text-lg font-semibold text-foreground">Test Tool:</h2>
+              <h2 className="text-lg font-semibold text-foreground">{t("mcpServers.toolTestPanel.title")}</h2>
               <div
                 className="group inline-flex items-center space-x-1 bg-muted hover:bg-accent px-3 py-1 rounded-md cursor-pointer transition-colors border border-border"
                 onClick={handleCopyToolName}
-                title="Click to copy tool name"
+                title={t("mcpServers.toolTestPanel.copyToolNameTitle")}
               >
                 <span className="font-mono text-foreground font-medium text-sm">{tool.name}</span>
                 <svg
@@ -171,14 +173,16 @@ export function ToolTestPanel({
               </div>
             </div>
             <p className="text-xs text-muted-foreground">{tool.description}</p>
-            <p className="text-xs text-muted-foreground">Provider: {tool.mcp_info.server_name}</p>
+            <p className="text-xs text-muted-foreground">
+              {t("mcpServers.toolTestPanel.provider", { serverName: tool.mcp_info.server_name })}
+            </p>
           </div>
         </div>
         <Button
           onClick={onClose}
           variant="ghost"
           size="icon-sm"
-          aria-label="Close"
+          aria-label={t("mcpServers.toolTestPanel.close")}
           className="text-muted-foreground hover:text-foreground"
         >
           <X className="size-4" />
@@ -191,13 +195,13 @@ export function ToolTestPanel({
         <div className="bg-card border border-border rounded-lg">
           <div className="border-b border-border px-4 py-2">
             <div className="flex items-center justify-between">
-              <h3 className="text-sm font-semibold text-foreground">Input Parameters</h3>
+              <h3 className="text-sm font-semibold text-foreground">{t("mcpServers.toolTestPanel.inputParameters")}</h3>
               <TooltipProvider>
                 <Tooltip>
                   <TooltipTrigger
                     render={<CircleHelp className="size-4 cursor-help text-muted-foreground hover:text-foreground" />}
                   />
-                  <TooltipContent>Configure the input parameters for this tool call</TooltipContent>
+                  <TooltipContent>{t("mcpServers.toolTestPanel.inputParametersTooltip")}</TooltipContent>
                 </Tooltip>
               </TooltipProvider>
             </div>
@@ -218,7 +222,7 @@ export function ToolTestPanel({
         {/* Right Column - Tool Result */}
         <div className="bg-card border border-border rounded-lg">
           <div className="border-b border-border px-4 py-2">
-            <h3 className="text-sm font-semibold text-foreground">Tool Result</h3>
+            <h3 className="text-sm font-semibold text-foreground">{t("mcpServers.toolTestPanel.toolResult")}</h3>
           </div>
 
           <div className="p-4">
@@ -241,9 +245,11 @@ export function ToolTestPanel({
                       />
                     </svg>
                   </div>
-                  <h4 className="text-sm font-medium text-foreground mb-1">Ready to Call Tool</h4>
+                  <h4 className="text-sm font-medium text-foreground mb-1">
+                    {t("mcpServers.toolTestPanel.empty.title")}
+                  </h4>
                   <p className="text-xs text-muted-foreground leading-relaxed">
-                    Configure the input parameters and click &quot;Call Tool&quot; to see the results here.
+                    {t("mcpServers.toolTestPanel.empty.description")}
                   </p>
                 </div>
               </div>
@@ -262,9 +268,11 @@ export function ToolTestPanel({
                             d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"
                           />
                         </svg>
-                        <h4 className="text-xs font-medium text-success">Tool executed successfully</h4>
+                        <h4 className="text-xs font-medium text-success">{t("mcpServers.toolTestPanel.success")}</h4>
                         {duration !== null && (
-                          <span className="text-xs text-success ml-1">• {(duration / 1000).toFixed(2)}s</span>
+                          <span className="text-xs text-success ml-1">
+                            {t("mcpServers.toolTestPanel.duration", { seconds: (duration / 1000).toFixed(2) })}
+                          </span>
                         )}
                       </div>
 
@@ -278,7 +286,7 @@ export function ToolTestPanel({
                                 : "text-success hover:text-success/80"
                             }`}
                           >
-                            Formatted
+                            {t("mcpServers.toolTestPanel.formatted")}
                           </button>
                           <button
                             onClick={() => setViewMode("json")}
@@ -293,7 +301,7 @@ export function ToolTestPanel({
                         <button
                           onClick={handleCopyResult}
                           className="p-1 hover:bg-success/15 rounded-sm text-success"
-                          title="Copy response"
+                          title={t("mcpServers.toolTestPanel.copyResponse")}
                         >
                           <svg
                             xmlns="http://www.w3.org/2000/svg"
@@ -322,8 +330,10 @@ export function ToolTestPanel({
                         <div className="animate-spin rounded-full h-8 w-8 border-2 border-border"></div>
                         <div className="animate-spin rounded-full h-8 w-8 border-2 border-info border-t-transparent absolute top-0"></div>
                       </div>
-                      <p className="text-sm font-medium mt-3">Calling tool...</p>
-                      <p className="text-xs text-muted-foreground mt-1">Please wait while we process your request</p>
+                      <p className="text-sm font-medium mt-3">{t("mcpServers.toolTestPanel.calling.title")}</p>
+                      <p className="text-xs text-muted-foreground mt-1">
+                        {t("mcpServers.toolTestPanel.calling.description")}
+                      </p>
                     </div>
                   )}
 
@@ -347,9 +357,13 @@ export function ToolTestPanel({
                         </div>
                         <div className="flex-1">
                           <div className="flex items-center space-x-2 mb-1">
-                            <h4 className="text-xs font-medium text-destructive">Tool Call Failed</h4>
+                            <h4 className="text-xs font-medium text-destructive">
+                              {t("mcpServers.toolTestPanel.failed")}
+                            </h4>
                             {duration !== null && (
-                              <span className="text-xs text-destructive">• {(duration / 1000).toFixed(2)}s</span>
+                              <span className="text-xs text-destructive">
+                                {t("mcpServers.toolTestPanel.duration", { seconds: (duration / 1000).toFixed(2) })}
+                              </span>
                             )}
                           </div>
                           <div className="bg-card border border-destructive/20 rounded-sm p-2 max-h-48 overflow-y-auto">
@@ -374,7 +388,7 @@ export function ToolTestPanel({
                               <div>
                                 <div className="bg-muted px-3 py-1 border-b border-border">
                                   <span className="text-xs font-medium text-foreground uppercase tracking-wide">
-                                    Text Response
+                                    {t("mcpServers.toolTestPanel.textResponse")}
                                   </span>
                                 </div>
                                 <div className="p-3">
@@ -463,7 +477,7 @@ export function ToolTestPanel({
                               <div>
                                 <div className="bg-muted px-3 py-1 border-b border-border">
                                   <span className="text-xs font-medium text-foreground uppercase tracking-wide">
-                                    Image Response
+                                    {t("mcpServers.toolTestPanel.imageResponse")}
                                   </span>
                                 </div>
                                 <div className="p-3">
@@ -471,7 +485,7 @@ export function ToolTestPanel({
                                     {/* eslint-disable-next-line @next/next/no-img-element */}
                                     <img
                                       src={content.url}
-                                      alt="Tool result"
+                                      alt={t("mcpServers.toolTestPanel.imageAlt")}
                                       className="max-w-full h-auto rounded-sm shadow-xs"
                                     />
                                   </div>
@@ -483,7 +497,7 @@ export function ToolTestPanel({
                               <div>
                                 <div className="bg-muted px-3 py-1 border-b border-border">
                                   <span className="text-xs font-medium text-foreground uppercase tracking-wide">
-                                    Embedded Resource
+                                    {t("mcpServers.toolTestPanel.embeddedResource")}
                                   </span>
                                 </div>
                                 <div className="p-3">
@@ -505,7 +519,9 @@ export function ToolTestPanel({
                                     </div>
                                     <div className="flex-1">
                                       <p className="text-xs font-medium text-info">
-                                        Resource Type: {content.resource_type}
+                                        {t("mcpServers.toolTestPanel.resourceType", {
+                                          resourceType: content.resource_type,
+                                        })}
                                       </p>
                                       {content.url && (
                                         <a
@@ -514,7 +530,7 @@ export function ToolTestPanel({
                                           rel="noopener noreferrer"
                                           className="inline-flex items-center text-xs text-info hover:underline mt-1"
                                         >
-                                          View Resource
+                                          {t("mcpServers.toolTestPanel.viewResource")}
                                           <svg className="ml-1 h-3 w-3" fill="currentColor" viewBox="0 0 20 20">
                                             <path d="M11 3a1 1 0 100 2h2.586l-6.293 6.293a1 1 0 101.414 1.414L15 6.414V9a1 1 0 102 0V4a1 1 0 00-1-1h-5z" />
                                             <path d="M5 5a2 2 0 00-2 2v8a2 2 0 002 2h8a2 2 0 002-2v-3a1 1 0 10-2 0v3H5V7h3a1 1 0 000-2H5z" />
