@@ -7576,6 +7576,37 @@ def test_converse_sampling_params_forwarded_on_models_that_accept_them():
     assert result["topP"] == 0.9
 
 
+@pytest.mark.parametrize(
+    "model",
+    [
+        "us.xai.grok-4.6",
+        "global.xai.grok-4.6",
+        "us-gov.xai.grok-4.6",
+        "us.xai.grok-4.7",
+        "global.xai.grok-4.7",
+        "moonshotai.kimi-k3",
+        "us.moonshotai.kimi-k3",
+        "global.moonshotai.kimi-k3",
+        "in.moonshotai.kimi-k3",
+    ],
+)
+def test_converse_drops_temperature_for_grok_and_kimi(model):
+    """Grok 4.6 / 4.7 and Kimi K3 answer any temperature on Converse with
+    ``This model doesn't support the temperature field``."""
+    config = AmazonConverseConfig()
+
+    assert "temperature" not in config.get_supported_openai_params(model)
+    result = config.map_openai_params(
+        non_default_params={"temperature": 0.2, "top_p": 0.9},
+        optional_params={},
+        model=model,
+        drop_params=True,
+    )
+
+    assert "temperature" not in result
+    assert "topP" not in result
+
+
 def test_converse_top_k_dropped_for_models_that_removed_it():
     """``top_k`` reaches converse as a provider-specific kwarg destined for
     ``additionalModelRequestFields``, bypassing ``map_openai_params``; the
