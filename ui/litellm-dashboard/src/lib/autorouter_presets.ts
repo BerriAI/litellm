@@ -116,8 +116,10 @@ export const buildModelAvailability = (
   modelGroups: Iterable<string>,
   deployments: readonly DeploymentModelRef[],
   groupProviders: ReadonlyMap<string, readonly string[]> = new Map(),
+  aliasTargets: ReadonlyMap<string, string> = new Map(),
 ): ModelAvailability => {
   const groups = new Set(modelGroups);
+  const routedGroup = (group: string): string => aliasTargets.get(group) ?? group;
   const deploymentGroups = new Set(deployments.map((deployment) => deployment.modelGroup));
   const deploymentProviders = new Map<string, Set<string>>();
   for (const deployment of deployments) {
@@ -125,21 +127,29 @@ export const buildModelAvailability = (
     providers.add(deploymentProvider(deployment));
     deploymentProviders.set(deployment.modelGroup, providers);
   }
-  const literalEntries = deployments
-    .filter((deployment) => groups.has(deployment.modelGroup))
-    .flatMap((deployment) =>
+  const routableDeployments = deployments.filter((deployment) => !deployment.blocked);
+  const routableByGroup = new Map<string, DeploymentModelRef[]>();
+  for (const deployment of routableDeployments) {
+    routableByGroup.set(deployment.modelGroup, [...(routableByGroup.get(deployment.modelGroup) ?? []), deployment]);
+  }
+  const literalEntries = Array.from(groups).flatMap((group) =>
+    (routableByGroup.get(routedGroup(group)) ?? []).flatMap((deployment) =>
       deployment.underlyingModels
         .map(normalizeUnderlyingModel)
-        .map((key) => ({ key, modelGroup: deployment.modelGroup, sourceGroup: deployment.modelGroup })),
-    );
-  const unlistedGroups = Array.from(groups).filter((group) => !group.includes("*") && !deploymentGroups.has(group));
-  const routableDeployments = deployments.filter((deployment) => !deployment.blocked);
+        .map((key) => ({ key, modelGroup: group, sourceGroup: deployment.modelGroup })),
+    ),
+  );
+  const unlistedGroups = Array.from(groups).filter(
+    (group) => !group.includes("*") && !deploymentGroups.has(routedGroup(group)),
+  );
   const wildcardEntries = unlistedGroups.flatMap((group) =>
-    wildcardRoutes(group, routableDeployments, groupProviders.get(group) ?? []).map(({ model, sourceGroup }) => ({
-      key: normalizeUnderlyingModel(model),
-      modelGroup: group,
-      sourceGroup,
-    })),
+    wildcardRoutes(routedGroup(group), routableDeployments, groupProviders.get(group) ?? []).map(
+      ({ model, sourceGroup }) => ({
+        key: normalizeUnderlyingModel(model),
+        modelGroup: group,
+        sourceGroup,
+      }),
+    ),
   );
   const entries = [...literalEntries, ...wildcardEntries];
   const grouped = new Map<string, Set<string>>();
@@ -187,6 +197,14 @@ export const deploymentRefsFromModelInfo = (
       ? [{ modelGroup: row.model_name, underlyingModels, provider, blocked: row.model_info?.blocked || undefined }]
       : [];
   });
+
+export const modelGroupAliasTargets = (aliases: unknown): ReadonlyMap<string, string> =>
+  new Map(
+    Object.entries(typeof aliases === "object" && aliases !== null ? aliases : {}).flatMap(([alias, entry]) => {
+      const target: unknown = typeof entry === "object" && entry !== null && "model" in entry ? entry.model : entry;
+      return typeof target === "string" && target ? [[alias, target] as const] : [];
+    }),
+  );
 
 export const resolveAvailableModels = (requiredModel: string, availability: ModelAvailability): readonly string[] => {
   const { modelGroups, underlyingIndex } = availability;

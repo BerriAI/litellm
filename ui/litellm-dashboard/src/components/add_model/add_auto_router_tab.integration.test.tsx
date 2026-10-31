@@ -113,8 +113,9 @@ const { mockFetchAvailableModels, mockFetchAllModelDeployments } = vi.hoisted(()
   mockFetchAllModelDeployments: vi.fn(),
 }));
 
-const { validateAutoRouterConfig } = vi.hoisted(() => ({
+const { validateAutoRouterConfig, getRouterSettingsCall } = vi.hoisted(() => ({
   validateAutoRouterConfig: vi.fn().mockResolvedValue({ valid: true }),
+  getRouterSettingsCall: vi.fn(),
 }));
 
 vi.mock("../networking", () => ({
@@ -129,6 +130,7 @@ vi.mock("../networking", () => ({
   modelAvailableCall: vi.fn().mockResolvedValue({ data: [] }),
   testAutoRouterRouting: vi.fn(),
   validateAutoRouterConfig,
+  getRouterSettingsCall,
 }));
 
 vi.mock("@/components/llm_calls/fetch_models", () => ({
@@ -196,6 +198,7 @@ describe("AddAutoRouterTab", () => {
     testQueryClient.clear();
     mockFetchAvailableModels.mockResolvedValue([]);
     mockFetchAllModelDeployments.mockResolvedValue([]);
+    getRouterSettingsCall.mockResolvedValue({ current_values: {} });
     vi.mocked(modelCostMap).mockResolvedValue({});
   });
 
@@ -2212,6 +2215,29 @@ describe("AddAutoRouterTab", () => {
       await waitFor(() => {
         expect(isOptionDisabled(optionByLabel("Anthropic Family")!)).toBe(false);
       });
+    });
+
+    it("names a preset model missing when an alias over its listed id routes elsewhere", async () => {
+      mockFetchAvailableModels.mockResolvedValue(
+        [...getRequiredModelsInPreset(ANTHROPIC_PRESET)].map((model) => ({
+          model_group: model.replace(/^claude-/, ""),
+          mode: "chat",
+          providers: ["anthropic"],
+        })),
+      );
+      mockFetchAllModelDeployments.mockResolvedValue([
+        { model_name: "*", litellm_params: { model: "anthropic/claude-*" } },
+        { model_name: "corp-opus", litellm_params: { model: "anthropic/claude-opus-5-5" } },
+      ]);
+      getRouterSettingsCall.mockResolvedValue({ current_values: { model_group_alias: { "haiku-4-5": "corp-opus" } } });
+
+      renderAdvanced(<Harness />);
+      openTemplateDropdown();
+
+      await waitFor(() => {
+        expect(optionByLabel("Anthropic Family")!).toHaveTextContent(/Missing: claude-haiku-4-5$/);
+      });
+      expect(isOptionDisabled(optionByLabel("Anthropic Family")!)).toBe(true);
     });
 
     it("prefills the expanded group names and submits them", async () => {

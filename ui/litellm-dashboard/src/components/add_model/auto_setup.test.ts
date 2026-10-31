@@ -183,6 +183,15 @@ describe("deployedRouterModels", () => {
     expect(model).toEqual({ name: "sonnet-5", model: "sonnet-5", provider: "OpenAI" });
   });
 
+  it("takes the identity of the model an alias over a listed id routes to", () => {
+    const [model] = deployedRouterModels(
+      [{ model_group: "haiku-4-5", mode: "chat", providers: ["anthropic"] }],
+      [deployment("*", "anthropic/claude-*"), deployment("corp-opus", "anthropic/claude-opus-5-5")],
+      new Map([["haiku-4-5", "corp-opus"]]),
+    );
+    expect(model).toMatchObject({ name: "haiku-4-5", line: "opus", version: [5, 5] });
+  });
+
   it("keeps a canonical alias's own identity when the catch-all's listed id does not parse", () => {
     const [model] = deployedRouterModels(
       [{ model_group: "claude-opus-5-5", mode: "chat", providers: ["anthropic"] }],

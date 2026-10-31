@@ -168,17 +168,19 @@ export const routingModelGroups = (groups: readonly ModelGroup[]): ModelGroup[] 
 export const deployedRouterModels = (
   groups: readonly ModelGroup[],
   deployments: readonly AutoRouterDeployment[],
+  aliasTargets: ReadonlyMap<string, string> = new Map(),
 ): SolverModel[] => {
   const wildcards = routableDeployments(deployments);
   return routingModelGroups(groups)
     .map((group) => {
-      const rows = deployments.filter((row) => row.model_name === group.model_group);
+      const routed = { ...group, model_group: aliasTargets.get(group.model_group) ?? group.model_group };
+      const rows = deployments.filter((row) => row.model_name === routed.model_group);
       const active = rows.filter((row) => !row.model_info?.blocked);
-      const isRouter = rows.some(isAutoRouterDeployment) || group.model_group.startsWith("auto_router/");
+      const isRouter = rows.some(isAutoRouterDeployment) || routed.model_group.startsWith("auto_router/");
       const hasWildcard =
-        group.model_group.includes("*") || active.some((row) => row.litellm_params?.model?.includes("*"));
+        routed.model_group.includes("*") || active.some((row) => row.litellm_params?.model?.includes("*"));
       const manualOnly = isRouter || hasWildcard || (rows.length > 0 && active.length === 0);
-      const identities = active.length > 0 ? active.map(identityOf) : routedIdentities(group, wildcards);
+      const identities = active.length > 0 ? active.map(identityOf) : routedIdentities(routed, wildcards);
       const first = identities[0];
       const homogeneous =
         first &&

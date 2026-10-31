@@ -18,7 +18,7 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/comp
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import { useZodForm } from "@/lib/forms/useZodForm";
 import AccessGroupTagsCombobox from "./AccessGroupTagsCombobox";
-import { modelAvailableCall, validateAutoRouterConfig, type Team } from "../networking";
+import { getRouterSettingsCall, modelAvailableCall, validateAutoRouterConfig, type Team } from "../networking";
 import { labelWithHint } from "@/components/shared/form/LabelWithHint";
 import { all_admin_roles } from "@/utils/roles";
 import { canCreateAutoRouterForTeam, canModifyModel, type ModelWriteScope } from "@/utils/modelPermissions";
@@ -73,6 +73,7 @@ import {
   buildPresetPrefill,
   buildModelAvailability,
   deploymentRefsFromModelInfo,
+  modelGroupAliasTargets,
   ModelAvailability,
   PresetPrefill,
   AutoRouterPreset,
@@ -105,6 +106,7 @@ interface AddAutoRouterTabProps {
 }
 
 const NO_PRESETS: AutoRouterPreset[] = [];
+const NO_ALIASES: ReadonlyMap<string, string> = new Map();
 
 // Why the submit is unavailable, or null when it is available. The button reads this to disable
 // itself and to say what is missing, so the two can never give different answers. Checks the
@@ -256,6 +258,12 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
     queryFn: () => fetchAllModelDeployments(accessToken, userId ?? "", userRole),
     enabled: Boolean(accessToken),
   });
+  const { data: aliasTargets = NO_ALIASES } = useQuery({
+    queryKey: ["routerSettings", "modelGroupAlias", accessToken],
+    queryFn: async () =>
+      modelGroupAliasTargets((await getRouterSettingsCall(accessToken))?.current_values?.model_group_alias),
+    enabled: Boolean(accessToken),
+  });
   const modelsLoading = groupsLoading || deploymentsLoading;
   useEffect(() => {
     if (!deployments || form.getFieldState("auto_router_name").isDirty) return;
@@ -288,8 +296,9 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
         modelInfo.map((m) => m.model_group),
         deploymentRefsFromModelInfo(deployments ?? []),
         new Map(modelInfo.map((m) => [m.model_group, m.providers ?? []])),
+        aliasTargets,
       ),
-    [modelInfo, deployments],
+    [modelInfo, deployments, aliasTargets],
   );
   const groupsOnlyAvailability = React.useMemo(
     () =>
@@ -300,8 +309,8 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
     [modelInfo],
   );
   const solverModels = React.useMemo(
-    () => deployedRouterModels(modelInfo, deployments ?? []),
-    [modelInfo, deployments],
+    () => deployedRouterModels(modelInfo, deployments ?? [], aliasTargets),
+    [modelInfo, deployments, aliasTargets],
   );
   const recommended = React.useMemo(
     () => recommendSolverPair(solverModels, goal, family),

@@ -12,6 +12,7 @@ import {
   buildPresetPrefill,
   buildModelAvailability,
   deploymentRefsFromModelInfo,
+  modelGroupAliasTargets,
   normalizeModelName,
   resolveAvailableModel,
   resolveAvailableModels,
@@ -688,6 +689,76 @@ describe("autorouter_presets", () => {
         servedBy("anthropic", "opus-5-5"),
       );
       expect(resolveAvailableModel("claude-opus-5-5", availability)).toBeUndefined();
+    });
+
+    it("keys an alias that shadows a listed id by the model its target serves", () => {
+      const availability = buildModelAvailability(
+        ["corp-opus", "haiku-4-5"],
+        [
+          { modelGroup: "*", underlyingModels: ["anthropic/claude-*"] },
+          { modelGroup: "corp-opus", underlyingModels: ["anthropic/claude-opus-5-5"] },
+        ],
+        servedBy("anthropic", "corp-opus", "haiku-4-5"),
+        new Map([["haiku-4-5", "corp-opus"]]),
+      );
+      expect(resolveAvailableModel("claude-haiku-4-5", availability)).toBeUndefined();
+      expect(resolveAvailableModels("claude-opus-5-5", availability)).toEqual(["corp-opus", "haiku-4-5"]);
+    });
+
+    it("keys an alias to a listed id by the model the catch-all routes that id to", () => {
+      const availability = buildModelAvailability(
+        ["fast"],
+        [{ modelGroup: "*", underlyingModels: ["anthropic/claude-*"] }],
+        servedBy("anthropic", "fast"),
+        new Map([["fast", "haiku-4-5"]]),
+      );
+      expect(resolveAvailableModel("claude-haiku-4-5", availability)).toBe("fast");
+    });
+
+    it("keys an alias to a deployed group by that group's model, not by the id the catch-all lists", () => {
+      const availability = buildModelAvailability(
+        ["latest"],
+        [
+          { modelGroup: "*", underlyingModels: ["anthropic/claude-*"] },
+          { modelGroup: "sonnet-5", underlyingModels: ["anthropic/claude-opus-5-5"] },
+        ],
+        servedBy("anthropic", "latest"),
+        new Map([["latest", "sonnet-5"]]),
+      );
+      expect(resolveAvailableModel("claude-sonnet-5", availability)).toBeUndefined();
+      expect(resolveAvailableModel("claude-opus-5-5", availability)).toBe("latest");
+    });
+
+    it("credits no model to a group whose only deployment is paused", () => {
+      const availability = buildModelAvailability(
+        ["corp-opus"],
+        deploymentRefsFromModelInfo([
+          {
+            model_name: "corp-opus",
+            litellm_params: { model: "anthropic/claude-opus-5-5" },
+            model_info: { blocked: true },
+          },
+        ]),
+        servedBy("anthropic", "corp-opus"),
+      );
+      expect(resolveAvailableModel("claude-opus-5-5", availability)).toBeUndefined();
+    });
+
+    it("reads both alias forms the router accepts and skips malformed entries", () => {
+      const aliases = {
+        fast: "haiku-4-5",
+        big: { model: "corp-opus", hidden: true },
+        unnamed: { hidden: true },
+        blank: "",
+        numeric: 3,
+      };
+      expect(modelGroupAliasTargets(aliases)).toEqual(
+        new Map([
+          ["fast", "haiku-4-5"],
+          ["big", "corp-opus"],
+        ]),
+      );
+      expect(modelGroupAliasTargets(undefined).size).toBe(0);
     });
 
     it("leaves a group another wildcard lists to that wildcard instead of the catch-all", () => {
