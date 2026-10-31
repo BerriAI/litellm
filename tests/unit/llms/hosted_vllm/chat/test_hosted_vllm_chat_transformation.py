@@ -1,14 +1,56 @@
 import json
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
+import httpx
 import pytest
-
 
 from litellm.constants import (
     DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET,
 )
 from litellm.llms.hosted_vllm.chat.transformation import HostedVLLMChatConfig
+from litellm.types.utils import ModelResponse
+
+
+def test_hosted_vllm_preserves_choice_fields():
+    config = HostedVLLMChatConfig()
+    response = config.transform_response(
+        model="hosted_vllm/qwen3",
+        raw_response=httpx.Response(
+            status_code=200,
+            json={
+                "id": "chatcmpl-vllm",
+                "model": "qwen3",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": "done"},
+                        "finish_reason": "stop",
+                        "stop_reason": "</answer>",
+                        "token_ids": [13, 42],
+                        "routed_experts": [1, 3],
+                    }
+                ],
+            },
+        ),
+        model_response=ModelResponse(),
+        logging_obj=MagicMock(),
+        request_data={},
+        messages=[{"role": "user", "content": "answer"}],
+        optional_params={},
+        litellm_params={},
+        encoding=None,
+    )
+
+    choice = response.model_dump()["choices"][0]
+    assert choice["stop_reason"] == "</answer>"
+    assert choice["token_ids"] == [13, 42]
+    assert "routed_experts" not in choice
+    assert choice["provider_specific_fields"] == {
+        "stop_reason": "</answer>",
+        "token_ids": [13, 42],
+        "routed_experts": [1, 3],
+    }
 
 
 def test_hosted_vllm_chat_transformation_file_url():
