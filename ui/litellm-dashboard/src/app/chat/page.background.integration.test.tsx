@@ -30,7 +30,7 @@ const result = () => ({
             server_label: "inventory",
           },
           { type: "message", content: [{ type: "output_text", text: "There are 12 widgets in stock." }] },
-        ]
+        ].filter((item) => item.type !== "mcp_call" || Boolean(requests.at(-1)?.tools))
       : [],
 });
 
@@ -93,12 +93,14 @@ beforeEach(() => {
 });
 afterEach(() => vi.unstubAllGlobals());
 
-async function startResearch() {
+async function startResearch(withTools = true) {
   const user = userEvent.setup();
   await screen.findByRole("button", { name: "research-chat" });
-  await user.click(screen.getByRole("button", { name: "Connect tools" }));
-  await user.click(await screen.findByRole("switch"));
-  await user.keyboard("{Escape}");
+  if (withTools) {
+    await user.click(screen.getByRole("button", { name: "Connect tools" }));
+    await user.click(await screen.findByRole("switch"));
+    await user.keyboard("{Escape}");
+  }
   fireEvent.change(screen.getByRole("textbox", { name: "Message", exact: true }), {
     target: { value: "Check inventory" },
   });
@@ -128,11 +130,28 @@ it("should retrieve the completed tool run after closing and reopening without s
     target: { value: "What was the result?" },
   });
   fireEvent.click(screen.getByRole("button", { name: "Send", exact: true }));
-  await screen.findByText("Foreground answer");
+  await waitFor(() => expect(requests).toHaveLength(2));
+  expect(requests[1]).toMatchObject({ background: true, stream: false });
   expect(requests[1]).not.toHaveProperty("previous_response_id");
   expect(requests[1].input).toEqual(
     expect.arrayContaining([{ type: "function_call_output", call_id: "call_inventory", output: "12 widgets" }]),
   );
+});
+
+it("should continue an ordinary chat without MCP tools after closing and reopening", async () => {
+  const first = renderChat();
+  await startResearch(false);
+  await screen.findByText("Running in the background. You can close this tab and return to this chat.");
+  await waitFor(() => expect(saved()[0]?.messages.at(-1)?.backgroundRun?.id).toBe("litellm_poll_research"));
+  expect(requests[0]).toMatchObject({ background: true, stream: false });
+  expect(requests[0]).not.toHaveProperty("tools");
+  const id = saved()[0].id;
+  first.unmount();
+  status = "completed";
+  renderChat(id);
+  expect(await screen.findByText("There are 12 widgets in stock.")).toBeVisible();
+  expect(requests).toHaveLength(1);
+  expect(cancellations).toBe(0);
 });
 
 it("should cancel a background run only when Stop is clicked", async () => {

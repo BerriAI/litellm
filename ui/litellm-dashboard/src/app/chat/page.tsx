@@ -115,7 +115,7 @@ export default function ChatConversationPage() {
   const supportsBackground = models.some(
     (model) => model.model_group === selectedModel && model.supports_background_chat,
   );
-  const useBackground = mode === "chat" && selectedMCPServers.length > 0 && supportsBackground && !storageUnavailable;
+  const useBackground = mode === "chat" && supportsBackground && !storageUnavailable;
   const [inputText, setInputText] = useState("");
   const [mcpPopoverOpen, setMcpPopoverOpen] = useState(false);
   const [storageBannerDismissed, setStorageBannerDismissed] = useState(false);
@@ -427,7 +427,7 @@ export default function ChatConversationPage() {
     if (background.pending && storageUnavailable)
       return "Keep this tab open. This run could not be saved in this browser.";
     if (background.pending) return "Running in the background. You can close this tab and return to this chat.";
-    if (useBackground) return "Tool runs continue after you close this tab once the server accepts the request.";
+    if (useBackground) return "Replies continue after you close this tab once the server accepts the request.";
     return "Keep this tab open. Background runs are not available for this chat.";
   };
 
@@ -579,7 +579,7 @@ export default function ChatConversationPage() {
             Cancellation requested
           </p>
         )}
-        {(background.pending || (mode === "chat" && selectedMCPServers.length > 0)) && (
+        {(background.pending || mode === "chat") && (
           <p role="status" className="mt-2 text-xs text-muted-foreground">
             {backgroundHint()}
           </p>
