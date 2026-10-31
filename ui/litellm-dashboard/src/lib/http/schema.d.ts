@@ -8953,7 +8953,7 @@ export interface paths {
          *     - user_id: Optional[str] - User ID associated with key
          *     - team_id: Optional[str] - Team ID associated with key
          *     - agent_id: Optional[str] - The agent id associated with the key.
-         *     - project_id: Optional[str] - Omit to retain the project, or send null to detach. A different project ID is rejected.
+         *     - project_id: Optional[str] - Omit to retain the project, send null to detach, or send a project id to assign an unassigned key to a project on the key's team. Moving a key between projects is rejected.
          *     - organization_id: Optional[str] - The organization id of the key.
          *     - budget_id: Optional[str] - The budget id associated with the key. Created by calling `/budget/new`.
          *     - end_user_budget_id: Optional[str] - Proxy admin only. Budget id applied to end users first seen through this key that carry no budget of their own. Omit to keep the current value, pass an empty string to clear it.
@@ -27870,7 +27870,10 @@ export interface components {
             entities?: {
                 [key: string]: components["schemas"]["MetricWithMetadata"];
             };
-            /** Guardrails */
+            /**
+             * Guardrails
+             * @description Spend by guardrail ID, already included in key and model spend. Populated on user, team and organization aggregated activity only, without a model filter
+             */
             guardrails?: {
                 [key: string]: components["schemas"]["GuardrailMetric"];
             };
@@ -33448,32 +33451,44 @@ export interface components {
         };
         /** GuardrailKeyMetric */
         GuardrailKeyMetric: {
+            /** @description API key alias and existence information */
             metadata: components["schemas"]["KeyMetadata"];
+            /** @description Guardrail spend and unpriced units for this API key */
             metrics: components["schemas"]["GuardrailSpendMetrics"];
         };
         /** GuardrailMetadata */
         GuardrailMetadata: {
-            /** Guardrail Name */
+            /**
+             * Guardrail Name
+             * @description Guardrail display name, falling back to the guardrail ID
+             */
             guardrail_name: string;
         };
         /** GuardrailMetric */
         GuardrailMetric: {
-            /** Api Key Breakdown */
+            /**
+             * Api Key Breakdown
+             * @description Per-key guardrail spend and unpriced units, limited to keys in the day's API key breakdown
+             */
             api_key_breakdown?: {
                 [key: string]: components["schemas"]["GuardrailKeyMetric"];
             };
+            /** @description Guardrail name information */
             metadata: components["schemas"]["GuardrailMetadata"];
+            /** @description Guardrail spend and unpriced units across all matching API keys */
             metrics: components["schemas"]["GuardrailSpendMetrics"];
         };
         /** GuardrailSpendMetrics */
         GuardrailSpendMetrics: {
             /**
              * Spend
+             * @description Guardrail spend in USD, already included in key and model spend
              * @default 0
              */
             spend: number;
             /**
              * Untracked Units
+             * @description Guardrail units with no known price, excluded from spend
              * @default 0
              */
             untracked_units: number;
@@ -35879,6 +35894,8 @@ export interface components {
             search_context_cost_per_query?: {
                 [key: string]: unknown;
             } | null;
+            /** Search Queries Cost Per Query */
+            search_queries_cost_per_query?: number | components["schemas"]["SearchContextCostPerQuery"] | null;
             /** Stream Timeout */
             stream_timeout?: number | string | null;
             /** Stream Timeout By Service Tier */
@@ -45432,6 +45449,17 @@ export interface components {
         } & {
             [key: string]: unknown;
         };
+        /** SearchContextCostPerQuery */
+        SearchContextCostPerQuery: {
+            /** Search Context Size High */
+            search_context_size_high?: number;
+            /** Search Context Size Low */
+            search_context_size_low?: number;
+            /** Search Context Size Medium */
+            search_context_size_medium?: number;
+        } & {
+            [key: string]: unknown;
+        };
         /**
          * SearchTool
          * @description Search tool configuration.
@@ -46192,6 +46220,16 @@ export interface components {
              * @enum {string}
              */
             classifier_failure_reason?: "timeout" | "circuit_open" | "not_configured" | "unsupported_input" | "invalid_response" | "declined" | "classifier_error";
+            /** Classifier Input Budget Status */
+            classifier_input_budget_status?: string;
+            /** Classifier Input Budget Tokens */
+            classifier_input_budget_tokens?: number;
+            /** Classifier Input Count Method */
+            classifier_input_count_method?: string;
+            /** Classifier Input Tokens */
+            classifier_input_tokens?: number;
+            /** Classifier Input Truncated */
+            classifier_input_truncated?: boolean;
             /** Classifier Max Quality Gap */
             classifier_max_quality_gap?: number;
             /** Classifier Model */
@@ -48691,7 +48729,7 @@ export interface components {
             policies?: string[] | null;
             /**
              * Project Id
-             * @description Omit to retain the project, or send null to detach. Assigning a different project is not supported.
+             * @description Omit to retain the project, send null to detach, or send a project id to assign an unassigned key to a project on the key's team. Moving a key between projects is not supported.
              */
             project_id?: string | null;
             /** Prompts */
@@ -51386,6 +51424,8 @@ export interface components {
             search_context_cost_per_query?: {
                 [key: string]: unknown;
             } | null;
+            /** Search Queries Cost Per Query */
+            search_queries_cost_per_query?: number | components["schemas"]["SearchContextCostPerQuery"] | null;
             /** Stream Timeout */
             stream_timeout?: number | string | null;
             /** Stream Timeout By Service Tier */
@@ -76637,7 +76677,7 @@ export interface operations {
                 end_date?: string | null;
                 /** @description Filter by specific model */
                 model?: string | null;
-                /** @description Filter by specific API key */
+                /** @description Filter by reporting API key ID. Missing keys are reported as unattributed. For a literal key unattributed or a key starting with raw:, add an extra raw: prefix */
                 api_key?: string | null;
                 /** @description Filter by specific user ID. Admins can filter by any user or omit for global view. Non-admins must provide their own user_id. */
                 user_id?: string | null;
@@ -76686,7 +76726,7 @@ export interface operations {
                 end_date?: string | null;
                 /** @description Filter by specific model */
                 model?: string | null;
-                /** @description Filter by specific API key */
+                /** @description Filter by reporting API key ID. Missing keys are reported as unattributed. For a literal key unattributed or a key starting with raw:, add an extra raw: prefix */
                 api_key?: string | null;
                 /** @description Filter by specific user ID. Admins can filter by any user or omit for global view. Non-admins must provide their own user_id. */
                 user_id?: string | null;
@@ -76731,7 +76771,7 @@ export interface operations {
                 end_date?: string | null;
                 /** @description Filter by specific model */
                 model?: string | null;
-                /** @description Filter by specific API key */
+                /** @description Filter by reporting API key ID. Missing keys are reported as unattributed. For a literal key unattributed or a key starting with raw:, add an extra raw: prefix */
                 api_key?: string | null;
                 /** @description Filter by specific user ID. Admins can filter by any user or omit for global view. Non-admins must provide their own user_id. */
                 user_id?: string | null;
@@ -76777,7 +76817,7 @@ export interface operations {
                 end_date?: string | null;
                 /** @description Filter by specific model */
                 model?: string | null;
-                /** @description Filter by specific API key */
+                /** @description Filter by reporting API key ID. Missing keys are reported as unattributed. For a literal key unattributed or a key starting with raw:, add an extra raw: prefix */
                 api_key?: string | null;
                 /** @description Filter by specific user ID. Admins can filter by any user or omit for global view. Non-admins must provide their own user_id. */
                 user_id?: string | null;
@@ -76824,7 +76864,7 @@ export interface operations {
                 end_date?: string | null;
                 /** @description Filter by specific model */
                 model?: string | null;
-                /** @description Filter by specific API key */
+                /** @description Filter by reporting API key ID. Missing keys are reported as unattributed. For a literal key unattributed or a key starting with raw:, add an extra raw: prefix */
                 api_key?: string | null;
                 /** @description Filter by specific user ID. Admins can filter by any user or omit for global view. Non-admins must provide their own user_id. */
                 user_id?: string | null;
@@ -76870,7 +76910,7 @@ export interface operations {
                 end_date?: string | null;
                 /** @description Filter by specific model */
                 model?: string | null;
-                /** @description Filter by specific API key */
+                /** @description Filter by reporting API key ID. Missing keys are reported as unattributed. For a literal key unattributed or a key starting with raw:, add an extra raw: prefix */
                 api_key?: string | null;
                 /** @description Filter by specific user ID. Admins can filter by any user or omit for global view. Non-admins must provide their own user_id. */
                 user_id?: string | null;
@@ -76916,7 +76956,7 @@ export interface operations {
                 end_date?: string | null;
                 /** @description Filter by specific model */
                 model?: string | null;
-                /** @description Filter by specific API key */
+                /** @description Filter by reporting API key ID. Missing keys are reported as unattributed. For a literal key unattributed or a key starting with raw:, add an extra raw: prefix */
                 api_key?: string | null;
                 /** @description Filter by specific user ID. Admins can filter by any user or omit for global view. Non-admins must provide their own user_id. */
                 user_id?: string | null;
@@ -76962,7 +77002,7 @@ export interface operations {
                 end_date?: string | null;
                 /** @description Filter by specific model */
                 model?: string | null;
-                /** @description Filter by specific API key */
+                /** @description Filter by reporting API key ID. Missing keys are reported as unattributed. For a literal key unattributed or a key starting with raw:, add an extra raw: prefix */
                 api_key?: string | null;
                 /** @description Filter by specific user ID. Admins can filter by any user or omit for global view. Non-admins must provide their own user_id. */
                 user_id?: string | null;

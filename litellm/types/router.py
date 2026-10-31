@@ -50,7 +50,7 @@ from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.router_weights import RouterWeights
 
 if TYPE_CHECKING:
-    from litellm.router import Router
+    from litellm.router_api import RoutingContext as RouterContext
 
 from .completion import CompletionRequest
 from .embedding import EmbeddingRequest
@@ -1313,7 +1313,7 @@ class FallbackAccessCheck(Protocol):
     rejects, so a fallback can never reach a model the caller could not have requested directly.
     """
 
-    async def __call__(self, *, model: str, request_kwargs: Mapping[str, object], llm_router: "Router") -> bool: ...
+    async def __call__(self, *, model: str, request_kwargs: Mapping[str, object], ctx: "RouterContext") -> bool: ...
 
 
 class FallbackBudgetCheck(Protocol):
@@ -1326,7 +1326,7 @@ class FallbackBudgetCheck(Protocol):
     and skips targets it rejects, leaving the free attempt itself untouched.
     """
 
-    async def __call__(self, *, model: str, request_kwargs: Mapping[str, object], llm_router: "Router") -> bool: ...
+    async def __call__(self, *, model: str, request_kwargs: Mapping[str, object], ctx: "RouterContext") -> bool: ...
 
 
 class AutoRouterCapabilityLimit(Protocol):
