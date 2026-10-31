@@ -307,7 +307,7 @@ impl NativeSecretManager {
                 super::operations::write_python_provider_with_context(
                     &backend,
                     &secret_name,
-                    &litellm_secrets::SecretValue::new(secret_value),
+                    &litellm_secret_value::SecretValue::new(secret_value),
                     &context,
                 )
                 .await,
@@ -365,7 +365,7 @@ impl NativeSecretManager {
                     &backend,
                     &current_secret_name,
                     &new_secret_name,
-                    &litellm_secrets::SecretValue::new(new_secret_value),
+                    &litellm_secret_value::SecretValue::new(new_secret_value),
                     &context,
                 )
                 .await,

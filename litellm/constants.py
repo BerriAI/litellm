@@ -68,6 +68,7 @@ RUNTIME_UPDATABLE_ROUTER_SETTINGS: Final[frozenset[str]] = frozenset(
         "retry_after",
         "fallbacks",
         "context_window_fallbacks",
+        "content_policy_fallbacks",
         "retry_policy",
         "model_group_retry_policy",
         "model_group_alias",
@@ -420,6 +421,8 @@ REALTIME_CREDENTIAL_RESOLUTION_TIMEOUT_SECONDS: Final = get_env_float(
     "REALTIME_CREDENTIAL_RESOLUTION_TIMEOUT_SECONDS", 20.0
 )
 BEDROCK_REALTIME_CLOSE_TIMEOUT_SECONDS: Final = get_env_float("BEDROCK_REALTIME_CLOSE_TIMEOUT_SECONDS", 5.0)
+REALTIME_LAZY_SETUP_DEADLINE_SECONDS: Final = 240.0
+REALTIME_LAZY_SETUP_CONTENT_GRACE_SECONDS: Final = 1.0
 
 # RFC 6455 caps the close frame payload at 125 bytes, 2 of which carry the status code
 WEBSOCKET_CLOSE_REASON_MAX_BYTES: Final = 123
@@ -631,6 +634,8 @@ STS_CREDENTIAL_EXPIRY_SAFETY_MARGIN_SECONDS: Final = 60
 BEDROCK_MIN_THINKING_BUDGET_TOKENS: Final = get_env_int("BEDROCK_MIN_THINKING_BUDGET_TOKENS", 1024)
 # Anthropic's Messages API rejects thinking.budget_tokens < 1024.
 ANTHROPIC_MIN_THINKING_BUDGET_TOKENS: Final = 1024
+ANTHROPIC_MAX_USER_ID_LENGTH: Final = 512
+ANTHROPIC_COMPATIBLE_MAX_USER_ID_LENGTH: Final = 255
 ANTHROPIC_BILLING_METADATA_PREFIX: Final = "x-anthropic-billing-header:"
 REPLICATE_POLLING_DELAY_SECONDS: Final = get_env_float("REPLICATE_POLLING_DELAY_SECONDS", 0.5)
 DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS: Final = get_env_int("DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS", 128000)
@@ -897,7 +902,9 @@ PROVIDERS_THAT_AUTHENTICATE_ON_PROVIDER_INFO: Final = frozenset(
     }
 )
 
+SUBSCRIPTION_BACKED_PROVIDERS: Final = frozenset({"chatgpt"})
 A2A_CHAT_COMPLETION_BRIDGE_PROVIDERS: Final = frozenset({"databricks_agent"})
+A2A_COMPLETION_BRIDGE_WORKING_MESSAGE: Final = "Processing request..."
 
 LITELLM_EMBEDDING_PROVIDERS_SUPPORTING_INPUT_ARRAY_OF_TOKENS: Final = [
     "openai",
@@ -1158,6 +1165,7 @@ openai_compatible_providers: Final[list[str]] = [
     "cortecs",
     "scx-ai",
     "prism",
+    "hostinger_router",
     "sail",
     "reka",
     "streamlake",
@@ -2042,6 +2050,7 @@ LITELLM_SETTINGS_SAFE_DB_OVERRIDES: Final = [
 SPECIAL_LITELLM_AUTH_TOKEN: Final = ["ui-token"]
 DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL = get_env_int("DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL", 60)
 AUTH_OBJECTS_TARGET: Final = "auth_objects"
+HEALTH_CHECKS_TARGET: Final = "health_checks"
 DEFAULT_ACCESS_GROUP_CACHE_TTL: Final = get_env_int("DEFAULT_ACCESS_GROUP_CACHE_TTL", 600)
 SPEND_LOG_KEY_METADATA_CACHE_TTL: Final = 600
 SPEND_LOG_KEY_METADATA_MISS_CACHE_TTL: Final = 30

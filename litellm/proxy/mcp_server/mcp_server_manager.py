@@ -3705,7 +3705,7 @@ class MCPServerManager:
 
         Priority:
         1. If object_permission.mcp_servers is explicitly set, use it (even for admins)
-        2. If admin and no object_permission, return all servers
+        2. If admin, not bound to a real team, and no object_permission, return all servers
         3. Otherwise, use standard permission checks
         """
         if managed_agent_policy(user_api_key_auth) is not None:
