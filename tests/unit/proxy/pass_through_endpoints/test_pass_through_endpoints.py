@@ -8665,6 +8665,105 @@ async def test_websocket_passthrough_carries_the_session_the_provider_opened_int
     ] == [["session.created", "response.done"], ["session.created", "response.done"]]
 
 
+REALTIME_TRANSCRIPTION_COMPLETED: Final = json.dumps(
+    {
+        "type": "conversation.item.input_audio_transcription.completed",
+        "item_id": "item_fake",
+        "transcript": "hello",
+        "usage": {"type": "duration", "seconds": 2},
+    }
+)
+TRANSCRIPTION_COMPLETED: Final = "conversation.item.input_audio_transcription.completed"
+
+
+def _transcription_session_update(frame_type: str, model: str) -> str:
+    return json.dumps({"type": frame_type, "session": {"audio": {"input": {"transcription": {"model": model}}}}})
+
+
+def _logged_frame_types(relayed: SimpleNamespace) -> list[list[str]]:
+    return [
+        [frame["type"] for frame in logged.kwargs["response_body"]]
+        for logged in relayed.success_handler.call_args_list
+    ]
+
+
+@pytest.mark.asyncio
+async def test_websocket_passthrough_bills_a_clip_transcribed_after_the_last_answer():
+    client: Final = _turn_taking_client(
+        [_transcription_session_update("session.update", "gpt-transcribe"), json.dumps({"type": "response.create"})],
+        answered_by='"type"',
+        answers_due=(1, 2, 4),
+    )
+    upstream_ws: Final = ScriptedUpstreamWebSocket(
+        REALTIME_SESSION_CREATED,
+        replies=[
+            [_transcription_session_update("session.updated", "gpt-transcribe")],
+            [REALTIME_RESPONSE_DONE, REALTIME_TRANSCRIPTION_COMPLETED],
+        ],
+    )
+
+    relayed: Final = await _relay_turns(client, upstream_ws, RecordingFrameModelGate(), "/openai/v1/realtime")
+
+    assert _logged_frame_types(relayed) == [
+        ["session.created", "session.updated", "response.done"],
+        ["session.created", "session.updated", TRANSCRIPTION_COMPLETED],
+    ]
+
+
+@pytest.mark.asyncio
+async def test_websocket_passthrough_bills_a_clip_transcribed_during_an_answer_in_that_answer_row():
+    client: Final = _turn_taking_client(
+        [json.dumps({"type": "response.create"})], answered_by='"type"', answers_due=(1, 4)
+    )
+    upstream_ws: Final = ScriptedUpstreamWebSocket(
+        REALTIME_SESSION_CREATED,
+        replies=[
+            [
+                json.dumps({"type": "response.created", "response": {"status": "in_progress"}}),
+                REALTIME_TRANSCRIPTION_COMPLETED,
+                REALTIME_RESPONSE_DONE,
+            ]
+        ],
+    )
+
+    relayed: Final = await _relay_turns(client, upstream_ws, RecordingFrameModelGate(), "/openai/v1/realtime")
+
+    assert _logged_frame_types(relayed) == [
+        ["session.created", "response.created", TRANSCRIPTION_COMPLETED, "response.done"]
+    ]
+
+
+@pytest.mark.asyncio
+async def test_websocket_passthrough_carries_only_the_latest_session_update_into_later_rows():
+    client: Final = _turn_taking_client(
+        [
+            _transcription_session_update("session.update", "gpt-transcribe-a"),
+            json.dumps({"type": "response.create"}),
+            _transcription_session_update("session.update", "gpt-transcribe-b"),
+            json.dumps({"type": "response.create"}),
+        ],
+        answered_by='"type"',
+        answers_due=(1, 2, 3, 4, 5),
+    )
+    upstream_ws: Final = ScriptedUpstreamWebSocket(
+        REALTIME_SESSION_CREATED,
+        replies=[
+            [_transcription_session_update("session.updated", "gpt-transcribe-a")],
+            [REALTIME_RESPONSE_DONE],
+            [_transcription_session_update("session.updated", "gpt-transcribe-b")],
+            [REALTIME_RESPONSE_DONE],
+        ],
+    )
+
+    relayed: Final = await _relay_turns(client, upstream_ws, RecordingFrameModelGate(), "/openai/v1/realtime")
+
+    last_row: Final = relayed.success_handler.call_args_list[-1].kwargs["response_body"]
+    assert [frame for frame in last_row if frame["type"] == "session.updated"] == [
+        json.loads(_transcription_session_update("session.updated", "gpt-transcribe-b"))
+    ]
+    assert len(relayed.success_handler.call_args_list) == 2
+
+
 @pytest.mark.asyncio
 async def test_websocket_passthrough_still_bills_the_answer_in_flight_when_a_later_frame_is_refused():
     """

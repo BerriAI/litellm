@@ -32,6 +32,15 @@ _TURN_ENDS: Final = _RESPONSES_TURN_ENDS | {_REALTIME_RESPONSE_DONE}
 _MODEL_NAMING_EVENTS: Final = _TURN_ENDS | {_SESSION_CREATED, _SESSION_UPDATED, _RESPONSE_CREATED}
 _REALTIME_BILLED_EVENTS: Final = frozenset({_REALTIME_RESPONSE_DONE, _TRANSCRIPTION_COMPLETED})
 _RESPONSE_COST_HEADER: Final = "llm_provider-x-litellm-response-cost"
+_FRAME_KINDS: Final[Mapping[str, WebsocketUpstreamFrameKind]] = MappingProxyType(
+    {
+        _SESSION_CREATED: "opens_session",
+        _SESSION_UPDATED: "updates_session",
+        _RESPONSE_CREATED: "starts_turn",
+        _TRANSCRIPTION_COMPLETED: "bills_usage",
+        _ERROR: "refuses_turn",
+    }
+)
 
 
 class _NamedModel(BaseModel):
@@ -112,13 +121,9 @@ def openai_websocket_frame_kind(frame: Mapping[str, object]) -> WebsocketUpstrea
     frame_type: Final = frame.get("type")
     if frame_type in _TURN_ENDS:
         return "ends_turn"
-    if frame_type == _SESSION_CREATED:
-        return "opens_session"
-    if frame_type == _RESPONSE_CREATED:
-        return "starts_turn"
-    if frame_type == _ERROR:
-        return "refuses_turn"
-    return "relayed"
+    if not isinstance(frame_type, str):
+        return "relayed"
+    return _FRAME_KINDS.get(frame_type, "relayed")
 
 
 def _realtime_billing(messages: WebsocketMessages, model: str, logging_obj: LiteLLMLoggingObj) -> _Billing | None:

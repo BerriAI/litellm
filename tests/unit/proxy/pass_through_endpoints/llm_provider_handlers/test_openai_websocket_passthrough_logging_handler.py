@@ -509,6 +509,8 @@ def test_a_responses_turn_costs_what_the_http_passthrough_charges_for_the_same_r
         ("response.failed", "ends_turn"),
         ("response.done", "ends_turn"),
         ("session.created", "opens_session"),
+        ("session.updated", "updates_session"),
+        ("conversation.item.input_audio_transcription.completed", "bills_usage"),
         ("response.created", "starts_turn"),
         ("response.output_text.delta", "relayed"),
         ("error", "refuses_turn"),
