@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Final, cast
 import httpx
 from pydantic import ConfigDict, TypeAdapter
 
+from litellm.litellm_core_utils.core_helpers import finite_cost
 from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR, set_hidden_params
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
@@ -225,8 +226,11 @@ class OpenrouterConfig(OpenAIGPTConfig):
                     additional_headers: Final = cast(  # cast-ok: preserve mapping operations on response metadata
                         dict[str, object], hidden_params["additional_headers"]
                     )
-                    if isinstance(response_cost, str | int | float):
-                        additional_headers["llm_provider-x-litellm-response-cost"] = float(response_cost)
+                    reported_cost: Final = (
+                        finite_cost(float(response_cost)) if isinstance(response_cost, str | int | float) else None
+                    )
+                    if reported_cost is not None:
+                        additional_headers["llm_provider-x-litellm-response-cost"] = reported_cost
         except Exception:
             # If we can't extract cost, continue without it - don't fail the response
             pass

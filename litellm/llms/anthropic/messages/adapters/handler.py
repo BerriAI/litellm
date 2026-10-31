@@ -160,6 +160,7 @@ async def prepare_context_managed_request(
     """Apply client compaction history, then optional context_management polyfill."""
     from litellm.llms.anthropic.messages.context_management.editors.compact import (
         apply_client_compaction_block_history,
+        slice_around_compaction_block,
     )
 
     # Skip the client-history pre-processing when a ``compact_20260112``
@@ -175,7 +176,7 @@ async def prepare_context_managed_request(
 
     if polyfill_will_run:
         history_result: PolyfillResult | None = None
-        working_messages: _AnthropicMessages = messages
+        working_messages: _AnthropicMessages = list(slice_around_compaction_block(messages)[0])
         working_system: _AnthropicSystem = system
     else:
         history_result = apply_client_compaction_block_history(
@@ -646,12 +647,14 @@ class LiteLLMMessagesToCompletionTransformationHandler:
             request_data["output_config"] = extra_kwargs["output_config"]
 
         custom_llm_provider: Final = extra_kwargs.get("custom_llm_provider")
+        api_base: Final = extra_kwargs.get("api_base")
         (
             openai_request,
             tool_name_mapping,
         ) = ANTHROPIC_ADAPTER.translate_completion_input_params_with_tool_mapping(
             request_data,
             custom_llm_provider=custom_llm_provider if isinstance(custom_llm_provider, str) else None,
+            api_base=api_base if isinstance(api_base, str) else None,
             drop_params=drops_unsupported_params(extra_kwargs.get("drop_params")),
         )
 

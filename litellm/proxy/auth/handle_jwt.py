@@ -225,7 +225,7 @@ def jwks_unavailable_exception(error: JWKSUnreachableError) -> ProxyException:
             f"unreachable, so the JWT signature could not be verified. Please retry shortly. Error: {error}"
         ),
         type=ProxyErrorTypes.auth_provider_unavailable,
-        param="None",
+        param=None,
         code=status.HTTP_503_SERVICE_UNAVAILABLE,
     )
 
@@ -2199,15 +2199,19 @@ class JWTAuthManager:
         # not mistaken for claimless and left with stale DB memberships the fallback
         # could later attribute. With the flag off, keep the upstream plural-only
         # reconciliation so existing deployments are unchanged.
-        jwt_team_ids: Final = set(
-            jwt_handler.get_all_jwt_team_ids(jwt_valid_token)
-            if jwt_handler.litellm_jwtauth.fallback_to_db_teams
-            else jwt_handler.get_team_ids_from_jwt(jwt_valid_token)
+        claim_team_ids: Final = tuple(
+            dict.fromkeys(
+                jwt_handler.get_all_jwt_team_ids(jwt_valid_token)
+                if jwt_handler.litellm_jwtauth.fallback_to_db_teams
+                else jwt_handler.get_team_ids_from_jwt(jwt_valid_token)
+            )
         )
-        existing_teams: Final = set(user_object.teams or [])
-        teams_to_add: Final = jwt_team_ids - existing_teams
+        jwt_team_ids: Final = frozenset(claim_team_ids)
+        existing_team_order: Final = tuple(dict.fromkeys(user_object.teams or []))
+        existing_teams: Final = frozenset(existing_team_order)
+        teams_to_add: Final = tuple(team_id for team_id in claim_team_ids if team_id not in existing_teams)
         preserve_db_teams_without_claims: Final = jwt_handler.litellm_jwtauth.fallback_to_db_teams and not jwt_team_ids
-        teams_to_remove: Final = set() if preserve_db_teams_without_claims else existing_teams - jwt_team_ids
+        teams_to_remove: Final = frozenset() if preserve_db_teams_without_claims else existing_teams - jwt_team_ids
         if teams_to_add or teams_to_remove:
             from litellm.proxy.management_endpoints.scim.scim_v2 import (
                 patch_team_membership,
@@ -2218,7 +2222,10 @@ class JWTAuthManager:
                 teams_ids_to_add_user_to=list(teams_to_add),
                 teams_ids_to_remove_user_from=list(teams_to_remove),
             )
-            user_object.teams = list(jwt_team_ids)
+            user_object.teams = [
+                *(team_id for team_id in existing_team_order if team_id not in teams_to_remove),
+                *teams_to_add,
+            ]
             if user_api_key_cache is not None:
                 await user_api_key_cache.async_set_cache(
                     key=user_object.user_id,

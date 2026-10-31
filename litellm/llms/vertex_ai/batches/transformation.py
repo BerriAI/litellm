@@ -9,14 +9,41 @@ from litellm._logging import verbose_logger
 from litellm._uuid import uuid
 from litellm.llms.vertex_ai.common_utils import (
     VertexAIError,
+    VertexAIModelRoute,
     convert_vertex_datetime_to_openai_datetime,
+    get_vertex_ai_model_route,
 )
+from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.transformation import VertexAIAnthropicConfig
 from litellm.types.llms.openai import BatchJobStatus, CreateBatchRequest
 from litellm.types.llms.vertex_ai import *
-from litellm.types.llms.vertex_ai import GenerateContentResponseBody
+from litellm.types.llms.vertex_ai import GenerateContentResponseBody, VertexPartnerProvider
 from litellm.types.utils import LiteLLMBatch, ModelInfo, Usage
 
 _NATIVE_VERTEX_RESPONSE: Final = TypeAdapter(GenerateContentResponseBody)
+_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object])
+VERTEX_ANTHROPIC_VERSION: Final = "vertex-2023-10-16"
+_ANTHROPIC_PUBLISHER_MODEL_PATH: Final = "publishers/anthropic/models/"
+
+
+def is_vertex_anthropic_batch_model(model: str) -> bool:
+    """
+    Whether a Vertex batch model (bare, `vertex_ai/`-prefixed or a publisher path) is a Claude model, decided the
+    way Vertex chat routes Claude. Vertex batches Claude only as `publishers/anthropic/models/<model>` with rows in
+    Anthropic's Messages shape
+    """
+    bare_model: Final = model.rsplit("/", 1)[-1]
+    return _ANTHROPIC_PUBLISHER_MODEL_PATH in model or (
+        get_vertex_ai_model_route(bare_model) is VertexAIModelRoute.PARTNER_MODELS
+        and VertexPartnerProvider.claude.value in bare_model
+    )
+
+
+def as_json_object(value: object) -> Mapping[str, object] | None:
+    return _JSON_OBJECT.validate_python(value) if isinstance(value, dict) else None
+
+
+def is_vertex_anthropic_batch_output_response(response_body: Mapping[str, object]) -> bool:
+    return response_body.get("type") == "message" and isinstance(response_body.get("usage"), dict)
 
 
 def _int_field(mapping: Mapping[str, object], key: str) -> int:
@@ -43,8 +70,22 @@ def is_vertex_embedding_batch_output_response(response_body: Mapping[str, object
     return isinstance(response_body.get("embedding"), dict)
 
 
+def is_vertex_anthropic_batch_output_row(vertex_output_row: Mapping[str, object]) -> bool:
+    """
+    Whether a Vertex batch output row came from a Claude (Anthropic Messages) request. Vertex echoes only the
+    request's top-level `custom_id` on these rows, with an Anthropic `message` response on success and an empty
+    response plus a `status` on failure, so a Claude input file read back is never mistaken for output
+    """
+    if not ("custom_id" in vertex_output_row and "processed_time" in vertex_output_row):
+        return False
+    response: Final = as_json_object(vertex_output_row.get("response"))
+    return (response is not None and is_vertex_anthropic_batch_output_response(response)) or bool(
+        vertex_output_row.get("status")
+    )
+
+
 def is_native_vertex_batch_output_row(row: Mapping[str, object]) -> bool:
-    return isinstance(row.get("request"), dict)
+    return isinstance(row.get("request"), dict) or is_vertex_anthropic_batch_output_row(row)
 
 
 class NativeVertexBatchCostCalculator(Protocol):
@@ -72,6 +113,9 @@ def _native_vertex_row_usage(
     response_body: Mapping[str, object],
     calculate_usage: Callable[[GenerateContentResponseBody], Usage],
 ) -> Usage | None:
+    anthropic_usage: Final = as_json_object(response_body.get("usage"))
+    if is_vertex_anthropic_batch_output_response(response_body) and anthropic_usage is not None:
+        return VertexAIAnthropicConfig().calculate_usage(usage_object=anthropic_usage, reasoning_content=None)
     if "usageMetadata" not in response_body:
         if not is_vertex_embedding_batch_output_response(response_body):
             return None
@@ -97,21 +141,24 @@ def native_vertex_batch_row_stats(
     """
     Usage and cost of one native Vertex predictions.jsonl row, a
     `{"request": ..., "response": {"candidates": [...], "usageMetadata": {...}, "modelVersion": ...}}`
-    generateContent object or a `{"request": ..., "response": {"embedding": {...}, "usageMetadata": {...}}}`
-    embedding object (an embedding row without `usageMetadata` is billed from its documented `tokenCount`).
-    `model_name` (the deployment model) prices the row unless it is a wildcard, else its own `modelVersion`
-    does, else the wildcard name so explicit deployment prices still apply; a row without a response, a
-    generateContent row without `response.usageMetadata`, and a row whose response fails validation are
+    generateContent object, a `{"request": ..., "response": {"embedding": {...}, "usageMetadata": {...}}}`
+    embedding object (an embedding row without `usageMetadata` is billed from its documented `tokenCount`) or a
+    `{"custom_id": ..., "request": ..., "response": {"type": "message", "model": ..., "usage": {...}}}` Claude object.
+    `model_name` (the deployment model) prices the row unless it is a wildcard, else its own `modelVersion` (Claude
+    rows: `model`) does, else the wildcard name so explicit deployment prices still apply; a row without a response,
+    a generateContent row without `response.usageMetadata`, and a row whose response fails validation are
     None (failed).
     """
-    response_body: Final = row.get("response")
-    if not isinstance(response_body, dict):
+    response_body: Final = as_json_object(row.get("response"))
+    if response_body is None:
         return None
     usage: Final = _native_vertex_row_usage(response_body, calculate_usage)
     if usage is None:
         return None
     total_tokens: Final = usage.total_tokens or (usage.prompt_tokens + usage.completion_tokens)
-    model_version: Final = response_body.get("modelVersion")
+    model_version: Final = response_body.get(
+        "model" if is_vertex_anthropic_batch_output_response(response_body) else "modelVersion"
+    )
     deployment_model: Final = model_name if model_name and "*" not in model_name else None
     model: Final = deployment_model or (model_version if isinstance(model_version, str) else model_name)
     if model is None:
