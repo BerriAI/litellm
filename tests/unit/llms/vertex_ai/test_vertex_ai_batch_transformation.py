@@ -308,7 +308,7 @@ async def test_vertex_file_upload_create_and_retrieve_batch(
     assert upload_request.headers["Content-Type"] == "application/json"
     uploaded_row: Final = json.loads(upload_request.content)
     assert uploaded_row["request"]["contents"] == [{"role": "user", "parts": [{"text": "hi"}]}]
-    assert uploaded_row["request"]["labels"]["litellm_custom_id"] == "request-1"
+    assert uploaded_row["request"]["labels"]["litellm_custom_id"] == "id-request-1"
 
     create_batch_response: Final = await litellm.acreate_batch(
         completion_window="24h",

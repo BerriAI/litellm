@@ -3,9 +3,11 @@ Tests for VertexAIFilesConfig transformation methods (Issues 5-7).
 Includes tests for Vertex AI batch output transformation to OpenAI format.
 """
 
+import contextlib
 import json
 import urllib.parse
 from collections.abc import Mapping, Sequence
+from datetime import date
 from typing import Final
 from types import MappingProxyType
 from urllib.parse import parse_qs, urlparse
@@ -987,6 +989,25 @@ def _wrap_entries(openai_jsonl_content):
     ]
 
 
+def _reads_as_number_boolean_or_date(value: str) -> bool:
+    with contextlib.suppress(ValueError):
+        json.loads(value)
+        return True
+    with contextlib.suppress(ValueError):
+        date.fromisoformat(value)
+        return True
+    return False
+
+
+def _chat_batch_entry(custom_id: str | None) -> dict[str, object]:
+    entry: Final = {
+        "method": "POST",
+        "url": "/v1/chat/completions",
+        "body": {"model": "gemini-2.5-flash", "messages": [{"role": "user", "content": "Reply with ok"}]},
+    }
+    return entry if custom_id is None else {"custom_id": custom_id, **entry}
+
+
 class TestVertexBatchCustomIdLabels:
     """Test custom_id handling in batch transformations"""
 
@@ -1014,7 +1035,7 @@ class TestVertexBatchCustomIdLabels:
         # Verify labels were added
         assert "labels" in vertex_request["request"]
         assert "litellm_custom_id" in vertex_request["request"]["labels"]
-        assert vertex_request["request"]["labels"]["litellm_custom_id"] == "request-1"
+        assert vertex_request["request"]["labels"]["litellm_custom_id"] == "id-request-1"
         raw_label = vertex_request["request"]["labels"]["litellm_custom_id_raw"]
         assert raw_label != "request-1"
         assert _sanitize_gcp_label_value(raw_label) == raw_label
@@ -1048,6 +1069,51 @@ class TestVertexBatchCustomIdLabels:
         assert _get_litellm_batch_custom_id_from_labels(labels_a) == custom_id_a
         assert _get_litellm_batch_custom_id_from_labels(labels_b) == custom_id_b
 
+    @pytest.mark.parametrize("custom_id", ["1", "-7", "1e5", "true", "2026-01-31", "MyRequest-1"])
+    def test_no_label_value_reads_as_a_number_boolean_or_date(self, custom_id):
+        labels: Final = _wrap_entries([_chat_batch_entry(custom_id)])[0]["request"]["labels"]
+
+        assert not any(_reads_as_number_boolean_or_date(value) for value in labels.values())
+        assert _get_litellm_batch_custom_id_from_labels(labels) == custom_id
+
+    def test_raw_label_litellm_did_not_encode_comes_back_unchanged(self):
+        labels: Final = {"litellm_custom_id_raw": "set-by-hand", "litellm_custom_id": "id-other"}
+
+        assert _get_litellm_batch_custom_id_from_labels(labels) == "set-by-hand"
+
+    def test_custom_ids_survive_the_nulls_vertex_adds_for_label_keys_other_rows_set(self):
+        long_custom_id: Final = "request-with-a-long-custom-id-that-needs-a-second-label-0001"
+        vertex_rows: Final = _wrap_entries(
+            [_chat_batch_entry(long_custom_id), _chat_batch_entry("req-b"), _chat_batch_entry(None)]
+        )
+        label_keys: Final = frozenset().union(*(row["request"].get("labels", {}) for row in vertex_rows))
+        vertex_output: Final = b"\n".join(
+            json.dumps(
+                {
+                    "status": "",
+                    "processed_time": "2026-10-31T07:44:12.000+00:00",
+                    "request": {
+                        **row["request"],
+                        "labels": {key: row["request"].get("labels", {}).get(key) for key in label_keys},
+                    },
+                    "response": {
+                        "candidates": [{"content": {"parts": [{"text": "ok"}], "role": "model"}, "finishReason": "STOP"}],
+                        "modelVersion": "gemini-2.5-flash",
+                        "usageMetadata": {"promptTokenCount": 5, "candidatesTokenCount": 1, "totalTokenCount": 6},
+                    },
+                }
+            ).encode("utf-8")
+            for row in vertex_rows
+        )
+
+        openai_output: Final = VertexAIFilesConfig()._try_transform_vertex_batch_output_to_openai(vertex_output)
+
+        assert [json.loads(line)["custom_id"] for line in openai_output.splitlines()] == [
+            long_custom_id,
+            "req-b",
+            "unknown",
+        ]
+
     def test_multiple_requests_each_get_their_own_label(self):
         """Test that multiple requests each get their own custom_id label"""
 
@@ -1070,7 +1136,7 @@ class TestVertexBatchCustomIdLabels:
 
         for i, vertex_request in enumerate(vertex_jsonl_content):
             expected_custom_id = f"request-{i + 1}"
-            assert vertex_request["request"]["labels"]["litellm_custom_id"] == expected_custom_id
+            assert vertex_request["request"]["labels"]["litellm_custom_id"] == f"id-{expected_custom_id}"
             raw_label = vertex_request["request"]["labels"]["litellm_custom_id_raw"]
             assert raw_label != expected_custom_id
             assert _sanitize_gcp_label_value(raw_label) == raw_label
@@ -1117,7 +1183,7 @@ class TestVertexBatchCustomIdLabels:
         vertex_input = _wrap_entries(openai_input)
 
         # Verify both labels are GCP-safe and encoded raw preserves round-trip.
-        assert vertex_input[0]["request"]["labels"]["litellm_custom_id"] == "myrequest-1"
+        assert vertex_input[0]["request"]["labels"]["litellm_custom_id"] == "id-myrequest-1"
         raw_label = vertex_input[0]["request"]["labels"]["litellm_custom_id_raw"]
         assert raw_label != "MyRequest-1"
         assert _sanitize_gcp_label_value(raw_label) == raw_label
@@ -1181,7 +1247,7 @@ class TestVertexBatchCustomIdLabels:
         vertex_input = _wrap_entries(openai_input)
 
         # Verify both labels are safe for GCP labels.
-        assert vertex_input[0]["request"]["labels"]["litellm_custom_id"] == "myrequest-1"
+        assert vertex_input[0]["request"]["labels"]["litellm_custom_id"] == "id-myrequest-1"
         raw_label = vertex_input[0]["request"]["labels"]["litellm_custom_id_raw"]
         assert raw_label != "MyRequest-1"
         assert _sanitize_gcp_label_value(raw_label) == raw_label
@@ -1463,7 +1529,7 @@ class TestVertexEmbeddingsBatchInputTranslation:
         )
 
         assert row["request"]["contents"] == [{"role": "user", "parts": [{"text": "Hello"}]}]
-        assert row["request"]["labels"]["litellm_custom_id"] == "request-1"
+        assert row["request"]["labels"]["litellm_custom_id"] == "id-request-1"
         assert "key" not in row
 
     def test_should_keep_lines_without_a_url_on_generate_content_path(self):
@@ -1529,7 +1595,7 @@ class TestVertexResponsesBatchInputTranslation:
         assert row["request"]["contents"] == [
             {"role": "user", "parts": [{"text": "What was the top headline in world news yesterday?"}]}
         ]
-        assert row["request"]["labels"]["litellm_custom_id"] == "resp-1"
+        assert row["request"]["labels"]["litellm_custom_id"] == "id-resp-1"
 
     def test_instructions_and_input_items_map_like_real_time(self):
         (row,) = _wrap_entries(

@@ -127,7 +127,9 @@ def unconvertible_line_message(line: int) -> str:
 
 def stored_custom_ids(request: Request) -> tuple[str, ...]:
     return tuple(
-        json.loads(line)["request"]["labels"]["litellm_custom_id"] for line in request.body.decode().split("\n") if line
+        json.loads(line)["request"]["labels"]["litellm_custom_id"].removeprefix("id-")
+        for line in request.body.decode().split("\n")
+        if line
     )
 
 

@@ -95,6 +95,7 @@ from ..common_utils import VertexAIError
 from ..vertex_llm_base import VertexBase
 
 _GCP_LABEL_VALUE_MAX_LEN: Final = 63
+_CUSTOM_ID_LABEL_PREFIX: Final = "id-"
 _CUSTOM_ID_RAW_LABEL_PREFIX: Final = "b32_"
 _VERTEX_BATCH_KEY_FIELD: Final = "key"
 _MANAGED_GCS_MODEL_PATH_PATTERN: Final = re.compile(r"publishers/[^/]+/models/([^/?]+)")
@@ -224,9 +225,12 @@ def _set_litellm_batch_custom_id_labels(labels: dict[str, str], custom_id: objec
     ``litellm_custom_id`` is GCP-label-safe (may alter casing and characters).
     ``litellm_custom_id_raw`` encodes the original string for
     round-trip correlation in batch output transforms.
+
+    Vertex loads the file through BigQuery, which types a quoted value such as "1", "true" or "2026-01-31" as a
+    number, boolean or date, and a label map holding one fails the row, so the readable label keeps an ``id-`` prefix.
     """
     custom_id_str: Final = str(custom_id)
-    labels["litellm_custom_id"] = _sanitize_gcp_label_value(custom_id_str)
+    labels["litellm_custom_id"] = _sanitize_gcp_label_value(f"{_CUSTOM_ID_LABEL_PREFIX}{custom_id_str}")
     raw_label_chunks: Final = _encode_gcp_label_value_chunks(custom_id_str)
     labels["litellm_custom_id_raw"] = raw_label_chunks[0]
     for index, raw_label_chunk in enumerate(raw_label_chunks[1:], start=1):
@@ -254,23 +258,28 @@ def _get_litellm_batch_custom_id(vertex_output_row: Mapping[str, object]) -> str
 
 
 def _get_litellm_batch_custom_id_from_labels(labels: Mapping[str, object] | None) -> str:
-    """Prefer encoded custom_id when present (see _set_litellm_batch_custom_id_labels)."""
+    """
+    Prefer encoded custom_id when present (see _set_litellm_batch_custom_id_labels).
+
+    Vertex echoes a null for every label key another row in the file set, so only string values count.
+    """
     if not labels:
         return "unknown"
     raw: Final = labels.get("litellm_custom_id_raw")
-    if raw:
-        raw_chunks: Final = [str(raw)]
+    if isinstance(raw, str) and raw:
+        raw_chunks: Final = [raw]
         chunk_prefix: Final = "litellm_custom_id_raw_"
         indexed_chunks: Final = []
         for key, value in labels.items():
-            if key.startswith(chunk_prefix) and key[len(chunk_prefix) :].isdigit():
-                indexed_chunks.append((int(key[len(chunk_prefix) :]), str(value)))
+            if key.startswith(chunk_prefix) and key[len(chunk_prefix) :].isdigit() and isinstance(value, str):
+                indexed_chunks.append((int(key[len(chunk_prefix) :]), value))
         raw_chunks.extend(raw_label_chunk for _, raw_label_chunk in sorted(indexed_chunks, key=lambda item: item[0]))
         decoded: Final = _decode_gcp_label_value_chunks(raw_chunks)
         if decoded is not None:
             return decoded
-        return str(raw)
-    return str(labels.get("litellm_custom_id", "unknown"))
+        return raw
+    readable: Final = labels.get("litellm_custom_id")
+    return readable if isinstance(readable, str) else "unknown"
 
 
 def _is_vertex_embeddings_batch_output_row(vertex_output_row: Mapping[str, object]) -> bool:
