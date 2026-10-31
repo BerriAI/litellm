@@ -74,7 +74,7 @@ class TransportMcpSingleUseStore:
     transport: RedisTransport
 
     async def claim(self, marker: SingleUseMarker, *, ttl: timedelta) -> int | RedisFailure:
-        reply: Final = await self.transport.eval(_CLAIM, (marker_key(marker),), (1, ttl // timedelta(seconds=1)))
+        reply: Final = await self.transport.eval_direct(_CLAIM, (marker_key(marker),), (1, ttl // timedelta(seconds=1)))
         return reply if isinstance(reply, RedisFailure) else _count(reply)
 
     async def peek(self, marker: SingleUseMarker) -> bool | RedisFailure:

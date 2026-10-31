@@ -2473,11 +2473,11 @@ class _RedisThatFaultsOnTheSecondClaim(fakeredis.FakeAsyncRedis):
         super().__init__(server=server)
         self.claims = 0
 
-    async def evalsha(self, sha: str, numkeys: int, *keys_and_args: str | bytes | float) -> object:
+    async def eval(self, script: str, numkeys: int, *keys_and_args: str | bytes | float) -> object:
         self.claims += 1
         if self.claims == 2:
             raise RedisConnectionError("redis down")
-        return await super().evalsha(sha, numkeys, *keys_and_args)
+        return await super().eval(script, numkeys, *keys_and_args)
 
 
 @pytest.mark.asyncio
