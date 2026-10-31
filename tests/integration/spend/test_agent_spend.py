@@ -366,6 +366,9 @@ def _assert_reused_jsonrpc_id_has_distinct_spend_identity(
             sorted(alias_user_pairs)
         ), rows
         request_ids: Final = tuple(str(row["request_id"]) for row in rows)
+        response_call_ids: Final = tuple(response.headers.get("x-litellm-call-id") for response in responses)
+        assert all(response_call_id is not None for response_call_id in response_call_ids), responses
+        assert response_call_ids == request_ids, (response_call_ids, rows)
         assert len(set(request_ids)) == 2 and all(request_id != "1" for request_id in request_ids), rows
         assert all(str(uuid.UUID(request_id)) == request_id for request_id in request_ids), rows
         assert len(trace_ids) == 2, trace_ids

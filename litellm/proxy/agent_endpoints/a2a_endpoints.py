@@ -43,7 +43,10 @@ from litellm.proxy.agent_endpoints.databricks_oauth import (
 )
 from litellm.proxy.agent_endpoints.utils import merge_agent_headers
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.common_utils.openai_error_payload import status_typed_proxy_exception
+from litellm.proxy.common_utils.openai_error_payload import (
+    headers_with_litellm_call_id,
+    status_typed_proxy_exception,
+)
 from litellm.proxy.common_utils.sse_keepalive import (
     SSE_COMMENT_PING,
     coerce_keepalive_interval,
@@ -397,19 +400,26 @@ async def _a2a_sse_event_source(
         await resp.aclose()
 
 
-def _sse_streaming_response(generator: AsyncGenerator[str, None]) -> StreamingResponse:
+def _sse_streaming_response(
+    generator: AsyncGenerator[str, None],
+    litellm_call_id: str | None = None,
+) -> StreamingResponse:
     # The upstream agent is only contacted once this generator is first pulled, so
     # a slow first event leaves the response body idle for its whole
     # time-to-first-token and an intermediary with an idle read timeout drops a
     # healthy connection. Off until an operator sets an interval, and the
     # buffering hint only goes out when there are keepalives to protect.
     keepalive_interval: Final = coerce_keepalive_interval(litellm.sse_keepalive_ping_interval_seconds)
+    base_headers: Final[Mapping[str, str] | None] = _SSE_KEEPALIVE_HEADERS if keepalive_interval is not None else None
+    response_headers: Final = (
+        headers_with_litellm_call_id(base_headers, litellm_call_id) if litellm_call_id is not None else base_headers
+    )
     if keepalive_interval is None:
-        return StreamingResponse(generator, media_type="text/event-stream")
+        return StreamingResponse(generator, media_type="text/event-stream", headers=response_headers)
     return StreamingResponse(
         wrap_sse_stream_with_keepalive_pings(generator, keepalive_interval, ping_chunk=SSE_COMMENT_PING),
         media_type="text/event-stream",
-        headers=_SSE_KEEPALIVE_HEADERS,
+        headers=response_headers,
     )
 
 
@@ -634,7 +644,7 @@ async def _handle_stream_message(
                 }
             )
 
-    return _sse_streaming_response(stream_response())
+    return _sse_streaming_response(stream_response(), litellm_call_id=litellm_call_id)
 
 
 @router.get(
@@ -982,7 +992,8 @@ async def invoke_agent_a2a(
                     response_dict,
                     served_version,
                     method="message/send",
-                )
+                ),
+                headers=headers_with_litellm_call_id(None, logging_obj.litellm_call_id),
             )
 
         elif method == "message/stream":
