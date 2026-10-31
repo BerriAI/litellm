@@ -1,4 +1,5 @@
 import os
+import shutil
 import subprocess
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
@@ -9,8 +10,11 @@ import pytest
 import yaml
 from pydantic import BaseModel, ConfigDict
 
-CONFIG: Final = Path(__file__).resolve().parents[2] / ".circleci" / "config.yml"
+CIRCLECI: Final = Path(__file__).resolve().parents[2] / ".circleci"
+CONFIG: Final = CIRCLECI / "config.yml"
 PUBLIC_REPO: Final = "https://github.com/BerriAI/litellm.git"
+LINUX_SHELL: Final = ("bash", "-eo", "pipefail", "-c")
+WINDOWS_SHELL: Final = ("bash", "-c")
 
 
 class _Run(BaseModel):
@@ -68,49 +72,81 @@ def _git(cwd: Path, *args: str) -> str:
     return subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True, text=True).stdout.strip()
 
 
-def _commit(work: Path, message: str) -> str:
+def _commit(work: Path, files: Mapping[str, str], message: str) -> str:
+    for name, content in files.items():
+        (work / name).write_text(content)
+    _git(work, "add", "-A")
     _git(work, "commit", "-q", "--allow-empty", "-m", message)
     return _git(work, "rev-parse", "HEAD")
 
 
-def _publish_two_commits(tmp_path: Path) -> _Upstream:
+def _new_upstream(tmp_path: Path) -> tuple[Path, Path]:
     remote: Final = tmp_path / "remote.git"
     work: Final = tmp_path / "work"
     work.mkdir()
     _git(tmp_path, "init", "-q", "--bare", str(remote))
+    _git(remote, "config", "uploadpack.allowFilter", "true")
     _git(work, "init", "-q", "-b", "main")
     _git(work, "config", "user.email", "t@t")
     _git(work, "config", "user.name", "t")
-    older: Final = _commit(work, "pipeline commit")
-    newer: Final = _commit(work, "main moved on")
+    return remote, work
+
+
+def _publish_two_commits(tmp_path: Path) -> _Upstream:
+    remote, work = _new_upstream(tmp_path)
+    older: Final = _commit(work, {"app.py": "x = 1\n"}, "pipeline commit")
+    newer: Final = _commit(work, {"app.py": "x = 2\n"}, "main moved on")
     _git(work, "push", "-q", str(remote), "main")
     return _Upstream(url=remote.as_uri(), older=older, newer=newer)
 
 
-def _run_checkout(tmp_path: Path, upstream: _Upstream, revisions: Mapping[str, str]) -> subprocess.CompletedProcess[str]:
+def _publish_docs_only_pr(tmp_path: Path) -> _Upstream:
+    remote, work = _new_upstream(tmp_path)
+    main: Final = _commit(work, {"litellm_inference.py": "x\n"}, "base")
+    _git(work, "checkout", "-q", "-b", "litellm_feature")
+    head: Final = _commit(work, {"README.md": "# docs\n"}, "docs")
+    _git(work, "push", "-q", str(remote), "main", "litellm_feature")
+    return _Upstream(url=remote.as_uri(), older=main, newer=head)
+
+
+def _stub(bin_dir: Path, name: str, script: str) -> None:
+    bin_dir.mkdir(exist_ok=True)
+    (bin_dir / name).write_text(f"#!/usr/bin/env bash\n{script}\n")
+    (bin_dir / name).chmod(0o755)
+
+
+def _job_env(tmp_path: Path, upstream: _Upstream) -> dict[str, str]:
+    return {
+        "PATH": f"{tmp_path / 'bin'}{os.pathsep}{os.environ['PATH']}",
+        "HOME": str(tmp_path),
+        "GIT_CONFIG_NOSYSTEM": "1",
+        "GIT_TERMINAL_PROMPT": "0",
+        "GIT_SSH_COMMAND": "false",
+        "GIT_CONFIG_COUNT": "1",
+        "GIT_CONFIG_KEY_0": f"url.{upstream.url}.insteadOf",
+        "GIT_CONFIG_VALUE_0": PUBLIC_REPO,
+    }
+
+
+def _run_checkout(
+    tmp_path: Path,
+    upstream: _Upstream,
+    revisions: Mapping[str, str],
+    shell: tuple[str, ...] = LINUX_SHELL,
+) -> subprocess.CompletedProcess[str]:
     job: Final = tmp_path / "job"
     job.mkdir()
     command: Final = _Config.model_validate(yaml.safe_load(CONFIG.read_text())).commands.checkout_over_https
     return subprocess.run(
-        ["bash", "-eo", "pipefail", "-c", command.steps[0].run.command],
+        [*shell, command.steps[0].run.command],
         cwd=job,
-        env={
-            "PATH": os.environ["PATH"],
-            "HOME": str(tmp_path),
-            "GIT_CONFIG_NOSYSTEM": "1",
-            "GIT_TERMINAL_PROMPT": "0",
-            "GIT_SSH_COMMAND": "false",
-            "GIT_CONFIG_COUNT": "1",
-            "GIT_CONFIG_KEY_0": f"url.{upstream.url}.insteadOf",
-            "GIT_CONFIG_VALUE_0": PUBLIC_REPO,
-            **revisions,
-        },
+        env={**_job_env(tmp_path, upstream), **revisions},
         capture_output=True,
         text=True,
     )
 
 
-def test_every_clone_goes_over_https_because_the_project_has_no_ssh_checkout_key() -> None:
+def test_every_clone_goes_over_https_so_no_job_needs_the_ssh_checkout_key() -> None:
     names: Final = tuple(_step_names(yaml.safe_load(CONFIG.read_text())))
     assert "checkout_over_https" in names
     assert "checkout" not in names
@@ -134,8 +170,51 @@ def test_a_job_checks_out_its_own_commit_from_the_public_https_url_after_main_mo
     assert _git(tmp_path / "job", "rev-parse", "HEAD") == upstream.older
 
 
-def test_a_revision_that_is_not_a_full_sha_is_refused_before_git_runs(tmp_path: Path) -> None:
+@pytest.mark.parametrize("shell", (LINUX_SHELL, WINDOWS_SHELL), ids=("linux", "windows-bash-exe"))
+def test_a_revision_that_is_not_a_full_sha_is_refused_before_git_runs(tmp_path: Path, shell: tuple[str, ...]) -> None:
     upstream: Final = _publish_two_commits(tmp_path)
-    result: Final = _run_checkout(tmp_path, upstream, {"CIRCLE_SHA1": upstream.newer, "REQUESTED_REVISION": "main"})
+    result: Final = _run_checkout(
+        tmp_path, upstream, {"CIRCLE_SHA1": upstream.newer, "REQUESTED_REVISION": "main"}, shell
+    )
     assert result.returncode != 0
     assert not (tmp_path / "job" / ".git").exists()
+
+
+def test_a_docs_only_pr_job_still_skips_backend_work_after_the_checkout(tmp_path: Path) -> None:
+    upstream: Final = _publish_docs_only_pr(tmp_path)
+    _stub(tmp_path / "bin", "circleci-agent", 'echo "circleci-agent $*"')
+    checkout: Final = _run_checkout(tmp_path, upstream, {"CIRCLE_SHA1": upstream.newer})
+    assert checkout.returncode == 0, checkout.stderr
+    path_filter: Final = subprocess.run(
+        ["bash", str(CIRCLECI / "scripts" / "path_filter.sh"), "backend"],
+        cwd=tmp_path / "job",
+        env={**_job_env(tmp_path, upstream), "CIRCLE_PULL_REQUEST": "https://github.com/BerriAI/litellm/pull/1"},
+        capture_output=True,
+        text=True,
+    )
+    assert path_filter.returncode == 0, path_filter.stderr
+    assert "circleci-agent step halt" in path_filter.stdout
+
+
+@pytest.mark.parametrize("shell", (LINUX_SHELL, WINDOWS_SHELL), ids=("linux", "windows-bash-exe"))
+@pytest.mark.parametrize(("failing_fetches", "checked_out"), ((2, True), (3, False)))
+def test_a_fetch_that_fails_is_retried_and_the_step_fails_once_retries_run_out(
+    tmp_path: Path, shell: tuple[str, ...], failing_fetches: int, checked_out: bool
+) -> None:
+    upstream: Final = _publish_two_commits(tmp_path)
+    fetches: Final = tmp_path / "fetches"
+    _stub(tmp_path / "bin", "sleep", "exit 0")
+    _stub(
+        tmp_path / "bin",
+        "git",
+        f'''if [ "$1" = fetch ]; then
+  echo x >> "{fetches}"
+  [ "$(wc -l < "{fetches}")" -le {failing_fetches} ] && exit 128
+fi
+exec "{shutil.which("git")}" "$@"''',
+    )
+    result: Final = _run_checkout(tmp_path, upstream, {"CIRCLE_SHA1": upstream.older}, shell)
+    assert (result.returncode == 0) is checked_out, result.stderr
+    assert len(fetches.read_text().splitlines()) == min(failing_fetches + 1, 3)
+    head: Final = subprocess.run(["git", "rev-parse", "HEAD"], cwd=tmp_path / "job", capture_output=True, text=True)
+    assert (head.stdout.strip() == upstream.older) is checked_out

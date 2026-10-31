@@ -40,7 +40,10 @@ commands:
             [[ "$revision" =~ ^[0-9a-f]{40}$ ]] || exit 1
             git init
             git remote add origin https://github.com/BerriAI/litellm.git
-            git fetch --depth 1 origin "$revision"
+            for _ in 1 2 3; do
+              git fetch --filter=blob:none origin "$revision" && break
+              sleep 5
+            done
             git checkout --detach FETCH_HEAD
   skip_if_unrelated_changes:
     parameters:

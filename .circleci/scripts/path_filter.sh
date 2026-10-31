@@ -14,9 +14,7 @@ run_full() {
 candidate_bases="${PATH_FILTER_BASE_BRANCH:-main}"
 merge_base=""
 for base in $candidate_bases; do
-  unshallow=""
-  [ "$(git rev-parse --is-shallow-repository)" = true ] && unshallow="--unshallow"
-  git fetch --quiet $unshallow origin "$base" 2>/dev/null || continue
+  git fetch --quiet origin "$base" 2>/dev/null || continue
   candidate="$(git merge-base HEAD FETCH_HEAD 2>/dev/null)" || continue
   [ -n "$candidate" ] || continue
   if [ -z "$merge_base" ] || git merge-base --is-ancestor "$merge_base" "$candidate" 2>/dev/null; then
