@@ -13350,6 +13350,15 @@ class TestUnroutableModelFailureLogHidesUnscannedContent:
                 {"query": f"email {_RAW_EMAIL}", "instruction": f"email {_RAW_EMAIL}"},
                 id="rerank-query-and-instruction",
             ),
+            pytest.param(
+                {
+                    "state": f"email {_RAW_EMAIL}",
+                    "fields": {
+                        "contact": {"type": "string", "instructions": f"email {_RAW_EMAIL}", "unit": _RAW_EMAIL}
+                    },
+                },
+                id="extraction-state-and-fields",
+            ),
         ],
     )
     async def test_failure_log_hides_every_field_a_skipped_guardrail_would_have_scanned(self, monkeypatch, body):
