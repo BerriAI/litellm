@@ -113,7 +113,6 @@ from litellm.proxy.common_request_processing import (
 from litellm.proxy.common_utils.callback_utils import (
     GUARDRAIL_SCAN_IDS_METADATA_KEY,
     GUARDRAIL_SCAN_METADATA_METADATA_KEY,
-    TRUSTED_PILLAR_RESPONSE_HEADERS_METADATA_KEY,
     get_logging_caching_headers,  # pyright: ignore[reportUnknownVariableType]  # untyped request_data param
 )
 from litellm.proxy.common_utils.error_body_call_id import JSON_OBJECT, error_body_call_id, with_call_id
@@ -199,14 +198,12 @@ _GUARDRAIL_HEADER_METADATA_FIELDS: Final = frozenset(
         "applied_guardrails",
         "applied_policies",
         "policy_sources",
-        "semantic-similarity",
         GUARDRAIL_SCAN_IDS_METADATA_KEY,
         GUARDRAIL_SCAN_METADATA_METADATA_KEY,
-        TRUSTED_PILLAR_RESPONSE_HEADERS_METADATA_KEY,
-        "pillar_response_headers",
-        "pillar_flagged",
     )
 )
+# h11's header field-value grammar: no NUL, line breaks or other whitespace beyond spaces and tabs between characters.
+_SENDABLE_HEADER_VALUE: Final = re.compile(rb"(?:[^\x00\s]+(?:[ \t]+[^\x00\s]+)*)?")
 
 
 def _is_mergeable_client_metadata(key: str, value: object) -> bool:
@@ -240,8 +237,10 @@ def _merged_metadata_entry(prior: object, value: object) -> object:
     )
 
 
-def _encodes_as_latin1(value: str) -> bool:
-    return all(ord(character) < 256 for character in value)
+def _is_sendable_header_value(value: str) -> bool:
+    return all(ord(character) < 256 for character in value) and bool(
+        _SENDABLE_HEADER_VALUE.fullmatch(value.encode("latin-1"))
+    )
 
 
 def _guardrail_response_headers(
@@ -270,7 +269,7 @@ def _guardrail_response_headers(
         for field, entries in groupby(sorted(recorded, key=lambda entry: entry[0]), key=lambda entry: entry[0])
     }
     headers: Final = _RESPONSE_HEADERS.validate_python(get_logging_caching_headers({"metadata": merged}) or {})
-    return MappingProxyType({name: value for name, value in headers.items() if _encodes_as_latin1(value)})
+    return MappingProxyType({name: value for name, value in headers.items() if _is_sendable_header_value(value)})
 
 
 class _RegisteredPassThroughRoute(TypedDict):

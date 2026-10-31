@@ -21,6 +21,9 @@ POST_CALL: Final = "passthrough-header-post"
 NON_LATIN1: Final = "passthrough-header-pre\u2014em"
 BLOCKER: Final = "passthrough-header-block"
 MISSING_MODEL: Final = "passthrough-header-missing-model"
+PILLAR: Final = "passthrough-header-pillar"
+TAG_POLICY: Final = "passthrough-header-tag-policy"
+POLICY_TAG_PREFIX: Final = "passthrough-header-tag-"
 HEADER: Final = "x-litellm-applied-guardrails"
 OPENAI_ROUTE: Final = "/openai/v1/chat/completions"
 ANTHROPIC_ROUTE: Final = "/anthropic/v1/messages"
@@ -45,6 +48,10 @@ def _allow(_request: Request) -> Reply:
 
 def _block(_request: Request) -> Reply:
     return Reply(body=json.dumps({"action": "BLOCKED", "blocked_reason": "synthetic block"}).encode())
+
+
+def _pillar_allow(_request: Request) -> Reply:
+    return Reply(body=json.dumps({"flagged": False, "session_id": "pillar-vendor-session"}).encode())
 
 
 def _openai_reply(request: Request) -> Reply:
@@ -84,6 +91,7 @@ def rig(session_gateway: Gateway, tmp_path_factory: pytest.TempPathFactory) -> I
     with ExitStack() as stack:
         vendor: Final = stack.enter_context(wire_server(_allow))
         blocking_vendor: Final = stack.enter_context(wire_server(_block))
+        pillar_vendor: Final = stack.enter_context(wire_server(_pillar_allow))
         upstreams: Final = MappingProxyType(
             {
                 OPENAI_ROUTE: stack.enter_context(wire_server(_openai_reply)),
@@ -114,7 +122,21 @@ def rig(session_gateway: Gateway, tmp_path_factory: pytest.TempPathFactory) -> I
                             (NON_LATIN1, "pre_call", vendor.url),
                             (BLOCKER, "pre_call", blocking_vendor.url),
                         )
+                    ]
+                    + [
+                        {
+                            "guardrail_name": PILLAR,
+                            "litellm_params": {
+                                "guardrail": "pillar",
+                                "mode": "pre_call",
+                                "default_on": False,
+                                "api_base": pillar_vendor.url,
+                                "api_key": "synthetic-pillar-key",
+                            },
+                        }
                     ],
+                    "policies": {TAG_POLICY: {"guardrails": {"add": [PRE_CALL]}}},
+                    "policy_attachments": [{"policy": TAG_POLICY, "tags": [f"{POLICY_TAG_PREFIX}*"]}],
                 }
             )
         )
@@ -240,3 +262,33 @@ def test_non_list_client_claim_does_not_fail_a_guarded_request(rig: HeaderRig, c
 
     assert response.status_code == 200, response.text
     assert response.headers.get(HEADER) == PRE_CALL
+
+
+def test_pillar_headers_stay_off_pass_through_responses(rig: HeaderRig) -> None:
+    gateway: Final = rig.owned.gateway
+    forged: Final[dict[str, JsonValue]] = {"pillar_session_id_response": "client-session", "pillar_scanners": {"x": 1}}
+    with gateway.scenario() as scenario:
+        response: Final = _send(
+            gateway, scenario, OPENAI_ROUTE, {**_route_body(OPENAI_ROUTE), "metadata": forged}, PILLAR
+        )
+
+    assert response.status_code == 200, response.text
+    assert response.headers.get(HEADER) == PILLAR
+    assert [name for name, _ in response.headers.multi_items() if name.startswith("x-pillar-")] == []
+
+
+@pytest.mark.parametrize("suffix", ["team\n", "x\r\nX-Injected: yes"])
+def test_header_value_with_a_line_break_is_left_out(rig: HeaderRig, suffix: str) -> None:
+    gateway: Final = rig.owned.gateway
+    body: Final[dict[str, JsonValue]] = {
+        **_route_body(OPENAI_ROUTE),
+        "metadata": {"tags": [f"{POLICY_TAG_PREFIX}{suffix}"]},
+    }
+    with gateway.scenario() as scenario:
+        response: Final = _send(gateway, scenario, OPENAI_ROUTE, body)
+
+    assert response.status_code == 200, response.text
+    assert response.headers.get(HEADER) == PRE_CALL
+    assert response.headers.get("x-litellm-applied-policies") == TAG_POLICY
+    assert "x-litellm-policy-sources" not in response.headers
+    assert "x-injected" not in response.headers

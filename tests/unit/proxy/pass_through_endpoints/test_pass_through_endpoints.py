@@ -17,6 +17,7 @@ from typing import Final, Optional, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import UUID
 
+import h11
 import httpx
 import pytest
 import respx
@@ -51,6 +52,7 @@ from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     SafeRouteAdder,
     _build_passthrough_failure_request_payload,
     _registered_pass_through_routes,
+    _guardrail_response_headers,
     _strip_client_guardrail_fields,
     _truncate_upstream_error_body,
     _update_metadata_with_tags_in_header,
@@ -12069,4 +12071,35 @@ class TestGuardrailResponseHeaders:
 
         _strip_client_guardrail_fields(body)
 
-        assert body == {"metadata": {"tags": ["team-a"]}, "litellm_metadata": {}}
+        assert body == {"metadata": {"pillar_flagged": True, "tags": ["team-a"]}, "litellm_metadata": {}}
+
+    def test_pillar_fields_recorded_on_the_request_add_no_pillar_headers(self):
+        headers: Final = _guardrail_response_headers(
+            {"metadata": {"pillar_session_id_response": "client-session"}},
+            {
+                "litellm_params": {
+                    "metadata": {
+                        "applied_guardrails": ["pillar"],
+                        "pillar_flagged": False,
+                        "pillar_response_headers": {"x-pillar-flagged": "false", "x-pillar-session-id": "vendor"},
+                        "_pillar_response_headers_trusted": True,
+                    }
+                }
+            },
+        )
+
+        assert headers == {"x-litellm-applied-guardrails": "pillar"}
+
+    @pytest.mark.parametrize("tag", ["prod-team\n", "prod-x\r\nX-Injected: yes", "prod\x00"])
+    def test_header_value_an_http_response_cannot_carry_is_left_out(self, tag: str):
+        headers: Final = _guardrail_response_headers(
+            {},
+            {
+                "litellm_params": {
+                    "metadata": {"applied_policies": ["tag-policy"], "policy_sources": {"tag-policy": f"tag:{tag}"}}
+                }
+            },
+        )
+
+        assert headers == {"x-litellm-applied-policies": "tag-policy"}
+        assert h11.Response(status_code=200, headers=[*headers.items()]).status_code == 200
