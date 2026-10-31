@@ -3063,9 +3063,6 @@ class Logging(LiteLLMLoggingBaseClass):
         )
         return normalized if assembled is None else assembled
 
-    def record_provider_reported_cost(self, cost: float | None) -> None:
-        self._provider_reported_cost = cost
-
     def billing_time_for_cost(self) -> datetime.datetime:
         if self.cost_billing_time is None:
             self.cost_billing_time = current_billing_time()
