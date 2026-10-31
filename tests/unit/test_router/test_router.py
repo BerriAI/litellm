@@ -53,6 +53,7 @@ from litellm.router import (
     FallbackAwareAnthropicMessagesStream,
     _stream_commits_now,
     _anthropic_stream_error_is_gateway_verdict,
+    _anthropic_stream_error_skips_recovery,
     _stream_fallback_error_for_raised,
     _anthropic_stream_forwards_ping_live,
     _stream_raised_error_status,
@@ -18569,6 +18570,53 @@ def test_anthropic_stream_should_decline_fallback_direct_call():
     assert _anthropic_stream_should_decline_fallback(False, pre_first_chunk_error) is False
     assert _anthropic_stream_should_decline_fallback(True, pre_first_chunk_error) is True
     assert _anthropic_stream_should_decline_fallback(False, post_first_chunk_error) is True
+
+
+def _pre_first_chunk_stream_error(original_exception: Exception) -> MidStreamFallbackError:
+    return MidStreamFallbackError(
+        message="stream failed",
+        model="glm",
+        llm_provider="bedrock_mantle",
+        original_exception=original_exception,
+        is_pre_first_chunk=True,
+    )
+
+
+_STREAM_OVERFLOW: Final = litellm.ContextWindowExceededError(
+    message="prompt is too long: 9 tokens > 8 maximum", llm_provider="bedrock_mantle", model="glm"
+)
+_STREAM_UNAVAILABLE: Final = litellm.ServiceUnavailableError(
+    message="unavailable", llm_provider="bedrock_mantle", model="glm"
+)
+
+
+@pytest.mark.parametrize(
+    ("error", "has_generated_content", "holds_for_overflow_only", "skips"),
+    [
+        pytest.param(_STREAM_UNAVAILABLE, False, False, False, id="full-hold-recovers-any-error"),
+        pytest.param(_STREAM_OVERFLOW, False, True, False, id="overflow-only-hold-recovers-an-overflow"),
+        pytest.param(_STREAM_UNAVAILABLE, False, True, True, id="overflow-only-hold-passes-a-503-through"),
+        pytest.param(
+            _pre_first_chunk_stream_error(_STREAM_OVERFLOW),
+            False,
+            True,
+            False,
+            id="overflow-only-hold-recovers-a-wrapped-overflow",
+        ),
+        pytest.param(
+            _pre_first_chunk_stream_error(_STREAM_UNAVAILABLE),
+            False,
+            True,
+            True,
+            id="overflow-only-hold-passes-a-wrapped-503-through",
+        ),
+        pytest.param(_pre_first_chunk_stream_error(_STREAM_OVERFLOW), True, False, True, id="content-already-sent"),
+    ],
+)
+def test_anthropic_stream_error_skips_recovery_direct_call(
+    error: Exception, has_generated_content: bool, holds_for_overflow_only: bool, skips: bool
+) -> None:
+    assert _anthropic_stream_error_skips_recovery(error, has_generated_content, holds_for_overflow_only) is skips
 
 
 def test_anthropic_stream_commits_now_direct_call():
