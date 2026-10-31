@@ -712,6 +712,12 @@ def _next_stream_sequence_number(responses_so_far: Sequence[object] | None) -> i
     return next((n + 1 for n in sequence_numbers if isinstance(n, int)), 0)
 
 
+def _is_responses_input(input_data: object) -> bool:
+    if isinstance(input_data, str):
+        return True
+    return isinstance(input_data, list) and all(isinstance(item, Mapping) for item in cast(list[object], input_data))
+
+
 class OpenAIResponsesHandler(BaseTranslation):
     """
     Handler for processing OpenAI Responses API with guardrails.
@@ -734,7 +740,7 @@ class OpenAIResponsesHandler(BaseTranslation):
         `instructions` into chat completion messages.
         """
         input_data: Final = data.get("input")
-        if input_data is None:
+        if not _is_responses_input(input_data):
             return None
         messages: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
             input=input_data,

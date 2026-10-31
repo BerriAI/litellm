@@ -3349,6 +3349,11 @@ class TestGetStructuredMessages:
         result = handler.get_structured_messages(data)
         assert result is None
 
+    def test_should_return_none_for_a_moderation_style_list_of_strings(self):
+        handler = OpenAIResponsesHandler()
+        data = {"model": "omni-moderation-latest", "input": ["safe text", "more safe text"]}
+        assert handler.get_structured_messages(data) is None
+
 
 class ToolAppendingGuardrail(CustomGuardrail):
     """Guardrail that appends a new function tool, mimicking a guardrail that
