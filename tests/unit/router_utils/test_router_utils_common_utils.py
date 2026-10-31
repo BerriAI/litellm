@@ -1,6 +1,7 @@
 import asyncio
 import logging
 from collections.abc import Mapping
+from datetime import datetime, timezone
 from itertools import chain
 from types import MappingProxyType
 from typing import Dict, Final, List, Optional, Union
@@ -10,6 +11,7 @@ import pytest
 
 import litellm
 from litellm import Router
+from litellm.caching.dual_cache import DualCache
 from litellm.constants import ROUTER_FALLBACK_ERROR_DETAIL_MAX_CHARS
 from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 from litellm.proxy._types import UserAPIKeyAuth
@@ -29,6 +31,7 @@ from litellm.litellm_core_utils.routing_common_utils import (
     PROVIDER_SCOPED_CREDENTIAL_PARAMS,
     warn_on_provider_credential_mismatch,
 )
+from litellm.router_utils.pre_call_checks.model_rate_limit_check import ModelRateLimitingCheck
 from litellm.types.router import Deployment, FallbackSkipReason, LiteLLM_Params, ModelInfo, SkippedFallbackTarget
 from litellm.types.utils import ProviderSpecificModelInfo
 
@@ -933,10 +936,13 @@ _SEARCH_RPM_OF_ONE: Final = (
 )
 
 
+_ONE_MINUTE: Final = datetime(2026, 10, 28, 12, 0, 30, tzinfo=timezone.utc)
+
+
 def _web_search_group_with_model_rate_limits(
     search_rpm: Mapping[str, Mapping[str, object]] = MappingProxyType({"litellm_params": {"rpm": 1}}),
 ) -> Router:
-    return Router(
+    router: Final = Router(
         model_list=[
             {
                 "model_name": "mixed",
@@ -959,8 +965,11 @@ def _web_search_group_with_model_rate_limits(
                 "model_info": {"id": "no-search", "supports_web_search": False},
             },
         ],
-        optional_pre_call_checks=["enforce_model_rate_limits"],
     )
+    check: Final = ModelRateLimitingCheck(dual_cache=DualCache(), clock=lambda: _ONE_MINUTE)
+    router.optional_callbacks = [check]
+    litellm.logging_callback_manager.add_litellm_callback(check)
+    return router
 
 
 @pytest.mark.asyncio
@@ -1037,7 +1046,7 @@ def _rate_limited_web_search_group(routing_strategy: str) -> Router:
         model_list=[
             {
                 "model_name": "mixed",
-                "litellm_params": {"model": "openai/gpt-x", "api_key": "fake-key", "mock_response": "hi", "rpm": 1},
+                "litellm_params": {"model": "openai/gpt-x", "api_key": "fake-key", "mock_response": "hi", "tpm": 1},
                 "model_info": {"id": "search"},
             },
             {
@@ -1052,29 +1061,22 @@ def _rate_limited_web_search_group(routing_strategy: str) -> Router:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("routing_strategy", ["usage-based-routing-v2", "cost-based-routing"])
-async def test_web_search_request_goes_to_the_other_deployment_once_the_capable_one_is_at_its_rpm_limit(
+async def test_web_search_request_goes_to_the_other_deployment_when_the_capable_one_has_no_tpm_room(
     routing_strategy: str,
 ) -> None:
     router: Final = _rate_limited_web_search_group(routing_strategy)
-    served_by: Final = []  # mutable-ok: collects one id per sequential request
-    for _ in range(3):
-        response = await router.acompletion(
-            model="mixed", messages=[{"role": "user", "content": "hi"}], **_ANTHROPIC_WEB_SEARCH_REQUEST
-        )
-        served_by.append(response._hidden_params["model_id"])
-        await asyncio.sleep(0.2)
-    assert served_by == ["search", "no-search", "no-search"]
-
-
-def test_sync_web_search_request_goes_to_the_other_deployment_once_the_capable_one_is_at_its_rpm_limit() -> None:
-    router: Final = _rate_limited_web_search_group("usage-based-routing-v2")
-    served_by: Final = tuple(
-        router.completion(
-            model="mixed", messages=[{"role": "user", "content": "hi"}], **_ANTHROPIC_WEB_SEARCH_REQUEST
-        )._hidden_params["model_id"]
-        for _ in range(3)
+    response: Final = await router.acompletion(
+        model="mixed", messages=[{"role": "user", "content": "hi"}], **_ANTHROPIC_WEB_SEARCH_REQUEST
     )
-    assert served_by == ("search", "no-search", "no-search")
+    assert response._hidden_params["model_id"] == "no-search"
+
+
+def test_sync_web_search_request_goes_to_the_other_deployment_when_the_capable_one_has_no_tpm_room() -> None:
+    router: Final = _rate_limited_web_search_group("usage-based-routing-v2")
+    response: Final = router.completion(
+        model="mixed", messages=[{"role": "user", "content": "hi"}], **_ANTHROPIC_WEB_SEARCH_REQUEST
+    )
+    assert response._hidden_params["model_id"] == "no-search"
 
 
 def test_sync_pick_falls_back_to_every_deployment_when_the_strategy_finds_none_that_can_search() -> None:
