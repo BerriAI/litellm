@@ -12,7 +12,7 @@ from __future__ import annotations
 import asyncio
 import copy
 import json
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from contextlib import AbstractContextManager
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock
@@ -539,6 +539,11 @@ def test_model_info_id_lookup_reports_the_same_cost_as_the_list(
     _invalidate_model_cost_lowercase_map()
 
 
+def _discoverable_models(monkeypatch: pytest.MonkeyPatch, models: Mapping[str, list[str]]) -> None:
+    for provider, provider_models in models.items():
+        monkeypatch.setitem(litellm.models_by_provider, provider, provider_models)
+
+
 async def test_v1_model_info_star_wildcard_filter_keeps_provider_expansion(monkeypatch):
     from litellm.proxy._types import SpecialModelNames, UserAPIKeyAuth
     from litellm.proxy.auth import model_checks
@@ -585,7 +590,6 @@ def test_model_info_prices_expanded_wildcard_rows_as_the_model_their_calls_route
     """A catch-all over Fireworks lists ``acme-chat``, which also names a DeepSeek entry, and a
     prefixed OpenAI wildcard lists ``my-openai/gpt-acme``, which names no entry at all. Each row must
     show the provider and price its calls are billed at."""
-    from litellm.proxy.auth import model_checks
 
     catalog: Final = {
         "fireworks_ai/accounts/fireworks/models/acme-chat": {
@@ -609,14 +613,6 @@ def test_model_info_prices_expanded_wildcard_rows_as_the_model_their_calls_route
     }
     monkeypatch.setattr(litellm, "model_cost", {**litellm.model_cost, **catalog})
     _invalidate_model_cost_lowercase_map()
-    monkeypatch.setattr(
-        model_checks,
-        "get_provider_models",
-        lambda provider, litellm_params=None: {
-            "fireworks_ai": ["fireworks_ai/accounts/fireworks/models/acme-chat"],
-            "openai": ["gpt-acme"],
-        }.get(provider, []),
-    )
     router: Final = litellm.Router(
         model_list=[
             {
@@ -632,6 +628,13 @@ def test_model_info_prices_expanded_wildcard_rows_as_the_model_their_calls_route
         ]
     )
     monkeypatch.setattr(proxy_server, "llm_router", router)
+    _discoverable_models(
+        monkeypatch,
+        {
+            "fireworks_ai": ["fireworks_ai/accounts/fireworks/models/acme-chat"],
+            "openai": ["gpt-acme"],
+        },
+    )
     monkeypatch.setattr(proxy_server, "llm_model_list", router.get_model_list())
     monkeypatch.setattr(proxy_server, "user_model", None)
 
@@ -678,7 +681,6 @@ def test_model_info_never_prices_a_wildcard_row_as_a_route_its_calls_skip(
     calls to those names never reach the catch-all, which still lists them. Such a row shows no price or
     provider, even where another provider's model goes by the same name, and every price shown is the one
     calls are billed at."""
-    from litellm.proxy.auth import model_checks
 
     catalog: Final = {
         "fireworks_ai/accounts/fireworks/models/acme-lite": {
@@ -720,17 +722,6 @@ def test_model_info_never_prices_a_wildcard_row_as_a_route_its_calls_skip(
     }
     monkeypatch.setattr(litellm, "model_cost", {**litellm.model_cost, **catalog})
     _invalidate_model_cost_lowercase_map()
-    monkeypatch.setattr(
-        model_checks,
-        "get_provider_models",
-        lambda provider, litellm_params=None: {
-            "fireworks_ai": [
-                "fireworks_ai/accounts/fireworks/models/acme-lite",
-                "fireworks_ai/accounts/fireworks/models/acme-pro",
-                "fireworks_ai/accounts/fireworks/models/acme-max",
-            ],
-        }.get(provider, []),
-    )
     router: Final = litellm.Router(
         model_list=[
             {
@@ -748,6 +739,16 @@ def test_model_info_never_prices_a_wildcard_row_as_a_route_its_calls_skip(
         routing_groups=[{"group_name": "acme-max", "models": ["acme-lite"], "routing_strategy": "simple-shuffle"}],
     )
     monkeypatch.setattr(proxy_server, "llm_router", router)
+    _discoverable_models(
+        monkeypatch,
+        {
+            "fireworks_ai": [
+                "fireworks_ai/accounts/fireworks/models/acme-lite",
+                "fireworks_ai/accounts/fireworks/models/acme-pro",
+                "fireworks_ai/accounts/fireworks/models/acme-max",
+            ],
+        },
+    )
     monkeypatch.setattr(proxy_server, "llm_model_list", router.get_model_list())
     monkeypatch.setattr(proxy_server, "user_model", None)
 
@@ -808,7 +809,6 @@ def test_model_info_never_prices_a_wildcard_row_as_a_route_its_calls_skip(
 
 
 def _catch_all_and_shadowed_wildcard_router(monkeypatch: pytest.MonkeyPatch) -> litellm.Router:
-    from litellm.proxy.auth import model_checks
 
     catalog: Final = {
         "gpt-5.6-acme": {
@@ -844,18 +844,6 @@ def _catch_all_and_shadowed_wildcard_router(monkeypatch: pytest.MonkeyPatch) -> 
     }
     monkeypatch.setattr(litellm, "model_cost", {**litellm.model_cost, **catalog})
     _invalidate_model_cost_lowercase_map()
-    monkeypatch.setattr(
-        model_checks,
-        "get_provider_models",
-        lambda provider, litellm_params=None: {
-            "openai": ["gpt-5.6-acme"],
-            "fireworks_ai": [
-                "fireworks_ai/accounts/fireworks/models/acme-pro",
-                "fireworks_ai/accounts/fireworks/models/acme-max",
-                "fireworks_ai/accounts/fireworks/models/acme-mini",
-            ],
-        }.get(provider, []),
-    )
     router: Final = litellm.Router(
         model_list=[
             {
@@ -877,6 +865,17 @@ def _catch_all_and_shadowed_wildcard_router(monkeypatch: pytest.MonkeyPatch) -> 
         model_group_alias={"my-fw/acme-pro": "acme-lite", "my-fw/acme-max": "my-fw/acme-mini"},
     )
     monkeypatch.setattr(proxy_server, "llm_router", router)
+    _discoverable_models(
+        monkeypatch,
+        {
+            "openai": ["gpt-5.6-acme"],
+            "fireworks_ai": [
+                "fireworks_ai/accounts/fireworks/models/acme-pro",
+                "fireworks_ai/accounts/fireworks/models/acme-max",
+                "fireworks_ai/accounts/fireworks/models/acme-mini",
+            ],
+        },
+    )
     monkeypatch.setattr(proxy_server, "llm_model_list", router.get_model_list())
     monkeypatch.setattr(proxy_server, "user_model", None)
     return router
@@ -1025,6 +1024,7 @@ def test_model_info_shows_no_wildcard_price_for_a_name_the_callers_team_publishe
         ]
     )
     monkeypatch.setattr(proxy_server, "llm_router", router)
+    _discoverable_models(monkeypatch, {"fireworks_ai": ["fireworks_ai/accounts/fireworks/models/acme-mini"]})
     monkeypatch.setattr(proxy_server, "llm_model_list", router.get_model_list())
 
     with auth_as(team_id="team-a"):
