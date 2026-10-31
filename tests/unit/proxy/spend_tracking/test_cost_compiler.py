@@ -1575,3 +1575,101 @@ async def test_capture_replays_effective_ptu_spillover_prices(
         assert float(result.total_cost) == pytest.approx(source_cost)
     finally:
         await meter.stop(1)
+
+
+@pytest.mark.asyncio
+async def test_live_adjustment_reload_is_captured_and_replay_remains_frozen(monkeypatch: pytest.MonkeyPatch) -> None:
+    import litellm
+    from litellm.proxy.spend_tracking.usage_capture import capture_logging_usage
+    from litellm.proxy.spend_tracking.usage_meter import DurableUsageMeter, UsageCaptureSettings
+    from litellm.types.utils import ModelResponse, Usage
+    from tests.unit.proxy.spend_tracking.test_usage_capture import StoredUsage
+    from tests.unit.proxy.spend_tracking.test_usage_meter import _manual_flush
+
+    monkeypatch.setattr(litellm, "cost_discount_config", {})
+    monkeypatch.setattr(litellm, "cost_margin_config", {})
+    logger: Final = _capture_logger()
+    monkeypatch.setattr(litellm, "cost_discount_config", {"openai": 0.1})
+    monkeypatch.setattr(litellm, "cost_margin_config", {"global": {"fixed_amount": 0.02}})
+    response: Final = ModelResponse(model="capture-model", usage=Usage(prompt_tokens=10, completion_tokens=4))
+    database: Final = StoredUsage()
+    meter: Final = DurableUsageMeter(database.insert, UsageCaptureSettings(), wait_for_batch=_manual_flush)
+    try:
+        amount: Final = logger.response_cost_calculator(response, ignore_stamped_cost=True)
+        assert amount == pytest.approx(0.18 * 0.9 + 0.02)
+        capture_logging_usage(meter, logger, response, _AT, _AT)
+        await meter.close()
+        monkeypatch.setattr(litellm, "cost_discount_config", {"openai": 0.9})
+        monkeypatch.setattr(litellm, "cost_margin_config", {"global": {"fixed_amount": 99.0}})
+        replay: Final = price_usage(database.rows[-1].envelope)
+        assert isinstance(replay, PricingSnapshot)
+        assert float(replay.total_cost) == pytest.approx(amount)
+    finally:
+        await meter.stop(1)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("token_pricing", (True, False))
+async def test_image_capture_replays_the_existing_image_calculator(
+    monkeypatch: pytest.MonkeyPatch, token_pricing: bool
+) -> None:
+    import litellm
+    from litellm.proxy.spend_tracking.usage_capture import capture_logging_usage
+    from litellm.proxy.spend_tracking.usage_meter import DurableUsageMeter, UsageCaptureSettings
+    from litellm.types.utils import ImageResponse
+    from tests.unit.proxy.spend_tracking.test_usage_capture import StoredUsage, _logger
+    from tests.unit.proxy.spend_tracking.test_usage_meter import _manual_flush
+
+    monkeypatch.setattr(litellm, "cost_discount_config", {"openai": 0.1})
+    monkeypatch.setattr(litellm, "cost_margin_config", {"global": {"fixed_amount": 0.2}})
+    model: Final = "gpt-image-capture" if token_pricing else "dall-e-capture"
+    monkeypatch.setitem(
+        litellm.model_cost,
+        model,
+        {
+            "litellm_provider": "openai",
+            "mode": "image_generation",
+            **(
+                {"input_cost_per_token": 0.01, "output_cost_per_image_token": 0.02}
+                if token_pricing
+                else {"output_cost_per_image": 0.25}
+            ),
+        },
+    )
+    logger: Final = _logger("aimage_generation")
+    logger.model = model
+    logger.update_environment_variables(
+        model=model, custom_llm_provider="openai", litellm_params={}, optional_params={}
+    )
+    response: Final = ImageResponse.model_validate(
+        {
+            "created": 1,
+            "model": model,
+            "data": [{"b64_json": "private-image-content"}] * 2,
+            "size": "1024x1024",
+            "quality": "standard",
+            "usage": {
+                "input_tokens": 10,
+                "output_tokens": 5,
+                "total_tokens": 15,
+                "input_tokens_details": {"text_tokens": 10, "image_tokens": 0},
+            }
+            if token_pricing
+            else None,
+        }
+    )
+    source: Final = logger.response_cost_calculator(response, ignore_stamped_cost=True)
+    assert source == pytest.approx(0.2 if token_pricing else 0.5)
+    database: Final = StoredUsage()
+    meter: Final = DurableUsageMeter(database.insert, UsageCaptureSettings(), wait_for_batch=_manual_flush)
+    try:
+        capture_logging_usage(meter, logger, response, _AT, _AT)
+        await meter.close()
+        envelope: Final = database.rows[-1].envelope
+        assert "private-image-content" not in envelope
+        monkeypatch.delitem(litellm.model_cost, model)
+        replay: Final = price_usage(envelope)
+        assert isinstance(replay, PricingSnapshot)
+        assert float(replay.total_cost) == pytest.approx(source)
+    finally:
+        await meter.stop(1)

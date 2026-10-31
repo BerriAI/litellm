@@ -66,11 +66,19 @@ def pricing_discounts() -> Mapping[str, float]:
     import litellm
 
     context: Final = _CURRENT.get()
-    return litellm.cost_discount_config if context is None else _DISCOUNTS.validate_json(context.discounts_json)
+    return (
+        litellm.cost_discount_config
+        if context is None or context.allow_live_models
+        else _DISCOUNTS.validate_json(context.discounts_json)
+    )
 
 
 def pricing_margins() -> Mapping[str, float | Mapping[str, float]]:
     import litellm
 
     context: Final = _CURRENT.get()
-    return litellm.cost_margin_config if context is None else _MARGINS.validate_json(context.margins_json)
+    return (
+        litellm.cost_margin_config
+        if context is None or context.allow_live_models
+        else _MARGINS.validate_json(context.margins_json)
+    )

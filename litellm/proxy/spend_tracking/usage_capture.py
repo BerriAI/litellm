@@ -31,7 +31,7 @@ from litellm.proxy.spend_tracking.usage_meter import (
     UsageCaptureSettings,
     usage_delivery_targets,
 )
-from litellm.types.utils import CallTypes, CustomPricingLiteLLMParams
+from litellm.types.utils import CallTypes, CustomPricingLiteLLMParams, ImageResponse
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging
@@ -1159,6 +1159,14 @@ def _pricing_inputs(kwargs: Mapping[str, object], logging_obj: object, response:
     from litellm.litellm_core_utils.litellm_logging import Logging
 
     return {
+        "image_response": {
+            "data": tuple(dict[str, JsonValue]() for _ in response.data or ()),
+            "usage": _response_fields(response.usage) if response.usage is not None else None,
+            "size": response.size,
+            "quality": response.quality,
+        }
+        if isinstance(response, ImageResponse)
+        else None,
         "tool_response": _tool_cost_inputs(response),
         "realtime_events": _realtime_cost_events(response),
         "request": _selected_pricing(kwargs),

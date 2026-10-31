@@ -33,6 +33,7 @@ from litellm.types.utils import (
     CallTypes,
     CostBreakdown,
     CostPerToken,
+    ImageResponse,
     LiteLLMRealtimeStreamLoggingObject,
     ModelInfo,
     ModelResponse,
@@ -93,7 +94,15 @@ def price_usage(envelope: str) -> PricingSnapshot | Unpriced:
     realtime_usage: Final = event.call_type is CallTypes.arealtime and any(
         bool(item.get("usage")) for item in realtime_events
     )
-    if captured.usage is None and not fixed_call and not realtime_usage and not speech_usage and not rerank_usage:
+    image_inputs: Final = _fields(captured.pricing.get("image_response"))
+    if (
+        captured.usage is None
+        and not fixed_call
+        and not realtime_usage
+        and not speech_usage
+        and not rerank_usage
+        and not image_inputs
+    ):
         return Unpriced(usage_event_id=event.event_id, reason="usage_unknown")
     pricing: Final = captured.pricing
     mapped: Final = _fields(pricing.get("model_map_information"))
@@ -238,6 +247,10 @@ def price_usage(envelope: str) -> PricingSnapshot | Unpriced:
             }
         )
         if tool_response.get("responses_api")
+        else ImageResponse.model_validate(
+            {"created": int(event.started_at.timestamp()), "model": model, **image_inputs}
+        )
+        if image_inputs
         else token_response
     )
     logger: Final = Logging(

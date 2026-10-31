@@ -1807,3 +1807,66 @@ def test_changed_request_flat_rate_preserves_explicit_deployment_tier_prices() -
         )
     finally:
         _restore_model_cost_entries(original)
+
+
+@pytest.mark.parametrize("call_type", ("completion", "embedding"))
+def test_sdk_followup_prices_change_only_after_explicit_registration(call_type: str) -> None:
+    model: Final = f"openai/followup-{call_type}-prices"
+    original: Final = _snapshot_model_cost_entries((model, model.removeprefix("openai/")))
+    models_before: Final = frozenset(litellm.open_ai_chat_completion_models)
+    logger: Final = _request_logger(model, call_type)
+    try:
+        litellm.register_model(
+            {
+                model: {
+                    "litellm_provider": "openai",
+                    "mode": "chat" if call_type == "completion" else "embedding",
+                    "input_cost_per_token": 0.0001,
+                    "output_cost_per_token": 0.0002,
+                }
+            },
+            persist_across_reloads=False,
+        )
+
+        def request(prices: dict[str, float], *, logging_obj: Logging | None = None) -> object:
+            if call_type == "completion":
+                return litellm.completion(
+                    model=model,
+                    messages=[{"role": "user", "content": "hello"}],
+                    api_key="fake-key",
+                    mock_response="hello back",
+                    litellm_logging_obj=logging_obj,
+                    **prices,
+                )
+            return litellm.embedding(
+                model=model,
+                input=["hello"],
+                api_key="fake-key",
+                mock_response=[0.1, 0.2],
+                litellm_logging_obj=logging_obj,
+                **prices,
+            )
+
+        first: Final = request({"input_cost_per_token": 0.001, "output_cost_per_token": 0.002}, logging_obj=logger)
+        second: Final = request({})
+        assert logger.response_cost_calculator(first, ignore_stamped_cost=True) == pytest.approx(
+            0.05 if call_type == "completion" else 0.01
+        )
+        assert litellm.completion_cost(completion_response=second, model=model, call_type=call_type) == pytest.approx(
+            0.005 if call_type == "completion" else 0.001
+        )
+        assert litellm.model_cost[model]["input_cost_per_token"] == 0.0001
+        litellm.register_model(
+            {model: {"input_cost_per_token": 0.0003, "output_cost_per_token": 0.0006}},
+            persist_across_reloads=False,
+        )
+        third: Final = request({})
+        assert litellm.completion_cost(completion_response=third, model=model, call_type=call_type) == pytest.approx(
+            0.015 if call_type == "completion" else 0.003
+        )
+        assert logger.response_cost_calculator(first, ignore_stamped_cost=True) == pytest.approx(
+            0.05 if call_type == "completion" else 0.01
+        )
+    finally:
+        _restore_model_cost_entries(original)
+        litellm.open_ai_chat_completion_models.intersection_update(models_before)
