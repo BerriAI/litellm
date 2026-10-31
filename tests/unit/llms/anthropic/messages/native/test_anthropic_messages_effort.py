@@ -1,3 +1,5 @@
+from typing import Final
+
 import pytest
 
 from litellm.constants import (
@@ -334,3 +336,70 @@ def test_reasoning_effort_budget_capped_for_openai_like_messages_upstream():
 
     assert result["thinking"] == {"type": "enabled", "budget_tokens": 3999}
     assert result["max_tokens"] == 4000
+
+
+CLEAR_THINKING_EDIT: Final = {"type": "clear_thinking_20251015", "keep": "all"}
+CLEAR_TOOL_USES_EDIT: Final = {"type": "clear_tool_uses_20250919"}
+
+
+@pytest.mark.parametrize(
+    ("model", "params", "keeps_thinking"),
+    [
+        pytest.param("claude-sonnet-4-5", {"reasoning_effort": "none"}, False, id="reasoning-effort-none"),
+        pytest.param("claude-haiku-4-5", {"reasoning_effort": "high"}, True, id="reasoning-effort-high"),
+        pytest.param(
+            "claude-haiku-4-5",
+            {"max_tokens": 1024, "reasoning_effort": "high"},
+            False,
+            id="reasoning-effort-budget-cannot-fit",
+        ),
+        pytest.param(
+            "claude-haiku-4-5",
+            {"max_tokens": 1024, "reasoning_effort": "high", "thinking": {"type": "enabled", "budget_tokens": 1000}},
+            True,
+            id="caller-thinking-kept-when-budget-cannot-fit",
+        ),
+        pytest.param("claude-opus-4-5", _claude_code_payload(effort="high"), False, id="effort-model-drops-adaptive"),
+        pytest.param("claude-sonnet-4-6", _claude_code_payload(effort="high"), True, id="adaptive-model"),
+        pytest.param("claude-3-5-haiku-latest", _claude_code_payload(), False, id="non-reasoning-model"),
+        pytest.param("claude-haiku-4-5", _claude_code_payload(), True, id="legacy-thinking-model"),
+        pytest.param(
+            "claude-opus-4-8", {"reasoning_effort": "none"}, False, id="adaptive-model-without-default-thinking"
+        ),
+    ],
+)
+def test_clear_thinking_edit_dropped_exactly_when_thinking_is(
+    model: str, params: dict[str, object], keeps_thinking: bool
+) -> None:
+    result: Final = _transform(
+        model,
+        {
+            "max_tokens": 8192,
+            **params,
+            "context_management": {"edits": [CLEAR_THINKING_EDIT, CLEAR_TOOL_USES_EDIT]},
+        },
+    )
+
+    assert ("thinking" in result) is keeps_thinking
+    expected_edits: Final = [CLEAR_THINKING_EDIT, CLEAR_TOOL_USES_EDIT] if keeps_thinking else [CLEAR_TOOL_USES_EDIT]
+    assert result["context_management"] == {"edits": expected_edits}
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "claude-fable-5",
+        "claude-sonnet-5",
+        "claude-opus-5",
+        "claude-haiku-5-5",
+        pytest.param("claude-sonnet-5-1", id="unmapped-claude-5-minor"),
+        pytest.param("claude-opus-5-2-20270101", id="unmapped-dated-claude-5-minor"),
+    ],
+)
+def test_clear_thinking_edit_kept_when_model_thinks_without_thinking_param(model: str) -> None:
+    result: Final = _transform(
+        model,
+        {"max_tokens": 8192, "reasoning_effort": "none", "context_management": {"edits": [CLEAR_THINKING_EDIT]}},
+    )
+
+    assert result["context_management"] == {"edits": [CLEAR_THINKING_EDIT]}

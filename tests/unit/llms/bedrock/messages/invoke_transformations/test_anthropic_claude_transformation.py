@@ -2195,6 +2195,36 @@ def test_bedrock_invoke_transform_emits_adaptive_thinking_for_opus_4_8():
     assert result["output_config"]["effort"] == "low"
 
 
+@pytest.mark.parametrize(
+    "thinking_params",
+    [
+        pytest.param({"thinking": {"type": "adaptive"}, "output_config": {"effort": "high"}}, id="adaptive-effort"),
+        pytest.param({"reasoning_effort": "none"}, id="reasoning-effort-none"),
+    ],
+)
+def test_bedrock_invoke_keeps_thinking_for_clear_thinking_edit_when_base_drops_thinking(
+    thinking_params: dict[str, object],
+) -> None:
+    from litellm.types.router import GenericLiteLLMParams
+
+    result: Final = AmazonAnthropicClaudeMessagesConfig().transform_anthropic_messages_request(
+        model="anthropic.claude-opus-4-5-20251101-v1:0",
+        messages=[{"role": "user", "content": "hi"}],
+        anthropic_messages_optional_request_params={
+            "max_tokens": 32000,
+            **thinking_params,
+            "context_management": {
+                "edits": [{"type": "clear_thinking_20251015", "keep": "all"}, {"type": "clear_tool_uses_20250919"}]
+            },
+        },
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    assert result["thinking"] == {"type": "enabled", "budget_tokens": BEDROCK_MIN_THINKING_BUDGET_TOKENS}
+    assert result["context_management"] == {"edits": [{"type": "clear_tool_uses_20250919"}]}
+
+
 def test_bedrock_invoke_transform_normalizes_system_role_message_into_system():
     """Bedrock Invoke rejects ``role: "system"`` entries in ``messages`` on some
     Claude aliases; they must be moved into the top-level ``system`` field
@@ -4488,7 +4518,10 @@ async def test_bedrock_messages_fallback_to_anthropic_sends_the_tool_names_bedro
                     "aws_region_name": "us-east-1",
                 },
             },
-            {"model_name": "anthropic-claude", "litellm_params": {"model": "anthropic/claude-opus-4-8", "api_key": "test"}},
+            {
+                "model_name": "anthropic-claude",
+                "litellm_params": {"model": "anthropic/claude-opus-4-8", "api_key": "test"},
+            },
         ],
         fallbacks=[{"bedrock-claude": ["anthropic-claude"]}],
         num_retries=0,

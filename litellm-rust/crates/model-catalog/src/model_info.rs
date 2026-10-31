@@ -155,6 +155,7 @@ pub struct ModelInfoFields {
     pub supports_adaptive_thinking: Option<bool>,
     pub supports_legacy_thinking: Option<bool>,
     pub thinking_always_on: Option<bool>,
+    pub thinking_on_by_default: Option<bool>,
     pub supports_tool_search: Option<bool>,
     pub supports_mid_conversation_system: Option<bool>,
     pub supports_anthropic_thinking_payload: Option<bool>,

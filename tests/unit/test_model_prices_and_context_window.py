@@ -60,6 +60,7 @@ class _CopilotThinkingCapabilities(BaseModel):
     supports_adaptive_thinking: bool | None = None
     supports_legacy_thinking: bool | None = None
     thinking_always_on: bool | None = None
+    thinking_on_by_default: bool | None = None
 
 
 def _copilot_endpoint_rows(path: Path) -> Mapping[str, _CopilotEndpointRow]:
@@ -87,6 +88,7 @@ _THINKING_KEYS: Final[tuple[str, ...]] = (
     "supports_adaptive_thinking",
     "supports_legacy_thinking",
     "thinking_always_on",
+    "thinking_on_by_default",
 )
 
 

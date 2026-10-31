@@ -1,8 +1,9 @@
-from collections.abc import Mapping
+from collections.abc import Mapping, MutableMapping
 from types import MappingProxyType
 from typing import Final
 
 from litellm.litellm_core_utils.url_utils import join_api_base
+from litellm.llms.anthropic.common_utils import drop_clear_thinking_edits_for_model
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.bedrock.common_utils import MANTLE_MESSAGES_PATH
 from litellm.llms.bedrock.messages.mantle_transformation import AmazonMantleMessagesConfig
@@ -44,6 +45,26 @@ class BedrockMantleAnthropicMessagesConfig(BedrockMantleAuthMixin, AmazonMantleM
             "clear_thinking_20251015": ANTHROPIC_BETA_HEADER_VALUES.CONTEXT_MANAGEMENT_2025_06_27.value,
         }
     )
+
+    def _drop_thinking(
+        self,
+        optional_params: MutableMapping[str, object],  # mutable-ok: edits optional params in place
+        model: str,
+        custom_llm_provider: str,
+        max_tokens: int | None,
+    ) -> None:
+        super()._drop_thinking(optional_params, model, custom_llm_provider, max_tokens)
+        if not self._adds_thinking_back_for_clear_thinking(optional_params, model, max_tokens):
+            drop_clear_thinking_edits_for_model(optional_params, model, custom_llm_provider)
+
+    def _adds_thinking_back_for_clear_thinking(
+        self, optional_params: Mapping[str, object], model: str, max_tokens: int | None
+    ) -> bool:
+        trial_request: Final = {
+            "context_management": optional_params.get("context_management"),
+            "max_tokens": max_tokens,
+        }
+        return self._ensure_thinking_for_clear_thinking_context_management(trial_request, model, drop_params=False)
 
     def __init__(self, aws_signer: BaseAWSLLM | None = None) -> None:
         AmazonMantleMessagesConfig.__init__(self)
