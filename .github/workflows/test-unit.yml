@@ -361,6 +361,7 @@ jobs:
               tests/unit/llms/searchapi
               tests/unit/llms/searxng
               tests/unit/llms/serper
+              tests/unit/llms/serpapi
               tests/unit/llms/snowflake
               tests/unit/llms/soniox
               tests/unit/llms/stability
