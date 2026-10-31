@@ -3724,17 +3724,23 @@ class _ShippedGuardrail(CustomGuardrail):
 
     __module__ = "litellm.proxy.guardrails.guardrail_hooks.shipped_double"
 
-    def __init__(self, name: str = "shipped", run_in_parallel: bool = False, default_on: bool = True) -> None:
+    def __init__(
+        self,
+        name: str = "shipped",
+        run_in_parallel: bool = False,
+        default_on: bool = True,
+        event_hook: GuardrailEventHooks = GuardrailEventHooks.pre_call,
+    ) -> None:
         super().__init__(
             guardrail_name=name,
-            event_hook=GuardrailEventHooks.pre_call,
+            event_hook=event_hook,
             default_on=default_on,
             run_in_parallel=run_in_parallel,
         )
-        self.seen: Final[list[object]] = []
+        self.seen: tuple[object, ...] = ()
 
     async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
-        self.seen.append(data.get("messages"))
+        self.seen = (*self.seen, data.get("messages"))
         return data
 
 
@@ -3751,10 +3757,10 @@ class _ShippedHook(CustomLogger):
 
     def __init__(self) -> None:
         super().__init__()
-        self.seen: Final[list[object]] = []
+        self.seen: tuple[object, ...] = ()
 
     async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
-        self.seen.append(data.get("messages"))
+        self.seen = (*self.seen, data.get("messages"))
         return data
 
 
@@ -3779,7 +3785,7 @@ def _unroutable_model_probe():
     )
 
 
-async def _walk(monkeypatch, callbacks, model: str, probe) -> dict:
+async def _walk(monkeypatch, callbacks, model: str, probe, call_type: str = "completion") -> dict:
     from litellm.caching.caching import DualCache
     from litellm.proxy.utils import ProxyLogging
 
@@ -3788,7 +3794,7 @@ async def _walk(monkeypatch, callbacks, model: str, probe) -> dict:
     return await ProxyLogging(user_api_key_cache=DualCache()).pre_call_hook(
         user_api_key_dict=UserAPIKeyAuth(api_key="test_key", user_id="test_user"),
         data={"model": model, "messages": [dict(message) for message in _SECRET_PROMPT]},
-        call_type="completion",
+        call_type=call_type,
         routing_probe=probe,
     )
 
@@ -3804,9 +3810,9 @@ async def test_pre_call_hook_skips_a_shipped_guardrail_only_for_a_model_routing_
     known_probe: Final = _unroutable_model_probe()
     await _walk(monkeypatch, [known_guardrail], "gpt-4o-mini", known_probe)
 
-    assert unknown_guardrail.seen == []
+    assert unknown_guardrail.seen == ()
     assert isinstance(unknown_probe.refusal, ProxyModelNotFoundError)
-    assert known_guardrail.seen == [_SECRET_PROMPT]
+    assert known_guardrail.seen == (_SECRET_PROMPT,)
     assert known_probe.refusal is None
 
 
@@ -3815,7 +3821,7 @@ async def test_pre_call_hook_without_a_probe_runs_the_shipped_guardrail_for_an_u
 
     result: Final = await _walk(monkeypatch, [guardrail], "no-such-model", None)
 
-    assert guardrail.seen == [_SECRET_PROMPT]
+    assert guardrail.seen == (_SECRET_PROMPT,)
     assert result["messages"] == _SECRET_PROMPT
 
 
@@ -3830,7 +3836,7 @@ async def test_pre_call_hook_runs_an_operator_guardrail_and_every_guardrail_befo
 
     await _walk(monkeypatch, [before, operator, after], "no-such-model", _unroutable_model_probe())
 
-    assert (len(before.seen), len(operator.seen), after.seen) == (1, 1, [])
+    assert (len(before.seen), len(operator.seen), after.seen) == (1, 1, ())
 
 
 async def test_pre_call_hook_runs_a_custom_code_guardrail_for_a_model_routing_refuses(monkeypatch):
@@ -3858,7 +3864,7 @@ async def test_pre_call_hook_runs_every_guardrail_when_one_routes_on_sensitive_d
 
     await _walk(monkeypatch, [guardrail, sensitive_router], "no-such-model", _unroutable_model_probe())
 
-    assert guardrail.seen == [_SECRET_PROMPT]
+    assert guardrail.seen == (_SECRET_PROMPT,)
 
 
 async def test_pre_call_hook_hides_the_prompt_from_hooks_after_a_skipped_guardrail(monkeypatch):
@@ -3869,8 +3875,34 @@ async def test_pre_call_hook_hides_the_prompt_from_hooks_after_a_skipped_guardra
     result: Final = await _walk(monkeypatch, [_ShippedGuardrail(), hook], "no-such-model", _unroutable_model_probe())
 
     redacted: Final = [{"role": "user", "content": REDACTED_BY_LITELLM}]
-    assert hook.seen == [redacted]
+    assert hook.seen == (redacted,)
     assert result["messages"] == redacted
+
+
+@pytest.mark.parametrize(
+    ("event_hook", "guardrail_skipped"),
+    [
+        pytest.param(GuardrailEventHooks.pre_mcp_call, True, id="mcp-guardrail"),
+        pytest.param(GuardrailEventHooks.pre_call, False, id="chat-only-guardrail"),
+    ],
+)
+async def test_pre_call_hook_checks_an_mcp_call_against_the_mcp_guardrail_event(
+    monkeypatch, event_hook, guardrail_skipped
+):
+    from litellm.constants import REDACTED_BY_LITELLM
+
+    guardrail: Final = _ShippedGuardrail(event_hook=event_hook)
+    hook: Final = _ShippedHook()
+    probe: Final = _unroutable_model_probe()
+
+    await _walk(monkeypatch, [guardrail, hook], "no-such-model", probe, call_type="call_mcp_tool")
+
+    redacted: Final = [{"role": "user", "content": REDACTED_BY_LITELLM}]
+    assert (guardrail.seen, hook.seen, probe.refusal is not None) == (
+        (),
+        ((redacted if guardrail_skipped else _SECRET_PROMPT),),
+        guardrail_skipped,
+    )
 
 
 async def test_pre_call_hook_leaves_the_request_alone_when_no_guardrail_applies(monkeypatch):
@@ -3879,7 +3911,7 @@ async def test_pre_call_hook_leaves_the_request_alone_when_no_guardrail_applies(
 
     result: Final = await _walk(monkeypatch, [_ShippedGuardrail(default_on=False), hook], "no-such-model", probe)
 
-    assert hook.seen == [_SECRET_PROMPT]
+    assert hook.seen == (_SECRET_PROMPT,)
     assert result["messages"] == _SECRET_PROMPT
     assert probe.refusal is None
 
