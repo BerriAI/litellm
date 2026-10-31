@@ -30,6 +30,25 @@ from litellm.videos.utils import VideoGenerationRequestUtils
 llm_http_handler: BaseLLMHTTPHandler = BaseLLMHTTPHandler()
 
 
+def _provider_from_model(model: object) -> str | None:
+    if not isinstance(model, str) or not model:
+        return None
+    try:
+        _, provider, _, _ = get_llm_provider(model=model)
+    except litellm.BadRequestError:
+        return None
+    return provider
+
+
+def _provider_for_video_id(video_id: str, custom_llm_provider: str | None, model: object) -> str:
+    return (
+        custom_llm_provider
+        or decode_video_id_with_provider(video_id).get("custom_llm_provider")
+        or _provider_from_model(model)
+        or "openai"
+    )
+
+
 ##### Video Generation #######################
 @client
 async def avideo_generation(
@@ -313,15 +332,15 @@ def video_content(
         ```
     """
     local_vars: Final = locals()
+    provider: Final = _provider_for_video_id(
+        video_id,
+        custom_llm_provider,
+        kwargs.get("model"),  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # kwargs is untyped
+    )
     try:
         litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
         litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id", None)
         _is_async: Final = kwargs.pop("async_call", False) is True
-
-        # Try to decode provider from video_id if not explicitly provided
-        if custom_llm_provider is None:
-            decoded: Final = decode_video_id_with_provider(video_id)
-            custom_llm_provider = decoded.get("custom_llm_provider") or "openai"
 
         # get llm provider logic
         litellm_params: Final = GenericLiteLLMParams(**kwargs)
@@ -329,11 +348,11 @@ def video_content(
         # get provider config
         video_provider_config: Final[BaseVideoConfig | None] = ProviderConfigManager.get_provider_video_config(
             model=None,
-            provider=litellm.LlmProviders(custom_llm_provider),
+            provider=litellm.LlmProviders(provider),
         )
 
         if video_provider_config is None:
-            raise ValueError(f"video support download is not supported for {custom_llm_provider}")
+            raise ValueError(f"video support download is not supported for {provider}")
 
         local_vars.update(kwargs)
         # For video content download, we don't need complex optional parameter handling
@@ -352,14 +371,14 @@ def video_content(
                 "litellm_call_id": litellm_call_id,
                 **video_content_request_params,
             },
-            custom_llm_provider=custom_llm_provider,
+            custom_llm_provider=provider,
         )
 
         # Call the handler with _is_async flag instead of directly calling the async handler
         return base_llm_http_handler.video_content_handler(
             video_id=video_id,
             video_content_provider_config=video_provider_config,
-            custom_llm_provider=custom_llm_provider,
+            custom_llm_provider=provider,
             litellm_params=litellm_params,
             logging_obj=litellm_logging_obj,
             timeout=timeout or DEFAULT_REQUEST_TIMEOUT,
@@ -372,7 +391,7 @@ def video_content(
     except Exception as e:
         raise litellm.exception_type(
             model="",
-            custom_llm_provider=custom_llm_provider,
+            custom_llm_provider=provider,
             original_exception=e,
             completion_kwargs=local_vars,
             extra_kwargs=kwargs,
@@ -409,20 +428,20 @@ async def avideo_content(
     - `bytes`: The raw video content as bytes
     """
     local_vars: Final = locals()
+    provider: Final = _provider_for_video_id(
+        video_id,
+        custom_llm_provider,
+        kwargs.get("model"),  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # kwargs is untyped
+    )
     try:
         loop: Final = asyncio.get_event_loop()
         kwargs["async_call"] = True
-
-        # Try to decode provider from video_id if not explicitly provided
-        if custom_llm_provider is None:
-            decoded: Final = decode_video_id_with_provider(video_id)
-            custom_llm_provider = decoded.get("custom_llm_provider") or "openai"
 
         func: Final = partial(
             video_content,
             video_id=video_id,
             timeout=timeout,
-            custom_llm_provider=custom_llm_provider,
+            custom_llm_provider=provider,
             variant=variant,
             extra_headers=extra_headers,
             extra_query=extra_query,
@@ -443,7 +462,7 @@ async def avideo_content(
     except Exception as e:
         raise litellm.exception_type(
             model="",
-            custom_llm_provider=custom_llm_provider,
+            custom_llm_provider=provider,
             original_exception=e,
             completion_kwargs=local_vars,
             extra_kwargs=kwargs,
@@ -970,7 +989,7 @@ def video_status(
 def video_status(
     video_id: str,
     timeout=600,  # default to 10 minutes
-    custom_llm_provider=None,
+    custom_llm_provider: str | None = None,
     # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
     # The extra values given here take precedence over values defined on the client or passed to this method.
     extra_headers: dict[str, object] | None = None,
@@ -1006,6 +1025,11 @@ def video_status(
         ```
     """
     local_vars: Final = locals()
+    provider: Final = _provider_for_video_id(
+        video_id,
+        custom_llm_provider,
+        kwargs.get("model"),  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # kwargs is untyped
+    )
     try:
         litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
         litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id", None)
@@ -1020,22 +1044,17 @@ def video_status(
             response: Final = VideoObject(**mock_response)
             return response
 
-        # Try to decode provider from video_id if not explicitly provided
-        if custom_llm_provider is None:
-            decoded: Final = decode_video_id_with_provider(video_id)
-            custom_llm_provider = decoded.get("custom_llm_provider") or "openai"
-
         # get llm provider logic
         litellm_params: Final = GenericLiteLLMParams(**kwargs)
 
         # get provider config
         video_status_provider_config: Final[BaseVideoConfig | None] = ProviderConfigManager.get_provider_video_config(
             model=None,
-            provider=litellm.LlmProviders(custom_llm_provider),
+            provider=litellm.LlmProviders(provider),
         )
 
         if video_status_provider_config is None:
-            raise ValueError(f"video status is not supported for {custom_llm_provider}")
+            raise ValueError(f"video status is not supported for {provider}")
 
         local_vars.update(kwargs)
         # For video status, we need the video_id
@@ -1053,7 +1072,7 @@ def video_status(
                 "litellm_call_id": litellm_call_id,
                 **video_status_request_params,
             },
-            custom_llm_provider=custom_llm_provider,
+            custom_llm_provider=provider,
         )
 
         # Set the correct call type for video status
@@ -1063,7 +1082,7 @@ def video_status(
         return base_llm_http_handler.video_status_handler(
             video_id=video_id,
             video_status_provider_config=video_status_provider_config,
-            custom_llm_provider=custom_llm_provider,
+            custom_llm_provider=provider,
             litellm_params=litellm_params,
             logging_obj=litellm_logging_obj,
             extra_headers=extra_headers,
@@ -1076,7 +1095,7 @@ def video_status(
     except Exception as e:
         raise litellm.exception_type(
             model="",
-            custom_llm_provider=custom_llm_provider,
+            custom_llm_provider=provider,
             original_exception=e,
             completion_kwargs=local_vars,
             extra_kwargs=kwargs,

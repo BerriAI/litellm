@@ -469,6 +469,7 @@ def image_generation(
             litellm.LlmProviders.QWENCLOUD,
             litellm.LlmProviders.QWEN_AI_PLATFORM,
             litellm.LlmProviders.EDENAI,
+            litellm.LlmProviders.XAI,
         ) or (custom_llm_provider == litellm.LlmProviders.TENCENT and image_generation_config is not None):
             if image_generation_config is None:
                 raise ValueError(f"image generation config is not supported for {custom_llm_provider}")
@@ -482,7 +483,7 @@ def image_generation(
             litellm_params_dict["api_base"] = _api_base
 
             return llm_http_handler.image_generation_handler(
-                api_key=api_key,
+                api_key=api_key or dynamic_api_key,
                 model=model,
                 prompt=prompt,
                 image_generation_provider_config=image_generation_config,

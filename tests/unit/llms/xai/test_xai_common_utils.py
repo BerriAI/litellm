@@ -20,7 +20,7 @@ def _default_xai_api_base(monkeypatch: pytest.MonkeyPatch):
 def _get_models(payload: object) -> list[str]:
     with respx.mock:
         respx.get(MODELS_URL).mock(return_value=httpx.Response(200, json=payload))
-        return XAIModelInfo().get_models(api_key="xai-test-key")
+        return XAIModelInfo().get_models(api_key="fake-key")
 
 
 def test_get_models_prefixes_every_listed_model_id_in_provider_order():
@@ -47,9 +47,9 @@ def test_get_models_returns_no_names_for_an_empty_data_container(data: object):
 def test_get_models_sends_the_api_key_as_bearer_token():
     with respx.mock:
         route = respx.get(MODELS_URL).mock(return_value=httpx.Response(200, json={"data": [{"id": "grok-4"}]}))
-        XAIModelInfo().get_models(api_key="xai-test-key")
+        XAIModelInfo().get_models(api_key="fake-key")
 
-    assert route.calls[0].request.headers["authorization"] == "Bearer xai-test-key"
+    assert route.calls[0].request.headers["authorization"] == "Bearer fake-key"
 
 
 @pytest.mark.parametrize(
@@ -101,7 +101,7 @@ def test_get_models_reports_the_upstream_status_and_body_on_an_http_error():
         with pytest.raises(
             Exception, match=re.escape("Failed to fetch models from XAI. Status code: 401, Response: bad key")
         ):
-            XAIModelInfo().get_models(api_key="xai-test-key")
+            XAIModelInfo().get_models(api_key="fake-key")
 
 
 @pytest.mark.parametrize(
