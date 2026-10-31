@@ -20,6 +20,7 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Final, TypeAlias
 
+from filelock import FileLock, Timeout
 from pydantic import ConfigDict, ValidationError
 
 from litellm.litellm_core_utils.cli_keyring import (
@@ -139,8 +140,29 @@ def get_cli_token_file_path() -> str:
     return str(config_dir / "token.json")
 
 
+def cli_token_lock() -> FileLock:
+    """One reentrant process lock for the metadata file and shared keychain entry.
+
+    Keep it beside the credential directory so a read-only directory still permits logout.
+    """
+    directory: Final = Path(get_cli_token_file_path()).parent
+    directory.parent.mkdir(parents=True, exist_ok=True)
+    path: Final = directory.with_name(f"{directory.name}-token.lock")
+    return FileLock(str(path), timeout=10, mode=0o600, is_singleton=True)
+
+
 def load_cli_token(*, vault: SecretVault = SYSTEM_KEYRING) -> CliTokenRecord | None:
     """Load the stored CLI credential, or None when this machine has none"""
+    if not Path(get_cli_token_file_path()).exists():
+        return None
+    try:
+        with cli_token_lock():
+            return _load_cli_token(vault)
+    except (OSError, Timeout):
+        return None
+
+
+def _load_cli_token(vault: SecretVault) -> CliTokenRecord | None:
     record: Final = _read_token_file()
     if record is None:
         return None
@@ -148,6 +170,14 @@ def load_cli_token(*, vault: SecretVault = SYSTEM_KEYRING) -> CliTokenRecord | N
 
 
 def save_cli_token(record: CliTokenRecord, *, vault: SecretVault = SYSTEM_KEYRING) -> SecretSave:
+    try:
+        with cli_token_lock():
+            return _save_cli_token(record, vault)
+    except (OSError, Timeout) as error:
+        return CredentialNotSaved(str(error))
+
+
+def _save_cli_token(record: CliTokenRecord, vault: SecretVault) -> SecretSave:
     """Store a freshly minted credential. Reports where its secret material ended up, and why.
 
     The token file is what makes a keychain-backed credential findable again, and it is also the
@@ -218,6 +248,14 @@ def _keep_the_secret_in_the_file(record: CliTokenRecord, outcome: SecretWrite) -
 
 
 def clear_cli_token(*, vault: SecretVault = SYSTEM_KEYRING) -> SecretClear:
+    try:
+        with cli_token_lock():
+            return _clear_cli_token(vault)
+    except (OSError, Timeout) as error:
+        return CredentialNotCleared(str(error))
+
+
+def _clear_cli_token(vault: SecretVault) -> SecretClear:
     """Remove the credential from both stores. Reports whether the keychain is now free of it.
 
     A logout the keychain never answered keeps the token file, with its secret taken out, because

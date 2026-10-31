@@ -20,10 +20,11 @@ from typing import TYPE_CHECKING, Final, Literal, Protocol
 from urllib.parse import parse_qs, urlencode, urlparse
 
 import requests
+from filelock import Timeout
 from pydantic import ConfigDict, Field, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, TypedDict
 
-from litellm.litellm_core_utils.cli_token_utils import CLI_TOKEN_FRESHNESS_BUFFER_SECONDS
+from litellm.litellm_core_utils.cli_token_utils import CLI_TOKEN_FRESHNESS_BUFFER_SECONDS, cli_token_lock
 from litellm.types.llms.base_model import LiteLLMBaseModel
 
 if TYPE_CHECKING:
@@ -499,16 +500,46 @@ def fresh_api_key(
     now: Callable[[], float] = time.time,
     warn: Callable[[str], None] = _ignore_warning,
 ) -> str | None:
-    """The stored key, refreshed first when it is about to expire and a refresh token is
-    on file. The refresh fires at the same moment ``is_cli_token_fresh`` stops calling the
-    key fresh, so a command that checks freshness and then asks for the key never disagrees
-    with itself. The rotated pair is saved before the new key is returned, so a crash after
-    this point never strands the CLI with a burned refresh token. A refresh that fails
-    reads the record again, because a sibling ``lite`` process may have rotated the pair
-    first, in which case the key it saved for this same proxy is the live one; when no sibling
-    did, the reason the proxy gave goes to ``warn`` so a revoked or refused refresh token is
-    never a silent failure. A record without ``expires_at`` (the classic ``lite login``
-    credential) is returned as stored."""
+    """Refresh under the shared credential lock, reloading before spending a single-use token.
+
+    A replaced or cleared login must not be renewed from the caller's stale snapshot.
+    The lock covers persistence, but cannot recover a lost token response or interrupted save.
+    """
+    expires_at: Final = token_data.get("expires_at")
+    if (
+        not isinstance(expires_at, (int, float))
+        or now() < expires_at - CLI_TOKEN_FRESHNESS_BUFFER_SECONDS
+        or _refresh_inputs(token_data) is None
+    ):
+        return _fresh_api_key(token_data, save, http, reload=reload, now=now, warn=warn)
+    key: Final = token_data.get("key")
+    still_valid: Final = key if isinstance(key, str) and now() < expires_at else None
+    try:
+        lock: Final = cli_token_lock()
+        lock.acquire()
+    except (OSError, Timeout):
+        warn("Could not renew the key: the CLI credential store could not be locked; no refresh was attempted")
+        return still_valid
+    try:
+        current: Final = reload()
+        if current is None or any(current.get(field) != token_data.get(field) for field in _CREDENTIAL_IDENTITY_FIELDS):
+            return still_valid
+        if not isinstance(current.get("expires_at"), (int, float)):
+            return still_valid
+        return _fresh_api_key(current, save, http, reload=reload, now=now, warn=warn) or still_valid
+    finally:
+        lock.release()
+
+
+def _fresh_api_key(
+    token_data: Mapping[str, object],
+    save: Callable[[CliTokenData], None],
+    http: Http,
+    *,
+    reload: Callable[[], Mapping[str, object] | None],
+    now: Callable[[], float],
+    warn: Callable[[str], None],
+) -> str | None:
     key: Final = token_data.get("key")
     if not isinstance(key, str) or not key:
         return None
