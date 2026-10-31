@@ -41,6 +41,8 @@ def _streaming_delta(message: Message) -> Delta:
 
 def convert_model_response_to_streaming(
     model_response: ModelResponse,
+    *,
+    preserve_logprobs: bool = False,
 ) -> ModelResponseStream:
     """
     Convert a ModelResponse to ModelResponseStream.
@@ -50,6 +52,7 @@ def convert_model_response_to_streaming(
 
     Args:
         model_response: The ModelResponse to convert
+        preserve_logprobs: Keep token probabilities only for an unmodified provider response.
 
     Returns:
         ModelResponseStream: A streaming chunk version of the response
@@ -65,6 +68,8 @@ def convert_model_response_to_streaming(
                     index=choice.index,
                     delta=_streaming_delta(cast(Choices, choice).message),
                     finish_reason=choice.finish_reason,
+                    # Guardrail replays can redact text while retaining the original token probabilities.
+                    logprobs=getattr(choice, "logprobs", None) if preserve_logprobs else None,
                 )
             )
         processed_chunk: Final = ModelResponseStream(
@@ -235,9 +240,16 @@ class BaseModelResponseIterator:
 
 
 class MockResponseIterator:  # for returning ai21 streaming responses
-    def __init__(self, model_response: ModelResponse, json_mode: bool | None = False):
+    def __init__(
+        self,
+        model_response: ModelResponse,
+        json_mode: bool | None = False,
+        *,
+        preserve_logprobs: bool = False,
+    ):
         self.model_response = model_response
         self.json_mode = json_mode
+        self.preserve_logprobs = preserve_logprobs
         self.is_done = False
 
     # Sync iterator
@@ -245,7 +257,7 @@ class MockResponseIterator:  # for returning ai21 streaming responses
         return self
 
     def _chunk_parser(self, chunk_data: ModelResponse) -> ModelResponseStream:
-        return convert_model_response_to_streaming(chunk_data)
+        return convert_model_response_to_streaming(chunk_data, preserve_logprobs=self.preserve_logprobs)
 
     def __next__(self):
         if self.is_done:
