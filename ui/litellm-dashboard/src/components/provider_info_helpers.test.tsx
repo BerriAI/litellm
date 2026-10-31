@@ -20,6 +20,18 @@ const BUNDLED_MODEL_MAP: Record<string, { litellm_provider?: string }> = JSON.pa
 );
 
 describe("provider_info_helpers", () => {
+  it("should resolve Foundry Local for the model form and provider display", () => {
+    expect(resolveLitellmProviderSlug("FOUNDRY_LOCAL")).toBe("foundry_local");
+    expect(getProviderLogoAndName("foundry_local")).toEqual({
+      displayName: "Foundry Local",
+      logo: providerLogoMap[Providers.FOUNDRY_LOCAL],
+    });
+    expect(getProviderLogoAndName("foundry_local").logo).toContain("foundry_local");
+    expect(PROVIDER_CREATE_FIELDS.find((provider) => provider.provider === "FOUNDRY_LOCAL")?.litellm_provider).toBe(
+      "foundry_local",
+    );
+  });
+
   it("resolves Meta Model API separately from Meta Llama and isolates their bundled models", () => {
     expect(resolveLitellmProviderSlug("META")).toBe("meta");
     expect(getPlaceholder(Providers.META)).toBe("meta/muse-spark-1.1");
