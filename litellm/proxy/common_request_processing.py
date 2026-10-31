@@ -53,6 +53,7 @@ from litellm.constants import (
 )
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.otel.runtime import phase_event
+from litellm.litellm_core_utils.add_retry_fallback_headers import get_hidden_params_dict
 from litellm.litellm_core_utils.bug_report import (
     allowlisted,
     bug_report_notice,
@@ -81,6 +82,7 @@ from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import (
 from litellm.litellm_core_utils.llm_response_utils.get_headers import (
     get_response_headers,
 )
+from litellm.litellm_core_utils.routing_common_utils import resolve_model_group_alias, resolve_served_model
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.served_output_texts import (
     record_served_output_texts,
@@ -135,6 +137,7 @@ from litellm.proxy.route_llm_request import (
     route_request,
 )
 from litellm.proxy.spend_tracking.cost_finalization import finalize_proxy_response_cost, prepare_response_cost
+from litellm.proxy.spend_tracking.usage_capture import capture_proxy_response
 from litellm.proxy.telemetry.request_context import bind_call_id as bind_telemetry_call_id
 from litellm.proxy.utils import (  # noqa: F401  # legacy module exports
     ProxyLogging,
@@ -146,8 +149,6 @@ from litellm.responses.streaming_iterator import partial_responses_incomplete_ev
 from litellm.router import Router
 from litellm.router_api import RoutingContext
 from litellm.router_strategy.auto_router.auto_router_model_naming import AUTO_ROUTER_MODEL_PREFIX
-from litellm.router_utils.add_retry_fallback_headers import get_hidden_params_dict
-from litellm.router_utils.common_utils import resolve_model_group_alias, resolve_served_model
 from litellm.types.extraction import ExtractionResponse
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.router import RouterRateLimitError
@@ -2565,7 +2566,7 @@ class ProxyBaseLLMRequestProcessing:
         aliased_model: Final = self.data.get("model")
         if llm_router is not None and route_type in ROUTER_SCHEDULED_ROUTE_TYPES and isinstance(aliased_model, str):
             self.data.update(
-                llm_router.priority_header_update(
+                llm_router.health().priority_header_fields(
                     model=aliased_model, kwargs=self.data, header=request.headers.get(SCHEDULER_PRIORITY_HEADER)
                 )
             )
@@ -2831,12 +2832,9 @@ class ProxyBaseLLMRequestProcessing:
 
     @staticmethod
     def _resolve_fallback_models(model: str, fallbacks: list) -> list[str] | None:
-        from litellm.router_utils.fallback_event_handlers import get_fallback_model_group
+        from litellm.router_api import fallback_chain
 
-        fallback_model_group, generic_fallback_idx = get_fallback_model_group(
-            fallbacks=fallbacks,
-            model_group=model,
-        )
+        fallback_model_group, generic_fallback_idx = fallback_chain(fallbacks, model)
         if fallback_model_group is not None:
             return fallback_model_group
         return fallbacks[generic_fallback_idx]["*"] if generic_fallback_idx is not None else None
@@ -3368,6 +3366,9 @@ class ProxyBaseLLMRequestProcessing:
                         _REQUEST_FIELDS.validate_python(request_metadata_bucket), logging_obj
                     )
                 ),
+            )
+            await capture_proxy_response(
+                logging_obj, response, background=_REQUEST_FIELDS.validate_python(self.data).get("background") is True
             )
         except (Exception, asyncio.CancelledError) as exc:
             _exception_raised = True
@@ -4190,8 +4191,8 @@ class ProxyBaseLLMRequestProcessing:
         HiddenParamsAsyncIteratorWrapper, so class sniffing runs on the
         unwrapped inner iterator.
         """
+        from litellm.litellm_core_utils.add_retry_fallback_headers import HiddenParamsAsyncIteratorWrapper
         from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
-        from litellm.router_utils.add_retry_fallback_headers import HiddenParamsAsyncIteratorWrapper
 
         unwrapped: Final = response.inner if isinstance(response, HiddenParamsAsyncIteratorWrapper) else response
 
@@ -5034,8 +5035,9 @@ class ProxyBaseLLMRequestProcessing:
         if stream_usage is None:
             return None
         service_tier: Final = obj.get("service_tier")
+        served_model: Final = litellm_logging_obj.model if litellm_logging_obj is not None else None
         cost_val: Final = ProxyBaseLLMRequestProcessing._streamed_usage_cost(
-            ModelResponse(usage=stream_usage),
+            ModelResponse(model=served_model, usage=stream_usage),
             model_name,
             service_tier if isinstance(service_tier, str) else None,
             litellm_logging_obj,

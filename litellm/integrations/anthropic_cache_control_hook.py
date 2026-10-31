@@ -13,8 +13,8 @@ import copy
 import itertools
 import os
 import re
-from collections.abc import Callable, Container, Iterable, Mapping, Sequence
-from typing import TYPE_CHECKING, Any, Final, cast
+from collections.abc import Callable, Container, Iterable, Iterator, Mapping, Sequence
+from typing import TYPE_CHECKING, Any, Final, TypeAlias, TypeVar, cast
 from urllib.parse import urlparse
 
 from pydantic import TypeAdapter, ValidationError
@@ -100,6 +100,192 @@ def _validated_object_list(value: object) -> list[object] | None:
         return _OBJECT_LIST_ADAPTER.validate_python(value)
     except ValidationError:
         return None
+
+
+_MessageT: Final = TypeVar("_MessageT")
+_CacheControlRewrite: TypeAlias = Callable[[object], ChatCompletionCachedContent | None]
+_MARK_CARRYING_MESSAGE_FIELDS: Final = ("content", "tool_calls")
+
+
+def _mark_carrying_blocks(fields: Mapping[str, object]) -> Sequence[object]:
+    lists: Final = tuple(fields.get(key) for key in _MARK_CARRYING_MESSAGE_FIELDS)
+    return tuple(
+        itertools.chain.from_iterable(
+            _OBJECT_LIST_ADAPTER.validate_python(value) for value in lists if isinstance(value, list)
+        )
+    )
+
+
+def _block_carries_cache_control(block: object) -> bool:
+    return isinstance(block, dict) and _CONTENT_PART_ADAPTER.validate_python(block).get("cache_control") is not None
+
+
+_ROLES_SENDING_MESSAGE_MARK_WITH_LIST_CONTENT: Final = frozenset({"tool", "function"})
+
+
+def _message_mark_reaches_provider(fields: Mapping[str, object]) -> bool:
+    if fields.get("cache_control") is None:
+        return False
+    return (
+        not isinstance(fields.get("content"), list)
+        or fields.get("role") in _ROLES_SENDING_MESSAGE_MARK_WITH_LIST_CONTENT
+    )
+
+
+def cache_control_count(message: object) -> int:
+    if not isinstance(message, dict):
+        return 0
+    fields: Final = _CONTENT_PART_ADAPTER.validate_python(message)
+    block_marks: Final = sum(1 for block in _mark_carrying_blocks(fields) if _block_carries_cache_control(block))
+    return int(_message_mark_reaches_provider(fields)) + block_marks
+
+
+def _fields_with_cache_control(fields: Mapping[str, object], rewrite: _CacheControlRewrite) -> Mapping[str, object]:
+    others: Final = {key: value for key, value in fields.items() if key != "cache_control"}
+    if "cache_control" not in fields:
+        return others
+    cache_control: Final = rewrite(fields["cache_control"])
+    return others if cache_control is None else {**others, "cache_control": cache_control}
+
+
+def block_with_cache_control(block: object, rewrite: _CacheControlRewrite) -> object:
+    if not isinstance(block, dict):
+        return block
+    return _fields_with_cache_control(_CONTENT_PART_ADAPTER.validate_python(block), rewrite)
+
+
+def with_cache_control(message: _MessageT, rewrite: _CacheControlRewrite) -> _MessageT:
+    if not isinstance(message, dict):
+        return message
+    fields: Final = _CONTENT_PART_ADAPTER.validate_python(message)
+    blocks_rewritten: Final = {
+        key: (
+            [block_with_cache_control(block, rewrite) for block in _OBJECT_LIST_ADAPTER.validate_python(value)]
+            if key in _MARK_CARRYING_MESSAGE_FIELDS and isinstance(value, list)
+            else value
+        )
+        for key, value in fields.items()
+    }
+    return cast(  # cast-ok: the same message shape with each cache marker rewritten or dropped
+        _MessageT, _fields_with_cache_control(blocks_rewritten, rewrite)
+    )
+
+
+def dropped_cache_control(_: object) -> None:
+    return None
+
+
+def _first_marked_index(value: object) -> int | None:
+    if not isinstance(value, list):
+        return None
+    blocks: Final = _OBJECT_LIST_ADAPTER.validate_python(value)
+    return next((index for index, block in enumerate(blocks) if _block_carries_cache_control(block)), None)
+
+
+_MarkSlot: TypeAlias = tuple[str, int]
+_MESSAGE_MARK_SLOT: Final[_MarkSlot] = ("cache_control", -1)
+
+
+def _block_mark_slots(fields: Mapping[str, object], key: str) -> tuple[_MarkSlot, ...]:
+    value: Final = fields.get(key)
+    if not isinstance(value, list):
+        return ()
+    blocks: Final = _OBJECT_LIST_ADAPTER.validate_python(value)
+    return tuple((key, index) for index, block in enumerate(blocks) if _block_carries_cache_control(block))
+
+
+def _mark_slots_in_wire_order(fields: Mapping[str, object]) -> tuple[_MarkSlot, ...]:
+    content_slots: Final = _block_mark_slots(fields, "content")
+    tool_call_slots: Final = _block_mark_slots(fields, "tool_calls")
+    if not _message_mark_reaches_provider(fields):
+        return content_slots + tool_call_slots
+    if isinstance(fields.get("content"), list):
+        return content_slots + (_MESSAGE_MARK_SLOT,) + tool_call_slots
+    return (_MESSAGE_MARK_SLOT,) + content_slots + tool_call_slots
+
+
+def _blocks_without_marks(key: str, value: object, dropped_slots: frozenset[_MarkSlot]) -> object:
+    if key not in _MARK_CARRYING_MESSAGE_FIELDS or not isinstance(value, list):
+        return value
+    return [
+        block_with_cache_control(block, dropped_cache_control) if (key, index) in dropped_slots else block
+        for index, block in enumerate(_OBJECT_LIST_ADAPTER.validate_python(value))
+    ]
+
+
+def _without_oldest_marks(message: _MessageT, dropped: int) -> _MessageT:
+    if dropped == 0 or not isinstance(message, dict):
+        return message
+    fields: Final = _CONTENT_PART_ADAPTER.validate_python(message)
+    dropped_slots: Final = frozenset(_mark_slots_in_wire_order(fields)[:dropped])
+    blocks_unmarked: Final = {key: _blocks_without_marks(key, value, dropped_slots) for key, value in fields.items()}
+    return cast(  # cast-ok: the same message with its oldest wire-order marks dropped
+        _MessageT,
+        _fields_with_cache_control(blocks_unmarked, dropped_cache_control)
+        if _MESSAGE_MARK_SLOT in dropped_slots
+        else blocks_unmarked,
+    )
+
+
+def tool_message_with_single_cache_mark(message: _MessageT) -> _MessageT:
+    if not isinstance(message, dict):
+        return message
+    fields: Final = _CONTENT_PART_ADAPTER.validate_python(message)
+    content: Final = fields.get("content")
+    if fields.get("role") != "tool" or not isinstance(content, list):
+        return message
+    kept_index: Final = None if fields.get("cache_control") is not None else _first_marked_index(content)
+    return cast(  # cast-ok: the same tool message keeping only the mark its single cache point reads
+        _MessageT,
+        {
+            **fields,
+            "content": [
+                block if index == kept_index else block_with_cache_control(block, dropped_cache_control)
+                for index, block in enumerate(_OBJECT_LIST_ADAPTER.validate_python(content))
+            ],
+        },
+    )
+
+
+_BudgetSpend: TypeAlias = Callable[[tuple[int, int], int], tuple[int, int]]
+
+
+def _newest_marks_kept(state: tuple[int, int], marks: int) -> tuple[int, int]:
+    remaining, _ = state
+    kept: Final = min(marks, remaining)
+    return remaining - kept, marks - kept
+
+
+def _whole_message_kept(state: tuple[int, int], marks: int) -> tuple[int, int]:
+    remaining, _ = state
+    if marks > remaining:
+        return remaining, marks
+    return remaining - marks, 0
+
+
+def _messages_within_budget(
+    messages: Sequence[_MessageT], reserved_marks: int, spend: _BudgetSpend
+) -> Sequence[_MessageT]:
+    budget: Final = max(MAX_CACHE_CONTROL_BLOCKS - reserved_marks, 0)
+    newest_first: Final = tuple(reversed(messages))
+    budget_after_each: Final = itertools.accumulate(
+        (cache_control_count(message) for message in newest_first), spend, initial=(budget, 0)
+    )
+    dropped_counts: Final = tuple(dropped for _, dropped in itertools.islice(budget_after_each, 1, None))
+    kept_newest_first: Final = tuple(
+        _without_oldest_marks(message, dropped) for message, dropped in zip(newest_first, dropped_counts)
+    )
+    return tuple(reversed(kept_newest_first))
+
+
+def newest_marks_within_cache_control_limit(messages: Sequence[_MessageT], reserved_marks: int) -> Sequence[_MessageT]:
+    return _messages_within_budget(messages, reserved_marks, _newest_marks_kept)
+
+
+def whole_messages_within_cache_control_limit(
+    messages: Sequence[_MessageT], reserved_marks: int
+) -> Sequence[_MessageT]:
+    return _messages_within_budget(messages, reserved_marks, _whole_message_kept)
 
 
 def _part_with_cache_control_renamed(part: object) -> object:
@@ -259,22 +445,41 @@ def _as_object_list(value: object | None) -> list[object] | None:
     return _validated_object_list(value)
 
 
-def _tool_call_carries_cache_breakpoint(tool_call: object, message: object, answered_tool_ids: Container[str]) -> bool:
+def _server_tool_call_id(tool_call: object) -> str | None:
+    tool_call_id: Final = _attribute_or_key(tool_call, "id")
+    if isinstance(tool_call_id, str) and tool_call_id.startswith(ANTHROPIC_SERVER_TOOL_USE_ID_PREFIX):
+        return tool_call_id
+    return None
+
+
+def _tool_call_carries_cache_breakpoint(tool_call: object, client_tool_call_ids: Container[str]) -> bool:
     if _attribute_or_key(tool_call, "cache_control") is None:
         return False
+    server_tool_call_id: Final = _server_tool_call_id(tool_call)
+    return server_tool_call_id is None or server_tool_call_id in client_tool_call_ids
 
-    return not tool_call_is_rebuilt_as_server_tool_use(
-        _attribute_or_key(tool_call, "id"), _attribute_or_key(message, "provider_specific_fields"), answered_tool_ids
+
+def _server_tool_call_ids_without_a_kept_result(message: object) -> Iterator[str]:
+    provider_specific_fields: Final = _attribute_or_key(message, "provider_specific_fields")
+    tool_calls: Final = _as_object_list(_attribute_or_key(message, "tool_calls")) or ()
+    return (
+        tool_call_id
+        for tool_call in tool_calls
+        if (tool_call_id := _server_tool_call_id(tool_call)) is not None
+        and not tool_call_is_rebuilt_as_server_tool_use(tool_call_id, provider_specific_fields)
     )
 
 
-def _tool_call_ids_answered_by_client_when_a_server_tool_call_is_marked(
+def _client_tool_call_ids_when_a_server_tool_call_is_marked(
     messages: Sequence[object], model: str | None = None, custom_llm_provider: str | None = None
 ) -> frozenset[str]:
     if not _marks_a_server_tool_call(messages):
         return frozenset()
     if model is not None and not _builds_anthropic_messages(model, custom_llm_provider):
-        return tool_call_ids_answered_in(messages)
+        server_calls_sent_as_client_calls: Final = itertools.chain.from_iterable(
+            map(_server_tool_call_ids_without_a_kept_result, messages)
+        )
+        return tool_call_ids_answered_in(messages) | frozenset(server_calls_sent_as_client_calls)
     return tool_call_ids_answered_by_client(messages, _keeps_mid_conversation_system(model, custom_llm_provider))
 
 
@@ -331,12 +536,7 @@ def _model_info_flags_mid_conversation_system(model: str, custom_llm_provider: s
 
 
 def _is_marked_server_tool_call(tool_call: object) -> bool:
-    tool_call_id: Final = _attribute_or_key(tool_call, "id")
-    return (
-        isinstance(tool_call_id, str)
-        and tool_call_id.startswith(ANTHROPIC_SERVER_TOOL_USE_ID_PREFIX)
-        and _attribute_or_key(tool_call, "cache_control") is not None
-    )
+    return _server_tool_call_id(tool_call) is not None and _attribute_or_key(tool_call, "cache_control") is not None
 
 
 def _tool_carries_cache_breakpoint(tool: object) -> bool:
@@ -482,7 +682,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         reserved_blocks: Final = AnthropicCacheControlHook._blocks_reserved_outside_messages(
             remaining_points, external_breakpoints, openai_dialect
         )
-        answered_tool_ids: Final = _tool_call_ids_answered_by_client_when_a_server_tool_call_is_marked(
+        answered_tool_ids: Final = _client_tool_call_ids_when_a_server_tool_call_is_marked(
             processed_messages, model, custom_llm_provider
         )
         breakpoints_before: Final = AnthropicCacheControlHook.count_request_cache_breakpoints(
@@ -571,7 +771,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         )
         message_list: Final = tuple(messages)
         client_answers: Final = (
-            _tool_call_ids_answered_by_client_when_a_server_tool_call_is_marked(message_list)
+            _client_tool_call_ids_when_a_server_tool_call_is_marked(message_list)
             if answered_tool_ids is None
             else answered_tool_ids
         )
@@ -663,7 +863,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         so earlier points win when slots are scarce.
         """
         client_answers: Final = (
-            _tool_call_ids_answered_by_client_when_a_server_tool_call_is_marked(messages)
+            _client_tool_call_ids_when_a_server_tool_call_is_marked(messages)
             if answered_tool_ids is None
             else answered_tool_ids
         )
@@ -753,11 +953,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         content_count: Final = sum(1 for block in content if _carries_cache_breakpoint(block)) if content else 0
         tool_calls: Final = _as_object_list(_attribute_or_key(message, "tool_calls"))
         tool_call_count: Final = (
-            sum(
-                1
-                for tool_call in tool_calls
-                if _tool_call_carries_cache_breakpoint(tool_call, message, answered_tool_ids)
-            )
+            sum(1 for tool_call in tool_calls if _tool_call_carries_cache_breakpoint(tool_call, answered_tool_ids))
             if tool_calls
             else 0
         )
@@ -1439,3 +1635,25 @@ class AnthropicCacheControlHook(CustomPromptManagement):
                 llm_router=None,
             )
         return None
+
+
+def messages_within_cache_control_cap(
+    messages: Sequence[_MessageT], tools: object, cache_control: object = None, request_kwargs: object = None
+) -> Sequence[_MessageT]:
+    """Under drop_params, drop the oldest message hints the provider's cache_control cap has no room for.
+
+    Tool hints and a top-level ``cache_control`` stay on the wire, so they are reserved first.
+    """
+    reserved_marks: Final = AnthropicCacheControlHook.count_external_cache_breakpoints(
+        _validated_object_list(tools), cache_control, request_kwargs
+    )
+    kept: Final = newest_marks_within_cache_control_limit(messages, reserved_marks)
+    dropped: Final = sum(map(cache_control_count, messages)) - sum(map(cache_control_count, kept))
+    if dropped > 0:
+        verbose_logger.warning(
+            "Dropped %d cache_control hint(s) from the oldest messages because drop_params is on and the "
+            "provider accepts at most %d cache_control blocks per request",
+            dropped,
+            MAX_CACHE_CONTROL_BLOCKS,
+        )
+    return kept

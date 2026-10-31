@@ -364,6 +364,10 @@ if TYPE_CHECKING:
         get_llm_provider,
         is_non_openai_azure_model,
     )
+    from litellm.litellm_core_utils.get_retry_from_policy import (
+        get_num_retries_from_retry_policy,
+        reset_retry_policy,
+    )
     from litellm.litellm_core_utils.get_supported_openai_params import (
         get_supported_openai_params,
     )
@@ -456,10 +460,6 @@ if TYPE_CHECKING:
     )
     from litellm.llms.cohere.common_utils import CohereModelInfo
     from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
-    from litellm.router_utils.get_retry_from_policy import (
-        get_num_retries_from_retry_policy,
-        reset_retry_policy,
-    )
     from litellm.types.llms.anthropic import (
         ANTHROPIC_API_ONLY_HEADERS,
         AnthropicThinkingParam,
@@ -1596,6 +1596,7 @@ def dispatch_success_logging(
     is_litellm_internal_call: bool,
 ) -> None:
     if is_litellm_internal_call:
+        logging_obj.capture_usage_before_logging(result, start_time, end_time)
         return
 
     _schedule_async_success_logging(
@@ -1634,9 +1635,14 @@ def _schedule_async_success_logging(
     if not logging_obj.claim_async_success_log():
         return
 
+    if logging_obj.defer_async_logging and not is_completion_with_fallbacks:
+        logging_obj.capture_usage_before_logging(result, start_time, end_time, freeze_only=True)
+
     def _enqueue_async_logging() -> None:
         from litellm.responses.streaming_iterator import spawn_logging_task
 
+        if not is_completion_with_fallbacks:
+            logging_obj.capture_usage_before_logging(result, start_time, end_time)
         if logging_obj.defer_async_logging:
             logging_obj.handle_sync_success_callbacks_for_async_calls(
                 result=result, start_time=start_time, end_time=end_time
@@ -2204,6 +2210,7 @@ def client(original_function):
 
             # LOG SUCCESS - handle streaming success logging in the _next_ object, remove `handle_success` once it's deprecated
             verbose_logger.info("Wrapper: Completed Call, calling success_handler")
+            logging_obj.capture_usage_before_logging(TypeAdapter(object).validate_python(result), start_time, end_time)
             if not is_internal_call.get():
                 # Copy the current context to propagate it to the background thread
                 # This is essential for OpenTelemetry span context propagation
@@ -5297,7 +5304,7 @@ def pre_process_optional_params(passed_params: dict, non_default_params: dict, c
 
 
 def _declared_reasoning_efforts(model_info: Mapping[str, object] | None) -> tuple[str, ...]:
-    from litellm.router_utils.reasoning_effort_capability import deployment_reasoning_effort_levels
+    from litellm.litellm_core_utils.reasoning_effort_capability import deployment_reasoning_effort_levels
 
     return deployment_reasoning_effort_levels(model_info) or ()
 
@@ -10204,7 +10211,7 @@ class ProviderConfigManager:
         from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 
         json_provider: Final = JSONProviderRegistry.get(provider.value)
-        if json_provider is not None and "/v1/messages" in json_provider.supported_endpoints:
+        if json_provider is not None and JSONProviderRegistry.serves_endpoint(provider.value, model, "/v1/messages"):
             from litellm.llms.openai_like.messages.transformation import (
                 JSONProviderAnthropicMessagesConfig,
             )
@@ -10343,7 +10350,7 @@ class ProviderConfigManager:
             return result
 
         # Fall back to JSON providers (generic OpenAI-compatible)
-        if JSONProviderRegistry.exists(provider_str) and JSONProviderRegistry.supports_responses_api(provider_str):
+        if JSONProviderRegistry.serves_endpoint(provider_str, model, "/v1/responses"):
             provider_config: Final = JSONProviderRegistry.get(provider_str)
             if provider_config is not None:
                 return create_responses_config_class(provider_config)()

@@ -5,6 +5,7 @@ Tests that invoke_agent_a2a properly integrates with add_litellm_data_to_request
 """
 
 import asyncio
+import importlib.util
 import json
 import socket
 import sys
@@ -17,8 +18,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 import respx
+from fastapi.testclient import TestClient
+from pydantic import BaseModel, ConfigDict
 
 import litellm
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.agents import AgentCaller
 
@@ -44,6 +48,7 @@ def _sse_upstream_response(*lines: str, first_line_delay: float = 0.0) -> httpx.
 class CapturedAgentCall:
     request_id: object
     agent_extra_headers: dict[str, str] | None
+    agent_name: object
 
 
 @pytest.mark.asyncio
@@ -627,7 +632,11 @@ async def _invoke_message_method(
 
     kwargs: Final = downstream.call_args.kwargs
     request_id: Final = kwargs["request"].__dict__["id"] if is_send else kwargs["request_id"]
-    return CapturedAgentCall(request_id=request_id, agent_extra_headers=kwargs.get("agent_extra_headers"))
+    return CapturedAgentCall(
+        request_id=request_id,
+        agent_extra_headers=kwargs.get("agent_extra_headers"),
+        agent_name=kwargs.get("agent_name"),
+    )
 
 
 @pytest.mark.asyncio
@@ -1682,6 +1691,76 @@ def test_build_message_send_params_proto_fallback_ignores_unknown_fields():
         }
     )
     assert result.message.role.value == "user"
+
+
+@pytest.mark.asyncio
+async def test_message_stream_names_the_agent_by_its_card_name():
+    agent: Final = _make_agent_mock()
+    agent.agent_card_params = {"url": "http://backend-agent:10001", "name": "trip-planner"}
+
+    captured: Final = await _invoke_message_method(
+        "message/stream",
+        _make_request_mock("message/stream", _HELLO_MESSAGE_PARAMS),
+        UserAPIKeyAuth(api_key="sk-test", user_id="u1"),
+        agent=agent,
+    )
+
+    assert captured.agent_name == "trip-planner"
+
+
+class _StreamedSpend(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    call_type: str
+    model: str
+    response_cost: float
+
+
+class _StreamedSpendRecorder(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.logged: Final = asyncio.Event()
+        self.spend: _StreamedSpend | None = None
+
+    async def async_log_success_event(
+        self, kwargs: Mapping[str, object], response_obj: object, start_time: object, end_time: object
+    ) -> None:
+        spend: Final = _StreamedSpend.model_validate(kwargs["standard_logging_object"])
+        if spend.call_type != "asend_message_streaming":
+            return
+        self.spend = spend
+        self.logged.set()
+
+
+@pytest.mark.skipif(importlib.util.find_spec("a2a") is None, reason="needs the optional a2a-sdk")
+@pytest.mark.asyncio
+async def test_handle_stream_message_bills_a_bridge_agent_under_its_name(monkeypatch: pytest.MonkeyPatch):
+    from litellm.proxy.agent_endpoints.a2a_endpoints import _handle_stream_message
+
+    recorder: Final = _StreamedSpendRecorder()
+    monkeypatch.setattr(litellm, "callbacks", [recorder])
+    monkeypatch.setattr(litellm, "success_callback", [recorder])
+    monkeypatch.setattr(litellm, "_async_success_callback", [recorder])
+
+    response: Final = await _handle_stream_message(
+        api_base=None,
+        request_id="req-1",
+        params=dict(_HELLO_MESSAGE_PARAMS),
+        litellm_params={
+            "custom_llm_provider": "langgraph",
+            "model": "agent",
+            "mock_response": "pong",
+            "cost_per_query": 0.25,
+        },
+        agent_id="agent-1",
+        agent_name="trip-planner",
+    )
+    _ = [chunk async for chunk in response.body_iterator]
+
+    await asyncio.wait_for(recorder.logged.wait(), timeout=10)
+    assert recorder.spend == _StreamedSpend(
+        call_type="asend_message_streaming", model="a2a_agent/trip-planner", response_cost=0.25
+    )
 
 
 @pytest.mark.asyncio
@@ -2863,3 +2942,56 @@ async def test_failed_upstream_stream_relays_its_body_only_when_that_is_a_json_o
         "id": "req-1",
         "method": "tasks/resubscribe",
     }
+
+
+def _a2a_app_refusing_with(refusal: Exception) -> TestClient:
+    from fastapi import FastAPI
+
+    from litellm.proxy.agent_endpoints.a2a_endpoints import router
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+    def refuse() -> UserAPIKeyAuth:
+        raise refusal
+
+    app: Final = FastAPI()
+    app.include_router(router)
+    app.dependency_overrides[user_api_key_auth] = refuse
+    return TestClient(app)
+
+
+@pytest.mark.parametrize("path", ["/a2a/agent-1", "/a2a/agent-1/message/send", "/v1/a2a/agent-1/message/send"])
+def test_a2a_auth_refusals_answer_as_jsonrpc_errors_with_the_callers_id(path: str):
+    from litellm.proxy._types import ProxyException
+
+    client: Final = _a2a_app_refusing_with(
+        ProxyException(message="Budget has been exceeded!", type="budget_exceeded", param=None, code=422)
+    )
+
+    response: Final = client.post(path, json={"jsonrpc": "2.0", "id": "req-7", "method": "message/send"})
+
+    assert response.status_code == 422
+    assert response.json() == {
+        "jsonrpc": "2.0",
+        "id": "req-7",
+        "error": {
+            "code": -32000,
+            "message": "Budget has been exceeded!",
+            "data": {"type": "budget_exceeded", "param": None, "code": "422"},
+        },
+    }
+
+
+def test_a2a_http_refusals_answer_as_jsonrpc_errors_with_a_null_id_for_unparseable_bodies():
+    from fastapi import HTTPException
+
+    client: Final = _a2a_app_refusing_with(HTTPException(status_code=403, detail="Agent 'agent-1' is not allowed"))
+
+    response: Final = client.post("/a2a/agent-1", content=b"not json")
+
+    assert response.status_code == 403
+    body: Final = response.json()
+    assert body["jsonrpc"] == "2.0"
+    assert body["id"] is None
+    assert body["error"]["code"] == -32000
+    assert body["error"]["message"] == "Agent 'agent-1' is not allowed"
+    assert body["error"]["data"]["code"] == "403"

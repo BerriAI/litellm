@@ -38,12 +38,14 @@ from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
     validate_no_callback_env_reference,
 )
 from litellm.proxy.mcp_server.stdio_gate import MCP_STDIO_DISABLED_MESSAGE, is_mcp_stdio_enabled
+from litellm.proxy.spend_tracking.usage_meter import UsageCaptureSettings
 from litellm.types.agents import (
     AgentCaller as AgentCaller,  # noqa: PLC0414  # public re-export
 )
 from litellm.types.agents import (
     AgentResponse as AgentResponse,  # noqa: PLC0414  # public re-export
 )
+from litellm.types.decisions import OpenAIDecisionResponse
 from litellm.types.integrations.compression_interception import (
     CompressionSavingsMetadata,
 )
@@ -2470,6 +2472,22 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     Documents all the fields supported by `general_settings` in config.yaml
     """
 
+    accounting_capture: UsageCaptureSettings | None = Field(
+        None,
+        description="Opt-in durable usage capture. Legacy spend updates remain active. Requires local Prisma writes.",
+    )
+    accounting_sync_ack: bool = Field(
+        False,
+        description="Wait for usage commit on foreground non-stream chat, text, embedding and Responses requests. "
+        "Other requests remain supported with asynchronous usage capture.",
+    )
+    accounting_sync_ack_timeout_seconds: float = Field(
+        20.0, gt=0, description="Maximum response wait for usage commit, including the batch flush interval"
+    )
+    accounting_sync_ack_failure_policy: Literal["fail_closed", "log"] = Field(
+        "fail_closed", description="Return 503 or log the persistence failure after the response wait expires"
+    )
+
     request_tag_mappings: Sequence[RequestTagMapping] | None = Field(
         None,
         description="Map W3C baggage values to request tags. Exact value/tag rules take precedence over tag_prefix fallbacks.",
@@ -4584,6 +4602,7 @@ PassThroughEndpointLoggingResultValues = (
     | StandardPassThroughResponseObject
     | ResponsesAPIResponse
     | TranscriptionResponse
+    | OpenAIDecisionResponse
 )
 
 
