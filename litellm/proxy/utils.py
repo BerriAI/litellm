@@ -163,7 +163,12 @@ from litellm.litellm_core_utils.core_helpers import (
 from litellm.litellm_core_utils.deployment_pricing import pricing_models
 from litellm.litellm_core_utils.duration_parser import get_budget_window_start
 from litellm.litellm_core_utils.env_utils import get_env_float, get_env_int
-from litellm.litellm_core_utils.litellm_logging import BilledRoundsDispatch, Logging, deployment_pricing_model_info
+from litellm.litellm_core_utils.litellm_logging import (
+    BilledRoundsDispatch,
+    Logging,
+    UsageObservation,
+    deployment_pricing_model_info,
+)
 from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
 from litellm.litellm_core_utils.routing_common_utils import resolve_model_group_alias
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
@@ -1739,6 +1744,39 @@ def _failure_fields_to_lift(
         if _prompt_estimate is not None
         else ()
     )
+    from litellm.litellm_core_utils.litellm_logging import UsageCaptureObservation
+
+    _recorded_observation: Final[object] = _model_call_details.get("_accounting_usage_observed")
+    _current_usage: Final = (
+        _current_failure_usage_to_lift(
+            _model_call_details,
+            request_data,
+            _model_call_details.get("current_attempt_api_call_start_time", _first_handoff) is not None,
+            _billed,
+            _deployment_id,
+            _base_model,
+            dispatched_call_type,
+        )
+        if Logging.usage_capture_callback is not None
+        and (_billed or _model_call_details.get("combined_usage_object") is not None)
+        else None
+    )
+    _current_observation: Final = (
+        _recorded_observation
+        if isinstance(_recorded_observation, UsageObservation)
+        else UsageObservation.UNKNOWN
+        if _current_usage is None
+        else UsageObservation.KNOWN
+        if _model_call_details.get("combined_usage_object") is not None
+        else UsageObservation.ESTIMATED
+    )
+    _capture_observation: Final = UsageCaptureObservation.from_usage(
+        _current_usage[0] if _current_usage is not None and isinstance(_current_usage[0], Usage) else None,
+        _current_observation,
+        float(_current_usage[1])
+        if _current_usage is not None and isinstance(_current_usage[1], (int, float))
+        else None,
+    )
     _entries: Final = (
         ("start_time", _model_call_details.get("start_time")),
         ("first_api_call_start_time", _first_handoff),
@@ -1747,6 +1785,16 @@ def _failure_fields_to_lift(
         ("response_cost", None if _usage_to_lift is None else (_usage_to_lift[1] or 0.0)),
         ("standard_logging_object", _model_call_details.get("standard_logging_object")),
         ("billed_failed_attempts", _earlier_attempts or None),
+        ("_accounting_capture", _model_call_details.get("_accounting_capture")),
+        ("_accounting_pricing_snapshot", _model_call_details.get("_accounting_pricing_snapshot")),
+        ("_accounting_finalized_cost", _logging_obj.finalized_cost if isinstance(_logging_obj, Logging) else None),
+        (
+            "_accounting_allocation",
+            _logging_obj.cost_allowance_allocation if isinstance(_logging_obj, Logging) else None,
+        ),
+        ("_accounting_usage_observed", _current_observation if Logging.usage_capture_callback is not None else None),
+        ("_accounting_usage_snapshot", _capture_observation if Logging.usage_capture_callback is not None else None),
+        ("_accounting_prior_captures", _model_call_details.get("_accounting_prior_captures")),
     )
     return MappingProxyType({key: value for key, value in _entries if value is not None})
 
@@ -3031,14 +3079,21 @@ class ProxyLogging:
         hook to consult, but it judges the payload the same way, so a proxy configured only with
         one of those still has something to say about every record.
         """
-        if request_metadata.get("_guardrail_pipelines"):
+        return self.request_has_pre_call_guardrails({"metadata": dict(request_metadata)}, event_type)
+
+    def request_has_pre_call_guardrails(
+        self,
+        request_data: Mapping[str, object],
+        event_type: GuardrailEventHooks = GuardrailEventHooks.pre_call,
+    ) -> bool:
+        if _policy_state_metadata(request_data).get("_guardrail_pipelines"):
             return True
         caps: Final = ProxyLogging.callback_capabilities()
         if caps.has_content_enforcer:
             return True
-        probe: Final = {"metadata": dict(request_metadata)}
         return any(
-            isinstance(callback, CustomGuardrail) and callback.should_run_guardrail(data=probe, event_type=event_type)
+            isinstance(callback, CustomGuardrail)
+            and callback.should_run_guardrail(data=request_data, event_type=event_type)
             for callback in caps.resolved_callbacks
         )
 

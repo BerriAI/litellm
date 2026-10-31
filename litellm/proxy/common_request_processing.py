@@ -137,6 +137,7 @@ from litellm.proxy.route_llm_request import (
     route_request,
 )
 from litellm.proxy.spend_tracking.cost_finalization import finalize_proxy_response_cost, prepare_response_cost
+from litellm.proxy.spend_tracking.usage_capture import capture_proxy_response
 from litellm.proxy.telemetry.request_context import bind_call_id as bind_telemetry_call_id
 from litellm.proxy.utils import (  # noqa: F401  # legacy module exports
     ProxyLogging,
@@ -3366,6 +3367,9 @@ class ProxyBaseLLMRequestProcessing:
                     )
                 ),
             )
+            await capture_proxy_response(
+                logging_obj, response, background=_REQUEST_FIELDS.validate_python(self.data).get("background") is True
+            )
         except (Exception, asyncio.CancelledError) as exc:
             _exception_raised = True
             if logging_obj.prepared_cost is not None:
@@ -5031,8 +5035,9 @@ class ProxyBaseLLMRequestProcessing:
         if stream_usage is None:
             return None
         service_tier: Final = obj.get("service_tier")
+        served_model: Final = litellm_logging_obj.model if litellm_logging_obj is not None else None
         cost_val: Final = ProxyBaseLLMRequestProcessing._streamed_usage_cost(
-            ModelResponse(usage=stream_usage),
+            ModelResponse(model=served_model, usage=stream_usage),
             model_name,
             service_tier if isinstance(service_tier, str) else None,
             litellm_logging_obj,

@@ -2712,7 +2712,7 @@ async def test_plain_tag_exhaustion_with_universal_default_tag_raises_by_default
     router = _quality_high_cost_low_router()
 
     with patch(
-        "litellm.router.async_get_cooldown_deployments",
+        "litellm.router_python_core.async_get_cooldown_deployments",
         new=AsyncMock(return_value=["quality-high-1", "quality-high-2"]),
     ):
         with pytest.raises(Exception, match='Not allowed to access model due to tags configuration\\.') as exc_info:
@@ -2737,7 +2737,7 @@ async def test_plain_tag_exhaustion_with_universal_default_tag_falls_open_when_a
     from unittest.mock import AsyncMock, patch
 
     with patch(
-        "litellm.router.async_get_cooldown_deployments",
+        "litellm.router_python_core.async_get_cooldown_deployments",
         new=AsyncMock(return_value=["quality-high-1", "quality-high-2"]),
     ):
         response = await router.acompletion(
