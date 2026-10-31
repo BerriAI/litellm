@@ -1,6 +1,7 @@
 #### What this does ####
 #   identifies lowest tpm deployment
 import traceback
+from collections.abc import Mapping, Sequence
 from datetime import datetime
 from typing import Final
 
@@ -27,6 +28,40 @@ class LowestTPMLoggingHandler(CustomLogger):
     def __init__(self, router_cache: DualCache, routing_args: dict = {}):
         self.router_cache = router_cache
         self.routing_args = RoutingArgs(**routing_args)
+
+    def _cached_usage(self, usage_key: str) -> Mapping[str, float]:
+        """The {deployment_id: count} dict this process has recorded for a model group this minute."""
+        cached: Final = self.router_cache.get_cache(key=usage_key, local_only=True)
+        if not isinstance(cached, Mapping):
+            return {}
+        return {k: float(v) for k, v in cached.items() if isinstance(k, str) and isinstance(v, (int, float))}
+
+    def _record_usage(self, usage_key: str, deployment_id: str, total: float | None) -> None:
+        """Copy a deployment's running total into the in-memory {deployment_id: count} dict for its
+        model group, which routing and the router's pre-call RPM check read. Nothing awaits between
+        the read and the write, so concurrent callbacks in this process can't overwrite each other."""
+        if total is None:
+            return
+        recorded: Final = self._cached_usage(usage_key)
+        usage: Final = {**recorded, deployment_id: max(recorded.get(deployment_id, 0.0), total)}
+        self.router_cache.set_cache(key=usage_key, value=usage, local_only=True, ttl=self.routing_args.ttl)
+
+    def _get_usage(self, usage_key: str, deployment_ids: Sequence[str]) -> Mapping[str, float]:
+        """This process's recorded usage, plus the shared counter for any deployment it hasn't served
+        this minute (read from Redis, if there is one, so other instances' traffic counts).
+
+        Counters are kept per deployment, f"{usage_key}:{deployment_id}", so each success is one
+        atomic increment (INCRBYFLOAT in Redis) instead of a read-modify-write of a shared dict,
+        which loses updates when callbacks run concurrently."""
+        recorded: Final = self._cached_usage(usage_key)
+        unseen: Final = tuple(i for i in deployment_ids if i not in recorded)
+        if not unseen:
+            return recorded
+        counts: Final = self.router_cache.batch_get_cache(keys=[f"{usage_key}:{i}" for i in unseen])
+        if not isinstance(counts, Sequence):
+            return recorded
+        shared: Final = {i: float(c) for i, c in zip(unseen, counts) if c is not None}
+        return {**shared, **recorded}
 
     @with_service_target("router_usage")
     def log_success_event(self, kwargs, response_obj, start_time, end_time):
@@ -62,17 +97,20 @@ class LowestTPMLoggingHandler(CustomLogger):
                 # Update usage
                 # ------------
 
-                ## TPM
-                request_count_dict = self.router_cache.get_cache(key=tpm_key) or {}
-                request_count_dict[id] = request_count_dict.get(id, 0) + total_tokens
+                if not isinstance(id, str) or not isinstance(total_tokens, int):
+                    return
 
-                self.router_cache.set_cache(key=tpm_key, value=request_count_dict, ttl=self.routing_args.ttl)
+                ## TPM
+                tpm_total: Final = self.router_cache.increment_cache(
+                    key=f"{tpm_key}:{id}", value=total_tokens, ttl=self.routing_args.ttl
+                )
+                self._record_usage(tpm_key, id, tpm_total)
 
                 ## RPM
-                request_count_dict = self.router_cache.get_cache(key=rpm_key) or {}
-                request_count_dict[id] = request_count_dict.get(id, 0) + 1
-
-                self.router_cache.set_cache(key=rpm_key, value=request_count_dict, ttl=self.routing_args.ttl)
+                rpm_total: Final = self.router_cache.increment_cache(
+                    key=f"{rpm_key}:{id}", value=1, ttl=self.routing_args.ttl
+                )
+                self._record_usage(rpm_key, id, rpm_total)
 
                 ### TESTING ###
                 if self.test_flag:
@@ -123,21 +161,20 @@ class LowestTPMLoggingHandler(CustomLogger):
                 # ------------
                 # update cache
 
-                ## TPM
-                request_count_dict = await self.router_cache.async_get_cache(key=tpm_key) or {}
-                request_count_dict[id] = request_count_dict.get(id, 0) + total_tokens
+                if not isinstance(id, str) or not isinstance(total_tokens, (int, float)):
+                    return
 
-                await self.router_cache.async_set_cache(
-                    key=tpm_key, value=request_count_dict, ttl=self.routing_args.ttl
+                ## TPM
+                tpm_total: Final = await self.router_cache.async_increment_cache(
+                    key=f"{tpm_key}:{id}", value=total_tokens, ttl=self.routing_args.ttl
                 )
+                self._record_usage(tpm_key, id, tpm_total)
 
                 ## RPM
-                request_count_dict = await self.router_cache.async_get_cache(key=rpm_key) or {}
-                request_count_dict[id] = request_count_dict.get(id, 0) + 1
-
-                await self.router_cache.async_set_cache(
-                    key=rpm_key, value=request_count_dict, ttl=self.routing_args.ttl
+                rpm_total: Final = await self.router_cache.async_increment_cache(
+                    key=f"{rpm_key}:{id}", value=1, ttl=self.routing_args.ttl
                 )
+                self._record_usage(rpm_key, id, rpm_total)
 
                 ### TESTING ###
                 if self.test_flag:
@@ -169,8 +206,9 @@ class LowestTPMLoggingHandler(CustomLogger):
         tpm_key: Final = f"{model_group}:tpm:{current_minute}"
         rpm_key: Final = f"{model_group}:rpm:{current_minute}"
 
-        tpm_dict = self.router_cache.get_cache(key=tpm_key)
-        rpm_dict: Final = self.router_cache.get_cache(key=rpm_key)
+        deployment_ids: Final = tuple(str(d["model_info"]["id"]) for d in healthy_deployments)
+        tpm_dict: Final = dict(self._get_usage(tpm_key, deployment_ids))
+        rpm_dict: Final = self._get_usage(rpm_key, deployment_ids)
 
         verbose_router_logger.debug("tpm_key=%s, tpm_dict: %s, rpm_dict: %s", tpm_key, tpm_dict, rpm_dict)
         try:
@@ -183,16 +221,8 @@ class LowestTPMLoggingHandler(CustomLogger):
         # ----------------------
         lowest_tpm = float("inf")
 
-        if tpm_dict is None:  # base case - none of the deployments have been used
-            # initialize a tpm dict with {model_id: 0}
-            tpm_dict = {}
-            for deployment in healthy_deployments:
-                tpm_dict[deployment["model_info"]["id"]] = 0
-        else:
-            for d in healthy_deployments:
-                ## if healthy deployment not yet used
-                if d["model_info"]["id"] not in tpm_dict:
-                    tpm_dict[d["model_info"]["id"]] = 0
+        for deployment_id in deployment_ids:  ## if healthy deployment not yet used
+            _ = tpm_dict.setdefault(deployment_id, 0)
 
         all_deployments: Final = tpm_dict
 
@@ -229,7 +259,7 @@ class LowestTPMLoggingHandler(CustomLogger):
 
             if (
                 item_tpm + input_tokens > _deployment_tpm
-                or (rpm_dict is not None and item in rpm_dict)
+                or (item in rpm_dict)
                 and (rpm_dict[item] + 1 >= _deployment_rpm)
             ):
                 continue
