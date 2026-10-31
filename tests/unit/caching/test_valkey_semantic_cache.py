@@ -99,6 +99,11 @@ def test_build_valkey_url_uses_rediss_scheme_when_ssl(monkeypatch):
     ).startswith("redis://")
 
 
+def test_index_definition_uses_supported_redis_search_types():
+    definition = _make_cache()._index_definition()
+    assert definition.args[:5] == ["ON", "HASH", "PREFIX", 1, "test_index:"]
+
+
 def test_init_requires_similarity_threshold():
     with pytest.raises(ValueError, match="similarity_threshold must be provided"):
         ValkeySemanticCache(sync_client=MagicMock(), async_client=AsyncMock())
