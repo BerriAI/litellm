@@ -520,12 +520,23 @@ def build_export_sql(
     )
 
 
+_EMPTY_METADATA_FIELDS: Final = ", '{}'::jsonb AS key_metadata, '{}'::jsonb AS user_metadata"
+_USER_METADATA_FIELD: Final = (
+    "COALESCE(MIN(CASE WHEN jsonb_typeof(u.metadata) = 'object' THEN u.metadata::text END), '{}')::jsonb "
+    "AS user_metadata"
+)
+_KEY_METADATA_FIELD: Final = (
+    "COALESCE(MIN(CASE WHEN jsonb_typeof(COALESCE(vt.metadata, dvt.metadata)) = 'object' "
+    "THEN COALESCE(vt.metadata, dvt.metadata)::text END), '{}')::jsonb AS key_metadata"
+)
+
+
 def _export_grouping(export_type: ExportType) -> tuple[str, str, str, tuple[str, ...]]:
     if export_type is ExportType.DAILY:
         return (
             "''",
             "NULL::text",
-            "NULL::text AS key_alias, NULL::text AS user_id, NULL::text AS user_email",
+            "NULL::text AS key_alias, NULL::text AS user_id, NULL::text AS user_email" + _EMPTY_METADATA_FIELDS,
             (),
         )
     if export_type is ExportType.DAILY_WITH_KEYS:
@@ -534,11 +545,14 @@ def _export_grouping(export_type: ExportType) -> tuple[str, str, str, tuple[str,
             _API_KEY_EXPR,
             "MAX(CASE WHEN scoped.api_key = '' THEN 'Unattributed' "
             "ELSE COALESCE(vt.key_alias, dvt.key_alias) END) AS key_alias, "
-            "MAX(COALESCE(vt.user_id, dvt.user_id)) AS user_id, MAX(u.user_email) AS user_email",
+            "MAX(COALESCE(vt.user_id, dvt.user_id)) AS user_id, MAX(u.user_email) AS user_email, "
+            + _KEY_METADATA_FIELD
+            + ", "
+            + _USER_METADATA_FIELD,
             (
                 "LEFT JOIN \"LiteLLM_VerificationToken\" vt ON vt.token = scoped.api_key AND scoped.api_key <> ''",
                 """LEFT JOIN LATERAL (
-                    SELECT key_alias, user_id
+                    SELECT key_alias, user_id, metadata
                     FROM "LiteLLM_DeletedVerificationToken"
                     WHERE token = scoped.api_key
                     ORDER BY deleted_at DESC
@@ -551,7 +565,7 @@ def _export_grouping(export_type: ExportType) -> tuple[str, str, str, tuple[str,
         return (
             _MODEL_EXPR,
             "NULL::text",
-            "NULL::text AS key_alias, NULL::text AS user_id, NULL::text AS user_email",
+            "NULL::text AS key_alias, NULL::text AS user_id, NULL::text AS user_email" + _EMPTY_METADATA_FIELDS,
             (),
         )
     if export_type is ExportType.DAILY_WITH_USERS:
@@ -559,11 +573,11 @@ def _export_grouping(export_type: ExportType) -> tuple[str, str, str, tuple[str,
             "COALESCE(vt.user_id, dvt.user_id, '')",
             "NULL::text",
             "NULL::text AS key_alias, MAX(COALESCE(vt.user_id, dvt.user_id)) AS user_id, "
-            "MAX(u.user_email) AS user_email",
+            "MAX(u.user_email) AS user_email, '{}'::jsonb AS key_metadata, " + _USER_METADATA_FIELD,
             (
                 'LEFT JOIN "LiteLLM_VerificationToken" vt ON vt.token = scoped.api_key',
                 """LEFT JOIN LATERAL (
-                    SELECT key_alias, user_id
+                    SELECT key_alias, user_id, metadata
                     FROM "LiteLLM_DeletedVerificationToken"
                     WHERE token = scoped.api_key
                     ORDER BY deleted_at DESC

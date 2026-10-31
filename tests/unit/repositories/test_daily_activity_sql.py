@@ -451,6 +451,34 @@ def test_export_uses_latest_deleted_key_metadata(export_type: ExportType) -> Non
     assert "COALESCE(vt.user_id, dvt.user_id)" in query.sql
 
 
+@pytest.mark.parametrize(
+    ("export_type", "key_metadata", "user_metadata"),
+    [
+        (
+            ExportType.DAILY_WITH_KEYS,
+            "THEN COALESCE(vt.metadata, dvt.metadata)::text END), '{}')::jsonb AS key_metadata",
+            "THEN u.metadata::text END), '{}')::jsonb AS user_metadata",
+        ),
+        (
+            ExportType.DAILY_WITH_USERS,
+            "'{}'::jsonb AS key_metadata",
+            "THEN u.metadata::text END), '{}')::jsonb AS user_metadata",
+        ),
+        (ExportType.DAILY, "'{}'::jsonb AS key_metadata", "'{}'::jsonb AS user_metadata"),
+        (ExportType.DAILY_WITH_MODELS, "'{}'::jsonb AS key_metadata", "'{}'::jsonb AS user_metadata"),
+    ],
+)
+def test_export_selects_stored_key_and_user_metadata_objects(
+    export_type: ExportType, key_metadata: str, user_metadata: str
+) -> None:
+    query = build_export_sql(_scope(entity_ids=None), export_type=export_type, after=None, batch_size=2)
+
+    assert key_metadata in query.sql
+    assert user_metadata in query.sql
+    if export_type is ExportType.DAILY_WITH_KEYS:
+        assert "SELECT key_alias, user_id, metadata" in query.sql
+
+
 @pytest.mark.parametrize("export_type", tuple(ExportType))
 def test_export_without_cursor_omits_cursor_predicate_and_parameters(export_type: ExportType) -> None:
     query = build_export_sql(
