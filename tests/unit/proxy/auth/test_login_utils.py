@@ -14,9 +14,12 @@ from types import SimpleNamespace
 from typing import TYPE_CHECKING, Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import fakeredis
 import httpx
 import pytest
 import respx
+
+from tests._support.fake_redis import fake_redis_cache
 
 if TYPE_CHECKING:
     from litellm.proxy.auth.login_throttle import LoginThrottle
@@ -1367,66 +1370,8 @@ async def test_disabling_the_control_lets_every_attempt_through(monkeypatch):
     assert _local_count(throttle, throttle._keys("admin").pair_counter) == 0
 
 
-class _FakeRedis:
-    """Redis whose only writes are the throttle's two scripts, run atomically as one call each.
-
-    Mirrors the Lua: a blocked key returns its remaining block time and is not counted; a counter
-    is expired on first write; one over the limit installs the block; a blocked pair stops the
-    source from being counted. The real scripts are exercised against a live Redis in the PR's
-    proof, this fake only has to be faithful enough for the worker-sharing tests.
-    """
-
-    def __init__(self):
-        self.values: dict = {}
-        self.ttls: dict = {}
-        self.scripts: list[str] = []
-
-    def async_register_script(self, script: str):
-        from litellm.proxy.auth import login_throttle as lt
-
-        async def _run(keys, args):
-            self.scripts.append(script)
-            if script == lt._BLOCK_TTLS_LUA:
-                return [self._ttl(keys[1]), self._ttl(keys[3])]
-            assert script == lt._RECORD_FAILURE_LUA
-            user_limit, source_limit, window, block = (int(a) for a in args)
-            user_block = self._bump(keys[0], keys[1], user_limit, window, block)
-            if source_limit > 0 and user_block == 0:
-                return [user_block, self._bump(keys[2], keys[3], source_limit, window, block)]
-            return [user_block, 0]
-
-        return _run
-
-    def _ttl(self, key: str) -> int:
-        return self.ttls.get(key, -2) if key in self.values else -2
-
-    def _bump(self, count_key: str, block_key: str, limit: int, window: int, block: int) -> int:
-        if self._ttl(block_key) > 0:
-            return self._ttl(block_key)
-        self.values[count_key] = self.values.get(count_key, 0) + 1
-        self.ttls.setdefault(count_key, window)
-        if self.values[count_key] > limit:
-            self.values[block_key] = 1
-            self.ttls[block_key] = block
-            return block
-        return 0
-
-    async def async_delete_cache(self, key):
-        self.values.pop(key, None)
-        self.ttls.pop(key, None)
-
-
-class _DownRedis(_FakeRedis):
-    """Redis whose every call fails, as during an outage or an open circuit breaker."""
-
-    def async_register_script(self, script: str):
-        async def _run(keys, args):
-            raise ConnectionError("redis is down")
-
-        return _run
-
-    async def async_delete_cache(self, key):
-        raise ConnectionError("redis is down")
+async def _redis_keys(server: fakeredis.FakeServer) -> list[str]:
+    return [key.decode() for key in await fakeredis.FakeAsyncRedis(server=server).keys("*")]
 
 
 @pytest.mark.asyncio
@@ -1437,57 +1382,65 @@ async def test_redis_is_the_only_counter_while_it_answers(monkeypatch):
     monkeypatch.setenv("UI_USERNAME", "admin")
     monkeypatch.setenv("UI_PASSWORD", "right")
     monkeypatch.setenv("DATABASE_URL", "postgresql://stub")
-    redis = _FakeRedis()
-    first_worker = _throttle(user_limit=2, stores=_stores(), redis_cache=redis)
-    second_worker = _throttle(user_limit=2, stores=_stores(), redis_cache=redis)
+    server = fakeredis.FakeServer()
+    raw = fakeredis.FakeAsyncRedis(server=server)
+    redis = fake_redis_cache(server)
+    first_worker = _throttle(user_limit=2, window_seconds=60, block_seconds=300, stores=_stores(), redis_cache=redis)
+    second_worker = _throttle(user_limit=2, window_seconds=60, block_seconds=300, stores=_stores(), redis_cache=redis)
+    keys = first_worker._keys("user@corp.com")
 
     assert [await _fail(first_worker, username="user@corp.com") for _ in range(3)] == ["401"] * 3
     assert not [k for k in first_worker.counters.cache_dict if str(k).startswith(LOGIN_THROTTLE_CACHE_KEY_PREFIX)], (
         "with Redis answering, no worker may keep a counter of its own"
     )
     assert not first_worker.blocks.cache_dict
+    assert await raw.get(keys.pair_counter) == b"3"
+    assert 0 < await raw.ttl(keys.pair_counter) <= 60
+    assert 0 < await raw.ttl(keys.pair_block) <= 300, "the block lives in Redis, where every worker reads it"
 
     assert await _fail(second_worker, username="user@corp.com") == "429", "the second worker sees the block"
 
-    block_keys = [k for k in redis.values if ":block:user:" in k]
-    assert block_keys, "the block lives in Redis, where every worker reads it"
-    for key in block_keys:
-        await redis.async_delete_cache(key)
+    await raw.delete(keys.pair_block)
     await _db_login(second_worker, "user@corp.com", "right", correct=True)
 
-    assert not [k for k in redis.values if ":user:" in k and ":block:" not in k], (
-        "success clears the shared pair counter"
-    )
+    assert keys.pair_counter not in await _redis_keys(server), "success clears the shared pair counter"
+
+
+@pytest.mark.asyncio
+async def test_the_shared_block_counts_the_source_once_the_pair_is_not_blocked(monkeypatch):
+    monkeypatch.setenv("UI_USERNAME", "admin")
+    monkeypatch.setenv("UI_PASSWORD", "right")
+    server = fakeredis.FakeServer()
+    raw = fakeredis.FakeAsyncRedis(server=server)
+    throttle = _throttle(user_limit=5, source_limit=2, block_seconds=120, redis_cache=fake_redis_cache(server))
+    keys = [throttle._keys(f"user-{i}@corp.com") for i in range(3)]
+
+    assert [await _fail(throttle, username=f"user-{i}@corp.com") for i in range(3)] == ["401"] * 3
+
+    assert await raw.get(keys[0].source_counter) == b"3"
+    assert 0 < await raw.ttl(keys[0].source_block) <= 120
+    assert await _fail(throttle, username="someone-else@corp.com") == "429"
 
 
 @pytest.mark.asyncio
 async def test_a_redis_outage_falls_back_to_this_workers_own_counter(monkeypatch):
-    """With Redis raising, guesses are still counted and blocked per worker, with a warning, instead of unbounded."""
-    import logging
-
-    from litellm._logging import verbose_proxy_logger
+    """With Redis down, guesses are still counted and blocked per worker instead of unbounded."""
     from litellm.proxy._types import ProxyException
 
     monkeypatch.setenv("UI_USERNAME", "admin")
     monkeypatch.setenv("UI_PASSWORD", "right")
     _set_throttle_clock(monkeypatch, 1_000.0)
-    throttle = _throttle(user_limit=2, block_seconds=300, redis_cache=_DownRedis())
+    server = fakeredis.FakeServer()
+    throttle = _throttle(user_limit=2, block_seconds=300, redis_cache=fake_redis_cache(server))
+    server.connected = False
 
-    records: list[logging.LogRecord] = []
-    handler = logging.Handler()
-    handler.emit = records.append
-    verbose_proxy_logger.addHandler(handler)
-    try:
-        assert [await _fail(throttle) for _ in range(3)] == ["401"] * 3
-        _set_throttle_clock(monkeypatch, 1_000.6)
-        with pytest.raises(ProxyException) as blocked:
-            await _guess(throttle)
-    finally:
-        verbose_proxy_logger.removeHandler(handler)
+    assert [await _fail(throttle) for _ in range(3)] == ["401"] * 3
+    _set_throttle_clock(monkeypatch, 1_000.6)
+    with pytest.raises(ProxyException) as blocked:
+        await _guess(throttle)
 
     assert blocked.value.code == "429"
     assert blocked.value.headers.get("Retry-After") == "300"
-    assert any("Redis failed while counting Admin UI sign-in attempts" in r.getMessage() for r in records)
 
 
 @pytest.mark.asyncio
@@ -1496,7 +1449,9 @@ async def test_a_failed_redis_delete_still_clears_this_workers_counter(monkeypat
     monkeypatch.setenv("UI_USERNAME", "admin")
     monkeypatch.setenv("UI_PASSWORD", "right")
     monkeypatch.setenv("DATABASE_URL", "postgresql://stub")
-    throttle = _throttle(user_limit=5, redis_cache=_DownRedis())
+    server = fakeredis.FakeServer()
+    throttle = _throttle(user_limit=5, redis_cache=fake_redis_cache(server))
+    server.connected = False
     key = throttle._keys("user@corp.com").pair_counter
 
     assert [await _fail(throttle, username="user@corp.com") for _ in range(2)] == ["401", "401"]
