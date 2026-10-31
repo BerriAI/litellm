@@ -223,6 +223,9 @@ async def langfuse_proxy_route(
         target=target_url,
         custom_headers=target_headers,
         query_params=dict(request.query_params),
+        # tags the request so the success handler skips logging it as an LLM call;
+        # the target URL path (LANGFUSE_HOST/api/public/...) has no `/langfuse/` to match on
+        custom_llm_provider="langfuse",
     )  # dynamically construct pass-through endpoint based on incoming path
     received_value: Final = await endpoint_func(
         request,
