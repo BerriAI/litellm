@@ -1389,7 +1389,10 @@ async def _abandon_late_producer(produce_task: "asyncio.Future[_LateResponseT]")
                 await aclose_streaming_response(produce_task.result())
 
 
-def _abandoned_producer_failure(produce_task: "asyncio.Future[_LateResponseT]") -> Exception:
+def _abandoned_producer_failure(produce_task: "asyncio.Future[_LateResponseT]") -> Exception | None:
+    answered: Final = not produce_task.cancelled() and produce_task.exception() is None
+    if answered:
+        return None
     failure: Final = None if produce_task.cancelled() else produce_task.exception()
     if isinstance(failure, Exception):
         return failure
@@ -1485,8 +1488,10 @@ async def open_sse_before_first_byte(
                 await asyncio.wait((produce_task,), timeout=interval)
         except BaseException:
             await _abandon_late_producer(produce_task)
-            with anyio.CancelScope(shield=True):
-                await _sanitized_late_failure(_abandoned_producer_failure(produce_task), on_late_failure)
+            failure: Final = _abandoned_producer_failure(produce_task)
+            if failure is not None:
+                with anyio.CancelScope(shield=True):
+                    await _sanitized_late_failure(failure, on_late_failure)
             raise
         try:
             try:

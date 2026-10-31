@@ -10813,6 +10813,43 @@ async def test_a_failure_that_lands_as_the_reader_leaves_is_reported_instead_of_
 
 
 @pytest.mark.asyncio
+async def test_a_reader_leaving_as_the_model_answers_is_not_reported_as_a_disconnect():
+    may_answer: Final = asyncio.Event()
+    audited: Final = asyncio.Queue[Exception]()
+    upstream_closed: Final = asyncio.Event()
+
+    async def upstream() -> AsyncGenerator[str, None]:
+        try:
+            yield 'data: {"a": 1}\n\n'
+            await asyncio.Event().wait()
+        finally:
+            upstream_closed.set()
+
+    upstream_gen: Final = upstream()
+    await upstream_gen.__anext__()
+
+    async def answers_between_pings() -> StreamingResponse:
+        await may_answer.wait()
+        return StreamingResponse(upstream_gen, media_type="text/event-stream")
+
+    async def record(exc: Exception) -> None:
+        await audited.put(exc)
+
+    response: Final = await open_sse_before_first_byte(
+        answers_between_pings(), ping_interval_seconds=0.05, on_late_failure=record
+    )
+    body: Final = response.body_iterator
+    assert isinstance(body, collections.abc.AsyncGenerator)
+    assert await body.__anext__() == TTFT_PING
+    may_answer.set()
+    await asyncio.sleep(0.01)
+    await body.aclose()
+
+    assert audited.empty()
+    assert upstream_closed.is_set()
+
+
+@pytest.mark.asyncio
 async def test_a_failing_audit_hook_never_costs_the_client_its_error_frame():
     async def slow_failure():
         await asyncio.sleep(0.2)
