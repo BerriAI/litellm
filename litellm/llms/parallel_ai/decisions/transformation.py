@@ -1,10 +1,3 @@
-"""Parallel's decision model uses System One questions and the native fast mode.
-
-Both LiteLLM Decisions routes share this adapter. Citations describe the whole
-request, so they stay on the response rather than being assigned to answers.
-Contract: https://docs.parallel.ai/api-reference/decisions/make-web-grounded-typed-decisions
-"""
-
 from collections.abc import Mapping
 from typing import Final
 

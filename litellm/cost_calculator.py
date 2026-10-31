@@ -24,7 +24,11 @@ from litellm.constants import (
 )
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, billed_usage_cost
 from litellm.litellm_core_utils.cost_discount import resolve_cost_discount
-from litellm.litellm_core_utils.decisions_pricing import decisions_pricing_fields, is_decisions_call_type
+from litellm.litellm_core_utils.decisions_pricing import (
+    decisions_pricing_fields,
+    decisions_request_price,
+    is_decisions_call_type,
+)
 from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR
 from litellm.litellm_core_utils.llm_cost_calc.tool_call_cost_tracking import (
     StandardBuiltInToolCostTracking,
@@ -604,11 +608,9 @@ def cost_per_token(
         decisions_overrides: Final = decisions_pricing_fields(
             litellm.model_cost.get(decisions_model_info["key"], {})  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # model cost map is dynamically loaded
         )
-        request_price: Final = decisions_overrides.get(
-            "input_cost_per_query", decisions_model_info.get("input_cost_per_query")
-        )
-        if isinstance(request_price, (int, float)):
-            return float(request_price), 0.0
+        request_price: Final = decisions_request_price(decisions_model_info, decisions_overrides)
+        if request_price is not None:
+            return request_price, 0.0
         if decisions_overrides:
             return generic_cost_per_token(
                 model=model,

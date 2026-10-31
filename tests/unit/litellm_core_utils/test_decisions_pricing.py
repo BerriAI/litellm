@@ -77,6 +77,36 @@ def test_flat_decisions_rate_overrides_catalog_without_changing_chat(
     ) == pytest.approx((100 * 1e-07, 0.0))
 
 
+@pytest.mark.parametrize("call_type", ["adecisions", "asystemone"])
+@pytest.mark.parametrize(
+    ("token_rates", "expected_costs"),
+    [
+        ({"input_cost_per_token": 1e-05, "output_cost_per_token": 0.0}, (100 * 1e-05, 0.0)),
+        ({"input_cost_per_token": 0.0, "output_cost_per_token": 1e-05}, (0.0, 10 * 1e-05)),
+    ],
+)
+def test_plain_query_price_leaves_a_token_priced_row_billing_tokens(
+    monkeypatch: pytest.MonkeyPatch,
+    call_type: str,
+    token_rates: dict[str, float],
+    expected_costs: tuple[float, float],
+) -> None:
+    model: Final = "fireworks_ai/accounts/example/models/priced-both"
+    monkeypatch.setitem(
+        litellm.model_cost,
+        model,
+        {"input_cost_per_query": 0.5, **token_rates, "litellm_provider": "fireworks_ai", "mode": "evaluation"},
+    )
+
+    assert cost_calculator.cost_per_token(
+        model=model,
+        custom_llm_provider="fireworks_ai",
+        prompt_tokens=100,
+        completion_tokens=10,
+        call_type=cast(CallTypesLiteral, call_type),
+    ) == pytest.approx(expected_costs)
+
+
 _LUNA_USAGE: Final = Usage(
     prompt_tokens=100,
     completion_tokens=10,
