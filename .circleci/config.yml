@@ -41,11 +41,10 @@ commands:
             git init
             git remote add origin https://github.com/BerriAI/litellm.git
             for attempt in 1 2 3; do
-              git fetch --filter=blob:none origin "$revision" && break
+              git fetch --filter=blob:none origin "$revision" && git checkout --detach FETCH_HEAD && break
               [[ $attempt -lt 3 ]] || exit 1
               sleep 5
             done
-            git checkout --detach FETCH_HEAD
   skip_if_unrelated_changes:
     parameters:
       category:
