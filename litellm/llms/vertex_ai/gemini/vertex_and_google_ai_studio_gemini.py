@@ -4026,11 +4026,15 @@ class ModelResponseIterator:
         # Also handle the case where the final chunk has empty
         # content (e.g. text:"") WITH finishReason. In this case
         # _process_candidates DOES create a choice, but maps
-        # finishReason="STOP" to "stop" because the current chunk
-        # has no tool_calls. Override if we saw tool_calls earlier.
+        # finishReason="STOP"/"MAX_TOKENS" to "stop"/"length" because
+        # the current chunk has no tool_calls. Override those if we
+        # saw tool_calls earlier so streaming matches the non-stream
+        # path (tool_calls win over STOP/MAX_TOKENS). Keep
+        # content_filter (SAFETY) unchanged.
+        # Ref: https://github.com/BerriAI/litellm/issues/48715
         if self.has_seen_tool_calls:
             for choice in model_response.choices:
-                if choice.finish_reason == "stop":
+                if choice.finish_reason in ("stop", "length"):
                     choice.finish_reason = "tool_calls"
 
         VertexGeminiConfig.set_stream_metadata_on_response(
