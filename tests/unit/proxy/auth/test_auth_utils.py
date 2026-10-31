@@ -5299,6 +5299,26 @@ class TestIsRequestBodySafeBlocksVertexTargetOverrides:
         with pytest.raises(ValueError, match="vertex_location"):
             is_request_body_safe(request_body, {}, router, "vertex_ai/gemini-2.5-flash", route="/v1/chat/completions")
 
+    def test_a_pinned_group_sharing_a_deployment_id_with_an_opted_in_group_is_still_checked(self) -> None:
+        router: Final = Router(
+            model_list=[
+                {
+                    "model_name": name,
+                    "litellm_params": {
+                        "model": "vertex_ai/gemini-2.5-flash",
+                        "vertex_location": "europe-west4",
+                        "configurable_clientside_auth_params": opt_in,
+                    },
+                    "model_info": {"id": "shared-id"},
+                }
+                for name, opt_in in (("a-pinned", []), ("z-optin", ["vertex_location"]))
+            ]
+        )
+        request_body: Final = {"model": "a-pinned", "vertex_location": "us-central1", "fallbacks": ["z-optin"]}
+
+        with pytest.raises(ValueError, match="vertex_location"):
+            is_request_body_safe(request_body, {}, router, "a-pinned", route="/v1/chat/completions")
+
     @pytest.mark.parametrize(
         "model, is_allowed", [("public-alias", True), ("gemini-optin", False)], ids=["alias", "aliased_target"]
     )

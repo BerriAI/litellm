@@ -556,27 +556,30 @@ class _OptInGroups:
     vertex_target: tuple[str, ...]
 
 
-def _deployment_id(deployment: Mapping[str, object]) -> str | None:
-    match deployment.get("model_info"):
-        case {"id": str(deployment_id)} if deployment_id:
-            return deployment_id
-        case _:
-            return None
+_OptInKey = tuple[str | tuple[str, str | None], ...]
 
 
-def _same_deployments_key(model_group: str, llm_router: Router) -> frozenset[tuple[str | None, str | None]] | str:
-    deployments: Final = _model_group_deployments(model_group, llm_router)
-    key: Final = tuple(
-        (_deployment_id(deployment), _deployment_provider(deployment["litellm_params"])) for deployment in deployments
+def _opt_in_key(litellm_params: LiteLLMParamsTypedDict) -> _OptInKey:
+    return tuple(
+        item if isinstance(item, str) else ("api_base", item.get("api_base"))
+        for item in deployment_clientside_auth_params(litellm_params) or ()
     )
-    return frozenset(key) if key and all(deployment_id for deployment_id, _ in key) else model_group
+
+
+def _same_answer_key(model_group: str, llm_router: Router) -> frozenset[tuple[str | None, _OptInKey]] | str:
+    deployments: Final = _model_group_deployments(model_group, llm_router)
+    key: Final = frozenset(
+        (_deployment_provider(deployment["litellm_params"]), _opt_in_key(deployment["litellm_params"]))
+        for deployment in deployments
+    )
+    return key or model_group
 
 
 def _distinct_opt_in_groups(model_groups: frozenset[str], llm_router: Router | None) -> tuple[str, ...]:
     if llm_router is None:
         return tuple(sorted(model_groups))
     return tuple(
-        {_same_deployments_key(model_group, llm_router): model_group for model_group in sorted(model_groups)}.values()
+        {_same_answer_key(model_group, llm_router): model_group for model_group in sorted(model_groups)}.values()
     )
 
 
