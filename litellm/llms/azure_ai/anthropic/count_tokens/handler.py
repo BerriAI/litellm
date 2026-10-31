@@ -39,6 +39,7 @@ class AzureAIAnthropicCountTokensHandler(AzureAIAnthropicCountTokensConfig):
         tools: list[dict[str, JsonValue]] | None = None,
         system: object = None,
         optional_params: Mapping[str, JsonValue] | None = None,
+        context_management: JsonValue = None,
     ) -> dict[str, object]:
         """
         Handle a CountTokens request using httpx with Azure authentication.
@@ -70,6 +71,7 @@ class AzureAIAnthropicCountTokensHandler(AzureAIAnthropicCountTokensConfig):
                 tools=tools,
                 system=system,
                 optional_params=optional_params,
+                context_management=context_management,
                 drop_params=drops_unsupported_params((litellm_params or {}).get("drop_params")),
             )
 
@@ -85,6 +87,7 @@ class AzureAIAnthropicCountTokensHandler(AzureAIAnthropicCountTokensConfig):
                 api_key=api_key,
                 litellm_params=litellm_params,
                 messages=messages,
+                context_management=context_management,
             )
             if not {"x-api-key", "Authorization"} & headers.keys():
                 raise AnthropicError(

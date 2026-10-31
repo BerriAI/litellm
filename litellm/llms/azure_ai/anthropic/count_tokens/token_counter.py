@@ -135,6 +135,7 @@ class AzureAIAnthropicTokenCounter(BaseTokenCounter):
                 tools=tools,
                 system=system,
                 optional_params=count_options,
+                context_management=None if context_management is None else context_management.spec,
             )
 
             if result is not None:

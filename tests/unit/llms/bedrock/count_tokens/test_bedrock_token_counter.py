@@ -173,6 +173,50 @@ async def test_runtime_rejection_of_an_edit_stands_when_mantle_does_not_serve_th
 
 
 @pytest.mark.asyncio
+async def test_runtime_400_without_an_edit_still_reports_the_mantle_failure() -> None:
+    bedrock: Final = _Bedrock(
+        runtime=(400, {"message": "The provided model identifier is invalid."}),
+        mantle=(404, {"type": "error", "error": {"type": "not_found_error", "message": "does not exist"}}),
+    )
+
+    result: Final = await _counter(bedrock).count_tokens(
+        model_to_use="us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        messages=MESSAGES,
+        contents=None,
+        deployment=DEPLOYMENT,
+        request_model="claude-haiku-4-5",
+    )
+
+    assert result is not None
+    assert result.status_code == 404
+    assert result.tokenizer_type == "bedrock_mantle_api"
+    assert "does not exist" in (result.error_message or "")
+    assert bedrock.posted_hosts() == (RUNTIME_HOST, MANTLE_HOST)
+
+
+@pytest.mark.asyncio
+async def test_plain_text_history_with_an_edit_is_counted_through_invoke_carrying_the_edit() -> None:
+    bedrock: Final = _Bedrock(runtime=(200, {"inputTokens": 57}), mantle=(200, {"input_tokens": 1}))
+    spec: Final[dict[str, JsonValue]] = {"edits": [{"type": "clear_tool_uses_20250919"}]}
+
+    result: Final = await _counter(bedrock).count_tokens(
+        model_to_use="global.anthropic.claude-opus-4-8",
+        messages=MESSAGES,
+        contents=None,
+        deployment=DEPLOYMENT,
+        request_model="claude-opus-4-8",
+        context_management=CountContextManagement(spec=spec, drop_invalid_edits=False),
+    )
+
+    assert result is not None
+    assert result.total_tokens == 57
+    assert bedrock.posted_hosts() == (RUNTIME_HOST,)
+    invoke_body: Final = _invoke_body(bedrock.requests[0])
+    assert invoke_body["context_management"] == spec
+    assert invoke_body["anthropic_beta"] == ["context-management-2025-06-27"]
+
+
+@pytest.mark.asyncio
 async def test_claude_runtime_404_retries_with_system_and_tools_on_mantle() -> None:
     bedrock: Final = _Bedrock(runtime=(404, UNSUPPORTED), mantle=(200, {"input_tokens": 2177}))
     tools: Final = [

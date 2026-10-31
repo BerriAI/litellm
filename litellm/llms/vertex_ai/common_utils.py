@@ -1458,6 +1458,7 @@ class VertexAITokenCounter(BaseTokenCounter):
     ) -> TokenCountResponse | None:
         import copy
 
+        from litellm.llms.anthropic.common_utils import context_management_with_edits
         from litellm.llms.vertex_ai.vertex_ai_partner_models.count_tokens.handler import count_tokens_publisher
         from litellm.llms.vertex_ai.vertex_ai_partner_models.main import (
             VertexAIError as PartnerVertexAIError,
@@ -1539,6 +1540,9 @@ class VertexAITokenCounter(BaseTokenCounter):
                     system=system,
                     tools=tools,
                     count_options=count_options,
+                    context_management=(
+                        None if context_management is None else context_management_with_edits(context_management.spec)
+                    ),
                 )
             except (PartnerVertexAIError, httpx.HTTPStatusError) as e:
                 status_code: Final = e.response.status_code
