@@ -3974,6 +3974,36 @@ async def test_clips_to_a_group_whose_only_taker_is_cooling_down_are_refused_rat
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("surface", tuple(_MEDIA_SURFACES))
+async def test_a_router_default_drop_params_overrides_a_deployment_when_choosing_who_takes_clips(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, local_model_cost_map: None, surface: str
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    respx_mock.post("https://openrouter.ai/api/alpha/decisions").respond(json=_RESPONSE)
+    unlisted: Final = "openrouter/example/omni-preview"
+    router: Final = litellm.Router(
+        model_list=[
+            _group_member("g", unlisted, "drops", 1, {}, drop_params=True),
+            _group_member("g", unlisted, "takes", 0, {"supports_audio_input": True}),
+        ],
+        default_litellm_params={"drop_params": False},
+    )
+    call: Final = getattr(router, surface)
+
+    async def send(**params: object) -> object:
+        response: Final = call(model="g", **_MEDIA_SURFACES[surface], audio=_AUDIO_CLIPS, **params)
+        return await response if asyncio.iscoroutine(response) else response
+
+    await send()
+    assert respx_mock.calls.last.request.headers["authorization"] == "Bearer takes"
+    assert json.loads(respx_mock.calls.last.request.content)["audio"] == list(_AUDIO_CLIPS)
+
+    await send(drop_params=True)
+    assert respx_mock.calls.last.request.headers["authorization"] == "Bearer drops"
+    assert "audio" not in json.loads(respx_mock.calls.last.request.content)
+
+
+@pytest.mark.asyncio
 async def test_a_deployment_that_turns_audio_off_is_refused_or_dropped_even_when_the_cost_map_allows_it(
     respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, local_model_cost_map: None
 ) -> None:

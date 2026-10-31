@@ -4152,13 +4152,16 @@ class Router(DeprecatedRouterMembers):
             raise e.original_exception from e
         raise e
 
+    def _active_default_litellm_params(self) -> Mapping[str, object]:
+        default_params: Final = _REQUEST_KWARGS_ADAPTER.validate_python(self._core_default_litellm_params)
+        return {key: value for key, value in default_params.items() if value is not None}
+
     def _params_sent_to_deployment(
         self, request_kwargs: Mapping[str, object], deployment: Deployment | None
     ) -> Mapping[str, object]:
         """The request as the deployment received it, merged in the order _update_kwargs_with_deployment applies."""
         deployment_params: Final = deployment.litellm_params.model_dump(exclude_none=True) if deployment else {}
-        default_params: Final = _REQUEST_KWARGS_ADAPTER.validate_python(self._core_default_litellm_params)
-        defaults: Final = {key: value for key, value in default_params.items() if value is not None}
+        defaults: Final = self._active_default_litellm_params()
         deployment_tool_choice: Final = (
             {"tool_choice": deployment_params["tool_choice"]}
             if deployment_params.get("tool_choice") is not None
@@ -14912,9 +14915,8 @@ class Router(DeprecatedRouterMembers):
             )
             return False
 
-    @staticmethod
     def _without_decisions_deployments_refusing_media(
-        healthy_deployments: _RouteDeploymentsT, group: str, request_kwargs: Mapping[str, object] | None
+        self, healthy_deployments: _RouteDeploymentsT, group: str, request_kwargs: Mapping[str, object] | None
     ) -> _RouteDeploymentsT:
         call_kwargs: Final = request_kwargs or {}
         audio: Final = bool(call_kwargs.get("audio"))
@@ -14926,13 +14928,14 @@ class Router(DeprecatedRouterMembers):
         ):
             return healthy_deployments
 
+        sent_kwargs: Final = {**self._active_default_litellm_params(), **call_kwargs}
         deployments_taking_media: Final = [
             deployment
             for deployment in healthy_deployments
             if not Router._decisions_deployment_refuses_media(
                 cast(DeploymentTypedDict, deployment),  # cast-ok: router candidates use the deployment shape
                 group,
-                call_kwargs,
+                sent_kwargs,
                 audio=audio,
                 videos=videos,
             )
