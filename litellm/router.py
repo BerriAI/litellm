@@ -10775,8 +10775,10 @@ class Router(DeprecatedRouterMembers):
             and (params.get("custom_llm_provider") == "bedrock" or model.startswith("bedrock/"))
         ):
             profile_model: Final = invoked_model if invoked_model.startswith("bedrock/") else f"bedrock/{invoked_model}"
+            from litellm.cost_calculator import cost_map_key_prices_anything
+
             profile_info: Final = lookup_model_info_for_registration(model=profile_model, custom_llm_provider="bedrock")
-            if not isinstance(profile_info, ModelInfoLookupMiss):
+            if not isinstance(profile_info, ModelInfoLookupMiss) and cost_map_key_prices_anything(profile_info["key"]):
                 return profile_model
         return model
 
