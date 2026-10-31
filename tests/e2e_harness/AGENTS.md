@@ -2,7 +2,7 @@
 
 Tests of the harness under `tests/e2e/` (the transport, the clients, the fixture bundle and replay edge, the stack lock, the IdP launcher, the coverage collector, the JUnit properties and the Claude Code driver), not of the product. They live outside `tests/e2e/` because the Buildkite e2e run copies that folder into the runner image and runs every test in it, so a harness test in there counts as a product test in the nightly numbers. Nothing here needs a proxy, provider keys or the network
 
-The layout mirrors `tests/e2e/`: `test_e2e_http.py` covers `tests/e2e/e2e_http.py`, `logging/test_datadog_reader.py` covers `tests/e2e/logging/datadog_reader.py`, `claude_code/` covers the driver, builder and probe, and `cli_harness/` covers the version resolver and the CLI env lockdown. Put a new harness test under the folder that mirrors the suite folder whose module it covers
+The layout mirrors `tests/e2e/`: `test_e2e_http.py` covers `tests/e2e/e2e_http.py`, `logging/test_datadog_reader.py` covers `tests/e2e/logging/datadog_reader.py`, `claude_code/` covers the driver, builder and probe, and `cli_harness/` covers the version resolver, the CLI env lockdown and the rate limiter. Put a new harness test under the folder that mirrors the suite folder whose module it covers
 
 Run them from the repo root. `e2e_config` reads `LITELLM_MASTER_KEY` at import and any value will do, the CI lane sets a dummy:
 

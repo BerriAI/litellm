@@ -16,6 +16,7 @@ import urllib.request
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from types import MappingProxyType
 from typing import BinaryIO, Final, cast
 
 MIN_AGE: Final = timedelta(days=3)
@@ -33,7 +34,7 @@ class Packument:
         document: Final = _as_mapping(raw)
         times: Final = _as_mapping(document.get("time"))
         return cls(
-            published_at={version: _parse_utc(stamp) for version, stamp in _string_values(times)},
+            published_at=MappingProxyType({version: _parse_utc(stamp) for version, stamp in _string_values(times)}),
             versions=frozenset(_as_mapping(document.get("versions"))),
         )
 

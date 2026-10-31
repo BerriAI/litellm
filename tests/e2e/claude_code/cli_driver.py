@@ -22,7 +22,7 @@ import tempfile
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple, Union
+from typing import Any, Callable, Dict, Final, List, Mapping, Optional, Sequence, Tuple, Union
 
 from cli_harness.lockdown import isolated_home, locked_down_env
 from cli_harness.rate_limiter import RateBucket, RateLimiter, get_default_limiter
@@ -72,6 +72,7 @@ Anthropic / Bedrock / Vertex) to reset. Both knobs are env-tunable so
 a matrix run can trade wall time for resilience without code edits;
 retries=0 disables the behavior entirely."""
 
+
 def infer_provider(model: str) -> RateBucket:
     """Map a model alias to its compat-matrix rate bucket.
 
@@ -85,7 +86,7 @@ def infer_provider(model: str) -> RateBucket:
     """
     if not model:
         raise ValueError("model must be a non-empty string")
-    lower = model.lower()
+    lower: Final = model.lower()
     if lower.endswith("-azure-openai"):
         return RateBucket.AZURE_OPENAI
     if lower.endswith("-openai"):
