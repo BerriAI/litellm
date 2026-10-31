@@ -576,3 +576,30 @@ async def test_usage_batch_is_atomic_and_replay_preserves_receipts(
     await store.insert_usage_batch((*writes, *writes))
     assert _rows(ledger_database, 'SELECT * FROM "LiteLLM_AccountingDelivery" ORDER BY event_id, target') == before
     assert _rows(ledger_database, 'SELECT count(*) FROM "LiteLLM_AccountingEvent"') == [(2,)]
+
+
+@pytest.mark.asyncio
+async def test_invalid_jsonb_submission_cannot_reject_another_producers_commit(
+    writer: _Writer, ledger_database: str
+) -> None:
+    from prisma.errors import DataError
+
+    from litellm.proxy.spend_tracking.usage_meter import DurableUsageMeter, UsageCaptureSettings
+
+    _, store = writer
+    invalid: Final = _usage("invalid")
+    valid: Final = _usage("valid")
+    meter: Final = DurableUsageMeter(store.insert_usage_batch, UsageCaptureSettings(batch_size=2))
+    rejected: Final = meter.submit(
+        (UsageWrite(invalid, _envelope(invalid, context={"parent": "bad\x00text"}), _TARGETS),)
+    )
+    accepted: Final = meter.submit((UsageWrite(valid, _envelope(valid), _TARGETS),))
+    try:
+        with pytest.raises(DataError):
+            await rejected
+        await accepted
+    finally:
+        await meter.close()
+    assert _rows(ledger_database, 'SELECT event_id FROM "LiteLLM_AccountingEvent"') == [("valid",)]
+    assert _rows(ledger_database, 'SELECT count(*) FROM "LiteLLM_AccountingDelivery"') == [(len(_TARGETS),)]
+    assert (meter.pending_bytes, meter.pending_records) == (0, 0)

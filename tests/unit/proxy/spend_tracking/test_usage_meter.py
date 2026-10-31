@@ -302,3 +302,40 @@ async def test_burst_drains_full_batches_without_waiting_for_partial_batch_deadl
     finally:
         await meter.stop(0)
         await asyncio.gather(*receipts, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sqlstate", ["22P05", "22003", "42P01"])
+async def test_invalid_submission_isolated_without_retrying_systemic_faults(sqlstate: str) -> None:
+    from prisma.errors import DataError
+
+    database: Final = CommitBarrier()
+    database.release.set()
+    attempts: Final = asyncio.Queue[tuple[str, ...]]()
+
+    async def persist(writes: tuple[UsageWrite, ...]) -> None:
+        identities: Final = tuple(write.event.event_id for write in writes)
+        attempts.put_nowait(identities)
+        if "invalid" in identities or sqlstate == "42P01":
+            raise DataError(
+                data={"user_facing_error": {"message": "database rejected input", "meta": {"code": sqlstate}}}
+            )
+        await database.write(writes)
+
+    meter: Final = DurableUsageMeter(persist, UsageCaptureSettings(batch_size=3))
+    rejected: Final = meter.submit((_write("caller"), _write("invalid")))
+    neighbor: Final = meter.submit((_write("neighbor"),))
+    try:
+        with pytest.raises(DataError):
+            await rejected
+        if sqlstate == "42P01":
+            with pytest.raises(DataError):
+                await neighbor
+            assert attempts.qsize() == 1
+        else:
+            await neighbor
+            assert database.committed == ("neighbor",)
+            assert attempts.qsize() == 3
+    finally:
+        await meter.close()
+    assert (meter.pending_records, meter.pending_bytes) == (0, 0)

@@ -87,6 +87,15 @@ def _retryable_persistence_failure(error: Exception) -> bool:
     )
 
 
+def _isolatable_persistence_failure(error: Exception) -> bool:
+    from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler, exception_chain
+
+    return isinstance(error, AccountingConflictError) or any(
+        isinstance(cause, Exception) and (PrismaDBExceptionHandler.postgres_sqlstate(cause) or "").startswith("22")
+        for cause in exception_chain(error)
+    )
+
+
 class DurableUsageMeter:
     def __init__(
         self,
@@ -192,8 +201,8 @@ class DurableUsageMeter:
         except asyncio.CancelledError:
             self._finish(batch, UsageCaptureError("Usage commit acknowledgement interrupted"))
             raise
-        except AccountingConflictError:
-            if len(batch) > 1:
+        except Exception as error:  # noqa: BLE001  # isolate data faults, surface systemic failures to all producers
+            if len(batch) > 1 and _isolatable_persistence_failure(error):
                 try:
                     for item in batch:
                         await self._commit((item,))
@@ -201,9 +210,12 @@ class DurableUsageMeter:
                     self._finish(batch, UsageCaptureError("Usage commit acknowledgement interrupted"))
                     raise
                 return
-            self._finish(batch, UsageCaptureError("Usage identity conflicts with accepted content"))
-        except Exception as error:  # noqa: BLE001  # persistence failures must reach every producer receipt
-            self._finish(batch, error)
+            self._finish(
+                batch,
+                UsageCaptureError("Usage identity conflicts with accepted content")
+                if isinstance(error, AccountingConflictError)
+                else error,
+            )
         else:
             self._finish(batch, None)
 
