@@ -5714,6 +5714,126 @@ def test_responses_uses_sdk_retries_without_router(monkeypatch: pytest.MonkeyPat
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize("systemone_format", [False, True], ids=["decisions", "systemone"])
+@pytest.mark.parametrize(
+    "num_retries,global_retries,upstream_failures,expected_attempts,router_call",
+    [
+        pytest.param(2, None, 1, 2, False, id="recovers"),
+        pytest.param(2, None, 3, 3, False, id="exhausts"),
+        pytest.param(0, None, 1, 1, False, id="disabled"),
+        pytest.param(None, None, 1, 1, False, id="omitted"),
+        pytest.param(2, None, 1, 1, True, id="router-owns-retries"),
+        pytest.param(None, 2, 1, 2, False, id="global-default"),
+        pytest.param(0, 2, 1, 1, False, id="disabled-overrides-global"),
+    ],
+)
+async def test_decisions_sdk_retries(
+    monkeypatch: pytest.MonkeyPatch,
+    is_async: bool,
+    systemone_format: bool,
+    num_retries: int | None,
+    global_retries: int | None,
+    upstream_failures: int,
+    expected_attempts: int,
+    router_call: bool,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "num_retries", global_retries)
+    success: Final = threading.Event()
+
+    def record_success(
+        kwargs: dict[str, object], completion_response: object, start_time: datetime, end_time: datetime
+    ) -> None:
+        success.set()
+
+    monkeypatch.setattr(litellm, "success_callback", [record_success])
+    retry_kwargs: Final = {} if num_retries is None else {"num_retries": num_retries}
+    call: Final = (
+        partial(
+            litellm.asystemone if is_async else litellm.systemone,
+            model="typesafe/jev-latest",
+            state="I was charged twice.",
+            questions={"needs_refund": {"type": "noul", "instructions": "Is a refund needed?"}},
+        )
+        if systemone_format
+        else partial(
+            litellm.adecisions if is_async else litellm.decisions,
+            model="typesafe/jev-latest",
+            input="I was charged twice.",
+            questions=[{"name": "needs_refund", "type": "predicate", "instructions": "Is a refund needed?"}],
+        )
+    )
+    request: Final = partial(
+        call,
+        api_base="https://decisions-retry.local",
+        api_key="test-key",
+        metadata={"model_group": "decisions-retry"} if router_call else None,
+        **retry_kwargs,
+    )
+    responses: Final = tuple(
+        httpx.Response(503, json={"error": {"message": "temporary outage", "type": "server_error"}})
+        for _ in range(upstream_failures)
+    ) + (
+        httpx.Response(
+            200,
+            json={"model": "jev-latest", "answers": {"needs_refund": {"type": "noul", "noul": 0.9}}},
+        ),
+    )
+    with respx.mock(assert_all_called=True) as upstream:
+        route: Final = upstream.post("https://decisions-retry.local/v1/systemone").mock(side_effect=responses)
+        if upstream_failures < expected_attempts:
+            pending: Final = request()
+            result: Final = await pending if asyncio.iscoroutine(pending) else pending
+            assert result.model_dump()["answers"] == (
+                {"needs_refund": {"type": "noul", "noul": 0.9}}
+                if systemone_format
+                else ({"name": "needs_refund", "type": "predicate", "probability": 0.9},)
+            )
+            assert await asyncio.to_thread(success.wait, 5), "Recovered requests must run success callbacks"
+        elif is_async:
+            with pytest.raises(litellm.ServiceUnavailableError, match="temporary outage"):
+                await request()
+        else:
+            with pytest.raises(litellm.ServiceUnavailableError, match="temporary outage"):
+                request()
+
+    assert route.call_count == expected_attempts
+    bodies: Final = tuple(json.loads(request.content) for request, _ in route.calls)
+    assert all(body == bodies[0] for body in bodies)
+    assert "num_retries" not in bodies[0]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
+async def test_decisions_retries_do_not_bypass_an_exhausted_budget(
+    monkeypatch: pytest.MonkeyPatch, is_async: bool
+) -> None:
+    monkeypatch.setattr(litellm, "max_budget", 1)
+    monkeypatch.setattr(litellm, "_current_cost", 2)
+    request: Final = partial(
+        litellm.adecisions if is_async else litellm.decisions,
+        model="typesafe/jev-latest",
+        input="hello",
+        questions=[{"name": "answer", "type": "predicate", "instructions": "Answer?"}],
+        api_base="https://decisions-budget.local",
+        api_key="test-key",
+        num_retries=2,
+    )
+    with respx.mock(assert_all_called=False) as upstream:
+        upstream.post("https://decisions-budget.local/v1/systemone").respond(
+            503, json={"error": {"message": "temporary outage"}}
+        )
+        if is_async:
+            with pytest.raises(litellm.BudgetExceededError):
+                await request()
+        else:
+            with pytest.raises(litellm.BudgetExceededError):
+                request()
+        assert len(upstream.calls) == 0
+
+
+@pytest.mark.asyncio
 async def test_wrapper_async_replays_cached_converted_chat_stream_as_stream(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
