@@ -68,7 +68,7 @@ from litellm.proxy.pass_through_endpoints.success_handler import (
 )
 from litellm.proxy.route_llm_request import ProxyModelNotFoundError
 from litellm.proxy.spend_tracking.spend_tracking_utils import get_spend_logs_id
-from litellm.proxy.utils import ProxyLogging
+from litellm.proxy.utils import ProxyLogging, _merge_guardrails_with_existing
 from litellm.types import utils as types_utils
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import CallTypes
@@ -11828,6 +11828,20 @@ class TestInheritAuthGuardrails:
             "project-guard",
             "team-guard",
         ]
+
+    @pytest.mark.asyncio
+    async def test_post_call_guardrails_stay_named_after_a_model_guardrail_merge(self):
+        auth: Final = UserAPIKeyAuth(api_key="sk-test", metadata={"guardrails": ["key-guard"]})
+
+        _, post_call = await self._run(
+            self._chat_body(),
+            inherit=True,
+            user_api_key_dict=auth,
+            guardrails=(self._guardrail("key-guard", GuardrailEventHooks.post_call),),
+        )
+
+        merged: Final = _merge_guardrails_with_existing(post_call.call_args.kwargs["data"], ["model-guard"])
+        assert merged["metadata"]["guardrails"] == ["key-guard", "model-guard"]
 
     @pytest.mark.asyncio
     async def test_pre_call_only_guardrails_relay_the_response_untouched(self):
