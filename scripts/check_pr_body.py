@@ -17,6 +17,8 @@ PLACEHOLDER: Final = "<blah>"
 AI_SUMMARY_TAG: Final = "<make-me-human-readable>"
 AI_SUMMARY_CLOSING_TAG: Final = "</make-me-human-readable>"
 HEADING_PATTERN: Final = re.compile(r"^## .+$", re.MULTILINE)
+HTML_COMMENT_PATTERN: Final = re.compile(r"<!--.*?-->", re.DOTALL)
+DETAILS_CHROME_PATTERN: Final = re.compile(r"</?details>|<summary>.*?</summary>", re.DOTALL)
 
 
 def template_headings(template_text: str) -> tuple[str, ...]:
@@ -31,13 +33,17 @@ def uses_template(found: Iterable[str], known: Iterable[str]) -> bool:
     return any(heading in known for heading in found)
 
 
+def visible_text(section: str) -> str:
+    return DETAILS_CHROME_PATTERN.sub("", HTML_COMMENT_PATTERN.sub("", section)).strip()
+
+
 def section_is_blank(body: str, heading: str) -> bool:
     matches: Final = tuple(HEADING_PATTERN.finditer(body))
     for index, match in enumerate(matches):
         if match.group().strip() != heading:
             continue
         end: Final = matches[index + 1].start() if index + 1 < len(matches) else len(body)
-        return not body[match.end() : end].strip()
+        return not visible_text(body[match.end() : end])
     return False
 
 

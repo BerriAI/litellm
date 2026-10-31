@@ -32,6 +32,18 @@ def test_blank_handwritten_section_with_crlf_and_trailing_spaces_fails():
     )
 
 
+def test_template_with_only_the_placeholder_and_tags_deleted_fails_as_blank():
+    body: Final = (
+        TEMPLATE.replace("`<make-me-human-readable>`\n", "")
+        .replace("<blah>", "")
+        .replace("`</make-me-human-readable>`\n", "")
+    )
+    assert "<!--" in body and "<details>" in body, "the template's comments and details chrome must stay in the body"
+    assert problems(body, TEMPLATE) == (
+        "the section under '## Handwritten 1-3 sentence description' is empty: write the 1-3 sentence summary there",
+    )
+
+
 def test_leftover_closing_tag_alone_fails():
     assert problems(GOOD_BODY.replace("Adds X so Y works", "Adds X\n`</make-me-human-readable>`"), TEMPLATE) == (
         "the summary under '## Handwritten 1-3 sentence description' is still AI-written: the PR author rewrites it "
