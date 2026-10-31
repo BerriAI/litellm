@@ -1,5 +1,7 @@
 import json
+import sys
 from collections.abc import Mapping
+from functools import reduce
 from typing import Final
 
 import httpx
@@ -12,6 +14,7 @@ from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.decisions.transformation import (
     BaseDecisionsConfig,
     DecisionsInputLimits,
+    input_has_no_text,
     ir_to_systemone_request,
     ir_to_systemone_response,
     parse_systemone_response,
@@ -24,6 +27,7 @@ from litellm.types.decisions import (
     DecisionsIRRefusal,
     DecisionsIRRequest,
     DecisionsIRScoreAnswer,
+    DecisionsIRState,
     DecisionsRequestBody,
     OpenAIDecisionRequestBody,
 )
@@ -472,3 +476,13 @@ def test_non_json_provider_response_is_an_api_error(raw_content: bytes, provider
     with pytest.raises(BaseLLMException, match="unexpected response") as error:
         config.transform_decisions_response("drex-v2.0", provider, httpx.Response(200, content=raw_content), request)
     assert error.value.status_code == 500
+
+
+def _nested_once(inner: object, _: int) -> object:
+    return [inner]
+
+
+def test_input_has_no_text_counts_a_state_nested_past_the_stack_as_no_text() -> None:
+    deepest_state: Final = reduce(_nested_once, range(sys.getrecursionlimit() * 2), "Product photo")
+
+    assert input_has_no_text(DecisionsIRState(state=deepest_state, images=())) is True

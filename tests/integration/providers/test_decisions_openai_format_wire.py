@@ -162,6 +162,7 @@ _PROVIDERS: Final = (
         _API_KEY,
         False,
         "perplexity/pplx-decider-v1-27b",
+        takes_images=True,
     ),
     _Provider("typesafe", "typesafe/jev-1.13.0", "/v1/systemone", "jev-1.13.0", _API_KEY, False, "typesafe/jev-1.13.0"),
     _Provider(
@@ -172,6 +173,7 @@ _PROVIDERS: Final = (
         _API_KEY,
         False,
         None,
+        takes_images=True,
         provider_reported_cost=1.5834e-5,
     ),
     _Provider(
@@ -224,9 +226,10 @@ _PROVIDERS: Final = (
 _SYSTEM_ONE_PROVIDERS: Final = tuple(provider for provider in _PROVIDERS if not provider.speaks_openai)
 _TEXT_ONLY_PROVIDERS: Final = tuple(provider for provider in _SYSTEM_ONE_PROVIDERS if not provider.takes_images)
 _PERPLEXITY: Final = _PROVIDERS[0]
+_OPENROUTER: Final = next(provider for provider in _PROVIDERS if provider.name == "openrouter")
 _TYPESAFE: Final = _PROVIDERS[1]
 _OPENAI: Final = next(provider for provider in _PROVIDERS if provider.speaks_openai)
-_CLOUDFLARE: Final = next(provider for provider in _SYSTEM_ONE_PROVIDERS if provider.takes_images)
+_CLOUDFLARE: Final = next(provider for provider in _PROVIDERS if provider.name == "cloudflare")
 _PREDICATE: Final[dict[str, JsonValue]] = {"type": "predicate", "name": "q", "instructions": "Is it?"}
 _INVALID_BODIES: Final[tuple[tuple[str, dict[str, JsonValue]], ...]] = (
     ("missing questions", {"input": _INPUT}),
@@ -516,6 +519,21 @@ def test_cloudflare_receives_images_from_either_format_in_its_images_field(gatew
         assert system_one_format.status_code == 200, system_one_format.text
         assert system_one_format.json()["answers"] == _SYSTEM_ONE_ANSWERS
         expected_body: Final = {**_CLOUDFLARE.upstream_body(), "images": [_PNG_DATA_URL]}
+        assert [call["body"] for call in _upstream_calls(gateway, handle)] == [expected_body] * 2
+
+
+@pytest.mark.parametrize("provider", (_PERPLEXITY, _OPENROUTER), ids=_provider_id)
+def test_perplexity_and_openrouter_receive_images_from_either_format_in_their_state(
+    gateway: Gateway, provider: _Provider
+) -> None:
+    with gateway.scenario() as scenario:
+        handle: Final = _register(scenario, provider.upstream_reply())
+        model: Final = _deployment(scenario, handle, provider)
+        openai_format, system_one_format = _decide_with_images_in_both_formats(gateway, model)
+        assert openai_format.status_code == 200, openai_format.text
+        assert system_one_format.status_code == 200, system_one_format.text
+        image_item: Final[dict[str, JsonValue]] = {"type": "image_url", "image_url": {"url": _PNG_DATA_URL}}
+        expected_body: Final = {**provider.upstream_body(), "state": [_INPUT, image_item]}
         assert [call["body"] for call in _upstream_calls(gateway, handle)] == [expected_body] * 2
 
 

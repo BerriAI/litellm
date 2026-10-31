@@ -4,14 +4,15 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from itertools import chain
 from types import MappingProxyType
-from typing import Final
+from typing import Final, TypeAlias
 
 import httpx
 from pydantic import TypeAdapter, ValidationError
 from pydantic_core import ErrorDetails
-from typing_extensions import assert_never
+from typing_extensions import TypeIs, assert_never  # noqa: TID251  # TypeIs reaches typing only on 3.13
 
 import litellm
+from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
 from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
@@ -66,10 +67,18 @@ _SYSTEMONE_RESPONSE_ADAPTER: Final[TypeAdapter[DecisionsResponse]] = TypeAdapter
 _RESERVED_HEADERS: Final[frozenset[str]] = frozenset({"authorization", "content-type"})
 _REMOTE_URL_PREFIXES: Final = ("http://", "https://")
 _DATA_URL_PREFIX: Final = "data:"
+_URL_SAFE_TO_STANDARD_BASE64: Final = str.maketrans("-_", "+/")
+_MEDIA_TYPE_ALIASES: Final[Mapping[str, str]] = MappingProxyType({"image/jpg": "image/jpeg"})
+
+_StateItem: TypeAlias = str | Mapping[str, object]
 
 
 def decisions_text(value: DecisionsJSON) -> str:
     return value if isinstance(value, str) else json.dumps(value)
+
+
+def standard_base64(value: str) -> str:
+    return "".join(value.split()).translate(_URL_SAFE_TO_STANDARD_BASE64)
 
 
 def systemone_keys(questions: Sequence[DecisionsIRQuestion]) -> tuple[str, ...]:
@@ -240,6 +249,34 @@ def _systemone_state(decision_input: DecisionsIRState | DecisionsIRMessages) -> 
             assert_never(decision_input)
 
 
+def _is_json_object(value: object) -> TypeIs[Mapping[str, object]]:  # guard-ok: JSON object keys are strings
+    return isinstance(value, Mapping)
+
+
+def _is_json_array(value: object) -> TypeIs[Sequence[object]]:  # guard-ok: only the items are read
+    return isinstance(value, Sequence)
+
+
+def _holds_no_text(value: object, depth: int = 0) -> bool:
+    if value is None:
+        return True
+    if isinstance(value, str):
+        return not value.strip()
+    if depth >= DEFAULT_MAX_RECURSE_DEPTH:
+        return True
+    if _is_json_object(value):
+        return all(
+            _holds_no_text(item, depth + 1) for key, item in value.items() if key != "type" or "text" not in value
+        )
+    if _is_json_array(value):
+        return all(_holds_no_text(item, depth + 1) for item in value)
+    return False
+
+
+def input_has_no_text(decision_input: DecisionsIRState | DecisionsIRMessages) -> bool:
+    return _holds_no_text(_systemone_state(decision_input))
+
+
 def _media_type(content_type: str) -> str:
     return content_type.split(";", 1)[0].strip().lower()
 
@@ -259,6 +296,54 @@ def _systemone_image(image: DecisionsImage) -> str | Mapping[str, object]:
     if media_type is None:
         return image
     return f"{_DATA_URL_PREFIX}{media_type};base64,{image.partition(',')[2]}"
+
+
+def _standard_data_url(media_type: str, payload: str) -> str:
+    standard_payload: Final = standard_base64(payload)
+    padding: Final = "=" * (-len(standard_payload) % 4)
+    standard_type: Final = _MEDIA_TYPE_ALIASES.get(media_type, media_type)
+    return f"{_DATA_URL_PREFIX}{standard_type};base64,{standard_payload}{padding}"
+
+
+def _data_url(image: DecisionsImage) -> str:
+    if isinstance(image, DecisionsBase64Image):
+        return _standard_data_url(_media_type(image.content_type), image.base64)
+    media_type: Final = image_media_type(image)
+    if media_type is None:
+        return image
+    return _standard_data_url(media_type, image.partition(",")[2])
+
+
+def _image_item(image: DecisionsImage) -> _StateItem:
+    return {"type": "image_url", "image_url": {"url": _data_url(image)}}
+
+
+def _part_item(part: OpenAIDecisionInputText | OpenAIDecisionInputImage) -> _StateItem:
+    if isinstance(part, OpenAIDecisionInputText):
+        return part.text
+    return _image_item(part.image_url)
+
+
+def _message_items(message: OpenAIDecisionInputMessage) -> tuple[_StateItem, ...]:
+    if isinstance(message.content, str):
+        return (message.content,)
+    return tuple(map(_part_item, message.content))
+
+
+def _state_items(state: DecisionsJSON) -> tuple[object, ...]:
+    if isinstance(state, (str, Mapping)):
+        return (state,)
+    return tuple(state)
+
+
+def _multimodal_state(decision_input: DecisionsIRState | DecisionsIRMessages) -> tuple[object, ...]:
+    match decision_input:
+        case DecisionsIRState():
+            return (*_state_items(decision_input.state), *map(_image_item, decision_input.images))
+        case DecisionsIRMessages():
+            return tuple(chain.from_iterable(map(_message_items, decision_input.messages)))
+        case _:
+            assert_never(decision_input)
 
 
 def _optional(key: str, value: object) -> Mapping[str, object]:
@@ -298,13 +383,15 @@ def _systemone_question(question: DecisionsIRQuestion) -> Mapping[str, object]:
             assert_never(question)
 
 
-def ir_to_systemone_request(model: str, request: DecisionsIRRequest) -> Mapping[str, object]:
-    state: Final = _systemone_state(request.input)
+def ir_to_systemone_request(
+    model: str, request: DecisionsIRRequest, *, images_in_state: bool = False
+) -> Mapping[str, object]:
     keyed_questions: Final = zip(systemone_keys(request.questions), request.questions, strict=True)
     images: Final = input_images(request.input)
+    state_carries_images: Final = images_in_state and bool(images)
     return {
         "model": model,
-        "state": state,
+        "state": [*_multimodal_state(request.input)] if state_carries_images else _systemone_state(request.input),
         **(
             {"audio": [clip if isinstance(clip, str) else clip.model_dump() for clip in request.audio]}
             if request.audio
@@ -316,7 +403,7 @@ def ir_to_systemone_request(model: str, request: DecisionsIRRequest) -> Mapping[
             else {}
         ),
         "questions": {key: _systemone_question(question) for key, question in keyed_questions},
-        **({"images": [_systemone_image(image) for image in images]} if images else {}),
+        **({"images": [_systemone_image(image) for image in images]} if images and not state_carries_images else {}),
         **(
             {"assets": {key: asset.model_dump(exclude_none=True) for key, asset in request.assets.items()}}
             if request.assets
@@ -534,6 +621,7 @@ class BaseDecisionsConfig(ABC):
     max_total_image_bytes: int | None = None
     image_media_types: frozenset[str] | None = None
     inlines_remote_images: bool = False
+    images_in_state: bool = False
     health_check_questions: Mapping[str, Mapping[str, object]] = MappingProxyType(
         {"reachable": MappingProxyType({"type": "noul", "instructions": "Is the service reachable?"})}
     )
@@ -629,9 +717,12 @@ class BaseDecisionsConfig(ABC):
         return headers, None
 
     def supports_images_in(
-        self, decision_input: DecisionsIRState | DecisionsIRMessages, headers: Mapping[str, str]
+        self, model: str, decision_input: DecisionsIRState | DecisionsIRMessages, headers: Mapping[str, str]
     ) -> bool:
         return self.supports_images
+
+    def image_rules_for(self, model: str) -> "BaseDecisionsConfig":
+        return self
 
     def supports_assets(self, headers: Mapping[str, str]) -> bool:
         return False
@@ -665,7 +756,7 @@ class BaseDecisionsConfig(ABC):
         request: DecisionsIRRequest,
         custom_llm_provider: str,
     ) -> Mapping[str, object] | UnsupportedDecisionsRequest:
-        return ir_to_systemone_request(self.request_model(model), request)
+        return ir_to_systemone_request(self.request_model(model), request, images_in_state=self.images_in_state)
 
     def unwrap_response(self, payload: object) -> object:
         return payload

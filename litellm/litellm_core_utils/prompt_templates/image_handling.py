@@ -322,6 +322,31 @@ async def async_convert_urls_to_base64(
         raise
 
 
+def convert_url_to_base64_or_error(
+    url: str, timeout: float | httpx.Timeout | None = None
+) -> "str | litellm.ImageFetchError":
+    try:
+        return convert_url_to_base64(url, timeout=timeout)
+    except litellm.ImageFetchError as error:
+        return error
+
+
+async def _fetch_data_url_or_error(
+    url: str, in_flight: asyncio.Semaphore, timeout: float | httpx.Timeout | None
+) -> "str | litellm.ImageFetchError":
+    try:
+        return await _fetch_data_url(url, in_flight, timeout)
+    except litellm.ImageFetchError as error:
+        return error
+
+
+async def async_convert_urls_to_base64_or_errors(
+    remote_urls: tuple[str, ...], timeout: float | httpx.Timeout | None = None
+) -> "tuple[str | litellm.ImageFetchError, ...]":
+    in_flight: Final = asyncio.Semaphore(MAX_CONCURRENT_REMOTE_MEDIA_FETCHES)
+    return tuple(await asyncio.gather(*(_fetch_data_url_or_error(url, in_flight, timeout) for url in remote_urls)))
+
+
 def _remote_urls_to_inline(
     messages: Iterable[AllMessageValues], should_inline: Callable[[RemoteMedia], bool]
 ) -> tuple[str, ...]:
