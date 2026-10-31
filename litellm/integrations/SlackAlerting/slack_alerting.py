@@ -592,6 +592,13 @@ class SlackAlerting(CustomBatchLogger):
             _cache_key: Final = f"budget_alerts:{event}:{_id}"
             result: Final = await _cache.async_get_cache(key=_cache_key)
             if result is None:
+                claim_count: Final = await _cache.async_increment_cache(
+                    key=_cache_key,
+                    value=1,
+                    ttl=self.alerting_args.budget_alert_ttl,
+                )
+                if claim_count is not None and claim_count > 1:
+                    return
                 webhook_event = WebhookEvent(
                     event=event,
                     event_message=event_message,
@@ -612,18 +619,17 @@ class SlackAlerting(CustomBatchLogger):
                     alert_emails=user_info.alert_emails,
                     max_budget_alert_emails=user_info.max_budget_alert_emails,
                 )
-                await self.send_alert(
-                    message=event_message + "\n\n" + user_info_str,
-                    level="High",
-                    alert_type=AlertType.budget_alerts,
-                    user_info=webhook_event,
-                    alerting_metadata={},
-                )
-                await _cache.async_set_cache(
-                    key=_cache_key,
-                    value="SENT",
-                    ttl=self.alerting_args.budget_alert_ttl,
-                )
+                try:
+                    await self.send_alert(
+                        message=event_message + "\n\n" + user_info_str,
+                        level="High",
+                        alert_type=AlertType.budget_alerts,
+                        user_info=webhook_event,
+                        alerting_metadata={},
+                    )
+                except Exception:
+                    await _cache.async_delete_cache(key=_cache_key)
+                    raise
 
             return
         return
