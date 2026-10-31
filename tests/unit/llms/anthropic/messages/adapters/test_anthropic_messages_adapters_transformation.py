@@ -41,6 +41,7 @@ from litellm.types.llms.openai import ChatCompletionAssistantToolCall
 from litellm.types.utils import (
     ChatCompletionDeltaToolCall,
     Choices,
+    CompletionTokensDetailsWrapper,
     Delta,
     Function,
     Message,
@@ -3399,6 +3400,28 @@ def test_translate_openai_usage_to_anthropic_cache_tokens_from_dict_details_with
     assert anthropic_usage["output_tokens"] == 50
     assert anthropic_usage["cache_read_input_tokens"] == 30
     assert anthropic_usage["cache_creation_input_tokens"] == 20
+
+
+def test_translate_openai_usage_to_anthropic_maps_reasoning_tokens_to_thinking_tokens():
+    usage = Usage(
+        prompt_tokens=19,
+        completion_tokens=30,
+        total_tokens=49,
+        completion_tokens_details=CompletionTokensDetailsWrapper(reasoning_tokens=25),
+    )
+
+    anthropic_usage = LiteLLMAnthropicMessagesAdapter.translate_openai_usage_to_anthropic_usage_delta(usage)
+
+    assert anthropic_usage["output_tokens"] == 30
+    assert anthropic_usage["output_tokens_details"] == {"thinking_tokens": 25}
+
+
+def test_translate_openai_usage_to_anthropic_omits_output_tokens_details_without_reasoning_tokens():
+    usage = Usage(prompt_tokens=19, completion_tokens=5, total_tokens=24)
+
+    anthropic_usage = LiteLLMAnthropicMessagesAdapter.translate_openai_usage_to_anthropic_usage_delta(usage)
+
+    assert "output_tokens_details" not in anthropic_usage
 
 
 def test_translate_openai_usage_to_anthropic_ignores_fractional_cache_tokens():

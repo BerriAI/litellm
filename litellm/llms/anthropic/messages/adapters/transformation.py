@@ -1582,6 +1582,13 @@ class LiteLLMAnthropicMessagesAdapter:
             return from_server_tool_use
         return cls._first_positive_prompt_tokens_detail_value(usage, ("web_search_requests",))
 
+    @staticmethod
+    def _get_reasoning_tokens(usage: Usage) -> int:
+        details: Final = usage.completion_tokens_details
+        if details is None or details.reasoning_tokens is None:
+            return 0
+        return details.reasoning_tokens
+
     @classmethod
     def translate_openai_usage_to_anthropic_usage_delta(cls, usage: Usage) -> UsageDelta:
         cache_read_input_tokens: Final = cls._get_cache_read_input_tokens(usage)
@@ -1600,6 +1607,9 @@ class LiteLLMAnthropicMessagesAdapter:
             usage_delta["cache_creation_input_tokens"] = cache_creation_input_tokens
         if cache_read_input_tokens > 0:
             usage_delta["cache_read_input_tokens"] = cache_read_input_tokens
+        reasoning_tokens: Final = cls._get_reasoning_tokens(usage)
+        if reasoning_tokens > 0:
+            usage_delta["output_tokens_details"] = {"thinking_tokens": reasoning_tokens}
         if web_search_requests > 0:
             return UsageDelta(
                 **usage_delta,
