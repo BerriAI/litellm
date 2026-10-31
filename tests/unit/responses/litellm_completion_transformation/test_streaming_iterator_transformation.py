@@ -477,7 +477,6 @@ def test_tool_call_arguments_are_chunked_to_match_openai_behavior():
     assert evt is not None
     assert evt.type == ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED
     assert evt.output_index == 0
-    assert hasattr(evt, "__dict__") and "sequence_number" in evt.__dict__
 
     # Collect all remaining delta events from the pending queue by creating empty chunks
     delta_events = []
@@ -511,16 +510,10 @@ def test_tool_call_arguments_are_chunked_to_match_openai_behavior():
         assert len(evt.delta) <= 10
         assert evt.item_id == "fc_call_test"
         assert evt.output_index == 0
-        assert hasattr(evt, "__dict__") and "sequence_number" in evt.__dict__
 
     # Verify all deltas concatenated equal the original arguments
     concatenated = "".join(evt.delta for evt in delta_events)
     assert concatenated == large_arguments
-
-    # Verify sequence numbers are increasing
-    sequence_numbers = [evt.__dict__["sequence_number"] for evt in delta_events]
-    assert sequence_numbers == sorted(sequence_numbers)
-    assert len(set(sequence_numbers)) == len(sequence_numbers)  # All unique
 
 
 def test_tool_call_delta_without_id_uses_index_mapping():
@@ -1988,3 +1981,50 @@ def test_the_partial_response_billed_on_disconnect_carries_the_logging_objects_b
         partial.response.usage.input_tokens,
         partial.response.usage.output_tokens,
     ), "the bill is priced on the partial's own usage"
+
+
+def _serialized_sequence_numbers(events: Iterable[BaseLiteLLMOpenAIResponseObject]) -> list[int]:
+    payloads: Final = tuple(json.loads(event.model_dump_json()) for event in events)
+    assert all("sequence_number" in payload for payload in payloads), [
+        payload["type"] for payload in payloads if "sequence_number" not in payload
+    ]
+    return [payload["sequence_number"] for payload in payloads]
+
+
+def _long_text_chunks() -> tuple[ModelResponseStream, ...]:
+    return (*(_chunk(f"word{i} ") for i in range(300)), _chunk("end", finish_reason="stop"))
+
+
+def _text_then_tool_call_chunks() -> tuple[ModelResponseStream, ...]:
+    return (_text_opening_a_tool_call_chunk("Checking. "), _tool_arguments_chunk('{"x": 1}', finish_reason="tool_calls"))
+
+
+@pytest.mark.parametrize(
+    "stream",
+    [
+        lambda: (_chunk("Hello"), _chunk("!", finish_reason="stop")),
+        _long_text_chunks,
+        _text_then_tool_call_chunks,
+        _reasoning_then_text_chunks,
+        _reasoning_and_text_in_one_chunk,
+        _reasoning_citation_then_tool_call_finishing_chunks,
+        lambda: (_tool_call_chunk(), _chunk("", finish_reason="tool_calls")),
+    ],
+    ids=["text", "long_text", "text_then_tool", "reasoning_then_text", "reasoning_and_text", "citation_tool", "tool"],
+)
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_every_event_serializes_its_position_in_the_stream_from_zero(stream: StreamChunks, sync_mode: bool):
+    iterator: Final = _build_iterator(stream())
+    events: Final = list(iterator) if sync_mode else [event async for event in iterator]
+
+    assert _serialized_sequence_numbers(events) == list(range(len(events)))
+
+
+def test_bridged_events_answer_dict_reads_of_their_number():
+    events: Final = list(_build_iterator((_chunk("Hello"), _chunk("!", finish_reason="stop"))))
+    positions: Final = list(range(len(events)))
+
+    assert [event["sequence_number"] for event in events] == positions
+    assert [event.get("sequence_number") for event in events] == positions
+    assert all("sequence_number" in event for event in events)

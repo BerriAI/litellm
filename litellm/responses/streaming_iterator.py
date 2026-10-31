@@ -365,6 +365,7 @@ def _mid_stream_fallback_eligible(mapped_exception: Exception) -> bool:
 
 
 PRE_OUTPUT_LIFECYCLE_EVENT_TYPES: Final = frozenset({"response.created", "response.in_progress", "response.queued"})
+SEQUENCE_NUMBER_STAMPED_ON_EMISSION: Final = -1
 
 
 class BaseResponsesAPIStreamingIterator:
@@ -1911,7 +1912,6 @@ def build_synthetic_response_events(
         _build_response_status_event(openai_types.ResponsesAPIStreamEvents.RESPONSE_IN_PROGRESS, transformed),
     ]
 
-    sequence_number = 0
     output_items: Final[Sequence[object]] = getattr(transformed, "output", []) or []
     for output_index, output_item in enumerate(output_items):
         output_item_payload = _dump_response_object(output_item)
@@ -2021,35 +2021,31 @@ def build_synthetic_response_events(
                             delta=summary_text[i : i + chunk_size],
                         )
                     )
-                sequence_number += 1
                 events.append(
                     openai_types.ReasoningSummaryTextDoneEvent(
                         type=openai_types.ResponsesAPIStreamEvents.REASONING_SUMMARY_TEXT_DONE,
                         item_id=item_id,
                         output_index=output_index,
-                        sequence_number=sequence_number,
+                        sequence_number=SEQUENCE_NUMBER_STAMPED_ON_EMISSION,
                         summary_index=summary_index,
                         text=summary_text,
                     )
                 )
-                sequence_number += 1
                 events.append(
                     openai_types.ReasoningSummaryPartDoneEvent(
                         type=openai_types.ResponsesAPIStreamEvents.REASONING_SUMMARY_PART_DONE,
                         item_id=item_id,
                         output_index=output_index,
-                        sequence_number=sequence_number,
+                        sequence_number=SEQUENCE_NUMBER_STAMPED_ON_EMISSION,
                         summary_index=summary_index,
                         part=openai_types.BaseLiteLLMOpenAIResponseObject(**summary_payload),
                     )
                 )
 
-        sequence_number += 1
         events.append(
             openai_types.OutputItemDoneEvent(
                 type=openai_types.ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE,
                 output_index=output_index,
-                sequence_number=sequence_number,
                 item=openai_types.BaseLiteLLMOpenAIResponseObject(**output_item_payload),
             )
         )
@@ -2060,7 +2056,7 @@ def build_synthetic_response_events(
             response=transformed,
         )
     )
-    return events
+    return [event.model_copy(update={"sequence_number": number}) for number, event in enumerate(events)]
 
 
 # ---------------------------------------------------------------------------

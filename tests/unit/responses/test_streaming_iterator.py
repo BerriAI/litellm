@@ -2835,3 +2835,54 @@ async def test_websocket_turns_logging_survives_garbage_collection(terminal_even
     await _run_websocket_turn(logger, terminal_event)
 
     assert await _logging_tasks_left_after_garbage_collection(logger) == 1
+
+
+@pytest.mark.parametrize(
+    "output",
+    [
+        [
+            {
+                "type": "message",
+                "id": "msg_seq",
+                "status": "completed",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "hello world", "annotations": []}],
+            }
+        ],
+        [
+            {
+                "type": "reasoning",
+                "id": "rs_seq",
+                "summary": [{"type": "summary_text", "text": "thinking about it"}],
+            },
+            {
+                "type": "function_call",
+                "id": "fc_seq",
+                "call_id": "call_seq",
+                "name": "lookup",
+                "arguments": '{"id":1}',
+            },
+        ],
+    ],
+    ids=["message", "reasoning_and_tool"],
+)
+def test_synthetic_stream_serializes_every_event_position_from_zero(output: list[dict[str, object]]):
+    transformed: Final = ResponsesAPIResponse.model_validate(
+        {
+            "id": "resp_seq",
+            "created_at": int(datetime.now().timestamp()),
+            "status": "completed",
+            "model": "claude-sonnet-5-5",
+            "object": "response",
+            "output": output,
+        }
+    )
+
+    events: Final = streaming_module.build_synthetic_response_events(
+        transformed=transformed,
+        logging_obj=None,
+        chunk_size=5,
+    )
+
+    payloads: Final = tuple(json.loads(event.model_dump_json()) for event in events)
+    assert [payload.get("sequence_number") for payload in payloads] == list(range(len(payloads)))
