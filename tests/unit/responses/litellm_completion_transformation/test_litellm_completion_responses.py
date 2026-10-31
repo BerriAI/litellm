@@ -6315,6 +6315,17 @@ def test_marks_past_the_provider_cap_keep_the_newest_under_drop_params(drop_para
     assert messages[1] == {"role": "user", "content": "turn 0"}
 
 
+def test_marks_past_the_provider_cap_inside_one_message_keep_the_newest_under_drop_params():
+    parts: Final = tuple(
+        {"type": "input_text", "text": f"part {index}", "cache_control": _EPHEMERAL} for index in range(1, 6)
+    )
+
+    messages: Final = _bridged_request({"role": "user", "content": list(parts)}, drop_params=True)
+
+    content: Final = TypeAdapter(list[dict[str, object]]).validate_python(messages[-1]["content"])
+    assert ["cache_control" in part for part in content] == [False, True, True, True, True]
+
+
 def test_global_drop_params_keeps_the_newest_marks(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(litellm, "drop_params", True)
 
