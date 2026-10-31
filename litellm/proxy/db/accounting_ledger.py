@@ -161,6 +161,24 @@ _LOAD_COST: Final = """
 SELECT payload::text AS payload, schema_version::text AS schema_version, payload_hash
 FROM "LiteLLM_AccountingEvent" WHERE source_event_id = $1 AND kind = 'cost'
 """
+_PENDING_COMPILATION: Final = """
+SELECT payload::text AS payload FROM "LiteLLM_AccountingEvent"
+WHERE kind = 'outbound_usage' AND compilation_state = 'pending'
+ORDER BY recorded_at, event_id LIMIT $1::int
+"""
+_COMPILATION_RESULT: Final = """
+UPDATE "LiteLLM_AccountingEvent" SET compilation_state = $2, compilation_error = $3
+WHERE event_id = $1 AND kind = 'outbound_usage'
+"""
+
+
+async def _unpriced(db: Prisma, event_id: str, reason: str) -> Unpriced:
+    await db.execute_raw(
+        _COMPILATION_RESULT, event_id, "excluded" if reason == "not_charge_owner" else "unpriced", reason
+    )
+    return Unpriced(usage_event_id=event_id, reason=reason)
+
+
 _COMPLETED_FAMILY: Final = """
 root.source_event_id IS NULL AND root.kind IN ('inbound_usage', 'outbound_usage')
 AND root.recorded_at < $1::timestamp
@@ -338,6 +356,15 @@ class AccountingLedger:
             case _:
                 assert_never(result)
 
+    async def pending_compilation(self, limit: int = 100) -> tuple[OutboundUsageEvent, ...]:
+        if not 1 <= limit <= 1000:
+            raise ValueError("Compilation batch size must be between 1 and 1000")
+        async with self._transaction() as db:
+            rows: Final = _STRINGS.validate_python(await db.query_raw(_PENDING_COMPILATION, limit))
+        return tuple(
+            OutboundUsageEvent.model_validate_json(_json(_JSON.validate_json(row["payload"])["event"])) for row in rows
+        )
+
     async def compile_cost(
         self,
         event: OutboundUsageEvent,
@@ -352,14 +379,14 @@ class AccountingLedger:
                 return Unpriced(usage_event_id=validated.event_id, reason="usage_not_committed")
             source: Final = sources[0]
             if source["schema_version"] != "1":
-                return Unpriced(usage_event_id=validated.event_id, reason="unsupported_usage_schema")
+                return await _unpriced(db, validated.event_id, "unsupported_usage_schema")
             payload: Final = _JSON.validate_json(source["payload"])
             if payload.get("event") != validated.model_dump(mode="json"):
                 raise AccountingConflictError("Compilation input differs from the accepted usage event")
             costs: Final = _STRINGS.validate_python(await db.query_raw(_LOAD_COST, validated.event_id))
             if costs:
                 if costs[0]["schema_version"] != "1":
-                    return Unpriced(usage_event_id=validated.event_id, reason="unsupported_cost_schema")
+                    return await _unpriced(db, validated.event_id, "unsupported_cost_schema")
                 existing: Final = CostEvent.model_validate_json(
                     _json(_JSON.validate_json(costs[0]["payload"])["event"])
                 )
@@ -368,12 +395,16 @@ class AccountingLedger:
                 replay: Final = _prepare(existing, targets, costs[0]["payload"], 1, 1)
                 if replay.payload_hash != costs[0]["payload_hash"]:
                     raise AccountingConflictError("Compilation delivery set differs from the accepted cost")
+                await db.execute_raw(_COMPILATION_RESULT, validated.event_id, "compiled", None)
                 return existing
-            priced: Final = price(source["payload"])
+            try:
+                priced: Final = price(source["payload"])
+            except ValueError:
+                return await _unpriced(db, validated.event_id, "invalid_pricing_inputs")
             if isinstance(priced, Unpriced):
                 if priced.usage_event_id != validated.event_id:
                     raise AccountingConflictError("Unpriced result does not match its source usage")
-                return priced
+                return await _unpriced(db, validated.event_id, priced.reason)
             cost: Final = CostEvent(
                 event_id=f"cost:{validated.event_id}",
                 usage_event_id=validated.event_id,
@@ -382,10 +413,13 @@ class AccountingLedger:
                 charges=(Metric(name=MetricName.SPEND, value=priced.total_cost, unit="USD"),),
                 snapshot=priced,
             )
-            record: Final = _prepare(cost, targets, _json({"event": cost.model_dump(mode="json")}), 1, 1)
+            record: Final = _prepare(
+                cost, targets, _json({"event": cost.model_dump(mode="json"), "pricing_inputs": payload}), 1, 1
+            )
             accepted: Final = await _accept(db, record)
             if accepted not in ("inserted", "duplicate"):
                 raise AccountingConflictError(f"Cannot commit compiled cost: {accepted}")
+            await db.execute_raw(_COMPILATION_RESULT, validated.event_id, "compiled", None)
             return cost
 
     async def purge_completed(

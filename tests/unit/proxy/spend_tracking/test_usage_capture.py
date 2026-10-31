@@ -1,13 +1,13 @@
 import asyncio
 import json
-from collections.abc import Awaitable, Mapping
+from collections.abc import Mapping
 from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Final
 
 import pytest
 
-from litellm.accounting import Metric, MetricName, Outcome
+from litellm.accounting import Metric, MetricName, OutboundUsageEvent, Outcome, Unpriced
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.proxy.db.accounting_ledger import AccountingConflictError, UsageWrite
 from litellm.proxy.spend_tracking.usage_meter import DurableUsageMeter, UsageCaptureError, UsageCaptureSettings
@@ -441,13 +441,13 @@ async def test_supported_sync_ack_waits_for_commit(call_type: str, monkeypatch: 
     monkeypatch.setattr(proxy_server, "usage_capture", runtime)
     monkeypatch.setattr(proxy_server, "general_settings", {"accounting_sync_ack": True})
     deadlines: Final = asyncio.Queue[float | None]()
-    original_wait: Final = asyncio.wait_for
+    original_timeout: Final = asyncio.timeout
 
-    async def wait_with_deadline(awaitable: Awaitable[object], timeout: float | None) -> object:
-        deadlines.put_nowait(timeout)
-        return await original_wait(awaitable, timeout)
+    def timeout_with_deadline(delay: float | None) -> asyncio.Timeout:
+        deadlines.put_nowait(delay)
+        return original_timeout(delay)
 
-    monkeypatch.setattr(asyncio, "wait_for", wait_with_deadline)
+    monkeypatch.setattr(asyncio, "timeout", timeout_with_deadline)
     response: Final = asyncio.create_task(
         capture_proxy_response(
             _logger(call_type),
@@ -1075,17 +1075,14 @@ async def test_response_ack_timeout_preserves_success_and_later_commits(monkeypa
     runtime.start(database.write, UsageCaptureSettings(batch_size=2))
     monkeypatch.setattr(proxy_server, "usage_capture", runtime)
     monkeypatch.setattr(proxy_server, "prisma_client", None)
-    monkeypatch.setattr(proxy_server, "general_settings", {"accounting_sync_ack": True})
+    monkeypatch.setattr(
+        proxy_server, "general_settings", {"accounting_sync_ack": True, "accounting_sync_ack_timeout_seconds": 0.01}
+    )
     logger: Final = _logger()
 
-    async def expired_deadline(future: object, timeout: float) -> None:
-        raise TimeoutError("controlled response deadline")
-
     try:
-        with monkeypatch.context() as clock:
-            clock.setattr(asyncio, "wait_for", expired_deadline)
-            with pytest.raises(HTTPException) as error:
-                await capture_proxy_response(logger, ModelResponse(id="provider", usage=Usage(prompt_tokens=3)))
+        with pytest.raises(HTTPException) as error:
+            await capture_proxy_response(logger, ModelResponse(id="provider", usage=Usage(prompt_tokens=3)))
         assert error.value.status_code == 503
         await database.entered.wait()
         captured: Final = logger.model_call_details["_accounting_capture"]
@@ -1709,4 +1706,51 @@ async def test_batch_replay_reserves_the_accepted_pricing_snapshot_size() -> Non
         assert database.rows == accepted and len(accepted) == 2
         assert runtime.meter is not None and runtime.meter.pending_bytes == 0
     finally:
+        await runtime.stop(1)
+
+
+class DelayedCostCompiler:
+    def __init__(self) -> None:
+        self.entered: Final = asyncio.Event()
+        self.cancelled: Final = asyncio.Event()
+        self.release: Final = asyncio.Event()
+
+    async def compile(self, event: OutboundUsageEvent) -> Unpriced:
+        self.entered.set()
+        try:
+            await self.release.wait()
+        except asyncio.CancelledError:
+            self.cancelled.set()
+            raise
+        return Unpriced(usage_event_id=event.event_id, reason="usage_unknown")
+
+
+@pytest.mark.asyncio
+async def test_sync_ack_deadline_bounds_compilation_after_usage_commit(monkeypatch: pytest.MonkeyPatch) -> None:
+    from fastapi import HTTPException
+
+    from litellm.proxy import proxy_server
+    from litellm.proxy.spend_tracking.usage_capture import UsageCaptureRuntime, capture_proxy_response
+    from litellm.types.utils import ModelResponse, Usage
+
+    database: Final = CommitBarrier()
+    database.release.set()
+    compiler: Final = DelayedCostCompiler()
+    runtime: Final = UsageCaptureRuntime()
+    runtime.start(database.write, UsageCaptureSettings(batch_size=2), compiler=compiler)
+    monkeypatch.setattr(proxy_server, "usage_capture", runtime)
+    monkeypatch.setattr(
+        proxy_server, "general_settings", {"accounting_sync_ack": True, "accounting_sync_ack_timeout_seconds": 0.1}
+    )
+    try:
+        with pytest.raises(HTTPException) as error:
+            await asyncio.wait_for(
+                capture_proxy_response(_logger(), ModelResponse(id="provider", usage=Usage(prompt_tokens=3))), 2
+            )
+        assert error.value.status_code == 503
+        assert compiler.entered.is_set()
+        assert compiler.cancelled.is_set()
+        assert database.committed == ("caller:inbound", "provider")
+    finally:
+        compiler.release.set()
         await runtime.stop(1)

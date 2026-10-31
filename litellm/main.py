@@ -1314,7 +1314,6 @@ from litellm.responses.bridge_check import (  # noqa: E402  # re-export at the o
 )
 from litellm.responses.bridge_check import (
     bridge_reasoning_effort,
-    keep_registered_mode,
     str_keyed_mapping,
 )
 from litellm.responses.bridge_check import (  # noqa: E402  # re-export at the old definition site
@@ -1470,50 +1469,20 @@ def _record_agentic_loop_params(
     )
 
 
-def _register_custom_pricing_for_request(
+def _set_request_pricing(
+    logging_obj: object,
     model: str,
     custom_llm_provider: str,
     kwargs: dict,
     model_info: dict | None,
 ) -> None:
-    """Register per-request custom pricing in litellm.model_cost.
-
-    Router-originated requests (identified by the deployment id the router puts
-    in metadata) get their full pricing registered under that unique id only;
-    the shared ``{provider}/{model}`` key receives the entry with pricing fields
-    stripped, mirroring Router._create_deployment. This keeps one deployment's
-    pricing overrides (e.g. a zero-cost wildcard) from clobbering built-in
-    pricing used by sibling deployments of the same backend model. Direct SDK
-    calls keep the legacy behavior of registering the shared key with pricing.
-    Either way the shared key's ``mode`` follows ``keep_registered_mode``, as on
-    deployment registration, since a call routes by its own ``model_info``.
-    """
-    entry: Final = _build_custom_pricing_entry(
-        custom_llm_provider=custom_llm_provider,
-        kwargs=kwargs,
-        model_info=model_info,
-    )
-    shared_key: Final = f"{custom_llm_provider}/{model}"
-    deployment_id: Final = _get_router_deployment_id(kwargs)
-    if deployment_id is None:
-        litellm.register_model({shared_key: keep_registered_mode(shared_key, entry)}, persist_across_reloads=False)
+    if not isinstance(logging_obj, LiteLLMLoggingObj):
         return
-    shared_entry: Final = keep_registered_mode(
-        shared_key, CustomPricingLiteLLMParams.strip_custom_pricing_fields(entry)
-    )
-    litellm.register_model(
-        {deployment_id: entry},
-        persist_across_reloads=False,
-        warning_display_name=shared_key,
-        custom_llm_provider=custom_llm_provider,
-        add_to_provider_model_sets=False,
-    )
-    litellm.register_model(
-        {shared_key: shared_entry},
-        persist_across_reloads=False,
-        warning_display_name=shared_key,
-        custom_llm_provider=custom_llm_provider,
-        add_to_provider_model_sets=False,
+    logging_obj.set_request_pricing(
+        model,
+        custom_llm_provider,
+        _build_custom_pricing_entry(custom_llm_provider, kwargs, model_info),
+        _get_router_deployment_id(kwargs),
     )
 
 
@@ -5971,14 +5940,14 @@ def completion(
                 "aws_region_name", None
             )  # support region-based pricing for bedrock
 
-        ### REGISTER CUSTOM MODEL PRICING -- IF GIVEN ###
         if (
             (input_cost_per_token is not None and output_cost_per_token is not None)
             or input_cost_per_second is not None
             or output_cost_per_second is not None
             or cost_per_second is not None
         ):
-            _register_custom_pricing_for_request(
+            _set_request_pricing(
+                logging_obj=litellm_logging_obj,
                 model=model,
                 custom_llm_provider=custom_llm_provider,
                 kwargs=kwargs,
@@ -7042,14 +7011,14 @@ def embedding(
         **non_default_params,
     )
 
-    ### REGISTER CUSTOM MODEL PRICING -- IF GIVEN ###
     if (
         (input_cost_per_token is not None and output_cost_per_token is not None)
         or input_cost_per_second is not None
         or output_cost_per_second is not None
         or cost_per_second is not None
     ):
-        _register_custom_pricing_for_request(
+        _set_request_pricing(
+            logging_obj=litellm_logging_obj,
             model=model,
             custom_llm_provider=custom_llm_provider,
             kwargs=kwargs,

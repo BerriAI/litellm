@@ -14,6 +14,7 @@ import sys
 import time
 import traceback
 from collections.abc import Awaitable, Callable, Coroutine, Iterable, Iterator, Mapping, Sequence
+from contextlib import nullcontext
 from dataclasses import dataclass
 from datetime import datetime as dt_object
 from enum import Enum
@@ -25,7 +26,13 @@ from httpx import Response, Timeout
 from pydantic import BaseModel, JsonValue, TypeAdapter
 
 import litellm
-from litellm._internal_context import in_mirrored_call, outside_mirrored_call, post_response_phase
+from litellm._internal_context import (
+    current_billing_time,
+    in_mirrored_call,
+    outside_mirrored_call,
+    pinned_billing_time,
+    post_response_phase,
+)
 from litellm._logging import (
     is_debugging_on,
     redact_string,
@@ -112,6 +119,7 @@ from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import (
     object_mapping,
     with_guardrail_entry,
 )
+from litellm.litellm_core_utils.llm_cost_calc.pricing_context import RetainedPricing, retained_pricing
 from litellm.litellm_core_utils.llm_cost_calc.tool_call_cost_tracking import (
     StandardBuiltInToolCostTracking,
 )
@@ -666,6 +674,10 @@ class UsageCaptureObservation:
             return cls(serialized, provenance, response_cost)
 
 
+_REQUEST_MODEL_INFO: Final = TypeAdapter(ModelInfo)
+_REQUEST_PRICING_MODELS: Final = TypeAdapter(dict[str, ModelInfo])
+
+
 class Logging(LiteLLMLoggingBaseClass):
     usage_capture_callback: ClassVar[
         Callable[
@@ -703,6 +715,8 @@ class Logging(LiteLLMLoggingBaseClass):
         logfireLogger, \
         prometheusLogger, \
         slack_app
+    cost_billing_time: datetime.datetime | None = None
+    request_pricing: RetainedPricing | None = None
     custom_pricing: bool = False
     custom_cost_per_token: CostPerToken | None = None
     custom_cost_per_second: float | None = None
@@ -2107,7 +2121,76 @@ class Logging(LiteLLMLoggingBaseClass):
         if margin_total_amount is not None:
             self.cost_breakdown["margin_total_amount"] = margin_total_amount
 
+    def _request_pricing_model_info(
+        self, model: str, provider: str, overrides: Mapping[str, object], deployment_id: str | None
+    ) -> ModelInfo:
+        for candidate in (deployment_id, f"{provider}/{model}"):
+            if candidate is None:
+                continue
+            try:
+                return litellm.get_model_info(model=candidate, custom_llm_provider=provider)
+            except Exception:  # noqa: BLE001  # unmapped SDK models can supply their complete pricing
+                verbose_logger.debug("No base pricing for request override candidate %s", candidate)
+        return _REQUEST_MODEL_INFO.validate_python(
+            {
+                "key": deployment_id or f"{provider}/{model}",
+                "max_tokens": None,
+                "max_input_tokens": None,
+                "max_output_tokens": None,
+                "input_cost_per_token": None,
+                "output_cost_per_token": None,
+                "litellm_provider": provider,
+                "mode": overrides.get(
+                    "mode", "embedding" if "embedding" in str(self.model_call_details.get("call_type", "")) else "chat"
+                ),
+                "supported_openai_params": None,
+            }
+        )
+
+    def set_request_pricing(
+        self,
+        model: str,
+        provider: str,
+        overrides: Mapping[str, object],
+        deployment_id: str | None = None,
+    ) -> None:
+        from litellm.utils import model_info_with_pricing_overrides
+
+        base: Final = self._request_pricing_model_info(model, provider, overrides, deployment_id)
+        normalized: Final = _REQUEST_MODEL_INFO.validate_python(
+            {
+                **base,
+                "mode": base.get("mode")
+                or ("embedding" if "embedding" in str(self.model_call_details.get("call_type", "")) else "chat"),
+            }
+        )
+        effective: Final = model_info_with_pricing_overrides(normalized, overrides)
+        keys: Final = (model, f"{provider}/{model}", deployment_id or model, effective["key"])
+        self.request_pricing = RetainedPricing(
+            models_json=_REQUEST_PRICING_MODELS.dump_json({name: effective for name in keys}).decode(),
+            discounts_json=json.dumps(litellm.cost_discount_config),
+            margins_json=json.dumps(litellm.cost_margin_config),
+        )
+
     def response_cost_calculator(
+        self,
+        result: object,
+        cache_hit: bool | None = None,
+        litellm_model_name: str | None = None,
+        router_model_id: str | None = None,
+        ignore_stamped_cost: bool = False,
+    ) -> float | None:
+        context: Final = (
+            retained_pricing(self.request_pricing)
+            if self.request_pricing is not None and not self.spilled_over_ptu_for(result)
+            else nullcontext()
+        )
+        with context, pinned_billing_time(self.billing_time_for_cost()):
+            return self._calculate_response_cost(
+                result, cache_hit, litellm_model_name, router_model_id, ignore_stamped_cost
+            )
+
+    def _calculate_response_cost(
         self,
         result: object,
         cache_hit: bool | None = None,
@@ -2404,7 +2487,9 @@ class Logging(LiteLLMLoggingBaseClass):
     def custom_pricing_for(self, result: object) -> bool:
         if self.spilled_over_ptu_for(result):
             return False
-        return use_custom_pricing_for_model(litellm_params=getattr(self, "litellm_params", None))
+        return self.request_pricing is not None or use_custom_pricing_for_model(
+            litellm_params=getattr(self, "litellm_params", None)
+        )
 
     def _prompt_for_cost_calculation(self) -> str:
         """
@@ -2965,6 +3050,8 @@ class Logging(LiteLLMLoggingBaseClass):
                 metered: Final = self.model_call_details.get(REALTIME_METERED_USAGE_KEY)
                 return {
                     "id": self.litellm_call_id,
+                    "model": self.model,
+                    "results": result,
                     "usage": {"metered_usage": TypeAdapter(object).dump_python(metered, mode="json")}
                     if metered is not None
                     else None,
@@ -2974,14 +3061,29 @@ class Logging(LiteLLMLoggingBaseClass):
         )
         return normalized if assembled is None else assembled
 
+    def record_provider_reported_cost(self, cost: float | None) -> None:
+        self._provider_reported_cost = cost
+
+    def billing_time_for_cost(self) -> datetime.datetime:
+        if self.cost_billing_time is None:
+            self.cost_billing_time = current_billing_time()
+        return self.cost_billing_time
+
     def usage_capture_pricing(self, result: object) -> Mapping[str, JsonValue]:
         from litellm.utils import count_characters
 
         return TypeAdapter(dict[str, JsonValue]).validate_python(
             {
+                "response_ms": getattr(result, "_response_ms", None),
+                "provider_reported_cost": self._provider_reported_cost,
+                "current_billing_time": self.billing_time_for_cost().isoformat(),
                 "custom_pricing": self.custom_pricing_for(result),
                 "custom_cost_per_token": self.custom_cost_per_token,
                 "custom_cost_per_second": self.custom_cost_per_second,
+                "tool_response_cost": self.model_call_details.get("response_cost")
+                if self.model_call_details.get("call_type")
+                in (CallTypes.call_mcp_tool.value, CallTypes.send_message.value, CallTypes.asend_message.value)
+                else None,
                 "prompt_characters": count_characters(self._prompt_for_cost_calculation())
                 if self.model_call_details.get("call_type") in (CallTypes.speech.value, CallTypes.aspeech.value)
                 else None,
@@ -7831,14 +7933,20 @@ def get_standard_logging_object_payload(
             timing_metrics: Final = getattr(logging_obj, "response_timing_metrics", None) or {}
             clean_hidden_params["litellm_overhead_time_ms"] = timing_metrics.get("litellm_overhead_time_ms")
 
-        model_cost_information: Final = StandardLoggingPayloadSetup.get_model_cost_information(
-            base_model=base_model,
-            custom_pricing=custom_pricing,
-            custom_llm_provider=kwargs.get("custom_llm_provider"),
-            init_response_obj=init_response_obj,
-            api_base=litellm_params.get("api_base"),
-            router_model_id=logging_obj.get_router_model_id(),
+        pricing_context: Final = (
+            retained_pricing(logging_obj.request_pricing)
+            if logging_obj.request_pricing is not None and not spilled_over
+            else nullcontext()
         )
+        with pricing_context:
+            model_cost_information: Final = StandardLoggingPayloadSetup.get_model_cost_information(
+                base_model=base_model,
+                custom_pricing=custom_pricing,
+                custom_llm_provider=kwargs.get("custom_llm_provider"),
+                init_response_obj=init_response_obj,
+                api_base=litellm_params.get("api_base"),
+                router_model_id=logging_obj.get_router_model_id(),
+            )
 
         error_information, error_str = StandardLoggingPayloadSetup.get_error_information_for_logging_payload(
             metadata=metadata,

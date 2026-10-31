@@ -7531,6 +7531,11 @@ def get_model_info(
             "supported_openai_params": ["temperature", "max_tokens", "top_p", "frequency_penalty", "presence_penalty"]
         }
     """
+    from litellm.litellm_core_utils.llm_cost_calc.pricing_context import retained_model_info
+
+    retained: Final = retained_model_info(model, custom_llm_provider)
+    if retained is not None:
+        return retained
     # api_key is a per-caller credential, not part of the model identity, so it is
     # kept out of the cache key; explicit keys are resolved without the cache.
     if api_key is not None:
