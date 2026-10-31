@@ -635,6 +635,7 @@ _PRE_CALL_CHECK_FILTERED_PARAMS: Final = frozenset({"response_format"})
 _STREAM_TIMEOUT_AWARE_GENERIC_HANDLERS: Final = frozenset({"anthropic_messages", "aresponses", "responses"})
 _video_call_deployment_id: Final[ContextVar[str | None]] = ContextVar("video_call_deployment_id", default=None)
 _routed_call_type: Final[ContextVar[str | None]] = ContextVar("routed_call_type", default=None)
+_DECISIONS_MEDIA_CALL_TYPES: Final = frozenset({"adecisions", "decisions", "asystemone", "systemone"})
 _ROUTE_CAPABILITY_RESOLVERS: Final[Mapping[str, Callable[[str, LlmProviders], object | None]]] = MappingProxyType(
     {
         "adecisions": ProviderConfigManager.get_provider_decisions_config,
@@ -4153,13 +4154,16 @@ class Router(DeprecatedRouterMembers):
             raise e.original_exception from e
         raise e
 
+    def _active_default_litellm_params(self) -> Mapping[str, object]:
+        default_params: Final = _REQUEST_KWARGS_ADAPTER.validate_python(self._core_default_litellm_params)
+        return {key: value for key, value in default_params.items() if value is not None}
+
     def _params_sent_to_deployment(
         self, request_kwargs: Mapping[str, object], deployment: Deployment | None
     ) -> Mapping[str, object]:
         """The request as the deployment received it, merged in the order _update_kwargs_with_deployment applies."""
         deployment_params: Final = deployment.litellm_params.model_dump(exclude_none=True) if deployment else {}
-        default_params: Final = _REQUEST_KWARGS_ADAPTER.validate_python(self._core_default_litellm_params)
-        defaults: Final = {key: value for key, value in default_params.items() if value is not None}
+        defaults: Final = self._active_default_litellm_params()
         deployment_tool_choice: Final = (
             {"tool_choice": deployment_params["tool_choice"]}
             if deployment_params.get("tool_choice") is not None
@@ -14912,6 +14916,62 @@ class Router(DeprecatedRouterMembers):
         return cast(_RouteDeploymentsT, filtered_deployments)  # cast-ok: same list shape as the input candidates
 
     @staticmethod
+    def _decisions_deployment_refuses_media(
+        deployment: DeploymentTypedDict, group: str, request_kwargs: Mapping[str, object], *, audio: bool, videos: bool
+    ) -> bool:
+        from litellm.decisions.call import deployment_refuses_media
+
+        plain_deployment: Final = cast(Mapping[str, object], deployment)  # cast-ok: router deployments are plain dicts
+        model_info: Final = cast(Mapping[str, object], plain_deployment.get("model_info") or {})  # cast-ok: plain dict
+        deployment_params: Final = cast(Mapping[str, object], deployment["litellm_params"])  # cast-ok: plain dict
+        try:
+            model, custom_llm_provider = Router._capability_model_and_provider(deployment["litellm_params"], group)
+            return deployment_refuses_media(
+                model,
+                custom_llm_provider,
+                model_info,
+                {**deployment_params, **request_kwargs},
+                audio=audio,
+                videos=videos,
+            )
+        except Exception as e:  # noqa: BLE001  # best-effort filter: a deployment it cannot resolve answers for itself
+            verbose_router_logger.debug(
+                "litellm.router.py::_decisions_deployment_refuses_media: keeping a deployment of model=%s. Got - %s",
+                group,
+                e,
+            )
+            return False
+
+    def _without_decisions_deployments_refusing_media(
+        self, healthy_deployments: _RouteDeploymentsT, group: str, request_kwargs: Mapping[str, object] | None
+    ) -> _RouteDeploymentsT:
+        call_kwargs: Final = request_kwargs or {}
+        audio: Final = bool(call_kwargs.get("audio"))
+        videos: Final = bool(call_kwargs.get("videos"))
+        if (
+            _routed_call_type.get() not in _DECISIONS_MEDIA_CALL_TYPES
+            or not (audio or videos)
+            or isinstance(healthy_deployments, Mapping)
+        ):
+            return healthy_deployments
+
+        sent_kwargs: Final = {**self._active_default_litellm_params(), **call_kwargs}
+        deployments_taking_media: Final = [
+            deployment
+            for deployment in healthy_deployments
+            if not Router._decisions_deployment_refuses_media(
+                cast(DeploymentTypedDict, deployment),  # cast-ok: router candidates use the deployment shape
+                group,
+                sent_kwargs,
+                audio=audio,
+                videos=videos,
+            )
+        ]
+        if not deployments_taking_media:
+            return healthy_deployments
+        return cast(_RouteDeploymentsT, deployments_taking_media)  # cast-ok: same list shape as the input candidates
+
+    @staticmethod
     def _without_declared_text_only_deployments(
         healthy_deployments: _RouteDeploymentsT,
         group: str,
@@ -15635,10 +15695,14 @@ class Router(DeprecatedRouterMembers):
 
         ## ORDER FILTERING ## -> if user set 'order' in deployments, return deployments with lowest order (e.g. order=1 > order=2)
         _target_order: Final = (request_kwargs or {}).pop("_target_order", None)
-        batch_candidates: Final = self._without_declared_text_only_deployments(
-            cast(list[dict[str, object]], healthy_deployments),  # cast-ok: router deployments are plain dicts
+        batch_candidates: Final = self._without_decisions_deployments_refusing_media(
+            self._without_declared_text_only_deployments(
+                cast(list[dict[str, object]], healthy_deployments),  # cast-ok: router deployments are plain dicts
+                model,
+                messages,
+                cast(Mapping[str, object] | None, request_kwargs),  # cast-ok: legacy signature uses a bare dict
+            ),
             model,
-            messages,
             cast(Mapping[str, object] | None, request_kwargs),  # cast-ok: legacy signature uses a bare dict
         )
         embedding_batch_admitting: Final = deployments_admitting_embedding_batch(
@@ -16878,10 +16942,14 @@ class Router(DeprecatedRouterMembers):
 
         ## ORDER FILTERING ## -> if user set 'order' in deployments, return deployments with lowest order (e.g. order=1 > order=2)
         _target_order: Final = (request_kwargs or {}).pop("_target_order", None)
-        batch_candidates: Final = self._without_declared_text_only_deployments(
-            cast(list[dict[str, object]], healthy_deployments),  # cast-ok: router deployments are plain dicts
+        batch_candidates: Final = self._without_decisions_deployments_refusing_media(
+            self._without_declared_text_only_deployments(
+                cast(list[dict[str, object]], healthy_deployments),  # cast-ok: router deployments are plain dicts
+                model,
+                messages,
+                cast(Mapping[str, object] | None, request_kwargs),  # cast-ok: legacy signature uses a bare dict
+            ),
             model,
-            messages,
             cast(Mapping[str, object] | None, request_kwargs),  # cast-ok: legacy signature uses a bare dict
         )
         embedding_batch_admitting: Final = deployments_admitting_embedding_batch(
