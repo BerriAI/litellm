@@ -3086,3 +3086,39 @@ async def test_pass_through_guardrail_text_is_the_client_body_without_the_inject
     texts: Final = [call["inputs"]["texts"] for call in guardrail.apply_calls]
     assert [[json.loads(text) for text in call_texts] for call_texts in texts] == [[body]], texts
     assert data["litellm_metadata"]["user_api_key_user_email"] == "someone@example.com", data["litellm_metadata"]
+
+
+@pytest.mark.parametrize("hook", ["async_pre_call_hook", "async_moderation_hook"])
+@pytest.mark.parametrize(
+    ("call_type", "request_body", "scanned_texts"),
+    [
+        (CallTypes.acompact_responses, {"input": [{"role": "user", "content": "Remember forbiddenword"}]}, [["Remember forbiddenword"]]),
+        (CallTypes.compact_responses, {"input": [{"role": "user", "content": "Remember forbiddenword"}]}, [["Remember forbiddenword"]]),
+        (CallTypes.aget_responses, {"response_id": "resp_abc"}, []),
+        (CallTypes.adelete_responses, {"response_id": "resp_abc"}, []),
+        (CallTypes.acancel_responses, {"response_id": "resp_abc"}, []),
+    ],
+)
+@pytest.mark.asyncio
+async def test_compact_input_is_guardrailed_like_create_while_stored_response_lookups_pass(
+    monkeypatch: pytest.MonkeyPatch,
+    hook: str,
+    call_type: CallTypes,
+    request_body: dict[str, object],
+    scanned_texts: list[list[str]],
+) -> None:
+    _patch_translation_mappings(monkeypatch, load_guardrail_translation_mappings())
+    guardrail: Final = RecordingGuardrail()
+    data: Final = {"model": "gpt-4o", **request_body, "guardrail_to_apply": guardrail}
+    user_api_key_dict: Final = UserAPIKeyAuth(token="hashed-key")
+
+    if hook == "async_pre_call_hook":
+        await UnifiedLLMGuardrails().async_pre_call_hook(
+            user_api_key_dict=user_api_key_dict, cache=DualCache(), data=data, call_type=call_type.value
+        )
+    else:
+        await UnifiedLLMGuardrails().async_moderation_hook(
+            data=data, user_api_key_dict=user_api_key_dict, call_type=call_type.value
+        )
+
+    assert [call["inputs"]["texts"] for call in guardrail.apply_calls] == scanned_texts
