@@ -10,6 +10,8 @@ from dotenv import load_dotenv
 load_dotenv()
 
 import pytest
+from fastapi import HTTPException
+
 import litellm
 from litellm.proxy.enterprise.enterprise_hooks.banned_keywords import (
     ENTERPRISE_BannedKeywords,
@@ -58,3 +60,25 @@ async def test_banned_keywords_check():
         )
     except Exception as e:
         pytest.fail(f"An error occurred - {str(e)}")
+
+
+@pytest.mark.parametrize("call_type", ["aresponses", "acompact_responses"])
+@pytest.mark.asyncio
+async def test_banned_keywords_block_responses_and_compact_input(
+    call_type: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "banned_keywords_list", ["forbiddenword"])
+
+    with pytest.raises(HTTPException) as raised:
+        await ENTERPRISE_BannedKeywords().async_pre_call_hook(
+            user_api_key_dict=UserAPIKeyAuth(api_key=hash_token("sk-98765")),
+            cache=DualCache(),
+            call_type=call_type,
+            data={
+                "model": "gpt-4o",
+                "input": [{"role": "user", "content": [{"type": "input_text", "text": "Remember forbiddenword"}]}],
+            },
+        )
+
+    assert raised.value.status_code == 400
+

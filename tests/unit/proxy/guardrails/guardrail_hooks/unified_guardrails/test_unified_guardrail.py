@@ -14,6 +14,7 @@ import anyio
 import pytest
 
 import litellm
+from litellm._logging import verbose_proxy_logger
 from litellm.caching import DualCache
 from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
@@ -3336,3 +3337,33 @@ async def test_a_route_without_a_call_type_passes_input_guardrails_unscanned(
         f"route '/v1/vector_stores' but call type '{route_call_type}' has no guardrail translation handler; "
         f"skipping {stage} scanning" in caplog.text
     )
+
+
+@pytest.mark.parametrize("hook", ["async_pre_call_hook", "async_moderation_hook"])
+@pytest.mark.parametrize(
+    ("call_type", "request_route"),
+    [("amoderation", "/v1/moderations"), ("aget_responses", "/v1/responses/resp_abc")],
+)
+@pytest.mark.asyncio
+async def test_a_call_type_without_an_input_handler_passes_input_guardrails_unscanned_without_a_warning(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, hook: str, call_type: str, request_route: str
+) -> None:
+    _patch_translation_mappings(monkeypatch, load_guardrail_translation_mappings())
+    guardrail: Final = RecordingGuardrail()
+    data: Final = {"model": "gpt-4o", "input": "Remember forbiddenword", "guardrail_to_apply": guardrail}
+    user_api_key_dict: Final = UserAPIKeyAuth(token="hashed-key", request_route=request_route)
+
+    with caplog.at_level(logging.WARNING, logger=verbose_proxy_logger.name):
+        result: Final = (
+            await UnifiedLLMGuardrails().async_pre_call_hook(
+                user_api_key_dict=user_api_key_dict, cache=DualCache(), data=data, call_type=call_type
+            )
+            if hook == "async_pre_call_hook"
+            else await UnifiedLLMGuardrails().async_moderation_hook(
+                data=data, user_api_key_dict=user_api_key_dict, call_type=call_type
+            )
+        )
+
+    assert guardrail.apply_calls == []
+    assert result == {"model": "gpt-4o", "input": "Remember forbiddenword"}
+    assert [r.getMessage() for r in caplog.records if r.name == verbose_proxy_logger.name] == []

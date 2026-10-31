@@ -102,12 +102,11 @@ def _as_endpoint_translation(translation: _EndpointTranslation) -> _EndpointTran
     return translation
 
 
-def _translated_call_type(call_type: object, mappings: Mapping[CallTypes, object]) -> CallTypes | None:
+def _known_call_type(call_type: object) -> CallTypes | None:
     try:
-        known_call_type: Final = CallTypes(call_type)
+        return CallTypes(call_type)
     except ValueError:
         return None
-    return known_call_type if known_call_type in mappings else None
 
 
 def _warn_untranslated_call_type(
@@ -307,11 +306,13 @@ class UnifiedLLMGuardrails(CustomLogger):
             return data
 
         mappings: Final = load_guardrail_translation_mappings()
-        input_call_type: Final = _translated_call_type(call_type, mappings)
+        input_call_type: Final = _known_call_type(call_type)
         if input_call_type is None:
             _warn_untranslated_call_type(
                 guardrail_to_apply.guardrail_name, user_api_key_dict.request_route, call_type, "pre-call"
             )
+            return data
+        if input_call_type not in mappings:
             return data
 
         endpoint_translation: Final = _as_endpoint_translation(mappings[input_call_type]())
@@ -361,11 +362,13 @@ class UnifiedLLMGuardrails(CustomLogger):
             return data
 
         mappings: Final = load_guardrail_translation_mappings()
-        input_call_type: Final = _translated_call_type(call_type, mappings)
+        input_call_type: Final = _known_call_type(call_type)
         if input_call_type is None:
             _warn_untranslated_call_type(
                 guardrail_to_apply.guardrail_name, user_api_key_dict.request_route, call_type, "during-call"
             )
+            return data
+        if input_call_type not in mappings:
             return data
 
         endpoint_translation: Final = _as_endpoint_translation(mappings[input_call_type]())

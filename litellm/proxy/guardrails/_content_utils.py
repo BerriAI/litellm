@@ -32,12 +32,15 @@ from litellm.responses.litellm_completion_transformation.compaction_items import
 #
 #   /v1/chat/completions   -> "acompletion"
 #   /v1/responses          -> "aresponses"
+#   /v1/responses/compact  -> "acompact_responses"
 #
 # ``"completion"`` is included for SDK / internal callers that invoke
 # ``pre_call_hook`` directly with the sync name. Embedding, moderation,
 # audio, and transcription endpoints are deliberately excluded — text
 # guardrails on those paths are a separate scope.
-TEXT_CONTENT_CALL_TYPES: Final[frozenset[str]] = frozenset({"completion", "acompletion", "aresponses"})
+TEXT_CONTENT_CALL_TYPES: Final[frozenset[str]] = frozenset(
+    {"completion", "acompletion", "aresponses", "acompact_responses"}
+)
 
 
 def is_text_content_call_type(call_type: str) -> bool:
