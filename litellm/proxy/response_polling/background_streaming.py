@@ -406,11 +406,10 @@ async def background_streaming_task(
                                         output_items[item_id] = item
                                 state_dirty = True
 
-                        # Flush state to Redis if interval elapsed
-                        await flush_state_if_needed()
-
-                    except json.JSONDecodeError as e:
+                    except (json.JSONDecodeError, AttributeError, TypeError) as e:
                         verbose_proxy_logger.warning("Failed to parse streaming chunk: %s", e)
+                    else:
+                        await flush_state_if_needed()
 
             # Final flush to ensure all accumulated state is saved
             await flush_state_if_needed(force=True)

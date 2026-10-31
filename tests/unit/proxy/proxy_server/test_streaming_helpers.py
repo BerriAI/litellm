@@ -193,6 +193,55 @@ async def test_responses_stream_sends_no_failure_event_after_an_upstream_error_e
     assert json.loads(frames[-1].split("data: ", 1)[1])["message"] == "upstream failed"
 
 
+class _MaskedEverywhereString(str):
+    def __repr__(self) -> str:
+        return "'***'"
+
+    def __str__(self) -> str:
+        return "***"
+
+    def __format__(self, format_spec: str) -> str:
+        return "***"
+
+
+async def _responses_frames(chunks: Iterable[Mapping[str, object]]) -> tuple[str, ...]:
+    async def upstream() -> AsyncIterator[Mapping[str, object]]:
+        for chunk in chunks:
+            yield chunk
+
+    return tuple(
+        [
+            frame.decode() if isinstance(frame, bytes) else frame
+            async for frame in select_data_generator(
+                response=upstream(), user_api_key_dict=_user_auth(), request_data={}, responses_stream_errors=True
+            )
+        ]
+    )
+
+
+@pytest.mark.asyncio
+async def test_responses_stream_never_writes_a_masked_type_value_on_its_event_line() -> None:
+    frames: Final = await _responses_frames(({"type": _MaskedEverywhereString("hook-canary"), "delta": "hi"},))
+
+    assert len(frames) == 1
+    assert "hook-canary" not in frames[0]
+    assert json.loads(frames[0].split("data: ", 1)[1])["delta"] == "hi"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "chunk",
+    [{"type": 5}, {"type": "response.completed", "response": "hook-text"}],
+    ids=["non_string_type", "string_response"],
+)
+async def test_responses_stream_sends_a_hook_chunk_its_event_model_cannot_read_as_a_data_frame(
+    chunk: Mapping[str, object],
+) -> None:
+    frames: Final = await _responses_frames((chunk,))
+
+    assert frames == (f"data: {json.dumps(chunk)}\n\n",)
+
+
 class _HookOutputItem(BaseModel, frozen=True):
     id: str
     type: str
@@ -587,6 +636,39 @@ def test_responses_sse_chunk_keeps_printing_a_dict_whose_item_repr_adds_a_key() 
     assert isinstance(frame, str)
     assert "hook-canary" not in frame
     assert json.loads(frame.removeprefix("data: "))["meta"] == {"v": "'***'", "m": "_ParentGrower()", "added": 1}
+
+
+class _KeySwapper:
+    def __init__(self, parent: dict[str, object], removed: str, added: Mapping[str, object]) -> None:
+        self.parent: Final = parent
+        self.removed: Final = removed
+        self.added: Final = added
+
+    def __repr__(self) -> str:
+        del self.parent[self.removed]  # mutable-ok: the hook value's repr resizes the dict that holds it
+        self.parent.update(self.added)  # mutable-ok: the hook value's repr resizes the dict that holds it
+        return "_KeySwapper()"
+
+
+@pytest.mark.parametrize(
+    ("added", "later", "expected"),
+    [
+        ({}, {"z1": "one", "z2": "two"}, {"a": "first", "d": "_KeySwapper()", "z1": "one", "z2": "two"}),
+        ({"z": "zed"}, {}, {"a": "first", "d": "_KeySwapper()", "z": "zed"}),
+    ],
+    ids=["removes_a_shown_key", "removes_a_shown_key_and_adds_one"],
+)
+def test_responses_sse_chunk_keeps_every_key_repr_prints_when_an_item_repr_resizes_its_dict(
+    added: Mapping[str, object], later: Mapping[str, object], expected: Mapping[str, object]
+) -> None:
+    parent: Final[dict[str, object]] = {"a": "first"}
+    parent["d"] = _KeySwapper(parent, "a", added)  # mutable-ok: the swapper needs the dict it resizes
+    parent.update(later)  # mutable-ok: keys stored after the swapper
+
+    frame: Final = _format_responses_sse_chunk(chunk={"type": "response.output_text.delta", "meta": parent})
+
+    assert isinstance(frame, str)
+    assert json.loads(frame.removeprefix("data: "))["meta"] == expected
 
 
 class _StrFailsOnceDict(dict[str, str]):
@@ -2445,7 +2527,7 @@ def test_responses_failure_after_a_hook_chunk_continues_its_sequence_number_like
 ) -> None:
     state: Final = ResponsesStreamErrorState()
     state.observe_chunk(chunk)
-    state.mark_emitted("data: {}\n\n")
+    state.mark_emitted(_format_responses_sse_chunk(chunk=chunk))
 
     failure_frame: Final = state.format_failure(RuntimeError("stream closed"))
 

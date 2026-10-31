@@ -1643,8 +1643,52 @@ class TestBackgroundStreamingTerminalEvents:
                 None,
                 {"input_tokens": 3},
             ),
+            (
+                (
+                    'event: error\ndata: {"error": {"code": "' + "9" * 4400 + '", "message": "huge code"}}\n\n',
+                    'data: {"type": "response.completed", "response": {"status": "completed", "usage": {"input_tokens": 3}}}\n\n',
+                ),
+                "completed",
+                None,
+                {"input_tokens": 3},
+            ),
+            (
+                (
+                    'data: {"type": "response.output_item.done", "output_index": 0, "item": "hook-text"}\n\n',
+                    'data: {"type": "response.completed", "response": {"status": "completed", "usage": {"input_tokens": 3}}}\n\n',
+                ),
+                "completed",
+                None,
+                {"input_tokens": 3},
+            ),
+            (
+                (
+                    'event: error\ndata: {"error": {"code": "400", "message": "output blocked by policy"}}\n\n'
+                    'event: response.completed\ndata: {"type": "response.completed", "response": {"status": "completed"}}\n\n',
+                ),
+                "completed",
+                None,
+                None,
+            ),
+            (
+                (
+                    'data: {"type": "response.output_text.delta", "delta": "hi"}\n\n',
+                    'data: [DONE]\n\nevent: error\ndata: {"error": {"code": "400", "message": "output blocked by policy"}}\n\n',
+                ),
+                "completed",
+                None,
+                None,
+            ),
         ],
-        ids=["error_frame_after_a_delta", "error_frame_then_completed", "unspaced_delta_then_completed"],
+        ids=[
+            "error_frame_after_a_delta",
+            "error_frame_then_completed",
+            "unspaced_delta_then_completed",
+            "error_code_past_the_int_digit_limit_then_completed",
+            "output_item_done_with_a_string_item_then_completed",
+            "error_frame_then_completed_in_one_chunk",
+            "error_frame_after_done_in_one_chunk",
+        ],
     )
     async def test_a_poll_stores_what_its_stream_ended_with(
         self,

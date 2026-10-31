@@ -7,7 +7,7 @@ from collections.abc import Iterable, Iterator, Mapping, Sequence
 from contextlib import suppress
 from enum import Enum
 from http import HTTPStatus
-from itertools import chain, groupby, islice, zip_longest
+from itertools import chain, groupby, takewhile, zip_longest
 from types import MappingProxyType
 from typing import Final
 
@@ -197,12 +197,13 @@ def _stored_items(value: Mapping[object, object]) -> Iterable[tuple[object, obje
 
 
 def _live_items(value: Mapping[object, object]) -> Iterator[tuple[object, object]]:
-    shown = 0  # rebind-ok: a repr that resizes its dict resumes after the items shown, the way dict's repr does
+    shown: Final = dict[int, object]()
     while True:
         with suppress(RuntimeError):
-            for pair in islice(_stored_items(value), shown, None):
-                shown += 1
-                yield pair
+            for key, item in _stored_items(value):
+                if id(key) not in shown:
+                    shown[id(key)] = key
+                    yield key, item
             return
 
 
@@ -381,7 +382,11 @@ def _status_error_code(status_code: int | None) -> str:
 def _status_of(code: str | int | None) -> int | None:
     if isinstance(code, int):
         return code
-    return int(code) if code is not None and code.isdecimal() else None
+    if code is None or not code.isdecimal():
+        return None
+    with suppress(ValueError):
+        return int(code)
+    return None
 
 
 def _response_error_code(details: _FailureDetails) -> str:
@@ -470,8 +475,38 @@ def _frame_events(frames: str) -> tuple[_StreamEvent, ...]:
     return tuple(_block_event(lines) for lines in _blocks(frames))
 
 
+def _before_done(lines: Sequence[str]) -> bool:
+    return _block_data(lines).strip() != "[DONE]"
+
+
+def _terminal_blocks(frame: str) -> tuple[tuple[tuple[str, ...], _StreamEvent], ...]:
+    read: Final = ((lines, _block_event(lines)) for lines in takewhile(_before_done, _blocks(frame)))
+    return tuple((lines, event) for lines, event in read if event.type in _TERMINAL_EVENT_TYPES)
+
+
 def frame_error_data(frame: str) -> str | None:
-    return next((_block_data(lines) for lines in _blocks(frame) if _block_event(lines).type == "error"), None)
+    terminal: Final = _terminal_blocks(frame)
+    if not terminal:
+        return None
+    lines, event = terminal[-1]
+    return _block_data(lines) if event.type == "error" else None
+
+
+def _observed_event(chunk: object) -> _StreamEvent | None:
+    if not isinstance(chunk, (BaseModel, Mapping)):
+        return None
+    try:
+        return _StreamEvent.model_validate(chunk)
+    except ValidationError:
+        return None
+
+
+def _wire_event(frame: str | bytes) -> _StreamEvent | None:
+    text: Final = frame.decode("utf-8", errors="replace") if isinstance(frame, bytes) else frame
+    try:
+        return _StreamEvent.model_validate_json(text.removeprefix("data: "))
+    except ValidationError:
+        return None
 
 
 class ResponsesStreamErrorState:
@@ -482,9 +517,11 @@ class ResponsesStreamErrorState:
         self.sequence_number = -1
         self.terminal_emitted = False
         self._pending_event: _StreamEvent | None = None
+        self._pending_on_wire = False
 
     def observe_chunk(self, chunk: object) -> None:
-        self._pending_event = _StreamEvent.model_validate(chunk) if isinstance(chunk, (BaseModel, Mapping)) else None
+        self._pending_event = _observed_event(chunk)
+        self._pending_on_wire = isinstance(chunk, Mapping)
 
     def _record(self, event: _StreamEvent) -> None:
         if event.sequence_number is not None:
@@ -503,11 +540,12 @@ class ResponsesStreamErrorState:
         return frames
 
     def mark_emitted(self, frame: str | bytes) -> str | bytes:
-        event: Final = self._pending_event
-        if event is None:
+        observed: Final = self._pending_event
+        if observed is None:
             return frame
-        self._record(event)
-        if not event.type or "\n" in event.type or "\r" in event.type:
+        event: Final = _wire_event(frame) if self._pending_on_wire else observed
+        self._record(observed if event is None else event)
+        if event is None or not event.type or "\n" in event.type or "\r" in event.type:
             return frame
         prefix: Final = f"event: {event.type}\n"
         return prefix.encode("utf-8") + frame if isinstance(frame, bytes) else prefix + frame

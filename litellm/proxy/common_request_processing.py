@@ -7,6 +7,7 @@ from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, 
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from functools import lru_cache
+from http import HTTPStatus
 from itertools import chain
 from types import MappingProxyType
 from typing import (
@@ -1340,11 +1341,16 @@ class FirstChunkSseFraming:
 
     data_payload: SseDataPayload
     error_frames: Callable[[Mapping[str, object]], tuple[str, ...]]
+    lowest_error_status: int
 
 
-OPENAI_FIRST_CHUNK_FRAMING: Final = FirstChunkSseFraming(data_payload=_sse_data_payload, error_frames=_sse_error_frames)
+OPENAI_FIRST_CHUNK_FRAMING: Final = FirstChunkSseFraming(
+    data_payload=_sse_data_payload, error_frames=_sse_error_frames, lowest_error_status=HTTPStatus.CONTINUE
+)
 RESPONSES_FIRST_CHUNK_FRAMING: Final = FirstChunkSseFraming(
-    data_payload=_responses_event_data_payload, error_frames=_responses_error_frames
+    data_payload=_responses_event_data_payload,
+    error_frames=_responses_error_frames,
+    lowest_error_status=HTTPStatus.BAD_REQUEST,
 )
 
 
@@ -1425,7 +1431,7 @@ async def create_response(
                 error_code_from_chunk: Final = await _parse_event_data_for_error(
                     first_chunk_value, framing.data_payload
                 )
-                if error_code_from_chunk is not None:
+                if error_code_from_chunk is not None and error_code_from_chunk >= framing.lowest_error_status:
                     # First chunk is an error, stream hasn't really started yet
                     # Should return standard JSON error response instead of SSE format
                     final_status_code = error_code_from_chunk

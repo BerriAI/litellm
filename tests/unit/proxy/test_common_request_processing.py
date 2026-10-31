@@ -2398,6 +2398,24 @@ class TestCommonRequestProcessingHelpers:
         assert len(frames) == len(frame_starts)
         assert all(frame.startswith(start) for frame, start in zip(frames, frame_starts, strict=True))
 
+    async def test_a_responses_stream_whose_first_frame_names_a_success_code_streams_on(self):
+        frames: Final = (
+            'data: {"error": {"message": "note", "type": "guardrail_scan_error", "code": 200}}\n\n',
+            'event: response.completed\ndata: {"type": "response.completed", "sequence_number": 1}\n\n',
+        )
+
+        async def responses_stream():
+            for frame in frames:
+                yield frame
+
+        response: Final = await create_response(
+            responses_stream(), "text/event-stream", {}, framing=RESPONSES_FIRST_CHUNK_FRAMING
+        )
+
+        assert isinstance(response, StreamingResponse)
+        assert response.status_code == status.HTTP_200_OK
+        assert tuple(await self.consume_stream(response)) == frames
+
     async def test_create_streaming_response_first_chunk_not_error(self):
         async def mock_generator():
             yield 'data: {"content": "first part"}\n\n'
