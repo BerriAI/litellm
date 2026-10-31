@@ -1,4 +1,6 @@
 import datetime
+import logging
+from typing import Final
 import httpx
 import pytest
 import json
@@ -1102,19 +1104,25 @@ class TestOCIReasoningEffort:
         )
         assert chat_request.get("reasoningEffort") == "HIGH"
 
-    def test_reasoning_effort_unsupported_on_cohere_dropped(self):
-        """drop_params=True → silently drop reasoning_effort for Cohere."""
+    def test_reasoning_effort_unsupported_on_cohere_dropped_with_one_warning(self, caplog):
         from litellm.llms.oci.chat.transformation import OCIChatConfig
 
         config = OCIChatConfig()
-        result = config.map_openai_params(
-            non_default_params={"reasoning_effort": "low"},
-            optional_params={},
-            model="cohere.command-latest",
-            drop_params=True,
-        )
+        with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+            result = config.map_openai_params(
+                non_default_params={"reasoning_effort": "low"},
+                optional_params={},
+                model="cohere.command-latest",
+                drop_params=True,
+            )
+        drop_warnings = [record.getMessage() for record in caplog.records if "Dropping" in record.getMessage()]
         assert "reasoning_effort" not in result
         assert "reasoningEffort" not in result
+        assert len(drop_warnings) == 1
+        assert all(
+            fragment in drop_warnings[0]
+            for fragment in ("reasoning_effort='low'", "cohere.command-latest", "(drop_params=True)")
+        )
 
     def test_reasoning_effort_unsupported_on_cohere_raises(self):
         """drop_params=False → raise rather than ship a payload Cohere will reject."""
@@ -2109,16 +2117,20 @@ class TestReasoningEffortGating:
         assert "reasoning_effort" not in OCIChatConfig().get_supported_openai_params("meta.llama-3.3-70b-instruct")
 
     @pytest.mark.parametrize("model", SERVED_GROK_4_20_MODELS)
-    def test_reasoning_effort_dropped_under_drop_params(self, local_model_cost_map, model):
-        result = OCIChatConfig().map_openai_params(
-            non_default_params={"reasoning_effort": "low", "temperature": 0.1},
-            optional_params={},
-            model=model,
-            drop_params=True,
-        )
+    def test_reasoning_effort_dropped_under_drop_params_with_one_warning(self, local_model_cost_map, model, caplog):
+        with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+            result = OCIChatConfig().map_openai_params(
+                non_default_params={"reasoning_effort": "low", "temperature": 0.1},
+                optional_params={},
+                model=model,
+                drop_params=True,
+            )
+        drop_warnings = [record.getMessage() for record in caplog.records if "Dropping" in record.getMessage()]
         assert "reasoningEffort" not in result
         assert "reasoning_effort" not in result
         assert result["temperature"] == 0.1
+        assert len(drop_warnings) == 1
+        assert all(fragment in drop_warnings[0] for fragment in ("reasoning_effort='low'", model, "(drop_params=True)"))
 
     def test_reasoning_effort_raises_without_drop_params_for_gated_grok(self, local_model_cost_map, monkeypatch):
         monkeypatch.setattr(litellm, "drop_params", False)
@@ -2164,3 +2176,32 @@ class TestOpenAIPrefixMaxTokensKey:
         chat_request = _oci_chat_request("openai.gpt-5", {"max_tokens": 64})
         assert chat_request["maxCompletionTokens"] == 64
         assert "maxTokens" not in chat_request
+
+
+def test_transform_request_sends_a_pdf_file_part_as_an_image_data_url() -> None:
+    pdf_data_url: Final = "data:application/pdf;base64,JVBERi0xLjQK"
+    transformed_request: Final = OCIChatConfig().transform_request(
+        model="google.gemini-2.5-flash",
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Summarize this."},
+                    {"type": "file", "file": {"filename": "report.pdf", "file_data": pdf_data_url}},
+                ],
+            }
+        ],
+        optional_params={"oci_compartment_id": TEST_COMPARTMENT_ID},
+        litellm_params={},
+        headers={},
+    )
+
+    assert transformed_request["chatRequest"]["messages"] == [
+        {
+            "role": "USER",
+            "content": [
+                {"type": "TEXT", "text": "Summarize this."},
+                {"type": "IMAGE", "imageUrl": {"url": pdf_data_url}},
+            ],
+        }
+    ]

@@ -7,6 +7,7 @@ repository.workspace = true
 description = "The types of litellm/types/router.py: a deployment's litellm_params as a config or a caller spells them"
 
 [dependencies]
+litellm-secret-value.workspace = true
 litellm-auth-types.workspace = true
 serde.workspace = true
 serde_json.workspace = true

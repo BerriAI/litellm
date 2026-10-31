@@ -26,7 +26,24 @@ from litellm.llms.azure_ai.anthropic.count_tokens.token_counter import AzureAIAn
 from litellm.llms.azure_ai.anthropic.count_tokens.transformation import (
     AzureAIAnthropicCountTokensConfig,
 )
-from litellm.types.utils import TokenCountMessagesFormat, TokenCountResponse
+from litellm.types.utils import CountContextManagement, TokenCountMessagesFormat, TokenCountResponse
+from litellm.constants import ANTHROPIC_TOKEN_COUNTING_BETA_VERSION
+from litellm.types.llms.anthropic import ANTHROPIC_BETA_HEADER_VALUES
+
+COMPACTION_BETA = ANTHROPIC_BETA_HEADER_VALUES.COMPACT_2026_09_04.value
+COMPACTED_HISTORY = [
+    {
+        "role": "assistant",
+        "content": [
+            {
+                "type": "compaction",
+                "content": "The user is building a recipe app and asked for one-sentence class descriptions.",
+                "signature": "EqQBCkYIBRgCKkBjZ2xhc3M" * 40,
+            }
+        ],
+    },
+    {"role": "user", "content": "Now do the same for Ingredient."},
+]
 
 
 @pytest.mark.parametrize(
@@ -169,6 +186,54 @@ def test_transform_includes_tools():
     )
 
     assert result["tools"] == tools
+
+
+_PATH_SCHEMA: Final[dict[str, JsonValue]] = {"type": "object", "properties": {"path": {"type": "string"}}}
+
+
+@pytest.mark.parametrize(
+    ("model", "drop_params", "expected_tools"),
+    [
+        (
+            "claude-haiku-5-5",
+            True,
+            [
+                {"name": "read_file", "input_schema": _PATH_SCHEMA},
+                {"name": "list_files", "input_schema": _PATH_SCHEMA, "defer_loading": True},
+            ],
+        ),
+        (
+            "claude-haiku-5-5",
+            False,
+            [
+                {"name": "read_file", "input_schema": _PATH_SCHEMA, "custom": {"eager_input_streaming": True}},
+                {"name": "list_files", "input_schema": _PATH_SCHEMA, "defer_loading": True},
+            ],
+        ),
+        (
+            "deepseek-chat",
+            True,
+            [
+                {"name": "read_file", "input_schema": _PATH_SCHEMA},
+                {"name": "list_files", "input_schema": _PATH_SCHEMA},
+            ],
+        ),
+    ],
+)
+def test_transform_counts_tools_the_way_messages_sends_them(
+    model: str, drop_params: bool, expected_tools: list[dict[str, JsonValue]]
+):
+    result: Final = AnthropicCountTokensConfig().transform_request_to_count_tokens(
+        model=model,
+        messages=[{"role": "user", "content": "Hello"}],
+        tools=[
+            {"name": "read_file", "input_schema": _PATH_SCHEMA, "custom": {"eager_input_streaming": True}},
+            {"name": "list_files", "input_schema": _PATH_SCHEMA, "custom": {"defer_loading": True}},
+        ],
+        drop_params=drop_params,
+    )
+
+    assert result["tools"] == expected_tools
 
 
 def test_transform_includes_system_and_tools():
@@ -842,3 +907,115 @@ async def test_counter_sends_the_structured_output_tool_choice_and_thinking_chat
         inference["tool_choice"],
         inference["tools"],
     )
+
+
+def test_headers_add_the_compaction_beta_only_for_a_compacted_history():
+    config = AnthropicCountTokensConfig()
+    auth_header = {"x-api-key": "sk-ant-api03-test-key"}
+
+    with_block = config.get_count_tokens_headers(auth_header, COMPACTED_HISTORY)["anthropic-beta"].split(",")
+    plain = config.get_count_tokens_headers(auth_header, [{"role": "user", "content": "hi"}])["anthropic-beta"]
+
+    assert COMPACTION_BETA in with_block
+    assert ANTHROPIC_TOKEN_COUNTING_BETA_VERSION in with_block
+    assert plain == ANTHROPIC_TOKEN_COUNTING_BETA_VERSION
+
+
+@pytest.mark.asyncio
+async def test_handler_sends_the_compaction_beta_with_a_compacted_history(httpx_transport_clients):
+    with respx.mock:
+        route = respx.post("https://gateway.example/v1/messages/count_tokens").mock(
+            return_value=httpx.Response(200, json={"input_tokens": 404})
+        )
+        result = await AnthropicCountTokensHandler().handle_count_tokens_request(
+            model="claude-sonnet-5-5",
+            messages=COMPACTED_HISTORY,
+            auth_header={"x-api-key": "sk-ant-api03-test-key"},
+            api_base="https://gateway.example",
+        )
+
+    assert result == {"input_tokens": 404}
+    betas = route.calls.last.request.headers["anthropic-beta"].split(",")
+    assert COMPACTION_BETA in betas
+    assert ANTHROPIC_TOKEN_COUNTING_BETA_VERSION in betas
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("httpx_transport_clients")
+@pytest.mark.parametrize(
+    ("context_management", "forwarded", "sent_beta", "unsent_beta"),
+    (
+        pytest.param(
+            {"edits": [{"type": "compact_20260112"}]},
+            {"edits": [{"type": "compact_20260112"}]},
+            ANTHROPIC_BETA_HEADER_VALUES.COMPACT_2026_01_12.value,
+            ANTHROPIC_BETA_HEADER_VALUES.CONTEXT_MANAGEMENT_2025_06_27.value,
+            id="compact",
+        ),
+        pytest.param(
+            {"edits": [{"type": "clear_tool_uses_20250919"}]},
+            {"edits": [{"type": "clear_tool_uses_20250919"}]},
+            ANTHROPIC_BETA_HEADER_VALUES.CONTEXT_MANAGEMENT_2025_06_27.value,
+            ANTHROPIC_BETA_HEADER_VALUES.COMPACT_2026_01_12.value,
+            id="clearing",
+        ),
+        pytest.param(
+            [{"type": "compaction", "compact_threshold": 150000}],
+            {"edits": [{"type": "compact_20260112", "trigger": {"type": "input_tokens", "value": 150000}}]},
+            ANTHROPIC_BETA_HEADER_VALUES.COMPACT_2026_01_12.value,
+            ANTHROPIC_BETA_HEADER_VALUES.CONTEXT_MANAGEMENT_2025_06_27.value,
+            id="openai_list_form",
+        ),
+    ),
+)
+async def test_counter_forwards_context_management_with_the_beta_inference_sends(
+    context_management: JsonValue, forwarded: JsonValue, sent_beta: str, unsent_beta: str
+) -> None:
+    """Anthropic counts an unsigned compaction block only under the compact_20260112 edit that inference sends,
+    and a clearing edit changes the count, so the count carries the request's context_management as inference
+    sends it, the OpenAI list form mapped to edits, and its beta."""
+    with respx.mock:
+        route: Final = respx.post("https://gateway.example/v1/messages/count_tokens").mock(
+            return_value=httpx.Response(200, json={"input_tokens": 259})
+        )
+        result: Final = await AnthropicTokenCounter().count_tokens(
+            model_to_use="claude-opus-5-5",
+            messages=[{"role": "assistant", "content": [{"type": "compaction", "content": "Recipe app summary."}]}],
+            contents=None,
+            deployment={"litellm_params": {"api_key": "sk-ant-api03-test-key", "api_base": "https://gateway.example"}},
+            context_management=CountContextManagement(spec=context_management, drop_invalid_edits=False),
+        )
+
+    sent: Final = route.calls.last.request
+    betas: Final = sent.headers["anthropic-beta"].split(",")
+    assert result is not None and result.total_tokens == 259
+    assert TypeAdapter(dict[str, JsonValue]).validate_json(sent.content)["context_management"] == forwarded
+    assert (sent_beta in betas, unsent_beta in betas) == (True, False)
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("httpx_transport_clients")
+@pytest.mark.parametrize("context_management", ({}, {"edits": []}, []), ids=("empty_object", "empty_edits", "empty_list"))
+async def test_counter_leaves_out_context_management_without_edits(context_management: JsonValue) -> None:
+    """Anthropic's count endpoint rejects a context_management with no edits, which inference accepts, so the count
+    leaves it out and adds no context-management beta."""
+    with respx.mock:
+        route: Final = respx.post("https://gateway.example/v1/messages/count_tokens").mock(
+            return_value=httpx.Response(200, json={"input_tokens": 11})
+        )
+        result: Final = await AnthropicTokenCounter().count_tokens(
+            model_to_use="claude-opus-5-5",
+            messages=[{"role": "user", "content": "Hello"}],
+            contents=None,
+            deployment={"litellm_params": {"api_key": "sk-ant-api03-test-key", "api_base": "https://gateway.example"}},
+            context_management=CountContextManagement(spec=context_management, drop_invalid_edits=False),
+        )
+
+    sent: Final = route.calls.last.request
+    betas: Final = frozenset(sent.headers.get("anthropic-beta", "").split(","))
+    assert result is not None and result.total_tokens == 11
+    assert "context_management" not in TypeAdapter(dict[str, JsonValue]).validate_json(sent.content)
+    assert not betas & {
+        ANTHROPIC_BETA_HEADER_VALUES.COMPACT_2026_01_12.value,
+        ANTHROPIC_BETA_HEADER_VALUES.CONTEXT_MANAGEMENT_2025_06_27.value,
+    }

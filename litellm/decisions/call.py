@@ -219,7 +219,7 @@ def supported_decisions_providers() -> tuple[str, ...]:
     )
 
 
-def _provider_config(model: str, custom_llm_provider: str) -> BaseDecisionsConfig:
+def get_decisions_provider_config(model: str, custom_llm_provider: str) -> BaseDecisionsConfig:
     provider: Final = next((member for member in LlmProviders if member.value == custom_llm_provider), None)
     provider_config: Final = (
         None if provider is None else ProviderConfigManager.get_provider_decisions_config(model, provider)
@@ -314,7 +314,7 @@ def _takes_videos(
 def deployment_takes_media(
     model: str, custom_llm_provider: str, model_info: Mapping[str, object], *, audio: bool, videos: bool
 ) -> bool:
-    provider_config: Final = _provider_config(model, custom_llm_provider)
+    provider_config: Final = get_decisions_provider_config(model, custom_llm_provider)
     canonical_model: Final = provider_config.canonical_model(model)
     deployment: Final = _DeploymentCapabilities.model_validate(model_info)
     return (not audio or _takes_audio(provider_config, canonical_model, custom_llm_provider, deployment)) and (
@@ -460,7 +460,7 @@ def _provider_ir_request(
     return supported
 
 
-def _outbound_headers(
+def decisions_outbound_headers(
     extra_headers: Mapping[str, str] | None, custom_llm_provider: str, kwargs: Mapping[str, object]
 ) -> Mapping[str, str]:
     forwarded: Final = ProviderSpecificHeaderUtils.get_provider_specific_headers(
@@ -518,7 +518,7 @@ def prepare_call(
         api_base=call_api_base,
         api_key=api_key,
     )
-    provider_config: Final = _provider_config(upstream_model, provider)
+    provider_config: Final = get_decisions_provider_config(upstream_model, provider)
     if not upstream_model:
         raise litellm.BadRequestError(
             message="A model name is required for the Decisions API",
@@ -530,7 +530,7 @@ def prepare_call(
     except ValueError as error:
         raise litellm.BadRequestError(message=str(error), model=model, llm_provider=provider) from error
     try:
-        headers: Final = _outbound_headers(extra_headers, provider, kwargs)
+        headers: Final = decisions_outbound_headers(extra_headers, provider, kwargs)
         support: Final = _resolved_support(provider_config, canonical_model, provider, headers, kwargs, fields)
         request_safety_identifier: Final = _request_safety_identifier(safety_identifier, provider_config, kwargs)
         request: Final = _fields_without_unsupported_media(fields, support, kwargs).validate(
