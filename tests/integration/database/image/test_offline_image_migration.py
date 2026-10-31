@@ -17,6 +17,8 @@ image-scan workflow). Requires a working docker CLI.
 import shutil
 import subprocess
 import uuid
+from pathlib import Path
+from typing import Final
 
 import os
 import pytest
@@ -188,3 +190,30 @@ def test_runtime_cache_env_not_read_only():
         and line.split("=", 1)[1].startswith("/opt/prisma")
     ]
     assert not offenders, f"cache/home env points at the read-only bake: {offenders}"
+
+
+@pytest.mark.parametrize("failed_attempts", [0, 2, 3])
+def test_runtime_apk_install_retries_then_propagates_failure(failed_attempts: int) -> None:
+    dockerfile: Final = Path(__file__).resolve().parents[4] / "docker" / "Dockerfile.non_root"
+    runtime: Final = dockerfile.read_text().split("FROM $LITELLM_RUNTIME_IMAGE AS runtime", 1)[1]
+    install: Final = next(
+        line.removeprefix("RUN ")
+        for line in runtime.replace("\\\n", "").splitlines()
+        if line.startswith("RUN ") and "apk add" in line
+    )
+    commands: Final = f"""
+attempt=0
+apk() {{
+    [ "$1" = upgrade ] && return 0
+    attempt=$((attempt + 1))
+    echo install-attempt
+    [ "$attempt" -gt {failed_attempts} ]
+}}
+sleep() {{ :; }}
+{install}
+"""
+    result: Final = subprocess.run(
+        ["sh", "-c", commands], capture_output=True, text=True, check=False
+    )
+    assert result.stdout.count("install-attempt") == min(failed_attempts + 1, 3)
+    assert result.returncode == (1 if failed_attempts == 3 else 0), result.stderr
