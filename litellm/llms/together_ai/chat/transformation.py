@@ -18,7 +18,7 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm.exceptions import UnsupportedParamsError
 from litellm.litellm_core_utils.prompt_templates.common_utils import strip_litellm_response_only_fields
-from litellm.router_utils.reasoning_effort_capability import declared_reasoning_efforts_for_model
+from litellm.litellm_core_utils.reasoning_effort_capability import declared_reasoning_efforts_for_model
 from litellm.types.llms.openai import AllMessageValues
 from litellm.utils import supports_function_calling, supports_reasoning, supports_response_schema
 

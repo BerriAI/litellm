@@ -44,6 +44,7 @@ from litellm.proxy._types import (
     UpdateTeamRequest,
     UserAPIKeyAuth,  # Import UserAPIKeyAuth
 )
+from litellm.proxy.hooks.model_max_budget_limiter import RoutedModels, routed_models_of
 from litellm.proxy.management.teams.authz import TeamAccess
 from litellm.proxy.management_endpoints.team_admin_field_permissions import (
     PROXY_CONTROLLED_TEAM_METADATA_KEYS,
@@ -17570,6 +17571,26 @@ def test_team_admin_cannot_loosen_team_model_caps(requested) -> None:
     assert "proxy admin" in exc.value.detail["error"]
 
 
+def test_team_cap_refusal_names_the_entry_holding_the_cap() -> None:
+    from litellm.proxy.management_endpoints.team_endpoints import _check_team_model_budget_update_authority
+
+    with pytest.raises(HTTPException) as exc:
+        _check_team_model_budget_update_authority(
+            data=UpdateTeamRequest(
+                team_id="t1",
+                model_max_budget={
+                    **_EXISTING_TEAM_MODEL_CAPS,
+                    "openai/gpt-4o": {"max_budget": 1000.0, "budget_duration": "1d"},
+                },
+            ),
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, user_id="team-admin"),
+            existing_model_max_budget=_EXISTING_TEAM_MODEL_CAPS,
+        )
+    assert exc.value.status_code == 403
+    assert "for 'openai/gpt-4o'" in exc.value.detail["error"]
+    assert "(entry 'gpt-4o')" in exc.value.detail["error"]
+
+
 @pytest.mark.parametrize(
     "requested",
     [
@@ -17591,6 +17612,253 @@ def test_team_admin_can_tighten_or_keep_team_model_caps(requested) -> None:
         )
         is None
     )
+
+
+_TEAM_OPUS_FAMILY_CAP: Final = MappingProxyType({"claude-opus*": {"max_budget": 10.0, "budget_duration": "1d"}})
+_TEAM_OPUS_GROUP_CAP: Final = MappingProxyType({"z-opus-group": {"max_budget": 10.0, "budget_duration": "1d"}})
+_TEAM_ROUTED_MODELS: Final = RoutedModels(
+    served_names=frozenset(
+        {"claude-opus-4-8", "claude-opus-5-5", "gemini-3-pro", "gpt-4o", "my-team/gpt-4o", "team-route/*"}
+    ),
+    group_members=MappingProxyType(
+        {
+            "opus-group": frozenset({"claude-opus-4-8"}),
+            "z-opus-group": frozenset({"claude-opus-4-8"}),
+            "a-opus-group": frozenset({"claude-opus-4-8", "claude-opus-5-5"}),
+            "zz-opus-group": frozenset({"claude-opus-4-8"}),
+            "a-gemini-group": frozenset({"gemini-3-pro"}),
+            "z-anthropic-group": frozenset({"anthropic/*"}),
+        }
+    ),
+)
+
+
+def _first_bedrock_anthropic_model(model_cost: Mapping[str, Mapping[str, object]]) -> str:
+    return next(
+        model.removeprefix("anthropic.")
+        for model, cost in model_cost.items()
+        if model.startswith("anthropic.") and str(cost.get("litellm_provider", "")).startswith("bedrock")
+    )
+
+
+_BEDROCK_ANTHROPIC_MODEL: Final = _first_bedrock_anthropic_model(litellm.model_cost)
+_TEAM_BEDROCK_VENDOR_CAP: Final = MappingProxyType({"anthropic.*": {"max_budget": 10.0, "budget_duration": "1d"}})
+_BEDROCK_ROUTE_ADDED_ENTRIES: Final = (_BEDROCK_ANTHROPIC_MODEL, f"{_BEDROCK_ANTHROPIC_MODEL[:12]}*")
+
+
+def _check_team_admin_model_caps(
+    existing: Mapping[str, object],
+    requested: Mapping[str, object],
+    routed_models: RoutedModels = _TEAM_ROUTED_MODELS,
+) -> None:
+    from litellm.proxy.management_endpoints.team_endpoints import _check_team_model_budget_update_authority
+
+    _check_team_model_budget_update_authority(
+        data=UpdateTeamRequest(team_id="t1", model_max_budget=dict(requested)),
+        user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, user_id="team-admin"),
+        existing_model_max_budget=existing,
+        routed_models_source=lambda _team_id: routed_models,
+    )
+
+
+@pytest.mark.parametrize(
+    ("existing", "added"),
+    [
+        (_TEAM_OPUS_FAMILY_CAP, {"opus-group": {"max_budget": 1000.0, "budget_duration": "1d"}}),
+        (_TEAM_OPUS_FAMILY_CAP, {"opus-group": {"max_budget": 10.0, "budget_duration": "1h"}}),
+        (_TEAM_OPUS_FAMILY_CAP, {"*laude-opus-4-8": {"max_budget": 1000.0, "budget_duration": "1d"}}),
+        (_TEAM_OPUS_GROUP_CAP, {"a-opus-group": {"max_budget": 1000.0, "budget_duration": "1d"}}),
+        (_TEAM_OPUS_GROUP_CAP, {"claude-opus-4-8": {"max_budget": 1000.0, "budget_duration": "1d"}}),
+        (
+            {"z-anthropic-group": {"max_budget": 10.0, "budget_duration": "1d"}},
+            {"claude-opus-4-8": {"max_budget": 1000.0, "budget_duration": "1d"}},
+        ),
+        (_TEAM_OPUS_FAMILY_CAP, {"claude-opus-4-8": {"max_budget": 1000.0, "budget_duration": "1d"}}),
+        (
+            {"anthropic/*": {"max_budget": 10.0, "budget_duration": "1d"}},
+            {"claude-opus-4-8": {"max_budget": 1000.0, "budget_duration": "1d"}},
+        ),
+        (
+            {"my-team/*": {"max_budget": 10.0, "budget_duration": "1d"}},
+            {"gpt-4o": {"max_budget": 1000.0, "budget_duration": "1d"}},
+        ),
+        (
+            {"team-route/*": {"max_budget": 10.0, "budget_duration": "1d"}},
+            {"gpt-4o": {"max_budget": 1000.0, "budget_duration": "1d"}},
+        ),
+        (_TEAM_OPUS_FAMILY_CAP, {"claude-opus-4-8": {"max_budget": 10.0, "budget_duration": "1d"}}),
+        (_TEAM_OPUS_FAMILY_CAP, {"claude-opus-4*": {"max_budget": 10.0, "budget_duration": "1d"}}),
+        (_TEAM_OPUS_FAMILY_CAP, {"opus-group": {"max_budget": 5.0, "budget_duration": "1d"}}),
+        (_TEAM_OPUS_FAMILY_CAP, {"opus-group": {"max_budget": 10.0, "budget_duration": "2d"}}),
+        (_TEAM_OPUS_FAMILY_CAP, {"opus-group": {"max_budget": 0.01, "budget_duration": "1h"}}),
+        (_TEAM_OPUS_FAMILY_CAP, {"claude-opus-4-8": {"rpm_limit": 10}}),
+    ],
+    ids=[
+        "group_over_pattern",
+        "group_with_a_faster_window",
+        "more_specific_pattern",
+        "earlier_group_sharing_a_model",
+        "model_inside_group",
+        "model_under_wildcard_group",
+        "model_matching_pattern",
+        "model_under_provider_pattern",
+        "model_under_served_prefix",
+        "model_under_wildcard_route",
+        "model_carved_out_at_the_same_cap",
+        "pattern_carved_out_at_the_same_cap",
+        "tighter_group",
+        "group_with_a_slower_window",
+        "group_with_a_faster_window_within_the_cap",
+        "uncapped_model",
+    ],
+)
+def test_team_admin_cannot_add_an_entry_that_takes_precedence_over_a_cap(
+    existing: Mapping[str, object], added: Mapping[str, object]
+) -> None:
+    with pytest.raises(HTTPException) as exc:
+        _check_team_admin_model_caps(existing=existing, requested={**existing, **added})
+    assert exc.value.status_code == 403
+    assert "proxy admin" in exc.value.detail["error"]
+    assert repr(next(iter(existing))) in exc.value.detail["error"]
+
+
+@pytest.mark.parametrize(
+    ("existing", "requested"),
+    [
+        (_TEAM_OPUS_FAMILY_CAP, {**_TEAM_OPUS_FAMILY_CAP, "claude*": {"max_budget": 1000.0, "budget_duration": "1d"}}),
+        (_TEAM_OPUS_GROUP_CAP, {**_TEAM_OPUS_GROUP_CAP, "a-gemini-group": {"max_budget": 1000.0, "budget_duration": "1d"}}),
+        (_TEAM_OPUS_GROUP_CAP, {**_TEAM_OPUS_GROUP_CAP, "zz-opus-group": {"max_budget": 1000.0, "budget_duration": "1d"}}),
+        (_TEAM_OPUS_GROUP_CAP, {**_TEAM_OPUS_GROUP_CAP, "gpt-4o": {"max_budget": 1000.0, "budget_duration": "1d"}}),
+        (_TEAM_OPUS_FAMILY_CAP, {**_TEAM_OPUS_FAMILY_CAP, "gpt-4o": {"max_budget": 1000.0, "budget_duration": "1d"}}),
+        (
+            _TEAM_OPUS_FAMILY_CAP,
+            {**_TEAM_OPUS_FAMILY_CAP, "a-gemini-group": {"max_budget": 1000.0, "budget_duration": "1d"}},
+        ),
+        (
+            {**_TEAM_OPUS_FAMILY_CAP, "opus-group": {"max_budget": 100.0, "budget_duration": "1d"}},
+            {**_TEAM_OPUS_FAMILY_CAP, "opus-group": {"max_budget": 100.0, "budget_duration": "1d"}},
+        ),
+        (
+            {**_TEAM_OPUS_FAMILY_CAP, "opus-group": {"max_budget": 100.0, "budget_duration": "1d"}},
+            {**_TEAM_OPUS_FAMILY_CAP, "opus-group": {"max_budget": 50.0, "budget_duration": "1d"}},
+        ),
+        (
+            {**_TEAM_OPUS_FAMILY_CAP, "opus-group": {"rpm_limit": 10}},
+            {**_TEAM_OPUS_FAMILY_CAP, "opus-group": {"rpm_limit": 20}},
+        ),
+        (
+            {**_TEAM_OPUS_FAMILY_CAP, "claude-opus-4-8": {"rpm_limit": 10, "budget_duration": "1d"}},
+            {**_TEAM_OPUS_FAMILY_CAP, "claude-opus-4-8": {"max_budget": 1000.0, "budget_duration": "1d"}},
+        ),
+        (
+            _TEAM_OPUS_FAMILY_CAP,
+            {**_TEAM_OPUS_FAMILY_CAP, "gemini-3-pro*": {"max_budget": 1000.0, "budget_duration": "1d"}},
+        ),
+        (
+            {**_TEAM_OPUS_FAMILY_CAP, "gpt-4o": {"max_budget": 10.0}},
+            {**_TEAM_OPUS_FAMILY_CAP, "gpt-4o": {"max_budget": 10.0, "budget_duration": "1d"}},
+        ),
+        (
+            {"z-anthropic-group": {"max_budget": 10.0}},
+            {"z-anthropic-group": {"max_budget": 10.0, "budget_duration": "1d"}},
+        ),
+    ],
+    ids=[
+        "less_specific_pattern",
+        "group_without_shared_models",
+        "later_group_sharing_a_model",
+        "model_outside_group",
+        "model_outside_pattern",
+        "group_outside_pattern",
+        "unchanged_looser_entry",
+        "tightened_looser_entry",
+        "uncapped_entry_edited",
+        "enforced_uncapped_entry_capped",
+        "pattern_sharing_only_a_wildcard_route",
+        "unenforced_capped_model_given_a_duration",
+        "unenforced_capped_wildcard_group_given_a_duration",
+    ],
+)
+def test_team_admin_can_keep_or_tighten_entries_and_add_ones_that_outrank_no_cap(
+    existing: Mapping[str, object], requested: Mapping[str, object]
+) -> None:
+    assert _check_team_admin_model_caps(existing=existing, requested=requested) is None
+
+
+def test_team_admin_cannot_make_an_unenforced_entry_take_precedence_over_a_cap() -> None:
+    existing: Final = {**_TEAM_OPUS_FAMILY_CAP, "claude-opus-4-8": {"rpm_limit": 10}}
+
+    with pytest.raises(HTTPException) as exc:
+        _check_team_admin_model_caps(
+            existing=existing,
+            requested={**existing, "claude-opus-4-8": {"max_budget": 1000.0, "budget_duration": "1d"}},
+        )
+    assert exc.value.status_code == 403
+    assert "'claude-opus*'" in exc.value.detail["error"]
+
+
+def test_team_admin_cannot_raise_an_unenforced_cap_while_enforcing_it() -> None:
+    with pytest.raises(HTTPException) as exc:
+        _check_team_admin_model_caps(
+            existing={"gpt-4o": {"max_budget": 10.0}},
+            requested={"gpt-4o": {"max_budget": 20.0, "budget_duration": "1d"}},
+        )
+    assert exc.value.status_code == 403
+    assert "(entry 'gpt-4o')" in exc.value.detail["error"]
+
+
+@pytest.mark.parametrize("added_entry", _BEDROCK_ROUTE_ADDED_ENTRIES, ids=["model", "pattern"])
+def test_team_admin_cannot_lift_a_bedrock_vendor_cap_through_a_bedrock_wildcard_route(added_entry: str) -> None:
+    with pytest.raises(HTTPException) as exc:
+        _check_team_admin_model_caps(
+            existing=_TEAM_BEDROCK_VENDOR_CAP,
+            requested={**_TEAM_BEDROCK_VENDOR_CAP, added_entry: {"max_budget": 1000.0, "budget_duration": "1d"}},
+            routed_models=RoutedModels(
+                served_names=frozenset({"bedrock/*", "gpt-4o"}), group_members=MappingProxyType({})
+            ),
+        )
+    assert exc.value.status_code == 403
+    assert "'anthropic.*'" in exc.value.detail["error"]
+
+
+@pytest.mark.parametrize("added_entry", _BEDROCK_ROUTE_ADDED_ENTRIES, ids=["model", "pattern"])
+def test_team_admin_can_add_entries_beside_a_bedrock_vendor_cap_no_route_serves(added_entry: str) -> None:
+    assert (
+        _check_team_admin_model_caps(
+            existing=_TEAM_BEDROCK_VENDOR_CAP,
+            requested={**_TEAM_BEDROCK_VENDOR_CAP, added_entry: {"max_budget": 1000.0, "budget_duration": "1d"}},
+            routed_models=RoutedModels(served_names=frozenset({"gpt-4o"}), group_members=MappingProxyType({})),
+        )
+        is None
+    )
+
+
+def test_team_admin_cannot_outrank_a_group_cap_through_a_team_model_both_groups_serve() -> None:
+    from litellm.proxy.management_endpoints.team_endpoints import _check_team_model_budget_update_authority
+
+    team_router: Final = Router(
+        model_list=[
+            {
+                "model_name": f"model_name_t1_{group}",
+                "litellm_params": {"model": "anthropic/claude-opus-4-8", "api_key": "sk-test"},
+                "model_info": {"team_id": "t1", "team_public_model_name": "claude-opus-4-8", "access_groups": [group]},
+            }
+            for group in ("a-opus", "z-opus")
+        ]
+    )
+    existing: Final = {"z-opus": {"max_budget": 10.0, "budget_duration": "1d"}}
+
+    with pytest.raises(HTTPException) as exc:
+        _check_team_model_budget_update_authority(
+            data=UpdateTeamRequest(
+                team_id="t1", model_max_budget={**existing, "a-opus": {"max_budget": 100.0, "budget_duration": "1d"}}
+            ),
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, user_id="team-admin"),
+            existing_model_max_budget=existing,
+            routed_models_source=lambda team_id: routed_models_of(router=team_router, team_id=team_id),
+        )
+    assert exc.value.status_code == 403
+    assert "'z-opus'" in exc.value.detail["error"]
 
 
 def test_team_model_cap_authority_skips_omitted_field_malformed_rows_and_proxy_admins() -> None:
@@ -18827,7 +19095,7 @@ _DB_OUTAGE_503_BODY: Final = {
     "error": {
         "message": "Service Unavailable, the authentication database is temporarily unreachable. Please retry shortly.",
         "type": "no_db_connection",
-        "param": "None",
+        "param": None,
         "code": "503",
     }
 }
@@ -19104,3 +19372,48 @@ async def test_default_budget_cache_eviction_does_not_fail_after_redis_error() -
     )
 
     user_api_key_cache.async_delete_cache.assert_awaited_once_with(key="team_member_default_budget:budget_456")
+
+
+@pytest.mark.asyncio
+async def test_team_info_reports_a_missing_team_as_a_request_error_not_an_auth_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    from fastapi import Request
+
+    from litellm.proxy._types import ProxyException
+    from litellm.proxy.management_endpoints import team_endpoints
+
+    mock_prisma_client: Final = MagicMock()
+    mock_prisma_client.db.litellm_teamtable.find_unique = AsyncMock(return_value=None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    with pytest.raises(ProxyException) as exc_info:
+        await team_endpoints.team_info(
+            http_request=MagicMock(spec=Request),
+            team_id="no-such-team",
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+
+    assert (exc_info.value.code, exc_info.value.type) == ("404", "invalid_request_error")
+    assert "Authentication Error" not in exc_info.value.message
+
+
+@pytest.mark.asyncio
+async def test_team_info_keeps_the_auth_label_for_a_caller_outside_the_team(monkeypatch: pytest.MonkeyPatch) -> None:
+    from fastapi import Request
+
+    from litellm.proxy._types import ProxyException
+    from litellm.proxy.management_endpoints import team_endpoints
+
+    other_team: Final = MagicMock()
+    other_team.model_dump.return_value = {"team_id": "team-a", "members_with_roles": []}
+    mock_prisma_client: Final = MagicMock()
+    mock_prisma_client.db.litellm_teamtable.find_unique = AsyncMock(return_value=other_team)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    with pytest.raises(ProxyException) as exc_info:
+        await team_endpoints.team_info(
+            http_request=MagicMock(spec=Request),
+            team_id="team-a",
+            user_api_key_dict=UserAPIKeyAuth(user_id="outsider", user_role=LitellmUserRoles.INTERNAL_USER),
+        )
+
+    assert (exc_info.value.code, exc_info.value.type) == ("403", "auth_error")

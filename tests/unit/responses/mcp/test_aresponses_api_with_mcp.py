@@ -17,7 +17,6 @@ import respx
 from mcp.types import CallToolResult, ListToolsResult, TextContent
 from mcp.types import Tool as MCPTool
 
-
 # Import required modules
 import litellm
 from litellm.exceptions import GuardrailRaisedException, MidStreamFallbackError
@@ -25,15 +24,15 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.langfuse.langfuse import langfuse_trace_id, langfuse_trace_metadata
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.xai.common_utils import xai_reported_cost_in_usd
-from litellm.proxy._experimental.mcp_server import mcp_server_manager
-from litellm.proxy._experimental.mcp_server.faults.list_outcomes import ServerListOk
+from litellm.proxy.mcp_server import mcp_server_manager
+from litellm.proxy.mcp_server.faults.list_outcomes import ServerListOk
 from litellm.proxy.utils import _estimate_dispatched_failure_usage, _failure_fields_to_lift
 from litellm.responses.mcp.litellm_proxy_mcp_handler import LiteLLM_Proxy_MCP_Handler
 from litellm.responses.mcp.mcp_streaming_iterator import MCPEnhancedStreamingIterator
 from litellm.types.llms.openai import (
+    OpenAIMcpServerTool,
     ResponsesAPIResponse,
     ResponsesAPIStreamingResponse,
-    OpenAIMcpServerTool,
     ToolParam,
 )
 from litellm.types.utils import ModelResponse, StandardLoggingPayload, Usage
@@ -1079,10 +1078,11 @@ async def test_aresponses_mcp_call_does_not_forward_admission_authorization(
     import types
     from unittest.mock import AsyncMock
 
-    from mcp.types import CallToolResult, TextContent, Tool as MCPTool
+    from mcp.types import CallToolResult, TextContent
+    from mcp.types import Tool as MCPTool
 
-    from litellm.proxy._experimental.mcp_server import mcp_server_manager
     from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.mcp_server import mcp_server_manager
     from litellm.types.mcp import MCPAuth, MCPTransport
     from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
@@ -1185,6 +1185,7 @@ async def test_no_duplicate_mcp_tools_in_streaming_e2e():
     sent to the LLM to ensure no duplication occurs.
     """
     from unittest.mock import AsyncMock, patch
+
     from litellm.responses.mcp.litellm_proxy_mcp_handler import (
         LiteLLM_Proxy_MCP_Handler,
     )
@@ -1715,7 +1716,7 @@ async def _auto_execute_through_mcp_server(
         sys.modules, "litellm.proxy.proxy_server", SimpleNamespace(proxy_logging_obj=None, prisma_client=None)
     )
     monkeypatch.setattr(
-        "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+        "litellm.proxy.mcp_server.mcp_server_manager.global_mcp_server_manager",
         SimpleNamespace(
             catalog=SimpleNamespace(operation=nullcontext),
             get_registry=MagicMock(return_value={}),
@@ -2042,7 +2043,7 @@ def _serve_the_demo_mcp_listing(monkeypatch: pytest.MonkeyPatch) -> _ListingReco
         sys.modules, "litellm.proxy.proxy_server", SimpleNamespace(proxy_logging_obj=None, prisma_client=None)
     )
     monkeypatch.setattr(
-        "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+        "litellm.proxy.mcp_server.mcp_server_manager.global_mcp_server_manager",
         SimpleNamespace(
             catalog=SimpleNamespace(operation=nullcontext),
             get_registry=MagicMock(return_value={}),
@@ -2054,11 +2055,11 @@ def _serve_the_demo_mcp_listing(monkeypatch: pytest.MonkeyPatch) -> _ListingReco
         ),
     )
     monkeypatch.setattr(
-        "litellm.proxy._experimental.mcp_server.operations._get_allowed_mcp_servers",
+        "litellm.proxy.mcp_server.operations._get_allowed_mcp_servers",
         AsyncMock(return_value=[demo_server]),
     )
     monkeypatch.setattr(
-        "litellm.proxy._experimental.mcp_server.catalog.get_filtered_server_tools",
+        "litellm.proxy.mcp_server.catalog.get_filtered_server_tools",
         AsyncMock(return_value=(ListToolsResult(tools=[echo_tool]), ServerListOk(tool_count=1))),
     )
     listing_recorder: Final = _ListingRecorder()
@@ -2665,6 +2666,65 @@ async def test_stream_auto_execute_bills_the_paid_first_round_on_its_success_row
     _assert_one_row_bills(recorder.logged, _ROUND_ONE_BODY)
     assert [row["response_cost"] for row in recorder.failed] == [0.0]
     assert _request_failure_row(logging_obj, recorder.logged[0]).get("response_cost", 0.0) == 0.0
+
+
+class _CutAfterStreamedText(httpx.AsyncByteStream):
+    async def __aiter__(self):
+        opened: Final = {**json.loads(json.dumps(_ROUND_TWO_BODY, default=dict)), "status": "in_progress"}
+        yield _sse(
+            (
+                {"type": "response.created", "response": opened, "sequence_number": 0},
+                {
+                    "type": "response.output_text.delta",
+                    "item_id": "msg_round_two",
+                    "output_index": 0,
+                    "content_index": 0,
+                    "delta": "PING " * 40,
+                    "sequence_number": 1,
+                },
+            )
+        )
+        raise httpx.ReadError("connection reset mid-stream")
+
+
+@pytest.mark.asyncio
+async def test_stream_auto_execute_bills_a_follow_up_cut_after_streamed_text_with_no_second_fixed_margin(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    from litellm.proxy.utils import ProxyLogging
+
+    monkeypatch.setattr(litellm, "cost_margin_config", {"openai": {"fixed_amount": _FIXED_MARGIN}})
+    _serve_responses(
+        respx_mock,
+        monkeypatch,
+        (_streamed(_ROUND_ONE_BODY), httpx.Response(200, stream=_CutAfterStreamedText(), headers=SSE_HEADERS)),
+    )
+    recorder: Final = _RoundRecorder()
+    logging_obj: Final = _rounds_logging_obj(recorder, "mcp-stream-follow-up-cut-after-text")
+
+    with pytest.raises(httpx.ReadError):
+        await _stream_auto_execute(logging_obj)
+    ProxyLogging.fire_deferred_stream_logging({"litellm_logging_obj": logging_obj})
+    await _settle(lambda: len(recorder.logged) > 0 and len(recorder.failed) > 0)
+
+    _assert_one_row_bills(recorder.logged, _ROUND_ONE_BODY)
+    assert len(recorder.failed) == 1
+    failed: Final = recorder.failed[0]
+    assert failed["completion_tokens"] > 0
+    priced_with_its_own_margin: Final = litellm.completion_cost(
+        completion_response=ModelResponse(
+            model="gpt-5.6",
+            usage=Usage(
+                prompt_tokens=failed["prompt_tokens"],
+                completion_tokens=failed["completion_tokens"],
+                total_tokens=failed["prompt_tokens"] + failed["completion_tokens"],
+            ),
+        ),
+        model="gpt-5.6",
+        custom_llm_provider="openai",
+    )
+    assert failed["response_cost"] == pytest.approx(priced_with_its_own_margin - _FIXED_MARGIN)
+    _assert_breakdown_agrees_with_the_billed_cost(failed)
 
 
 @pytest.mark.asyncio

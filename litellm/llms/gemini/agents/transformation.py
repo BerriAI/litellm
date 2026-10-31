@@ -20,15 +20,12 @@ from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.agents.transformation import BaseAgentsAPIConfig
 from litellm.llms.gemini.common_utils import GeminiError, GeminiModelInfo
 from litellm.types.agents import (
+    AgentCreateRequest,
     AgentCreateResponse,
     AgentDeleteResult,
     AgentListResponse,
     AgentVersionsResponse,
 )
-
-# Keys inside litellm_params that should be forwarded to the Gemini
-# create-agent body verbatim.
-_GEMINI_AGENT_BODY_KEYS: Final = ("base_agent", "instructions", "base_environment")
 
 
 class _JsonResponse(Protocol):
@@ -37,30 +34,6 @@ class _JsonResponse(Protocol):
 
 def _json_body(response: _JsonResponse) -> object:
     return response.json()
-
-
-# LiteLLM-internal keys that must never be forwarded to Gemini.
-_LITELLM_INTERNAL_KEYS: Final = frozenset(
-    {
-        "custom_llm_provider",
-        "api_key",
-        "api_base",
-        "make_public",
-        "cost_per_query",
-        "input_cost_per_token",
-        "output_cost_per_token",
-        "require_trace_id_on_calls_to_agent",
-        "require_trace_id_on_calls_by_agent",
-        "max_iterations",
-        "max_budget_per_session",
-        "guardrails",
-        "is_public",
-        "agent_name",
-        "agent_id",
-        "agent_card_params",
-        "provider_agent_response",
-    }
-)
 
 
 class GeminiAgentsConfig(BaseAgentsAPIConfig):
@@ -143,14 +116,9 @@ class GeminiAgentsConfig(BaseAgentsAPIConfig):
 
     def transform_create_request(
         self,
-        name: str,
-        litellm_params: Mapping[str, object],
-    ) -> dict[str, object]:
-        body: Final[dict[str, object]] = {"name": name}
-        for key in _GEMINI_AGENT_BODY_KEYS:
-            value = litellm_params.get(key)
-            if value is not None:
-                body[key] = value
+        create_request: AgentCreateRequest,
+    ) -> Mapping[str, object]:
+        body: Final[Mapping[str, object]] = create_request.model_dump(mode="json", exclude_none=True)
         verbose_logger.debug("GeminiAgentsConfig create body: %s", body)
         return body
 

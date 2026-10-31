@@ -1,4 +1,5 @@
 import json
+import logging
 from collections.abc import Iterator
 from typing import Final
 
@@ -6,6 +7,7 @@ import httpx
 import litellm
 import pytest
 import respx
+from litellm._logging import verbose_logger
 from litellm.caching.llm_caching_handler import LLMClientCache
 from litellm.llms.deepseek.chat.transformation import DeepSeekChatConfig
 
@@ -951,3 +953,42 @@ def test_get_complete_url_ignores_a_trailing_slash_on_api_base(api_base: str):
         )
         == "https://gateway.example.com/deepseek/chat/completions"
     )
+
+
+def _budget_warnings(caplog: pytest.LogCaptureFixture) -> tuple[str, ...]:
+    return tuple(
+        r.getMessage()
+        for r in caplog.records
+        if r.levelno == logging.WARNING and "Dropping thinking.budget_tokens=" in r.getMessage()
+    )
+
+
+def test_enabled_thinking_budget_dropped_for_deepseek_warns_once(caplog: pytest.LogCaptureFixture) -> None:
+    with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
+        result: Final = DeepSeekChatConfig().map_openai_params(
+            non_default_params={"thinking": {"type": "enabled", "budget_tokens": 4000}},
+            optional_params={},
+            model="deepseek-reasoner",
+            drop_params=False,
+        )
+
+    warnings: Final = _budget_warnings(caplog)
+    assert result["thinking"] == {"type": "enabled"}
+    assert len(warnings) == 1
+    assert "budget_tokens=4000" in warnings[0]
+    assert "deepseek-reasoner" in warnings[0]
+
+
+@pytest.mark.parametrize(
+    "thinking", ({"type": "enabled"}, {"type": "disabled", "budget_tokens": 4000}), ids=("no-budget", "disabled")
+)
+def test_deepseek_thinking_without_a_requested_budget_does_not_warn(
+    thinking: dict[str, object], caplog: pytest.LogCaptureFixture
+) -> None:
+    with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
+        result: Final = DeepSeekChatConfig().map_openai_params(
+            non_default_params={"thinking": thinking}, optional_params={}, model="deepseek-reasoner", drop_params=False
+        )
+
+    assert result["thinking"] == {"type": thinking["type"]}
+    assert _budget_warnings(caplog) == ()

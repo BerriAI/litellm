@@ -5,7 +5,6 @@ import os
 import re
 from collections.abc import Awaitable, Callable, Mapping
 from contextlib import closing
-from functools import lru_cache
 from types import MappingProxyType
 from typing import Final, Literal, NamedTuple, cast
 
@@ -18,15 +17,18 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm.caching.caching import DualCache
 from litellm.constants import DEFAULT_MAX_RETRIES
+from litellm.litellm_core_utils.single_flight import SingleFlight, single_flight_lru_cache
 from litellm.litellm_core_utils.url_utils import ensure_api_route
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.llms.openai.common_utils import BaseOpenAILLM, OpenAIAsyncHTTPClient, OpenAIHTTPClient
 from litellm.secret_managers.get_azure_ad_token_provider import (
     get_azure_ad_token_provider,
+    single_flight_bearer_token_provider,
 )
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.router import GenericLiteLLMParams
+from litellm.types.secret_managers.get_azure_ad_token_provider import AzureCredentialType
 from litellm.utils import add_path_to_api_base
 
 azure_ad_cache: Final = DualCache()
@@ -94,7 +96,7 @@ def process_azure_headers(headers: httpx.Headers | dict) -> dict:
     return {**llm_response_headers, **openai_headers}
 
 
-@lru_cache(maxsize=128)
+@single_flight_lru_cache
 def _cached_entra_id_token_provider(
     tenant_id: str,
     client_id: str,
@@ -107,31 +109,36 @@ def _cached_entra_id_token_provider(
     to expiry, so reusing the provider keeps one AAD round trip per token lifetime instead of one
     per request.
     """
-    from azure.identity import ClientSecretCredential, get_bearer_token_provider
+    from azure.identity import ClientSecretCredential
 
-    return get_bearer_token_provider(ClientSecretCredential(tenant_id, client_id, client_secret), scope)
+    return single_flight_bearer_token_provider(ClientSecretCredential(tenant_id, client_id, client_secret), scope)
 
 
-@lru_cache(maxsize=128)
+@single_flight_lru_cache
 def _cached_username_password_token_provider(
     client_id: str,
     azure_username: str,
     azure_password: str,
     scope: str,
 ) -> Callable[[], str]:
-    from azure.identity import UsernamePasswordCredential, get_bearer_token_provider
+    from azure.identity import UsernamePasswordCredential
 
     credential: Final = UsernamePasswordCredential(
         client_id=client_id,
         username=azure_username,
         password=azure_password,
     )
-    return get_bearer_token_provider(credential, scope)
+    return single_flight_bearer_token_provider(credential, scope)
 
 
-@lru_cache(maxsize=128)
+@single_flight_lru_cache
 def _cached_azure_ad_token_refresh_provider(scope: str) -> Callable[[], str]:
     return get_azure_ad_token_provider(azure_scope=scope)
+
+
+@single_flight_lru_cache
+def _cached_default_azure_credential_provider(scope: str) -> Callable[[], str]:
+    return get_azure_ad_token_provider(azure_scope=scope, azure_credential=AzureCredentialType.DefaultAzureCredential)
 
 
 def cached_azure_ad_token_refresh_provider(scope: str) -> Callable[[], str]:
@@ -240,6 +247,58 @@ def get_azure_ad_token_from_username_password(
     return token_provider
 
 
+@single_flight_lru_cache
+def _oidc_token_exchange(cache_key: str) -> SingleFlight[str]:
+    return SingleFlight()
+
+
+def _cached_oidc_token(cache_key: str) -> str | None:
+    cached: Final = azure_ad_cache.get_cache(cache_key)
+    return cached if isinstance(cached, str) else None
+
+
+def _exchange_oidc_token(cache_key: str, token_url: str, client_id: str, scope: str, oidc_token: str) -> str:
+    cached_access_token: Final = _cached_oidc_token(cache_key)
+    if cached_access_token is not None:
+        return cached_access_token
+
+    with closing(HTTPHandler(timeout=litellm.request_timeout)) as client:
+        req_token: Final = client.post(
+            token_url,
+            data={
+                "client_id": client_id,
+                "grant_type": "client_credentials",
+                "scope": scope,
+                "client_assertion_type": "urn:ietf:params:oauth:client-assertion-type:jwt-bearer",
+                "client_assertion": oidc_token,
+            },
+        )
+
+    if req_token.status_code != 200:
+        raise AzureOpenAIError(
+            status_code=req_token.status_code,
+            message=req_token.text,
+        )
+
+    azure_ad_token_json: Final[_AzureAdTokenJson] = req_token.json()
+    azure_ad_token_access_token: Final = azure_ad_token_json.get("access_token", None)
+    azure_ad_token_expires_in: Final = azure_ad_token_json.get("expires_in", None)
+
+    if azure_ad_token_access_token is None:
+        raise AzureOpenAIError(status_code=422, message="Azure AD Token access_token not returned")
+
+    if azure_ad_token_expires_in is None:
+        raise AzureOpenAIError(status_code=422, message="Azure AD Token expires_in not returned")
+
+    azure_ad_cache.set_cache(
+        key=cache_key,
+        value=azure_ad_token_access_token,
+        ttl=azure_ad_token_expires_in,
+    )
+
+    return azure_ad_token_access_token
+
+
 def get_azure_ad_token_from_oidc(
     azure_ad_token: str,
     azure_client_id: str | None = None,
@@ -282,49 +341,24 @@ def get_azure_ad_token_from_oidc(
             "azure_client_id": azure_client_id,
             "azure_tenant_id": azure_tenant_id,
             "azure_authority_host": azure_authority_host,
+            "scope": scope,
             "oidc_token": oidc_token,
         }
     )
 
-    azure_ad_token_access_token = azure_ad_cache.get_cache(azure_ad_token_cache_key)
-    if azure_ad_token_access_token is not None:
-        return azure_ad_token_access_token
+    cached_access_token: Final = _cached_oidc_token(azure_ad_token_cache_key)
+    if cached_access_token is not None:
+        return cached_access_token
 
-    with closing(HTTPHandler(timeout=litellm.request_timeout)) as client:
-        req_token: Final = client.post(
-            f"{azure_authority_host}/{azure_tenant_id}/oauth2/v2.0/token",
-            data={
-                "client_id": azure_client_id,
-                "grant_type": "client_credentials",
-                "scope": scope,
-                "client_assertion_type": "urn:ietf:params:oauth:client-assertion-type:jwt-bearer",
-                "client_assertion": oidc_token,
-            },
+    return _oidc_token_exchange(azure_ad_token_cache_key).run(
+        lambda: _exchange_oidc_token(
+            azure_ad_token_cache_key,
+            token_url=f"{azure_authority_host}/{azure_tenant_id}/oauth2/v2.0/token",
+            client_id=azure_client_id,
+            scope=scope,
+            oidc_token=oidc_token,
         )
-
-    if req_token.status_code != 200:
-        raise AzureOpenAIError(
-            status_code=req_token.status_code,
-            message=req_token.text,
-        )
-
-    azure_ad_token_json: Final[_AzureAdTokenJson] = req_token.json()
-    azure_ad_token_access_token = azure_ad_token_json.get("access_token", None)
-    azure_ad_token_expires_in: Final = azure_ad_token_json.get("expires_in", None)
-
-    if azure_ad_token_access_token is None:
-        raise AzureOpenAIError(status_code=422, message="Azure AD Token access_token not returned")
-
-    if azure_ad_token_expires_in is None:
-        raise AzureOpenAIError(status_code=422, message="Azure AD Token expires_in not returned")
-
-    azure_ad_cache.set_cache(
-        key=azure_ad_token_cache_key,
-        value=azure_ad_token_access_token,
-        ttl=azure_ad_token_expires_in,
     )
-
-    return azure_ad_token_access_token
 
 
 def select_azure_base_url_or_endpoint(azure_client_params: dict):
@@ -503,17 +537,10 @@ class BaseAzureLLM(BaseOpenAILLM):
         Returns:
             Token provider callable if DefaultAzureCredential is enabled and available, None otherwise
         """
-        from litellm.types.secret_managers.get_azure_ad_token_provider import (
-            AzureCredentialType,
-        )
-
         verbose_logger.debug("Attempting to use DefaultAzureCredential for Azure Auth")
 
         try:
-            azure_ad_token_provider: Final = get_azure_ad_token_provider(
-                azure_scope=scope,
-                azure_credential=AzureCredentialType.DefaultAzureCredential,
-            )
+            azure_ad_token_provider: Final = _cached_default_azure_credential_provider(scope)
             verbose_logger.debug("Successfully obtained Azure AD token provider using DefaultAzureCredential")
             return azure_ad_token_provider
         except Exception as e:
@@ -594,7 +621,7 @@ class BaseAzureLLM(BaseOpenAILLM):
 
         # For Azure v1 API, use standard OpenAI client instead of AzureOpenAI
         # See: https://learn.microsoft.com/en-us/azure/ai-services/openai/reference#api-specs
-        if self._is_azure_v1_api_version(api_version):
+        if self.is_azure_v1_api_version(api_version):
             # Extract only params that OpenAI client accepts
             # Always use /openai/v1/ regardless of whether user passed "v1", "latest", or "preview"
             # The OpenAI client accepts a callable for `api_key` and re-invokes it
@@ -895,7 +922,7 @@ class BaseAzureLLM(BaseOpenAILLM):
         else:
             new_url = api_base
 
-        if BaseAzureLLM._is_azure_v1_api_version(api_version):
+        if BaseAzureLLM.is_azure_v1_api_version(api_version):
             # ensure the request go to /openai/v1 and not just /openai
             if "/openai/v1" not in new_url:
                 parsed_url: Final = httpx.URL(new_url)
@@ -925,7 +952,7 @@ class BaseAzureLLM(BaseOpenAILLM):
 
         Returns None when ``api_version`` is a dated one, which still uses the deployment route.
         """
-        if not BaseAzureLLM._is_azure_v1_api_version(api_version):
+        if not BaseAzureLLM.is_azure_v1_api_version(api_version):
             return None
 
         base_url: Final = httpx.URL(api_base)
@@ -943,7 +970,7 @@ class BaseAzureLLM(BaseOpenAILLM):
         )
 
     @staticmethod
-    def _is_azure_v1_api_version(api_version: str | None) -> bool:
+    def is_azure_v1_api_version(api_version: str | None) -> bool:
         if api_version is None:
             return False
         return api_version in {"preview", "latest", "v1"}

@@ -260,6 +260,7 @@ class ResponsesToCompletionBridgeHandler:
                 structured_output=is_structured_output_request(
                     cast("Mapping[str, object]", optional_params)  # cast-ok: optional_params is an untyped dict
                 ),
+                replays_openai_history=custom_llm_provider == "openai",
             )
             streamwrapper: Final = CustomStreamWrapper(
                 completion_stream=completion_stream,
@@ -363,6 +364,7 @@ class ResponsesToCompletionBridgeHandler:
                 structured_output=is_structured_output_request(
                     cast("Mapping[str, object]", optional_params)  # cast-ok: optional_params is an untyped dict
                 ),
+                replays_openai_history=custom_llm_provider == "openai",
             )
             streamwrapper: Final = CustomStreamWrapper(
                 completion_stream=completion_stream,

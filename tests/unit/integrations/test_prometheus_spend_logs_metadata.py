@@ -5,6 +5,10 @@ Verifies that metadata from x-litellm-spend-logs-metadata header is available
 in Prometheus custom labels via combined_metadata.
 """
 
+from typing import Final
+
+import pytest
+
 from litellm.integrations.prometheus import (
     _get_combined_custom_metadata_from_standard_logging_payload,
     get_custom_labels_from_metadata,
@@ -205,3 +209,34 @@ def test_project_alias_accessible_without_prefix(monkeypatch):
     result = get_custom_labels_from_metadata(combined)
 
     assert result == {"user_api_key_project_alias": "hotel-recommendations"}
+
+
+@pytest.mark.parametrize(
+    ("standard_logging_metadata", "expected_labels"),
+    [
+        (
+            {"is_silent_experiment": True, "requester_metadata": {"is_silent_experiment": False}},
+            {"metadata_is_silent_experiment": "true"},
+        ),
+        (
+            {
+                "requester_metadata": {"is_silent_experiment": True},
+                "spend_logs_metadata": {"is_silent_experiment": "true"},
+            },
+            {},
+        ),
+    ],
+    ids=["mirrored call", "direct call with a client flag"],
+)
+def test_silent_experiment_label_comes_only_from_the_router_flag(
+    monkeypatch: pytest.MonkeyPatch,
+    standard_logging_metadata: dict[str, object],
+    expected_labels: dict[str, str],
+):
+    monkeypatch.setattr("litellm.custom_prometheus_metadata_labels", ["metadata.is_silent_experiment"])
+
+    combined: Final = _get_combined_custom_metadata_from_standard_logging_payload(
+        {"metadata": standard_logging_metadata}
+    )
+
+    assert get_custom_labels_from_metadata(combined) == expected_labels

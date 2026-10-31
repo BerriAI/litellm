@@ -2,6 +2,7 @@ import copy
 import json
 import operator
 from collections.abc import Mapping
+from itertools import chain
 from typing import Final
 
 import httpx
@@ -11,9 +12,10 @@ from pydantic import JsonValue, ValidationError
 
 import litellm
 from litellm.litellm_core_utils.tool_fields import DropPolicy
+from litellm.llms.anthropic.messages.context_management.constants import CLEARED_TOOL_RESULT_PLACEHOLDER
 from litellm.llms.openai.responses.count_tokens.token_counter import OpenAITokenCounter
 from litellm.responses.utils import ResponsesAPIRequestUtils
-from litellm.types.utils import TokenCountMessagesFormat, TokenCountResponse
+from litellm.types.utils import CountContextManagement, TokenCountMessagesFormat, TokenCountResponse
 
 COUNT_URL: Final = "https://api.openai.com/v1/responses/input_tokens"
 
@@ -482,6 +484,122 @@ async def test_anthropic_format_tool_result_text_block_without_text_still_counts
     assert (result.error, result.total_tokens) == (False, 9)
     sent: Final = json.loads(route.calls.last.request.content)
     assert {"type": "function_call_output", "call_id": "toolu_log", "output": "build ok\n\ndone"} in sent["input"]
+
+
+def _tool_pair(index: int) -> tuple[dict[str, object], dict[str, object]]:
+    return (
+        {"role": "assistant", "content": [{"type": "tool_use", "id": f"toolu_{index}", "name": "log", "input": {}}]},
+        {
+            "role": "user",
+            "content": [{"type": "tool_result", "tool_use_id": f"toolu_{index}", "content": f"log {index} " * 40}],
+        },
+    )
+
+
+TOOL_PAIRS: Final[list[dict[str, object]]] = [
+    {"role": "user", "content": "Compare the logs."},
+    *chain.from_iterable(_tool_pair(index) for index in range(3)),
+]
+
+
+async def _count_with_edit(
+    monkeypatch: pytest.MonkeyPatch, edit: dict[str, JsonValue], drop_invalid_edits: bool, system: object = None
+) -> tuple[TokenCountResponse | None, respx.Route]:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    with respx.mock:
+        route: Final = respx.post(COUNT_URL).mock(return_value=httpx.Response(200, json={"input_tokens": 9}))
+        result: Final = await OpenAITokenCounter().count_tokens(
+            model_to_use="gpt-4o",
+            messages=copy.deepcopy(TOOL_PAIRS),
+            contents=None,
+            deployment={"litellm_params": {"api_key": "sk-test"}},
+            request_model="openai/gpt-4o",
+            system=system,
+            messages_format="anthropic",
+            context_management=CountContextManagement(spec={"edits": [edit]}, drop_invalid_edits=drop_invalid_edits),
+        )
+        return result, route
+
+
+def _sent_outputs(route: respx.Route) -> dict[str, str]:
+    sent: Final = json.loads(route.calls.last.request.content)
+    return {item["call_id"]: item["output"] for item in sent["input"] if item["type"] == "function_call_output"}
+
+
+CLEAR_EDIT: Final[dict[str, JsonValue]] = {
+    "type": "clear_tool_uses_20250919",
+    "trigger": {"type": "tool_uses", "value": 1},
+    "keep": {"type": "tool_uses", "value": 1},
+}
+
+
+@pytest.mark.asyncio
+async def test_anthropic_format_counts_the_history_the_clear_edit_leaves_for_inference(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    result, route = await _count_with_edit(monkeypatch, CLEAR_EDIT, drop_invalid_edits=False)
+
+    assert result is not None
+    assert (result.error, result.total_tokens) == (False, 9)
+    assert _sent_outputs(route) == {
+        "toolu_0": CLEARED_TOOL_RESULT_PLACEHOLDER,
+        "toolu_1": CLEARED_TOOL_RESULT_PLACEHOLDER,
+        "toolu_2": "log 2 " * 40,
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "system",
+    [
+        "Follow the policy. " * 1500,
+        [{"type": "text", "text": "Follow the policy. " * 1500}],
+        ["Stray.", {"type": "text", "text": "Follow the policy. " * 1500}],
+    ],
+    ids=["string", "blocks", "blocks_beside_a_stray_string"],
+)
+async def test_anthropic_format_input_tokens_trigger_counts_the_system_prompt_like_inference(
+    monkeypatch: pytest.MonkeyPatch, system: object
+) -> None:
+    message_tokens: Final = litellm.token_counter(model="gpt-4o", messages=TOOL_PAIRS)
+    trigger_between_messages_and_system: Final = message_tokens + 1000
+    edit: Final[dict[str, JsonValue]] = {
+        **CLEAR_EDIT,
+        "trigger": {"type": "input_tokens", "value": trigger_between_messages_and_system},
+    }
+
+    _, without_system = await _count_with_edit(monkeypatch, edit, drop_invalid_edits=False)
+    _, with_system = await _count_with_edit(monkeypatch, edit, drop_invalid_edits=False, system=system)
+
+    assert _sent_outputs(without_system)["toolu_0"] == "log 0 " * 40
+    assert _sent_outputs(with_system) == {
+        "toolu_0": CLEARED_TOOL_RESULT_PLACEHOLDER,
+        "toolu_1": CLEARED_TOOL_RESULT_PLACEHOLDER,
+        "toolu_2": "log 2 " * 40,
+    }
+
+
+@pytest.mark.asyncio
+async def test_anthropic_format_malformed_clear_edit_answers_400_without_calling_openai(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    result, route = await _count_with_edit(monkeypatch, {**CLEAR_EDIT, "exclude_tools": "log"}, drop_invalid_edits=False)
+
+    assert route.called is False
+    assert result is not None
+    assert (result.error, result.status_code) == (True, 400)
+    assert "exclude_tools" in str(result.error_message)
+
+
+@pytest.mark.asyncio
+async def test_anthropic_format_drop_params_counts_the_clear_without_its_malformed_field(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    result, route = await _count_with_edit(monkeypatch, {**CLEAR_EDIT, "exclude_tools": "log"}, drop_invalid_edits=True)
+
+    assert result is not None
+    assert result.error is False
+    assert _sent_outputs(route)["toolu_0"] == CLEARED_TOOL_RESULT_PLACEHOLDER
 
 
 @pytest.mark.asyncio

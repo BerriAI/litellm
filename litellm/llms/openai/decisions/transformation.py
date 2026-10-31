@@ -270,10 +270,9 @@ def _openai_choice_answer(question: DecisionsIRChoiceQuestion, answer: Decisions
         name=question.name,
         choice=answer.choice,
         probabilities=tuple(
-            OpenAIChoiceProbability(
-                value=option.value, probability=probabilities.get(systemone_choice_key(option.value), 0.0)
-            )
+            OpenAIChoiceProbability(value=option.value, probability=probabilities[systemone_choice_key(option.value)])
             for option in question.choices
+            if systemone_choice_key(option.value) in probabilities
         ),
         confidence=answer.confidence,
     )
@@ -285,10 +284,9 @@ def _openai_score_answer(question: DecisionsIRScoreQuestion, answer: DecisionsIR
         name=question.name,
         score=answer.score,
         probabilities=tuple(
-            OpenAIScoreProbability(
-                value=index, label=decisions_text(level.label), probability=probabilities.get(index, 0.0)
-            )
+            OpenAIScoreProbability(value=index, label=decisions_text(level.label), probability=probabilities[index])
             for index, level in enumerate(question.levels)
+            if index in probabilities
         ),
         confidence=answer.confidence,
     )
@@ -356,10 +354,10 @@ class OpenAIDecisionsConfig(BaseDecisionsConfig):
     ) -> str | None:
         return resolve_openai_bearer_token(api_key=api_key, api_base=api_base, litellm_params=litellm_params)
 
-    def supports_audio_input(self, model: str, custom_llm_provider: str) -> bool:
+    def supports_audio_input(self, model: str, custom_llm_provider: str, deployment_flag: bool | None) -> bool:
         return False
 
-    def supports_video_input(self, model: str, custom_llm_provider: str) -> bool:
+    def supports_video_input(self, model: str, custom_llm_provider: str, deployment_flag: bool | None) -> bool:
         return False
 
     def transform_decisions_request(

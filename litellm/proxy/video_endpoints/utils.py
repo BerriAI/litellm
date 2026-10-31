@@ -89,7 +89,7 @@ def routable_model_name(model: object, llm_router: "Router | None", custom_llm_p
     if name is None or llm_router is None:
         return name
     provider: Final = custom_llm_provider if isinstance(custom_llm_provider, str) else None
-    return name if llm_router.resolve_model_name_from_model_id(name, provider) else None
+    return name if llm_router.registry().resolve(name, kind="from_id", custom_llm_provider=provider) else None
 
 
 def video_model_group(decoded: DecodedVideoId, llm_router: "Router | None") -> str | None:
@@ -103,15 +103,19 @@ def video_model_group(decoded: DecodedVideoId, llm_router: "Router | None") -> s
         return None
     model_id: Final = decoded.get("model_id")
     provider: Final = decoded.get("custom_llm_provider")
-    resolved: Final = llm_router.resolve_model_name_from_model_id(model_id, provider) if model_id else None
+    registry: Final = llm_router.registry()
+    resolved: Final = registry.resolve(model_id, kind="from_id", custom_llm_provider=provider) if model_id else None
     deployment_id: Final = decoded.get("deployment_id")
     if not deployment_id or resolved in (model_id, f"{provider}/{model_id}"):
         return resolved
-    deployment: Final = llm_router.get_deployment(model_id=deployment_id)
+    deployment: Final = registry.deployment(deployment_id)
     if deployment is None:
         return resolved
     creating_group: Final = deployment.model_info.team_public_model_name or deployment.model_name
-    if resolved is not None and llm_router.resolve_served_model_name(resolved, creating_group) == creating_group:
+    if (
+        resolved is not None
+        and registry.resolve(resolved, kind="served", served_model=creating_group) == creating_group
+    ):
         return resolved
     return creating_group
 
@@ -123,7 +127,7 @@ def fallback_requested_model(requested_model: str | None, response: object, llm_
     if requested_model is None or llm_router is None or not isinstance(response, VideoObject):
         return None
     deployment_id: Final = id_safe_name(response.hidden_params.get("model_id"))
-    deployment: Final = llm_router.get_deployment(model_id=deployment_id) if deployment_id else None
+    deployment: Final = llm_router.registry().deployment(deployment_id) if deployment_id else None
     if deployment is None:
         return None
     creating_group: Final = deployment.model_info.team_public_model_name or deployment.model_name

@@ -9,10 +9,12 @@ Use this to route requests between Teams
 """
 
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import replace
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, overload
+from typing import TYPE_CHECKING, Final, Literal, Protocol, TypedDict, overload
+
+from typing_extensions import ReadOnly
 
 from litellm._logging import verbose_logger
 from litellm.constants import (
@@ -21,14 +23,11 @@ from litellm.constants import (
     ROUTING_REQUEST_TAGS_METADATA_KEY,
 )
 from litellm.litellm_core_utils.core_helpers import get_metadata_variable_name_from_kwargs
+from litellm.router_deprecated import renamed_router_param
 from litellm.types.router import BaggageMappedTagsStamp, ConsumedRequestTagsStamp, DeploymentTypedDict, RouterErrors
 
 if TYPE_CHECKING:
-    from litellm.router import Router as _Router
-
-    LitellmRouter = _Router
-else:
-    LitellmRouter = Any
+    from litellm.router_api import RoutingContext
 
 
 class _TagLitellmParamsLike(Protocol):
@@ -54,6 +53,10 @@ class _DeploymentLike(Protocol):
     def get(self, key: Literal["model_info"], /) -> _ModelInfoLike | None: ...
     @overload
     def get(self, key: Literal["model_name"], /) -> object: ...
+
+
+class _DeploymentWithModelInfo(TypedDict, total=False):
+    model_info: ReadOnly[Mapping[str, object]]
 
 
 class _MetadataLike(Protocol):
@@ -285,13 +288,14 @@ def _unknown_required_tag_hides_an_answer(
 
 def _chain_allows_fail_open(
     healthy_deployments: _DeploymentPool,
+    request_deployments: Iterable[_DeploymentLike | _DeploymentWithModelInfo],
     excluded_set: frozenset[str],
     required_set: frozenset[str],
     routing_confirmed: frozenset[str],
 ) -> bool:
     if _unknown_required_tag_hides_an_answer(healthy_deployments, excluded_set, required_set, routing_confirmed):
         return False
-    return any((d.get("model_info") or {}).get("allow_fail_open") is True for d in healthy_deployments)
+    return any((d.get("model_info") or {}).get("allow_fail_open") is True for d in request_deployments)
 
 
 def _trusted_only_pool(
@@ -327,6 +331,7 @@ def _trusted_only_pool(
 
 
 def _resolve_or_fail_open(
+    request_deployments: Iterable[_DeploymentLike | _DeploymentWithModelInfo],
     pool: Sequence[_DeploymentLike],
     healthy_deployments: _DeploymentPool,
     excluded_set: frozenset[str],
@@ -339,7 +344,7 @@ def _resolve_or_fail_open(
 ) -> tuple[_DeploymentLike, ...]:
     if pool:
         return tuple(pool)
-    if _chain_allows_fail_open(healthy_deployments, excluded_set, required_set, routing_confirmed):
+    if _chain_allows_fail_open(healthy_deployments, request_deployments, excluded_set, required_set, routing_confirmed):
         # Fall open only within whatever still satisfies whichever constraints
         # trace back to key/team policy. A constraint with no inherited backing at
         # all (or, when inherited_tags is unavailable, any constraint at all) can
@@ -356,6 +361,7 @@ def _resolve_or_fail_open(
 
 
 def _resolve_constraint_only_pool(
+    request_deployments: Iterable[_DeploymentLike | _DeploymentWithModelInfo],
     healthy_deployments: _DeploymentPool,
     excluded_set: frozenset[str],
     required_set: frozenset[str],
@@ -371,6 +377,7 @@ def _resolve_constraint_only_pool(
         else _exclude_deployments(_default_tagged_pool(healthy_deployments), excluded_set)
     )
     return _resolve_or_fail_open(
+        request_deployments,
         pool,
         healthy_deployments,
         excluded_set,
@@ -384,18 +391,18 @@ def _resolve_constraint_only_pool(
 
 
 def _all_deployments_or_fallback(
-    llm_router_instance: LitellmRouter,
+    ctx: "RoutingContext",
     model: str,
     fallback: _DeploymentPool,
 ) -> Sequence[_DeploymentLike | DeploymentTypedDict] | Mapping[_DeploymentLike, object]:
     try:
-        return llm_router_instance.get_all_deployments(model_name=model)
+        return ctx.registry().deployments(model, source="all")
     except Exception:  # noqa: BLE001  # fail safe toward today's healthy-only behavior on lookup errors
         return fallback
 
 
 def _chain_tag_filtering_override(
-    llm_router_instance: LitellmRouter,
+    ctx: "RoutingContext",
     model: str,
     healthy_deployments: _DeploymentPool,
 ) -> bool | None:
@@ -408,7 +415,7 @@ def _chain_tag_filtering_override(
     # repeatedly failing that one deployment into cooldown. Falls back to
     # healthy_deployments on a lookup error, preserving today's behavior rather
     # than crashing the request.
-    all_deployments: Final = _all_deployments_or_fallback(llm_router_instance, model, healthy_deployments)
+    all_deployments: Final = _all_deployments_or_fallback(ctx, model, healthy_deployments)
     for d in all_deployments:
         value = (d.get("model_info") or MappingProxyType({})).get("enable_tag_filtering")
         if value is not None:
@@ -448,7 +455,7 @@ def _tags_that_route(request_tags: Sequence[str], metadata: object, routing_pref
 
 
 def _tag_known_to_group(
-    llm_router_instance: LitellmRouter,
+    ctx: "RoutingContext",
     model: str,
     positive_tags: Sequence[str],
     routing_confirmed: frozenset[str],
@@ -457,7 +464,7 @@ def _tag_known_to_group(
     if tag_set & routing_confirmed:
         return True
     try:
-        all_deployments: Final = llm_router_instance.get_all_deployments(model_name=model)
+        all_deployments: Final = ctx.registry().deployments(model, source="all")
     except Exception:  # noqa: BLE001  # fail safe toward "unrecognized" so lookup errors preserve the existing silent-fallback behavior
         return False
     return any(
@@ -547,12 +554,15 @@ def _tag_sequence(tags: object) -> Sequence[object]:
     return typed_tags
 
 
+@renamed_router_param("llm_router_instance")
 async def get_deployments_for_tag(
-    llm_router_instance: LitellmRouter,
+    ctx: "RoutingContext",
     model: str,  # used to raise the correct error
     healthy_deployments: _DeploymentPool,
     request_kwargs: _RequestKwargsLike | None = None,
     metadata_variable_name: Literal["metadata", "litellm_metadata"] = "metadata",
+    *,
+    request_deployments: Iterable[_DeploymentLike | _DeploymentWithModelInfo],
 ) -> _DeploymentPool:
     """
     Returns a list of deployments that match the requested model and tags in the request.
@@ -575,11 +585,9 @@ async def get_deployments_for_tag(
         return healthy_deployments
 
     request_enable_tag_filtering: Final = request_kwargs.get("enable_tag_filtering")
-    chain_enable_tag_filtering: Final = _chain_tag_filtering_override(llm_router_instance, model, healthy_deployments)
+    chain_enable_tag_filtering: Final = _chain_tag_filtering_override(ctx, model, healthy_deployments)
     chain_default: Final = (
-        chain_enable_tag_filtering
-        if chain_enable_tag_filtering is not None
-        else llm_router_instance.enable_tag_filtering
+        chain_enable_tag_filtering if chain_enable_tag_filtering is not None else ctx.settings().enable_tag_filtering
     )
     if request_enable_tag_filtering is not True and chain_default is not True:
         return healthy_deployments
@@ -590,8 +598,8 @@ async def get_deployments_for_tag(
         request_tags: Final = without_baggage_mapped_tags(
             _request_tags_after_router_consumption(metadata, model), metadata
         )
-        match_any: Final = llm_router_instance.tag_filtering_match_any
-        routing_prefix: Final = llm_router_instance.tag_routing_prefix or ""
+        match_any: Final = ctx.settings().tag_filtering_match_any
+        routing_prefix: Final = ctx.settings().tag_routing_prefix or ""
 
         # Build header strings for regex matching from what the proxy already stores.
         # Currently we match against User-Agent; format matches "^User-Agent: claude-code/..."
@@ -624,6 +632,7 @@ async def get_deployments_for_tag(
 
         if constraint_only:
             return _resolve_constraint_only_pool(
+                request_deployments,
                 healthy_deployments,
                 excluded_set,
                 required_set,
@@ -675,6 +684,7 @@ async def get_deployments_for_tag(
 
             if len(new_healthy_deployments) == 0 and len(default_deployments) == 0:
                 return _resolve_or_fail_open(
+                    request_deployments,
                     (),
                     healthy_deployments,
                     excluded_set,
@@ -689,9 +699,10 @@ async def get_deployments_for_tag(
             if (
                 len(new_healthy_deployments) == 0
                 and positive_tags
-                and _tag_known_to_group(llm_router_instance, model, positive_tags, routing_confirmed)
+                and _tag_known_to_group(ctx, model, positive_tags, routing_confirmed)
             ):
                 return _resolve_or_fail_open(
+                    request_deployments,
                     (),
                     healthy_deployments,
                     excluded_set,

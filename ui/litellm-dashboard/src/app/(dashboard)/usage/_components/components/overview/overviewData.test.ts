@@ -7,6 +7,7 @@ import {
   labelForDate,
   modelColorMap,
   OTHER_COLOR,
+  providerSpendRows,
   rollUpBreakdown,
   seriesBy,
 } from "./overviewData";
@@ -85,6 +86,34 @@ describe("bucketSeries", () => {
     expect(weekly.data.map((point) => point.date)).toEqual(["2026-10-01", "2026-10-08"]);
     expect(bucketTotals(weekly).get("2026-10-01")).toBe(3);
     expect(bucketTotals(weekly).get("2026-10-08")).toBe(4);
+  });
+});
+
+const providerDay = (date: string, providers: Record<string, Record<string, unknown>>): DailyData =>
+  ({
+    ...day(date, 0, {}),
+    breakdown: {
+      ...day(date, 0, {}).breakdown,
+      providers: Object.fromEntries(
+        Object.entries(providers).map(([name, metadata]) => [
+          name,
+          { metrics: metrics(0), metadata, api_key_breakdown: {} },
+        ]),
+      ),
+    },
+  }) as unknown as DailyData;
+
+describe("providerSpendRows", () => {
+  it("marks a provider covered by a subscription on any day of the range and leaves metered ones unmarked", () => {
+    const rows = providerSpendRows([
+      providerDay("2026-10-01", { chatgpt: {}, openai: {} }),
+      providerDay("2026-10-02", { chatgpt: { subscription_covered: true }, openai: { subscription_covered: false } }),
+    ]);
+    expect(Object.fromEntries(rows.map((row) => [row.provider, row.subscription_covered]))).toEqual({
+      chatgpt: true,
+      openai: false,
+    });
+    expect(rows.find((row) => row.provider === "chatgpt")).toEqual(expect.objectContaining({ requests: 2 }));
   });
 });
 

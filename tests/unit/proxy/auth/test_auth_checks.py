@@ -12,7 +12,7 @@ load_dotenv()
 from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
 from copy import deepcopy
 from types import SimpleNamespace
-from typing import Final
+from typing import Final, Literal
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest, litellm
@@ -46,7 +46,7 @@ from litellm.proxy.auth.auth_checks import (
     _team_soft_budget_check,
     common_checks,
 )
-from litellm.proxy.utils import ProxyLogging
+from litellm.proxy.utils import InternalUsageCache, ProxyLogging
 from litellm.proxy.utils import CallInfo
 from litellm.types.passthrough_endpoints.pass_through_endpoints import LITELLM_PASS_THROUGH_ENDPOINT_MARKER
 
@@ -719,6 +719,51 @@ async def test_can_key_call_model_wildcard_access(key_models, model, expect_to_w
                 valid_token=user_api_key_object,
                 llm_router=router,
             )
+
+
+@pytest.fixture
+def shipped_routing_rules() -> Iterator[None]:
+    from litellm.litellm_core_utils.fallback_generalizations import (
+        get_fallback_generalization_rules,
+        set_fallback_generalizations,
+    )
+    from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
+
+    previous_rules: Final = list(get_fallback_generalization_rules())
+    set_fallback_generalizations(GetModelCostMap.load_local_model_cost_map()["fallback_generalizations"]["rules"])
+    yield
+    set_fallback_generalizations(previous_rules)
+
+
+@pytest.mark.parametrize("object_type", ["team", "project"])
+@pytest.mark.parametrize(
+    "allowed_models, model, expect_to_work",
+    [
+        (["typesafe/*"], "jev-latest", True),
+        (["typesafe/*"], "jev-1.14.0", True),
+        (["jev-latest"], "jev-latest", True),
+        (["openai/*"], "jev-latest", False),
+        (["typesafe/*"], "foo/jev-latest", False),
+        (["typesafe/*"], "jev-internal-router", False),
+        (["typesafe/*"], "jev-2.0-internal", False),
+        (["typesafe/*"], "jev-1.0", False),
+    ],
+)
+def test_typesafe_provider_wildcard_covers_bare_jev_model(
+    shipped_routing_rules: None,
+    object_type: Literal["team", "project"],
+    allowed_models: list[str],
+    model: str,
+    expect_to_work: bool,
+) -> None:
+    from litellm.proxy._types import ProxyException
+    from litellm.proxy.auth.auth_checks import can_object_call_model
+
+    if expect_to_work:
+        assert can_object_call_model(model=model, llm_router=None, models=allowed_models, object_type=object_type)
+        return
+    with pytest.raises(ProxyException):
+        can_object_call_model(model=model, llm_router=None, models=allowed_models, object_type=object_type)
 
 
 @pytest.mark.parametrize(
@@ -2380,3 +2425,51 @@ async def test_bulk_eviction_clears_the_redis_copies_before_waiting_on_a_wedged_
 
     assert refilled == []
     assert redis.entries == {}
+
+
+class _SignallingPublishRedisClient(_SlowPublishRedisClient):
+    def __init__(self) -> None:
+        super().__init__()
+        self.sent = asyncio.Event()
+
+    async def _send(self, messages: Sequence[str]) -> None:
+        await super()._send(messages)
+        self.sent.set()
+
+
+class _DeleteAfterBroadcastRedisCache(_AuthRedisCache):
+    def __init__(self, broadcast_sent: asyncio.Event) -> None:
+        super().__init__({})
+        self._broadcast_sent = broadcast_sent
+        self.finished = False
+
+    async def delete_cache_keys(self, keys: Sequence[str]) -> None:
+        await self._broadcast_sent.wait()
+        self.finished = True
+
+
+@pytest.mark.asyncio
+async def test_bulk_eviction_broadcasts_while_the_usage_cache_redis_is_wedged(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(pubsub_module, "_in_flight_publishes", asyncio.Semaphore(16))
+    monkeypatch.setattr(pubsub_module, "_pending_publishes", set())
+    client: Final = _SignallingPublishRedisClient()
+    usage_redis: Final = _DeleteAfterBroadcastRedisCache(broadcast_sent=client.sent)
+    proxy_logging_obj: Final = ProxyLogging(user_api_key_cache=None)
+    proxy_logging_obj.internal_usage_cache = InternalUsageCache(
+        dual_cache=DualCache(redis_cache=usage_redis)  # pyright: ignore[reportArgumentType]  # a dict-backed fake of the Redis layer
+    )
+    hashed_tokens: Final = ("token-a", "token-b")
+
+    with patch(
+        "litellm.proxy.common_utils.auth_cache_invalidation_pubsub.coordination_redis_cache",
+        return_value=_PubSubRedisCache(client),
+    ):
+        await delete_cache_key_objects(
+            hashed_tokens=hashed_tokens, user_api_key_cache=UserApiKeyCache(), proxy_logging_obj=proxy_logging_obj
+        )
+        await _drain_publishes()
+
+    assert usage_redis.finished
+    assert {json.loads(message)["cache_key"] for message in client.published} == set(hashed_tokens)
