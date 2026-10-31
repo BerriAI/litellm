@@ -924,6 +924,11 @@ class ChatCompletionSession(TypedDict, total=False):
 ########### End of Initialize Classes used for Responses API  ###########
 
 
+def _requested_top_logprobs(request_fields: Mapping[str, object]) -> int | None:
+    value: Final = request_fields.get("top_logprobs")
+    return value if isinstance(value, int) else None
+
+
 def _chain_session_metadata(chain_session: str, request_kwargs: Mapping[str, object]) -> Mapping[str, object]:
     key: Final = "litellm_metadata" if request_kwargs.get("litellm_metadata") else "metadata"
     metadata: Final = request_kwargs.get(key)
@@ -1275,9 +1280,7 @@ class LiteLLMCompletionResponsesConfig:
         if malformed_field_error is not None:
             raise malformed_field_error
 
-        request_fields: Final[Mapping[str, object]] = responses_api_request
-        requested_top_logprobs: Final = request_fields.get("top_logprobs")
-        top_logprobs: Final = requested_top_logprobs if isinstance(requested_top_logprobs, int) else None
+        top_logprobs: Final = _requested_top_logprobs(responses_api_request)
         litellm_completion_request: dict = {
             "messages": (
                 list(
