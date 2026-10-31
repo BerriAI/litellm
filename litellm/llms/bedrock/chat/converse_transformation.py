@@ -1977,8 +1977,9 @@ class AmazonConverseConfig(BaseConfig):
         additional_request_params: dict,
         anthropic_beta_list: list,
     ) -> None:
-        """Keep only compact_20260112 edits for Bedrock; add beta header or drop field."""
+        """Keep compact edits, and clear_thinking edits while thinking is on. Add their betas or drop the field."""
         from litellm.llms.anthropic.messages.context_management.constants import (
+            CLEAR_THINKING_EDIT_TYPE,
             COMPACT_EDIT_TYPE,
         )
         from litellm.types.llms.anthropic import ANTHROPIC_BETA_HEADER_VALUES
@@ -1992,17 +1993,25 @@ class AmazonConverseConfig(BaseConfig):
             additional_request_params.pop("context_management", None)
             return
 
-        compact_edits: Final = [e for e in edits if isinstance(e, dict) and e.get("type") == COMPACT_EDIT_TYPE]
-        if compact_edits:
-            compact_beta: Final = ANTHROPIC_BETA_HEADER_VALUES.COMPACT_2026_01_12.value
-            if compact_beta not in anthropic_beta_list:
-                anthropic_beta_list.append(compact_beta)
-            additional_request_params["context_management"] = {
-                **cm,
-                "edits": compact_edits,
-            }
-        else:
+        thinking: Final = additional_request_params.get("thinking")
+        thinking_is_on: Final = isinstance(thinking, dict) and thinking.get("type") in ("enabled", "adaptive")
+        beta_by_edit_type: Final = {
+            COMPACT_EDIT_TYPE: ANTHROPIC_BETA_HEADER_VALUES.COMPACT_2026_01_12.value,
+            **(
+                {CLEAR_THINKING_EDIT_TYPE: ANTHROPIC_BETA_HEADER_VALUES.CONTEXT_MANAGEMENT_2025_06_27.value}
+                if thinking_is_on
+                else {}
+            ),
+        }
+        kept_edits: Final = [e for e in edits if isinstance(e, dict) and e.get("type") in beta_by_edit_type]
+        if not kept_edits:
             additional_request_params.pop("context_management", None)
+            return
+
+        for beta in dict.fromkeys(beta_by_edit_type[e["type"]] for e in kept_edits):
+            if beta not in anthropic_beta_list:
+                anthropic_beta_list.append(beta)
+        additional_request_params["context_management"] = {**cm, "edits": kept_edits}
 
     def _transform_request_helper(
         self,
