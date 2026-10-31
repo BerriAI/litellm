@@ -1086,7 +1086,7 @@ model LiteLLM_DailyTagSpend {
   id                  String   @id @default(uuid())
   request_id          String?
   tag                 String?   
-  team_id             String   @default("") // "" unless spent through a team's virtual key
+  team_id             String   @default("")
   date                String
   api_key             String   
   model               String?
