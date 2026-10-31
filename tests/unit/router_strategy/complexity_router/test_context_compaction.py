@@ -11,6 +11,7 @@ import respx
 
 import litellm
 from litellm.llms import compaction as native
+from litellm.router_api import RoutingContext
 from litellm.router_strategy.complexity_router.config import ContextCompactionConfig
 from litellm.router_strategy.complexity_router.context_compaction import (
     CompactionState,
@@ -184,7 +185,7 @@ async def test_all_surfaces_compact_and_keep_selected_answerer(
         protocol: native.CompactionProtocol, request: Mapping[str, object], parent_model: str | None = None
     ) -> Mapping[str, object]:
         assert parent_model == "auto"
-        result: Final = await native.dispatch(router, protocol, request)
+        result: Final = await native.dispatch(RoutingContext(router), protocol, request)
         captured.put_nowait(result)
         return result
 
@@ -385,9 +386,9 @@ async def test_client_owned_history_bypasses_compaction(
     counted: Final = router._count_pre_call_check_tokens(None, request["input"], request)
     if arm_first and counted > 512:
         with pytest.raises(litellm.ContextWindowExceededError):
-            await compact_to_fit(router, deployment.model_dump(), request, "responses")
+            await compact_to_fit(RoutingContext(router), deployment.model_dump(), request, "responses")
     else:
-        result: Final = await compact_to_fit(router, deployment.model_dump(), request, "responses")
+        result: Final = await compact_to_fit(RoutingContext(router), deployment.model_dump(), request, "responses")
         assert result is request
     assert {key: value for key, value in request.items() if key != "_context_compaction_state"} == original
     assert all(route.call_count == 0 for route in wire)
@@ -454,15 +455,16 @@ async def test_unusable_output_budget_still_enforces_known_input_window(
     request: Final = {**payload, "model": "small", "max_tokens": output, "_context_compaction_state": state}
     if overflow:
         with pytest.raises(litellm.BadRequestError, match="known input window"):
-            await compact_to_fit(router, deployment.model_dump(), request, "chat")
+            await compact_to_fit(RoutingContext(router), deployment.model_dump(), request, "chat")
     else:
-        assert await compact_to_fit(router, deployment.model_dump(), request, "chat") is request
+        assert await compact_to_fit(RoutingContext(router), deployment.model_dump(), request, "chat") is request
     assert all(route.call_count == 0 for route in wire)
 
 
 @pytest.mark.parametrize("outcome", ["success", "timeout", "cancel"])
 async def test_retry_reuses_summary_or_terminal_cancellation(outcome: Literal["success", "timeout", "cancel"]) -> None:
     router: Final = make_router()
+    ctx: Final = RoutingContext(router)
     deployment: Final = router.get_deployment(model_id="pinned-answer")
     assert deployment is not None
     state: Final = CompactionState(config=ContextCompactionConfig(model="large", max_tokens=512, timeout_seconds=0.02))
@@ -483,21 +485,21 @@ async def test_retry_reuses_summary_or_terminal_cancellation(outcome: Literal["s
 
     token: Final = compaction_executor.set(execute)
     try:
-        first: Final = asyncio.create_task(compact_to_fit(router, deployment.model_dump(), request, "messages"))
+        first: Final = asyncio.create_task(compact_to_fit(ctx, deployment.model_dump(), request, "messages"))
         await asyncio.wait_for(started.wait(), timeout=2)
         if outcome == "cancel":
             first.cancel()
         if outcome == "success":
-            assert await first == await compact_to_fit(router, deployment.model_dump(), request, "messages")
+            assert await first == await compact_to_fit(ctx, deployment.model_dump(), request, "messages")
             changed: Final = {**request, "messages": [{"role": "user", "content": "new history"}, *request["messages"]]}
             with pytest.raises(litellm.BadRequestError, match="History changed"):
-                await compact_to_fit(router, deployment.model_dump(), changed, "messages")
+                await compact_to_fit(ctx, deployment.model_dump(), changed, "messages")
         else:
             error: Final = asyncio.CancelledError if outcome == "cancel" else asyncio.TimeoutError
             with pytest.raises(error):
                 await first
             with pytest.raises(error):
-                await compact_to_fit(router, deployment.model_dump(), request, "messages")
+                await compact_to_fit(ctx, deployment.model_dump(), request, "messages")
         assert calls.qsize() == 1 and stopped.is_set()
     finally:
         compaction_executor.reset(token)

@@ -25,6 +25,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.constants import OPENAI_CHAT_PDF_FILE_TOKENS, PDF_DATA_URL_PREFIX
 from litellm.google_genai.adapters.transformation import GoogleGenAIAdapter
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, iter_items
+from litellm.litellm_core_utils.deployment_pricing import deployment_pricing_models, str_keyed
 from litellm.litellm_core_utils.token_counter import (
     deployment_openai_model,
     pdf_page_pricing,
@@ -35,7 +36,6 @@ from litellm.responses.litellm_completion_transformation.compaction_items import
     billable_input_since_newest_compaction,
     holds_compaction_summary,
 )
-from litellm.router_utils.deployment_pricing import deployment_pricing_models, str_keyed
 from litellm.rust_bridge import runtime
 from litellm.rust_bridge.catalog import Route, RouteContext
 from litellm.rust_bridge.token_counter import (
@@ -199,7 +199,7 @@ def models_counted_for(model: str, llm_router: Router | None, team_id: str | Non
 def _routed_deployments(model: str, llm_router: Router, team_id: str | None) -> Sequence[object]:
     registry: Final = llm_router.registry()
     resolved: Final = registry.resolve(model, kind="alias") or model
-    routing_group: Final = llm_router.get_routing_group(resolved)
+    routing_group: Final = registry.routing_group(resolved)
     members: Final = routing_group.models if routing_group is not None else (resolved,)
     named: Final = tuple(
         chain.from_iterable(registry.deployments(member, source="all", team_id=team_id) for member in members)

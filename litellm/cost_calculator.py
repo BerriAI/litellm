@@ -623,7 +623,11 @@ def cost_per_token(
         )
         if lyria_generation_cost is not None:
             return 0.0, lyria_generation_cost
-        speech_model_info = litellm.get_model_info(model=model_without_prefix, custom_llm_provider=custom_llm_provider)
+        speech_model_info: Final = cached_get_model_info_helper(
+            model=model_without_prefix,
+            custom_llm_provider=custom_llm_provider,
+            preserve_unset_costs=True,
+        )
         cost_metric: Final = select_cost_metric_for_model(speech_model_info)
         prompt_cost: float = 0.0
         completion_cost: float = 0.0
@@ -1544,6 +1548,12 @@ def _response_time_ms_for_cost(
     return litellm_logging_obj.get_response_ms()
 
 
+def _breakdown_total(litellm_logging_obj: LitellmLoggingObject | None) -> float | None:
+    breakdown: Final = None if litellm_logging_obj is None else litellm_logging_obj.cost_breakdown
+    total: Final[object] = None if breakdown is None else breakdown.get("total_cost")
+    return float(total) if isinstance(total, (int, float)) and not isinstance(total, bool) else None
+
+
 def _adjusted_provider_billed_cost(
     reported_cost: float,
     custom_llm_provider: str | None,
@@ -1561,9 +1571,9 @@ def _adjusted_provider_billed_cost(
     )
     _store_cost_breakdown_in_logging_obj(
         litellm_logging_obj=litellm_logging_obj,
-        prompt_tokens_cost_usd_dollar=None,
-        completion_tokens_cost_usd_dollar=None,
-        cost_for_built_in_tools_cost_usd_dollar=None,
+        prompt_tokens_cost_usd_dollar=0.0,
+        completion_tokens_cost_usd_dollar=adjusted_cost,
+        cost_for_built_in_tools_cost_usd_dollar=0.0,
         total_cost_usd_dollar=adjusted_cost,
         original_cost=reported_cost,
         discount_percent=discount_percent,
@@ -2376,6 +2386,15 @@ def response_cost_calculator(
                     )
                     provider_response_cost: Final = get_response_cost_from_hidden_params(hidden_params)
                     if provider_response_cost is not None and not custom_pricing:
+                        if _breakdown_total(litellm_logging_obj) != provider_response_cost:
+                            _store_cost_breakdown_in_logging_obj(
+                                litellm_logging_obj=litellm_logging_obj,
+                                prompt_tokens_cost_usd_dollar=0.0,
+                                completion_tokens_cost_usd_dollar=provider_response_cost,
+                                cost_for_built_in_tools_cost_usd_dollar=0.0,
+                                total_cost_usd_dollar=provider_response_cost,
+                                original_cost=provider_response_cost,
+                            )
                         return provider_response_cost
 
             response_cost = completion_cost(
@@ -3069,7 +3088,7 @@ def batch_cost_calculator(
             batch_rates.cache_creation,
             batch_rates.cache_creation_rates_by_ttl,
         )
-    elif input_cost_per_token:
+    elif input_cost_per_token is not None:
         details: Final = parse_prompt_tokens_details(usage)
         cache_read_tokens: Final = details["cache_hit_tokens"]
         cache_creation_tokens: Final = details["cache_creation_tokens"]
@@ -3085,7 +3104,10 @@ def batch_cost_calculator(
         cache_read_cost_key: Final = get_service_tier_cost_key("cache_read_input_token_cost", None)
         total_prompt_cost += calculate_cost_component(model_info, cache_read_cost_key, cache_read_tokens) / 2
 
-        cache_creation_cost: Final = model_info.get("cache_creation_input_token_cost") or input_cost_per_token
+        configured_cache_creation_cost: Final = model_info.get("cache_creation_input_token_cost")
+        cache_creation_cost: Final = (
+            input_cost_per_token if configured_cache_creation_cost is None else configured_cache_creation_cost
+        )
         total_prompt_cost += cache_creation_tokens * cache_creation_cost / 2
     text_rate: Final = _batch_or_half(batch_rates.output, output_cost_per_token)
     image_rate: Final = _batch_or_half(
