@@ -62,8 +62,10 @@ class PartType(TypedDict, total=False):
     text: str
     inline_data: BlobType
     file_data: FileDataType
-    function_call: FunctionCall
-    function_response: FunctionResponse
+    function_call: FunctionCall  # Accepted on input
+    functionCall: FunctionCall   # Canonical Proto3 JSON emitted to upstream
+    function_response: FunctionResponse  # Accepted on input
+    functionResponse: FunctionResponse   # Canonical Proto3 JSON emitted to upstream
     thought: bool
     thoughtSignature: str
     media_resolution: Literal["low", "medium", "high"]

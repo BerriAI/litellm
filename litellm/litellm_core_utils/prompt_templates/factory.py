@@ -1391,7 +1391,7 @@ def convert_to_gemini_tool_call_invoke(
                         tool_call_id=(tool.get("id") if forward_function_call_id else None),
                     )
                     if gemini_function_call is not None:
-                        part_dict: VertexPartType = {"function_call": gemini_function_call}
+                        part_dict: VertexPartType = {"functionCall": gemini_function_call}
                         thought_signature = get_thought_signature_from_tool(dict(tool))
                         # Gemini signs only the first functionCall part of a parallel batch, so scope the
                         # placeholder fallback to that part instead of fabricating one per sibling call:
@@ -1410,7 +1410,7 @@ def convert_to_gemini_tool_call_invoke(
         elif function_call is not None:
             gemini_function_call = _gemini_tool_call_invoke_helper(function_call_params=function_call)
             if gemini_function_call is not None:
-                part_dict_function: Final[VertexPartType] = {"function_call": gemini_function_call}
+                part_dict_function: Final[VertexPartType] = {"functionCall": gemini_function_call}
 
                 # Extract thought signature from function_call's provider_specific_fields
                 thought_signature = None
@@ -1743,7 +1743,7 @@ def convert_to_gemini_tool_call_result(
     if gemini_call_id:
         _function_response["id"] = gemini_call_id
 
-    _part: Final[VertexPartType] = {"function_response": _function_response}
+    _part: Final[VertexPartType] = {"functionResponse": _function_response}
 
     if media_parts:
         if not supports_multimodal_function_responses:
