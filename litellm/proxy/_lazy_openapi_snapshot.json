@@ -48815,6 +48815,28 @@
           "title": "ChatCompletionRedactedThinkingBlock",
           "type": "object"
         },
+        "ChatCompletionRefusalObject": {
+          "properties": {
+            "cache_control": {
+              "$ref": "#/components/schemas/ChatCompletionCachedContent"
+            },
+            "refusal": {
+              "title": "Refusal",
+              "type": "string"
+            },
+            "type": {
+              "const": "refusal",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "refusal"
+          ],
+          "title": "ChatCompletionRefusalObject",
+          "type": "object"
+        },
         "ChatCompletionSystemMessage": {
           "properties": {
             "cache_control": {
@@ -49160,6 +49182,9 @@
                       },
                       {
                         "$ref": "#/components/schemas/ChatCompletionFileObject"
+                      },
+                      {
+                        "$ref": "#/components/schemas/ChatCompletionRefusalObject"
                       }
                     ]
                   },

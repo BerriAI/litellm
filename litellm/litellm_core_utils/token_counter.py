@@ -76,6 +76,7 @@ from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionDocumentObject,
     ChatCompletionRedactedThinkingBlock,
+    ChatCompletionRefusalObject,
     ChatCompletionThinkingBlock,
     ChatCompletionToolParam,
     OpenAIMessageContentListBlock,
@@ -1672,7 +1673,16 @@ def _count_anthropic_content(
 
 
 _TEXT_FIELD_BY_BLOCK_TYPE: Final = MappingProxyType(
-    {"text": "text", "thinking": "thinking", "redacted_thinking": "thinking", "compaction": "content"}
+    {
+        "text": "text",
+        "thinking": "thinking",
+        "redacted_thinking": "thinking",
+        "compaction": "content",
+        # `refusal` is OpenAI's content part for a turn the model declined. It is
+        # plain text, so it counts like a text part - without this, replaying a
+        # refused assistant message in the history blows up here.
+        "refusal": "refusal",
+    }
 )
 
 
@@ -1683,6 +1693,7 @@ def _count_content_list(
         OpenAIMessageContentListBlock
         | ChatCompletionThinkingBlock
         | ChatCompletionRedactedThinkingBlock
+        | ChatCompletionRefusalObject
         | AnthropicMessagesTextParam
         | AnthropicMessagesImageParam
         | AnthropicMessagesDocumentParam
@@ -1752,7 +1763,7 @@ def _count_content_list(
                     f"Invalid content item type: {content_type}. "
                     f"Expected str or dict with 'type' field "
                     f"(text, image_url, image, document, file, tool_use, tool_result, thinking, redacted_thinking, "
-                    f"compaction, tool_reference, search_result)."
+                    f"compaction, tool_reference, search_result, refusal)."
                 )
         return num_tokens
     except Exception as e:

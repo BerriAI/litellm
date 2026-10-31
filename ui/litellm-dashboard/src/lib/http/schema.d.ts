@@ -29111,6 +29111,17 @@ export interface components {
         } & {
             [key: string]: unknown;
         };
+        /** ChatCompletionRefusalObject */
+        ChatCompletionRefusalObject: {
+            cache_control?: components["schemas"]["ChatCompletionCachedContent"];
+            /** Refusal */
+            refusal: string;
+            /**
+             * Type
+             * @constant
+             */
+            type: "refusal";
+        };
         /** ChatCompletionSystemMessage */
         ChatCompletionSystemMessage: {
             cache_control?: components["schemas"]["ChatCompletionCachedContent"];
@@ -29249,7 +29260,7 @@ export interface components {
         ChatCompletionUserMessage: {
             cache_control?: components["schemas"]["ChatCompletionCachedContent"];
             /** Content */
-            content: string | (components["schemas"]["ChatCompletionTextObject"] | components["schemas"]["ChatCompletionImageObject"] | components["schemas"]["ChatCompletionAudioObject"] | components["schemas"]["ChatCompletionDocumentObject"] | components["schemas"]["ChatCompletionVideoObject"] | components["schemas"]["ChatCompletionFileObject"])[];
+            content: string | (components["schemas"]["ChatCompletionTextObject"] | components["schemas"]["ChatCompletionImageObject"] | components["schemas"]["ChatCompletionAudioObject"] | components["schemas"]["ChatCompletionDocumentObject"] | components["schemas"]["ChatCompletionVideoObject"] | components["schemas"]["ChatCompletionFileObject"] | components["schemas"]["ChatCompletionRefusalObject"])[];
             /**
              * Role
              * @constant

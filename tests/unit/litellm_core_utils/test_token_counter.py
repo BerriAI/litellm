@@ -3570,3 +3570,68 @@ def test_openai_model_check_holds_while_openai_models_are_registered_concurrentl
             registering.result()
     finally:
         litellm.open_ai_chat_completion_models.difference_update(registered)
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+def test_token_counter_counts_assistant_refusal_content_part() -> None:
+    """
+    An assistant history message can carry a `refusal` content part - it is part of
+    OpenAI's `chat_completion_assistant_message_param` shape and models that refuse a
+    turn replay it in the next request. token_counter used to reject it with
+    `Invalid content item type: refusal`, which also turned /utils/token_counter into
+    a 500 on the proxy.
+
+    A refusal part is plain text, so it should count exactly like the same text sent
+    as a `text` part.
+    """
+    refusal_text = "I cannot help with that request."
+    refusal_messages = [
+        {"role": "user", "content": "A request"},
+        {"role": "assistant", "content": [{"type": "refusal", "refusal": refusal_text}]},
+        {"role": "user", "content": "Please suggest a safe alternative."},
+    ]
+    text_messages = [
+        {"role": "user", "content": "A request"},
+        {"role": "assistant", "content": [{"type": "text", "text": refusal_text}]},
+        {"role": "user", "content": "Please suggest a safe alternative."},
+    ]
+
+    assert token_counter_new(model="gpt-4o", messages=refusal_messages) == token_counter_new(
+        model="gpt-4o", messages=text_messages
+    )
+
+
+def test_count_content_list_accepts_refusal_block() -> None:
+    from litellm.litellm_core_utils.token_counter import _count_content_list
+
+    assert (
+        _count_content_list(
+            count_function=len,
+            content_list=[{"type": "refusal", "refusal": "no"}],
+            use_default_image_token_count=False,
+            default_token_count=None,
+        )
+        == 2
+    )
+
+    # a part without refusal text still parses, it just contributes nothing
+    assert (
+        _count_content_list(
+            count_function=len,
+            content_list=[{"type": "refusal"}],
+            use_default_image_token_count=False,
+            default_token_count=None,
+        )
+        == 0
+    )
+
+    # a text part keeps using `text` and is not matched by the refusal key
+    assert (
+        _count_content_list(
+            count_function=len,
+            content_list=[{"type": "text", "text": "keep", "refusal": "ignored"}],
+            use_default_image_token_count=False,
+            default_token_count=None,
+        )
+        == 4
+    )
