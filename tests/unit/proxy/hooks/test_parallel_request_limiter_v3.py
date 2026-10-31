@@ -26,6 +26,7 @@ from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.constants import INTERNAL_CALL_ORIGIN_METADATA_KEY
 from litellm.integrations.custom_secret_manager import CustomSecretManager
 from litellm.litellm_core_utils import ptu_pricing
+from litellm.litellm_core_utils.ptu_shares import PTUTeamCeiling
 from litellm.llms.azure.ptu_capacity import AZURE_PTU_CAPACITY
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
@@ -46,10 +47,9 @@ from litellm.proxy.hooks.parallel_request_limiter_v3 import (
 from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     PROXY_MaxParallelRequestsHandler_v3 as _PROXY_MaxParallelRequestsHandler,
 )
-from litellm.proxy.spend_tracking.input_tokens import tokenizer_models
+from litellm.proxy.spend_tracking.input_tokens import models_counted_for
 from litellm.proxy.spend_tracking.ptu_feature_flag import PTU_COST_ATTRIBUTION_ENV_VAR
 from litellm.proxy.utils import InternalUsageCache, ProxyLogging, hash_token
-from litellm.router_utils.ptu_shares import PTUTeamCeiling
 from litellm.types.caching import RedisPipelineIncrementOperation
 from litellm.types.extraction import ExtractionResponse
 from litellm.types.llms.openai import ResponsesAPIResponse
@@ -2591,7 +2591,8 @@ async def test_agent_session_rate_limit_skipped_without_session_id():
 
 
 @pytest.mark.asyncio
-async def test_agent_rate_limit_from_metadata_agent_id():
+@pytest.mark.parametrize("metadata_field", ("metadata", "litellm_metadata"))
+async def test_agent_rate_limit_from_metadata_agent_id(metadata_field):
     """
     Test that agent rate limits work when agent_id comes from
     request metadata (header) rather than from the API key.
@@ -2639,7 +2640,7 @@ async def test_agent_rate_limit_from_metadata_agent_id():
             cache=local_cache,
             data={
                 "model": "gpt-4",
-                "metadata": {"agent_id": _agent_id},
+                metadata_field: {"agent_id": _agent_id},
             },
             call_type="",
         )
@@ -9101,6 +9102,63 @@ async def test_a2a_url_target_owns_invocation_fee_and_request_limit(
     assert "expensive" in str(denied.value.detail)
 
 
+@pytest.mark.asyncio
+async def test_project_itpm_reserves_a_pdf_at_the_largest_count_of_the_group_deployments() -> None:
+    from tests.unit.proxy.spend_tracking.test_input_tokens import _one_page_pdf_message
+
+    cache: Final = DualCache()
+    handler: Final = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(cache),
+        counted_models_resolver=lambda model, team_id: ("claude-haiku-5-5", "gpt-5.6-sol"),
+    )
+    messages: Final = _one_page_pdf_message()
+    caller: Final = UserAPIKeyAuth(
+        api_key=hash_token("sk-pdf-itpm"),
+        project_id="pdf-itpm",
+        project_metadata={"model_itpm_limit": {"gpt-4o": 1_000_000}, "model_otpm_limit": {"gpt-4o": 1_000_000}},
+    )
+
+    await handler.async_pre_call_hook(
+        user_api_key_dict=caller,
+        cache=cache,
+        data={"model": "gpt-4o", "messages": messages, "max_tokens": 10},
+        call_type="acompletion",
+    )
+
+    stash: Final = get_request_stash()
+    assert stash is not None
+    by_name: Final = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(DualCache()), counted_models_resolver=lambda model, team_id: (model,)
+    )
+    claude_count: Final = by_name._estimate_precise_input_tokens({"messages": messages}, "claude-haiku-5-5")
+    assert claude_count > by_name._estimate_precise_input_tokens({"messages": messages}, "gpt-4o")
+    assert stash.itpm_reserved_tokens == claude_count
+
+
+def test_project_itpm_adds_what_openai_chat_bills_on_top_of_a_pdf_files_pages_on_chat_completions_only() -> None:
+    from litellm.constants import OPENAI_CHAT_PDF_FILE_TOKENS
+    from tests.unit.proxy.spend_tracking.test_input_tokens import _one_page_pdf_message
+
+    router: Final = Router(
+        model_list=[
+            {"model_name": name, "litellm_params": {"model": model, "api_key": "sk-test"}}
+            for name, model in (("on-openai", "openai/gpt-5.6-sol"), ("on-azure", "azure/gpt-5.6-sol"))
+        ]
+    )
+    handler: Final = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(DualCache()),
+        counted_models_resolver=lambda model, team_id: models_counted_for(model, router, team_id),
+    )
+    data: Final = {"messages": _one_page_pdf_message()}
+
+    assert handler._estimate_precise_input_tokens(data, "on-openai", "acompletion") == (
+        handler._estimate_precise_input_tokens(data, "on-azure", "acompletion") + OPENAI_CHAT_PDF_FILE_TOKENS
+    )
+    assert handler._estimate_precise_input_tokens(data, "on-openai", "anthropic_messages") == (
+        handler._estimate_precise_input_tokens(data, "on-azure", "anthropic_messages")
+    )
+
+
 def _extraction_request(state: str, call_id: str) -> dict[str, object]:
     return {
         "model": "invoice-reader",
@@ -9184,7 +9242,7 @@ _MULTILINGUAL_REQUEST: Final[dict[str, object]] = {
 def _project_itpm_estimate(router: Router, model: str) -> int:
     handler: Final = _PROXY_MaxParallelRequestsHandler(
         internal_usage_cache=InternalUsageCache(DualCache()),
-        tokenizer_models_resolver=partial(tokenizer_models, llm_router=router),
+        counted_models_resolver=lambda model, team_id: models_counted_for(model, router, team_id),
     )
     return handler._estimate_precise_input_tokens(_MULTILINGUAL_REQUEST, model, "acompletion")
 
@@ -9193,7 +9251,7 @@ def test_project_itpm_counts_a_group_mixing_in_a_non_openai_model_by_its_name_as
     router: Final = Router(
         model_list=[
             {"model_name": "gpt-6.1-sol", "litellm_params": {"model": model, "api_key": "sk-test"}}
-            for model in ("openai/gpt-6.1-sol", "anthropic/claude-sonnet-5-5")
+            for model in ("openai/gpt-6.1-sol", "cohere/command-r-plus")
         ]
     )
     messages: Final = _MULTILINGUAL_REQUEST["messages"]
