@@ -45,7 +45,7 @@ if [ $? -eq 0 ]; then
   pwd
 
   # Specify the destination directory
-  destination_dir="../../litellm/proxy/_experimental/out"
+  destination_dir="../../litellm/proxy/ui/out"
 
   # Remove existing files in the destination directory
   rm -rf "$destination_dir"/*
