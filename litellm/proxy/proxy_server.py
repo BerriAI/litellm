@@ -2851,6 +2851,20 @@ current_dir = os.path.dirname(os.path.abspath(__file__))
 # app.mount("/ui", StaticFiles(directory=ui_path, html=True), name="ui")
 
 
+# Optional fastapi-guard security middleware (off unless LITELLM_GUARD_ENABLED
+# is set). Added before RequestBodyDecompressionMiddleware, CORSMiddleware and
+# SecurityHeadersMiddleware so it nests *inside* all three (Starlette makes the
+# last-added middleware outermost): it inspects the decoded request body, and
+# guard's own 403/429 rejections still leave with CORS and security headers.
+# It stays outside the auth dependencies, so screened-and-blocked requests
+# never reach key validation. See middleware/guard_middleware.py.
+from litellm.proxy.middleware.guard_middleware import (  # noqa: E402  # mid-file attach: the middleware stack freezes once the lifespan runs
+    GuardMiddleware,
+)
+
+app.add_middleware(GuardMiddleware)
+
+
 def configured_max_request_size_mb() -> int | float | None:
     return MAX_REQUEST_SIZE_MB_SETTING.validate_python(general_settings.get("max_request_size_mb"))
 
