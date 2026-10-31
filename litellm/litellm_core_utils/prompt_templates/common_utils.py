@@ -88,17 +88,22 @@ def handle_any_messages_to_chat_completion_str_messages_conversion(
         return [{"input": str(messages)}]
 
 
+def _message_with_str_content(message: AllMessageValues) -> AllMessageValues:
+    texts: Final = convert_content_list_to_str(message=message)
+    if not texts:
+        return message
+    return cast(  # cast-ok: the same message with its content flattened to one string
+        AllMessageValues, {**message, "content": texts}
+    )
+
+
 def handle_messages_with_content_list_to_str_conversion(
     messages: list[AllMessageValues],
 ) -> list[AllMessageValues]:
     """
-    Handles messages with content list conversion
+    Returns new messages with each content list flattened to a string, leaving the caller's messages untouched
     """
-    for message in messages:
-        texts = convert_content_list_to_str(message=message)
-        if texts:
-            message["content"] = texts
-    return messages
+    return [_message_with_str_content(message) for message in messages]
 
 
 def strip_name_from_message(message: AllMessageValues, allowed_name_roles: list[str] = ["user"]) -> AllMessageValues:
@@ -2023,12 +2028,14 @@ def infer_content_type_from_url_and_content(
     """
     from litellm.litellm_core_utils.token_counter import get_image_type
 
+    media_type: Final = current_content_type.split(";", 1)[0].strip().lower() if current_content_type else None
+
     # If we have a valid content type that's not generic, use it
-    if current_content_type and current_content_type not in [
+    if media_type and media_type not in [
         "binary/octet-stream",
         "application/octet-stream",
     ]:
-        return current_content_type
+        return media_type
 
     # Extension to MIME type mapping
     # Supports images, documents, and other common file types

@@ -429,6 +429,24 @@ def test_budget_window_start_reads_json_encoded_windows(window: str, expected: d
     assert get_budget_window_start(window) == expected
 
 
+@pytest.mark.asyncio
+async def test_reservation_counts_a_pdf_with_the_deployment_behind_a_gpt_named_group() -> None:
+    from litellm.proxy.spend_tracking.input_tokens import count_input_tokens_for_model
+    from tests.unit.proxy.spend_tracking.test_input_tokens import _one_page_pdf_message
+
+    request_body: Final = {"model": "gpt-4o", "messages": _one_page_pdf_message()}
+    router: Final = Router(
+        model_list=[{"model_name": "gpt-4o", "litellm_params": {"model": "anthropic/claude-haiku-5-5", "api_key": "x"}}]
+    )
+
+    counts: Final = await count_request_input_tokens(
+        request_body=request_body, route="/chat/completions", llm_router=router, team_id=None
+    )
+
+    assert counts == {"gpt-4o": count_input_tokens_for_model(request_body=request_body, model="claude-haiku-5-5")}
+    assert counts["gpt-4o"] > count_input_tokens_for_model(request_body=request_body, model="gpt-4o")
+
+
 _MULTILINGUAL_MESSAGES: Final = [{"role": "user", "content": "日本語のテキストとहिन्दी पाठ और русский текст. " * 20}]
 
 
@@ -446,7 +464,35 @@ async def _input_tokens(router: Router, model: str) -> dict[str, int]:
             request_body={"model": model, "messages": _MULTILINGUAL_MESSAGES},
             route="/v1/chat/completions",
             llm_router=router,
+            team_id=None,
         )
+    )
+
+
+async def _reserved_input_tokens(router: Router, model: str, route: str, messages: list[dict[str, object]]) -> int:
+    counts: Final = await count_request_input_tokens(
+        request_body={"model": model, "messages": messages}, route=route, llm_router=router, team_id=None
+    )
+    return counts[model]
+
+
+@pytest.mark.asyncio
+async def test_an_openai_chat_request_reserves_what_openai_chat_bills_on_top_of_each_pdf_files_pages() -> None:
+    from litellm.constants import OPENAI_CHAT_PDF_FILE_TOKENS
+    from tests.unit.proxy.spend_tracking.test_input_tokens import _one_page_pdf_message
+
+    router: Final = _router_with_groups(("on-openai", "openai/gpt-5.6-sol"), ("on-azure", "azure/gpt-5.6-sol"))
+    two_pdfs: Final = [*_one_page_pdf_message(), *_one_page_pdf_message()]
+
+    assert await _reserved_input_tokens(router, "on-openai", "/v1/chat/completions", two_pdfs) == (
+        await _reserved_input_tokens(router, "on-azure", "/v1/chat/completions", two_pdfs)
+        + 2 * OPENAI_CHAT_PDF_FILE_TOKENS
+    )
+    assert await _reserved_input_tokens(router, "on-openai", "/v1/messages", two_pdfs) == (
+        await _reserved_input_tokens(router, "on-azure", "/v1/messages", two_pdfs)
+    )
+    assert await _reserved_input_tokens(router, "on-openai", "/v1/chat/completions", _MULTILINGUAL_MESSAGES) == (
+        await _reserved_input_tokens(router, "on-azure", "/v1/chat/completions", _MULTILINGUAL_MESSAGES)
     )
 
 
@@ -516,7 +562,7 @@ async def test_release_named_group_or_alias_no_openai_model_serves_reserves_on_a
 async def test_group_mixing_in_a_non_openai_model_reserves_on_its_name_as_written_and_its_openai_models(
     group: str, counted_as: str
 ):
-    served: Final = ("openai/gpt-6.1-sol", "anthropic/claude-sonnet-5-5")
+    served: Final = ("openai/gpt-6.1-sol", "cohere/command-r-plus")
     router: Final = _router_with_groups(*((group, model) for model in served))
 
     reserved: Final = (await _input_tokens(router, group))[group]
