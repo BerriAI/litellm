@@ -31445,6 +31445,7 @@ def test_request_carries_image_sees_chat_parts_and_responses_input_items():
     assert litellm.Router._request_carries_image(None, {"input": _IMAGE_RESPONSES_INPUT}) is True
     assert litellm.Router._request_carries_image([{"role": "user", "content": "Say hi"}], {}) is False
     assert litellm.Router._request_carries_image(None, {"input": "Say hi"}) is False
+    assert litellm.Router._request_carries_image(None, {"input": ["safe text", "more safe text"]}) is False
 
 
 @pytest.mark.asyncio
