@@ -59,8 +59,14 @@ def _sample_agent_card_params_with_backend_url() -> dict[str, object]:
                 "url": _AGENT_CARD_BACKEND_URL,
                 "protocolBinding": "JSONRPC",
                 "protocolVersion": "1.0",
-            }
+            },
+            {
+                "url": _AGENT_CARD_BACKEND_URL,
+                "protocolBinding": "GRPC",
+                "protocolVersion": "1.0",
+            },
         ],
+        "additionalInterfaces": [{"url": _AGENT_CARD_BACKEND_URL, "transport": "GRPC"}],
     }
 
 
@@ -1047,18 +1053,12 @@ def _client_with_agent_card(
     registry: Final = MagicMock()
     registry.get_agent_by_id = MagicMock(return_value=agent)
     registry.get_agent_list = MagicMock(return_value=(agent,))
-    registry.ids_for_agent = MagicMock(return_value=(agent.agent_id,))
+    registry.ids_for_agent = MagicMock(return_value=frozenset({agent.agent_id}))
+    registry.stable_agent_id = MagicMock(side_effect=lambda agent_id: agent_id)
     monkeypatch.setattr(agent_endpoints, "AGENT_REGISTRY", registry)
     monkeypatch.setattr(agent_registry, "global_agent_registry", registry)
-    monkeypatch.setattr(
-        "litellm.proxy.agent_endpoints.auth.agent_permission_handler.AgentRequestHandler.resolve_agent_access",
-        AsyncMock(return_value=RestrictedAgentAccess(frozenset({agent.agent_id}))),
-    )
-    monkeypatch.setattr(
-        "litellm.proxy.agent_endpoints.auth.agent_permission_handler.AgentRequestHandler.is_agent_allowed",
-        AsyncMock(return_value=True),
-    )
     prisma: Final = MagicMock()
+    prisma.writer_db = prisma.db
     prisma.db.litellm_agentstable.find_many = AsyncMock(return_value=[])
     prisma.db.litellm_agentstable.find_unique = AsyncMock(return_value=None)
     prisma.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
@@ -1068,6 +1068,7 @@ def _client_with_agent_card(
     test_app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
         user_id="test-user",
         user_role=role,
+        object_permission={"object_permission_id": "agent-card-test", "agents": [agent.agent_id]},
     )
     return TestClient(test_app)
 
@@ -1092,8 +1093,15 @@ def test_non_admin_agent_card_urls_point_at_proxy(
     card: Final = result["agent_card_params"]
     proxy_url: Final = "http://testserver/a2a/agent-123"
     assert card["url"] == proxy_url
-    assert card["supportedInterfaces"][0]["url"] == proxy_url
     assert "agent.internal" not in response.text
+    assert "additionalInterfaces" not in card
+    assert card["supportedInterfaces"] == [
+        {
+            "url": proxy_url,
+            "protocolBinding": "JSONRPC",
+            "protocolVersion": "1.0",
+        }
+    ]
 
 
 def test_proxy_admin_agent_listing_keeps_backend_card_urls(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1109,7 +1117,19 @@ def test_proxy_admin_agent_listing_keeps_backend_card_urls(monkeypatch: pytest.M
     assert response.status_code == 200, response.text
     card: Final = response.json()[0]["agent_card_params"]
     assert card["url"] == _AGENT_CARD_BACKEND_URL
-    assert card["supportedInterfaces"][0]["url"] == _AGENT_CARD_BACKEND_URL
+    assert card["supportedInterfaces"] == [
+        {
+            "url": _AGENT_CARD_BACKEND_URL,
+            "protocolBinding": "JSONRPC",
+            "protocolVersion": "1.0",
+        },
+        {
+            "url": _AGENT_CARD_BACKEND_URL,
+            "protocolBinding": "GRPC",
+            "protocolVersion": "1.0",
+        },
+    ]
+    assert card["additionalInterfaces"] == [{"url": _AGENT_CARD_BACKEND_URL, "transport": "GRPC"}]
 
 
 def test_non_admin_health_check_probes_backend_and_returns_proxy_card(monkeypatch: pytest.MonkeyPatch) -> None:

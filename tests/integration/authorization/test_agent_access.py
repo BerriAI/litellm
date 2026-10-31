@@ -80,10 +80,15 @@ def _peer_card(url: str, name: str) -> dict[str, JsonValue]:
     }
 
 
-def _register_agent(gateway: Gateway, scenario: Scenario, name: str, url: str) -> str:
-    created: Final = gateway.request(
-        "POST", "/v1/agents", {"agent_name": name, "agent_card_params": _peer_card(url, name)}
-    )
+def _register_agent(
+    gateway: Gateway,
+    scenario: Scenario,
+    name: str,
+    url: str,
+    agent_card: dict[str, JsonValue] | None = None,
+) -> str:
+    card: Final = _peer_card(url, name) if agent_card is None else agent_card
+    created: Final = gateway.request("POST", "/v1/agents", {"agent_name": name, "agent_card_params": card})
     assert created.status_code == 200, created.text
     identity: Final = created.json()["agent_id"]
 
@@ -433,10 +438,25 @@ def test_agent_list_and_detail_cards_use_proxy_urls_for_scoped_keys(gateway: Gat
         return Reply(body=json.dumps(_peer_card(wire.url, marker)).encode())
 
     with wire_server(upstream) as wire, gateway.scenario() as scenario:
-        agent_id: Final = _register_agent(gateway, scenario, marker, wire.url)
+        backend_url: Final = wire.url + "/"
+        peer_card: Final = _peer_card(wire.url, marker)
+        peer_interfaces: Final = peer_card["supportedInterfaces"]
+        assert isinstance(peer_interfaces, list)
+        agent_card: Final = {
+            **peer_card,
+            "additionalInterfaces": [{"url": backend_url, "transport": "GRPC"}],
+            "supportedInterfaces": [
+                *peer_interfaces,
+                {
+                    "url": backend_url,
+                    "protocolBinding": "GRPC",
+                    "protocolVersion": "0.3",
+                },
+            ],
+        }
+        agent_id: Final = _register_agent(gateway, scenario, marker, wire.url, agent_card)
         user_id: Final = scenario.user(user_role="internal_user")
         scoped_key: Final = scenario.key(user_id=user_id, object_permission={"agents": [agent_id]})
-        backend_url: Final = wire.url + "/"
 
         public_card: Final = gateway.request(
             "GET",
@@ -451,6 +471,8 @@ def test_agent_list_and_detail_cards_use_proxy_urls_for_scoped_keys(gateway: Gat
         assert detailed.status_code == 200, detailed.text
         assert wire.url not in listed.text
         assert wire.url not in detailed.text
+        assert "additionalInterfaces" not in listed.text
+        assert "additionalInterfaces" not in detailed.text
         public_urls: Final = (
             public_card.json()["url"],
             public_card.json()["supportedInterfaces"][0]["url"],
@@ -459,6 +481,13 @@ def test_agent_list_and_detail_cards_use_proxy_urls_for_scoped_keys(gateway: Gat
         for body in (listed_agent, detailed.json()):
             card: Final = body["agent_card_params"]
             assert (card["url"], card["supportedInterfaces"][0]["url"]) == public_urls
+            assert card["supportedInterfaces"] == [
+                {
+                    "url": public_urls[1],
+                    "protocolBinding": "JSONRPC",
+                    "protocolVersion": "0.3",
+                }
+            ]
 
         admin_listed: Final = gateway.request("GET", "/v1/agents")
         assert admin_listed.status_code == 200, admin_listed.text
