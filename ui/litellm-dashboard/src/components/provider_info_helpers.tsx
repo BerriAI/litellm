@@ -50,6 +50,7 @@ import ollamaLogo from "../../public/assets/logos/ollama.svg";
 import openaiSmallLogo from "../../public/assets/logos/openai_small.svg";
 import openrouterLogo from "../../public/assets/logos/openrouter.svg";
 import oracleLogo from "../../public/assets/logos/oracle.svg";
+import parallelAiLogo from "../../public/assets/logos/parallel_ai.png";
 import perplexityAiLogo from "../../public/assets/logos/perplexity-ai.svg";
 import qwenLogo from "../../public/assets/logos/qwen.png";
 import recraftLogo from "../../public/assets/logos/recraft.svg";
@@ -191,6 +192,7 @@ export enum Providers {
   Triton = "Triton",
   TypeSafe = "TypeSafe",
   Nace = "Nace",
+  ParallelAI = "Parallel AI",
   V0 = "V0",
   VERCEL_AI_GATEWAY = "Vercel Ai Gateway",
   Vertex_AI = "Vertex AI (Anthropic, Gemini, etc.)",
@@ -325,6 +327,7 @@ export const provider_map: Record<string, string> = {
   Triton: "triton",
   TypeSafe: "typesafe",
   Nace: "nace",
+  ParallelAI: "parallel_ai",
   V0: "v0",
   VERCEL_AI_GATEWAY: "vercel_ai_gateway",
   Vertex_AI: "vertex_ai",
@@ -419,6 +422,7 @@ export const providerLogoMap: Partial<Record<Providers, string>> = {
   [Providers.OpenAI_Compatible]: openaiSmallLogo.src,
   [Providers.Openrouter]: openrouterLogo.src,
   [Providers.Oracle]: oracleLogo.src,
+  [Providers.ParallelAI]: parallelAiLogo.src,
   [Providers.Perplexity]: perplexityAiLogo.src,
   [Providers.Qwen_AI_Platform]: qwenLogo.src,
   [Providers.QwenCloud]: qwenLogo.src,
@@ -514,6 +518,7 @@ const providerPlaceholderMap: Partial<Record<Providers, string>> = {
   [Providers.Tencent]: "tencent/deepseek-v4-pro",
   [Providers.TypeSafe]: "typesafe/jev-latest",
   [Providers.Nace]: "nace/drex-latest",
+  [Providers.ParallelAI]: "parallel_ai/decision",
   [Providers.StreamLake]: "streamlake/<model-or-endpoint>",
   [Providers.Vertex_AI]: "gemini-pro",
   [Providers.VolcEngine]: "volcengine/<any-model-on-volcengine>",

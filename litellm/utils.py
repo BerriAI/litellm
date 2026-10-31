@@ -10052,12 +10052,19 @@ class ProviderConfigManager:
             return litellm.LayaDecisionsConfig()
         if provider == LlmProviders.BESPOKE:
             return litellm.BespokeDecisionsConfig()
-        if provider in (LlmProviders.OPENAI, LlmProviders.AZURE, LlmProviders.AZURE_AI, LlmProviders.EU_JEV):
+        if provider in (
+            LlmProviders.OPENAI,
+            LlmProviders.AZURE,
+            LlmProviders.AZURE_AI,
+            LlmProviders.EU_JEV,
+            LlmProviders.PARALLEL_AI,
+        ):
             configs: Final = {
                 LlmProviders.OPENAI: litellm.OpenAIDecisionsConfig,
                 LlmProviders.AZURE: litellm.AzureDecisionsConfig,
                 LlmProviders.AZURE_AI: litellm.AzureAIDecisionsConfig,
                 LlmProviders.EU_JEV: litellm.EuJevDecisionsConfig,
+                LlmProviders.PARALLEL_AI: litellm.ParallelAIDecisionsConfig,
             }
             return configs[provider]()
         return None

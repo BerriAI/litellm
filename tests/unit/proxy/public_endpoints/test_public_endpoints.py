@@ -536,6 +536,7 @@ def _decisions_provider_entry(provider: str) -> ProviderCreateInfo:
     (
         ("TypeSafe", "TypeSafe", LlmProviders.TYPESAFE),
         ("Nace", "Nace", LlmProviders.NACE),
+        ("ParallelAI", "Parallel AI", LlmProviders.PARALLEL_AI),
         ("EU_JEV", "eu/jev", LlmProviders.EU_JEV),
     ),
 )

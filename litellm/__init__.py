@@ -1753,6 +1753,9 @@ if TYPE_CHECKING:
     from .llms.typesafe.decisions.transformation import (
         TypeSafeDecisionsConfig as TypeSafeDecisionsConfig,
     )
+    from .llms.parallel_ai.decisions.transformation import (
+        ParallelAIDecisionsConfig as ParallelAIDecisionsConfig,
+    )
     from .llms.openrouter.decisions.transformation import (
         OpenRouterDecisionsConfig as OpenRouterDecisionsConfig,
     )

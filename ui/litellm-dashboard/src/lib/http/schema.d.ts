@@ -29349,7 +29349,7 @@ export interface components {
             /** Choice */
             choice: string;
             /** Confidence */
-            confidence: number;
+            confidence?: number | null;
             /** Probabilities */
             probabilities: {
                 [key: string]: number;
@@ -40154,7 +40154,7 @@ export interface components {
             /** Choice */
             choice: string | boolean;
             /** Confidence */
-            confidence: number;
+            confidence?: number | null;
             /** Name */
             name: string | null;
             /** Probabilities */
@@ -40250,7 +40250,7 @@ export interface components {
         /** OpenAIScoreAnswer */
         OpenAIScoreAnswer: {
             /** Confidence */
-            confidence: number;
+            confidence?: number | null;
             /** Name */
             name: string | null;
             /** Probabilities */
@@ -45490,7 +45490,7 @@ export interface components {
         /** ScoreAnswer */
         ScoreAnswer: {
             /** Confidence */
-            confidence: number;
+            confidence?: number | null;
             /** Legend */
             legend: {
                 [key: string]: string | {

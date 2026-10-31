@@ -73,6 +73,12 @@ describe("provider_info_helpers", () => {
   });
 
   describe("getProviderLogoAndName", () => {
+    it("shows the Parallel AI logo for the parallel_ai slug", () => {
+      const { logo, displayName } = getProviderLogoAndName("parallel_ai");
+      expect(displayName).toBe(Providers.ParallelAI);
+      expect(logo).toContain("parallel_ai");
+    });
+
     it("should return empty logo and dash display name when providerValue is empty", () => {
       const result = getProviderLogoAndName("");
       expect(result).toEqual({ logo: "", displayName: "-" });
@@ -575,6 +581,16 @@ describe("provider_info_helpers", () => {
         "sagemaker-model": { litellm_provider: "sagemaker" },
       };
       expect(getProviderModels("Sail" as Providers, modelMap)).toEqual(["sail/openai/gpt-oss-120b"]);
+    });
+
+    it("lists Parallel decision models with their provider and model placeholder", () => {
+      const modelMap = {
+        "parallel_ai/decision": { litellm_provider: "parallel_ai", mode: "evaluation" },
+      };
+
+      expect(getProviderModels("ParallelAI", modelMap)).toEqual(["parallel_ai/decision"]);
+      expect(getProviderLogoAndName("parallel_ai").displayName).toBe("Parallel AI");
+      expect(getPlaceholder("ParallelAI")).toBe("parallel_ai/decision");
     });
 
     it("lists Nace decision models and resolves the provider name and model placeholder", () => {

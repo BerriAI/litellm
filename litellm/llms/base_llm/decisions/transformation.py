@@ -534,6 +534,7 @@ class BaseDecisionsConfig(ABC):
     max_total_image_bytes: int | None = None
     image_media_types: frozenset[str] | None = None
     inlines_remote_images: bool = False
+    openai_evidence_fields: frozenset[str] = frozenset()
     health_check_questions: Mapping[str, Mapping[str, object]] = MappingProxyType(
         {"reachable": MappingProxyType({"type": "noul", "instructions": "Is the service reachable?"})}
     )
