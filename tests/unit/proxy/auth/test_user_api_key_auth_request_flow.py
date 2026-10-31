@@ -11278,6 +11278,211 @@ async def test_cached_key_team_member_budget_blocks_at_exact_cap(team_member_spe
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
+    "route, expect_blocked",
+    [
+        ("/models", False),
+        ("/v1/models", False),
+        ("/model/info", False),
+        ("/key/info", False),
+        ("/user/info", False),
+        ("/v1/messages", True),
+        ("/health/services", True),
+    ],
+)
+async def test_cached_key_team_member_budget_skips_non_spending_routes(route, expect_blocked):
+    """An over-budget team member keeps access to model discovery and self-service
+    info routes, while paid LLM routes and side-effectful health routes stay blocked."""
+    from litellm.proxy._types import LiteLLM_TeamMembership, LiteLLM_TeamTableCachedObj
+    from litellm.proxy.common_utils.user_api_key_cache import team_membership_auth_cache_key
+    from litellm.proxy.utils import hash_token
+
+    api_key = "sk-non-spending-routes"
+    hashed_token = hash_token(api_key)
+    team_id = "team-non-spending-routes"
+    user_id = "user-non-spending-routes"
+    team_member_spend = 2.4
+
+    user_api_key_cache = DualCache()
+    await cache_key_object(
+        hashed_token=hashed_token,
+        user_api_key_obj=UserAPIKeyAuth(
+            api_key=api_key,
+            token=hashed_token,
+            team_id=team_id,
+            user_id=user_id,
+            team_member_spend=team_member_spend,
+        ),
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=None,
+    )
+    await user_api_key_cache.async_set_cache(
+        key=f"team_id:{team_id}",
+        value=LiteLLM_TeamTableCachedObj(team_id=team_id),
+    )
+    await user_api_key_cache.async_set_cache(
+        key=user_id,
+        value=LiteLLM_UserTable(user_id=user_id, user_role=LitellmUserRoles.INTERNAL_USER),
+    )
+    await user_api_key_cache.async_set_cache(
+        key=team_membership_auth_cache_key(team_id=team_id, user_id=user_id),
+        value=LiteLLM_TeamMembership(
+            user_id=user_id,
+            team_id=team_id,
+            spend=team_member_spend,
+            budget_id="budget-non-spending-routes",
+            litellm_budget_table=LiteLLM_BudgetTable(max_budget=team_member_spend),
+        ),
+    )
+
+    mock_request = MagicMock()
+    mock_request.url.path = route
+    mock_request.method = "GET"
+    mock_request.headers = {"authorization": f"Bearer {api_key}"}
+    mock_request.query_params = {}
+    mock_request.state = SimpleNamespace()
+
+    proxy_logging_obj = MagicMock()
+    proxy_logging_obj.budget_alerts = AsyncMock()
+    proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
+
+    async def _auth():
+        return await user_api_key_auth_builder(
+            request=mock_request,
+            api_key=f"Bearer {api_key}",
+            azure_api_key_header="",
+            anthropic_api_key_header=None,
+            google_ai_studio_api_key_header=None,
+            azure_apim_header=None,
+            request_data={},
+        )
+
+    with (
+        patch(  # test-quality-ok: the builder reads proxy settings from module globals, no injection seam
+            "litellm.proxy.proxy_server.general_settings", {"disable_budget_reservation": True}
+        ),
+        patch("litellm.proxy.proxy_server.master_key", "sk-master"),  # test-quality-ok: module-global proxy state
+        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),  # test-quality-ok: module-global proxy state
+        patch(  # test-quality-ok: seed the cached key, team and membership without a DB
+            "litellm.proxy.proxy_server.user_api_key_cache", user_api_key_cache
+        ),
+        patch(  # test-quality-ok: module-global proxy state
+            "litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging_obj
+        ),
+        patch(  # test-quality-ok: the live counter needs Redis or a DB; pin the spend the check compares
+            "litellm.proxy.proxy_server.get_current_spend",
+            new=AsyncMock(return_value=team_member_spend),
+        ),
+    ):
+        if not expect_blocked:
+            result = await _auth()
+            assert result.team_member_spend == team_member_spend
+            return
+        with pytest.raises(ProxyException) as exc_info:
+            await _auth()
+
+    assert exc_info.value.type == ProxyErrorTypes.budget_exceeded
+    assert f"TeamMember={user_id}:{team_id}" in exc_info.value.message
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "route, expect_blocked",
+    [
+        ("/models", False),
+        ("/v1/models", False),
+        ("/utils/model_info", False),
+        ("/v1/messages", True),
+        ("/v1/chat/completions", True),
+    ],
+)
+async def test_cached_key_max_budget_skips_discovery_routes(route, expect_blocked):
+    """A key over its own max_budget keeps access to model discovery routes, while
+    paid LLM routes stay blocked. The key has a team but no team-member budget, so
+    only the key-level max-budget check can block it."""
+    from litellm.proxy._types import LiteLLM_TeamTableCachedObj
+    from litellm.proxy.utils import hash_token
+
+    api_key = "sk-key-budget-discovery-routes"
+    hashed_token = hash_token(api_key)
+    team_id = "team-key-budget-discovery"
+    user_id = "user-key-budget-discovery"
+    key_spend = 0.101
+    key_max_budget = 0.002
+
+    user_api_key_cache = DualCache()
+    await cache_key_object(
+        hashed_token=hashed_token,
+        user_api_key_obj=UserAPIKeyAuth(
+            api_key=api_key,
+            token=hashed_token,
+            team_id=team_id,
+            user_id=user_id,
+            spend=key_spend,
+            max_budget=key_max_budget,
+        ),
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=None,
+    )
+    await user_api_key_cache.async_set_cache(
+        key=f"team_id:{team_id}",
+        value=LiteLLM_TeamTableCachedObj(team_id=team_id),
+    )
+    await user_api_key_cache.async_set_cache(
+        key=user_id,
+        value=LiteLLM_UserTable(user_id=user_id, user_role=LitellmUserRoles.INTERNAL_USER),
+    )
+
+    mock_request = MagicMock()
+    mock_request.url.path = route
+    mock_request.method = "GET"
+    mock_request.headers = {"authorization": f"Bearer {api_key}"}
+    mock_request.query_params = {}
+    mock_request.state = SimpleNamespace()
+
+    proxy_logging_obj = MagicMock()
+    proxy_logging_obj.budget_alerts = AsyncMock()
+    proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
+
+    async def _auth():
+        return await user_api_key_auth_builder(
+            request=mock_request,
+            api_key=f"Bearer {api_key}",
+            azure_api_key_header="",
+            anthropic_api_key_header=None,
+            google_ai_studio_api_key_header=None,
+            azure_apim_header=None,
+            request_data={},
+        )
+
+    with (
+        patch(  # test-quality-ok: the builder reads proxy settings from module globals, no injection seam
+            "litellm.proxy.proxy_server.general_settings", {"disable_budget_reservation": True}
+        ),
+        patch("litellm.proxy.proxy_server.master_key", "sk-master"),  # test-quality-ok: module-global proxy state
+        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()), # test-quality-ok: module-global proxy state
+        patch( # test-quality-ok: seed the cached key and team without a DB
+            "litellm.proxy.proxy_server.user_api_key_cache", user_api_key_cache
+        ),
+        patch( # test-quality-ok: module-global proxy state
+            "litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging_obj
+        ),
+        patch( # test-quality-ok: the live counter needs Redis or a DB; pin the spend the check compares
+            "litellm.proxy.proxy_server.get_current_spend",
+            new=AsyncMock(return_value=key_spend),
+        ),
+    ):
+        if not expect_blocked:
+            result = await _auth()
+            assert result.spend == key_spend
+            return
+        with pytest.raises(ProxyException) as exc_info:
+            await _auth()
+
+    assert exc_info.value.type == ProxyErrorTypes.budget_exceeded
+    assert "Key=" in exc_info.value.message
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
     "expiry_offset, expect_blocked",
     [
         (timedelta(days=1), False),

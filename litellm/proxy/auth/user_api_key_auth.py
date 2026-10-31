@@ -3030,7 +3030,11 @@ async def validate_resolved_virtual_key(  # noqa: C901  # Preserve ordering of e
                 verbose_proxy_logger.info("Skipping all budget checks for zero-cost model: %s", model)
 
         # Check 3. Check if user is in their team budget
-        if not skip_budget_checks and valid_token.team_member_spend is not None:
+        if (
+            not skip_budget_checks
+            and not route_skips_budget_checks(route=route)
+            and valid_token.team_member_spend is not None
+        ):
             _user_id: Final = valid_token.user_id
             _team_id: Final = valid_token.team_id
             if prisma_client is not None and _user_id is not None and _team_id is not None:
@@ -3131,8 +3135,8 @@ async def validate_resolved_virtual_key(  # noqa: C901  # Preserve ordering of e
                     user_obj=user_obj,
                 )
 
-                # Check 5. Token Spend is under budget
-                if RouteChecks.is_llm_api_route(route=route):
+                # Check 5. Token Spend is under budget (discovery routes are OpenAI routes, so they need the route_skips_budget_checks exemption too, #48809)
+                if RouteChecks.is_llm_api_route(route=route) and not route_skips_budget_checks(route=route):
                     await virtual_key_max_budget_check(
                         valid_token=valid_token,
                         proxy_logging_obj=proxy_logging_obj,
