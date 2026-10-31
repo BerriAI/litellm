@@ -15561,13 +15561,9 @@ class Router(DeprecatedRouterMembers):
             verbose_router_logger.debug("healthy_deployments after web search filter: %s", healthy_deployments)
 
         healthy_deployments = (  # pyright: ignore[reportUnknownVariableType]  # rebind-ok: route filter narrows
-            self._without_decisions_deployments_refusing_media(
-                self._without_deployments_that_cannot_serve_route(
-                    healthy_deployments,  # pyright: ignore[reportUnknownArgumentType]  # legacy selector type
-                    model,
-                ),
+            self._without_deployments_that_cannot_serve_route(
+                healthy_deployments,  # pyright: ignore[reportUnknownArgumentType]  # legacy selector type
                 model,
-                cast(Mapping[str, object] | None, request_kwargs),  # cast-ok: request kwargs are a plain dict
             )
         )
 
@@ -15669,10 +15665,14 @@ class Router(DeprecatedRouterMembers):
 
         ## ORDER FILTERING ## -> if user set 'order' in deployments, return deployments with lowest order (e.g. order=1 > order=2)
         _target_order: Final = (request_kwargs or {}).pop("_target_order", None)
-        batch_candidates: Final = self._without_declared_text_only_deployments(
-            cast(list[dict[str, object]], healthy_deployments),  # cast-ok: router deployments are plain dicts
+        batch_candidates: Final = self._without_decisions_deployments_refusing_media(
+            self._without_declared_text_only_deployments(
+                cast(list[dict[str, object]], healthy_deployments),  # cast-ok: router deployments are plain dicts
+                model,
+                messages,
+                cast(Mapping[str, object] | None, request_kwargs),  # cast-ok: legacy signature uses a bare dict
+            ),
             model,
-            messages,
             cast(Mapping[str, object] | None, request_kwargs),  # cast-ok: legacy signature uses a bare dict
         )
         embedding_batch_admitting: Final = deployments_admitting_embedding_batch(
@@ -16848,13 +16848,9 @@ class Router(DeprecatedRouterMembers):
             request_kwargs=request_kwargs,
         )
         healthy_deployments = (  # pyright: ignore[reportUnknownVariableType]  # rebind-ok: route filter narrows
-            self._without_decisions_deployments_refusing_media(
-                self._without_deployments_that_cannot_serve_route(
-                    healthy_deployments,  # pyright: ignore[reportUnknownArgumentType]  # legacy selector type
-                    model,
-                ),
+            self._without_deployments_that_cannot_serve_route(
+                healthy_deployments,  # pyright: ignore[reportUnknownArgumentType]  # legacy selector type
                 model,
-                cast(Mapping[str, object] | None, request_kwargs),  # cast-ok: request kwargs are a plain dict
             )
         )
         strategy, strategy_selector = self._get_routing_context(model, request_kwargs)
@@ -16918,10 +16914,14 @@ class Router(DeprecatedRouterMembers):
 
         ## ORDER FILTERING ## -> if user set 'order' in deployments, return deployments with lowest order (e.g. order=1 > order=2)
         _target_order: Final = (request_kwargs or {}).pop("_target_order", None)
-        batch_candidates: Final = self._without_declared_text_only_deployments(
-            cast(list[dict[str, object]], healthy_deployments),  # cast-ok: router deployments are plain dicts
+        batch_candidates: Final = self._without_decisions_deployments_refusing_media(
+            self._without_declared_text_only_deployments(
+                cast(list[dict[str, object]], healthy_deployments),  # cast-ok: router deployments are plain dicts
+                model,
+                messages,
+                cast(Mapping[str, object] | None, request_kwargs),  # cast-ok: legacy signature uses a bare dict
+            ),
             model,
-            messages,
             cast(Mapping[str, object] | None, request_kwargs),  # cast-ok: legacy signature uses a bare dict
         )
         embedding_batch_admitting: Final = deployments_admitting_embedding_batch(

@@ -3937,6 +3937,42 @@ async def test_a_group_sends_clips_to_a_deployment_that_takes_them_and_refuses_o
     assert len(respx_mock.calls) == sent_before_refusal
 
 
+def _answer_unless_key_is(rejected_key: str) -> Callable[[httpx.Request], httpx.Response]:
+    def answer(request: httpx.Request) -> httpx.Response:
+        if request.headers["authorization"] == f"Bearer {rejected_key}":
+            return httpx.Response(401, json={"error": {"message": "invalid key"}})
+        return httpx.Response(200, json=_RESPONSE)
+
+    return answer
+
+
+@pytest.mark.asyncio
+async def test_clips_to_a_group_whose_only_taker_is_cooling_down_are_refused_rather_than_rate_limited(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, local_model_cost_map: None
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    route: Final = respx_mock.post("https://openrouter.ai/api/alpha/decisions").mock(
+        side_effect=_answer_unless_key_is("takes")
+    )
+    unlisted: Final = "openrouter/example/omni-preview"
+    router: Final = litellm.Router(
+        model_list=[
+            _group_member("g", unlisted, "refuses", 1, {}),
+            _group_member("g", unlisted, "takes", 1, {"supports_audio_input": True}),
+        ],
+        num_retries=0,
+        cooldown_time=120,
+    )
+    with pytest.raises(litellm.AuthenticationError):
+        await router.adecisions(model="g-takes", input="review", questions=_PREDICATE_QUESTIONS)
+    sent_before_clips: Final = len(route.calls)
+
+    with pytest.raises(litellm.UnsupportedParamsError, match=re.escape("['audio']")):
+        await router.adecisions(model="g", input="review", questions=_PREDICATE_QUESTIONS, audio=_AUDIO_CLIPS)
+
+    assert len(route.calls) == sent_before_clips
+
+
 @pytest.mark.asyncio
 async def test_a_deployment_that_turns_audio_off_is_refused_or_dropped_even_when_the_cost_map_allows_it(
     respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, local_model_cost_map: None
