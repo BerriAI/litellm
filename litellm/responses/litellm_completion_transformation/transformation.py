@@ -459,17 +459,35 @@ def _is_tool_output_item(item: object) -> bool:
     return isinstance(item_type, str) and item_type in TOOL_CALL_OUTPUT_ITEM_TYPES
 
 
+def _converts_before(
+    convert_input: Callable[[str | ResponseInputParam], object], sent_input: str | ResponseInputParam, position: int
+) -> bool:
+    try:
+        convert_input(sent_input[:position])
+    except TypeError:
+        return False
+    return True
+
+
 def _unhashable_tool_output_call_id_error(
-    input: str | ResponseInputParam, read_input: str | ResponseInputParam, error: TypeError
+    input: str | ResponseInputParam,
+    read_input: str | ResponseInputParam,
+    error: TypeError,
+    converts_before: Callable[[int], bool],
 ) -> BadRequestError | None:
     call_ids: Final = (
-        (f"input[{index}].call_id", message_field(item, "call_id"))
+        (f"input[{index}].call_id", message_field(item, "call_id"), item)
         for index, item in _read_positions(parts_of(input), read_input)
         if _is_tool_output_item(item)
     )
-    return _first_invalid_input_type(
-        (path, call_id) for path, call_id in call_ids if is_unhashable_value_behind(error, call_id)
+    first: Final = next((candidate for candidate in call_ids if is_unhashable_value_behind(error, candidate[1])), None)
+    if first is None:
+        return None
+    path, call_id, item = first
+    read_position: Final = next(
+        position for position, read_item in enumerate(parts_of(read_input)) if read_item is item
     )
+    return _invalid_input_type(path, call_id) if converts_before(read_position) else None
 
 
 def _carries_non_string_field(message: object) -> bool:
@@ -1397,17 +1415,20 @@ class LiteLLMCompletionResponsesConfig:
 
         dumped_input: Final = with_compaction_items_as_params(input)
         read_input: Final = _input_to_read(dumped_input, only_since_compaction, native_compaction)
+        sent_input: Final = read_input if item_cache_control else without_item_cache_control(read_input)
+        convert_input: Final = partial(
+            LiteLLMCompletionResponsesConfig._transform_response_input_param_to_chat_completion_message,
+            replay_reasoning=replay_reasoning,
+            native_compaction=native_compaction,
+        )
         try:
-            converted: Final = (
-                LiteLLMCompletionResponsesConfig._transform_response_input_param_to_chat_completion_message(
-                    input=read_input if item_cache_control else without_item_cache_control(read_input),
-                    replay_reasoning=replay_reasoning,
-                    native_compaction=native_compaction,
-                )
-            )
+            converted: Final = convert_input(sent_input)
         except TypeError as error:
             call_id_error: Final = _unhashable_tool_output_call_id_error(
-                dumped_input if caller_input is None else caller_input, read_input, error
+                dumped_input if caller_input is None else caller_input,
+                read_input,
+                error,
+                partial(_converts_before, convert_input, sent_input),
             )
             if call_id_error is None:
                 raise
