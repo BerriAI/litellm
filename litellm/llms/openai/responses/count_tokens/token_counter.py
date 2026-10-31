@@ -14,6 +14,10 @@ from typing_extensions import assert_never
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
+from litellm.litellm_core_utils.reasoning_effort_capability import (
+    deployment_reasoning_effort_levels,
+    resolve_deployment_reasoning_effort,
+)
 from litellm.litellm_core_utils.tool_fields import DropPolicy
 from litellm.llms.anthropic.messages.context_management import AnthropicContextManagementError
 from litellm.llms.anthropic.messages.convertible_blocks import deployment_drops_params, unconvertible_blocks_error
@@ -36,10 +40,6 @@ from litellm.llms.openai.workload_identity import (
     get_workload_identity_bearer_token,
     openai_static_api_key,
     resolve_openai_workload_identity_config,
-)
-from litellm.router_utils.reasoning_effort_capability import (
-    deployment_reasoning_effort_levels,
-    resolve_deployment_reasoning_effort,
 )
 from litellm.types.utils import CountContextManagement, LlmProviders, TokenCountMessagesFormat, TokenCountResponse
 
