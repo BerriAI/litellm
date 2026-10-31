@@ -8092,7 +8092,7 @@ def _turn_taking_client(
     answer to every earlier frame), and that Starlette refuses to send to once it is closed"""
     from starlette.websockets import WebSocketState
 
-    delivered: list[str] = []
+    delivered: Final[list[str]] = []
     script: Final = iter(frames)
     receives: Final = iter(range(len(frames) + 1) if answers_due is None else answers_due)
 
