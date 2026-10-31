@@ -12,7 +12,7 @@ spend tracking stores, so a follow-up previous_response_id still finds the conve
 
 import itertools
 import json
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from itertools import accumulate, chain, islice, product
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock
@@ -1988,3 +1988,103 @@ def test_the_partial_response_billed_on_disconnect_carries_the_logging_objects_b
         partial.response.usage.input_tokens,
         partial.response.usage.output_tokens,
     ), "the bill is priced on the partial's own usage"
+
+
+_HI_LOGPROB: Final = {
+    "token": "Hi",
+    "logprob": -0.01,
+    "bytes": [72, 105],
+    "top_logprobs": [{"token": "Hi", "logprob": -0.01, "bytes": [72, 105]}],
+}
+_BANG_LOGPROB: Final = {
+    "token": "!",
+    "logprob": -0.2,
+    "bytes": [33],
+    "top_logprobs": [{"token": "!", "logprob": -0.2, "bytes": [33]}],
+}
+_THINK_LOGPROB: Final = {"token": "hmm", "logprob": -1.3, "bytes": [104, 109, 109], "top_logprobs": []}
+
+
+def _logprobs_chunk(
+    delta: Delta, token_logprobs: Sequence[Mapping[str, object]], finish_reason: str | None = None
+) -> ModelResponseStream:
+    return ModelResponseStream(
+        id=CHAT_COMPLETION_ID,
+        created=1748575031,
+        model="claude-haiku-4-5",
+        object="chat.completion.chunk",
+        choices=[
+            StreamingChoices(
+                index=0,
+                delta=delta,
+                finish_reason=finish_reason,
+                logprobs={"content": list(token_logprobs)},
+            )
+        ],
+    )
+
+
+async def _wire_events(chunks: Sequence[ModelResponseStream], sync_mode: bool) -> tuple[Mapping[str, object], ...]:
+    events: Final = await _collect_events(_build_iterator(chunks), sync_mode)
+    return tuple(event.model_dump(mode="json", exclude_none=True) for event in events)
+
+
+def _events_of_type(events: Sequence[Mapping[str, object]], event_type: str) -> tuple[Mapping[str, object], ...]:
+    return tuple(event for event in events if event["type"] == event_type)
+
+
+def _streamed_full_logprobs(events: Sequence[Mapping[str, object]]) -> Mapping[str, object]:
+    (text_done,) = _events_of_type(events, "response.output_text.done")
+    (message_done,) = [
+        event for event in _events_of_type(events, "response.output_item.done") if event["item"]["type"] == "message"
+    ]
+    (completed,) = _events_of_type(events, "response.completed")
+    (completed_message,) = [item for item in completed["response"]["output"] if item["type"] == "message"]
+    return {
+        "response.output_text.done": text_done["logprobs"],
+        "response.output_item.done": message_done["item"]["content"][0]["logprobs"],
+        "response.completed": completed_message["content"][0]["logprobs"],
+    }
+
+
+def _content_part_logprobs(events: Sequence[Mapping[str, object]]) -> tuple[object, ...]:
+    return tuple(
+        event["part"]["logprobs"]
+        for event in events
+        if event["type"] in ("response.content_part.added", "response.content_part.done")
+    )
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_streamed_output_text_carries_each_deltas_logprobs_and_the_full_list_when_done(sync_mode: bool):
+    events: Final = await _wire_events(
+        (
+            _logprobs_chunk(Delta(role="assistant", reasoning_content="hmm"), [_THINK_LOGPROB]),
+            _logprobs_chunk(Delta(role="assistant", content="Hi"), [_HI_LOGPROB]),
+            _logprobs_chunk(Delta(role="assistant", content="!"), [_BANG_LOGPROB], finish_reason="stop"),
+        ),
+        sync_mode,
+    )
+
+    assert [event["logprobs"] for event in _events_of_type(events, "response.output_text.delta")] == [
+        [_HI_LOGPROB],
+        [_BANG_LOGPROB],
+    ]
+    assert _streamed_full_logprobs(events) == dict.fromkeys(
+        ("response.output_text.done", "response.output_item.done", "response.completed"),
+        [_HI_LOGPROB, _BANG_LOGPROB],
+    )
+    assert _content_part_logprobs(events) == ([], [])
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_streamed_output_text_without_chat_logprobs_carries_empty_logprobs(sync_mode: bool):
+    events: Final = await _wire_events((_chunk("Hel"), _chunk("lo", finish_reason="stop")), sync_mode)
+
+    assert [event["logprobs"] for event in _events_of_type(events, "response.output_text.delta")] == [[], []]
+    assert _streamed_full_logprobs(events) == dict.fromkeys(
+        ("response.output_text.done", "response.output_item.done", "response.completed"), []
+    )
+    assert _content_part_logprobs(events) == ([], [])

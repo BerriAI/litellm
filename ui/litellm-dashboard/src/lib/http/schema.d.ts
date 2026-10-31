@@ -40049,6 +40049,30 @@ export interface components {
              */
             type: "box";
         };
+        /** OpenAIChatCompletionLogprobsContent */
+        OpenAIChatCompletionLogprobsContent: {
+            /** Bytes */
+            bytes?: unknown[];
+            /** Logprob */
+            logprob: number;
+            /** Token */
+            token: string;
+            /** Top Logprobs */
+            top_logprobs?: components["schemas"]["OpenAIChatCompletionLogprobsContentTopLogprobs"][];
+        } & {
+            [key: string]: unknown;
+        };
+        /** OpenAIChatCompletionLogprobsContentTopLogprobs */
+        OpenAIChatCompletionLogprobsContentTopLogprobs: {
+            /** Bytes */
+            bytes?: unknown[];
+            /** Logprob */
+            logprob: number;
+            /** Token */
+            token: string;
+        } & {
+            [key: string]: unknown;
+        };
         /** OpenAIChoiceAnswer */
         OpenAIChoiceAnswer: {
             /** Choice */
@@ -40582,6 +40606,8 @@ export interface components {
         OutputText: {
             /** Annotations */
             annotations: components["schemas"]["GenericResponseOutputItemContentAnnotation"][] | null;
+            /** Logprobs */
+            logprobs?: components["schemas"]["OpenAIChatCompletionLogprobsContent"][] | null;
             /** Text */
             text: string | null;
             /** Type */
