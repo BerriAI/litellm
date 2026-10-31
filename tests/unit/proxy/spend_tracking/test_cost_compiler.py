@@ -913,9 +913,10 @@ async def test_stream_replay_applies_adjustments_once_to_legacy_stamped_usage(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("amount", [0.0, 0.123])
-@pytest.mark.parametrize("mapped", [False, True])
+@pytest.mark.parametrize("mapped", [None, "mapped-cost-model", "openai/mapped-cost-model"])
+@pytest.mark.parametrize("provider", ["openai", "litellm_proxy"])
 async def test_capture_retains_provider_header_price_without_catalog(
-    amount: float, mapped: bool, monkeypatch: pytest.MonkeyPatch
+    amount: float, mapped: str | None, provider: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from litellm.proxy.spend_tracking.usage_capture import capture_logging_usage
     from litellm.proxy.spend_tracking.usage_meter import DurableUsageMeter, UsageCaptureSettings
@@ -933,6 +934,9 @@ async def test_capture_retains_provider_header_price_without_catalog(
     import litellm
 
     logger: Final = _logger()
+    logger.update_environment_variables(
+        model="capture-model", custom_llm_provider=provider, litellm_params={}, optional_params={}
+    )
     if mapped:
         monkeypatch.setitem(
             litellm.model_cost,
@@ -944,7 +948,7 @@ async def test_capture_retains_provider_header_price_without_catalog(
                 "output_cost_per_token": 0.02,
             },
         )
-        logger.model_call_details["litellm_params"]["metadata"] = {"model_info": {"base_model": "mapped-cost-model"}}
+        logger.model_call_details["litellm_params"]["metadata"] = {"model_info": {"base_model": mapped}}
     expected: Final = logger.response_cost_calculator(response, ignore_stamped_cost=True)
     expected_breakdown: Final = logger.cost_breakdown
     database: Final = StoredUsage()
@@ -1152,3 +1156,14 @@ async def test_capture_preserves_completed_guardrail_fee_without_header_finaliza
         assert float(result.total_cost) == pytest.approx(0.18 + (0.03 if billable else 0))
     finally:
         await meter.stop(1)
+
+
+@pytest.mark.parametrize("mode", [None, "chat"])
+def test_header_split_retains_token_rates_when_catalog_mode_is_unspecified(mode: str | None) -> None:
+    result: Final = price_usage(
+        json.dumps(_retained_envelope(rates={"mode": mode}, logging={"provider_reported_cost": 0.18}))
+    )
+    assert isinstance(result, PricingSnapshot)
+    assert float(result.total_cost) == pytest.approx(0.18)
+    assert float(result.input_cost or 0) == pytest.approx(0.1)
+    assert float(result.output_cost or 0) == pytest.approx(0.08)

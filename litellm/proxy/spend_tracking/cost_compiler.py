@@ -108,7 +108,6 @@ def price_usage(envelope: str) -> PricingSnapshot | Unpriced:
     info: Final = {
         "key": key,
         "litellm_provider": provider,
-        "mode": "chat",
         "max_tokens": None,
         "max_input_tokens": None,
         "max_output_tokens": None,
@@ -116,6 +115,7 @@ def price_usage(envelope: str) -> PricingSnapshot | Unpriced:
         "output_cost_per_token": None,
         "supported_openai_params": None,
         **rates,
+        "mode": rates.get("mode") or "chat",
     }
     adjustments: Final = _fields(pricing.get("adjustments"))
     discount: Final = adjustments.get("discount")
