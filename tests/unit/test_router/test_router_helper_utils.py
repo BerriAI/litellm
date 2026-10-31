@@ -2614,7 +2614,7 @@ def test_deployments_by_pattern(model_list):
 def test_pattern_match_deployment_set_model_name(user_request_model, model_name, litellm_model, expected_model):
     from re import Match
 
-    from litellm.router_utils.pattern_match_deployments import PatternMatchRouter
+    from litellm.litellm_core_utils.pattern_match_deployments import PatternMatchRouter
 
     pattern_router = PatternMatchRouter()
 
@@ -2799,7 +2799,7 @@ def test_init_auto_router_deployment_success(mock_auto_router, model_list):
         auto_router_config=None,
         default_model="gpt-5-mini",
         embedding_model="text-embedding-3-small",
-        litellm_router_instance=router,
+        ctx=router._core_ctx,
         max_input_chars=DEFAULT_AUTO_ROUTER_MAX_INPUT_CHARS,
     )
 

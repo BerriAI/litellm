@@ -17,6 +17,7 @@ import anyio
 from fastapi import HTTPException
 from mcp import MCPError, ReadResourceResult, Resource
 from mcp.types import (
+    METHOD_NOT_FOUND,
     CallToolRequest,
     CallToolRequestParams,
     CallToolResult,
@@ -222,6 +223,7 @@ __all__ = (
     "mcp_get_prompt",
     "mcp_read_resource",
     "raise_denied_scoped_mcp_access",
+    "raise_generic_mcp_access_denial",
 )
 
 
@@ -762,8 +764,14 @@ async def raise_denied_scoped_mcp_access(
                 )
             }
             raise HTTPException(status_code=403, detail=group_denial)
+    raise_generic_mcp_access_denial(requested_names)
+
+
+def raise_generic_mcp_access_denial(requested_names: Sequence[str]) -> NoReturn:
     generic_denial: Final[_McpDeniedDetail] = {
-        "error": f"The key is not allowed to access the requested MCP servers: {', '.join(requested_names)}"
+        "error": (
+            f"The key is not allowed to access the requested MCP servers: {', '.join(dict.fromkeys(requested_names))}"
+        )
     }
     raise HTTPException(status_code=403, detail=generic_denial)
 
@@ -2804,6 +2812,58 @@ async def _fire_mcp_tool_call_logging(
             route="/mcp/call_tool",
         )
     return result
+
+
+async def log_mcp_sdk_rejection(
+    *,
+    method: str,
+    request_id: str | int | None,
+    error_code: int,
+    start_time: datetime,
+    user_api_key_auth: UserAPIKeyAuth,
+) -> None:
+    from litellm.proxy.proxy_server import proxy_logging_obj
+    from litellm.utils import Rules, function_setup
+
+    message: Final = "Method not found" if error_code == METHOD_NOT_FOUND else "Invalid request parameters"
+    rejection: Final = {
+        "method": "".join(char for char in method[:256] if char.isprintable()),
+        "request_id": (
+            "".join(char for char in str(request_id)[:128] if char.isprintable()) if request_id is not None else None
+        ),
+        "error_code": error_code,
+        "error_message": message,
+        "stage": "sdk_dispatch",
+        "route": user_api_key_auth.request_route or "/mcp",
+    }
+    metadata: Final = {
+        **LiteLLMProxyRequestSetup.get_sanitized_user_information_from_key(user_api_key_auth),
+        "spend_logs_metadata": {"mcp_sdk_rejection": rejection},
+    }
+    logging_obj, request_data = function_setup(
+        original_function=CallTypes.call_mcp_tool.value,
+        rules_obj=Rules(),
+        start_time=start_time,
+        model="MCP: request_rejected",
+        litellm_call_id=str(uuid.uuid4()),
+        metadata=metadata,
+    )
+    logging_obj.update_environment_variables(  # pyright: ignore[reportUnknownMemberType]  # untyped legacy signature
+        litellm_params={"metadata": metadata},
+        optional_params={},
+        user=user_api_key_auth.user_id,
+    )
+    safe_error: Final = HTTPException(status_code=400, detail=message)
+    end_time: Final = datetime.now()  # noqa: DTZ005  # matches the failure logging start time
+    await asyncio.to_thread(logging_obj.failure_handler, safe_error, "", start_time, end_time)
+    await logging_obj.async_failure_handler(safe_error, "", start_time, end_time)
+    await proxy_logging_obj.post_call_failure_hook(  # pyright: ignore[reportUnknownMemberType]  # legacy signature
+        request_data={**request_data, "litellm_logging_obj": logging_obj},
+        original_exception=safe_error,
+        user_api_key_dict=user_api_key_auth,
+        route="/mcp",
+        traceback_str="",
+    )
 
 
 async def fire_mcp_tool_call_failure_logging(
