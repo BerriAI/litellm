@@ -123,7 +123,7 @@ ENV LITELLM_RELEASE_TAG=${LITELLM_RELEASE_TAG}
 USER root
 
 # node (without npm) is required by the prisma CLI at runtime
-RUN apk add --no-cache bash openssl libssl3 tzdata nodejs python-3.13 libsndfile libevent
+RUN apk add --no-cache bash openssl libssl3 tzdata nodejs python-3.13 libsndfile libevent tini
 COPY --from=pgbouncer-builder /usr/local/bin/pgbouncer /usr/local/bin/pgbouncer
 
 WORKDIR /app
@@ -164,5 +164,5 @@ RUN find /app/.venv -type f -path "*/tornado/test/*" -delete && \
 
 EXPOSE 4000/tcp
 
-ENTRYPOINT ["docker/prod_entrypoint.sh"]
+ENTRYPOINT ["/usr/bin/tini", "--", "docker/prod_entrypoint.sh"]
 CMD ["--port", "4000"]
