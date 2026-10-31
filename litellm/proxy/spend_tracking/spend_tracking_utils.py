@@ -625,8 +625,8 @@ def get_logging_payload(
         routing_metadata,
         routing_litellm_params,
     )
-    completion_start_time: Final = TypeAdapter(datetime).validate_python(
-        kwargs.get("completion_start_time") or end_time
+    completion_start_time: Final = TypeAdapter[datetime | None](datetime | None).validate_python(
+        kwargs.get("completion_start_time", end_time)
     )
     call_type: Final = kwargs.get("call_type")
     cache_hit: Final = kwargs.get("cache_hit", False)
@@ -933,7 +933,9 @@ def get_logging_payload(
             cache_hit=str(cache_hit),
             startTime=_ensure_datetime_utc(start_time),
             endTime=_ensure_datetime_utc(end_time),
-            completionStartTime=_ensure_datetime_utc(completion_start_time),
+            completionStartTime=(
+                _ensure_datetime_utc(completion_start_time) if completion_start_time is not None else None
+            ),
             model=model_name,
             user=metadata.get("user_api_key_user_id", "") or "",
             team_id=metadata.get("user_api_key_team_id", "") or "",

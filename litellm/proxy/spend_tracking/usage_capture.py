@@ -505,19 +505,19 @@ class _CaptureBuilder:
         self.writes = usage_writes(payload, observed, replace(context, usage_source=provenance))
 
 
-def _prior_writes(kwargs: Mapping[str, object]) -> tuple[UsageWrite, ...]:
+def _prior_captures(kwargs: Mapping[str, object]) -> tuple[CapturedUsage, ...]:
     prior: Final = kwargs.get("_accounting_prior_captures", ())
     return (
         tuple(
-            chain.from_iterable(
-                item.writes
-                for item in TypeAdapter(tuple[object, ...]).validate_python(prior)
-                if isinstance(item, CapturedUsage)
-            )
+            item for item in TypeAdapter(tuple[object, ...]).validate_python(prior) if isinstance(item, CapturedUsage)
         )
         if isinstance(prior, tuple)
         else ()
     )
+
+
+def _prior_writes(kwargs: Mapping[str, object]) -> tuple[UsageWrite, ...]:
+    return tuple(chain.from_iterable(item.writes for item in _prior_captures(kwargs)))
 
 
 def capture_callback(
@@ -537,8 +537,8 @@ def capture_callback(
     payload: Final = get_logging_payload(
         dict(kwargs), response, start_time, end_time, llm_router=get_llm_router(), capture_usage=builder.observe
     )
-    dependencies: Final = _prior_writes(kwargs)
-    return CapturedUsage(payload, builder.writes, meter.submit((*dependencies, *builder.writes)))
+    prerequisites: Final = tuple(item.receipt for item in _prior_captures(kwargs))
+    return CapturedUsage(payload, builder.writes, meter.submit(builder.writes, prerequisites=prerequisites))
 
 
 def captured_callback_kwargs(

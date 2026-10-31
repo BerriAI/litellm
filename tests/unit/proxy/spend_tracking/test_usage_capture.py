@@ -1275,7 +1275,7 @@ async def test_parent_receipt_cannot_acknowledge_when_a_linked_attempt_conflicts
         other.capture_usage_before_logging(ModelResponse(id="success", usage=Usage(prompt_tokens=3)), NOW, NOW)
         captured: Final = other.model_call_details["_accounting_capture"]
         await runtime.meter.flush()
-        with pytest.raises(UsageCaptureError, match="identity"):
+        with pytest.raises(UsageCaptureError, match="dependency"):
             await captured.receipt
     finally:
         await runtime.stop(1)
@@ -1302,3 +1302,37 @@ async def test_unserializable_observation_does_not_interrupt_retry_or_legacy_usa
         await runtime.stop(1)
     assert tuple(row.event.event_id for row in database.rows) == ("caller:inbound", "success")
     assert json.loads(database.rows[-1].envelope)["related_attempt_ids"] == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("prior_committed", [False, True])
+@pytest.mark.parametrize("batch_size", [2, 3])
+async def test_retry_dependencies_do_not_resubmit_usage_or_expand_final_submission(
+    prior_committed: bool, batch_size: int
+) -> None:
+    from litellm.proxy.spend_tracking.usage_capture import UsageCaptureRuntime
+    from litellm.types.utils import ModelResponse, Usage
+
+    database: Final = CommitBarrier()
+    database.release.set()
+    runtime: Final = UsageCaptureRuntime()
+    runtime.start(database.write, UsageCaptureSettings(batch_size=batch_size, max_pending_records=3))
+    logger: Final = _logger()
+    try:
+        logger.record_partial_usage_for_failure(Usage(prompt_tokens=5), 0.4)
+        logger.carry_failed_attempt_usage()
+        assert runtime.meter is not None
+        if prior_committed:
+            await runtime.meter.flush()
+        logger.capture_usage_before_logging(ModelResponse(id="success", usage=Usage(prompt_tokens=3)), NOW, NOW)
+        captured: Final = logger.model_call_details.get("_accounting_capture")
+        assert captured is not None, "Final usage must be admitted independently of prior usage batch size"
+        await runtime.meter.close()
+        await captured.receipt
+        assert runtime.meter.pending_records == 0
+    finally:
+        await runtime.stop(1)
+    assert database.committed == ("caller-attempt-0", "caller:inbound", "success")
+    final: Final = json.loads(captured.writes[-1].envelope)
+    assert final["related_attempt_ids"] == ["caller-attempt-0"]
+    assert final["usage"]["prompt_tokens"] == 3
