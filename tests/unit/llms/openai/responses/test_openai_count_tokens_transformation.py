@@ -603,6 +603,26 @@ def test_anthropic_messages_keep_every_block_the_chat_converter_drops() -> None:
     )
 
 
+def test_a_count_with_anthropic_tool_search_counts_the_tools_without_the_search() -> None:
+    _, _, tools, _ = OpenAICountTokensConfig.anthropic_messages_to_responses_input(
+        model="gpt-5.6-luna",
+        messages=[{"role": "user", "content": "Find a weather tool."}],
+        system=None,
+        tools=[
+            {"type": "tool_search_tool_regex_20251119", "name": "tool_search_tool_regex"},
+            {
+                "name": "get_weather",
+                "input_schema": {"type": "object", "properties": {"city": {"type": "string"}}},
+                "defer_loading": True,
+            },
+        ],
+    )
+
+    assert [(tool.get("type"), tool.get("name"), tool.get("defer_loading")) for tool in tools or ()] == [
+        ("function", "get_weather", None)
+    ]
+
+
 def test_anthropic_list_system_becomes_joined_instruction_text() -> None:
     _, instructions, _, _ = OpenAICountTokensConfig.anthropic_messages_to_responses_input(
         model="gpt-4o",

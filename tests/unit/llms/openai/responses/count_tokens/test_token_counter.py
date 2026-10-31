@@ -196,6 +196,95 @@ async def _sent_count_body(
         return json.loads(route.calls.last.request.content)
 
 
+TOOL_SEARCH_TOOLS: Final[list[dict[str, object]]] = [
+    {"type": "tool_search_tool_regex_20251119", "name": "tool_search_tool_regex"},
+    {
+        "name": "get_weather",
+        "input_schema": {"type": "object", "properties": {"city": {"type": "string"}}},
+        "defer_loading": True,
+    },
+]
+UNDEFERRED_TOOL_SEARCH_TOOLS: Final[list[dict[str, object]]] = [
+    TOOL_SEARCH_TOOLS[0],
+    {key: value for key, value in TOOL_SEARCH_TOOLS[1].items() if key != "defer_loading"},
+]
+
+
+async def _counted_tools(
+    monkeypatch: pytest.MonkeyPatch,
+    model: str,
+    litellm_params: Mapping[str, object],
+    tools: list[dict[str, object]] = TOOL_SEARCH_TOOLS,
+) -> list[tuple[object, object, object]]:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    with respx.mock:
+        route: Final = respx.post(f"{litellm_params.get('api_base', 'https://api.openai.com/v1')}/responses/input_tokens")
+        route.mock(return_value=httpx.Response(200, json={"input_tokens": 1}))
+        await OpenAITokenCounter().count_tokens(
+            model_to_use=model,
+            messages=[{"role": "user", "content": "What is the weather in Paris?"}],
+            contents=None,
+            deployment={"litellm_params": {"api_key": "sk-test", **litellm_params}},
+            request_model=f"openai/{model}",
+            tools=tools,
+            messages_format="anthropic",
+        )
+        counted: Final = json.loads(route.calls.last.request.content)["tools"]
+    return [(tool.get("type"), tool.get("name"), tool.get("defer_loading")) for tool in counted]
+
+
+@pytest.mark.asyncio
+async def test_anthropic_tool_search_is_counted_as_the_openai_tool_search_inference_sends(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    assert await _counted_tools(monkeypatch, "gpt-5.6-luna", {}) == [
+        ("tool_search", None, None),
+        ("function", "get_weather", True),
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("tools", "expected"),
+    [
+        pytest.param(
+            TOOL_SEARCH_TOOLS,
+            [("tool_search", None, None), ("function", "get_weather", True)],
+            id="a-tool-is-deferred",
+        ),
+        pytest.param(UNDEFERRED_TOOL_SEARCH_TOOLS, [("function", "get_weather", None)], id="nothing-is-deferred"),
+    ],
+)
+@pytest.mark.parametrize(
+    "litellm_params",
+    [pytest.param({}, id="without-drop-params"), pytest.param({"drop_params": True}, id="drop-params")],
+)
+async def test_anthropic_tool_search_is_counted_only_beside_a_deferred_tool(
+    monkeypatch: pytest.MonkeyPatch,
+    tools: list[dict[str, object]],
+    expected: list[tuple[object, object, object]],
+    litellm_params: Mapping[str, object],
+) -> None:
+    assert await _counted_tools(monkeypatch, "gpt-5.6-luna", litellm_params, tools) == expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("model", "litellm_params"),
+    [
+        pytest.param("a-model-the-cost-map-does-not-mark-for-tool-search", {}, id="model-without-tool-search"),
+        pytest.param("gpt-5.6-luna", {"api_base": "https://responses.example.test/v1"}, id="other-responses-server"),
+        pytest.param(
+            "gpt-5.6-luna", {"additional_drop_params": ["tools[*].defer_loading"]}, id="deployment-drops-deferral"
+        ),
+    ],
+)
+async def test_anthropic_tool_search_is_left_out_of_the_count_where_inference_cannot_run_it(
+    monkeypatch: pytest.MonkeyPatch, model: str, litellm_params: Mapping[str, object]
+) -> None:
+    assert await _counted_tools(monkeypatch, model, litellm_params) == [("function", "get_weather", None)]
+
+
 @pytest.mark.asyncio
 async def test_anthropic_format_sends_the_document_image_and_tool_turns_to_the_count_endpoint(
     monkeypatch: pytest.MonkeyPatch,

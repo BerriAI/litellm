@@ -17,6 +17,7 @@ from litellm.constants import (
     DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
 )
+from litellm.exceptions import UnsupportedParamsError
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     TOOL_RESULT_IMAGE_BOUNDARY,
     TOOL_RESULT_IMAGE_PLACEHOLDER,
@@ -947,6 +948,220 @@ class TestTranslateToolChoiceToResponsesAPI:
     def test_specific_tool_maps_to_function(self):
         result = _ADAPTER.translate_tool_choice_to_responses_api({"type": "tool", "name": "get_weather"})
         assert result == {"type": "function", "name": "get_weather"}
+
+
+_TOOL_SEARCH: Final = {"type": "tool_search_tool_bm25_20251119", "name": "tool_search_tool_bm25"}
+_DEFERRED_WEATHER: Final = {
+    "name": "get_weather",
+    "description": "Weather for a city",
+    "input_schema": {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]},
+    "defer_loading": True,
+}
+_DEFERRED_BASH: Final = {"type": "bash_20250124", "name": "bash", "defer_loading": True}
+
+
+class TestAnthropicTypedToolsOnResponses:
+    """Anthropic-defined tools carry no input_schema, so the adapter has to supply the schema Claude has built in."""
+
+    @staticmethod
+    def _only_tool(tool: Dict[str, Any]) -> Dict[str, Any]:
+        tools: Final = _ADAPTER.translate_request(_make_request(tools=[tool]), drop_params=False)["tools"]
+        assert len(tools) == 1
+        return tools[0]
+
+    @staticmethod
+    def _enum(tool: Dict[str, Any], prop: str) -> List[str]:
+        return tool["parameters"]["properties"][prop]["enum"]
+
+    def test_bash_gets_a_command_parameter(self):
+        tool: Final = self._only_tool({"type": "bash_20250124", "name": "bash"})
+
+        assert tool["type"] == "function"
+        assert tool["name"] == "bash"
+        assert tool["strict"] is False
+        assert set(tool["parameters"]["properties"]) == {"command", "restart"}
+        assert tool["description"]
+
+    def test_text_editor_from_20250429_inserts_insert_text_and_has_no_undo(self):
+        tool: Final = self._only_tool({"type": "text_editor_20250728", "name": "str_replace_based_edit_tool"})
+
+        assert tool["name"] == "str_replace_based_edit_tool"
+        assert self._enum(tool, "command") == ["view", "create", "str_replace", "insert"]
+        assert "insert_text" in tool["parameters"]["properties"]
+        assert tool["parameters"]["required"] == ["command", "path"]
+
+    def test_text_editor_before_20250429_inserts_new_str_and_can_undo(self):
+        tool: Final = self._only_tool({"type": "text_editor_20250124", "name": "str_replace_editor"})
+
+        assert "undo_edit" in self._enum(tool, "command")
+        assert "insert_text" not in tool["parameters"]["properties"]
+        assert "new_str" in tool["parameters"]["properties"]
+
+    def test_memory_gets_every_memory_command(self):
+        tool: Final = self._only_tool({"type": "memory_20250818", "name": "memory"})
+
+        assert set(self._enum(tool, "command")) == {"view", "create", "str_replace", "insert", "delete", "rename"}
+        assert {"old_path", "new_path"} <= set(tool["parameters"]["properties"])
+
+    @pytest.mark.parametrize(
+        ("tool_type", "enable_zoom", "has_scroll", "has_zoom"),
+        [
+            ("computer_20241022", True, False, False),
+            ("computer_20250124", True, True, False),
+            ("computer_20251124", False, True, False),
+            ("computer_20251124", True, True, True),
+        ],
+    )
+    def test_computer_actions_follow_the_tool_version(
+        self, tool_type: str, enable_zoom: bool, has_scroll: bool, has_zoom: bool
+    ):
+        tool: Final = self._only_tool(
+            {
+                "type": tool_type,
+                "name": "computer",
+                "display_width_px": 1280,
+                "display_height_px": 800,
+                "enable_zoom": enable_zoom,
+            }
+        )
+        actions: Final = self._enum(tool, "action")
+        properties: Final = tool["parameters"]["properties"]
+
+        assert {"screenshot", "left_click", "type", "key"} <= set(actions)
+        assert ("scroll" in actions) is has_scroll
+        assert ("scroll_direction" in properties) is has_scroll
+        assert ("zoom" in actions) is has_zoom
+        assert ("region" in properties) is has_zoom
+        assert "1280x800" in tool["description"]
+
+    @pytest.mark.parametrize(
+        "tool_type", ["web_search_20250305", "web_search_preview", "web_search_preview_2025_03_11", "web_search_2025_08_26"]
+    )
+    def test_every_web_search_type_runs_the_hosted_web_search(self, tool_type: str):
+        assert self._only_tool({"type": tool_type, "name": "web_search"}) == {"type": "web_search_preview"}
+
+    def test_custom_tool_named_like_a_typed_tool_keeps_its_own_schema(self):
+        schema: Final = {"type": "object", "properties": {"cmd": {"type": "string"}}, "required": ["cmd"]}
+
+        tool: Final = self._only_tool({"name": "bash", "input_schema": schema})
+
+        assert tool["parameters"] == schema
+        assert "description" not in tool
+
+    @pytest.mark.parametrize(
+        "tool",
+        [
+            {"type": "web_fetch_20250910", "name": "web_fetch"},
+            {"type": "code_execution_20250825", "name": "code_execution"},
+            {"type": "mcp_toolset", "mcp_server_name": "docs"},
+            {"type": "computer_toolset_20260801"},
+            _TOOL_SEARCH,
+        ],
+    )
+    def test_tool_with_no_responses_equivalent_is_a_400_without_drop_params(self, tool: Dict[str, Any]):
+        with pytest.raises(UnsupportedParamsError) as error:
+            _ADAPTER.translate_request(_make_request(tools=[tool]), drop_params=False)
+
+        assert error.value.status_code == 400
+        assert tool["type"] in str(error.value)
+        assert "litellm_params" in str(error.value)
+
+    def test_tool_with_no_responses_equivalent_drops_under_drop_params(self):
+        kwargs: Final = _ADAPTER.translate_request(
+            _make_request(
+                tools=[{"type": "web_fetch_20250910", "name": "web_fetch"}, {"type": "bash_20250124", "name": "bash"}]
+            ),
+            drop_params=True,
+        )
+
+        assert [tool["name"] for tool in kwargs["tools"]] == ["bash"]
+
+    def test_tool_choice_of_a_hosted_tool_names_the_hosted_type(self):
+        kwargs: Final = _ADAPTER.translate_request(
+            _make_request(
+                tools=[
+                    {"type": "bash_20250124", "name": "bash"},
+                    {"type": "web_search_20250305", "name": "web_search"},
+                ],
+                tool_choice={"type": "tool", "name": "web_search"},
+            )
+        )
+
+        assert kwargs["tool_choice"] == {"type": "web_search_preview"}
+
+    def test_tool_choice_of_a_dropped_tool_is_dropped_with_it(self):
+        kwargs: Final = _ADAPTER.translate_request(
+            _make_request(
+                tools=[{"type": "web_fetch_20250910", "name": "web_fetch"}, {"type": "bash_20250124", "name": "bash"}],
+                tool_choice={"type": "tool", "name": "web_fetch"},
+            ),
+            drop_params=True,
+        )
+
+        assert [tool["name"] for tool in kwargs["tools"]] == ["bash"]
+        assert "tool_choice" not in kwargs
+
+    def test_tool_choice_is_dropped_when_every_tool_was_dropped(self):
+        kwargs: Final = _ADAPTER.translate_request(
+            _make_request(tools=[{"type": "web_fetch_20250910", "name": "web_fetch"}], tool_choice={"type": "any"}),
+            drop_params=True,
+        )
+
+        assert "tools" not in kwargs
+        assert "tool_choice" not in kwargs
+
+    def test_tool_choice_forcing_the_tool_search_is_a_400_without_drop_params(self):
+        with pytest.raises(UnsupportedParamsError) as error:
+            _ADAPTER.translate_request(
+                _make_request(
+                    tools=[_TOOL_SEARCH, _DEFERRED_WEATHER],
+                    tool_choice={"type": "tool", "name": "tool_search_tool_bm25"},
+                ),
+                drop_params=False,
+                maps_tool_search=True,
+            )
+
+        assert error.value.status_code == 400
+        assert "tool_search_tool_bm25" in str(error.value)
+        assert "drop_params" in str(error.value)
+
+    def test_tool_choice_forcing_the_tool_search_is_dropped_under_drop_params(self):
+        kwargs: Final = _ADAPTER.translate_request(
+            _make_request(
+                tools=[_TOOL_SEARCH, _DEFERRED_WEATHER],
+                tool_choice={"type": "tool", "name": "tool_search_tool_bm25"},
+            ),
+            drop_params=True,
+            maps_tool_search=True,
+        )
+
+        assert [tool["name"] for tool in kwargs["tools"]] == ["tool_search_tool_bm25", "get_weather"]
+        assert "tool_choice" not in kwargs
+
+    @pytest.mark.parametrize(
+        ("tools", "maps_tool_search", "deferred"),
+        [
+            ([_TOOL_SEARCH, _DEFERRED_WEATHER], True, True),
+            ([_TOOL_SEARCH, _DEFERRED_BASH], True, True),
+            ([_DEFERRED_WEATHER], True, None),
+            ([_TOOL_SEARCH, _DEFERRED_WEATHER], False, None),
+        ],
+    )
+    def test_a_tool_stays_deferred_only_beside_a_tool_search_the_target_runs(
+        self, tools: List[Dict[str, Any]], maps_tool_search: bool, deferred: Any
+    ):
+        kwargs: Final = _ADAPTER.translate_request(
+            _make_request(tools=tools), drop_params=True, maps_tool_search=maps_tool_search
+        )
+
+        deferrable: Final = next(tool for tool in kwargs["tools"] if tool.get("type") == "function")
+        assert deferrable.get("defer_loading") is deferred
+        assert any(tool["type"] == _TOOL_SEARCH["type"] for tool in kwargs["tools"]) is (deferred is True)
+
+    def test_tool_choice_without_tools_still_reaches_the_provider(self):
+        kwargs: Final = _ADAPTER.translate_request(_make_request(tool_choice={"type": "any"}))
+
+        assert kwargs["tool_choice"] == "required"
 
 
 # ---------------------------------------------------------------------------

@@ -2,7 +2,7 @@ import datetime
 import json
 import os
 import sys
-from collections.abc import AsyncIterator, Mapping
+from collections.abc import AsyncIterator, Mapping, Sequence
 from itertools import chain
 from typing import Final, cast
 from unittest.mock import AsyncMock, patch
@@ -762,6 +762,338 @@ async def test_recomputed_cost_of_a_served_bridge_response_prices_the_reasoning_
     assert logging_obj.cost_breakdown is not None
     assert logging_obj.cost_breakdown["output_cost"] == pytest.approx(expected_output)
     assert logging_obj.cost_breakdown["reasoning_cost"] == pytest.approx(expected_reasoning)
+
+
+TOOL_SEARCH: Final = {"type": "tool_search_tool_bm25_20251119", "name": "tool_search_tool_bm25"}
+DEFERRED_WEATHER: Final = {
+    "name": "get_weather",
+    "description": "Weather for a city",
+    "input_schema": {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]},
+    "defer_loading": True,
+}
+WEB_FETCH: Final = {"type": "web_fetch_20250910", "name": "web_fetch"}
+TYPED_BASH: Final = {"type": "bash_20250124", "name": "bash"}
+OPENAI_API_BASE: Final = "https://api.openai.com/v1"
+OTHER_RESPONSES_API_BASE: Final = "https://responses.example.test/v1"
+
+
+async def _openai_request_for(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    tools: list[Mapping[str, object]],
+    api_base: str = OPENAI_API_BASE,
+    model: str = "openai/gpt-5.6-luna",
+    **extra: object,
+) -> respx.Route:
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-typed-tools-test")
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    upstream: Final = respx_mock.post(f"{api_base}/responses").respond(status_code=200, json=TOOL_CALL_RESPONSE)
+    await LiteLLMMessagesToResponsesAPIHandler.async_anthropic_messages_handler(
+        max_tokens=1024,
+        messages=MESSAGES,
+        model=model,
+        tools=[dict(tool) for tool in tools],
+        custom_llm_provider="openai",
+        api_base=api_base,
+        **extra,
+    )
+    return upstream
+
+
+def _tools_sent(upstream: respx.Route) -> list[Mapping[str, object]]:
+    return json.loads(upstream.calls.last.request.content)["tools"]
+
+
+@pytest.mark.asyncio
+async def test_anthropic_tool_search_reaches_openai_as_its_server_tool_search_with_the_tool_still_deferred(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    upstream: Final = await _openai_request_for(respx_mock, monkeypatch, [TOOL_SEARCH, DEFERRED_WEATHER])
+
+    wire_keys: Final = ("type", "execution", "name", "defer_loading")
+    assert [tuple(tool.get(key) for key in wire_keys) for tool in _tools_sent(upstream)] == [
+        ("tool_search", "server", None, None),
+        ("function", None, "get_weather", True),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_a_deferred_typed_tool_keeps_the_tool_search_under_drop_params(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    upstream: Final = await _openai_request_for(
+        respx_mock, monkeypatch, [TOOL_SEARCH, {**TYPED_BASH, "defer_loading": True}], drop_params=True
+    )
+
+    assert [(tool["type"], tool.get("defer_loading")) for tool in _tools_sent(upstream)] == [
+        ("tool_search", None),
+        ("function", True),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_tool_search_for_a_responses_server_other_than_openai_answers_400_without_drop_params(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    with pytest.raises(litellm.UnsupportedParamsError) as error:
+        await _openai_request_for(
+            respx_mock, monkeypatch, [TOOL_SEARCH, DEFERRED_WEATHER], api_base=OTHER_RESPONSES_API_BASE, drop_params=False
+        )
+
+    assert error.value.status_code == 400
+    assert not respx_mock.calls
+
+
+@pytest.mark.asyncio
+async def test_drop_params_drops_tool_search_and_its_deferral_for_a_responses_server_other_than_openai(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    upstream: Final = await _openai_request_for(
+        respx_mock, monkeypatch, [TOOL_SEARCH, DEFERRED_WEATHER], api_base=OTHER_RESPONSES_API_BASE, drop_params=True
+    )
+
+    assert [(tool["type"], tool["name"], tool.get("defer_loading")) for tool in _tools_sent(upstream)] == [
+        ("function", "get_weather", None)
+    ]
+
+
+MODEL_WITHOUT_TOOL_SEARCH: Final = "openai/a-model-the-cost-map-does-not-mark-for-tool-search"
+
+
+@pytest.mark.asyncio
+async def test_tool_search_on_an_openai_model_that_cannot_run_it_answers_400_naming_drop_params(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    with pytest.raises(litellm.UnsupportedParamsError) as error:
+        await _openai_request_for(
+            respx_mock, monkeypatch, [TOOL_SEARCH, DEFERRED_WEATHER], model=MODEL_WITHOUT_TOOL_SEARCH, drop_params=False
+        )
+
+    assert error.value.status_code == 400
+    assert "tool_search_tool_bm25_20251119" in error.value.message
+    assert "drop_params" in error.value.message
+    assert not respx_mock.calls
+
+
+@pytest.mark.asyncio
+async def test_drop_params_drops_tool_search_and_its_deferral_on_an_openai_model_that_cannot_run_it(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    upstream: Final = await _openai_request_for(
+        respx_mock, monkeypatch, [TOOL_SEARCH, DEFERRED_WEATHER], model=MODEL_WITHOUT_TOOL_SEARCH, drop_params=True
+    )
+
+    assert [(tool["type"], tool["name"], tool.get("defer_loading")) for tool in _tools_sent(upstream)] == [
+        ("function", "get_weather", None)
+    ]
+
+
+UNDEFERRED_WEATHER: Final = {key: value for key, value in DEFERRED_WEATHER.items() if key != "defer_loading"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "weather",
+    [
+        pytest.param(UNDEFERRED_WEATHER, id="no-defer-loading"),
+        pytest.param({**DEFERRED_WEATHER, "defer_loading": "true"}, id="defer-loading-string"),
+    ],
+)
+async def test_tool_search_with_no_deferred_tool_answers_400_naming_drop_params_before_any_openai_call(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, weather: Mapping[str, object]
+):
+    with pytest.raises(litellm.UnsupportedParamsError) as error:
+        await _openai_request_for(respx_mock, monkeypatch, [TOOL_SEARCH, weather], drop_params=False)
+
+    assert error.value.status_code == 400
+    assert "tool_search_tool_bm25_20251119" in error.value.message
+    assert "drop_params" in error.value.message
+    assert not respx_mock.calls
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tool_type", [pytest.param(["bash"], id="list"), pytest.param({"name": "bash"}, id="object")])
+async def test_a_tool_whose_type_is_not_a_string_reaches_openai_as_a_function_beside_tool_search(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, tool_type: object
+):
+    upstream: Final = await _openai_request_for(
+        respx_mock, monkeypatch, [TOOL_SEARCH, DEFERRED_WEATHER, {"type": tool_type, "name": "odd_tool"}]
+    )
+
+    assert [(tool["type"], tool.get("name")) for tool in _tools_sent(upstream)] == [
+        ("tool_search", None),
+        ("function", "get_weather"),
+        ("function", "odd_tool"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_additional_drop_params_tools_sends_no_tools_even_beside_one_openai_cannot_run(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    upstream: Final = await _openai_request_for(
+        respx_mock, monkeypatch, [WEB_FETCH, TYPED_BASH], drop_params=False, additional_drop_params=["tools"]
+    )
+
+    assert "tools" not in json.loads(upstream.calls.last.request.content)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "tool_choice",
+    [{"type": "tool", "name": "web_fetch"}, {"type": "tool", "name": "bash"}, {"type": "any"}],
+    ids=["forcing-a-tool-openai-cannot-run", "forcing-a-client-tool", "forcing-any-tool"],
+)
+async def test_additional_drop_params_tools_sends_no_tool_choice_forcing_a_dropped_tool(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, tool_choice: Mapping[str, object]
+):
+    upstream: Final = await _openai_request_for(
+        respx_mock,
+        monkeypatch,
+        [WEB_FETCH, TYPED_BASH],
+        drop_params=True,
+        additional_drop_params=["tools"],
+        tool_choice=dict(tool_choice),
+    )
+
+    sent: Final = json.loads(upstream.calls.last.request.content)
+    assert "tools" not in sent
+    assert "tool_choice" not in sent
+
+
+DEFERRED_STOCK: Final = {
+    "name": "get_stock",
+    "description": "Price for a ticker",
+    "input_schema": {"type": "object", "properties": {"ticker": {"type": "string"}}, "required": ["ticker"]},
+    "defer_loading": True,
+}
+FORCE_STOCK: Final = {"type": "tool", "name": "get_stock"}
+
+
+def _tool_search_wire(upstream: respx.Route) -> list[tuple[object, ...]]:
+    return [(tool["type"], tool.get("name"), tool.get("defer_loading")) for tool in _tools_sent(upstream)]
+
+
+@pytest.mark.asyncio
+async def test_a_tool_choice_forcing_a_deferred_function_sends_that_function_loaded_beside_tool_search(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    upstream: Final = await _openai_request_for(
+        respx_mock,
+        monkeypatch,
+        [TOOL_SEARCH, DEFERRED_STOCK, DEFERRED_WEATHER],
+        drop_params=False,
+        tool_choice=dict(FORCE_STOCK),
+    )
+
+    assert _tool_search_wire(upstream) == [
+        ("tool_search", None, None),
+        ("function", "get_stock", None),
+        ("function", "get_weather", True),
+    ]
+    assert json.loads(upstream.calls.last.request.content)["tool_choice"] == {"type": "function", "name": "get_stock"}
+
+
+@pytest.mark.asyncio
+async def test_drop_params_drops_tool_search_when_the_forced_function_is_the_only_deferred_one(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    upstream: Final = await _openai_request_for(
+        respx_mock, monkeypatch, [TOOL_SEARCH, DEFERRED_STOCK], drop_params=True, tool_choice=dict(FORCE_STOCK)
+    )
+
+    assert _tool_search_wire(upstream) == [("function", "get_stock", None)]
+    assert json.loads(upstream.calls.last.request.content)["tool_choice"] == {"type": "function", "name": "get_stock"}
+
+
+@pytest.mark.asyncio
+async def test_additional_drop_params_tool_choice_sends_tool_search_without_the_choice_that_forces_it(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    upstream: Final = await _openai_request_for(
+        respx_mock,
+        monkeypatch,
+        [TOOL_SEARCH, DEFERRED_WEATHER],
+        drop_params=False,
+        additional_drop_params=["tool_choice"],
+        tool_choice={"type": "tool", "name": "tool_search_tool_bm25"},
+    )
+
+    assert "tool_choice" not in json.loads(upstream.calls.last.request.content)
+    assert _tool_search_wire(upstream) == [("tool_search", None, None), ("function", "get_weather", True)]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "additional_drop_params",
+    [
+        pytest.param(["tools[*].defer_loading"], id="every-tool"),
+        pytest.param(["tools[1].defer_loading"], id="one-tool-by-index"),
+        pytest.param(("tools[*].defer_loading",), id="sdk-tuple"),
+    ],
+)
+async def test_additional_drop_params_of_a_defer_loading_path_answers_400_for_tool_search_without_drop_params(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, additional_drop_params: Sequence[str]
+):
+    with pytest.raises(litellm.UnsupportedParamsError) as error:
+        await _openai_request_for(
+            respx_mock,
+            monkeypatch,
+            [TOOL_SEARCH, DEFERRED_WEATHER],
+            drop_params=False,
+            additional_drop_params=additional_drop_params,
+        )
+
+    assert "tool_search_tool_bm25_20251119" in error.value.message
+    assert not respx_mock.calls
+
+
+@pytest.mark.asyncio
+async def test_a_deferral_inside_the_custom_object_keeps_tool_search_with_the_tool_deferred(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    wrapped: Final = {**UNDEFERRED_WEATHER, "custom": {"defer_loading": True}}
+
+    upstream: Final = await _openai_request_for(respx_mock, monkeypatch, [TOOL_SEARCH, wrapped], drop_params=False)
+
+    assert _tool_search_wire(upstream) == [("tool_search", None, None), ("function", "get_weather", True)]
+    assert all("custom" not in tool for tool in _tools_sent(upstream))
+
+
+@pytest.mark.asyncio
+async def test_an_unversioned_typed_tool_name_reaches_openai_with_the_clients_own_schema(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    schema: Final = {"type": "object", "properties": {"script": {"type": "string"}}, "required": ["script"]}
+
+    upstream: Final = await _openai_request_for(
+        respx_mock, monkeypatch, [{"type": "bash", "name": "bash", "input_schema": schema}], drop_params=False
+    )
+
+    assert [(tool["name"], tool["parameters"]) for tool in _tools_sent(upstream)] == [("bash", schema)]
+
+
+@pytest.mark.asyncio
+async def test_a_tool_openai_cannot_run_answers_400_before_any_openai_call_without_drop_params(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    with pytest.raises(litellm.UnsupportedParamsError) as error:
+        await _openai_request_for(respx_mock, monkeypatch, [WEB_FETCH, TYPED_BASH], drop_params=False)
+
+    assert error.value.status_code == 400
+    assert not respx_mock.calls
+
+
+@pytest.mark.asyncio
+async def test_drop_params_drops_a_tool_openai_cannot_run_and_keeps_the_rest(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    upstream: Final = await _openai_request_for(respx_mock, monkeypatch, [WEB_FETCH, TYPED_BASH], drop_params=True)
+
+    tools: Final = _tools_sent(upstream)
+    assert [tool["name"] for tool in tools] == ["bash"]
+    assert "command" in cast(Mapping[str, Mapping[str, object]], tools[0]["parameters"])["properties"]
 
 
 TEXT_RESPONSE: Final = {
