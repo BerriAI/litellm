@@ -1303,7 +1303,7 @@ class TestDeploymentCallbackOnFailureCooldownTimePrecedence:
             },
         }
 
-        with patch("litellm.router.set_cooldown_deployments") as mock_set_cooldown:
+        with patch("litellm.router_python_core.set_cooldown_deployments") as mock_set_cooldown:
             router.deployment_callback_on_failure(
                 kwargs=kwargs,
                 completion_response=None,
@@ -1339,7 +1339,7 @@ class TestDeploymentCallbackOnFailureCooldownTimePrecedence:
             },
         }
 
-        with patch("litellm.router.set_cooldown_deployments") as mock_set_cooldown:
+        with patch("litellm.router_python_core.set_cooldown_deployments") as mock_set_cooldown:
             router.deployment_callback_on_failure(
                 kwargs=kwargs,
                 completion_response=None,
