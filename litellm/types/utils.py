@@ -3472,6 +3472,10 @@ class StandardLoggingHiddenParams(TypedDict):
     batch_successful_requests: ReadOnly[int | None]
     batch_failed_requests: ReadOnly[int | None]
     upstream_provider: ReadOnly[NotRequired[str | None]]
+    timing_pre_processing_ms: ReadOnly[NotRequired[float | None]]
+    timing_llm_api_ms: ReadOnly[NotRequired[float | None]]
+    timing_post_processing_ms: ReadOnly[NotRequired[float | None]]
+    timing_message_copy_ms: ReadOnly[NotRequired[float | None]]
     litellm_model_name: str | None  # the model name sent to the provider by litellm
     usage_object: dict | None
 

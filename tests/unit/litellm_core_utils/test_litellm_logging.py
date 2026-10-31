@@ -12664,6 +12664,17 @@ def test_standard_logging_payload_uses_deployment_when_no_base_model():
     assert payload["model_map_information"]["model_map_key"] != "invoke_test_claude"
 
 
+_TIMING_KEYS: Final = frozenset(
+    {
+        "timing_pre_processing_ms",
+        "timing_llm_api_ms",
+        "timing_post_processing_ms",
+        "timing_message_copy_ms",
+    }
+)
+_OPTIONAL_HIDDEN_PARAM_FIELDS: Final = _TIMING_KEYS | frozenset({"upstream_provider"})
+
+
 @pytest.mark.usefixtures("_vcr_outcome_gate", "drain_logging_worker", "isolate_litellm_state", "setup_and_teardown")
 def test_get_hidden_params():
     """Test get_hidden_params with different inputs"""
@@ -12677,7 +12688,11 @@ def test_get_hidden_params():
     assert result.get("upstream_provider") is None
 
     # assert all fields in StandardLoggingHiddenParams are present
-    assert all(field in result for field in StandardLoggingHiddenParams.__annotations__ if field != "upstream_provider")
+    assert all(
+        field in result
+        for field in StandardLoggingHiddenParams.__annotations__
+        if field not in _OPTIONAL_HIDDEN_PARAM_FIELDS
+    )
 
     # Test with valid params
     hidden_params = {
@@ -12700,7 +12715,26 @@ def test_get_hidden_params():
     assert result["additional_headers"]["x_ratelimit_limit_requests"] == 2000
     assert result.get("upstream_provider") == "serving-site-a"
     # assert all fields in StandardLoggingHiddenParams are present
-    assert all(field in result for field in StandardLoggingHiddenParams.__annotations__ if field != "upstream_provider")
+    assert all(
+        field in result
+        for field in StandardLoggingHiddenParams.__annotations__
+        if field not in _OPTIONAL_HIDDEN_PARAM_FIELDS
+    )
+
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "drain_logging_worker", "isolate_litellm_state", "setup_and_teardown")
+def test_get_hidden_params_copies_detailed_timing_values_when_present() -> None:
+    timing_values: Final = {
+        "timing_pre_processing_ms": 1.25,
+        "timing_llm_api_ms": 2.5,
+        "timing_post_processing_ms": 3.75,
+        "timing_message_copy_ms": 4.0,
+    }
+    copied: Final = StandardLoggingPayloadSetup.get_hidden_params(timing_values)
+    assert {key: copied.get(key) for key in timing_values} == timing_values
+
+    absent: Final = StandardLoggingPayloadSetup.get_hidden_params({"model_id": "test-model"})
+    assert not _TIMING_KEYS & absent.keys()
 
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "drain_logging_worker", "isolate_litellm_state", "setup_and_teardown")

@@ -998,6 +998,24 @@ class DataDogLLMObsLogger(CustomBatchLogger):
         """
         Get the latency metrics from the standard logging payload
         """
+        hidden_params: Final = standard_logging_payload.get("hidden_params", {})
+        phase_hidden_params: Final[Mapping[str, object]] = MappingProxyType(hidden_params)
+        pre_processing_ms: Final = phase_hidden_params.get("timing_pre_processing_ms")
+        llm_api_ms: Final = phase_hidden_params.get("timing_llm_api_ms")
+        post_processing_ms: Final = phase_hidden_params.get("timing_post_processing_ms")
+        phase_latency_metrics: Final[DDLLMObsLatencyMetrics] = DDLLMObsLatencyMetrics(
+            **(
+                {"pre_processing_time_ms": float(pre_processing_ms)}
+                if isinstance(pre_processing_ms, (int, float))
+                else {}
+            ),
+            **({"llm_api_time_ms": float(llm_api_ms)} if isinstance(llm_api_ms, (int, float)) else {}),
+            **(
+                {"post_processing_time_ms": float(post_processing_ms)}
+                if isinstance(post_processing_ms, (int, float))
+                else {}
+            ),
+        )
         latency_metrics: Final[DDLLMObsLatencyMetrics] = DDLLMObsLatencyMetrics()
         # Add latency metrics to metadata
         # Time to first token (convert from seconds to milliseconds for consistency)
@@ -1006,7 +1024,6 @@ class DataDogLLMObsLogger(CustomBatchLogger):
             latency_metrics["time_to_first_token_ms"] = time_to_first_token_seconds * 1000
 
         # LiteLLM overhead time
-        hidden_params: Final = standard_logging_payload.get("hidden_params", {})
         litellm_overhead_ms: Final = hidden_params.get("litellm_overhead_time_ms")
         if litellm_overhead_ms is not None:
             latency_metrics["litellm_overhead_time_ms"] = litellm_overhead_ms
@@ -1024,7 +1041,7 @@ class DataDogLLMObsLogger(CustomBatchLogger):
                 # Convert from seconds to milliseconds for consistency
                 latency_metrics["guardrail_overhead_time_ms"] = total_duration * 1000
 
-        return latency_metrics
+        return {**phase_latency_metrics, **latency_metrics}
 
     def _get_stream_value_from_payload(self, standard_logging_payload: StandardLoggingPayload) -> bool:
         """

@@ -57,6 +57,8 @@ def build_payload(
     messages: Any = NOT_GIVEN,
     response_message: dict[str, Any] | None = None,
     usage_object: dict[str, Any] | None = None,
+    hidden_params: dict[str, object] | None = None,
+    include_hidden_params: bool = True,
     model_parameters: dict[str, Any] | None = None,
     metadata: dict[str, Any] | None = None,
     model_group: str | None = None,
@@ -78,6 +80,11 @@ def build_payload(
             "completion_tokens": 507,
             "total_tokens": prompt_tokens + 507,
             "response_cost": 0.02,
+            **(
+                {"hidden_params": hidden_params if hidden_params is not None else {}}
+                if include_hidden_params
+                else {}
+            ),
             "status": "success",
         },
         "litellm_params": {"metadata": {}},
@@ -890,6 +897,37 @@ def test_a_lone_guardrail_record_survives_redaction(logger: DataDogLLMObsLogger)
         }
     ]
     assert metadata["latency_metrics"]["guardrail_overhead_time_ms"] == 10.0
+
+
+def test_hidden_detailed_timing_values_are_reported_as_latency_metrics(logger: DataDogLLMObsLogger) -> None:
+    payload: Final = build(
+        logger,
+        hidden_params={
+            "timing_pre_processing_ms": 1.25,
+            "timing_llm_api_ms": 2.5,
+            "timing_post_processing_ms": 3.75,
+            "timing_message_copy_ms": 4.0,
+        },
+    )
+
+    assert payload["meta"]["metadata"]["latency_metrics"] == {
+        "pre_processing_time_ms": 1.25,
+        "llm_api_time_ms": 2.5,
+        "post_processing_time_ms": 3.75,
+    }
+
+    absent_timing_metrics: Final = build(logger, hidden_params={})["meta"]["metadata"]["latency_metrics"]
+    assert not {
+        "pre_processing_time_ms",
+        "llm_api_time_ms",
+        "post_processing_time_ms",
+    }.intersection(absent_timing_metrics)
+
+    missing_hidden_params_metrics: Final = build(logger, include_hidden_params=False)["meta"]["metadata"][
+        "latency_metrics"
+    ]
+    empty_hidden_params_metrics: Final = build(logger, hidden_params={})["meta"]["metadata"]["latency_metrics"]
+    assert missing_hidden_params_metrics == empty_hidden_params_metrics
 
 
 @pytest.mark.parametrize("guardrail_information", [None, [], 5, "abc", [None, "x"], {}])

@@ -127,6 +127,9 @@ class DDLLMObsLatencyMetrics(TypedDict, total=False):
     time_to_first_token_ms: float
     litellm_overhead_time_ms: float
     guardrail_overhead_time_ms: float
+    pre_processing_time_ms: ReadOnly[float]
+    llm_api_time_ms: ReadOnly[float]
+    post_processing_time_ms: ReadOnly[float]
 
 
 class DDLLMObsSpendMetrics(TypedDict, total=False):
