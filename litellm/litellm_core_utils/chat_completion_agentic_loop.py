@@ -18,10 +18,12 @@ from litellm.litellm_core_utils.agentic_loop_settings import (
 )
 from litellm.litellm_core_utils.core_helpers import qualify_agentic_followup_model
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObject
+from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import is_str_keyed_dict, object_items
 from litellm.llms.base_llm.base_model_iterator import MockResponseIterator
 from litellm.types.integrations.custom_logger import (
     CHAT_COMPLETION_AGENTIC_SURFACE,
     NON_CODE_INTERPRETER_INTERCEPTION_INTERNAL_PREFIXES,
+    AgenticLoopLimitError,
     AgenticLoopPlan,
     AgenticLoopRequestPatch,
     AgenticLoopSafetyError,
@@ -93,14 +95,14 @@ def _coerce_int(value: object, default: int) -> int:
     return int(value) if isinstance(value, (int, str)) else default
 
 
-def _agentic_loop_settings(kwargs: Mapping[str, object]) -> tuple[int, int, list[str]]:
+def _agentic_loop_settings(kwargs: Mapping[str, object]) -> tuple[int, int, tuple[str, ...]]:
     depth: Final = _coerce_int(kwargs.get("_agentic_loop_depth"), 0)
     configured: Final = validated_max_agentic_loops(
         kwargs.get("max_agentic_loops"), field="litellm_params.max_agentic_loops"
     )
     max_loops: Final = DEFAULT_MAX_AGENTIC_LOOPS if configured is None else configured
     raw_fingerprints: Final = kwargs.get("_agentic_loop_fingerprints")
-    fingerprints: Final = [str(fp) for fp in raw_fingerprints] if isinstance(raw_fingerprints, list) else []
+    fingerprints: Final = tuple(str(fp) for fp in raw_fingerprints) if isinstance(raw_fingerprints, list) else ()
     return depth, max_loops, fingerprints
 
 
@@ -113,7 +115,7 @@ def _fingerprint_tools(tool_calls: object) -> str:
 
 def _check_agentic_loop_safety(
     tool_calls: object,
-    fingerprints: list[str],
+    fingerprints: Sequence[str],
     depth: int,
     max_loops: int,
     model: str,
@@ -122,7 +124,7 @@ def _check_agentic_loop_safety(
     if fingerprint in fingerprints:
         raise AgenticLoopSafetyError("Agentic loop detected repeated tool-call fingerprint; aborting rerun")
     if depth >= max_loops:
-        raise AgenticLoopSafetyError(f"Exceeded max_agentic_loops={max_loops} for model={model}")
+        raise AgenticLoopLimitError(f"Exceeded max_agentic_loops={max_loops} for model={model}")
     return fingerprint
 
 
@@ -171,6 +173,10 @@ def _end_refused_turn(
     return finalized if replay is None else replay
 
 
+def _request_tools(optional_params: Mapping[str, object]) -> list[dict[str, object]]:
+    return [tool for tool in object_items(optional_params.get("tools")) if is_str_keyed_dict(tool)]
+
+
 def _custom_loggers(logging_obj: object) -> tuple[CustomLogger, ...]:
     import litellm
 
@@ -185,7 +191,7 @@ async def _refused_chat_turn(
     *,
     response: ModelResponse,
     model: str,
-    messages: list,
+    messages: list[dict[str, object]],
     tools: list[dict[str, object]] | None,
     custom_llm_provider: str,
     kwargs: Mapping[str, object],
@@ -265,7 +271,7 @@ async def _execute_chat_completion_agentic_plan(
     custom_llm_provider: str,
     depth: int,
     max_loops: int,
-    fingerprints: list[str],
+    fingerprints: Sequence[str],
     fingerprint: str,
 ) -> object:
     import litellm
@@ -341,8 +347,8 @@ async def maybe_run_chat_completion_agentic_loop(
     *,
     response: ModelResponse,
     model: str,
-    messages: list,
-    optional_params: dict,
+    messages: list[dict[str, object]],
+    optional_params: dict[str, object],
     kwargs: dict[str, object],
     logging_obj: object,
     custom_llm_provider: str,
@@ -350,7 +356,7 @@ async def maybe_run_chat_completion_agentic_loop(
 ) -> ModelResponse | CustomStreamWrapper | None:
     callbacks: Final = _custom_loggers(logging_obj)
     depth, max_loops, fingerprints = _agentic_loop_settings(kwargs)
-    tools: Final = optional_params.get("tools", [])
+    tools: Final = _request_tools(optional_params)
 
     for callback in callbacks:
         if not _gate_overridden(callback):
@@ -392,7 +398,7 @@ async def maybe_run_chat_completion_agentic_loop(
         except AgenticLoopSafetyError as e:
             if stream:
                 raise
-            verbose_logger.warning("LiteLLM.AgenticLoopRefused: ending turn [model=%s]: %s", model, str(e))
+            verbose_logger.warning("LiteLLM.AgenticLoopRefused: ending turn [rail=%s]", type(e).__name__)
             return _end_refused_turn(
                 await _refused_chat_turn(
                     callbacks,
@@ -472,8 +478,8 @@ async def run_chat_completion_agentic_hooks(
     *,
     response: ModelResponse,
     model: str,
-    messages: list,
-    optional_params: dict,
+    messages: list[dict[str, object]],
+    optional_params: dict[str, object],
     kwargs: dict[str, object],
     logging_obj: LiteLLMLoggingObject,
     custom_llm_provider: str,
@@ -481,7 +487,7 @@ async def run_chat_completion_agentic_hooks(
 ) -> object | None:
     callbacks: Final = _custom_loggers(logging_obj)
     depth, max_loops, fingerprints = _agentic_loop_settings(kwargs)
-    tools: Final = optional_params.get("tools", [])
+    tools: Final = _request_tools(optional_params)
     hook_kwargs: Final = {**kwargs, "custom_llm_provider": custom_llm_provider}
 
     for callback in callbacks:
@@ -495,9 +501,9 @@ async def run_chat_completion_agentic_hooks(
                 custom_llm_provider=custom_llm_provider,
                 kwargs=kwargs,
             )
-        except Exception as e:
+        except Exception:
             verbose_logger.exception(
-                "LiteLLM.AgenticHookError: Exception in async_should_run_chat_completion_agentic_loop: %s", str(e)
+                "LiteLLM.AgenticHookError: Exception in async_should_run_chat_completion_agentic_loop"
             )
             continue
 
@@ -515,7 +521,7 @@ async def run_chat_completion_agentic_hooks(
         except AgenticLoopSafetyError as e:
             if stream:
                 raise
-            verbose_logger.warning("LiteLLM.AgenticLoopRefused: ending turn [model=%s]: %s", model, str(e))
+            verbose_logger.warning("LiteLLM.AgenticLoopRefused: ending turn [rail=%s]", type(e).__name__)
             return await _refused_chat_turn(
                 callbacks,
                 callback,

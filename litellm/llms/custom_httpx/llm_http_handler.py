@@ -149,6 +149,7 @@ from litellm.types.extraction import ExtractionResponse
 from litellm.types.files import StreamingMediaUploadConfig, TwoStepFileUploadConfig
 from litellm.types.integrations.custom_logger import (
     NON_CODE_INTERPRETER_INTERCEPTION_INTERNAL_PREFIXES,
+    AgenticLoopLimitError,
     AgenticLoopPlan,
     AgenticLoopRequestPatch,
     AgenticLoopSafetyError,
@@ -5967,7 +5968,7 @@ class BaseLLMHTTPHandler:
     @staticmethod
     def _check_agentic_loop_safety(
         tool_calls: object,
-        fingerprints: list[str],
+        fingerprints: Sequence[str],
         depth: int,
         max_loops: int,
         model: str,
@@ -5986,7 +5987,7 @@ class BaseLLMHTTPHandler:
         if fingerprint in fingerprints:
             raise AgenticLoopSafetyError("Agentic loop detected repeated tool-call fingerprint; aborting rerun")
         if depth >= max_loops:
-            raise AgenticLoopSafetyError(f"Exceeded max_agentic_loops={max_loops} for model={model}")
+            raise AgenticLoopLimitError(f"Exceeded max_agentic_loops={max_loops} for model={model}")
         return fingerprint
 
     @staticmethod
@@ -6070,7 +6071,7 @@ class BaseLLMHTTPHandler:
         kwargs: dict,
         depth: int,
         max_loops: int,
-        fingerprints: list[str],
+        fingerprints: Sequence[str],
         fingerprint: str,
         stream: bool = False,
         callback: Optional["CustomLogger"] = None,
@@ -6111,7 +6112,7 @@ class BaseLLMHTTPHandler:
         kwargs_for_followup.update(patch.kwargs)
         kwargs_for_followup["_agentic_loop_depth"] = depth + 1
         kwargs_for_followup["max_agentic_loops"] = max_loops
-        kwargs_for_followup["_agentic_loop_fingerprints"] = fingerprints + [fingerprint]
+        kwargs_for_followup["_agentic_loop_fingerprints"] = [*fingerprints, fingerprint]
 
         response: AnthropicMessagesResponse | AsyncIterator[object] = await anthropic_messages.acreate(
             **{
@@ -6150,7 +6151,7 @@ class BaseLLMHTTPHandler:
         kwargs: dict,
         depth: int,
         max_loops: int,
-        fingerprints: list[str],
+        fingerprints: Sequence[str],
         fingerprint: str,
         callback: Optional["CustomLogger"] = None,
     ) -> ResponsesAPIResponse | BaseResponsesAPIStreamingIterator:
@@ -6386,12 +6387,7 @@ class BaseLLMHTTPHandler:
             except AgenticLoopSafetyError as e:
                 if not self._can_replace_turn_with_terminal_response(stream, api_surface):
                     raise
-                verbose_logger.warning(
-                    "LiteLLM.AgenticLoopRefused: ending turn [call_id=%s model=%s]: %s",
-                    logging_obj.litellm_call_id,
-                    model,
-                    str(e),
-                )
+                verbose_logger.warning("LiteLLM.AgenticLoopRefused: ending turn [rail=%s]", type(e).__name__)
                 return self._maybe_wrap_in_fake_stream(
                     self._finalize_refused_agentic_response(
                         response=response,

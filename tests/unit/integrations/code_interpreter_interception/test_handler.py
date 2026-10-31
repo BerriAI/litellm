@@ -8,13 +8,18 @@ config and records how it is called.
 import time
 from typing import Final
 
+import httpx
 import pytest
+import respx
+
+import litellm
 
 from litellm.integrations.code_interpreter_interception.handler import (
     _INTERCEPTION_ACTIVE_KEY as _ACTIVE_KEY,
 )
 from litellm.integrations.code_interpreter_interception.handler import (
     _SANDBOX_KEY,
+    _SANDBOX_UNAVAILABLE_OUTPUT,
     _SESSION_SCOPED_KEY,
     LITELLM_CODE_EXECUTION_TOOL_NAME,
     CodeInterpreterInterceptionLogger,
@@ -1455,25 +1460,26 @@ class _SandboxThatCannotRunCode(FakeSandbox):
 
 
 _SANDBOX_FAILURES: Final = (
-    pytest.param(None, "[sandbox unavailable] CodeInterpreterInterception: no sandbox available", id="no_sandbox"),
-    pytest.param(_SandboxThatCannotStart(), "[sandbox unavailable] sandbox provider unreachable", id="create_fails"),
-    pytest.param(_SandboxThatCannotRunCode(), "[sandbox unavailable] sandbox run timed out", id="run_fails"),
+    pytest.param(None, id="no_sandbox"),
+    pytest.param(_SandboxThatCannotStart(), id="create_fails"),
+    pytest.param(_SandboxThatCannotRunCode(), id="run_fails"),
 )
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(("sandbox", "expected_output"), _SANDBOX_FAILURES)
-async def test_a_sandbox_failure_answers_the_responses_tool_call_with_the_failure(sandbox, expected_output):
+@pytest.mark.parametrize("sandbox", _SANDBOX_FAILURES)
+async def test_a_sandbox_failure_answers_the_responses_tool_call_with_a_fixed_failure(sandbox):
     plan: Final = await _build_plan(CodeInterpreterInterceptionLogger(sandbox_config=sandbox), sandbox)
 
     outputs: Final = [message for message in _iter_messages(plan) if message.get("type") == "function_call_output"]
     assert plan.run_agentic_loop is True
-    assert [(output["call_id"], output["output"].startswith(expected_output)) for output in outputs] == [("c1", True)]
+    assert [(output["call_id"], output["output"]) for output in outputs] == [("c1", _SANDBOX_UNAVAILABLE_OUTPUT)]
+    assert [call["status"] for call in plan.metadata["code_interpreter_calls"]] == ["failed"]
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(("sandbox", "expected_output"), _SANDBOX_FAILURES)
-async def test_a_sandbox_failure_answers_the_chat_tool_call_with_the_failure(sandbox, expected_output):
+@pytest.mark.parametrize("sandbox", _SANDBOX_FAILURES)
+async def test_a_sandbox_failure_answers_the_chat_tool_call_with_a_fixed_failure(sandbox):
     logger: Final = CodeInterpreterInterceptionLogger(sandbox_config=sandbox)
 
     plan: Final = await logger.async_build_agentic_loop_plan(
@@ -1499,6 +1505,59 @@ async def test_a_sandbox_failure_answers_the_chat_tool_call_with_the_failure(san
 
     tool_messages: Final = [message for message in _iter_messages(plan) if message.get("role") == "tool"]
     assert plan.run_agentic_loop is True
-    assert [(message["tool_call_id"], message["content"].startswith(expected_output)) for message in tool_messages] == [
-        ("call_1", True)
+    assert [(message["tool_call_id"], message["content"]) for message in tool_messages] == [
+        ("call_1", _SANDBOX_UNAVAILABLE_OUTPUT)
     ]
+    assert [call["status"] for call in plan.metadata["code_interpreter_calls"]] == ["failed"]
+
+
+def _anthropic_message(content: list[dict[str, object]], stop_reason: str) -> dict[str, object]:
+    return {
+        "id": "msg_1",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-sonnet-5-5",
+        "content": content,
+        "stop_reason": stop_reason,
+        "stop_sequence": None,
+        "usage": {"input_tokens": 10, "output_tokens": 5},
+    }
+
+
+@pytest.mark.asyncio
+async def test_a_responses_request_bridged_to_claude_runs_the_code_and_ends_without_the_internal_call(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    sandbox: Final = FakeSandbox(stdout="42")
+    monkeypatch.setattr(litellm, "callbacks", [CodeInterpreterInterceptionLogger(sandbox_config=sandbox)])
+    provider: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(
+        side_effect=[
+            httpx.Response(
+                200,
+                json=_anthropic_message(
+                    [
+                        {
+                            "type": "tool_use",
+                            "id": "toolu_1",
+                            "name": LITELLM_CODE_EXECUTION_TOOL_NAME,
+                            "input": {"code": "print(40 + 2)"},
+                        }
+                    ],
+                    "tool_use",
+                ),
+            ),
+            httpx.Response(200, json=_anthropic_message([{"type": "text", "text": "The answer is 42."}], "end_turn")),
+        ]
+    )
+
+    response: Final = await litellm.aresponses(
+        model="anthropic/claude-sonnet-5-5",
+        input="compute 40 + 2",
+        api_key="sk-test",
+        tools=[{"type": "code_interpreter", "container": {"type": "auto"}}],
+    )
+
+    assert provider.call_count == 2
+    assert [run["code"] for run in sandbox.run_calls] == ["print(40 + 2)"]
+    assert not [item for item in response.output if getattr(item, "type", None) == "function_call"]

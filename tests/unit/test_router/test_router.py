@@ -42,6 +42,7 @@ from litellm.integrations.otel.plumbing.context import set_request_root_span
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.llms.anthropic.messages.native.streaming_iterator import closing_superseded_attempt
 from litellm.llms.anthropic.messages.native.agentic_streaming_iterator import (
+    AGENTIC_LOOP_LIMIT_ERROR_SSE_BYTES,
     SERVER_FULFILLED_TOOL_LEAK_ERROR_SSE_BYTES,
 )
 from litellm.llms.bedrock.common_utils import BedrockError
@@ -81,6 +82,7 @@ from litellm.router_utils.fallback_event_handlers import (
 from litellm.router_utils.prompt_caching_cache import PromptCachingCache
 from litellm.router_utils.router_callbacks.track_deployment_metrics import get_deployment_successes_for_current_minute
 from litellm.scheduler import FlowItem
+from litellm.types.integrations.custom_logger import AgenticLoopPlan, AgenticLoopRequestPatch
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionRequest
 from litellm.types.router import (
     CustomRoutingStrategyBase,
@@ -3841,6 +3843,151 @@ async def test_continued_stream_sharing_the_proxy_logging_object_bills_the_cut_t
     assert recorder.successes[-1]["response_cost"] == pytest.approx(
         failure["response_cost"] + backup_prompt_cost + backup_completion_cost
     )
+
+
+_AGENTIC_FIRST_CALL_USAGE: Final = {"prompt_tokens": 50, "completion_tokens": 7, "total_tokens": 57}
+_AGENTIC_FIRST_CALL_BODY: Final = {
+    "id": "chatcmpl-first",
+    "object": "chat.completion",
+    "created": 1700000000,
+    "model": "gpt-4o-mini",
+    "choices": [
+        {
+            "index": 0,
+            "finish_reason": "tool_calls",
+            "message": {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {"id": "call_abc", "type": "function", "function": {"name": "litellm_code_execution", "arguments": "{}"}}
+                ],
+            },
+        }
+    ],
+    "usage": _AGENTIC_FIRST_CALL_USAGE,
+}
+
+
+class _ScriptedAgenticFollowUps(CustomLogger):
+    def __init__(self, follow_ups: tuple[str, ...]) -> None:
+        super().__init__()
+        self._follow_ups: Final = follow_ups
+        self.plans_built = 0
+        self.shared_call_succeeded: Final = asyncio.Event()
+
+    async def async_should_run_agentic_loop(
+        self, response, model, messages, tools, stream, custom_llm_provider, kwargs
+    ) -> tuple[bool, dict[str, object]]:
+        return bool(response.choices[0].message.tool_calls), {"tool_calls": [{"id": "call_abc"}]}
+
+    async def async_build_agentic_loop_plan(
+        self,
+        tools,
+        model,
+        messages,
+        response,
+        anthropic_messages_provider_config,
+        anthropic_messages_optional_request_params,
+        logging_obj,
+        stream,
+        kwargs,
+    ) -> AgenticLoopPlan:
+        follow_up: Final = self._follow_ups[min(self.plans_built, len(self._follow_ups) - 1)]
+        self.plans_built += 1
+        return AgenticLoopPlan(
+            run_agentic_loop=True,
+            request_patch=AgenticLoopRequestPatch(
+                messages=[{"role": "user", "content": "what is 6*7?"}, {"role": "assistant", "content": "42"}],
+                kwargs={"mock_response": follow_up},
+            ),
+        )
+
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time) -> None:
+        if kwargs.get("litellm_call_id") == "shared-agentic-call":
+            self.shared_call_succeeded.set()
+
+
+async def _route_agentic_request_with_retries(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter, follow_ups: tuple[str, ...]
+) -> tuple[object, LiteLLMLogging, respx.Route, _ScriptedAgenticFollowUps]:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    hook: Final = _ScriptedAgenticFollowUps(follow_ups)
+    monkeypatch.setattr(litellm, "callbacks", [hook])
+    first_calls: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
+        return_value=httpx.Response(200, json=_AGENTIC_FIRST_CALL_BODY)
+    )
+    router: Final = Router(
+        model_list=[{"model_name": "m", "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "sk-test"}}],
+        num_retries=2,
+        retry_after=0,
+    )
+    messages: Final = [{"role": "user", "content": "what is 6*7?"}]
+    shared_logging, _ = litellm.utils.function_setup(
+        original_function="acompletion",
+        rules_obj=litellm.utils.Rules(),
+        start_time=datetime.now(),
+        model="m",
+        messages=messages,
+        litellm_call_id="shared-agentic-call",
+    )
+    try:
+        outcome: object = await router.acompletion(
+            model="m", messages=messages, litellm_call_id="shared-agentic-call", litellm_logging_obj=shared_logging
+        )
+    except litellm.RateLimitError as error:
+        outcome = error
+    return outcome, shared_logging, first_calls, hook
+
+
+@pytest.mark.asyncio
+async def test_retried_agentic_request_whose_follow_up_always_fails_bills_every_first_call(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    from litellm.proxy.utils import _failure_fields_to_lift
+
+    outcome, shared_logging, first_calls, _ = await _route_agentic_request_with_retries(
+        monkeypatch, respx_mock, ("litellm.RateLimitError",)
+    )
+
+    lifted: Final = _failure_fields_to_lift({"litellm_logging_obj": shared_logging})
+    first_call_cost: Final = sum(
+        litellm.cost_per_token(model="gpt-4o-mini", prompt_tokens=50, completion_tokens=7)
+    )
+    assert isinstance(outcome, litellm.RateLimitError)
+    assert first_calls.call_count == 3
+    assert lifted["combined_usage_object"].prompt_tokens == 3 * _AGENTIC_FIRST_CALL_USAGE["prompt_tokens"]
+    assert lifted["combined_usage_object"].completion_tokens == 3 * _AGENTIC_FIRST_CALL_USAGE["completion_tokens"]
+    assert lifted["response_cost"] == pytest.approx(3 * first_call_cost)
+
+
+@pytest.mark.asyncio
+async def test_retried_agentic_request_that_recovers_bills_the_failed_attempts_first_call_on_success(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    outcome, shared_logging, first_calls, hook = await _route_agentic_request_with_retries(
+        monkeypatch, respx_mock, ("litellm.RateLimitError", "42")
+    )
+    await asyncio.wait_for(hook.shared_call_succeeded.wait(), timeout=10)
+
+    assert isinstance(outcome, litellm.ModelResponse)
+    success: Final = shared_logging.model_call_details["standard_logging_object"]
+    follow_up_cost: Final = sum(
+        litellm.cost_per_token(
+            model="gpt-4o-mini",
+            prompt_tokens=outcome.usage.prompt_tokens,
+            completion_tokens=outcome.usage.completion_tokens,
+        )
+    )
+    failed_first_call_cost: Final = sum(
+        litellm.cost_per_token(model="gpt-4o-mini", prompt_tokens=50, completion_tokens=7)
+    )
+    assert first_calls.call_count == 2
+    assert success["prompt_tokens"] == outcome.usage.prompt_tokens + _AGENTIC_FIRST_CALL_USAGE["prompt_tokens"]
+    assert (
+        success["completion_tokens"]
+        == outcome.usage.completion_tokens + _AGENTIC_FIRST_CALL_USAGE["completion_tokens"]
+    )
+    assert success["response_cost"] == pytest.approx(follow_up_cost + failed_first_call_cost)
 
 
 def _responses_sse(*events: Mapping[str, object]) -> str:
@@ -18520,6 +18667,7 @@ def test_anthropic_stream_forwards_ping_live_direct_call():
 
 def test_anthropic_stream_error_is_gateway_verdict_direct_call():
     assert _anthropic_stream_error_is_gateway_verdict(SERVER_FULFILLED_TOOL_LEAK_ERROR_SSE_BYTES) is True
+    assert _anthropic_stream_error_is_gateway_verdict(AGENTIC_LOOP_LIMIT_ERROR_SSE_BYTES) is True
     assert _anthropic_stream_error_is_gateway_verdict(_anthropic_messages_overloaded_error_chunk()) is False
     assert _anthropic_stream_error_is_gateway_verdict(_anthropic_messages_ping_chunk()) is False
 

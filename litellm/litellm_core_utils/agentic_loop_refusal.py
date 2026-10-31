@@ -7,7 +7,12 @@ from typing import Final
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import message_field, parts_of
 from litellm.types.llms.openai import ResponsesAPIResponse
-from litellm.types.utils import Choices, ModelResponse
+from litellm.types.utils import (
+    ChatCompletionMessageCustomToolCall,
+    ChatCompletionMessageToolCall,
+    Choices,
+    ModelResponse,
+)
 
 
 def _strings(values: Iterable[object]) -> frozenset[str]:
@@ -23,7 +28,7 @@ async def _calls_a_gate_claims(gate: Awaitable[tuple[bool, object]]) -> tuple[ob
     try:
         should_run, tool_calls = await gate
     except Exception as e:
-        verbose_logger.debug("LiteLLM.AgenticLoopRefused: skipping a gate that failed: %s", e)
+        verbose_logger.debug("LiteLLM.AgenticLoopRefused: skipping a gate that failed with %s", type(e).__name__)
         return ()
     return _claimed_calls(tool_calls) if should_run else ()
 
@@ -73,12 +78,19 @@ def _is_refused_chat_tool_call(call: object, refused_ids: frozenset[str], refuse
     return is_refused_call(message_field(call, "id"), name, refused_ids, refused_names)
 
 
+def _at_position(
+    call: ChatCompletionMessageToolCall | ChatCompletionMessageCustomToolCall, position: int
+) -> ChatCompletionMessageToolCall | ChatCompletionMessageCustomToolCall:
+    return call if message_field(call, "index") is None else call.model_copy(update={"index": position})
+
+
 def _finalized_choice(choice: object, refused_ids: frozenset[str], refused_names: frozenset[str]) -> object:
     if not isinstance(choice, Choices) or not choice.message.tool_calls:
         return choice
-    kept: Final = [
+    surviving: Final = (
         call for call in choice.message.tool_calls if not _is_refused_chat_tool_call(call, refused_ids, refused_names)
-    ]
+    )
+    kept: Final = [_at_position(call, position) for position, call in enumerate(surviving)]
     finish_reason: Final = "stop" if not kept and choice.finish_reason == "tool_calls" else choice.finish_reason
     return choice.model_copy(
         update={

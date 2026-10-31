@@ -522,6 +522,78 @@ async def test_refused_rerun_keeps_the_clients_own_tool_call(restore_callbacks):
     assert result.choices[0].message.content == "Running it."
 
 
+def _indexed_tool_call(call_id: str, name: str, index: int) -> ChatCompletionMessageToolCall:
+    return ChatCompletionMessageToolCall(
+        id=call_id, type="function", function=Function(name=name, arguments="{}"), index=index
+    )
+
+
+def _turn_with_the_internal_call_between_the_clients() -> ModelResponse:
+    return ModelResponse(
+        choices=[
+            Choices(
+                finish_reason="tool_calls",
+                message=Message(
+                    role="assistant",
+                    content=None,
+                    tool_calls=[
+                        _indexed_tool_call("call_weather", "get_weather", 0),
+                        _indexed_tool_call("call_abc", "litellm_code_execution", 1),
+                        _indexed_tool_call("call_time", "get_time", 2),
+                    ],
+                ),
+            )
+        ]
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("rail_kwargs", _REFUSING_RAILS, ids=["max_agentic_loops", "repeated_fingerprint"])
+async def test_refused_rerun_renumbers_the_kept_tool_calls_from_zero(restore_callbacks, rail_kwargs: Dict[str, object]):
+    result = await _run_refused_rerun(_turn_with_the_internal_call_between_the_clients(), rail_kwargs)
+
+    assert [(call.id, call.index) for call in result.choices[0].message.tool_calls] == [
+        ("call_weather", 0),
+        ("call_time", 1),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_refused_rerun_on_a_converted_stream_replays_the_kept_tool_calls_from_index_zero(
+    restore_callbacks, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(
+        litellm,
+        "callbacks",
+        [_GateOnlyLogger(plan=AgenticLoopPlan(run_agentic_loop=True), tool_calls=_REFUSED_GATE_TOOL_CALLS)],
+    )
+    logging_obj: Final = Logging(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=False,
+        call_type="acompletion",
+        start_time=datetime.datetime(2026, 1, 1, tzinfo=datetime.timezone.utc),
+        litellm_call_id="call-refused-stream",
+        function_id="fn-refused-stream",
+    )
+
+    result: Final = await maybe_run_chat_completion_agentic_loop(
+        response=_turn_with_the_internal_call_between_the_clients(),
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params={},
+        kwargs={**_REFUSING_RAILS[1], f"{CODE_INTERPRETER_INTERCEPTION_PREFIX}_converted_stream": True},
+        logging_obj=logging_obj,
+        custom_llm_provider="openai",
+        stream=False,
+    )
+
+    assert isinstance(result, CustomStreamWrapper)
+    deltas: Final = [chunk.choices[0].delta async for chunk in result if chunk.choices]
+    streamed_calls: Final = [call for delta in deltas for call in delta.tool_calls or []]
+    assert [(call.id, call.index) for call in streamed_calls] == [("call_weather", 0), ("call_time", 1)]
+
+
 @pytest.mark.asyncio
 async def test_refused_rerun_drops_every_hooks_internal_call_and_keeps_the_clients(restore_callbacks):
     response = ModelResponse(

@@ -9432,6 +9432,7 @@ class Router(DeprecatedRouterMembers):
                     # Update retry tracking metadata before each retry attempt
                     _metadata["attempted_retries"] = current_attempt + 1
                     _metadata["max_retries"] = num_retries
+                    carry_superseded_attempt_usage(kwargs)
                     # if the function call is successful, no exception will be raised and we'll break out of the loop
                     response = await self.make_call(original_function, *args, **kwargs)
                     if coroutine_checker.is_async_callable(response):  # async errors are often returned as coroutines

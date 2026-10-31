@@ -22,7 +22,7 @@ from typing import TYPE_CHECKING, Any, Final, cast
 
 from litellm._logging import verbose_logger
 from litellm.constants import STREAM_SSE_KEEPALIVE_PING_BYTES
-from litellm.types.integrations.custom_logger import AgenticLoopSafetyError
+from litellm.types.integrations.custom_logger import AgenticLoopLimitError, AgenticLoopSafetyError
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -36,10 +36,16 @@ SERVER_FULFILLED_TOOL_LEAK_ERROR_SSE_BYTES: Final = (
     b'data: {"type": "error", "error": {"type": "api_error", "message": '
     b'"Server-side tool retrieval failed, so this turn could not be completed. Please retry."}}\n\n'
 )
+AGENTIC_LOOP_LIMIT_ERROR_SSE_BYTES: Final = (
+    b"event: error\n"
+    b'data: {"type": "error", "error": {"type": "api_error", "message": '
+    b'"The agentic loop reached its limit before this turn finished. '
+    b'Raise max_agentic_loops to allow more loops."}}\n\n'
+)
 
 
 def is_server_fulfilled_tool_leak_error(chunk: object) -> bool:
-    return chunk == SERVER_FULFILLED_TOOL_LEAK_ERROR_SSE_BYTES
+    return chunk in (SERVER_FULFILLED_TOOL_LEAK_ERROR_SSE_BYTES, AGENTIC_LOOP_LIMIT_ERROR_SSE_BYTES)
 
 
 async def _anext_or_none(iterator: AsyncIterator) -> bytes | None:
@@ -217,6 +223,7 @@ class AgenticAnthropicStreamingIterator:
         self._follow_up_chunk_task: asyncio.Task | None = None
         self._replay_index = 0
         self._error_emitted = False
+        self._loop_limit_reached = False
 
     @property
     def has_buffered_provider_output(self) -> bool:
@@ -289,6 +296,8 @@ class AgenticAnthropicStreamingIterator:
                 "tool_use [model=%s]; emitting an SSE error instead of leaking the tool call to the client",
                 self._model,
             )
+            if self._loop_limit_reached:
+                return AGENTIC_LOOP_LIMIT_ERROR_SSE_BYTES
             return SERVER_FULFILLED_TOOL_LEAK_ERROR_SSE_BYTES
 
         if self._replay_index < len(self._collected_bytes):
@@ -395,12 +404,8 @@ class AgenticAnthropicStreamingIterator:
                     type(result).__name__,
                 )
         except AgenticLoopSafetyError as e:
-            verbose_logger.warning(
-                "AgenticStreamingIterator: agentic loop refused [call_id=%s model=%s]: %s",
-                getattr(self._logging_obj, "litellm_call_id", "unknown"),
-                self._model,
-                str(e),
-            )
+            self._loop_limit_reached = isinstance(e, AgenticLoopLimitError)
+            verbose_logger.warning("AgenticStreamingIterator: agentic loop refused [rail=%s]", type(e).__name__)
 
     @staticmethod
     def _rebuild_anthropic_response_from_sse(

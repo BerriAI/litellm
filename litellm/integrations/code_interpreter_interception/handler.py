@@ -74,7 +74,7 @@ class CodeInterpreterLogOutput(TypedDict):
 class CodeInterpreterCall(TypedDict):
     id: str
     type: Literal["code_interpreter_call"]
-    status: Literal["completed"]
+    status: Literal["completed", "failed"]
     code: str
     container_id: str | None
     outputs: list[CodeInterpreterLogOutput]
@@ -150,21 +150,27 @@ class _ReadySandbox:
 
 @dataclass(frozen=True, slots=True)
 class _SandboxUnavailable:
-    reason: str
+    pass
 
 
 _Sandbox: TypeAlias = _ReadySandbox | _SandboxUnavailable
 
 
-def _unavailable_output(unavailable: _SandboxUnavailable) -> str:
-    return f"[sandbox unavailable] {unavailable.reason}"
+@dataclass(frozen=True, slots=True)
+class _ToolRun:
+    output: str
+    status: Literal["completed", "failed"]
+
+
+_SANDBOX_UNAVAILABLE_OUTPUT: Final = "The code did not run because the code execution sandbox is unavailable."
+_FAILED_TOOL_RUN: Final = _ToolRun(output=_SANDBOX_UNAVAILABLE_OUTPUT, status="failed")
 
 
 def _sandbox_unavailable(step: str, error: Exception) -> _SandboxUnavailable:
     verbose_logger.warning(
         "CodeInterpreterInterception: %s failed, answering the tool call with the failure: %s", step, error
     )
-    return _SandboxUnavailable(reason=str(error))
+    return _SandboxUnavailable()
 
 
 def _output_item_type(item: object) -> object:
@@ -213,6 +219,14 @@ def _extract_session_id(kwargs: dict[str, object]) -> str | None:
 def _extract_identity(kwargs: Mapping[str, object]) -> str:
     identity: Final = kwargs.get("user_api_key_hash")
     return identity if isinstance(identity, str) else ""
+
+
+def _bridged_from_responses(kwargs: Mapping[str, object], call_type: CallTypes | None) -> bool:
+    route: Final = getattr(kwargs.get("litellm_logging_obj"), "call_type", None)
+    return call_type in (CallTypes.completion, CallTypes.acompletion) and route in (
+        CallTypes.responses,
+        CallTypes.aresponses,
+    )
 
 
 def _resolve_sandbox_tool(sandbox_tool_name: str | None) -> SandboxToolParams | None:
@@ -287,7 +301,7 @@ class CodeInterpreterInterceptionLogger(CustomLogger):
     async def async_pre_call_deployment_hook(
         self, kwargs: dict[str, object], call_type: CallTypes | None
     ) -> dict | None:
-        if not kwargs.get("_agentic_loop_depth"):
+        if not kwargs.get("_agentic_loop_depth") and not _bridged_from_responses(kwargs, call_type):
             kwargs.pop(_INTERCEPTION_ACTIVE_KEY, None)
             kwargs.pop(_SANDBOX_KEY, None)
             self._strip_interception_metadata(kwargs)
@@ -486,7 +500,7 @@ class CodeInterpreterInterceptionLogger(CustomLogger):
             for tool_call in tool_calls:
                 arguments = tool_call.get("arguments", "")
                 code = self._parse_code(arguments)
-                stdout = await self._sandbox_tool_output(sandbox=sandbox, arguments=arguments)
+                tool_run = await self._sandbox_tool_output(sandbox=sandbox, arguments=arguments)
                 input_list.append(
                     {
                         "type": "function_call",
@@ -499,17 +513,17 @@ class CodeInterpreterInterceptionLogger(CustomLogger):
                     {
                         "type": "function_call_output",
                         "call_id": tool_call.get("call_id"),
-                        "output": stdout,
+                        "output": tool_run.output,
                     }
                 )
                 code_interpreter_calls.append(
                     {
                         "id": f"ci_{uuid.uuid4().hex}",
                         "type": "code_interpreter_call",
-                        "status": "completed",
+                        "status": tool_run.status,
                         "code": code,
                         "container_id": container_id,
-                        "outputs": ([{"type": "logs", "logs": stdout}] if stdout else []),
+                        "outputs": ([{"type": "logs", "logs": tool_run.output}] if tool_run.output else []),
                     }
                 )
         except Exception:
@@ -623,21 +637,21 @@ class CodeInterpreterInterceptionLogger(CustomLogger):
     ) -> tuple[ChatCompletionToolMessage, CodeInterpreterCall]:
         arguments: Final = tool_call.get("arguments", "")
         code: Final = self._parse_code(arguments)
-        stdout: Final = await self._sandbox_tool_output(sandbox=sandbox, arguments=arguments)
+        tool_run: Final = await self._sandbox_tool_output(sandbox=sandbox, arguments=arguments)
         tool_call_id: Final = tool_call.get("id") or tool_call.get("call_id") or uuid.uuid4().hex
         return (
             {
                 "role": "tool",
                 "tool_call_id": tool_call_id,
-                "content": stdout,
+                "content": tool_run.output,
             },
             {
                 "id": f"ci_{uuid.uuid4().hex}",
                 "type": "code_interpreter_call",
-                "status": "completed",
+                "status": tool_run.status,
                 "code": code,
                 "container_id": container_id,
-                "outputs": [{"type": "logs", "logs": stdout}] if stdout else [],
+                "outputs": [{"type": "logs", "logs": tool_run.output}] if tool_run.output else [],
             },
         )
 
@@ -722,14 +736,20 @@ class CodeInterpreterInterceptionLogger(CustomLogger):
         except (json.JSONDecodeError, TypeError, AttributeError):
             return ""
 
-    async def _sandbox_tool_output(self, sandbox: _Sandbox, arguments: str) -> str:
+    async def _sandbox_tool_output(self, sandbox: _Sandbox, arguments: str) -> _ToolRun:
         match sandbox:
             case _SandboxUnavailable():
-                return _unavailable_output(sandbox)
+                return _FAILED_TOOL_RUN
             case _ReadySandbox(container=container, params=params):
-                return await self._run_tool_call(container=container, params=params, arguments=arguments)
+                match await self._run_tool_call(container=container, params=params, arguments=arguments):
+                    case _SandboxUnavailable():
+                        return _FAILED_TOOL_RUN
+                    case str() as output:
+                        return _ToolRun(output=output, status="completed")
 
-    async def _run_tool_call(self, container: ContainerHandle, params: SandboxToolParams | None, arguments: str) -> str:
+    async def _run_tool_call(
+        self, container: ContainerHandle, params: SandboxToolParams | None, arguments: str
+    ) -> str | _SandboxUnavailable:
         try:
             code: Final = json.loads(arguments).get("code", "") if arguments else ""
         except (json.JSONDecodeError, TypeError):
@@ -738,7 +758,7 @@ class CodeInterpreterInterceptionLogger(CustomLogger):
         try:
             result: Final = await self._run_code(container=container, params=params, code=code)
         except Exception as e:
-            return _unavailable_output(_sandbox_unavailable("running the code", e))
+            return _sandbox_unavailable("running the code", e)
         if getattr(result, "error", None):
             error: Final = result.error
             message: Final = error.get("value") or error.get("name") if isinstance(error, dict) else str(error)

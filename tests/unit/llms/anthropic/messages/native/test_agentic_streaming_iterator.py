@@ -21,10 +21,10 @@ from litellm.llms.anthropic.messages.native.agentic_streaming_iterator import (
     _handle_message_start,
     _parse_sse_events,
 )
+from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.proxy.utils import ProxyLogging
-from litellm.types.integrations.custom_logger import AgenticLoopSafetyError
 
 
 # ---------------------------------------------------------------------------
@@ -967,22 +967,26 @@ class TestAgenticStreamingIteratorHoldBack:
         assert "litellm_content_retrieve" not in wire
 
     @pytest.mark.asyncio
-    async def test_a_capped_loop_fails_the_turn_instead_of_replaying_the_retrieval_tool_use(self):
-        chunks = _build_tool_use_stream()
-
+    async def test_a_capped_loop_tells_the_client_to_raise_max_agentic_loops_instead_of_retrying(self):
         mock_handler = MagicMock()
         mock_handler._call_agentic_completion_hooks = AsyncMock(
-            side_effect=AgenticLoopSafetyError("Exceeded max_agentic_loops=1")
+            side_effect=lambda **_: BaseLLMHTTPHandler._check_agentic_loop_safety(
+                tool_calls=[{"name": "litellm_content_retrieve"}],
+                fingerprints=[],
+                depth=1,
+                max_loops=1,
+                model="claude-sonnet-4-20250514",
+            )
         )
 
-        iterator = _build_hold_back_iterator(MockAsyncStream(chunks), mock_handler)
+        iterator = _build_hold_back_iterator(MockAsyncStream(_build_tool_use_stream()), mock_handler)
+        wire = b"".join([chunk async for chunk in iterator if chunk != STREAM_SSE_KEEPALIVE_PING_BYTES]).decode()
 
-        collected = []
-        async for chunk in iterator:
-            collected.append(chunk)
-
-        assert [c for c in collected if c != STREAM_SSE_KEEPALIVE_PING_BYTES] == [SERVER_FULFILLED_TOOL_LEAK_ERROR_SSE_BYTES]
-        assert b"litellm_content_retrieve" not in b"".join(collected)
+        error_messages = [json.loads(data)["error"]["message"] for event, data in _sse_frames(wire) if event == "error"]
+        assert len(error_messages) == 1
+        assert "max_agentic_loops" in error_messages[0]
+        assert "retry" not in error_messages[0].lower()
+        assert "litellm_content_retrieve" not in wire
 
     @pytest.mark.asyncio
     async def test_should_error_instead_of_replaying_when_no_hook_fires_on_tool_use(self):
