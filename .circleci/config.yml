@@ -21,19 +21,30 @@ orbs:
   win: circleci/windows@5.0 # Add Windows orb
 
 commands:
-  checkout_migration_source:
+  checkout_over_https:
+    parameters:
+      revision:
+        type: string
+        default: ""
+      shell:
+        type: string
+        default: /bin/bash -eo pipefail
     steps:
       - run:
-          name: Select the requested migration test revision
+          name: Check out the public repository over HTTPS
+          shell: << parameters.shell >>
           environment:
-            MIGRATION_SOURCE_SHA: << pipeline.parameters.migration_source_sha >>
+            REQUESTED_REVISION: << parameters.revision >>
           command: |
-            revision="${MIGRATION_SOURCE_SHA:-$CIRCLE_SHA1}"
+            revision="${REQUESTED_REVISION:-$CIRCLE_SHA1}"
             [[ "$revision" =~ ^[0-9a-f]{40}$ ]] || exit 1
             git init
             git remote add origin https://github.com/BerriAI/litellm.git
-            git fetch --depth 1 origin "$revision"
-            git checkout --detach FETCH_HEAD
+            for attempt in 1 2 3; do
+              git fetch --filter=blob:none origin "$revision" && git checkout --detach FETCH_HEAD && break
+              [[ $attempt -lt 3 ]] || exit 1
+              sleep 5
+            done
   skip_if_unrelated_changes:
     parameters:
       category:
@@ -347,7 +358,7 @@ commands:
       - when:
           condition: << parameters.checkout >>
           steps:
-            - checkout
+            - checkout_over_https
       - setup_google_dns
       - install_uv
       - install_rust
@@ -377,7 +388,8 @@ jobs:
       CARGO_HTTP_MULTIPLEXING: "false"
       CARGO_NET_RETRY: "5"
     steps:
-      - checkout
+      - checkout_over_https:
+          shell: bash.exe
       - run:
           name: Skip job when no windows-release-relevant files changed
           shell: bash.exe
@@ -451,7 +463,7 @@ jobs:
           password: ${DOCKERHUB_PASSWORD}
     working_directory: ~/project
     steps:
-      - checkout
+      - checkout_over_https
       - setup_google_dns
       - install_uv
       - install_rust
@@ -482,7 +494,7 @@ jobs:
     working_directory: ~/project
 
     steps:
-      - checkout
+      - checkout_over_https
       - skip_if_unrelated_changes
       - attach_workspace:
           at: ~/project
@@ -559,7 +571,7 @@ jobs:
     resource_class: medium
     working_directory: ~/project
     steps:
-      - checkout
+      - checkout_over_https
       - run:
           name: Generate LiteLLM master key
           command: |
@@ -659,7 +671,7 @@ jobs:
     resource_class: large
     working_directory: ~/project
     steps:
-      - checkout
+      - checkout_over_https
       - run:
           name: Generate LiteLLM master key
           command: |
@@ -740,7 +752,7 @@ jobs:
     resource_class: large
     working_directory: ~/project
     steps:
-      - checkout
+      - checkout_over_https
       - skip_if_unrelated_changes:
           category: client
       - setup_google_dns
@@ -794,7 +806,7 @@ jobs:
       # the rest of the suite: nothing else performs a logout.
       PROXY_LOGOUT_URL: "https://www.example.com"
     steps:
-      - checkout
+      - checkout_over_https
       - run:
           name: Generate LiteLLM master key
           command: |
@@ -940,7 +952,7 @@ jobs:
       # and by migration.serverRootPath.config.ts, which refuses to run without it.
       SERVER_ROOT_PATH: "/litellm"
     steps:
-      - checkout
+      - checkout_over_https
       - run:
           name: Generate LiteLLM master key
           command: |
@@ -1066,11 +1078,12 @@ jobs:
       - when:
           condition: << parameters.migration_qualification >>
           steps:
-            - checkout_migration_source
+            - checkout_over_https:
+                revision: << pipeline.parameters.migration_source_sha >>
       - unless:
           condition: << parameters.migration_qualification >>
           steps:
-            - checkout
+            - checkout_over_https
             - skip_if_unrelated_changes
 
       - run:
@@ -1122,7 +1135,8 @@ jobs:
       MIGRATION_TEST_OUTPUT: /tmp/migration-results
       PYTHONPATH: tests/e2e
     steps:
-      - checkout_migration_source
+      - checkout_over_https:
+          revision: << pipeline.parameters.migration_source_sha >>
       - run:
           name: Generate LiteLLM master key
           command: |
@@ -1197,7 +1211,7 @@ jobs:
     resource_class: medium
     working_directory: ~/project
     steps:
-      - checkout
+      - checkout_over_https
       - skip_if_unrelated_changes
       - attach_workspace:
           at: ~/project
@@ -1371,7 +1385,7 @@ jobs:
     environment:
       UV_PYTHON_DOWNLOADS: never
     steps:
-      - checkout
+      - checkout_over_https
       - install_uv
       - run:
           name: Install the locked shard verifier and coverage dependencies
@@ -1419,7 +1433,7 @@ jobs:
             ROUTING_PARITY_BASE: << pipeline.parameters.routing_parity_base >>
           command: |
             [[ "$ROUTING_PARITY_BASE" =~ ^[0-9a-f]{40}$ ]] || exit 1
-            git fetch --depth 1 origin "$ROUTING_PARITY_BASE"
+            git fetch --depth 1 --no-filter origin "$ROUTING_PARITY_BASE"
             git rm -r -f --quiet litellm enterprise litellm-proxy-extras
             git checkout "$ROUTING_PARITY_BASE" -- litellm enterprise litellm-proxy-extras
             git reset --quiet
@@ -1494,7 +1508,7 @@ jobs:
     environment:
       DATABASE_URL: postgresql://postgres:postgres@localhost:5432/litellm_test
     steps:
-      - checkout
+      - checkout_over_https
       - skip_if_unrelated_changes
       - setup_litellm_test_deps:
           checkout: false

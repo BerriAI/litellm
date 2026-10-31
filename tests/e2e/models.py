@@ -1363,6 +1363,7 @@ class LiteLLMParamsBody(BaseModel):
     realtime_protocol: str | None = None
     allowed_openai_params: list[str] | None = None
     drop_params: bool | None = None
+    thought_signature_in_tool_call_id: bool | None = None
     aws_access_key_id: str | None = Field(default=None, repr=False)
     aws_secret_access_key: str | None = Field(default=None, repr=False)
     aws_region_name: str | None = None

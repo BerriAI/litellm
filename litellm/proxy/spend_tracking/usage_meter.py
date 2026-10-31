@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from collections import deque
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from concurrent.futures import Future
 from dataclasses import dataclass
 from itertools import accumulate, chain, count, takewhile
@@ -114,6 +114,9 @@ class DurableUsageMeter:
         self._admission: Final = Lock()
         self._queue: Final[deque[_Pending]] = deque()  # mutable-ok: one bounded producer/consumer queue
         self._wakeup: Final = asyncio.Event()
+        self._capacity_changed: Final = asyncio.Event()
+        self._reservations: Mapping[object, tuple[int, int]] = {}
+        self._reserved_bytes = 0
         self._task: asyncio.Task[None] | None = None
         self._closed = False
         self.pending_bytes = 0
@@ -143,6 +146,36 @@ class DurableUsageMeter:
         wrapped.add_done_callback(lambda done: None if done.cancelled() else done.exception())
         return wrapped
 
+    def reserve_producer(self, size: int, headroom: int) -> object:
+        token: Final = object()
+        self.resize_producer(token, size, headroom)
+        return token
+
+    def resize_producer(self, token: object, size: int, headroom: int) -> None:
+        with self._admission:
+            previous: Final = self._reservations.get(token, (0, 0))[0]
+            delta: Final = size - previous
+            others: Final = (value[1] for key, value in self._reservations.items() if key is not token)
+            required: Final = max((headroom, *others))
+            if (
+                self._closed
+                or self.pending_bytes + delta > self.settings.max_pending_bytes
+                or self._reserved_bytes + delta + required > self.settings.max_pending_bytes
+            ):
+                raise UsageCaptureError("Batch capture producer byte capacity exhausted")
+            self._reservations = {**self._reservations, token: (size, headroom)}
+            self._reserved_bytes += delta
+            self.pending_bytes += delta
+        self._capacity_changed.set()
+
+    def release_producer(self, token: object) -> None:
+        with self._admission:
+            size, _ = self._reservations[token]
+            self._reservations = {key: value for key, value in self._reservations.items() if key is not token}
+            self._reserved_bytes -= size
+            self.pending_bytes -= size
+        self._capacity_changed.set()
+
     def _ensure_worker(self) -> None:
         if self.pending_records >= self.settings.batch_size or self._queue and self._queue[0].prerequisites:
             self._wakeup.set()
@@ -152,6 +185,34 @@ class DurableUsageMeter:
     async def record(self, event: InboundUsageEvent | OutboundUsageEvent) -> None:
         envelope: Final = '{"event":' + event.model_dump_json() + "}"
         await asyncio.shield(self.submit((UsageWrite(event, envelope, usage_delivery_targets(event.dimensions)),)))
+
+    async def record_writes(self, writes: tuple[UsageWrite, ...]) -> None:
+        size: Final = sum(len(write.envelope.encode("utf-8")) for write in writes)
+        capacity: Final = self.settings.max_pending_bytes - self._reserved_bytes
+        if len(writes) > min(self.settings.batch_size, self.settings.max_pending_records) or (
+            size > capacity and len(writes) > 1
+        ):
+            middle: Final = len(writes) // 2
+            await self.record_writes(writes[:middle])
+            await self.record_writes(writes[middle:])
+            return
+        if size > capacity:
+            raise UsageCaptureError("One usage observation exceeds capture capacity")
+        while (receipt := self._submit_available(writes)) is None:
+            self._wakeup.set()
+            await self._capacity_changed.wait()
+        self._wakeup.set()
+        await asyncio.shield(receipt)
+
+    def _submit_available(self, writes: tuple[UsageWrite, ...]) -> asyncio.Future[None] | None:
+        self._capacity_changed.clear()
+        try:
+            receipt: Final = self.submit(writes)
+        except UsageCaptureError:
+            if self._closed or not self.pending_records or not writes:
+                raise
+            return None
+        return receipt
 
     async def flush(self) -> None:
         self._ensure_worker()
@@ -240,6 +301,7 @@ class DurableUsageMeter:
             with self._admission:
                 self.pending_bytes -= item.size
                 self.pending_records -= len(item.writes)
+            self._capacity_changed.set()
             if item.committed.done():
                 continue
             if error is None:
