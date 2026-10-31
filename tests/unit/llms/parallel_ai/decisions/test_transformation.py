@@ -1,6 +1,7 @@
 import json
 from collections.abc import Mapping
 from dataclasses import replace
+from datetime import datetime
 from typing import Final
 
 import httpx
@@ -23,7 +24,7 @@ from litellm.types.decisions import (
     UnsupportedDecisionsRequest,
 )
 from litellm.types.utils import LlmProviders
-from litellm.utils import ProviderConfigManager
+from litellm.utils import ProviderConfigManager, Rules, function_setup
 
 QUESTIONS: Final = {
     "available": {"type": "noul", "instructions": "Is this product available?"},
@@ -96,6 +97,12 @@ def test_provider_routes_systemone_questions_to_parallel_without_a_model_field()
         "questions": QUESTIONS,
     }
     assert config.get_complete_url("https://gateway.example/v1/", "decision") == "https://gateway.example/v1/decisions"
+
+
+@pytest.mark.parametrize("suffix", ["", "/", "/v1", "/v1/", "/v1/decisions", "/v1/decisions/", "/v1/search", "/v1/search/"])
+def test_base_carrying_a_parallel_route_reaches_the_decisions_endpoint(suffix: str) -> None:
+    complete_url: Final = ParallelAIDecisionsConfig().get_complete_url(f"https://api.parallel.ai{suffix}", "decision")
+    assert complete_url == "https://api.parallel.ai/v1/decisions"
 
 
 def test_auth_replaces_conflicting_headers_without_forwarding_bearer_credentials() -> None:
@@ -226,6 +233,38 @@ def test_request_pricing_is_independent_of_token_count(tokens: int, call_type: s
     assert cost == (rate, 0.0)
 
 
+@pytest.mark.asyncio
+async def test_deployment_query_price_replaces_the_catalog_price(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    respx_mock.post("https://api.parallel.ai/v1/decisions").respond(json=PAYLOAD)
+    price: Final = 25 * litellm.model_cost["parallel_ai/decision"]["input_cost_per_query"]
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "webjev",
+                "litellm_params": {
+                    "model": "parallel_ai/decision",
+                    "api_key": "test-key",
+                    "input_cost_per_query": price,
+                },
+            }
+        ]
+    )
+    fields: Final = {
+        "model": "webjev",
+        "input": "Example",
+        "questions": [{"type": "predicate", "name": "available", "instructions": "Available?"}],
+        "litellm_call_id": "query-price-call",
+    }
+    logging_obj, data = function_setup("adecisions", Rules(), datetime.now(), **fields)
+    response: Final = await router.adecisions(**data, litellm_logging_obj=logging_obj)
+    assert response._hidden_params["response_cost"] == pytest.approx(price)
+    await GLOBAL_LOGGING_WORKER.clear_queue()
+
+
 @pytest.mark.parametrize(
     "payload", [{"answers": {}}, {"mode": "fast", "answers": {"available": {"type": "noul", "noul": "invalid"}}}]
 )
@@ -279,6 +318,9 @@ async def test_untrusted_base_cannot_receive_environment_key(
         "https://api.parallel.ai:8443",
         "https://attacker.example/api.parallel.ai",
         "https://api.parallel.ai/other-tenant",
+        "https://api.parallel.ai/other-tenant/v1/search",
+        "https://attacker.example/v1/search",
+        "https://attacker.example/v1/decisions",
     ],
 )
 def test_environment_key_rejects_untrusted_destination_variants(api_base: str, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -288,7 +330,16 @@ def test_environment_key_rejects_untrusted_destination_variants(api_base: str, m
         ParallelAIDecisionsConfig().resolve_connection(api_base, None)
 
 
-@pytest.mark.parametrize("api_base", [None, "https://api.parallel.ai", "https://API.PARALLEL.AI:443/v1/"])
+@pytest.mark.parametrize(
+    "api_base",
+    [
+        None,
+        "https://api.parallel.ai",
+        "https://API.PARALLEL.AI:443/v1/",
+        "https://api.parallel.ai/v1/decisions",
+        "https://api.parallel.ai/v1/search",
+    ],
+)
 def test_default_destination_retains_environment_key(api_base: str | None, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("PARALLEL_AI_API_BASE", raising=False)
     monkeypatch.setenv("PARALLEL_AI_API_KEY", "server-secret")
@@ -297,7 +348,9 @@ def test_default_destination_retains_environment_key(api_base: str | None, monke
     assert key == "server-secret"
 
 
-@pytest.mark.parametrize("api_base", [None, "https://gateway.example/parallel/v1/"])
+@pytest.mark.parametrize(
+    "api_base", [None, "https://gateway.example/parallel/v1/", "https://gateway.example/parallel/v1/search"]
+)
 def test_operator_base_retains_environment_key(api_base: str | None, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("PARALLEL_AI_API_BASE", "https://gateway.example/parallel")
     monkeypatch.setenv("PARALLEL_AI_API_KEY", "server-secret")

@@ -557,6 +557,7 @@ def prepare_call(
             litellm_params={
                 "litellm_call_id": kwargs.get("litellm_call_id"),
                 "api_base": provider_config.get_complete_url(resolved_api_base, canonical_model),
+                "input_cost_per_query": kwargs.get("input_cost_per_query"),
             },
             custom_llm_provider=provider,
         )

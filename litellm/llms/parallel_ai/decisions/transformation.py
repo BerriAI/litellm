@@ -41,6 +41,9 @@ class ParallelAIDecisionsConfig(BaseDecisionsConfig):
             )
         return resolved_base, self.resolve_api_key(None)
 
+    def get_complete_url(self, api_base: str, model: str) -> str:
+        return super().get_complete_url(api_base.rstrip("/").removesuffix("/v1/search").removesuffix(self.path), model)
+
     def _decisions_url(self, api_base: str | None) -> httpx.URL:
         return httpx.URL(self.get_complete_url(api_base or self.get_default_api_base(), "decision"))
 
