@@ -169,6 +169,7 @@ _TOOL_FIELDS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _TOOLS_ADAPTER: Final = TypeAdapter(list[object])
 _CONTENT_BLOCKS_ADAPTER: Final = TypeAdapter(tuple[object, ...])
 _LITELLM_PARAMS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+_REQUEST_PARAMS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _NATIVE_OUTPUT_STRING_FORMATS: Final = frozenset(
     ("date-time", "time", "date", "duration", "email", "hostname", "uri", "ipv4", "ipv6", "uuid")
 )
@@ -2292,6 +2293,16 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             headers=headers,
         )
 
+    @staticmethod
+    def _messages_within_cache_control_cap(
+        messages: Sequence[AllMessageValues], optional_params: Mapping[str, object]
+    ) -> Sequence[AllMessageValues]:
+        from litellm.integrations.anthropic_cache_control_hook import messages_within_cache_control_cap
+
+        return messages_within_cache_control_cap(
+            messages, optional_params.get("tools"), optional_params.get("cache_control"), optional_params
+        )
+
     def transform_request(
         self,
         model: str,
@@ -2309,9 +2320,18 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             anthropic_messages_pt,
         )
 
-        drop_params: Final = litellm.drop_params is True or litellm_params.get("drop_params") is True
+        drop_params: Final = drops_unsupported_params(litellm_params.get("drop_params"))
+        capped_messages: Final = (
+            list(
+                self._messages_within_cache_control_cap(
+                    messages, _REQUEST_PARAMS_ADAPTER.validate_python(optional_params)
+                )
+            )
+            if drop_params
+            else messages
+        )
 
-        if "tools" not in optional_params and messages is not None and has_tool_call_blocks(messages):
+        if "tools" not in optional_params and has_tool_call_blocks(capped_messages):
             optional_params["tools"], _ = self._map_tools(add_dummy_tool(custom_llm_provider="anthropic"))
 
         # Drop thinking param if thinking is enabled but thinking_blocks are missing
@@ -2323,9 +2343,8 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         # Related issue: https://github.com/BerriAI/litellm/issues/18926
         if (
             optional_params.get("thinking") is not None
-            and messages is not None
-            and last_assistant_with_tool_calls_has_no_thinking_blocks(messages)
-            and not any_assistant_message_has_thinking_blocks(messages)
+            and last_assistant_with_tool_calls_has_no_thinking_blocks(capped_messages)
+            and not any_assistant_message_has_thinking_blocks(capped_messages)
         ):
             if litellm.modify_params:
                 optional_params.pop("thinking", None)
@@ -2370,15 +2389,18 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         _name_forward_map, _name_reverse_map = self._sanitize_tool_names_in_request(
             optional_params=optional_params,
         )
-        if _name_forward_map:
-            messages = self._rewrite_tool_names_in_messages(messages, _name_forward_map)
+        request_messages: Final = (
+            self._rewrite_tool_names_in_messages(capped_messages, _name_forward_map)
+            if _name_forward_map
+            else capped_messages
+        )
         if _name_reverse_map and isinstance(litellm_params, dict):
             litellm_params[ANTHROPIC_TOOL_NAME_REVERSE_MAP_KEY] = _name_reverse_map
 
         # Only the leading system run becomes the top-level system prompt. A later
         # system message stays in the conversation: hoisting it rewrites the cached
         # prefix and re-bills the whole history at cache-write pricing (#36559).
-        leading_system_run, later_messages = split_leading_system_run(messages)
+        leading_system_run, later_messages = split_leading_system_run(request_messages)
         anthropic_system_message_list: Final = self.translate_system_message(messages=list(leading_system_run))
         # Handling anthropic API Prompt Caching
         if len(anthropic_system_message_list) > 0:
@@ -2400,7 +2422,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         except Exception as e:
             raise AnthropicError(
                 status_code=400,
-                message=f"{e}\nReceived Messages={messages}",
+                message=f"{e}\nReceived Messages={request_messages}",
             )  # don't use verbose_logger.exception, if exception is raised
 
         self.update_headers_with_optional_anthropic_beta(

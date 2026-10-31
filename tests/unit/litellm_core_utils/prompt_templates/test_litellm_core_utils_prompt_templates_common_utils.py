@@ -26,6 +26,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_semantic_cache_prompt_from_messages,
     get_str_from_messages,
     handle_any_messages_to_chat_completion_str_messages_conversion,
+    handle_messages_with_content_list_to_str_conversion,
     hoist_images_from_tool_messages,
     is_encrypted_reasoning_block,
     merge_consecutive_system_messages,
@@ -2704,3 +2705,16 @@ def test_get_content_from_model_response_includes_server_tool_calls_before_clien
     assert get_content_from_model_response(response) == (
         "Looking it up." + server_call.model_dump_json() + client_call.model_dump_json()
     )
+
+
+def test_content_list_flattening_returns_new_messages_and_leaves_the_callers_untouched() -> None:
+    messages: Final = [
+        {"role": "user", "content": [{"type": "text", "text": "Hello"}, {"type": "text", "text": " world"}]},
+        {"role": "assistant", "content": "Hi"},
+    ]
+    messages_before: Final = copy.deepcopy(messages)
+
+    flattened: Final = handle_messages_with_content_list_to_str_conversion(messages)
+
+    assert flattened == [{"role": "user", "content": "Hello world"}, {"role": "assistant", "content": "Hi"}]
+    assert messages == messages_before

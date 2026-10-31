@@ -32,6 +32,7 @@ from typing_extensions import ReadOnly, TypedDict
 import litellm
 from litellm import get_llm_provider
 from litellm._logging import verbose_proxy_logger
+from litellm._uuid import uuid
 from litellm.constants import (
     ALLOWED_VERTEX_AI_PASSTHROUGH_HEADERS,
     AWS_ERROR_TYPE_HEADER,
@@ -51,7 +52,11 @@ from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException
 from litellm.integrations.custom_guardrail import guardrail_request_data_with_streaming, is_guardrail_intervention
 from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
 from litellm.litellm_core_utils.fallback_generalizations import match_routing_generalization
-from litellm.llms.anthropic.common_utils import AnthropicModelInfo, merge_anthropic_beta_headers
+from litellm.llms.anthropic.common_utils import (
+    AnthropicModelInfo,
+    anthropic_pass_through_api_base,
+    merge_anthropic_beta_headers,
+)
 from litellm.llms.azure.passthrough.transformation import (
     foreign_azure_deployment,
     is_azure_body_model_inference_endpoint,
@@ -149,7 +154,7 @@ from litellm.types.passthrough_endpoints.tinyfish import (
 )
 from litellm.types.passthrough_endpoints.vertex_ai import VertexPassThroughCredentials
 from litellm.types.router import LiteLLMParamsTypedDict
-from litellm.types.utils import LlmProviders
+from litellm.types.utils import CallTypes, LlmProviders
 from litellm.types.vector_stores import LiteLLM_ManagedVectorStore
 from litellm.utils import ProviderConfigManager
 
@@ -1046,7 +1051,7 @@ async def anthropic_proxy_route(
     """
     [Docs](https://docs.litellm.ai/docs/pass_through/anthropic_completion)
     """
-    base_target_url = os.getenv("ANTHROPIC_API_BASE") or os.getenv("ANTHROPIC_BASE_URL") or "https://api.anthropic.com"
+    base_target_url = anthropic_pass_through_api_base()
     encoded_endpoint = httpx.URL(endpoint).path
 
     # Ensure endpoint starts with '/' for proper URL construction
@@ -4105,7 +4110,12 @@ async def vertex_ai_live_websocket_passthrough(
             await proxy_logging_obj.post_call_failure_hook(
                 user_api_key_dict=user_api_key_dict,
                 original_exception=e,
-                request_data={},
+                request_data={
+                    "model": model or "",
+                    "custom_llm_provider": litellm.LlmProviders.VERTEX_AI.value,
+                    "call_type": CallTypes.pass_through.value,
+                    "litellm_call_id": str(uuid.uuid4()),
+                },
             )
         if websocket.client_state != WebSocketState.DISCONNECTED:
             await websocket.close(code=1011, reason=VERTEX_LIVE_UNCONFIGURED_CLOSE_REASON)
@@ -4140,6 +4150,8 @@ async def vertex_ai_live_websocket_passthrough(
         forward_headers=False,
         endpoint="/vertex_ai/live",
         accept_websocket=False,
+        builtin_provider_route=True,
+        model=model,
         setup_model_rewriter=_build_vertex_live_setup_model_rewriter(
             vertex_project=resolved_project,
             vertex_location=resolved_location,

@@ -152,12 +152,12 @@ async fn reachable(client: RedisClient) -> Option<RedisClient> {
 fn client(params: Params, breaker: Option<BreakerConfig>) -> Result<RedisClient, Error> {
     tracing::info!(endpoint = ?params.endpoint, namespace = ?params.namespace, "redis client configured");
     let endpoint = match params.endpoint {
-        RedisEndpoint::Url(url) => Endpoint::Url(url.expose().to_owned()),
+        RedisEndpoint::Url(url) => Endpoint::Url(url),
         RedisEndpoint::Host(host) => Endpoint::Host(HostEndpoint {
             host: host.host,
             port: host.port,
-            username: host.username.map(|value| value.expose().to_owned()),
-            password: host.password.map(|value| value.expose().to_owned()),
+            username: host.username,
+            password: host.password,
             tls: host.tls,
             db: host.db,
         }),
@@ -170,8 +170,8 @@ fn client(params: Params, breaker: Option<BreakerConfig>) -> Result<RedisClient,
                     port: node.port,
                 })
                 .collect(),
-            username: cluster.username.map(|value| value.expose().to_owned()),
-            password: cluster.password.map(|value| value.expose().to_owned()),
+            username: cluster.username,
+            password: cluster.password,
             tls: cluster.tls,
         }),
     };
