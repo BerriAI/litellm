@@ -1,11 +1,10 @@
+import importlib.metadata
 from typing import Final
-
-import importlib_metadata
 
 
 def _installed_version(distribution: str) -> str | None:
     try:
-        return importlib_metadata.version(distribution)
+        return importlib.metadata.version(distribution)
     except Exception:
         return None
 
