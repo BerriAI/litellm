@@ -7447,7 +7447,7 @@ def test_bridged_chat_logprobs_become_output_text_logprobs() -> None:
         chat_completion_response=_hello_chat_response(_HELLO_LOGPROBS),
     )
 
-    assert response.model_dump()["output"][0]["content"] == [
+    assert response.model_dump(mode="json")["output"][0]["content"] == [
         {
             "type": "output_text",
             "text": "Hello.",
@@ -7473,7 +7473,7 @@ def test_bridged_chat_response_without_logprobs_emits_no_logprobs_key() -> None:
         request_input="Say hello.", responses_api_request={}, chat_completion_response=_hello_chat_response(None)
     )
 
-    assert response.model_dump()["output"][0]["content"] == [
+    assert response.model_dump(mode="json")["output"][0]["content"] == [
         {"type": "output_text", "text": "Hello.", "annotations": []}
     ]
 

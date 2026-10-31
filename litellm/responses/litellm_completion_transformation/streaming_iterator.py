@@ -1021,9 +1021,9 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             logprobs=self._final_text_logprobs(litellm_complete_object),
         )
 
-    def _final_text_logprobs(self, litellm_complete_object: ModelResponse) -> list[OutputTextLogprob] | None:
+    def _final_text_logprobs(self, litellm_complete_object: ModelResponse) -> tuple[OutputTextLogprob, ...] | None:
         if self._text_logprobs:
-            return list(self._text_logprobs)
+            return self._text_logprobs
         return output_text_logprobs(getattr(litellm_complete_object.choices[0], "logprobs", None))
 
     def create_output_content_part_done_event(self, litellm_complete_object: ModelResponse) -> ContentPartDoneEvent:

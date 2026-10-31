@@ -3716,7 +3716,7 @@ class LiteLLMCompletionResponsesConfig:
 
     @staticmethod
     def _message_output_content(
-        message: Message, logprobs: list[OutputTextLogprob] | None = None
+        message: Message, logprobs: Sequence[OutputTextLogprob] | None = None
     ) -> tuple[OutputText | ResponseOutputRefusal, ...]:
         refusal: Final = openai_chat_refusal_text(message)
         refusal_parts: Final = (ResponseOutputRefusal(type="refusal", refusal=refusal),) if refusal is not None else ()
@@ -3778,7 +3778,7 @@ class LiteLLMCompletionResponsesConfig:
     @staticmethod
     def _transform_chat_message_to_response_output_text(
         message: Message,
-        logprobs: list[OutputTextLogprob] | None = None,
+        logprobs: Sequence[OutputTextLogprob] | None = None,
     ) -> OutputText:
         annotations: Final = getattr(message, "annotations", None)
         transformed_annotations: Final = (

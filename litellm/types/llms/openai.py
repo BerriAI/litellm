@@ -3,7 +3,7 @@ import math
 from collections.abc import Iterable, Mapping, Sequence
 from enum import Enum
 from os import PathLike
-from typing import IO, TYPE_CHECKING, Any, Final, Generic, Literal, Optional, TypeAlias, Union, cast
+from typing import IO, TYPE_CHECKING, Any, Final, Generic, Literal, Optional, TypeAlias, Union
 
 import httpx
 from openai import Omit
@@ -1868,7 +1868,7 @@ class ContentPartDonePartOutputText(BaseLiteLLMOpenAIResponseObject):
     type: Literal["output_text"]
     text: str
     annotations: list[BaseLiteLLMOpenAIResponseObject]
-    logprobs: list[OutputTextLogprob] | None = None
+    logprobs: Sequence[OutputTextLogprob] | None = None
 
 
 class ContentPartDonePartRefusal(BaseLiteLLMOpenAIResponseObject):

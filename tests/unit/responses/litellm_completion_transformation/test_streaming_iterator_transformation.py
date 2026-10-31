@@ -2004,7 +2004,7 @@ def _logprobs_chunk(content: str, logprob: float, finish_reason: str | None = No
 
 def test_streamed_chat_logprobs_reach_the_text_delta_and_done_events() -> None:
     events: Final = [
-        event.model_dump()
+        event.model_dump(mode="json")
         for event in _build_iterator(
             [_logprobs_chunk("Hello", -0.25), _logprobs_chunk(".", -0.5, finish_reason="stop")]
         )
@@ -2027,7 +2027,7 @@ def test_streamed_chat_logprobs_reach_the_text_delta_and_done_events() -> None:
 
 def test_streamed_chat_without_logprobs_emits_text_events_without_a_logprobs_key() -> None:
     events: Final = [
-        event.model_dump() for event in _build_iterator([_chunk("Hello"), _chunk("!", finish_reason="stop")])
+        event.model_dump(mode="json") for event in _build_iterator([_chunk("Hello"), _chunk("!", finish_reason="stop")])
     ]
 
     text_events: Final = [
