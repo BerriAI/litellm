@@ -175,3 +175,24 @@ it.each(["queued", "completed"] as const)(
     expect(update).not.toHaveProperty("totalLatency");
   },
 );
+
+it("should preserve and deduplicate source annotations while excluding unsafe links", () => {
+  const annotations = [
+    { type: "url_citation", url: "https://example.com/report", title: "Report", start_index: 0, end_index: 6 },
+    { type: "url_citation", url: "https://example.com/report", title: "Report", start_index: 8, end_index: 14 },
+    { type: "url_citation", url: "javascript:alert(1)", title: "Unsafe", start_index: 8, end_index: 14 },
+  ];
+  const response = {
+    id: "litellm_poll_research",
+    status: "completed",
+    output: [
+      { type: "web_search_call", id: "search", status: "completed", action: { type: "search", query: "inventory" } },
+      { type: "message", content: [{ type: "output_text", text: "A report.", annotations }] },
+    ],
+  } as ModelResponse;
+  expect(backgroundResponseUpdate(response)).toMatchObject({
+    content: "A report.",
+    webSearchCount: 1,
+    citations: [{ url: "https://example.com/report", title: "Report" }],
+  });
+});
