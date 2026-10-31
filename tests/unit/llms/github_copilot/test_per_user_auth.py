@@ -2,6 +2,7 @@
 
 import asyncio
 import datetime
+import json
 import time
 from collections.abc import Callable
 from contextlib import contextmanager
@@ -24,11 +25,16 @@ from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.github_copilot.per_user_auth import (
     _SESSION_CACHE,
     GITHUB_COPILOT_USER_SESSION_KWARG_KEY,
+    GithubCopilotTokenRejectedError,
+    GithubTokenRefreshed,
+    GithubTokenRefreshRejected,
+    GithubTokenRefreshUnavailable,
     GithubCopilotUserSession,
     _session_cache_key,
     aattach_github_copilot_user_session,
     aexchange_github_token,
     apoll_device_flow,
+    arefresh_github_token,
     astart_device_flow,
     attach_github_copilot_user_session,
     evict_copilot_user_session,
@@ -250,10 +256,11 @@ def test_cached_session_is_not_reused_after_github_token_changes():
 
 
 @pytest.mark.parametrize("status", [401, 403, 404])
-def test_exchange_auth_failures_raise_caller_auth_error_and_evict(status):
+def test_exchange_auth_failures_raise_caller_auth_error_and_evict(status: int) -> None:
     with github_http(_exchange_responder(status=status)):
         with pytest.raises(CallerCredentialAuthenticationError) as exc:
             exchange_github_token("user-a", "gh-token", "copilot-cred", _GITHUB_ENDPOINTS)
+        assert isinstance(exc.value, GithubCopilotTokenRejectedError) == (status == 401)
         assert "Reconnect GitHub Copilot for credential 'copilot-cred' in the LiteLLM UI (LLM Credentials)" in str(
             exc.value
         )
@@ -440,11 +447,137 @@ async def test_apoll_device_flow_error_mapping(github_error, expected_status):
 async def test_apoll_device_flow_connected():
     def respond(request: httpx.Request) -> httpx.Response:
         assert str(request.url) == ACCESS_TOKEN_URL
-        return httpx.Response(200, json={"access_token": "gho_x"}, request=request)
+        return httpx.Response(
+            200,
+            json={
+                "access_token": "gho_x",
+                "refresh_token": "ghr_x",
+                "expires_in": 28800,
+                "refresh_token_expires_in": 15897600,
+            },
+            request=request,
+        )
 
     with github_http(respond):
         poll = await apoll_device_flow("dc", _GITHUB_ENDPOINTS)
-        assert poll.status == "connected" and poll.access_token == "gho_x"
+        assert (
+            poll.status,
+            poll.access_token,
+            poll.refresh_token,
+            poll.expires_in,
+            poll.refresh_token_expires_in,
+        ) == ("connected", "gho_x", "ghr_x", 28800, 15897600)
+
+
+@pytest.mark.asyncio
+async def test_device_flow_omits_empty_refresh_token_and_nonpositive_expiries():
+    def respond(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "access_token": "gho_x",
+                "refresh_token": "",
+                "expires_in": 0,
+                "refresh_token_expires_in": -1,
+            },
+            request=request,
+        )
+
+    with github_http(respond):
+        poll = await apoll_device_flow("dc", _GITHUB_ENDPOINTS)
+    assert poll.status == "connected" and poll.access_token == "gho_x"
+    assert (poll.refresh_token, poll.expires_in, poll.refresh_token_expires_in) == (None, None, None)
+
+
+@pytest.mark.asyncio
+async def test_refresh_grant_uses_configured_ghe_endpoint_and_rotates_pair():
+    endpoints: Final = github_host_endpoints("octo.ghe.com")
+    seen: Final[list[httpx.Request]] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(
+            200,
+            json={
+                "access_token": "gho_rotated",
+                "refresh_token": "ghr_rotated",
+                "expires_in": 28800,
+                "refresh_token_expires_in": 15897600,
+            },
+            request=request,
+        )
+
+    with github_http(respond):
+        result: Final = await arefresh_github_token("ghr_old", endpoints)
+    assert result == GithubTokenRefreshed(
+        access_token="gho_rotated",
+        refresh_token="ghr_rotated",
+        expires_in=28800,
+        refresh_token_expires_in=15897600,
+    )
+    assert str(seen[0].url) == "https://octo.ghe.com/login/oauth/access_token"
+    assert json.loads(seen[0].content) == {
+        "client_id": endpoints.client_id,
+        "grant_type": "refresh_token",
+        "refresh_token": "ghr_old",
+    }
+    assert "client_secret" not in json.loads(seen[0].content)
+    assert "Authorization" not in seen[0].headers
+
+
+@pytest.mark.asyncio
+async def test_refresh_grant_classifies_rejections_and_unavailability():
+    responses: Final = (
+        (200, {"error": "invalid_grant"}, GithubTokenRefreshRejected),
+        (400, {"error": "invalid_grant"}, GithubTokenRefreshRejected),
+        (429, {"error": "rate_limited"}, GithubTokenRefreshUnavailable),
+        (500, {"error": "server_error"}, GithubTokenRefreshUnavailable),
+    )
+    for status, payload, expected_type in responses:
+        with github_http(
+            lambda request, response_status=status, response_payload=payload: httpx.Response(
+                response_status,
+                json=response_payload,
+                request=request,
+            )
+        ):
+            result: Final = await arefresh_github_token("ghr_old", _GITHUB_ENDPOINTS)
+        assert isinstance(result, expected_type)
+
+
+@pytest.mark.asyncio
+async def test_refresh_grant_transport_and_invalid_json_are_unavailable():
+    def disconnected(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("offline", request=request)
+
+    with github_http(disconnected):
+        disconnected_result: Final = await arefresh_github_token("ghr_old", _GITHUB_ENDPOINTS)
+    with github_http(lambda request: httpx.Response(200, content=b"{", request=request)):
+        invalid_json_result: Final = await arefresh_github_token("ghr_old", _GITHUB_ENDPOINTS)
+    assert isinstance(disconnected_result, GithubTokenRefreshUnavailable)
+    assert isinstance(invalid_json_result, GithubTokenRefreshUnavailable)
+
+
+@pytest.mark.asyncio
+async def test_github_auth_endpoint_overrides_accept_plain_http_localhost(monkeypatch, per_user_credential):
+    token_url: Final = "http://127.0.0.1:8123/login/oauth/access_token"
+    api_key_url: Final = "http://127.0.0.1:8123/copilot_internal/v2/token"
+    monkeypatch.setenv("GITHUB_COPILOT_ACCESS_TOKEN_URL", token_url)
+    monkeypatch.setenv("GITHUB_COPILOT_API_KEY_URL", api_key_url)
+    endpoints: Final = github_host_endpoints("github.com")
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        if str(request.url) == token_url:
+            return httpx.Response(200, json={"access_token": "gho_next", "refresh_token": "ghr_next"}, request=request)
+        if str(request.url) == api_key_url:
+            return httpx.Response(200, json=_exchange_payload(), request=request)
+        pytest.fail(f"unexpected request to {request.url}")
+
+    with github_http(respond) as requests:
+        refreshed: Final = await arefresh_github_token("ghr_old", endpoints)
+        await aexchange_github_token("user-a", "gho_access", "copilot-cred", endpoints)
+    assert isinstance(refreshed, GithubTokenRefreshed)
+    assert [str(request.url) for request in requests] == [token_url, api_key_url]
 
 
 def test_is_github_copilot_per_user_request():
