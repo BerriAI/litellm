@@ -7,6 +7,7 @@ import pytest
 from integration._support.client import Gateway, eventually
 from integration._support.database import read_rows
 from integration._support.wire import Reply, Request, wire_server
+from integration.compatibility._a2a_peers import legacy_send, peer, register, sse_frames
 from pydantic import BaseModel, JsonValue
 
 
@@ -190,9 +191,11 @@ def _assert_a2a_calls_are_billed(
             lambda rows: len(rows) == len(methods),
             seconds=30,
         )
-        assert [{name: value for name, value in row.items() if name != "day"} for row in logs] == [
+        assert [
+            {name: value for name, value in row.items() if name not in {"day", "request_id"}}
+            for row in logs
+        ] == [
             {
-                "request_id": f"{marker}-{method}",
                 "agent_id": agent,
                 "spend": cost,
                 "api_key": digest,
@@ -200,6 +203,9 @@ def _assert_a2a_calls_are_billed(
             }
             for method in sorted(methods)
         ], logs
+        request_ids: Final = tuple(str(row["request_id"]) for row in logs)
+        assert len(set(request_ids)) == len(methods), logs
+        assert all(str(uuid.UUID(request_id)) == request_id for request_id in request_ids), logs
         total: Final = cost * len(methods)
         assert eventually(
             lambda: read_rows('SELECT spend FROM "LiteLLM_AgentsTable" WHERE agent_id=%s', (agent,)),
@@ -270,3 +276,126 @@ def test_a2a_send_bills_input_and_output_tokens_at_the_agent_per_token_prices(ga
 
 def test_a2a_stream_bills_input_and_output_tokens_at_the_agent_per_token_prices(gateway: Gateway) -> None:
     _assert_a2a_calls_are_billed(gateway, _PER_TOKEN, _PER_TOKEN_COST, (("message/stream", "/a2a/{agent}"),))
+
+
+def _assert_reused_jsonrpc_id_has_distinct_spend_identity(
+    gateway: Gateway,
+    *,
+    version: str,
+    method: str,
+) -> None:
+    marker: Final = "a2aidentity" + uuid.uuid4().hex
+    dialect: Final = "v1" if version == "1.0" else "langgraph"
+    params: Final = None if version == "1.0" else {"a2a_protocol_version": "0.3"}
+
+    with peer(marker, dialect) as agent, gateway.scenario() as scenario:
+        identity: Final = register(gateway, scenario.cleanups.callback, marker, agent.url, params)
+        user_ids: Final = tuple(scenario.user(user_id=f"{marker}-user-{index}") for index in range(2))
+        alias_user_pairs: Final = tuple(
+            (f"{marker}-key-{index}", user_id)
+            for index, user_id in enumerate(user_ids)
+        )
+        keys: Final = tuple(
+            scenario.key(user_id=user_id, key_alias=alias)
+            for alias, user_id in alias_user_pairs
+        )
+        digests: Final = tuple(sha256(key.encode()).hexdigest() for key in keys)
+        body: Final = (
+            legacy_send("1", method=method)
+            if version == "0.3"
+            else {
+                "jsonrpc": "2.0",
+                "id": "1",
+                "method": method,
+                "params": {
+                    "message": {
+                        "messageId": "client-message",
+                        "parts": [{"text": "reused id"}],
+                        "role": "ROLE_USER",
+                    }
+                },
+            }
+        )
+
+        responses: Final = tuple(
+            gateway.request(
+                "POST",
+                f"/a2a/{identity}",
+                body,
+                key=key,
+                headers={"a2a-version": version},
+            )
+            for key in keys
+        )
+        for response in responses:
+            assert response.status_code == 200, response.text
+            if "stream" in method.lower():
+                frames: Final = sse_frames(response.text)
+                assert frames and all(frame["id"] == "1" for frame in frames), response.text
+                assert all("error" not in frame for frame in frames), response.text
+            else:
+                response_body: Final = response.json()
+                assert response_body["id"] == "1" and "error" not in response_body, response.text
+
+        assert agent.wire is not None
+        upstream_requests: Final = tuple(item for item in agent.wire.drain() if item.method == "POST")
+        upstream: Final = tuple(json.loads(item.body) for item in upstream_requests)
+        assert len(upstream) == 2, upstream
+        trace_ids: Final = tuple(
+            str(item.headers["x-litellm-trace-id"])
+            for item in upstream_requests
+        )
+
+        rows: Final = eventually(
+            lambda: read_rows(
+                'SELECT spend.request_id, spend.api_key, spend.call_type, token.key_alias, token.user_id '
+                'FROM "LiteLLM_SpendLogs" AS spend '
+                'JOIN "LiteLLM_VerificationToken" AS token ON spend.api_key=token.token '
+                "WHERE spend.api_key=%s OR spend.api_key=%s ORDER BY token.key_alias",
+                (digests[0], digests[1]),
+            ),
+            lambda found: len(found) == 2,
+            seconds=30,
+            return_last_on_timeout=True,
+        )
+        assert len(rows) == 2, rows
+        assert tuple((str(row["key_alias"]), str(row["user_id"])) for row in rows) == tuple(
+            sorted(alias_user_pairs)
+        ), rows
+        request_ids: Final = tuple(str(row["request_id"]) for row in rows)
+        assert len(set(request_ids)) == 2 and all(request_id != "1" for request_id in request_ids), rows
+        assert all(str(uuid.UUID(request_id)) == request_id for request_id in request_ids), rows
+        assert len(trace_ids) == 2, trace_ids
+        assert len(set(trace_ids)) == 2 and all(trace_id != "1" for trace_id in trace_ids), trace_ids
+
+        if "stream" in method.lower():
+            stream_call_ids: Final = tuple(
+                (digest, response.headers.get("x-litellm-call-id"))
+                for digest, response in zip(digests, responses)
+            )
+            matching_rows: Final = tuple(
+                (call_id, tuple(row for row in rows if row["api_key"] == digest))
+                for digest, call_id in stream_call_ids
+                if call_id is not None
+            )
+            assert all(
+                len(matches) == 1 and str(matches[0]["request_id"]) == call_id
+                for call_id, matches in matching_rows
+            ), matching_rows
+
+
+@pytest.mark.parametrize(
+    ("version", "method"),
+    (
+        ("1.0", "SendMessage"),
+        ("1.0", "SendStreamingMessage"),
+        ("0.3", "message/send"),
+        ("0.3", "message/stream"),
+    ),
+)
+def test_a2a_reused_jsonrpc_ids_have_distinct_litellm_spend_ids(
+    gateway: Gateway,
+    version: str,
+    method: str,
+) -> None:
+    _assert_reused_jsonrpc_id_has_distinct_spend_identity(gateway, version=version, method=method)

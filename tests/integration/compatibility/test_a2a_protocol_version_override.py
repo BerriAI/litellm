@@ -65,8 +65,8 @@ def _assert_v1_wire(sent: tuple[dict[str, JsonValue], ...], marker: str, method:
     assert message["messageId"] == marker + "-in", sent
 
 
-def _one_spend_row(request_id: str, call_type: str, status: str) -> None:
-    rows: Final = eventually(lambda: spend_rows(request_id), lambda values: len(values) == 1, seconds=70)
+def _one_spend_row(agent_id: str, call_type: str, status: str) -> None:
+    rows: Final = eventually(lambda: spend_rows(agent_id), lambda values: len(values) == 1, seconds=70)
     assert rows[0]["call_type"] == call_type and rows[0]["status"] == status, rows
 
 
@@ -93,7 +93,7 @@ def test_pinned_langgraph_agent_answers_message_send_in_the_legacy_dialect(gatew
         identity: Final = register(gateway, scenario.cleanups.callback, agent.marker, agent.url, PINNED)
         _send_ok(gateway, identity, agent.marker, route)
         _assert_legacy_wire(posts(agent.wire), agent.marker)  # type: ignore[arg-type]
-        _one_spend_row(agent.marker, "asend_message", "success")
+        _one_spend_row(identity, "asend_message", "success")
 
 
 def test_pinned_langgraph_agent_streams_message_stream_to_the_final_frame(gateway: Gateway) -> None:
@@ -113,7 +113,7 @@ def test_pinned_langgraph_agent_streams_message_stream_to_the_final_frame(gatewa
         assert results[1]["artifactUpdate"]["artifact"]["parts"] == [{"text": "echo: synthetic ping"}]  # type: ignore[index]
         assert results[2]["statusUpdate"]["status"]["state"] == "TASK_STATE_COMPLETED", response.text  # type: ignore[index]
         _assert_legacy_wire(posts(agent.wire), agent.marker, "message/stream")  # type: ignore[arg-type]
-        _one_spend_row(agent.marker, "asend_message_streaming", "success")
+        _one_spend_row(identity, "asend_message_streaming", "success")
 
 
 def test_v1_caller_reaches_pinned_legacy_agent_in_its_own_envelope(gateway: Gateway) -> None:
@@ -142,7 +142,7 @@ def test_v1_caller_reaches_pinned_legacy_agent_in_its_own_envelope(gateway: Gate
         assert "kind" not in task and task["status"]["state"] == "TASK_STATE_COMPLETED", response.text
         assert task["artifacts"][0]["parts"] == [{"text": "echo: synthetic ping"}], response.text
         _assert_legacy_wire(posts(agent.wire), agent.marker)  # type: ignore[arg-type]
-        _one_spend_row(agent.marker, "asend_message", "success")
+        _one_spend_row(identity, "asend_message", "success")
 
 
 @pytest.mark.parametrize("value", ("0.3.0", 0.3, " 0.3 "), ids=("dotted", "number", "spaced"))
@@ -153,7 +153,7 @@ def test_protocol_version_aliases_pin_the_legacy_transport(gateway: Gateway, val
         )
         _send_ok(gateway, identity, agent.marker)
         _assert_legacy_wire(posts(agent.wire), agent.marker)  # type: ignore[arg-type]
-        _one_spend_row(agent.marker, "asend_message", "success")
+        _one_spend_row(identity, "asend_message", "success")
 
 
 def test_genuine_v1_agent_pinned_one_point_zero_is_unchanged(gateway: Gateway) -> None:
@@ -163,7 +163,7 @@ def test_genuine_v1_agent_pinned_one_point_zero_is_unchanged(gateway: Gateway) -
         )
         _send_ok(gateway, identity, agent.marker)
         _assert_v1_wire(posts(agent.wire), agent.marker)  # type: ignore[arg-type]
-        _one_spend_row(agent.marker, "asend_message", "success")
+        _one_spend_row(identity, "asend_message", "success")
 
 
 def test_genuine_v1_agent_unpinned_is_unchanged(gateway: Gateway) -> None:
@@ -171,7 +171,7 @@ def test_genuine_v1_agent_unpinned_is_unchanged(gateway: Gateway) -> None:
         identity: Final = register(gateway, scenario.cleanups.callback, agent.marker, agent.url, None)
         _send_ok(gateway, identity, agent.marker)
         _assert_v1_wire(posts(agent.wire), agent.marker)  # type: ignore[arg-type]
-        _one_spend_row(agent.marker, "asend_message", "success")
+        _one_spend_row(identity, "asend_message", "success")
 
 
 @pytest.mark.parametrize("pin", (None, "0.3"), ids=("unpinned", "pinned-legacy"))
@@ -184,7 +184,7 @@ def test_lowercase_binding_still_downgrades_to_the_legacy_transport(gateway: Gat
         identity: Final = register(gateway, scenario.cleanups.callback, agent.marker, agent.url, params)
         _send_ok(gateway, identity, agent.marker)
         _assert_legacy_wire(posts(agent.wire), agent.marker)  # type: ignore[arg-type]
-        _one_spend_row(agent.marker, "asend_message", "success")
+        _one_spend_row(identity, "asend_message", "success")
 
 
 def test_explicit_one_point_zero_opts_out_of_the_lowercase_downgrade(gateway: Gateway) -> None:
@@ -194,7 +194,7 @@ def test_explicit_one_point_zero_opts_out_of_the_lowercase_downgrade(gateway: Ga
         )
         _send_ok(gateway, identity, agent.marker)
         _assert_v1_wire(posts(agent.wire), agent.marker)  # type: ignore[arg-type]
-        _one_spend_row(agent.marker, "asend_message", "success")
+        _one_spend_row(identity, "asend_message", "success")
 
 
 def test_one_point_zero_pin_on_a_legacy_card_sends_v1(gateway: Gateway) -> None:
@@ -205,7 +205,7 @@ def test_one_point_zero_pin_on_a_legacy_card_sends_v1(gateway: Gateway) -> None:
         )
         _send_ok(gateway, identity, agent.marker)
         _assert_v1_wire(posts(agent.wire), agent.marker)  # type: ignore[arg-type]
-        _one_spend_row(agent.marker, "asend_message", "success")
+        _one_spend_row(identity, "asend_message", "success")
 
 
 def test_override_rewrites_only_canonical_interfaces(gateway: Gateway) -> None:
@@ -219,7 +219,7 @@ def test_override_rewrites_only_canonical_interfaces(gateway: Gateway) -> None:
         _send_ok(gateway, identity, agent.marker)
         _assert_legacy_wire(posts(agent.wire), agent.marker)  # type: ignore[arg-type]
         assert decoy.wire.drain() == (), "the HTTP+JSON and custom bindings must not be selected"  # type: ignore[union-attr]
-        _one_spend_row(agent.marker, "asend_message", "success")
+        _one_spend_row(identity, "asend_message", "success")
 
 
 def test_override_added_and_removed_by_patch_takes_effect_on_both_workers(gateway: Gateway) -> None:
@@ -267,8 +267,9 @@ def test_repeated_pinned_sends_log_one_row_each(gateway: Gateway) -> None:
         assert [item["params"]["message"]["messageId"] for item in sent] == [m + "-in" for m in markers], sent  # type: ignore[index]
         assert len({item["id"] for item in sent}) == len(markers), sent
         assert {item["method"] for item in sent} == {"message/send"}, sent
-        for marker in markers:
-            _one_spend_row(marker, "asend_message", "success")
+        rows: Final = eventually(lambda: spend_rows(identity), lambda values: len(values) == len(markers), seconds=70)
+        assert all(row["call_type"] == "asend_message" and row["status"] == "success" for row in rows), rows
+        assert len({str(row["request_id"]) for row in rows}) == len(markers), rows
 
 
 def test_registered_agent_persists_protocol_version(gateway: Gateway) -> None:
@@ -295,4 +296,4 @@ def test_pinned_agent_survives_localhost_retry(gateway: Gateway) -> None:
             traffic
         )
         _assert_legacy_wire(sent, agent.marker)
-        _one_spend_row(agent.marker, "asend_message", "success")
+        _one_spend_row(identity, "asend_message", "success")
