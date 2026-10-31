@@ -1607,3 +1607,70 @@ async def test_batch_callback_handoff_is_bounded_and_runtime_owns_persistence(
         release.set()
         await asyncio.gather(callback, return_exceptions=True)
         await runtime.stop(1)
+
+
+@pytest.mark.asyncio
+async def test_batch_producers_share_byte_capacity_and_release_it_after_drain() -> None:
+    from litellm.proxy.spend_tracking.usage_capture import UsageCaptureRuntime
+
+    database: Final = StoredUsage()
+    release: Final = asyncio.Event()
+    runtime: Final = UsageCaptureRuntime()
+
+    async def persist(writes: tuple[UsageWrite, ...]) -> None:
+        await release.wait()
+        assert runtime.meter is not None
+        assert runtime.meter.pending_bytes <= 65536
+        await database.insert(writes)
+
+    runtime.start(persist, UsageCaptureSettings(batch_size=32, max_pending_bytes=65536), load=database.load)
+    rows: Final = tuple(
+        {"model": "capture-model" if index % 7 else None, "usage": {"prompt_tokens": 2} if index % 7 else None}
+        for index in range(1000)
+    )
+    response: Final = {"id": "batch", "status": "completed", "usage": {"batch_usage_by_request": rows}}
+    kwargs: Final = {"call_type": "aretrieve_batch", "litellm_call_id": "poll", "litellm_params": {}}
+    try:
+        first: Final = runtime.submit_batch(kwargs, response, NOW, NOW)
+        assert runtime.meter is not None
+        assert 49000 < runtime.meter.pending_bytes <= 65536
+        with pytest.raises(UsageCaptureError, match="producer byte capacity"):
+            runtime.submit_batch(kwargs, {**response, "id": "other-batch"}, NOW, NOW)
+        release.set()
+        await asyncio.shield(first.receipt)
+        assert len(database.rows) == 1001
+        assert runtime.meter.pending_bytes == 0
+        second: Final = runtime.submit_batch(kwargs, {**response, "id": "other-batch"}, NOW, NOW)
+        await asyncio.shield(second.receipt)
+        assert len(database.rows) == 2002
+        assert runtime.meter.pending_bytes == 0
+    finally:
+        release.set()
+        await runtime.stop(1)
+
+
+@pytest.mark.asyncio
+async def test_batch_replay_reserves_the_accepted_pricing_snapshot_size() -> None:
+    from litellm.proxy.spend_tracking.usage_capture import PricingCapture, UsageBatchWriter, UsageCaptureRuntime
+
+    database: Final = StoredUsage()
+    writer: Final = UsageBatchWriter(database.insert, database.load)
+    runtime: Final = UsageCaptureRuntime()
+    runtime.start(writer.write, UsageCaptureSettings(max_pending_bytes=16384), load=database.load)
+    response: Final = {
+        "id": "batch",
+        "status": "completed",
+        "usage": {"batch_usage_by_request": ({"model": "model", "usage": {"prompt_tokens": 2}},)},
+    }
+    kwargs: Final = {"call_type": "aretrieve_batch", "litellm_call_id": "poll", "litellm_params": {}}
+    pricing: Final = PricingCapture("{}", "{}", json.dumps({"batch_models": {"model": {"source": "x" * 1200}}}))
+    try:
+        initial: Final = runtime.submit_batch({**kwargs, "_accounting_pricing_snapshot": pricing}, response, NOW, NOW)
+        await asyncio.shield(initial.receipt)
+        accepted: Final = database.rows
+        replay: Final = runtime.submit_batch(kwargs, response, NOW, NOW)
+        await asyncio.shield(replay.receipt)
+        assert database.rows == accepted and len(accepted) == 2
+        assert runtime.meter is not None and runtime.meter.pending_bytes == 0
+    finally:
+        await runtime.stop(1)

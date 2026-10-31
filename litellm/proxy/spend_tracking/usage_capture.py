@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import Awaitable, Callable, Mapping
+import re
+from collections.abc import Awaitable, Callable, Iterator, Mapping
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -623,7 +624,7 @@ def _batch_row_write(root: UsageWrite, row: Mapping[str, JsonValue], index: int)
 class _BatchCapture:
     payload: SpendLogsPayload
     root: UsageWrite
-    rows: tuple[Mapping[str, JsonValue], ...]
+    rows: bytes
     prerequisites: tuple[asyncio.Future[None], ...]
 
 
@@ -641,25 +642,69 @@ def _prepare_batch_capture(
     if len(builder.writes) != 1 or _terminal_facts(builder.writes[0]) is None:
         raise UsageCaptureError("Batch rows require one terminal job observation")
     return _BatchCapture(
-        payload, _batch_root(builder.writes[0], rows), rows, tuple(prior.receipt for prior in _prior_captures(kwargs))
+        payload,
+        _batch_root(builder.writes[0], rows),
+        b"\n".join(_json(row).encode("utf-8") for row in rows),
+        tuple(prior.receipt for prior in _prior_captures(kwargs)),
     )
+
+
+def _batch_writes(root: UsageWrite, rows: bytes) -> Iterator[UsageWrite]:
+    return (
+        _batch_row_write(root, _JSON_OBJECT.validate_json(match.group()), index)
+        for index, match in enumerate(re.finditer(rb"[^\n]+", rows))
+    )
+
+
+def _batch_write_bound(root: UsageWrite, rows: bytes) -> int:
+    return max(
+        len(root.envelope.encode("utf-8")),
+        max(len(write.envelope.encode("utf-8")) for write in _batch_writes(root, rows)),
+    )
+
+
+def _batch_capacity(
+    meter: DurableUsageMeter, root: UsageWrite, rows: bytes, *, extra_bytes: int = 0
+) -> tuple[int, int, int]:
+    retained: Final = len(rows) + len(root.envelope.encode("utf-8")) + extra_bytes
+    bound: Final = _batch_write_bound(root, rows)
+    chunk_bytes: Final = max(
+        bound,
+        min(
+            bound * min(meter.settings.batch_size, rows.count(b"\n") + 1),
+            meter.settings.max_pending_bytes // 4,
+            (meter.settings.max_pending_bytes - retained) // 2,
+        ),
+    )
+    return retained + chunk_bytes, chunk_bytes, bound
 
 
 async def _persist_batch_capture(
     meter: DurableUsageMeter,
     load: Callable[[tuple[str, ...]], Awaitable[tuple[UsageWrite, ...]]],
-    capture: _BatchCapture,
+    root: UsageWrite,
+    rows: bytes,
+    prerequisites: tuple[asyncio.Future[None], ...],
+    chunk_bytes: int,
+    reservation: object | None = None,
 ) -> None:
-    for receipt in capture.prerequisites:
+    for receipt in prerequisites:
         await asyncio.shield(receipt)
-    await meter.record_writes((capture.root,))
-    accepted: Final = await load((capture.root.event.event_id,))
+    await meter.record_writes((root,))
+    accepted: Final = await load((root.event.event_id,))
     if len(accepted) != 1:
         raise UsageCaptureError("Committed batch snapshot could not be loaded")
-    frozen: Final = _reuse_terminal_snapshot(capture.root, accepted[0])
-    remaining: Final = iter(enumerate(capture.rows))
-    while group := tuple(islice(remaining, meter.settings.batch_size)):
-        await meter.record_writes(tuple(_batch_row_write(frozen, row, index) for index, row in group))
+    frozen: Final = _reuse_terminal_snapshot(root, accepted[0])
+    retained, capacity, bound = _batch_capacity(meter, frozen, rows, extra_bytes=len(root.envelope.encode("utf-8")))
+    if reservation is not None:
+        meter.resize_producer(reservation, retained, capacity)
+    write_capacity: Final = capacity if reservation is not None else chunk_bytes
+    if bound > write_capacity:
+        raise UsageCaptureError("Batch observation exceeds reserved producer write capacity")
+    group_size: Final = min(meter.settings.batch_size, max(1, write_capacity // bound))
+    remaining: Final = _batch_writes(frozen, rows)
+    while group := tuple(islice(remaining, group_size)):
+        await meter.record_writes(group)
 
 
 async def capture_batch_callback(
@@ -673,7 +718,9 @@ async def capture_batch_callback(
     if load is None:
         raise UsageCaptureError("Batch capture requires the existing ledger snapshot reader")
     capture: Final = _prepare_batch_capture(kwargs, response, start_time, end_time)
-    await _persist_batch_capture(meter, load, capture)
+    await _persist_batch_capture(
+        meter, load, capture.root, capture.rows, capture.prerequisites, meter.settings.max_pending_bytes
+    )
     receipt: Final[asyncio.Future[None]] = asyncio.get_running_loop().create_future()
     receipt.set_result(None)
     return CapturedUsage(capture.payload, (capture.root,), receipt)
@@ -986,7 +1033,15 @@ class UsageCaptureRuntime:
         if len(self._batches) >= meter.settings.max_pending_records:
             raise UsageCaptureError("Batch capture producer capacity exhausted")
         capture: Final = _prepare_batch_capture(kwargs, response, start_time, end_time)
-        task: Final = asyncio.create_task(_persist_batch_capture(meter, load, capture), name="accounting batch capture")
+        retained, chunk_bytes, _ = _batch_capacity(meter, capture.root, capture.rows)
+        reservation: Final = meter.reserve_producer(retained, chunk_bytes)
+        task: Final = asyncio.create_task(
+            _persist_batch_capture(
+                meter, load, capture.root, capture.rows, capture.prerequisites, chunk_bytes, reservation
+            ),
+            name="accounting batch capture",
+        )
+        task.add_done_callback(lambda _: meter.release_producer(reservation))
         self._batches.add(task)
         task.add_done_callback(self._batch_finished)
         return CapturedUsage(capture.payload, (capture.root,), task)

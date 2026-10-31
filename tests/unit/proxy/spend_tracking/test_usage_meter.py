@@ -78,6 +78,13 @@ async def test_byte_limit_rejects_new_work_without_evicting_admitted_work() -> N
     meter: Final = DurableUsageMeter(
         database.write, UsageCaptureSettings(max_pending_bytes=size), wait_for_batch=_manual_flush
     )
+    reservation: Final = meter.reserve_producer(size // 2, size // 2)
+    with pytest.raises(UsageCaptureError, match="producer byte capacity"):
+        meter.reserve_producer(1, size)
+    with pytest.raises(UsageCaptureError, match="producer byte capacity"):
+        meter.resize_producer(reservation, size, 1)
+    assert meter.pending_bytes == size // 2
+    meter.release_producer(reservation)
     receipt: Final = meter.submit((write,))
     with pytest.raises(UsageCaptureError, match="capacity"):
         meter.submit((_write("extra"),))
@@ -88,6 +95,8 @@ async def test_byte_limit_rejects_new_work_without_evicting_admitted_work() -> N
     assert database.committed == (write.event.event_id,)
     with pytest.raises(UsageCaptureError, match="closed"):
         meter.submit((_write("after-close"),))
+    with pytest.raises(UsageCaptureError, match="producer byte capacity"):
+        meter.reserve_producer(1, 1)
 
 
 @pytest.mark.asyncio
