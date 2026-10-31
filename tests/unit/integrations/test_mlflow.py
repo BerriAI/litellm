@@ -291,23 +291,24 @@ class _ExceptionSpanEvent:
 def test_mlflow_failure_event_records_the_error_text_the_payload_logged(scrubbed):
     secret = "my ssn is 123-45-6789"
     modules = _mock_mlflow_modules()
+    modules["mlflow"].get_current_active_span.return_value = None
     modules["mlflow.entities"].SpanEvent = _ExceptionSpanEvent
     with patch.dict("sys.modules", modules):
         from litellm.integrations.mlflow import MlflowLogger
 
         mlflow_logger = MlflowLogger()
-        span = MagicMock()
-        mlflow_logger._start_span_or_trace = MagicMock(return_value=span)
-        mlflow_logger._end_span_or_trace = MagicMock()
-        mlflow_logger._extract_and_set_chat_attributes = MagicMock()
+        span = MagicMock(parent_id=None, request_id="req-1")
+        mlflow_logger._client = MagicMock(**{"start_trace.return_value": span})
         error_message = "bad input: redacted-by-litellm" if scrubbed else f"bad input: {secret}"
 
         mlflow_logger._handle_failure(
             kwargs={
                 "litellm_call_id": "x",
+                "messages": [{"role": "user", "content": "hi"}],
                 "exception": ValueError(f"bad input: {secret}"),
                 "standard_logging_object": {
-                    "error_information": {"error_message": error_message, "traceback": "frames"}
+                    "request_tags": [],
+                    "error_information": {"error_message": error_message, "traceback": "frames"},
                 },
             },
             response_obj=None,
@@ -316,6 +317,7 @@ def test_mlflow_failure_event_records_the_error_text_the_payload_logged(scrubbed
         )
 
         event = span.add_event.call_args.args[0]
+        mlflow_logger._client.end_trace.assert_called_once()
         assert event.attributes["exception.type"] == "ValueError"
         assert event.attributes["exception.message"] == error_message
         assert event.attributes["exception.stacktrace"] == ("frames" if scrubbed else "raw")
