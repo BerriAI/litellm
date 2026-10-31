@@ -24,13 +24,13 @@ from litellm.llms.databricks.decisions.transformation import DATABRICKS_DECISION
 from litellm.llms.laya.common_utils import laya_response_model
 from litellm.llms.nadir.decisions.transformation import NADIR_DECISIONS_CONFIG, nadir_bucket_body
 from litellm.llms.pass_through.typesafe_logging_handler import TypeSafePassthroughLoggingHandler
+from litellm.router_deprecated import renamed_router_param
 from litellm.router_strategy.complexity_router.config import DEFAULT_JEV_INSTRUCTIONS as _DEFAULT_JEV_INSTRUCTIONS
 from litellm.types.decisions import DecisionsIRState, DecisionsJSON, DecisionsResponse
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.utils import AUTOROUTER_CLASSIFIER_CALL_ORIGIN, StandardLoggingRoutingDecision
 
 if TYPE_CHECKING:
-    from litellm.router import Router
     from litellm.router_api import RoutingContext
     from litellm.router_strategy.complexity_router.config import OpenSourceClassifierConfig
     from litellm.types.router import Deployment
@@ -75,14 +75,12 @@ class JevBudgetedRequest:
     telemetry: StandardLoggingRoutingDecision
 
 
-def jev_input_targets(router: "Router", config: "OpenSourceClassifierConfig") -> tuple[JevInputTarget, ...]:
-    from litellm.router_api import RoutingContext
+def jev_input_targets(context: "RoutingContext", config: "OpenSourceClassifierConfig") -> tuple[JevInputTarget, ...]:
     from litellm.types.router import Deployment
 
     if config.deployment_name is None:
         provider: Final = "typesafe" if config.provider == "jev" else config.provider
         return (_jev_input_target({"model": f"{provider}/{config.model}"}, None),)
-    context: Final = RoutingContext(router)
     deployments: Final = context.registry().deployments(model_name=config.deployment_name) or ()
     return tuple(
         _jev_deployment_input_target(context, Deployment.model_validate(deployment)) for deployment in deployments
@@ -247,30 +245,13 @@ class JevClassifierClient(Protocol):
     ) -> JevSystemOneResponse: ...
 
 
-class _DecisionsRouter(Protocol):
-    async def adecisions(
-        self,
-        *,
-        model: str,
-        state: DecisionsJSON,
-        questions: Mapping[str, object],
-        timeout: float,
-        num_retries: int,
-        disable_fallbacks: bool,
-        metadata: Mapping[str, object],
-        proxy_server_request: Mapping[str, object],
-        turn_off_message_logging: bool | None,
-        litellm_session_id: str = "",
-        litellm_trace_id: str = "",
-    ) -> object: ...
-
-
 _PARENT_METADATA: Final = TypeAdapter[Mapping[str, object] | None](Mapping[str, object] | None)
 
 
 class RouterJevClassifierClient:
-    def __init__(self, router: "Router", deployment_name: str) -> None:
-        self._router: _DecisionsRouter = router
+    @renamed_router_param("router")
+    def __init__(self, ctx: "RoutingContext", deployment_name: str) -> None:
+        self.ctx: Final = ctx
         self._deployment_name = deployment_name
 
     async def evaluate(
@@ -293,7 +274,7 @@ class RouterJevClassifierClient:
             "questions": {key: value.model_dump() for key, value in request.questions.items()},
         }
         response: Final = DecisionsResponse.model_validate(
-            await self._router.adecisions(
+            await self.ctx.adecisions(
                 model=self._deployment_name,
                 state=state,
                 questions={key: value.model_dump() for key, value in request.questions.items()},
