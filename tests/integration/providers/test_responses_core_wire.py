@@ -17,8 +17,8 @@ from openai.types.responses import ResponseCompletedEvent
 from pydantic import JsonValue, TypeAdapter
 
 import litellm
-from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.types.llms.openai import ResponseCompletedEvent as LiteLLMResponseCompletedEvent
+from litellm.types.llms.openai import ResponsesAPIResponse
 
 _MODEL: Final = "gpt-5"
 _API_KEY: Final = "synthetic-responses-key"
@@ -169,6 +169,9 @@ async def test_regression_sdk_comparison_response_id_is_raw_on_the_wire(
             id="foreign-provider-wrapper",
         ),
         pytest.param("resp_" + base64.b64encode(b"custom;id;response").decode(), id="unmanaged-semicolons"),
+        pytest.param(
+            "resp_" + base64.b64encode(b"openai;foreign;resp_unmanaged").decode(), id="openai-without-envelope-markers"
+        ),
     ),
 )
 def test_guard_sdk_custom_host_preserves_unmanaged_comparison_ids(extra: bool, comparison_id: str) -> None:
