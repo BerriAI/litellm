@@ -1493,7 +1493,7 @@ def test_bedrock_mantle_context_overflow_maps_to_context_window_exceeded():
 
 _GPT_OSS_OVERFLOW_EVENT: Final = (
     'ErrorEvent { error: APIError { type: "BadRequestError", code: Some(400), '
-    "message: \"Input length (360068) exceeds model's maximum context length (131072).\", param: None } }"
+    'message: "Input length (360068) exceeds model\'s maximum context length (131072).", param: None } }'
 )
 
 
@@ -1519,13 +1519,15 @@ _GPT_OSS_OVERFLOW_EVENT: Final = (
         pytest.param(OpenAIError(status_code=503, message=_GPT_OSS_OVERFLOW_EVENT), id="streamed-event"),
         pytest.param(
             BaseLLMException(
-                status_code=400, message=f"Error code: 400 - {repr({'error': {'message': _GPT_OSS_OVERFLOW_EVENT}})}"
+                status_code=400, message=f"Error code: 400 - { {'error': {'message': _GPT_OSS_OVERFLOW_EVENT}}!r}"
             ),
             id="python-repr",
         ),
     ],
 )
-def test_bedrock_mantle_gpt_oss_input_length_overflow_maps_to_context_window_exceeded(original_exception):
+def test_bedrock_mantle_gpt_oss_input_length_overflow_maps_to_context_window_exceeded(
+    original_exception: BaseLLMException,
+) -> None:
     with pytest.raises(litellm.ContextWindowExceededError) as excinfo:
         exception_type(
             model="openai.gpt-oss-20b",
@@ -1538,10 +1540,10 @@ def test_bedrock_mantle_gpt_oss_input_length_overflow_maps_to_context_window_exc
     assert "prompt is too long: 360068 tokens > 131072 maximum" in excinfo.value.message
 
 
-def test_bedrock_mantle_gpt_oss_streamed_responses_overflow_event_maps_to_context_window_exceeded():
+def test_bedrock_mantle_gpt_oss_streamed_responses_overflow_event_maps_to_context_window_exceeded() -> None:
     from litellm.responses.streaming_iterator import map_stream_error_to_exception
 
-    mapped_exception = map_stream_error_to_exception(
+    mapped_exception: Final = map_stream_error_to_exception(
         {
             "code": "invalid_prompt",
             "message": (
@@ -1557,6 +1559,51 @@ def test_bedrock_mantle_gpt_oss_streamed_responses_overflow_event_maps_to_contex
     assert isinstance(mapped_exception, litellm.ContextWindowExceededError)
     assert mapped_exception.status_code == 400
     assert "prompt is too long: 165072 tokens > 131072 maximum" in mapped_exception.message
+
+
+_QWEN_OVERFLOW_EVENT: Final = (
+    'ErrorEvent { error: APIError { type: "BadRequestError", code: Some(400), message: "This model\'s maximum '
+    "context length is 32768 tokens. However, you requested 16 output tokens and your prompt contains at least "
+    "32753 input tokens, for a total of at least 32769 tokens. Please reduce the length of the input prompt or the "
+    'number of requested output tokens. (parameter=input_tokens, value=32753)", param: None } }'
+)
+
+
+@pytest.mark.parametrize(
+    "original_exception",
+    [
+        pytest.param(
+            BaseLLMException(
+                status_code=400,
+                message=json.dumps(
+                    {
+                        "error": {
+                            "code": "validation_error",
+                            "message": _QWEN_OVERFLOW_EVENT,
+                            "param": None,
+                            "type": "invalid_request_error",
+                        }
+                    }
+                ),
+            ),
+            id="400-body",
+        ),
+        pytest.param(OpenAIError(status_code=503, message=_QWEN_OVERFLOW_EVENT), id="streamed-event"),
+    ],
+)
+def test_bedrock_mantle_qwen_maximum_context_length_overflow_maps_to_context_window_exceeded(
+    original_exception: BaseLLMException,
+) -> None:
+    with pytest.raises(litellm.ContextWindowExceededError) as excinfo:
+        exception_type(
+            model="qwen.qwen3-32b",
+            original_exception=original_exception,
+            custom_llm_provider="bedrock_mantle",
+        )
+
+    assert excinfo.value.status_code == 400
+    assert excinfo.value.response.status_code == 400
+    assert "prompt is too long" in excinfo.value.message
 
 
 def test_bedrock_mantle_openai_envelope_context_overflow_maps_to_context_window_exceeded():

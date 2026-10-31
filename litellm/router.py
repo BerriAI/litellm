@@ -821,9 +821,15 @@ def _stream_raised_error_status(error: Exception) -> int | None:
 def _stream_fallback_error_for_raised(
     error: Exception, model: str, has_generated_content: bool, llm_provider: str = "anthropic"
 ) -> "MidStreamFallbackError | None":
-    """The pre-stream retry rule (408, 409, 429, 5xx); None means the raise propagates unchanged."""
+    """
+    The pre-stream retry rule (408, 409, 429, 5xx), plus a context window overflow, which the fallback chain
+    sends to context_window_fallbacks the way it does before a stream opens; None means the raise propagates
+    unchanged.
+    """
     if has_generated_content:
         return None
+    if isinstance(error, litellm.ContextWindowExceededError):
+        return _stream_pre_content_error(error, model, llm_provider)
     status_code: Final = _stream_raised_error_status(error)
     if status_code is None:
         return _stream_pre_content_error(error, model, llm_provider)
@@ -1628,7 +1634,9 @@ class Router:
             else:
                 self.fallbacks = [{"*": _fallbacks}]
 
-        self.context_window_fallbacks = context_window_fallbacks or litellm.context_window_fallbacks
+        self.context_window_fallbacks: list[dict[str, list[str]]] | None = (  # mutable-ok: resolver contract
+            context_window_fallbacks or litellm.context_window_fallbacks
+        )
 
         _content_policy_fallbacks: Final = content_policy_fallbacks or litellm.content_policy_fallbacks
         self.validate_fallbacks(fallback_param=_content_policy_fallbacks)
@@ -6611,7 +6619,7 @@ class Router:
             model: Final = cast(str, initial_kwargs.get("model"))  # cast-ok: kwargs always carries the model group
             has_generated_content = not (  # rebind-ok: set once real content is seen, the buffer cap is hit, or neither a retry nor a fallback can take over
                 self._anthropic_messages_stream_can_retry(initial_kwargs)
-                or self._stream_can_fall_back(model, initial_kwargs)
+                or self._stream_can_fall_back_on_overflow(model, initial_kwargs)
             )
             buffered_lifecycle_chunks: tuple[bytes, ...] = ()  # rebind-ok: flushed once committed or on decline
             try:
@@ -10024,6 +10032,22 @@ class Router:
                 }
             )
         )
+
+    def _stream_can_fall_back_on_overflow(self, model_group: str, kwargs: Mapping[str, Any]) -> bool:
+        """Whether a context window overflow before content could still reach a fallback, which context_window_fallbacks
+        can serve as well as every route _stream_can_fall_back counts."""
+        if fallbacks_disabled_for_request(kwargs):
+            return False
+        if self._stream_can_fall_back(model_group, kwargs):
+            return True
+        context_window_fallbacks: Final = kwargs.get("context_window_fallbacks", self.context_window_fallbacks)
+        if not context_window_fallbacks:
+            return False
+        resolved, _ = get_fallback_model_group_for_lookup_groups(
+            fallbacks=context_window_fallbacks,
+            lookup_groups=fallback_lookup_groups(kwargs, model_group),
+        )
+        return has_unattempted_fallback_target(resolved, kwargs)
 
     def _stream_can_fall_back(self, model_group: str, kwargs: Mapping[str, Any]) -> bool:
         """

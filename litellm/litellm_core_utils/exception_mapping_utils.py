@@ -917,16 +917,19 @@ def _bedrock_mantle_context_window_response(original_exception: _ProviderHTTPExc
 def _get_bedrock_mantle_context_window_message(error_str: str) -> str | None:
     """
     Mantle reports context overflow as a validation_error carrying the token counts (worded
-    differently for gpt-oss, and again on its Responses API), or as OpenAI's context_length_exceeded
-    code, either in a 400 body or in a streamed error event with no error type. Clients such as
-    Claude Code only treat "prompt is too long" as overflow (litellm/litellm#36546).
+    differently for gpt-oss, and again on its Responses API), as OpenAI's context_length_exceeded
+    code, or in a wording the other providers share, either in a 400 body or in a streamed error
+    event with no error type. Clients such as Claude Code only treat "prompt is too long" as overflow
+    (litellm/litellm#36546).
     """
     matches: Final = (pattern.search(error_str) for pattern in _BEDROCK_MANTLE_CONTEXT_WINDOW_PATTERNS)
     match: Final = next((found for found in matches if found is not None), None)
     if match is not None:
         prompt_tokens, max_tokens = match.groups()
         return f"prompt is too long: {prompt_tokens} tokens > {max_tokens} maximum"
-    if _BEDROCK_MANTLE_CONTEXT_LENGTH_EXCEEDED_CODE_PATTERN.search(error_str) is not None:
+    if _BEDROCK_MANTLE_CONTEXT_LENGTH_EXCEEDED_CODE_PATTERN.search(
+        error_str
+    ) is not None or ExceptionCheckers.is_error_str_context_window_exceeded(error_str):
         return _BEDROCK_MANTLE_CONTEXT_WINDOW_GENERIC_MESSAGE
     return None
 

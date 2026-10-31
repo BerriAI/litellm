@@ -18970,6 +18970,71 @@ async def test_anthropic_messages_retry_raising_a_context_window_error_takes_the
     assert [model for model, _, _ in provider.calls][-1] == "anthropic/cw-model"
 
 
+def _anthropic_messages_overflow_before_content():
+    return _AnthropicMessagesRaisingByteStream(
+        [_anthropic_messages_message_start_chunk()],
+        litellm.ContextWindowExceededError(
+            message="prompt is too long: 9 tokens > 8 maximum", llm_provider="bedrock_mantle", model="glm"
+        ),
+    )
+
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_stream_overflow_before_content_takes_the_context_window_fallback():
+    router: Final = _anthropic_messages_retry_router(num_retries=0, context_window_fallbacks=[{"glm": ["cw"]}])
+    provider: Final = _AnthropicMessagesScriptedProvider(
+        _anthropic_messages_overflow_before_content,
+        lambda: _AnthropicMessagesFakeByteStream(
+            [_anthropic_messages_message_start_chunk(), _anthropic_messages_content_chunk("from cw")]
+        ),
+    )
+
+    stream: Final = await _anthropic_messages_stream_through_router(router, provider)
+    body: Final = [chunk async for chunk in stream]
+
+    assert body == [_anthropic_messages_message_start_chunk(), _anthropic_messages_content_chunk("from cw")]
+    assert [model for model, _, _ in provider.calls][-1] == "anthropic/cw-model"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("context_window_fallbacks", "request_kwargs"),
+    [
+        pytest.param(None, {}, id="no-fallback-configured"),
+        pytest.param([{"glm": ["cw"]}], {"disable_fallbacks": True}, id="fallbacks-disabled-for-the-request"),
+    ],
+)
+async def test_anthropic_messages_stream_overflow_surfaces_when_no_fallback_can_take_over(
+    context_window_fallbacks: list[dict[str, list[str]]] | None, request_kwargs: dict[str, object]
+) -> None:
+    router: Final = _anthropic_messages_retry_router(num_retries=0, context_window_fallbacks=context_window_fallbacks)
+    provider: Final = _AnthropicMessagesScriptedProvider(_anthropic_messages_overflow_before_content)
+
+    stream: Final = await _anthropic_messages_stream_through_router(router, provider, **request_kwargs)
+    outcome: Final = [chunk async for chunk in _events_until_error(stream)]
+
+    assert outcome[:-1] == [_anthropic_messages_message_start_chunk()]
+    assert isinstance(outcome[-1], litellm.ContextWindowExceededError)
+    assert len(provider.calls) == 1
+
+
+@pytest.mark.parametrize(
+    ("context_window_fallbacks", "request_kwargs", "expected"),
+    [
+        pytest.param([{"glm": ["cw"]}], {}, True, id="router-context-window-fallback"),
+        pytest.param(None, {"context_window_fallbacks": [{"glm": ["cw"]}]}, True, id="request-context-window-fallback"),
+        pytest.param(None, {}, False, id="no-fallback-configured"),
+        pytest.param([{"glm": ["cw"]}], {"disable_fallbacks": True}, False, id="fallbacks-disabled-for-the-request"),
+    ],
+)
+def test_stream_can_fall_back_on_overflow_counts_context_window_fallbacks(
+    context_window_fallbacks: list[dict[str, list[str]]] | None, request_kwargs: dict[str, object], expected: bool
+) -> None:
+    router: Final = _anthropic_messages_retry_router(num_retries=0, context_window_fallbacks=context_window_fallbacks)
+
+    assert router._stream_can_fall_back_on_overflow("glm", {"model": "glm", **request_kwargs}) is expected
+
+
 def test_anthropic_messages_retry_budget_precedence_direct_call():
     """A retry policy naming the error class outranks the request's num_retries, which outranks the routed
     deployment's, which outranks the router's; num_retries=0 on the request turns a policy off too."""
