@@ -3,6 +3,7 @@ import functools
 import json
 import logging
 from collections.abc import Mapping
+from functools import partial
 from types import MappingProxyType
 from typing import Any, Final, cast
 
@@ -11,9 +12,6 @@ import pytest
 import respx
 
 import litellm
-
-
-
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     TOOL_RESULT_IMAGE_PLACEHOLDER,
     encrypted_reasoning_signature,
@@ -35,6 +33,8 @@ from litellm.llms.anthropic.messages.native.mid_conversation_system import (
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 from litellm.types.llms.anthropic import (
     AnthopicMessagesAssistantMessageParam,
+    AnthropicMessagesRequest,
+    AnthropicMessagesToolChoice,
     AnthropicMessagesUserMessageParam,
 )
 from litellm.types.llms.openai import ChatCompletionAssistantToolCall
@@ -5527,3 +5527,37 @@ async def test_chat_bridge_tool_result_text_block_without_text_reaches_the_model
             ],
         }
     ]
+
+@pytest.mark.parametrize(
+    ("tool_choice", "message"),
+    [
+        ({}, "tool_choice.type: Field required"),
+        ({"name": "get_weather"}, "tool_choice.type: Field required"),
+        (
+            {"type": "web_search"},
+            "tool_choice: Input tag 'web_search' found using 'type' "
+            "does not match any of the expected tags: 'auto', 'any', 'tool', 'none'",
+        ),
+    ],
+)
+@pytest.mark.parametrize("through_request", [False, True])
+def test_invalid_tool_choice_is_bad_request(tool_choice: dict[str, str], message: str, through_request: bool) -> None:
+    request: Final = AnthropicMessagesRequest(
+        model="test-model",
+        max_tokens=128,
+        messages=[{"role": "user", "content": "Hello"}],
+        tool_choice=tool_choice,
+    )
+    translate: Final = (
+        partial(LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai, request)
+        if through_request
+        else partial(
+            LiteLLMAnthropicMessagesAdapter().translate_anthropic_tool_choice_to_openai,
+            cast(AnthropicMessagesToolChoice, tool_choice),
+        )
+    )
+    with pytest.raises(litellm.BadRequestError) as exc_info:
+        translate()
+
+    assert exc_info.value.status_code == 400
+    assert message in exc_info.value.message
