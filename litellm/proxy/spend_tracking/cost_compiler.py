@@ -71,7 +71,11 @@ def price_usage(envelope: str) -> PricingSnapshot | Unpriced:
     )
     provider: Final = next((d.value for d in event.dimensions if d.name is DimensionName.PROVIDER), None)
     logged: Final = _fields(pricing.get("logging"))
-    reported: Final = logged.get("provider_reported_cost")
+    reported: Final = (
+        logged.get("provider_reported_cost")
+        if logged.get("provider_reported_cost") is not None
+        else logged.get("provider_usage_cost")
+    )
     upstream: Final = (
         isinstance(reported, (int, float))
         and not isinstance(reported, bool)
@@ -122,6 +126,12 @@ def price_usage(envelope: str) -> PricingSnapshot | Unpriced:
     )
     response_inputs: Final = _fields(pricing.get("response_inputs"))
     tool_response: Final = _fields(pricing.get("tool_response"))
+    replay_usage: Final = Usage.model_validate(
+        {
+            **{name: value for name, value in (captured.usage or {}).items() if name != "cost"},
+            **({"cost": reported} if upstream and logged.get("provider_reported_cost") is None else {}),
+        }
+    )
     token_response: Final = ModelResponse(
         model=model,
         choices=[
@@ -136,7 +146,7 @@ def price_usage(envelope: str) -> PricingSnapshot | Unpriced:
                 }
             }
         ],
-        usage=Usage.model_validate({name: value for name, value in (captured.usage or {}).items() if name != "cost"}),
+        usage=replay_usage,
         service_tier=response_inputs.get("service_tier"),
         meta={"billed_units": response_inputs.get("billed_units")},
         hidden_params={
@@ -182,7 +192,7 @@ def price_usage(envelope: str) -> PricingSnapshot | Unpriced:
         custom_llm_provider=provider,
         litellm_params={**deployment, **request, "metadata": {"model_info": _fields(pricing.get("model_info"))}},
         additional_response_cost=request.get("additional_response_cost"),
-        usage=Usage.model_validate({name: value for name, value in (captured.usage or {}).items() if name != "cost"}),
+        usage=replay_usage,
         end_time=event.ended_at,
         mcp_tool_call_metadata={
             "name": _fields(pricing.get("tool")).get("name"),
@@ -202,7 +212,9 @@ def price_usage(envelope: str) -> PricingSnapshot | Unpriced:
         }
     )
     logger.record_provider_reported_cost(
-        TypeAdapter[float | None](float | None).validate_python(reported if upstream else None)
+        TypeAdapter[float | None](float | None).validate_python(
+            logged.get("provider_reported_cost") if upstream else None
+        )
     )
     billed_at: Final = TypeAdapter(datetime).validate_python(logged.get("current_billing_time", event.ended_at))
     if event.call_type is CallTypes.arealtime and captured.usage and captured.usage.get("metered_usage") is not None:
@@ -250,7 +262,7 @@ def price_usage(envelope: str) -> PricingSnapshot | Unpriced:
             "priced_model_key": key,
             "total_cost": Decimal(str(finalized.amount)),
             "guardrail_cost": Decimal(str(guardrail)),
-            "upstream_reported_cost": Decimal(str(logged["provider_reported_cost"])) if upstream else None,
+            "upstream_reported_cost": Decimal(str(reported)) if upstream else None,
             "additional_costs": tuple(
                 {"name": name, "amount": Decimal(str(value))}
                 for name, value in {
