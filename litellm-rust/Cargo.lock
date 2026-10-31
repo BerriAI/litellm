@@ -3150,6 +3150,7 @@ dependencies = [
  "defmt",
  "jiff-core",
  "jiff-static",
+ "jiff-tzdb",
  "log",
  "portable-atomic",
  "portable-atomic-util",
@@ -3177,6 +3178,12 @@ dependencies = [
  "quote",
  "syn 2.0.119",
 ]
+
+[[package]]
+name = "jiff-tzdb"
+version = "0.1.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fa8377070c6bae868759445e5a77f66d84f0b72f3a054bfb00e6d038b8282da7"
 
 [[package]]
 name = "jni"
@@ -3373,6 +3380,7 @@ dependencies = [
  "litellm-auth-azure",
  "litellm-auth-gcp",
  "litellm-auth-types",
+ "litellm-secret-value",
 ]
 
 [[package]]
@@ -3409,6 +3417,7 @@ dependencies = [
  "azure_identity",
  "litellm-auth-types",
  "litellm-error",
+ "litellm-secret-value",
  "moka",
  "rstest",
  "serde_json",
@@ -3428,6 +3437,7 @@ dependencies = [
  "http 1.4.2",
  "litellm-auth-types",
  "litellm-error",
+ "litellm-secret-value",
  "moka",
  "rstest",
  "serde",
@@ -3443,10 +3453,10 @@ name = "litellm-auth-types"
 version = "0.1.0"
 dependencies = [
  "litellm-error",
+ "litellm-secret-value",
  "rstest",
  "serde",
  "serde_json",
- "subtle",
  "thiserror 2.0.19",
  "tokio",
  "veil",
@@ -3516,6 +3526,7 @@ dependencies = [
  "litellm-cache-testing",
  "litellm-error",
  "litellm-http",
+ "litellm-secret-value",
  "percent-encoding",
  "reqwest",
  "rstest",
@@ -3661,10 +3672,10 @@ dependencies = [
 name = "litellm-callbacks-legacy-python"
 version = "0.1.0"
 dependencies = [
- "litellm-auth",
  "litellm-error",
  "litellm-host",
  "litellm-host-python",
+ "litellm-secret-value",
  "proptest",
  "pyo3",
  "rstest",
@@ -3685,9 +3696,9 @@ dependencies = [
 name = "litellm-config"
 version = "0.1.0"
 dependencies = [
- "litellm-auth-types",
  "litellm-error",
  "litellm-router-types",
+ "litellm-secret-value",
  "rstest",
  "serde",
  "serde_json",
@@ -3729,9 +3740,12 @@ dependencies = [
 name = "litellm-cost"
 version = "0.1.0"
 dependencies = [
- "criterion",
- "proptest",
+ "jiff",
  "rstest",
+ "schemars 1.2.2",
+ "serde",
+ "serde_json",
+ "strum",
  "thiserror 2.0.19",
 ]
 
@@ -3794,7 +3808,6 @@ dependencies = [
  "envy",
  "futures-util",
  "http-body-util",
- "litellm-auth-types",
  "litellm-circuit-breaker",
  "litellm-config",
  "litellm-error",
@@ -3807,6 +3820,7 @@ dependencies = [
  "litellm-llms",
  "litellm-redis-client",
  "litellm-redis-testing",
+ "litellm-secret-value",
  "litellm-secrets",
  "litellm-tracing",
  "rstest",
@@ -3829,9 +3843,9 @@ dependencies = [
  "axum",
  "axum-login",
  "futures-util",
- "litellm-auth-types",
  "litellm-config",
  "litellm-error",
+ "litellm-secret-value",
  "litellm-secrets",
  "rstest",
  "serde",
@@ -3869,6 +3883,7 @@ dependencies = [
  "litellm-llms",
  "litellm-llms-types",
  "litellm-router",
+ "litellm-secret-value",
  "litellm-secrets",
  "rstest",
  "serde",
@@ -3885,9 +3900,9 @@ name = "litellm-gateway-management"
 version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
- "litellm-auth-types",
  "litellm-error",
  "litellm-gateway-auth",
+ "litellm-secret-value",
  "rand 0.8.7",
  "rstest",
  "thiserror 2.0.19",
@@ -3902,9 +3917,9 @@ dependencies = [
  "base64 0.22.1",
  "futures-util",
  "http 1.4.2",
- "litellm-auth-types",
  "litellm-config",
  "litellm-error",
+ "litellm-secret-value",
  "litellm-secrets",
  "moka",
  "rmcp",
@@ -3932,9 +3947,9 @@ dependencies = [
  "futures-util",
  "governor",
  "jsonwebtoken",
- "litellm-auth-types",
  "litellm-error",
  "litellm-gateway-auth",
+ "litellm-secret-value",
  "rand 0.8.7",
  "rstest",
  "serde",
@@ -3954,8 +3969,8 @@ name = "litellm-host"
 version = "0.1.0"
 dependencies = [
  "futures-util",
- "litellm-auth",
  "litellm-coroutine",
+ "litellm-secret-value",
  "rstest",
  "serde_json",
  "thiserror 2.0.19",
@@ -4084,6 +4099,7 @@ dependencies = [
  "litellm-inference-testing",
  "litellm-llms",
  "litellm-llms-types",
+ "litellm-secret-value",
  "litellm-secrets",
  "litellm-tracing",
  "rstest",
@@ -4114,6 +4130,7 @@ dependencies = [
  "litellm-llms",
  "litellm-llms-types",
  "litellm-router-types",
+ "litellm-secret-value",
  "litellm-secrets",
  "litellm-tracing",
  "reqwest",
@@ -4144,6 +4161,7 @@ dependencies = [
  "litellm-inference-testing",
  "litellm-llms",
  "litellm-llms-types",
+ "litellm-secret-value",
  "litellm-secrets",
  "litellm-tracing",
  "mime_guess",
@@ -4178,6 +4196,7 @@ dependencies = [
  "litellm-inference-testing",
  "litellm-llms",
  "litellm-llms-types",
+ "litellm-secret-value",
  "litellm-secrets",
  "litellm-tracing",
  "reqwest",
@@ -4197,6 +4216,7 @@ dependencies = [
  "litellm-auth",
  "litellm-http",
  "litellm-inference",
+ "litellm-secret-value",
  "litellm-secrets",
  "tokio",
 ]
@@ -4244,6 +4264,7 @@ dependencies = [
  "litellm-llms-types",
  "litellm-python-compat",
  "litellm-router-types",
+ "litellm-secret-value",
  "litellm-secrets",
  "reqwest",
  "rstest",
@@ -4277,15 +4298,33 @@ name = "litellm-model-catalog"
 version = "0.1.0"
 dependencies = [
  "indexmap 2.14.0",
+ "jiff",
  "jsonschema",
+ "litellm-cost",
  "litellm-error",
- "litellm-llms-types",
+ "macro_rules_attribute",
  "rstest",
  "schemars 1.2.2",
  "serde",
  "serde_json",
+ "serde_with",
+ "strum",
  "thiserror 2.0.19",
  "time",
+]
+
+[[package]]
+name = "litellm-model-catalog-refresh"
+version = "0.1.0"
+dependencies = [
+ "litellm-error",
+ "litellm-http",
+ "litellm-model-catalog",
+ "reqwest",
+ "rstest",
+ "thiserror 2.0.19",
+ "tokio",
+ "url",
 ]
 
 [[package]]
@@ -4317,7 +4356,9 @@ dependencies = [
  "litellm-inference-transcription",
  "litellm-llms",
  "litellm-llms-types",
+ "litellm-model-catalog",
  "litellm-router-types",
+ "litellm-secret-value",
  "litellm-secrets",
  "litellm-secrets-aws",
  "litellm-secrets-types",
@@ -4367,6 +4408,7 @@ dependencies = [
  "futures-util",
  "litellm-circuit-breaker",
  "litellm-redis-testing",
+ "litellm-secret-value",
  "redis",
  "rstest",
  "thiserror 2.0.19",
@@ -4403,10 +4445,21 @@ name = "litellm-router-types"
 version = "0.1.0"
 dependencies = [
  "litellm-auth-types",
+ "litellm-secret-value",
  "rstest",
  "serde",
  "serde_json",
  "serde_with",
+]
+
+[[package]]
+name = "litellm-secret-value"
+version = "0.1.0"
+dependencies = [
+ "rstest",
+ "serde",
+ "subtle",
+ "veil",
 ]
 
 [[package]]
@@ -4422,6 +4475,7 @@ dependencies = [
  "litellm-error",
  "litellm-http",
  "litellm-python-compat",
+ "litellm-secret-value",
  "litellm-secrets-aws",
  "litellm-secrets-azure",
  "litellm-secrets-cyberark",
@@ -4450,6 +4504,7 @@ dependencies = [
  "base64 0.22.1",
  "litellm-auth-aws",
  "litellm-core-utils",
+ "litellm-secret-value",
  "litellm-secrets-types",
  "litellm-tracing",
  "rstest",
@@ -4469,6 +4524,7 @@ dependencies = [
  "litellm-auth-types",
  "litellm-core-utils",
  "litellm-http",
+ "litellm-secret-value",
  "litellm-secrets-types",
  "percent-encoding",
  "reqwest",
@@ -4490,6 +4546,7 @@ dependencies = [
  "base64 0.22.1",
  "litellm-core-utils",
  "litellm-http",
+ "litellm-secret-value",
  "litellm-secrets-types",
  "litellm-tracing",
  "moka",
@@ -4520,6 +4577,7 @@ dependencies = [
  "litellm-auth-types",
  "litellm-core-utils",
  "litellm-http",
+ "litellm-secret-value",
  "litellm-secrets-types",
  "moka",
  "percent-encoding",
@@ -4541,6 +4599,7 @@ dependencies = [
  "litellm-core-utils",
  "litellm-error",
  "litellm-http",
+ "litellm-secret-value",
  "litellm-secrets-types",
  "reqwest",
  "rstest",
@@ -4560,7 +4619,7 @@ dependencies = [
 name = "litellm-secrets-types"
 version = "0.1.0"
 dependencies = [
- "litellm-auth-types",
+ "litellm-secret-value",
  "moka",
  "rstest",
  "serde",
