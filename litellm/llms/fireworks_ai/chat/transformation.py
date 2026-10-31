@@ -23,6 +23,7 @@ from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionToolParam,
+    ChatCompletionToolParamFunctionChunk,
     OpenAIChatCompletionToolParam,
 )
 from litellm.types.utils import (
@@ -45,6 +46,7 @@ from ...openai.chat.gpt_transformation import (
     OpenAIChatCompletionStreamingHandler,
     OpenAIGPTConfig,
 )
+from ...openai.common_utils import without_cache_control
 from ..common_utils import (
     FIREROUTER,
     FireworksAIException,
@@ -480,15 +482,23 @@ class FireworksAIConfig(FireworksAIMixin, OpenAIGPTConfig):
         return (("response_format", _json_schema_response_format(choice_schema, "choice")),)
 
     def _transform_tools(self, tools: list[OpenAIChatCompletionToolParam]) -> list[OpenAIChatCompletionToolParam]:
-        for tool in tools:
-            if tool.get("type") != "function":
-                continue
-            function = tool["function"]
-            function.pop("strict", None)
-            params = function.get("parameters")
-            if isinstance(params, dict):
-                unpack_legacy_defs(params)
-        return tools
+        return [self._fireworks_tool(tool) for tool in tools]
+
+    @staticmethod
+    def _fireworks_tool(tool: OpenAIChatCompletionToolParam) -> OpenAIChatCompletionToolParam:
+        if tool.get("type") != "function":
+            return tool
+        function: Final = tool["function"]
+        params: Final = function.get("parameters")
+        unstrict_function: Final = cast(  # cast-ok: the same function definition minus `strict`
+            ChatCompletionToolParamFunctionChunk, {key: value for key, value in function.items() if key != "strict"}
+        )
+        new_function: Final[ChatCompletionToolParamFunctionChunk] = (
+            {**unstrict_function, "parameters": unpack_legacy_defs(params, copy=True)}
+            if isinstance(params, dict)
+            else unstrict_function
+        )
+        return {**tool, "function": new_function}
 
     def _transform_messages_helper(
         self, messages: list[AllMessageValues], model: str, litellm_params: dict
@@ -496,10 +506,6 @@ class FireworksAIConfig(FireworksAIMixin, OpenAIGPTConfig):
         """
         Strip fields not permitted by FireworksAI from messages.
         """
-        from litellm.litellm_core_utils.prompt_templates.common_utils import (
-            filter_value_from_dict,
-        )
-
         supports_vision_value: Final = self._get_model_cost_capability_exact(model=model, capability="supports_vision")
         for message in messages:
             if message["role"] == "user":
@@ -530,9 +536,11 @@ class FireworksAIConfig(FireworksAIMixin, OpenAIGPTConfig):
                                 model=model,
                                 llm_provider="fireworks_ai",
                             )
-            filter_value_from_dict(cast(dict, message), "cache_control")
 
-        return [strip_litellm_response_only_fields(message) for message in messages]
+        return [
+            strip_litellm_response_only_fields(cast(AllMessageValues, without_cache_control(message)))
+            for message in messages
+        ]
 
     # Cached index of fireworks_ai/* entries from litellm.model_cost. Building
     # this index requires a full scan of model_cost (tens of thousands of

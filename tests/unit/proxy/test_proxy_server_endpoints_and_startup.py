@@ -1654,6 +1654,15 @@ class MockPrisma:
     async def disconnect(self):
         pass
 
+    async def stop_background_tasks(self):
+        pass
+
+    async def aclose(self):
+        try:
+            await self.stop_background_tasks()
+        finally:
+            await self.disconnect()
+
 
 mock_prisma = MockPrisma()
 
@@ -1764,7 +1773,7 @@ async def test_proxy_startup_refuses_an_unsafe_master_key_even_when_the_database
     from litellm.proxy.auth.master_key_boot_check import UnsafeMasterKeyError
     from litellm.proxy.proxy_server import proxy_startup_event
 
-    async def unreachable():
+    async def unreachable(resources):
         raise ConnectionError("database is down")
 
     _, announced = _boot_with_general_settings(monkeypatch, tmp_path, general_settings)
@@ -1809,7 +1818,7 @@ async def test_proxy_startup_asks_to_migrate_only_when_the_database_holds_values
 
     database = _DatabaseWithOneStoredCredential(encrypt_value_helper("sk-provider", new_encryption_key=encrypted_with))
 
-    async def connected():
+    async def connected(resources):
         return database
 
     _, announced = _boot_with_general_settings(monkeypatch, tmp_path, {"master_key": PUBLICLY_KNOWN_KEY})
@@ -1844,6 +1853,21 @@ async def test_proxy_startup_says_a_lingering_migrate_from_variable_can_be_delet
 
 
 class _PrismaClientWhoseDatabaseRejectsQueries:
+    def __init__(self) -> None:
+        self.disconnect_calls = 0
+
+    async def disconnect(self) -> None:
+        self.disconnect_calls += 1
+
+    async def stop_background_tasks(self) -> None:
+        pass
+
+    async def aclose(self) -> None:
+        try:
+            await self.stop_background_tasks()
+        finally:
+            await self.disconnect()
+
     class _Database:
         async def query_raw(self, query, *args):
             raise RuntimeError("permission denied for table LiteLLM_CredentialsTable")
@@ -1858,7 +1882,8 @@ async def test_proxy_startup_stops_when_the_requested_migration_fails(monkeypatc
     from litellm.proxy.proxy_server import proxy_startup_event
 
     _boot_with_general_settings(monkeypatch, tmp_path, {"master_key": "sk-a-safe-master-key"})
-    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", _PrismaClientWhoseDatabaseRejectsQueries())
+    prisma: Final = _PrismaClientWhoseDatabaseRejectsQueries()
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", prisma)
     monkeypatch.setenv("LITELLM_MIGRATE_FROM_MASTER_KEY", PUBLICLY_KNOWN_KEY)
 
     with (
@@ -1871,6 +1896,25 @@ async def test_proxy_startup_stops_when_the_requested_migration_fails(monkeypatc
     notices = [record.getMessage() for record in caplog.records if "LITELLM_MIGRATE_FROM_MASTER_KEY" in record.message]
     assert len(notices) == 1
     assert "Could not migrate stored values" in notices[0]
+    assert prisma.disconnect_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_proxy_startup_after_a_failed_migration_does_not_reuse_the_closed_client(monkeypatch, tmp_path):
+    from fastapi import FastAPI
+
+    from litellm.proxy.proxy_server import proxy_startup_event
+
+    _boot_with_general_settings(monkeypatch, tmp_path, {"master_key": "sk-a-safe-master-key"})
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", _PrismaClientWhoseDatabaseRejectsQueries())
+    monkeypatch.setenv("LITELLM_MIGRATE_FROM_MASTER_KEY", PUBLICLY_KNOWN_KEY)
+    with pytest.raises(RuntimeError, match="permission denied"):
+        async with proxy_startup_event(FastAPI()):
+            pass
+
+    monkeypatch.setenv("LITELLM_MIGRATE_FROM_MASTER_KEY", "")
+    async with proxy_startup_event(FastAPI()) as state:
+        assert state["database"] is None
 
 
 @pytest.mark.asyncio
@@ -1917,11 +1961,11 @@ async def test_proxy_startup_boots_an_unsafe_master_key_under_the_override(monke
 class _ShutdownAwarePrisma(MockPrisma):
     def __init__(self):
         super().__init__()
-        self.stop_view_setup_task = AsyncMock()
+        self.stop_background_tasks = AsyncMock()
 
 
 @pytest.mark.asyncio
-async def test_proxy_shutdown_stops_the_view_setup_task(monkeypatch, tmp_path):
+async def test_proxy_shutdown_stops_database_background_tasks(monkeypatch, tmp_path):
     import yaml
     from fastapi import FastAPI
 
@@ -1936,11 +1980,11 @@ async def test_proxy_shutdown_stops_the_view_setup_task(monkeypatch, tmp_path):
     monkeypatch.setattr(proxy_server_module, "store_model_in_db", False)
 
     async with proxy_startup_event(FastAPI()):
-        stopped_while_serving = fake_prisma.stop_view_setup_task.await_count
+        stopped_while_serving = fake_prisma.stop_background_tasks.await_count
 
     actual = {
         "stopped_while_serving": stopped_while_serving,
-        "stopped_after_shutdown": fake_prisma.stop_view_setup_task.await_count,
+        "stopped_after_shutdown": fake_prisma.stop_background_tasks.await_count,
     }
     assert actual == {"stopped_while_serving": 0, "stopped_after_shutdown": 1}
 
@@ -14231,12 +14275,22 @@ async def test_team_window_spend_row_carries_the_request_start_time():
 def _mock_startup_prisma_client(health_check_error=None, connect_error=None):
     client = MagicMock()
     client.connect = AsyncMock(side_effect=connect_error)
+    client.disconnect = AsyncMock()
+    client.stop_background_tasks = AsyncMock()
     client.db.start_token_refresh_task = AsyncMock()
     client.check_view_exists = AsyncMock()
     client._set_spend_logs_row_count_in_proxy_state = AsyncMock()
     client.start_view_setup_task = MagicMock()
     client.start_db_health_watchdog_task = AsyncMock()
     client.health_check = AsyncMock(side_effect=health_check_error)
+
+    async def close_client() -> None:
+        try:
+            await client.stop_background_tasks()
+        finally:
+            await client.disconnect()
+
+    client.aclose = AsyncMock(side_effect=close_client)
     return client
 
 
@@ -14343,6 +14397,8 @@ async def test_setup_prisma_client_raises_when_db_unavailable_is_not_allowed(mon
     mock_client = _mock_startup_prisma_client(health_check_error=httpx.ReadTimeout("startup health check timed out"))
     with pytest.raises(httpx.ReadTimeout):
         await _run_setup_prisma_client(mock_client)
+    mock_client.stop_background_tasks.assert_awaited_once()
+    mock_client.disconnect.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -14363,6 +14419,31 @@ async def test_setup_prisma_client_returns_none_when_connect_itself_fails(monkey
     assert result is None
     assert mock_client.start_db_health_watchdog_task.await_count == 0
     assert mock_client.health_check.await_count == 0
+    mock_client.stop_background_tasks.assert_awaited_once()
+    mock_client.disconnect.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_cancelling_prisma_setup_closes_the_client_before_publishing_it(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DISABLE_PRISMA_HEALTH_CHECK_ON_STARTUP", "False")
+    checking: Final = asyncio.Event()
+    client: Final = _mock_startup_prisma_client()
+
+    async def health_check() -> None:
+        checking.set()
+        await asyncio.Event().wait()
+
+    client.health_check = health_check
+    setup: Final = asyncio.create_task(_run_setup_prisma_client(client))
+    try:
+        await asyncio.wait_for(checking.wait(), timeout=2)
+    finally:
+        setup.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await setup
+
+    client.stop_background_tasks.assert_awaited_once()
+    client.disconnect.assert_awaited_once()
 
 
 async def _run_scheduled_background_jobs():
@@ -15317,12 +15398,12 @@ async def test_load_config_router_budget_checks_fallback_targets_against_the_cal
 
     # on by default: an over-budget caller is refused the paid fallback with no config at all
     monkeypatch.setattr(proxy_server, "general_settings", {}, raising=False)
-    assert await router.fallback_budget_check(model="m", request_kwargs=over_budget, llm_router=router) is False
-    assert await router.fallback_budget_check(model="m", request_kwargs=under_budget, llm_router=router) is True
+    assert await router.fallback_budget_check(model="m", request_kwargs=over_budget, ctx=router._core_ctx) is False
+    assert await router.fallback_budget_check(model="m", request_kwargs=under_budget, ctx=router._core_ctx) is True
 
     # explicit opt-out restores the unguarded behaviour
     monkeypatch.setattr(proxy_server, "general_settings", {"enforce_fallback_budget": False}, raising=False)
-    assert await router.fallback_budget_check(model="m", request_kwargs=over_budget, llm_router=router) is True
+    assert await router.fallback_budget_check(model="m", request_kwargs=over_budget, ctx=router._core_ctx) is True
 
 
 @pytest.mark.asyncio

@@ -145,7 +145,7 @@ async def _select(
     counter_for_model: Callable[[str], TokenCounter],
     now: float,
 ) -> CacheAwareChoice | None:
-    complexity: Final = ComplexityRouter("smart", router, config.model_dump())
+    complexity: Final = ComplexityRouter("smart", router._core_ctx, config.model_dump())
     return await select_cached_model(
         router=router,
         config=config,
@@ -233,10 +233,11 @@ async def test_disabled_setting_does_not_access_prediction_services() -> None:
     assert config.cache_aware_routing is False
     assert (
         await choose_cached_model(
-            router=_router(),
+            ctx=_router()._core_ctx,
             config=config,
             params_for_model=partial(
-                ComplexityRouter("smart", _router(), config.model_dump())._litellm_params_for_model, request_kwargs={}
+                ComplexityRouter("smart", _router()._core_ctx, config.model_dump())._litellm_params_for_model,
+                request_kwargs={},
             ),
             response=_response(),
             request_kwargs={},

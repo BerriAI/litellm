@@ -120,13 +120,14 @@ from litellm.utils import (
 )
 
 from ..common_utils import (
-    REFUSAL_STOP_FIELDS,
+    STOP_REASON_FIELDS,
     AnthropicError,
     AnthropicModelInfo,
     eager_input_streaming_flag,
     process_anthropic_headers,
-    refusal_provider_specific_fields,
+    refusal_params,
     requires_native_compaction_beta,
+    stop_reason_provider_specific_fields,
     strip_advisor_blocks_from_messages,
     tools_marked_for_a_tool_config_point,
 )
@@ -167,6 +168,9 @@ _DEFER_LOADING_ADAPTER: Final = TypeAdapter(bool)
 _TOOL_FIELDS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _TOOLS_ADAPTER: Final = TypeAdapter(list[object])
 _LITELLM_PARAMS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+_RESPONSE_BLOCKS: Final = TypeAdapter(tuple[Mapping[str, object], ...])
+_PENDING_WEB_SEARCH_RESULT: Final = MappingProxyType({"content": ()})
+_REQUEST_PARAMS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _NATIVE_OUTPUT_STRING_FORMATS: Final = frozenset(
     ("date-time", "time", "date", "duration", "email", "hostname", "uri", "ipv4", "ipv6", "uuid")
 )
@@ -2254,6 +2258,16 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             headers=headers,
         )
 
+    @staticmethod
+    def _messages_within_cache_control_cap(
+        messages: Sequence[AllMessageValues], optional_params: Mapping[str, object]
+    ) -> Sequence[AllMessageValues]:
+        from litellm.integrations.anthropic_cache_control_hook import messages_within_cache_control_cap
+
+        return messages_within_cache_control_cap(
+            messages, optional_params.get("tools"), optional_params.get("cache_control"), optional_params
+        )
+
     def transform_request(
         self,
         model: str,
@@ -2271,9 +2285,18 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             anthropic_messages_pt,
         )
 
-        drop_params: Final = litellm.drop_params is True or litellm_params.get("drop_params") is True
+        drop_params: Final = drops_unsupported_params(litellm_params.get("drop_params"))
+        capped_messages: Final = (
+            list(
+                self._messages_within_cache_control_cap(
+                    messages, _REQUEST_PARAMS_ADAPTER.validate_python(optional_params)
+                )
+            )
+            if drop_params
+            else messages
+        )
 
-        if "tools" not in optional_params and messages is not None and has_tool_call_blocks(messages):
+        if "tools" not in optional_params and has_tool_call_blocks(capped_messages):
             optional_params["tools"], _ = self._map_tools(add_dummy_tool(custom_llm_provider="anthropic"))
 
         # Drop thinking param if thinking is enabled but thinking_blocks are missing
@@ -2285,9 +2308,8 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         # Related issue: https://github.com/BerriAI/litellm/issues/18926
         if (
             optional_params.get("thinking") is not None
-            and messages is not None
-            and last_assistant_with_tool_calls_has_no_thinking_blocks(messages)
-            and not any_assistant_message_has_thinking_blocks(messages)
+            and last_assistant_with_tool_calls_has_no_thinking_blocks(capped_messages)
+            and not any_assistant_message_has_thinking_blocks(capped_messages)
         ):
             if litellm.modify_params:
                 optional_params.pop("thinking", None)
@@ -2332,15 +2354,18 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         _name_forward_map, _name_reverse_map = self._sanitize_tool_names_in_request(
             optional_params=optional_params,
         )
-        if _name_forward_map:
-            messages = self._rewrite_tool_names_in_messages(messages, _name_forward_map)
+        request_messages: Final = (
+            self._rewrite_tool_names_in_messages(capped_messages, _name_forward_map)
+            if _name_forward_map
+            else capped_messages
+        )
         if _name_reverse_map and isinstance(litellm_params, dict):
             litellm_params[ANTHROPIC_TOOL_NAME_REVERSE_MAP_KEY] = _name_reverse_map
 
         # Only the leading system run becomes the top-level system prompt. A later
         # system message stays in the conversation: hoisting it rewrites the cached
         # prefix and re-bills the whole history at cache-write pricing (#36559).
-        leading_system_run, later_messages = split_leading_system_run(messages)
+        leading_system_run, later_messages = split_leading_system_run(request_messages)
         anthropic_system_message_list: Final = self.translate_system_message(messages=list(leading_system_run))
         # Handling anthropic API Prompt Caching
         if len(anthropic_system_message_list) > 0:
@@ -2362,7 +2387,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         except Exception as e:
             raise AnthropicError(
                 status_code=400,
-                message=f"{e}\nReceived Messages={messages}",
+                message=f"{e}\nReceived Messages={request_messages}",
             )  # don't use verbose_logger.exception, if exception is raised
 
         self.update_headers_with_optional_anthropic_beta(
@@ -2897,28 +2922,24 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         web_search_results: Sequence[object],
         completion_response: Mapping[str, object],
     ) -> list[object]:
-        content: Final = completion_response.get("content")
-        blocks: Final = content if isinstance(content, Sequence) else ()
-        inputs: Final = {
-            call_id: tool_input
-            for block in blocks
-            if isinstance(block, Mapping)
-            and block.get("type") == "server_tool_use"
-            and block.get("name") == "web_search"
-            and isinstance((call_id := block.get("id")), str)
-            and isinstance((tool_input := block.get("input")), Mapping)
+        blocks: Final = _RESPONSE_BLOCKS.validate_python(completion_response.get("content") or ())
+        results_by_id: Final = {
+            tool_use_id: result
+            for result in _RESPONSE_BLOCKS.validate_python(web_search_results)
+            if result.get("type") == "web_search_tool_result"
+            and isinstance((tool_use_id := result.get("tool_use_id")), str)
         }
         return [
             build_web_search_call(
-                tool_id=tool_use_id,
-                tool_input=inputs.get(tool_use_id, {}),
-                result=result,
+                tool_id=call_id,
+                tool_input=block.get("input"),
+                result=results_by_id.get(call_id, _PENDING_WEB_SEARCH_RESULT),
+                status=None if call_id in results_by_id else "in_progress",
             )
-            for result in web_search_results
-            if isinstance(result, dict)
-            and result.get("type") == "web_search_tool_result"
-            and isinstance((tool_use_id := result.get("tool_use_id")), str)
-            and tool_use_id in inputs
+            for block in blocks
+            if block.get("type") == "server_tool_use"
+            and block.get("name") == "web_search"
+            and isinstance((call_id := block.get("id")), str)
         ]
 
     def _build_provider_specific_fields(
@@ -2942,10 +2963,10 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
         if web_search_results is not None:
             provider_specific_fields["web_search_results"] = web_search_results
-            provider_specific_fields["web_search_calls"] = self._build_web_search_calls(
-                web_search_results,
-                completion_response,
-            )
+
+        web_search_calls: Final = self._build_web_search_calls(web_search_results or (), completion_response)
+        if web_search_results is not None or web_search_calls:
+            provider_specific_fields["web_search_calls"] = web_search_calls
 
         if tool_results is not None:
             provider_specific_fields["tool_results"] = tool_results
@@ -2967,10 +2988,10 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         if compaction_blocks is not None:
             provider_specific_fields["compaction_blocks"] = compaction_blocks
 
-        refusal_fields: Final = refusal_provider_specific_fields(
-            REFUSAL_STOP_FIELDS.validate_python(completion_response)
+        stop_reason_fields: Final = stop_reason_provider_specific_fields(
+            STOP_REASON_FIELDS.validate_python(completion_response)
         )
-        return {**provider_specific_fields, **refusal_fields}
+        return {**provider_specific_fields, **stop_reason_fields}
 
     def transform_parsed_response(
         self,
@@ -3045,22 +3066,26 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         if json_extra_content:
             merged_text = merged_text + json_extra_content if merged_text else json_extra_content
 
+        refusal_fields: Final = refusal_params(STOP_REASON_FIELDS.validate_python(completion_response))
         _message = litellm.Message(
             tool_calls=tool_calls_for_message,
             content=merged_text or None,
             provider_specific_fields=provider_specific_fields,
             thinking_blocks=thinking_blocks,
             reasoning_content=reasoning_content,
+            **refusal_fields,
         )
         _message.provider_specific_fields = provider_specific_fields
 
         if json_mode_message is not None:
-            refusal_fields: Final = refusal_provider_specific_fields(
-                REFUSAL_STOP_FIELDS.validate_python(completion_response)
+            stop_reason_fields: Final = stop_reason_provider_specific_fields(
+                STOP_REASON_FIELDS.validate_python(completion_response)
             )
             completion_response["stop_reason"] = "stop"
-            if refusal_fields:
-                json_mode_message.provider_specific_fields = dict(refusal_fields)
+            if stop_reason_fields:
+                json_mode_message.provider_specific_fields = dict(stop_reason_fields)
+            if "refusal" in refusal_fields:
+                json_mode_message.refusal = refusal_fields["refusal"]
             if thinking_blocks:
                 json_mode_message.thinking_blocks = thinking_blocks
                 json_mode_message.reasoning_content = reasoning_content

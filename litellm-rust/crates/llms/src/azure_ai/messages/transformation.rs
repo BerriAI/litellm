@@ -1,10 +1,10 @@
-use litellm_auth::SecretValue;
 use litellm_http::request::{has_bearer_auth, has_header};
 use litellm_llms_types::{
     formats::messages::{MessagesOptionalParams, MessagesRequest},
     providers::anthropic::{BetaProvider, DEFAULT_HEADERS, MESSAGES_PATH},
 };
 use litellm_router_types::LitellmParams;
+use litellm_secret_value::SecretValue;
 
 use crate::{
     Error,

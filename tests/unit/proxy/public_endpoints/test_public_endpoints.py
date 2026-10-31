@@ -28,6 +28,28 @@ from litellm.types.proxy.public_endpoints.public_endpoints import ProviderCreate
 from litellm.types.utils import LlmProviders
 
 
+def test_meta_model_api_fields_are_separate_from_meta_llama() -> None:
+    app: Final = FastAPI()
+    app.include_router(router)
+    response: Final = TestClient(app).get("/public/providers/fields")
+    assert response.status_code == 200
+    providers: Final = response.json()
+    meta: Final = next((p for p in providers if p["litellm_provider"] == "meta"), None)
+    llama: Final = next(p for p in providers if p["litellm_provider"] == "meta_llama")
+    assert meta is not None
+    assert meta["provider"] == "META"
+    assert meta["provider_display_name"] == "Meta Model API"
+    assert meta["default_model_placeholder"] == "meta/muse-spark-1.1"
+    fields: Final = {field["key"]: field for field in meta["credential_fields"]}
+    assert set(fields) == {"api_base", "api_key"}
+    assert fields["api_base"]["field_type"] == "text"
+    assert fields["api_key"]["field_type"] == "password"
+    assert fields["api_base"]["required"] is False
+    assert fields["api_key"]["required"] is False
+    assert llama["provider"] == "LLAMA"
+    assert llama["provider_display_name"] == "Meta Llama"
+
+
 def test_bigmodel_fields_require_private_key_and_share_default_base_with_adapter() -> None:
     from litellm.llms.bigmodel.common_utils import BIGMODEL_API_BASE
 
@@ -386,6 +408,34 @@ def test_cognition_provider_fields():
     assert fields_by_key["api_base"]["required"] is False
 
 
+def test_zai_provider_fields():
+    from litellm.llms.zai.chat.transformation import ZAI_API_BASE
+
+    app_instance: Final = FastAPI()
+    app_instance.include_router(router)
+    test_client: Final = TestClient(app_instance)
+
+    response: Final = test_client.get("/public/providers/fields")
+    assert response.status_code == 200
+    providers: Final = response.json()
+
+    zai: Final = next((p for p in providers if p["provider"] == "ZAI"), None)
+    assert zai is not None, "Z.AI provider entry not found"
+
+    assert zai["provider_display_name"] == "Z.AI (Zhipu AI)"
+    assert zai["litellm_provider"] == "zai"
+    assert zai["default_model_placeholder"].startswith("zai/")
+
+    fields_by_key: Final = {f["key"]: f for f in zai["credential_fields"]}
+
+    assert fields_by_key["api_key"]["required"] is True
+    assert fields_by_key["api_key"]["field_type"] == "password"
+
+    assert fields_by_key["api_base"]["required"] is False
+    assert fields_by_key["api_base"]["field_type"] == "text"
+    assert fields_by_key["api_base"]["placeholder"] == ZAI_API_BASE
+
+
 def test_zerogpu_add_model_form_defaults_resolve_to_a_priced_zerogpu_model():
     import litellm
     from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
@@ -568,7 +618,6 @@ ADD_MODEL_UNLISTED_PROVIDERS: Final = frozenset(
         "libertai",
         "litellm_agent",
         "manus",
-        "meta",
         "modelscope",
         "mongodb",
         "nano-gpt",
@@ -590,7 +639,6 @@ ADD_MODEL_UNLISTED_PROVIDERS: Final = frozenset(
         "transcribe",
         "valkey",
         "xiaomi_mimo",
-        "zai",
     }
 )
 

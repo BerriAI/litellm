@@ -106,6 +106,20 @@ from litellm.integrations.custom_guardrail import CustomGuardrail, is_guardrail_
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.otel.routing import routing_decision_attributes
 from litellm.integrations.otel.runtime import phase_attributes, phase_event, phase_span
+from litellm.litellm_core_utils.access_windows import access_windows_config_error, filter_reserved_deployments
+from litellm.litellm_core_utils.add_retry_fallback_headers import (
+    add_fallback_headers_to_response,
+    add_retry_headers_to_response,
+    apply_quality_router_decision_headers,
+    apply_remaining_usage_headers,
+    apply_response_model_id,
+    complexity_router_decision_headers,
+    ensure_response_additional_headers,
+    get_hidden_params_dict,
+    prepare_response_for_header_attachment,
+    replace_complexity_router_headers,
+    response_total_token_count,
+)
 from litellm.litellm_core_utils.asyncify import run_async_function
 from litellm.litellm_core_utils.batch_utils import (
     batch_create_routing,
@@ -115,6 +129,10 @@ from litellm.litellm_core_utils.batch_utils import (
     replace_model_in_jsonl,
     should_replace_model_in_jsonl,
     without_deployments_that_cannot_batch,
+)
+from litellm.litellm_core_utils.clientside_credential_handler import (
+    get_dynamic_litellm_params,
+    is_clientside_credential,
 )
 from litellm.litellm_core_utils.completion_timeout import CompletionTimeout
 from litellm.litellm_core_utils.core_helpers import (
@@ -127,12 +145,18 @@ from litellm.litellm_core_utils.core_helpers import (
 from litellm.litellm_core_utils.coroutine_checker import coroutine_checker
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor, reject_api_key_secret_reference
 from litellm.litellm_core_utils.dd_tracing import tracer
+from litellm.litellm_core_utils.deployment_pricing import deployment_pricing_models
+from litellm.litellm_core_utils.get_litellm_params import SUPPLEMENTAL_KWARGS_KEYS
 from litellm.litellm_core_utils.get_llm_provider_logic import (
     declared_authenticating_provider,
     inferred_provider,
     is_registered_custom_provider,
     resolve_model_and_provider_for_metadata,
 )
+from litellm.litellm_core_utils.get_retry_from_policy import (
+    get_num_retries_from_retry_policy as _get_num_retries_from_retry_policy,
+)
+from litellm.litellm_core_utils.get_retry_from_policy import resolve_retry_policy
 from litellm.litellm_core_utils.hidden_params import (
     HIDDEN_PARAMS_ATTR as _HIDDEN_PARAMS_ATTR,
 )
@@ -142,6 +166,7 @@ from litellm.litellm_core_utils.hidden_params import (
 )
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.litellm_core_utils.llm_cost_calc.utils import SERVICE_TIER_COST_KEY_SUFFIXES
+from litellm.litellm_core_utils.pattern_match_deployments import PatternMatchRouter
 from litellm.litellm_core_utils.ptu_pricing import (
     PTU_COST_ATTRIBUTION_ENV_VAR,
     declares_ptu,
@@ -152,9 +177,51 @@ from litellm.litellm_core_utils.ptu_pricing import (
     ptu_terms,
     zeroed_ptu_pricing,
 )
+from litellm.litellm_core_utils.ptu_shares import (
+    PTUTeamCeiling,
+    filter_ptu_shared_deployments,
+    ptu_capacity_warning,
+    ptu_share_teams,
+    share_holder_request_kwargs,
+    team_ptu_ceiling,
+)
+from litellm.litellm_core_utils.reasoning_effort_capability import (
+    deployment_is_catalog_mapped,
+    intersect_supported_reasoning_efforts,
+    resolve_supported_reasoning_efforts,
+)
 from litellm.litellm_core_utils.request_timeout_resolver import (
     get_configured_request_timeout,
     get_service_tier_timeout,
+)
+from litellm.litellm_core_utils.routing_common_utils import (
+    MID_STREAM_CONTINUATION_KWARG,
+    as_retry_skipped_deployment_ids,
+    deployment_model_id_pin,
+    deployments_the_caller_may_use,
+    filter_team_based_models,
+    filter_web_search_deployments,
+    format_content_policy_fallback_hint,
+    format_content_policy_no_fallback_note,
+    format_fallback_outcome_message,
+    format_no_fallback_group_message,
+    get_request_team_id,
+    is_proxy_admin_request,
+    provider_for_generic_call,
+    request_user_api_key_auth,
+    resolve_model_group_alias,
+    team_may_use_deployment,
+    truncate_fallback_error_detail,
+    warn_on_ignored_model_capability_flags,
+    warn_on_provider_credential_mismatch,
+    with_admin_api_key_secret_reference,
+    without_model_capability_flags,
+    without_router_only_kwargs,
+)
+from litellm.litellm_core_utils.routing_groups import (
+    apply_routing_group_priority,
+    parse_routing_groups,
+    validate_routing_strategy,
 )
 from litellm.litellm_core_utils.secret_redaction import redact_string
 from litellm.litellm_core_utils.sensitive_data_masker import (
@@ -196,6 +263,7 @@ from litellm.router_api import (
     aapply_changes,
     apply_changes,
 )
+from litellm.router_api import RoutingContext as RouterContext
 from litellm.router_api import deployment_id as _deployment_id
 from litellm.router_deprecated import DeprecatedRouterMembers
 from litellm.router_host import router_host
@@ -233,49 +301,7 @@ from litellm.router_strategy.tag_based_routing import (
     is_valid_deployment_tag,
     tags_with_serving_deployment_tags,
 )
-from litellm.router_utils.access_windows import access_windows_config_error, filter_reserved_deployments
-from litellm.router_utils.add_retry_fallback_headers import (
-    add_fallback_headers_to_response,
-    add_retry_headers_to_response,
-    apply_quality_router_decision_headers,
-    apply_remaining_usage_headers,
-    apply_response_model_id,
-    complexity_router_decision_headers,
-    ensure_response_additional_headers,
-    get_hidden_params_dict,
-    prepare_response_for_header_attachment,
-    replace_complexity_router_headers,
-    response_total_token_count,
-)
 from litellm.router_utils.client_initalization_utils import InitalizeCachedClient, MaxParallelRequestsLimit
-from litellm.router_utils.clientside_credential_handler import (
-    get_dynamic_litellm_params,
-    is_clientside_credential,
-)
-from litellm.router_utils.common_utils import (
-    MID_STREAM_CONTINUATION_KWARG,
-    as_retry_skipped_deployment_ids,
-    deployment_model_id_pin,
-    deployments_the_caller_may_use,
-    filter_team_based_models,
-    filter_web_search_deployments,
-    format_content_policy_fallback_hint,
-    format_content_policy_no_fallback_note,
-    format_fallback_outcome_message,
-    format_no_fallback_group_message,
-    get_request_team_id,
-    is_proxy_admin_request,
-    provider_for_generic_call,
-    request_user_api_key_auth,
-    resolve_model_group_alias,
-    team_may_use_deployment,
-    truncate_fallback_error_detail,
-    warn_on_ignored_model_capability_flags,
-    warn_on_provider_credential_mismatch,
-    with_admin_api_key_secret_reference,
-    without_model_capability_flags,
-    without_router_only_kwargs,
-)
 from litellm.router_utils.cooldown_cache import CooldownCache
 from litellm.router_utils.cooldown_handlers import (
     DEFAULT_COOLDOWN_TIME_SECONDS,
@@ -292,7 +318,6 @@ from litellm.router_utils.cooldown_handlers import (
     mark_deployment_selection_failure,
     set_cooldown_deployments,
 )
-from litellm.router_utils.deployment_pricing import deployment_pricing_models
 from litellm.router_utils.embedding_batch_size_check import (
     async_log_rejection_before_provider_call,
     clear_rejected_before_provider_call,
@@ -337,10 +362,6 @@ from litellm.router_utils.fallback_event_handlers import (
     routed_deployment_id,
     run_async_fallback,
 )
-from litellm.router_utils.get_retry_from_policy import (
-    get_num_retries_from_retry_policy as _get_num_retries_from_retry_policy,
-)
-from litellm.router_utils.get_retry_from_policy import resolve_retry_policy
 from litellm.router_utils.handle_error import (
     async_raise_no_deployment_exception,
     send_llm_exception_alert,
@@ -392,19 +413,6 @@ from litellm.router_utils.pre_call_checks.model_rate_limit_check import (
 from litellm.router_utils.pre_call_checks.prompt_caching_deployment_check import (
     PromptCachingDeploymentCheck,
 )
-from litellm.router_utils.ptu_shares import (
-    PTUTeamCeiling,
-    filter_ptu_shared_deployments,
-    ptu_capacity_warning,
-    ptu_share_teams,
-    share_holder_request_kwargs,
-    team_ptu_ceiling,
-)
-from litellm.router_utils.reasoning_effort_capability import (
-    deployment_is_catalog_mapped,
-    intersect_supported_reasoning_efforts,
-    resolve_supported_reasoning_efforts,
-)
 from litellm.router_utils.request_priority import (
     InvalidPriority,
     parse_default_priority,
@@ -419,11 +427,6 @@ from litellm.router_utils.router_callbacks.track_deployment_metrics import (
     get_counted_usage_tokens,
     increment_deployment_failures_for_current_minute,
     increment_deployment_successes_for_current_minute,
-)
-from litellm.router_utils.routing_groups import (
-    apply_routing_group_priority,
-    parse_routing_groups,
-    validate_routing_strategy,
 )
 from litellm.router_utils.routing_read_batch import ROUTER_USAGE_TARGET, RoutingPrefetch, RoutingReadBatch
 from litellm.router_utils.stream_usage_injection import router_config_requests_stream_usage
@@ -476,6 +479,7 @@ from litellm.types.router import (
     SearchToolTypedDict,
     TaggedPreRoutingStrategy,
     holds_secret_pointer,
+    validate_litellm_params_strictly,
 )
 from litellm.types.services import ServiceTypes
 from litellm.types.utils import (
@@ -504,6 +508,7 @@ from litellm.utils import (
     ProviderConfigManager,
     Rules,
     TextCompletionResponse,
+    _restore_correlation_context_if_supported,  # pyright: ignore[reportPrivateUsage]  # same task-local cleanup as the SDK wrapper
     aresolve_api_key_secret_reference,
     function_setup,
     get_llm_provider,
@@ -518,8 +523,6 @@ from litellm.utils import (
     set_live_deployment_replay,
     token_counter,
 )
-
-from .router_utils.pattern_match_deployments import PatternMatchRouter
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
@@ -634,6 +637,7 @@ _PRE_CALL_CHECK_FILTERED_PARAMS: Final = frozenset({"response_format"})
 _STREAM_TIMEOUT_AWARE_GENERIC_HANDLERS: Final = frozenset({"anthropic_messages", "aresponses", "responses"})
 _video_call_deployment_id: Final[ContextVar[str | None]] = ContextVar("video_call_deployment_id", default=None)
 _routed_call_type: Final[ContextVar[str | None]] = ContextVar("routed_call_type", default=None)
+_DECISIONS_MEDIA_CALL_TYPES: Final = frozenset({"adecisions", "decisions", "asystemone", "systemone"})
 _ROUTE_CAPABILITY_RESOLVERS: Final[Mapping[str, Callable[[str, LlmProviders], object | None]]] = MappingProxyType(
     {
         "adecisions": ProviderConfigManager.get_provider_decisions_config,
@@ -719,6 +723,35 @@ def _drops_malformed_request_tools(
         return False
     set_defaults: Final = {name: value for name, value in defaults.items() if value is not None}
     return drop_policy({**deployment_params, **set_defaults, **request}).drops("tools")
+
+
+def _malformed_request_params_the_deployment_sets(
+    deployment_params: Mapping[str, object], defaults: Mapping[str, object], request: Mapping[str, object]
+) -> frozenset[str]:
+    overrides: Final = {
+        key: value
+        for key, value in request.items()
+        if key in SUPPLEMENTAL_KWARGS_KEYS and deployment_params.get(key) is not None
+    }
+    if not overrides:
+        return frozenset()
+    try:
+        validate_litellm_params_strictly(GenericLiteLLMParams, overrides)
+    except ValidationError as error:
+        set_defaults: Final = {name: value for name, value in defaults.items() if value is not None}
+        policy: Final = drop_policy({**deployment_params, **set_defaults, **request})
+        malformed: Final = (str(detail["loc"][0]) for detail in error.errors() if detail["loc"])
+        return frozenset(key for key in malformed if policy.drops(key))
+    return frozenset()
+
+
+def _drop_malformed_request_params_the_deployment_sets(
+    kwargs: dict[str, object],  # mutable-ok: drops the keys from the router's request kwargs in place
+    deployment_params: Mapping[str, object],
+    defaults: Mapping[str, object],
+) -> None:
+    for key in _malformed_request_params_the_deployment_sets(deployment_params, defaults, kwargs):
+        kwargs.pop(key)
 
 
 def _merged_tools(deployment_tools: Sequence[object], request_tools: object) -> list[object] | None:
@@ -895,6 +928,23 @@ def _stream_pre_content_error(
         original_exception=error,
         is_pre_first_chunk=True,
     )
+
+
+def _context_window_stream_fallback_error(
+    error: "MidStreamFallbackError | litellm.ContextWindowExceededError",
+    model: object,
+    llm_provider: str,
+    has_output: bool,
+) -> "MidStreamFallbackError":
+    if isinstance(error, litellm.ContextWindowExceededError):
+        if has_output:
+            raise error
+        return _stream_pre_content_error(error, model if isinstance(model, str) else "", llm_provider)
+    if isinstance(error.original_exception, litellm.ContextWindowExceededError) and (
+        has_output or error.generated_content or error.emitted_disqualifying_content
+    ):
+        raise error.original_exception
+    return error
 
 
 def _deployment_num_retries(deployment: "Deployment | None") -> int | None:
@@ -1592,6 +1642,7 @@ class Router(DeprecatedRouterMembers):
         router = Router(model_list=model_list, fallbacks=[{"azure-gpt-3.5-turbo": ["openai-gpt-3.5-turbo"]}])
         ```
         """
+        self._core_ctx: Final = RouterContext(self)
 
         self.set_verbose = set_verbose
         self.ignore_invalid_deployments = ignore_invalid_deployments
@@ -1867,7 +1918,7 @@ class Router(DeprecatedRouterMembers):
         if self._normalize_strategy(routing_strategy) == "lar1":
             from litellm.router_strategy.lar1_routing import apply_lar1_routing_strategy
 
-            apply_lar1_routing_strategy(self, routing_strategy_args)
+            apply_lar1_routing_strategy(self._core_ctx, routing_strategy_args)
         else:
             self.routing_strategy_init(
                 routing_strategy=routing_strategy,
@@ -2241,7 +2292,7 @@ class Router(DeprecatedRouterMembers):
         if strategy == "lar1":
             from litellm.router_strategy.lar1_routing import apply_lar1_routing_strategy
 
-            apply_lar1_routing_strategy(self, self.routing_strategy_args)
+            apply_lar1_routing_strategy(self._core_ctx, self.routing_strategy_args)
             return
 
         attr: Final = self._DEFAULT_SELECTOR_ATTR_BY_STRATEGY.get(strategy or "")
@@ -2566,7 +2617,7 @@ class Router(DeprecatedRouterMembers):
             )
             deployments: Final = self._core_get_model_list(model_name=model)
             if deployments:
-                RoutingPrefetch.arm(self, usage_selector, deployments)
+                RoutingPrefetch.arm(self._core_ctx, usage_selector, deployments)
         except Exception as e:  # noqa: BLE001  # a prefetch is an optimisation, never a reason to fail the request
             verbose_router_logger.debug(
                 "routing read prefetch not armed for %s: %s", _without_line_breaks(model), _without_line_breaks(e)
@@ -3115,7 +3166,7 @@ class Router(DeprecatedRouterMembers):
                     break
 
             if existing_ec_callback is not None:
-                existing_ec_callback.router = self
+                existing_ec_callback.ctx = self._core_ctx
                 existing_ec_callback.enable_global_affinity = (
                     existing_ec_callback.enable_global_affinity or enable_global_affinity
                 )
@@ -3123,7 +3174,7 @@ class Router(DeprecatedRouterMembers):
                 ec_callback = existing_ec_callback
             else:
                 ec_callback = EncryptedContentAffinityCheck(
-                    router=self,
+                    ctx=self._core_ctx,
                     enable_global_affinity=enable_global_affinity,
                     model_group_affinity_config=self.model_group_affinity_config,
                 )
@@ -3672,7 +3723,7 @@ class Router(DeprecatedRouterMembers):
         except Exception as e:
             asyncio.create_task(
                 send_llm_exception_alert(
-                    litellm_router_instance=self,
+                    ctx=self._core_ctx,
                     request_kwargs=kwargs,
                     error_traceback_str=traceback.format_exc(),
                     original_exception=e,
@@ -3716,6 +3767,11 @@ class Router(DeprecatedRouterMembers):
         priced_partial._hidden_params = {  # pyright: ignore[reportPrivateUsage]  # no public accessor
             key: value for key, value in get_hidden_params_dict(partial_response).items() if key != "response_cost"
         }
+        if LiteLLMLogging.usage_capture_callback is not None:
+            from litellm._internal_context import internal_sub_call
+
+            with internal_sub_call(cut_logging.litellm_call_id):
+                cut_logging.capture_usage_before_logging(priced_partial)
         return ContinuedPartial(
             usage=BaseTokenUsageProcessor.combine_usage_objects(
                 usage_objects=[partial_usage, inherited_usage]
@@ -3845,7 +3901,19 @@ class Router(DeprecatedRouterMembers):
             try:
                 async for item in _achunks_with_first(model_response, first_chunk):
                     yield item
-            except MidStreamFallbackError as e:
+            except (MidStreamFallbackError, litellm.ContextWindowExceededError) as stream_error:
+                e: Final = (
+                    _context_window_stream_fallback_error(
+                        stream_error,
+                        getattr(model_response, "model", ""),
+                        model_response.custom_llm_provider or "",
+                        bool(getattr(model_response, "response_uptil_now", ""))
+                        or _stream_chunks_have_generated_content(model_response.chunks),
+                    )
+                    if isinstance(stream_error, litellm.ContextWindowExceededError)
+                    or isinstance(stream_error.original_exception, litellm.ContextWindowExceededError)
+                    else stream_error
+                )
                 with anyio.CancelScope(shield=True):
                     await close_model_response()
                     await held_slot.aclose()
@@ -3917,7 +3985,9 @@ class Router(DeprecatedRouterMembers):
                         initial_kwargs["messages"] = messages
                     self._update_kwargs_before_fallbacks(model=model_group, kwargs=initial_kwargs)
                     fallback_response = await self.async_function_with_fallbacks_common_utils(
-                        e=e,
+                        e=e.original_exception
+                        if isinstance(e.original_exception, litellm.ContextWindowExceededError)
+                        else e,
                         disable_fallbacks=fallbacks_disabled_for_request(initial_kwargs),
                         fallbacks=fallbacks,
                         context_window_fallbacks=context_window_fallbacks,
@@ -3985,10 +4055,10 @@ class Router(DeprecatedRouterMembers):
                     if fallback_response is not None and hasattr(fallback_response, "aclose"):
                         try:
                             await fallback_response.aclose()
-                        except BaseException as e:
+                        except BaseException as close_error:
                             verbose_router_logger.debug(
                                 "stream_with_fallbacks: error closing fallback_response: %s",
-                                e,
+                                close_error,
                             )
 
         wrapped_response: Final = FallbackStreamWrapper(stream_with_fallbacks())
@@ -4120,13 +4190,16 @@ class Router(DeprecatedRouterMembers):
             raise e.original_exception from e
         raise e
 
+    def _active_default_litellm_params(self) -> Mapping[str, object]:
+        default_params: Final = _REQUEST_KWARGS_ADAPTER.validate_python(self._core_default_litellm_params)
+        return {key: value for key, value in default_params.items() if value is not None}
+
     def _params_sent_to_deployment(
         self, request_kwargs: Mapping[str, object], deployment: Deployment | None
     ) -> Mapping[str, object]:
         """The request as the deployment received it, merged in the order _update_kwargs_with_deployment applies."""
         deployment_params: Final = deployment.litellm_params.model_dump(exclude_none=True) if deployment else {}
-        default_params: Final = _REQUEST_KWARGS_ADAPTER.validate_python(self._core_default_litellm_params)
-        defaults: Final = {key: value for key, value in default_params.items() if value is not None}
+        defaults: Final = self._active_default_litellm_params()
         deployment_tool_choice: Final = (
             {"tool_choice": deployment_params["tool_choice"]}
             if deployment_params.get("tool_choice") is not None
@@ -4348,6 +4421,10 @@ class Router(DeprecatedRouterMembers):
             def __aiter__(self):
                 return self
 
+            @property
+            def yielded_first_chunk(self) -> bool:
+                return self._yielded_first_chunk
+
             async def __anext__(self):
                 try:
                     chunk: Final = await self._async_generator.__anext__()
@@ -4375,6 +4452,7 @@ class Router(DeprecatedRouterMembers):
                 # the very key that created the container (#30210).
                 if self.completed_response is None and getattr(chunk, "type", None) in _RESPONSES_TERMINAL_EVENT_TYPES:
                     self.completed_response = chunk
+                self._yielded_first_chunk = True
                 return chunk
 
             async def aclose(self):
@@ -4401,7 +4479,18 @@ class Router(DeprecatedRouterMembers):
                     yield item
                 for held_event in held_lifecycle_events:
                     yield held_event
-            except MidStreamFallbackError as e:
+            except (MidStreamFallbackError, litellm.ContextWindowExceededError) as stream_error:
+                e: Final = (
+                    _context_window_stream_fallback_error(
+                        stream_error,
+                        source_iterator.model or "",
+                        source_iterator.custom_llm_provider or "",
+                        wrapper.yielded_first_chunk,
+                    )
+                    if isinstance(stream_error, litellm.ContextWindowExceededError)
+                    or isinstance(stream_error.original_exception, litellm.ContextWindowExceededError)
+                    else stream_error
+                )
                 if response_id_exposed:
                     self._raise_released_stream_error(e, initial_kwargs)
                 async with contextlib.aclosing(
@@ -4572,7 +4661,11 @@ class Router(DeprecatedRouterMembers):
             # The content-policy dispatch branch matches on the trigger's own type, so a refusal's
             # MidStreamFallbackError envelope is unwrapped here or the wrong fallback list is consulted.
             fallback_trigger: Final[Exception] = (
-                e.original_exception if isinstance(e.original_exception, litellm.ContentPolicyViolationError) else e
+                e.original_exception
+                if isinstance(
+                    e.original_exception, (litellm.ContentPolicyViolationError, litellm.ContextWindowExceededError)
+                )
+                else e
             )
             fallback_response = await self.async_function_with_fallbacks_common_utils(  # rebind-ok: set on success
                 e=fallback_trigger,
@@ -4658,7 +4751,19 @@ class Router(DeprecatedRouterMembers):
             try:
                 for item in _chunks_with_first(model_response, first_chunk):
                     yield item
-            except MidStreamFallbackError as e:
+            except (MidStreamFallbackError, litellm.ContextWindowExceededError) as stream_error:
+                e: Final = (
+                    _context_window_stream_fallback_error(
+                        stream_error,
+                        getattr(model_response, "model", ""),
+                        model_response.custom_llm_provider or "",
+                        bool(getattr(model_response, "response_uptil_now", ""))
+                        or _stream_chunks_have_generated_content(model_response.chunks),
+                    )
+                    if isinstance(stream_error, litellm.ContextWindowExceededError)
+                    or isinstance(stream_error.original_exception, litellm.ContextWindowExceededError)
+                    else stream_error
+                )
                 if fallbacks_disabled_for_request(initial_kwargs) or (
                     not e.is_pre_first_chunk
                     and (e.generated_content or _stream_chunks_have_generated_content(model_response.chunks))
@@ -4683,7 +4788,9 @@ class Router(DeprecatedRouterMembers):
                     router_self._update_kwargs_before_fallbacks(model=model_group, kwargs=initial_kwargs)
                     fallback_response = run_async_function(
                         router_self.async_function_with_fallbacks_common_utils,
-                        e=e,
+                        e=e.original_exception
+                        if isinstance(e.original_exception, litellm.ContextWindowExceededError)
+                        else e,
                         disable_fallbacks=fallbacks_disabled_for_request(initial_kwargs),
                         fallbacks=fallbacks,
                         context_window_fallbacks=context_window_fallbacks,
@@ -4867,7 +4974,7 @@ class Router(DeprecatedRouterMembers):
                 kwargs=kwargs,
                 client_type="max_parallel_requests",
             )
-            compacted_input: Final = await compact_to_fit(self, deployment, input_kwargs, "chat")
+            compacted_input: Final = await compact_to_fit(self._core_ctx, deployment, input_kwargs, "chat")
             async with contextlib.AsyncExitStack() as deployment_slot:
                 if isinstance(max_parallel_requests_limit, MaxParallelRequestsLimit):
                     deployment_slot.enter_context(max_parallel_requests_limit)
@@ -5147,6 +5254,11 @@ class Router(DeprecatedRouterMembers):
             if isinstance(raw_deployment_params, LiteLLM_Params)
             else raw_deployment_params
         )
+        _drop_malformed_request_params_the_deployment_sets(
+            kwargs,  # pyright: ignore[reportUnknownArgumentType]  # kwargs is the router's untyped request dict
+            deployment_context,
+            defaults,
+        )
         declared_provider: Final = deployment_context.get("custom_llm_provider")
         declared_model: Final = deployment_context.get("model")
         deployment_provider: Final = (
@@ -5330,7 +5442,7 @@ class Router(DeprecatedRouterMembers):
         hop_kwargs: Final = _FALLBACK_HOP_ADAPTER.validate_python(kwargs)
         if _is_fallback_hop(hop_kwargs):
             EncryptedContentAffinityCheck.strip_reasoning_the_targets_cannot_decrypt(
-                self,
+                self._core_ctx,
                 hop_kwargs.get("input"),
                 hop_kwargs.get("messages"),
                 (_FALLBACK_HOP_ADAPTER.validate_python(deployment),),
@@ -5936,7 +6048,7 @@ class Router(DeprecatedRouterMembers):
         except Exception as e:
             asyncio.create_task(
                 send_llm_exception_alert(
-                    litellm_router_instance=self,
+                    ctx=self._core_ctx,
                     request_kwargs=kwargs,
                     error_traceback_str=traceback.format_exc(),
                     original_exception=e,
@@ -5946,15 +6058,42 @@ class Router(DeprecatedRouterMembers):
 
     async def _aimage_generation(self, prompt: str, model: str, **kwargs):
         model_name = model
+        start_time: Final = datetime.now()  # noqa: DTZ005  # SDK logging uses naive local timestamps
         try:
             verbose_router_logger.debug("Inside _image_generation()- model: %s", model)
             parent_otel_span: Final = get_parent_otel_span_from_kwargs(kwargs)
-            deployment: Final = await self._core_async_get_available_deployment(
-                model=model,
-                messages=[{"role": "user", "content": "prompt"}],
-                specific_deployment=kwargs.pop("specific_deployment", None),
-                request_kwargs=kwargs,
-            )
+            try:
+                deployment: Final = await self._core_async_get_available_deployment(
+                    model=model,
+                    messages=[{"role": "user", "content": "prompt"}],
+                    specific_deployment=kwargs.pop("specific_deployment", None),
+                    request_kwargs=kwargs,
+                )
+            except Exception as selection_error:
+                # Admitted attempts keep SDK-owned logging, including deployment callbacks and retry state
+                request_kwargs: Final = cast(  # cast-ok: Python kwargs have string keys and opaque values
+                    Mapping[str, object], kwargs
+                )
+                if request_kwargs.get("litellm_logging_obj") is None:
+                    refusal_kwargs: Final = {**request_kwargs, "model": model, "prompt": prompt}
+                    refusal_kwargs.setdefault("litellm_call_id", str(uuid.uuid4()))
+                    logging_obj, _ = function_setup(
+                        "aimage_generation",
+                        Rules(),
+                        start_time,
+                        **refusal_kwargs,  # pyright: ignore[reportArgumentType]  # preserve opaque SDK options, including is_async_call
+                    )
+                    try:
+                        asyncio.create_task(
+                            logging_obj.dispatch_failure_handlers(
+                                exception=selection_error,
+                                traceback_exception=traceback.format_exc(),
+                                prefer_async_handlers=True,
+                            )
+                        )
+                    finally:
+                        _restore_correlation_context_if_supported(logging_obj)
+                raise
             self._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs)
 
             data: Final = deployment["litellm_params"].copy()
@@ -6021,7 +6160,7 @@ class Router(DeprecatedRouterMembers):
         except Exception as e:
             asyncio.create_task(
                 send_llm_exception_alert(
-                    litellm_router_instance=self,
+                    ctx=self._core_ctx,
                     request_kwargs=kwargs,
                     error_traceback_str=traceback.format_exc(),
                     original_exception=e,
@@ -6114,7 +6253,7 @@ class Router(DeprecatedRouterMembers):
         except Exception as e:
             asyncio.create_task(
                 send_llm_exception_alert(
-                    litellm_router_instance=self,
+                    ctx=self._core_ctx,
                     request_kwargs=kwargs,
                     error_traceback_str=traceback.format_exc(),
                     original_exception=e,
@@ -6176,7 +6315,7 @@ class Router(DeprecatedRouterMembers):
         except Exception as e:
             asyncio.create_task(
                 send_llm_exception_alert(
-                    litellm_router_instance=self,
+                    ctx=self._core_ctx,
                     request_kwargs=kwargs,
                     error_traceback_str=traceback.format_exc(),
                     original_exception=e,
@@ -6292,7 +6431,7 @@ class Router(DeprecatedRouterMembers):
         except Exception as e:
             asyncio.create_task(
                 send_llm_exception_alert(
-                    litellm_router_instance=self,
+                    ctx=self._core_ctx,
                     request_kwargs=kwargs,
                     error_traceback_str=traceback.format_exc(),
                     original_exception=e,
@@ -6362,7 +6501,7 @@ class Router(DeprecatedRouterMembers):
         except Exception as e:
             asyncio.create_task(
                 send_llm_exception_alert(
-                    litellm_router_instance=self,
+                    ctx=self._core_ctx,
                     request_kwargs=kwargs,
                     error_traceback_str=traceback.format_exc(),
                     original_exception=e,
@@ -6421,7 +6560,7 @@ class Router(DeprecatedRouterMembers):
 
         return _OPAQUE_VALUE_ADAPTER.validate_python(
             await SearchAPIRouter.async_search_with_fallbacks(
-                router_instance=self,
+                litellm_routing_ctx=self._core_ctx,
                 original_function=original_function,
                 **kwargs,
             )
@@ -6435,7 +6574,7 @@ class Router(DeprecatedRouterMembers):
         from litellm.router_utils.search_api_router import SearchAPIRouter
 
         return await SearchAPIRouter.async_search_with_fallbacks_helper(
-            router_instance=self,
+            litellm_routing_ctx=self._core_ctx,
             model=model,
             original_generic_function=original_generic_function,
             **kwargs,
@@ -6553,7 +6692,7 @@ class Router(DeprecatedRouterMembers):
         except Exception as e:
             asyncio.create_task(
                 send_llm_exception_alert(
-                    litellm_router_instance=self,
+                    ctx=self._core_ctx,
                     request_kwargs=kwargs,
                     error_traceback_str=traceback.format_exc(),
                     original_exception=e,
@@ -6653,7 +6792,7 @@ class Router(DeprecatedRouterMembers):
                 response_kwargs["custom_llm_provider"] = custom_llm_provider
 
             compacted_input: Final = await compact_to_fit(
-                self,
+                self._core_ctx,
                 deployment,
                 response_kwargs,
                 surface_for_call(generic_function_name),
@@ -7531,7 +7670,7 @@ class Router(DeprecatedRouterMembers):
         except Exception as e:
             asyncio.create_task(
                 send_llm_exception_alert(
-                    litellm_router_instance=self,
+                    ctx=self._core_ctx,
                     request_kwargs=kwargs,
                     error_traceback_str=traceback.format_exc(),
                     original_exception=e,
@@ -7610,7 +7749,7 @@ class Router(DeprecatedRouterMembers):
         except Exception as e:
             asyncio.create_task(
                 send_llm_exception_alert(
-                    litellm_router_instance=self,
+                    ctx=self._core_ctx,
                     request_kwargs=kwargs,
                     error_traceback_str=traceback.format_exc(),
                     original_exception=e,
@@ -7624,7 +7763,7 @@ class Router(DeprecatedRouterMembers):
         **kwargs,
     ) -> OpenAIFileObject:
         try:
-            from litellm.router_utils.common_utils import add_model_file_id_mappings
+            from litellm.litellm_core_utils.routing_common_utils import add_model_file_id_mappings
 
             verbose_router_logger.debug("Inside _atext_completion()- model: %s", model)
             parent_otel_span: Final = get_parent_otel_span_from_kwargs(kwargs)
@@ -7850,7 +7989,7 @@ class Router(DeprecatedRouterMembers):
         except Exception as e:
             asyncio.create_task(
                 send_llm_exception_alert(
-                    litellm_router_instance=self,
+                    ctx=self._core_ctx,
                     request_kwargs=kwargs,
                     error_traceback_str=traceback.format_exc(),
                     original_exception=e,
@@ -8018,7 +8157,7 @@ class Router(DeprecatedRouterMembers):
         except Exception as e:
             asyncio.create_task(
                 send_llm_exception_alert(
-                    litellm_router_instance=self,
+                    ctx=self._core_ctx,
                     request_kwargs=kwargs,
                     error_traceback_str=traceback.format_exc(),
                     original_exception=e,
@@ -8049,7 +8188,7 @@ class Router(DeprecatedRouterMembers):
         except Exception as e:
             asyncio.create_task(
                 send_llm_exception_alert(
-                    litellm_router_instance=self,
+                    ctx=self._core_ctx,
                     request_kwargs=kwargs,
                     error_traceback_str=traceback.format_exc(),
                     original_exception=e,
@@ -8839,7 +8978,7 @@ class Router(DeprecatedRouterMembers):
         # that fails with RouterRateLimitError whenever the "remaining" entries
         # are all in cooldown — the inner async_get_healthy_deployments call
         # would find an empty list and raise immediately.
-        cooldown_ids = set(await async_get_cooldown_deployments(litellm_router_instance=self, parent_otel_span=None))
+        cooldown_ids = set(await async_get_cooldown_deployments(ctx=self._core_ctx, parent_otel_span=None))
         remaining: Final = (all_ids - cooldown_ids) - excluded
         if not remaining:
             return None
@@ -8919,7 +9058,7 @@ class Router(DeprecatedRouterMembers):
             raise e
 
         input_kwargs: Final = {
-            "litellm_router": self,
+            "litellm_routing_ctx": self._core_ctx,
             "original_exception": original_exception,
             **kwargs,
             "attempted_targets": fallback_walk,
@@ -9135,7 +9274,7 @@ class Router(DeprecatedRouterMembers):
             parent_otel_span: Final = get_parent_otel_span_from_kwargs(kwargs)
             fallback_failure_exception_str = truncate_fallback_error_detail(redact_string(str(new_exception)))
             cooldown_info: Final = await async_get_cooldown_deployments_with_debug_info(
-                litellm_router_instance=self,
+                ctx=self._core_ctx,
                 parent_otel_span=parent_otel_span,
             )
             verbose_router_logger.error(
@@ -9756,7 +9895,7 @@ class Router(DeprecatedRouterMembers):
 
             # Always track deployment successes for cooldown logic, regardless of TPM/RPM limits
             increment_deployment_successes_for_current_minute(
-                litellm_router_instance=self,
+                ctx=self._core_ctx,
                 deployment_id=str(deployment_id),
             )
 
@@ -9936,7 +10075,7 @@ class Router(DeprecatedRouterMembers):
 
         if id is not None:
             key: Final = increment_deployment_successes_for_current_minute(
-                litellm_router_instance=self,
+                ctx=self._core_ctx,
                 deployment_id=id,
             )
             return key
@@ -10047,11 +10186,11 @@ class Router(DeprecatedRouterMembers):
                 if deployment_id is None:
                     return False
                 increment_deployment_failures_for_current_minute(
-                    litellm_router_instance=self,
+                    ctx=self._core_ctx,
                     deployment_id=deployment_id,
                 )
                 result: Final = set_cooldown_deployments(
-                    litellm_router_instance=self,
+                    ctx=self._core_ctx,
                     exception_status=exception_status,
                     original_exception=exception,
                     deployment=deployment_id,
@@ -10357,9 +10496,7 @@ class Router(DeprecatedRouterMembers):
         except Exception:
             pass
 
-        unhealthy_deployments: Final = get_cooldown_deployments(
-            litellm_router_instance=self, parent_otel_span=parent_otel_span
-        )
+        unhealthy_deployments: Final = get_cooldown_deployments(ctx=self._core_ctx, parent_otel_span=parent_otel_span)
         unhealthy_set: Final = set(unhealthy_deployments)
         healthy_deployments: list = [d for d in _all_deployments if d["model_info"]["id"] not in unhealthy_set]
         healthy_deployments = self._filter_blocked_deployments(healthy_deployments)
@@ -10387,7 +10524,7 @@ class Router(DeprecatedRouterMembers):
             pass
 
         unhealthy_deployments: Final = await async_get_cooldown_deployments(
-            litellm_router_instance=self, parent_otel_span=parent_otel_span
+            ctx=self._core_ctx, parent_otel_span=parent_otel_span
         )
         # Convert to set for O(1) lookup instead of O(n)
         unhealthy_deployments_set: Final = set(unhealthy_deployments)
@@ -10445,7 +10582,7 @@ class Router(DeprecatedRouterMembers):
                             )
                         )
                     set_cooldown_deployments(
-                        litellm_router_instance=self,
+                        ctx=self._core_ctx,
                         exception_status=e.status_code,
                         original_exception=e,
                         deployment=deployment["model_info"]["id"],
@@ -10529,7 +10666,7 @@ class Router(DeprecatedRouterMembers):
         )
         if selected is None:
             no_deployment: Final = await async_raise_no_deployment_exception(
-                litellm_router_instance=self, model=model_group, parent_otel_span=None
+                ctx=self._core_ctx, model=model_group, parent_otel_span=None
             )
             raise litellm.RateLimitError(
                 message=str(no_deployment),
@@ -10847,7 +10984,9 @@ class Router(DeprecatedRouterMembers):
             merged_params: Final[Mapping[str, object]] = (
                 _litellm_params if zeroed_pricing is None else MappingProxyType({**_litellm_params, **zeroed_pricing})
             )
-            litellm_params: Final[LiteLLM_Params] = LiteLLM_Params.model_validate(dict(**merged_params))
+            litellm_params: Final[LiteLLM_Params] = validate_litellm_params_strictly(
+                LiteLLM_Params, dict(**merged_params)
+            )
             declared_params: Final = _LITELLM_PARAMS_ADAPTER.validate_python(_litellm_params)
             warn_on_provider_credential_mismatch(model_name=_model_name, litellm_params=declared_params)
             warn_on_ignored_model_capability_flags(model_name=_model_name, litellm_params=declared_params)
@@ -10960,7 +11099,7 @@ class Router(DeprecatedRouterMembers):
             auto_router_config=auto_router_config,
             default_model=default_model,
             embedding_model=embedding_model,
-            litellm_router_instance=self,
+            ctx=self._core_ctx,
             max_input_chars=(max_input_chars if max_input_chars is not None else DEFAULT_AUTO_ROUTER_MAX_INPUT_CHARS),
         )
         self._register_pre_routing_strategy(
@@ -11041,7 +11180,7 @@ class Router(DeprecatedRouterMembers):
         complexity_router: Final[ComplexityRouter] = ComplexityRouter(
             model_name=deployment.model_name,
             default_model=default_model,
-            litellm_router_instance=self,
+            ctx=self._core_ctx,
             complexity_router_config=complexity_router_config,
         )
         self._register_pre_routing_strategy(
@@ -11341,7 +11480,7 @@ class Router(DeprecatedRouterMembers):
         quality_router: Final[QualityRouter] = QualityRouter(
             model_name=deployment.model_name,
             default_model=default_model,
-            litellm_router_instance=self,
+            ctx=self._core_ctx,
             quality_router_config=quality_router_config,
         )
         self._register_pre_routing_strategy(
@@ -13562,7 +13701,7 @@ class Router(DeprecatedRouterMembers):
         while remaining:
             try:
                 picked = await get_deployments_for_tag(
-                    llm_router_instance=self,
+                    ctx=self._core_ctx,
                     model=model,
                     healthy_deployments=remaining,
                     request_kwargs=tag_request,
@@ -14445,7 +14584,7 @@ class Router(DeprecatedRouterMembers):
         if routing_strategy == "lar1":
             from litellm.router_strategy.lar1_routing import apply_lar1_routing_strategy
 
-            apply_lar1_routing_strategy(self, kwargs.get("routing_strategy_args"))
+            apply_lar1_routing_strategy(self._core_ctx, kwargs.get("routing_strategy_args"))
             return
         self.routing_strategy_init(
             routing_strategy=routing_strategy, routing_strategy_args=kwargs.get("routing_strategy_args", {})
@@ -14538,7 +14677,7 @@ class Router(DeprecatedRouterMembers):
             cache_key = f"{model_id}_max_parallel_requests_client"
             client = self._core_cache.get_cache(key=cache_key, local_only=True, parent_otel_span=parent_otel_span)
             if client is None:
-                InitalizeCachedClient.set_max_parallel_requests_client(litellm_router_instance=self, model=deployment)
+                InitalizeCachedClient.set_max_parallel_requests_client(ctx=self._core_ctx, model=deployment)
                 client = self._core_cache.get_cache(key=cache_key, local_only=True, parent_otel_span=parent_otel_span)
             return client
         elif client_type == "async":
@@ -14820,6 +14959,62 @@ class Router(DeprecatedRouterMembers):
         return cast(_RouteDeploymentsT, filtered_deployments)  # cast-ok: same list shape as the input candidates
 
     @staticmethod
+    def _decisions_deployment_refuses_media(
+        deployment: DeploymentTypedDict, group: str, request_kwargs: Mapping[str, object], *, audio: bool, videos: bool
+    ) -> bool:
+        from litellm.decisions.call import deployment_refuses_media
+
+        plain_deployment: Final = cast(Mapping[str, object], deployment)  # cast-ok: router deployments are plain dicts
+        model_info: Final = cast(Mapping[str, object], plain_deployment.get("model_info") or {})  # cast-ok: plain dict
+        deployment_params: Final = cast(Mapping[str, object], deployment["litellm_params"])  # cast-ok: plain dict
+        try:
+            model, custom_llm_provider = Router._capability_model_and_provider(deployment["litellm_params"], group)
+            return deployment_refuses_media(
+                model,
+                custom_llm_provider,
+                model_info,
+                {**deployment_params, **request_kwargs},
+                audio=audio,
+                videos=videos,
+            )
+        except Exception as e:  # noqa: BLE001  # best-effort filter: a deployment it cannot resolve answers for itself
+            verbose_router_logger.debug(
+                "litellm.router.py::_decisions_deployment_refuses_media: keeping a deployment of model=%s. Got - %s",
+                group,
+                e,
+            )
+            return False
+
+    def _without_decisions_deployments_refusing_media(
+        self, healthy_deployments: _RouteDeploymentsT, group: str, request_kwargs: Mapping[str, object] | None
+    ) -> _RouteDeploymentsT:
+        call_kwargs: Final = request_kwargs or {}
+        audio: Final = bool(call_kwargs.get("audio"))
+        videos: Final = bool(call_kwargs.get("videos"))
+        if (
+            _routed_call_type.get() not in _DECISIONS_MEDIA_CALL_TYPES
+            or not (audio or videos)
+            or isinstance(healthy_deployments, Mapping)
+        ):
+            return healthy_deployments
+
+        sent_kwargs: Final = {**self._active_default_litellm_params(), **call_kwargs}
+        deployments_taking_media: Final = [
+            deployment
+            for deployment in healthy_deployments
+            if not Router._decisions_deployment_refuses_media(
+                cast(DeploymentTypedDict, deployment),  # cast-ok: router candidates use the deployment shape
+                group,
+                sent_kwargs,
+                audio=audio,
+                videos=videos,
+            )
+        ]
+        if not deployments_taking_media:
+            return healthy_deployments
+        return cast(_RouteDeploymentsT, deployments_taking_media)  # cast-ok: same list shape as the input candidates
+
+    @staticmethod
     def _without_declared_text_only_deployments(
         healthy_deployments: _RouteDeploymentsT,
         group: str,
@@ -14845,17 +15040,12 @@ class Router(DeprecatedRouterMembers):
 
     @staticmethod
     def _request_carries_image(
-        messages: list[dict[str, str]] | None,  # mutable-ok: handed to resolve_structured_messages as-is
+        messages: object,
         request_kwargs: Mapping[str, object],
     ) -> bool:
         from litellm.litellm_core_utils.prompt_templates.common_utils import request_contains_image_content
-        from litellm.litellm_core_utils.prompt_templates.factory import resolve_structured_messages
 
-        structured: Final = resolve_structured_messages(
-            messages=cast(list[dict[str, object]] | None, messages),  # cast-ok: chat messages are plain dicts
-            request_kwargs=cast(dict[str, object], request_kwargs),  # cast-ok: the resolver only reads the mapping
-        )
-        return bool(structured) and request_contains_image_content(structured)
+        return request_contains_image_content(messages or request_kwargs.get("messages") or request_kwargs.get("input"))
 
     @staticmethod
     def _pre_call_check_requested_chat_params(request_kwargs: Mapping[str, object]) -> frozenset[str]:
@@ -15469,10 +15659,10 @@ class Router(DeprecatedRouterMembers):
 
         routing_read_batch: Final = RoutingReadBatch.active()
         cooldown_deployments: Final = (
-            await async_get_cooldown_deployments(litellm_router_instance=self, parent_otel_span=parent_otel_span)
+            await async_get_cooldown_deployments(ctx=self._core_ctx, parent_otel_span=parent_otel_span)
             if routing_read_batch is None
             else await routing_read_batch.async_get_cooldown_deployments(
-                litellm_router_instance=self,
+                ctx=self._core_ctx,
                 healthy_deployments=healthy_deployments,
                 parent_otel_span=parent_otel_span,
             )
@@ -15527,7 +15717,7 @@ class Router(DeprecatedRouterMembers):
             )
         # check if user wants to do tag based routing
         healthy_deployments = await get_deployments_for_tag(
-            llm_router_instance=self,
+            ctx=self._core_ctx,
             model=model,
             request_kwargs=request_kwargs,
             healthy_deployments=healthy_deployments,
@@ -15543,10 +15733,14 @@ class Router(DeprecatedRouterMembers):
 
         ## ORDER FILTERING ## -> if user set 'order' in deployments, return deployments with lowest order (e.g. order=1 > order=2)
         _target_order: Final = (request_kwargs or {}).pop("_target_order", None)
-        batch_candidates: Final = self._without_declared_text_only_deployments(
-            cast(list[dict[str, object]], healthy_deployments),  # cast-ok: router deployments are plain dicts
+        batch_candidates: Final = self._without_decisions_deployments_refusing_media(
+            self._without_declared_text_only_deployments(
+                cast(list[dict[str, object]], healthy_deployments),  # cast-ok: router deployments are plain dicts
+                model,
+                messages,
+                cast(Mapping[str, object] | None, request_kwargs),  # cast-ok: legacy signature uses a bare dict
+            ),
             model,
-            messages,
             cast(Mapping[str, object] | None, request_kwargs),  # cast-ok: legacy signature uses a bare dict
         )
         embedding_batch_admitting: Final = deployments_admitting_embedding_batch(
@@ -15606,7 +15800,7 @@ class Router(DeprecatedRouterMembers):
 
         if len(healthy_deployments) == 0:
             exception: Final = await async_raise_no_deployment_exception(
-                litellm_router_instance=self,
+                ctx=self._core_ctx,
                 model=model,
                 parent_otel_span=parent_otel_span,
                 route_model_ids=await self._async_routable_cooled_deployment_ids(
@@ -15852,7 +16046,7 @@ class Router(DeprecatedRouterMembers):
                 )
             if deployment is None:
                 exception: Final = await async_raise_no_deployment_exception(
-                    litellm_router_instance=self,
+                    ctx=self._core_ctx,
                     model=model,
                     parent_otel_span=parent_otel_span,
                 )
@@ -16022,7 +16216,7 @@ class Router(DeprecatedRouterMembers):
 
             if deployment is None:
                 exception: Final = await async_raise_no_deployment_exception(
-                    litellm_router_instance=self,
+                    ctx=self._core_ctx,
                     model=model,
                     parent_otel_span=parent_otel_span,
                 )
@@ -16390,7 +16584,7 @@ class Router(DeprecatedRouterMembers):
             if isinstance(selected_strategy.strategy, ComplexityRouter)
             else (),
             parent_model=model,
-            router=self,
+            ctx=self._core_ctx,
             allow_escalation=isinstance(selected_strategy.strategy, ComplexityRouter)
             and selected_strategy.strategy.config.enable_context_window_escalation,
             messages=messages,
@@ -16753,9 +16947,7 @@ class Router(DeprecatedRouterMembers):
             parent_otel_span=parent_otel_span,
         )
 
-        cooldown_deployments: Final = get_cooldown_deployments(
-            litellm_router_instance=self, parent_otel_span=parent_otel_span
-        )
+        cooldown_deployments: Final = get_cooldown_deployments(ctx=self._core_ctx, parent_otel_span=parent_otel_span)
         _pre_cooldown_deployments: Final = healthy_deployments
         healthy_deployments = self._filter_cooldown_deployments(
             healthy_deployments=healthy_deployments,
@@ -16788,10 +16980,14 @@ class Router(DeprecatedRouterMembers):
 
         ## ORDER FILTERING ## -> if user set 'order' in deployments, return deployments with lowest order (e.g. order=1 > order=2)
         _target_order: Final = (request_kwargs or {}).pop("_target_order", None)
-        batch_candidates: Final = self._without_declared_text_only_deployments(
-            cast(list[dict[str, object]], healthy_deployments),  # cast-ok: router deployments are plain dicts
+        batch_candidates: Final = self._without_decisions_deployments_refusing_media(
+            self._without_declared_text_only_deployments(
+                cast(list[dict[str, object]], healthy_deployments),  # cast-ok: router deployments are plain dicts
+                model,
+                messages,
+                cast(Mapping[str, object] | None, request_kwargs),  # cast-ok: legacy signature uses a bare dict
+            ),
             model,
-            messages,
             cast(Mapping[str, object] | None, request_kwargs),  # cast-ok: legacy signature uses a bare dict
         )
         embedding_batch_admitting: Final = deployments_admitting_embedding_batch(
@@ -16854,7 +17050,7 @@ class Router(DeprecatedRouterMembers):
             _cooldown_time = self._core_cooldown_cache.get_min_cooldown(
                 model_ids=model_ids, parent_otel_span=parent_otel_span
             )
-            _cooldown_list = get_cooldown_deployments(litellm_router_instance=self, parent_otel_span=parent_otel_span)
+            _cooldown_list = get_cooldown_deployments(ctx=self._core_ctx, parent_otel_span=parent_otel_span)
             raise RouterRateLimitError(
                 model=model,
                 cooldown_time=_cooldown_time,
@@ -16862,7 +17058,7 @@ class Router(DeprecatedRouterMembers):
                 cooldown_list=_cooldown_list,
                 model_ids=model_ids,
                 cooldown_deployments=get_cooldown_deployment_info(
-                    self,
+                    self._core_ctx,
                     self._deployment_ids(
                         self._region_routable_deployments(
                             request_deployments,
@@ -16901,7 +17097,7 @@ class Router(DeprecatedRouterMembers):
             _cooldown_time = self._core_cooldown_cache.get_min_cooldown(
                 model_ids=model_ids, parent_otel_span=parent_otel_span
             )
-            _cooldown_list = get_cooldown_deployments(litellm_router_instance=self, parent_otel_span=parent_otel_span)
+            _cooldown_list = get_cooldown_deployments(ctx=self._core_ctx, parent_otel_span=parent_otel_span)
             raise RouterRateLimitError(
                 model=model,
                 cooldown_time=_cooldown_time,
@@ -17008,9 +17204,7 @@ class Router(DeprecatedRouterMembers):
             healthy_deployments=pass_through_deployments,
             parent_otel_span=parent_otel_span,
         )
-        cooldown_deployments: Final = get_cooldown_deployments(
-            litellm_router_instance=self, parent_otel_span=parent_otel_span
-        )
+        cooldown_deployments: Final = get_cooldown_deployments(ctx=self._core_ctx, parent_otel_span=parent_otel_span)
         pass_through_deployments = self._filter_cooldown_deployments(
             healthy_deployments=pass_through_deployments,
             cooldown_deployments=cooldown_deployments,
@@ -17039,7 +17233,7 @@ class Router(DeprecatedRouterMembers):
             _cooldown_time = self._core_cooldown_cache.get_min_cooldown(
                 model_ids=model_ids, parent_otel_span=parent_otel_span
             )
-            _cooldown_list = get_cooldown_deployments(litellm_router_instance=self, parent_otel_span=parent_otel_span)
+            _cooldown_list = get_cooldown_deployments(ctx=self._core_ctx, parent_otel_span=parent_otel_span)
             raise RouterRateLimitError(
                 model=model,
                 cooldown_time=_cooldown_time,
@@ -17047,7 +17241,7 @@ class Router(DeprecatedRouterMembers):
                 cooldown_list=_cooldown_list,
                 model_ids=pass_through_model_ids,
                 cooldown_deployments=get_cooldown_deployment_info(
-                    self,
+                    self._core_ctx,
                     self._deployment_ids(
                         self._region_routable_deployments(
                             request_deployments,
@@ -17085,7 +17279,7 @@ class Router(DeprecatedRouterMembers):
             _cooldown_time = self._core_cooldown_cache.get_min_cooldown(
                 model_ids=model_ids, parent_otel_span=parent_otel_span
             )
-            _cooldown_list = get_cooldown_deployments(litellm_router_instance=self, parent_otel_span=parent_otel_span)
+            _cooldown_list = get_cooldown_deployments(ctx=self._core_ctx, parent_otel_span=parent_otel_span)
             raise RouterRateLimitError(
                 model=model,
                 cooldown_time=_cooldown_time,

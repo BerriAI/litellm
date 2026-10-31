@@ -910,6 +910,71 @@ def test_stream_chunk_builder_dict_snapshot_preserves_hidden_provider_fields():
     assert response._hidden_params["provider_specific_fields"]["traffic_type"] == "default"
 
 
+def test_stream_chunk_builder_finds_upstream_provider_in_later_chunk_regression() -> None:
+    first: Final = ModelResponseStream(
+        id="chatcmpl-provider",
+        created=1,
+        model="gpt-4.1-mini",
+        object="chat.completion.chunk",
+        choices=[
+            StreamingChoices(
+                finish_reason=None,
+                index=0,
+                delta=Delta(content="hello", role="assistant"),
+            )
+        ],
+    )
+    later: Final = ModelResponseStream(
+        id="chatcmpl-provider",
+        created=1,
+        model="gpt-4.1-mini",
+        object="chat.completion.chunk",
+        choices=[
+            StreamingChoices(
+                finish_reason="stop",
+                index=0,
+                delta=Delta(content=" world", role=None),
+            )
+        ],
+    )
+    first_hidden_params: Final = {"origin": "first"}
+    later_hidden_params: Final = {"upstream_provider": "serving-site-a"}
+    chunks: Final = [
+        {**first.model_dump(), "_hidden_params": first_hidden_params},
+        {**later.model_dump(), "_hidden_params": later_hidden_params},
+    ]
+
+    response: Final = stream_chunk_builder(chunks=chunks)
+
+    assert response is not None
+    assert response._hidden_params.get("upstream_provider") == "serving-site-a"
+    assert first_hidden_params.get("upstream_provider") is None
+    assert later_hidden_params.get("upstream_provider") == "serving-site-a"
+
+
+def test_stream_chunk_builder_preserves_source_provider_metadata_guard() -> None:
+    chunk: Final = ModelResponseStream(
+        id="chatcmpl-provider",
+        created=1,
+        model="gpt-4.1-mini",
+        object="chat.completion.chunk",
+        choices=[
+            StreamingChoices(
+                finish_reason="stop",
+                index=0,
+                delta=Delta(content="hello", role="assistant"),
+            )
+        ],
+    )
+    hidden_params: Final = {"upstream_provider": "serving-site-a"}
+    chunk_dict: Final = {**chunk.model_dump(), "_hidden_params": hidden_params}
+
+    response: Final = stream_chunk_builder(chunks=[chunk_dict])
+
+    assert response is not None
+    assert chunk_dict["_hidden_params"]["upstream_provider"] == "serving-site-a"
+
+
 def test_stream_chunk_builder_propagates_vertex_ai_metadata_from_chunks():
     """Vertex AI metadata on streaming chunks must appear on assembled response."""
     grounding_metadata = [{"webSearchQueries": ["weather in SF"]}]
@@ -1075,6 +1140,30 @@ def test_cost_field_in_usage_chunks():
     assert usage.cost == 0.00025
     assert usage.prompt_tokens == 10
     assert usage.completion_tokens == 5
+
+
+def test_the_rebuilt_response_keeps_the_upstream_cost_a_stamped_usage_chunk_saved(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(litellm, "cost_margin_config", {"global": 0.5})
+    text_chunk = ModelResponseStream(
+        id="chatcmpl-1",
+        model="gpt-4.1",
+        choices=[StreamingChoices(finish_reason="stop", index=0, delta=Delta(content="Hi"))],
+    )
+    usage_chunk = ModelResponseStream(
+        id="chatcmpl-1",
+        model="gpt-4.1",
+        choices=[],
+        usage=Usage(completion_tokens=5, prompt_tokens=10, total_tokens=15, cost=0.0015),
+    )
+    usage_chunk._hidden_params = {"response_cost": 0.0015, "upstream_usage_cost": 0.001}
+
+    rebuilt = stream_chunk_builder([text_chunk, usage_chunk], messages=[{"role": "user", "content": "hi"}])
+
+    assert rebuilt is not None
+    assert rebuilt._hidden_params["upstream_usage_cost"] == 0.001
+    assert litellm.completion_cost(rebuilt, custom_llm_provider="openai") == pytest.approx(0.0015), (
+        "the upstream's 0.001 gets the 50% margin once, litellm's 0.0015 bill is not margined again"
+    )
 
 
 

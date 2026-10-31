@@ -3491,6 +3491,7 @@
               "additionalProperties": {
                 "$ref": "#/components/schemas/GuardrailMetric"
               },
+              "description": "Spend by guardrail ID, already included in key and model spend. Populated on user, team and organization aggregated activity only, without a model filter",
               "title": "Guardrails",
               "type": "object"
             },
@@ -3812,10 +3813,12 @@
         "GuardrailKeyMetric": {
           "properties": {
             "metadata": {
-              "$ref": "#/components/schemas/KeyMetadata"
+              "$ref": "#/components/schemas/KeyMetadata",
+              "description": "API key alias and existence information"
             },
             "metrics": {
-              "$ref": "#/components/schemas/GuardrailSpendMetrics"
+              "$ref": "#/components/schemas/GuardrailSpendMetrics",
+              "description": "Guardrail spend and unpriced units for this API key"
             }
           },
           "required": [
@@ -3828,6 +3831,7 @@
         "GuardrailMetadata": {
           "properties": {
             "guardrail_name": {
+              "description": "Guardrail display name, falling back to the guardrail ID",
               "title": "Guardrail Name",
               "type": "string"
             }
@@ -3844,14 +3848,17 @@
               "additionalProperties": {
                 "$ref": "#/components/schemas/GuardrailKeyMetric"
               },
+              "description": "Per-key guardrail spend and unpriced units, limited to keys in the day's API key breakdown",
               "title": "Api Key Breakdown",
               "type": "object"
             },
             "metadata": {
-              "$ref": "#/components/schemas/GuardrailMetadata"
+              "$ref": "#/components/schemas/GuardrailMetadata",
+              "description": "Guardrail name information"
             },
             "metrics": {
-              "$ref": "#/components/schemas/GuardrailSpendMetrics"
+              "$ref": "#/components/schemas/GuardrailSpendMetrics",
+              "description": "Guardrail spend and unpriced units across all matching API keys"
             }
           },
           "required": [
@@ -3865,11 +3872,13 @@
           "properties": {
             "spend": {
               "default": 0.0,
+              "description": "Guardrail spend in USD, already included in key and model spend",
               "title": "Spend",
               "type": "number"
             },
             "untracked_units": {
               "default": 0,
+              "description": "Guardrail units with no known price, excluded from spend",
               "title": "Untracked Units",
               "type": "integer"
             }
@@ -24259,7 +24268,14 @@
           "properties": {
             "content": {
               "items": {
-                "$ref": "#/components/schemas/OutputText"
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/OutputText"
+                  },
+                  {
+                    "$ref": "#/components/schemas/ResponseOutputRefusal"
+                  }
+                ]
               },
               "title": "Content",
               "type": "array"
@@ -58006,7 +58022,7 @@
     "paths": {
       "/toolset/{toolset_name}/mcp": {
         "delete": {
-          "description": "Namespace a toolset as its own MCP endpoint.\n\nConnecting to /toolset/<name>/mcp exposes exactly the tools defined in\nthe toolset. Access is enforced: non-admin API keys must have the toolset\nlisted in their object_permission.mcp_toolsets grant list, or the request\nwill be rejected with a 403.",
+          "description": "Namespace a toolset as its own MCP endpoint.\n\nConnecting to /toolset/<name>/mcp exposes exactly the tools defined in\nthe toolset. Access is enforced: API keys other than an admin's key with no\nteam must hold the toolset through one of their grant sources, or the\nrequest will be rejected with a 403.",
           "operationId": "toolset_mcp_route_toolset__toolset_name__mcp_delete",
           "parameters": [
             {
@@ -58045,7 +58061,7 @@
           ]
         },
         "get": {
-          "description": "Namespace a toolset as its own MCP endpoint.\n\nConnecting to /toolset/<name>/mcp exposes exactly the tools defined in\nthe toolset. Access is enforced: non-admin API keys must have the toolset\nlisted in their object_permission.mcp_toolsets grant list, or the request\nwill be rejected with a 403.",
+          "description": "Namespace a toolset as its own MCP endpoint.\n\nConnecting to /toolset/<name>/mcp exposes exactly the tools defined in\nthe toolset. Access is enforced: API keys other than an admin's key with no\nteam must hold the toolset through one of their grant sources, or the\nrequest will be rejected with a 403.",
           "operationId": "toolset_mcp_route_toolset__toolset_name__mcp_get",
           "parameters": [
             {
@@ -58084,7 +58100,7 @@
           ]
         },
         "head": {
-          "description": "Namespace a toolset as its own MCP endpoint.\n\nConnecting to /toolset/<name>/mcp exposes exactly the tools defined in\nthe toolset. Access is enforced: non-admin API keys must have the toolset\nlisted in their object_permission.mcp_toolsets grant list, or the request\nwill be rejected with a 403.",
+          "description": "Namespace a toolset as its own MCP endpoint.\n\nConnecting to /toolset/<name>/mcp exposes exactly the tools defined in\nthe toolset. Access is enforced: API keys other than an admin's key with no\nteam must hold the toolset through one of their grant sources, or the\nrequest will be rejected with a 403.",
           "operationId": "toolset_mcp_route_toolset__toolset_name__mcp_head",
           "parameters": [
             {
@@ -58123,7 +58139,7 @@
           ]
         },
         "options": {
-          "description": "Namespace a toolset as its own MCP endpoint.\n\nConnecting to /toolset/<name>/mcp exposes exactly the tools defined in\nthe toolset. Access is enforced: non-admin API keys must have the toolset\nlisted in their object_permission.mcp_toolsets grant list, or the request\nwill be rejected with a 403.",
+          "description": "Namespace a toolset as its own MCP endpoint.\n\nConnecting to /toolset/<name>/mcp exposes exactly the tools defined in\nthe toolset. Access is enforced: API keys other than an admin's key with no\nteam must hold the toolset through one of their grant sources, or the\nrequest will be rejected with a 403.",
           "operationId": "toolset_mcp_route_toolset__toolset_name__mcp_options",
           "parameters": [
             {
@@ -58162,7 +58178,7 @@
           ]
         },
         "patch": {
-          "description": "Namespace a toolset as its own MCP endpoint.\n\nConnecting to /toolset/<name>/mcp exposes exactly the tools defined in\nthe toolset. Access is enforced: non-admin API keys must have the toolset\nlisted in their object_permission.mcp_toolsets grant list, or the request\nwill be rejected with a 403.",
+          "description": "Namespace a toolset as its own MCP endpoint.\n\nConnecting to /toolset/<name>/mcp exposes exactly the tools defined in\nthe toolset. Access is enforced: API keys other than an admin's key with no\nteam must hold the toolset through one of their grant sources, or the\nrequest will be rejected with a 403.",
           "operationId": "toolset_mcp_route_toolset__toolset_name__mcp_patch",
           "parameters": [
             {
@@ -58201,7 +58217,7 @@
           ]
         },
         "post": {
-          "description": "Namespace a toolset as its own MCP endpoint.\n\nConnecting to /toolset/<name>/mcp exposes exactly the tools defined in\nthe toolset. Access is enforced: non-admin API keys must have the toolset\nlisted in their object_permission.mcp_toolsets grant list, or the request\nwill be rejected with a 403.",
+          "description": "Namespace a toolset as its own MCP endpoint.\n\nConnecting to /toolset/<name>/mcp exposes exactly the tools defined in\nthe toolset. Access is enforced: API keys other than an admin's key with no\nteam must hold the toolset through one of their grant sources, or the\nrequest will be rejected with a 403.",
           "operationId": "toolset_mcp_route_toolset__toolset_name__mcp_post",
           "parameters": [
             {
@@ -58240,7 +58256,7 @@
           ]
         },
         "put": {
-          "description": "Namespace a toolset as its own MCP endpoint.\n\nConnecting to /toolset/<name>/mcp exposes exactly the tools defined in\nthe toolset. Access is enforced: non-admin API keys must have the toolset\nlisted in their object_permission.mcp_toolsets grant list, or the request\nwill be rejected with a 403.",
+          "description": "Namespace a toolset as its own MCP endpoint.\n\nConnecting to /toolset/<name>/mcp exposes exactly the tools defined in\nthe toolset. Access is enforced: API keys other than an admin's key with no\nteam must hold the toolset through one of their grant sources, or the\nrequest will be rejected with a 403.",
           "operationId": "toolset_mcp_route_toolset__toolset_name__mcp_put",
           "parameters": [
             {
