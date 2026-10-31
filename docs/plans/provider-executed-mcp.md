@@ -1,0 +1,190 @@
+# Provider-executed MCP registration
+
+Status: schema proposal for review, implementation has not started
+
+## Implementation plan
+
+Work through these layers in order on `litellm_provider_mcp_registration`. Update this table as each layer is reviewed and implemented
+
+| Layer | Scope | Status |
+| --- | --- | --- |
+| 1 | Settle registration fields, values, storage, and validation | Proposed in this change |
+| 2 | Implement persistence and execution-mode isolation before enabling provider registration | Pending layer 1 review |
+| 3 | Management UI/API, stored tool options, and existing key/team/toolset selectors | Pending |
+| 4 | Authorize effective OpenAI Responses and Anthropic Messages MCP attachments through existing MCP permissions | Pending |
+| 5 | Live provider tests, streaming admission tests, UI tests, and gateway regressions | Pending |
+
+V1 supports URL-based OpenAI Responses MCP and both Anthropic Messages connector formats. Request authorization applies to streaming and non-streaming calls before provider dispatch. Server restrictions, team permissions, and key permissions intersect. Existing applicable permission ceilings and explicit denies continue to apply
+
+Response/SSE inspection, per-invocation argument policy inside a provider's tool loop, automatic MCP discovery for provider registrations, local MCP references, provider connector IDs, and additional API bridges are outside v1
+
+## Layer 1 schema proposal
+
+### Entity and terminology
+
+Store both execution modes in `LiteLLM_MCPServerTable`, with the same stable `server_id`. Existing `LiteLLM_ObjectPermissionTable` and `LiteLLM_MCPToolsetTable` shapes remain unchanged
+
+| Surface | Proposed wording |
+| --- | --- |
+| API, YAML, and database field | `execution_mode` |
+| Value `litellm` | LiteLLM-executed |
+| Value `provider` | Provider-executed |
+| UI field label | Execution mode |
+| Provider-mode help | The LLM provider discovers and calls this MCP server. LiteLLM authorizes the server and tool scope without connecting to it |
+| Provider-mode tool editor label | Allowed tools |
+| Provider-mode tool editor help | Enter the upstream tool names permitted on this server. Keys, teams, and toolsets can select from this list. LiteLLM does not discover or verify these tools |
+
+Execution mode identifies who may initiate the upstream MCP connection. A caller using LiteLLM's gateway still uses a `litellm` registration. A provider registration is usable as an authorized native attachment on the LLM API
+
+No `native_mcp_policy`, `declared_tools`, `native_url`, provider-specific server table, or additional toolset kind is introduced. The registration does not need an OpenAI/Anthropic discriminator because the same endpoint can be used by either provider
+
+### Storage
+
+Add one enum column and make the existing transport column nullable. The following is the proposed Prisma change, not an applied migration
+
+```prisma
+enum MCPExecutionMode {
+  litellm
+  provider
+}
+
+model LiteLLM_MCPServerTable {
+  execution_mode MCPExecutionMode @default(litellm)
+  transport      String?          @default("sse")
+}
+```
+
+The model excerpt shows only the changed fields. All other columns remain in place
+
+| Field | Provider-executed storage and meaning |
+| --- | --- |
+| `execution_mode` | Required enum value `provider`. Omitted on existing/legacy registrations means `litellm` |
+| `server_id` | Existing stable identifier used by object permissions and toolsets |
+| `server_name`, `alias`, `description` | Existing management identity and display fields |
+| `url` | Required approved HTTPS MCP endpoint, stored in canonical form |
+| `allowed_tools` | Existing `String[]`. Explicit finite server-level allowlist and source of management tool choices |
+| `mcp_info.tool_allowlist_enforced` | Existing marker, persisted as `true` for provider mode so `[]` means deny all |
+| `tool_name_to_description` | Existing optional descriptions for names in `allowed_tools` |
+| `transport` | SQL `NULL`. LiteLLM neither chooses nor opens the provider's MCP transport |
+| `auth_type`, `credentials` | SQL `NULL`. LiteLLM does not manage this registration's upstream authentication |
+| Other connection-only settings | Neutral existing defaults, with no active connection configuration accepted |
+| Object permissions and toolsets | Existing tables and existing server IDs/tool names |
+
+The provider registration's tool list retains the meaning of an authorization ceiling. Reusing it for management choices does not turn it into a verified discovery cache. Provider discovery supplies real descriptions and input schemas to the model; LiteLLM does not need to store those schemas
+
+Add a partial unique index on `url` for rows whose `execution_mode` is `provider`. One canonical endpoint maps to one provider registration in v1. The same URL may also exist on a separate LiteLLM-executed registration, and existing duplicate gateway URLs remain valid
+
+```sql
+CREATE UNIQUE INDEX "LiteLLM_MCPServerTable_provider_url_key"
+ON "LiteLLM_MCPServerTable" ("url")
+WHERE "execution_mode" = 'provider';
+```
+
+Use the same canonicalization and collision checks for YAML-defined registrations. Reject ambiguous provider registrations across database/config sources rather than selecting whichever record grants more access
+
+### API and YAML contract
+
+The existing create/update/read schemas gain the enum field. Use the same vocabulary in API payloads, YAML, and the UI. Validate the merged stored record on partial updates
+
+```json
+{
+  "server_name": "docs",
+  "execution_mode": "provider",
+  "url": "https://docs.example/mcp",
+  "allowed_tools": ["search_docs", "fetch_doc"],
+  "tool_name_to_description": {
+    "search_docs": "Search documentation",
+    "fetch_doc": "Read a documentation page"
+  }
+}
+```
+
+Management reads return the stored field values, including `execution_mode`, `transport: null`, and the enforced-allowlist marker. They do not probe the endpoint. Existing response redaction conventions still apply
+
+| Input | Proposed behavior |
+| --- | --- |
+| Omitted `execution_mode` on create/config | Preserve existing LiteLLM execution and transport defaults |
+| Unknown or null `execution_mode` | Reject |
+| `execution_mode` omitted on update | Preserve stored mode |
+| Change an existing registration's mode | Reject in v1; create a separate registration |
+| Missing or null provider `url` | Reject |
+| Provider URL | Require HTTPS; reject URL userinfo and fragments; lowercase scheme/hostname and omit default port 443; preserve path, trailing slash, and query identity |
+| Provider `transport` omitted or null | Persist null explicitly, rather than applying the database's legacy SSE default |
+| Provider `transport` set to SSE, HTTP, or stdio | Reject; transport is not a configuration responsibility of this registration |
+| `allowed_tools` omitted on provider create/config | Reject; require an explicit administrative choice |
+| `allowed_tools` omitted on update | Preserve the existing list |
+| `allowed_tools: null` | Reject for provider mode |
+| `allowed_tools: []` | Register a server with zero permitted tools; never interpret as unrestricted |
+| Tool names | Exact upstream names, case-sensitive; reject blank names and wildcard entries, deduplicate identical names |
+| Description-map keys | Must reference entries in `allowed_tools` |
+| Allowlist marker omitted | Persist `mcp_info.tool_allowlist_enforced=true`, preserving unrelated metadata |
+| Allowlist marker explicitly false or null | Reject for provider mode |
+
+Endpoint matching uses this same canonicalization later in authorization. It does not follow redirects, perform discovery, collapse tenant paths, or equate URLs solely by hostname. Changing a provider URL changes the resource behind existing grants and requires the existing privileged registration-update authorization
+
+Reject active provider-mode connection settings, including stored tokens, OAuth/BYOK configuration, static/forwarded credential headers, stdio commands and environments, connection probes, and schema-pinning configuration. Accept neutral null/empty/default values needed to round-trip the existing shared response shape. Do not store `auth_type="none"` to imply the upstream server itself is unauthenticated
+
+The provider may receive credentials in a native LLM request according to its API. That does not authorize LiteLLM to store them in the registration or use them to connect to MCP
+
+### Permissions and toolsets
+
+The existing shapes remain sufficient
+
+```json
+{
+  "object_permission": {
+    "mcp_servers": ["server_docs"],
+    "mcp_tool_permissions": {
+      "server_docs": ["search_docs"]
+    },
+    "mcp_toolsets": ["toolset_research"]
+  }
+}
+```
+
+```json
+{
+  "toolset_name": "research",
+  "tools": [
+    {"server_id": "server_docs", "tool_name": "search_docs"},
+    {"server_id": "server_gateway", "tool_name": "read_record"}
+  ]
+}
+```
+
+A toolset may include both execution modes. Membership contributes grants through the existing resolver and never changes execution mode. Removing a name from server-level `allowed_tools` immediately restricts its effective authorization even if an object permission or toolset still references it
+
+Because provider registrations in v1 have a finite allowlist, an unbounded native attachment is rejected. Granting all tools of this registration means all of its approved names, not every tool the upstream server might expose now or later. Clients must send an explicitly bounded scope that passes authorization; v1 does not silently rewrite requests
+
+### Compatibility and implementation touchpoints
+
+Migration work adds the enum column, relaxes transport nullability, and adds the provider-only unique index. Existing rows retain LiteLLM behavior through the constant default. No data-rewriting migration is needed. Layer 2 must install the no-connection boundary before provider registrations can be created or loaded into executable gateway paths
+
+| Existing location | Later implementation change |
+| --- | --- |
+| `litellm/proxy/schema.prisma` and migrations | Enum, column, nullable transport, partial unique index |
+| `litellm/types/mcp.py` | Shared execution-mode vocabulary |
+| `NewMCPServerRequest` / `UpdateMCPServerRequest` in `litellm/proxy/_types.py` | Mode and mode-dependent validation |
+| `litellm/models/mcp_server.py` | Management response/storage representation |
+| `litellm/types/mcp_server/mcp_server_manager.py` and registry loading | Preserve mode; exclude provider registrations from connection-capable use |
+| Existing server repository and config loader | Canonical storage, partial updates, config collision checks |
+| Management UI/API and tool selectors | Stored allowed-tool choices for provider mode, with no `/mcp-rest/tools/list` call |
+| Existing MCP auth resolver | Reuse server/tool grants, groups, toolsets, denies, and applicable ceilings |
+| LLM request dispatch | Resolve and authorize effective native attachments after config/translation and before dispatch |
+
+Existing `metadata.allowed_tools` remains an independent compatibility restriction. It does not grant access that object permissions or server restrictions deny. The exact rollout setting for strict native-attachment enforcement belongs to layer 4, without changing this storage contract
+
+## Acceptance checks for the implementation layers
+
+| Area | Required proof |
+| --- | --- |
+| Schema and compatibility | Old registrations load as `litellm`; provider records round-trip with null transport/credentials and exact allowed tools |
+| Field validation | Mode/URL/list validation; partial updates; enforced empty list; duplicate endpoint rejection |
+| Management | API and UI create/edit/select the same server and tool IDs without live MCP discovery |
+| Toolsets | Mixed-mode toolsets remain assignable; grants cannot change execution mode or exceed server/team ceilings |
+| Isolation | Zero outbound MCP initialize/list/call/probe activity for provider registrations, including startup, refresh, and malicious gateway references |
+| Authorization | Registered allowed native calls succeed; unknown URL, wrong mode, disallowed tools, unbounded scope, and narrower key/team grants reject before provider dispatch |
+| API coverage | OpenAI Responses and both Anthropic Messages formats; request-supplied and model-configured attachments; streaming and non-streaming |
+| Live evidence | Real providers execute authorized read-only MCP tools; denied requests produce zero provider dispatches; existing gateway execution still works |
+
+This change contains only the proposal and implementation checklist. No schema migration, executable model, management endpoint, or authorization behavior is changed yet
