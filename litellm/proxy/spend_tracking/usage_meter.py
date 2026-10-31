@@ -58,6 +58,7 @@ class _Pending:
     size: int
     committed: Future[None]
     finished: asyncio.Event
+    prerequisites: tuple[asyncio.Future[None], ...]
 
 
 async def _wait_for_batch(wakeup: asyncio.Event, timeout: float) -> None:
@@ -118,7 +119,9 @@ class DurableUsageMeter:
         self.pending_bytes = 0
         self.pending_records = 0
 
-    def submit(self, writes: tuple[UsageWrite, ...]) -> asyncio.Future[None]:
+    def submit(
+        self, writes: tuple[UsageWrite, ...], *, prerequisites: tuple[asyncio.Future[None], ...] = ()
+    ) -> asyncio.Future[None]:
         size: Final = sum(len(write.envelope.encode("utf-8")) for write in writes)
         with self._admission:
             if (
@@ -132,7 +135,7 @@ class DurableUsageMeter:
             receipt: Final = Future[None]()
             receipt.set_running_or_notify_cancel()
             receipt.add_done_callback(_report_failure)
-            self._queue.append(_Pending(writes, size, receipt, asyncio.Event()))
+            self._queue.append(_Pending(writes, size, receipt, asyncio.Event(), prerequisites))
             self.pending_bytes += size
             self.pending_records += len(writes)
             self._loop.call_soon_threadsafe(self._ensure_worker)
@@ -141,7 +144,7 @@ class DurableUsageMeter:
         return wrapped
 
     def _ensure_worker(self) -> None:
-        if self.pending_records >= self.settings.batch_size:
+        if self.pending_records >= self.settings.batch_size or self._queue and self._queue[0].prerequisites:
             self._wakeup.set()
         if self._task is None or self._task.done():
             self._task = asyncio.create_task(self._run(), name="accounting usage capture")
@@ -178,7 +181,10 @@ class DurableUsageMeter:
 
     def _take_batch(self) -> tuple[_Pending, ...]:
         with self._admission:
-            sizes: Final = accumulate(len(item.writes) for item in self._queue)
+            if self._queue[0].prerequisites:
+                return (self._queue.popleft(),)
+            independent: Final = takewhile(lambda item: not item.prerequisites, self._queue)
+            sizes: Final = accumulate(len(item.writes) for item in independent)
             count: Final = sum(1 for _ in takewhile(lambda size: size <= self.settings.batch_size, sizes))
             return tuple(self._queue.popleft() for _ in range(count))
 
@@ -197,6 +203,13 @@ class DurableUsageMeter:
     async def _commit(self, batch: tuple[_Pending, ...]) -> None:
         writes: Final = tuple(chain.from_iterable(item.writes for item in batch))
         try:
+            if batch[0].prerequisites:
+                outcomes: Final = await asyncio.gather(
+                    *(asyncio.shield(receipt) for receipt in batch[0].prerequisites), return_exceptions=True
+                )
+                for outcome in outcomes:
+                    if isinstance(outcome, BaseException):
+                        raise UsageCaptureError("Usage dependency did not acknowledge commit") from outcome
             await self._persist(writes)
         except asyncio.CancelledError:
             self._finish(batch, UsageCaptureError("Usage commit acknowledgement interrupted"))
@@ -240,7 +253,12 @@ class DurableUsageMeter:
                 await self._wait_for_batch(self._wakeup, self.settings.flush_interval_seconds)
                 self._wakeup.clear()
                 await self._commit(self._take_batch())
-                if self._closed or self.pending_records >= self.settings.batch_size:
+                if (
+                    self._closed
+                    or self.pending_records >= self.settings.batch_size
+                    or self._queue
+                    and self._queue[0].prerequisites
+                ):
                     self._wakeup.set()
         except (Exception, asyncio.CancelledError):  # noqa: BLE001  # reject queued receipts if the writer exits abnormally
             while self._queue:

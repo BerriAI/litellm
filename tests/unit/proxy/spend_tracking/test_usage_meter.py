@@ -339,3 +339,51 @@ async def test_invalid_submission_isolated_without_retrying_systemic_faults(sqls
     finally:
         await meter.close()
     assert (meter.pending_records, meter.pending_bytes) == (0, 0)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("dependency_outcome", ["commit", "failure", "cancel"])
+async def test_commit_dependencies_preserve_capacity_and_isolate_failed_dependents(dependency_outcome: str) -> None:
+    database: Final = CommitBarrier()
+    meter: Final = DurableUsageMeter(database.write, UsageCaptureSettings(batch_size=3, max_pending_records=4))
+    prerequisite: Final[asyncio.Future[None]] = asyncio.get_running_loop().create_future()
+    dependent: Final = meter.submit((_write("parent"), _write("final")), prerequisites=(prerequisite,))
+    neighbor: Final = meter.submit((_write("neighbor"),))
+    assert meter.pending_records == 3
+    assert not dependent.done()
+    with pytest.raises(UsageCaptureError, match="capacity"):
+        meter.submit((_write("excess-one"), _write("excess-two")))
+    if dependency_outcome == "commit":
+        prerequisite.set_result(None)
+    elif dependency_outcome == "failure":
+        prerequisite.set_exception(ValueError("dependency failed"))
+    else:
+        prerequisite.cancel()
+    database.release.set()
+    await meter.close()
+    await neighbor
+    if dependency_outcome == "commit":
+        await dependent
+        assert database.committed == ("parent", "final", "neighbor")
+    else:
+        with pytest.raises(UsageCaptureError, match="dependency"):
+            await dependent
+        assert database.committed == ("neighbor",)
+    assert meter.pending_records == 0
+    assert meter.pending_bytes == 0
+
+
+@pytest.mark.asyncio
+async def test_shutdown_does_not_cancel_dependency_receipt_or_leak_reserved_capacity() -> None:
+    database: Final = CommitBarrier()
+    meter: Final = DurableUsageMeter(database.write, UsageCaptureSettings(batch_size=2))
+    prerequisite: Final[asyncio.Future[None]] = asyncio.get_running_loop().create_future()
+    dependent: Final = meter.submit((_write("parent"), _write("final")), prerequisites=(prerequisite,))
+    await meter.stop(0)
+    with pytest.raises(UsageCaptureError, match="acknowledgement"):
+        await dependent
+    assert not prerequisite.done()
+    assert database.committed == ()
+    assert meter.pending_records == 0
+    assert meter.pending_bytes == 0
+    prerequisite.set_result(None)
