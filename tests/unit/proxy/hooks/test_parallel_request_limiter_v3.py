@@ -3746,6 +3746,53 @@ async def test_a_request_logging_a_failure_and_a_success_settles_its_reservation
     assert int(await local_cache.async_get_cache(key=tokens_key) or 0) == used_tokens
 
 
+class _YieldingIncrementInMemoryCache(InMemoryCache):
+    async def async_increment(self, key: str, value: float, **kwargs: object) -> float:
+        await asyncio.sleep(0)
+        return await super().async_increment(key, value, **kwargs)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("success_starts_first", [True, False])
+@pytest.mark.parametrize("failure_path", ["failure_event", "post_call_failure_hook"])
+async def test_concurrent_failure_and_success_callbacks_settle_a_reservation_once_v3(
+    success_starts_first: bool, failure_path: str
+) -> None:
+    api_key: Final = hash_token("sk-concurrent-failure-and-success")
+    local_cache: Final = DualCache(in_memory_cache=_YieldingIncrementInMemoryCache())
+    handler: Final = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(local_cache))
+    tokens_key: Final = handler.create_rate_limit_keys(key="api_key", value=api_key, rate_limit_type="tokens")
+    await _reserve_tpm_for_owner_call(handler, local_cache, api_key, "concurrent-call")
+    kwargs: Final = {
+        "litellm_call_id": "concurrent-call",
+        "standard_logging_object": {"metadata": {"user_api_key_hash": api_key}},
+    }
+    now: Final = datetime.now()
+    log_failure: Final = (
+        partial(handler.async_log_failure_event, kwargs=dict(kwargs), response_obj=None, start_time=now, end_time=now)
+        if failure_path == "failure_event"
+        else partial(
+            handler.async_post_call_failure_hook,
+            request_data=dict(kwargs),
+            original_exception=Exception("stream ended"),
+            user_api_key_dict=UserAPIKeyAuth(api_key=api_key, tpm_limit=10_000),
+        )
+    )
+    log_success: Final = partial(
+        handler.async_log_success_event,
+        kwargs=dict(kwargs),
+        response_obj=ModelResponse(usage=Usage(prompt_tokens=20, completion_tokens=10, total_tokens=30)),
+        start_time=now,
+        end_time=now,
+    )
+
+    await asyncio.gather(
+        *((log_success(), log_failure()) if success_starts_first else (log_failure(), log_success()))
+    )
+
+    assert int(await local_cache.async_get_cache(key=tokens_key) or 0) == 30
+
+
 @pytest.mark.asyncio
 async def test_post_call_failure_hook_settles_reservation_at_recovered_partial_usage_v3():
     """

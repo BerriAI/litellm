@@ -5575,18 +5575,18 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 else None,
             )
 
-            await self._apply_usage_operations(
-                self._build_success_event_pipeline_operations(
-                    kwargs=kwargs,
-                    response_obj=response_obj,
-                    rate_limit_type=rate_limit_type,
-                ),
-                litellm_parent_otel_span,
+            usage_operations: Final = self._build_success_event_pipeline_operations(
+                kwargs=kwargs,
+                response_obj=response_obj,
+                rate_limit_type=rate_limit_type,
             )
             io_token_operations: Final = self._build_io_token_reservation_ops(
                 kwargs=kwargs,
                 response_obj=response_obj,
             )
+            if stash is not None:
+                stash.clear_reserved_tokens()
+            await self._apply_usage_operations(usage_operations, litellm_parent_otel_span)
             if io_token_operations:
                 if isinstance(io_token_operations, list):
                     await self.async_increment_tokens_with_ttl_preservation(
@@ -5598,8 +5598,6 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                         pipeline_operations=io_token_operations,
                         parent_otel_span=litellm_parent_otel_span,
                     )
-            if stash is not None:
-                stash.clear_reserved_tokens()
 
         except Exception as e:
             verbose_proxy_logger.exception("Error in rate limit success event: %s", e)
@@ -5822,6 +5820,8 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 else ()
             )
 
+            if stash is not None and (reserved_tokens > 0 or itpm_reserved > 0 or otpm_reserved > 0):
+                stash.reservation_released = True
             if pipeline_operations:
                 await self.internal_usage_cache.dual_cache.async_increment_cache_pipeline_post_call(
                     pipeline_operations, parent_otel_span=litellm_parent_otel_span
@@ -5836,8 +5836,6 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                         pipeline_operations=project_operations,
                         parent_otel_span=litellm_parent_otel_span,
                     )
-            if stash is not None and (reserved_tokens > 0 or itpm_reserved > 0 or otpm_reserved > 0):
-                stash.reservation_released = True
             if stash is None and tpm_actual > 0 and _is_socket_turn(failed_call):
                 await self._apply_usage_operations(
                     self._build_success_event_pipeline_operations(
@@ -6040,6 +6038,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     itpm_reserved,
                     otpm_reserved,
                 )
+            stash.reservation_released = True
             if combined_ops:
                 await self.internal_usage_cache.dual_cache.async_increment_cache_pipeline(
                     increment_list=list(combined_ops),
@@ -6056,7 +6055,6 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                         pipeline_operations=project_ops,
                         parent_otel_span=user_api_key_dict.parent_otel_span,
                     )
-            stash.reservation_released = True
         except Exception as e:
             verbose_proxy_logger.exception("Error releasing TPM reservation on post-call failure: %s", e)
         return
