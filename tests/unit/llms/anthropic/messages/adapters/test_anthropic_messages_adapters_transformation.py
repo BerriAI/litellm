@@ -5527,3 +5527,30 @@ async def test_chat_bridge_tool_result_text_block_without_text_reaches_the_model
             ],
         }
     ]
+
+
+@pytest.mark.parametrize(
+    ("tool_choice", "expected_parallel_tool_calls"),
+    [
+        ({"type": "auto", "disable_parallel_tool_use": True}, False),
+        ({"type": "any", "disable_parallel_tool_use": True}, False),
+        ({"type": "auto", "disable_parallel_tool_use": False}, None),
+        ({"type": "auto"}, None),
+    ],
+)
+def test_translate_anthropic_to_openai_disable_parallel_tool_use_sets_parallel_tool_calls(
+    tool_choice: dict[str, object], expected_parallel_tool_calls: bool | None
+) -> None:
+    from litellm.types.llms.anthropic import AnthropicMessagesRequest
+
+    request: Final = AnthropicMessagesRequest(
+        model="gpt-5.4",
+        max_tokens=64,
+        messages=[{"role": "user", "content": "What is the weather in Paris?"}],
+        tools=[{"name": "lookup_weather", "input_schema": {"type": "object", "properties": {}}}],
+        tool_choice=tool_choice,
+    )
+
+    translated, _ = LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(request)
+
+    assert translated.get("parallel_tool_calls") == expected_parallel_tool_calls

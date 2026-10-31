@@ -656,9 +656,10 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         # tool_choice
         tool_choice: Final = anthropic_request.get("tool_choice")
         if tool_choice:
-            responses_kwargs["tool_choice"] = self.translate_tool_choice_to_responses_api(
-                cast(AnthropicMessagesToolChoice, tool_choice)
-            )
+            anthropic_tool_choice: Final = cast(AnthropicMessagesToolChoice, tool_choice)
+            responses_kwargs["tool_choice"] = self.translate_tool_choice_to_responses_api(anthropic_tool_choice)
+            if anthropic_tool_choice.get("disable_parallel_tool_use") is True:
+                responses_kwargs["parallel_tool_calls"] = False
 
         # thinking -> reasoning
         thinking: Final = anthropic_request.get("thinking")

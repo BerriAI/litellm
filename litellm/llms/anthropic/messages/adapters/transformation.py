@@ -1101,9 +1101,10 @@ class LiteLLMAnthropicMessagesAdapter:
         tool_choice: Final = anthropic_message_request["tool_choice"]
         if not tool_choice:
             return
-        new_kwargs["tool_choice"] = self.translate_anthropic_tool_choice_to_openai(
-            tool_choice=cast(AnthropicMessagesToolChoice, tool_choice)
-        )
+        anthropic_tool_choice: Final = cast(AnthropicMessagesToolChoice, tool_choice)
+        new_kwargs["tool_choice"] = self.translate_anthropic_tool_choice_to_openai(tool_choice=anthropic_tool_choice)
+        if anthropic_tool_choice.get("disable_parallel_tool_use") is True:
+            new_kwargs["parallel_tool_calls"] = False  # rebind-ok: out-param store like tool_choice above
 
     def _translate_stop_sequences_to_openai(
         self,

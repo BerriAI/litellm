@@ -1178,6 +1178,22 @@ class TestTranslateRequestBroaderCoverage:
         kwargs = _ADAPTER.translate_request(req)
         assert kwargs["tool_choice"] == {"type": "function", "name": "do_thing"}
 
+    @pytest.mark.parametrize(
+        ("tool_choice", "expected_parallel_tool_calls"),
+        [
+            ({"type": "auto", "disable_parallel_tool_use": True}, False),
+            ({"type": "any", "disable_parallel_tool_use": True}, False),
+            ({"type": "auto", "disable_parallel_tool_use": False}, None),
+            ({"type": "auto"}, None),
+        ],
+    )
+    def test_disable_parallel_tool_use_sets_parallel_tool_calls(
+        self, tool_choice: dict[str, object], expected_parallel_tool_calls: bool | None
+    ):
+        req = _make_request(tools=[{"name": "do_thing"}], tool_choice=tool_choice)
+        kwargs = _ADAPTER.translate_request(req)
+        assert kwargs.get("parallel_tool_calls") == expected_parallel_tool_calls
+
     def test_thinking_translated_to_reasoning(self):
         req = _make_request(thinking={"type": "enabled", "budget_tokens": 12000})
         kwargs = _ADAPTER.translate_request(req)
