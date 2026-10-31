@@ -1,29 +1,38 @@
+import json
+
+import fakeredis
 import pytest
 
 from litellm.integrations.focus.focus_logger import FocusLogger
 from litellm.proxy import proxy_server
+from litellm.redis.transport.contract import RedisTransport
+from tests._support.fake_redis import fake_redis_transport
 
 FOCUS_LOCK = "cronjob_lock:focus_export_usage_data"
 VANTAGE_LOCK = "cronjob_lock:vantage_export_usage_data"
 
 
-class _InMemoryRedis:
+class _InMemoryRedis(fakeredis.FakeAsyncRedis):
     def __init__(self, locks: dict[str, str]) -> None:
-        self.locks = locks
+        server = fakeredis.FakeServer()
+        super().__init__(server=server)
+        self._sync = fakeredis.FakeRedis(server=server)
+        for key, owner in locks.items():
+            self._sync.set(key, json.dumps(owner))
         self.granted: list[tuple[str, str]] = []
 
-    async def async_set_cache(self, key: str, value: str, nx: bool, ttl: int) -> bool:
-        if nx and key in self.locks:
-            return False
-        self.locks[key] = value
-        self.granted.append((key, value))
-        return True
+    def transport(self) -> RedisTransport:
+        return fake_redis_transport(self, failure_threshold=1)
 
-    async def async_get_cache(self, key: str) -> str | None:
-        return self.locks.get(key)
+    @property
+    def locks(self) -> dict[str, str]:
+        return {key.decode(): json.loads(self._sync.get(key)) for key in self._sync.scan_iter()}
 
-    async def async_delete_cache(self, key: str) -> int:
-        return 1 if self.locks.pop(key, None) is not None else 0
+    async def set(self, name: str, value: str, *, nx: bool, px: int | None) -> bool | None:
+        stored = await super().set(name, value, nx=nx, px=px)
+        if stored:
+            self.granted.append((name, json.loads(value)))
+        return stored
 
 
 @pytest.mark.asyncio

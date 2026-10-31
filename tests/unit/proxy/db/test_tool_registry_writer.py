@@ -7,6 +7,7 @@ import json
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock
 
+import fakeredis
 import pytest
 from prisma.errors import PrismaError, RawQueryError
 
@@ -24,7 +25,7 @@ from litellm.proxy.db.tool_registry_writer import (
     list_tools,
     update_tool_policy,
 )
-from litellm.types.caching import RedisPipelineLpopOperation, RedisPipelineRpushOperation
+from tests._support.fake_redis import fake_redis_cache
 
 
 def _mock_row(**kwargs):
@@ -69,9 +70,7 @@ def _make_prisma(
     prisma.db.litellm_tooltable = MagicMock()
     prisma.db.litellm_tooltable.upsert = AsyncMock(return_value=upsert_return)
     prisma.db.execute_raw = AsyncMock(return_value=1)
-    prisma.db.litellm_tooltable.find_many = AsyncMock(
-        return_value=find_many_rows if find_many_rows is not None else []
-    )
+    prisma.db.litellm_tooltable.find_many = AsyncMock(return_value=find_many_rows if find_many_rows is not None else [])
     prisma.db.litellm_tooltable.find_unique = AsyncMock(return_value=find_unique_row)
     prisma.db.litellm_verificationtoken = MagicMock()
     prisma.db.litellm_verificationtoken.find_many = AsyncMock(return_value=list(key_rows))
@@ -227,9 +226,7 @@ async def test_get_tool_found():
     result = await get_tool(prisma, "my_tool")
     assert result is not None
     assert result.tool_name == "my_tool"
-    prisma.db.litellm_tooltable.find_unique.assert_awaited_once_with(
-        where={"tool_name": "my_tool"}
-    )
+    prisma.db.litellm_tooltable.find_unique.assert_awaited_once_with(where={"tool_name": "my_tool"})
 
 
 @pytest.mark.asyncio
@@ -266,9 +263,7 @@ async def test_update_tool_policy_calls_upsert_then_get_tool():
         updated_by="admin",
     )
     prisma = _make_prisma(find_unique_row=row)
-    result = await update_tool_policy(
-        prisma, "my_tool", updated_by="admin", input_policy="blocked"
-    )
+    result = await update_tool_policy(prisma, "my_tool", updated_by="admin", input_policy="blocked")
     assert result is not None
     assert result.input_policy == "blocked"
     prisma.db.litellm_tooltable.upsert.assert_awaited_once()
@@ -431,31 +426,8 @@ async def test_sync_tool_policy_from_db_retries_on_transport_error_second_read()
     assert reconnect_kwargs["reason"] == "sync_tool_policy_from_db_perms_lookup_failure"
 
 
-class _InMemoryRedis:
-    def __init__(self) -> None:
-        self.store: dict[str, str] = {}
-        self.lists: dict[str, list[object]] = {}
-
-    async def async_set_cache(self, key: str, value: str, nx: bool = False, **kwargs: object) -> bool | None:
-        if nx and key in self.store:
-            return None
-        self.store[key] = json.dumps(value)
-        return True
-
-    async def async_get_cache(self, key: str, **kwargs: object) -> str | None:
-        raw = self.store.get(key)
-        return json.loads(raw) if raw is not None else None
-
-    async def async_delete_cache(self, key: str) -> int:
-        return 1 if self.store.pop(key, None) is not None else 0
-
-    async def async_rpush_pipeline(self, rpush_list: list[RedisPipelineRpushOperation]) -> list[int]:
-        for op in rpush_list:
-            self.lists.setdefault(op["key"], []).extend(op["values"])
-        return [len(self.lists[op["key"]]) for op in rpush_list]
-
-    async def async_lpop_pipeline(self, lpop_list: list[RedisPipelineLpopOperation]) -> list[list[object] | None]:
-        return [self.lists.pop(op["key"], None) for op in lpop_list]
+async def _buffered(server: fakeredis.FakeServer) -> list[bytes]:
+    return await fakeredis.FakeAsyncRedis(server=server).lrange(REDIS_TOOL_DISCOVERY_BUFFER_KEY, 0, -1)
 
 
 def _postgres_rejection(sqlstate: str) -> RawQueryError:
@@ -473,7 +445,8 @@ def _postgres_rejection(sqlstate: str) -> RawQueryError:
 async def test_commit_with_redis_writes_every_workers_tools_in_one_statement_from_the_tool_lock_holder_only(
     lock_held_by_another_pod: str | None,
 ):
-    redis = _InMemoryRedis()
+    server = fakeredis.FakeServer()
+    redis = fake_redis_cache(server)
     if lock_held_by_another_pod is not None:
         assert await PodLockManager(redis_cache=redis).acquire_lock(cronjob_id=lock_held_by_another_pod)
     other_worker = ToolDiscoveryQueue()
@@ -500,9 +473,9 @@ async def test_commit_with_redis_writes_every_workers_tools_in_one_statement_fro
     prisma_client.db.litellm_tooltable.upsert.assert_not_awaited()
     if lock_held_by_another_pod == TOOL_DISCOVERY_COMMIT_JOB_NAME:
         prisma_client.db.execute_raw.assert_not_awaited()
-        assert len(redis.lists[REDIS_TOOL_DISCOVERY_BUFFER_KEY]) == 2, "non-holders leave their tools for the holder"
+        assert len(await _buffered(server)) == 2, "non-holders leave their tools for the holder"
         return
-    assert REDIS_TOOL_DISCOVERY_BUFFER_KEY not in redis.lists, "the spend lock must not gate the tool drain"
+    assert await _buffered(server) == [], "the spend lock must not gate the tool drain"
     prisma_client.db.execute_raw.assert_awaited_once()
     sql, *params = prisma_client.db.execute_raw.call_args.args
     assert sql.startswith('INSERT INTO "LiteLLM_ToolTable"') and 'ON CONFLICT ("tool_name")' in sql
@@ -512,7 +485,8 @@ async def test_commit_with_redis_writes_every_workers_tools_in_one_statement_fro
 
 @pytest.mark.asyncio
 async def test_commit_without_redis_writes_only_this_workers_tools_in_one_statement_and_never_touches_redis():
-    redis = _InMemoryRedis()
+    server = fakeredis.FakeServer()
+    redis = fake_redis_cache(server)
     queue = ToolDiscoveryQueue()
     queue.add_update({"tool_name": "get_weather", "origin": "user_defined"})
     queue.add_update({"tool_name": "get_weather", "origin": "user_defined"})
@@ -528,7 +502,9 @@ async def test_commit_without_redis_writes_only_this_workers_tools_in_one_statem
         use_redis_buffer=False,
     )
 
-    assert redis.lists == {}, "without the buffer flag nothing goes through redis"
+    assert await fakeredis.FakeAsyncRedis(server=server).keys("*") == [], (
+        "without the buffer flag nothing goes through redis"
+    )
     assert queue.flush() == []
     prisma_client.db.execute_raw.assert_awaited_once()
     sql, *params = prisma_client.db.execute_raw.call_args.args
@@ -549,7 +525,8 @@ async def test_commit_without_redis_writes_only_this_workers_tools_in_one_statem
 async def test_failed_tool_table_write_requeues_the_rows_only_when_they_provably_did_not_apply(
     failure: Exception, requeued: bool
 ):
-    redis = _InMemoryRedis()
+    server = fakeredis.FakeServer()
+    redis = fake_redis_cache(server)
     queue = ToolDiscoveryQueue()
     queue.add_update({"tool_name": "get_weather", "origin": "user_defined"})
     prisma_client = MagicMock()
@@ -564,6 +541,6 @@ async def test_failed_tool_table_write_requeues_the_rows_only_when_they_provably
     )
 
     prisma_client.db.execute_raw.assert_awaited_once()
-    left_in_redis = [json.loads(entry) for entry in redis.lists.get(REDIS_TOOL_DISCOVERY_BUFFER_KEY, [])]
+    left_in_redis = [json.loads(entry) for entry in await _buffered(server)]
     expected = [[{"tool_name": "get_weather", "origin": "user_defined", "call_count": 1}]] if requeued else []
     assert left_in_redis == expected, f"requeued={requeued} but redis holds {left_in_redis}"
