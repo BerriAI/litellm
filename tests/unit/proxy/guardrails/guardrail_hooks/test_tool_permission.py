@@ -2025,6 +2025,25 @@ class TestToolPermissionGuardrailAnthropicMessages:
         assert rewritten["extra_body"] == {"tools": [bash], "seed": 7}
 
     @pytest.mark.asyncio
+    async def test_rewrite_relaxes_an_extra_body_tool_choice_that_names_a_dropped_tool(self) -> None:
+        guardrail = self._pre_call([{"id": "deny_delete", "tool_name": r"^delete_db$", "decision": "deny"}], "rewrite")
+        weather = {"type": "function", "function": {"name": "get_weather"}}
+        delete_db = {"type": "function", "function": {"name": "delete_db"}}
+        data = {
+            "model": "m",
+            "messages": [{"role": "user", "content": "hi"}],
+            "extra_body": {
+                "tools": [weather, delete_db],
+                "tool_choice": {"type": "function", "function": {"name": "delete_db"}},
+                "seed": 7,
+            },
+        }
+
+        result = await self._run_pre_call(guardrail, data, "acompletion")
+
+        assert result["extra_body"] == {"tools": [weather], "tool_choice": "none", "seed": 7}
+
+    @pytest.mark.asyncio
     @pytest.mark.parametrize(
         "rule",
         [
@@ -2568,6 +2587,32 @@ class TestToolPermissionGuardrailAnthropicMessages:
             with pytest.raises(HTTPException) as excinfo:
                 await self._run_pre_call(guardrail, data, "acompletion")
             assert excinfo.value.detail["detection_message"] == f"Tool '{denied}' denied by default action"
+            return
+
+        result = await self._run_pre_call(guardrail, data, "acompletion")
+
+        assert result["functions"] == [weather]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("on_disallowed_action", ["block", "rewrite"])
+    async def test_pre_call_judges_a_legacy_functions_entry_as_a_function_whatever_its_type(
+        self, on_disallowed_action: Literal["block", "rewrite"]
+    ) -> None:
+        guardrail = self._pre_call(
+            [{"id": "deny_delete", "tool_name": r"^delete_db$", "tool_type": r"^function$", "decision": "deny"}],
+            on_disallowed_action,
+        )
+        weather = {"name": "get_weather"}
+        data = {
+            "model": "gemini-3",
+            "messages": [{"role": "user", "content": "hi"}],
+            "functions": [weather, {"type": "custom", "name": "delete_db"}],
+        }
+
+        if on_disallowed_action == "block":
+            with pytest.raises(HTTPException) as excinfo:
+                await self._run_pre_call(guardrail, data, "acompletion")
+            assert excinfo.value.detail["detection_message"] == "Tool 'delete_db' denied by rule 'deny_delete'"
             return
 
         result = await self._run_pre_call(guardrail, data, "acompletion")

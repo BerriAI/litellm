@@ -1062,7 +1062,7 @@ class ToolPermissionGuardrail(CustomGuardrail):
         request_tools.extend(map(_mcp_server_target, _request_list(request, "mcp_servers") or ()))
 
         for function in _request_list(request, "functions") or ():
-            request_tools.extend(self._get_request_tool_targets(function))
+            request_tools.extend(self._legacy_function_targets(function))
 
         listed_names: Final = frozenset(name for name, _ in request_tools)
         for forced_tool_name in (
@@ -1078,6 +1078,24 @@ class ToolPermissionGuardrail(CustomGuardrail):
             request_tools.extend(self._get_request_tool_targets(input_tool))
 
         return request_tools
+
+    def _legacy_function_targets(self, function: object) -> tuple[_ToolTarget, ...]:
+        targets: Final = self._get_request_tool_targets(function)
+        as_functions: Final = tuple((name, "function") for name, _ in targets if name is not None)
+        return tuple(dict.fromkeys(targets + as_functions))
+
+    def _rewritten_extra_body(
+        self,
+        extra_body: Mapping[str, object],
+        kept_tools: tuple[object, ...] | None,
+        rewrite_choice: Callable[[object], object],
+    ) -> dict[str, object]:
+        choice: Final = extra_body.get("tool_choice")
+        return {
+            **extra_body,
+            **({"tools": list(kept_tools)} if kept_tools is not None else {}),
+            **({"tool_choice": rewrite_choice(choice)} if choice is not None else {}),
+        }
 
     def _tool_names_in(self, tools: Sequence[object]) -> frozenset[str]:
         targets: Final = chain.from_iterable(self._get_request_tool_targets(tool) for tool in tools)
@@ -1189,11 +1207,6 @@ class ToolPermissionGuardrail(CustomGuardrail):
         extra_body: Final = _extra_body(request)
         extra_body_tools: Final = _extra_body_tools(request)
         kept_extra_body_tools: Final = None if extra_body_tools is None else kept_tool_list(extra_body_tools)
-        if extra_body is not None and kept_extra_body_tools is not None:
-            data["extra_body"] = {  # rebind-ok: rewrite mode edits the request in place
-                **extra_body,
-                "tools": list(kept_extra_body_tools),
-            }
 
         functions: Final = _request_list(request, "functions")
         kept_functions: Final = None if functions is None else kept_tool_list(functions)
@@ -1232,12 +1245,19 @@ class ToolPermissionGuardrail(CustomGuardrail):
         removed_types: Final = self._tool_types_in(sent_tools) - kept_types
 
         tools_remain: Final = bool(kept_sent_tools) or bool(kept_mcp_servers)
+        rewrite_choice: Final = partial(
+            self._rewritten_tool_choice,
+            removed_names=removed_names,
+            removed_types=removed_types,
+            tools_remain=tools_remain,
+        )
         tool_choice: Final = _REQUEST_DATA.validate_python(data.get("tool_choice"))
         if tool_choice is not None:
-            rewritten_choice: Final = self._rewritten_tool_choice(
-                tool_choice, removed_names, removed_types, tools_remain
+            data["tool_choice"] = rewrite_choice(tool_choice)  # rebind-ok: rewrite mode edits the request in place
+        if extra_body is not None and (kept_extra_body_tools is not None or "tool_choice" in extra_body):
+            data["extra_body"] = self._rewritten_extra_body(  # rebind-ok: rewrite mode edits the request in place
+                extra_body, kept_extra_body_tools, rewrite_choice
             )
-            data["tool_choice"] = rewritten_choice  # rebind-ok: rewrite mode edits the request in place
 
         named_function_call: Final = self._get_named_function_call(data)
         if named_function_call in removed_names:
