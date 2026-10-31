@@ -970,9 +970,18 @@ def test_a2a_task_methods_pass_through_verbatim_and_push_callbacks_are_validated
                 {"taskId": "t1", "url": callback},
             ):
                 rejected = call("tasks/pushNotificationConfig/set", params)
-                assert (rejected.status_code, rejected.json()) == (400, {"detail": detail}), (
-                    f"{params}: {rejected.text}"
-                )
+                assert (rejected.status_code, rejected.json()) == (
+                    400,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": marker + "tasks/pushNotificationConfig/set",
+                        "error": {
+                            "code": -32000,
+                            "message": detail,
+                            "data": {"type": "invalid_request_error", "param": None, "code": "400"},
+                        },
+                    },
+                ), f"{params}: {rejected.text}"
         assert tuple(item for item in wire.drain() if item.method == "POST") == ()
 
         public: Final = {"taskId": "t1", "pushNotificationConfig": {"url": "https://1.1.1.1/callback"}}
@@ -1065,7 +1074,15 @@ def test_a2a_v1_task_methods_and_extended_card_lower_to_0_3_upstream_and_answer_
             rejected = call("CreateTaskPushNotificationConfig", params)
             assert (rejected.status_code, rejected.json()) == (
                 400,
-                {"detail": "Push notification URL must use HTTPS"},
+                {
+                    "jsonrpc": "2.0",
+                    "id": marker + "CreateTaskPushNotificationConfig",
+                    "error": {
+                        "code": -32000,
+                        "message": "Push notification URL must use HTTPS",
+                        "data": {"type": "invalid_request_error", "param": None, "code": "400"},
+                    },
+                },
             ), f"{params}: {rejected.text}"
         assert forwarded() == ()
 
@@ -1141,6 +1158,14 @@ def test_a2a_v1_push_config_envelope_sent_to_a_0_3_agent_has_its_callback_valida
         )
         assert (rejected.status_code, rejected.json()) == (
             400,
-            {"detail": "Push notification URL must use HTTPS"},
+            {
+                "jsonrpc": "2.0",
+                "id": marker,
+                "error": {
+                    "code": -32000,
+                    "message": "Push notification URL must use HTTPS",
+                    "data": {"type": "invalid_request_error", "param": None, "code": "400"},
+                },
+            },
         ), rejected.text
         assert tuple(item for item in wire.drain() if item.method == "POST") == ()
