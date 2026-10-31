@@ -66,8 +66,8 @@ if TYPE_CHECKING:
     from litellm.router_api import RoutingContext
 
 _REQUEST_KWARGS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
-_ACCOUNT_SCOPE_HEADERS: Final = frozenset({"openai-organization", "openai-project"})
-_PROVIDER_NAMES: Final = frozenset(provider.value for provider in LlmProviders)
+_ACCOUNT_SCOPE_HEADERS: Final = frozenset({"openai-organization", "openai-project", "cookie"})
+_SINGLE_VENDOR_PROVIDERS: Final = frozenset({LlmProviders.OPENAI.value})
 
 
 @dataclass(frozen=True, slots=True)
@@ -227,9 +227,9 @@ class EncryptedContentAffinityCheck(CustomLogger):
         """
         ``(api_base, api_key, account scope)`` identifies an upstream encryption boundary.
         The values are resolved the way the request resolves them, the deployment's own values
-        winning over its named credential's, without modifying the deployment. A deployment with
-        no ``api_key`` takes its provider's default key, and one with no ``api_base`` takes the
-        endpoint its provider's Responses URL builder resolves for it.
+        winning over its named credential's, without modifying the deployment. On a provider that
+        serves one vendor's models, a deployment with no ``api_key`` takes the provider's default
+        key, and one with no ``api_base`` takes the endpoint its Responses URL builder resolves.
 
         Accepts plain dicts (the common case in ``healthy_deployments``) as
         well as ``LiteLLM_Params`` Pydantic instances. A stricter
@@ -247,7 +247,7 @@ class EncryptedContentAffinityCheck(CustomLogger):
         if explicit_api_key and explicit_api_base:
             return (explicit_api_base, explicit_api_key, account_scope)
         route: Final = EncryptedContentAffinityCheck._provider_route(effective_params)
-        if route is None:
+        if route is None or route.provider not in _SINGLE_VENDOR_PROVIDERS:
             return None
         api_key: Final = explicit_api_key or EncryptedContentAffinityCheck._default_api_key(route)
         if not api_key:
@@ -269,15 +269,11 @@ class EncryptedContentAffinityCheck(CustomLogger):
 
     @staticmethod
     def _account_scope(litellm_params: Mapping[str, object]) -> frozenset[tuple[str, object]]:
-        organization: Final = litellm_params.get("organization")
-        header_scope: Final = frozenset(
+        return frozenset(
             (name.lower(), str(value))
             for name, value in EncryptedContentAffinityCheck._header_items(litellm_params)
             if name.lower() in _ACCOUNT_SCOPE_HEADERS or has_sensitive_keyword(name)
         )
-        if not organization:
-            return header_scope
-        return header_scope | {("openai-organization", str(organization))}
 
     @staticmethod
     def _header_items(litellm_params: Mapping[str, object]) -> Iterator[tuple[str, object]]:
@@ -313,8 +309,6 @@ class EncryptedContentAffinityCheck(CustomLogger):
 
     @staticmethod
     def _default_api_key(route: _ProviderRoute) -> str | None:
-        if route.provider not in _PROVIDER_NAMES:
-            return None
         model_info: Final = ProviderConfigManager.get_provider_model_info(
             model=route.model, provider=LlmProviders(route.provider)
         )

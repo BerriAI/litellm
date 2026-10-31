@@ -2730,14 +2730,12 @@ def _deployment_of(ctx: RoutingContext, model_id: str) -> dict[str, object]:
 SUMMARY_ONLY_REASONING: Final = {"type": "reasoning", "summary": [{"type": "summary_text", "text": "scattering"}]}
 UNMARKED_REASONING: Final = {**SUMMARY_ONLY_REASONING, "id": "rs_test", "encrypted_content": "gAAAAA-blob"}
 OPENAI_SHARED_KEY: Final = {"model": "openai/gpt-5.5", "api_key": "shared-key"}
-MANTLE_SHARED_KEY: Final = {"model": "bedrock_mantle/openai.gpt-6-astra", "api_key": "shared-key"}
 
 
 @pytest.fixture
 def no_process_wide_api_base(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(litellm, "api_base", None)
-    for name in ("AZURE_API_BASE", "BEDROCK_MANTLE_API_BASE"):
-        monkeypatch.delenv(name, raising=False)
+    monkeypatch.delenv("AZURE_API_BASE", raising=False)
 
 
 @pytest.mark.usefixtures("no_process_wide_api_base")
@@ -2754,22 +2752,16 @@ def no_process_wide_api_base(monkeypatch: pytest.MonkeyPatch) -> None:
         ),
         pytest.param(OPENAI_SHARED_KEY, {**OPENAI_SHARED_KEY, "api_key": "other-key"}, False, id="different key"),
         pytest.param(
-            {**MANTLE_SHARED_KEY, "aws_region_name": "us-east-2"},
-            {**MANTLE_SHARED_KEY, "aws_region_name": "us-east-1"},
+            {"model": "bedrock_mantle/us-west-2/openai.gpt-6-astra", "api_key": "shared-key"},
+            {"model": "bedrock_mantle/us-west-2/openai.gpt-6-astra", "api_key": "shared-key"},
             False,
-            id="same key in different Mantle regions",
+            id="same key on Bedrock Mantle, which serves several vendors",
         ),
         pytest.param(
-            {**MANTLE_SHARED_KEY, "model": "bedrock_mantle/us-west-2/openai.gpt-6-astra"},
-            {**MANTLE_SHARED_KEY, "model": "bedrock_mantle/us-east-1/openai.gpt-6-astra"},
+            {"model": "openrouter/openai/gpt-6.1-sol", "api_key": "shared-key"},
+            {"model": "openrouter/anthropic/claude-haiku-5.5", "api_key": "shared-key"},
             False,
-            id="same key in different Mantle regions named in the model",
-        ),
-        pytest.param(
-            {**MANTLE_SHARED_KEY, "model": "bedrock_mantle/us-west-2/openai.gpt-6-astra"},
-            {**MANTLE_SHARED_KEY, "model": "bedrock_mantle/us-west-2/openai.gpt-6-astra"},
-            True,
-            id="same key in one Mantle region named in the model",
+            id="same key on an aggregator that serves several vendors",
         ),
         pytest.param(
             {"model": "anthropic/claude-opus-5-5", "api_key": "shared-key"},
@@ -2820,10 +2812,16 @@ def no_process_wide_api_base(monkeypatch: pytest.MonkeyPatch) -> None:
             id="same key with an OpenAI project beside one without",
         ),
         pytest.param(
+            {**OPENAI_SHARED_KEY, "extra_headers": {"Cookie": "session=account-a"}},
+            {**OPENAI_SHARED_KEY, "extra_headers": {"cookie": "session=account-b"}},
+            False,
+            id="same key signed in to different accounts by cookie",
+        ),
+        pytest.param(
             {**OPENAI_SHARED_KEY, "organization": "org-a"},
-            {**OPENAI_SHARED_KEY, "headers": {"OpenAI-Organization": "org-a"}},
+            {**OPENAI_SHARED_KEY, "organization": "org-b"},
             True,
-            id="same OpenAI organization set two ways",
+            id="organization param the Responses request never sends",
         ),
         pytest.param(
             {**OPENAI_SHARED_KEY, "extra_headers": {"x-team": "a", "OpenAI-Organization": "org-a"}},
