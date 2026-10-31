@@ -7,6 +7,8 @@ from typing import Final
 from unittest.mock import AsyncMock, patch
 
 import pytest
+import httpx
+import respx
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
@@ -1245,3 +1247,69 @@ async def test_session_lookup_follows_the_owner_across_keys_and_keeps_ownerless_
 
     assert await _history_request_ids(sqlite_db, "alice-new-key") == ["alice-old-key", "alice-new-key"]
     assert await _history_request_ids(sqlite_db, "ownerless-2") == ["ownerless-2"]
+
+
+GEMINI_URL_PATTERN: Final = r"https://generativelanguage\.googleapis\.com/v1[a-z]*/models/gemini-3\.5-flash:.*"
+LONG_SIGNATURE: Final = "Ab+/" * 200
+
+
+def _gemini_answer() -> httpx.Response:
+    return httpx.Response(
+        200,
+        json={
+            "candidates": [
+                {"content": {"role": "model", "parts": [{"text": "Sunny"}]}, "finishReason": "STOP", "index": 0}
+            ],
+            "usageMetadata": {"promptTokenCount": 9, "candidatesTokenCount": 1, "totalTokenCount": 10},
+        },
+    )
+
+
+def _stored_function_call_turn(response_id: str) -> dict:
+    return {
+        "request_id": response_id,
+        "call_type": "aresponses",
+        "session_id": "gemini-session",
+        "proxy_server_request": {"input": "What is the weather in Paris?", "model": "gemini-short-ids"},
+        "response": {
+            "id": response_id,
+            "object": "response",
+            "output": [
+                {
+                    "type": "function_call",
+                    "call_id": "call_1",
+                    "name": "get_weather",
+                    "arguments": '{"city": "Paris"}',
+                    "status": "completed",
+                    "provider_specific_fields": {"thought_signature": LONG_SIGNATURE},
+                }
+            ],
+        },
+    }
+
+
+@pytest.mark.parametrize("short_ids", [False, True])
+async def test_previous_response_replays_a_thought_signature_kept_out_of_the_id_only_with_short_ids(
+    short_ids: bool, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    response_id: Final = ResponsesAPIRequestUtils._build_responses_api_response_id(
+        custom_llm_provider="gemini", model_id=None, response_id="chatcmpl-gemini-turn-1"
+    )
+    stored: Final = _StoredSpendLogs((_stored_function_call_turn(response_id),))
+
+    with patch("litellm.proxy.proxy_server.prisma_client", SimpleNamespace(db=stored)), respx.mock:
+        route: Final = respx.post(url__regex=GEMINI_URL_PATTERN).mock(return_value=_gemini_answer())
+        await litellm.aresponses(
+            model="gemini/gemini-3.5-flash",
+            input=[{"type": "function_call_output", "call_id": "call_1", "output": '{"temp_c": 21}'}],
+            previous_response_id=response_id,
+            api_key="test-gemini-key",
+            **({"thought_signature_in_tool_call_id": False} if short_ids else {}),
+        )
+        sent_body: Final = json.loads(route.calls.last.request.content)
+
+    model_turns: Final = [turn for turn in sent_body["contents"] if turn["role"] == "model"]
+    model_parts: Final = list(chain.from_iterable(turn["parts"] for turn in model_turns))
+    assert len(model_parts) == 1
+    assert (model_parts[0]["thoughtSignature"] == LONG_SIGNATURE) is short_ids
