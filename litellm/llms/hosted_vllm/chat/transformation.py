@@ -2,6 +2,7 @@
 Translate from OpenAI's `/v1/chat/completions` to VLLM's `/v1/chat/completions`
 """
 
+import copy
 import json
 from collections.abc import Coroutine
 from typing import Final, Literal, cast, overload
@@ -88,7 +89,7 @@ class HostedVLLMChatConfig(OpenAIGPTConfig):
     ) -> dict:
         _tools = non_default_params.pop("tools", None)
         if _tools is not None:
-            _tools = remove_additional_properties(_tools)
+            _tools = remove_additional_properties(copy.deepcopy(_tools))  # pyright: ignore[reportUnknownArgumentType]  # tools arrive untyped through the bare-dict params
             _tools = remove_strict_from_schema(_tools)
             if isinstance(_tools, list):
                 _tools = self._convert_custom_tools_to_function_tools(_tools)
@@ -99,7 +100,7 @@ class HostedVLLMChatConfig(OpenAIGPTConfig):
         thinking_effort: Final = (
             None
             if "reasoning_effort" in non_default_params
-            else reasoning_effort_from_thinking(thinking, drop_params=drop_params)
+            else reasoning_effort_from_thinking(thinking, model=model, drop_params=drop_params)
         )
         if thinking_effort is not None:
             non_default_params["reasoning_effort"] = thinking_effort

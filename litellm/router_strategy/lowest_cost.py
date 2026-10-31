@@ -10,8 +10,8 @@ from litellm._internal_context import with_service_target
 from litellm._logging import verbose_router_logger
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.router_utils.batch_utils import is_batch_retrieve_call_type
-from litellm.router_utils.deployment_pricing import deployment_pricing_models, str_keyed
+from litellm.litellm_core_utils.batch_utils import is_batch_retrieve_call_type
+from litellm.litellm_core_utils.deployment_pricing import deployment_pricing_models, str_keyed
 
 
 def _deployment_cost_map_rates(deployment: object) -> tuple[float | None, float | None]:

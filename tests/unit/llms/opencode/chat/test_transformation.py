@@ -1,3 +1,4 @@
+import asyncio
 import json
 from collections.abc import Mapping
 from datetime import datetime
@@ -6,8 +7,11 @@ from typing import Final
 import httpx
 import pytest
 import respx
+from pydantic import TypeAdapter
 
 import litellm
+from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.core_helpers import RESPONSE_COST_HEADER
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.llms.opencode.common_utils import go_headers
@@ -400,3 +404,179 @@ def test_gemini_sync_stream_preserves_tool_calls_and_usage(go_catalog: None) -> 
         assert json.loads(tool.function.arguments) == {"city": "Paris"}
         assert any(c.choices[0].finish_reason == "tool_calls" for c in chunks if c.choices)
         assert chunks[-1].usage.total_tokens == 15
+
+
+GO_REPORTED_USAGE: Final = {
+    "cost": 0,
+    "opencode": {"billing_source": "go", "list_cost": 0.00412, "allowance": 0.00412},
+}
+ROW_PRICE_FOR_FIXTURE_USAGE: Final = 10 * 0.000002 + 5 * 0.000005
+
+
+def go_priced_reply(route: str, model: str, usage_extra: Mapping[str, object]) -> Mapping[str, object]:
+    reply: Final = upstream_reply(route, model)
+    key: Final = "usageMetadata" if route == "gemini" else "usage"
+    usage: Final = TypeAdapter(Mapping[str, object]).validate_python(reply[key])
+    return {**reply, key: {**usage, **usage_extra}}
+
+
+class CostRecorder(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.costs: list[float | None] = []  # mutable-ok: test probe accumulates logged costs
+
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time) -> None:  # noqa: ANN001
+        self.costs.append(kwargs.get("response_cost"))
+
+
+async def logged_cost(recorder: CostRecorder) -> float | None:
+    for _ in range(50):
+        if recorder.costs:
+            return recorder.costs[-1]
+        await asyncio.sleep(0.05)
+    raise AssertionError("success callback never ran")
+
+
+@pytest.fixture
+def cost_recorder(monkeypatch: pytest.MonkeyPatch) -> CostRecorder:
+    recorder: Final = CostRecorder()
+    monkeypatch.setattr(litellm, "callbacks", [recorder])
+    return recorder
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("upstream", ["chat/completions", "messages", "responses", "gemini"])
+@pytest.mark.parametrize("ingress", ["chat", "responses"])
+async def test_reported_list_cost_is_billed_instead_of_rows(
+    go_catalog: None, cost_recorder: CostRecorder, upstream: str, ingress: str
+) -> None:
+    model: Final = f"fixture-{upstream.split('/')[0]}"
+    with respx.mock(using="httpx") as transport:
+        transport.post().mock(
+            return_value=httpx.Response(200, json=go_priced_reply(upstream, model, GO_REPORTED_USAGE))
+        )
+        kwargs: Final = {"model": f"opencode_go/{model}", "api_key": "fake-go-key"}
+        if ingress == "chat":
+            response: Final = await litellm.acompletion(messages=[{"role": "user", "content": "hello"}], **kwargs)
+        else:
+            response = await litellm.aresponses(input="hello", **kwargs)
+    assert response._hidden_params["additional_headers"][RESPONSE_COST_HEADER] == pytest.approx(0.00412)
+    assert await logged_cost(cost_recorder) == pytest.approx(0.00412)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("usage_extra", [{}, {"cost": 0}, {"opencode": {"billing_source": "go"}}])
+async def test_rows_price_the_request_when_no_list_cost_is_reported(
+    go_catalog: None, cost_recorder: CostRecorder, usage_extra: Mapping[str, object]
+) -> None:
+    with respx.mock(using="httpx") as transport:
+        transport.post().mock(
+            return_value=httpx.Response(200, json=go_priced_reply("chat/completions", "fixture-chat", usage_extra))
+        )
+        response: Final = await litellm.acompletion(
+            model="opencode_go/fixture-chat", api_key="fake-go-key", messages=[{"role": "user", "content": "hello"}]
+        )
+    assert RESPONSE_COST_HEADER not in response._hidden_params.get("additional_headers", {})
+    assert await logged_cost(cost_recorder) == pytest.approx(ROW_PRICE_FOR_FIXTURE_USAGE)
+
+
+def sse(*events: Mapping[str, object]) -> str:
+    return "".join(f"data: {json.dumps(event)}\n\n" for event in events) + "data: [DONE]\n\n"
+
+
+@pytest.mark.asyncio
+async def test_chat_stream_bills_the_final_usage_chunks_list_cost(
+    go_catalog: None, cost_recorder: CostRecorder
+) -> None:
+    chunk: Final = {
+        "id": "chatcmpl-test",
+        "object": "chat.completion.chunk",
+        "created": 1700000000,
+        "model": "fixture-chat",
+    }
+    with respx.mock(using="httpx") as transport:
+        transport.post().mock(
+            return_value=httpx.Response(
+                200,
+                headers={"content-type": "text/event-stream"},
+                text=sse(
+                    {**chunk, "choices": [{"index": 0, "delta": {"role": "assistant", "content": "hello"}}]},
+                    {**chunk, "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]},
+                    {
+                        **chunk,
+                        "choices": [],
+                        "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15, **GO_REPORTED_USAGE},
+                    },
+                ),
+            )
+        )
+        stream: Final = await litellm.acompletion(
+            model="opencode_go/fixture-chat",
+            api_key="fake-go-key",
+            messages=[{"role": "user", "content": "hello"}],
+            stream=True,
+            stream_options={"include_usage": True},
+        )
+        chunks: Final = [piece async for piece in stream]
+    assert "".join(piece.choices[0].delta.content or "" for piece in chunks if piece.choices) == "hello"
+    assert await logged_cost(cost_recorder) == pytest.approx(0.00412)
+
+
+@pytest.mark.asyncio
+async def test_responses_stream_bills_the_completed_events_list_cost(
+    go_catalog: None, cost_recorder: CostRecorder
+) -> None:
+    completed: Final = go_priced_reply("responses", "fixture-responses", GO_REPORTED_USAGE)
+    with respx.mock(using="httpx") as transport:
+        transport.post().mock(
+            return_value=httpx.Response(
+                200,
+                headers={"content-type": "text/event-stream"},
+                text=sse(
+                    {
+                        "type": "response.output_text.delta",
+                        "delta": "hello",
+                        "item_id": "msg_test",
+                        "output_index": 0,
+                        "content_index": 0,
+                        "sequence_number": 1,
+                    },
+                    {"type": "response.completed", "response": completed, "sequence_number": 2},
+                ),
+            )
+        )
+        stream: Final = await litellm.aresponses(
+            model="opencode_go/fixture-responses", api_key="fake-go-key", input="hello", stream=True
+        )
+        events: Final = [event async for event in stream]
+    assert events[-1].type == "response.completed"
+    assert events[-1].response._hidden_params["additional_headers"][RESPONSE_COST_HEADER] == pytest.approx(0.00412)
+    assert await logged_cost(cost_recorder) == pytest.approx(0.00412)
+
+
+def test_stream_chunk_builder_reads_list_cost_from_dict_chunks():
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    logging_obj = Logging(
+        model="opencode_go/glm-5.3",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        call_type="completion",
+        start_time=datetime.now(),
+        litellm_call_id="dict-chunks",
+        function_id="1",
+    )
+    logging_obj.model_call_details["custom_llm_provider"] = "opencode_go"
+    chunk = {
+        "id": "chatcmpl-go",
+        "object": "chat.completion.chunk",
+        "created": 1,
+        "model": "glm-5.3",
+        "choices": [{"index": 0, "delta": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+    }
+    final_usage = {**chunk, "choices": [], "usage": dict(GO_REPORTED_USAGE)}
+
+    assembled = litellm.stream_chunk_builder(chunks=[chunk, final_usage], logging_obj=logging_obj)
+
+    assert assembled is not None
+    assert assembled._hidden_params["response_cost"] == GO_REPORTED_USAGE["opencode"]["list_cost"]

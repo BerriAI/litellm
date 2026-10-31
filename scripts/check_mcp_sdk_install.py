@@ -8,11 +8,11 @@ MINIMUM_MCP_VERSION: Final[tuple[int, int, int]] = (2, 2, 0)
 
 IMPORTED_MODULES: Final[tuple[str, ...]] = (
     "litellm",
-    "litellm.experimental_mcp_client",
-    "litellm.experimental_mcp_client.client",
-    "litellm.proxy._experimental.mcp_server.server",
-    "litellm.proxy._experimental.mcp_server.mcp_server_manager",
-    "litellm.proxy._experimental.mcp_server.rest_endpoints",
+    "litellm.mcp_client",
+    "litellm.mcp_client.client",
+    "litellm.proxy.mcp_server.server",
+    "litellm.proxy.mcp_server.mcp_server_manager",
+    "litellm.proxy.mcp_server.rest_endpoints",
 )
 
 
@@ -50,7 +50,7 @@ def main() -> int:
             "path": "/mcp",
             "headers": [(b"mcp-protocol-version", b"2026-07-28")],
         }
-        mcp_server: Final = sys.modules["litellm.proxy._experimental.mcp_server.server"]
+        mcp_server: Final = sys.modules["litellm.proxy.mcp_server.server"]
         if mcp_server.unsupported_protocol_version(scope) != "2026-07-28":
             sys.stderr.write("unsupported_protocol_version accepted a modern-only version\n")
             return 1

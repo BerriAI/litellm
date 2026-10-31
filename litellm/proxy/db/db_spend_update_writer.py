@@ -34,6 +34,7 @@ from litellm.constants import (
     DB_SPEND_UPDATE_JOB_NAME,
     INTERNAL_CALL_ORIGIN_METADATA_KEY,
 )
+from litellm.litellm_core_utils.core_helpers import finite_cost, single_log_line
 from litellm.litellm_core_utils.litellm_logging import coerce_model_access_groups
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.proxy._types import (
@@ -135,7 +136,7 @@ def _turn_chains_through_the_db(payload: Mapping[str, object], llm_router: "Rout
         return False
     model_id: Final = payload.get("model_id")
     deployment: Final = (
-        llm_router.get_deployment(model_id=model_id) if llm_router is not None and isinstance(model_id, str) else None
+        llm_router.registry().deployment(model_id) if llm_router is not None and isinstance(model_id, str) else None
     )
     if deployment is None:
         return True
@@ -472,6 +473,8 @@ _TEAM_ADVISORY_LOCK_SQL: Final = "SELECT pg_advisory_xact_lock(hashtext($1)) IS 
 # recreates the member. The rows travel as one JSON document, not as a numeric array: Prisma
 # types a raw array parameter from the first batch a connection sees, so after an all-$0 batch
 # (integers) every later fractional batch on that connection failed with "improper binary format".
+# total_spend is floored at spend before adding: rows written before total_spend existed (migration
+# 20260421135425, default 0) carry their history only in spend, so a plain increment keeps them behind forever.
 _TEAM_MEMBER_SPEND_SQL: Final = """
 INSERT INTO "LiteLLM_TeamMembership" (user_id, team_id, spend, total_spend)
 SELECT member.user_id, member.team_id, member.cost, member.cost
@@ -487,7 +490,7 @@ WHERE EXISTS (
 )
 ON CONFLICT (user_id, team_id) DO UPDATE
 SET spend = "LiteLLM_TeamMembership".spend + EXCLUDED.spend,
-    total_spend = "LiteLLM_TeamMembership".total_spend + EXCLUDED.total_spend
+    total_spend = GREATEST("LiteLLM_TeamMembership".total_spend, "LiteLLM_TeamMembership".spend) + EXCLUDED.total_spend
 """
 
 
@@ -516,8 +519,12 @@ def get_llm_router():
         return None
 
 
+class _DeploymentRegistry(Protocol):
+    def deployment_dict(self, id: str) -> Mapping[str, object] | None: ...
+
+
 class _DeploymentLookup(Protocol):
-    def get_model_info(self, id: str) -> Mapping[str, object] | None: ...
+    def registry(self) -> _DeploymentRegistry: ...
 
 
 def _served_model_access_groups(
@@ -531,7 +538,7 @@ def _served_model_access_groups(
     """
     if router is None or not served_model_id:
         return None
-    deployment: Final = router.get_model_info(id=served_model_id)
+    deployment: Final = router.registry().deployment_dict(served_model_id)
     if deployment is None:
         return None
     model_info: Final = deployment.get("model_info")
@@ -611,6 +618,7 @@ class DBSpendUpdateWriter:
         """
         from litellm.proxy.proxy_server import (
             disable_spend_logs,
+            general_settings,  # pyright: ignore[reportUnknownVariableType]  # legacy proxy configuration is narrowed below
             litellm_proxy_budget_name,
             prisma_client,
         )
@@ -645,7 +653,14 @@ class DBSpendUpdateWriter:
                 end_time=end_time,
                 llm_router=llm_router,
             )
-            payload["spend"] = response_cost or 0.0
+            billable_cost: Final = finite_cost(response_cost)
+            if response_cost is not None and billable_cost is None:
+                verbose_proxy_logger.warning(
+                    "Spend tracking - recording a non-finite response_cost=%s as 0 for request_id=%s",
+                    response_cost,
+                    single_log_line(payload["request_id"]),
+                )
+            payload["spend"] = billable_cost or 0.0
             if isinstance(payload["startTime"], datetime):
                 payload["startTime"] = payload["startTime"].isoformat()
             if isinstance(payload["endTime"], datetime):
@@ -657,10 +672,18 @@ class DBSpendUpdateWriter:
             if team_id is not None and team_id != "":
                 payload["team_id"] = team_id
 
+            error_log_settings: Final = cast(  # cast-ok: proxy settings use string keys
+                Mapping[str, object], general_settings
+            )
+            keep_spend_logs: Final = disable_spend_logs is False and not (
+                "status" in payload
+                and payload["status"] == "failure"
+                and error_log_settings.get("disable_error_logs") is True
+            )
             if not await self._record_spend_log(
                 payload=payload,
                 prisma_client=prisma_client,
-                disable_spend_logs=disable_spend_logs,
+                disable_spend_logs=not keep_spend_logs,
                 llm_router=llm_router,
             ):
                 return False
@@ -670,9 +693,9 @@ class DBSpendUpdateWriter:
             await self._enqueue_autorouter_turn_transaction(
                 payload=payload,
                 prisma_client=prisma_client,
-                spend_logs_kept=disable_spend_logs is False,
+                spend_logs_kept=keep_spend_logs,
             )
-            if disable_spend_logs is False:
+            if keep_spend_logs:
                 await self._enqueue_tool_usage_transaction(
                     payload=payload,
                     completion_response=completion_response,
@@ -687,7 +710,7 @@ class DBSpendUpdateWriter:
             spawn_logging_task(
                 asyncio.get_running_loop(),
                 self._batch_database_updates(
-                    response_cost=response_cost,
+                    response_cost=billable_cost,
                     user_id=user_id,
                     hashed_token=hashed_token,
                     team_id=team_id,
@@ -1897,8 +1920,6 @@ class DBSpendUpdateWriter:
             prisma_client=prisma_client,
             proxy_logging_obj=proxy_logging_obj,
         )
-
-        # NOTE: Daily tag spend is committed by a separate scheduler job.
 
         ################## Daily End-User Spend Update Transactions ##################
         # Aggregate all in memory daily end-user spend transactions and commit to db

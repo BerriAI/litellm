@@ -2179,6 +2179,48 @@ def test_generic_cost_per_token_falls_back_to_default_for_missing_12h_rate() -> 
     assert result[0] == pytest.approx(100 * model_info["cache_creation_input_token_cost"])
 
 
+@pytest.mark.parametrize(("prompt_tokens", "twelve_hour_rate"), [(10_000, 7e-6), (300_000, 14e-6)])
+def test_generic_cost_per_token_prices_ultrafast_12h_cache_writes_at_the_ultrafast_rate(
+    prompt_tokens: int, twelve_hour_rate: float
+) -> None:
+    model_info: Final[ModelInfo] = {
+        "input_cost_per_token": 1e-6,
+        "output_cost_per_token": 2e-6,
+        "input_cost_per_token_ultrafast": 5e-6,
+        "cache_creation_input_token_cost": 2e-6,
+        "cache_creation_input_token_cost_ultrafast": 3e-6,
+        "cache_creation_input_token_cost_above_12hr": 4e-6,
+        "cache_creation_input_token_cost_above_12hr_ultrafast": 7e-6,
+        "cache_creation_input_token_cost_above_12hr_above_272k_tokens": 8e-6,
+        "cache_creation_input_token_cost_above_12hr_above_272k_tokens_ultrafast": 14e-6,
+    }
+    usage: Final = Usage(
+        prompt_tokens=prompt_tokens,
+        completion_tokens=0,
+        total_tokens=prompt_tokens,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            cache_creation_tokens=5_000,
+            cache_creation_token_details=CacheCreationTokenDetails(
+                ephemeral_30m_input_tokens=3_000, ephemeral_12h_input_tokens=2_000
+            ),
+        ),
+    )
+
+    prompt_cost, _ = generic_cost_per_token(
+        model="test-ultrafast-12h-cache-write",
+        usage=usage,
+        custom_llm_provider="openai",
+        service_tier="ultrafast",
+        model_info=model_info,
+    )
+
+    assert prompt_cost == pytest.approx(
+        (prompt_tokens - 5_000) * model_info["input_cost_per_token_ultrafast"]
+        + 3_000 * model_info["cache_creation_input_token_cost_ultrafast"]
+        + 2_000 * twelve_hour_rate
+    )
+
+
 def test_cache_writing_cost_with_zero_creation_tokens_and_ephemeral_details():
     """
     Regression test: when cache_creation_tokens is 0 but cache_creation_token_details
@@ -4077,6 +4119,44 @@ def test_get_batch_cost_rates_has_no_cache_write_rate_without_a_cache_write_batc
     )
 
     assert rates.cache_creation is None
+
+
+@pytest.mark.parametrize(("prompt_tokens", "expected"), [(1_000, 2.5e-7), (272_000, 2.5e-7), (300_000, 5e-7)])
+def test_get_batch_cost_rates_reads_the_12h_batch_cache_write_rate_for_the_crossed_tier(
+    prompt_tokens: int, expected: float
+) -> None:
+    from litellm.litellm_core_utils.llm_cost_calc.utils import get_batch_cost_rates
+
+    rates: Final = get_batch_cost_rates(
+        _batch_rates_model_info(
+            input_cost_per_token_batches=1e-7,
+            cache_creation_input_token_cost_batches=1.25e-7,
+            cache_creation_input_token_cost_above_12hr_batches=2.5e-7,
+            cache_creation_input_token_cost_above_12hr_above_272k_tokens_batches=5e-7,
+        ),
+        Usage(prompt_tokens=prompt_tokens, completion_tokens=1, total_tokens=prompt_tokens + 1),
+        "openai",
+    )
+
+    assert rates.cache_creation == 1.25e-7
+    assert rates.cache_creation_rates_by_ttl == {"12hr": expected}
+
+
+def test_get_batch_cost_rates_has_no_12h_cache_write_rate_without_a_12h_batch_key() -> None:
+    from litellm.litellm_core_utils.llm_cost_calc.utils import get_batch_cost_rates
+
+    rates: Final = get_batch_cost_rates(
+        _batch_rates_model_info(
+            input_cost_per_token_batches=1e-7,
+            cache_creation_input_token_cost_batches=1.25e-7,
+            cache_creation_input_token_cost_above_12hr=2.5e-7,
+            cache_creation_input_token_cost_above_12hr_ultrafast=5e-7,
+        ),
+        Usage(prompt_tokens=300_000, completion_tokens=1, total_tokens=300_001),
+        "openai",
+    )
+
+    assert rates.cache_creation_rates_by_ttl == {}
 
 
 @pytest.mark.parametrize("model_base", ["gpt-6-sol", "gpt-6-luna"])

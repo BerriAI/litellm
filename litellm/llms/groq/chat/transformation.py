@@ -11,7 +11,7 @@ from pydantic import BaseModel, TypeAdapter, ValidationError
 import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.litellm_core_utils.prompt_templates.common_utils import strip_litellm_response_only_fields
+from litellm.litellm_core_utils.prompt_templates.common_utils import strip_litellm_internal_message_fields
 from litellm.llms.openai.chat.gpt_transformation import (
     OpenAIChatCompletionStreamingHandler,
 )
@@ -140,7 +140,8 @@ class GroqChatConfig(OpenAILikeChatConfig):
     def _transform_messages(
         self, messages: list[AllMessageValues], model: str, is_async: bool = False
     ) -> list[AllMessageValues] | Coroutine[object, object, list[AllMessageValues]]:
-        for idx, message in enumerate(messages):
+        transformed_messages: Final = list(messages)
+        for idx, message in enumerate(transformed_messages):
             """
             1. Don't pass 'null' function_call assistant message to groq - https://github.com/BerriAI/litellm/issues/5839
             """
@@ -154,12 +155,12 @@ class GroqChatConfig(OpenAILikeChatConfig):
                 for k, v in _message.items():
                     if v is not None:
                         new_message[k] = v
-                messages[idx] = strip_litellm_response_only_fields(new_message)
+                transformed_messages[idx] = strip_litellm_internal_message_fields(new_message)
 
         if is_async:
-            return super()._transform_messages(messages=messages, model=model, is_async=True)
+            return super()._transform_messages(messages=transformed_messages, model=model, is_async=True)
         else:
-            return super()._transform_messages(messages=messages, model=model, is_async=False)
+            return super()._transform_messages(messages=transformed_messages, model=model, is_async=False)
 
     def transform_messages(
         self,
