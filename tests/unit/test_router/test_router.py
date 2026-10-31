@@ -3960,34 +3960,35 @@ async def test_retried_agentic_request_whose_follow_up_always_fails_bills_every_
     assert lifted["response_cost"] == pytest.approx(3 * first_call_cost)
 
 
-@pytest.mark.asyncio
-async def test_retried_agentic_request_that_recovers_bills_the_failed_attempts_first_call_on_success(
-    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
-) -> None:
-    outcome, shared_logging, first_calls, hook = await _route_agentic_request_with_retries(
-        monkeypatch, respx_mock, ("litellm.RateLimitError", "42")
-    )
-    await asyncio.wait_for(hook.shared_call_succeeded.wait(), timeout=10)
+async def _successful_agentic_request_cost_report(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter, follow_ups: tuple[str, ...]
+) -> tuple[int, Mapping[str, object], Mapping[str, str | None]]:
+    from litellm.proxy.common_request_processing import cost_headers
 
+    outcome, shared_logging, _, hook = await _route_agentic_request_with_retries(monkeypatch, respx_mock, follow_ups)
+    await asyncio.wait_for(hook.shared_call_succeeded.wait(), timeout=10)
     assert isinstance(outcome, litellm.ModelResponse)
     success: Final = shared_logging.model_call_details["standard_logging_object"]
-    follow_up_cost: Final = sum(
-        litellm.cost_per_token(
-            model="gpt-4o-mini",
-            prompt_tokens=outcome.usage.prompt_tokens,
-            completion_tokens=outcome.usage.completion_tokens,
-        )
+    billed: Final = {
+        field: success[field] for field in ("response_cost", "prompt_tokens", "completion_tokens", "cost_breakdown")
+    }
+    return hook.plans_built, billed, cost_headers(success["response_cost"], shared_logging)
+
+
+@pytest.mark.asyncio
+async def test_retried_agentic_request_that_recovers_reports_the_cost_of_a_first_try_success(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    first_try_attempts, first_try_billed, first_try_headers = await _successful_agentic_request_cost_report(
+        monkeypatch, respx_mock, ("42",)
     )
-    failed_first_call_cost: Final = sum(
-        litellm.cost_per_token(model="gpt-4o-mini", prompt_tokens=50, completion_tokens=7)
+    recovered_attempts, recovered_billed, recovered_headers = await _successful_agentic_request_cost_report(
+        monkeypatch, respx_mock, ("litellm.RateLimitError", "42")
     )
-    assert first_calls.call_count == 2
-    assert success["prompt_tokens"] == outcome.usage.prompt_tokens + _AGENTIC_FIRST_CALL_USAGE["prompt_tokens"]
-    assert (
-        success["completion_tokens"]
-        == outcome.usage.completion_tokens + _AGENTIC_FIRST_CALL_USAGE["completion_tokens"]
-    )
-    assert success["response_cost"] == pytest.approx(follow_up_cost + failed_first_call_cost)
+
+    assert (first_try_attempts, recovered_attempts) == (1, 2)
+    assert recovered_billed == first_try_billed
+    assert recovered_headers == first_try_headers
 
 
 def _responses_sse(*events: Mapping[str, object]) -> str:

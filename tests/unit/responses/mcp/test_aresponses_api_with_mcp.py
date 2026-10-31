@@ -1918,7 +1918,7 @@ def _router_retrying_once() -> litellm.Router:
 
 
 @pytest.mark.asyncio
-async def test_non_stream_auto_execute_retried_after_a_failed_follow_up_bills_the_failed_attempts_first_round_on_success(
+async def test_non_stream_auto_execute_retried_after_a_failed_follow_up_bills_each_attempt_its_own_rounds(
     respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
 ):
     _serve_responses(
@@ -1945,11 +1945,9 @@ async def test_non_stream_auto_execute_retried_after_a_failed_follow_up_bills_th
     assert len(recorder.logged) == 1
     row: Final = recorder.logged[0]
     assert row["id"] == response.id
-    assert (response.usage.input_tokens, response.usage.output_tokens) == (500 + 149, 40 + 5)
-    assert (row["prompt_tokens"], row["completion_tokens"]) == (500 + 149 + 71, 40 + 5 + 19)
-    assert row["response_cost"] == pytest.approx(
-        _round_cost(_RETRIED_ROUND_ONE) + _round_cost(_ROUND_TWO_BODY) + _round_cost(_ROUND_ONE_BODY)
-    )
+    assert (row["prompt_tokens"], row["completion_tokens"]) == (500 + 149, 40 + 5)
+    assert (row["prompt_tokens"], row["completion_tokens"]) == (response.usage.input_tokens, response.usage.output_tokens)
+    assert row["response_cost"] == pytest.approx(_round_cost(_RETRIED_ROUND_ONE) + _round_cost(_ROUND_TWO_BODY))
 
 
 @pytest.mark.asyncio

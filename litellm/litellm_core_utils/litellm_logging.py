@@ -50,7 +50,6 @@ from litellm.constants import (
     REDACTED_BY_LITELLM,
 )
 from litellm.cost_calculator import (
-    BaseTokenUsageProcessor,
     RealtimeAPITokenUsageProcessor,
     ResponsesWebSocketTokenUsageProcessor,
     get_usage_object,
@@ -572,7 +571,6 @@ _PER_CALL_LITELLM_PARAM_DICTS: Final = frozenset({"metadata", "litellm_metadata"
 _LITELLM_PARAMS: Final = TypeAdapter(dict[str, object])
 _SERVED_ANTHROPIC_BODY: Final = TypeAdapter(dict[str, object])
 _REDACTED_RESULT: Final = TypeAdapter(object)
-_FAILED_ATTEMPTS_USAGE: Final = TypeAdapter(tuple[tuple[Usage, float], ...])
 _GUARDRAIL_INFORMATION_KEY: Final = "standard_logging_guardrail_information"
 
 
@@ -2234,12 +2232,19 @@ class Logging(LiteLLMLoggingBaseClass):
         return 0.0
 
     def uncached_price(self, result: object) -> UncachedPrice:
+        return self._price_without_recording(result, cache_hit=False, ignore_stamped_cost=True)
+
+    def _price_without_recording(
+        self, result: object, *, cache_hit: bool | None, ignore_stamped_cost: bool
+    ) -> UncachedPrice:
         previous_cost_breakdown: Final = self.cost_breakdown
         previous_billed_token_rates: Final = self.billed_token_rates
         debug_key: Final = "response_cost_failure_debug_information"
         previous_failure_debug_info: Final = self.model_call_details.get(debug_key)
         try:
-            cost: Final = self.response_cost_calculator(result=result, cache_hit=False, ignore_stamped_cost=True)
+            cost: Final = self.response_cost_calculator(
+                result=result, cache_hit=cache_hit, ignore_stamped_cost=ignore_stamped_cost
+            )
             return UncachedPrice(cost=cost, cost_breakdown=self.cost_breakdown)
         finally:
             self.cost_breakdown = previous_cost_breakdown
@@ -2670,34 +2675,6 @@ class Logging(LiteLLMLoggingBaseClass):
                 },
             )
 
-    def _add_failed_attempts_spend(self, response: object) -> None:
-        own_usage: Final = get_usage_object(completion_response=response)
-        own_cost: Final = self.model_call_details.get("response_cost")
-        if own_usage is None or not isinstance(own_cost, (int, float)):
-            return
-        earlier_attempts: Final = _FAILED_ATTEMPTS_USAGE.validate_python(
-            (
-                *self.model_call_details.get("failed_attempts_billed_on_success", ()),
-                *self.model_call_details.pop("failed_attempts_usage", ()),
-            )
-        )
-        if not earlier_attempts:
-            return
-        earlier_cost: Final = sum(cost for _, cost in earlier_attempts)
-        self.model_call_details["failed_attempts_billed_on_success"] = earlier_attempts
-        self.model_call_details["combined_usage_object"] = BaseTokenUsageProcessor.combine_usage_objects(
-            usage_objects=[own_usage, *(usage for usage, _ in earlier_attempts)]
-        )
-        self.model_call_details["response_cost"] = own_cost + earlier_cost
-        if self.cost_breakdown is not None:
-            self.cost_breakdown = self.cost_breakdown | CostBreakdown(
-                total_cost=own_cost + earlier_cost,
-                additional_costs={
-                    **self.cost_breakdown.get("additional_costs", {}),
-                    "failed_attempts_cost": earlier_cost,
-                },
-            )
-
     def claim_stream_failure_report(self) -> bool:
         if self._stream_failure_claimed:
             return False
@@ -2707,7 +2684,10 @@ class Logging(LiteLLMLoggingBaseClass):
     def record_earlier_round_for_failure(self, response: object) -> None:
         usage: Final = get_usage_object(completion_response=response)
         if usage is not None:
-            self.record_partial_usage_for_failure(usage, self.response_cost_calculator(result=response) or 0.0)
+            earlier_round_price: Final = self._price_without_recording(
+                response, cache_hit=None, ignore_stamped_cost=False
+            )
+            self.record_partial_usage_for_failure(usage, earlier_round_price.cost or 0.0)
 
     def record_assembled_response_for_failure(self, assembled: ModelResponse) -> None:
         """Bill a fully streamed response on the failure log when a post-call hook rejects it."""
@@ -2955,7 +2935,6 @@ class Logging(LiteLLMLoggingBaseClass):
         elif "response_cost" in hidden_params:
             self.model_call_details["response_cost"] = hidden_params["response_cost"]
             self._record_zero_cost_diagnostic(logging_result, hidden_params["response_cost"])
-            self._add_failed_attempts_spend(logging_result)
         elif (existing_cost := self.model_call_details.get("response_cost")) is not None and (
             existing_cost != 0 or self.call_type == CallTypes.pass_through.value  # pyright: ignore[reportUnknownMemberType]  # Logging.call_type is untyped
         ):
@@ -2965,7 +2944,6 @@ class Logging(LiteLLMLoggingBaseClass):
             pass
         else:
             self.model_call_details["response_cost"] = self.response_cost_calculator(result=logging_result)
-            self._add_failed_attempts_spend(logging_result)
 
         if not build_logging_payload:
             return None
