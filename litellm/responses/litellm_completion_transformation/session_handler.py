@@ -172,7 +172,7 @@ def _path_through_referenced_rows(
     return tuple(dict.fromkeys((*stored_path, *request_ids)))
 
 
-def _in_path_order(spend_logs: Sequence["SpendLogsPayload"], path: Sequence[str]) -> list["SpendLogsPayload"]:
+def _in_path_order(spend_logs: Sequence["SpendLogsPayload"], path: Sequence[str]) -> Sequence["SpendLogsPayload"]:
     position: Final = {request_id: index for index, request_id in enumerate(path)}
     return sorted(spend_logs, key=lambda spend_log: position.get(spend_log["request_id"], len(path)))
 
@@ -280,8 +280,11 @@ _PATH_QUERY: Final = _OWNER_SCOPED_QUERY.format(
 )
 
 
-async def _read_spend_logs(prisma_client: "PrismaClient", query: str, *params: object) -> list["SpendLogsPayload"]:
-    return cast("list[SpendLogsPayload]", await prisma_client.db.query_raw(query, *params))
+async def _read_spend_logs(prisma_client: "PrismaClient", query: str, *params: object) -> Sequence["SpendLogsPayload"]:
+    return cast(  # cast-ok: query_raw is untyped; spend log rows are read as is
+        "Sequence[SpendLogsPayload]",
+        await prisma_client.db.query_raw(query, *params),
+    )
 
 
 class ResponsesSessionHandler:
@@ -597,7 +600,7 @@ class ResponsesSessionHandler:
     async def get_all_spend_logs_for_previous_response_id(
         previous_response_id: str,
         client_response_ids: tuple[str, ...] = (),
-    ) -> "list[SpendLogsPayload]":
+    ) -> "Sequence[SpendLogsPayload]":
         """
         Get all spend logs for a previous response id
 
