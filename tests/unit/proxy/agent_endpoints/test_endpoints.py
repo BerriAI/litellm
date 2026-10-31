@@ -663,7 +663,7 @@ class TestAgentRBACProxyAdmin:
         monkeypatch.setattr(agent_endpoints, "AGENT_REGISTRY", self.mock_registry)
 
     def test_should_allow_admin_to_create_agent(self, monkeypatch):
-        with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma:
+        with patch("litellm.proxy.proxy_server.prisma_client"):
             self.mock_registry.get_agent_by_name = MagicMock(return_value=None)
             self.mock_registry.add_agent_to_db = AsyncMock(
                 return_value=_sample_agent_response()
