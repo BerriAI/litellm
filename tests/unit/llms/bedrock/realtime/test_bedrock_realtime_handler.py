@@ -77,10 +77,14 @@ class LoggedEventRecorder(CustomLogger):
         super().__init__()
         self.events: Final[list[tuple[Literal["success", "failure"], dict[str, object]]]] = []
 
-    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+    async def async_log_success_event(
+        self, kwargs: Mapping[str, object], response_obj: object, start_time: datetime, end_time: datetime
+    ) -> None:
         self.events.append(("success", dict(kwargs)))
 
-    async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+    async def async_log_failure_event(
+        self, kwargs: Mapping[str, object], response_obj: object, start_time: datetime, end_time: datetime
+    ) -> None:
         self.events.append(("failure", dict(kwargs)))
 
     def payload(self, event: Literal["success", "failure"]) -> StandardLoggingPayload:
@@ -94,7 +98,9 @@ class HeldSuccessLogger(CustomLogger):
         self.entered: Final = asyncio.Event()
         self.release: Final = asyncio.Event()
 
-    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+    async def async_log_success_event(
+        self, kwargs: Mapping[str, object], response_obj: object, start_time: datetime, end_time: datetime
+    ) -> None:
         self.entered.set()
         await self.release.wait()
 

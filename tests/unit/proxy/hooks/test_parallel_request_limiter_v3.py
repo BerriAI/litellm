@@ -3708,6 +3708,41 @@ async def test_failure_event_refunds_reservation_for_input_only_estimate_v3():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("failure_first", [True, False])
+@pytest.mark.parametrize(
+    ("response_obj", "used_tokens"),
+    [
+        ([], 0),
+        (ModelResponse(usage=Usage(prompt_tokens=20, completion_tokens=10, total_tokens=30)), 30),
+    ],
+)
+async def test_a_request_logging_a_failure_and_a_success_settles_its_reservation_once_v3(
+    failure_first: bool, response_obj: object, used_tokens: int
+) -> None:
+    api_key: Final = hash_token("sk-failure-and-success")
+    local_cache: Final = DualCache()
+    handler: Final = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(local_cache))
+    tokens_key: Final = handler.create_rate_limit_keys(key="api_key", value=api_key, rate_limit_type="tokens")
+    await _reserve_tpm_for_owner_call(handler, local_cache, api_key, "dropped-call")
+    kwargs: Final = {
+        "litellm_call_id": "dropped-call",
+        "standard_logging_object": {"metadata": {"user_api_key_hash": api_key}},
+    }
+    now: Final = datetime.now()
+    log_failure: Final = partial(
+        handler.async_log_failure_event, kwargs=dict(kwargs), response_obj=None, start_time=now, end_time=now
+    )
+    log_success: Final = partial(
+        handler.async_log_success_event, kwargs=dict(kwargs), response_obj=response_obj, start_time=now, end_time=now
+    )
+
+    for log_event in (log_failure, log_success) if failure_first else (log_success, log_failure):
+        await log_event()
+
+    assert int(await local_cache.async_get_cache(key=tokens_key) or 0) == used_tokens
+
+
+@pytest.mark.asyncio
 async def test_post_call_failure_hook_settles_reservation_at_recovered_partial_usage_v3():
     """
     Pass-through streams report a mid-stream failure through the proxy-level
