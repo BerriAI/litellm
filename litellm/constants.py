@@ -588,6 +588,8 @@ _REALTIME_BODY_CACHE_SIZE = 1000  # Keep realtime helper caches bounded; workloa
 INITIAL_RETRY_DELAY: Final = get_env_float("INITIAL_RETRY_DELAY", 0.5)
 MAX_RETRY_DELAY: Final = get_env_float("MAX_RETRY_DELAY", 8.0)
 JITTER: Final = get_env_float("JITTER", 0.75)
+COORDINATION_REDIS_ENV_RETRY_SECONDS: Final = 30.0
+COORDINATION_REDIS_ENV_RETRY_ATTEMPTS: Final = 20
 DEFAULT_IN_MEMORY_TTL = get_env_int("DEFAULT_IN_MEMORY_TTL", 5)  # default time to live for the in-memory cache
 DEFAULT_MAX_REDIS_BATCH_CACHE_SIZE: Final = get_env_int(
     "DEFAULT_MAX_REDIS_BATCH_CACHE_SIZE", 1000
