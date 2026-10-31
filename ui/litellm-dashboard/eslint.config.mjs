@@ -68,6 +68,16 @@ const eslintConfig = [
     },
   },
   {
+    files: ["src/**/*.{ts,tsx}"],
+    ignores: [
+      "src/lib/money.ts",
+      "src/**/*.test.{ts,tsx}",
+      "src/**/*.spec.{ts,tsx}",
+      "src/**/*.integration.test.{ts,tsx}",
+    ],
+    rules: { "local/no-hardcoded-currency": "warn" },
+  },
+  {
     files: ["src/**/*.tsx"],
     ignores: ["src/components/ui/**"],
     rules: {

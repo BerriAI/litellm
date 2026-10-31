@@ -5,6 +5,7 @@ import filenamePascalCase from "./filename-pascal-case.mjs";
 import noNoopHoverVariant from "./no-noop-hover-variant.mjs";
 import noAdHocZIndex from "./no-ad-hoc-z-index.mjs";
 import noArbitraryDesignValue from "./no-arbitrary-design-value.mjs";
+import noHardcodedCurrency from "./no-hardcoded-currency.mjs";
 
 const plugin = {
   rules: {
@@ -15,6 +16,7 @@ const plugin = {
     "no-noop-hover-variant": noNoopHoverVariant,
     "no-ad-hoc-z-index": noAdHocZIndex,
     "no-arbitrary-design-value": noArbitraryDesignValue,
+    "no-hardcoded-currency": noHardcodedCurrency,
   },
 };
 
