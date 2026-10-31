@@ -412,7 +412,8 @@ def test_a_model_without_a_price_fails_cost_tracking_and_a_zero_priced_model_onl
     assert unpriced_result.status == "error"
     assert _checks(free_result)["cost_tracking"] == (
         "warn",
-        "turn 1 response_cost is $0, this model is priced at zero",
+        "turn 1 response_cost is $0, either this model is priced at zero or no price resolved for it (not in the "
+        "cost map and no custom pricing on the deployment)",
     )
     assert free_result.status == "warning"
     assert overall_status([unpriced_result, free_result]) == "error"

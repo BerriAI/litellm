@@ -553,19 +553,22 @@ def _cache_read_note(turn: RepeatedTurn, parsed: ParsedTurn) -> str:
     )
 
 
+def _cache_miss(turn: RepeatedTurn, parsed: ParsedTurn) -> CheckResult:
+    return CheckResult(
+        "prompt_caching",
+        "fail",
+        f"turn {turn.number} reported 0 cached tokens on {parsed.input_tokens} input tokens in {turn.attempts} "
+        "attempts, the provider did not reuse the repeated system prompt",
+    )
+
+
 def _prompt_caching_check(second: RepeatedTurn, third: RepeatedTurn) -> CheckResult:
     reached: Final = tuple((turn, parsed) for turn in (second, third) if (parsed := _parsed(turn)) is not None)
     if not reached:
         return CheckResult("prompt_caching", "fail", "not checked, the conversation did not reach turn 2")
-    missed: Final = next(((turn, parsed) for turn, parsed in reached if parsed.cache_read_tokens == 0), None)
+    missed: Final = next((_cache_miss(turn, parsed) for turn, parsed in reached if parsed.cache_read_tokens == 0), None)
     if missed is not None:
-        turn, parsed = missed
-        return CheckResult(
-            "prompt_caching",
-            "fail",
-            f"turn {turn.number} reported 0 cached tokens on {parsed.input_tokens} input tokens in {turn.attempts} "
-            "attempts, the provider did not reuse the repeated system prompt",
-        )
+        return missed
     return CheckResult("prompt_caching", "pass", ", ".join(_cache_read_note(turn, parsed) for turn, parsed in reached))
 
 
@@ -579,7 +582,10 @@ def _cost_verdict(turn_number: int, cost: float | None) -> CheckResult | None:
         )
     if cost == 0:
         return CheckResult(
-            "cost_tracking", "warn", f"turn {turn_number} response_cost is $0, this model is priced at zero"
+            "cost_tracking",
+            "warn",
+            f"turn {turn_number} response_cost is $0, either this model is priced at zero or no price resolved for "
+            "it (not in the cost map and no custom pricing on the deployment)",
         )
     return None
 
