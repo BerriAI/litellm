@@ -1801,6 +1801,23 @@ def test_vertex_ai_map_tools_declares_a_namespace_by_its_members() -> None:
     ]
 
 
+def test_vertex_ai_map_tools_declares_a_namespace_member_like_the_same_chat_tool() -> None:
+    parameters = {
+        "type": "object",
+        "properties": {"repo": {"$ref": "#/$defs/Repo"}, "label": {"type": ["string", "null"]}},
+        "$defs": {"Repo": {"type": "string"}},
+    }
+    function = {"name": "create_issue", "description": "Open an issue", "parameters": parameters}
+    namespace = {"type": "namespace", "name": "github", "tools": [{"type": "function", **function}]}
+
+    from_namespace = VertexGeminiConfig().map_function(value=[namespace], optional_params={})
+    from_chat_tool = VertexGeminiConfig().map_function(
+        value=[{"type": "function", "function": function}], optional_params={}
+    )
+
+    assert from_namespace == from_chat_tool
+
+
 def test_vertex_ai_map_tool_with_anyof():
     """
     Related issue: https://github.com/BerriAI/litellm/issues/11164

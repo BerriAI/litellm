@@ -511,11 +511,20 @@ def mapped_gemini_speech_config(
     }
 
 
+def _as_chat_tool(member: JsonValue) -> JsonValue:
+    if not isinstance(member, dict) or "function" in member or "name" not in member:
+        return member
+    return {
+        "type": member.get("type", "function"),
+        "function": {key: value for key, value in member.items() if key != "type"},
+    }
+
+
 def _namespace_members_or_tool(tool: JsonValue) -> tuple[JsonValue, ...]:
     if not isinstance(tool, dict) or tool.get("type") != "namespace":
         return (tool,)
     members: Final = tool.get("tools")
-    return tuple(members) if isinstance(members, list) else ()
+    return tuple(map(_as_chat_tool, members)) if isinstance(members, list) else ()
 
 
 def _with_namespace_members_inlined(tools: JsonValue) -> JsonValue:

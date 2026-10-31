@@ -2144,15 +2144,33 @@ class TestToolPermissionGuardrailAnthropicMessages:
                 "allow",
                 "Tool 'exec' denied by rule 'deny_exec'",
             ),
+            (
+                [
+                    {"id": "deny_exec", "tool_name": r"^exec$", "decision": "deny"},
+                    {"id": "allow_all", "tool_name": r"^.*$", "decision": "allow"},
+                ],
+                "deny",
+                "Tool 'exec' denied by rule 'deny_exec'",
+            ),
+            (
+                [
+                    {"id": "allow_functions", "tool_name": r"^functions__.*$", "decision": "allow"},
+                    {"id": "deny_all", "tool_name": r"^.*$", "decision": "deny"},
+                ],
+                "allow",
+                None,
+            ),
         ],
         ids=[
             "bare_name_deny_rule",
             "bare_name_allow_rule",
             "qualified_rule_wins_over_an_earlier_bare_rule",
             "type_rule_keeps_an_earlier_bare_name_rule_in_charge",
+            "bare_name_deny_beats_a_later_catch_all_allow",
+            "qualified_allow_beats_a_later_catch_all_deny",
         ],
     )
-    async def test_pre_call_judges_a_namespace_member_by_its_bare_name_when_no_rule_names_it_qualified(
+    async def test_pre_call_judges_a_namespace_member_by_its_qualified_and_bare_names(
         self, rules: list[dict[str, str]], default_action: Literal["allow", "deny"], detection_message: str | None
     ) -> None:
         guardrail = self._pre_call(rules, "block", default_action=default_action)
@@ -2176,6 +2194,79 @@ class TestToolPermissionGuardrailAnthropicMessages:
         result = await self._run_pre_call(guardrail, data, "responses")
 
         assert result["tools"] == [{"type": "namespace", "name": "functions", "tools": members[1:]}]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("placement", ["tools", "functions"])
+    @pytest.mark.parametrize("on_disallowed_action", ["block", "rewrite"])
+    @pytest.mark.parametrize(
+        ("member", "detection_message"),
+        [
+            ({"type": "function", "function": {"name": "delete_db"}}, "Tool 'delete_db' denied by rule 'deny_delete'"),
+            (
+                {"type": "function", "name": "lookup", "function": {"name": "delete_db"}},
+                "Tool 'delete_db' denied by rule 'deny_delete'",
+            ),
+            ({"googleSearch": {}}, "Tool 'googleSearch' denied by rule 'deny_search'"),
+            (
+                {
+                    "type": "namespace",
+                    "name": "inner",
+                    "tools": [{"type": "function", "name": "noop"}],
+                    "function": {"name": "delete_db"},
+                },
+                "Tool 'delete_db' denied by rule 'deny_delete'",
+            ),
+        ],
+        ids=["chat_shaped_member", "function_object_behind_another_name", "hosted_key_member", "nested_namespace"],
+    )
+    async def test_pre_call_judges_a_namespace_member_by_what_a_provider_reads_from_it(
+        self,
+        member: dict[str, object],
+        detection_message: str,
+        on_disallowed_action: Literal["block", "rewrite"],
+        placement: Literal["tools", "functions"],
+    ) -> None:
+        guardrail = self._pre_call(
+            [
+                {"id": "deny_delete", "tool_name": r"^delete_db$", "decision": "deny"},
+                {"id": "deny_search", "tool_type": r"^googleSearch$", "decision": "deny"},
+            ],
+            on_disallowed_action,
+        )
+        weather = {"type": "function", "name": "get_weather"}
+        data = {
+            "model": "gemini-3",
+            "messages": [{"role": "user", "content": "hi"}],
+            placement: [{"type": "namespace", "name": "ops", "tools": [weather, member]}],
+        }
+
+        if on_disallowed_action == "block":
+            with pytest.raises(HTTPException) as excinfo:
+                await self._run_pre_call(guardrail, data, "acompletion")
+            assert excinfo.value.detail["detection_message"] == detection_message
+            return
+
+        result = await self._run_pre_call(guardrail, data, "acompletion")
+
+        assert result[placement] == [{"type": "namespace", "name": "ops", "tools": [weather]}]
+
+    @pytest.mark.asyncio
+    async def test_pre_call_allows_a_chat_shaped_namespace_member_the_allowlist_names(self) -> None:
+        guardrail = self._pre_call(
+            [{"id": "allow_create", "tool_name": r"^github__create_issue$", "decision": "allow"}],
+            "block",
+            default_action="deny",
+        )
+        namespace = {
+            "type": "namespace",
+            "name": "github",
+            "tools": [{"type": "function", "function": {"name": "create_issue"}}],
+        }
+        data = {"model": "gemini-3", "messages": [{"role": "user", "content": "hi"}], "tools": [namespace]}
+
+        result = await self._run_pre_call(guardrail, data, "acompletion")
+
+        assert result["tools"] == [namespace]
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(

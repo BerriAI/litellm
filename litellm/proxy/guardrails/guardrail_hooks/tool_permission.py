@@ -160,15 +160,11 @@ def _qualified_member_name(namespace: str, name: str) -> str:
     return f"{namespace}__{name}"
 
 
-def _namespace_member_target(namespace: str | None, member: object) -> _ToolTarget | None:
-    fields: Final = _object_mapping(member)
-    if fields is None:
-        return None
-    member_type: Final = _non_empty_string(fields.get("type"))
-    name: Final = _non_empty_string(fields.get("name"))
-    if name is None or namespace is None:
-        return (name, member_type)
-    return (_qualified_member_name(namespace, name), member_type)
+def _qualified_target(namespace: str | None, target: _ToolTarget) -> _ToolTarget:
+    name, tool_type = target
+    return (
+        (_qualified_member_name(namespace, name), tool_type) if namespace is not None and name is not None else target
+    )
 
 
 def _member_name(member: object) -> str | None:
@@ -176,38 +172,30 @@ def _member_name(member: object) -> str | None:
     return _non_empty_string(fields.get("name")) if fields is not None else None
 
 
-def _bare_member_names(tool: object) -> tuple[tuple[str, str], ...]:
-    fields: Final = _object_mapping(tool)
-    namespace: Final = _non_empty_string(fields.get("name")) if fields is not None else None
-    if namespace is None:
-        return ()
-    names: Final = (name for name in map(_member_name, _namespace_members(tool)) if name is not None)
-    return tuple((_qualified_member_name(namespace, name), name) for name in names)
-
-
-def _declaration_target(declaration: object) -> _ToolTarget | None:
-    fields: Final = _object_mapping(declaration)
-    name: Final = _non_empty_string(fields.get("name")) if fields is not None else None
-    return (name, "function") if name is not None else None
+def _declaration_targets(declaration: object) -> tuple[_ToolTarget, ...]:
+    name: Final = _member_name(declaration)
+    return ((name, "function"),) if name is not None else ()
 
 
 @dataclass(frozen=True, slots=True)
 class _MemberGroup:
     key: str
     members: Sequence[object]
-    target_of: Callable[[object], _ToolTarget | None]
+    targets_of: Callable[[object], tuple[_ToolTarget, ...]]
 
 
-def _member_group(tool: object) -> _MemberGroup | None:
+def _member_group(
+    tool: object, namespace_member_targets: Callable[[str | None, object], tuple[_ToolTarget, ...]]
+) -> _MemberGroup | None:
     fields: Final = _object_mapping(tool)
     if fields is None:
         return None
     members: Final = _namespace_members(tool)
     if members:
-        return _MemberGroup("tools", members, partial(_namespace_member_target, _non_empty_string(fields.get("name"))))
+        return _MemberGroup("tools", members, partial(namespace_member_targets, _member_name(tool)))
     key: Final = next((key for key in _DECLARATION_KEYS if _object_list(fields.get(key))), None)
     declarations: Final = _object_list(fields.get(key)) if key is not None else None
-    return _MemberGroup(key, declarations, _declaration_target) if key is not None and declarations else None
+    return _MemberGroup(key, declarations, _declaration_targets) if key is not None and declarations else None
 
 
 def _keyed_tool_fields(tool: object) -> Mapping[str, object] | None:
@@ -355,7 +343,7 @@ def _is_denied_target(
 def _kept_members(group: _MemberGroup | None, is_denied: Callable[[_ToolTarget], bool]) -> tuple[object, ...]:
     if group is None:
         return ()
-    return tuple(member for member in group.members if not is_denied(group.target_of(member) or (None, None)))
+    return tuple(member for member in group.members if not any(map(is_denied, group.targets_of(member))))
 
 
 def _none_tool_choice(tool_choice: object) -> object:
@@ -655,23 +643,31 @@ class ToolPermissionGuardrail(CustomGuardrail):
         verbose_proxy_logger.debug(message)
         return is_allowed, None, message
 
-    def _has_matching_name_rule(self, tool_name: str | None, tool_type: str | None) -> bool:
-        return any(
-            rule.tool_name is not None and self._rule_matches_tool(rule, tool_name=tool_name, tool_type=tool_type)[0]
-            for rule in self.rules
-        )
+    def _is_name_rule_for(self, rule: ToolPermissionRule, tool_name: str, tool_type: str | None) -> bool:
+        return rule.tool_name is not None and self._rule_matches_tool(rule, tool_name=tool_name, tool_type=tool_type)[0]
+
+    def _first_name_rule(self, tool_name: str, tool_type: str | None) -> ToolPermissionRule | None:
+        return next((rule for rule in self.rules if self._is_name_rule_for(rule, tool_name, tool_type)), None)
+
+    def _deciding_member_name(self, qualified: str, bare: str, tool_type: str | None) -> str:
+        qualified_rule: Final = self._first_name_rule(qualified, tool_type)
+        bare_rule: Final = self._first_name_rule(bare, tool_type)
+        if bare_rule is None or bare_rule is qualified_rule:
+            return qualified
+        if qualified_rule is None or self._is_name_rule_for(qualified_rule, bare, tool_type):
+            return bare
+        if self._is_name_rule_for(bare_rule, qualified, tool_type):
+            return qualified
+        return bare if bare_rule.decision == "deny" else qualified
 
     def _check_target_permission(
         self, target: _ToolTarget, bare_names: Mapping[str, str]
     ) -> tuple[bool, str | None, str | None]:
         name, tool_type = target
         bare_name: Final = bare_names.get(name) if name is not None else None
-        falls_back: Final = (
-            bare_name is not None
-            and not self._has_matching_name_rule(name, tool_type)
-            and self._has_matching_name_rule(bare_name, tool_type)
-        )
-        return self._check_tool_permission(bare_name if falls_back else name, tool_type)
+        if name is None or bare_name is None:
+            return self._check_tool_permission(name, tool_type)
+        return self._check_tool_permission(self._deciding_member_name(name, bare_name, tool_type), tool_type)
 
     def _parse_tool_call_arguments(
         self, tool_call: ChatCompletionMessageToolCall
@@ -972,12 +968,35 @@ class ToolPermissionGuardrail(CustomGuardrail):
         if not any(_is_tool_use_block(block) for block in kept_blocks):
             response["stop_reason"] = "end_turn"  # rebind-ok: dropping every tool_use ends the turn
 
-    def _get_request_tool_targets(self, tool: object) -> tuple[_ToolTarget, ...]:
-        group: Final = _member_group(tool)
-        member_targets: Final = (
-            tuple(target for target in map(group.target_of, group.members) if target is not None)
-            if group is not None
+    def _unqualified_member_targets(self, member: object) -> tuple[_ToolTarget, ...]:
+        fields: Final = _object_mapping(member)
+        if fields is None:
+            return ()
+        targets: Final = self._get_request_tool_targets(member)
+        own_name: Final = _member_name(member)
+        judged_names: Final = frozenset(name for name, _ in targets)
+        own_target: Final = (
+            ((own_name, _non_empty_string(fields.get("type"))),)
+            if own_name is not None and own_name not in judged_names
             else ()
+        )
+        return targets + own_target
+
+    def _namespace_member_targets(self, namespace: str | None, member: object) -> tuple[_ToolTarget, ...]:
+        return tuple(_qualified_target(namespace, target) for target in self._unqualified_member_targets(member))
+
+    def _bare_member_names(self, tool: object) -> tuple[tuple[str, str], ...]:
+        namespace: Final = _member_name(tool)
+        members: Final = _namespace_members(tool)
+        if namespace is None or not members:
+            return ()
+        targets: Final = chain.from_iterable(map(self._unqualified_member_targets, members))
+        return tuple((_qualified_member_name(namespace, name), name) for name, _ in targets if name is not None)
+
+    def _get_request_tool_targets(self, tool: object) -> tuple[_ToolTarget, ...]:
+        group: Final = _member_group(tool, self._namespace_member_targets)
+        member_targets: Final = (
+            tuple(chain.from_iterable(map(group.targets_of, group.members))) if group is not None else ()
         )
         keyed: Final = _keyed_tool_fields(tool)
         part_targets: Final = tuple(_part_target(keyed, key) for key in _part_keys(keyed)) if keyed is not None else ()
@@ -1071,7 +1090,7 @@ class ToolPermissionGuardrail(CustomGuardrail):
         denied_names: frozenset[str],
     ) -> tuple[object, ...]:
         is_denied: Final = partial(_is_denied_target, denied_targets=denied_targets, denied_names=denied_names)
-        group: Final = _member_group(tool)
+        group: Final = _member_group(tool, self._namespace_member_targets)
         keyed: Final = _keyed_tool_fields(tool)
         fields: Final = _object_mapping(tool)
         if fields is None or (group is None and keyed is None):
@@ -1354,7 +1373,7 @@ class ToolPermissionGuardrail(CustomGuardrail):
             return data
 
         bare_names: Final = MappingProxyType(
-            dict(chain.from_iterable(map(_bare_member_names, _sent_tools(_REQUEST_DATA.validate_python(data)))))
+            dict(chain.from_iterable(map(self._bare_member_names, _sent_tools(_REQUEST_DATA.validate_python(data)))))
         )
         decisions: Final = tuple((target, self._check_target_permission(target, bare_names)) for target in new_tools)
         denied: Final = tuple(
