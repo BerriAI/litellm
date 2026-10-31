@@ -524,7 +524,7 @@ async def route_create_file(
             _create_file_request=_create_file_request,
         )
     else:
-        await apply_team_provider_credentials(
+        apply_team_provider_credentials(
             data=cast(dict, _create_file_request),  # cast-ok: TypedDict is a plain dict at runtime; merged in place
             llm_router=llm_router,
             user_api_key_dict=user_api_key_dict,
@@ -1131,7 +1131,7 @@ async def get_file_content(
             )
 
             if not should_route:
-                await apply_team_provider_credentials(
+                apply_team_provider_credentials(
                     data=data,
                     llm_router=llm_router,
                     user_api_key_dict=user_api_key_dict,
@@ -1397,7 +1397,7 @@ async def get_file(
             # Remove file_id from data to avoid "multiple values for keyword argument" error
             # data was initialized with {"file_id": file_id}
             data.pop("file_id", None)
-            await apply_team_provider_credentials(
+            apply_team_provider_credentials(
                 data=data,
                 llm_router=llm_router,
                 user_api_key_dict=user_api_key_dict,
@@ -1616,7 +1616,7 @@ async def delete_file(
             )
         else:
             data.pop("file_id", None)
-            await apply_team_provider_credentials(
+            apply_team_provider_credentials(
                 data=data,
                 llm_router=llm_router,
                 user_api_key_dict=user_api_key_dict,
@@ -1786,7 +1786,7 @@ def _routed_model_name_on_provider(
 def _stored_model_name_routes_to_provider(
     llm_router: Router, custom_llm_provider: str, provider_model_names: frozenset[str], model_name: str
 ) -> bool:
-    routing_group: Final = llm_router.get_routing_group(model_name)
+    routing_group: Final = llm_router.registry().routing_group(model_name)
     routed_model_names: Final = (
         tuple(routing_group.models) if routing_group is not None else (llm_router.registry().resolve(model_name),)
     )
@@ -2018,7 +2018,7 @@ async def list_files(
                 )
             else:
                 resolved_custom_llm_provider: Final = custom_llm_provider or "openai"
-                await apply_team_provider_credentials(
+                apply_team_provider_credentials(
                     data=data,
                     llm_router=llm_router,
                     user_api_key_dict=user_api_key_dict,

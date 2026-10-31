@@ -713,6 +713,14 @@ class AnthropicResponseContentBlockRedactedThinking(LiteLLMBaseModel):
     data: str
 
 
+class AnthropicResponseContentBlockCompaction(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    type: Literal["compaction"]
+    content: str | None = None
+    signature: str | None = None
+
+
 class AnthropicResponseContentBlockServerToolUse(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
@@ -743,7 +751,9 @@ class AnthropicOutputTokensDetails(LiteLLMBaseModel):
     thinking_tokens: int | None = None
 
 
-AnthropicFinishReason = Literal["end_turn", "max_tokens", "stop_sequence", "tool_use", "refusal"]
+AnthropicFinishReason = Literal[
+    "end_turn", "max_tokens", "stop_sequence", "tool_use", "refusal", "pause_turn", "compaction"
+]
 
 
 class AnthropicResponse(LiteLLMBaseModel):
@@ -761,6 +771,7 @@ class AnthropicResponse(LiteLLMBaseModel):
         | AnthropicResponseContentBlockToolUse
         | AnthropicResponseContentBlockThinking
         | AnthropicResponseContentBlockRedactedThinking
+        | AnthropicResponseContentBlockCompaction
         | AnthropicResponseContentBlockServerToolUse
         | AnthropicResponseContentBlockWebSearchToolResult
     ]
@@ -808,6 +819,9 @@ class AnthropicThinkingParam(TypedDict, total=False):
     block_binding: ReadOnly[AnthropicThinkingBlockBinding]
 
 
+LEGACY_THINKING_DISPLAY_UPDATES_PROVIDERS: Final = frozenset(("anthropic", "azure_ai", "vertex_ai"))
+
+
 class ANTHROPIC_HOSTED_TOOLS(str, Enum):
     WEB_SEARCH = "web_search"
     BASH = "bash"
@@ -828,6 +842,7 @@ class ANTHROPIC_BETA_HEADER_VALUES(str, Enum):
     CONTEXT_MANAGEMENT_2025_06_27 = "context-management-2025-06-27"
     COMPACT_2026_01_12 = "compact-2026-01-12"
     COMPACT_2026_09_04 = "compact-2026-09-04"
+    INLINE_TOOLS_2026_09_15 = "inline-tools-2026-09-15"
     STRUCTURED_OUTPUT_2025_09_25 = "structured-outputs-2025-11-13"
     ADVANCED_TOOL_USE_2025_11_20 = "advanced-tool-use-2025-11-20"
     FAST_MODE_2026_02_01 = "fast-mode-2026-02-01"

@@ -239,7 +239,7 @@ impl litellm_host_native::services::HostCallHandler<Ocr> for CallerTokenHost {
             OcrOp::AcquireAzureAdToken(reply) => {
                 self.trace.lock().unwrap().push("token".into());
                 reply.send(litellm_auth::ResolvedCredential::Static(
-                    litellm_auth::SecretValue::new("caller-token"),
+                    litellm_secret_value::SecretValue::new("caller-token"),
                 ));
                 Ok(())
             }

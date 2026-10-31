@@ -9269,6 +9269,94 @@ def reset_mock_cache() -> None:
     _model_cache.flush_cache()
 
 
+@respx.mock
+def test_get_valid_models_does_not_ask_a_timed_out_provider_again_on_the_next_listing(reset_mock_cache: None) -> None:
+    catalog: Final = respx.get("https://openrouter.ai/api/v1/models/user").mock(
+        side_effect=httpx.ReadTimeout("catalog hung")
+    )
+    deployment: Final = LiteLLM_Params(model="openrouter/*", api_key="sk-or-during-an-outage")
+
+    listings: Final = tuple(
+        get_valid_models(check_provider_endpoint=True, custom_llm_provider="openrouter", litellm_params=deployment)
+        for _ in range(2)
+    )
+
+    assert (listings, catalog.call_count) == (([], []), 1)
+
+
+@respx.mock
+def test_get_valid_models_does_not_ask_a_timed_out_hosted_vllm_server_again_on_the_next_listing(
+    reset_mock_cache: None,
+) -> None:
+    models_route: Final = respx.get("http://vllm-hung.test:8000/v1/models").mock(
+        side_effect=httpx.ReadTimeout("vLLM did not answer")
+    )
+    deployment: Final = LiteLLM_Params(model="hosted_vllm/*", api_base="http://vllm-hung.test:8000/v1")
+
+    listings: Final = tuple(
+        get_valid_models(check_provider_endpoint=True, custom_llm_provider="hosted_vllm", litellm_params=deployment)
+        for _ in range(2)
+    )
+
+    assert (listings, models_route.call_count) == (([], []), 1)
+
+
+@respx.mock
+def test_get_valid_models_lists_a_provider_again_right_after_a_fast_failure(reset_mock_cache: None) -> None:
+    respx.get("https://openrouter.ai/api/v1/models/user").mock(
+        side_effect=(httpx.Response(503), httpx.Response(200, json={"data": [{"id": "anthropic/claude-haiku-5-5"}]}))
+    )
+    deployment: Final = LiteLLM_Params(model="openrouter/*", api_key="sk-or-recovers")
+
+    listings: Final = tuple(
+        get_valid_models(check_provider_endpoint=True, custom_llm_provider="openrouter", litellm_params=deployment)
+        for _ in range(2)
+    )
+
+    assert listings == ([], ["openrouter/anthropic/claude-haiku-5-5"])
+
+
+@respx.mock
+def test_get_valid_models_keeps_a_good_listing_when_an_overlapping_listing_fails_after_it(
+    reset_mock_cache: None,
+) -> None:
+    deployment: Final = LiteLLM_Params(model="openrouter/*", api_key="sk-or-overlapping-listings")
+    first_request: Final = iter((True, False))
+
+    def answer_after_an_overlapping_listing(request: httpx.Request) -> httpx.Response:
+        if next(first_request):
+            get_valid_models(check_provider_endpoint=True, custom_llm_provider="openrouter", litellm_params=deployment)
+            raise httpx.ReadTimeout("catalog hung", request=request)
+        return httpx.Response(200, json={"data": [{"id": "anthropic/claude-haiku-5-5"}]})
+
+    respx.get("https://openrouter.ai/api/v1/models/user").mock(side_effect=answer_after_an_overlapping_listing)
+    get_valid_models(check_provider_endpoint=True, custom_llm_provider="openrouter", litellm_params=deployment)
+
+    assert get_valid_models(
+        check_provider_endpoint=True, custom_llm_provider="openrouter", litellm_params=deployment
+    ) == ["openrouter/anthropic/claude-haiku-5-5"]
+
+
+@respx.mock
+def test_get_valid_models_asks_a_provider_once_when_many_listings_start_together(reset_mock_cache: None) -> None:
+    def slow_catalog(request: httpx.Request) -> httpx.Response:
+        threading.Event().wait(0.2)
+        return httpx.Response(200, json={"data": [{"id": "anthropic/claude-haiku-5-5"}]})
+
+    catalog: Final = respx.get("https://openrouter.ai/api/v1/models/user").mock(side_effect=slow_catalog)
+    deployment: Final = LiteLLM_Params(model="openrouter/*", api_key="sk-or-many-listings")
+
+    def list_models(_: int) -> tuple[str, ...]:
+        return tuple(
+            get_valid_models(check_provider_endpoint=True, custom_llm_provider="openrouter", litellm_params=deployment)
+        )
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        listings: Final = frozenset(pool.map(list_models, range(8)))
+
+    assert (listings, catalog.call_count) == (frozenset({("openrouter/anthropic/claude-haiku-5-5",)}), 1)
+
+
 @pytest.fixture
 def isolated_openai_model_sets(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
@@ -10953,131 +11041,6 @@ def test_get_valid_models_from_provider_cache_invalidation(monkeypatch):
     monkeypatch.delenv("OPENAI_API_KEY")
 
     assert _model_cache.get_cached_model_info("openai") is None
-
-
-@respx.mock
-def test_a_timed_out_provider_model_listing_is_retried_only_after_its_timeout_ttl() -> None:
-    from litellm.constants import PROVIDER_MODEL_DISCOVERY_TIMEOUT_CACHE_TTL_SECONDS
-    from litellm.llms.vllm.common_utils import HostedVLLMModelInfo
-    from litellm.types.router import LiteLLM_Params
-    from litellm.utils import AvailableModelsCache, _get_valid_models_from_provider_api
-
-    models_route: Final = respx.get("http://vllm-hung.test:8000/v1/models").mock(
-        side_effect=httpx.ReadTimeout("vLLM did not answer")
-    )
-    litellm_params: Final = LiteLLM_Params(model="hosted_vllm/*", api_base="http://vllm-hung.test:8000/v1")
-    clock: Final = Mock(return_value=1000.0)
-    model_cache: Final = AvailableModelsCache(clock=clock)
-
-    def list_models() -> list[str]:
-        return _get_valid_models_from_provider_api(
-            HostedVLLMModelInfo(), "hosted_vllm", litellm_params, model_cache=model_cache
-        )
-
-    assert list_models() == []
-    assert list_models() == []
-    assert models_route.call_count == 1
-
-    models_route.mock(side_effect=None, return_value=httpx.Response(200, json={"data": [{"id": "qwen2.5"}]}))
-    clock.return_value = 1000.0 + PROVIDER_MODEL_DISCOVERY_TIMEOUT_CACHE_TTL_SECONDS - 1
-    assert list_models() == []
-    assert models_route.call_count == 1
-
-    clock.return_value = 1000.0 + PROVIDER_MODEL_DISCOVERY_TIMEOUT_CACHE_TTL_SECONDS + 1
-    assert list_models() == ["qwen2.5"]
-    assert models_route.call_count == 2
-
-
-@respx.mock
-def test_concurrent_listings_of_one_server_share_a_single_request() -> None:
-    import time
-
-    from litellm.llms.vllm.common_utils import HostedVLLMModelInfo
-    from litellm.types.router import LiteLLM_Params
-    from litellm.utils import AvailableModelsCache, _get_valid_models_from_provider_api
-
-    listing_started: Final = threading.Event()
-    server_released: Final = threading.Event()
-
-    def slow_listing(request: httpx.Request) -> httpx.Response:
-        listing_started.set()
-        server_released.wait(timeout=5)
-        return httpx.Response(200, json={"data": [{"id": "qwen2.5"}]})
-
-    models_route: Final = respx.get("http://vllm-slow.test:8000/v1/models").mock(side_effect=slow_listing)
-    litellm_params: Final = LiteLLM_Params(model="hosted_vllm/*", api_base="http://vllm-slow.test:8000/v1")
-    model_cache: Final = AvailableModelsCache(clock=Mock(return_value=1000.0))
-
-    def list_models() -> list[str]:
-        return _get_valid_models_from_provider_api(
-            HostedVLLMModelInfo(), "hosted_vllm", litellm_params, model_cache=model_cache
-        )
-
-    with ThreadPoolExecutor(max_workers=4) as callers:
-        listings: Final = tuple(callers.submit(list_models) for _ in range(4))
-        try:
-            assert listing_started.wait(timeout=3)
-            time.sleep(0.3)
-        finally:
-            server_released.set()
-        assert [listing.result(timeout=5) for listing in listings] == [["qwen2.5"]] * 4
-
-    assert models_route.call_count == 1
-
-
-@respx.mock
-def test_a_listing_that_times_out_keeps_the_models_a_concurrent_listing_cached() -> None:
-    from litellm.llms.vllm.common_utils import HostedVLLMModelInfo
-    from litellm.types.router import LiteLLM_Params
-    from litellm.utils import AvailableModelsCache, _get_valid_models_from_provider_api
-
-    litellm_params: Final = LiteLLM_Params(model="hosted_vllm/*", api_base="http://vllm-flaky.test:8000/v1")
-    model_cache: Final = AvailableModelsCache(clock=Mock(return_value=1000.0))
-
-    def list_models() -> list[str]:
-        return _get_valid_models_from_provider_api(
-            HostedVLLMModelInfo(), "hosted_vllm", litellm_params, model_cache=model_cache
-        )
-
-    def time_out_after_a_concurrent_listing_succeeds(request: httpx.Request) -> httpx.Response:
-        assert list_models() == ["qwen2.5"]
-        raise httpx.ReadTimeout("vLLM did not answer", request=request)
-
-    models_route: Final = respx.get("http://vllm-flaky.test:8000/v1/models").mock(
-        side_effect=iter(
-            (time_out_after_a_concurrent_listing_succeeds, httpx.Response(200, json={"data": [{"id": "qwen2.5"}]}))
-        )
-    )
-
-    assert list_models() == ["qwen2.5"]
-    assert list_models() == ["qwen2.5"]
-    assert models_route.call_count == 2
-
-
-@pytest.mark.parametrize(
-    ("host", "first_answer"),
-    [("vllm-erroring.test", httpx.Response(503)), ("vllm-refusing.test", httpx.ConnectError("connection refused"))],
-    ids=["server-error", "connection-refused"],
-)
-@respx.mock
-def test_a_provider_model_listing_that_fails_fast_is_tried_again_on_the_next_call(
-    host: str, first_answer: httpx.Response | httpx.ConnectError
-) -> None:
-    from litellm.types.router import LiteLLM_Params
-
-    models_route: Final = respx.get(f"http://{host}:8000/v1/models").mock(
-        side_effect=[first_answer, httpx.Response(200, json={"data": [{"id": "qwen2.5"}]})]
-    )
-    litellm_params: Final = LiteLLM_Params(model="hosted_vllm/*", api_base=f"http://{host}:8000/v1")
-
-    def list_models() -> list[str]:
-        return get_valid_models(
-            check_provider_endpoint=True, custom_llm_provider="hosted_vllm", litellm_params=litellm_params
-        )
-
-    assert list_models() == []
-    assert list_models() == ["qwen2.5"]
-    assert models_route.call_count == 2
 
 
 def test_delta_tool_calls_sequential_indices():

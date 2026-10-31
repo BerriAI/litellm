@@ -1,5 +1,3 @@
-import asyncio
-import threading
 from datetime import datetime, timezone
 from types import MappingProxyType
 from typing import Final
@@ -11,6 +9,7 @@ import respx
 from fastapi import HTTPException
 from litellm_enterprise.proxy.hooks.managed_files import _PROXY_LiteLLMManagedFiles
 
+import litellm
 from litellm import Router
 from litellm.caching.caching import DualCache
 from litellm.proxy._types import UserAPIKeyAuth
@@ -769,141 +768,26 @@ def test_a_request_key_that_cannot_be_an_http_header_is_a_bad_request(api_key: s
     assert api_key not in str(refused.value.detail)
 
 
-@pytest.mark.asyncio
-@respx.mock
-async def test_a_hung_wildcard_listing_during_a_credential_lookup_leaves_the_event_loop_free(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    import litellm
-
-    monkeypatch.setattr(litellm, "check_provider_endpoint", True)
-    listing_started: Final = threading.Event()
-    other_request_served: Final = threading.Event()
-    listing_answered: Final = threading.Event()
-
-    def listing_that_answers_once_another_request_is_served(request: httpx.Request) -> httpx.Response:
-        listing_started.set()
-        if other_request_served.wait(timeout=3):
-            listing_answered.set()
-            return httpx.Response(200, json={"data": [{"id": "qwen2.5"}]})
-        return httpx.Response(503)
-
-    respx.get("http://vllm-credential-lookup.test:8000/v1/models").mock(
-        side_effect=listing_that_answers_once_another_request_is_served
-    )
-    data: Final[dict[str, object]] = {}
-    lookup: Final = asyncio.create_task(
-        apply_team_provider_credentials(
-            data=data,
-            llm_router=Router(
-                model_list=[
-                    {
-                        "model_name": "hosted_vllm/*",
-                        "litellm_params": {
-                            "model": "hosted_vllm/*",
-                            "api_base": "http://vllm-credential-lookup.test:8000/v1",
-                        },
-                    },
-                    {"model_name": "gpt-4o", "litellm_params": {"model": "openai/gpt-4o", "api_key": "openai-key"}},
-                ]
-            ),
-            user_api_key_dict=UserAPIKeyAuth(api_key="sk-test", models=["hosted_vllm/*"]),
-            custom_llm_provider="openai",
-        )
-    )
-    assert await asyncio.to_thread(listing_started.wait, 3)
-    other_request_served.set()
-    await lookup
-
-    assert listing_answered.is_set()
-    assert data == {}
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "custom_llm_provider, vllm_api_base, openai_deployment, applied_credential",
-    [
-        ("openai", "http://vllm-beside-openai.test:8000/v1", ("gpt-4o", "openai/gpt-4o"), ("api_key", "openai-key")),
-        (
-            "openai",
-            "http://vllm-before-openai-wildcard.test:8000/v1",
-            ("openai/*", "openai/*"),
-            ("api_key", "openai-key"),
-        ),
-        (
-            "hosted_vllm",
-            "http://vllm-route-match.test:8000/v1",
-            ("gpt-4o", "openai/gpt-4o"),
-            ("api_base", "http://vllm-route-match.test:8000/v1"),
-        ),
-        (
-            "anthropic",
-            "http://vllm-beside-no-anthropic-deployment.test:8000/v1",
-            ("gpt-4o", "openai/gpt-4o"),
-            ("api_key", None),
-        ),
-    ],
-)
-async def test_a_credential_lookup_never_lists_a_wildcard_server_whose_models_cannot_change_the_answer(
-    monkeypatch: pytest.MonkeyPatch,
-    custom_llm_provider: str,
-    vllm_api_base: str,
-    openai_deployment: tuple[str, str],
-    applied_credential: tuple[str, str | None],
-) -> None:
-    import litellm
-
-    monkeypatch.setattr(litellm, "check_provider_endpoint", True)
-    data: Final[dict[str, object]] = {}
-
-    with respx.mock(assert_all_called=False) as vllm_server:
-        listing: Final = vllm_server.get(f"{vllm_api_base}/models").mock(
-            return_value=httpx.Response(200, json={"data": [{"id": "qwen2.5"}]})
-        )
-        await apply_team_provider_credentials(
-            data=data,
-            llm_router=Router(
-                model_list=[
-                    {
-                        "model_name": "hosted_vllm/*",
-                        "litellm_params": {"model": "hosted_vllm/*", "api_base": vllm_api_base},
-                    },
-                    {
-                        "model_name": openai_deployment[0],
-                        "litellm_params": {"model": openai_deployment[1], "api_key": "openai-key"},
-                    },
-                ]
-            ),
-            user_api_key_dict=UserAPIKeyAuth(api_key="sk-test"),
-            custom_llm_provider=custom_llm_provider,
-        )
-
-    assert not listing.called
-    assert data.get(applied_credential[0]) == applied_credential[1]
-
-
 def _apply_team_a_openai_credentials(data: dict[str, object]) -> None:
-    asyncio.run(
-        apply_team_provider_credentials(
-            data=data,
-            llm_router=Router(
-                model_list=[
-                    {
-                        "model_name": "openai/*",
-                        "litellm_params": {
-                            "model": "openai/*",
-                            "api_key": "team-openai-key",
-                            "api_base": "https://team.example/v1",
-                        },
-                        "model_info": {"id": "team-a-openai", "team_id": "team-a"},
-                    }
-                ]
-            ),
-            user_api_key_dict=UserAPIKeyAuth(
-                api_key="test-key", user_id="test-user", team_id="team-a", team_models=["openai/*"], models=["gpt-4o"]
-            ),
-            custom_llm_provider="openai",
-        )
+    apply_team_provider_credentials(
+        data=data,
+        llm_router=Router(
+            model_list=[
+                {
+                    "model_name": "openai/*",
+                    "litellm_params": {
+                        "model": "openai/*",
+                        "api_key": "team-openai-key",
+                        "api_base": "https://team.example/v1",
+                    },
+                    "model_info": {"id": "team-a-openai", "team_id": "team-a"},
+                }
+            ]
+        ),
+        user_api_key_dict=UserAPIKeyAuth(
+            api_key="test-key", user_id="test-user", team_id="team-a", team_models=["openai/*"], models=["gpt-4o"]
+        ),
+        custom_llm_provider="openai",
     )
 
 
@@ -971,3 +855,112 @@ def test_a_team_keeps_its_first_config_file_openai_deployment_over_older_db_ones
 
     assert credentials is not None
     assert credentials["api_key"] == "deployment-z-key"
+
+
+@pytest.mark.parametrize(
+    ("custom_llm_provider", "openrouter_key", "api_key"),
+    [("openai", "sk-or-files-openai", "openai-key"), ("openrouter", "sk-or-files-openrouter", "sk-or-files-openrouter")],
+)
+def test_a_provider_credential_lookup_never_lists_an_openrouter_wildcards_live_catalog(
+    monkeypatch: pytest.MonkeyPatch, custom_llm_provider: str, openrouter_key: str, api_key: str
+):
+    monkeypatch.setattr(litellm, "check_provider_endpoint", True)
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "openrouter/*",
+                "litellm_params": {
+                    "model": "openrouter/*",
+                    "api_key": openrouter_key,
+                    "api_base": "https://openrouter.ai/api/v1",
+                },
+            },
+            {"model_name": "gpt-5.4-mini", "litellm_params": {"model": "openai/gpt-5.4-mini", "api_key": "openai-key"}},
+        ]
+    )
+
+    with respx.mock(assert_all_called=False) as respx_mock:
+        catalog_route: Final = respx_mock.get("https://openrouter.ai/api/v1/models/user").mock(
+            return_value=httpx.Response(200, json={"data": [{"id": "openai/gpt-5.4-mini"}]})
+        )
+        credentials: Final = get_team_provider_credentials(
+            llm_router=router,
+            user_api_key_dict=UserAPIKeyAuth(api_key="test-key", user_id="test-user"),
+            custom_llm_provider=custom_llm_provider,
+            include_accessible_deployments=True,
+        )
+
+    assert credentials is not None
+    assert (credentials["custom_llm_provider"], credentials["api_key"]) == (custom_llm_provider, api_key)
+    assert catalog_route.call_count == 0
+
+
+@pytest.mark.parametrize(
+    ("key_models", "deployments", "custom_llm_provider", "api_key"),
+    [
+        (
+            ["anthropic/*"],
+            (("anthropic/claude-*", "anthropic/claude-*", "anthropic-narrow-key"),),
+            "anthropic",
+            "anthropic-narrow-key",
+        ),
+        (["anthropic/claude-3*"], (("anthropic/*", "anthropic/*", "anthropic-wide-key"),), "anthropic", "anthropic-wide-key"),
+        (["openrouter/*"], (("openrouter/openai/*", "openrouter/openai/*", "sk-or-narrow"),), "openrouter", "sk-or-narrow"),
+        (
+            ["team/*"],
+            (("team/*", "openrouter/*", "sk-or-team"), ("team/openai/*", "openai/*", "openai-team-key")),
+            "openai",
+            "openai-team-key",
+        ),
+    ],
+)
+def test_a_key_wildcard_finds_the_deployment_it_grants_without_listing_any_provider_catalog(
+    monkeypatch: pytest.MonkeyPatch,
+    key_models: list[str],
+    deployments: tuple[tuple[str, str, str], ...],
+    custom_llm_provider: str,
+    api_key: str,
+):
+    monkeypatch.setattr(litellm, "check_provider_endpoint", True)
+    router: Final = Router(
+        model_list=[
+            {"model_name": model_name, "litellm_params": {"model": model, "api_key": deployment_key}}
+            for model_name, model, deployment_key in deployments
+        ]
+    )
+
+    with respx.mock(assert_all_called=False) as respx_mock:
+        catalog_requests: Final = respx_mock.route().mock(return_value=httpx.Response(200, json={"data": []}))
+        credentials: Final = get_team_provider_credentials(
+            llm_router=router,
+            user_api_key_dict=UserAPIKeyAuth(api_key="test-key", user_id="test-user", models=key_models),
+            custom_llm_provider=custom_llm_provider,
+            include_accessible_deployments=True,
+        )
+
+    assert credentials is not None
+    assert (credentials["custom_llm_provider"], credentials["api_key"]) == (custom_llm_provider, api_key)
+    assert catalog_requests.call_count == 0
+
+
+@pytest.mark.parametrize(
+    ("deployed_name", "api_key"), [("gpt-4o-mini", None), ("openai/gpt-4o-mini", "openai-deployment-key")]
+)
+def test_a_provider_wildcard_grant_finds_only_deployments_named_under_it(deployed_name: str, api_key: str | None):
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": deployed_name,
+                "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "openai-deployment-key"},
+            }
+        ]
+    )
+
+    credentials: Final = get_team_provider_credentials(
+        llm_router=router,
+        user_api_key_dict=UserAPIKeyAuth(api_key="test-key", user_id="test-user", models=["openai/*"]),
+        custom_llm_provider="openai",
+        include_accessible_deployments=True,
+    )
+
+    assert (None if credentials is None else credentials["api_key"]) == api_key

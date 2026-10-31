@@ -1,7 +1,9 @@
 use std::sync::Arc;
 
+use litellm_secret_value::SecretValue;
 use litellm_secrets::{SecretManager, SecretManagerState};
-use litellm_secrets_types::{AccessMode, KeyManagementSettings, KeyManagementSystem, SecretValue};
+use litellm_secrets_types::{AccessMode, KeyManagementSettings, KeyManagementSystem};
+
 use pyo3::prelude::*;
 use serde_json::Value;
 

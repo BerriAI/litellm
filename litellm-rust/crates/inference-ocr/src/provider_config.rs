@@ -1,4 +1,6 @@
-use litellm_auth::{InputSource, SecretValue, Sourced};
+use litellm_auth::{InputSource, Sourced};
+use litellm_secret_value::SecretValue;
+
 use litellm_core_utils::get_llm_provider_logic::{
     CustomLlmProvider, LlmProviders, get_custom_llm_provider,
 };
@@ -407,7 +409,7 @@ mod tests {
     fn connection_resolution_preserves_dynamic_precedence_and_input_sources() {
         let connection = OcrConfigKind::Mistral.resolve_connection_params(OcrCredentialInputs {
             api_key: Some(Sourced::new(
-                litellm_auth::SecretValue::new("explicit-key"),
+                litellm_secret_value::SecretValue::new("explicit-key"),
                 InputSource::Deployment,
             )),
             api_base: Some(Sourced::new(
@@ -415,7 +417,7 @@ mod tests {
                 InputSource::Deployment,
             )),
             dynamic_api_key: Some(Sourced::new(
-                litellm_auth::SecretValue::new("dynamic-key"),
+                litellm_secret_value::SecretValue::new("dynamic-key"),
                 InputSource::Environment,
             )),
             dynamic_api_base: Some(Sourced::new(
@@ -455,7 +457,7 @@ mod tests {
     ) {
         let dynamic_key = dynamic_value.map(|value| {
             Sourced::new(
-                litellm_auth::SecretValue::new(value),
+                litellm_secret_value::SecretValue::new(value),
                 InputSource::Environment,
             )
         });
@@ -463,7 +465,7 @@ mod tests {
             dynamic_value.map(|value| Sourced::new(value.into(), InputSource::Environment));
         let connection = OcrConfigKind::Mistral.resolve_connection_params(OcrCredentialInputs {
             api_key: Some(Sourced::new(
-                litellm_auth::SecretValue::new("explicit-key"),
+                litellm_secret_value::SecretValue::new("explicit-key"),
                 InputSource::Deployment,
             )),
             api_base: Some(Sourced::new(
@@ -502,14 +504,14 @@ mod tests {
             OcrCredentialInputs {
                 api_key: explicit_key.map(|value| {
                     Sourced::new(
-                        litellm_auth::SecretValue::new(value),
+                        litellm_secret_value::SecretValue::new(value),
                         InputSource::Deployment,
                     )
                 }),
                 api_base: explicit_base
                     .map(|value| Sourced::new(value.into(), InputSource::Deployment)),
                 dynamic_api_key: Some(Sourced::new(
-                    litellm_auth::SecretValue::new("dynamic-key"),
+                    litellm_secret_value::SecretValue::new("dynamic-key"),
                     InputSource::Environment,
                 )),
                 dynamic_api_base: Some(Sourced::new(

@@ -489,7 +489,7 @@ async def create_batch(
                 verbose_proxy_logger.debug("Created batch using model: %s", model_param)
             else:
                 # SCENARIO 3: Fallback to custom_llm_provider (uses env variables)
-                await apply_team_provider_credentials(
+                apply_team_provider_credentials(
                     data=cast(dict, _create_batch_data),  # cast-ok: TypedDict is a dict at runtime
                     llm_router=llm_router,
                     user_api_key_dict=user_api_key_dict,
@@ -772,7 +772,7 @@ async def retrieve_batch(
                 or get_custom_llm_provider_from_request_query(request=request)
             )
             custom_llm_provider: Final = requested_provider or "openai"
-            await apply_team_provider_credentials(
+            apply_team_provider_credentials(
                 data=data,
                 llm_router=llm_router,
                 user_api_key_dict=user_api_key_dict,
@@ -986,7 +986,7 @@ async def list_batches(
                 or get_custom_llm_provider_from_request_query(request=request)
                 or "openai"
             )
-            await apply_team_provider_credentials(
+            apply_team_provider_credentials(
                 data=data,
                 llm_router=llm_router,
                 user_api_key_dict=user_api_key_dict,
@@ -1209,7 +1209,7 @@ async def cancel_batch(
             # Extract batch_id from data to avoid "multiple values for keyword argument" error
             # data was cast from CancelBatchRequest which already contains batch_id
             data.pop("batch_id", None)
-            await apply_team_provider_credentials(
+            apply_team_provider_credentials(
                 data=data,
                 llm_router=llm_router,
                 user_api_key_dict=user_api_key_dict,

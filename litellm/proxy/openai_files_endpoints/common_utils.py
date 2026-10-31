@@ -1,4 +1,5 @@
 import base64
+import itertools
 import logging
 import mimetypes
 import re
@@ -509,20 +510,6 @@ _UNKNOWN_CREATION_TIME: Final = datetime.max.replace(tzinfo=timezone.utc)
 class _RouterDeployment(TypedDict):
     model_name: ReadOnly[NotRequired[str]]
     model_info: ReadOnly[Mapping[str, object]]
-    litellm_params: ReadOnly[Mapping[str, object]]
-
-
-def _deployment_serves_provider(deployment: _RouterDeployment, custom_llm_provider: str) -> bool:
-    from litellm.router_utils.common_utils import credential_provider
-
-    litellm_params: Final = deployment["litellm_params"]
-    model: Final = litellm_params.get("model")
-    deployment_provider: Final = litellm_params.get("custom_llm_provider")
-    return (
-        isinstance(model, str)
-        and credential_provider(deployment_provider if isinstance(deployment_provider, str) else None, model)
-        == custom_llm_provider
-    )
 
 
 def _team_deployment_rank(model_info: Mapping[str, object], deployment_id: str) -> tuple[datetime, str]:
@@ -544,7 +531,7 @@ def get_team_provider_credentials(
     custom_llm_provider: str,
     *,
     include_accessible_deployments: bool = True,
-) -> dict[str, object] | None:
+) -> dict | None:
     """
     Resolve upstream credentials for a provider-scoped file operation
     (e.g. GET /v1/files), which doesn't pin a model.
@@ -555,7 +542,8 @@ def get_team_provider_credentials(
        listings on the team's own provider account/key instead of a shared
        global one.
     2. Fallback: any deployment the caller is granted access to for this
-       provider, expanding wildcard routes and the all-proxy-models sentinel.
+       provider, matching wildcard grants against deployed model names without
+       listing any provider's catalog, and expanding the all-proxy-models sentinel.
        Skipped when ``include_accessible_deployments`` is False.
 
     Credential lookup is scoped to both the team's allowlist and the key's own
@@ -573,7 +561,8 @@ def get_team_provider_credentials(
         return None
 
     from litellm.proxy._types import SpecialModelNames
-    from litellm.proxy.auth.model_checks import get_key_models, iter_model_names_expanding_wildcards_last
+    from litellm.proxy.auth.auth_checks import is_model_allowed_by_pattern
+    from litellm.proxy.auth.model_checks import get_complete_model_list, get_key_models
 
     team_id: Final = user_api_key_dict.team_id
     team_models: Final = user_api_key_dict.team_models or []
@@ -647,30 +636,46 @@ def get_team_provider_credentials(
 
     if not include_accessible_deployments:
         return None
-    if not any(_deployment_serves_provider(deployment, custom_llm_provider) for deployment in registry.all()):
-        return None
 
     # 2. Fall back to deployments the caller is allowed to access. The key's
     #    effective allowlist (sentinels and access groups already expanded by
     #    get_key_models) wins when set; otherwise the team's allowlist applies.
     #    The all-proxy-models sentinel isn't expanded by
-    #    iter_model_names_expanding_wildcards_last, so normalize it to an empty allowlist, which
+    #    get_complete_model_list, so normalize it to an empty allowlist, which
     #    defers to the team-scoped proxy model list. A team or key with a
     #    restricted allowlist (e.g. anthropic only) therefore never resolves
     #    another provider's key.
     grants_all_models: Final = SpecialModelNames.all_proxy_models.value in team_models
     effective_team_models: Final = [] if grants_all_models else team_models
 
-    models_to_try: Final = iter_model_names_expanding_wildcards_last(
-        key_models=key_model_allowlist,
+    granted_models: Final = get_complete_model_list(
+        key_models=list(key_model_allowlist),
         team_models=effective_team_models,
         proxy_model_list=proxy_model_list,
+        user_model=None,
+        infer_model_from_keys=False,
+        return_wildcard_routes=True,
         llm_router=llm_router,
         model_access_groups=model_access_groups,
+        include_model_access_groups=True,
         team_id=team_id,
+        expand_wildcard_routes=False,
+    )
+    deployments_granted_by_wildcard: Final = (
+        model_name
+        for model_name in proxy_model_list
+        if any(
+            is_model_allowed_by_pattern(model=model_name, allowed_model_pattern=granted) for granted in granted_models
+        )
     )
     return next(
-        (credentials for credentials in map(_provider_credentials, models_to_try) if credentials is not None),
+        (
+            credentials
+            for credentials in map(
+                _provider_credentials, dict.fromkeys(itertools.chain(granted_models, deployments_granted_by_wildcard))
+            )
+            if credentials is not None
+        ),
         None,
     )
 
@@ -711,7 +716,7 @@ def explicit_request_credentials(data: Mapping[str, object]) -> Mapping[str, str
     return MappingProxyType({"api_key": api_key, "api_base": api_base})
 
 
-async def apply_team_provider_credentials(
+def apply_team_provider_credentials(
     data: dict,  # mutable-ok: credentials are merged into the request payload in place, same contract as prepare_data_with_credentials
     llm_router: Optional["Router"],
     user_api_key_dict: "UserAPIKeyAuth",
@@ -726,10 +731,7 @@ async def apply_team_provider_credentials(
     ``forward_llm_provider_auth_headers``) replaces the deployment's, and the
     request's ``api_base`` replaces the deployment's only alongside that key.
     """
-    from litellm.proxy.auth.model_checks import run_model_discovery
-
-    credentials: Final = await run_model_discovery(
-        get_team_provider_credentials,
+    credentials: Final = get_team_provider_credentials(
         llm_router=llm_router,
         user_api_key_dict=user_api_key_dict,
         custom_llm_provider=custom_llm_provider,

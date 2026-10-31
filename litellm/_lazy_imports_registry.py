@@ -1469,11 +1469,11 @@ _UTILS_MODULE_IMPORT_MAP: Final = {
     "AsyncHTTPHandler": ("litellm.llms.custom_httpx.http_handler", "AsyncHTTPHandler"),
     "HTTPHandler": ("litellm.llms.custom_httpx.http_handler", "HTTPHandler"),
     "get_num_retries_from_retry_policy": (
-        "litellm.router_utils.get_retry_from_policy",
+        "litellm.litellm_core_utils.get_retry_from_policy",
         "get_num_retries_from_retry_policy",
     ),
     "reset_retry_policy": (
-        "litellm.router_utils.get_retry_from_policy",
+        "litellm.litellm_core_utils.get_retry_from_policy",
         "reset_retry_policy",
     ),
     "get_coroutine_checker": (

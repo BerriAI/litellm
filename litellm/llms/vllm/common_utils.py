@@ -13,6 +13,14 @@ from litellm.types.llms.openai import AllMessageValues
 from litellm.utils import add_path_to_api_base
 
 
+def endpoint_under_api_base(endpoint: str, api_base: str | None) -> str:
+    return (
+        endpoint.lstrip("/").removeprefix("v1/")
+        if api_base is not None and api_base.rstrip("/").endswith("/v1")
+        else endpoint
+    )
+
+
 class VLLMError(BaseLLMException):
     def __init__(
         self,
@@ -37,7 +45,7 @@ _EXTRA_HEADERS: Final = TypeAdapter(Mapping[str, str])
 def _auth_headers(api_key: str | None) -> Mapping[str, str]:
     if api_key is None or api_key == PLACEHOLDER_API_KEY:
         return {}
-    return {"x-api-key": api_key, "Authorization": f"Bearer {api_key}"}
+    return {"Authorization": f"Bearer {api_key}"}
 
 
 def _str_param(litellm_params: Mapping[str, object], key: str) -> str | None:
@@ -48,15 +56,22 @@ def _str_param(litellm_params: Mapping[str, object], key: str) -> str | None:
 class VLLMModelInfo(BaseLLMModelInfo):
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, str],
         model: str,
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:
-        return {**headers, **_auth_headers(api_key)}
+    ) -> dict[str, str]:
+        upstream_key: Final = self.upstream_api_key(api_key, api_base)
+        return {**headers, **self.upstream_auth_headers(upstream_key)} if upstream_key else headers
+
+    def upstream_api_key(self, api_key: str | None, api_base: str | None) -> str | None:
+        return api_key
+
+    def upstream_auth_headers(self, api_key: str) -> Mapping[str, str]:
+        return {"Authorization": f"Bearer {api_key}", "x-api-key": api_key}
 
     @staticmethod
     def get_api_base(api_base: str | None = None) -> str:
@@ -69,7 +84,7 @@ class VLLMModelInfo(BaseLLMModelInfo):
 
     @staticmethod
     def get_api_key(api_key: str | None = None) -> str | None:
-        return api_key
+        return None
 
     @staticmethod
     def get_base_model(model: str) -> str | None:

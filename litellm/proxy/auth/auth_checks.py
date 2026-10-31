@@ -84,6 +84,7 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.agent_endpoints.auth.agent_access_groups import (
+    AgentAccessGroupCeiling,
     CeilingResolver,
     resolve_agent_access_group_ceiling,
 )
@@ -166,6 +167,7 @@ from litellm.repositories.table_repositories import (
 from litellm.repositories.team_repository import TeamRepository
 from litellm.repositories.user_repository import UserRepository
 from litellm.router import Router
+from litellm.router_api import RegistryReader
 from litellm.types.proxy.auth.auth_checks import UserNotFoundError
 from litellm.types.proxy.model_access_group_budget import ModelAccessGroupBudget
 from litellm.types.router import DeploymentTypedDict
@@ -524,7 +526,7 @@ def _log_budget_lookup_failure(entity: str, error: Exception) -> None:
     )
 
 
-def _get_router_zero_cost_cache(llm_router: Router) -> dict[str, bool] | None:
+def _get_router_zero_cost_cache(llm_router: RegistryReader) -> dict[str, bool] | None:
     """
     Return the router's per-instance zero-cost cache, or ``None`` for objects
     that don't expose one (e.g. ``MagicMock`` stand-ins in unit tests).
@@ -540,7 +542,7 @@ def _get_router_zero_cost_cache(llm_router: Router) -> dict[str, bool] | None:
     return cache if isinstance(cache, dict) else None
 
 
-def is_model_cost_zero(model: str | list[str] | None, llm_router: Router | None) -> bool:
+def is_model_cost_zero(model: str | list[str] | None, llm_router: RegistryReader | None) -> bool:
     """
     Check if a model has zero cost (no configured pricing).
 
@@ -666,7 +668,7 @@ _NO_MODEL_INFO: Final[Mapping[str, object]] = MappingProxyType({})
 _TEAM_GRANT_RELATIONS: Final[Mapping[str, object]] = MappingProxyType({"litellm_model_table": True})
 
 
-def _deployments_served_for(model: str, llm_router: "Router") -> Sequence[DeploymentTypedDict]:
+def _deployments_served_for(model: str, llm_router: RegistryReader) -> Sequence[DeploymentTypedDict]:
     """
     The deployments a request to ``model`` routes to, for the gates that waive budget checks.
 
@@ -936,52 +938,57 @@ _GUARDRAIL_MODIFICATION_KEYS: Final[tuple] = (
 )
 
 
-def _guardrail_modification_check(request_body: Mapping[str, object], team_object: LiteLLM_TeamTable | None) -> None:
+def requests_guardrail_modification(request_body: Mapping[str, object]) -> bool:
+    """Whether a request body sets the plural ``guardrails`` list or a per-request toggle that influences whether
+    default-on guardrails run (``disable_global_guardrails``, ``disable_global_guardrail`` singular, and
+    ``opted_out_global_guardrails``), at the top level or in either metadata key"""
+    return (
+        _requests_guardrail_modification_in(request_body.get("metadata"))
+        or _requests_guardrail_modification_in(request_body.get("litellm_metadata"))
+        or _requests_guardrail_modification_in(request_body)
+    )
+
+
+def _requests_guardrail_modification_in(container: object) -> bool:
+    coerced: Final = _guardrail_container_as_dict(container)
+    if coerced is None:
+        return False
+    return any(key in coerced for key in _GUARDRAIL_MODIFICATION_KEYS)
+
+
+def _guardrail_container_as_dict(container: object) -> Mapping[str, object] | None:
+    """Accept dict or JSON-string (from multipart/form-data or extra_body).
+
+    Without this, an attacker can smuggle guardrail keys past the check by
+    sending ``{"metadata": "{\\"disable_global_guardrails\\": true}"}`` —
+    ``isinstance(dict)`` on the string returns False, the check returns
+    no-modification, and ``add_litellm_data_to_request`` parses the string
+    to a dict downstream.
+    """
+    if isinstance(container, Mapping):
+        return container
+    if isinstance(container, str):
+        parsed: Final = _safe_json_loads_obj(container)
+        return parsed if isinstance(parsed, dict) else None
+    return None
+
+
+def guardrail_modification_check(request_body: Mapping[str, object], team_object: LiteLLM_TeamTable | None) -> None:
     """
     Reject user-supplied metadata flags that would modify guardrail behavior
-    unless the team has explicit permission. Checked keys include the plural
-    ``guardrails`` list plus the per-request toggles that influence whether
-    default-on guardrails run (``disable_global_guardrails``,
-    ``disable_global_guardrail`` singular, and ``opted_out_global_guardrails``).
+    unless the team has explicit permission.
 
     User-supplied values for the bypass toggles are also silently ignored by
     ``_get_admin_metadata`` at read time; this check adds defense in depth by
     failing loudly at the auth layer so operators see an explicit 403 instead
     of a confusing silent-ignore.
     """
+    if requests_guardrail_modification(request_body):
+        require_guardrail_modification_permission(team_object)
+
+
+def require_guardrail_modification_permission(team_object: LiteLLM_TeamTable | None) -> None:
     from litellm.proxy.guardrails.guardrail_helpers import can_modify_guardrails
-
-    def _coerce_to_dict(container: object) -> dict | None:
-        """Accept dict or JSON-string (from multipart/form-data or extra_body).
-
-        Without this, an attacker can smuggle guardrail keys past the check by
-        sending ``{"metadata": "{\\"disable_global_guardrails\\": true}"}`` —
-        ``isinstance(dict)`` on the string returns False, the check returns
-        no-modification, and ``add_litellm_data_to_request`` parses the string
-        to a dict downstream.
-        """
-        if isinstance(container, dict):
-            return container
-        if isinstance(container, str):
-            parsed: Final = _safe_json_loads_obj(container)
-            return parsed if isinstance(parsed, dict) else None
-        return None
-
-    def _user_requested_modification(container: object) -> bool:
-        coerced: Final = _coerce_to_dict(container)
-        if coerced is None:
-            return False
-        return any(key in coerced for key in _GUARDRAIL_MODIFICATION_KEYS)
-
-    # Check both metadata keys — callers can populate either depending on the
-    # endpoint. Cover the top-level too so root-level injection is rejected.
-    modifies: Final = (
-        _user_requested_modification(request_body.get("metadata"))
-        or _user_requested_modification(request_body.get("litellm_metadata"))
-        or _user_requested_modification(request_body)
-    )
-    if not modifies:
-        return
 
     if not can_modify_guardrails(team_object):
         raise HTTPException(
@@ -1079,13 +1086,31 @@ def model_max_budget_of(holder: ModelMaxBudgetHolder) -> Mapping[str, object] | 
 
 
 def route_skips_budget_checks(route: str) -> bool:
-    return route not in BUDGET_ENFORCED_SIDE_EFFECT_ROUTES and (
-        route in MODEL_DISCOVERY_ROUTES or not RouteChecks.is_llm_api_route(route=route)
+    if route in BUDGET_ENFORCED_SIDE_EFFECT_ROUTES:
+        return False
+    if route in MODEL_DISCOVERY_ROUTES:
+        return True
+    if RouteChecks.is_llm_api_route(route=route):
+        return False
+    from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (  # noqa: PLC0415  # pass-through endpoints import the auth stack
+        InitPassThroughEndpointHelpers,
     )
 
+    return not InitPassThroughEndpointHelpers.is_registered_pass_through_route(route=route)
 
-def request_skips_budget_checks(route: str, model: str | list[str] | None, llm_router: Router | None) -> bool:
-    return route_skips_budget_checks(route=route) or is_model_cost_zero(model=model, llm_router=llm_router)
+
+def request_skips_budget_checks(
+    route: str,
+    model: str | list[str] | None,
+    llm_router: Router | None,
+    *,
+    request_body: Mapping[str, object] | None = None,
+) -> bool:
+    if route_skips_budget_checks(route=route):
+        return True
+    if request_body is not None and is_mcp_discovery_request(route=route, request_body=request_body):
+        return True
+    return is_model_cost_zero(model=model, llm_router=llm_router)
 
 
 async def common_checks(
@@ -1135,10 +1160,11 @@ async def common_checks(
         team_id=valid_token.team_id if valid_token is not None else None,
     )
 
-    skip_all_budget_checks: Final = (
-        skip_budget_checks
-        or route_skips_budget_checks(route=route)
-        or is_mcp_discovery_request(route=route, request_body=_typed_request_body(request_body))
+    skip_all_budget_checks: Final = skip_budget_checks or request_skips_budget_checks(
+        route=route,
+        model=_model,
+        llm_router=llm_router,
+        request_body=_typed_request_body(request_body),
     )
 
     membership_user_id: Final = (
@@ -1484,7 +1510,7 @@ async def common_checks(
 
     _enforce_user_param_check(general_settings, request, request_body, route)
     _global_proxy_budget_check(global_proxy_spend, skip_all_budget_checks, route)
-    _guardrail_modification_check(_typed_request_body(request_body), team_object)
+    guardrail_modification_check(_typed_request_body(request_body), team_object)
 
     # 10 [OPTIONAL] Organization RBAC checks
     organization_role_based_access_check(user_object=user_object, route=route, request_body=request_body)
@@ -1684,6 +1710,7 @@ def get_actual_routes(allowed_routes: list) -> list:
 
 KEY_END_USER_BUDGET_ID_METADATA_FIELD: Final = "end_user_budget_id"
 _KEY_METADATA_ADAPTER: Final[TypeAdapter[Mapping[str, object] | None]] = TypeAdapter(Mapping[str, object] | None)
+_OBJECTS_ADAPTER: Final[TypeAdapter[tuple[object, ...]]] = TypeAdapter(tuple[object, ...])
 
 
 def get_key_end_user_budget_id(key_metadata: Mapping[str, object] | None) -> str | None:
@@ -3455,28 +3482,35 @@ async def delete_cache_key_objects(
     proxy_logging_obj: ProxyLogging | None,
 ) -> None:
     """
-    Evict a batch of key objects, for callers that delete keys in bulk rather than through
-    `/key/delete`. Auth resolves a cached key object without re-reading its team, so a key left
-    cached after its row is gone keeps buying access until its TTL expires.
-
-    Evicting locally only reaches this worker; `_delete_cache_key_object` itself broadcasts each
-    token, so a deleted key left in a peer worker's in-memory cache still authenticates there until
-    its TTL expires.
+    Evict a batch of deleted key objects here and on every other worker. Auth resolves a cached key
+    object without re-reading its team, so a key left cached after its row is gone keeps buying
+    access until its TTL expires.
 
     Best-effort per key: the rows are already deleted by the time this runs, so an unreachable
     cache backend must not abort the caller partway through its own cascade.
 
-    Every token is dropped from this worker's memory first, then from the auth cache and the
-    internal usage cache in one batch each, so a deleted key stops authenticating here the instant
-    its rows are gone instead of refilling from Redis on the next miss. Every other worker then
-    gets the eviction in one pipelined broadcast: a publish per key would pass the publisher's
-    pending cap on a bulk delete, and the dropped keys would keep authenticating there until their
-    TTL.
+    Every token is dropped from this worker's memory first, then from the auth cache's Redis layer,
+    so a deleted key stops authenticating here the instant its rows are gone instead of refilling
+    from Redis on the next miss. Every other worker then gets the eviction in one pipelined
+    broadcast: a publish per key would pass the publisher's pending cap on a bulk delete, and the
+    dropped keys would keep authenticating there until their TTL. The internal usage cache is not
+    an auth refill source, so its batch delete runs beside that chain and a hung Redis costs one
+    bounded wait there instead of another in line.
     """
     evict_local(cache_keys=hashed_tokens, user_api_key_cache=user_api_key_cache)
+    usage_eviction: Final = (
+        ()
+        if proxy_logging_obj is None
+        else (evict_shared(cache_keys=hashed_tokens, cache=proxy_logging_obj.internal_usage_cache.dual_cache),)
+    )
+    _ = await asyncio.gather(
+        _evict_auth_cache_then_broadcast(hashed_tokens=hashed_tokens, user_api_key_cache=user_api_key_cache),
+        *usage_eviction,
+    )
+
+
+async def _evict_auth_cache_then_broadcast(hashed_tokens: Sequence[str], user_api_key_cache: UserApiKeyCache) -> None:
     await evict_shared(cache_keys=hashed_tokens, cache=user_api_key_cache)
-    if proxy_logging_obj is not None:
-        await evict_shared(cache_keys=hashed_tokens, cache=proxy_logging_obj.internal_usage_cache.dual_cache)
     await broadcast_evictions(cache_keys=hashed_tokens)
 
 
@@ -4828,7 +4862,7 @@ async def get_skill_names_from_access_groups(
 
 def _resolve_all_team_model_sentinel_for_auth_check(
     models: list[str],
-    llm_router: Router | None,
+    llm_router: RegistryReader | None,
     team_id: str | None,
 ) -> list[str]:
     if SpecialModelNames.all_team_models.value not in models or team_id is None or llm_router is None:
@@ -4842,7 +4876,7 @@ def _resolve_all_team_model_sentinel_for_auth_check(
 
 def check_model_access_helper(
     model: str,
-    llm_router: Router | None,
+    llm_router: RegistryReader | None,
     models: list[str],
     team_model_aliases: dict[str, str] | None = None,
     team_id: str | None = None,
@@ -4893,7 +4927,7 @@ _check_model_access_helper: Final = check_model_access_helper
 
 def _owning_team_names_for_team_deployment(
     model: str,
-    llm_router: Router | None,
+    llm_router: RegistryReader | None,
     team_id: str | None,
     team_model_aliases: Mapping[str, str] | None,
 ) -> tuple[str, ...]:
@@ -4911,7 +4945,7 @@ def _owning_team_names_for_team_deployment(
 
 def _can_object_call_model(
     model: str | list[str],
-    llm_router: Router | None,
+    llm_router: RegistryReader | None,
     models: list[str],
     team_model_aliases: dict[str, str] | None = None,
     team_id: str | None = None,
@@ -5038,7 +5072,7 @@ def _resolve_team_alias(
 
 
 def _live_team_alias_target(
-    model: str, team_model_aliases: Mapping[str, str], team_id: str | None, llm_router: Router | None
+    model: str, team_model_aliases: Mapping[str, str], team_id: str | None, llm_router: RegistryReader | None
 ) -> str:
     target: Final = team_model_aliases.get(model)
     if target is None:
@@ -5085,6 +5119,36 @@ async def can_agent_call_model(
     )
 
 
+async def _agent_access_group_ceilings(
+    valid_token: UserAPIKeyAuth, resolve_ceiling: CeilingResolver
+) -> tuple[AgentAccessGroupCeiling, ...]:
+    if not valid_token.agent_id:
+        return ()
+
+    from litellm.proxy.agent_endpoints.auth.agent_access_groups import resolve_managed_agent_ceilings
+
+    managed: Final = managed_agent_policy(valid_token)
+    if managed is not None:
+        return await resolve_managed_agent_ceilings(managed)
+    unmanaged: Final = await resolve_ceiling(valid_token.agent_id)
+    return (unmanaged,) if unmanaged is not None else ()
+
+
+def _managed_agent_model_grants(valid_token: UserAPIKeyAuth) -> frozenset[str]:
+    managed: Final = managed_agent_policy(valid_token)
+    granted: Final = (managed.object_permission or {}).get("models") if managed is not None else None
+    if not isinstance(granted, (list, tuple)):
+        return frozenset()
+    return frozenset(name for name in _OBJECTS_ADAPTER.validate_python(granted) if isinstance(name, str))
+
+
+async def agent_model_grants(
+    valid_token: UserAPIKeyAuth, resolve_ceiling: CeilingResolver = resolve_agent_access_group_ceiling
+) -> frozenset[str]:
+    ceilings: Final = await _agent_access_group_ceilings(valid_token, resolve_ceiling)
+    return _managed_agent_model_grants(valid_token).union(*(ceiling.models for ceiling in ceilings))
+
+
 async def _check_agent_access_group_model_access(
     model: str | list[str] | None,  # mutable-ok: _can_object_call_model and the client message helper take list[str]
     valid_token: UserAPIKeyAuth | None,
@@ -5092,20 +5156,9 @@ async def _check_agent_access_group_model_access(
     resolve_ceiling: CeilingResolver = resolve_agent_access_group_ceiling,
 ) -> Literal[True]:
     """Attached groups naming no model deny every model; the empty allowlist in ``_can_object_call_model`` allows."""
-    if not model or valid_token is None or not valid_token.agent_id:
+    if not model or valid_token is None:
         return True
-
-    from litellm.proxy.agent_endpoints.auth.agent_access_groups import resolve_managed_agent_ceilings
-
-    managed: Final = managed_agent_policy(valid_token)
-    unmanaged: Final = await resolve_ceiling(valid_token.agent_id) if managed is None else None
-    ceilings: Final = (
-        await resolve_managed_agent_ceilings(managed)
-        if managed is not None
-        else (unmanaged,)
-        if unmanaged is not None
-        else ()
-    )
+    ceilings: Final = await _agent_access_group_ceilings(valid_token, resolve_ceiling)
     dispatched: Final = _resolve_team_alias(
         model, team_model_aliases_for_auth_check(valid_token), valid_token.team_id, llm_router
     )
@@ -5506,7 +5559,7 @@ async def can_key_call_model(
     model: str | list[str],
     llm_model_list: Sequence[object] | None,
     valid_token: UserAPIKeyAuth,
-    llm_router: litellm.Router | None,
+    llm_router: RegistryReader | None,
     prisma_client: DatabaseClient | None = None,
 ) -> Literal[True]:
     """
@@ -5585,7 +5638,7 @@ async def can_key_call_resolved_model(
     model: str,
     llm_model_list: Sequence[object] | None,
     valid_token: UserAPIKeyAuth,
-    llm_router: litellm.Router | None,
+    llm_router: RegistryReader | None,
 ) -> None:
     from litellm.proxy.proxy_server import (
         prisma_client,
@@ -5733,7 +5786,7 @@ def can_org_access_model(
 async def can_team_access_model(
     model: str | list[str],
     team_object: LiteLLM_TeamTable | None,
-    llm_router: Router | None,
+    llm_router: RegistryReader | None,
     team_model_aliases: dict[str, str] | None = None,
     key_model_aliases: Mapping[str, str] | None = None,
     prisma_client: DatabaseClient | None = None,
@@ -5836,7 +5889,7 @@ async def key_access_group_grants_model(
     model: str | list[str],
     valid_token: UserAPIKeyAuth | None,
     team_object: LiteLLM_TeamTable | None,
-    llm_router: Router | None,
+    llm_router: RegistryReader | None,
     key_model_aliases: Mapping[str, str] | None = None,
 ) -> bool:
     """
@@ -5872,7 +5925,7 @@ _key_access_group_grants_model: Final = key_access_group_grants_model
 def can_project_access_model(
     model: str | list[str],
     project_object: LiteLLM_ProjectTable,
-    llm_router: Router | None,
+    llm_router: RegistryReader | None,
     key_model_aliases: Mapping[str, str] | None = None,
 ) -> Literal[True]:
     """
@@ -5893,7 +5946,7 @@ def can_project_access_model(
 def can_customer_access_model(
     model: str | list[str],
     end_user_object: LiteLLM_EndUserTable,
-    llm_router: Router | None,
+    llm_router: RegistryReader | None,
     valid_token: UserAPIKeyAuth | None,
 ) -> Literal[True]:
     team_model_aliases: Final = team_model_aliases_for_auth_check(valid_token) if valid_token is not None else None
@@ -6056,7 +6109,7 @@ async def _team_grants_personal_key_model(
     model: str,
     team_object: LiteLLM_TeamTableCachedObj,
     valid_token: UserAPIKeyAuth,
-    llm_router: Router | None,
+    llm_router: RegistryReader | None,
     prisma_client: PrismaClient | None,
     user_api_key_cache: UserApiKeyCache,
     proxy_logging_obj: ProxyLogging,
@@ -6094,7 +6147,7 @@ async def _loaded_teams_allow_model(
     model: str,
     teams: tuple[LiteLLM_TeamTableCachedObj | None, ...],
     valid_token: UserAPIKeyAuth,
-    llm_router: Router | None,
+    llm_router: RegistryReader | None,
     prisma_client: PrismaClient | None,
     user_api_key_cache: UserApiKeyCache,
     proxy_logging_obj: ProxyLogging,
@@ -6360,7 +6413,7 @@ async def can_personal_key_call_model_via_teams(
     model: str | Sequence[str],
     user_object: LiteLLM_UserTable | None,
     valid_token: UserAPIKeyAuth,
-    llm_router: Router | None,
+    llm_router: RegistryReader | None,
     prisma_client: PrismaClient | None,
     user_api_key_cache: UserApiKeyCache,
     proxy_logging_obj: ProxyLogging,
@@ -7152,7 +7205,7 @@ async def check_team_member_model_access(
     model: str | list[str],
     team_object: LiteLLM_TeamTable,
     valid_token: UserAPIKeyAuth,
-    llm_router: Router | None,
+    llm_router: RegistryReader | None,
     prisma_client: Optional["PrismaClient"],
     user_api_key_cache: UserApiKeyCache,
     proxy_logging_obj: ProxyLogging,

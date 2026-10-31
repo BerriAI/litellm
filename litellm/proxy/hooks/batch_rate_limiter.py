@@ -527,7 +527,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
                 return True
         return False
 
-    async def _resolve_batch_input_file_fetch_params(
+    def _resolve_batch_input_file_fetch_params(
         self,
         file_id: str,
         custom_llm_provider: str,
@@ -541,7 +541,6 @@ class _PROXY_BatchRateLimiter(CustomLogger):
         without decoding them, ``afile_content`` is called with the encoded ID
         and the upstream provider returns 404.
         """
-        from litellm.proxy.auth.model_checks import run_model_discovery
         from litellm.proxy.openai_files_endpoints.common_utils import (
             decode_model_from_file_id,
             explicit_request_credentials,
@@ -592,8 +591,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
             return file_id, fetch_kwargs
 
         team_credentials: Final = (
-            await run_model_discovery(
-                get_team_provider_credentials,
+            get_team_provider_credentials(
                 llm_router=llm_router,
                 user_api_key_dict=user_api_key_dict,
                 custom_llm_provider=custom_llm_provider,
@@ -950,7 +948,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
                     user_api_key_dict=user_api_key_dict,
                 )
             else:
-                provider_file_id, fetch_kwargs = await self._resolve_batch_input_file_fetch_params(
+                provider_file_id, fetch_kwargs = self._resolve_batch_input_file_fetch_params(
                     file_id=file_id,
                     custom_llm_provider=custom_llm_provider,
                     data=data or {},

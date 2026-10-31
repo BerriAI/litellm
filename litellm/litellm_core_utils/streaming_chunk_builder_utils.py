@@ -14,11 +14,18 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.core_helpers import (
     PROVIDERS_BILLED_FROM_THEIR_OWN_USAGE_FIELDS,
+    UPSTREAM_USAGE_COST,
     chunk_usage,
+    finite_cost,
     provider_reported_usage_cost,
     stamp_litellm_bill_on_usage,
 )
-from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR, set_hidden_params
+from litellm.litellm_core_utils.hidden_params import (
+    HIDDEN_PARAMS_ATTR,
+    get_hidden_params,
+    set_hidden_param,
+    set_hidden_params,
+)
 from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import BEDROCK_TRACE_FIELDS, object_items, object_mapping
 from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import partition_annotations
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
@@ -323,6 +330,20 @@ class ChunkProcessor:
         )
 
     @staticmethod
+    def _get_upstream_provider(chunks: Sequence[object]) -> str | None:
+        def _provider_from_chunk(chunk: object) -> str | None:
+            hidden_params: Final = get_hidden_params(chunk)
+            if hidden_params is None:
+                return None
+            provider: Final[object] = hidden_params.get("upstream_provider")
+            return provider if isinstance(provider, str) and provider else None
+
+        return next(
+            (provider for chunk in chunks if (provider := _provider_from_chunk(chunk)) is not None),
+            None,
+        )
+
+    @staticmethod
     def apply_provider_assembled_streaming_metadata(
         response: ModelResponse,
         chunks: list[object],
@@ -499,10 +520,22 @@ class ChunkProcessor:
             chunks,
             first_chunk_model,
         )
-        if provider_response_model is not None:
-            response._hidden_params = dict(  # pyright: ignore[reportPrivateUsage]  # ModelResponse exposes no public hidden-params setter
-                response._hidden_params,  # pyright: ignore[reportPrivateUsage]  # ModelResponse exposes no public hidden-params getter
-                provider_response_model=provider_response_model,
+        upstream_provider: Final = self._get_upstream_provider(chunks)
+        provider_hidden_params: Final[Mapping[str, str]] = MappingProxyType(
+            {
+                key: value
+                for key, value in (
+                    ("provider_response_model", provider_response_model),
+                    ("upstream_provider", upstream_provider),
+                )
+                if value is not None
+            }
+        )
+        if provider_hidden_params:
+            response_hidden_params: Final[Mapping[str, builtins.object]] = get_hidden_params(response) or {}
+            set_hidden_params(
+                response,
+                dict(response_hidden_params, **provider_hidden_params),
             )
         return response
 
@@ -1014,7 +1047,9 @@ class ChunkProcessor:
                     prompt_tokens_details, cache_creation_token_details
                 )
 
-                if usage_chunk_dict["cost"] is not None:
+                if Usage.dropped_non_finite_cost(usage_chunk):
+                    cost = None
+                elif usage_chunk_dict["cost"] is not None:
                     cost = usage_chunk_dict["cost"]
 
         prompt_tokens_details = attach_cache_creation_token_details(prompt_tokens_details, cache_creation_token_details)
@@ -1441,11 +1476,19 @@ def _set_stream_builder_response_cost(
     _set_hidden_response_cost(response, response_cost)
 
 
+def _carry_upstream_usage_cost(response: ModelResponse, chunks: Sequence[object]) -> None:
+    chunk_hidden_params: Final = (get_hidden_params(chunk) for chunk in reversed(chunks))
+    stamped: Final = (hidden for hidden in chunk_hidden_params if hidden is not None and UPSTREAM_USAGE_COST in hidden)
+    for hidden in stamped:
+        set_hidden_param(response, UPSTREAM_USAGE_COST, hidden[UPSTREAM_USAGE_COST])
+        return
+
+
 def _stamp_streaming_usage_cost(usage: Usage, response: ModelResponse, logging_obj: Optional["Logging"]) -> None:
     if logging_obj is None:
         return
-    if _logged_provider(logging_obj) in PROVIDERS_BILLED_FROM_THEIR_OWN_USAGE_FIELDS and isinstance(
-        getattr(usage, "cost", None), (int, float)
+    if _logged_provider(logging_obj) in PROVIDERS_BILLED_FROM_THEIR_OWN_USAGE_FIELDS and (
+        finite_cost(getattr(usage, "cost", None)) is not None
     ):
         return
     computed_cost: Final = logging_obj.response_cost_calculator(result=response)
@@ -1466,11 +1509,20 @@ def _delta_reasoning_items(delta: object) -> Sequence[object]:
     return cast(Sequence[object], items) if isinstance(items, list) else ()  # cast-ok: items forwarded verbatim
 
 
-def _chunk_reasoning_items(chunk: object) -> Sequence[object]:
+def _chunk_first_delta(chunk: object) -> object:
     choices: Final = _field_of(chunk, "choices")
     if not isinstance(choices, list) or not choices:
-        return ()
-    return _delta_reasoning_items(_field_of(cast(Sequence[object], choices)[0], "delta"))  # cast-ok: untyped chunk
+        return None
+    return _field_of(cast(Sequence[object], choices)[0], "delta")  # cast-ok: untyped chunk
+
+
+def _chunk_reasoning_items(chunk: object) -> Sequence[object]:
+    return _delta_reasoning_items(_chunk_first_delta(chunk))
+
+
+def _chunk_refusal(chunk: object) -> str:
+    refusal: Final = _field_of(_chunk_first_delta(chunk), "refusal")
+    return refusal if isinstance(refusal, str) else ""
 
 
 _NON_TEXT_DELTA_FIELDS: Final = (
@@ -1483,6 +1535,7 @@ _NON_TEXT_DELTA_FIELDS: Final = (
     "audio",
     "images",
     "provider_specific_fields",
+    "refusal",
 )
 
 
@@ -1631,6 +1684,9 @@ def _assembled_message_fields(processor: ChunkProcessor, chunks: Sequence) -> It
         yield "reasoning_content", processor.get_combined_reasoning_content(reasoning_chunks)
 
     typed_chunks: Final = cast(Sequence[object], chunks)  # cast-ok: chunks are untyped upstream
+    combined_refusal: Final = "".join(_chunk_refusal(chunk) for chunk in typed_chunks)
+    if combined_refusal:
+        yield "refusal", combined_refusal
     reasoning_items: Final = tuple(chain.from_iterable(_chunk_reasoning_items(chunk) for chunk in typed_chunks))
     if reasoning_items:
         yield "reasoning_items", list(reasoning_items)
@@ -1791,6 +1847,7 @@ def stream_chunk_builder(
                 response,
                 logging_obj,
             )
+            _carry_upstream_usage_cost(response, chunks)  # pyright: ignore[reportUnknownArgumentType]  # chunks is an untyped list param
             _stamp_streaming_usage_cost(usage, response, logging_obj)
             _set_stream_builder_response_cost(
                 response,
@@ -1833,6 +1890,7 @@ def stream_chunk_builder(
                 )
                 break
 
+        _carry_upstream_usage_cost(response, chunks)  # pyright: ignore[reportUnknownArgumentType]  # chunks is an untyped list param
         _stamp_streaming_usage_cost(usage, response, logging_obj)
         _set_stream_builder_response_cost(
             response,

@@ -291,12 +291,13 @@ async def test_ssl_context_with_shared_session(monkeypatch: pytest.MonkeyPatch):
         await shared_session.close()
 
 
-def test_get_ssl_configuration(monkeypatch):
+def test_get_ssl_configuration():
     """Test that get_ssl_configuration() returns a proper SSL context with certifi CA bundle
     when no environment variables are set."""
-    from litellm.llms.custom_httpx import http_handler
+    from litellm.llms.custom_httpx.http_handler import _ssl_context_cache
 
-    monkeypatch.setattr(http_handler, "_ssl_context_cache", {})
+    # Clear cache to ensure ssl.create_default_context is called
+    _ssl_context_cache.clear()
 
     with patch.dict(os.environ, clear=True):
         with patch("ssl.create_default_context") as mock_create_context:

@@ -18,6 +18,8 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.x509.oid import NameOID
 
+from litellm import Router
+
 
 def test_get_team_models_for_all_models_and_team_only_models():
     from litellm.proxy.auth.model_checks import get_team_models
@@ -538,168 +540,6 @@ def test_hosted_vllm_wildcard_listing_does_not_wait_the_completion_timeout_on_a_
     read_timeout: Final = models_route.calls.last.request.extensions["timeout"]["read"]
     assert read_timeout is not None
     assert read_timeout <= NON_LLM_CONNECTION_TIMEOUT
-
-
-@pytest.mark.asyncio
-@respx.mock
-async def test_a_hung_wildcard_listing_leaves_the_event_loop_free_for_other_requests(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    import asyncio
-
-    import litellm
-    from litellm import Router
-    from litellm.proxy._types import UserAPIKeyAuth
-    from litellm.proxy.utils import get_available_models_for_user
-
-    monkeypatch.setattr(litellm, "check_provider_endpoint", True)
-    listing_started: Final = threading.Event()
-    other_request_served: Final = threading.Event()
-
-    def listing_that_answers_once_another_request_is_served(request: httpx.Request) -> httpx.Response:
-        listing_started.set()
-        if other_request_served.wait(timeout=3):
-            return httpx.Response(200, json={"data": [{"id": "qwen2.5"}]})
-        return httpx.Response(503)
-
-    respx.get("http://vllm-stalled.test:8000/v1/models").mock(
-        side_effect=listing_that_answers_once_another_request_is_served
-    )
-    router: Final = Router(
-        model_list=[
-            {
-                "model_name": "hosted_vllm/*",
-                "litellm_params": {"model": "hosted_vllm/*", "api_base": "http://vllm-stalled.test:8000/v1"},
-            }
-        ]
-    )
-
-    listing: Final = asyncio.create_task(
-        get_available_models_for_user(
-            user_api_key_dict=UserAPIKeyAuth(api_key="sk-test", models=[]),
-            llm_router=router,
-            general_settings={},
-            user_model=None,
-        )
-    )
-    assert await asyncio.to_thread(listing_started.wait, 3)
-    other_request_served.set()
-
-    assert "hosted_vllm/qwen2.5" in await listing
-
-
-@pytest.mark.asyncio
-@respx.mock
-async def test_a_model_list_that_needs_no_listing_answers_while_hung_listings_hold_every_discovery_thread(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    import asyncio
-
-    import litellm
-    from litellm import Router
-    from litellm.constants import PROVIDER_MODEL_DISCOVERY_MAX_THREADS
-    from litellm.proxy._types import UserAPIKeyAuth
-    from litellm.proxy.utils import get_available_models_for_user
-
-    monkeypatch.setattr(litellm, "check_provider_endpoint", True)
-    listing_started: Final = threading.Event()
-    hung_server_released: Final = threading.Event()
-
-    def hung_listing(request: httpx.Request) -> httpx.Response:
-        listing_started.set()
-        hung_server_released.wait(timeout=10)
-        return httpx.Response(503)
-
-    respx.get("http://vllm-holding-every-thread.test:8000/v1/models").mock(side_effect=hung_listing)
-    router: Final = Router(
-        model_list=[
-            {
-                "model_name": "stuck/*",
-                "litellm_params": {
-                    "model": "hosted_vllm/*",
-                    "api_base": "http://vllm-holding-every-thread.test:8000/v1",
-                },
-            },
-            {
-                "model_name": "qwen-open",
-                "litellm_params": {"model": "hosted_vllm/qwen2.5", "api_base": "http://vllm-open.test:8000/v1"},
-            },
-        ]
-    )
-
-    def list_models(models: list[str]) -> asyncio.Task[list[str]]:
-        return asyncio.create_task(
-            get_available_models_for_user(
-                user_api_key_dict=UserAPIKeyAuth(api_key="sk-test", models=models),
-                llm_router=router,
-                general_settings={},
-                user_model=None,
-            )
-        )
-
-    try:
-        admin_listings: Final = tuple(list_models([]) for _ in range(PROVIDER_MODEL_DISCOVERY_MAX_THREADS))
-        assert await asyncio.to_thread(listing_started.wait, 3)
-        await asyncio.sleep(0.1)
-
-        assert await asyncio.wait_for(list_models(["qwen-open"]), timeout=2) == ["qwen-open"]
-    finally:
-        hung_server_released.set()
-    for admin_models in await asyncio.gather(*admin_listings):
-        assert "qwen-open" in admin_models
-
-
-@respx.mock
-def test_a_hung_wildcard_listing_leaves_the_default_executor_free_for_completion_calls(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    import asyncio
-    from concurrent.futures import ThreadPoolExecutor
-
-    import litellm
-    from litellm import Router
-    from litellm.proxy._types import UserAPIKeyAuth
-    from litellm.proxy.utils import get_available_models_for_user
-
-    monkeypatch.setattr(litellm, "check_provider_endpoint", True)
-    listing_started: Final = threading.Event()
-    completion_served: Final = threading.Event()
-
-    def listing_that_answers_once_a_completion_is_served(request: httpx.Request) -> httpx.Response:
-        listing_started.set()
-        if completion_served.wait(timeout=3):
-            return httpx.Response(200, json={"data": [{"id": "qwen2.5"}]})
-        return httpx.Response(503)
-
-    respx.get("http://vllm-default-executor.test:8000/v1/models").mock(
-        side_effect=listing_that_answers_once_a_completion_is_served
-    )
-    router: Final = Router(
-        model_list=[
-            {
-                "model_name": "hosted_vllm/*",
-                "litellm_params": {"model": "hosted_vllm/*", "api_base": "http://vllm-default-executor.test:8000/v1"},
-            }
-        ]
-    )
-
-    async def list_models_while_a_completion_runs_on_the_default_executor() -> list[str]:
-        loop: Final = asyncio.get_running_loop()
-        loop.set_default_executor(ThreadPoolExecutor(max_workers=1))
-        listing: Final = asyncio.create_task(
-            get_available_models_for_user(
-                user_api_key_dict=UserAPIKeyAuth(api_key="sk-test", models=[]),
-                llm_router=router,
-                general_settings={},
-                user_model=None,
-            )
-        )
-        with ThreadPoolExecutor(max_workers=1) as waiter:
-            assert await loop.run_in_executor(waiter, listing_started.wait, 3)
-        await asyncio.wait_for(loop.run_in_executor(None, completion_served.set), timeout=1)
-        return await listing
-
-    assert "hosted_vllm/qwen2.5" in asyncio.run(list_models_while_a_completion_runs_on_the_default_executor())
 
 
 @respx.mock
@@ -1663,6 +1503,223 @@ def test_partial_bedrock_wildcard_lists_nothing_when_no_discovered_id_carries_it
     )
 
     assert get_known_models_from_wildcard("bedrock/anthropic.*", deployment) == []
+
+
+@pytest.mark.parametrize(
+    ("wildcard", "deployment_model", "listed_ids"),
+    [
+        (
+            "openrouter/*",
+            "openrouter/*",
+            ["openrouter/openai/gpt-5.4-mini", "openrouter/anthropic/claude-haiku-5-5"],
+        ),
+        ("or-team/*", "openrouter/*", ["or-team/openai/gpt-5.4-mini", "or-team/anthropic/claude-haiku-5-5"]),
+        ("openrouter/openai/*", "openrouter/openai/*", ["openrouter/openai/gpt-5.4-mini"]),
+        ("*", "openrouter/*", ["openai/gpt-5.4-mini", "anthropic/claude-haiku-5-5"]),
+    ],
+)
+@respx.mock
+def test_openrouter_wildcard_lists_the_live_catalog_with_each_vendor_namespace(
+    monkeypatch: pytest.MonkeyPatch, wildcard: str, deployment_model: str, listed_ids: list[str]
+) -> None:
+    import litellm
+    from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
+    from litellm.types.router import LiteLLM_Params
+
+    monkeypatch.setattr(litellm, "check_provider_endpoint", True)
+    monkeypatch.delenv("OPENROUTER_API_BASE", raising=False)
+    respx.get("https://openrouter.ai/api/v1/models/user").mock(
+        return_value=httpx.Response(
+            200, json={"data": [{"id": "openai/gpt-5.4-mini"}, {"id": "anthropic/claude-haiku-5-5"}]}
+        )
+    )
+
+    assert (
+        get_known_models_from_wildcard(wildcard, LiteLLM_Params(model=deployment_model, api_key=f"sk-or-{wildcard}"))
+        == listed_ids
+    )
+
+
+@respx.mock
+def test_key_granted_openrouter_wildcard_without_an_openrouter_deployment_lists_no_environment_catalog(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import litellm
+    from litellm import Router
+    from litellm.proxy.auth.model_checks import get_complete_model_list
+
+    monkeypatch.setattr(litellm, "check_provider_endpoint", True)
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-environment-only")
+    catalog: Final = respx.get("https://openrouter.ai/api/v1/models/user").mock(
+        return_value=httpx.Response(200, json={"data": [{"id": "anthropic/claude-haiku-5-5"}]})
+    )
+    router: Final = Router(
+        model_list=[{"model_name": "or-team/*", "litellm_params": {"model": "openrouter/*", "api_key": "sk-or-team"}}]
+    )
+
+    listed: Final = get_complete_model_list(
+        key_models=["openrouter/*"],
+        team_models=[],
+        proxy_model_list=router.model_names,
+        user_model=None,
+        infer_model_from_keys=False,
+        llm_router=router,
+    )
+
+    assert (listed, catalog.call_count) == ([], 0)
+
+
+@contextmanager
+def _openai_catalog_behind_a_catch_all(
+    monkeypatch: pytest.MonkeyPatch, concrete_name: str, concrete_model_info: Mapping[str, str]
+) -> Generator[Router, None, None]:
+    import litellm
+
+    monkeypatch.setattr(litellm, "check_provider_endpoint", True)
+    monkeypatch.delenv("OPENAI_API_BASE", raising=False)
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+    with respx.mock(assert_all_called=False) as respx_mock:
+        respx_mock.get("https://api.openai.com/v1/models").mock(
+            return_value=httpx.Response(200, json={"data": [{"id": "gpt-4o"}, {"id": "gpt-4o-mini"}]})
+        )
+        yield Router(
+            model_list=[
+                {"model_name": "*", "litellm_params": {"model": "openai/*", "api_key": "sk-openai-catch-all"}},
+                {
+                    "model_name": concrete_name,
+                    "litellm_params": {"model": "openrouter/openai/gpt-4o", "api_key": "sk-or-gpt-4o"},
+                    "model_info": dict(concrete_model_info),
+                },
+            ]
+        )
+
+
+@pytest.mark.parametrize(
+    ("concrete_name", "concrete_model_info", "team_id"),
+    [
+        ("gpt-4o", {}, None),
+        ("model_name_team-x_gpt-4o", {"team_id": "team-x", "team_public_model_name": "gpt-4o"}, "team-x"),
+    ],
+)
+def test_catch_all_wildcard_lists_a_name_a_concrete_deployment_serves_once(
+    monkeypatch: pytest.MonkeyPatch, concrete_name: str, concrete_model_info: Mapping[str, str], team_id: str | None
+) -> None:
+    from litellm.proxy.auth.model_checks import get_complete_model_list
+
+    with _openai_catalog_behind_a_catch_all(monkeypatch, concrete_name, concrete_model_info) as router:
+        listed: Final = get_complete_model_list(
+            key_models=[],
+            team_models=[],
+            proxy_model_list=router.get_model_names(team_id=team_id),
+            user_model=None,
+            infer_model_from_keys=False,
+            llm_router=router,
+            team_id=team_id,
+        )
+
+    assert sorted(listed) == ["gpt-4o", "gpt-4o-mini"]
+
+
+def test_catch_all_wildcard_model_info_keeps_only_the_concrete_row_for_a_deployed_name(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy.auth.model_checks import expand_wildcard_deployments_for_model_info
+
+    with _openai_catalog_behind_a_catch_all(monkeypatch, "gpt-4o", {}) as router:
+        rows: Final = expand_wildcard_deployments_for_model_info(
+            [dict(deployment) for deployment in router.get_model_list() or ()], llm_router=router
+        )
+
+    assert sorted((row["model_name"], row["litellm_params"]["model"]) for row in rows) == [
+        ("gpt-4o", "openrouter/openai/gpt-4o"),
+        ("gpt-4o-mini", "openai/gpt-4o-mini"),
+    ]
+
+
+@contextmanager
+def _openrouter_catalog_beside_a_named_deployment(
+    monkeypatch: pytest.MonkeyPatch,
+    wildcard_name: str,
+    named: str,
+    catalog: tuple[str, ...] = ("openai/gpt-5.4-mini", "anthropic/claude-haiku-5-5"),
+    wildcard_key: str | None = None,
+) -> Generator[Router, None, None]:
+    import litellm
+
+    monkeypatch.setattr(litellm, "check_provider_endpoint", True)
+    monkeypatch.delenv("OPENROUTER_API_BASE", raising=False)
+    with respx.mock(assert_all_called=False) as respx_mock:
+        respx_mock.get("https://openrouter.ai/api/v1/models/user").mock(
+            return_value=httpx.Response(200, json={"data": [{"id": catalog_id} for catalog_id in catalog]})
+        )
+        yield Router(
+            model_list=[
+                {
+                    "model_name": wildcard_name,
+                    "litellm_params": {
+                        "model": "openrouter/*",
+                        "api_key": wildcard_key or f"sk-or-wildcard-{wildcard_name}",
+                    },
+                },
+                {
+                    "model_name": named,
+                    "litellm_params": {"model": "openrouter/openai/gpt-5.4-mini", "api_key": "sk-or-named"},
+                },
+            ]
+        )
+
+
+@pytest.mark.parametrize(
+    ("wildcard_name", "named"),
+    [("openrouter/*", "openrouter/openai/gpt-5.4-mini"), ("or-team/*", "or-team/openai/gpt-5.4-mini")],
+)
+def test_provider_wildcard_lists_a_name_a_named_deployment_serves_once(
+    monkeypatch: pytest.MonkeyPatch, wildcard_name: str, named: str
+) -> None:
+    from litellm.proxy.auth.model_checks import expand_wildcard_deployments_for_model_info, get_complete_model_list
+
+    with _openrouter_catalog_beside_a_named_deployment(monkeypatch, wildcard_name, named) as router:
+        listed: Final = get_complete_model_list(
+            key_models=[],
+            team_models=[],
+            proxy_model_list=list(router.model_names),
+            user_model=None,
+            infer_model_from_keys=False,
+            llm_router=router,
+        )
+        rows: Final = expand_wildcard_deployments_for_model_info(
+            [dict(deployment) for deployment in router.get_model_list() or ()], llm_router=router
+        )
+
+    vendor_prefix: Final = wildcard_name.removesuffix("*")
+    assert sorted(listed) == [f"{vendor_prefix}anthropic/claude-haiku-5-5", named]
+    assert sorted((row["model_name"], row["litellm_params"]["api_key"]) for row in rows) == [
+        (f"{vendor_prefix}anthropic/claude-haiku-5-5", f"sk-or-wildcard-{wildcard_name}"),
+        (named, "sk-or-named"),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("wildcard_name", "named"),
+    [("openrouter/*", "openrouter/openai/gpt-5.4-mini"), ("or-team/*", "or-team/openai/gpt-5.4-mini")],
+)
+def test_provider_wildcard_whose_whole_catalog_is_deployed_by_name_shows_only_the_named_row(
+    monkeypatch: pytest.MonkeyPatch, wildcard_name: str, named: str
+) -> None:
+    from litellm.proxy.auth.model_checks import expand_wildcard_deployments_for_model_info
+
+    with _openrouter_catalog_beside_a_named_deployment(
+        monkeypatch,
+        wildcard_name,
+        named,
+        catalog=("openai/gpt-5.4-mini",),
+        wildcard_key=f"sk-or-one-model-{wildcard_name}",
+    ) as router:
+        rows: Final = expand_wildcard_deployments_for_model_info(
+            [dict(deployment) for deployment in router.get_model_list() or ()], llm_router=router
+        )
+
+    assert [(row["model_name"], row["litellm_params"]["api_key"]) for row in rows] == [(named, "sk-or-named")]
 
 
 @respx.mock

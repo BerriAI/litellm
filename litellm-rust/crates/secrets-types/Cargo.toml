@@ -6,7 +6,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
-litellm-auth-types.workspace = true
+litellm-secret-value.workspace = true
 moka.workspace = true
 tokio = { workspace = true, features = ["sync"] }
 serde.workspace = true

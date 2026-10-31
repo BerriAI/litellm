@@ -5,7 +5,9 @@
 //! that split: `validate_environment` shapes the forwarded headers and names the credential
 //! as an [`AuthScheme`], and [`resolve_auth`] turns the scheme into headers and a signer.
 
-use litellm_auth::{AuthServices, CredentialPlacement, SecretValue, TokenProviderHandle};
+use litellm_auth::{AuthServices, CredentialPlacement, TokenProviderHandle};
+use litellm_secret_value::SecretValue;
+
 use litellm_auth_aws::{AwsCredentialSource, SigV4Signer};
 use litellm_auth_gcp::VertexConfig;
 use litellm_http::request::with_header;
