@@ -6,6 +6,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+litellm-secret-value.workspace = true
 litellm-secrets-types.workspace = true
 litellm-core-utils.workspace = true
 litellm-http.workspace = true
@@ -14,6 +15,7 @@ moka.workspace = true
 reqwest.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+url.workspace = true
 veil.workspace = true
 litellm-tracing.workspace = true
 percent-encoding = "2.3"

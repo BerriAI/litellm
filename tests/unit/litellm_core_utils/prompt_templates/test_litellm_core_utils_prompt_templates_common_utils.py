@@ -25,11 +25,13 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_semantic_cache_prompt_from_messages,
     get_str_from_messages,
     handle_any_messages_to_chat_completion_str_messages_conversion,
+    handle_messages_with_content_list_to_str_conversion,
     hoist_images_from_tool_messages,
     is_encrypted_reasoning_block,
     merge_consecutive_system_messages,
     native_redacted_thinking_data,
     parse_tool_call_arguments,
+    prompt_cache_breakpoint_for_wire,
     responses_reasoning_items_from_thinking_blocks,
     salvage_concatenated_tool_arguments,
     schema_grammar_branch_count,
@@ -37,6 +39,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     schema_has_unresolvable_ref,
     schema_property_count,
     split_concatenated_json_objects,
+    split_media_for_tpm,
     strip_encrypted_reasoning_from_messages,
     strip_litellm_response_only_fields,
     system_messages_first,
@@ -2327,6 +2330,52 @@ def test_get_semantic_cache_prompt_from_messages_matches_get_str_from_messages_w
     assert get_semantic_cache_prompt_from_messages(messages) == get_str_from_messages(messages)
 
 
+_MALFORMED_PROMPT_CACHE_BREAKPOINTS: Final = (
+    "yes",
+    1,
+    ["explicit"],
+    "",
+    {},
+    {"mode": "bogus"},
+    {"mode": "explicit", "ttl": "1h"},
+)
+_MALFORMED_PROMPT_CACHE_BREAKPOINT_IDS: Final = (
+    "string",
+    "int",
+    "list",
+    "empty-string",
+    "empty-object",
+    "bogus-mode",
+    "bad-ttl",
+)
+_VALID_PROMPT_CACHE_BREAKPOINTS: Final = ({"mode": "explicit"}, {"mode": "explicit", "ttl": "30m"})
+
+
+@pytest.mark.parametrize("drop_params", (True, False), ids=("drop", "keep"))
+def test_prompt_cache_breakpoint_for_wire_passes_a_missing_marker_through(drop_params: bool) -> None:
+    assert prompt_cache_breakpoint_for_wire(None, drop_params) is None
+
+
+@pytest.mark.parametrize("marker", _MALFORMED_PROMPT_CACHE_BREAKPOINTS, ids=_MALFORMED_PROMPT_CACHE_BREAKPOINT_IDS)
+def test_prompt_cache_breakpoint_for_wire_drops_a_malformed_marker_under_drop_params(marker: object) -> None:
+    assert prompt_cache_breakpoint_for_wire(marker, True) is None
+
+
+@pytest.mark.parametrize("marker", _MALFORMED_PROMPT_CACHE_BREAKPOINTS, ids=_MALFORMED_PROMPT_CACHE_BREAKPOINT_IDS)
+def test_prompt_cache_breakpoint_for_wire_forwards_a_malformed_marker_without_drop_params(marker: object) -> None:
+    assert prompt_cache_breakpoint_for_wire(marker, False) is marker
+
+
+@pytest.mark.parametrize("drop_params", (True, False), ids=("drop", "keep"))
+@pytest.mark.parametrize("marker", _VALID_PROMPT_CACHE_BREAKPOINTS, ids=("explicit", "explicit-30m"))
+def test_prompt_cache_breakpoint_for_wire_keeps_a_valid_marker(marker: dict[str, str], drop_params: bool) -> None:
+    assert prompt_cache_breakpoint_for_wire(marker, drop_params) == marker
+
+
+def test_prompt_cache_breakpoint_for_wire_strips_an_unknown_key_under_drop_params() -> None:
+    assert prompt_cache_breakpoint_for_wire({"mode": "explicit", "note": "kept"}, True) == {"mode": "explicit"}
+
+
 def test_cache_control_is_replaced_by_an_explicit_prompt_cache_breakpoint_on_the_same_block() -> None:
     marked: Final = {"type": "text", "text": "rules", "cache_control": {"type": "ephemeral", "ttl": "1h"}}
 
@@ -2512,3 +2561,131 @@ def test_shared_image_url_agrees_with_responses_normalization(
     expected: Final = {"type": "image_url", "image_url": {"url": "data:image/png;base64,IMAGE"}}
     assert as_openai_image_part(part) == expected
     assert as_openai_image_part(normalized) == expected
+
+
+@pytest.mark.parametrize(
+    "part,projected,media",
+    [
+        (
+            {"type": "image_url", "image_url": {"url": "data:image/png;base64,IMAGE", "detail": "high"}},
+            {"type": "image_url", "image_url": {"url": "", "detail": "high"}},
+            {"type": "image_url", "image_url": {"url": "data:image/png;base64,IMAGE", "detail": "high"}},
+        ),
+        (
+            {"type": "input_image", "image_url": "https://example.com/image.png", "detail": "low"},
+            {"type": "input_image", "image_url": "", "detail": "low"},
+            {"type": "image_url", "image_url": {"url": "https://example.com/image.png", "detail": "low"}},
+        ),
+        (
+            {"type": "computer_screenshot", "image_url": "data:image/png;base64,IMAGE"},
+            {"type": "computer_screenshot", "image_url": ""},
+            {"type": "image_url", "image_url": {"url": "data:image/png;base64,IMAGE", "detail": "auto"}},
+        ),
+        (
+            {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "IMAGE"}},
+            {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": ""}},
+            {"type": "image_url", "image_url": {"url": "data:image/png;base64,IMAGE", "detail": "auto"}},
+        ),
+        (
+            {"type": "input_audio", "input_audio": {"data": "AUDIO", "format": "wav"}},
+            {"type": "input_audio", "input_audio": {"data": "", "format": "wav"}},
+            {"type": "input_audio", "input_audio": {"data": "AUDIO", "format": "wav"}},
+        ),
+        (
+            {"type": "file", "file": {"file_data": "IMAGE", "format": "image/png", "filename": "image.png"}},
+            {"type": "file", "file": {"file_data": "", "format": "image/png", "filename": "image.png"}},
+            {"type": "image_url", "image_url": {"url": "data:image/png;base64,IMAGE", "detail": "auto"}},
+        ),
+        (
+            {"type": "input_file", "file_data": "data:audio/wav;base64,AUDIO", "filename": "audio.wav"},
+            {"type": "input_file", "file_data": "", "filename": "audio.wav"},
+            {"type": "input_audio", "input_audio": {"data": "AUDIO", "format": "wav"}},
+        ),
+    ],
+)
+def test_tpm_projection_blanks_only_declared_media_transport(
+    part: Mapping[str, object], projected: Mapping[str, object], media: Mapping[str, object],
+) -> None:
+    text: Final = {"type": "text", "text": "data:image/png;base64,IMAGE"}
+    request: Final = [{"role": "user", "content": [text, {**part, "cache_control": {"type": "ephemeral"}}]}]
+    original: Final = copy.deepcopy(request)
+    assert split_media_for_tpm(request) == (
+        [{"role": "user", "content": [text, {**projected, "cache_control": {"type": "ephemeral"}}]}],
+        (media,),
+    )
+    assert request == original
+
+
+def test_tpm_projection_retains_nested_and_native_history_around_media() -> None:
+    image: Final = {"type": "image_url", "image_url": {"url": "data:image/png;base64,IMAGE", "detail": "high"}}
+    empty_image: Final = {"type": "image_url", "image_url": {"url": "", "detail": "high"}}
+    document: Final = {"type": "document", "title": "keep", "source": {"type": "content", "content": [image]}}
+    empty_document: Final = {**document, "source": {"type": "content", "content": [empty_image]}}
+    tool: Final = {"type": "tool_result", "tool_use_id": "call", "content": [document, {"type": "text", "text": "keep"}]}
+    empty_tool: Final = {**tool, "content": [empty_document, {"type": "text", "text": "keep"}]}
+    request: Final = [
+        {"role": "user", "content": [tool]},
+        {"type": "function_call_output", "call_id": "call", "output": [image]},
+        {"type": "custom_tool_call_output", "call_id": "custom", "output": [image]},
+        {"type": "computer_call_output", "call_id": "computer", "output": {
+            "type": "computer_screenshot", "image_url": "data:image/png;base64,IMAGE",
+        }},
+        {"type": "image_generation_call", "id": "ig", "result": "IMAGE", "status": "completed"},
+        {"type": "code_interpreter_call", "id": "ci", "code": "keep()", "outputs": [
+            {"type": "logs", "logs": "keep"}, {"type": "image", "url": "https://example.com/image.png"},
+        ]},
+    ]
+    original: Final = copy.deepcopy(request)
+    projected, media = split_media_for_tpm(request)
+    assert projected == [
+        {"role": "user", "content": [empty_tool]},
+        {"type": "function_call_output", "call_id": "call", "output": [empty_image]},
+        {"type": "custom_tool_call_output", "call_id": "custom", "output": [empty_image]},
+        {"type": "computer_call_output", "call_id": "computer", "output": {
+            "type": "computer_screenshot", "image_url": "",
+        }},
+        {"type": "image_generation_call", "id": "ig", "result": "", "status": "completed"},
+        {"type": "code_interpreter_call", "id": "ci", "code": "keep()", "outputs": [
+            {"type": "logs", "logs": "keep"}, {"type": "image", "url": ""},
+        ]},
+    ]
+    assert media == (
+        image, image, image,
+        {"type": "image_url", "image_url": {"url": "data:image/png;base64,IMAGE", "detail": "auto"}},
+        {"type": "image_url", "image_url": {"url": "data:application/octet-stream;base64,IMAGE", "detail": "auto"}},
+        {"type": "image_url", "image_url": {"url": "https://example.com/image.png", "detail": "auto"}},
+    )
+    assert request == original
+
+
+def test_tpm_projection_preserves_non_media_identity_and_opaque_values() -> None:
+    image: Final = {"type": "input_image", "image_url": "data:image/png;base64,OPAQUE"}
+    request: Final = [
+        {"role": "user", "content": json.dumps(image)},
+        {"type": "custom_tool_call_output", "call_id": "call", "output": json.dumps(image)},
+        {"type": "function_call", "call_id": "call", "name": "keep", "arguments": {"content": [image]}},
+        {"type": "file_search_call", "results": [{"text": "keep", "content": [image]}]},
+        {"type": "image_generation_call", "id": "ig", "status": "in_progress", "result": None},
+        {"role": "user", "content": [
+            {"type": "document", "source": {"type": "base64", "media_type": "application/pdf", "data": "PDF"}},
+            {"type": "document", "source": {"type": "text", "data": json.dumps(image)}},
+            {"type": "file", "file": {"format": "application/pdf", "file_data": "PDF"}},
+            {"type": "text", "text": "keep", "metadata": {"content": [image]}},
+        ]},
+    ]
+    projected, media = split_media_for_tpm(request)
+    assert projected is request
+    assert media == ()
+
+
+def test_content_list_flattening_returns_new_messages_and_leaves_the_callers_untouched() -> None:
+    messages: Final = [
+        {"role": "user", "content": [{"type": "text", "text": "Hello"}, {"type": "text", "text": " world"}]},
+        {"role": "assistant", "content": "Hi"},
+    ]
+    messages_before: Final = copy.deepcopy(messages)
+
+    flattened: Final = handle_messages_with_content_list_to_str_conversion(messages)
+
+    assert flattened == [{"role": "user", "content": "Hello world"}, {"role": "assistant", "content": "Hi"}]
+    assert messages == messages_before

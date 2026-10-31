@@ -1388,6 +1388,55 @@ async def test_finalizer_with_running_loop_schedules_close_and_holds_task_ref():
     assert not (AsyncHTTPHandler._finalizer_close_tasks & scheduled)
 
 
+async def _drop_unused_handler() -> None:
+    AsyncHTTPHandler(timeout=61.0)
+    gc.collect()
+
+
+def test_finalizer_close_does_not_keep_a_loop_closed_right_after_it_alive():
+    loop: Final = asyncio.new_event_loop()
+    loop.run_until_complete(_drop_unused_handler())
+    loop.close()
+    closed_loop: Final = weakref.ref(loop)
+    del loop
+    gc.collect()
+
+    assert closed_loop() is None
+
+
+class _TransportFailingToClose(httpx.AsyncBaseTransport):
+    async def aclose(self) -> None:
+        raise RuntimeError("close failed")
+
+
+async def _drop_handler_whose_close_fails() -> None:
+    AsyncHTTPHandler(timeout=61.0, transport=_TransportFailingToClose())
+    gc.collect()
+
+
+def test_failed_finalizer_close_in_a_loops_last_step_reports_no_unretrieved_exception():
+    loop: Final = asyncio.new_event_loop()
+    exception_handler: Final = MagicMock()
+    loop.set_exception_handler(exception_handler)
+    loop.run_until_complete(_drop_handler_whose_close_fails())
+    loop.close()
+    del loop
+    gc.collect()
+
+    exception_handler.assert_not_called()
+
+
+async def _sync_client_with_timeout_62() -> HTTPHandler:
+    return get_httpx_client(params={"timeout": 62.0})
+
+
+def test_sync_client_is_shared_by_short_lived_loops_and_callers_outside_a_loop():
+    built_in_first_loop: Final = asyncio.run(_sync_client_with_timeout_62())
+
+    assert asyncio.run(_sync_client_with_timeout_62()) is built_in_first_loop
+    assert get_httpx_client(params={"timeout": 62.0}) is built_in_first_loop
+
+
 @pytest.mark.asyncio
 async def test_sync_close_helper_respects_session_ownership():
     """The loop-less fallback closes only sessions the transport owns; a
@@ -1917,12 +1966,12 @@ async def test_http2_flag_bypasses_aiohttp_transport(monkeypatch: pytest.MonkeyP
 
     monkeypatch.setattr(litellm, "http2", True)
     assert AsyncHTTPHandler.should_use_aiohttp_transport() is False
-    assert AsyncHTTPHandler.create_async_transport() is None
+    assert not isinstance(AsyncHTTPHandler.create_async_transport(), LiteLLMAiohttpTransport)
 
     monkeypatch.setattr(litellm, "http2", False)
     monkeypatch.setenv("LITELLM_HTTP2", "True")
     assert AsyncHTTPHandler.should_use_aiohttp_transport() is False
-    assert AsyncHTTPHandler.create_async_transport() is None
+    assert not isinstance(AsyncHTTPHandler.create_async_transport(), LiteLLMAiohttpTransport)
 
 
 @pytest.mark.asyncio

@@ -29,6 +29,7 @@ from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     PROXY_MaxParallelRequestsHandler_v3,
 )
 from litellm.proxy.utils import InternalUsageCache
+from litellm.router_api import RoutingContext
 from litellm.router_utils.cooldown_cache import ROUTER_COOLDOWNS_TARGET, CooldownCache
 from litellm.router_utils.routing_read_batch import (
     ROUTER_COOLDOWNS_USAGE_TARGET,
@@ -390,7 +391,7 @@ async def test_a_prefetch_with_incomplete_usage_keys_releases_cooldown_reservati
     )
 
     with request_redis_batch_scope():
-        RoutingPrefetch.arm(router, router.lowesttpm_logger_v2, router.model_list[:1])
+        RoutingPrefetch.arm(RoutingContext(router), router.lowesttpm_logger_v2, router.model_list[:1])
         deployment: Final = await router.async_get_available_deployment(
             model=_MODEL_GROUP, messages=[{"role": "user", "content": "ping"}], request_kwargs={}
         )

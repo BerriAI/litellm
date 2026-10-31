@@ -1,4 +1,6 @@
 import asyncio
+from collections.abc import Mapping
+from itertools import chain
 from typing import Final, Optional
 from unittest.mock import AsyncMock, patch
 
@@ -494,6 +496,82 @@ class TestResponsesAPIReasoningNullFields:
         assert dumped["instructions"] is None
 
 
+_OUTPUT_ITEMS_OPENAI_SENDS_WITHOUT_CREATED_BY: Final = (
+    {"id": "cmp_1", "type": "compaction", "encrypted_content": "gAAAA"},
+    {
+        "id": "apc_1",
+        "type": "apply_patch_call",
+        "call_id": "call_1",
+        "status": "completed",
+        "operation": {"type": "delete_file", "path": "a.py"},
+    },
+    {"id": "apco_1", "type": "apply_patch_call_output", "call_id": "call_1", "status": "completed"},
+    {
+        "id": "sh_1",
+        "type": "shell_call",
+        "call_id": "call_2",
+        "status": "completed",
+        "action": {"commands": ["ls"], "max_output_length": None, "timeout_ms": None},
+    },
+    {
+        "id": "sho_1",
+        "type": "shell_call_output",
+        "call_id": "call_2",
+        "status": "completed",
+        "output": [{"stdout": "a.py", "stderr": "", "outcome": {"type": "exit", "exit_code": 0}}],
+    },
+    {"id": "tsc_1", "type": "tool_search_call", "arguments": {}, "execution": "server", "status": "completed"},
+    {"id": "fco_1", "type": "function_call_output", "call_id": "call_3", "output": "42", "status": "completed"},
+    {
+        "id": "cco_1",
+        "type": "computer_call_output",
+        "call_id": "call_4",
+        "output": {"type": "computer_screenshot", "image_url": "data:image/png;base64,AAAA"},
+        "status": "completed",
+    },
+)
+
+
+def _created_by_paths_under_key(key: object, child: object, path: str) -> tuple[str, ...]:
+    return (f"{path}.{key}",) if key == "created_by" else _created_by_paths(child, f"{path}.{key}")
+
+
+def _created_by_paths(value: object, path: str = "") -> tuple[str, ...]:
+    if isinstance(value, dict):
+        return tuple(chain.from_iterable(_created_by_paths_under_key(k, v, path) for k, v in value.items()))
+    if isinstance(value, list):
+        return tuple(chain.from_iterable(_created_by_paths(v, f"{path}[{i}]") for i, v in enumerate(value)))
+    return ()
+
+
+@pytest.mark.parametrize("item", _OUTPUT_ITEMS_OPENAI_SENDS_WITHOUT_CREATED_BY, ids=lambda item: item["type"])
+def test_output_item_replays_without_a_created_by_the_provider_never_sent(item: Mapping[str, object]):
+    response: Final = ResponsesAPIResponse.model_validate(
+        {"id": "resp_1", "created_at": 1741476542, "object": "response", "status": "completed", "output": [item]}
+    )
+
+    assert _created_by_paths(json.loads(response.model_dump_json())["output"]) == ()
+    assert _created_by_paths(response.model_dump()["output"]) == ()
+
+
+def test_output_item_keeps_a_created_by_the_provider_sent():
+    item: Final = {"id": "cmp_1", "type": "compaction", "encrypted_content": "gAAAA", "created_by": "user_1"}
+    response: Final = ResponsesAPIResponse.model_validate(
+        {"id": "resp_1", "created_at": 1741476542, "object": "response", "status": "completed", "output": [item]}
+    )
+
+    assert json.loads(response.model_dump_json())["output"] == [item]
+
+
+def test_shell_call_output_the_sdk_cannot_type_serializes_as_sent():
+    item: Final = {"id": "sho_1", "type": "shell_call_output", "output": ["a.py"]}
+    response: Final = ResponsesAPIResponse.model_validate(
+        {"id": "resp_1", "created_at": 1741476542, "object": "response", "status": "completed", "output": [item]}
+    )
+
+    assert json.loads(response.model_dump_json())["output"] == [item]
+
+
 def test_normalize_fine_tuning_job_dict_maps_azure_pending():
     from litellm.llms.openai.fine_tuning.handler import _normalize_fine_tuning_job_dict
 
@@ -527,6 +605,23 @@ def test_openai_file_object_accepts_pending_status():
         status="pending",
     )
     assert file_obj.status == "pending"
+
+
+@pytest.mark.parametrize("object_type", ({}, {"object": None}), ids=["missing", "null"])
+def test_openai_file_object_without_an_object_type_validates_as_a_file(object_type: dict[str, None]) -> None:
+    from litellm.types.llms.openai import OpenAIFileObject
+
+    server_file: Final = {
+        "id": "file-b73f4c",
+        "bytes": 156,
+        "created_at": 1793238707,
+        "filename": "batch_requests.jsonl",
+        "purpose": "batch",
+    }
+
+    file_obj: Final = OpenAIFileObject.model_validate({**server_file, **object_type})
+
+    assert file_obj.model_dump(exclude_none=True) == {**server_file, "object": "file"}
 
 
 class TestOpenAIFileObjectBatchGuardrailSerialization:
