@@ -18,8 +18,8 @@ from __future__ import annotations
 import asyncio
 import functools
 import json
-from collections import OrderedDict
-from collections.abc import AsyncIterator, Callable, Iterable, Mapping
+from collections import Counter, OrderedDict
+from collections.abc import AsyncIterator, Callable, ItemsView, Iterable, Iterator, Mapping
 from datetime import datetime, timezone
 from enum import Enum
 from http import HTTPStatus
@@ -33,7 +33,7 @@ from fastapi import HTTPException, Response
 from fastapi.responses import JSONResponse, StreamingResponse
 from openai import APIError as OpenAIAPIError
 from openai.types.responses import ResponseOutputMessage, ResponseOutputText
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, PrivateAttr
 
 import litellm
 import litellm.proxy.proxy_server as ps
@@ -289,7 +289,6 @@ _MASKED_IN_EVERY_FRAME: Final = (
     MappingProxyType({"headers": _REDACTED_HEADERS}),
     MappingProxyType(_REDACTED_HEADERS),
     _HiddenFieldModel(user="rig", password="hook-canary"),
-    _MaskedReprModel(token="hook-canary"),
     _MaskedReprStrModel(token="hook-canary"),
     _MaskedReprArgsModel(token="hook-canary"),
 )
@@ -299,16 +298,44 @@ _MASKED_IN_EVERY_FRAME_IDS: Final = (
     "proxy_over_dict_holding_redacted_dict",
     "proxy_wrapping_redacted_dict",
     "repr_false_field",
-    "masked_repr_model",
     "masked_repr_str_model",
     "masked_repr_args_model",
 )
 
 
+class _UnmaskingDict(dict[str, str]):
+    def items(self) -> ItemsView[str, str]:  # pyright: ignore[reportIncompatibleMethodOverride]  # rig hides storage
+        return {key: "hook-canary" for key in dict.keys(self)}.items()
+
+
+class _UnmaskingList(list[str]):
+    def __iter__(self) -> Iterator[str]:
+        return iter(("hook-canary",))
+
+
+class _MostCommonMaskedCounter(Counter[str]):
+    def most_common(self, n: int | None = None) -> list[tuple[str, int]]:
+        return [(key, count) for key, count in super().most_common(n) if key != "hook-canary"]
+
+
 @pytest.mark.parametrize(
     "nested",
-    [*_MASKED_IN_EVERY_FRAME, _MaskedReprString("hook-canary")],
-    ids=[*_MASKED_IN_EVERY_FRAME_IDS, "masked_repr_string"],
+    [
+        *_MASKED_IN_EVERY_FRAME,
+        _MaskedReprModel(token="hook-canary"),
+        _MaskedReprString("hook-canary"),
+        _UnmaskingDict(token="enc:MASKED"),
+        _UnmaskingList(("enc:MASKED",)),
+        _MostCommonMaskedCounter(("shown", "hook-canary")),
+    ],
+    ids=[
+        *_MASKED_IN_EVERY_FRAME_IDS,
+        "masked_repr_model",
+        "masked_repr_string",
+        "dict_items_differ_from_storage",
+        "list_iter_differs_from_storage",
+        "counter_most_common_masks",
+    ],
 )
 def test_responses_sse_chunk_never_shows_what_a_nested_value_hides_from_its_repr(nested: object) -> None:
     frame: Final = _format_responses_sse_chunk(
@@ -335,8 +362,41 @@ def test_responses_error_event_never_shows_what_a_nested_value_hides_from_its_st
     assert "hook-canary" not in frame
 
 
+class _OwnFormatDict(dict[str, str]):
+    def __format__(self, format_spec: str) -> str:
+        return json.dumps({"type": "response.output_text.delta", "token": "MASKED"})
+
+
+class _MaskedStrDict(dict[str, str]):
+    def __str__(self) -> str:
+        return "{'type': 'response.output_text.delta', 'token': 'MASKED'}"
+
+
+@pytest.mark.parametrize(
+    "chunk",
+    [
+        _OwnFormatDict(type="response.output_text.delta", token="hook-canary"),
+        MappingProxyType(_MaskedStrDict(type="response.output_text.delta", token="hook-canary")),
+    ],
+    ids=["own_format", "proxy_over_masked_str"],
+)
+def test_responses_sse_chunk_sends_a_whole_chunk_as_the_text_its_printer_gave(chunk: object) -> None:
+    frame: Final = _format_responses_sse_chunk(chunk=chunk)
+
+    assert isinstance(frame, str)
+    assert "hook-canary" not in frame
+
+
 class _RigTuple(tuple[object, ...]):
     pass
+
+
+class _RevealingReprModel(BaseModel, frozen=True):
+    a: int
+    _note: str = PrivateAttr(default="hook-canary")
+
+    def __repr__(self) -> str:
+        return f"_RevealingReprModel(note={self._note})"
 
 
 @pytest.mark.parametrize(
@@ -345,8 +405,9 @@ class _RigTuple(tuple[object, ...]):
         OrderedDict(member=_MaskedStrModel(token="hook-canary")),
         _RigTuple((_MaskedStrModel(token="hook-canary"),)),
         _HookOutputItem(id="msg_nested", type="message"),
+        _RevealingReprModel(a=1),
     ],
-    ids=["dict_subclass", "tuple_subclass", "model"],
+    ids=["dict_subclass", "tuple_subclass", "model", "model_with_own_repr"],
 )
 def test_responses_error_event_sends_a_detail_the_way_base_json_dumps_did(detail: object) -> None:
     frame: Final = ResponsesStreamErrorState().format_error(

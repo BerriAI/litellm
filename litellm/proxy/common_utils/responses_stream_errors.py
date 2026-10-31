@@ -1,7 +1,7 @@
 import json
 import time
 from collections import Counter, OrderedDict, defaultdict
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from enum import Enum
 from http import HTTPStatus
 from types import MappingProxyType
@@ -78,37 +78,40 @@ class _BaseForm(Enum):
     DUMPED = "dumped"
 
 
-def _prints_every_item(kind: type[object]) -> bool:
+def _prints_every_item(kind: type[object], form: _BaseForm) -> bool:
     repr_owner: Final = next((owner for owner in kind.__mro__ if "__repr__" in owner.__dict__), object)
-    return kind.__str__ is object.__str__ and repr_owner in (dict, list, tuple, OrderedDict, defaultdict, Counter)
+    if form is _BaseForm.DUMPED:
+        return kind.__str__ is object.__str__ and repr_owner in (dict, list, tuple, OrderedDict, defaultdict, Counter)
+    return (
+        kind.__str__ is object.__str__
+        and kind.__format__ is object.__format__
+        and (kind in (OrderedDict, Counter) or repr_owner in (dict, list, tuple, defaultdict))
+    )
 
 
-def _is_shown_mapping(value: object) -> TypeIs[Mapping[object, object]]:  # guard-ok: narrows dicts to object items
+def _is_shown_dict(value: object, form: _BaseForm) -> TypeIs[Mapping[object, object]]:  # guard-ok: dict items as object
     kind: Final = type(value)
-    return isinstance(value, dict) and _prints_every_item(kind)
+    return isinstance(value, dict) and _prints_every_item(kind, form)
 
 
-def _is_shown_sequence(value: object) -> TypeIs[Sequence[object]]:  # guard-ok: narrows lists and tuples to object items
+def _is_shown_sequence(value: object, form: _BaseForm) -> TypeIs[Sequence[object]]:  # guard-ok: items as object
     kind: Final = type(value)
-    return isinstance(value, (list, tuple)) and _prints_every_item(kind)
+    return isinstance(value, (list, tuple)) and _prints_every_item(kind, form)
 
 
 def _is_proxy(value: object) -> TypeIs[Mapping[object, object]]:  # guard-ok: mappingproxy cannot be subclassed
     return isinstance(value, MappingProxyType)
 
 
-def _prints_as_dict(proxy: Mapping[object, object]) -> bool:
-    return repr(proxy) == f"mappingproxy({dict(proxy)!r})"
+def _printed_proxy_items(proxy: Mapping[object, object], printed: str) -> Iterable[tuple[object, object]] | None:
+    snapshot: Final = dict(proxy)
+    shown: Final = repr(snapshot)
+    return snapshot.items() if printed in (shown, f"mappingproxy({shown})") else None
 
 
 def _repr_prints_its_fields(model: BaseModel) -> bool:
     kind: Final = type(model)
     return kind.__repr__ is BaseModel.__repr__ and kind.__repr_str__ is BaseModel.__repr_str__
-
-
-def _str_skips_its_repr(model: BaseModel) -> bool:
-    kind: Final = type(model)
-    return kind.__str__ is BaseModel.__str__ and kind.__repr__ is not BaseModel.__repr__
 
 
 def _plain_scalar(value: str | float) -> str | float:
@@ -130,11 +133,7 @@ def _text(value: object, form: _BaseForm) -> object:
     try:
         if isinstance(value, (str, int, float)) and (form is _BaseForm.DUMPED or _repr_shows_its_value(value)):
             return _plain_scalar(value)
-        if form is _BaseForm.PRINTED:
-            return repr(value)
-        if isinstance(value, BaseModel) and _str_skips_its_repr(value):
-            return repr(value)
-        return str(value)
+        return repr(value) if form is _BaseForm.PRINTED else str(value)
     except Exception:  # noqa: BLE001  # hook values run their own __repr__ and __str__, so a failure drops the value
         return _DROPPED
 
@@ -143,11 +142,31 @@ def _json_key(key: object, form: _BaseForm) -> object:
     return key if key is None or type(key) in (str, int, float, bool) else _text(key, form)
 
 
+def _shown_sequence(value: object, form: _BaseForm) -> Iterator[object] | None:
+    if not _is_shown_sequence(value, form):
+        return None
+    if form is _BaseForm.PRINTED and isinstance(value, list):
+        return list[object].__iter__(value)
+    if form is _BaseForm.PRINTED and isinstance(value, tuple):
+        return tuple[object, ...].__iter__(value)
+    return iter(value)
+
+
+def _shown_items(value: object, form: _BaseForm) -> Iterable[tuple[object, object]] | None:
+    if not _is_shown_dict(value, form):
+        return None
+    if form is _BaseForm.PRINTED and isinstance(value, dict):
+        return dict[object, object].items(value)
+    return value.items()
+
+
 def _expansion(value: object, form: _BaseForm) -> tuple[Iterable[tuple[object, object]], _BaseForm] | None:
-    if _is_shown_mapping(value):
-        return value.items(), form
-    if _is_proxy(value) and _prints_as_dict(value):
-        return value.items(), _BaseForm.PRINTED
+    shown_items: Final = _shown_items(value, form)
+    if shown_items is not None:
+        return shown_items, form
+    if _is_proxy(value):
+        proxy_items: Final = _printed_proxy_items(value, repr(value) if form is _BaseForm.PRINTED else str(value))
+        return None if proxy_items is None else (proxy_items, _BaseForm.PRINTED)
     if form is _BaseForm.PRINTED and isinstance(value, BaseModel) and _repr_prints_its_fields(value):
         return value.__repr_args__(), _BaseForm.PRINTED
     return None
@@ -160,8 +179,9 @@ def _json_safe(value: object, form: _BaseForm, path: frozenset[int]) -> object:
         return _text(value, form)
     inner_path: Final = path | frozenset((id(value),))
     try:
-        if _is_shown_sequence(value):
-            shown_items: Final = [_json_safe(item, form, inner_path) for item in value]
+        sequence: Final = _shown_sequence(value, form)
+        if sequence is not None:
+            shown_items: Final = [_json_safe(item, form, inner_path) for item in sequence]
             return [item for item in shown_items if item is not _DROPPED]
         expansion: Final = _expansion(value, form)
         if expansion is None:
@@ -174,7 +194,9 @@ def _json_safe(value: object, form: _BaseForm, path: frozenset[int]) -> object:
 
 
 def responses_chunk_json(chunk: object) -> str | None:
-    if not _is_shown_mapping(chunk) and not _is_proxy(chunk):
+    if _is_proxy(chunk) and _printed_proxy_items(chunk, format(chunk, "")) is None:
+        return None
+    if not _is_shown_dict(chunk, _BaseForm.PRINTED) and not _is_proxy(chunk):
         return None
     shown: Final = _json_safe(chunk, _BaseForm.PRINTED, frozenset())
     return None if isinstance(shown, str) or shown is _DROPPED else json.dumps(shown)
