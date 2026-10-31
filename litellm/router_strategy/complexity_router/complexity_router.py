@@ -126,10 +126,13 @@ from .jev_classifier import (
     DEFAULT_JEV_INSTRUCTIONS,
     HttpJevClassifierClient,
     JevClassifierClient,
+    JevSystemOneRequest,
     JevVerdict,
     RouterJevClassifierClient,
     build_jev_request,
+    fit_jev_request,
     jev_classifier_cost,
+    jev_input_targets,
 )
 from .llm_v2 import LLM_V2_PROMPT_VERSION, LLMV2Decision, LLMV2TaskContext, LLMV2Verdict, llm_v2_response_format
 from .stall_detector import detect_stalled_task
@@ -1166,6 +1169,7 @@ class ClassificationOutcome(NamedTuple):
     heuristic_v2_forecast: StandardLoggingHeuristicV2Forecast | None = None
     classifier_failure_reason: ClassifierFailureReason | None = None
     classifier_error_type: str | None = None
+    classifier_input_telemetry: StandardLoggingRoutingDecision | None = None
 
 
 def _with_classifier_failure(
@@ -1207,23 +1211,24 @@ def _with_classifier_forecast(
     decision: StandardLoggingRoutingDecision, outcome: ClassificationOutcome
 ) -> StandardLoggingRoutingDecision:
     """Attach validated forecasts and their applied policy to the routing decision."""
+    with_input: Final[StandardLoggingRoutingDecision] = {**decision, **(outcome.classifier_input_telemetry or {})}
     if outcome.heuristic_v2_forecast is not None:
-        return {**decision, "heuristic_v2_forecast": outcome.heuristic_v2_forecast}
+        return {**with_input, "heuristic_v2_forecast": outcome.heuristic_v2_forecast}
     if outcome.jev_verdict is not None:
         forecasted_decision: Final[StandardLoggingRoutingDecision] = {
-            **decision,
+            **with_input,
             "classifier_probabilities": outcome.jev_verdict.probabilities,
             "classifier_confidence": outcome.jev_verdict.confidence,
         }
         return forecasted_decision
     if outcome.llm_v2_forecast is not None:
-        return _with_llm_v2_forecast(decision, outcome.llm_v2_forecast)
+        return _with_llm_v2_forecast(with_input, outcome.llm_v2_forecast)
     forecast: Final = outcome.capability_forecast
     if forecast is None:
-        return decision
+        return with_input
     verdict: Final = forecast.verdict
     enriched: Final[StandardLoggingRoutingDecision] = {
-        **decision,
+        **with_input,
         "classifier_crux": verdict.crux,
         "classifier_primary_rule": verdict.primary_rule,
         "classifier_capability_boundary": verdict.capability_boundary,
@@ -1974,19 +1979,21 @@ class ComplexityRouter(CustomLogger):
         `score` because the score is only interpretable against the boundaries that
         mapped it to a tier.
         """
-        decision: Final = StandardLoggingRoutingDecision(
-            router_model_name=self.model_name,
-            router_type="complexity",
-            routed_model=routed_model,
-            cause=cause,
-            conversation_continuing=conversation_continuing,
-            **(
-                {"classifier_failure_reason": classifier_failure_reason}
-                if classifier_failure_reason is not None
-                else {}
-            ),
-            **({"classifier_error_type": classifier_error_type} if classifier_error_type is not None else {}),
+        failure: Final[StandardLoggingRoutingDecision] = (
+            {"classifier_failure_reason": classifier_failure_reason} if classifier_failure_reason is not None else {}
         )
+        error: Final[StandardLoggingRoutingDecision] = (
+            {"classifier_error_type": classifier_error_type} if classifier_error_type is not None else {}
+        )
+        decision: Final[StandardLoggingRoutingDecision] = {
+            "router_model_name": self.model_name,
+            "router_type": "complexity",
+            "routed_model": routed_model,
+            "cause": cause,
+            "conversation_continuing": conversation_continuing,
+            **failure,
+            **error,
+        }
         if (baseline := self.savings_baseline) is not None:
             decision["savings_baseline_model"] = baseline.model
             if baseline.deployment_id is not None:
@@ -2371,16 +2378,6 @@ class ComplexityRouter(CustomLogger):
                 system_prompt,
                 failure_reason="unsupported_input",
             )
-        breaker: Final = self._classifier_circuit_breaker
-        permit: Final = breaker.acquire_permit() if breaker is not None else None
-        if breaker is not None and permit is None:
-            return self._classifier_failure_outcome(
-                "jev classifier circuit is open",
-                prompt,
-                system_prompt,
-                failure_reason="circuit_open",
-                signal=_CLASSIFIER_CIRCUIT_OPEN_SIGNAL,
-            )
         criteria: Final[Mapping[str, str]] = (
             MappingProxyType(
                 {
@@ -2395,13 +2392,40 @@ class ComplexityRouter(CustomLogger):
             )
         )
         timeout_s: Final = config.timeout_ms / 1000
-        request: Final = build_jev_request(
-            prompt=self._classifier_context_payload(prompt, system_prompt, request_kwargs, messages),
-            system_prompt=None,
-            model=config.model,
-            instructions=config.instructions or DEFAULT_JEV_INSTRUCTIONS,
-            criteria=criteria,
+        from litellm.litellm_core_utils.token_counter import offload_token_count
+
+        def build_request(current_prompt: str, caller_constraints: str | None) -> JevSystemOneRequest:
+            return build_jev_request(
+                prompt=self._classifier_context_payload(
+                    current_prompt, caller_constraints, request_kwargs, messages, current_ask_for_history=prompt
+                ),
+                system_prompt=None,
+                model=config.model,
+                instructions=config.instructions or DEFAULT_JEV_INSTRUCTIONS,
+                criteria=criteria,
+            )
+
+        budgeted: Final = await offload_token_count(fit_jev_request)(
+            build_request, prompt, system_prompt, jev_input_targets(self.litellm_router_instance, config), _truncate
         )
+        request: Final = budgeted.request
+        if request is None:
+            return self._classifier_failure_outcome(
+                "classifier input cannot fit the provider budget",
+                prompt,
+                system_prompt,
+                failure_reason="unsupported_input",
+            )._replace(classifier_input_telemetry=budgeted.telemetry)
+        breaker: Final = self._classifier_circuit_breaker
+        permit: Final = breaker.acquire_permit() if breaker is not None else None
+        if breaker is not None and permit is None:
+            return self._classifier_failure_outcome(
+                "jev classifier circuit is open",
+                prompt,
+                system_prompt,
+                failure_reason="circuit_open",
+                signal=_CLASSIFIER_CIRCUIT_OPEN_SIGNAL,
+            )._replace(classifier_input_telemetry=budgeted.telemetry)
         try:
             response: Final = await asyncio.wait_for(client.evaluate(request, timeout_s, request_kwargs), timeout_s)
             answer: Final = response.answers.get("tier")
@@ -2449,6 +2473,7 @@ class ComplexityRouter(CustomLogger):
                 cause="jev_classifier",
                 classifier_cost=verdict.cost,
                 jev_verdict=verdict,
+                classifier_input_telemetry=budgeted.telemetry,
             )
         except asyncio.CancelledError:
             if breaker is not None and permit is not None:
@@ -2463,7 +2488,7 @@ class ComplexityRouter(CustomLogger):
                 system_prompt,
                 failure_reason=_classifier_failure_reason(e),
                 error_type=type(e).__name__,
-            )
+            )._replace(classifier_input_telemetry=budgeted.telemetry)
 
     def _classifier_failure_outcome(
         self,
@@ -2654,6 +2679,7 @@ class ComplexityRouter(CustomLogger):
         messages: Sequence[Mapping[str, object]] | None,
         *,
         encrypted_task: bool = False,
+        current_ask_for_history: str | None = None,
     ) -> str:
         include_assistant: Final = self.config.classifier_context_include_assistant_turns
         marker_pairs: Final = self._reminder_markers_for_request(request_kwargs or EMPTY_MAPPING)
@@ -2661,7 +2687,7 @@ class ComplexityRouter(CustomLogger):
         prior_turns: Final = (
             _extract_prior_turns(
                 messages,
-                current_ask=prompt,
+                current_ask=prompt if current_ask_for_history is None else current_ask_for_history,
                 window_size=self.config.classifier_context_window_size,
                 budget_chars=self.config.classifier_context_budget_chars,
                 per_turn_chars=self.config.classifier_context_per_turn_chars,
@@ -4983,16 +5009,19 @@ class ComplexityRouter(CustomLogger):
             return PreRoutingHookResponse(
                 model=fallback_model,
                 messages=messages if has_original_messages else None,
-                routing_decision=self._build_routing_decision(
-                    routed_model=fallback_model,
-                    conversation_continuing=conversation_continuing,
-                    cause=outcome.cause,
-                    signals=outcome.signals,
-                    classifier_failure_reason=outcome.classifier_failure_reason,
-                    classifier_error_type=outcome.classifier_error_type,
-                    escalation_keyword=escalation_keyword,
-                    escalated=False,
-                    tier_litellm_params=fallback_tier_params,
+                routing_decision=_with_classifier_forecast(
+                    self._build_routing_decision(
+                        routed_model=fallback_model,
+                        conversation_continuing=conversation_continuing,
+                        cause=outcome.cause,
+                        signals=outcome.signals,
+                        classifier_failure_reason=outcome.classifier_failure_reason,
+                        classifier_error_type=outcome.classifier_error_type,
+                        escalation_keyword=escalation_keyword,
+                        escalated=False,
+                        tier_litellm_params=fallback_tier_params,
+                    ),
+                    outcome,
                 ),
                 litellm_params=fallback_tier_params,
             )

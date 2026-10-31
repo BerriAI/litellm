@@ -6,6 +6,8 @@ Why separate file? Make it easy to see how transformation works
 
 from typing import Final
 
+from pydantic import TypeAdapter
+
 from litellm._uuid import uuid
 from litellm.types.rerank import (
     RerankBilledUnits,
@@ -19,7 +21,7 @@ from litellm.types.rerank import (
 
 class TogetherAIRerankConfig:
     def _transform_response(self, response: dict) -> RerankResponse:
-        _billed_units: Final = RerankBilledUnits(**response.get("usage", {}))
+        _billed_units: Final = TypeAdapter(RerankBilledUnits).validate_python(response.get("usage", {}))
         _tokens: Final = RerankTokens(**response.get("usage", {}))
         rerank_meta: Final = RerankResponseMeta(billed_units=_billed_units, tokens=_tokens)
 

@@ -1216,6 +1216,9 @@ class RoutingContext:
     def registry(self) -> RouterRegistry:
         return self._router.registry()
 
+    def deployment_params(self, request: Mapping[str, object], deployment: "Deployment | None") -> Mapping[str, object]:
+        return self._router._params_sent_to_deployment(request, deployment)
+
     def settings(self) -> RouterSettings:
         return self._router.settings()
 
