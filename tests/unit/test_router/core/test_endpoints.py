@@ -414,6 +414,7 @@ def _scripted_stream(*texts: str) -> Callable[..., CustomStreamWrapper]:
         async def chunks() -> AsyncIterator[ModelResponseStream]:
             for text in texts:
                 yield ModelResponseStream(choices=[{"index": 0, "delta": {"role": "assistant", "content": text}}])
+            yield ModelResponseStream(choices=[{"index": 0, "delta": {}, "finish_reason": "stop"}])
 
         logging_obj: Final = LiteLLMLogging(
             model="d1",

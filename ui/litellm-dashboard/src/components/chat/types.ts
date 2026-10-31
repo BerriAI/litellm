@@ -25,6 +25,11 @@ export interface ChatImageGeneration {
   prompt: string;
 }
 
+export interface ChatBackgroundRun {
+  id: string;
+  status: "queued" | "in_progress" | "completed" | "failed" | "cancelled" | "incomplete" | "expired";
+}
+
 export interface ChatMessage {
   id: string;
   role: "user" | "assistant" | "tool";
@@ -33,6 +38,8 @@ export interface ChatMessage {
   generatedImages?: ChatImageAttachment[];
   imageGeneration?: ChatImageGeneration;
   reasoningContent?: string;
+  backgroundRun?: ChatBackgroundRun;
+  backgroundError?: string;
   /** MCP tool events that occurred during this assistant turn, in order. */
   mcpEvents?: MCPEvent[];
   toolName?: string;
@@ -55,6 +62,8 @@ export type AssistantMessageUpdate = Partial<
     | "usage"
     | "generatedImages"
     | "imageGeneration"
+    | "backgroundRun"
+    | "backgroundError"
   >
 >;
 

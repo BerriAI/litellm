@@ -1142,11 +1142,6 @@
       "count": 1
     }
   },
-  "src/app/chat/page.tsx": {
-    "no-nested-ternary": {
-      "count": 1
-    }
-  },
   "src/app/login/LoginPage.tsx": {
     "local/no-complex-jsx-arrow": {
       "count": 1
