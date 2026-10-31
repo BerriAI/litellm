@@ -10351,41 +10351,58 @@ def test_map_openai_params_audio_voice_reaches_speech_config_mapped() -> None:
     assert optional_params["speechConfig"]["voiceConfig"]["prebuiltVoiceConfig"]["voiceName"] == "Kore"
 
 
-@pytest.mark.parametrize("audio_format", ("mp3", "opus", "flac", "PCM16"))
-@pytest.mark.parametrize(
-    "audio",
-    (
-        {"voice": "Kore"},
-        {"speech_config": {"voice_name": "Kore"}},
-    ),
+def _top_level_format_audio(audio_format: str) -> Mapping[str, object]:
+    return {"voice": "Kore", "format": audio_format}
+
+
+def _format_beside_speech_config_audio(audio_format: str) -> Mapping[str, object]:
+    return {"speech_config": {"voice_name": "Kore"}, "format": audio_format}
+
+
+def _format_inside_speech_config_audio(audio_format: str) -> Mapping[str, object]:
+    return {"speech_config": {"voice_name": "Kore", "format": audio_format}}
+
+
+_FORMAT_PLACEMENTS: Final = (
+    _top_level_format_audio,
+    _format_beside_speech_config_audio,
+    _format_inside_speech_config_audio,
 )
+
+
+@pytest.mark.parametrize("audio_format", ("mp3", "opus", "flac", "PCM16"))
+@pytest.mark.parametrize("audio", _FORMAT_PLACEMENTS)
 @pytest.mark.parametrize("model", ("gemini/gemini-3.8-flash-tts", "vertex_ai/gemini-3.8-flash-tts"))
-def test_chat_audio_unsupported_format_is_a_400_naming_the_format(
-    model: str, audio: Mapping[str, object], audio_format: str
+def test_chat_audio_unsupported_format_is_a_400_naming_the_model_and_format(
+    model: str, audio: Callable[[str], Mapping[str, object]], audio_format: str
 ) -> None:
     with respx.mock, pytest.raises(litellm.BadRequestError) as raised:
         completion(
             model=model,
             messages=[{"role": "user", "content": "Say hello"}],
             modalities=["audio"],
-            audio={**audio, "format": audio_format},
+            audio=audio(audio_format),
             api_key="test-key",
             vertex_project="test-project",
             vertex_location="us-central1",
         )
 
     assert raised.value.status_code == 400
-    assert f"audio format '{audio_format}'" in str(raised.value)
+    assert f"gemini-3.8-flash-tts does not take the audio format '{audio_format}'" in str(raised.value)
 
 
+@pytest.mark.parametrize("audio", _FORMAT_PLACEMENTS)
 @pytest.mark.parametrize("request_drop_params, global_drop_params", ((True, False), (False, True)))
 def test_chat_audio_unsupported_format_is_dropped_under_drop_params(
-    monkeypatch: pytest.MonkeyPatch, request_drop_params: bool, global_drop_params: bool
+    monkeypatch: pytest.MonkeyPatch,
+    request_drop_params: bool,
+    global_drop_params: bool,
+    audio: Callable[[str], Mapping[str, object]],
 ) -> None:
     monkeypatch.setattr(litellm, "drop_params", global_drop_params)
 
     optional_params: Final = VertexGeminiConfig().map_openai_params(
-        non_default_params={"modalities": ["audio"], "audio": {"voice": "Kore", "format": "mp3"}},
+        non_default_params={"modalities": ["audio"], "audio": audio("mp3")},
         optional_params={},
         model="gemini-3.8-flash-tts",
         drop_params=request_drop_params,
