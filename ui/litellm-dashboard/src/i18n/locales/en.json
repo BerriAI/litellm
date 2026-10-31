@@ -817,6 +817,1323 @@
       }
     }
   },
+  "guardrails": {
+    "garden": {
+      "searchPlaceholder": "Search guardrails",
+      "litellmHeading": "LiteLLM Content Filter",
+      "showLess": "Show less",
+      "showAll": "Show all ({{total}})",
+      "litellmDescription": "Built-in guardrails powered by LiteLLM. Zero latency, no external dependencies, no additional cost.",
+      "decisionModelHeading": "Decision Model",
+      "decisionModelDescription": "Ask a decision model yes/no questions about each request or response, and block or log when a score reaches its threshold.",
+      "partnerHeading": "Partner Guardrails",
+      "partnerDescription": "Third-party guardrail integrations from leading AI security providers."
+    },
+    "gardenCard": {
+      "testCases": "test cases"
+    },
+    "gardenDetail": {
+      "categories": {
+        "litellm": {
+          "provider": "LiteLLM Content Filter",
+          "type": "Content Filter"
+        },
+        "decisionModel": {
+          "provider": "Decision Model",
+          "type": "Decision Model"
+        },
+        "partner": {
+          "provider": "Partner Guardrail",
+          "type": "Partner"
+        }
+      },
+      "detailRows": {
+        "provider": "Provider",
+        "subcategory": "Subcategory",
+        "cost": "Cost",
+        "externalDependencies": "External Dependencies",
+        "latency": "Latency"
+      },
+      "detailValues": {
+        "decisionModelCost": "Billed per call by the decision model provider",
+        "litellmCost": "$0 / request",
+        "noExternalDependencies": "None"
+      },
+      "evalMetrics": {
+        "precision": "Precision",
+        "recall": "Recall",
+        "f1Score": "F1 Score",
+        "testCases": "Test Cases",
+        "falsePositives": "False Positives",
+        "falseNegatives": "False Negatives",
+        "latencyP50": "Latency (p50)"
+      },
+      "tabs": {
+        "overview": "Overview",
+        "evalResults": "Eval Results"
+      },
+      "createGuardrail": "Create Guardrail",
+      "overviewHeading": "Overview",
+      "detailsHeading": "Guardrail Details",
+      "detailsSubtitle": "Details are as follows",
+      "propertyColumn": "Property",
+      "guardrailIdLabel": "Guardrail ID",
+      "typeLabel": "Type",
+      "tagsLabel": "Tags",
+      "evalResultsHeading": "Eval Results",
+      "metricColumn": "Metric",
+      "valueColumn": "Value"
+    },
+    "gardenCatalog": {
+      "contentFilter": {
+        "deniedFinancial": {
+          "name": "Denied Financial Advice",
+          "description": "Detects requests for personalized financial advice, investment recommendations, or financial planning."
+        },
+        "deniedInsults": {
+          "name": "Insults & Personal Attacks",
+          "description": "Detects insults, name-calling, and personal attacks directed at the chatbot, staff, or other people."
+        },
+        "deniedLegal": {
+          "name": "Denied Legal Advice",
+          "description": "Detects requests for unauthorized legal advice, case analysis, or legal recommendations."
+        },
+        "deniedMedical": {
+          "name": "Denied Medical Advice",
+          "description": "Detects requests for medical diagnosis, treatment recommendations, or health advice."
+        },
+        "harmfulViolence": {
+          "name": "Harmful Violence",
+          "description": "Detects content related to violence, criminal planning, attacks, and violent threats."
+        },
+        "harmfulSelfHarm": {
+          "name": "Harmful Self-Harm",
+          "description": "Detects content related to self-harm, suicide, and dangerous self-destructive behavior."
+        },
+        "harmfulChildSafety": {
+          "name": "Harmful Child Safety",
+          "description": "Detects content that could endanger child safety or exploit minors."
+        },
+        "harmfulIllegalWeapons": {
+          "name": "Harmful Illegal Weapons",
+          "description": "Detects content related to illegal weapons manufacturing, distribution, or acquisition."
+        },
+        "biasGender": {
+          "name": "Bias: Gender",
+          "description": "Detects gender-based discrimination, stereotypes, and biased language."
+        },
+        "biasRacial": {
+          "name": "Bias: Racial",
+          "description": "Detects racial discrimination, stereotypes, and racially biased content."
+        },
+        "biasReligious": {
+          "name": "Bias: Religious",
+          "description": "Detects religious discrimination, intolerance, and religiously biased content."
+        },
+        "biasSexualOrientation": {
+          "name": "Bias: Sexual Orientation",
+          "description": "Detects discrimination based on sexual orientation and related biased content."
+        },
+        "promptInjectionJailbreak": {
+          "name": "Prompt Injection: Jailbreak",
+          "description": "Detects jailbreak attempts designed to bypass AI safety guidelines and restrictions."
+        },
+        "promptInjectionDataExfil": {
+          "name": "Prompt Injection: Data Exfiltration",
+          "description": "Detects attempts to extract sensitive data through prompt manipulation."
+        },
+        "promptInjectionSql": {
+          "name": "Prompt Injection: SQL",
+          "description": "Detects SQL injection attempts embedded in prompts."
+        },
+        "promptInjectionMaliciousCode": {
+          "name": "Prompt Injection: Malicious Code",
+          "description": "Detects attempts to inject malicious code through prompts."
+        },
+        "promptInjectionSystemPrompt": {
+          "name": "Prompt Injection: System Prompt",
+          "description": "Detects attempts to extract or override system prompts."
+        },
+        "toxicAbuse": {
+          "name": "Toxic & Abusive Language",
+          "description": "Detects toxic, abusive, and hateful language across multiple languages (EN, AU, DE, ES, FR)."
+        },
+        "patterns": {
+          "name": "Pattern Matching",
+          "description": "Detect and block sensitive data patterns like SSNs, credit card numbers, API keys, and custom regex patterns."
+        },
+        "keywords": {
+          "name": "Keyword Blocking",
+          "description": "Block or mask content containing specific keywords or phrases. Upload custom word lists or add individual terms."
+        },
+        "blockCodeExecution": {
+          "name": "Block Code Execution",
+          "description": "Detects markdown fenced code blocks in requests and responses. Block or mask executable code (e.g. Python, JavaScript, Bash) by language with configurable confidence."
+        },
+        "competitorIntent": {
+          "name": "Competitor Name Blocking",
+          "description": "Block or reframe competitor comparison and ranking intent. Detect when users ask to compare or recommend competitors (airline or generic competitor lists)."
+        }
+      },
+      "decisionModel": {
+        "typesafeJev": {
+          "description": "TypeSafe's Jev decision model answers your yes/no questions about each request, such as prompt injection or policy checks."
+        },
+        "perplexity": {
+          "name": "Perplexity Decision",
+          "description": "Perplexity's pplx-decider model answers your yes/no questions about each request or response."
+        },
+        "microsoft": {
+          "name": "Microsoft Decision Model",
+          "description": "Microsoft Foundry decision models, such as Microsoft-Decision-1, answer your yes/no questions about each request or response."
+        },
+        "openai": {
+          "name": "OpenAI Decision Model",
+          "description": "OpenAI decision models, such as gpt-6-luna, answer your yes/no questions about each request or response."
+        },
+        "databricks": {
+          "name": "Databricks Decision Model",
+          "description": "Decision models served on Databricks, such as OpenJev, answer your yes/no questions about each request or response."
+        }
+      },
+      "partner": {
+        "presidio": {
+          "description": "Microsoft Presidio for PII detection and anonymization. Supports 30+ entity types with configurable actions."
+        },
+        "bedrock": {
+          "description": "AWS Bedrock Guardrails for content filtering, topic avoidance, and sensitive information detection."
+        },
+        "lakera": {
+          "description": "AI security platform protecting against prompt injections, data leakage, and harmful content."
+        },
+        "openaiModeration": {
+          "description": "OpenAI's content moderation API for detecting harmful content across multiple categories."
+        },
+        "googleModelArmor": {
+          "description": "Google Cloud's model protection service for safe and responsible AI deployments."
+        },
+        "guardrailsAi": {
+          "description": "Open-source framework for adding structural, type, and quality guarantees to LLM outputs."
+        },
+        "zscaler": {
+          "description": "Enterprise AI security from Zscaler for monitoring and protecting AI/ML workloads."
+        },
+        "panw": {
+          "description": "Palo Alto Networks Prisma AI Runtime Security for securing AI applications in production."
+        },
+        "ciscoAiDefense": {
+          "description": "Cisco AI Defense Inspection API for runtime protection: prompt injection, PII/PCI/PHI, harassment, hate speech, profanity, violence, and code detection."
+        },
+        "noma": {
+          "description": "AI security platform for detecting and preventing AI-specific threats and vulnerabilities."
+        },
+        "aporia": {
+          "description": "Real-time AI guardrails for hallucination detection, topic control, and policy enforcement."
+        },
+        "aim": {
+          "description": "AIM Security guardrails for comprehensive AI threat detection and mitigation."
+        },
+        "catoNetworks": {
+          "description": "Cato Networks guardrails for comprehensive AI threat detection and mitigation."
+        },
+        "promptSecurity": {
+          "description": "Protect against prompt injection attacks, data leakage, and other LLM security threats."
+        },
+        "lasso": {
+          "description": "Content moderation and safety guardrails for responsible AI deployments."
+        },
+        "pangea": {
+          "description": "Pangea's AI guardrails for secure, compliant, and trustworthy AI applications."
+        },
+        "enkryptai": {
+          "description": "AI security and governance platform for enterprise AI safety and compliance."
+        },
+        "javelin": {
+          "description": "AI gateway with built-in guardrails for secure and compliant AI operations."
+        },
+        "pillar": {
+          "description": "AI safety platform for monitoring, testing, and securing AI systems."
+        },
+        "akto": {
+          "description": "AI security platform from Akto.io with automatic monitoring and guardrails for AI/ML applications."
+        },
+        "promptguard": {
+          "description": "AI security gateway with prompt injection detection, PII redaction, topic filtering, entity blocklists, and hallucination detection. Self-hostable with drop-in proxy integration."
+        },
+        "xecguard": {
+          "description": "CyCraft XecGuard AI security gateway. Multi-policy scanning (prompt injection, harmful content, PII, system-prompt enforcement) plus RAG context grounding."
+        },
+        "deepkeep": {
+          "description": "DeepKeep AI Firewall for comprehensive LLM security — prompt injection detection, PII protection, content moderation, and policy enforcement with configurable guardrail pipelines."
+        },
+        "repelloai": {
+          "description": "RepelloAI Argus scans prompts and responses against policies configured per asset in the Repello dashboard."
+        },
+        "straiker": {
+          "description": "Defend AI Agentic Guardrails: Indirect/Direct Prompt Injection, Tool Misuse, Malicious MCP and Skills"
+        },
+        "alice": {
+          "description": "Policy-based guardrails for prompts and model responses, evaluated per application so one proxy can enforce a different policy set per team or product."
+        },
+        "agent365": {
+          "description": "Microsoft Agent 365 tool-call governance: Defender threat evaluation and observability for MCP tool calls, acting on behalf of the signed-in user"
+        },
+        "llmShieldProxy": {
+          "description": "Self-hosted PII redaction that puts the original values back into the model's response, so the provider never receives personal data while the end user still sees it."
+        },
+        "conduct": {
+          "description": "Conduct Guard evaluates prompts against workspace rules before the model call: prompt injection, PII, and custom policies, with block, warning, and approval verdicts."
+        },
+        "wingback": {
+          "description": "Wingback runtime security for LiteLLM — PII detection, prompt injection, toxic content, and policy enforcement via the Wingback connectors service."
+        },
+        "airia": {
+          "description": "Airia AI security and governance platform. Runtime guardrails for prompt injection, data leakage prevention, and responsible AI, enforced on every prompt and response."
+        }
+      },
+      "subcategories": {
+        "contentCategory": "Content Category",
+        "patterns": "Patterns",
+        "keywords": "Keywords",
+        "codeSafety": "Code Safety"
+      },
+      "tags": {
+        "contentCategory": "Content Category",
+        "topicBlocker": "Topic Blocker",
+        "safety": "Safety",
+        "bias": "Bias",
+        "promptInjection": "Prompt Injection",
+        "toxicity": "Toxicity",
+        "pii": "PII",
+        "regex": "Regex",
+        "dataProtection": "Data Protection",
+        "keywords": "Keywords",
+        "blocklist": "Blocklist",
+        "code": "Code",
+        "competitor": "Competitor",
+        "decisionModel": "Decision Model",
+        "contentSafety": "Content Safety",
+        "security": "Security",
+        "contentModeration": "Content Moderation",
+        "openSource": "Open Source",
+        "validation": "Validation",
+        "enterprise": "Enterprise",
+        "threatDetection": "Threat Detection",
+        "hallucination": "Hallucination",
+        "policy": "Policy",
+        "compliance": "Compliance",
+        "governance": "Governance",
+        "gateway": "Gateway",
+        "monitoring": "Monitoring",
+        "grounding": "Grounding",
+        "rag": "RAG",
+        "firewall": "Firewall",
+        "agentic": "Agentic",
+        "toolMisuse": "Tool Misuse",
+        "skills": "Skills",
+        "observability": "Observability",
+        "dataPrivacy": "Data Privacy",
+        "streaming": "Streaming",
+        "runtime": "Runtime",
+        "secrets": "Secrets",
+        "redaction": "Redaction"
+      }
+    },
+    "panel": {
+      "tabs": {
+        "garden": "Guardrail Garden",
+        "guardrails": "Guardrails",
+        "playground": "Test Playground",
+        "submitted": "Submitted Guardrails"
+      },
+      "addMenu": {
+        "trigger": "Add New Guardrail",
+        "provider": "Add Provider Guardrail",
+        "customCode": "Create Custom Code Guardrail"
+      }
+    },
+    "table": {
+      "loading": "Loading guardrails…",
+      "empty": {
+        "title": "No guardrails yet",
+        "description": "Add a guardrail to start filtering requests and responses."
+      },
+      "columns": {
+        "guardrailId": "Guardrail ID",
+        "name": "Name",
+        "provider": "Provider",
+        "mode": "Mode",
+        "defaultOn": "Default On",
+        "createdAt": "Created At",
+        "updatedAt": "Updated At",
+        "actions": "Actions"
+      },
+      "defaultOnStatus": {
+        "on": "Default On",
+        "off": "Default Off"
+      },
+      "actions": {
+        "open": "Open guardrail actions",
+        "delete": "Delete"
+      },
+      "configDeleteHint": "Config guardrails are defined in the config file and cannot be deleted from the dashboard.",
+      "unnamed": "Unnamed Guardrail"
+    },
+    "deleteModal": {
+      "title": "Delete Guardrail",
+      "danglingReferenceWarning": "Keys, teams, and policies that list this guardrail will silently stop running it. Policy pipeline steps that use it will block every request with a 400 error, unless the step's on_error is next or allow (or its on_fail, when on_error is not set).",
+      "message": "Are you sure you want to delete guardrail: {{name}}? This action cannot be undone.",
+      "infoTitle": "Guardrail Information",
+      "info": {
+        "name": "Name",
+        "id": "ID",
+        "provider": "Provider",
+        "mode": "Mode",
+        "defaultOn": "Default On",
+        "yes": "Yes",
+        "no": "No"
+      },
+      "toast": {
+        "deleted": "Guardrail \"{{name}}\" deleted successfully",
+        "deleteFailed": "Failed to delete guardrail"
+      }
+    },
+    "settingsActions": {
+      "editCode": "Edit Code",
+      "editSettings": "Edit Settings",
+      "delete": "Delete"
+    },
+    "testPanel": {
+      "title": "Test Guardrails:",
+      "subtitle_zero": "Test <noun>guardrail</noun> and compare results",
+      "subtitle_one": "Test <noun>guardrail</noun> and compare results",
+      "subtitle_other": "Test <noun>guardrails</noun> and compare results",
+      "inputLabel": "Input Text",
+      "inputTooltip": "Press Enter to submit. Use Shift+Enter for new line.",
+      "copyInput": "Copy Input",
+      "inputPlaceholder": "Enter text to test with guardrails...",
+      "keyboardHint": "Press <kbd>Enter</kbd> to submit • <kbd>Shift+Enter</kbd> for new line",
+      "characters": "Characters: <length/>",
+      "metadataLabel": "Metadata (optional)",
+      "metadataTooltip": "JSON object forwarded to the guardrail as request_data['metadata']. Custom guardrails can read per-request configuration from it.",
+      "errors": {
+        "metadataNotObject": "Metadata must be a JSON object",
+        "invalidJson": "Invalid JSON"
+      },
+      "toast": {
+        "emptyText": "Please enter text to test",
+        "metadataError": "Metadata: {{error}}",
+        "copied": "Input copied to clipboard",
+        "copyFailed": "Failed to copy input"
+      },
+      "submit": {
+        "idle_zero": "Test {{count}} guardrail",
+        "idle_one": "Test {{count}} guardrail",
+        "idle_other": "Test {{count}} guardrails",
+        "running_zero": "Testing {{count}} guardrail...",
+        "running_one": "Testing {{count}} guardrail...",
+        "running_other": "Testing {{count}} guardrails..."
+      }
+    },
+    "testPlayground": {
+      "sidebarTitle": "Guardrails",
+      "searchPlaceholder": "Search guardrails...",
+      "noMatches": "No guardrails match your search",
+      "noGuardrails": "No guardrails available",
+      "typeLabel": "Type: ",
+      "modeLabel": "Mode: ",
+      "selectedCount": "<selected/> of <total/> selected",
+      "title": "Guardrail Testing Playground",
+      "emptyState": {
+        "title": "Select Guardrails to Test",
+        "description": "Choose one or more guardrails from the left sidebar to start testing and comparing results."
+      },
+      "toast": {
+        "applied_one": "{{count}} guardrail applied successfully",
+        "applied_other": "{{count}} guardrails applied successfully",
+        "failed_one": "{{count}} guardrail failed",
+        "failed_other": "{{count}} guardrails failed"
+      }
+    },
+    "testResults": {
+      "title": "Results",
+      "latency": "<value/>ms",
+      "copy": "Copy",
+      "outputLabel": "Output Text",
+      "charactersLabel": "Characters:",
+      "errorTitle": "<name/> - Error",
+      "toast": {
+        "copied": "Result copied to clipboard",
+        "copyFailed": "Failed to copy result"
+      }
+    },
+    "teamTab": {
+      "modes": {
+        "preCall": "Pre Call",
+        "postCall": "Post Call",
+        "duringCall": "During Call"
+      },
+      "validation": {
+        "teamRequired": "Select a team",
+        "nameRequired": "Enter a guardrail name",
+        "modeRequired": "Select a mode",
+        "apiBaseRequired": "Enter the API base URL",
+        "apiBaseInvalid": "Must be a valid URL",
+        "notJsonObject": "Must be a JSON object",
+        "invalidJson": "Invalid JSON"
+      },
+      "status": {
+        "active": "Active",
+        "pending": "Pending Review",
+        "rejected": "Rejected"
+      },
+      "stats": {
+        "total": "Total Submitted",
+        "pending": "Pending Review",
+        "active": "Active",
+        "rejected": "Rejected"
+      },
+      "card": {
+        "team": "Team: <team/>",
+        "model": "Model: <value/>",
+        "submitted": "Submitted: <value/>",
+        "forwardApiKey": "Forward API Key",
+        "review": "Review",
+        "close": "Close",
+        "approve": "Approve",
+        "reject": "Reject",
+        "staticHeaders": "Static headers",
+        "noStaticHeaders": "No static headers configured."
+      },
+      "detail": {
+        "team": "Team: <team/>",
+        "submittedBy": "Submitted by <by/> on <at/>",
+        "closeLabel": "Close detail panel",
+        "endpoint": "Endpoint",
+        "method": "Method",
+        "forwardKeyTitle": "Forward LiteLLM API Key",
+        "forwardKeyDescription": "When enabled, the caller's LiteLLM API key is forwarded as an <code>Authorization</code> header to your guardrail endpoint. This allows your guardrail to authenticate model calls using the original caller's credentials.",
+        "staticHeaders": "Static headers",
+        "staticHeadersHint": "Sent with every request to the guardrail.",
+        "noStaticHeaders": "No static headers configured.",
+        "removeHeader": "Remove {{name}}",
+        "headerNamePlaceholder": "Header name (e.g. X-API-Key)",
+        "headerValuePlaceholder": "Value",
+        "addStaticHeader": "Add",
+        "forwardClientHeaders": "Forward client headers",
+        "forwardClientHeadersHint": "Allowed header names to forward from the client request to the guardrail (e.g. x-request-id).",
+        "noForwardClientHeaders": "No forward client headers configured.",
+        "forwardHeaderPlaceholder": "e.g. x-request-id",
+        "addForwardHeader": "Add",
+        "equivalentConfig": "Equivalent config",
+        "separateInstanceNote": "This guardrail runs on a separate instance. It receives the user request and forwards the result to the next step in the pipeline. See <docs>LiteLLM Generic Guardrail API docs</docs> for configuration details.",
+        "testEndpoint": "Test Endpoint",
+        "approve": "Approve",
+        "reject": "Reject"
+      },
+      "confirm": {
+        "approveTitle": "Approve Guardrail",
+        "rejectTitle": "Reject Guardrail",
+        "approveMessage": "Are you sure you want to approve <name/>? This will make it active and available for use.",
+        "rejectMessage": "Are you sure you want to reject <name/>? This will mark it as rejected and notify the team.",
+        "cancel": "Cancel",
+        "approve": "Approve",
+        "reject": "Reject"
+      },
+      "toolbar": {
+        "searchPlaceholder": "Search guardrails...",
+        "statusFilterLabel": "Filter by status",
+        "statusFilter": {
+          "all": "All Status",
+          "pending": "Pending Review",
+          "active": "Active",
+          "rejected": "Rejected"
+        },
+        "addGuardrail": "Add Guardrail"
+      },
+      "list": {
+        "loading": "Loading submissions…",
+        "empty": "No guardrails match your filters.",
+        "loadFailed": "Failed to load submissions"
+      },
+      "submitModal": {
+        "title": "Submit Guardrail for Review",
+        "notice": "Your guardrail will be sent for admin review before it becomes active.",
+        "team": "Team",
+        "guardrailName": "Guardrail Name",
+        "guardrailNamePlaceholder": "e.g. pii-detection",
+        "mode": "Mode",
+        "apiBase": "API Base URL",
+        "extraParams": "Additional litellm_params (optional)",
+        "extraParamsHint": "JSON object merged into litellm_params. e.g. forward_api_key, headers, model, unreachable_fallback",
+        "guardrailInfo": "Guardrail Info (optional)",
+        "cancel": "Cancel",
+        "submit": "Submit for Review"
+      },
+      "toast": {
+        "submitted": "Guardrail submitted for review",
+        "forwardKeyEnabled": "Forward API key enabled",
+        "forwardKeyDisabled": "Forward API key disabled",
+        "forwardKeyFailed": "Failed to update forward API key",
+        "staticHeadersUpdated": "Static headers updated",
+        "staticHeadersFailed": "Failed to update static headers",
+        "forwardHeadersUpdated": "Forward client headers updated",
+        "forwardHeadersFailed": "Failed to update forward client headers",
+        "approved": "Guardrail approved",
+        "approveFailed": "Failed to approve guardrail",
+        "rejected": "Guardrail rejected",
+        "rejectFailed": "Failed to reject guardrail"
+      }
+    },
+    "customCode": {
+      "title": {
+        "create": "Create Custom Guardrail",
+        "edit": "Edit Custom Guardrail"
+      },
+      "description": "Define custom logic using Python-like syntax",
+      "nameLabel": "Guardrail Name",
+      "namePlaceholder": "e.g., block-pii-custom",
+      "modeLabel": {
+        "tagScoped": "Mode (tag-scoped, read-only)",
+        "multiple": "Mode (can select multiple)"
+      },
+      "tagScopedModeAriaLabel": "Mode (tag-scoped)",
+      "modePlaceholder": "Select modes",
+      "noMatchingModes": "No matching modes",
+      "continueObserving": "Continue observing the response after a flagged request",
+      "templateLabel": "Template",
+      "standardTemplates": "STANDARD",
+      "browseCommunity": "Browse Community templates",
+      "defaultOn": "Default On",
+      "pythonLogic": "Python Logic",
+      "restrictedEnvironment": "Restricted environment (no imports)",
+      "loggingOnlyScope": {
+        "label": "Logging only scope"
+      },
+      "test": {
+        "title": "Test Your Guardrail",
+        "inputLabel": "Test Input (JSON)",
+        "loadExample": "Load example:",
+        "examples": {
+          "preCall": "Pre-call",
+          "preMcp": "Pre MCP",
+          "postCall": "Post-call"
+        },
+        "fields": {
+          "texts": "<field/>: Message content (always)",
+          "images": "<field/>: Base64 images (vision)",
+          "tools": "<field/>: Tool definitions <preCall/>, MCP as OpenAI tool <preMcpCall/>",
+          "toolCalls": "<field/>: LLM tool calls <postCall/>",
+          "structuredMessages": "<field/>: Full messages",
+          "model": "<field/>: Model name (always)"
+        },
+        "run": "Run Test",
+        "running": "Running...",
+        "result": {
+          "allowed": "Allowed",
+          "blocked": "Blocked:",
+          "modified": "Modified",
+          "unknownAction": "Unknown"
+        },
+        "errors": {
+          "noAccessToken": "No access token available",
+          "invalidInput": "Invalid test input JSON",
+          "unknown": "Unknown error occurred",
+          "failed": "Failed to test custom code"
+        }
+      },
+      "contribute": {
+        "title": "Built a useful guardrail?",
+        "description": "Share it with the community and help others build faster",
+        "button": "Contribute Template"
+      },
+      "primitives": {
+        "title": "Available Primitives",
+        "hint": "Click to copy functions to clipboard",
+        "copied": "Copied!",
+        "categories": {
+          "returnValues": "Return Values",
+          "httpRequests": "HTTP Requests (async)",
+          "regex": "Regex Functions",
+          "json": "JSON Functions",
+          "url": "URL Functions",
+          "codeDetection": "Code Detection",
+          "textUtilities": "Text Utilities"
+        },
+        "descriptions": {
+          "allow": "Let request/response through",
+          "block": "Reject with message",
+          "flag": "Let through, record a non-blocking violation",
+          "modify": "Transform content",
+          "httpRequest": "Make async HTTP request",
+          "httpGet": "Async GET request",
+          "httpPost": "Async POST request",
+          "regexMatch": "Returns True if pattern found",
+          "regexReplace": "Replace all matches",
+          "regexFindAll": "Return list of matches",
+          "jsonParse": "Parse JSON string, returns None on error",
+          "jsonStringify": "Convert to JSON string",
+          "jsonSchemaValid": "Validate against JSON schema",
+          "extractUrls": "Extract all URLs from text",
+          "isValidUrl": "Check if URL is valid",
+          "allUrlsValid": "Check all URLs in text are valid",
+          "detectCode": "Returns True if code detected",
+          "detectCodeLanguages": "Returns list of detected languages",
+          "containsCodeLanguage": "Check for specific languages",
+          "contains": "Check if substring exists",
+          "containsAny": "Check if any substring exists",
+          "wordCount": "Count words",
+          "charCount": "Count characters",
+          "stringTransforms": "String transforms"
+        }
+      },
+      "templates": {
+        "empty": "Empty Template",
+        "blockSsn": "Block SSN",
+        "redactEmail": "Redact Emails",
+        "blockSql": "Block SQL Injection",
+        "validateJson": "Validate JSON",
+        "externalApi": "External API Check (async)"
+      },
+      "modes": {
+        "preCall": "pre_call (Request)",
+        "postCall": "post_call (Response)",
+        "duringCall": "during_call (Parallel)",
+        "loggingOnly": "logging_only",
+        "preMcpCall": "pre_mcp_call (Before MCP Tool Call)",
+        "postMcpCall": "post_mcp_call (After MCP Tool Call)",
+        "duringMcpCall": "during_mcp_call (During MCP Tool Call)"
+      },
+      "footer": {
+        "autosaveNote": "Changes are auto-saved to local draft",
+        "cancel": "Cancel",
+        "save": "Save Guardrail",
+        "update": "Update Guardrail"
+      },
+      "toast": {
+        "nameRequired": "Please enter a guardrail name",
+        "codeRequired": "Please enter custom code",
+        "noAccessToken": "No access token available",
+        "updated": "Custom code guardrail updated successfully",
+        "created": "Custom code guardrail created successfully",
+        "createFailed": "Failed to create guardrail: {{error}}",
+        "updateFailed": "Failed to update guardrail: {{error}}"
+      }
+    },
+    "addForm": {
+      "title": "Create guardrail",
+      "modeDescriptions": {
+        "preCall": "Before LLM Call - Runs before the LLM call and checks the input (Recommended)",
+        "duringCall": "During LLM Call - Runs in parallel with the LLM call, with response held until check completes",
+        "postCall": "After LLM Call - Runs after the LLM call and checks only the output",
+        "loggingOnly": "Logging Only - Only runs on logging callbacks without affecting the LLM call",
+        "preMcpCall": "Before MCP Tool Call - Runs before MCP tool execution and validates tool calls",
+        "duringMcpCall": "During MCP Tool Call - Runs in parallel with MCP tool execution for monitoring",
+        "postMcpCall": "After MCP Tool Call - Runs after MCP tool execution and checks the tool result"
+      },
+      "fields": {
+        "name": {
+          "label": "Guardrail Name",
+          "required": "Please enter a guardrail name",
+          "placeholder": "Enter a name for this guardrail"
+        },
+        "provider": {
+          "label": "Guardrail Provider",
+          "required": "Please select a provider",
+          "placeholder": "Select a guardrail provider",
+          "empty": "No matching providers"
+        },
+        "mode": {
+          "label": "Mode",
+          "hint": "How the guardrail should be applied",
+          "required": "Please select a mode"
+        },
+        "alwaysOn": {
+          "label": "Always On",
+          "hint": "If enabled, this guardrail will be applied to all requests by default.",
+          "placeholder": "Select an option",
+          "yes": "Yes",
+          "no": "No"
+        },
+        "skipSystemMessages": {
+          "label": "Skip system messages in guardrail",
+          "hint": "Unified guardrails only: omit role: system from guardrail evaluation input (OpenAI chat + Anthropic messages). The model still receives full messages. Use global default follows litellm_settings.skip_system_message_in_guardrail."
+        },
+        "skipToolMessages": {
+          "label": "Skip tool messages in guardrail",
+          "hint": "Unified guardrails only: omit role: tool from guardrail evaluation input (OpenAI chat + Anthropic messages). The model still receives full messages. Use global default follows litellm_settings.skip_tool_message_in_guardrail."
+        }
+      },
+      "endpoint": {
+        "intro": "Configure settings for a specific call type. Most guardrails don't need this — skip it unless you're using a specific endpoint like <code>/v1/realtime</code>.",
+        "callType": {
+          "label": "Call type",
+          "placeholder": "Select a call type",
+          "comingSoon": "More call types coming soon."
+        },
+        "realtime": {
+          "title": "/v1/realtime settings",
+          "endSessionAfter": {
+            "label": "End session after X violations",
+            "description": "Automatically close the session after this many guardrail violations. Leave empty to never auto-close.",
+            "placeholder": "e.g. 3"
+          },
+          "onViolation": {
+            "label": "On violation",
+            "warn": {
+              "label": "Warn",
+              "description": "Bot speaks the message, session continues"
+            },
+            "endSession": {
+              "label": "End session",
+              "description": "Bot speaks the message, connection closes immediately"
+            }
+          },
+          "message": {
+            "label": "Message the user hears",
+            "description": "What the bot says aloud when this guardrail fires. Falls back to the default violation message if empty.",
+            "placeholder": "e.g. I'm not able to continue this conversation. Please contact us at 1-800-774-2678."
+          }
+        }
+      },
+      "steps": {
+        "basicInfo": "Basic Info",
+        "topics": "Topics",
+        "patterns": "Patterns",
+        "keywords": "Keywords",
+        "endpointSettings": "Endpoint Settings (Optional)",
+        "piiConfiguration": "PII Configuration",
+        "decisionModelConfiguration": "Decision Model Configuration",
+        "providerConfiguration": "Provider Configuration",
+        "optional": "optional",
+        "edit": "Edit"
+      },
+      "actions": {
+        "cancel": "Cancel",
+        "previous": "Previous",
+        "next": "Next",
+        "create": "Create Guardrail"
+      },
+      "toasts": {
+        "loadFailed": "Failed to load guardrail configuration",
+        "piiEntityRequired": "Please select at least one PII entity to continue",
+        "fixHighlightedFields": "Failed to create guardrail: please fix the highlighted fields",
+        "contentFilterRequired": "Please configure at least one content filter setting (category, pattern, keyword, or competitor intent)",
+        "invalidJson": "Invalid JSON in configuration",
+        "criterionRequired": "Add at least one evaluation criterion",
+        "criterionWeights": "Criterion weights must sum to 100% (currently {{total}}%)",
+        "toolRuleRequired": "Add at least one tool permission rule",
+        "created": "Guardrail created successfully",
+        "createFailed": "Failed to create guardrail: {{message}}"
+      }
+    },
+    "providerFields": {
+      "boolean": {
+        "true": "True",
+        "false": "False"
+      },
+      "errors": {
+        "invalidJsonObject": "{{field}} must be a valid JSON object",
+        "required": "{{field}} is required"
+      },
+      "toasts": {
+        "invalidJsonObject": "Enter a valid JSON object for this configuration"
+      },
+      "loading": "Loading provider parameters...",
+      "loadFailed": "Failed to load provider parameters",
+      "noFields": "No configuration fields available for this provider."
+    },
+    "optionalParams": {
+      "title": "Optional Parameters",
+      "defaultDescription": "Configure additional settings for this guardrail provider",
+      "boolean": {
+        "true": "True",
+        "false": "False"
+      },
+      "dict": {
+        "enterValue": "Enter {{name}} value",
+        "selectValue": "Select {{name}} value",
+        "remove": "Remove",
+        "keyPlaceholder": "Select category to configure",
+        "addHint": "Select a category to add threshold configuration"
+      },
+      "errors": {
+        "required": "{{field}} is required"
+      }
+    },
+    "formField": {
+      "skipMessage": {
+        "placeholder": "Select an option",
+        "options": {
+          "inherit": "Use global default",
+          "yes": "Yes — exclude from guardrail scan",
+          "no": "No — always include in scan"
+        }
+      },
+      "loggingOnlyScope": {
+        "label": "Logging only scope",
+        "hint": "Which direction a logging_only scan observes. Observe-only scans never block; pre_call and post_call on this guardrail still block.",
+        "placeholder": "Select an option"
+      },
+      "continueOnInputFailure": {
+        "label": "Continue observing the response after a flagged request",
+        "hint": "When on, a flagged or failing request scan is logged and the response is still scanned, so both verdicts land."
+      }
+    },
+    "streamScope": {
+      "appliesTo": "{{mode}} applies to",
+      "placeholder": "Streaming and non-streaming",
+      "requestShape": "Request shape",
+      "requestShapeHint": "Run this guardrail on streaming requests, non-streaming requests, or both, for each selected mode."
+    },
+    "pii": {
+      "configuration": {
+        "title": "Configure PII Protection",
+        "selectedCount_one": "{{count}} items selected",
+        "selectedCount_other": "{{count}} items selected"
+      },
+      "categoryFilter": {
+        "title": "Filter by category",
+        "placeholder": "Select categories to filter by",
+        "empty": "No matching categories"
+      },
+      "quickActions": {
+        "title": "Quick Actions",
+        "hint": "Apply action to all PII types at once",
+        "unselectAll": "Unselect All",
+        "selectAllMask": "Select All & Mask",
+        "selectAllBlock": "Select All & Block"
+      },
+      "entityList": {
+        "typeColumn": "PII Type",
+        "actionColumn": "Action",
+        "actionSelect": "Action",
+        "empty": "No PII types match your filter criteria"
+      }
+    },
+    "decisionModel": {
+      "intro": "The <strong>Decision Model</strong> answers yes/no questions about each request (pre_call, during_call) or response (post_call). A question whose probability reaches its threshold blocks the call, or is recorded when set to Log only.",
+      "actionOptions": {
+        "block": "Block",
+        "log": "Log only"
+      },
+      "noModels": {
+        "ariaLabel": "No decision models",
+        "title": "No decision models yet",
+        "description": "Add a decision model to use this guardrail. A model shows up here once its mode is decisions.",
+        "descriptionForProvider": "Add a decision model from the {{provider}} provider to use this guardrail. A model shows up here once its mode is decisions.",
+        "addModel": "Add a model"
+      },
+      "model": {
+        "label": "Decision Model",
+        "hint": "A decisions-API model on this proxy, such as typesafe/jev-latest. It scores every question below.",
+        "required": "Select a decision model",
+        "placeholder": "Select a decision model",
+        "placeholderEmpty": "No decision models yet",
+        "empty": "No matching models"
+      },
+      "questions": {
+        "label": "Questions",
+        "description": "Yes/no questions the decision model answers about the text. Block stops the call once a score reaches the threshold, and Log only records it.",
+        "add": "Add question"
+      },
+      "question": {
+        "remove": "Remove question {{position}}",
+        "nameLabel": "Name",
+        "nameAriaLabel": "Question {{position}} name",
+        "namePlaceholder": "Name (e.g. invoice_policy)",
+        "duplicateName": "Another question already uses this name",
+        "questionLabel": "Question",
+        "questionAriaLabel": "Question {{position}}",
+        "questionPlaceholder": "The question the decision model answers, e.g. Does the text ask about invoices?",
+        "actionLabel": "Action",
+        "actionAriaLabel": "Question {{position}} action",
+        "thresholdLabel": "Threshold",
+        "thresholdAriaLabel": "Question {{position}} threshold"
+      },
+      "problems": {
+        "noQuestions": "Add at least one question",
+        "incompleteQuestion": "Give every question a name and a question, or remove it",
+        "duplicateNames": "Each question needs a different name"
+      },
+      "test": {
+        "label": "Test",
+        "description": "Try your questions on a sample input before you save. Uses the thresholds above. Each run is a real decision model call, so it is billed and shows up in Logs.",
+        "inputAriaLabel": "Test input",
+        "inputPlaceholder": "Paste a sample input to score against your questions",
+        "run": "Run test",
+        "running": "Running…",
+        "disabled": {
+          "noModel": "Select a decision model to run a test",
+          "noInput": "Type an input to run a test",
+          "noQuestions": "Add a question to run a test"
+        },
+        "historyHint": "Latest first. Each run keeps its input so you can compare.",
+        "stale": "The model or questions changed since this run. Run it again to score them.",
+        "overall": {
+          "block": "Block",
+          "pass": "Pass"
+        },
+        "chip": {
+          "block": "Block",
+          "logged": "Pass · logged",
+          "pass": "Pass",
+          "noAnswer": "No answer"
+        }
+      }
+    },
+    "llmJudge": {
+      "intro": "The <strong>Judge Model</strong> scores the user request (pre_call, during_call) or the LLM response (post_call) 0–100 against your criteria. If the weighted average falls below the threshold, it is blocked (or logged).",
+      "judgeModel": {
+        "label": "Judge Model",
+        "hint": "The LLM that reads each response and grades it. Pick a capable model — it never sees end-user data beyond what the LLM returned.",
+        "required": "Select a judge model",
+        "placeholder": "Select a model",
+        "empty": "No matching models"
+      },
+      "threshold": {
+        "label": "Minimum Score to Pass",
+        "hint": "0–100. If the weighted average of criterion scores falls below this, the guardrail triggers. 80 is a good default."
+      },
+      "onFailure": {
+        "label": "On Failure",
+        "hint": "Block: return HTTP 422 when the score is too low. Log: record the result but let the response through.",
+        "placeholder": "Select an action",
+        "options": {
+          "block": "Block (return 422)",
+          "log": "Log only"
+        }
+      },
+      "criteria": {
+        "label": "Evaluation Criteria",
+        "hint": "Each criterion is something the judge checks. Weights must add up to 100%.",
+        "nameRequired": "Enter criterion name",
+        "namePlaceholder": "Criterion name (e.g. Policy accuracy)",
+        "weightLabel": "Weight",
+        "weightHint": "How much this criterion counts toward the final score. All weights must add up to 100%.",
+        "weightRequired": "Enter weight",
+        "weightPlaceholder": "e.g. 50",
+        "remove": "Remove criterion",
+        "descriptionRequired": "Describe what to check",
+        "descriptionPlaceholder": "What should the judge check for this criterion?",
+        "add": "Add Criterion",
+        "weightsTotalOk": "Weights total: {{total}}% ✓",
+        "weightsTotalOff": "Weights total: {{total}}% — must add up to 100%"
+      }
+    },
+    "toolPermission": {
+      "title": "LiteLLM Tool Permission Guardrail",
+      "description": "Provide regex patterns (e.g., {{example}}) for tool names or types and optionally constrain payload fields.",
+      "addRule": "Add Rule",
+      "empty": "No tool rules added yet",
+      "decisionOptions": {
+        "allow": "Allow",
+        "deny": "Deny"
+      },
+      "onDisallowedOptions": {
+        "block": "Block",
+        "rewrite": "Rewrite"
+      },
+      "rule": {
+        "title": "Rule {{number}}",
+        "remove": "Remove",
+        "id": "Rule ID",
+        "toolName": "Tool Name (optional)",
+        "toolType": "Tool Type (optional)",
+        "decision": "Decision"
+      },
+      "constraints": {
+        "restrict": "+ Restrict tool arguments (optional)",
+        "title": "Argument constraints (dot or array paths)",
+        "remove": "Remove constraint",
+        "addAnother": "+ Add another constraint"
+      },
+      "defaultAction": "Default action",
+      "onDisallowed": {
+        "label": "On disallowed action",
+        "hint": "Block returns an error when a forbidden tool is invoked. Rewrite strips the tool call but lets the rest of the response continue."
+      },
+      "violationMessage": {
+        "label": "Violation message (optional)",
+        "placeholder": "This violates our org policy..."
+      }
+    },
+    "info": {
+      "loading": "Loading...",
+      "back": "Back to Guardrails",
+      "notFound": "Guardrail not found",
+      "unnamed": "Unnamed Guardrail",
+      "tabs": {
+        "overview": "Overview",
+        "settings": "Settings"
+      },
+      "overview": {
+        "provider": "Provider",
+        "createdAt": "Created At",
+        "lastUpdated": "Last Updated:",
+        "piiProtection": "PII Protection",
+        "piiEntitiesConfigured_one": "PII entities configured",
+        "piiEntitiesConfigured_other": "PII entities configured",
+        "piiEntityConfiguration": "PII Entity Configuration",
+        "entityType": "Entity Type",
+        "configuration": "Configuration",
+        "customCode": "Custom Code",
+        "editCode": "Edit Code"
+      },
+      "settings": {
+        "heading": "Guardrail Settings",
+        "configTooltip": "Guardrail is defined in the config file and cannot be edited.",
+        "configDetailsLabel": "Config guardrail details",
+        "nameLabel": "Guardrail Name",
+        "nameRequired": "Please input a guardrail name",
+        "namePlaceholder": "Enter guardrail name",
+        "defaultOnLabel": "Default On",
+        "defaultOnPlaceholder": "Select an option",
+        "defaultOnOptions": {
+          "yes": "Yes",
+          "no": "No"
+        },
+        "skipSystemMessagesLabel": "Skip system messages in guardrail",
+        "skipSystemMessagesHint": "Unified guardrails: omit role: system from guardrail input (LLM still gets full messages). Use global default follows litellm_settings.skip_system_message_in_guardrail.",
+        "skipToolMessagesLabel": "Skip tool messages in guardrail",
+        "skipToolMessagesHint": "Unified guardrails: omit role: tool from guardrail input (LLM still gets full messages). Use global default follows litellm_settings.skip_tool_message_in_guardrail.",
+        "sections": {
+          "piiProtection": "PII Protection",
+          "providerSettings": "Provider Settings",
+          "advancedSettings": "Advanced Settings"
+        },
+        "guardrailInfoLabel": "Guardrail Information",
+        "cancel": "Cancel",
+        "save": "Save Changes"
+      },
+      "toasts": {
+        "loadFailed": "Failed to load guardrail information",
+        "noChanges": "No changes detected",
+        "updated": "Guardrail updated successfully",
+        "updateFailed": "Failed to update guardrail"
+      }
+    },
+    "readOnlyDetails": {
+      "guardrailId": "Guardrail ID",
+      "guardrailName": "Guardrail Name",
+      "unnamed": "Unnamed Guardrail",
+      "provider": "Provider",
+      "defaultOn": "Default On",
+      "yes": "Yes",
+      "no": "No",
+      "piiProtection": "PII Protection",
+      "piiEntitiesConfigured_one": "PII entities configured",
+      "piiEntitiesConfigured_other": "PII entities configured",
+      "createdAt": "Created At",
+      "lastUpdated": "Last Updated",
+      "decisionModel": {
+        "heading": "Decision Model",
+        "checks": "Checks",
+        "columns": {
+          "check": "Check",
+          "action": "Action",
+          "threshold": "Threshold"
+        }
+      }
+    },
+    "modeDisplay": {
+      "mode": "Mode",
+      "defaultOn": "Default On",
+      "defaultOff": "Default Off",
+      "loggingOnlyScope": "Logging only scope",
+      "continueAfterFlagged": "Continue after a flagged request",
+      "on": "On",
+      "off": "Off"
+    },
+    "contentFilter": {
+      "options": {
+        "action": {
+          "block": "Block",
+          "mask": "Mask"
+        },
+        "severity": {
+          "high": "High",
+          "medium": "Medium",
+          "low": "Low"
+        }
+      },
+      "manager": {
+        "heading": "Content Filter Configuration",
+        "unsavedChanges": "You have unsaved changes to patterns or keywords. Remember to click \"Save Changes\" at the bottom."
+      },
+      "configuration": {
+        "intro": "Configure patterns, keywords, and content categories to detect and filter sensitive information in requests and responses.",
+        "patterns": {
+          "title": "Pattern Detection",
+          "description": "Detect sensitive information using regex patterns (SSN, credit cards, API keys, etc.)",
+          "addPrebuilt": "Add prebuilt pattern",
+          "addCustom": "Add custom regex"
+        },
+        "keywords": {
+          "title": "Blocked Keywords",
+          "description": "Block or mask specific sensitive terms and phrases",
+          "addKeyword": "Add keyword",
+          "uploadYaml": "Upload YAML file"
+        },
+        "toasts": {
+          "selectPattern": "Please select a pattern",
+          "patternNameAndRegexRequired": "Please provide pattern name and regex",
+          "keywordRequired": "Please enter a keyword",
+          "uploadSucceeded": "File uploaded successfully",
+          "invalidFile": "Invalid file",
+          "validationFailed": "Validation failed: {{error}}",
+          "uploadFailed": "Failed to upload file: {{error}}"
+        }
+      },
+      "display": {
+        "categoriesTitle": "Content Categories",
+        "categoriesConfigured_one": "categories configured",
+        "categoriesConfigured_other": "categories configured",
+        "patternsTitle": "Pattern Detection",
+        "patternsConfigured_one": "patterns configured",
+        "patternsConfigured_other": "patterns configured",
+        "keywordsTitle": "Blocked Keywords",
+        "keywordsConfigured_one": "keywords configured",
+        "keywordsConfigured_other": "keywords configured"
+      },
+      "categoryTable": {
+        "columns": {
+          "category": "Category",
+          "severityThreshold": "Severity Threshold",
+          "action": "Action"
+        },
+        "delete": "Delete",
+        "empty": "No categories configured."
+      },
+      "keywordTable": {
+        "columns": {
+          "keyword": "Keyword",
+          "action": "Action",
+          "description": "Description"
+        },
+        "delete": "Delete",
+        "empty": "No keywords added."
+      },
+      "patternTable": {
+        "columns": {
+          "type": "Type",
+          "name": "Pattern name",
+          "regex": "Regex pattern",
+          "action": "Action"
+        },
+        "types": {
+          "prebuilt": "Prebuilt",
+          "custom": "Custom"
+        },
+        "delete": "Delete",
+        "empty": "No patterns added."
+      },
+      "patternModal": {
+        "title": "Add prebuilt pattern",
+        "patternTypeLabel": "Pattern type",
+        "patternTypePlaceholder": "Choose pattern type",
+        "noMatches": "No matching patterns",
+        "actionLabel": "Action",
+        "actionDescription": "Choose what action the guardrail should take when this pattern is detected",
+        "cancel": "Cancel",
+        "add": "Add"
+      },
+      "customPatternModal": {
+        "title": "Add custom regex pattern",
+        "nameLabel": "Pattern name",
+        "namePlaceholder": "e.g., {{example}}",
+        "regexLabel": "Regex pattern",
+        "regexPlaceholder": "e.g., {{example}}",
+        "regexHelp": "Enter a valid regular expression to match sensitive data",
+        "actionLabel": "Action",
+        "actionDescription": "Choose what action the guardrail should take when this pattern is detected",
+        "cancel": "Cancel",
+        "add": "Add"
+      },
+      "keywordModal": {
+        "title": "Add blocked keyword",
+        "keywordLabel": "Keyword",
+        "keywordPlaceholder": "Enter sensitive keyword or phrase",
+        "actionLabel": "Action",
+        "actionDescription": "Choose what action the guardrail should take when this keyword is detected",
+        "descriptionLabel": "Description (optional)",
+        "descriptionPlaceholder": "Explain why this keyword is sensitive",
+        "cancel": "Cancel",
+        "add": "Add"
+      },
+      "categoryConfiguration": {
+        "title": "Blocked topics",
+        "subtitle": "Select topics to block using keyword and semantic analysis",
+        "placeholder": "Select a content category",
+        "noMatches": "No matching categories",
+        "add": "Add",
+        "preview": "Preview:",
+        "loadingContent": "Loading content...",
+        "previewUnavailable": "Unable to load category content",
+        "viewContent": "View {{fileType}} for {{name}}",
+        "contentLoadsOnExpand": "Content will load when expanded",
+        "empty": "No blocked topics selected. Add topics to detect and block harmful content.",
+        "columns": {
+          "category": "Category",
+          "action": "Action",
+          "severityThreshold": "Severity Threshold"
+        },
+        "remove": "Remove"
+      },
+      "competitorIntent": {
+        "title": "Competitor Intent Filter",
+        "disabledDescription": "Block or reframe competitor comparison questions. When enabled, airline type auto-loads competitors from IATA; generic type requires manual competitor list.",
+        "enabledDescription": "Block or reframe competitor comparison questions. Airline type uses major airlines (excluding your brand); generic requires manual competitor list.",
+        "typeLabel": "Type",
+        "intentTypes": {
+          "airline": "Airline (auto-load competitors from IATA)",
+          "generic": "Generic (specify competitors manually)"
+        },
+        "brandSelfLabel": "Your Brand ({{field}})",
+        "airlinePlaceholder": "Search or select airline, or type to add custom",
+        "typeToAddPlaceholder": "Type and press Enter to add",
+        "airlineBrandDescription": "Select your airline from the list (excluded from competitors) or type to add a custom term",
+        "genericBrandDescription": "Names/codes users use for your brand",
+        "locationsLabel": "Locations (optional)",
+        "locationsDescription": "Countries, cities, airports for disambiguation (e.g. qatar, doha)",
+        "competitorsLabel": "Competitors",
+        "competitorsDescription": "Competitor names to detect (required for generic type)",
+        "competitorComparisonLabel": "Policy: Competitor comparison",
+        "possibleCompetitorComparisonLabel": "Policy: Possible competitor comparison",
+        "policies": {
+          "refuse": "Refuse (block request)",
+          "reframe": "Reframe (suggest alternative)",
+          "reframeToBackend": "Reframe (suggest alternative to backend LLM)"
+        },
+        "thresholdsLabel": "Confidence thresholds",
+        "thresholds": {
+          "high": "High",
+          "medium": "Medium",
+          "low": "Low",
+          "example": "e.g. {{value}}"
+        },
+        "thresholdsHelp": {
+          "intro": "Classify competitor intent by confidence (0–1). Higher confidence -> stronger intent.",
+          "high": "<strong>High (≥)</strong>: Treat as full competitor comparison -> uses \"Competitor comparison\" policy",
+          "medium": "<strong>Medium (≥)</strong>: Treat as possible comparison -> uses \"Possible competitor comparison\" policy",
+          "low": "<strong>Low (≥)</strong>: Log only; allow request. Below Low -> allow with no action",
+          "outro": "Raise thresholds to be more permissive; lower them to be stricter."
+        }
+      }
+    },
+    "modeOptions": {
+      "loggingOnlyScope": {
+        "default": "Default (request and response)",
+        "input": "Input only (request)",
+        "output": "Output only (response)"
+      },
+      "streamScope": {
+        "both": "Streaming and non-streaming",
+        "streaming": "Streaming only",
+        "nonStreaming": "Non-streaming only"
+      }
+    }
+  },
   "guardrailsMonitor": {
     "page": {
       "title": "Guardrails Monitor"
