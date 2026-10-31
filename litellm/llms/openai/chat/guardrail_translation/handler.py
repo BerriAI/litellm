@@ -19,7 +19,7 @@ import json
 import time
 import uuid
 from collections.abc import Iterator, Mapping, Sequence
-from itertools import chain
+from itertools import chain, groupby
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Union, cast
 
@@ -762,13 +762,18 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
     def _joined_streamed_arguments(
         responses_so_far: Sequence["ModelResponseStream"],
     ) -> Mapping[tuple[int, int], str]:
-        """The argument text streamed so far per (choice index, tool call index)."""
-        fragments: Final = tuple(OpenAIChatCompletionsHandler._streamed_argument_fragments(responses_so_far))
+        """The argument text streamed so far per (choice index, tool call index).
+
+        Grouped in one pass. Rescanning every fragment once per distinct call made a sampled
+        round cost the number of calls times the length of the stream, which at n=2 grows with
+        the square of the streamed arguments.
+        """
+        fragments: Final = sorted(
+            OpenAIChatCompletionsHandler._streamed_argument_fragments(responses_so_far),
+            key=lambda fragment: fragment[0],
+        )
         return MappingProxyType(
-            {
-                call: "".join(text for other, text in fragments if other == call)
-                for call in frozenset(call for call, _ in fragments)
-            }
+            {call: "".join(text for _, text in group) for call, group in groupby(fragments, key=lambda f: f[0])}
         )
 
     @staticmethod
@@ -932,20 +937,23 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                 if len(streamed_choice_indices) == 1 and not stream_ended and not tool_arguments_complete
                 else self._rebuild_ended_stream_per_choice(responses_so_far, litellm_logging_obj)
             )
-            if assembled is not None:
-                resolved_request_data["response"] = (
-                    assembled
-                    if tool_arguments_complete
-                    else self._without_unfinished_tool_calls(assembled, responses_so_far)
-                )
-            if assembled is not None and len(assembled.choices) > 1:
+            inspected: Final = (
+                None
+                if assembled is None
+                else assembled
+                if tool_arguments_complete
+                else self._without_unfinished_tool_calls(assembled, responses_so_far)
+            )
+            if inspected is not None:
+                resolved_request_data["response"] = inspected
+            if inspected is not None and len(inspected.choices) > 1:
                 choice_rounds: Final = tuple(
                     (
                         choice,
                         StreamTransformSink(),
                         [self._narrowed_to_choice(chunk, choice.index) for chunk in responses_so_far],
                     )
-                    for choice in assembled.choices
+                    for choice in inspected.choices
                 )
                 from litellm.proxy.policy_engine.pipeline_executor import (
                     UndeliverableStreamRewrite,
@@ -954,7 +962,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                 transform_undeliverable: UndeliverableStreamRewrite | None = None  # rebind-ok: keeps the first failure
                 try:
                     for choice, choice_sink, choice_chunks in choice_rounds:
-                        resolved_request_data["response"] = assembled.model_copy(
+                        resolved_request_data["response"] = inspected.model_copy(
                             update=MappingProxyType({"choices": [choice]})
                         )
                         resolved_request_data["responses"] = choice_chunks
