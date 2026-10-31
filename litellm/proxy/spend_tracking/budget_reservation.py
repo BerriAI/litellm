@@ -55,7 +55,6 @@ from litellm.router import Router
 from litellm.types.proxy.model_access_group_budget import ModelAccessGroupBudget
 from litellm.types.router import DeploymentTypedDict
 from litellm.types.utils import CallTypes
-from litellm.utils import ProviderConfigManager
 
 
 @dataclass
@@ -1404,9 +1403,7 @@ def _estimate_request_max_cost_for_model(
     llm_router: Router | None,
     input_tokens: int | None = None,
 ) -> float | None:
-    output_multiplier: Final = _get_output_multiplier(
-        _requested_output_counts(request_body=request_body, route=route, model=model, llm_router=llm_router)
-    )
+    output_multiplier: Final = _get_output_multiplier(_requested_output_counts(request_body=request_body, route=route))
     estimates: Final = [
         _max_cost_for_cost_info(
             request_body=request_body,
@@ -1444,39 +1441,54 @@ def _max_cost_for_cost_info(
         model_info=model_info,
         input_tokens=input_tokens,
     )
+    if estimated_input_tokens is None:
+        return None
+    if RouteChecks.is_generate_content_route(route):
+        return _generate_content_hold(
+            request_body=request_body,
+            model_info=model_info,
+            input_tokens=estimated_input_tokens,
+            output_multiplier=output_multiplier,
+        )
     output_tokens: Final = _estimate_output_tokens(
         request_body=request_body,
         route=route,
         model_info=model_info,
     )
-    if estimated_input_tokens is None or output_tokens is None:
+    if output_tokens is None:
         return None
-    candidates_hold: Final = _priced_hold(
+    return _priced_hold(
         model_info=model_info,
         input_tokens=estimated_input_tokens,
         held_output_tokens=output_tokens * output_multiplier,
         output_tokens=output_tokens,
     )
-    if candidates_hold is None or output_multiplier == 1 or not RouteChecks.is_generate_content_route(route):
-        return candidates_hold
-    one_candidate_hold: Final = _priced_hold(
+
+
+def _generate_content_hold(
+    request_body: Mapping[str, object], model_info: Mapping[str, object], input_tokens: int, output_multiplier: int
+) -> float | None:
+    main_hold: Final = _main_generate_content_hold(model_info)
+    requested_output_tokens: Final = _gemini_requested_output_tokens(request_body)
+    if main_hold is None or requested_output_tokens is None:
+        return main_hold
+    capped_hold: Final = _priced_hold(
         model_info=model_info,
-        input_tokens=estimated_input_tokens,
-        held_output_tokens=output_tokens,
-        output_tokens=output_tokens,
+        input_tokens=input_tokens,
+        held_output_tokens=requested_output_tokens * output_multiplier,
+        output_tokens=requested_output_tokens,
     )
-    hold_ceiling: Final = _candidates_hold_ceiling(model_info=model_info, counted_input_tokens=estimated_input_tokens)
-    if one_candidate_hold is None or hold_ceiling is None:
-        return one_candidate_hold
-    return max(one_candidate_hold, min(candidates_hold, hold_ceiling))
+    return main_hold if capped_hold is None else min(capped_hold, main_hold)
 
 
-def _candidates_hold_ceiling(model_info: Mapping[str, object], counted_input_tokens: int) -> float | None:
+def _main_generate_content_hold(model_info: Mapping[str, object]) -> float | None:
     context_window: Final = _to_int(model_info.get("max_input_tokens"))
+    if context_window is None:
+        return None
     default_output_tokens: Final = min(DEFAULT_MAX_OUTPUT_TOKENS_FALLBACK, _model_output_ceiling(model_info))
     return _priced_hold(
         model_info=model_info,
-        input_tokens=counted_input_tokens if context_window is None else context_window,
+        input_tokens=context_window,
         held_output_tokens=default_output_tokens,
         output_tokens=default_output_tokens,
     )
@@ -1709,7 +1721,7 @@ def _estimate_output_tokens(
     if _is_input_only_route(route=route):
         return 0
 
-    requested: Final = _requested_output_tokens(request_body, route)
+    requested: Final = _requested_output_tokens(request_body)
 
     # Clamp at min(requested-or-default, model_max-or-default). Two purposes:
     # (1) Without an explicit cap we still need a finite reservation so the
@@ -1739,9 +1751,7 @@ def _gemini_candidate_counts(request_body: Mapping[str, object]) -> tuple[object
     )
 
 
-def _requested_output_tokens(request_body: Mapping[str, object], route: str) -> int | None:
-    if RouteChecks.is_generate_content_route(route):
-        return _gemini_requested_output_tokens(request_body)
+def _requested_output_tokens(request_body: Mapping[str, object]) -> int | None:
     candidates: Final = (
         *(request_body.get(field) for field in _OUTPUT_TOKEN_FIELDS),
         _nested_field(request_body, "inferenceConfig", "maxTokens"),
@@ -1749,7 +1759,7 @@ def _requested_output_tokens(request_body: Mapping[str, object], route: str) -> 
     return next((tokens for tokens in map(_to_int, candidates) if tokens is not None and tokens >= 0), None)
 
 
-_GEMINI_PASS_THROUGH_ONLY_CAPS: Final = (
+_OTHER_GEMINI_CAP_SPELLINGS: Final = (
     ("generationConfig", "max_output_tokens"),
     ("generation_config", "maxOutputTokens"),
     ("generation_config", "max_output_tokens"),
@@ -1758,14 +1768,13 @@ _GEMINI_PASS_THROUGH_ONLY_CAPS: Final = (
 
 def _gemini_requested_output_tokens(request_body: Mapping[str, object]) -> int | None:
     gemini_cap: Final = _positive_int(_nested_field(request_body, "generationConfig", "maxOutputTokens"))
-    pass_through_caps: Final = tuple(
-        cap
-        for config_field, field in _GEMINI_PASS_THROUGH_ONLY_CAPS
-        if (cap := _positive_int(_nested_field(request_body, config_field, field))) is not None
+    if gemini_cap is None:
+        return None
+    other_caps: Final = (
+        _positive_int(_nested_field(request_body, config_field, field))
+        for config_field, field in _OTHER_GEMINI_CAP_SPELLINGS
     )
-    if not pass_through_caps:
-        return gemini_cap
-    return max(gemini_cap or DEFAULT_MAX_OUTPUT_TOKENS_FALLBACK, *pass_through_caps)
+    return max((gemini_cap, *(cap for cap in other_caps if cap is not None)))
 
 
 def _positive_int(value: object) -> int | None:
@@ -1773,46 +1782,10 @@ def _positive_int(value: object) -> int | None:
     return number if number is not None and number > 0 else None
 
 
-def _requested_output_counts(
-    request_body: Mapping[str, object],
-    route: str,
-    model: str,
-    llm_router: Router | None,
-) -> tuple[object, ...]:
-    if not RouteChecks.is_generate_content_route(route):
-        return (request_body.get("n"), request_body.get("best_of"))
-    candidate_counts: Final = _gemini_candidate_counts(request_body)
-    if all(count is None for count in candidate_counts):
-        return ()
-    return candidate_counts if _takes_candidate_count(model=model, llm_router=llm_router) else ()
-
-
-def _takes_candidate_count(model: str, llm_router: Router | None) -> bool:
-    deployments: Final = (llm_router.registry().deployments(model) if llm_router is not None else None) or ()
-    deployment_params: Final = tuple(
-        params for deployment in deployments if (params := as_str_mapping(_get_value(deployment, "litellm_params")))
-    )
-    return any(_serves_generate_content_natively(params) for params in deployment_params or ({"model": model},))
-
-
-def _serves_generate_content_natively(litellm_params: Mapping[str, object]) -> bool:
-    model: Final = litellm_params.get("model")
-    custom_llm_provider: Final = litellm_params.get("custom_llm_provider")
-    if not isinstance(model, str):
-        return True
-    try:
-        backend_model, provider, _, _ = litellm.get_llm_provider(
-            model=model,
-            custom_llm_provider=custom_llm_provider if isinstance(custom_llm_provider, str) else None,
-        )
-        native_config: Final = ProviderConfigManager.get_provider_google_genai_generate_content_config(
-            model=backend_model,
-            provider=litellm.LlmProviders(provider),
-            litellm_params={key: litellm_params[key] for key in ("base_model", "api_base") if key in litellm_params},
-        )
-    except (litellm.BadRequestError, ValueError):
-        return True
-    return native_config is not None
+def _requested_output_counts(request_body: Mapping[str, object], route: str) -> tuple[object, ...]:
+    if RouteChecks.is_generate_content_route(route):
+        return _gemini_candidate_counts(request_body)
+    return (request_body.get("n"), request_body.get("best_of"))
 
 
 def _get_output_multiplier(requested_counts: tuple[object, ...]) -> int:

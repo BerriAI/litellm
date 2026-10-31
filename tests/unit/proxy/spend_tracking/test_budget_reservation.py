@@ -25,7 +25,6 @@ from litellm.proxy.common_utils.user_api_key_cache import (
     team_membership_reservation_cache_key,
 )
 from litellm.proxy.spend_tracking.budget_reservation import (
-    DEFAULT_MAX_OUTPUT_TOKENS_FALLBACK,
     _get_team_member_budget_counter,
     estimate_request_input_cost,
     estimate_request_max_cost,
@@ -197,9 +196,11 @@ GEMINI_SYSTEM_PARTS: Final = ("Answer tersely", "Use British spelling")
     (
         ({"generationConfig": {"maxOutputTokens": 5}}, {"max_tokens": 5}),
         ({"generationConfig": {"maxOutputTokens": 5, "candidateCount": 3}}, {"max_tokens": 5, "n": 3}),
-        ({"generation_config": {"max_output_tokens": 5, "candidate_count": 3}}, {"n": 3}),
-        ({"generationConfig": {"candidate_count": 3}}, {"n": 3}),
-        ({}, {}),
+        ({"generationConfig": {"maxOutputTokens": 5, "candidate_count": 3}}, {"max_tokens": 5, "n": 3}),
+        (
+            {"generationConfig": {"maxOutputTokens": 5}, "generation_config": {"candidate_count": 3}},
+            {"max_tokens": 5, "n": 3},
+        ),
     ),
 )
 @pytest.mark.parametrize("system_texts", (GEMINI_SYSTEM_PARTS[:1], GEMINI_SYSTEM_PARTS))
@@ -239,6 +240,7 @@ def test_gemini_generate_content_body_reserves_the_prompt_not_the_context_window
 GEMINI_ROUTE: Final = "/v1beta/models/gemini-3.8-flash:generateContent"
 GEMINI_TEXT_CONTENT: Final = {"role": "user", "parts": [{"text": GEMINI_PROMPT}]}
 GEMINI_AUDIO_PART: Final = {"inlineData": {"mimeType": "audio/wav", "data": "UklGRg" * 40_000}}
+GEMINI_OUTPUT_CAP: Final = {"generationConfig": {"maxOutputTokens": 5}}
 
 
 def _gemini_hold(body: dict[str, object], input_tokens: int | None = None) -> float | None:
@@ -277,7 +279,9 @@ def _gemini_hold(body: dict[str, object], input_tokens: int | None = None) -> fl
 def test_gemini_body_the_prompt_count_cannot_see_whole_keeps_the_context_window_hold(body: dict[str, object]) -> None:
     context_window: Final = litellm.get_model_info("gemini-3.8-flash")["max_input_tokens"]
     assert context_window is not None
-    assert _gemini_hold(body) == _gemini_hold({"contents": [GEMINI_TEXT_CONTENT]}, input_tokens=context_window)
+    assert _gemini_hold({**body, **GEMINI_OUTPUT_CAP}) == _gemini_hold(
+        {"contents": [GEMINI_TEXT_CONTENT], **GEMINI_OUTPUT_CAP}, input_tokens=context_window
+    )
 
 
 def test_gemini_tool_turns_and_thought_signatures_count_as_prompt() -> None:
@@ -290,10 +294,12 @@ def test_gemini_tool_turns_and_thought_signatures_count_as_prompt() -> None:
             {"role": "model", "parts": [{"functionCall": {"name": "lookup", "args": {}}, "thoughtSignature": "c2ln"}]},
             {"role": "user", "parts": [{"functionResponse": {"name": "lookup", "response": {"answer": "hi"}}}]},
         ],
+        **GEMINI_OUTPUT_CAP,
     }
-    text_hold: Final = _gemini_hold({"contents": [GEMINI_TEXT_CONTENT]})
+    text_body: Final = {"contents": [GEMINI_TEXT_CONTENT], **GEMINI_OUTPUT_CAP}
+    text_hold: Final = _gemini_hold(text_body)
     tool_turns_hold: Final = _gemini_hold(tool_turns)
-    context_window_hold: Final = _gemini_hold({"contents": [GEMINI_TEXT_CONTENT]}, input_tokens=context_window)
+    context_window_hold: Final = _gemini_hold(text_body, input_tokens=context_window)
     assert text_hold is not None and tool_turns_hold is not None and context_window_hold is not None
     assert text_hold < tool_turns_hold < context_window_hold
 
@@ -328,22 +334,34 @@ def test_gemini_output_fields_on_a_chat_body_leave_its_hold_alone(gemini_output_
     assert _chat_hold({**GEMINI_CHAT_BODY, **gemini_output_fields}) == plain_hold
 
 
-@pytest.mark.parametrize("cap", (0, -1000))
-def test_a_gemini_output_cap_of_zero_or_below_holds_the_default_output(cap: int) -> None:
-    uncapped_hold: Final = _gemini_hold({"contents": [GEMINI_TEXT_CONTENT]})
-    assert uncapped_hold is not None
+@pytest.mark.parametrize(
+    "generation_config",
+    ({}, {"candidateCount": 4}, {"maxOutputTokens": 0}, {"maxOutputTokens": -1000}, {"maxOutputTokens": "many"}),
+)
+def test_a_gemini_call_without_an_output_cap_holds_the_whole_context_window(
+    generation_config: dict[str, object],
+) -> None:
+    context_window: Final = litellm.get_model_info("gemini-3.8-flash")["max_input_tokens"]
+    assert context_window is not None
+    window_filling_chat_hold: Final = estimate_request_max_cost(
+        request_body=GEMINI_CHAT_BODY,
+        route="/chat/completions",
+        llm_router=None,
+        input_token_counts={"gemini-3.8-flash": context_window},
+    )
+    assert window_filling_chat_hold is not None
     assert (
-        _gemini_hold({"contents": [GEMINI_TEXT_CONTENT], "generationConfig": {"maxOutputTokens": cap}})
-        == uncapped_hold
+        _gemini_hold({"contents": [GEMINI_TEXT_CONTENT], "generationConfig": generation_config})
+        == window_filling_chat_hold
     )
 
 
 @pytest.mark.parametrize(
     ("output_fields", "same_hold_fields"),
     (
-        ({"generationConfig": {"max_output_tokens": 30000}}, {"generationConfig": {"maxOutputTokens": 30000}}),
-        ({"generation_config": {"maxOutputTokens": 30000}}, {"generationConfig": {"maxOutputTokens": 30000}}),
-        ({"generation_config": {"max_output_tokens": 30000}}, {"generationConfig": {"maxOutputTokens": 30000}}),
+        ({"generationConfig": {"max_output_tokens": 30000}}, {}),
+        ({"generation_config": {"maxOutputTokens": 30000}}, {}),
+        ({"generation_config": {"max_output_tokens": 30000}}, {}),
         (
             {"generationConfig": {"maxOutputTokens": 8000}, "generation_config": {"max_output_tokens": 30000}},
             {"generationConfig": {"maxOutputTokens": 30000}},
@@ -355,7 +373,7 @@ def test_a_gemini_output_cap_of_zero_or_below_holds_the_default_output(cap: int)
         ),
     ),
 )
-def test_an_output_cap_spelling_v1beta_drops_can_only_raise_the_hold(
+def test_an_output_cap_spelled_other_than_max_output_tokens_can_only_raise_the_hold(
     output_fields: dict[str, object], same_hold_fields: dict[str, object]
 ) -> None:
     expected_hold: Final = _gemini_hold({"contents": [GEMINI_TEXT_CONTENT], **same_hold_fields})
@@ -368,10 +386,12 @@ UNPRICEABLE_COUNTS: Final = (10**400, "9" * 400, 1e308, math.inf)
 
 @pytest.mark.parametrize("count", UNPRICEABLE_COUNTS)
 def test_a_candidate_count_too_large_to_price_holds_one_candidate(count: object) -> None:
-    one_candidate_hold: Final = _gemini_hold({"contents": [GEMINI_TEXT_CONTENT]})
+    one_candidate_hold: Final = _gemini_hold({"contents": [GEMINI_TEXT_CONTENT], **GEMINI_OUTPUT_CAP})
     assert one_candidate_hold is not None
     assert (
-        _gemini_hold({"contents": [GEMINI_TEXT_CONTENT], "generationConfig": {"candidateCount": count}})
+        _gemini_hold(
+            {"contents": [GEMINI_TEXT_CONTENT], "generationConfig": {"maxOutputTokens": 5, "candidateCount": count}}
+        )
         == one_candidate_hold
     )
 
@@ -412,8 +432,8 @@ def _priced_gemini_hold(
     (
         (WIDE_WINDOW, {"maxOutputTokens": 8000, "candidateCount": 4}, WIDE_WINDOW, {"maxOutputTokens": 32000}),
         (WIDE_WINDOW, {"maxOutputTokens": 20000, "candidate_count": 2}, WIDE_WINDOW, {"maxOutputTokens": 40000}),
-        (WIDE_WINDOW, {"candidateCount": 2}, WIDE_WINDOW, {"maxOutputTokens": 2 * DEFAULT_MAX_OUTPUT_TOKENS_FALLBACK}),
-        (LOW_OUTPUT_CEILING, {"candidateCount": 4}, {**WIDE_WINDOW, "max_output_tokens": 4000}, {}),
+        (LOW_OUTPUT_CEILING, {"maxOutputTokens": 8000, "candidateCount": 4}, WIDE_WINDOW, {"maxOutputTokens": 32000}),
+        (LOW_OUTPUT_CEILING, {"maxOutputTokens": 8000}, WIDE_WINDOW, {"maxOutputTokens": 8000}),
     ),
 )
 def test_candidates_hold_what_one_candidate_writing_all_their_output_holds(
@@ -433,9 +453,10 @@ def test_candidates_hold_what_one_candidate_writing_all_their_output_holds(
         (WIDE_WINDOW, {"candidateCount": 1e300}),
         (WIDE_WINDOW, {"maxOutputTokens": 100_000, "candidateCount": 8}),
         (LOW_OUTPUT_CEILING, {"candidateCount": 1e300}),
+        (LOW_OUTPUT_CEILING, {"maxOutputTokens": 100_000, "candidateCount": 8}),
     ),
 )
-def test_candidates_never_hold_more_than_the_whole_context_window_hold(
+def test_a_gemini_hold_never_exceeds_the_whole_context_window_hold(
     model_info: dict[str, object], generation_config: dict[str, object]
 ) -> None:
     context_window_hold: Final = _priced_gemini_hold(model_info, {}, input_tokens=1_000_000)
@@ -443,31 +464,14 @@ def test_candidates_never_hold_more_than_the_whole_context_window_hold(
     assert _priced_gemini_hold(model_info, generation_config) == context_window_hold
 
 
-def test_candidates_never_hold_less_than_one_candidate() -> None:
-    narrow_window: Final = {"max_input_tokens": 10, "max_output_tokens": 100_000}
-    one_candidate_hold: Final = _priced_gemini_hold(narrow_window, {"maxOutputTokens": 50_000})
-    assert one_candidate_hold is not None
-    assert _priced_gemini_hold(narrow_window, {"maxOutputTokens": 50_000, "candidateCount": 2}) == one_candidate_hold
-
-
 NO_WINDOW_MODEL: Final = "vertex_ai/gemini-without-cost-map-entry"
 
 
 @pytest.mark.parametrize(
-    ("generation_config", "same_hold_config"),
-    (
-        ({"maxOutputTokens": 4000, "candidateCount": 2}, {"maxOutputTokens": 8000}),
-        ({"maxOutputTokens": 8000, "candidateCount": 4}, {}),
-        ({"candidateCount": 1_000_000}, {}),
-    ),
+    "generation_config", ({}, {"maxOutputTokens": 4000}, {"maxOutputTokens": 8000, "candidateCount": 4})
 )
-def test_candidates_of_a_model_with_no_context_window_hold_up_to_one_uncapped_candidate(
-    generation_config: dict[str, object], same_hold_config: dict[str, object]
-) -> None:
-    no_window: Final = {"max_output_tokens": 100_000}
-    expected_hold: Final = _priced_gemini_hold(no_window, same_hold_config, model=NO_WINDOW_MODEL)
-    assert expected_hold is not None
-    assert _priced_gemini_hold(no_window, generation_config, model=NO_WINDOW_MODEL) == expected_hold
+def test_a_gemini_model_with_no_context_window_is_not_held(generation_config: dict[str, object]) -> None:
+    assert _priced_gemini_hold({"max_output_tokens": 100_000}, generation_config, model=NO_WINDOW_MODEL) is None
 
 
 @pytest.mark.parametrize("count", UNPRICEABLE_COUNTS)
@@ -487,18 +491,17 @@ def _group_generate_content_hold(router: Router, generation_config: dict[str, ob
 
 
 @pytest.mark.parametrize(
-    ("backend_models", "candidates_are_generated"),
+    "backend_models",
     (
-        (("vertex_ai/claude-haiku-5-5",), False),
-        (("anthropic/claude-haiku-5-5",), False),
-        (("gemini/gemini-3.8-flash",), True),
-        (("vertex_ai/gemini-3.8-flash",), True),
-        (("vertex_ai/claude-haiku-5-5", "gemini/gemini-3.8-flash"), True),
+        ("vertex_ai/claude-haiku-5-5",),
+        ("anthropic/claude-haiku-5-5",),
+        ("openai/gpt-5.4-mini",),
+        ("gemini/gemini-3.8-flash",),
+        ("vertex_ai/gemini-3.8-flash",),
+        ("vertex_ai/claude-haiku-5-5", "gemini/gemini-3.8-flash"),
     ),
 )
-def test_a_candidate_count_is_held_only_when_a_deployment_generates_the_candidates(
-    backend_models: tuple[str, ...], candidates_are_generated: bool
-) -> None:
+def test_a_candidate_count_is_held_whatever_deployment_serves_the_name(backend_models: tuple[str, ...]) -> None:
     router: Final = Router(
         model_list=[
             {"model_name": "assistant", "litellm_params": {"model": model, "api_key": "sk-test"}}
@@ -510,8 +513,7 @@ def test_a_candidate_count_is_held_only_when_a_deployment_generates_the_candidat
 
     assert one_candidate_hold is not None
     assert three_candidate_hold is not None
-    assert (three_candidate_hold > one_candidate_hold) is candidates_are_generated
-    assert three_candidate_hold >= one_candidate_hold
+    assert three_candidate_hold > one_candidate_hold
 
 
 def test_a_candidate_count_for_a_gemini_name_no_deployment_serves_is_held() -> None:
