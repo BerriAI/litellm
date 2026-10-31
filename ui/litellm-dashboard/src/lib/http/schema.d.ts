@@ -49293,6 +49293,15 @@ export interface components {
         };
         /** UpdateUsefulLinksRequest */
         UpdateUsefulLinksRequest: {
+            /**
+             * Previous Useful Links
+             * @description The useful links the caller started from. When set, only the links added, changed or removed relative to it change, so links another admin edited meanwhile keep that edit. When omitted, useful_links replaces the stored links.
+             */
+            previous_useful_links?: {
+                [key: string]: string | {
+                    [key: string]: unknown;
+                };
+            } | null;
             /** Useful Links */
             useful_links: {
                 [key: string]: string | {

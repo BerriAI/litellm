@@ -1869,11 +1869,12 @@ export const deleteAllowedIP = async (accessToken: string, ip: string) => {
 export const updateUsefulLinksCall = async (
   accessToken: string,
   useful_links: Record<string, string | { url: string; index: number }>,
+  previous_useful_links: Record<string, string | { url: string; index: number }>,
 ) => {
   try {
     return await apiClient.post(`/model_hub/update_useful_links`, {
       accessToken,
-      body: { useful_links: useful_links },
+      body: { useful_links, previous_useful_links },
     });
   } catch (error) {
     console.error("Failed to create key:", error);

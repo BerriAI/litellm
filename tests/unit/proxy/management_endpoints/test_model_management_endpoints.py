@@ -2121,6 +2121,71 @@ class TestUpdateModel:
 
 
 @pytest.mark.asyncio
+async def test_update_useful_links_from_the_dashboard_keeps_a_link_another_admin_edited(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import litellm
+    from litellm.proxy.management_endpoints.model_management_endpoints import update_useful_links
+    from litellm.proxy.proxy_server import ProxyConfig
+    from litellm.types.proxy.management_endpoints.model_management_endpoints import UpdateUsefulLinksRequest
+
+    docs: Final = {"url": "https://docs.example.com", "index": 0}
+    status_before: Final = {"url": "https://status.example.com", "index": 1}
+    status_edited_by_other_admin: Final = {"url": "https://status.example.com/v2", "index": 1}
+    retired: Final = {"url": "https://retired.example.com", "index": 2}
+    docs_edited: Final = {"url": "https://docs.example.com/v2", "index": 0}
+    blog: Final = {"url": "https://blog.example.com", "index": 2}
+    rows: Final = ConfigRows(
+        {
+            "litellm_settings": {
+                "public_model_groups_links": {"Docs": docs, "Status": status_edited_by_other_admin, "Retired": retired}
+            }
+        }
+    )
+    monkeypatch.setattr(litellm, "public_model_groups_links", {})
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", ReplicaPrisma(rows))
+    monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_config", ProxyConfig())
+
+    response: Final = await update_useful_links(
+        request=UpdateUsefulLinksRequest(
+            useful_links={"Docs": docs_edited, "Status": status_before, "Blog": blog},
+            previous_useful_links={"Docs": docs, "Status": status_before, "Retired": retired},
+        ),
+        user_api_key_dict=UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN),
+    )
+
+    expected: Final = {"Docs": docs_edited, "Status": status_edited_by_other_admin, "Blog": blog}
+    assert response["useful_links"] == expected
+    assert rows.stored("litellm_settings")["public_model_groups_links"] == expected
+    assert litellm.public_model_groups_links == expected
+
+
+@pytest.mark.asyncio
+async def test_update_useful_links_that_change_nothing_create_no_settings_row(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import litellm
+    from litellm.proxy.management_endpoints.model_management_endpoints import update_useful_links
+    from litellm.proxy.proxy_server import ProxyConfig
+    from litellm.types.proxy.management_endpoints.model_management_endpoints import UpdateUsefulLinksRequest
+
+    rows: Final = ConfigRows({})
+    monkeypatch.setattr(litellm, "public_model_groups_links", {})
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", ReplicaPrisma(rows))
+    monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_config", ProxyConfig())
+
+    response: Final = await update_useful_links(
+        request=UpdateUsefulLinksRequest(useful_links={}, previous_useful_links={}),
+        user_api_key_dict=UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN),
+    )
+
+    assert response["useful_links"] == {}
+    assert "litellm_settings" not in rows.serialized_rows
+
+
+@pytest.mark.asyncio
 async def test_update_public_model_groups_from_the_modal_keeps_a_group_another_admin_published(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

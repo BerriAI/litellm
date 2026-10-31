@@ -2628,6 +2628,14 @@ if MCP_AVAILABLE:
                 },
             )
 
+        from litellm.proxy.proxy_server import proxy_config
+
+        await proxy_config.remove_from_list_setting(
+            section_name="litellm_settings",
+            key="public_mcp_servers",
+            item=server_id,
+            on_written=_set_public_mcp_servers,
+        )
         # try to delete the mcp server
         mcp_server_record_deleted: Final = await delete_mcp_server(prisma_client, server_id)
 

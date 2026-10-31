@@ -24,7 +24,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Annotated, Final, Literal, Protocol, TypeAlias, TypeVar, cast, runtime_checkable
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
-from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError, field_validator
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, TypeAdapter, ValidationError, field_validator
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -3597,6 +3597,14 @@ async def update_public_model_groups(
         )
 
 
+_USEFUL_LINKS: Final = TypeAdapter(Mapping[str, JsonValue])
+_PUBLIC_MODEL_GROUPS_LINKS: Final = TypeAdapter(dict[str, str | dict[str, object]])
+
+
+def _set_public_model_groups_links(public_model_groups_links: Mapping[str, JsonValue]) -> None:
+    litellm.public_model_groups_links = _PUBLIC_MODEL_GROUPS_LINKS.validate_python(public_model_groups_links)
+
+
 @router.post(
     "/model_hub/update_useful_links",
     description="Update useful links",
@@ -3622,6 +3630,20 @@ async def update_useful_links(
                     "error": f"Only proxy admins can update public model groups. Your role={user_api_key_dict.user_role}"
                 },
             )
+
+        if request.previous_useful_links is not None:
+            stored_useful_links: Final = await proxy_config.apply_mapping_setting_delta(
+                section_name="litellm_settings",
+                key="public_model_groups_links",
+                requested=_USEFUL_LINKS.validate_python(request.useful_links),
+                previous=_USEFUL_LINKS.validate_python(request.previous_useful_links),
+                on_written=_set_public_model_groups_links,
+            )
+            return {
+                "message": "Successfully updated useful links",
+                "useful_links": dict(stored_useful_links),
+                "updated_by": user_api_key_dict.user_id,
+            }
 
         # Load existing config first (this may overwrite in-memory litellm settings
         # from DB values via _update_config_from_db), so set the in-memory value AFTER

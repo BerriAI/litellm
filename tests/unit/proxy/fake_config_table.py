@@ -57,11 +57,16 @@ def section_locked_transactions(litellm_config: object) -> Callable[[], SectionL
 
 class ReplicaPrisma:
 
-    def __init__(self, rows: ConfigRows, cached_rows: Mapping[str, Mapping[str, object]] | None = None) -> None:
+    def __init__(
+        self,
+        rows: ConfigRows,
+        cached_rows: Mapping[str, Mapping[str, object]] | None = None,
+        tables: Mapping[str, object] | None = None,
+    ) -> None:
         self.rows: Final = rows
         self._cached_rows: Final = cached_rows
         self.tx: Final = section_locked_transactions(rows)
-        self.db: Final = SimpleNamespace(litellm_config=rows)
+        self.db: Final = SimpleNamespace(litellm_config=rows, **(tables or {}))
         self.writer_db: Final = self.db
 
     async def get_generic_data(self, key: str, value: str, table_name: str) -> SimpleNamespace | None:

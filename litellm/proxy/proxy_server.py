@@ -5516,14 +5516,50 @@ def _with_list_delta(
     aliases: Callable[[str], frozenset[str]],
 ) -> Mapping[str, JsonValue]:
     current: Final = _listed_items(section, key)
-    removed: Final = frozenset(chain.from_iterable(aliases(item) for item in previous.difference(requested)))
+    requested_ids: Final = frozenset(chain.from_iterable(aliases(item) for item in requested))
+    previous_ids: Final = frozenset(chain.from_iterable(aliases(item) for item in previous))
+    removed: Final = previous_ids.difference(requested_ids)
     kept: Final = tuple(item for item in current if item not in removed)
     added: Final = tuple(
-        item for item in dict.fromkeys(requested) if item not in previous and aliases(item).isdisjoint(kept)
+        item
+        for item in _first_of_each_alias_set(requested, aliases)
+        if aliases(item).isdisjoint(previous_ids) and aliases(item).isdisjoint(kept)
     )
     if (*kept, *added) == current:
         return section
     return MappingProxyType({**section, key: [*kept, *added]})
+
+
+def _first_of_each_alias_set(items: tuple[str, ...], aliases: Callable[[str], frozenset[str]]) -> tuple[str, ...]:
+    return tuple(
+        item
+        for index, item in enumerate(items)
+        if all(aliases(item).isdisjoint(aliases(earlier)) for earlier in items[:index])
+    )
+
+
+def _with_mapping_delta(
+    section: Mapping[str, JsonValue],
+    *,
+    key: str,
+    requested: Mapping[str, JsonValue],
+    previous: Mapping[str, JsonValue],
+) -> Mapping[str, JsonValue]:
+    current: Final = _CONFIG_SECTION_VALUES.validate_python(section.get(key) or {})
+    changed: Final = {
+        name: value for name, value in requested.items() if name not in previous or previous[name] != value
+    }
+    removed: Final = frozenset(previous).difference(requested)
+    kept: Final = {name: value for name, value in current.items() if name not in removed and name not in changed}
+    merged: Final = {**kept, **changed}
+    if merged == dict(current):
+        return section
+    return MappingProxyType({**section, key: merged})
+
+
+def _settings_db_client() -> PrismaClient | None:
+    stores_settings_in_db: Final = general_settings_view().get("store_model_in_db", False) is True or store_model_in_db
+    return prisma_client if stores_settings_in_db else None
 
 
 @dataclass(frozen=True, slots=True)
@@ -6121,11 +6157,11 @@ class ProxyConfig:
         listed_as: frozenset[str],
         on_written: Callable[[tuple[str, ...]], None],
     ) -> tuple[str, ...] | None:
-        section_rewrite: Final = await self._rewrite_list_setting(
+        section_rewrite: Final = await self._rewrite_setting(
             section_name=section_name,
             key=key,
             rewrite=lambda section: _with_list_item(section, key=key, item=item, listed_as=listed_as),
-            on_written=on_written,
+            on_written=lambda section: on_written(_listed_items(section, key)),
         )
         return _listed_items(section_rewrite.after, key) if section_rewrite.changed else None
 
@@ -6139,29 +6175,60 @@ class ProxyConfig:
         on_written: Callable[[tuple[str, ...]], None],
         aliases: Callable[[str], frozenset[str]] = _listed_only_as_itself,
     ) -> tuple[str, ...]:
-        section_rewrite: Final = await self._rewrite_list_setting(
+        section_rewrite: Final = await self._rewrite_setting(
             section_name=section_name,
             key=key,
             rewrite=lambda section: _with_list_delta(
                 section, key=key, requested=tuple(requested), previous=frozenset(previous), aliases=aliases
             ),
-            on_written=on_written,
+            on_written=lambda section: on_written(_listed_items(section, key)),
         )
         return _listed_items(section_rewrite.after, key)
 
-    async def _rewrite_list_setting(
+    async def remove_from_list_setting(
+        self,
+        *,
+        section_name: Section,
+        key: str,
+        item: str,
+        on_written: Callable[[tuple[str, ...]], None],
+        aliases: Callable[[str], frozenset[str]] = _listed_only_as_itself,
+    ) -> None:
+        if _settings_db_client() is not None and self._settings_stores[section_name].owned_by_config(key):
+            return
+        await self.apply_list_setting_delta(
+            section_name=section_name, key=key, requested=(), previous=(item,), on_written=on_written, aliases=aliases
+        )
+
+    async def apply_mapping_setting_delta(
+        self,
+        *,
+        section_name: Section,
+        key: str,
+        requested: Mapping[str, JsonValue],
+        previous: Mapping[str, JsonValue],
+        on_written: Callable[[Mapping[str, JsonValue]], None],
+    ) -> Mapping[str, JsonValue]:
+        section_rewrite: Final = await self._rewrite_setting(
+            section_name=section_name,
+            key=key,
+            rewrite=lambda section: _with_mapping_delta(section, key=key, requested=requested, previous=previous),
+            on_written=lambda section: on_written(_CONFIG_SECTION_VALUES.validate_python(section.get(key) or {})),
+        )
+        return _CONFIG_SECTION_VALUES.validate_python(section_rewrite.after.get(key) or {})
+
+    async def _rewrite_setting(
         self,
         *,
         section_name: Section,
         key: str,
         rewrite: Callable[[Mapping[str, JsonValue]], Mapping[str, JsonValue]],
-        on_written: Callable[[tuple[str, ...]], None],
+        on_written: Callable[[Mapping[str, JsonValue]], None],
     ) -> _SectionRewrite:
-        if prisma_client is None or not (
-            general_settings_view().get("store_model_in_db", False) is True or store_model_in_db
-        ):
+        db_client: Final = _settings_db_client()
+        if db_client is None:
             file_rewrite: Final = await self._rewrite_file_section(section_name=section_name, rewrite=rewrite)
-            on_written(_listed_items(file_rewrite.after, key))
+            on_written(file_rewrite.after)
             return file_rewrite
         store: Final = self._settings_stores[section_name]
         if store.owned_by_config(key):
@@ -6169,11 +6236,9 @@ class ProxyConfig:
             if rewrite(config_section) != config_section:
                 self._raise_config_owned(section_name=section_name, rejected=(key,), store=store)
             return _SectionRewrite(before=config_section, after=config_section)
-        section_rewrite: Final = await _rewrite_config_section(
-            prisma_client, section_name=section_name, rewrite=rewrite
-        )
+        section_rewrite: Final = await _rewrite_config_section(db_client, section_name=section_name, rewrite=rewrite)
         store.apply_db_row(section_name, section_rewrite.after)
-        on_written(_listed_items(section_rewrite.after, key))
+        on_written(section_rewrite.after)
         if section_rewrite.changed:
             await invalidate_config_param(section_name)
         return section_rewrite
