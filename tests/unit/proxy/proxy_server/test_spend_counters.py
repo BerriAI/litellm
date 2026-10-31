@@ -1812,7 +1812,7 @@ class _RedisCacheOnClient(RedisCache):
         self.service_logger_obj = ServiceLogging()
         self.default_ttl = None
 
-    def init_async_client(self) -> FakeAsyncRedis:
+    def _init_async_client(self) -> FakeAsyncRedis:
         return self._injected_client
 
 

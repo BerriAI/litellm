@@ -288,7 +288,7 @@ async def test_delayed_shared_pin_read_preserves_a_newer_local_write(
             await resume.wait()
             return value
 
-    reader: Final = DelayedReader(connection_pool=redis.init_async_client().connection_pool)
+    reader: Final = DelayedReader(connection_pool=redis._init_async_client().connection_pool)
     litellm.in_memory_llm_clients_cache.set_cache(key=redis._get_async_client_cache_key(), value=reader)
     pending: Final = asyncio.create_task(_selected_session_ids(router))
     try:

@@ -373,7 +373,7 @@ class RedisBatch:
         widths: list[int] = []  # mutable-ok: filled while enqueuing
 
         async def run() -> list[object]:
-            client: Final = self.redis_cache.init_async_client()
+            client: Final = self.redis_cache._async_client()  # pyright: ignore[reportPrivateUsage]  # raw redis-py client, no typed alternative yet
             async with client.pipeline(transaction=False) as pipe:
                 widths.extend(op.enqueue(pipe) for op in ops)
                 return await pipe.execute(raise_on_error=False)

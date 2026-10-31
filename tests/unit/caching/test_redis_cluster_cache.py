@@ -60,8 +60,8 @@ async def test_redis_cluster_async_batch_get(mock_init_redis_cluster):
         password="hello",
     )
 
-    # Mock the init_async_client to return our mock redis client
-    cache.init_async_client = MagicMock(return_value=mock_redis)
+    # Mock the _init_async_client to return our mock redis client
+    cache._init_async_client = MagicMock(return_value=mock_redis)
 
     # Test async_batch_get_cache
     keys = ["key1", "key2"]
@@ -210,9 +210,9 @@ def test_init_pubsub_client_derives_a_node_client_for_cluster_backend() -> None:
     cluster = _cluster_for_pubsub()
     node = ClusterNode(host="10.1.2.3", port=7001)
     cluster.nodes_manager.default_node = node
-    cache.init_async_client = MagicMock(return_value=cluster)
+    cache._init_async_client = MagicMock(return_value=cluster)
 
-    client = cache.init_pubsub_client()
+    client = cache._init_pubsub_client()
 
     assert isinstance(client, Redis) and not isinstance(client, RedisCluster)
     kwargs = client.connection_pool.connection_kwargs
@@ -228,9 +228,9 @@ def test_init_pubsub_client_falls_back_to_first_startup_node() -> None:
     startup node is a valid pub/sub target."""
     cache = _isolated_redis_cache("cluster-pubsub-startup-fallback")
     cluster = _cluster_for_pubsub(startup_node_host="10.8.8.8")
-    cache.init_async_client = MagicMock(return_value=cluster)
+    cache._init_async_client = MagicMock(return_value=cluster)
 
-    client = cache.init_pubsub_client()
+    client = cache._init_pubsub_client()
 
     assert isinstance(client, Redis)
     assert client.connection_pool.connection_kwargs["host"] == "10.8.8.8"
@@ -240,10 +240,10 @@ def test_init_pubsub_client_returns_the_same_cached_client_on_repeat_calls() -> 
     cache = _isolated_redis_cache("cluster-pubsub-caching")
     cluster = _cluster_for_pubsub()
     cluster.nodes_manager.default_node = ClusterNode(host="10.1.2.3", port=7001)
-    cache.init_async_client = MagicMock(return_value=cluster)
+    cache._init_async_client = MagicMock(return_value=cluster)
 
-    first = cache.init_pubsub_client()
-    second = cache.init_pubsub_client()
+    first = cache._init_pubsub_client()
+    second = cache._init_pubsub_client()
 
     assert first is second
 
@@ -251,9 +251,9 @@ def test_init_pubsub_client_returns_the_same_cached_client_on_repeat_calls() -> 
 def test_init_pubsub_client_returns_the_shared_async_client_for_standalone() -> None:
     cache = _isolated_redis_cache("standalone-pubsub")
     standalone = Redis()
-    cache.init_async_client = MagicMock(return_value=standalone)
+    cache._init_async_client = MagicMock(return_value=standalone)
 
-    assert cache.init_pubsub_client() is standalone
+    assert cache._init_pubsub_client() is standalone
 
 
 def test_init_pubsub_client_preserves_tls_and_authentication() -> None:
@@ -268,9 +268,9 @@ def test_init_pubsub_client_preserves_tls_and_authentication() -> None:
         socket_connect_timeout=3.0,
         socket_keepalive=True,
     )
-    cache.init_async_client = MagicMock(return_value=cluster)
+    cache._init_async_client = MagicMock(return_value=cluster)
 
-    client = cache.init_pubsub_client()
+    client = cache._init_pubsub_client()
     connection = client.connection_pool.make_connection()
 
     assert isinstance(connection, SSLConnection)
@@ -286,13 +286,13 @@ def test_init_pubsub_client_rejects_missing_nodes_and_can_retry() -> None:
     cache = _isolated_redis_cache("cluster-pubsub-no-nodes")
     cluster = _cluster_for_pubsub()
     cluster.nodes_manager.startup_nodes = {}
-    cache.init_async_client = MagicMock(return_value=cluster)
+    cache._init_async_client = MagicMock(return_value=cluster)
 
     with pytest.raises(ValueError, match="no default node and no startup nodes"):
-        cache.init_pubsub_client()
+        cache._init_pubsub_client()
 
     cluster.nodes_manager.default_node = ClusterNode(host="recovered.example.test", port=7001)
-    client = cache.init_pubsub_client()
+    client = cache._init_pubsub_client()
 
     assert client.connection_pool.connection_kwargs["host"] == "recovered.example.test"
 
@@ -303,11 +303,11 @@ def test_disconnect_closes_derived_pubsub_connections_even_when_pool_close_fails
     close_fails: bool, has_shared_pool: bool
 ) -> None:
     cache = _isolated_redis_cache(f"cluster-pubsub-close-{close_fails}-{has_shared_pool}")
-    cache.async_redis_conn_pool = AsyncMock() if has_shared_pool else None
-    cache.init_async_client = MagicMock(return_value=_cluster_for_pubsub())
+    cache._async_redis_conn_pool = AsyncMock() if has_shared_pool else None
+    cache._init_async_client = MagicMock(return_value=_cluster_for_pubsub())
 
     async def exercise() -> None:
-        client = cache.init_pubsub_client()
+        client = cache._init_pubsub_client()
         connection = AsyncMock()
         connection.disconnect.side_effect = ConnectionError("connection close failed") if close_fails else None
         client.connection_pool._available_connections.append(connection)
@@ -316,19 +316,19 @@ def test_disconnect_closes_derived_pubsub_connections_even_when_pool_close_fails
 
         connection.disconnect.assert_awaited_once()
         if has_shared_pool:
-            cache.async_redis_conn_pool.disconnect.assert_awaited_once_with(inuse_connections=True)
-        cache.redis_client.close.assert_called_once()
+            cache._async_redis_conn_pool.disconnect.assert_awaited_once_with(inuse_connections=True)
+        cache._redis_client.close.assert_called_once()
 
     asyncio.run(exercise())
 
 
 def test_expired_pubsub_client_closes_connections_after_eviction() -> None:
     cache = _isolated_redis_cache("cluster-pubsub-expired")
-    cache.init_async_client = MagicMock(return_value=_cluster_for_pubsub())
+    cache._init_async_client = MagicMock(return_value=_cluster_for_pubsub())
     clients = LLMClientCache(evicted_client_closer=EvictedClientCloser(grace_seconds=0))
 
     async def exercise() -> None:
-        client = cache.init_pubsub_client()
+        client = cache._init_pubsub_client()
         closed = asyncio.Event()
         connection = AsyncMock()
         connection.disconnect.side_effect = closed.set
@@ -336,7 +336,7 @@ def test_expired_pubsub_client_closes_connections_after_eviction() -> None:
         cache_key = clients.update_cache_key_with_event_loop(f"{cache._get_async_client_cache_key()}-pubsub")
         clients.ttl_dict[cache_key] = 0
 
-        replacement = cache.init_pubsub_client()
+        replacement = cache._init_pubsub_client()
         await asyncio.wait_for(closed.wait(), timeout=1)
 
         assert replacement is not client
@@ -358,10 +358,10 @@ def test_init_async_client_returns_one_cluster_client_per_event_loop() -> None:
         loop_b = asyncio.new_event_loop()
 
         async def get_client() -> RedisCluster:
-            return cache.init_async_client()
+            return cache._init_async_client()
 
         async def get_client_pair() -> tuple[RedisCluster, RedisCluster]:
-            return cache.init_async_client(), cache.init_async_client()
+            return cache._init_async_client(), cache._init_async_client()
 
         try:
             client_a, client_a_again = loop_a.run_until_complete(get_client_pair())
@@ -395,13 +395,13 @@ def test_evicted_async_client_is_closed_only_for_cluster(cluster: bool) -> None:
         )
 
         async def exercise() -> None:
-            client = cache.init_async_client()
+            client = cache._init_async_client()
             closed = asyncio.Event()
             client.aclose = AsyncMock(side_effect=closed.set)
             cache_key = clients.update_cache_key_with_event_loop(cache._get_async_client_cache_key())
             clients.ttl_dict[cache_key] = 0
 
-            replacement = cache.init_async_client()
+            replacement = cache._init_async_client()
 
             assert replacement is not client
             if cluster:
@@ -445,7 +445,7 @@ def _cluster_set_cache_with_client(
             max_connections=max_connections,
             connection_gate=connection_gate,
         )
-    setattr(cache, "init_async_client", MagicMock(return_value=client))
+    setattr(cache, "_init_async_client", MagicMock(return_value=client))
     return cast(
         "Callable[[str, str], Awaitable[object]]", cache.async_set_cache
     )  # cast-ok: wrapped **kwargs are untyped
@@ -492,7 +492,7 @@ async def test_cluster_cache_sends_after_the_connection_wait_timeout() -> None:
 
 @pytest.mark.asyncio
 async def test_cluster_caches_sharing_a_client_share_the_connection_cap() -> None:
-    """init_async_client hands caches with identical settings the same client, so two caches must not each admit
+    """_init_async_client hands caches with identical settings the same client, so two caches must not each admit
     a full max_connections worth of commands against that one pool."""
     client = _InFlightCountingClient(command_seconds=0.01)
     first = _cluster_set_cache_with_client(client, max_connections=3)

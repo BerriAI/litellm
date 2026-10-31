@@ -99,7 +99,7 @@ class FakeRedisCache(RedisCache):
         self.alone: list[tuple[str, Any]] = []
         self.store: dict[str, Any] = {}
 
-    def init_async_client(self) -> FakeClient:  # pyright: ignore[reportIncompatibleMethodOverride]  # fake client, no server
+    def _init_async_client(self) -> FakeClient:  # pyright: ignore[reportIncompatibleMethodOverride]  # fake client, no server
         return self.client
 
     async def async_batch_get_cache(self, key_list: Sequence[str], **kwargs: object) -> dict[str, Any]:  # pyright: ignore[reportIncompatibleMethodOverride]  # records the direct read
