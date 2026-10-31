@@ -1581,6 +1581,37 @@ class TestToolPermissionGuardrailAnthropicMessages:
             await self._drain(self.blocking, chunks)
 
     @pytest.mark.asyncio
+    async def test_denied_tool_use_split_over_data_lines_after_a_plain_message_start_is_blocked(self):
+        def over_two_data_lines(frame: bytes) -> bytes:
+            return frame.replace(b", ", b",\ndata: ", 1)
+
+        message_start, *content = self._sse_chunks("Bash")
+        chunks: Final = self._ended_by_upstream_error([message_start, *map(over_two_data_lines, content)])
+
+        with pytest.raises(GuardrailRaisedException, match="could not be verified"):
+            await self._drain(self.blocking, chunks)
+
+    @pytest.mark.asyncio
+    async def test_denied_tool_use_named_only_by_its_event_lines_beside_an_upstream_error_is_blocked(self):
+        def without_type(frame: bytes) -> bytes:
+            return re.sub(rb'"type": "(?:content_block_\w+|message_\w+)"', b'"error": {}', frame, count=1)
+
+        chunks: Final = self._ended_by_upstream_error([without_type(frame) for frame in self._sse_chunks("Bash")])
+
+        with pytest.raises(GuardrailRaisedException, match="could not be verified"):
+            await self._drain(self.blocking, chunks)
+
+    @pytest.mark.asyncio
+    async def test_denied_tool_use_between_space_led_data_lines_is_blocked(self):
+        def wrapped(frame: bytes) -> bytes:
+            return b' data: {"type": "error", "error": {}, "w": [\n' + frame.rstrip(b"\n") + b"\n data: ]}\n\n"
+
+        chunks: Final = [wrapped(frame) for frame in self._sse_chunks("Bash")]
+
+        with pytest.raises(GuardrailRaisedException, match="could not be verified"):
+            await self._drain(self.blocking, chunks)
+
+    @pytest.mark.asyncio
     async def test_denied_tool_use_delivered_before_an_upstream_error_is_still_blocked(self):
         chunks: Final = self._ended_by_upstream_error(self._sse_chunks("Read")[:7])
 

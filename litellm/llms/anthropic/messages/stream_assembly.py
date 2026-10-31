@@ -428,6 +428,9 @@ _ANTHROPIC_EVENT_TYPES: Final = frozenset(
 )
 
 
+_ERROR_PAYLOAD_KEYS: Final = frozenset({"type", "error", "request_id"})
+
+
 def _is_anthropic_event_type(event_type: object) -> bool:
     return isinstance(event_type, str) and event_type in _ANTHROPIC_EVENT_TYPES
 
@@ -456,7 +459,54 @@ def _sse_event_data(event: str) -> Mapping[str, object] | None:
 
 
 def _sse_frames(sse_stream: str) -> Sequence[str]:
-    return split_sse_chunk_into_events("\n".join(split_sse_lines(sse_stream)))
+    return "\n".join(split_sse_lines(sse_stream)).split("\n\n")
+
+
+def _sse_field(line: str) -> tuple[str, str]:
+    name, _, value = line.partition(":")
+    return name, value.removeprefix(" ")
+
+
+def _sse_fields(frame: str) -> tuple[tuple[str, str], ...]:
+    """The frame's fields as a client reads them: a name matches exactly and a comment is no field."""
+    return tuple(_sse_field(line) for line in frame.split("\n") if line and not line.startswith(":"))
+
+
+def _carries_no_data(fields: Sequence[tuple[str, str]]) -> bool:
+    match fields:
+        case () | (("event", _),) | (("data", "" | "[DONE]"),):
+            return True
+        case _:
+            return False
+
+
+def _json_mapping(payload: str) -> Mapping[str, object] | None:
+    try:
+        value: Final[object] = json.loads(payload)
+    except ValueError:
+        return None
+    return as_str_mapping(value)
+
+
+def _payload_type(payload: str) -> object:
+    event: Final = _json_mapping(payload)
+    return event.get("type") if event is not None else None
+
+
+def _is_read_the_same_by_every_reader(fields: Sequence[tuple[str, str]]) -> bool:
+    """Whether the frame is one a client and this module read alike, whichever way either goes about it.
+
+    A client joins ``data:`` lines, ignores a field whose name is not exact, and an SDK takes an event's
+    type from its ``event:`` line and skips data with no event name, while assembly reads only one
+    ``data:`` line and the data's ``type``.
+    """
+    match fields:
+        case (("data", _),) | (("event", "error"), ("data", _)):
+            return True
+        case (("event", name), ("data", payload)):
+            return _payload_type(payload) == name
+        case _:
+            return _carries_no_data(fields)
 
 
 def _parsed_sse_events(sse_stream: str) -> tuple[Mapping[str, object], ...]:
@@ -639,15 +689,20 @@ def anthropic_sse_events_without_blocks(
     )
 
 
-def _content_events_before_upstream_error(sse_stream: str) -> tuple[str, ...]:
+def _content_events_before_upstream_error(sse_stream: str) -> tuple[str, ...] | None:
     """The stream's events minus its upstream ``error`` and every cut-off block assembly cannot read.
 
     A cut-off text block is still text the client was sent, so it stays. A cut-off tool call's
     input is a JSON prefix, and a cut-off thinking block has no signature, so neither is a block the
     client can act on, and both are left out.
+
+    None when a frame could read differently to a client, since a guardrail would then pass a stream
+    holding content it never saw.
     """
     if not _error_events(sse_stream):
         return (sse_stream,)
+    if not all(_is_read_the_same_by_every_reader(_sse_fields(frame)) for frame in _sse_frames(sse_stream)):
+        return None
     events: Final = _sse_events_with_data(sse_stream)
     cut_off: Final = frozenset(
         index
@@ -686,6 +741,8 @@ def assemble_anthropic_sse_stream(
     content_events: Final = (
         _content_events_before_upstream_error(sse_stream) if through_upstream_error else (sse_stream,)
     )
+    if content_events is None:
+        return None
     try:
         assembled: Final = build_complete_streaming_response(
             all_chunks=content_events,
@@ -706,21 +763,19 @@ def assemble_anthropic_sse_stream(
     return assembled
 
 
-def _sse_frame_data(frame: str) -> str:
-    """The frame's data as a client reads it, every ``data:`` line joined."""
-    data_lines: Final = (line.strip() for line in split_sse_lines(frame))
-    return "\n".join(line[len("data:") :].strip() for line in data_lines if line.startswith("data:")).strip()
-
-
 def _is_error_payload(payload: str) -> bool:
-    try:
-        value: Final[object] = json.loads(payload)
-    except ValueError:
-        return False
-    event: Final = as_str_mapping(value)
-    if event is None:
+    event: Final = _json_mapping(payload)
+    if event is None or not _ERROR_PAYLOAD_KEYS.issuperset(event):
         return False
     return event.get("type") == "error" or ("type" not in event and isinstance(event.get("error"), Mapping))
+
+
+def _is_error_frame(fields: Sequence[tuple[str, str]]) -> bool:
+    match fields:
+        case (("data", payload),) | (("event", "error"), ("data", payload)):
+            return _is_error_payload(payload)
+        case _:
+            return False
 
 
 def is_sse_error_stream(all_chunks: Sequence[object]) -> bool:
@@ -738,7 +793,6 @@ def is_sse_error_stream(all_chunks: Sequence[object]) -> bool:
     sse_stream: Final = _joined_sse_stream(all_chunks)
     if sse_stream is None:
         return False
-    payloads: Final = tuple(
-        payload for frame in _sse_frames(sse_stream) if (payload := _sse_frame_data(frame)) not in ("", "[DONE]")
-    )
-    return len(payloads) > 0 and all(_is_error_payload(payload) for payload in payloads)
+    frames: Final = tuple(_sse_fields(frame) for frame in _sse_frames(sse_stream))
+    with_data: Final = tuple(fields for fields in frames if not _carries_no_data(fields))
+    return len(with_data) > 0 and all(_is_error_frame(fields) for fields in with_data)

@@ -95,6 +95,13 @@ TOOL_CALL_OVER_TWO_DATA_LINES: Final = (
 )
 
 
+def _wrapped_in_ignored_fields(prefix: bytes) -> bytes:
+    return (
+        prefix + b'data: {"type": "error", "error": {}, "w": [\n'
+        b'data: {"type": "content_block_start"}\n' + prefix + b"data: ]}\n\n"
+    )
+
+
 @pytest.mark.parametrize(
     ("chunks", "expected"),
     [
@@ -230,8 +237,19 @@ def test_assemble_anthropic_sse_stream_returns_none_without_a_message_to_build(c
         ((b"data: some words\n\n", ANTHROPIC_ERROR), False),
         ((b"data: 5\n\n", CHAT_ERROR), False),
         ((b'data: {"type": "message_start", "error": {}}\n\n', ANTHROPIC_ERROR), False),
-        ((b'event: error\ndata: {"type": "error",\ndata: "error": {"type": "overloaded_error"}}\n\n',), True),
-        ((b": keepalive\n\n", CHAT_ERROR, b"data: [DONE]\n\n"), True),
+        ((b'event: error\ndata: {"type": "error",\ndata: "error": {"type": "overloaded_error"}}\n\n',), False),
+        ((b": keepalive\n\n", b"event: ping\n\n", CHAT_ERROR, b"data: [DONE]\n\n"), True),
+        ((b'event: error\ndata: {"type": "error", "error": {"type": "api_error"}, "request_id": "req_1"}\n\n',), True),
+        ((_wrapped_in_ignored_fields(b" "),), False),
+        ((_wrapped_in_ignored_fields("\u00a0".encode()),), False),
+        ((b' data: {"type": "error", "error": {}}\n\n',), False),
+        ((b'event: message_start\ndata: {"error": {}, "message": {"id": "m1"}}\n\n', ANTHROPIC_ERROR), False),
+        ((b'data: {"error": {"code": 0}, "candidates": []}\n\n',), False),
+        ((b'data: {"type": "error", "error": {}, "choices": []}\n\n',), False),
+        ((b'id: 1\ndata: {"type": "error", "error": {}}\n\n',), False),
+        ((b'\xef\xbb\xbfdata: {"type": "message_start"}\n\n', ANTHROPIC_ERROR), False),
+        ((b'event: message_stop\ndata: {"error": {}}\n\n',), False),
+        ((b"data:\n\n", ANTHROPIC_ERROR), True),
     ],
     ids=[
         "anthropic-error",
@@ -248,8 +266,70 @@ def test_assemble_anthropic_sse_stream_returns_none_without_a_message_to_build(c
         "non-object-beside-an-error",
         "message-start-with-an-error-field",
         "error-over-two-data-lines",
-        "keepalive-and-done-marker",
+        "keepalive-bare-event-and-done-marker",
+        "error-with-a-request-id",
+        "content-between-space-led-data-lines",
+        "content-between-nbsp-led-data-lines",
+        "space-led-error",
+        "content-named-by-its-event-line",
+        "error-key-beside-gemini-candidates",
+        "typed-error-beside-chat-choices",
+        "error-with-an-id-field",
+        "content-behind-a-byte-order-mark",
+        "error-under-a-content-event-name",
+        "empty-data-line",
     ],
 )
 def test_is_sse_error_stream_is_true_only_for_frames_that_are_all_errors(chunks: tuple[object, ...], expected: bool):
     assert is_sse_error_stream(chunks) is expected
+
+
+@pytest.mark.parametrize(
+    "frame",
+    [
+        TOOL_CALL_OVER_TWO_DATA_LINES,
+        _wrapped_in_ignored_fields(b" "),
+        b'event: content_block_start\ndata: {"index": 0, "content_block": {"type": "tool_use"}}\n\n',
+        b'event: content_block_start\ndata: {"type": "ping", "content_block": {"type": "tool_use"}}\n\n',
+        b'event: content_block_start\n data: {"type": "error"}\ndata: {"type": "content_block_start"}\n\n',
+    ],
+    ids=[
+        "over-two-data-lines",
+        "between-ignored-fields",
+        "type-only-on-the-event-line",
+        "event-line-disagrees-with-the-data",
+        "error-on-an-ignored-field-beside-the-real-data",
+    ],
+)
+def test_assembly_through_an_upstream_error_refuses_a_frame_a_client_may_read_differently(frame: bytes):
+    chunks: Final = (ANTHROPIC_STREAM[0], frame, ANTHROPIC_ERROR)
+
+    assert assemble_anthropic_sse_stream(chunks, through_upstream_error=True) is None
+
+
+@pytest.mark.parametrize(
+    "frame",
+    [
+        b": keepalive\n\n",
+        b'event: ping\ndata: {"type": "ping"}\n\n',
+        b'event: not_known_yet\ndata: {"type": "not_known_yet"}\n\n',
+        b"data: some words\n\n",
+        b"data: 5\n\n",
+    ],
+    ids=["comment", "ping", "event-type-no-client-reads", "words-no-event-names", "non-object-no-event-names"],
+)
+def test_assembly_through_an_upstream_error_keeps_a_frame_every_reader_agrees_on(frame: bytes):
+    chunks: Final = (*ANTHROPIC_STREAM[:4], frame, ANTHROPIC_ERROR)
+
+    assert assemble_anthropic_sse_stream(chunks, through_upstream_error=True) is not None
+
+
+@pytest.mark.parametrize(
+    "error_frame",
+    [ANTHROPIC_ERROR, b"event: error\ndata: upstream broke\n\n"],
+    ids=["typed", "named-with-unreadable-data"],
+)
+def test_assembly_through_an_upstream_error_reads_past_the_error_frame(error_frame: bytes):
+    chunks: Final = (*ANTHROPIC_STREAM[:4], error_frame)
+
+    assert assemble_anthropic_sse_stream(chunks, through_upstream_error=True) is not None
