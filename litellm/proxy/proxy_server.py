@@ -12148,7 +12148,7 @@ class ProxyStartupEvent:
         proxy_logging_obj: ProxyLogging,
         user_api_key_cache: UserApiKeyCache,
     ) -> PrismaClient | None:
-        if database_url is None:
+        if database_url is None or not database_url.strip():
             return None
         client: Final = PrismaClient(database_url=database_url, proxy_logging_obj=proxy_logging_obj)
         async with AsyncExitStack() as setup_resources:
