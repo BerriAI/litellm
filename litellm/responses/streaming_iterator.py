@@ -233,6 +233,11 @@ def spawn_logging_task(
 
 
 async def drain_logging_tasks(timeout: float = 5.0) -> None:
+    # A task that finished as its loop closed never ran its discard callback, and a
+    # task from another loop cannot be awaited here: forget both, wait on the rest.
+    running_loop: Final = asyncio.get_running_loop()
+    stale: Final = {task for task in _PENDING_LOGGING_TASKS if task.done() or task.get_loop() is not running_loop}
+    _PENDING_LOGGING_TASKS.difference_update(stale)
     if not _PENDING_LOGGING_TASKS:
         return
     _, pending = await asyncio.wait(tuple(_PENDING_LOGGING_TASKS), timeout=timeout)

@@ -1,5 +1,6 @@
 import OpenAI from "openai";
 import { makeOpenAIResponsesRequest } from "@/components/llm_calls/responses_api";
+import { backgroundResponseUpdate } from "./backgroundChat";
 import { generateChatImages } from "./imageHelpers";
 import { toResponsesMessages } from "./attachmentHelpers";
 import type { AssistantMessageUpdate, ChatMessage, MCPEvent } from "./types";
@@ -15,6 +16,7 @@ interface ChatRequestOptions {
     "role" | "content" | "attachments" | "generatedImages" | "imageGeneration" | "mcpEvents"
   >[];
   previousResponseId?: string | null;
+  background?: boolean;
   mcpServers?: string[];
   onResponseId: (id: string | null) => void;
   onUpdate: (update: AssistantMessageUpdate) => void;
@@ -43,6 +45,7 @@ export async function runChatRequest({
   signal,
   messages,
   previousResponseId,
+  background = false,
   mcpServers,
   onResponseId,
   onUpdate,
@@ -94,6 +97,14 @@ export async function runChatRequest({
       undefined,
       true,
       (totalLatency) => onUpdate({ totalLatency }),
+      undefined,
+      undefined,
+      background
+        ? (response) => {
+            onResponseId(null);
+            onUpdate(backgroundResponseUpdate(response));
+          }
+        : undefined,
     );
     signal.throwIfAborted();
   } catch (error: unknown) {
