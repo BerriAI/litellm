@@ -409,14 +409,11 @@ def test_context_window_fallback_fires_for_the_overflow_on_streamed_chat_complet
     _assert_fell_back(cwf_rig, "overflow", prompt, text)
 
 
-def test_context_window_fallback_is_not_consulted_on_streamed_messages(cwf_rig: Rig) -> None:
+def test_context_window_fallback_fires_for_the_overflow_on_streamed_messages(cwf_rig: Rig) -> None:
     prompt: Final = _prompt("cwf messages stream")
     response, text = _consumed(cwf_rig.gateway, "/v1/messages", _messages(cwf_rig.models["cwf"], prompt, True))
     assert response.status_code == 200, text
-    error: Final = _only_error(text)
-    assert error["type"] == "invalid_request_error", text
-    assert _GENERIC in str(error["message"]), text
-    _assert_no_fallback(cwf_rig, "overflow", prompt)
+    _assert_fell_back(cwf_rig, "overflow", prompt, text)
 
 
 def test_context_window_fallback_fires_on_streamed_responses(cwf_rig: Rig) -> None:
@@ -454,16 +451,11 @@ def test_plain_fallback_fires_for_the_overflow_on_streamed_chat_completions(fb_r
     _assert_fell_back(fb_rig, "overflow", prompt, text)
 
 
-def test_streamed_messages_overflow_on_a_plain_fallback_deployment_returns_400_without_falling_back(
-    fb_rig: Rig,
-) -> None:
+def test_plain_fallback_fires_for_the_overflow_on_streamed_messages(fb_rig: Rig) -> None:
     prompt: Final = _prompt("fb messages stream")
     response, text = _consumed(fb_rig.gateway, "/v1/messages", _messages(fb_rig.models["fb"], prompt, True))
-    assert response.status_code == 400, text
-    error: Final = object_value(_JSON_OBJECT.validate_json(text)["error"])
-    assert error["type"] == "invalid_request_error", text
-    assert _GENERIC in str(error["message"]), text
-    _assert_no_fallback(fb_rig, "overflow", prompt)
+    assert response.status_code == 200, text
+    _assert_fell_back(fb_rig, "overflow", prompt, text)
 
 
 def test_plain_fallback_fires_on_streamed_responses(fb_rig: Rig) -> None:

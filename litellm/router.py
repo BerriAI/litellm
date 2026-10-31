@@ -681,6 +681,7 @@ _RESOLVED_RETRY_POLICY_ADAPTER: Final = TypeAdapter(RetryPolicy | None)
 _ROUTING_KWARGS_ADAPTER: Final[TypeAdapter[Mapping[str, object] | None]] = TypeAdapter(Mapping[str, object] | None)
 _FALLBACK_HOP_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _REQUEST_KWARGS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+_FALLBACK_CHAIN_ADAPTER: Final = TypeAdapter(tuple[Mapping[str, list[str]], ...])
 _DEPLOYMENT_PARAMS_ADAPTER: Final[TypeAdapter[Mapping[str, object] | GenericLiteLLMParams]] = TypeAdapter(
     Mapping[str, object] | GenericLiteLLMParams
 )
@@ -861,6 +862,25 @@ def _anthropic_stream_should_decline_fallback(has_generated_content: bool, error
     return has_generated_content or not error.is_pre_first_chunk
 
 
+def _anthropic_stream_error_skips_recovery(
+    error: Exception, has_generated_content: bool, holds_for_overflow_only: bool
+) -> bool:
+    """
+    A held stream whose only possible recovery is a context window fallback lets every other failure through
+    with its held frames, as it would have reached the client with no hold.
+    """
+    from litellm.exceptions import MidStreamFallbackError
+
+    if isinstance(error, MidStreamFallbackError) and _anthropic_stream_should_decline_fallback(
+        has_generated_content, error
+    ):
+        return True
+    if not holds_for_overflow_only:
+        return False
+    underlying: Final = error.original_exception if isinstance(error, MidStreamFallbackError) else error
+    return not isinstance(underlying, litellm.ContextWindowExceededError)
+
+
 def _stream_raised_error_status(error: Exception) -> int | None:
     raw_status: Final = getattr(error, "status_code", None)
     if isinstance(raw_status, int):
@@ -874,9 +894,15 @@ def _stream_raised_error_status(error: Exception) -> int | None:
 def _stream_fallback_error_for_raised(
     error: Exception, model: str, has_generated_content: bool, llm_provider: str = "anthropic"
 ) -> "MidStreamFallbackError | None":
-    """The pre-stream retry rule (408, 409, 429, 5xx); None means the raise propagates unchanged."""
+    """
+    The pre-stream retry rule (408, 409, 429, 5xx), plus a context window overflow, which the fallback chain
+    sends to context_window_fallbacks the way it does before a stream opens; None means the raise propagates
+    unchanged.
+    """
     if has_generated_content:
         return None
+    if isinstance(error, litellm.ContextWindowExceededError):
+        return _stream_pre_content_error(error, model, llm_provider)
     status_code: Final = _stream_raised_error_status(error)
     if status_code is None:
         return _stream_pre_content_error(error, model, llm_provider)
@@ -1849,7 +1875,9 @@ class Router(DeprecatedRouterMembers):
             else:
                 self._core_fallbacks = [{"*": _fallbacks}]
 
-        self._core_context_window_fallbacks = context_window_fallbacks or litellm.context_window_fallbacks
+        self._core_context_window_fallbacks: list[dict[str, list[str]]] | None = (  # mutable-ok: resolvers take lists
+            context_window_fallbacks or litellm.context_window_fallbacks
+        )
 
         _content_policy_fallbacks: Final = content_policy_fallbacks or litellm.content_policy_fallbacks
         self.validate_fallbacks(fallback_param=_content_policy_fallbacks)
@@ -6931,9 +6959,14 @@ class Router(DeprecatedRouterMembers):
             # to take over there is nothing to buffer for, so every frame,
             # including pings and provider error frames, is forwarded live.
             model: Final = cast(str, initial_kwargs.get("model"))  # cast-ok: kwargs always carries the model group
+            can_retry_or_fall_back: Final = self._anthropic_messages_stream_can_retry(
+                initial_kwargs
+            ) or self._stream_can_fall_back(model, initial_kwargs)
+            holds_for_overflow_only: Final = not can_retry_or_fall_back and self._stream_can_fall_back_on_overflow(
+                model, initial_kwargs
+            )
             has_generated_content = not (  # rebind-ok: set once real content is seen, the buffer cap is hit, or neither a retry nor a fallback can take over
-                self._anthropic_messages_stream_can_retry(initial_kwargs)
-                or self._stream_can_fall_back(model, initial_kwargs)
+                can_retry_or_fall_back or holds_for_overflow_only
             )
             buffered_lifecycle_chunks: tuple[bytes, ...] = ()  # rebind-ok: flushed once committed or on decline
             try:
@@ -6957,7 +6990,7 @@ class Router(DeprecatedRouterMembers):
                     )
                     refusal_stop_details = (
                         parse_anthropic_refusal_stop_details(parse_window)
-                        if not has_generated_content and error_event is None
+                        if not has_generated_content and error_event is None and not holds_for_overflow_only
                         else None
                     )
                     if (
@@ -6995,6 +7028,7 @@ class Router(DeprecatedRouterMembers):
                 async for item in self._aanthropic_messages_recover_stream_error(
                     stream_error,
                     has_generated_content,
+                    holds_for_overflow_only,
                     buffered_lifecycle_chunks,
                     model,
                     initial_kwargs,
@@ -7015,6 +7049,7 @@ class Router(DeprecatedRouterMembers):
         self,
         stream_error: Exception,
         has_generated_content: bool,
+        holds_for_overflow_only: bool,
         buffered_lifecycle_chunks: tuple[bytes, ...],
         model: str,
         initial_kwargs: dict[str, object],  # mutable-ok: _aanthropic_messages_fallback_attempt mutates it
@@ -7024,12 +7059,10 @@ class Router(DeprecatedRouterMembers):
         """Turns a source-iterator failure into a fallback attempt or the error reaching the caller."""
         from litellm.exceptions import MidStreamFallbackError
 
-        if isinstance(stream_error, MidStreamFallbackError) and _anthropic_stream_should_decline_fallback(
-            has_generated_content, stream_error
-        ):
+        if _anthropic_stream_error_skips_recovery(stream_error, has_generated_content, holds_for_overflow_only):
             for buffered_chunk in buffered_lifecycle_chunks:
                 yield buffered_chunk
-            if stream_error.original_exception is not None:
+            if isinstance(stream_error, MidStreamFallbackError) and stream_error.original_exception is not None:
                 raise stream_error.original_exception from stream_error
             raise stream_error
         fallback_error: Final = (
@@ -7175,7 +7208,7 @@ class Router(DeprecatedRouterMembers):
                 context_window_fallbacks=_request_fallback_list(
                     kwargs,
                     "context_window_fallbacks",
-                    cast(  # cast-ok: untyped router attribute
+                    cast(  # cast-ok: list is invariant and the helper takes list[object]
                         "list[object] | None", self._core_context_window_fallbacks
                     ),
                 ),
@@ -7221,8 +7254,9 @@ class Router(DeprecatedRouterMembers):
         last_error = e  # rebind-ok: the newest failure is what the fallback chain and the caller see
         for attempt in range(attempted_retries_for_request(initial_kwargs), budget):
             trigger = _mid_stream_retry_trigger(last_error)
-            if not policy_applies and not self._stream_should_retry(
-                trigger, healthy_deployments, all_deployments, initial_kwargs
+            if isinstance(trigger, litellm.ContextWindowExceededError) or (
+                not policy_applies
+                and not self._stream_should_retry(trigger, healthy_deployments, all_deployments, initial_kwargs)
             ):
                 return _StreamRetriesExhausted(last_error)
             if get_metadata_variable_name_from_kwargs(retry_kwargs) in retry_kwargs:
@@ -10378,6 +10412,27 @@ class Router(DeprecatedRouterMembers):
                 }
             )
         )
+
+    def _stream_can_fall_back_on_overflow(self, model_group: str, kwargs: Mapping[str, object]) -> bool:
+        """Whether a context window overflow before content could still reach a fallback, which context_window_fallbacks
+        can serve as well as every route _stream_can_fall_back counts. A chain in a shape other than group-keyed lists
+        errs toward True, as _stream_can_fall_back does for non-standard fallbacks."""
+        if fallbacks_disabled_for_request(kwargs):
+            return False
+        if self._stream_can_fall_back(model_group, kwargs):
+            return True
+        configured: Final = kwargs.get("context_window_fallbacks", self._core_context_window_fallbacks)
+        if not configured:
+            return False
+        try:
+            chain: Final = _FALLBACK_CHAIN_ADAPTER.validate_python(configured)
+        except ValidationError:
+            return True
+        resolved, _ = get_fallback_model_group_for_lookup_groups(
+            fallbacks=chain,
+            lookup_groups=fallback_lookup_groups(kwargs, model_group),
+        )
+        return has_unattempted_fallback_target(resolved, kwargs)
 
     def _stream_can_fall_back(self, model_group: str, kwargs: Mapping[str, Any]) -> bool:
         """
