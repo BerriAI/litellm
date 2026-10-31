@@ -120,7 +120,11 @@ from litellm.proxy.common_utils.openai_error_payload import (
     openai_error_type,
     relayed_provider_specific_fields,
 )
-from litellm.proxy.common_utils.responses_stream_errors import ResponsesStreamErrorState, sse_error_object
+from litellm.proxy.common_utils.responses_stream_errors import (
+    SSE_LINE_BREAK,
+    ResponsesStreamErrorState,
+    sse_error_object,
+)
 from litellm.proxy.common_utils.sse_keepalive import (
     SSE_COMMENT_PING_BYTES,
     SSE_STREAM_START_TAIL,
@@ -1019,7 +1023,7 @@ def _sse_data_payload(event_line: str | bytes) -> str | None:
 
 
 def _responses_event_data_payload(event_line: str | bytes) -> str | None:
-    match _sse_text(event_line).strip().split("\n"):
+    match SSE_LINE_BREAK.split(_sse_text(event_line).strip()):
         case ["event: error", data_line] if data_line.startswith("data: "):
             return data_line.removeprefix("data: ").strip()
         case _:

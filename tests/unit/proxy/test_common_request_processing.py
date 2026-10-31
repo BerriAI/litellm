@@ -2348,11 +2348,13 @@ class TestCommonRequestProcessingHelpers:
         assert body["error"]["code"] == 403
         assert body["error"]["message"] == "forbidden"
 
-    async def test_a_responses_stream_whose_first_event_is_a_named_error_answers_as_json(self):
+    @pytest.mark.parametrize("newline", ["\n", "\r\n", "\r"])
+    async def test_a_responses_stream_whose_first_event_is_a_named_error_answers_as_json(self, newline: str):
         error: Final = {"type": "guardrail_error", "code": "400", "message": "blocked", "param": None}
+        event: Final = json.dumps({"type": "error", "sequence_number": 0, "error": error})
 
         async def responses_stream():
-            yield f"event: error\ndata: {json.dumps({'type': 'error', 'sequence_number': 0, 'error': error})}\n\n"
+            yield f"event: error{newline}data: {event}{newline}{newline}"
 
         response: Final = await create_response(
             responses_stream(), "text/event-stream", {}, framing=RESPONSES_FIRST_CHUNK_FRAMING

@@ -19,7 +19,7 @@ import asyncio
 import functools
 import json
 from collections import Counter, OrderedDict
-from collections.abc import AsyncIterator, Callable, ItemsView, Iterable, Iterator, Mapping
+from collections.abc import AsyncIterator, Callable, ItemsView, Iterable, Iterator, KeysView, Mapping
 from datetime import datetime, timezone
 from enum import Enum
 from http import HTTPStatus
@@ -387,8 +387,116 @@ def test_responses_sse_chunk_sends_a_whole_chunk_as_the_text_its_printer_gave(ch
     assert "hook-canary" not in frame
 
 
+class _RaisingRepr:
+    def __repr__(self) -> str:
+        raise RuntimeError("rig repr failure")
+
+
+class _MaskedStrHolder(dict[str, object]):
+    def __str__(self) -> str:
+        return "{'type': 'response.output_text.delta', 'member': 'MASKED'}"
+
+
+class _KeysRefusedDict(dict[str, str]):
+    def keys(self) -> KeysView[str]:  # pyright: ignore[reportIncompatibleMethodOverride]  # rig refuses its keys
+        raise RuntimeError("rig keys refused")
+
+
+class _ItemRefusedDict(dict[str, str]):
+    def __getitem__(self, key: str) -> str:
+        raise RuntimeError("rig item refused")
+
+
+class _PrintsOnceDict(dict[str, str]):
+    printed: bool = False
+
+    def __str__(self) -> str:
+        if self.printed:
+            raise RuntimeError("rig prints once")
+        self.printed = True
+        return "{'type': 'response.output_text.delta', 'token': 'MASKED'}"
+
+
+_DELTA_STORAGE: Final = {"type": "response.output_text.delta", "token": "shown"}
+
+
+@pytest.mark.parametrize(
+    ("make_underlying", "printed"),
+    [
+        (
+            lambda: _MaskedStrHolder(type="response.output_text.delta", member=_RaisingRepr()),
+            "{'type': 'response.output_text.delta', 'member': 'MASKED'}",
+        ),
+        (lambda: _KeysRefusedDict(_DELTA_STORAGE), repr(_DELTA_STORAGE)),
+        (lambda: _ItemRefusedDict(_DELTA_STORAGE), repr(_DELTA_STORAGE)),
+        (
+            lambda: _PrintsOnceDict(type="response.output_text.delta", token="hook-canary"),
+            "{'type': 'response.output_text.delta', 'token': 'MASKED'}",
+        ),
+    ],
+    ids=["member_repr_raises", "keys_raise", "item_lookup_raises", "str_works_once"],
+)
+def test_responses_sse_chunk_sends_a_whole_proxy_it_cannot_read_as_the_text_base_printed_once(
+    make_underlying: Callable[[], Mapping[str, object]], printed: str
+) -> None:
+    frame: Final = _format_responses_sse_chunk(chunk=MappingProxyType(make_underlying()))
+
+    assert frame == f"data: {printed}\n\n"
+
+
+class _OwnFormatHolder(dict[str, str]):
+    def __format__(self, format_spec: str) -> str:
+        return "MASKED"
+
+
+def _reordered() -> OrderedDict[str, int]:
+    ordered: Final = OrderedDict(first=1, second=2)
+    ordered.move_to_end("first")
+    return ordered
+
+
+@pytest.mark.parametrize(
+    "nested",
+    [
+        _reordered(),
+        Counter(rare=1, common=3),
+        _OwnFormatHolder(token="shown"),
+        _MaskedStrDict(token="shown"),
+    ],
+    ids=["reordered_ordered_dict", "counter", "own_format", "own_str"],
+)
+def test_responses_sse_chunk_sends_a_nested_mapping_with_the_items_and_order_its_repr_printed(
+    nested: Mapping[str, object],
+) -> None:
+    frame: Final = _format_responses_sse_chunk(chunk={"type": "response.output_text.delta", "nested": nested})
+
+    assert isinstance(frame, str)
+    shown: Final = json.loads(frame.removeprefix("data: "))["nested"]
+    assert repr(shown) in repr(nested)
+
+
 class _RigTuple(tuple[object, ...]):
     pass
+
+
+class _ItemsHideAliasDict(dict[str, str]):
+    __repr__ = dict.__repr__
+
+    def items(self) -> ItemsView[str, str]:  # pyright: ignore[reportIncompatibleMethodOverride]  # rig hides an entry
+        return {key: value for key, value in dict.items(self) if key != "h"}.items()
+
+
+class _ItemsHideRevealingDict(_ItemsHideAliasDict):
+    def __repr__(self) -> str:
+        return dict.__repr__(self)
+
+
+class _IterHideRevealingList(list[str]):
+    def __repr__(self) -> str:
+        return list.__repr__(self)
+
+    def __iter__(self) -> Iterator[str]:
+        return (item for item in list.__iter__(self) if item != "hook-canary")
 
 
 class _RevealingReprModel(BaseModel, frozen=True):
@@ -406,8 +514,19 @@ class _RevealingReprModel(BaseModel, frozen=True):
         _RigTuple((_MaskedStrModel(token="hook-canary"),)),
         _HookOutputItem(id="msg_nested", type="message"),
         _RevealingReprModel(a=1),
+        _ItemsHideAliasDict(k="shown", h="hook-canary"),
+        _ItemsHideRevealingDict(k="shown", h="hook-canary"),
+        _IterHideRevealingList(("shown", "hook-canary")),
     ],
-    ids=["dict_subclass", "tuple_subclass", "model", "model_with_own_repr"],
+    ids=[
+        "dict_subclass",
+        "tuple_subclass",
+        "model",
+        "model_with_own_repr",
+        "items_hide_with_dict_repr_alias",
+        "items_hide_with_own_revealing_repr",
+        "iter_hides_with_own_revealing_repr",
+    ],
 )
 def test_responses_error_event_sends_a_detail_the_way_base_json_dumps_did(detail: object) -> None:
     frame: Final = ResponsesStreamErrorState().format_error(
@@ -416,6 +535,18 @@ def test_responses_error_event_sends_a_detail_the_way_base_json_dumps_did(detail
 
     payload: Final = json.loads(frame.split("data: ", 1)[1])
     assert payload["error"]["provider_specific_fields"]["detail"] == json.loads(json.dumps(detail, default=str))
+
+
+@pytest.mark.parametrize("status_code", ["abc", 1.5, True, None], ids=["string", "float", "bool", "null"])
+def test_responses_hook_error_frame_keeps_its_message_whatever_status_code_it_carries(status_code: object) -> None:
+    hook_frame: Final = json.dumps(
+        {"error": {"message": "rig status", "type": "guardrail_scan_error", "status_code": status_code}}
+    )
+
+    frame: Final = ResponsesStreamErrorState().format_error_message(f"data: {hook_frame}\n\n")
+
+    assert frame.startswith("event: error\n")
+    assert json.loads(frame.split("data: ", 1)[1])["message"] == "rig status"
 
 
 class _RigColor(Enum):
@@ -1973,6 +2104,52 @@ async def test_responses_stream_keeps_tool_deltas_and_only_emits_a_valid_termina
         assert payloads[-1]["type"] == "response.completed"
         assert payloads[-1]["sequence_number"] == 2
         assert "error" not in payloads[-1]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("raw_sse_stream", [False, True])
+@pytest.mark.parametrize("newline", ["\n", "\r\n"])
+@pytest.mark.parametrize(
+    "event_name,data,terminal",
+    [
+        (
+            "response.output_text.delta",
+            {"type": "response.output_text.delta", "sequence_number": 4, "delta": "hi"},
+            False,
+        ),
+        (
+            "response.completed",
+            {"type": "response.completed", "sequence_number": 4, "response": {"id": "resp_raw", "model": "gpt-6"}},
+            True,
+        ),
+        ("error", {"error": {"message": "denied", "code": "529"}}, True),
+    ],
+)
+async def test_a_responses_stream_failing_after_a_pre_framed_event_adds_a_failure_only_without_a_terminal(
+    raw_sse_stream: bool, newline: str, event_name: str, data: Mapping[str, object], terminal: bool
+) -> None:
+    pre_framed: Final = f"event: {event_name}{newline}data: {json.dumps(data)}{newline}{newline}"
+
+    async def upstream() -> AsyncIterator[bytes]:
+        yield pre_framed.encode()
+        raise litellm.APIError(status_code=500, message="Stream closed", llm_provider="openai", model="gpt-6")
+
+    frames: Final = [
+        frame.decode() if isinstance(frame, bytes) else frame
+        async for frame in select_data_generator(
+            response=upstream(),
+            user_api_key_dict=_user_auth(),
+            request_data={"_litellm_raw_sse_stream": True} if raw_sse_stream else {},
+            responses_stream_errors=True,
+        )
+    ]
+
+    assert frames[0] == pre_framed
+    assert len(frames) == (1 if terminal else 2)
+    if not terminal:
+        failure: Final = ResponseFailedEvent.model_validate_json(frames[1].split("data: ", 1)[1])
+        assert frames[1].startswith("event: response.failed\n")
+        assert failure.sequence_number == 5
 
 
 # ---------------------------------------------------------------------------

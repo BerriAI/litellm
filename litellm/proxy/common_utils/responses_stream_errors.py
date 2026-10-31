@@ -1,9 +1,11 @@
 import json
+import re
 import time
 from collections import Counter, OrderedDict, defaultdict
 from collections.abc import Iterable, Iterator, Mapping, Sequence
 from enum import Enum
 from http import HTTPStatus
+from itertools import chain, groupby, zip_longest
 from types import MappingProxyType
 from typing import Final
 
@@ -40,6 +42,11 @@ class _FailureDetails(LiteLLMBaseModel):
     code: str | int | None = None
     type: str | None = None
     status_code: int | None = None
+
+    @field_validator("status_code", mode="before")
+    @classmethod
+    def normalize_status_code(cls, value: object) -> int | None:
+        return value if isinstance(value, int) and not isinstance(value, bool) else None
 
     @field_validator("message", mode="before")
     @classmethod
@@ -78,25 +85,35 @@ class _BaseForm(Enum):
     DUMPED = "dumped"
 
 
-def _prints_every_item(kind: type[object], form: _BaseForm) -> bool:
-    repr_owner: Final = next((owner for owner in kind.__mro__ if "__repr__" in owner.__dict__), object)
-    if form is _BaseForm.DUMPED:
-        return kind.__str__ is object.__str__ and repr_owner in (dict, list, tuple, OrderedDict, defaultdict, Counter)
-    return (
-        kind.__str__ is object.__str__
-        and kind.__format__ is object.__format__
-        and (kind in (OrderedDict, Counter) or repr_owner in (dict, list, tuple, defaultdict))
+def _repr_owner(kind: type[object]) -> type[object]:
+    return next((owner for owner in kind.__mro__ if "__repr__" in owner.__dict__), object)
+
+
+def _repr_prints_every_item(kind: type[object]) -> bool:
+    return kind in (OrderedDict, Counter) or _repr_owner(kind) in (dict, list, tuple, defaultdict)
+
+
+def _format_prints_every_item(kind: type[object]) -> bool:
+    return kind.__str__ is object.__str__ and kind.__format__ is object.__format__ and _repr_prints_every_item(kind)
+
+
+def _str_prints_every_item(kind: type[object]) -> bool:
+    return kind.__str__ is object.__str__ and _repr_owner(kind) in (
+        dict,
+        list,
+        tuple,
+        OrderedDict,
+        defaultdict,
+        Counter,
     )
 
 
-def _is_shown_dict(value: object, form: _BaseForm) -> TypeIs[Mapping[object, object]]:  # guard-ok: dict items as object
-    kind: Final = type(value)
-    return isinstance(value, dict) and _prints_every_item(kind, form)
+def _is_dict(value: object) -> TypeIs[Mapping[object, object]]:  # guard-ok: dict items as object
+    return isinstance(value, dict)
 
 
-def _is_shown_sequence(value: object, form: _BaseForm) -> TypeIs[Sequence[object]]:  # guard-ok: items as object
-    kind: Final = type(value)
-    return isinstance(value, (list, tuple)) and _prints_every_item(kind, form)
+def _is_sequence(value: object) -> TypeIs[Sequence[object]]:  # guard-ok: items as object
+    return isinstance(value, (list, tuple))
 
 
 def _is_proxy(value: object) -> TypeIs[Mapping[object, object]]:  # guard-ok: mappingproxy cannot be subclassed
@@ -142,22 +159,45 @@ def _json_key(key: object, form: _BaseForm) -> object:
     return key if key is None or type(key) in (str, int, float, bool) else _text(key, form)
 
 
-def _shown_sequence(value: object, form: _BaseForm) -> Iterator[object] | None:
-    if not _is_shown_sequence(value, form):
-        return None
-    if form is _BaseForm.PRINTED and isinstance(value, list):
+def _stored_sequence(value: Sequence[object]) -> Iterator[object]:
+    if isinstance(value, list):
         return list[object].__iter__(value)
-    if form is _BaseForm.PRINTED and isinstance(value, tuple):
+    if isinstance(value, tuple):
         return tuple[object, ...].__iter__(value)
     return iter(value)
 
 
-def _shown_items(value: object, form: _BaseForm) -> Iterable[tuple[object, object]] | None:
-    if not _is_shown_dict(value, form):
+def _stored_items(value: Mapping[object, object]) -> Iterable[tuple[object, object]]:
+    return dict[object, object].items(value) if isinstance(value, dict) else value.items()
+
+
+def _dumps_shown(kind: type[object], shown: Iterable[object], stored: Iterable[object]) -> bool:
+    return _str_prints_every_item(kind) or any(left is not right for left, right in zip_longest(shown, stored))
+
+
+def _shown_sequence(value: object, form: _BaseForm) -> Iterable[object] | None:
+    if not _is_sequence(value):
         return None
-    if form is _BaseForm.PRINTED and isinstance(value, dict):
-        return dict[object, object].items(value)
-    return value.items()
+    if form is _BaseForm.PRINTED:
+        return _stored_sequence(value) if _repr_prints_every_item(type(value)) else None
+    dumped: Final = tuple(value)
+    return dumped if _dumps_shown(type(value), dumped, _stored_sequence(value)) else None
+
+
+def _shown_items(value: object, form: _BaseForm) -> Iterable[tuple[object, object]] | None:
+    if not _is_dict(value):
+        return None
+    if form is _BaseForm.DUMPED:
+        dumped: Final = tuple(value.items())
+        stored: Final = chain.from_iterable(_stored_items(value))
+        return dumped if _dumps_shown(type(value), chain.from_iterable(dumped), stored) else None
+    if not _repr_prints_every_item(type(value)):
+        return None
+    if isinstance(value, OrderedDict):
+        return OrderedDict[object, object].items(value)
+    if isinstance(value, Counter):
+        return Counter[object].most_common(value)
+    return _stored_items(value)
 
 
 def _expansion(value: object, form: _BaseForm) -> tuple[Iterable[tuple[object, object]], _BaseForm] | None:
@@ -187,19 +227,36 @@ def _json_safe(value: object, form: _BaseForm, path: frozenset[int]) -> object:
         if expansion is None:
             return _text(value, form)
         items, inner = expansion
-        pairs: Final = [(_json_key(key, inner), _json_safe(item, inner, inner_path)) for key, item in items]
-        return {key: item for key, item in pairs if key is not _DROPPED and item is not _DROPPED}
+        return _items_json(items, inner, inner_path)
     except Exception:  # noqa: BLE001  # hook values run their own printers and can nest past the recursion limit
         return _text(value, form)
 
 
-def responses_chunk_json(chunk: object) -> str | None:
-    if _is_proxy(chunk) and _printed_proxy_items(chunk, format(chunk, "")) is None:
-        return None
-    if not _is_shown_dict(chunk, _BaseForm.PRINTED) and not _is_proxy(chunk):
+def _items_json(
+    items: Iterable[tuple[object, object]], form: _BaseForm, path: frozenset[int]
+) -> Mapping[object, object]:
+    pairs: Final = [(_json_key(key, form), _json_safe(item, form, path)) for key, item in items]
+    return {key: item for key, item in pairs if key is not _DROPPED and item is not _DROPPED}
+
+
+def _proxy_chunk_data(proxy: Mapping[object, object]) -> str:
+    printed: Final = format(proxy, "")
+    try:
+        items: Final = _printed_proxy_items(proxy, printed)
+        return printed if items is None else json.dumps(_items_json(items, _BaseForm.PRINTED, frozenset((id(proxy),))))
+    except Exception:  # noqa: BLE001  # hook values run their own printers, so the text base printed stands
+        return printed
+
+
+def responses_chunk_data(chunk: object) -> str | None:
+    if _is_proxy(chunk):
+        return _proxy_chunk_data(chunk)
+    if not _is_dict(chunk) or not _format_prints_every_item(type(chunk)):
         return None
     shown: Final = _json_safe(chunk, _BaseForm.PRINTED, frozenset())
-    return None if isinstance(shown, str) or shown is _DROPPED else json.dumps(shown)
+    if isinstance(shown, str):
+        return shown
+    return None if shown is _DROPPED else json.dumps(shown)
 
 
 def _dumped_detail(error: Mapping[str, object]) -> Mapping[str, object]:
@@ -305,6 +362,35 @@ def _error_event(
     }
 
 
+SSE_LINE_BREAK: Final = re.compile(r"\r\n|\r|\n")
+_TERMINAL_EVENT_TYPES: Final = frozenset(("response.completed", "response.failed", "response.incomplete", "error"))
+
+
+def _field_values(lines: Sequence[str], name: str) -> tuple[str, ...]:
+    prefix: Final = f"{name}:"
+    return tuple(line.removeprefix(prefix).removeprefix(" ") for line in lines if line.startswith(prefix))
+
+
+def _parsed_event(data: str) -> _StreamEvent:
+    try:
+        return _StreamEvent.model_validate_json(data)
+    except ValidationError:
+        return _StreamEvent()
+
+
+def _block_event(lines: Sequence[str]) -> _StreamEvent:
+    named: Final = _field_values(lines, "event")
+    parsed: Final = _parsed_event("\n".join(_field_values(lines, "data")))
+    if parsed.type in _TERMINAL_EVENT_TYPES or not named:
+        return parsed
+    return parsed.model_copy(update={"type": named[-1]})
+
+
+def _frame_events(frames: str) -> tuple[_StreamEvent, ...]:
+    blocks: Final = groupby(SSE_LINE_BREAK.split(frames), key=bool)
+    return tuple(_block_event(tuple(lines)) for filled, lines in blocks if filled)
+
+
 class ResponsesStreamErrorState:
     def __init__(self) -> None:
         self.response_id: str | None = None
@@ -317,10 +403,7 @@ class ResponsesStreamErrorState:
     def observe_chunk(self, chunk: object) -> None:
         self._pending_event = _StreamEvent.model_validate(chunk) if isinstance(chunk, (BaseModel, Mapping)) else None
 
-    def mark_emitted(self, frame: str | bytes) -> str | bytes:
-        event: Final = self._pending_event
-        if event is None:
-            return frame
+    def _record(self, event: _StreamEvent) -> None:
         if event.sequence_number is not None:
             self.sequence_number = max(self.sequence_number, event.sequence_number)
         if event.response is not None:
@@ -328,8 +411,19 @@ class ResponsesStreamErrorState:
             self.model = event.response.model or self.model
             if event.response.created_at is not None:
                 self.created_at = event.response.created_at
-        if event.type in ("response.completed", "response.failed", "response.incomplete", "error"):
+        if event.type in _TERMINAL_EVENT_TYPES:
             self.terminal_emitted = True
+
+    def observe_frames(self, frames: str) -> str:
+        for event in _frame_events(frames):
+            self._record(event)
+        return frames
+
+    def mark_emitted(self, frame: str | bytes) -> str | bytes:
+        event: Final = self._pending_event
+        if event is None:
+            return frame
+        self._record(event)
         if not event.type or "\n" in event.type or "\r" in event.type:
             return frame
         prefix: Final = f"event: {event.type}\n"

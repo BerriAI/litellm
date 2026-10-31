@@ -1647,6 +1647,25 @@ async def test_a_streamed_read_cut_before_its_terminal_event_ends_in_a_responses
     assert "before any terminal event" in events[-1]["response"]["error"]["message"]
 
 
+def _resumed_wire() -> str:
+    return "".join(f"event: {event['type']}\ndata: {json.dumps(event)}\n\n" for event in _resumed_events("resp_read"))
+
+
+@pytest.mark.asyncio
+async def test_a_streamed_read_whose_first_event_is_a_named_error_answers_with_its_status(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(litellm, "callbacks", [_FirstFrameHook(_NAMED_ERROR_FRAME)])
+    result, _ = await _read_through_proxy(
+        monkeypatch,
+        {"stream": "true"},
+        httpx.Response(200, content=_resumed_wire(), headers={"Content-Type": "text/event-stream"}),
+    )
+
+    assert result.status_code == 529, result.text
+    assert result.json()["error"]["message"] == "denied"
+
+
 @pytest.mark.asyncio
 async def test_a_plain_read_through_the_proxy_still_answers_json(monkeypatch: pytest.MonkeyPatch):
     result, upstream_requests = await _read_through_proxy(

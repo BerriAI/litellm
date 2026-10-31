@@ -908,6 +908,7 @@ async def get_response(
                 response_id,
                 read_settles_billing,
             ),
+            sse_framing=RESPONSES_SSE_FRAMING,
             model=None,
             user_model=user_model,
             user_temperature=user_temperature,

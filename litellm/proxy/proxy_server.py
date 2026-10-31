@@ -554,7 +554,7 @@ from litellm.proxy.common_utils.periodic_reload_schedule import (
 from litellm.proxy.common_utils.proxy_state import ProxyState
 from litellm.proxy.common_utils.registry_read_through import resync_model_deployments_by_ids
 from litellm.proxy.common_utils.reset_budget_job import ResetBudgetJob
-from litellm.proxy.common_utils.responses_stream_errors import ResponsesStreamErrorState, responses_chunk_json
+from litellm.proxy.common_utils.responses_stream_errors import ResponsesStreamErrorState, responses_chunk_data
 from litellm.proxy.common_utils.scheduled_job_stagger import (
     apply_scheduled_job_stagger,
     attach_job_timing_logger,
@@ -10267,8 +10267,12 @@ def _format_streaming_sse_chunk(chunk: object) -> str | bytes:
 
 
 def _format_responses_sse_chunk(chunk: object) -> str | bytes:
-    data: Final = responses_chunk_json(chunk)
+    data: Final = responses_chunk_data(chunk)
     return _format_streaming_sse_chunk(chunk=chunk) if data is None else f"data: {data}\n\n"
+
+
+def _observed_frames(frames: str, error_state: ResponsesStreamErrorState | None) -> str:
+    return frames if error_state is None else error_state.observe_frames(frames)
 
 
 _SSE_FRAME_DELIMITERS: Final = ("\r\n\r\n", "\n\n", "\r\r")
@@ -10647,12 +10651,14 @@ async def async_data_generator(
                         frame, raw_sse_buffer = _pop_complete_sse_frame(raw_sse_buffer)
                         if frame is None:
                             break
-                        yield frame
+                        yield _observed_frames(frame, error_state)
                     if len(raw_sse_buffer) > _MAX_RAW_SSE_BUFFER_CHARS:
                         raise ValueError("Raw SSE stream exceeded maximum buffered size without a frame delimiter")
                     raw_passthrough = True
                 elif chunk.startswith(("data:", "event:", ":")):
-                    yield (chunk if chunk.endswith(_SSE_FRAME_DELIMITERS) else chunk + "\n\n")
+                    yield _observed_frames(
+                        chunk if chunk.endswith(_SSE_FRAME_DELIMITERS) else chunk + "\n\n", error_state
+                    )
                     raw_passthrough = True
             elif isinstance(chunk, str) and is_raw_sse_stream:
                 raw_sse_buffer += chunk
@@ -10660,7 +10666,7 @@ async def async_data_generator(
                     frame, raw_sse_buffer = _pop_complete_sse_frame(raw_sse_buffer)
                     if frame is None:
                         break
-                    yield frame
+                    yield _observed_frames(frame, error_state)
                 if len(raw_sse_buffer) > _MAX_RAW_SSE_BUFFER_CHARS:
                     raise ValueError("Raw SSE stream exceeded maximum buffered size without a frame delimiter")
                 raw_passthrough = True
@@ -10694,7 +10700,10 @@ async def async_data_generator(
             ProxyLogging.fire_deferred_stream_logging(request_data)
 
         if raw_sse_buffer:
-            yield (raw_sse_buffer if raw_sse_buffer.endswith(_SSE_FRAME_DELIMITERS) else raw_sse_buffer + "\n\n")
+            yield _observed_frames(
+                raw_sse_buffer if raw_sse_buffer.endswith(_SSE_FRAME_DELIMITERS) else raw_sse_buffer + "\n\n",
+                error_state,
+            )
 
         if error_message is not None:
             yield error_message if error_state is None else error_state.format_error_message(error_message)
