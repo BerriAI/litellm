@@ -2098,6 +2098,9 @@ async def pass_through_request(
                 **existing_metadata,
                 "guardrails": post_call_guardrails,
             }
+            # The kwargs split popped the logging object off _parsed_body; unified (apply_guardrail) guardrails
+            # resolve a pass-through response's call type from it when the route has no API_ROUTE_TO_CALL_TYPES entry.
+            hook_data["litellm_logging_obj"] = logging_obj
             post_call_guardrail_data = hook_data
             response_body = await proxy_logging_obj.post_call_success_hook(
                 data=hook_data,
