@@ -2507,13 +2507,6 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         None,
         description="local development only: start even when master_key is unset, empty, or a publicly known default",
     )
-    fips_mode: bool | None = Field(
-        None,
-        description=(
-            "refuse to start unless Python's and the cryptography library's OpenSSL enforce FIPS, and only start on "
-            "a new database or one set up in FIPS mode"
-        ),
-    )
     coordination_redis: CoordinationRedisParams | None = Field(
         None,
         description=(
