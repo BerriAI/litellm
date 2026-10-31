@@ -1,6 +1,7 @@
 """Overlapping cold starts of one spend counter inside one process add that process's cached spend once."""
 
 import asyncio
+import threading
 from typing import Final, cast
 
 import pytest
@@ -177,3 +178,67 @@ async def test_a_failed_seed_fails_the_requests_that_joined_it_and_the_next_cold
 
     assert [type(outcome) for outcome in outcomes] == [ConnectionError] * 3
     assert redis.values[counter] == 6.0
+
+
+class _HeldReplyRedis(_SharedRedis):
+    """Applies an increment at once but holds its reply until released, like a slow network round trip."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.applied: Final = asyncio.Event()
+        self.release: Final = asyncio.Event()
+
+    async def async_increment(self, key: str, value: float, **_: object) -> float:
+        self.values[key] = self.values.get(key, 0.0) + value
+        total: Final = self.values[key]
+        self.applied.set()
+        await self.release.wait()
+        return total
+
+
+@pytest.mark.asyncio
+async def test_a_counter_deleted_before_an_earlier_add_returns_is_seeded_by_a_later_cold_reader(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    counter: Final = "spend:end_user:deleted-mid-add"
+    redis: Final = _HeldReplyRedis()
+    _process(monkeypatch, redis, cached_spend=6.0)
+
+    first: Final = asyncio.ensure_future(_cold_start(redis, counter))
+    await redis.applied.wait()
+    del redis.values[counter]
+    later: Final = asyncio.ensure_future(_cold_start(redis, counter))
+    for _ in range(20):
+        await asyncio.sleep(0)
+    redis.release.set()
+    await asyncio.gather(first, later)
+
+    assert redis.values[counter] == 6.0
+
+
+def test_a_cold_start_on_another_event_loop_adds_on_its_own(monkeypatch: pytest.MonkeyPatch) -> None:
+    counter: Final = "spend:end_user:two-loops"
+    held: Final = threading.Event()
+    release: Final = threading.Event()
+
+    class _ThreadHeldRedis(_SharedRedis):
+        async def async_increment(self, key: str, value: float, **_: object) -> float:
+            if threading.current_thread() is not threading.main_thread():
+                held.set()
+                while not release.is_set():
+                    await asyncio.sleep(0.001)
+            return await super().async_increment(key, value)
+
+    redis: Final = _ThreadHeldRedis()
+    _process(monkeypatch, redis, cached_spend=6.0)
+    other_loop: Final = threading.Thread(target=lambda: asyncio.run(_cold_start(redis, counter)), daemon=True)
+    other_loop.start()
+    assert held.wait(5)
+
+    try:
+        asyncio.run(_cold_start(redis, counter))
+    finally:
+        release.set()
+        other_loop.join(5)
+
+    assert redis.values[counter] == 12.0
