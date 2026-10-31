@@ -21,12 +21,8 @@ describe("processSSOSettingsPayload", () => {
 
       const result = processSSOSettingsPayload(formValues);
 
-      expect(result).toEqual({
-        other_field: "value",
-        another_field: 123,
-        role_mappings: null,
-        team_mappings: null,
-      });
+      const expected = { other_field: "value", another_field: 123, role_mappings: null, team_mappings: null };
+      expect(result).toEqual(expected);
     });
 
     it("should return all fields except role mapping fields when use_role_mappings is not present", () => {
@@ -52,13 +48,14 @@ describe("processSSOSettingsPayload", () => {
     });
 
     it("clears mappings the user unchecked on a provider that supports them", () => {
-      const result = processSSOSettingsPayload({
+      const formValues = {
         sso_provider: "generic",
         use_role_mappings: false,
         use_team_mappings: false,
         group_claim: "groups",
         team_ids_jwt_field: "teams",
-      });
+      };
+      const result = processSSOSettingsPayload(formValues);
 
       expect(result.role_mappings).toBeNull();
       expect(result.team_mappings).toBeNull();
@@ -324,12 +321,8 @@ describe("processSSOSettingsPayload", () => {
 
       const result = processSSOSettingsPayload(formValues);
 
-      expect(result).toEqual({
-        sso_provider: "google",
-        other_field: "value",
-        role_mappings: null,
-        team_mappings: null,
-      });
+      const expected = { sso_provider: "google", other_field: "value", role_mappings: null, team_mappings: null };
+      expect(result).toEqual(expected);
     });
 
     it("should not include team mappings for microsoft provider even when use_team_mappings is true", () => {
@@ -342,12 +335,8 @@ describe("processSSOSettingsPayload", () => {
 
       const result = processSSOSettingsPayload(formValues);
 
-      expect(result).toEqual({
-        sso_provider: "microsoft",
-        other_field: "value",
-        role_mappings: null,
-        team_mappings: null,
-      });
+      const expected = { sso_provider: "microsoft", other_field: "value", role_mappings: null, team_mappings: null };
+      expect(result).toEqual(expected);
     });
   });
 

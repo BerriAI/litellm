@@ -440,24 +440,22 @@ describe("renderProviderFields", () => {
 
 describe("pickMountedSSOValues", () => {
   it("nulls the previous provider's fields after a provider switch so the save clears them", () => {
-    const picked = pickMountedSSOValues(
-      {
-        sso_provider: "microsoft",
-        google_client_id: "old-google-id",
-        google_client_secret: "old-google-secret",
-        microsoft_client_id: "new-microsoft-id",
-        user_email: "admin@example.com",
-      },
-      "sso-settings",
-    );
-
-    expect(picked).toMatchObject({
+    const valuesAfterSwitch = {
+      sso_provider: "microsoft",
+      google_client_id: "old-google-id",
+      google_client_secret: "old-google-secret",
+      microsoft_client_id: "new-microsoft-id",
+      user_email: "admin@example.com",
+    };
+    const expected = {
       sso_provider: "microsoft",
       microsoft_client_id: "new-microsoft-id",
       google_client_id: null,
       google_client_secret: null,
       generic_client_id: null,
       saml_idp_metadata_url: null,
-    });
+    };
+
+    expect(pickMountedSSOValues(valuesAfterSwitch, "sso-settings")).toMatchObject(expected);
   });
 });
