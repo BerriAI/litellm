@@ -7,7 +7,7 @@ with guardrail transformations, including tool calls.
 
 import json
 from collections.abc import Mapping
-from typing import Any, Literal, Optional
+from typing import Any, Final, Literal, Optional
 
 import pytest
 
@@ -163,8 +163,8 @@ def _hosted_web_call_inputs(web_search_calls) -> list[tuple[str, str, Optional[s
     ]
 
 
-_SEARCH_INPUT = {"query": "jane@example.com"}
-_FETCH_INPUT = {"url": "https://example.com/?email=jane@example.com"}
+_SEARCH_INPUT: Final = {"query": "jane@example.com"}
+_FETCH_INPUT: Final = {"url": "https://example.com/?email=jane@example.com"}
 
 
 class QueryRedactingGuardrail(CustomGuardrail):

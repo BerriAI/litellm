@@ -43,6 +43,10 @@ from litellm.llms.anthropic.common_utils import (
     with_server_tool_call_arguments,
     write_anthropic_server_tool_calls,
 )
+from litellm.llms.base_llm.guardrail_translation.utils import (
+    web_search_call,
+    with_web_search_call_arguments,
+)
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
@@ -52,6 +56,7 @@ from litellm.proxy.common_utils.callback_utils import (
     add_guardrail_to_applied_guardrails_header,
 )
 from litellm.types.guardrails import GuardrailEventHooks
+from litellm.types.llms.anthropic import claude_hosted_web_tool_call
 from litellm.types.utils import (
     Choices,
     Delta,
@@ -127,6 +132,12 @@ class CiscoAIDefenseGuardrailAPIError(Exception):
 
 class _CustomGuardrailOptions(TypedDict, total=False, extra_items=object):
     """Base-class constructor options this guardrail forwards untouched to CustomGuardrail."""
+
+
+def _claude_hosted_web_tool_arguments(item: object) -> str | None:
+    search: Final = web_search_call(item)
+    hosted_call: Final = None if search is None else claude_hosted_web_tool_call(search)
+    return None if hosted_call is None else hosted_call[2]
 
 
 def _streamed_choice_index(choice: object) -> int:
@@ -1691,7 +1702,7 @@ class CiscoAIDefenseGuardrail(CiscoAIDefenseMcpMixin, CustomGuardrail):
 
     def _redact_responses_api_output(
         self,
-        output_items: list,
+        output_items: list[object],
         sanitized_text: str | None,
         sanitized_messages: list[dict[str, object]] | None,
     ) -> bool:
@@ -1703,7 +1714,10 @@ class CiscoAIDefenseGuardrail(CiscoAIDefenseMcpMixin, CustomGuardrail):
         if not replacement_text:
             return False
         applied = False
-        for item in output_items:
+        for index, item in enumerate(output_items):
+            if _claude_hosted_web_tool_arguments(item):
+                output_items[index] = with_web_search_call_arguments(item, "{}")  # rebind-ok: in-place redaction
+                applied = True
             content = getattr(item, "content", None) or (item.get("content") if isinstance(item, dict) else None)
             if isinstance(content, list):
                 for part in content:
@@ -2064,8 +2078,9 @@ class CiscoAIDefenseGuardrail(CiscoAIDefenseMcpMixin, CustomGuardrail):
         output_items: Final = getattr(response, "output", None)
         if not isinstance(output_items, list):
             return []
+        typed_output_items: Final[Sequence[object]] = output_items
         output_parts: Final[list[str]] = []
-        for item in output_items:
+        for item in typed_output_items:
             get = item.get if isinstance(item, dict) else (lambda k: getattr(item, k, None))
             for part in get("content") or []:
                 pget = part.get if isinstance(part, dict) else (lambda k: getattr(part, k, None))
@@ -2079,6 +2094,8 @@ class CiscoAIDefenseGuardrail(CiscoAIDefenseMcpMixin, CustomGuardrail):
             direct = get("text")
             if isinstance(direct, str) and direct:
                 output_parts.append(direct)
+            if hosted_arguments := _claude_hosted_web_tool_arguments(item):
+                output_parts.append(hosted_arguments)
         joined = " ".join(output_parts)
         return [{"role": "assistant", "content": joined}] if joined else []
 

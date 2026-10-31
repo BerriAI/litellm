@@ -38,7 +38,6 @@ from itertools import accumulate, chain, groupby, repeat
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, NamedTuple, Protocol, TypeVar, Union, cast
 
-from openai.types.responses import ResponseFunctionWebSearch
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, TypedDict
 
@@ -67,6 +66,8 @@ from litellm.llms.base_llm.guardrail_translation.utils import (
     stream_item_fingerprint,
     stream_item_items,
     unappliable_request_rewrite,
+    web_search_call,
+    with_web_search_call_arguments,
 )
 from litellm.llms.openai.responses.guardrail_translation.tool_merge import (
     append_returned_tools,
@@ -111,7 +112,6 @@ from litellm.types.llms.openai import (
 from litellm.types.responses.main import (
     GenericResponseOutputItem,
     OutputText,
-    with_hosted_web_tool_arguments,
 )
 from litellm.types.utils import GenericGuardrailAPIInputs
 
@@ -334,19 +334,8 @@ def _is_tool_call_item(item: object) -> bool:
     return isinstance(item, Mapping) and item.get("type") in _TOOL_CALL_ITEM_TYPES
 
 
-def _web_search_call(item: object) -> ResponseFunctionWebSearch | None:
-    if isinstance(item, ResponseFunctionWebSearch):
-        return item
-    if stream_item_field(item, "type") != _WEB_SEARCH_CALL_TYPE:
-        return None
-    try:
-        return ResponseFunctionWebSearch.model_validate(item.model_dump() if isinstance(item, BaseModel) else item)
-    except ValidationError:
-        return None
-
-
 def _claude_web_search_tool_call(item: object) -> ChatCompletionAssistantToolCall | None:
-    search: Final = _web_search_call(item)
+    search: Final = web_search_call(item)
     return None if search is None else claude_web_search_call_tool_call(search)
 
 
@@ -405,16 +394,7 @@ def _scanned_tool_call(item: Mapping[str, object], index: int) -> ChatCompletion
 
 
 def _rewritten_web_search_call(item: object, payload: str | None) -> object:
-    search: Final = _web_search_call(item)
-    if payload is None or search is None:
-        return item
-    action: Final = with_hosted_web_tool_arguments(search.action, payload)
-    if isinstance(item, ResponseFunctionWebSearch):
-        return item.model_copy(update={"action": action})
-    if isinstance(item, BaseModel):
-        return item.model_copy(update={"action": action.model_dump()})
-    fields: Final = _tool_call_output_item_mapping(item)
-    return item if fields is None else {**fields, "action": action.model_dump()}
+    return item if payload is None else with_web_search_call_arguments(item, payload)
 
 
 def _tool_search_rewrite(payload: str) -> Mapping[str, object]:
