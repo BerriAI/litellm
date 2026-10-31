@@ -21,6 +21,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     TOOL_RESULT_MEDIA_BOUNDARY,
 )
 from litellm.litellm_core_utils.prompt_templates.image_handling import in_memory_cache
+from litellm.llms.bedrock.chat.chat_completions.transformation import AmazonBedrockRuntimeChatCompletionsConfig
 from litellm.llms.deepinfra.chat.transformation import DeepInfraConfig
 from litellm.llms.deepseek.chat.transformation import DeepSeekChatConfig
 from litellm.llms.docker_model_runner.chat.transformation import DockerModelRunnerChatConfig
@@ -33,6 +34,7 @@ from litellm.llms.openai.chat.gpt_transformation import (
 from litellm.llms.openai_like.dynamic_config import create_config_class
 from litellm.llms.openai_like.json_loader import SimpleProviderConfig
 from litellm.llms.sambanova.chat import SambanovaConfig
+from litellm.llms.vertex_ai.vertex_gemma_models.transformation import VertexGemmaConfig
 
 
 class TestOpenAIGPTConfig:
@@ -1541,13 +1543,14 @@ async def test_streamed_completion_downloads_its_pdf_url_with_the_async_client(r
 
 
 @pytest.mark.usefixtures("pdf_urls_reachable")
-@pytest.mark.respx(assert_all_called=True)
+@pytest.mark.respx(assert_all_called=False)
 @pytest.mark.asyncio
-async def test_async_transform_request_rejects_a_file_part_without_its_file_ahead_of_a_dead_pdf_url(
+async def test_async_transform_request_rejects_a_file_part_without_its_file_before_downloading_a_later_pdf_url(
     respx_mock: respx.MockRouter,
 ) -> None:
     pdf_url: Final = "https://files.example.test/after-a-broken-part.pdf"
-    respx_mock.get(pdf_url).mock(return_value=Response(404))
+    in_memory_cache.delete_cache(pdf_url)
+    download: Final = respx_mock.get(pdf_url).mock(return_value=Response(200, content=b"%PDF-1.4"))
 
     with pytest.raises(
         litellm.BadRequestError, match="Content block has type='file' but is missing the required 'file' field"
@@ -1559,6 +1562,8 @@ async def test_async_transform_request_rejects_a_file_part_without_its_file_ahea
             litellm_params={"custom_llm_provider": "openai"},
             headers={},
         )
+
+    assert not download.called
 
 
 @pytest.mark.asyncio
@@ -1711,21 +1716,29 @@ _PARITY_URL: Final = "https://files.example.test/parity.pdf"
         ),
     ],
 )
+@pytest.mark.parametrize(
+    ("config", "model"),
+    [
+        pytest.param(OpenAIGPTConfig(), "gpt-4.1", id="openai"),
+        pytest.param(AmazonBedrockRuntimeChatCompletionsConfig(), "us.xai.grok-4.6", id="bedrock_chat_completions"),
+        pytest.param(VertexGemmaConfig(), "gemma-3-27b-it", id="vertex_gemma"),
+    ],
+)
 async def test_async_transform_request_matches_the_sync_request_downloads_and_callers_messages(
-    respx_mock: respx.MockRouter, messages: list[dict[str, object]]
+    respx_mock: respx.MockRouter, messages: list[dict[str, object]], config: OpenAIGPTConfig, model: str
 ) -> None:
     download: Final = respx_mock.get(_PARITY_URL).mock(side_effect=_serve_pdf)
     sync_messages: Final = copy.deepcopy(messages)
     async_messages: Final = copy.deepcopy(messages)
 
     in_memory_cache.delete_cache(_PARITY_URL)
-    sync_request: Final = OpenAIGPTConfig().transform_request(
-        model="gpt-4.1", messages=sync_messages, optional_params={}, litellm_params={}, headers={}
+    sync_request: Final = config.transform_request(
+        model=model, messages=sync_messages, optional_params={}, litellm_params={}, headers={}
     )
     sync_downloads: Final = download.call_count
     in_memory_cache.delete_cache(_PARITY_URL)
-    async_request: Final = await OpenAIGPTConfig().async_transform_request(
-        model="gpt-4.1", messages=async_messages, optional_params={}, litellm_params={}, headers={}
+    async_request: Final = await config.async_transform_request(
+        model=model, messages=async_messages, optional_params={}, litellm_params={}, headers={}
     )
 
     assert async_request == sync_request

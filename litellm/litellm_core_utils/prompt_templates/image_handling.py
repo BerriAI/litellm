@@ -7,7 +7,7 @@ import base64
 import time
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
-from itertools import chain
+from itertools import chain, takewhile
 from types import MappingProxyType
 from typing import Final
 
@@ -343,16 +343,25 @@ async def async_fetch_urls_to_base64(
     return MappingProxyType(dict(zip(remote_urls, outcomes, strict=True)))
 
 
-def _remote_urls_to_inline(
-    messages: Iterable[AllMessageValues], should_inline: Callable[[RemoteMedia], bool]
-) -> tuple[str, ...]:
-    parts: Final = chain.from_iterable(_content_parts(message) for message in messages)
+def _remote_urls_in_parts(parts: Iterable[object], should_inline: Callable[[RemoteMedia], bool]) -> tuple[str, ...]:
     remotes: Final = (remote for part in parts if (remote := _parse_remote_part(part)) is not None)
     return tuple(dict.fromkeys(remote.url for remote in remotes if should_inline(_remote_media(remote))))
 
 
+def _remote_urls_to_inline(
+    messages: Iterable[AllMessageValues], should_inline: Callable[[RemoteMedia], bool]
+) -> tuple[str, ...]:
+    return _remote_urls_in_parts(chain.from_iterable(_content_parts(message) for message in messages), should_inline)
+
+
+def _is_not_a_file_part_missing_its_file(part: object) -> bool:
+    fields: Final = _as_mapping(part)
+    return fields is None or fields.get("type") != "file" or fields.get("file") is not None
+
+
 def remote_file_urls(messages: Iterable[AllMessageValues]) -> tuple[str, ...]:
-    return _remote_urls_to_inline(messages, inline_remote_file_urls)
+    parts: Final = chain.from_iterable(_content_parts(message) for message in messages)
+    return _remote_urls_in_parts(takewhile(_is_not_a_file_part_missing_its_file, parts), inline_remote_file_urls)
 
 
 def inline_remote_media(
