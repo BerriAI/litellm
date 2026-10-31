@@ -120,8 +120,9 @@ REFUSAL_STOP_DETAILS: Final = {"type": "refusal", "category": "cyber", "explanat
     [
         ("end_turn", {"safeguard_results": SAFEGUARD_RESULTS}),
         ("refusal", {"stop_details": REFUSAL_STOP_DETAILS}),
+        ("pause_turn", {}),
     ],
-    ids=["safeguard_results", "refusal_stop_details"],
+    ids=["safeguard_results", "refusal_stop_details", "pause_turn"],
 )
 def test_rewritten_stream_keeps_the_upstream_message_delta_fields(stop_reason: str, delta_fields: dict[str, object]):
     """A guardrail that rewrites a streamed response assembles it into the OpenAI shape, which has no
