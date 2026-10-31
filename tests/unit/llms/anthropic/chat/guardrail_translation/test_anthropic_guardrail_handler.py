@@ -662,6 +662,7 @@ class TestAnthropicMessagesHandlerInputProcessing:
                 {"name": "get_weather", "input_schema": {"type": "object", "properties": {}}, "defer_loading": False},
                 {"name": "get_time", "input_schema": {"type": "object", "properties": {}}},
                 {"name": "get_quote", "input_schema": {"type": "object", "properties": {}}, "custom": {"defer_loading": True}},
+                {"name": "get_news", "input_schema": {"type": "object", "properties": {}}, "defer_loading": "true"},
             ],
         }
 
@@ -673,6 +674,7 @@ class TestAnthropicMessagesHandlerInputProcessing:
             ("get_weather", False, None),
             ("get_time", None, None),
             ("get_quote", None, {"defer_loading": True}),
+            ("get_news", None, None),
         ]
 
     @pytest.mark.asyncio

@@ -274,6 +274,9 @@ async def test_anthropic_tool_search_is_counted_only_beside_a_deferred_tool(
     [
         pytest.param("a-model-the-cost-map-does-not-mark-for-tool-search", {}, id="model-without-tool-search"),
         pytest.param("gpt-5.6-luna", {"api_base": "https://responses.example.test/v1"}, id="other-responses-server"),
+        pytest.param(
+            "gpt-5.6-luna", {"additional_drop_params": ["tools[*].defer_loading"]}, id="deployment-drops-deferral"
+        ),
     ],
 )
 async def test_anthropic_tool_search_is_left_out_of_the_count_where_inference_cannot_run_it(

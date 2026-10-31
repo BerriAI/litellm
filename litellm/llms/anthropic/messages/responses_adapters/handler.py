@@ -50,7 +50,7 @@ from ..convertible_blocks import reject_malformed_tool_result_text
 from ..safeguards import with_safeguard_results
 from ..utils import litellm_logging_obj_from_kwargs, local_model_name
 from .streaming_iterator import AnthropicResponsesStreamWrapper
-from .tool_translation import openai_runs_tool_search
+from .tool_translation import maps_openai_tool_search
 from .transformation import LiteLLMAnthropicToResponsesAPIAdapter
 
 AnthropicRequestMessages: TypeAlias = list[AllAnthropicMessageValues] | list[dict[str, object]]
@@ -183,13 +183,12 @@ def _provider_returns_encrypted_reasoning(model: str, custom_llm_provider: objec
     return responses_config is not None and "include" in responses_config.get_supported_openai_params(provider_model)
 
 
-_DEFERRAL_DROP_PATH: Final = "tools[*].defer_loading"
-
-
 def _maps_tool_search(model: str, forwarded_kwargs: Mapping[str, object]) -> bool:
     provider: Final = _resolved_provider(model, forwarded_kwargs.get("custom_llm_provider"))
-    return provider == LlmProviders.OPENAI.value and openai_runs_tool_search(
-        local_model_name(model, provider), forwarded_kwargs.get("api_base") or forwarded_kwargs.get("base_url")
+    return provider == LlmProviders.OPENAI.value and maps_openai_tool_search(
+        local_model_name(model, provider),
+        forwarded_kwargs.get("api_base") or forwarded_kwargs.get("base_url"),
+        forwarded_kwargs.get("additional_drop_params"),
     )
 
 
@@ -337,7 +336,7 @@ def _build_responses_kwargs(
         ),
         auto_summary_level=auto_reasoning_summary(model, forwarded_kwargs.get("custom_llm_provider")),
         drop_params=drops_unsupported_params(forwarded_kwargs.get("drop_params")),
-        maps_tool_search=_maps_tool_search(model, forwarded_kwargs) and _DEFERRAL_DROP_PATH not in dropped,
+        maps_tool_search=_maps_tool_search(model, forwarded_kwargs),
     )
 
     # Normalize reasoning effort based on model capabilities

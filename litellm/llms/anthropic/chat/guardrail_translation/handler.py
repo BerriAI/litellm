@@ -259,10 +259,10 @@ def _with_original_name(tool: ChatCompletionToolParam, original_names: Mapping[s
 
 
 def _request_deferral(tool: Mapping[str, object]) -> Mapping[str, object] | None:
-    if "defer_loading" in tool:
-        return {"defer_loading": tool["defer_loading"]}
-    match tool.get("custom"):
-        case {"defer_loading": bool() as wrapped}:
+    match tool:
+        case {"defer_loading": bool() as deferred}:
+            return {"defer_loading": deferred}
+        case {"custom": {"defer_loading": bool() as wrapped}}:
             return {"custom": {"defer_loading": wrapped}}
         case _:
             return None

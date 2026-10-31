@@ -3,6 +3,8 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from typing import Final, TypeAlias
 
+from pydantic import ConfigDict, TypeAdapter, ValidationError
+
 import litellm
 from litellm._logging import verbose_logger
 from litellm.exceptions import UnsupportedParamsError
@@ -13,6 +15,9 @@ from litellm.types.utils import LlmProviders
 
 _VERSIONED_TOOL_TYPE: Final = re.compile(r"(?P<family>[a-z0-9_]+?)_(?P<version>\d{8})")
 _UNVERSIONED_SERVER_TOOL_TYPES: Final = frozenset({"mcp_toolset", "computer_toolset"})
+_DEFERRAL_DROP_PATH: Final = re.compile(r"tools\[[^\]]*\]\.defer_loading")
+_DropPaths: TypeAlias = list[object] | tuple[object, ...]
+_DROP_PATHS: Final[TypeAdapter[_DropPaths]] = TypeAdapter(_DropPaths, config=ConfigDict(strict=True))
 _TEXT_EDITOR_INSERT_TEXT_SINCE: Final = "20250429"
 _COMPUTER_MODIFIERS_SINCE: Final = "20250124"
 _COMPUTER_ZOOM_SINCE: Final = "20251124"
@@ -342,7 +347,17 @@ def unforceable_tool_choice_error(name: str) -> UnsupportedParamsError:
     )
 
 
-def openai_runs_tool_search(model: str, api_base: object) -> bool:
-    return targets_openai_api(api_base) and litellm.supports_tool_search(
-        model=model, custom_llm_provider=LlmProviders.OPENAI.value
+def _drops_deferral(additional_drop_params: object) -> bool:
+    try:
+        paths: Final = _DROP_PATHS.validate_python(additional_drop_params)
+    except ValidationError:
+        return False
+    return any(isinstance(path, str) and _DEFERRAL_DROP_PATH.fullmatch(path) is not None for path in paths)
+
+
+def maps_openai_tool_search(model: str, api_base: object, additional_drop_params: object) -> bool:
+    return (
+        targets_openai_api(api_base)
+        and not _drops_deferral(additional_drop_params)
+        and litellm.supports_tool_search(model=model, custom_llm_provider=LlmProviders.OPENAI.value)
     )

@@ -2,7 +2,7 @@ import datetime
 import json
 import os
 import sys
-from collections.abc import AsyncIterator, Mapping
+from collections.abc import AsyncIterator, Mapping, Sequence
 from itertools import chain
 from typing import Final, cast
 from unittest.mock import AsyncMock, patch
@@ -1025,8 +1025,16 @@ async def test_additional_drop_params_tool_choice_sends_tool_search_without_the_
 
 
 @pytest.mark.asyncio
-async def test_additional_drop_params_of_every_defer_loading_answers_400_for_tool_search_without_drop_params(
-    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize(
+    "additional_drop_params",
+    [
+        pytest.param(["tools[*].defer_loading"], id="every-tool"),
+        pytest.param(["tools[1].defer_loading"], id="one-tool-by-index"),
+        pytest.param(("tools[*].defer_loading",), id="sdk-tuple"),
+    ],
+)
+async def test_additional_drop_params_of_a_defer_loading_path_answers_400_for_tool_search_without_drop_params(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, additional_drop_params: Sequence[str]
 ):
     with pytest.raises(litellm.UnsupportedParamsError) as error:
         await _openai_request_for(
@@ -1034,7 +1042,7 @@ async def test_additional_drop_params_of_every_defer_loading_answers_400_for_too
             monkeypatch,
             [TOOL_SEARCH, DEFERRED_WEATHER],
             drop_params=False,
-            additional_drop_params=["tools[*].defer_loading"],
+            additional_drop_params=additional_drop_params,
         )
 
     assert "tool_search_tool_bm25_20251119" in error.value.message
