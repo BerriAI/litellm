@@ -1,7 +1,8 @@
 """Live checks behind ``POST /health/test_model``.
 
 One three-turn tool-call conversation per selected endpoint, read from that endpoint's file in
-``test_model_requests/``. ``turn_1`` is the full first request body in the endpoint's native shape. Chat Completions
+``test_model_requests/``. ``turn_1`` is the full first request body in the endpoint's native shape, with
+``<system prompt>`` standing for the long shared prompt in ``system_prompt.txt``. Chat Completions
 and Responses carry no prompt-cache markers, so later turns can only report cached tokens when the provider caches
 the repeated prefix on its own. Messages mirrors Claude Code: ``cache_control`` on the latest user message and a
 mid-conversation ``role: system`` reminder, so a proxy that hoists that reminder into the system prompt changes the
@@ -225,9 +226,19 @@ class RequestFile(BaseModel):
     turn_3_appended_messages: Sequence[object]
 
 
-def _request_file(name: str) -> Callable[[], RequestFile]:
+SYSTEM_PROMPT_PLACEHOLDER: Final = "<system prompt>"
+
+
+def load_request_file(name: str) -> RequestFile:
+    """The named request file with ``<system prompt>`` filled from ``system_prompt.txt`` beside it."""
+    prompt: Final = (TEST_MODEL_REQUESTS_DIR / "system_prompt.txt").read_text(encoding="utf-8")
     text: Final = (TEST_MODEL_REQUESTS_DIR / f"{name}.json").read_text(encoding="utf-8")
-    return lambda: RequestFile.model_validate_json(text)
+    return RequestFile.model_validate_json(text.replace(json.dumps(SYSTEM_PROMPT_PLACEHOLDER), json.dumps(prompt)))
+
+
+def _request_file(name: str) -> Callable[[], RequestFile]:
+    file: Final = load_request_file(name)
+    return lambda: file
 
 
 _CHAT_FILE: Final = _request_file("chat_completions")

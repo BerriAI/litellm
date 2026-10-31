@@ -14,6 +14,7 @@ from litellm.proxy.health_endpoints.model_checks import (
     CalledTurn,
     EndpointScript,
     endpoint_result_payload,
+    load_request_file,
     overall_status,
     run_endpoint_check,
 )
@@ -507,10 +508,12 @@ def test_the_three_request_files_send_one_system_prompt_and_one_tool_so_endpoint
         third: Final = json.dumps(file["turn_3_appended_messages"])
         assert "<turn 2 response: assistant output>" in third, (name, third)
         assert "user" in {m["role"] for m in file["turn_3_appended_messages"][-2:]}, (name, third)
-    assert chat["messages"][0]["content"] == responses["instructions"] == messages["system"]
+    assert chat["messages"][0]["content"] == responses["instructions"] == messages["system"] == "<system prompt>"
+    assert len((TEST_MODEL_REQUESTS_DIR / "system_prompt.txt").read_text(encoding="utf-8")) > 20000
+    assert load_request_file("messages").turn_1["system"] != "<system prompt>"
     assert messages["messages"][-1]["content"][0]["cache_control"] == {"type": "ephemeral"}, messages["messages"][-1]
     assert chat["tools"][0]["function"]["parameters"] == responses["tools"][0]["parameters"]
     assert chat["tools"][0]["function"]["parameters"] == messages["tools"][0]["input_schema"]
-    assert CHAT_COMPLETIONS_SCRIPT.turn_one() == chat
-    assert RESPONSES_SCRIPT.turn_one() == responses
-    assert MESSAGES_SCRIPT.turn_one() == messages
+    assert CHAT_COMPLETIONS_SCRIPT.turn_one() == load_request_file("chat_completions").turn_1
+    assert RESPONSES_SCRIPT.turn_one() == load_request_file("responses").turn_1
+    assert MESSAGES_SCRIPT.turn_one() == load_request_file("messages").turn_1
