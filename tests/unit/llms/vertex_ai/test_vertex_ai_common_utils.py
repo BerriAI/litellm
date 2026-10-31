@@ -1826,6 +1826,57 @@ async def test_vertex_ai_token_counter_forwards_system_and_tools_to_partner_requ
     assert without_optional_fields.total_tokens == 37
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("edit_type", "expected_beta"),
+    [("clear_tool_uses_20250919", "context-management-2025-06-27"), ("compact_20260112", "compact-2026-01-12")],
+)
+async def test_vertex_claude_count_forwards_the_context_edits_and_beta_vertex_inference_sends(
+    edit_type: str, expected_beta: str
+) -> None:
+    from litellm.llms.vertex_ai.vertex_ai_partner_models.count_tokens import handler
+
+    class FakeResponse:
+        status_code = 200
+
+        def json(self) -> dict[str, int]:
+            return {"input_tokens": 21}
+
+    class FakeHttpClient:
+        posted: tuple[tuple[dict[str, str], dict[str, object]], ...] = ()
+
+        async def post(
+            self, url: str, headers: dict[str, str], json: dict[str, object], timeout: float
+        ) -> FakeResponse:
+            self.posted = (*self.posted, (headers, json))
+            return FakeResponse()
+
+    fake_http_client: Final = FakeHttpClient()
+    spec: Final[dict[str, JsonValue]] = {"edits": [{"type": edit_type}]}
+    with (
+        patch.object(handler, "get_async_httpx_client", return_value=fake_http_client),
+        patch.object(
+            handler.VertexAIPartnerModelsTokenCounter,
+            "_ensure_access_token_async",
+            new=AsyncMock(return_value=("fake-token", "test-project")),
+        ),
+    ):
+        result: Final = await VertexAITokenCounter().count_tokens(
+            model_to_use="claude-opus-4-8",
+            messages=[{"role": "user", "content": "Hello"}],
+            contents=None,
+            deployment={"litellm_params": {"vertex_project": "test-project", "vertex_location": "us-east5"}},
+            messages_format="anthropic",
+            context_management=CountContextManagement(spec=spec, drop_invalid_edits=False),
+        )
+
+    assert result is not None
+    assert result.total_tokens == 21
+    ((headers, body),) = fake_http_client.posted
+    assert body["context_management"] == spec
+    assert headers["anthropic-beta"] == expected_beta
+
+
 _PARTNER_CHAT_TOOL_TURNS: Final[list[dict[str, object]]] = [
     {"role": "user", "content": "Weather in SF?"},
     {

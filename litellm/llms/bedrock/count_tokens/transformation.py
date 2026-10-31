@@ -87,6 +87,8 @@ class BedrockCountTokensConfig(BaseAWSLLM):
         Returns:
             'converse' or 'invokeModel'
         """
+        if "context_management" in request_data:
+            return "invokeModel"
         messages: Final = request_data.get("messages")
         if isinstance(messages, list):
             # Anthropic content blocks carry a "type" key ({"type": "text", ...});

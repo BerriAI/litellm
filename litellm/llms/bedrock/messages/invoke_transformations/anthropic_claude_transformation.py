@@ -37,6 +37,7 @@ from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation
     bedrock_invoke_guardrail_headers,
 )
 from litellm.llms.bedrock.common_utils import (
+    BEDROCK_INVOKE_CONTEXT_MANAGEMENT_EDIT_BETAS,
     BedrockError,
     apply_bedrock_invoke_structured_output,
     bedrock_supports_tool_search,
@@ -499,12 +500,7 @@ class AmazonAnthropicClaudeMessagesConfig(
     # Bedrock InvokeModel DOES support ``clear_tool_uses_20250919`` under the
     # ``context-management-2025-06-27`` beta. AWS docs:
     # https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-anthropic-claude-messages-tool-use.md
-    _BEDROCK_INVOKE_SUPPORTED_CONTEXT_MANAGEMENT_EDITS: Mapping[str, str] = MappingProxyType(
-        {
-            "compact_20260112": ANTHROPIC_BETA_HEADER_VALUES.COMPACT_2026_01_12.value,
-            "clear_tool_uses_20250919": ANTHROPIC_BETA_HEADER_VALUES.CONTEXT_MANAGEMENT_2025_06_27.value,
-        }
-    )
+    _BEDROCK_INVOKE_SUPPORTED_CONTEXT_MANAGEMENT_EDITS: Mapping[str, str] = BEDROCK_INVOKE_CONTEXT_MANAGEMENT_EDIT_BETAS
 
     @classmethod
     def _filter_context_management_for_bedrock_invoke(
