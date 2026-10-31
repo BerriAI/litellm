@@ -47,6 +47,9 @@ from litellm.types.proxy.guardrails.guardrail_hooks.ibm import (
 from litellm.types.proxy.guardrails.guardrail_hooks.litellm_content_filter import (
     ContentFilterCategoryConfig,
 )
+from litellm.types.proxy.guardrails.guardrail_hooks.needlepath import (
+    NeedlepathGuardrailConfigModel,
+)
 from litellm.types.proxy.guardrails.guardrail_hooks.ovalix import (
     OvalixGuardrailConfigModel,
 )
@@ -163,6 +166,7 @@ class SupportedGuardrailIntegrations(Enum):
     AIRIA = "airia"
     WINGBACK = "wingback"
     DECISION_MODEL = "decision_model"
+    NEEDLEPATH = "needlepath"
 
 
 class Role(Enum):
@@ -1387,6 +1391,7 @@ class LitellmParams(  # pyright: ignore[reportIncompatibleVariableOverride]  # o
     HeadroomGuardrailConfigModel,
     CompresrGuardrailConfigModel,
     TypeSafeGuardrailConfigModel,
+    NeedlepathGuardrailConfigModel,
     RepelloAIGuardrailConfigModel,
     LassoGuardrailConfigModel,
     DeepKeepGuardrailConfigModel,
