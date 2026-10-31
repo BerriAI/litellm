@@ -5252,17 +5252,24 @@ class TestHostedWebSearchReplay:
         "leading_text", ((), ({"type": "text", "text": "Let me look that up."},)), ids=("alone", "after_text")
     )
     @pytest.mark.parametrize(
-        "server_tool_use",
+        ("server_tool_use", "expected_input"),
         (
-            {"type": "server_tool_use", "id": "srvtoolu_01Pending", "name": "web_fetch", "input": {"url": _FETCHED_URL}},
-            {"type": "server_tool_use", "id": "srvtoolu_01Pending", "name": "web_search", "input": {"query": "python"}},
+            (
+                {"type": "server_tool_use", "id": "srvtoolu_01Pending", "name": "web_fetch", "input": {"url": _FETCHED_URL}},
+                {"url": _FETCHED_URL},
+            ),
+            (
+                {"type": "server_tool_use", "id": "srvtoolu_01Pending", "name": "web_search", "input": {"query": "python"}},
+                {"query": "python"},
+            ),
         ),
         ids=("web_fetch", "web_search"),
     )
-    def test_pending_claude_web_call_is_never_replayed_to_anthropic_as_a_client_tool_use(
+    def test_pending_claude_web_call_replays_to_anthropic_as_its_own_server_tool_use(
         self,
         leading_text: tuple[Mapping[str, object], ...],
         server_tool_use: Mapping[str, object],
+        expected_input: Mapping[str, object],
     ) -> None:
         response: Final = _anthropic_turn_on_responses((*leading_text, server_tool_use, _WEATHER_TOOL_USE))
         history: Final = [
@@ -5281,6 +5288,7 @@ class TestHostedWebSearchReplay:
 
         assert [turn["role"] for turn in anthropic_turns] == ["user", "assistant", "user"]
         assert [block for block in anthropic_turns[1]["content"] if block["type"] != "text"] == [
+            {"type": "server_tool_use", "id": "srvtoolu_01Pending", "name": server_tool_use["name"], "input": expected_input},
             {"type": "tool_use", "id": "toolu_01Weather", "name": "get_weather", "input": {"city": "Paris"}},
         ]
         assert [(block["type"], block["tool_use_id"]) for block in anthropic_turns[2]["content"]] == [

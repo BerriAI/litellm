@@ -3825,7 +3825,7 @@ _FETCH_STILL_WAITING_ON_ITS_RESULT: Final = {
 
 
 @pytest.mark.parametrize("modify_params", [False, True])
-def test_server_call_still_waiting_on_its_result_is_never_replayed_as_a_client_call(
+def test_server_call_still_waiting_on_its_result_is_replayed_as_a_server_call(
     modify_params: bool, monkeypatch: pytest.MonkeyPatch
 ):
     content: Final = [_FETCH_STILL_WAITING_ON_ITS_RESULT, _WEATHER_CALL]
@@ -3838,8 +3838,42 @@ def test_server_call_still_waiting_on_its_result_is_never_replayed_as_a_client_c
         {"role": "tool", "tool_call_id": "toolu_01Weather", "content": "18C"},
     )
 
-    assert replayed[1]["content"] == [_WEATHER_CALL]
+    assert replayed[1]["content"] == content
     assert [turn["role"] for turn in replayed] == ["user", "assistant", "user"]
+    assert [block["tool_use_id"] for block in replayed[2]["content"]] == ["toolu_01Weather"]
+
+
+_FETCH_AND_WEATHER_THINKING: Final = {
+    "type": "thinking",
+    "thinking": "Fetch the page, then check the weather.",
+    "signature": "sig_fetch_weather",
+}
+_CHECKING_BOTH: Final = {"type": "text", "text": "Checking both."}
+
+
+@pytest.mark.parametrize("thinking_inline", [False, True], ids=["thinking_blocks", "inline_thinking"])
+def test_tool_use_turn_waiting_on_a_server_call_keeps_its_thinking_and_both_calls(thinking_inline: bool):
+    parsed: Final = _parsed_assistant_message(
+        [_FETCH_AND_WEATHER_THINKING, _CHECKING_BOTH, _FETCH_STILL_WAITING_ON_ITS_RESULT, _WEATHER_CALL], "tool_use"
+    ).model_dump()
+    message: Final = (
+        {**parsed, "thinking_blocks": None, "content": [_FETCH_AND_WEATHER_THINKING, _CHECKING_BOTH]}
+        if thinking_inline
+        else parsed
+    )
+
+    replayed: Final = _replayed(
+        {"role": "user", "content": "Fetch example.com, then tell me the weather in Paris"},
+        message,
+        {"role": "tool", "tool_call_id": "toolu_01Weather", "content": "18C"},
+    )
+
+    assistant_content: Final = replayed[1]["content"]
+    assert assistant_content[:2] == [_FETCH_AND_WEATHER_THINKING, _CHECKING_BOTH]
+    assert sorted(assistant_content[2:], key=lambda block: block["id"]) == [
+        _FETCH_STILL_WAITING_ON_ITS_RESULT,
+        _WEATHER_CALL,
+    ]
     assert [block["tool_use_id"] for block in replayed[2]["content"]] == ["toolu_01Weather"]
 
 

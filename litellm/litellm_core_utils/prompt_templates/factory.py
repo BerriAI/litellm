@@ -2127,6 +2127,12 @@ def _unrun_server_tool_use_ids(blocks: Sequence[Mapping[str, object]]) -> frozen
     )
 
 
+def _paused_server_tool_use_ids(blocks: Sequence[Mapping[str, object]]) -> frozenset[object]:
+    if any(block.get("type") == "tool_use" for block in blocks):
+        return frozenset()
+    return _unrun_server_tool_use_ids(blocks)
+
+
 def _last_block_id_among(blocks: Sequence[Mapping[str, object]], ids: frozenset[object]) -> object:
     return next(block_id for block in reversed(blocks) if (block_id := _block_id(block)) in ids)
 
@@ -2140,7 +2146,7 @@ def _paused_turn_replay(
     tuple[_AnthropicToolInvokeItem, ...],
     tuple[ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock, ...],
 ]:
-    unrun_ids: Final = _unrun_server_tool_use_ids(tool_invokes)
+    unrun_ids: Final = _paused_server_tool_use_ids(tool_invokes)
     if not unrun_ids:
         return tuple(tool_invokes), tuple(thinking_blocks)
     dropped_ids: Final = (
@@ -3226,7 +3232,7 @@ def anthropic_messages_pt(
                 if assistant_tool_calls is not None
                 else ()
             )
-            turn_paused = bool(_unrun_server_tool_use_ids(tool_invoke_results))
+            turn_paused = bool(_paused_server_tool_use_ids(tool_invoke_results))
             replayed_tool_invokes, replayed_thinking_blocks = _paused_turn_replay(
                 tool_invoke_results, thinking_blocks or (), is_final_message=msg_i == len(messages) - 1
             )
