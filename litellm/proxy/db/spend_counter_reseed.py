@@ -55,6 +55,7 @@ _WINDOW_SPEND_ENTITY_TYPES: Final[Mapping[str, str]] = MappingProxyType(
     {
         "Key": Litellm_EntityType.KEY.value,
         "Team": Litellm_EntityType.TEAM.value,
+        "TeamMember": Litellm_EntityType.TEAM_MEMBER.value,
     }
 )
 
@@ -66,6 +67,18 @@ _WINDOW_SPEND_LOG_FIELDS: Final[Mapping[str, str]] = MappingProxyType(
         "Team": "team_id",
     }
 )
+
+
+def _window_spend_log_identity(entity_type: str, entity_id: str) -> Mapping[str, str] | None:
+    if entity_type == "TeamMember":
+        from litellm.proxy.common_utils.team_member_budget import parse_member_window_entity_id
+
+        user_id, team_id = parse_member_window_entity_id(entity_id)
+        return {"user": user_id, "team_id": team_id}
+    group_field: Final = _WINDOW_SPEND_LOG_FIELDS.get(entity_type)
+    if group_field is None:
+        return None
+    return {group_field: entity_id}
 
 
 def _as_utc(value: datetime) -> datetime:
@@ -388,21 +401,20 @@ class SpendCounterReseed:
         entity_type: str,
         entity_id: str,
         window_start: datetime,
+        window_end: datetime | None = None,
     ) -> float | None:
         if prisma_client is None:
             return None
 
-        group_field: Final = _WINDOW_SPEND_LOG_FIELDS.get(entity_type)
-        if group_field is None:
+        identity: Final = _window_spend_log_identity(entity_type, entity_id)
+        if identity is None:
             return None
-        where: Final = {
-            group_field: entity_id,
-            "startTime": {"gte": window_start},
-        }
-
+        group_fields: Final = tuple(identity)
+        period: Final = {"gte": window_start, **({"lt": window_end} if window_end is not None else {})}
+        where: Final = {**identity, "startTime": period}
         try:
             response: Final = await SpendLogsRepository(prisma_client).table.group_by(
-                by=[group_field],
+                by=group_fields,
                 where=where,
                 sum={"spend": True},
             )

@@ -6,11 +6,12 @@ budget-window value types and the team-model alias table). Re-exported from
 ``litellm.proxy._types`` for backwards compatibility.
 """
 
+import enum
 import json
 from datetime import datetime
-from typing import Final, Literal, Optional
+from typing import Annotated, Final, Literal, Optional, TypeAlias
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, model_validator
 
 from litellm.models.object_permission import LiteLLM_ObjectPermissionTable
 from litellm.types.llms.base import LiteLLMPydanticObjectBase
@@ -50,6 +51,34 @@ class BudgetLimitEntry(LiteLLMPydanticObjectBase):
     reset_at: datetime | None = None
 
 
+class TeamMemberBudgetDuration(str, enum.Enum):
+    HOURLY = "1h"
+    DAILY = "24h"
+    WEEKLY = "7d"
+    MONTHLY = "30d"
+
+
+class TeamMemberBudgetWindow(LiteLLMPydanticObjectBase):
+    model_config = ConfigDict(frozen=True)
+
+    budget_duration: TeamMemberBudgetDuration
+    max_budget: float = Field(ge=0, allow_inf_nan=False)
+
+
+def _validate_member_budget_windows(
+    windows: tuple[TeamMemberBudgetWindow, ...],
+) -> tuple[TeamMemberBudgetWindow, ...]:
+    durations: Final = frozenset(window.budget_duration for window in windows)
+    if len(durations) != len(windows):
+        raise ValueError("Each member budget duration must be unique")
+    return windows
+
+
+TeamMemberBudgetWindows: TypeAlias = Annotated[
+    tuple[TeamMemberBudgetWindow, ...], AfterValidator(_validate_member_budget_windows)
+]
+
+
 class LiteLLM_ModelTable(LiteLLMPydanticObjectBase):
     id: int | None = None
     model_aliases: str | dict | None = None
@@ -75,6 +104,7 @@ class TeamBase(LiteLLMPydanticObjectBase):
     max_budget: float | None = None
     soft_budget: float | None = None
     budget_duration: str | None = None
+    team_member_budget_limits: TeamMemberBudgetWindows | None = None
     budget_limits: list[BudgetLimitEntry] | None = None
     models: list[str] = []
     blocked: bool = False
@@ -114,6 +144,7 @@ class LiteLLM_TeamTable(TeamBase):
             "model_aliases",
             "router_settings",
             "budget_limits",
+            "team_member_budget_limits",
         ]
 
         if isinstance(values, BaseModel):

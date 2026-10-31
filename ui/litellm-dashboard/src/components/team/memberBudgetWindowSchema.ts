@@ -24,7 +24,7 @@ export const memberBudgetWindowsSchema = budgetWindowEntriesSchema.superRefine((
   });
 });
 
-export const isMemberBudgetWindows = (value: unknown): value is BudgetWindowEntry[] =>
+export const isMemberBudgetWindows = (value: unknown): value is MemberBudgetWindow[] =>
   budgetWindowEntriesSchema.safeParse(value).success;
 
 export type MemberBudgetWindow = z.infer<typeof memberBudgetWindowsSchema>[number];

@@ -1881,6 +1881,7 @@ class OrgMember(MemberBase):
 
 
 from litellm.models.team import TeamBase as TeamBase  # noqa: E402
+from litellm.models.team import TeamMemberBudgetWindows
 
 RouterSettingsDict = Annotated[
     dict[str, object],
@@ -1985,6 +1986,7 @@ class UpdateTeamRequest(LiteLLMPydanticObjectBase):
     object_permission: LiteLLM_ObjectPermissionBase | None = None
     disable_global_guardrails: bool | None = None
     require_trace_id: bool | None = None
+    team_member_budget_limits: TeamMemberBudgetWindows | None = None
     team_member_budget: float | None = None
     team_member_budget_duration: str | None = None
     team_member_model_max_budget: GenericBudgetConfigType | None = None
@@ -4259,6 +4261,7 @@ class TeamMemberAddRequest(MemberAddRequest):
     """
 
     team_id: str = Field(description="The ID of the team to add the member to")
+    budget_limits: TeamMemberBudgetWindows | None = None
     max_budget_in_team: float | None = Field(
         default=None,
         description="Maximum budget allocated to this user within the team. If not set, user has unlimited budget within team limits",
@@ -4278,6 +4281,7 @@ class TeamMemberDeleteRequest(MemberDeleteRequest):
 
 
 class TeamMemberUpdateRequest(TeamMemberDeleteRequest):
+    budget_limits: TeamMemberBudgetWindows | None = None
     max_budget_in_team: float | None = None
     role: Literal["admin", "user"] | None = None
     tpm_limit: int | None = Field(default=None, description="Tokens per minute limit for this team member")
@@ -4317,6 +4321,7 @@ class TeamMemberUpdateRequest(TeamMemberDeleteRequest):
 
 
 class TeamMemberUpdateResponse(MemberUpdateResponse):
+    budget_limits: TeamMemberBudgetWindows | None = None
     team_id: str
     max_budget_in_team: float | None = None
     tpm_limit: int | None = None

@@ -31,7 +31,10 @@ from litellm.proxy.db.db_transaction_queue.window_spend_update_queue import (
 )
 
 if TYPE_CHECKING:
+    from prisma import models as prisma_models
+
     from litellm.proxy.utils import PrismaClient
+    from litellm.repositories.prisma_protocols import TableActions
 
 
 _SELECT_EXISTING_ROWS_SQL: Final = (
@@ -133,6 +136,9 @@ class _UpsertBatchManager(Protocol):
 
 
 class _UpsertTransaction(Protocol):
+    @property
+    def litellm_budgetwindowspend(self) -> "TableActions[prisma_models.LiteLLM_BudgetWindowSpend]": ...
+
     def batch_(self) -> _UpsertBatchManager: ...
 
 
@@ -204,6 +210,26 @@ async def spend_logs_seed_totals(
     counts everything: that can only over-count once, which enforcement
     tolerates, whereas under-counting is a budget bypass.
     """
+    if entity_type == Litellm_EntityType.TEAM_MEMBER.value:
+        from litellm.proxy.db.spend_counter_reseed import SpendCounterReseed
+
+        total: Final = await SpendCounterReseed.window_from_spend_logs(
+            prisma_client=prisma_client, entity_type="TeamMember", entity_id=entity_id, window_start=window_start
+        )
+        before: Final = (
+            total
+            if batch_started_at is None
+            else await SpendCounterReseed.window_from_spend_logs(
+                prisma_client=prisma_client,
+                entity_type="TeamMember",
+                entity_id=entity_id,
+                window_start=window_start,
+                window_end=_exclusion_upper_bound(batch_started_at),
+            )
+        )
+        if total is None or before is None:
+            return None
+        return WindowSeedTotals(total=total, before_batch=before)
     if entity_type == Litellm_EntityType.KEY.value:
         bounded_sql, unbounded_sql = _SEED_FROM_SPEND_LOGS_KEY_SQL, _SEED_FROM_SPEND_LOGS_KEY_UNBOUNDED_SQL
     elif entity_type == Litellm_EntityType.TEAM.value:
@@ -342,10 +368,31 @@ async def commit_window_spend_updates(
     if not transactions:
         return
 
-    ordered: Final = tuple(sorted(transactions, key=window_spend_group_key))
-    existing_primary_keys: Final = await _existing_primary_keys(
-        prisma_client=prisma_client,
-        transactions=ordered,
+    member_transactions: Final = tuple(
+        sorted(
+            (t for t in transactions if t["entity_type"] == Litellm_EntityType.TEAM_MEMBER.value),
+            key=window_spend_group_key,
+        )
+    )
+    member_seed_bases: Final = tuple(
+        [
+            await _member_window_seed_base(prisma_client, transaction, spend_logs_aggregate)
+            for transaction in member_transactions
+        ]
+    )
+    ordered: Final = tuple(
+        sorted(
+            (t for t in transactions if t["entity_type"] != Litellm_EntityType.TEAM_MEMBER.value),
+            key=window_spend_group_key,
+        )
+    )
+    existing_primary_keys: Final[frozenset[tuple[str, str, str]]] = (
+        await _existing_primary_keys(
+            prisma_client=prisma_client,
+            transactions=ordered,
+        )
+        if ordered
+        else frozenset()
     )
     seed_bases: Final = tuple(
         [
@@ -368,13 +415,71 @@ async def commit_window_spend_updates(
     async with (
         db_span("commit_window_spend_updates", "LiteLLM_BudgetWindowSpend"),
         _upsert_transaction(prisma_client) as db_transaction,
-        db_transaction.batch_() as batcher,
     ):
-        for transaction, seed_base in zip(ordered, seed_bases):
-            batcher.execute_raw(
-                _UPSERT_WINDOW_SPEND_SQL,
-                *_upsert_params(transaction=transaction, seed_base=seed_base, now=now),
-            )
+        for transaction, seed_base in zip(member_transactions, member_seed_bases):
+            await _write_member_window_spend(db_transaction.litellm_budgetwindowspend, transaction, seed_base)
+        async with db_transaction.batch_() as batcher:
+            for transaction, seed_base in zip(ordered, seed_bases):
+                batcher.execute_raw(
+                    _UPSERT_WINDOW_SPEND_SQL,
+                    *_upsert_params(transaction=transaction, seed_base=seed_base, now=now),
+                )
+
+
+async def _member_window_seed_base(
+    prisma_client: "PrismaClient",
+    transaction: WindowSpendTransaction,
+    spend_logs_aggregate: WindowSpendLogsAggregate,
+) -> float:
+    from litellm.repositories.table_repositories import BudgetWindowSpendRepository
+
+    existing: Final = await BudgetWindowSpendRepository(prisma_client).table.find_unique(
+        where={
+            "entity_type_entity_id_window_duration": {
+                "entity_type": transaction["entity_type"],
+                "entity_id": transaction["entity_id"],
+                "window_duration": transaction["window_duration"],
+            }
+        }
+    )
+    if existing is not None:
+        return 0.0
+    totals: Final = await spend_logs_aggregate(
+        prisma_client=prisma_client,
+        entity_type=transaction["entity_type"],
+        entity_id=transaction["entity_id"],
+        window_start=datetime.fromisoformat(transaction["window_start"]).replace(tzinfo=timezone.utc),
+        batch_started_at=_transaction_started_at(transaction),
+    )
+    if totals is None:
+        return 0.0
+    return _seed_base(totals, transaction["spend"])
+
+
+async def _write_member_window_spend(
+    table: "TableActions[prisma_models.LiteLLM_BudgetWindowSpend]",
+    transaction: WindowSpendTransaction,
+    seed: float,
+) -> None:
+    key: Final = {
+        "entity_type": transaction["entity_type"],
+        "entity_id": transaction["entity_id"],
+        "window_duration": transaction["window_duration"],
+    }
+    start: Final = datetime.fromisoformat(transaction["window_start"])
+    # Keep this row locked until the entire flush commits, including key/team windows.
+    await table.upsert(
+        where={"entity_type_entity_id_window_duration": key},
+        data={"create": {**key, "window_start": start, "spend": seed}, "update": {"spend": {"increment": 0.0}}},
+    )
+    await table.update_many(
+        where={**key, "window_start": {"lt": start}},
+        data={"window_start": start, "spend": seed},
+    )
+    await table.update(
+        where={"entity_type_entity_id_window_duration": key},
+        data={"spend": {"increment": transaction["spend"]}},
+    )
 
 
 async def roll_window_spend_row(

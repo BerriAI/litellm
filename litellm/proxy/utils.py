@@ -6331,12 +6331,11 @@ class PrismaClient:
             raise e
 
     def jsonify_team_object(self, db_data: Mapping[str, object]) -> dict[str, object]:
-        db_data = self.jsonify_object(data=db_data)
-        if db_data.get("members_with_roles", None) is not None and isinstance(db_data["members_with_roles"], list):
-            db_data["members_with_roles"] = json.dumps(db_data["members_with_roles"])
-        if db_data.get("budget_limits", None) is not None and isinstance(db_data["budget_limits"], list):
-            db_data["budget_limits"] = json.dumps(db_data["budget_limits"])
-        return db_data
+        serialized: Final = self.jsonify_object(data=db_data)
+        for column in ("members_with_roles", "budget_limits", "team_member_budget_limits"):
+            if isinstance(serialized.get(column), (list, tuple)):
+                serialized[column] = json.dumps(serialized[column])
+        return serialized
 
     # Define a retrying strategy with exponential backoff
     @backoff.on_exception(

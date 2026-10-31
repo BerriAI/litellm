@@ -171,6 +171,7 @@ from litellm.proxy.management_endpoints.common_utils import (  # noqa: F401  # l
     team_member_has_permission,
     update_metadata_fields,
     upsert_budget_and_membership,
+    upsert_team_member_budget_windows,
     user_api_key_has_admin_view,
     validate_budget_duration,
     validate_team_model_max_budget,
@@ -533,7 +534,14 @@ def _team_tx_db(tx: "Prisma") -> "TableActions[prisma_models.LiteLLM_TeamTable]"
     )
 
 
-def _team_membership_db(prisma_client: PrismaClient | None) -> "TableActions[prisma_models.LiteLLM_TeamMembership]":
+def _team_membership_db(
+    prisma_client: PrismaClient | None,
+    tx: "MemberWriteTx | Prisma | None" = None,
+) -> "TableActions[prisma_models.LiteLLM_TeamMembership]":
+    if tx is not None:
+        return cast(  # cast-ok: Prisma JSON writes are strings; TableActions widens inputs at the transaction boundary
+            "TableActions[prisma_models.LiteLLM_TeamMembership]", tx.litellm_teammembership
+        )
     return TeamMembershipRepository(prisma_client).table
 
 
@@ -1961,10 +1969,7 @@ async def new_team(
             )
 
         ## ADD TO TEAM TABLE
-        complete_team_data: Final = LiteLLM_TeamTable(
-            **data_json,
-            model_id=_model_id,
-        )
+        complete_team_data: Final = LiteLLM_TeamTable.model_validate({**data_json, "model_id": _model_id})
 
         # Set Management Endpoint Metadata Fields
         for field in LiteLLM_ManagementEndpoint_MetadataFields_Premium:
@@ -3147,6 +3152,8 @@ async def _validate_team_member_add_permissions(
     # budget and model controls stay admin-only.  Reject them here so a
     # self-joining non-admin cannot set their own cap, reset window, or model
     # scope via the bypass.
+    if data.budget_limits is not None:
+        raise HTTPException(status_code=403, detail="Only admins may set member budget windows")
     if data.max_budget_in_team is not None or data.budget_duration is not None or data.allowed_models is not None:
         raise HTTPException(
             status_code=403,
@@ -3237,6 +3244,13 @@ async def _process_team_members(
             raise HTTPException(
                 status_code=500,
                 detail={"error": f"Unable to add user - {m}, to team - {data.team_id}, for reason - {e}"},
+            )
+        if data.budget_limits is not None:
+            updated_tm = await upsert_team_member_budget_windows(
+                table=_team_membership_db(prisma_client, tx),
+                team_id=data.team_id,
+                user_id=updated_user.user_id,
+                windows=data.budget_limits,
             )
         updated_users.append(updated_user)
         if updated_tm is not None:
@@ -4233,7 +4247,14 @@ async def team_member_update(
             budget_patch=budget_patch,
             team_default_budget_id=team_default_budget_id,
         )
-    if budget_patch:
+        if data.budget_limits is not None:
+            await upsert_team_member_budget_windows(
+                table=_team_membership_db(prisma_client, tx),
+                team_id=data.team_id,
+                user_id=received_user_id,
+                windows=data.budget_limits,
+            )
+    if budget_patch or data.budget_limits is not None:
         await invalidate_team_member_spend_state(
             user_id=received_user_id,
             team_id=data.team_id,
@@ -4257,6 +4278,7 @@ async def team_member_update(
         user_id=received_user_id,
         user_email=data.user_email,
         max_budget_in_team=data.max_budget_in_team,
+        budget_limits=data.budget_limits,
         tpm_limit=data.tpm_limit,
         rpm_limit=data.rpm_limit,
         budget_duration=data.budget_duration,
@@ -5185,6 +5207,7 @@ def _transform_teams_to_deleted_records(
             "litellm_model_table",
             "object_permission",
             "id",
+            "team_member_budget_limits",
             "budget_limits",  # not in LiteLLM_DeletedTeamTable schema
             "default_team_member_models",  # not in LiteLLM_DeletedTeamTable schema
         ):

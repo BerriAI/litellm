@@ -8357,7 +8357,7 @@ export interface paths {
          *      Example:
          *     ```bash
          *     curl --location 'http://0.0.0.0:4000/key/block'     --header "Authorization: Bearer $LITELLM_MASTER_KEY"     --header 'Content-Type: application/json'     --data '{
-         *         "key": "sk-Fn8Ej39NxjAXrvpUGKghGw"
+         *         "key": "<VIRTUAL_KEY>"
          *     }'
          *     ```
          *
@@ -8916,7 +8916,7 @@ export interface paths {
          *     Example:
          *     ```bash
          *     curl --location 'http://0.0.0.0:4000/key/unblock'     --header "Authorization: Bearer $LITELLM_MASTER_KEY"     --header 'Content-Type: application/json'     --data '{
-         *         "key": "sk-Fn8Ej39NxjAXrvpUGKghGw"
+         *         "key": "<VIRTUAL_KEY>"
          *     }'
          *     ```
          *
@@ -34680,6 +34680,8 @@ export interface components {
             team_alias?: string | null;
             /** Team Id */
             team_id: string;
+            /** Team Member Budget Limits */
+            team_member_budget_limits?: components["schemas"]["TeamMemberBudgetWindow"][] | null;
             /** Team Member Permissions */
             team_member_permissions?: string[] | null;
             /** Tpd Limit */
@@ -36196,6 +36198,8 @@ export interface components {
         LiteLLM_TeamMembership: {
             /** Budget Id */
             budget_id?: string | null;
+            /** Budget Limits */
+            budget_limits?: components["schemas"]["TeamMemberBudgetWindow"][] | null;
             /** Litellm Budget Table */
             litellm_budget_table?: components["schemas"]["LiteLLM_BudgetTableFull"] | components["schemas"]["LiteLLM_BudgetTable"] | null;
             /**
@@ -36303,6 +36307,8 @@ export interface components {
             team_alias?: string | null;
             /** Team Id */
             team_id: string;
+            /** Team Member Budget Limits */
+            team_member_budget_limits?: components["schemas"]["TeamMemberBudgetWindow"][] | null;
             /** Team Member Permissions */
             team_member_permissions?: string[] | null;
             /** Tpd Limit */
@@ -39677,6 +39683,8 @@ export interface components {
             team_member_budget?: number | null;
             /** Team Member Budget Duration */
             team_member_budget_duration?: string | null;
+            /** Team Member Budget Limits */
+            team_member_budget_limits?: components["schemas"]["TeamMemberBudgetWindow"][] | null;
             /** Team Member Key Duration */
             team_member_key_duration?: string | null;
             /** Team Member Model Max Budget */
@@ -40967,6 +40975,8 @@ export interface components {
             team_member_budget?: number | null;
             /** Team Member Budget Duration */
             team_member_budget_duration?: string | null;
+            /** Team Member Budget Limits */
+            team_member_budget_limits?: components["schemas"]["TeamMemberBudgetWindow"][] | null;
             /** Team Member Key Duration */
             team_member_key_duration?: string | null;
             /** Team Member Model Max Budget */
@@ -46738,6 +46748,8 @@ export interface components {
             team_alias?: string | null;
             /** Team Id */
             team_id: string;
+            /** Team Member Budget Limits */
+            team_member_budget_limits?: components["schemas"]["TeamMemberBudgetWindow"][] | null;
             /** Team Member Permissions */
             team_member_permissions?: string[] | null;
             /** Tpd Limit */
@@ -46898,6 +46910,8 @@ export interface components {
             team_alias?: string | null;
             /** Team Id */
             team_id: string;
+            /** Team Member Budget Limits */
+            team_member_budget_limits?: components["schemas"]["TeamMemberBudgetWindow"][] | null;
             /** Team Member Permissions */
             team_member_permissions?: string[] | null;
             /** Tpd Limit */
@@ -46964,6 +46978,8 @@ export interface components {
              * @description Duration after which this team member's budget resets (e.g. '1h', '24h', '7d', '30d'). If not set, the budget never resets.
              */
             budget_duration?: string | null;
+            /** Budget Limits */
+            budget_limits?: components["schemas"]["TeamMemberBudgetWindow"][] | null;
             /**
              * Max Budget In Team
              * @description Maximum budget allocated to this user within the team. If not set, user has unlimited budget within team limits
@@ -47002,6 +47018,11 @@ export interface components {
             /** User Id */
             user_id?: string | null;
         };
+        /**
+         * TeamMemberBudgetDuration
+         * @enum {string}
+         */
+        TeamMemberBudgetDuration: "1h" | "24h" | "7d" | "30d";
         /**
          * TeamMemberBudgetPatch
          * @description One member's per-member limits, merge-patch style: a field left out of the row is
@@ -47053,6 +47074,12 @@ export interface components {
             /** User Id */
             user_id?: string | null;
         };
+        /** TeamMemberBudgetWindow */
+        TeamMemberBudgetWindow: {
+            budget_duration: components["schemas"]["TeamMemberBudgetDuration"];
+            /** Max Budget */
+            max_budget: number;
+        };
         /** TeamMemberDeleteRequest */
         TeamMemberDeleteRequest: {
             /** Team Id */
@@ -47083,6 +47110,8 @@ export interface components {
         TeamMemberInfoResponse: {
             /** Budget Id */
             budget_id?: string | null;
+            /** Budget Limits */
+            budget_limits?: components["schemas"]["TeamMemberBudgetWindow"][] | null;
             /** Litellm Budget Table */
             litellm_budget_table?: components["schemas"]["LiteLLM_BudgetTableFull"] | components["schemas"]["LiteLLM_BudgetTable"] | null;
             /** Role */
@@ -47144,6 +47173,8 @@ export interface components {
              * @description Duration after which this team member's budget resets (e.g. '1h', '24h', '7d', '30d'). If not set, the budget never resets.
              */
             budget_duration?: string | null;
+            /** Budget Limits */
+            budget_limits?: components["schemas"]["TeamMemberBudgetWindow"][] | null;
             /** Max Budget In Team */
             max_budget_in_team?: number | null;
             /**
@@ -47188,6 +47219,8 @@ export interface components {
             allowed_models?: string[] | null;
             /** Budget Duration */
             budget_duration?: string | null;
+            /** Budget Limits */
+            budget_limits?: components["schemas"]["TeamMemberBudgetWindow"][] | null;
             /** Max Budget In Team */
             max_budget_in_team?: number | null;
             /** Model Max Budget */
@@ -49284,6 +49317,8 @@ export interface components {
             team_member_budget?: number | null;
             /** Team Member Budget Duration */
             team_member_budget_duration?: string | null;
+            /** Team Member Budget Limits */
+            team_member_budget_limits?: components["schemas"]["TeamMemberBudgetWindow"][] | null;
             /** Team Member Key Duration */
             team_member_key_duration?: string | null;
             /** Team Member Model Max Budget */

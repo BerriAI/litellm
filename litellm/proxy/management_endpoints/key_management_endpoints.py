@@ -8074,7 +8074,7 @@ async def block_key(
     --header "Authorization: Bearer $LITELLM_MASTER_KEY" \
     --header 'Content-Type: application/json' \
     --data '{
-        "key": "sk-Fn8Ej39NxjAXrvpUGKghGw"
+        "key": "<VIRTUAL_KEY>"
     }'
     ```
 
@@ -8188,7 +8188,7 @@ async def unblock_key(
     --header "Authorization: Bearer $LITELLM_MASTER_KEY" \
     --header 'Content-Type: application/json' \
     --data '{
-        "key": "sk-Fn8Ej39NxjAXrvpUGKghGw"
+        "key": "<VIRTUAL_KEY>"
     }'
     ```
 
