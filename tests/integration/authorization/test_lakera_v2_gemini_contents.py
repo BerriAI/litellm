@@ -184,3 +184,13 @@ def test_monitor_mode_forwards_the_body_unchanged(rig: GeminiLakeraRig) -> None:
     assert response.status_code == 200, response.text
     assert len(_lakera_messages(rig)) == 1
     assert [_JSON.validate_json(request.body) for request in rig.upstream.drain()] == [body]
+
+
+def test_card_in_a_single_contents_object_is_blocked(rig: GeminiLakeraRig) -> None:
+    body: Final[dict[str, JsonValue]] = {"contents": {"role": "user", "parts": {"text": PII_PROMPT}}}
+
+    response: Final = _send(rig, "block", body)
+
+    assert response.status_code == 400, response.text
+    assert _lakera_messages(rig) == ((("user", PII_PROMPT),),)
+    assert rig.upstream.drain() == ()
