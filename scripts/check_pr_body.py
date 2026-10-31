@@ -36,7 +36,7 @@ def section_is_blank(body: str, heading: str) -> bool:
     for index, match in enumerate(matches):
         if match.group().strip() != heading:
             continue
-        end = matches[index + 1].start() if index + 1 < len(matches) else len(body)
+        end: Final = matches[index + 1].start() if index + 1 < len(matches) else len(body)
         return not body[match.end() : end].strip()
     return False
 
