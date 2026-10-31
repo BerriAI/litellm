@@ -208,7 +208,7 @@ async def _log_mcp_protocol_rejection(
             original_function="call_mcp_tool",
             rules_obj=Rules(),
             start_time=start_time,
-            **request_data,  # pyright: ignore[reportAny]  # function_setup erases its forwarded keyword types
+            **request_data,  # pyright: ignore[reportAny, reportArgumentType]  # function_setup erases its forwarded keyword types
         )
 
         if litellm_logging_obj is None:  # pyright: ignore[reportUnnecessaryComparison]  # keep best-effort guard for runtime substitutes
