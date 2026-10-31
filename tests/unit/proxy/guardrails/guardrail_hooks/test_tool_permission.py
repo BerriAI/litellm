@@ -2431,6 +2431,59 @@ class TestToolPermissionGuardrailAnthropicMessages:
         assert result["tools"] == [weather]
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("on_disallowed_action", ["block", "rewrite"])
+    async def test_pre_call_leaves_a_gemini_hosted_key_that_sits_beside_a_function(
+        self, on_disallowed_action: Literal["block", "rewrite"]
+    ) -> None:
+        guardrail = self._pre_call(
+            [{"id": "allow_weather", "tool_name": r"^get_weather$", "decision": "allow"}],
+            on_disallowed_action,
+            default_action="deny",
+        )
+        tool = {"type": "function", "function": {"name": "get_weather"}, "googleSearch": {}}
+        data = {"model": "gemini-3", "messages": [{"role": "user", "content": "hi"}], "tools": [tool]}
+
+        result = await self._run_pre_call(guardrail, data, "acompletion")
+
+        assert result["tools"] == [tool]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("on_disallowed_action", ["block", "rewrite"])
+    @pytest.mark.parametrize(
+        ("function", "denied"),
+        [
+            ({"type": "function", "function": {"name": "delete_db"}}, "delete_db"),
+            ({"name": "get_weather", "function": {"name": "delete_db"}}, "delete_db"),
+            ({"googleSearch": {}}, "googleSearch"),
+        ],
+        ids=["function_object", "function_object_behind_an_allowed_name", "gemini_hosted_key"],
+    )
+    async def test_pre_call_judges_a_legacy_functions_entry_like_a_tool(
+        self, function: dict[str, object], denied: str, on_disallowed_action: Literal["block", "rewrite"]
+    ) -> None:
+        guardrail = self._pre_call(
+            [{"id": "allow_weather", "tool_name": r"^get_weather$", "decision": "allow"}],
+            on_disallowed_action,
+            default_action="deny",
+        )
+        weather = {"name": "get_weather"}
+        data = {
+            "model": "gemini-3",
+            "messages": [{"role": "user", "content": "hi"}],
+            "functions": [weather, function],
+        }
+
+        if on_disallowed_action == "block":
+            with pytest.raises(HTTPException) as excinfo:
+                await self._run_pre_call(guardrail, data, "acompletion")
+            assert excinfo.value.detail["detection_message"] == f"Tool '{denied}' denied by default action"
+            return
+
+        result = await self._run_pre_call(guardrail, data, "acompletion")
+
+        assert result["functions"] == [weather]
+
+    @pytest.mark.asyncio
     async def test_rewrite_keeps_an_allowed_function_whose_declaration_list_is_denied(self) -> None:
         guardrail = self._pre_call(
             [{"id": "allow_weather", "tool_name": r"^get_weather$", "decision": "allow"}],

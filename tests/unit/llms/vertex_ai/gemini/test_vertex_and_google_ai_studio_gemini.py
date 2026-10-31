@@ -1783,6 +1783,24 @@ def test_vertex_ai_map_tools():
     assert tools == new_tools
 
 
+def test_vertex_ai_map_tools_declares_a_namespace_by_its_members() -> None:
+    namespace = {
+        "type": "namespace",
+        "name": "github",
+        "tools": [
+            {"type": "function", "name": "create_issue", "parameters": {"type": "object", "properties": {}}},
+            {"type": "function", "function": {"name": "close_issue"}},
+        ],
+    }
+
+    tools = VertexGeminiConfig().map_function(value=[namespace], optional_params={})
+
+    assert [declaration["name"] for declaration in tools[0]["function_declarations"]] == [
+        "create_issue",
+        "close_issue",
+    ]
+
+
 def test_vertex_ai_map_tool_with_anyof():
     """
     Related issue: https://github.com/BerriAI/litellm/issues/11164

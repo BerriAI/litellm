@@ -65,11 +65,25 @@ _FORCED_FUNCTION_CALLING_MODES: Final = frozenset({"ANY", "VALIDATED"})
 _NAME_IDENTIFIED_TYPES: Final = frozenset({"function", "custom", "namespace", *_HOSTED_SERVER_NAME_FIELDS})
 _TEXT_EDITOR_TOOL_NAMES: Final = frozenset({"str_replace_editor", "str_replace_based_edit_tool"})
 _TYPE_VERSION_SUFFIX: Final = re.compile(r"_\d{8}$")
-_GEMINI_HOSTED_TOOL_KEYS: Final = frozenset(tool.value.replace("_", "").lower() for tool in VertexToolName)
+_GEMINI_TYPED_HOSTED_TOOLS: Final = ("computer_use", "web_search", "web_search_preview")
 _NAMED_CHOICE_TYPES: Final = frozenset({"tool", "function", "custom", "allowed_tools", "any", "auto", "none"})
 _DECODED_ARGUMENTS: Final = TypeAdapter(object)
 _REQUEST_DATA: Final = TypeAdapter(object)
 _ToolTarget: TypeAlias = tuple[str | None, str | None]
+
+
+def _snake_case(name: str) -> str:
+    return re.sub(r"(?<!^)(?=[A-Z])", "_", name).lower()
+
+
+def _camel_case(name: str) -> str:
+    head, *rest = name.split("_")
+    return head + "".join(part.title() for part in rest)
+
+
+_GEMINI_HOSTED_TOOL_KEYS: Final = frozenset(
+    chain.from_iterable((_snake_case(tool.value), _camel_case(tool.value)) for tool in VertexToolName)
+)
 
 
 def _name_identifies_tool(name: str, tool_type: str) -> bool:
@@ -128,10 +142,10 @@ def _namespace_function_targets(tool: object) -> tuple[_ToolTarget, ...]:
 
 def _gemini_hosted_key_targets(tool: object) -> tuple[_ToolTarget, ...]:
     fields: Final = _object_mapping(tool)
-    if fields is None:
+    if fields is None or fields.get("type") in _GEMINI_TYPED_HOSTED_TOOLS:
         return ()
-    hosted_keys: Final = (key for key in fields if key.replace("_", "").lower() in _GEMINI_HOSTED_TOOL_KEYS)
-    return tuple(_part_target(fields, key) for key in hosted_keys)
+    keys: Final = tuple(key for key in fields if key != "type")
+    return (_part_target(fields, keys[0]),) if len(keys) == 1 and keys[0] in _GEMINI_HOSTED_TOOL_KEYS else ()
 
 
 def _namespace_members(tool: object) -> Sequence[object]:
@@ -242,6 +256,7 @@ def _extra_body_tools(data: object) -> Sequence[object] | None:
 def _sent_tools(data: object) -> tuple[object, ...]:
     return (
         *(_request_list(data, "tools") or ()),
+        *(_request_list(data, "functions") or ()),
         *(_extra_body_tools(data) or ()),
         *_tools_in_items(_input_items(data)),
     )
@@ -991,9 +1006,6 @@ class ToolPermissionGuardrail(CustomGuardrail):
             return (*named_targets, (None, normalized_type))
         return ((None, tool_type),) if tool_type is not None else ()
 
-    def _get_legacy_function_name(self, function: object) -> str | None:
-        return self._get_mapping_value(function, "name")
-
     def _get_named_tool_choice(self, tool_choice: object) -> str | None:
         if not tool_choice or tool_choice in ("auto", "none", "required"):
             return None
@@ -1031,9 +1043,7 @@ class ToolPermissionGuardrail(CustomGuardrail):
         request_tools.extend(map(_mcp_server_target, _request_list(request, "mcp_servers") or ()))
 
         for function in _request_list(request, "functions") or ():
-            function_name = self._get_legacy_function_name(function)
-            if function_name is not None:
-                request_tools.append((function_name, "function"))
+            request_tools.extend(self._get_request_tool_targets(function))
 
         listed_names: Final = frozenset(name for name, _ in request_tools)
         for forced_tool_name in (
@@ -1167,13 +1177,9 @@ class ToolPermissionGuardrail(CustomGuardrail):
             }
 
         functions: Final = _request_list(request, "functions")
-        kept_functions: Final = (
-            None
-            if functions is None
-            else [function for function in functions if self._get_legacy_function_name(function) not in denied_names]
-        )
+        kept_functions: Final = None if functions is None else kept_tool_list(functions)
         if kept_functions is not None:
-            data["functions"] = kept_functions  # rebind-ok: rewrite mode edits the request in place
+            data["functions"] = list(kept_functions)  # rebind-ok: rewrite mode edits the request in place
 
         mcp_servers: Final = _request_list(request, "mcp_servers")
         kept_mcp_servers: Final = (
@@ -1198,6 +1204,7 @@ class ToolPermissionGuardrail(CustomGuardrail):
 
         kept_sent_tools: Final = (
             *(kept_tools or ()),
+            *(kept_functions or ()),
             *(kept_extra_body_tools or ()),
             *_tools_in_items(kept_input_items),
         )
@@ -1205,7 +1212,7 @@ class ToolPermissionGuardrail(CustomGuardrail):
         kept_types: Final = self._tool_types_in(kept_sent_tools)
         removed_types: Final = self._tool_types_in(sent_tools) - kept_types
 
-        tools_remain: Final = bool(kept_sent_tools) or bool(kept_functions) or bool(kept_mcp_servers)
+        tools_remain: Final = bool(kept_sent_tools) or bool(kept_mcp_servers)
         tool_choice: Final = _REQUEST_DATA.validate_python(data.get("tool_choice"))
         if tool_choice is not None:
             rewritten_choice: Final = self._rewritten_tool_choice(
@@ -1214,7 +1221,7 @@ class ToolPermissionGuardrail(CustomGuardrail):
             data["tool_choice"] = rewritten_choice  # rebind-ok: rewrite mode edits the request in place
 
         named_function_call: Final = self._get_named_function_call(data)
-        if named_function_call in denied_names:
+        if named_function_call in removed_names:
             data["function_call"] = "none"  # rebind-ok: rewrite mode edits the request in place
 
         functions_remain: Final = "function" in kept_types
