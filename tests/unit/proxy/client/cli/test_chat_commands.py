@@ -1,4 +1,5 @@
 import io
+from pathlib import Path
 from typing import Final
 
 import pytest
@@ -7,7 +8,11 @@ from pydantic import JsonValue
 from rich.console import Console
 
 from litellm.proxy.client.chat import ChatClient
-from litellm.proxy.client.cli.commands.chat import _stream_response
+from litellm.proxy.client.cli.commands.chat import (
+    _load_conversation,
+    _save_conversation,
+    _stream_response,
+)
 
 BASE_URL: Final = "http://localhost:8000"
 MESSAGE: Final = "blocked [/pii] :warning: content in [prompt_injection] after 42 tokens"
@@ -16,6 +21,25 @@ PARTIAL_THEN_ERROR: Final = (
     + f'data: {{"error": {{"message": "{MESSAGE}"}}}}\n\n'.encode()
     + b"data: [DONE]\n\n"
 )
+
+
+def test_save_and_load_conversation_roundtrips_non_ascii(tmp_path: Path) -> None:
+    """/save writes readable UTF-8 (not \\uXXXX escapes) and /load reads it back on any locale."""
+    console = Console()
+    messages = [
+        {"role": "user", "content": "Café ☕ 東京"},
+        {"role": "assistant", "content": "日本語で返信します"},
+    ]
+    target = tmp_path / "conversation.json"
+
+    _save_conversation(console, messages, f"/save {target}")
+
+    saved = target.read_text(encoding="utf-8")
+    assert "東京" in saved
+    assert "\\u" not in saved
+
+    loaded = _load_conversation(console, f"/load {target}", system=None)
+    assert loaded == messages
 
 
 @pytest.mark.parametrize(
