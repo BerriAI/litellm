@@ -19,13 +19,14 @@ const (
 )
 
 type tagBudgetTable struct {
-	BudgetID            string   `json:"budget_id"`
-	MaxBudget           *float64 `json:"max_budget"`
-	SoftBudget          *float64 `json:"soft_budget"`
-	MaxParallelRequests *int     `json:"max_parallel_requests"`
-	TPMLimit            *int     `json:"tpm_limit"`
-	RPMLimit            *int     `json:"rpm_limit"`
-	BudgetDuration      string   `json:"budget_duration"`
+	BudgetID            string      `json:"budget_id"`
+	MaxBudget           *float64    `json:"max_budget"`
+	SoftBudget          *float64    `json:"soft_budget"`
+	MaxParallelRequests *int        `json:"max_parallel_requests"`
+	TPMLimit            *int        `json:"tpm_limit"`
+	RPMLimit            *int        `json:"rpm_limit"`
+	BudgetDuration      string      `json:"budget_duration"`
+	ModelMaxBudget      interface{} `json:"model_max_budget"`
 }
 
 type tagInfoEntry struct {
@@ -68,7 +69,8 @@ func resourceLiteLLMTag() *schema.Resource {
 			"budget_id": {
 				Type:        schema.TypeString,
 				Optional:    true,
-				Description: "Existing budget ID to associate with this tag.",
+				Computed:    true,
+				Description: "Existing budget ID to associate with this tag. When unset, holds the ID of the budget the proxy creates for inline budget fields.",
 			},
 			"max_budget": {
 				Type:        schema.TypeFloat,
@@ -101,9 +103,10 @@ func resourceLiteLLMTag() *schema.Resource {
 				Description: "Duration for budget reset (e.g. '1h', '1d', '30d').",
 			},
 			"model_max_budget": {
-				Type:        schema.TypeString,
-				Optional:    true,
-				Description: "JSON object string with per-model budget configuration.",
+				Type:             schema.TypeString,
+				Optional:         true,
+				DiffSuppressFunc: budgetSuppressEquivalentJSON,
+				Description:      "JSON object string with per-model budget configuration.",
 			},
 		},
 	}
@@ -233,6 +236,8 @@ func resourceLiteLLMTagRead(d *schema.ResourceData, m interface{}) error {
 			d.Set("rpm_limit", *bt.RPMLimit)
 		}
 		d.Set("budget_duration", GetStringValue(bt.BudgetDuration, d.Get("budget_duration").(string)))
+		modelMaxBudget, _ := budgetModelMaxBudgetString(bt.ModelMaxBudget)
+		d.Set("model_max_budget", modelMaxBudget)
 	}
 
 	log.Printf("[INFO] Successfully read tag with name: %s", d.Id())
