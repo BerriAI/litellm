@@ -2342,7 +2342,19 @@ def _metadata_fields(value: object) -> Mapping[str, object]:
         return {}
 
 
+_CALLER_OWNED_KEY_FIELDS: Final[frozenset[str]] = frozenset({"user_api_key_end_user_id", "user_api_key_request_route"})
+
+
 def _is_key_identity_field(key: str) -> bool:
+    """Whether a metadata field attributes the authenticated key rather than the request.
+
+    The ``user_api_key_`` namespace also carries two fields that describe the caller's own
+    request: the end user it is made for, and the route it came from. A guardrail needs both
+    to decide, and on ``/apply_guardrail`` the proxy's own values say nothing about the call
+    the caller is asking about.
+    """
+    if key in _CALLER_OWNED_KEY_FIELDS:
+        return False
     return key == "user_api_key" or key.startswith("user_api_key_")
 
 

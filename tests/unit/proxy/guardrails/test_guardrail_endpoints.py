@@ -4,9 +4,10 @@ from collections.abc import Callable
 from datetime import datetime
 from types import MappingProxyType
 from typing import Dict, Final, List, Optional
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
+from pytest_mock import MockerFixture
 import yaml
 
 
@@ -22,6 +23,7 @@ from litellm.proxy.guardrails.guardrail_endpoints import (
     TestCustomCodeGuardrailRequest,
     UpdateGuardrailRequest,
     _get_guardrails_list_response,
+    _guardrail_request_metadata,
     apply_guardrail,
     approve_guardrail_submission,
     create_guardrail,
@@ -2167,18 +2169,20 @@ async def test_apply_guardrail_invokes_logging_pipeline(mocker):
     }
 
 
-def _patch_apply_guardrail_env(mocker, guardrail_result, processed_data=None):
-    mock_guardrail = mocker.Mock()
+def _patch_apply_guardrail_env(
+    mocker: MockerFixture, guardrail_result: object, processed_data: dict[str, object] | None = None
+) -> Mock:
+    mock_guardrail: Final = mocker.Mock()
     mock_guardrail.apply_guardrail = AsyncMock(return_value=guardrail_result)
 
-    mock_registry = mocker.Mock()
+    mock_registry: Final = mocker.Mock()
     mock_registry.get_initialized_guardrail_callback.return_value = mock_guardrail
     mocker.patch("litellm.proxy.guardrails.guardrail_endpoints.GUARDRAIL_REGISTRY", mock_registry)
 
-    mock_logging_obj = mocker.Mock()
+    mock_logging_obj: Final = mocker.Mock()
     mock_logging_obj.async_success_handler = AsyncMock()
     mock_logging_obj.model_call_details = {}
-    mock_processor = mocker.Mock()
+    mock_processor: Final = mocker.Mock()
     mock_processor.common_processing_pre_call_logic = AsyncMock(
         return_value=(processed_data or {"guardrail_name": "test-guardrail"}, mock_logging_obj)
     )
@@ -2187,7 +2191,7 @@ def _patch_apply_guardrail_env(mocker, guardrail_result, processed_data=None):
         return_value=mock_processor,
     )
 
-    mock_proxy_logging = mocker.Mock()
+    mock_proxy_logging: Final = mocker.Mock()
     mock_proxy_logging.post_call_success_hook = AsyncMock()
     mocker.patch("litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging)
     mocker.patch("litellm.proxy.proxy_server.general_settings", {})
@@ -2251,6 +2255,42 @@ async def test_apply_guardrail_forwards_metadata_and_messages_together(mocker):
     )
 
 
+class TestGuardrailRequestMetadata:
+    """What a guardrail is told about the caller on /apply_guardrail."""
+
+    def test_the_authenticated_key_identity_replaces_the_caller_version(self) -> None:
+        metadata: Final = _guardrail_request_metadata(
+            {"forbidden_topics": ["tax"], "user_api_key_alias": "someone-else"},
+            {"user_api_key_alias": "billing-app", "user_api_key_user_id": "u-1"},
+        )
+        assert metadata == {
+            "forbidden_topics": ["tax"],
+            "user_api_key_alias": "billing-app",
+            "user_api_key_user_id": "u-1",
+        }
+
+    def test_the_bare_key_hash_cannot_come_from_the_caller(self) -> None:
+        metadata: Final = _guardrail_request_metadata({"user_api_key": "spoof"}, {"user_api_key": "hashed"})
+        assert metadata == {"user_api_key": "hashed"}
+
+    def test_the_caller_owns_the_end_user_and_the_route(self) -> None:
+        """Both describe the call the caller is asking about, not the key it authenticated with."""
+        metadata: Final = _guardrail_request_metadata(
+            {"user_api_key_end_user_id": "customer-42", "user_api_key_request_route": "/v1/chat/completions"},
+            {"user_api_key_request_route": "/apply_guardrail"},
+        )
+        assert metadata == {
+            "user_api_key_end_user_id": "customer-42",
+            "user_api_key_request_route": "/v1/chat/completions",
+        }
+
+    def test_a_guardrail_can_annotate_what_it_is_handed(self) -> None:
+        """OpenAI moderation and Presidio write their detection details into this mapping."""
+        metadata: Final = _guardrail_request_metadata({}, {"user_api_key_alias": "billing-app"})
+        metadata["moderation_model"] = "omni-moderation-latest"
+        assert metadata == {"user_api_key_alias": "billing-app", "moderation_model": "omni-moderation-latest"}
+
+
 @pytest.mark.asyncio
 async def test_apply_guardrail_replaces_caller_identity_with_the_authenticated_key(mocker):
     """Identity fields come from the proxy's own sanitized metadata, never from
@@ -2289,42 +2329,6 @@ async def test_apply_guardrail_replaces_caller_identity_with_the_authenticated_k
         "user_api_key_alias": "billing-app",
         "user_api_key_user_id": "u-1",
     }
-
-
-@pytest.mark.asyncio
-async def test_apply_guardrail_hands_the_guardrail_metadata_it_can_write_to(mocker):
-    """Guardrails such as OpenAI moderation annotate the metadata they are given, so a
-    read-only mapping turns a normal evaluation into a 500."""
-    mock_guardrail = _patch_apply_guardrail_env(
-        mocker,
-        {"texts": ["ok"]},
-        processed_data={"guardrail_name": "test-guardrail", "metadata": {"user_api_key_alias": "billing-app"}},
-    )
-
-    annotated: Final[list[object]] = []  # mutable-ok: records the metadata the guardrail was handed
-
-    async def annotating_guardrail(**kwargs):
-        kwargs["request_data"]["metadata"]["moderation_model"] = "omni-moderation-latest"
-        annotated.append(kwargs["request_data"]["metadata"])
-        return {"texts": ["ok"]}
-
-    mock_guardrail.apply_guardrail = annotating_guardrail
-
-    await apply_guardrail(
-        fastapi_request=mocker.Mock(),
-        request=ApplyGuardrailRequest(
-            guardrail_name="test-guardrail", text="hello", metadata={"forbidden_topics": ["tax"]}
-        ),
-        user_api_key_dict=UserAPIKeyAuth(key_alias="billing-app"),
-    )
-
-    assert annotated == [
-        {
-            "forbidden_topics": ["tax"],
-            "user_api_key_alias": "billing-app",
-            "moderation_model": "omni-moderation-latest",
-        }
-    ]
 
 
 @pytest.mark.asyncio
