@@ -173,7 +173,15 @@ def usage_writes(
         ended_at=ended,
         outcome=outcome,
         dimensions=dimensions,
-        metrics=_usage_metrics(None if context.usage_source == "unknown" else usage),
+        metrics=_usage_metrics(
+            None
+            if context.usage_source == "unknown"
+            or (
+                context.ownership == "aggregate"
+                and payload["call_type"] in {CallTypes.retrieve_batch.value, CallTypes.aretrieve_batch.value}
+            )
+            else usage
+        ),
     )
     envelope: Final = {
         "event": outbound.model_dump(mode="json"),
@@ -218,6 +226,7 @@ def usage_writes(
 
 
 _INCLUDED_IN_PARENT: Final = object()
+_BATCH_ROWS: Final = object()
 
 
 _PRICING_FIELDS: Final = frozenset(
@@ -306,6 +315,10 @@ def capture_context(payload: SpendLogsPayload, kwargs: Mapping[str, object], res
         "expired",
         "incomplete",
     }
+    batch_summary: Final = (
+        payload["call_type"] in {CallTypes.retrieve_batch.value, CallTypes.aretrieve_batch.value}
+        and kwargs.get("_accounting_batch_rows") is not _BATCH_ROWS
+    )
     deferred: Final = billed_id.endswith(("_batch_cost", "_background_cost")) and terminal
     management: Final = (
         payload["call_type"] in {CallTypes.create_batch.value, CallTypes.acreate_batch.value}
@@ -320,6 +333,8 @@ def capture_context(payload: SpendLogsPayload, kwargs: Mapping[str, object], res
         if management
         else f"{billed_id}:included"
         if included_in_parent
+        else f"{billed_id}:summary"
+        if batch_summary and terminal
         else billed_id
     )
     if not attempt or attempt == "None" or (cached and not caller):
@@ -390,12 +405,12 @@ def capture_context(payload: SpendLogsPayload, kwargs: Mapping[str, object], res
         parent_request_id=parent,
         retry_of_attempt_id=_text(request_metadata.get("retry_of_attempt_id")),
         job_id=_text(raw_response.get("id")) if deferred or management else None,
-        charge_eligible=not cached and not included_in_parent and not management,
+        charge_eligible=not cached and not included_in_parent and not management and not batch_summary,
         request_count_eligible=bool(caller) and not origin and not retry and not deferred and not included_in_parent,
         ownership="included_in_parent"
         if included_in_parent
         else "aggregate"
-        if kwargs.get("additional_response_cost") is not None
+        if batch_summary or kwargs.get("additional_response_cost") is not None
         else "attempt",
         pricing=_json(captured_pricing),
         finalized_cost=_json(
@@ -564,13 +579,26 @@ def _batch_rows(response: object) -> tuple[Mapping[str, JsonValue], ...]:
 
 
 def _batch_root(write: UsageWrite, rows: tuple[Mapping[str, JsonValue], ...]) -> UsageWrite:
-    event: Final = write.event.model_copy(update={"metrics": None})
+    from litellm.proxy.openai_files_endpoints.common_utils import (
+        convert_b64_uid_to_unified_uid,
+        get_batch_id_from_unified_batch_id,
+        get_original_file_id,
+    )
+
     envelope: Final = _JSON_OBJECT.validate_json(write.envelope)
+    observed_job: Final = TypeAdapter(str).validate_python(envelope["job_id"])
+    decoded: Final = convert_b64_uid_to_unified_uid(observed_job)
+    job: Final = (
+        get_batch_id_from_unified_batch_id(decoded) if decoded != observed_job else get_original_file_id(observed_job)
+    )
+    identity: Final = f"{job}_batch_cost"
+    event: Final = write.event.model_copy(update={"metrics": None, "event_id": identity, "attempt_id": identity})
     return _database_usage_write(
         event,
         {
             **envelope,
             "event": event.model_dump(mode="json"),
+            "job_id": job,
             "usage": {
                 "batch_row_count": len(rows),
                 "batch_rows_sha256": sha256(_json(rows).encode()).hexdigest(),
@@ -644,7 +672,7 @@ def _prepare_batch_capture(
     from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
 
     rows: Final = tuple(sorted(_batch_rows(response), key=_json))
-    builder: Final = _CaptureBuilder(kwargs, response)
+    builder: Final = _CaptureBuilder({**kwargs, "_accounting_batch_rows": _BATCH_ROWS}, response)
     payload: Final = get_logging_payload(
         dict(kwargs), response, start_time, end_time, llm_router=get_llm_router(), capture_usage=builder.observe
     )
@@ -846,7 +874,7 @@ def capture_logging_usage(
             if isinstance(existing_pricing, PricingCapture) and not internal and not _batch_rows(normalized)
             else _capture_pricing(logging_obj, normalized_result, details)
         )
-        if freeze_only or _batch_rows(normalized):
+        if freeze_only or logging_obj.call_type in {CallTypes.retrieve_batch.value, CallTypes.aretrieve_batch.value}:
             if not internal:
                 logging_obj.record_usage_pricing(pricing)
             return

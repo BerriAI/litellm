@@ -2009,7 +2009,7 @@ def completion_cost(
                         video_resolution=video_resolution,
                     )
                 elif call_type in _SPEECH_CALL_TYPES:
-                    prompt_characters = _speech_billed_characters(
+                    prompt_characters = speech_billed_characters(
                         completion_response if isinstance(completion_response, HttpxBinaryResponseContent) else None,
                         prompt,
                     )
@@ -2527,7 +2527,7 @@ def response_cost_calculator(
         raise e
 
 
-def _speech_billed_characters(speech_response: HttpxBinaryResponseContent | None, prompt: str) -> int:
+def speech_billed_characters(speech_response: HttpxBinaryResponseContent | None, prompt: str) -> int:
     reported: Final = speech_response.hidden_params.get("billed_characters") if speech_response is not None else None
     return reported if isinstance(reported, int) else litellm.utils.count_characters(text=prompt)
 

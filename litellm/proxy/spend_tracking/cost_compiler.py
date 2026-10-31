@@ -5,6 +5,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Final
 
+from httpx import Response
 from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter
 
 from litellm._internal_context import pinned_billing_time
@@ -18,19 +19,21 @@ from litellm.accounting import (
     PricingSnapshot,
     Unpriced,
 )
-from litellm.cost_calculator import batch_cost_calculator
+from litellm.cost_calculator import batch_cost_calculator, ocr_batch_cost
 from litellm.litellm_core_utils.hidden_params import set_hidden_param
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.llm_cost_calc.finalization import finalize_cost
 from litellm.litellm_core_utils.llm_cost_calc.pricing_context import RetainedPricing, retained_pricing
+from litellm.llms.base_llm.ocr.transformation import OCRUsageInfo
 from litellm.proxy.db.accounting_ledger import AccountingLedger
 from litellm.proxy.spend_tracking.usage_meter import usage_delivery_targets
-from litellm.types.llms.openai import ResponsesAPIResponse
+from litellm.types.llms.openai import HttpxBinaryResponseContent, ResponsesAPIResponse
 from litellm.types.utils import (
     CallTypes,
     CostBreakdown,
     CostPerToken,
     LiteLLMRealtimeStreamLoggingObject,
+    ModelInfo,
     ModelResponse,
     StandardBuiltInToolsParams,
     Usage,
@@ -55,6 +58,7 @@ class _UsageEnvelope(BaseModel):
     usage: Mapping[str, JsonValue] | None = None
     pricing: Mapping[str, JsonValue]
     charge_eligible: bool
+    parent_request_id: str | None = None
     finalized_cost: Mapping[str, JsonValue] | None = None
     allocation: Mapping[str, JsonValue] | None = None
 
@@ -62,8 +66,19 @@ class _UsageEnvelope(BaseModel):
 def price_usage(envelope: str) -> PricingSnapshot | Unpriced:
     captured: Final = _UsageEnvelope.model_validate_json(envelope)
     event: Final = captured.event
-    if not captured.charge_eligible:
+    batch_summary: Final = event.call_type in {CallTypes.retrieve_batch, CallTypes.aretrieve_batch} and not (
+        captured.parent_request_id is not None and event.event_id.startswith(f"{captured.parent_request_id}:row:")
+    )
+    if not captured.charge_eligible or batch_summary:
         return Unpriced(usage_event_id=event.event_id, reason="not_charge_owner")
+    logged: Final = _fields(captured.pricing.get("logging"))
+    speech_characters: Final = logged.get("prompt_characters")
+    speech_usage: Final = (
+        event.call_type in {CallTypes.speech, CallTypes.aspeech}
+        and isinstance(speech_characters, int)
+        and not isinstance(speech_characters, bool)
+        and speech_characters >= 0
+    )
     fixed_call: Final = event.call_type in {CallTypes.call_mcp_tool, CallTypes.send_message, CallTypes.asend_message}
     realtime_events: Final = TypeAdapter(tuple[dict[str, JsonValue], ...]).validate_python(
         captured.pricing.get("realtime_events") or ()
@@ -71,17 +86,22 @@ def price_usage(envelope: str) -> PricingSnapshot | Unpriced:
     realtime_usage: Final = event.call_type is CallTypes.arealtime and any(
         bool(item.get("usage")) for item in realtime_events
     )
-    if captured.usage is None and not fixed_call and not realtime_usage:
+    if captured.usage is None and not fixed_call and not realtime_usage and not speech_usage:
         return Unpriced(usage_event_id=event.event_id, reason="usage_unknown")
     pricing: Final = captured.pricing
     mapped: Final = _fields(pricing.get("model_map_information"))
     rates: Final = _fields(mapped.get("model_map_value"))
+    if (
+        event.call_type in {CallTypes.speech, CallTypes.aspeech}
+        and rates.get("input_cost_per_character") is not None
+        and not speech_usage
+    ):
+        return Unpriced(usage_event_id=event.event_id, reason="usage_unknown")
     model: Final = next(
         (d.value for d in event.dimensions if d.name is DimensionName.MODEL),
         event.call_type.value if fixed_call else None,
     )
     provider: Final = next((d.value for d in event.dimensions if d.name is DimensionName.PROVIDER), None)
-    logged: Final = _fields(pricing.get("logging"))
     if (
         fixed_call
         and event.outcome is not Outcome.SUCCEEDED
@@ -180,8 +200,14 @@ def price_usage(envelope: str) -> PricingSnapshot | Unpriced:
         },
         response_ms=logged.get("response_ms"),
     )
+    speech_response: Final = HttpxBinaryResponseContent(Response(200, content=b"")) if speech_usage else None
+    if speech_response is not None:
+        set_hidden_param(speech_response, "billed_characters", speech_characters)
+        speech_response.usage = replay_usage
     response: Final = (
-        LiteLLMRealtimeStreamLoggingObject.model_validate(
+        speech_response
+        if speech_response is not None
+        else LiteLLMRealtimeStreamLoggingObject.model_validate(
             {
                 "results": pricing.get("realtime_events", []),
                 "usage": captured.usage or {},
@@ -251,7 +277,15 @@ def price_usage(envelope: str) -> PricingSnapshot | Unpriced:
     logger.cost_billing_time = billed_at
     with retained_pricing(context), pinned_billing_time(billed_at):
         batch_costs: Final = (
-            batch_cost_calculator(
+            ocr_batch_cost(
+                model=model,
+                custom_llm_provider=provider,
+                usage_info=OCRUsageInfo.model_validate(captured.usage),
+                model_info=TypeAdapter(ModelInfo).validate_python(info),
+            )
+            if event.call_type in {CallTypes.retrieve_batch, CallTypes.aretrieve_batch}
+            and any(name in (captured.usage or {}) for name in OCRUsageInfo.model_fields)
+            else batch_cost_calculator(
                 replay_usage,
                 model,
                 provider,

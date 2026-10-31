@@ -1167,3 +1167,184 @@ def test_header_split_retains_token_rates_when_catalog_mode_is_unspecified(mode:
     assert float(result.total_cost) == pytest.approx(0.18)
     assert float(result.input_cost or 0) == pytest.approx(0.1)
     assert float(result.output_cost or 0) == pytest.approx(0.08)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("logging_first", (False, True))
+async def test_batch_logging_and_rows_have_one_charge_owner(
+    monkeypatch: pytest.MonkeyPatch, logging_first: bool
+) -> None:
+    import litellm
+    from litellm.batches.batch_utils import batch_cost_and_usage
+    from litellm.proxy.spend_tracking.usage_capture import (
+        UsageBatchWriter,
+        capture_batch_callback,
+        capture_callback,
+        capture_logging_usage,
+    )
+    from litellm.proxy.spend_tracking.usage_meter import DurableUsageMeter, UsageCaptureSettings
+    from litellm.types.utils import LiteLLMBatch
+    from tests.unit.proxy.spend_tracking.test_usage_capture import StoredUsage, _logger
+    from tests.unit.proxy.spend_tracking.test_usage_meter import _manual_flush
+
+    rates: Final = {
+        "input_cost_per_token_batches": 0.003,
+        "output_cost_per_token_batches": 0.004,
+        "input_cost_per_token": 0.006,
+        "output_cost_per_token": 0.008,
+        "litellm_provider": "openai",
+        "mode": "chat",
+    }
+    monkeypatch.setitem(litellm.model_cost, "capture-model", rates)
+    billed: Final = batch_cost_and_usage(
+        [
+            {
+                "response": {
+                    "status_code": 200,
+                    "body": {
+                        "model": "capture-model",
+                        "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+                    },
+                }
+            }
+            for _ in range(2)
+        ],
+        "openai",
+    )
+    response: Final = LiteLLMBatch(
+        id="owner-job",
+        object="batch",
+        endpoint="/v1/chat/completions",
+        input_file_id="file",
+        completion_window="24h",
+        status="completed",
+        created_at=1,
+        completed_at=2,
+        usage=billed.usage,
+    )
+    database: Final = StoredUsage()
+    writer: Final = UsageBatchWriter(database.insert, database.load)
+    meter: Final = DurableUsageMeter(writer.write, UsageCaptureSettings(), wait_for_batch=_manual_flush)
+    logger: Final = _logger("aretrieve_batch")
+    capture_logging_usage(meter, logger, response, _AT, _AT, freeze_only=True)
+    try:
+        for _ in range(2):
+            if logging_first:
+                capture_callback(
+                    meter,
+                    {**logger.model_call_details, "litellm_logging_obj": logger},
+                    {
+                        **response.model_dump(),
+                        "id": "provider-job",
+                        "usage": {"prompt_tokens": 20, "completion_tokens": 10, "total_tokens": 30},
+                    },
+                    _AT,
+                    _AT,
+                )
+                capture_logging_usage(meter, logger, response, _AT, _AT)
+            await capture_batch_callback(
+                meter, database.load, {**logger.model_call_details, "litellm_logging_obj": logger}, response, _AT, _AT
+            )
+            if not logging_first:
+                capture_callback(
+                    meter,
+                    {**logger.model_call_details, "litellm_logging_obj": logger},
+                    {
+                        **response.model_dump(),
+                        "id": "provider-job",
+                        "usage": {"prompt_tokens": 20, "completion_tokens": 10, "total_tokens": 30},
+                    },
+                    _AT,
+                    _AT,
+                )
+                capture_logging_usage(meter, logger, response, _AT, _AT)
+            await meter.flush()
+        costs: Final = tuple(
+            price_usage(row.envelope) for row in database.rows if isinstance(row.event, OutboundUsageEvent)
+        )
+        priced: Final = tuple(cost for cost in costs if isinstance(cost, PricingSnapshot))
+        assert len(priced) == 2, costs
+        assert sum(float(cost.total_cost) for cost in priced) == pytest.approx(2 * (10 * 0.003 + 5 * 0.004))
+    finally:
+        await meter.stop(1)
+
+
+@pytest.mark.parametrize("characters", (0, 17))
+def test_speech_replay_prices_retained_characters(characters: int) -> None:
+    original: Final = _retained_envelope(
+        rates={"input_cost_per_character": 0.003, "mode": "audio_speech"}, logging={"prompt_characters": characters}
+    )
+    event: Final = OutboundUsageEvent.model_validate(original["event"]).model_copy(
+        update={"call_type": CallTypes.aspeech}
+    )
+    result: Final = price_usage(json.dumps({**original, "event": event.model_dump(mode="json")}))
+    assert isinstance(result, PricingSnapshot), result
+    assert float(result.total_cost) == pytest.approx(characters * 0.003)
+
+
+def test_batch_ocr_replay_prices_pages_and_annotations() -> None:
+    original: Final = _retained_envelope(
+        rates={"ocr_cost_per_page_batches": 0.003, "annotation_cost_per_page_batches": 0.004, "mode": "ocr"},
+        usage={"pages_processed": 3, "pages_processed_annotation": 2},
+    )
+    event: Final = OutboundUsageEvent.model_validate(original["event"]).model_copy(
+        update={"call_type": CallTypes.aretrieve_batch}
+    )
+    result: Final = price_usage(
+        json.dumps(
+            {
+                **original,
+                "event": {**event.model_dump(mode="json"), "event_id": "batch:row:0"},
+                "parent_request_id": "batch",
+            }
+        )
+    )
+    assert isinstance(result, PricingSnapshot), result
+    assert float(result.total_cost) == pytest.approx(3 * 0.003 + 2 * 0.004)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("reported_characters", (None, 5))
+async def test_speech_capture_replays_billed_quantities_without_input_text(reported_characters: int | None) -> None:
+    from httpx import Response
+
+    from litellm.litellm_core_utils.hidden_params import set_hidden_param
+    from litellm.proxy.spend_tracking.usage_capture import capture_logging_usage
+    from litellm.proxy.spend_tracking.usage_meter import DurableUsageMeter, UsageCaptureSettings
+    from litellm.types.llms.openai import HttpxBinaryResponseContent
+    from tests.unit.proxy.spend_tracking.test_usage_capture import StoredUsage, _logger
+    from tests.unit.proxy.spend_tracking.test_usage_meter import _manual_flush
+
+    logger: Final = _logger("aspeech")
+    logger.set_request_pricing("capture-model", "openai", {"input_cost_per_character": 0.003, "mode": "audio_speech"})
+    logger.model_call_details["input"] = "privatespeechinput"
+    response: Final = HttpxBinaryResponseContent(Response(200, content=b"audio"))
+    if reported_characters is not None:
+        set_hidden_param(response, "billed_characters", reported_characters)
+    expected: Final = (reported_characters if reported_characters is not None else len("privatespeechinput")) * 0.003
+    assert logger.response_cost_calculator(response) == pytest.approx(expected)
+    database: Final = StoredUsage()
+    meter: Final = DurableUsageMeter(database.insert, UsageCaptureSettings(), wait_for_batch=_manual_flush)
+    try:
+        capture_logging_usage(meter, logger, response, _AT, _AT)
+        await meter.flush()
+        envelope: Final = next(row.envelope for row in database.rows if isinstance(row.event, OutboundUsageEvent))
+        assert "privatespeechinput" not in envelope
+        priced: Final = price_usage(envelope)
+        assert isinstance(priced, PricingSnapshot), priced
+        assert float(priced.total_cost) == pytest.approx(expected)
+    finally:
+        await meter.stop(1)
+
+
+@pytest.mark.parametrize("characters", (None, -1, True))
+def test_character_pricing_does_not_invent_zero_for_missing_or_invalid_quantity(characters: object) -> None:
+    original: Final = _retained_envelope(
+        rates={"input_cost_per_character": 0.003}, logging={"prompt_characters": characters}
+    )
+    event: Final = OutboundUsageEvent.model_validate(original["event"]).model_copy(
+        update={"call_type": CallTypes.aspeech}
+    )
+    assert price_usage(json.dumps({**original, "event": event.model_dump(mode="json")})) == Unpriced(
+        usage_event_id=event.event_id, reason="usage_unknown"
+    )

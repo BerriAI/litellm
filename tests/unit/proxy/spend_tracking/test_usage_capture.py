@@ -334,7 +334,7 @@ async def test_competing_writers_reuse_only_terminal_pricing_snapshots(terminal:
 
 
 @pytest.mark.asyncio
-async def test_batch_poll_has_distinct_identity_and_only_terminal_usage_is_chargeable() -> None:
+async def test_batch_poll_and_terminal_summary_are_not_charge_owners() -> None:
     from litellm.proxy.spend_tracking.usage_capture import capture_callback
 
     database: Final = StoredUsage()
@@ -352,8 +352,8 @@ async def test_batch_poll_has_distinct_identity_and_only_terminal_usage_is_charg
     await meter.close()
     assert pending.writes[-1].event.event_id == "poll:status"
     assert json.loads(pending.writes[-1].envelope)["charge_eligible"] is False
-    assert completed.writes[-1].event.event_id == "batch_batch_cost"
-    assert json.loads(completed.writes[-1].envelope)["charge_eligible"] is True
+    assert completed.writes[-1].event.event_id == "batch_batch_cost:summary"
+    assert json.loads(completed.writes[-1].envelope)["charge_eligible"] is False
     assert len(completed.writes) == 1
 
 
@@ -1021,9 +1021,8 @@ async def test_batch_capture_provenance_tracks_observations_not_envelope_presenc
     envelope: Final = json.loads(database.rows[-1].envelope)
     assert envelope["usage_source"] == ("unknown" if measured is None else "measured")
     assert envelope["usage"]["batch_usage_by_model"] == usage["batch_usage_by_model"]
-    assert database.rows[-1].event.metrics == (
-        None if measured is None else (Metric(name=MetricName.TOTAL_TOKENS, value=Decimal(measured["total_tokens"])),)
-    )
+    assert database.rows[-1].event.metrics is None
+    assert envelope["charge_eligible"] is False
 
 
 @pytest.mark.asyncio

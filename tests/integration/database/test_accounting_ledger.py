@@ -358,7 +358,9 @@ async def test_compilation_rejects_changed_source_before_reusing_a_charge(writer
 
 
 @pytest.mark.asyncio
-async def test_compilation_failure_rolls_back_and_can_be_retried(writer: _Writer, ledger_database: str) -> None:
+async def test_compilation_failure_retains_retry_without_a_partial_charge(
+    writer: _Writer, ledger_database: str
+) -> None:
     _, store = writer
     event: Final = _usage()
     assert isinstance(event, OutboundUsageEvent)
@@ -367,8 +369,9 @@ async def test_compilation_failure_rolls_back_and_can_be_retried(writer: _Writer
     def failed_pricing(envelope: str) -> PricingSnapshot:
         raise RuntimeError("pricing temporarily unavailable")
 
-    with pytest.raises(RuntimeError, match="pricing temporarily unavailable"):
-        await LoggingCostCompiler(store, failed_pricing, _TARGETS).compile(event)
+    assert await LoggingCostCompiler(store, failed_pricing, _TARGETS).compile(event) == Unpriced(
+        usage_event_id=event.event_id, reason="calculation_retryable"
+    )
     assert _rows(ledger_database, "SELECT count(*) FROM \"LiteLLM_AccountingEvent\" WHERE kind = 'cost'") == [(0,)]
     result: Final = await LoggingCostCompiler(store, lambda _: _cost(amount="0").snapshot, _TARGETS).compile(event)
     assert isinstance(result, CostEvent)
@@ -872,12 +875,19 @@ async def test_restarted_compiler_recovers_transient_failures_without_revisiting
         return _cost().snapshot
 
     await LoggingCostCompiler(store, transient, _TARGETS).compile_pending()
-    assert await store.pending_compilation() == (delayed,)
+    assert await store.pending_compilation() == ()
+    assert _rows(
+        ledger_database,
+        "SELECT compilation_state, compilation_error FROM \"LiteLLM_AccountingEvent\" WHERE event_id = 'delayed'",
+    ) == [("pending", "calculation_retryable")]
     assert _rows(ledger_database, "SELECT source_event_id FROM \"LiteLLM_AccountingEvent\" WHERE kind = 'cost'") == [
         (healthy.event_id,)
     ]
     async with connected_proxy_prisma(ledger_database) as restarted:
         recovered: Final = AccountingLedger.for_client(restarted)
+        await restarted.db.execute_raw(
+            'UPDATE "LiteLLM_AccountingEvent" SET compilation_retry_at = NULL WHERE event_id = $1', delayed.event_id
+        )
         await LoggingCostCompiler(recovered, lambda _: _cost().snapshot, _TARGETS).compile_pending()
         assert await recovered.pending_compilation() == ()
         await LoggingCostCompiler(recovered, transient, _TARGETS).compile_pending()
@@ -982,3 +992,131 @@ async def test_proxy_capture_and_background_compiler_converge_on_final_header_ch
     finally:
         release.set()
         await runtime.stop(5)
+
+
+@pytest.mark.asyncio
+async def test_failing_compilation_page_does_not_starve_later_usage(writer: _Writer, ledger_database: str) -> None:
+    _, store = writer
+    broken: Final = _usage("broken-price")
+    healthy: Final = _usage("healthy-price")
+    assert isinstance(broken, OutboundUsageEvent)
+    assert isinstance(healthy, OutboundUsageEvent)
+    await _insert(store, broken)
+    await _insert(store, healthy)
+
+    def price(envelope: str) -> PricingSnapshot:
+        if OutboundUsageEvent.model_validate(json.loads(envelope)["event"]).event_id == broken.event_id:
+            raise RuntimeError("temporary calculator failure")
+        return _cost().snapshot
+
+    await LoggingCostCompiler(store, price, _TARGETS).compile_pending(limit=1)
+    await LoggingCostCompiler(store, price, _TARGETS).compile_pending(limit=1)
+    assert _rows(ledger_database, "SELECT source_event_id FROM \"LiteLLM_AccountingEvent\" WHERE kind = 'cost'") == [
+        (healthy.event_id,)
+    ]
+    assert isinstance(await LoggingCostCompiler(store, lambda _: _cost().snapshot, _TARGETS).compile(broken), CostEvent)
+    assert await store.pending_compilation() == ()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("summary_first", (False, True))
+async def test_batch_callbacks_commit_only_row_charges_across_restart(
+    writer: _Writer, ledger_database: str, monkeypatch: pytest.MonkeyPatch, summary_first: bool
+) -> None:
+    import litellm
+    from litellm.proxy.spend_tracking.usage_capture import (
+        UsageBatchWriter,
+        capture_batch_callback,
+        capture_callback,
+        capture_logging_usage,
+    )
+    from litellm.proxy.spend_tracking.usage_meter import DurableUsageMeter, UsageCaptureSettings
+    from tests.unit.proxy.spend_tracking.test_usage_capture import _logger
+    from tests.unit.proxy.spend_tracking.test_usage_meter import _manual_flush
+
+    _, store = writer
+    rates: Final = {
+        "input_cost_per_token_batches": 0.003,
+        "output_cost_per_token_batches": 0.004,
+        "litellm_provider": "openai",
+        "mode": "chat",
+    }
+    monkeypatch.setitem(litellm.model_cost, "capture-model", rates)
+    usage: Final = {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}
+    response: Final = {
+        "id": "managed-job",
+        "status": "completed",
+        "usage": {
+            "batch_usage_by_model": {"capture-model": usage},
+            "batch_usage_by_request": [{"model": "capture-model", "usage": usage} for _ in range(2)],
+        },
+    }
+    logger: Final = _logger("aretrieve_batch")
+    batches: Final = UsageBatchWriter(store.insert_usage_batch, store.load_usage_batch)
+    meter: Final = DurableUsageMeter(batches.write, UsageCaptureSettings(), wait_for_batch=_manual_flush)
+    compiler: Final = LoggingCostCompiler(store)
+    capture_logging_usage(meter, logger, response, _AT, _AT, freeze_only=True)
+    kwargs: Final = {**logger.model_call_details, "litellm_logging_obj": logger}
+
+    async def summary() -> None:
+        capture_callback(
+            meter,
+            kwargs,
+            {
+                "id": "provider-job",
+                "status": "completed",
+                "usage": {"prompt_tokens": 20, "completion_tokens": 10, "total_tokens": 30},
+            },
+            _AT,
+            _AT,
+        )
+        await meter.flush()
+        await compiler.compile_pending()
+
+    try:
+        if summary_first:
+            await summary()
+        await capture_batch_callback(meter, store.load_usage_batch, kwargs, response, _AT, _AT)
+        await compiler.compile_pending()
+        if not summary_first:
+            await summary()
+        before: Final = _rows(
+            ledger_database, 'SELECT event_id, payload_hash FROM "LiteLLM_AccountingEvent" ORDER BY event_id'
+        )
+        costs: Final = _rows(
+            ledger_database, "SELECT payload::text FROM \"LiteLLM_AccountingEvent\" WHERE kind = 'cost'"
+        )
+        deliveries: Final = _rows(
+            ledger_database,
+            'SELECT event_id, target, state FROM "LiteLLM_AccountingDelivery" ORDER BY event_id, target',
+        )
+        assert len(costs) == 2
+        snapshots: Final = tuple(
+            CostEvent.model_validate_json(json.dumps(json.loads(str(row[0]))["event"])).snapshot for row in costs
+        )
+        assert sum(float(snapshot.total_cost) for snapshot in snapshots) == pytest.approx(2 * (10 * 0.003 + 5 * 0.004))
+        monkeypatch.setitem(litellm.model_cost, "capture-model", {**rates, "input_cost_per_token_batches": 99.0})
+        async with connected_proxy_prisma(ledger_database) as restarted:
+            ledger: Final = AccountingLedger.for_client(restarted)
+            from litellm.proxy.openai_files_endpoints.common_utils import encode_file_id_with_model
+
+            for job_id in ("managed-job", encode_file_id_with_model("managed-job", "capture-model", "batch")):
+                await capture_batch_callback(
+                    meter, ledger.load_usage_batch, kwargs, {**response, "id": job_id}, _AT, _AT
+                )
+            await asyncio.gather(*(LoggingCostCompiler(ledger).compile_pending() for _ in range(2)))
+        assert (
+            _rows(ledger_database, 'SELECT event_id, payload_hash FROM "LiteLLM_AccountingEvent" ORDER BY event_id')
+            == before
+        )
+        assert (
+            _rows(
+                ledger_database,
+                'SELECT event_id, target, state FROM "LiteLLM_AccountingDelivery" ORDER BY event_id, target',
+            )
+            == deliveries
+        )
+        for row, snapshot in zip(costs, snapshots, strict=True):
+            assert price_usage(json.dumps(json.loads(str(row[0]))["pricing_inputs"])) == snapshot
+    finally:
+        await meter.stop(1)

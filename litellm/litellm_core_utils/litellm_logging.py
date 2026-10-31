@@ -65,6 +65,7 @@ from litellm.cost_calculator import (
     get_usage_object,
     pricing_entry_for_cost_calc,
     select_model_name_for_cost_calc,
+    speech_billed_characters,
 )
 from litellm.exceptions import (
     BudgetExceededError,
@@ -3069,8 +3070,6 @@ class Logging(LiteLLMLoggingBaseClass):
         return self.cost_billing_time
 
     def usage_capture_pricing(self, result: object) -> Mapping[str, JsonValue]:
-        from litellm.utils import count_characters
-
         return TypeAdapter(dict[str, JsonValue]).validate_python(
             {
                 "response_ms": getattr(result, "_response_ms", None),
@@ -3086,7 +3085,10 @@ class Logging(LiteLLMLoggingBaseClass):
                 if self.model_call_details.get("call_type")
                 in (CallTypes.call_mcp_tool.value, CallTypes.send_message.value, CallTypes.asend_message.value)
                 else None,
-                "prompt_characters": count_characters(self._prompt_for_cost_calculation())
+                "prompt_characters": speech_billed_characters(
+                    result if isinstance(result, HttpxBinaryResponseContent) else None,
+                    self._prompt_for_cost_calculation(),
+                )
                 if self.model_call_details.get("call_type") in (CallTypes.speech.value, CallTypes.aspeech.value)
                 else None,
             }

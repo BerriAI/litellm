@@ -164,11 +164,19 @@ FROM "LiteLLM_AccountingEvent" WHERE source_event_id = $1 AND kind = 'cost'
 _PENDING_COMPILATION: Final = """
 SELECT payload::text AS payload FROM "LiteLLM_AccountingEvent"
 WHERE kind = 'outbound_usage' AND compilation_state = 'pending'
+AND (compilation_retry_at IS NULL OR compilation_retry_at <= CURRENT_TIMESTAMP)
 ORDER BY recorded_at, event_id LIMIT $1::int
 """
 _COMPILATION_RESULT: Final = """
-UPDATE "LiteLLM_AccountingEvent" SET compilation_state = $2, compilation_error = $3
+UPDATE "LiteLLM_AccountingEvent" SET compilation_state = $2, compilation_error = $3, compilation_retry_at = NULL
 WHERE event_id = $1 AND kind = 'outbound_usage'
+"""
+
+
+_RETRY_COMPILATION: Final = """
+UPDATE "LiteLLM_AccountingEvent"
+SET compilation_error = 'calculation_retryable', compilation_retry_at = CURRENT_TIMESTAMP + INTERVAL '30 seconds'
+WHERE event_id = $1 AND kind = 'outbound_usage' AND compilation_state = 'pending'
 """
 
 
@@ -401,6 +409,9 @@ class AccountingLedger:
                 priced: Final = price(source["payload"])
             except ValueError:
                 return await _unpriced(db, validated.event_id, "invalid_pricing_inputs")
+            except Exception:  # noqa: BLE001  # retain failed pricing for bounded retries without starving newer events
+                await db.execute_raw(_RETRY_COMPILATION, validated.event_id)
+                return Unpriced(usage_event_id=validated.event_id, reason="calculation_retryable")
             if isinstance(priced, Unpriced):
                 if priced.usage_event_id != validated.event_id:
                     raise AccountingConflictError("Unpriced result does not match its source usage")
