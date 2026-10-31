@@ -1802,9 +1802,14 @@ class TestGeminiContents:
     @pytest.mark.parametrize("chat_field", ["messages", "input"])
     def test_a_chat_field_next_to_contents_does_not_hide_the_contents(self, chat_field: str):
         data: Final = {chat_field: [], "contents": [{"parts": [{"text": "card"}]}]}
-        assert _build_lakera_inspection_messages(data, call_type="pass_through_endpoint") == [
+        assert _build_lakera_inspection_messages(data, call_type="agenerate_content") == [
             {"role": "user", "content": "card"}
         ]
+
+    @pytest.mark.parametrize("chat_field", ["messages", "input"])
+    def test_a_pass_through_chat_body_with_stray_contents_is_read_as_chat(self, chat_field: str):
+        data: Final = {chat_field: [USER_MSG], "contents": [{"parts": [{"text": "stray"}]}]}
+        assert _build_lakera_inspection_messages(data, call_type="pass_through_endpoint") == [USER_MSG]
 
     @pytest.mark.parametrize("call_type", ["agenerate_content", "agenerate_content_stream"])
     def test_reads_contents_on_the_google_generate_content_routes(self, call_type: str):
@@ -1846,10 +1851,23 @@ class TestGeminiContents:
         }
         with pytest.raises(HTTPException) as blocked:
             await _run_gemini_pre_call(
-                LakeraAIGuardrail(api_key="test_key", on_flagged="mask"), PII_ONLY_LAKERA_RESPONSE, data
+                LakeraAIGuardrail(api_key="test_key", on_flagged="mask"),
+                PII_ONLY_LAKERA_RESPONSE,
+                data,
+                "agenerate_content",
             )
         assert blocked.value.status_code == 400
         assert data["messages"] == [{"role": "user", "content": "alice@example.com"}]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("on_flagged", ["mask", "monitor"])
+    async def test_a_pass_through_chat_body_with_stray_contents_is_still_masked(self, on_flagged: str):
+        data: Final[dict[str, object]] = {"messages": [{"role": "user", "content": "a@b.com hi"}], "contents": []}
+        sent: Final = await _run_gemini_pre_call(
+            LakeraAIGuardrail(api_key="test_key", on_flagged=on_flagged), EMAIL_AT_START_LAKERA_RESPONSE, data
+        )
+        assert sent == [[{"role": "user", "content": "a@b.com hi"}]]
+        assert data["messages"] == [{"role": "user", "content": "[MASKED EMAIL] hi"}]
 
     @pytest.mark.asyncio
     async def test_clean_body_reaches_lakera_and_is_forwarded_unchanged(self):
