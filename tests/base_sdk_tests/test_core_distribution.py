@@ -132,7 +132,9 @@ def test_core_artifacts_exclude_local_configuration(distributions: tuple[Path, P
             assert not any(member.name.endswith(f"/{name}") for member in archive.getmembers())
 
 
-@pytest.mark.parametrize("relative_path", ["rust-toolchain.toml", ".cargo/config.toml"])
+@pytest.mark.parametrize(
+    "relative_path", ["rust-toolchain.toml", ".cargo/config.toml", "model_prices_and_context_window.json"]
+)
 def test_core_sdist_preserves_native_build_configuration(distribution_directory: Path, relative_path: str) -> None:
     sdists: Final = tuple(distribution_directory.glob("litellm_core-*.tar.gz"))
     assert len(sdists) == 1
