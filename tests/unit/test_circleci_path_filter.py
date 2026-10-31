@@ -236,6 +236,17 @@ def test_path_filter_runs_backend_pr(tmp_path: Path) -> None:
     assert "halt" not in result.stdout
 
 
+def test_path_filter_halts_docs_only_pr_from_a_depth_one_checkout(tmp_path: Path) -> None:
+    work = _pr_repo(tmp_path, {"README.md": "# docs\n"})
+    _git(work, "push", "-q", "origin", "litellm_feature")
+    shallow = tmp_path / "shallow"
+    remote = (tmp_path / "remote.git").as_uri()
+    subprocess.run(["git", "clone", "-q", "--depth", "1", "-b", "litellm_feature", remote, str(shallow)], check=True)
+    result = _run_path_filter(shallow, tmp_path, "backend", SCRIPTS_DIR)
+    assert result.returncode == 0
+    assert "circleci-agent step halt" in result.stdout
+
+
 def test_path_filter_fails_open_when_not_a_pr(tmp_path: Path) -> None:
     work = _pr_repo(tmp_path, {"README.md": "# docs\n"})
     result = _run_path_filter(work, tmp_path, "backend", SCRIPTS_DIR, is_pr=False)
