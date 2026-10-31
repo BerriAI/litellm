@@ -3066,10 +3066,8 @@ def test_fallback_probe_skips_only_a_loaded_model_that_refuses_the_route() -> No
 
 
 @pytest.mark.asyncio
-async def test_route_request_without_a_model_sends_to_the_team_deployment_by_its_public_name():
-    import litellm
-
-    router = litellm.Router(
+async def test_route_request_without_a_model_sends_to_the_team_deployment_by_its_public_name() -> None:
+    router: Final = litellm.Router(
         model_list=[
             {
                 "model_name": "internal-team-gpt",
@@ -3078,27 +3076,26 @@ async def test_route_request_without_a_model_sends_to_the_team_deployment_by_its
             }
         ]
     )
-    data = {
+    data: Final[dict[str, object]] = {
         "model": None,
         "messages": [{"role": "user", "content": "hi"}],
         "metadata": {"user_api_key_team_id": "team-a"},
     }
 
-    llm_call = await route_request(data=data, llm_router=router, user_model=None, route_type="acompletion")
-    response = await llm_call
+    llm_call: Final = await route_request(data=data, llm_router=router, user_model=None, route_type="acompletion")
+    response: Final = await llm_call
 
     assert response.choices[0].message.content == "from-team"
     assert data["model"] == "team-gpt"
 
 
 @pytest.mark.asyncio
-async def test_route_request_read_through_sends_through_the_router_it_built(monkeypatch):
+async def test_route_request_read_through_sends_through_the_router_it_built(monkeypatch: pytest.MonkeyPatch) -> None:
     """With no router loaded yet, a model the read-through finds is sent through the router the read-through built."""
-    import litellm
     from litellm.proxy import proxy_server
 
-    model_name = "e2e-first-db-model"
-    built_router = litellm.Router(
+    model_name: Final = "e2e-first-db-model"
+    built_router: Final = litellm.Router(
         model_list=[
             {
                 "model_name": model_name,
@@ -3115,18 +3112,18 @@ async def test_route_request_read_through_sends_through_the_router_it_built(monk
     monkeypatch.setattr(proxy_server, "store_model_in_db", True)
     monkeypatch.setattr(proxy_server, "llm_router", None)
 
-    async def build_router_from_db(prisma_client, proxy_logging_obj):
+    async def build_router_from_db(prisma_client: object, proxy_logging_obj: object) -> None:
         monkeypatch.setattr(proxy_server, "llm_router", built_router)
 
     monkeypatch.setattr(proxy_server.proxy_config, "add_deployment", build_router_from_db)
 
-    llm_call = await route_request(
+    llm_call: Final = await route_request(
         data={"model": model_name, "messages": [{"role": "user", "content": "hi"}]},
         llm_router=None,
         user_model=None,
         route_type="acompletion",
     )
-    response = await llm_call
+    response: Final = await llm_call
 
     assert response.choices[0].message.content == "hello-from-new-router"
 
@@ -3137,35 +3134,42 @@ def _probe(llm_router: litellm.Router | None = None) -> UnroutableModelProbe:
     )
 
 
+def _gpt_4o_router() -> litellm.Router:
+    return litellm.Router(
+        model_list=[{"model_name": "gpt-4o", "litellm_params": {"model": "openai/gpt-4o", "api_key": "fake"}}]
+    )
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("routing_error", "refused"),
+    ("request_body", "refused"),
     [
-        pytest.param(ProxyModelNotFoundError(route="/chat/completions", model_name="typo"), True, id="model-not-found"),
-        pytest.param(HTTPException(status_code=403, detail="model blocked for this key"), False, id="blocked-model"),
-        pytest.param(ValueError("malformed body"), False, id="other-error"),
+        pytest.param({}, True, id="model-not-found"),
+        pytest.param({"router_settings_override": "not-an-object"}, False, id="malformed-override"),
+        pytest.param({"mock_testing_fallbacks": True}, False, id="mock-params-disabled"),
     ],
 )
-async def test_unroutable_model_probe_refuses_only_a_model_not_found(monkeypatch, routing_error, refused):
-    async def failing_route_request(**kwargs):
-        raise routing_error
+async def test_unroutable_model_probe_refuses_only_a_model_not_found(
+    request_body: dict[str, object], refused: bool
+) -> None:
+    probe: Final = _probe(_gpt_4o_router())
+    request: Final = {"model": "typo", "messages": [{"role": "user", "content": "hi"}], **request_body}
 
-    monkeypatch.setattr("litellm.proxy.route_llm_request.route_request", failing_route_request)
-    probe: Final = _probe()
-
-    assert await probe.refuses({"model": "typo"}) is refused
-    assert probe.refusal is (routing_error if refused else None)
+    assert await probe.refuses(request) is refused
+    assert isinstance(probe.refusal, ProxyModelNotFoundError) is refused
 
 
 @pytest.mark.asyncio
-async def test_unroutable_model_probe_closes_the_call_and_routes_each_model_once(monkeypatch):
-    routed: Final[list[str]] = []
+async def test_unroutable_model_probe_closes_the_call_and_routes_each_model_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    routed: Final[list[object]] = []
     calls: Final[list[Coroutine[object, object, None]]] = []
 
     async def provider_call() -> None:
         return None
 
-    async def routing_route_request(*, data, **kwargs):
+    async def routing_route_request(*, data: dict[str, object], **_: object) -> Coroutine[object, object, None]:
         routed.append(data["model"])
         data["model"] = "rewritten-by-routing"
         calls.append(provider_call())
@@ -3185,16 +3189,13 @@ async def test_unroutable_model_probe_closes_the_call_and_routes_each_model_once
 @pytest.mark.parametrize("model", ["gpt-4o", "a2a/support-agent"])
 async def test_unroutable_model_probe_does_not_route_a_loaded_model_or_an_agent(
     monkeypatch: pytest.MonkeyPatch, model: str
-):
+) -> None:
     routed: Final[list[object]] = []
 
-    async def recording_route_request(*, data, **kwargs):
+    async def recording_route_request(*, data: dict[str, object], **_: object) -> None:
         routed.append(data["model"])
 
     monkeypatch.setattr("litellm.proxy.route_llm_request.route_request", recording_route_request)
-    router: Final = litellm.Router(
-        model_list=[{"model_name": "gpt-4o", "litellm_params": {"model": "openai/gpt-4o", "api_key": "fake"}}]
-    )
 
-    assert await _probe(router).refuses({"model": model}) is False
+    assert await _probe(_gpt_4o_router()).refuses({"model": model}) is False
     assert routed == []
