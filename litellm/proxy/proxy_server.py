@@ -499,7 +499,7 @@ from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     encrypt_value_helper,
 )
 from litellm.proxy.common_utils.error_body_call_id import JSON_OBJECT, error_body_call_id, with_call_id
-from litellm.proxy.common_utils.fips import enforce_fips_database, enforce_fips_mode
+from litellm.proxy.common_utils.fips import enforce_fips_database, enforce_fips_mode, is_fips_mode
 from litellm.proxy.common_utils.healthy_model_filter import (
     get_hidden_unhealthy_model_names,
     is_healthy_only_listing_default,
@@ -1607,7 +1607,7 @@ async def _proxy_lifespan(app: FastAPI, resources: AsyncExitStack) -> AsyncGener
             if decoded_worker_config is not None:
                 await initialize_from_worker_config(decoded_worker_config)
 
-    enforce_fips_mode()
+    enforce_fips_mode(general_settings_view())
 
     async with AsyncExitStack() as boot_database:
         enforce_master_key_boot_verdict(
@@ -1643,6 +1643,7 @@ async def _proxy_lifespan(app: FastAPI, resources: AsyncExitStack) -> AsyncGener
 
     await enforce_fips_database(
         None if prisma_client is None else FipsRepository(prisma_client),
+        fips_mode=is_fips_mode(general_settings_view()),
         database_is_configured=get_secret("DATABASE_URL", None) is not None,
     )
 

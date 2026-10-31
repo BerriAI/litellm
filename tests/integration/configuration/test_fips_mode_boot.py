@@ -10,7 +10,7 @@ from tests.integration._support.database import scratch_database, write_rows
 from tests.integration._support.process import refused_boot_log
 
 
-def _config(directory: Path, upstream_url: str) -> Path:
+def _config(directory: Path, upstream_url: str, fips_mode: object) -> Path:
     config: Final = directory / "fips_boot.yaml"
     config.write_text(
         json.dumps(
@@ -21,6 +21,7 @@ def _config(directory: Path, upstream_url: str) -> Path:
                         "litellm_params": {"model": "openai/fips-model", "api_base": upstream_url, "api_key": "sk-x"},
                     }
                 ],
+                "general_settings": {"fips_mode": fips_mode},
             }
         )
     )
@@ -30,17 +31,13 @@ def _config(directory: Path, upstream_url: str) -> Path:
 def test_fips_mode_refuses_to_start_when_openssl_does_not_enforce_fips(gateway: Gateway, tmp_path: Path) -> None:
     if _hashlib.get_fips_mode() == 1:
         pytest.skip("this runner's OpenSSL is in FIPS mode")
-    log: Final = refused_boot_log(
-        gateway, tmp_path, {"LITELLM_FIPS_MODE": "true"}, config=_config(tmp_path, gateway.upstream_url)
-    )
-    assert "LITELLM_FIPS_MODE is on but OpenSSL does not enforce FIPS" in log, log
+    log: Final = refused_boot_log(gateway, tmp_path, {}, config=_config(tmp_path, gateway.upstream_url, True))
+    assert "general_settings.fips_mode is on but OpenSSL does not enforce FIPS" in log, log
 
 
 def test_fips_mode_refuses_to_start_on_a_value_that_is_not_a_boolean(gateway: Gateway, tmp_path: Path) -> None:
-    log: Final = refused_boot_log(
-        gateway, tmp_path, {"LITELLM_FIPS_MODE": "enforced"}, config=_config(tmp_path, gateway.upstream_url)
-    )
-    assert "LITELLM_FIPS_MODE='enforced' is not a boolean" in log, log
+    log: Final = refused_boot_log(gateway, tmp_path, {}, config=_config(tmp_path, gateway.upstream_url, "enforced"))
+    assert "general_settings.fips_mode='enforced' is not a boolean" in log, log
 
 
 def test_proxy_refuses_to_start_without_fips_mode_on_a_database_set_up_in_fips_mode(
@@ -61,7 +58,7 @@ def test_proxy_refuses_to_start_without_fips_mode_on_a_database_set_up_in_fips_m
         log: Final = refused_boot_log(
             gateway,
             tmp_path,
-            {"LITELLM_FIPS_MODE": "false", "DATABASE_URL": database_url},
-            config=_config(tmp_path, gateway.upstream_url),
+            {"DATABASE_URL": database_url},
+            config=_config(tmp_path, gateway.upstream_url, False),
         )
-    assert "This database was set up with LITELLM_FIPS_MODE=true" in log, log
+    assert "This database was set up with general_settings.fips_mode: true" in log, log

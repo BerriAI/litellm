@@ -30,14 +30,14 @@ def _marker_rows(database_url: str) -> int:
 @pytest.mark.parametrize(
     "fips_mode, setup, refusal, marked_after",
     [
-        ("true", (_CONFIG_TABLE, _KEY_TABLE), None, 1),
-        ("true", (_CONFIG_TABLE, _KEY_TABLE, _MARKER, _KEY), None, 1),
-        ("true", (_CONFIG_TABLE, _KEY_TABLE, _KEY), "already holds data written without it", 0),
-        ("true", (_CONFIG_TABLE, _KEY_TABLE, _SETTING), "already holds data written without it", 0),
-        ("true", (), "could not be checked", None),
-        ("false", (_CONFIG_TABLE, _KEY_TABLE, _MARKER), "set up with LITELLM_FIPS_MODE=true", 1),
-        ("false", (_CONFIG_TABLE, _KEY_TABLE, _KEY), None, 0),
-        ("false", (), None, None),
+        (True, (_CONFIG_TABLE, _KEY_TABLE), None, 1),
+        (True, (_CONFIG_TABLE, _KEY_TABLE, _MARKER, _KEY), None, 1),
+        (True, (_CONFIG_TABLE, _KEY_TABLE, _KEY), "already holds data written without it", 0),
+        (True, (_CONFIG_TABLE, _KEY_TABLE, _SETTING), "already holds data written without it", 0),
+        (True, (), "could not be checked", None),
+        (False, (_CONFIG_TABLE, _KEY_TABLE, _MARKER), "set up with general_settings.fips_mode: true", 1),
+        (False, (_CONFIG_TABLE, _KEY_TABLE, _KEY), None, 0),
+        (False, (), None, None),
     ],
     ids=[
         "fips-on-new-database",
@@ -52,12 +52,11 @@ def _marker_rows(database_url: str) -> int:
 )
 async def test_fips_database_check(
     monkeypatch: pytest.MonkeyPatch,
-    fips_mode: str,
+    fips_mode: bool,
     setup: tuple[LiteralString, ...],
     refusal: str | None,
     marked_after: int | None,
 ) -> None:
-    monkeypatch.setenv("LITELLM_FIPS_MODE", fips_mode)
     with scratch_database() as database_url:
         for statement in setup:
             write_rows(statement, (), database_url=database_url)
@@ -66,7 +65,7 @@ async def test_fips_database_check(
         await client.connect()
         try:
             with pytest.raises(FipsModeError, match=refusal) if refusal else nullcontext():
-                await enforce_fips_database(FipsRepository(client), database_is_configured=True)
+                await enforce_fips_database(FipsRepository(client), fips_mode=fips_mode, database_is_configured=True)
         finally:
             await client.aclose()
         if marked_after is not None:
@@ -77,7 +76,6 @@ async def test_fips_database_check(
 async def test_pods_starting_together_in_fips_mode_on_a_new_database_both_start(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("LITELLM_FIPS_MODE", "true")
     with scratch_database() as database_url:
         for statement in (_CONFIG_TABLE, _KEY_TABLE):
             write_rows(statement, (), database_url=database_url)
@@ -86,7 +84,10 @@ async def test_pods_starting_together_in_fips_mode_on_a_new_database_both_start(
         await asyncio.gather(*(pod.connect() for pod in pods))
         try:
             await asyncio.gather(
-                *(enforce_fips_database(FipsRepository(pod), database_is_configured=True) for pod in pods)
+                *(
+                    enforce_fips_database(FipsRepository(pod), fips_mode=True, database_is_configured=True)
+                    for pod in pods
+                )
             )
         finally:
             await asyncio.gather(*(pod.aclose() for pod in pods))

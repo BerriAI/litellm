@@ -1814,10 +1814,24 @@ async def test_proxy_startup_refuses_a_database_set_up_in_fips_mode_when_fips_mo
     from litellm.proxy.proxy_server import proxy_startup_event
 
     _boot_with_general_settings(monkeypatch, tmp_path, {"master_key": "sk-a-safe-master-key"})
-    monkeypatch.delenv("LITELLM_FIPS_MODE", raising=False)
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", _PrismaClientOnAFipsDatabase())
 
-    with pytest.raises(FipsModeError, match="set up with LITELLM_FIPS_MODE=true"):
+    with pytest.raises(FipsModeError, match=r"set up with general_settings\.fips_mode: true"):
+        async with proxy_startup_event(FastAPI()):
+            pass
+
+
+@pytest.mark.asyncio
+async def test_proxy_startup_reads_fips_mode_from_the_config_file(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from litellm.proxy.common_utils.fips import FipsModeError
+    from litellm.proxy.proxy_server import proxy_startup_event
+
+    _boot_with_general_settings(monkeypatch, tmp_path, {"master_key": "sk-a-safe-master-key", "fips_mode": True})
+    monkeypatch.setattr("litellm.proxy.common_utils.fips.openssl_enforces_fips", lambda: False)
+
+    with pytest.raises(FipsModeError, match=r"general_settings\.fips_mode is on but OpenSSL does not enforce FIPS"):
         async with proxy_startup_event(FastAPI()):
             pass
 

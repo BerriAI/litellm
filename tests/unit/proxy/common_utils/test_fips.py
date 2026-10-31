@@ -32,13 +32,19 @@ def _fake_openssl(monkeypatch: pytest.MonkeyPatch, *, fips_flag: int, md5_refuse
     monkeypatch.setattr(_hashlib, "new", new)
 
 
-@pytest.mark.parametrize("value, expected", [("true", True), (" TRUE ", True), ("false", False), (None, False)])
-def test_is_fips_mode(monkeypatch: pytest.MonkeyPatch, value: str | None, expected: bool) -> None:
-    if value is None:
-        monkeypatch.delenv("LITELLM_FIPS_MODE", raising=False)
-    else:
-        monkeypatch.setenv("LITELLM_FIPS_MODE", value)
-    assert is_fips_mode() is expected
+@pytest.mark.parametrize(
+    "general_settings, expected",
+    [
+        ({"fips_mode": True}, True),
+        ({"fips_mode": " TRUE "}, True),
+        ({"fips_mode": False}, False),
+        ({"fips_mode": "false"}, False),
+        ({"fips_mode": None}, False),
+        ({}, False),
+    ],
+)
+def test_is_fips_mode(general_settings: Mapping[str, object], expected: bool) -> None:
+    assert is_fips_mode(general_settings) is expected
 
 
 @pytest.mark.parametrize(
@@ -90,34 +96,40 @@ def test_this_runners_cryptography_openssl_does_not_enforce_fips() -> None:
 
 
 @pytest.mark.parametrize(
-    "fips_mode, openssl_fips, cryptography_fips, refusal",
+    "general_settings, openssl_fips, cryptography_fips, refusal",
     [
-        (None, False, False, None),
-        ("", False, False, None),
-        ("false", False, False, None),
-        ("true", True, True, None),
-        ("true", False, True, "is on but OpenSSL does not enforce FIPS"),
-        ("true", True, False, "cryptography library's OpenSSL has no working FIPS provider"),
-        ("enforced", True, True, "LITELLM_FIPS_MODE='enforced' is not a boolean"),
+        ({}, False, False, None),
+        ({"fips_mode": False}, False, False, None),
+        ({"fips_mode": True}, True, True, None),
+        ({"fips_mode": "true"}, True, True, None),
+        ({"fips_mode": True}, False, True, "general_settings.fips_mode is on but OpenSSL does not enforce FIPS"),
+        ({"fips_mode": True}, True, False, "cryptography library's OpenSSL has no working FIPS provider"),
+        ({"fips_mode": "enforced"}, True, True, "general_settings.fips_mode='enforced' is not a boolean"),
+        ({"fips_mode": 1}, True, True, "general_settings.fips_mode=1 is not a boolean"),
     ],
-    ids=["unset", "empty", "false", "fips", "openssl-not-fips", "cryptography-not-fips", "not-a-boolean"],
+    ids=[
+        "unset",
+        "false",
+        "fips",
+        "fips-from-a-string",
+        "openssl-not-fips",
+        "cryptography-not-fips",
+        "not-a-boolean",
+        "a-number",
+    ],
 )
 def test_enforce_fips_mode(
     monkeypatch: pytest.MonkeyPatch,
-    fips_mode: str | None,
+    general_settings: Mapping[str, object],
     openssl_fips: bool,
     cryptography_fips: bool,
     refusal: str | None,
 ) -> None:
-    if fips_mode is None:
-        monkeypatch.delenv("LITELLM_FIPS_MODE", raising=False)
-    else:
-        monkeypatch.setenv("LITELLM_FIPS_MODE", fips_mode)
     _fake_openssl(monkeypatch, fips_flag=int(openssl_fips), md5_refused=openssl_fips)
     monkeypatch.setattr(rust_openssl, "is_fips_enabled", lambda: cryptography_fips)
 
     with pytest.raises(FipsModeError, match=refusal) if refusal else nullcontext():
-        enforce_fips_mode()
+        enforce_fips_mode(general_settings)
 
 
 class _Database:
@@ -151,13 +163,13 @@ class _Prisma:
 @pytest.mark.parametrize(
     "fips_mode, database, refusal, marked_after",
     [
-        ("true", _Database(marked_fips=False, holds_rows=False), None, True),
-        ("true", _Database(marked_fips=True, holds_rows=True), None, True),
-        ("true", _Database(marked_fips=False, holds_rows=True), "already holds data written without it", False),
-        ("true", _Database(marked_fips=False, holds_rows=False, readable=False), "could not be checked", False),
-        ("false", _Database(marked_fips=True, holds_rows=True), "set up with LITELLM_FIPS_MODE=true", True),
-        ("false", _Database(marked_fips=False, holds_rows=True), None, False),
-        ("false", _Database(marked_fips=True, holds_rows=True, readable=False), None, True),
+        (True, _Database(marked_fips=False, holds_rows=False), None, True),
+        (True, _Database(marked_fips=True, holds_rows=True), None, True),
+        (True, _Database(marked_fips=False, holds_rows=True), "already holds data written without it", False),
+        (True, _Database(marked_fips=False, holds_rows=False, readable=False), "could not be checked", False),
+        (False, _Database(marked_fips=True, holds_rows=True), "set up with general_settings.fips_mode: true", True),
+        (False, _Database(marked_fips=False, holds_rows=True), None, False),
+        (False, _Database(marked_fips=True, holds_rows=True, readable=False), None, True),
     ],
     ids=[
         "fips-on-new-database",
@@ -170,12 +182,10 @@ class _Prisma:
     ],
 )
 async def test_enforce_fips_database(
-    monkeypatch: pytest.MonkeyPatch, fips_mode: str, database: _Database, refusal: str | None, marked_after: bool
+    fips_mode: bool, database: _Database, refusal: str | None, marked_after: bool
 ) -> None:
-    monkeypatch.setenv("LITELLM_FIPS_MODE", fips_mode)
-
     with pytest.raises(FipsModeError, match=refusal) if refusal else nullcontext():
-        await enforce_fips_database(FipsRepository(_Prisma(database)), database_is_configured=True)
+        await enforce_fips_database(FipsRepository(_Prisma(database)), fips_mode=fips_mode, database_is_configured=True)
 
     assert database.marked_fips is marked_after
 
@@ -183,13 +193,11 @@ async def test_enforce_fips_database(
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "fips_mode, database_is_configured, refusal",
-    [("true", True, "can't be reached"), ("true", False, None), ("false", True, None)],
+    [(True, True, "can't be reached"), (True, False, None), (False, True, None)],
     ids=["fips-on-unreachable", "fips-on-no-database", "fips-off-unreachable"],
 )
 async def test_enforce_fips_database_without_a_connected_database(
-    monkeypatch: pytest.MonkeyPatch, fips_mode: str, database_is_configured: bool, refusal: str | None
+    fips_mode: bool, database_is_configured: bool, refusal: str | None
 ) -> None:
-    monkeypatch.setenv("LITELLM_FIPS_MODE", fips_mode)
-
     with pytest.raises(FipsModeError, match=refusal) if refusal else nullcontext():
-        await enforce_fips_database(None, database_is_configured=database_is_configured)
+        await enforce_fips_database(None, fips_mode=fips_mode, database_is_configured=database_is_configured)
