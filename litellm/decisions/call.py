@@ -852,6 +852,9 @@ def _with_images_within_limits(call: DecisionsCall, kept: Sequence[bool]) -> Dec
     error: Final = _image_limit_error(call) or _unreadable_image_error(call)
     if error is None:
         return replace(call, ir_request=replace(call.ir_request, input=kept_input))
+    type_checked: Final = _checked_image_types(call)
+    if input_images(type_checked.ir_request.input) == input_images(kept_input):
+        return type_checked
     return _dropped_or_refused(call, kept_input, error)
 
 

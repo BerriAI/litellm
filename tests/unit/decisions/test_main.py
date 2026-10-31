@@ -4868,6 +4868,50 @@ async def test_a_blank_state_still_reaches_the_model_when_its_only_image_drops_f
     assert sent.get("images", []) == []
 
 
+@pytest.mark.usefixtures("cloudflare_account")
+@pytest.mark.parametrize("state", ("", [], "  ", [None]), ids=str)
+def test_a_blank_state_still_reaches_the_model_when_its_only_download_is_a_type_the_model_refuses(
+    state: object, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "user_url_validation", False)
+    respx_mock.get(_REMOTE_IMAGE_URL).respond(content=b"GIF89a", headers={"content-type": "image/gif"})
+    route: Final = respx_mock.post(f"{_CLOUDFLARE_RUN_URL}/clef").respond(json=_RESPONSE)
+
+    litellm.systemone(
+        model="cloudflare/clef",
+        state=state,
+        questions=_SYSTEMONE_PREDICATE,
+        images=[_REMOTE_IMAGE_URL],
+        drop_params=True,
+    )
+
+    sent: Final = json.loads(route.calls.last.request.content)
+    assert sent["state"] == state
+    assert sent.get("images", []) == []
+
+
+@pytest.mark.usefixtures("cloudflare_account")
+def test_a_blank_state_is_refused_when_a_download_type_drop_comes_with_a_download_size_drop(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "user_url_validation", False)
+    gif_url: Final = "https://images.example/screen.gif"
+    respx_mock.get(gif_url).respond(content=b"GIF89a", headers={"content-type": "image/gif"})
+    respx_mock.get(_REMOTE_IMAGE_URL).respond(content=bytes(4 * _MIB + 1), headers={"content-type": "image/png"})
+    route: Final = respx_mock.post(f"{_CLOUDFLARE_RUN_URL}/clef").respond(json=_RESPONSE)
+
+    with pytest.raises(litellm.BadRequestError):
+        litellm.systemone(
+            model="cloudflare/clef",
+            state="",
+            questions=_SYSTEMONE_PREDICATE,
+            images=[gif_url, _REMOTE_IMAGE_URL],
+            drop_params=True,
+        )
+
+    assert not route.called
+
+
 _NOT_AN_IMAGE_DATA_URL: Final = f"data:image/png;base64,{_NOT_AN_IMAGE_BASE64}"
 _DECISIONS_PREDICATE: Final[list[dict[str, str]]] = [{"type": "predicate", "name": "red", "instructions": "Is it red?"}]
 
