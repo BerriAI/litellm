@@ -18,5 +18,6 @@ class TestCodexCommandRoundTrip:
         run: Final = codex.exec(
             "Run `cat secret.txt`, then reply with exactly what it printed.", model=setup.model, cwd=workspace
         )
+        assert run.exit_code == 0, run
         assert any(marker in command.output for command in run.commands), run
         assert marker in run.answer, run
