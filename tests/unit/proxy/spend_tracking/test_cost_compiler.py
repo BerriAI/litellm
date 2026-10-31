@@ -910,3 +910,179 @@ async def test_stream_replay_applies_adjustments_once_to_legacy_stamped_usage(
         assert float(priced.original_cost or 0) == pytest.approx(0.1 + completion_tokens * 0.02)
     finally:
         await meter.stop(1)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("amount", [0.0, 0.123])
+async def test_capture_retains_provider_header_price_without_catalog(amount: float) -> None:
+    from litellm.proxy.spend_tracking.usage_capture import capture_logging_usage
+    from litellm.proxy.spend_tracking.usage_meter import DurableUsageMeter, UsageCaptureSettings
+    from litellm.types.utils import ModelResponse, Usage
+    from tests.unit.proxy.spend_tracking.test_usage_capture import StoredUsage, _logger
+    from tests.unit.proxy.spend_tracking.test_usage_meter import _manual_flush
+
+    response: Final = ModelResponse(
+        model="capture-model",
+        usage=Usage(prompt_tokens=10, completion_tokens=4),
+    )
+    from litellm.litellm_core_utils.core_helpers import set_response_cost_in_hidden_params
+
+    set_response_cost_in_hidden_params(response, amount)
+    database: Final = StoredUsage()
+    meter: Final = DurableUsageMeter(database.insert, UsageCaptureSettings(), wait_for_batch=_manual_flush)
+    try:
+        capture_logging_usage(meter, _logger(), response, _AT, _AT)
+        await meter.close()
+        result: Final = price_usage(database.rows[-1].envelope)
+        assert isinstance(result, PricingSnapshot)
+        assert result.total_cost == Decimal(str(amount))
+        assert result.pricing_source == "upstream_header"
+    finally:
+        await meter.stop(1)
+
+
+@pytest.mark.parametrize("metadata", [{"input_cost_per_token": None}, {"service_tier": "default"}])
+def test_catalog_provenance_ignores_metadata_without_price_overrides(metadata: dict[str, object]) -> None:
+    result: Final = price_usage(json.dumps(_retained_envelope(deployment=metadata, request=metadata)))
+    assert isinstance(result, PricingSnapshot)
+    assert result.pricing_source == "cost_map"
+
+
+@pytest.mark.parametrize("call_type", ["get_responses", "aget_responses"])
+def test_terminal_response_replay_prices_usage_without_changing_event_identity(call_type: str) -> None:
+    from pydantic import TypeAdapter
+
+    original: Final = _retained_envelope()
+    event: Final = TypeAdapter(dict[str, object]).validate_python(original["event"])
+    result: Final = price_usage(json.dumps({**original, "event": {**event, "call_type": call_type}}))
+    assert isinstance(result, PricingSnapshot)
+    assert float(result.total_cost) == pytest.approx(10 * 0.01 + 4 * 0.02)
+
+
+@pytest.mark.asyncio
+async def test_batch_terminal_capture_refreshes_row_prices_after_creation(monkeypatch: pytest.MonkeyPatch) -> None:
+    import litellm
+    from litellm.proxy.spend_tracking.usage_capture import capture_batch_callback, capture_logging_usage
+    from litellm.proxy.spend_tracking.usage_meter import DurableUsageMeter, UsageCaptureSettings
+    from tests.unit.proxy.spend_tracking.test_usage_capture import StoredUsage, _logger
+    from tests.unit.proxy.spend_tracking.test_usage_meter import _manual_flush
+
+    rates: Final = {
+        "mode": "chat",
+        "litellm_provider": "openai",
+        "input_cost_per_token": 0.01,
+        "output_cost_per_token": 0.02,
+        "input_cost_per_token_batches": 0.003,
+        "output_cost_per_token_batches": 0.004,
+    }
+    monkeypatch.setitem(litellm.model_cost, "capture-model", rates)
+    monkeypatch.setattr(litellm, "cost_margin_config", {"global": {"fixed_amount": 0.1}})
+    monkeypatch.setitem(litellm.model_cost, "second-model", {**rates, "input_cost_per_token_batches": 0.005})
+    logger: Final = _logger("aretrieve_batch")
+    database: Final = StoredUsage()
+    meter: Final = DurableUsageMeter(database.insert, UsageCaptureSettings(), wait_for_batch=_manual_flush)
+    usage: Final = {"prompt_tokens": 10, "completion_tokens": 4, "total_tokens": 14}
+    response: Final = {
+        "id": "batch",
+        "status": "completed",
+        "usage": {
+            **usage,
+            "batch_usage_by_model": {"capture-model": usage, "second-model": usage},
+            "batch_usage_by_request": [
+                {"model": "capture-model", "usage": usage},
+                {"model": "capture-model", "usage": usage},
+                {"model": "second-model", "usage": usage},
+            ],
+        },
+    }
+    try:
+        capture_logging_usage(meter, logger, {"id": "batch", "status": "in_progress"}, _AT, _AT, freeze_only=True)
+        capture_logging_usage(meter, logger, response, _AT, _AT)
+        await capture_batch_callback(meter, database.load, logger.model_call_details, response, _AT, _AT)
+        first_rows: Final = database.rows
+        monkeypatch.setitem(litellm.model_cost, "capture-model", {**rates, "input_cost_per_token_batches": 99.0})
+        capture_logging_usage(meter, logger, response, _AT, _AT)
+        await capture_batch_callback(meter, database.load, logger.model_call_details, response, _AT, _AT)
+        await meter.close()
+        assert database.rows == first_rows
+        results: Final = tuple(price_usage(row.envelope) for row in database.rows)
+        priced: Final = tuple(result for result in results if isinstance(result, PricingSnapshot))
+        assert len(priced) == 3
+        assert sorted(float(price.total_cost) for price in priced) == pytest.approx([0.046, 0.046, 0.066])
+    finally:
+        await meter.stop(1)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("call_type", ["get_responses", "aget_responses"])
+async def test_background_capture_compiles_terminal_usage_once(call_type: str) -> None:
+    from litellm.constants import INTERNAL_CALL_ORIGIN_METADATA_KEY
+    from litellm.proxy.spend_tracking.usage_capture import capture_logging_usage
+    from litellm.proxy.spend_tracking.usage_meter import DurableUsageMeter, UsageCaptureSettings
+    from litellm.types.llms.openai import ResponsesAPIResponse
+    from litellm.types.utils import BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN
+    from tests.unit.proxy.spend_tracking.test_usage_capture import StoredUsage
+    from tests.unit.proxy.spend_tracking.test_usage_meter import _manual_flush
+
+    logger: Final = _capture_logger(call_type)
+    logger.update_environment_variables(
+        model="capture-model",
+        custom_llm_provider="openai",
+        optional_params={},
+        litellm_params={"metadata": {INTERNAL_CALL_ORIGIN_METADATA_KEY: BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN}},
+    )
+    response: Final = ResponsesAPIResponse.model_validate(
+        {
+            "id": "background-job",
+            "object": "response",
+            "created_at": int(_AT.timestamp()),
+            "status": "completed",
+            "background": True,
+            "model": "capture-model",
+            "output": [],
+            "usage": {"input_tokens": 10, "output_tokens": 4, "total_tokens": 14},
+        }
+    )
+    database: Final = StoredUsage()
+    meter: Final = DurableUsageMeter(database.insert, UsageCaptureSettings(), wait_for_batch=_manual_flush)
+    try:
+        capture_logging_usage(meter, logger, response, _AT, _AT)
+        await meter.close()
+        assert len(database.rows) == 1
+        assert database.rows[0].event.call_type.value == call_type
+        assert database.rows[0].event.event_id == "background-job_background_cost"
+        result: Final = price_usage(database.rows[0].envelope)
+        assert isinstance(result, PricingSnapshot)
+        assert float(result.total_cost) == pytest.approx(10 * 0.01 + 4 * 0.02)
+    finally:
+        await meter.stop(1)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("call_type", ["call_mcp_tool", "asend_message"])
+async def test_failed_fixed_call_without_usage_does_not_invent_a_free_charge(call_type: str) -> None:
+    from litellm.proxy.spend_tracking.usage_capture import capture_callback
+    from litellm.proxy.spend_tracking.usage_meter import DurableUsageMeter, UsageCaptureSettings
+    from tests.unit.proxy.spend_tracking.test_usage_capture import StoredUsage, _logger
+    from tests.unit.proxy.spend_tracking.test_usage_meter import _manual_flush
+
+    logger: Final = _logger(call_type)
+    logger.model_call_details["response_cost"] = 0.0
+    database: Final = StoredUsage()
+    meter: Final = DurableUsageMeter(database.insert, UsageCaptureSettings(), wait_for_batch=_manual_flush)
+    try:
+        capture_callback(
+            meter,
+            {**logger.model_call_details, "litellm_logging_obj": logger, "log_event_type": "failed_api_call"},
+            RuntimeError("Request rejected before dispatch"),
+            _AT,
+            _AT,
+        )
+        await meter.close()
+        outbound: Final = database.rows[-1]
+        assert outbound.event.outcome is Outcome.FAILED
+        assert price_usage(outbound.envelope) == Unpriced(
+            usage_event_id=outbound.event.event_id, reason="usage_unknown"
+        )
+    finally:
+        await meter.stop(1)

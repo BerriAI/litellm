@@ -1754,3 +1754,34 @@ async def test_sync_ack_deadline_bounds_compilation_after_usage_commit(monkeypat
     finally:
         compiler.release.set()
         await runtime.stop(1)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("call_type", ["create_batch", "acreate_batch"])
+async def test_batch_creation_is_not_a_charge_owner(call_type: str) -> None:
+    from litellm.proxy.spend_tracking.cost_compiler import price_usage
+    from litellm.proxy.spend_tracking.usage_capture import capture_callback
+    from litellm.accounting import Unpriced
+
+    database: Final = StoredUsage()
+    meter: Final = DurableUsageMeter(database.insert, UsageCaptureSettings(), wait_for_batch=_manual_flush)
+    try:
+        captured: Final = capture_callback(
+            meter,
+            {
+                "call_type": call_type,
+                "litellm_call_id": "create",
+                "model": "capture-model",
+                "litellm_params": {},
+            },
+            {"id": "batch", "status": "validating"},
+            NOW,
+            NOW,
+        )
+        await meter.close()
+        outbound: Final = captured.writes[-1]
+        assert price_usage(outbound.envelope) == Unpriced(
+            usage_event_id=outbound.event.event_id, reason="not_charge_owner"
+        )
+    finally:
+        await meter.stop(1)

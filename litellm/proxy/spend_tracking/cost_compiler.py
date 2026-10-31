@@ -9,7 +9,16 @@ from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter
 
 from litellm._internal_context import pinned_billing_time
 from litellm._logging import verbose_proxy_logger
-from litellm.accounting import CostEvent, DeliveryTarget, DimensionName, OutboundUsageEvent, PricingSnapshot, Unpriced
+from litellm.accounting import (
+    CostEvent,
+    DeliveryTarget,
+    DimensionName,
+    OutboundUsageEvent,
+    Outcome,
+    PricingSnapshot,
+    Unpriced,
+)
+from litellm.cost_calculator import batch_cost_calculator
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.llm_cost_calc.finalization import finalize_cost
 from litellm.litellm_core_utils.llm_cost_calc.pricing_context import RetainedPricing, retained_pricing
@@ -18,6 +27,7 @@ from litellm.proxy.spend_tracking.usage_meter import usage_delivery_targets
 from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.types.utils import (
     CallTypes,
+    CostBreakdown,
     CostPerToken,
     LiteLLMRealtimeStreamLoggingObject,
     ModelResponse,
@@ -71,6 +81,13 @@ def price_usage(envelope: str) -> PricingSnapshot | Unpriced:
     )
     provider: Final = next((d.value for d in event.dimensions if d.name is DimensionName.PROVIDER), None)
     logged: Final = _fields(pricing.get("logging"))
+    if (
+        fixed_call
+        and event.outcome is not Outcome.SUCCEEDED
+        and captured.usage is None
+        and not logged.get("tool_response_cost")
+    ):
+        return Unpriced(usage_event_id=event.event_id, reason="usage_unknown")
     reported: Final = (
         logged.get("provider_reported_cost")
         if logged.get("provider_reported_cost") is not None
@@ -180,7 +197,9 @@ def price_usage(envelope: str) -> PricingSnapshot | Unpriced:
         model=model,
         messages=[],
         stream=False,
-        call_type=event.call_type.value,
+        call_type=CallTypes.aresponses.value
+        if event.call_type in {CallTypes.get_responses, CallTypes.aget_responses}
+        else event.call_type.value,
         start_time=event.started_at,
         litellm_call_id=event.event_id,
         function_id=event.attempt_id,
@@ -226,7 +245,26 @@ def price_usage(envelope: str) -> PricingSnapshot | Unpriced:
         )
     logger.cost_billing_time = billed_at
     with retained_pricing(context), pinned_billing_time(billed_at):
-        amount: Final = logger.response_cost_calculator(response, ignore_stamped_cost=True)
+        batch_costs: Final = (
+            batch_cost_calculator(
+                replay_usage,
+                model,
+                provider,
+                data_residency=TypeAdapter[str | None](str | None).validate_python(deployment.get("data_residency")),
+                vertex_location=TypeAdapter[str | None](str | None).validate_python(deployment.get("vertex_location")),
+            )
+            if event.call_type in {CallTypes.retrieve_batch, CallTypes.aretrieve_batch}
+            else None
+        )
+        amount: Final = (
+            sum(batch_costs)
+            if batch_costs is not None
+            else logger.response_cost_calculator(response, ignore_stamped_cost=True)
+        )
+        if batch_costs is not None:
+            logger.cost_breakdown = CostBreakdown(
+                input_cost=batch_costs[0], output_cost=batch_costs[1], total_cost=sum(batch_costs)
+            )
     if amount is None:
         return Unpriced(usage_event_id=event.event_id, reason="calculation_failed")
     retained_final: Final = captured.finalized_cost or {}
@@ -255,9 +293,9 @@ def price_usage(envelope: str) -> PricingSnapshot | Unpriced:
             "pricing_source": "upstream_header"
             if upstream
             else "per_request"
-            if request
+            if any(is_server_derived_pricing_key(name) and value is not None for name, value in request.items())
             else "deployment"
-            if deployment
+            if any(is_server_derived_pricing_key(name) and value is not None for name, value in deployment.items())
             else "cost_map",
             "priced_model_key": key,
             "total_cost": Decimal(str(finalized.amount)),
