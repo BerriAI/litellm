@@ -1725,8 +1725,9 @@ class DelayedCostCompiler:
 
 
 @pytest.mark.asyncio
-async def test_sync_ack_deadline_bounds_compilation_after_usage_commit(monkeypatch: pytest.MonkeyPatch) -> None:
-    from fastapi import HTTPException
+async def test_sync_ack_preserves_committed_usage_ack_when_compilation_times_out(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
 
     from litellm.proxy import proxy_server
     from litellm.proxy.spend_tracking.usage_capture import UsageCaptureRuntime, capture_proxy_response
@@ -1742,11 +1743,9 @@ async def test_sync_ack_deadline_bounds_compilation_after_usage_commit(monkeypat
         proxy_server, "general_settings", {"accounting_sync_ack": True, "accounting_sync_ack_timeout_seconds": 0.1}
     )
     try:
-        with pytest.raises(HTTPException) as error:
-            await asyncio.wait_for(
-                capture_proxy_response(_logger(), ModelResponse(id="provider", usage=Usage(prompt_tokens=3))), 2
-            )
-        assert error.value.status_code == 503
+        await asyncio.wait_for(
+            capture_proxy_response(_logger(), ModelResponse(id="provider", usage=Usage(prompt_tokens=3))), 2
+        )
         assert compiler.entered.is_set()
         assert compiler.cancelled.is_set()
         assert database.committed == ("caller:inbound", "provider")

@@ -1,8 +1,9 @@
+from collections import ChainMap
 from collections.abc import Generator, Mapping
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
-from typing import Final
+from typing import Final, cast  # noqa: TID251  # live catalog has no typed boundary yet
 
 from pydantic import TypeAdapter
 
@@ -18,6 +19,7 @@ class RetainedPricing:
     models_json: str
     discounts_json: str
     margins_json: str
+    allow_live_models: bool = False
 
     def models(self) -> Mapping[str, ModelInfo]:
         return _MODELS.validate_json(self.models_json)
@@ -41,14 +43,23 @@ def retained_model_info(model: str, provider: str | None) -> ModelInfo | None:
         return None
     models: Final = context.models()
     result: Final = models.get(f"{provider}/{model}") or models.get(model)
-    if result is None:
+    if result is None and not context.allow_live_models:
         raise ValueError(f"Pricing snapshot has no retained model {model}")
     return result
 
 
 def retained_models() -> Mapping[str, ModelInfo] | None:
+    import litellm
+
     context: Final = _CURRENT.get()
-    return None if context is None else context.models()
+    if context is None:
+        return None
+    if not context.allow_live_models:
+        return context.models()
+    catalog: Final = cast(  # cast-ok: legacy catalog getter has an untyped dict signature
+        dict[str, ModelInfo], vars(litellm)["model_cost"]
+    )
+    return ChainMap(dict(context.models()), catalog)
 
 
 def pricing_discounts() -> Mapping[str, float]:

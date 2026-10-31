@@ -175,7 +175,7 @@ WHERE event_id = $1 AND kind = 'outbound_usage'
 
 _RETRY_COMPILATION: Final = """
 UPDATE "LiteLLM_AccountingEvent"
-SET compilation_error = 'calculation_retryable', compilation_retry_at = CURRENT_TIMESTAMP + INTERVAL '30 seconds'
+SET compilation_error = $2, compilation_retry_at = CURRENT_TIMESTAMP + INTERVAL '30 seconds'
 WHERE event_id = $1 AND kind = 'outbound_usage' AND compilation_state = 'pending'
 """
 
@@ -373,6 +373,10 @@ class AccountingLedger:
             OutboundUsageEvent.model_validate_json(_json(_JSON.validate_json(row["payload"])["event"])) for row in rows
         )
 
+    async def defer_compilation(self, event: OutboundUsageEvent) -> None:
+        async with self._transaction() as db:
+            await db.execute_raw(_RETRY_COMPILATION, event.event_id, "compilation_retryable")
+
     async def compile_cost(
         self,
         event: OutboundUsageEvent,
@@ -410,7 +414,7 @@ class AccountingLedger:
             except ValueError:
                 return await _unpriced(db, validated.event_id, "invalid_pricing_inputs")
             except Exception:  # noqa: BLE001  # retain failed pricing for bounded retries without starving newer events
-                await db.execute_raw(_RETRY_COMPILATION, validated.event_id)
+                await db.execute_raw(_RETRY_COMPILATION, validated.event_id, "calculation_retryable")
                 return Unpriced(usage_event_id=validated.event_id, reason="calculation_retryable")
             if isinstance(priced, Unpriced):
                 if priced.usage_event_id != validated.event_id:

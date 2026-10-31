@@ -488,6 +488,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
             "extraction",
             "ocr",
             "realtime",
+            "rerank",
         ]
     ]
     supported_endpoints: list[str] | None

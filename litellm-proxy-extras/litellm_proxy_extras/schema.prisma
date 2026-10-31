@@ -2116,8 +2116,8 @@ model LiteLLM_AccountingEvent {
   compilation_retry_at DateTime?
 
   @@index([recorded_at])
-  @@index([kind, source_event_id])
   @@index([kind, compilation_state, recorded_at])
+  @@index([kind, source_event_id])
 }
 
 // One row per (event, target table, version): pending work for the projector and,

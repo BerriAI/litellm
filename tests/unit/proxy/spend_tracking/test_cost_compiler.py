@@ -1348,3 +1348,230 @@ def test_character_pricing_does_not_invent_zero_for_missing_or_invalid_quantity(
     assert price_usage(json.dumps({**original, "event": event.model_dump(mode="json")})) == Unpriced(
         usage_event_id=event.event_id, reason="usage_unknown"
     )
+
+
+@pytest.mark.parametrize("measured_tokens", (False, True))
+def test_rerank_replay_preserves_billable_search_units(measured_tokens: bool) -> None:
+    from pydantic import TypeAdapter
+
+    original: Final = _retained_envelope(
+        rates={"mode": "rerank", "input_cost_per_query": 0.03},
+        response_inputs={"billed_units": {"search_units": 3, "total_tokens": 14}},
+    )
+    event: Final = OutboundUsageEvent.model_validate(original["event"]).model_copy(
+        update={
+            "call_type": CallTypes.arerank,
+            "dimensions": (
+                Dimension(name=DimensionName.MODEL, value="cohere/retained-reranker"),
+                Dimension(name=DimensionName.PROVIDER, value="cohere"),
+            ),
+        }
+    )
+    pricing: Final = TypeAdapter(dict[str, object]).validate_python(original["pricing"])
+    result: Final = price_usage(
+        json.dumps(
+            {
+                **original,
+                "usage": original["usage"] if measured_tokens else None,
+                "event": event.model_dump(mode="json"),
+                "pricing": pricing,
+            }
+        )
+    )
+    assert isinstance(result, PricingSnapshot)
+    assert float(result.total_cost) == pytest.approx(3 * 0.03)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("served_tier", ("default", "priority"))
+async def test_responses_replay_uses_served_tier(served_tier: str) -> None:
+    from litellm.proxy.spend_tracking.usage_capture import capture_logging_usage
+    from litellm.proxy.spend_tracking.usage_meter import DurableUsageMeter, UsageCaptureSettings
+    from litellm.types.llms.openai import ResponsesAPIResponse
+    from tests.unit.proxy.spend_tracking.test_usage_capture import StoredUsage
+    from tests.unit.proxy.spend_tracking.test_usage_meter import _manual_flush
+
+    logger: Final = _capture_logger("aresponses")
+    logger.set_request_pricing(
+        "capture-model",
+        "openai",
+        {
+            "input_cost_per_token": 0.01,
+            "output_cost_per_token": 0.02,
+            "input_cost_per_token_priority": 0.03,
+            "output_cost_per_token_priority": 0.04,
+        },
+    )
+    logger.update_environment_variables(
+        model="capture-model",
+        custom_llm_provider="openai",
+        litellm_params={},
+        optional_params={"service_tier": "priority" if served_tier == "default" else "default"},
+    )
+    response: Final = ResponsesAPIResponse.model_validate(
+        {
+            "id": "tier",
+            "created_at": 1,
+            "model": "capture-model",
+            "output": [],
+            "service_tier": served_tier,
+            "usage": {"input_tokens": 10, "output_tokens": 4, "total_tokens": 14},
+        }
+    )
+    source_cost: Final = logger.response_cost_calculator(response, ignore_stamped_cost=True)
+    assert source_cost == pytest.approx(0.18 if served_tier == "default" else 0.46)
+    database: Final = StoredUsage()
+    meter: Final = DurableUsageMeter(database.insert, UsageCaptureSettings(), wait_for_batch=_manual_flush)
+    try:
+        capture_logging_usage(meter, logger, response, _AT, _AT)
+        await meter.close()
+        result: Final = price_usage(database.rows[-1].envelope)
+        assert isinstance(result, PricingSnapshot)
+        assert float(result.total_cost) == pytest.approx(source_cost)
+    finally:
+        await meter.stop(1)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("token_pricing", "automatic_size"), ((False, False), (False, True), (True, False)))
+@pytest.mark.parametrize("custom_primary", (False, True))
+async def test_responses_image_tool_replays_retained_prices_without_image_content(
+    monkeypatch: pytest.MonkeyPatch, token_pricing: bool, custom_primary: bool, automatic_size: bool
+) -> None:
+    import litellm
+    from litellm.proxy.spend_tracking.usage_capture import capture_logging_usage
+    from litellm.proxy.spend_tracking.usage_meter import DurableUsageMeter, UsageCaptureSettings
+    from litellm.types.llms.openai import ResponsesAPIResponse
+    from tests.unit.proxy.spend_tracking.test_usage_capture import StoredUsage, _logger
+    from tests.unit.proxy.spend_tracking.test_usage_meter import _manual_flush
+
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "capture-model",
+        {"litellm_provider": "openai", "mode": "chat", "input_cost_per_token": 0.01, "output_cost_per_token": 0.02},
+    )
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "retained-image",
+        {
+            "litellm_provider": "openai",
+            "mode": "image_generation",
+            "input_cost_per_token": 0.03,
+            "output_cost_per_image_token": 0.04,
+        },
+    )
+    image_price_key: Final = f"{'high' if automatic_size else 'low'}/1024-x-1024/retained-image"
+    monkeypatch.setitem(
+        litellm.model_cost,
+        image_price_key,
+        {"litellm_provider": "openai", "mode": "image_generation", "output_cost_per_image": 0.25},
+    )
+    logger: Final = _logger("aresponses")
+    if custom_primary:
+        logger.set_request_pricing(
+            "capture-model", "openai", {"input_cost_per_token": 0.01, "output_cost_per_token": 0.02}
+        )
+    response: Final = ResponsesAPIResponse.model_validate(
+        {
+            "id": "image-tool",
+            "created_at": 1,
+            "model": "capture-model",
+            "tools": [{"type": "image_generation", "model": "retained-image"}],
+            "output": [
+                {
+                    "id": "image",
+                    "type": "image_generation_call",
+                    "status": "completed",
+                    "quality": "auto" if automatic_size else "low",
+                    "size": "auto" if automatic_size else "1024x1024",
+                    "result": "private-image-content",
+                }
+            ],
+            "usage": {"input_tokens": 10, "output_tokens": 4, "total_tokens": 14},
+            "tool_usage": {
+                "image_gen": {
+                    "input_tokens": 10,
+                    "output_tokens": 5,
+                    "total_tokens": 15,
+                    "input_tokens_details": {"text_tokens": 10, "image_tokens": 0},
+                    "output_tokens_details": {"text_tokens": 0, "image_tokens": 5},
+                }
+            }
+            if token_pricing
+            else None,
+        }
+    )
+    source_cost: Final = logger.response_cost_calculator(response, ignore_stamped_cost=True)
+    assert source_cost == pytest.approx(0.18 + (0.5 if token_pricing else 0.25))
+    database: Final = StoredUsage()
+    meter: Final = DurableUsageMeter(database.insert, UsageCaptureSettings(), wait_for_batch=_manual_flush)
+    try:
+        capture_logging_usage(meter, logger, response, _AT, _AT)
+        await meter.close()
+        captured: Final = database.rows[-1].envelope
+        assert "private-image-content" not in captured
+        monkeypatch.delitem(litellm.model_cost, "retained-image")
+        monkeypatch.delitem(litellm.model_cost, image_price_key)
+        result: Final = price_usage(captured)
+        assert isinstance(result, PricingSnapshot)
+        assert float(result.total_cost) == pytest.approx(source_cost)
+    finally:
+        await meter.stop(1)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("spilled_over", (False, True))
+async def test_capture_replays_effective_ptu_spillover_prices(
+    monkeypatch: pytest.MonkeyPatch, spilled_over: bool
+) -> None:
+    import litellm
+    from litellm.litellm_core_utils.hidden_params import set_hidden_param
+    from litellm.proxy.spend_tracking.usage_capture import capture_logging_usage
+    from litellm.proxy.spend_tracking.usage_meter import DurableUsageMeter, UsageCaptureSettings
+    from litellm.types.utils import ModelResponse, Usage
+    from tests.unit.proxy.spend_tracking.test_usage_capture import StoredUsage, _logger
+    from tests.unit.proxy.spend_tracking.test_usage_meter import _manual_flush
+
+    monkeypatch.setenv("LITELLM_ENABLE_PTU_COST_ATTRIBUTION", "true")
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "azure/capture-model",
+        {"litellm_provider": "azure", "mode": "chat", "input_cost_per_token": 0.01, "output_cost_per_token": 0.02},
+    )
+    logger: Final = _logger()
+    logger.update_environment_variables(
+        model="capture-model",
+        custom_llm_provider="azure",
+        optional_params={},
+        litellm_params={
+            "input_cost_per_token": 0.0,
+            "output_cost_per_token": 0.0,
+            "metadata": {
+                "model_info": {
+                    "team_id": "team",
+                    "ptu_count": 10,
+                    "cost_per_ptu_per_hour": 1.0,
+                    "ptu_effective_from": "2026-01-01",
+                }
+            },
+        },
+    )
+    logger.set_request_pricing("capture-model", "azure", {"input_cost_per_token": 0.0, "output_cost_per_token": 0.0})
+    response: Final = ModelResponse(
+        id="spill", model="capture-model", usage=Usage(prompt_tokens=10, completion_tokens=4, total_tokens=14)
+    )
+    set_hidden_param(
+        response, "additional_headers", {"llm_provider-x-ms-is-spilled-over": "true"} if spilled_over else {}
+    )
+    source_cost: Final = logger.response_cost_calculator(response, ignore_stamped_cost=True)
+    assert source_cost == pytest.approx(0.18 if spilled_over else 0)
+    database: Final = StoredUsage()
+    meter: Final = DurableUsageMeter(database.insert, UsageCaptureSettings(), wait_for_batch=_manual_flush)
+    try:
+        capture_logging_usage(meter, logger, response, _AT, _AT)
+        await meter.close()
+        result: Final = price_usage(database.rows[-1].envelope)
+        assert isinstance(result, PricingSnapshot)
+        assert float(result.total_cost) == pytest.approx(source_cost)
+    finally:
+        await meter.stop(1)

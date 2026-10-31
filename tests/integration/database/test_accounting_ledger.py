@@ -995,7 +995,10 @@ async def test_proxy_capture_and_background_compiler_converge_on_final_header_ch
 
 
 @pytest.mark.asyncio
-async def test_failing_compilation_page_does_not_starve_later_usage(writer: _Writer, ledger_database: str) -> None:
+@pytest.mark.parametrize("conflicting_result", (False, True))
+async def test_failing_compilation_page_does_not_starve_later_usage(
+    writer: _Writer, ledger_database: str, conflicting_result: bool
+) -> None:
     _, store = writer
     broken: Final = _usage("broken-price")
     healthy: Final = _usage("healthy-price")
@@ -1004,12 +1007,15 @@ async def test_failing_compilation_page_does_not_starve_later_usage(writer: _Wri
     await _insert(store, broken)
     await _insert(store, healthy)
 
-    def price(envelope: str) -> PricingSnapshot:
+    def price(envelope: str) -> PricingSnapshot | Unpriced:
         if OutboundUsageEvent.model_validate(json.loads(envelope)["event"]).event_id == broken.event_id:
+            if conflicting_result:
+                return Unpriced(usage_event_id="different-usage", reason="usage_unknown")
             raise RuntimeError("temporary calculator failure")
         return _cost().snapshot
 
     await LoggingCostCompiler(store, price, _TARGETS).compile_pending(limit=1)
+    assert await store.pending_compilation(limit=1) == (healthy,)
     _rows(
         ledger_database,
         'UPDATE "LiteLLM_AccountingEvent" SET compilation_retry_at = CURRENT_TIMESTAMP WHERE event_id = %s',

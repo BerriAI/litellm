@@ -8,7 +8,7 @@ from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from decimal import Decimal
 from hashlib import sha256
-from itertools import chain, groupby, islice, repeat
+from itertools import chain, groupby, islice, product, repeat
 from typing import TYPE_CHECKING, Final
 
 from pydantic import BaseModel, JsonValue, TypeAdapter
@@ -828,7 +828,18 @@ async def capture_proxy_response(logging_obj: object, response: object, *, backg
                             await compiler.compile(write.event)
     except Exception as error:  # noqa: BLE001  # the configured response policy owns every capture failure
         verbose_proxy_logger.exception("Usage capture failed before the response boundary")
-        if sync_ack and settings.get("accounting_sync_ack_failure_policy", "fail_closed") == "fail_closed":
+        accepted: Final = logging_obj.model_call_details.get("_accounting_capture")
+        committed: Final = (
+            isinstance(accepted, CapturedUsage)
+            and accepted.receipt.done()
+            and not accepted.receipt.cancelled()
+            and accepted.receipt.exception() is None
+        )
+        if (
+            sync_ack
+            and not committed
+            and settings.get("accounting_sync_ack_failure_policy", "fail_closed") == "fail_closed"
+        ):
             acknowledgement: Final = UsageAcknowledgementError(error)
             raise HTTPException(503, str(acknowledgement)) from acknowledgement
 
@@ -911,7 +922,7 @@ class PricingCapture:
 def _capture_pricing(logging_obj: Logging, normalized: object, details: Mapping[str, object]) -> PricingCapture:
     from litellm.litellm_core_utils.llm_cost_calc.pricing_context import retained_pricing
 
-    if logging_obj.request_pricing is not None:
+    if logging_obj.request_pricing is not None and not logging_obj.spilled_over_ptu_for(normalized):
         with retained_pricing(logging_obj.request_pricing):
             return _capture_effective_pricing(logging_obj, normalized, details)
     return _capture_effective_pricing(logging_obj, normalized, details)
@@ -934,7 +945,7 @@ def _capture_effective_pricing(
         if prepared is not None
         else StandardLoggingPayloadSetup.get_model_cost_information(
             base_model=logging_obj.get_deployment_model_for_cost(),
-            custom_pricing=bool(params.get("custom_pricing")),
+            custom_pricing=logging_obj.custom_pricing_for(normalized),
             custom_llm_provider=_text(details.get("custom_llm_provider")),
             init_response_obj=normalized,
             api_base=_text(params.get("api_base")),
@@ -996,6 +1007,16 @@ def _capture_effective_pricing(
                     )
                     for model in realtime_models
                 },
+                "tool_models": {
+                    model: StandardLoggingPayloadSetup.get_model_cost_information(
+                        base_model=model,
+                        custom_pricing=False,
+                        custom_llm_provider=provider,
+                        init_response_obj={"model": model},
+                    )
+                    for model in _image_tool_pricing_models(normalized, provider)
+                    if model in _fields(vars(litellm)["model_cost"])
+                },
                 "batch_models": {
                     model: StandardLoggingPayloadSetup.get_model_cost_information(
                         base_model=model,
@@ -1026,16 +1047,64 @@ def _tool_cost_inputs(response: object) -> Mapping[str, object]:
     return {
         **flags,
         "responses_api": True,
+        "tools": tuple(
+            {key: value for key, value in _fields(tool).items() if key in {"type", "model"}}
+            for tool in TypeAdapter(tuple[object, ...]).validate_python(raw.get("tools") or ())
+            if _fields(tool).get("type") == "image_generation"
+        ),
+        "tool_usage": _response_fields(raw.get("tool_usage")) or None,
         "usage": _response_fields(raw.get("usage")),
         "output": tuple(
-            {key: value for key, value in _fields(item).items() if key in {"type", "id", "status", "usage"}}
+            {
+                key: value
+                for key, value in _fields(item).items()
+                if key in {"type", "id", "status", "usage", "quality", "size"}
+            }
             for item in TypeAdapter(tuple[object, ...]).validate_python(raw.get("output") or ())
         ),
     }
 
 
-def _realtime_cost_fields(value: object) -> Mapping[str, JsonValue]:
-    fields: Final = _fields(value)
+def _image_tool_pricing_models(response: object, provider: str | None) -> tuple[str, ...]:
+    from litellm.cost_calculator import image_cost_model_candidates
+
+    raw: Final = _tool_cost_inputs(response)
+    models: Final = tuple(
+        model
+        for tool in TypeAdapter(tuple[dict[str, JsonValue], ...]).validate_python(raw.get("tools") or ())
+        if isinstance(model := tool.get("model"), str)
+    )
+    items: Final = tuple(
+        item
+        for item in TypeAdapter(tuple[dict[str, JsonValue], ...]).validate_python(raw.get("output") or ())
+        if item.get("type") == "image_generation_call" and item.get("status") == "completed"
+    )
+    candidates: Final = chain.from_iterable(
+        image_cost_model_candidates(
+            model,
+            provider,
+            _text(item.get("quality")) if item.get("quality") != "auto" else None,
+            _text(item.get("size")) if item.get("size") != "auto" else None,
+        )
+        for model, item in product(models, items)
+    )
+    return tuple(dict.fromkeys(model for model in candidates if model is not None))
+
+
+_REALTIME_CHILDREN: Final = (
+    "response",
+    "event",
+    "session",
+    "audio",
+    "input",
+    "transcription",
+    "input_audio_transcription",
+)
+
+
+def _realtime_cost_node(
+    fields: Mapping[str, object],
+) -> dict[str, JsonValue]:  # mutable-ok: tree builder attaches sanitized children
     return {
         **{
             key: _JSON_OBJECT.validate_python(fields[key]) for key in ("usage",) if isinstance(fields.get(key), Mapping)
@@ -1045,12 +1114,24 @@ def _realtime_cost_fields(value: object) -> Mapping[str, JsonValue]:
             for key, value in fields.items()
             if key in {"type", "id", "model", "service_tier"} and isinstance(value, str)
         },
-        **{
-            key: dict(_realtime_cost_fields(fields[key]))
-            for key in ("response", "event", "session", "audio", "input", "transcription", "input_audio_transcription")
-            if isinstance(fields.get(key), Mapping)
-        },
     }
+
+
+def _realtime_cost_fields(value: object) -> Mapping[str, JsonValue]:
+    root: Final = _realtime_cost_node(_fields(value))
+    pending: Final[list[tuple[Mapping[str, object], dict[str, JsonValue]]]] = [  # mutable-ok: traversal stack
+        (_fields(value), root)
+    ]
+    while pending:
+        source, target = pending.pop()
+        for key in _REALTIME_CHILDREN:
+            if not isinstance(source.get(key), Mapping):
+                continue
+            fields: Final = _fields(source[key])  # pyright: ignore[reportGeneralTypeIssues]  # loop-local traversal value
+            child: Final = _realtime_cost_node(fields)  # pyright: ignore[reportGeneralTypeIssues]  # loop-local traversal value
+            target[key] = child
+            pending.append((fields, child))
+    return root
 
 
 def _realtime_cost_events(response: object) -> tuple[Mapping[str, JsonValue], ...]:
@@ -1063,12 +1144,15 @@ def _realtime_cost_events(response: object) -> tuple[Mapping[str, JsonValue], ..
 
 
 def _realtime_pricing_models(value: Mapping[str, JsonValue]) -> Iterator[str]:
-    model: Final = value.get("model")
-    if isinstance(model, str):
-        yield model
-    for key in ("response", "event", "session", "audio", "input", "transcription", "input_audio_transcription"):
-        if isinstance(nested := value.get(key), dict):
-            yield from _realtime_pricing_models(nested)
+    pending: Final[list[Mapping[str, JsonValue]]] = [  # mutable-ok: iterative traversal avoids recursion
+        value
+    ]
+    while pending:
+        fields: Final = pending.pop()  # pyright: ignore[reportGeneralTypeIssues]  # loop-local traversal value
+        model: Final = fields.get("model")  # pyright: ignore[reportGeneralTypeIssues]  # loop-local traversal value
+        if isinstance(model, str):
+            yield model
+        pending.extend(nested for key in _REALTIME_CHILDREN if isinstance(nested := fields.get(key), dict))
 
 
 def _pricing_inputs(kwargs: Mapping[str, object], logging_obj: object, response: object) -> Mapping[str, object]:

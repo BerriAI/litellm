@@ -2167,12 +2167,20 @@ class Logging(LiteLLMLoggingBaseClass):
                 or ("embedding" if "embedding" in str(self.model_call_details.get("call_type", "")) else "chat"),
             }
         )
-        effective: Final = model_info_with_pricing_overrides(normalized, overrides)
+        effective: Final = model_info_with_pricing_overrides(
+            normalized,
+            {
+                name: value
+                for name, value in overrides.items()
+                if deployment_id is None or normalized.get(name) != value
+            },
+        )
         keys: Final = (model, f"{provider}/{model}", deployment_id or model, effective["key"])
         self.request_pricing = RetainedPricing(
             models_json=_REQUEST_PRICING_MODELS.dump_json({name: effective for name in keys}).decode(),
             discounts_json=json.dumps(litellm.cost_discount_config),
             margins_json=json.dumps(litellm.cost_margin_config),
+            allow_live_models=True,
         )
 
     def response_cost_calculator(
@@ -2182,6 +2190,7 @@ class Logging(LiteLLMLoggingBaseClass):
         litellm_model_name: str | None = None,
         router_model_id: str | None = None,
         ignore_stamped_cost: bool = False,
+        custom_pricing_override: bool | None = None,
     ) -> float | None:
         context: Final = (
             retained_pricing(self.request_pricing)
@@ -2190,7 +2199,7 @@ class Logging(LiteLLMLoggingBaseClass):
         )
         with context, pinned_billing_time(self.billing_time_for_cost()):
             return self._calculate_response_cost(
-                result, cache_hit, litellm_model_name, router_model_id, ignore_stamped_cost
+                result, cache_hit, litellm_model_name, router_model_id, ignore_stamped_cost, custom_pricing_override
             )
 
     def _calculate_response_cost(
@@ -2200,6 +2209,7 @@ class Logging(LiteLLMLoggingBaseClass):
         litellm_model_name: str | None = None,
         router_model_id: str | None = None,
         ignore_stamped_cost: bool = False,
+        custom_pricing_override: bool | None = None,
     ) -> float | None:
         """
         Calculate response cost using result + logging object variables.
@@ -2262,7 +2272,9 @@ class Logging(LiteLLMLoggingBaseClass):
             router_model_id = self.get_router_model_id()
 
         ## RESPONSE COST ##
-        custom_pricing: Final = self.custom_pricing_for(priced_result)
+        custom_pricing: Final = (
+            self.custom_pricing_for(priced_result) if custom_pricing_override is None else custom_pricing_override
+        )
 
         prompt: Final = self._prompt_for_cost_calculation()
 

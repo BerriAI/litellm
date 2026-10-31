@@ -2924,6 +2924,46 @@ def transcription_cost(model: str, custom_llm_provider: str | None, duration: fl
     return openai_cost_per_second(model=model, custom_llm_provider=custom_llm_provider, duration=duration)
 
 
+def image_cost_model_candidates(
+    model: str, custom_llm_provider: str | None, quality: str | None, size: str | None
+) -> tuple[str | None, ...]:
+    # Standardize size format to use "-x-"
+    size_str: str = size or "1024-x-1024"
+    size_str = size_str.replace("x", "-x-") if "x" in size_str and "-x-" not in size_str else size_str
+
+    # Build model names for cost lookup
+    base_model_name = f"{size_str}/{model}"
+    model_name_without_custom_llm_provider: str | None = None
+    if custom_llm_provider and model.startswith(f"{custom_llm_provider}/"):
+        model_name_without_custom_llm_provider = model.replace(f"{custom_llm_provider}/", "")
+        base_model_name = f"{custom_llm_provider}/{size_str}/{model_name_without_custom_llm_provider}"
+    model_name_with_quality: Final = f"{quality}/{base_model_name}" if quality else base_model_name
+    provider_first_model_name_with_quality: Final = (
+        f"{custom_llm_provider}/{quality}/{size_str}/{model_name_without_custom_llm_provider or model}"
+        if quality and custom_llm_provider
+        else None
+    )
+
+    # gpt-image-1 models use low, medium, high quality. If user did not specify quality, use medium fot gpt-image-1 model family
+    model_name_with_v2_quality: Final = f"{ImageGenerationRequestQuality.HIGH.value}/{base_model_name}"
+
+    verbose_logger.debug("Looking up cost for models: %s, %s", model_name_with_quality, base_model_name)
+
+    model_without_provider: Final = f"{size_str}/{model.split('/')[-1]}"
+    model_with_quality_without_provider = f"{quality}/{model_without_provider}" if quality else model_without_provider
+
+    return (
+        model_name_with_quality,
+        provider_first_model_name_with_quality,
+        base_model_name,
+        model_name_with_v2_quality,
+        model_with_quality_without_provider,
+        model_without_provider,
+        model,
+        model_name_without_custom_llm_provider,
+    )
+
+
 def default_image_cost_calculator(
     model: str,
     custom_llm_provider: str | None = None,
@@ -2950,44 +2990,9 @@ def default_image_cost_calculator(
     Raises:
         Exception: If model pricing not found in cost map
     """
-    # Standardize size format to use "-x-"
-    size_str: str = size or "1024-x-1024"
-    size_str = size_str.replace("x", "-x-") if "x" in size_str and "-x-" not in size_str else size_str
-
-    # Parse dimensions
-    height, width = map(int, size_str.split("-x-"))
-
-    # Build model names for cost lookup
-    base_model_name = f"{size_str}/{model}"
-    model_name_without_custom_llm_provider: str | None = None
-    if custom_llm_provider and model.startswith(f"{custom_llm_provider}/"):
-        model_name_without_custom_llm_provider = model.replace(f"{custom_llm_provider}/", "")
-        base_model_name = f"{custom_llm_provider}/{size_str}/{model_name_without_custom_llm_provider}"
-    model_name_with_quality: Final = f"{quality}/{base_model_name}" if quality else base_model_name
-    provider_first_model_name_with_quality: Final = (
-        f"{custom_llm_provider}/{quality}/{size_str}/{model_name_without_custom_llm_provider or model}"
-        if quality and custom_llm_provider
-        else None
-    )
-
-    # gpt-image-1 models use low, medium, high quality. If user did not specify quality, use medium fot gpt-image-1 model family
-    model_name_with_v2_quality: Final = f"{ImageGenerationRequestQuality.HIGH.value}/{base_model_name}"
-
-    verbose_logger.debug("Looking up cost for models: %s, %s", model_name_with_quality, base_model_name)
-
-    model_without_provider: Final = f"{size_str}/{model.split('/')[-1]}"
-    model_with_quality_without_provider = f"{quality}/{model_without_provider}" if quality else model_without_provider
-
-    models_to_check: Final = (
-        model_name_with_quality,
-        provider_first_model_name_with_quality,
-        base_model_name,
-        model_name_with_v2_quality,
-        model_with_quality_without_provider,
-        model_without_provider,
-        model,
-        model_name_without_custom_llm_provider,
-    )
+    size_str: Final = (size or "1024x1024").replace("-x-", "x")
+    height, width = map(int, size_str.split("x"))
+    models_to_check: Final = image_cost_model_candidates(model, custom_llm_provider, quality, size)
     matched_model: Final = next(
         (
             _model

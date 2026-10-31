@@ -28,6 +28,7 @@ from litellm.llms.base_llm.ocr.transformation import OCRUsageInfo
 from litellm.proxy.db.accounting_ledger import AccountingLedger
 from litellm.proxy.spend_tracking.usage_meter import usage_delivery_targets
 from litellm.types.llms.openai import HttpxBinaryResponseContent, ResponsesAPIResponse
+from litellm.types.rerank import RerankResponse
 from litellm.types.utils import (
     CallTypes,
     CostBreakdown,
@@ -71,6 +72,12 @@ def price_usage(envelope: str) -> PricingSnapshot | Unpriced:
     )
     if not captured.charge_eligible or batch_summary:
         return Unpriced(usage_event_id=event.event_id, reason="not_charge_owner")
+    response_inputs: Final = _fields(captured.pricing.get("response_inputs"))
+    rerank_usage: Final = event.call_type in {CallTypes.rerank, CallTypes.arerank} and any(
+        isinstance(value, int) and not isinstance(value, bool) and value >= 0
+        for name, value in _fields(response_inputs.get("billed_units")).items()
+        if name in {"search_units", "total_tokens"}
+    )
     logged: Final = _fields(captured.pricing.get("logging"))
     speech_characters: Final = logged.get("prompt_characters")
     speech_usage: Final = (
@@ -86,7 +93,7 @@ def price_usage(envelope: str) -> PricingSnapshot | Unpriced:
     realtime_usage: Final = event.call_type is CallTypes.arealtime and any(
         bool(item.get("usage")) for item in realtime_events
     )
-    if captured.usage is None and not fixed_call and not realtime_usage and not speech_usage:
+    if captured.usage is None and not fixed_call and not realtime_usage and not speech_usage and not rerank_usage:
         return Unpriced(usage_event_id=event.event_id, reason="usage_unknown")
     pricing: Final = captured.pricing
     mapped: Final = _fields(pricing.get("model_map_information"))
@@ -146,7 +153,7 @@ def price_usage(envelope: str) -> PricingSnapshot | Unpriced:
             **_fields(_fields(snapshot).get("model_map_value")),
             "key": _fields(snapshot).get("model_map_key") or name,
         }
-        for name, snapshot in _fields(pricing.get("realtime_models")).items()
+        for name, snapshot in {**_fields(pricing.get("realtime_models")), **_fields(pricing.get("tool_models"))}.items()
         if _fields(snapshot).get("model_map_value") is not None
     }
     base_pricing: Final = _fields(pricing.get("base_model_information"))
@@ -169,7 +176,6 @@ def price_usage(envelope: str) -> PricingSnapshot | Unpriced:
         _json({provider: discount} if provider and discount is not None else {}),
         _json({"global": margin} if margin is not None else {}),
     )
-    response_inputs: Final = _fields(pricing.get("response_inputs"))
     tool_response: Final = _fields(pricing.get("tool_response"))
     replay_usage: Final = Usage.model_validate(
         {
@@ -215,6 +221,10 @@ def price_usage(envelope: str) -> PricingSnapshot | Unpriced:
             }
         )
         if event.call_type in {CallTypes.arealtime, CallTypes.aresponses_websocket}
+        else RerankResponse.model_validate(
+            {"id": event.event_id, "results": [], "meta": {"billed_units": response_inputs.get("billed_units")}}
+        )
+        if event.call_type in {CallTypes.rerank, CallTypes.arerank}
         else ResponsesAPIResponse.model_validate(
             {
                 "id": event.event_id,
@@ -222,6 +232,9 @@ def price_usage(envelope: str) -> PricingSnapshot | Unpriced:
                 "model": model,
                 "output": tool_response.get("output", []),
                 "usage": tool_response.get("usage"),
+                "service_tier": response_inputs.get("service_tier"),
+                "tools": tool_response.get("tools"),
+                "tool_usage": tool_response.get("tool_usage"),
             }
         )
         if tool_response.get("responses_api")
@@ -298,7 +311,13 @@ def price_usage(envelope: str) -> PricingSnapshot | Unpriced:
         amount: Final = (
             sum(batch_costs)
             if batch_costs is not None
-            else logger.response_cost_calculator(response, ignore_stamped_cost=True)
+            else logger.response_cost_calculator(
+                response,
+                ignore_stamped_cost=True,
+                custom_pricing_override=TypeAdapter[bool | None](bool | None).validate_python(
+                    logged.get("custom_pricing")
+                ),
+            )
         )
         if batch_costs is not None:
             logger.cost_breakdown = CostBreakdown(
@@ -396,6 +415,12 @@ class LoggingCostCompiler:
                 await self.compile(event)
             except Exception:  # noqa: BLE001  # retain pending work for retry without starving other events
                 verbose_proxy_logger.exception("Cost compilation failed for %s", event.event_id)
+                try:
+                    await self._ledger.defer_compilation(event)
+                except Exception:  # noqa: BLE001  # database outages must not prevent attempts on later events
+                    verbose_proxy_logger.exception(
+                        "Cost compilation retry could not be scheduled for %s", event.event_id
+                    )
 
 
 _SPEND_TARGETS: Final = (
