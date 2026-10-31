@@ -57,6 +57,7 @@ from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     guardrail_entry_names,
     guardrail_request_data_with_streaming,
+    merged_guardrail_entries,
     without_server_streaming_classification,
 )
 from litellm.integrations.custom_logger import CustomLogger
@@ -959,19 +960,27 @@ async def _inherit_auth_guardrails(
 
     The endpoint's configured guardrails win. Without any, and with ``inherit`` and a JSON body, the key, team,
     project, policy and request-body guardrails are merged into ``parsed_body["metadata"]`` for the pre-call hook,
-    and returned only when at least one of them runs post_call, so the response is relayed untouched otherwise.
+    with the ones the client named in ``metadata.guardrails`` kept after them, and returned only when at least one
+    of them runs post_call, so the response is relayed untouched otherwise.
     """
     if configured_guardrails or not inherit or not parsed_body:
         return configured_guardrails
     if not isinstance(parsed_body.get("metadata"), dict):
         parsed_body["metadata"] = {}  # rebind-ok: the merge below writes into the live request body's metadata
+    client_named: Final = (as_str_mapping(parsed_body["metadata"]) or {}).get("guardrails")
     await move_guardrails_to_metadata(
         data=parsed_body,
         _metadata_variable_name="metadata",
         user_api_key_dict=user_api_key_dict,
     )
-    merged: Final = (as_str_mapping(parsed_body["metadata"]) or {}).get("guardrails")
-    entries: Final = _GUARDRAIL_ENTRIES.validate_python(merged) if isinstance(merged, list) else []
+    metadata: Final = parsed_body["metadata"]
+    merged: Final = (as_str_mapping(metadata) or {}).get("guardrails")
+    entries: Final = merged_guardrail_entries(
+        _GUARDRAIL_ENTRIES.validate_python(merged) if isinstance(merged, list) else (),
+        _GUARDRAIL_ENTRIES.validate_python(client_named) if isinstance(client_named, list) else (),
+    )
+    if entries and isinstance(metadata, dict):
+        metadata["guardrails"] = entries
     return entries if entries and _named_guardrail_runs_post_call(parsed_body, entries) else None
 
 

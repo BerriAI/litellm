@@ -365,3 +365,19 @@ def test_key_apply_guardrail_post_call_scans_the_provider_reply(rig: AuthGuardra
 
         assert response.status_code == 200, response.text
         assert [b'"Hi' in request.body for request in rig.generic_post_call_vendor.drain()] == [True]
+
+
+@pytest.mark.parametrize("route", [OPENAI_ROUTE, ANTHROPIC_ROUTE, GEMINI_ROUTE])
+def test_guardrail_the_client_names_in_metadata_still_runs_for_a_guarded_key(rig: AuthGuardrailRig, route: str) -> None:
+    gateway: Final = rig.owned.gateway
+    with gateway.scenario() as scenario:
+        key: Final = scenario.key(metadata={"guardrails": [GENERIC_POST_CALL]})
+        _drain(rig)
+
+        response: Final = _send(
+            gateway, route, {**_route_body(route, BLOCK_MARKER), "metadata": {"guardrails": [GUARDRAIL]}}, key
+        )
+
+        assert response.status_code == 400, response.text
+        assert [BLOCK_MARKER.encode() in request.body for request in rig.vendor.drain()] == [True]
+        assert rig.upstreams[route].drain() == ()
