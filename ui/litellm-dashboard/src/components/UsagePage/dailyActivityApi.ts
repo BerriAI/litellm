@@ -11,10 +11,22 @@ export type KeyActivityRow = components["schemas"]["KeyActivityRow"];
 export type KeySpendActivityRow = components["schemas"]["KeySpendActivityRow"];
 export type DailyActivityKeySearchResponse = components["schemas"]["DailyActivityKeySearchResponse"];
 export type DailyActivityKeyPageResponse = components["schemas"]["DailyActivityKeyPageResponse"];
+export type DailyActivityTagPageResponse = components["schemas"]["DailyActivityTagPageResponse"];
+export type DailyActivityTagSpendRow = components["schemas"]["TagSpendRow"];
 export type ModelTopKeysResponse = components["schemas"]["ModelTopKeysResponse"];
 export type CacheLeakageKeysResponse = components["schemas"]["CacheLeakageKeysResponse"];
 export type UserActivityRow = components["schemas"]["UserActivityRow"];
 export type DailyActivityUserPageResponse = components["schemas"]["DailyActivityUserPageResponse"];
+
+export interface DailyActivityTagPageRequest {
+  accessToken: string;
+  startTime: Date;
+  endTime: Date;
+  teamId: string;
+  offset: number;
+  limit: number;
+  signal?: AbortSignal;
+}
 
 export interface DailyActivityRequest {
   accessToken: string;
