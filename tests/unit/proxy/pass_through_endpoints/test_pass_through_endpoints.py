@@ -17,6 +17,7 @@ from typing import Final, Optional, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import UUID
 
+import h11
 import httpx
 import pytest
 import respx
@@ -51,6 +52,8 @@ from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     SafeRouteAdder,
     _build_passthrough_failure_request_payload,
     _registered_pass_through_routes,
+    _guardrail_response_headers,
+    _strip_client_guardrail_fields,
     _truncate_upstream_error_body,
     _update_metadata_with_tags_in_header,
     _with_trace_context,
@@ -483,6 +486,38 @@ async def test_pass_through_request_preserves_proxy_exception_status():
         assert exc.value is original
         assert exc.value.code == "400"
         assert exc.value.param == "limit"
+
+
+@pytest.mark.asyncio
+async def test_guardrail_proxy_exception_carries_the_guardrails_that_ran():
+    blocked: Final = ProxyException(message="blocked by guardrail", type="None", param="None", code=400)
+
+    async def record_then_block(
+        user_api_key_dict: UserAPIKeyAuth, data: dict[str, object], call_type: str, endpoint_type: object
+    ) -> None:
+        data["metadata"] = {"applied_guardrails": ["passed-guard"]}  # mutable-ok: a guardrail records on the live body
+        raise blocked
+
+    with patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_proxy_logging:
+        mock_proxy_logging.post_call_failure_hook = AsyncMock()
+        mock_proxy_logging.pre_call_hook = AsyncMock(side_effect=record_then_block)
+
+        mock_request = MagicMock(spec=Request)
+        mock_request.method = "POST"
+        mock_request.body = AsyncMock(return_value=b'{"model": "gpt-5.6", "messages": []}')
+        mock_request.headers = Headers({"content-type": "application/json"})
+        mock_request.query_params = QueryParams({})
+
+        with pytest.raises(ProxyException) as exc:
+            await pass_through_request(
+                request=mock_request,
+                target="http://test.com/v1/chat/completions",
+                custom_headers={},
+                user_api_key_dict=UserAPIKeyAuth(api_key="sk-test"),
+            )
+
+    assert exc.value is blocked
+    assert exc.value.headers["x-litellm-applied-guardrails"] == "passed-guard"
 
 
 def test_is_langfuse_route():
@@ -11697,13 +11732,23 @@ async def test_passthrough_header_and_callback_share_finalized_cost(
 
     client, cleanup = _inject_fake_passthrough_client(httpx.MockTransport(upstream), timeout=None)
     try:
-        request: Final = Request({
-            "type": "http", "method": "GET", "path": "/passthrough-relay/results",
-            "headers": [], "query_string": b"", "scheme": "http", "server": ("test", 80),
-        })
+        request: Final = Request(
+            {
+                "type": "http",
+                "method": "GET",
+                "path": "/passthrough-relay/results",
+                "headers": [],
+                "query_string": b"",
+                "scheme": "http",
+                "server": ("test", 80),
+            }
+        )
         result: Final = await pass_through_request(
-            request=request, target="http://cost-upstream.invalid/results", custom_headers={},
-            user_api_key_dict=UserAPIKeyAuth(api_key="hashed"), cost_per_request=flat_cost,
+            request=request,
+            target="http://cost-upstream.invalid/results",
+            custom_headers={},
+            user_api_key_dict=UserAPIKeyAuth(api_key="hashed"),
+            cost_per_request=flat_cost,
         )
         payload: Final = await asyncio.wait_for(observed, timeout=10)
         await GLOBAL_LOGGING_WORKER.flush()
@@ -11893,9 +11938,7 @@ class TestInheritAuthGuardrails:
     async def test_request_body_guardrails_are_added_to_the_key_guardrails(self):
         auth: Final = UserAPIKeyAuth(api_key="sk-test", metadata={"guardrails": ["key-guard"]})
 
-        pre_call, _ = await self._run(
-            self._chat_body(guardrails=["body-guard"]), inherit=True, user_api_key_dict=auth
-        )
+        pre_call, _ = await self._run(self._chat_body(guardrails=["body-guard"]), inherit=True, user_api_key_dict=auth)
 
         assert pre_call[0]["metadata"]["guardrails"] == ["key-guard", "body-guard"]
         assert "guardrails" not in pre_call[0]
@@ -11947,3 +11990,153 @@ class TestInheritAuthGuardrails:
 
         assert "guardrails" not in pre_call[0].get("metadata", {})
         post_call.assert_not_awaited()
+
+
+class TestGuardrailResponseHeaders:
+    def test_pre_and_post_call_guardrails_are_combined_without_repeats(self):
+        headers: Final = HttpPassThroughEndpointHelpers.get_response_headers(
+            headers=httpx.Headers({"content-type": "application/json"}),
+            guardrail_request_data=(
+                {"model": "gpt-5.6"},
+                {"litellm_params": {"metadata": {"applied_guardrails": ["pre"], "guardrail_scan_ids": ["scan-1"]}}},
+                {"metadata": {"applied_guardrails": ["pre", "post"]}},
+            ),
+        )
+
+        assert headers["x-litellm-applied-guardrails"] == "pre,post"
+        assert headers["x-litellm-guardrail-scan-id"] == "scan-1"
+
+    def test_scan_ids_recorded_as_tuples_before_and_after_the_call_are_both_kept(self):
+        headers: Final = HttpPassThroughEndpointHelpers.get_response_headers(
+            headers=httpx.Headers({"content-type": "application/json"}),
+            guardrail_request_data=(
+                {},
+                {"litellm_params": {"metadata": {"guardrail_scan_ids": ("pre-scan",)}}},
+                {"metadata": {"guardrail_scan_ids": ("post-scan",)}},
+            ),
+        )
+
+        assert headers["x-litellm-guardrail-scan-id"] == "pre-scan,post-scan"
+
+    def test_policy_sources_recorded_before_and_after_the_call_are_both_kept(self):
+        headers: Final = HttpPassThroughEndpointHelpers.get_response_headers(
+            headers=httpx.Headers({"content-type": "application/json"}),
+            guardrail_request_data=(
+                {},
+                {"litellm_params": {"metadata": {"policy_sources": {"pre-policy": "key", "shared": "team"}}}},
+                {"metadata": {"policy_sources": {"post-policy": "tag", "shared": "key"}}},
+            ),
+        )
+
+        assert headers["x-litellm-policy-sources"] == "pre-policy=key; shared=key; post-policy=tag"
+
+    def test_a_litellm_params_object_in_the_request_body_is_never_read(self):
+        forged: Final = {"metadata": {"applied_guardrails": ["forged"], "guardrail_scan_ids": ["fake"]}}
+
+        headers: Final = HttpPassThroughEndpointHelpers.get_response_headers(
+            headers=httpx.Headers({"content-type": "application/json"}),
+            guardrail_request_data=(
+                {"model": "gpt-5.6", "litellm_params": forged},
+                {"litellm_params": {"metadata": {}}},
+                {"model": "gpt-5.6", "litellm_params": forged, "metadata": {"guardrails": ["post"]}},
+            ),
+        )
+
+        assert headers == {"content-type": "application/json"}
+
+    def test_guardrail_name_outside_latin1_is_left_out_of_the_headers(self):
+        headers: Final = HttpPassThroughEndpointHelpers.get_response_headers(
+            headers=httpx.Headers({"content-type": "application/json"}),
+            guardrail_request_data=(
+                {},
+                {
+                    "litellm_params": {
+                        "metadata": {"applied_guardrails": ["pii\u2014guard"], "guardrail_scan_ids": ["s1"]}
+                    }
+                },
+            ),
+        )
+
+        assert headers == {"content-type": "application/json", "x-litellm-guardrail-scan-id": "s1"}
+        assert Response(content=b"{}", headers=headers).status_code == 200
+
+    def test_metadata_outside_the_header_fields_is_never_read(self):
+        class _Unreadable:
+            __hash__ = object.__hash__
+
+            def __eq__(self, other: object) -> bool:
+                raise AssertionError("non-header metadata was read")
+
+        headers: Final = HttpPassThroughEndpointHelpers.get_response_headers(
+            headers=httpx.Headers({"content-type": "application/json"}),
+            guardrail_request_data=(
+                {"metadata": {"unused": [_Unreadable()]}},
+                {"litellm_params": {"metadata": {"unused": [_Unreadable()]}}},
+            ),
+        )
+
+        assert headers == {"content-type": "application/json"}
+
+    def test_no_guardrail_data_adds_no_headers(self):
+        headers: Final = HttpPassThroughEndpointHelpers.get_response_headers(
+            headers=httpx.Headers({"content-type": "application/json"}),
+            guardrail_request_data=({"metadata": {"tags": ["team-a"]}},),
+        )
+
+        assert headers == {"content-type": "application/json"}
+
+    def test_client_sent_guardrail_header_fields_are_stripped(self):
+        body: Final = {
+            "metadata": {"applied_guardrails": ["forged"], "pillar_flagged": True, "tags": ["team-a"]},
+            "litellm_metadata": {"guardrail_scan_ids": ["forged-scan"]},
+        }
+
+        _strip_client_guardrail_fields(body)
+
+        assert body == {"metadata": {"pillar_flagged": True, "tags": ["team-a"]}, "litellm_metadata": {}}
+
+    def test_pillar_fields_recorded_on_the_request_add_no_pillar_headers(self):
+        headers: Final = _guardrail_response_headers(
+            {"metadata": {"pillar_session_id_response": "client-session"}},
+            {
+                "litellm_params": {
+                    "metadata": {
+                        "applied_guardrails": ["pillar"],
+                        "pillar_flagged": False,
+                        "pillar_response_headers": {"x-pillar-flagged": "false", "x-pillar-session-id": "vendor"},
+                        "_pillar_response_headers_trusted": True,
+                    }
+                }
+            },
+        )
+
+        assert headers == {"x-litellm-applied-guardrails": "pillar"}
+
+    @pytest.mark.parametrize("tag", ["prod-team\n", "prod-x\r\nX-Injected: yes", "prod\x00"])
+    def test_header_value_an_http_response_cannot_carry_is_left_out(self, tag: str):
+        headers: Final = _guardrail_response_headers(
+            {},
+            {
+                "litellm_params": {
+                    "metadata": {"applied_policies": ["tag-policy"], "policy_sources": {"tag-policy": f"tag:{tag}"}}
+                }
+            },
+        )
+
+        assert headers == {"x-litellm-applied-policies": "tag-policy"}
+        assert h11.Response(status_code=200, headers=[*headers.items()]).status_code == 200
+
+    def test_guardrail_headers_past_the_size_budget_are_left_out_so_a_client_can_read_the_response(self):
+        names: Final = [f"caller-named-{index}" for index in range(10_000)]
+        headers: Final = _guardrail_response_headers(
+            {}, {"litellm_params": {"metadata": {"applied_guardrails": names, "applied_policies": ["tag-policy"]}}}
+        )
+        server: Final = h11.Connection(h11.SERVER)
+        server.receive_data(b"GET / HTTP/1.1\r\nhost: proxy\r\n\r\n")
+        server.next_event()
+        client: Final = h11.Connection(h11.CLIENT)
+        client.send(h11.Request(method="GET", target="/", headers=[("host", "proxy")]))
+        client.receive_data(server.send(h11.Response(status_code=200, headers=[*headers.items()])) or b"")
+
+        assert headers == {"x-litellm-applied-policies": "tag-policy"}
+        assert isinstance(client.next_event(), h11.Response)
