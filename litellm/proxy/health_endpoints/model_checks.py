@@ -19,7 +19,7 @@ from typing import Final, Literal, TypeAlias
 
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 
-from litellm.router_utils.add_retry_fallback_headers import get_hidden_params_dict
+from litellm.litellm_core_utils.add_retry_fallback_headers import get_hidden_params_dict
 
 TestModelEndpoint: TypeAlias = Literal["/v1/chat/completions", "/v1/responses", "/v1/messages"]
 TestModelRouteType: TypeAlias = Literal["acompletion", "aresponses", "anthropic_messages"]

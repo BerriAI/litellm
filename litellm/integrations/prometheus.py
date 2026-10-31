@@ -66,7 +66,7 @@ from litellm.repositories.organization_repository import OrganizationRepository
 from litellm.repositories.table_repositories import EndUserRepository
 from litellm.repositories.team_repository import TeamRepository
 from litellm.repositories.user_repository import UserRepository
-from litellm.router_utils.router_callbacks.track_deployment_metrics import find_deployment_metadata
+from litellm.router_api import deployment_metadata
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.integrations.prometheus import *
 from litellm.types.integrations.prometheus import (
@@ -3022,8 +3022,8 @@ class PrometheusLogger(CustomLogger):
         ).get("custom_llm_provider")
         if isinstance(provider, str) and provider:
             return provider
-        deployment_metadata: Final = find_deployment_metadata(litellm_params)
-        return _deployment_model_provider(deployment_metadata.get("deployment") if deployment_metadata else None)
+        picked_deployment: Final = deployment_metadata(litellm_params)
+        return _deployment_model_provider(picked_deployment.get("deployment") if picked_deployment else None)
 
     @staticmethod
     def _extract_api_provider_from_exception(exception: Exception) -> str | None:
@@ -5209,7 +5209,7 @@ def _tag_matches_wildcard_configured_pattern(tags: Sequence[str], configured_tag
     """
     import re
 
-    from litellm.router_utils.pattern_match_deployments import PatternMatchRouter
+    from litellm.litellm_core_utils.pattern_match_deployments import PatternMatchRouter
 
     pattern_router: Final = PatternMatchRouter()
     regex_pattern: Final = pattern_router.pattern_to_regex(configured_tag)

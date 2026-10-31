@@ -23078,6 +23078,24 @@
         "output_cost_per_token_batches": 1e-06,
         "source": "https://developers.openai.com/api/docs/pricing"
     },
+    "deepgram/aura": {
+        "input_cost_per_character": 1.5e-05,
+        "litellm_provider": "deepgram",
+        "metadata": {
+            "calculation": "$0.0150/1000 characters = $0.000015 per character",
+            "note": "Aura-1 text-to-speech voices (aura-<voice>-<lang>), pay as you go"
+        },
+        "source": "https://deepgram.com/pricing"
+    },
+    "deepgram/aura-2": {
+        "input_cost_per_character": 3e-05,
+        "litellm_provider": "deepgram",
+        "metadata": {
+            "calculation": "$0.030/1000 characters = $0.00003 per character",
+            "note": "Aura-2 text-to-speech voices (aura-2-<voice>-<lang>), pay as you go"
+        },
+        "source": "https://deepgram.com/pricing"
+    },
     "deepgram/base": {
         "input_cost_per_second": 0.00020833,
         "litellm_provider": "deepgram",
@@ -31224,6 +31242,9 @@
         "output_cost_per_image_token": 3e-05,
         "output_cost_per_reasoning_token": 2.5e-06,
         "output_cost_per_token": 2.5e-06,
+        "output_cost_per_token_batches": 1.25e-06,
+        "output_cost_per_token_flex": 1.25e-06,
+        "output_cost_per_token_priority": 4.5e-06,
         "rpm": 100000,
         "source": "https://ai.google.dev/gemini-api/docs/pricing",
         "supported_endpoints": [
@@ -31404,6 +31425,7 @@
         "mode": "image_generation",
         "output_cost_per_image": 0.0336,
         "output_cost_per_image_token": 3e-05,
+        "output_cost_per_image_token_batches": 1.5e-05,
         "output_cost_per_token": 1.5e-06,
         "output_cost_per_token_batches": 7.5e-07,
         "rpm": 1000,
@@ -59744,12 +59766,13 @@
         "cache_read_input_token_cost": 1.375e-06,
         "output_cost_per_token": 8.25e-05,
         "litellm_provider": "bedrock_mantle",
-        "max_input_tokens": 1050000,
+        "max_input_tokens": 922000,
         "max_output_tokens": 128000,
         "mode": "responses",
         "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-56-cyber.html",
         "use_openai_responses_path": true,
         "supported_endpoints": [
+            "/v1/chat/completions",
             "/v1/responses"
         ],
         "supported_modalities": [
@@ -75428,6 +75451,7 @@
         "mode": "image_generation",
         "output_cost_per_image": 0.0336,
         "output_cost_per_image_token": 3e-05,
+        "output_cost_per_image_token_batches": 1.5e-05,
         "output_cost_per_token": 7.5e-06,
         "output_cost_per_token_batches": 3.75e-06,
         "rpm": 1000.0,

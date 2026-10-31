@@ -32,8 +32,13 @@ from litellm.integrations.SlackAlerting.ms_teams import (
     build_ms_teams_payload,
     get_ms_teams_webhook_url,
 )
+from litellm.litellm_core_utils.clientside_credential_handler import (
+    _ADMIN_CONFIG_FIELDS_TO_CLEAR_ON_BASE_OVERRIDE,  # pyright: ignore[reportPrivateUsage]  # one canonical list, shared with the router path
+    clientside_credential_keys,
+)
 from litellm.litellm_core_utils.custom_logger_registry import CustomLoggerRegistry
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.routing_common_utils import resolve_model_group_alias
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.proxy._types import (
     AlertType,
@@ -114,11 +119,6 @@ from litellm.proxy.middleware.in_flight_requests_middleware import (
 from litellm.proxy.shutdown.graceful_shutdown_manager import GracefulShutdownManager
 from litellm.router import Router
 from litellm.router_api import deployment_usable_by_team
-from litellm.router_utils.clientside_credential_handler import (
-    _ADMIN_CONFIG_FIELDS_TO_CLEAR_ON_BASE_OVERRIDE,  # pyright: ignore[reportPrivateUsage]  # one canonical list, shared with the router path
-    clientside_credential_keys,
-)
-from litellm.router_utils.common_utils import resolve_model_group_alias
 from litellm.secret_managers.main import get_secret_bool
 from litellm.types.proxy.litellm_pre_call_utils import RedactedDict, SecretFields
 from litellm.types.router import Deployment, reject_server_owned_wif_fields
