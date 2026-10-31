@@ -2522,6 +2522,71 @@ def test_stream_chunk_builder_rebuilds_each_text_completion_choice_by_index() ->
     assert (response.usage.prompt_tokens, response.usage.completion_tokens) == (1, 4)
 
 
+def test_stream_chunk_builder_joins_content_part_list_delta():
+    """A provider streaming delta.content as a content-part list must aggregate as text."""
+    chunks = [
+        ModelResponseStream(
+            id="chatcmpl-123",
+            created=1,
+            model="gpt-4.1-mini",
+            object="chat.completion.chunk",
+            choices=[
+                StreamingChoices(
+                    finish_reason=None,
+                    index=0,
+                    delta=Delta(content=[{"type": "text", "text": "Hello "}], role="assistant"),
+                )
+            ],
+        ),
+        ModelResponseStream(
+            id="chatcmpl-123",
+            created=2,
+            model="gpt-4.1-mini",
+            object="chat.completion.chunk",
+            choices=[
+                StreamingChoices(
+                    finish_reason="stop",
+                    index=0,
+                    delta=Delta(content=[{"type": "text", "text": "world"}], role=None),
+                )
+            ],
+        ),
+    ]
+
+    response = stream_chunk_builder(chunks=chunks)
+    assert response is not None
+    assert response.choices[0].message.content == "Hello world"
+
+
+def test_delta_content_as_str_skips_parts_without_usable_text():
+    """Parts holding a null value or not being mappings must not abort the join."""
+    from litellm.litellm_core_utils.streaming_chunk_builder_utils import delta_content_as_str
+
+    assert delta_content_as_str([{"type": "text", "text": "a"}, {"type": "text", "text": "b"}]) == "ab"
+    assert delta_content_as_str([{"type": "text", "text": None}]) == ""
+    assert delta_content_as_str(["bare string", 42, None]) == ""
+    assert (
+        delta_content_as_str(
+            [
+                {"type": "text", "text": "a"},
+                {"type": "text", "text": None},
+                {"type": "text", "text": "b"},
+            ]
+        )
+        == "ab"
+    )
+
+
+def test_delta_content_as_str_reads_text_from_non_mapping_parts():
+    """A part exposing only a ``text`` attribute still contributes its text."""
+    from litellm.litellm_core_utils.streaming_chunk_builder_utils import delta_content_as_str
+
+    class _TextPart:
+        text = "from attribute"
+
+    assert delta_content_as_str([_TextPart()]) == "from attribute"
+
+
 def test_stream_chunk_builder_keeps_null_text_completion_logprobs_fields_null() -> None:
     response: Final = litellm.stream_chunk_builder(
         chunks=[
