@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Final, Literal
 
+import anyio
 import httpx
 from integration._support.asgi import asgi_server
 from integration._support.client import Gateway, Scenario
@@ -112,6 +113,29 @@ def math_service(name: str = "integration-math", *, rich: bool = False) -> MCPSe
         return f"Hello, {name}"
 
     return service
+
+
+def _cancel_on_disconnect(app: ASGIApp) -> ASGIApp:
+    async def connected(scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await app(scope, receive, send)
+            return
+        sender, reader = anyio.create_memory_object_stream[Message]()
+        async with sender, reader, anyio.create_task_group() as tasks:
+
+            async def relay() -> None:
+                while True:
+                    message: Final = await receive()
+                    if message["type"] == "http.disconnect":
+                        tasks.cancel_scope.cancel()
+                        return
+                    await sender.send(message)
+
+            tasks.start_soon(relay)
+            await app(scope, reader.receive, send)
+            tasks.cancel_scope.cancel()
+
+    return connected
 
 
 def _capturing(app: Callable[[Scope, Receive, Send], object], observed: queue.Queue[dict[str, object]]):
@@ -256,7 +280,11 @@ def mcp_peer(transport: Literal["http", "sse"] = "http", *, rich: bool = False) 
         else service.streamable_http_app(stateless_http=True, json_response=True, transport_security=security)
     )
     observed: Final[queue.Queue[dict[str, object]]] = queue.Queue()
-    with asgi_server(_capturing(app, observed), before_stop=_drain_sse_streams if transport == "sse" else None) as url:
+    captured: Final = _capturing(app, observed)
+    with asgi_server(
+        _cancel_on_disconnect(captured) if transport == "http" else captured,
+        before_stop=_drain_sse_streams if transport == "sse" else None,
+    ) as url:
         yield McpPeer(url + ("/sse" if transport == "sse" else "/mcp"), observed, transport)
 
 

@@ -113,6 +113,39 @@ async def test_mcp_notification_ordering_preserves_other_responses(
 
 
 @pytest.mark.asyncio
+async def test_mcp_http_disconnect_cancels_an_in_flight_handler(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[2]))
+    from integration._support.mcp import _cancel_on_disconnect
+    from starlette.types import Receive, Send
+
+    started: Final = asyncio.Event()
+    stopped: Final = asyncio.Event()
+    body: Final[Message] = {"type": "http.request", "body": b"tool-call", "more_body": False}
+    pending: Final = iter((body,))
+
+    async def receive() -> Message:
+        message: Final = next(pending, None)
+        if message is not None:
+            return message
+        await started.wait()
+        return {"type": "http.disconnect"}
+
+    async def send(message: Message) -> None:
+        pytest.fail(f"Disconnected handler sent a response: {message}")
+
+    async def app(scope: Scope, receive: Receive, send: Send) -> None:
+        assert await receive() == body
+        started.set()
+        try:
+            await asyncio.Future[None]()
+        finally:
+            stopped.set()
+
+    await asyncio.wait_for(_cancel_on_disconnect(app)({"type": "http"}, receive, send), 2)
+    assert stopped.is_set(), "The disconnected HTTP handler was left running"
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("failure", (RuntimeError("dispatch failed"), asyncio.CancelledError()))
 async def test_mcp_notification_dispatch_failure_is_not_acknowledged(
     failure: BaseException, monkeypatch: pytest.MonkeyPatch
