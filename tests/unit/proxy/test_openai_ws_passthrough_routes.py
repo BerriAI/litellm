@@ -121,8 +121,13 @@ class _FakeRelay:
 
 
 class _FakeFrameModelGate:
+    def __init__(self, refusals: Mapping[str, WebsocketFrameModelRefused] = MappingProxyType({})) -> None:
+        self.refusals = refusals
+        self.checked: list[str] = []
+
     async def __call__(self, websocket: object, model: str, /) -> WebsocketFrameModelVerdict:
-        return WebsocketFrameModelAllowed(access_groups=())
+        self.checked.append(model)
+        return self.refusals.get(model) or WebsocketFrameModelAllowed(access_groups=())
 
 
 @dataclass(frozen=True, slots=True)
@@ -136,8 +141,9 @@ async def _serve(
     endpoint: str,
     user_api_key_dict: UserAPIKeyAuth,
     general_settings: Mapping[str, object],
+    frame_model_gate: _FakeFrameModelGate | None = None,
 ) -> _Served:
-    served: Final = _Served(relay=_FakeRelay(), frame_model_gate=_FakeFrameModelGate())
+    served: Final = _Served(relay=_FakeRelay(), frame_model_gate=frame_model_gate or _FakeFrameModelGate())
     await openai_websocket_proxy_route(
         websocket=websocket,
         endpoint=endpoint,
@@ -329,6 +335,55 @@ async def test_openai_websocket_connects_model_restricted_keys(key_models):
     assert len(served.relay.calls) == 1
     assert served.relay.calls[0].client_frame_model_gate is served.frame_model_gate
     assert websocket.sent == []
+    assert websocket.closed is None
+
+
+ALIAS_REFUSAL: Final = WebsocketFrameModelRefused(
+    message=_OPENAI_WS_ALIASED_MODEL_REFUSAL, error_type=ProxyErrorTypes.key_model_access_denied.value
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "query",
+    [
+        "model=gpt-realtime-2.1",
+        "model=gpt-realtime-2.1&model=gpt-realtime-2.1-mini",
+        "model=gpt-realtime-2.1-mini&model=gpt-realtime-2.1",
+    ],
+    ids=["one_model", "refused_model_first", "refused_model_last"],
+)
+async def test_openai_websocket_refuses_an_opening_model_the_frame_gate_refuses(query):
+    """
+    The relay sends the connection URL to OpenAI unchanged, so every model it names has to pass the
+    same gate as a frame, or an alias the upgrade resolves to an allowed model opens the session on the
+    alias name itself
+    """
+    websocket: Final = _FakeWebSocket("/openai/v1/realtime", query)
+    gate: Final = _FakeFrameModelGate(MappingProxyType({"gpt-realtime-2.1": ALIAS_REFUSAL}))
+
+    with patch(GET_CREDENTIALS, return_value="sk-provider"):
+        served: Final = await _serve(
+            websocket, "v1/realtime", UserAPIKeyAuth(models=["gpt-realtime-2.1-mini"]), ENABLED, gate
+        )
+
+    assert websocket.error_message() == _OPENAI_WS_ALIASED_MODEL_REFUSAL
+    assert websocket.closed == (1008, "This key cannot use a model alias over OpenAI websocket passthrough.")
+    assert served.relay.calls == []
+    assert "gpt-realtime-2.1" in gate.checked
+
+
+@pytest.mark.asyncio
+async def test_openai_websocket_relays_a_session_once_every_opening_model_passes_the_frame_gate():
+    websocket: Final = _FakeWebSocket("/openai/v1/realtime", "model=gpt-realtime-2.1-mini")
+
+    with patch(GET_CREDENTIALS, return_value="sk-provider"):
+        served: Final = await _serve(
+            websocket, "v1/realtime", UserAPIKeyAuth(models=["gpt-realtime-2.1-mini"]), ENABLED
+        )
+
+    assert served.frame_model_gate.checked == ["gpt-realtime-2.1-mini"]
+    assert len(served.relay.calls) == 1
     assert websocket.closed is None
 
 

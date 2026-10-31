@@ -142,6 +142,7 @@ from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     YieldsToConfiguredPassThroughRoute,
     create_pass_through_route,
     create_websocket_passthrough_route,
+    refuse_websocket,
     websocket_passthrough_request,
 )
 from litellm.proxy.utils import ProxyLogging as ProxyLoggingType
@@ -3560,6 +3561,14 @@ def _negotiated_websocket_subprotocol(websocket: WebSocket) -> str | None:
     return requested_subprotocols[0] if requested_subprotocols else None
 
 
+async def _opening_model_refusal(
+    websocket: WebSocket, query_string: str, frame_model_gate: WebsocketFrameModelGate
+) -> WebsocketFrameModelRefused | None:
+    opening_models: Final = dict.fromkeys(httpx.QueryParams(query_string).get_list("model"))
+    verdicts: Final = tuple([await frame_model_gate(websocket, model) for model in opening_models])
+    return next((verdict for verdict in verdicts if isinstance(verdict, WebsocketFrameModelRefused)), None)
+
+
 @router.websocket("/openai_passthrough/{endpoint:path}")
 @router.websocket("/openai/{endpoint:path}")
 async def openai_websocket_proxy_route(
@@ -3618,6 +3627,11 @@ async def openai_websocket_proxy_route(
     custom_headers: Final = {"Authorization": f"Bearer {openai_api_key}"}
 
     await websocket.accept(subprotocol=negotiated_subprotocol)
+
+    opening_refusal: Final = await _opening_model_refusal(websocket, query_string, frame_model_gate)
+    if opening_refusal is not None:
+        await refuse_websocket(websocket, opening_refusal)
+        return
 
     await relay(
         websocket=websocket,

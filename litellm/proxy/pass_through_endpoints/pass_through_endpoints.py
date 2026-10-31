@@ -2788,11 +2788,15 @@ def _refusal_close_reason(message: str) -> str:
     return _truncated_close_reason(message if first_sentence is None else first_sentence.group(0))
 
 
+async def refuse_websocket(websocket: WebSocket, refusal: WebsocketFrameModelRefused) -> None:
+    await websocket.send_text(realtime_error_event(refusal.message, error_type=refusal.error_type))
+    await websocket.close(code=CloseCode.POLICY_VIOLATION, reason=_refusal_close_reason(refusal.message))
+
+
 async def _refuse_client_frame(
     websocket: WebSocket, upstream_ws: ClientConnection, refusal: WebsocketFrameModelRefused
 ) -> None:
-    await websocket.send_text(realtime_error_event(refusal.message, error_type=refusal.error_type))
-    await websocket.close(code=CloseCode.POLICY_VIOLATION, reason=_refusal_close_reason(refusal.message))
+    await refuse_websocket(websocket, refusal)
     await upstream_ws.close()
 
 
