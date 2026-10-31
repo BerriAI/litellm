@@ -13,7 +13,7 @@ import yaml
 from fastapi import HTTPException
 
 from litellm.integrations.custom_guardrail import CustomGuardrail
-from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+from litellm.proxy._types import LitellmUserRoles, ProxyException, UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_endpoints import (
     CreateGuardrailRequest,
     ListGuardrailsResponse,
@@ -2196,6 +2196,39 @@ def _patch_apply_guardrail_env(mocker, guardrail_result):
     mocker.patch("litellm.litellm_core_utils.thread_pool_executor.executor")
 
     return mock_guardrail
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("vendor_status", "expected_type"),
+    [(401, "authentication_error"), (403, "permission_error")],
+)
+async def test_a_guardrail_vendors_rejection_is_labelled_the_way_chat_labels_it(
+    mocker, vendor_status: int, expected_type: str
+):
+    """A vendor refusing the guardrail's own credentials is not the caller's key being rejected,
+    so it must not read as the proxy's auth_error the way a 401 the proxy raises does."""
+    mock_guardrail: Final = _patch_apply_guardrail_env(mocker, None)
+    mock_guardrail.apply_guardrail.side_effect = HTTPException(
+        status_code=vendor_status, detail="vendor refused the request"
+    )
+    mocker.patch(
+        "litellm.proxy.proxy_server.proxy_logging_obj.post_call_failure_hook", AsyncMock(return_value=None)
+    )
+
+    with pytest.raises(ProxyException) as raised:
+        await apply_guardrail(
+            fastapi_request=mocker.Mock(),
+            request=ApplyGuardrailRequest(guardrail_name="test-guardrail", text="hello"),
+            user_api_key_dict=UserAPIKeyAuth(),
+        )
+
+    assert raised.value.to_dict() == {
+        "message": "vendor refused the request",
+        "type": expected_type,
+        "param": None,
+        "code": str(vendor_status),
+    }
 
 
 @pytest.mark.asyncio
