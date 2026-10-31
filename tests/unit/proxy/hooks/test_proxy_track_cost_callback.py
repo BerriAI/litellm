@@ -1528,6 +1528,28 @@ async def test_track_cost_callback_alerts_only_on_a_billable_call_with_no_loggin
 
 
 @pytest.mark.asyncio
+async def test_track_cost_callback_logs_no_warning_for_a_file_delete_routed_to_a_deployment(caplog: pytest.LogCaptureFixture):
+    kwargs: Final = {
+        "call_type": "afile_delete",
+        "model": "openai/*",
+        "litellm_call_id": "delete-call-id",
+        "litellm_params": {},
+        "stream": False,
+    }
+
+    with patch("litellm.proxy.proxy_server.proxy_logging_obj", _FailedTrackingAlerts()):
+        with caplog.at_level(logging.WARNING, logger=verbose_proxy_logger.name):
+            await ProxyDBLogger()._PROXY_track_cost_callback(
+                kwargs=kwargs,
+                completion_response=None,
+                start_time=datetime.now(),
+                end_time=datetime.now(),
+            )
+
+    assert [record.getMessage() for record in caplog.records if record.levelno >= logging.WARNING] == []
+
+
+@pytest.mark.asyncio
 async def test_track_cost_callback_defers_in_progress_background_interaction():  # test-quality-ok: writing no spend row and raising no alert is the whole observable contract of the deferral path
     """
     A background=true interaction create returns in_progress with no usage

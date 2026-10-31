@@ -9,6 +9,7 @@ import asyncio
 import base64
 import json
 import logging
+from collections.abc import Callable, Mapping
 from types import MappingProxyType
 
 import pytest
@@ -2273,13 +2274,21 @@ async def test_batch_create_hook_passes_the_router_deployment_as_creating_model_
 class _FakeFilesRouter:
     """Uploads each target model's file to every deployment it routes to, one new provider id per upload."""
 
-    def __init__(self, deployments_by_model, delete_error=None):
+    def __init__(
+        self,
+        deployments_by_model: Mapping[str, tuple[str, ...]],
+        delete_error: Exception | None = None,
+        delete_gate: asyncio.Event | None = None,
+    ) -> None:
         self.deployments_by_model = deployments_by_model
         self.delete_error = delete_error
+        self.delete_gate = delete_gate
         self.upload_count = 0
-        self.deletes = ()
+        self.deletes: tuple[tuple[str, str, Mapping[str, object], Mapping[str, str]], ...] = ()
 
-    async def acreate_file(self, model, file, purpose, litellm_metadata):
+    async def acreate_file(
+        self, model: str, file: tuple[str, bytes, str], purpose: str, litellm_metadata: Mapping[str, object]
+    ) -> OpenAIFileObject:
         deployment_ids: Final = self.deployments_by_model[model]
         provider_file_ids: Final = tuple(
             f"file-upload-{self.upload_count + offset + 1}" for offset in range(len(deployment_ids))
@@ -2293,14 +2302,22 @@ class _FakeFilesRouter:
         }
         return response
 
-    def registry(self):
+    def registry(self) -> "_FakeFilesRouter":
         return self
 
-    def credentials(self, model_id, form):
+    def credentials(self, model_id: str, form: str) -> dict[str, str]:
         assert form == "with_provider"
         return {"custom_llm_provider": "openai", "api_key": f"key-of-{model_id}"}
 
-    async def afile_delete(self, model, file_id, litellm_metadata, _litellm_internal_model_credentials):
+    async def afile_delete(
+        self,
+        model: str,
+        file_id: str,
+        litellm_metadata: Mapping[str, object],
+        _litellm_internal_model_credentials: Mapping[str, str],
+    ) -> None:
+        if self.delete_gate is not None:
+            await self.delete_gate.wait()
         self.deletes = (*self.deletes, (model, file_id, litellm_metadata, _litellm_internal_model_credentials))
         if self.delete_error is not None:
             raise self.delete_error
@@ -2309,7 +2326,17 @@ class _FakeFilesRouter:
 _REQUEST_METADATA: Final = MappingProxyType({"user_api_key_team_id": "test-team"})
 
 
-async def _create_managed_file(router, target_model_names):
+async def _eventually(condition: Callable[[], bool]) -> None:
+    async def _poll() -> None:
+        while not condition():
+            await asyncio.sleep(0)
+
+    await asyncio.wait_for(_poll(), timeout=1)
+
+
+async def _create_managed_file(
+    router: _FakeFilesRouter, target_model_names: list[str]
+) -> tuple[dict[str, str], list[str], tuple[str, str]]:
     managed_files, mock_prisma = _make_real_managed_files_instance()
     response: Final = await managed_files.acreate_file(
         create_file_request={
@@ -2336,6 +2363,7 @@ async def test_acreate_file_keeps_the_upload_the_managed_id_carries_when_two_tar
     router: Final = _FakeFilesRouter({"gpt-a": ("wildcard-dep",), "gpt-b": ("wildcard-dep",)})
 
     model_mappings, flat_ids, carried = await _create_managed_file(router, ["gpt-a", "gpt-b"])
+    await _eventually(lambda: len(router.deletes) == 1)
 
     assert carried == ("wildcard-dep", "file-upload-1")
     assert model_mappings == {"wildcard-dep": "file-upload-1"}
@@ -2356,6 +2384,7 @@ async def test_acreate_file_deletes_only_the_repeat_upload_and_keeps_every_deplo
     router: Final = _FakeFilesRouter({"gpt-a": ("dep-1", "dep-2"), "gpt-b": ("dep-2",), "gpt-c": ("dep-3",)})
 
     model_mappings, flat_ids, carried = await _create_managed_file(router, ["gpt-a", "gpt-b", "gpt-c"])
+    await _eventually(lambda: len(router.deletes) == 1)
 
     assert carried == ("dep-1", "file-upload-1")
     assert list(model_mappings.items()) == [
@@ -2368,7 +2397,7 @@ async def test_acreate_file_deletes_only_the_repeat_upload_and_keeps_every_deplo
 
 
 @pytest.mark.asyncio
-async def test_acreate_file_still_returns_the_managed_file_when_deleting_the_repeat_upload_fails(caplog):
+async def test_acreate_file_still_returns_the_managed_file_when_deleting_the_repeat_upload_fails(caplog: pytest.LogCaptureFixture):
     router: Final = _FakeFilesRouter(
         {"gpt-a": ("wildcard-dep",), "gpt-b": ("wildcard-dep",)},
         delete_error=RuntimeError("provider unavailable"),
@@ -2376,6 +2405,7 @@ async def test_acreate_file_still_returns_the_managed_file_when_deleting_the_rep
 
     with caplog.at_level(logging.WARNING):
         model_mappings, flat_ids, carried = await _create_managed_file(router, ["gpt-a", "gpt-b"])
+        await _eventually(lambda: "provider unavailable" in caplog.text)
 
     assert carried == ("wildcard-dep", "file-upload-1")
     assert model_mappings == {"wildcard-dep": "file-upload-1"}
@@ -2383,3 +2413,21 @@ async def test_acreate_file_still_returns_the_managed_file_when_deleting_the_rep
     assert [delete[:2] for delete in router.deletes] == [("wildcard-dep", "file-upload-2")]
     assert "file-upload-2" in caplog.text and "wildcard-dep" in caplog.text
     assert "provider unavailable" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_acreate_file_answers_before_deleting_the_repeat_upload_finishes():
+    delete_gate: Final = asyncio.Event()
+    router: Final = _FakeFilesRouter({"gpt-a": ("wildcard-dep",), "gpt-b": ("wildcard-dep",)}, delete_gate=delete_gate)
+
+    model_mappings, flat_ids, carried = await asyncio.wait_for(
+        _create_managed_file(router, ["gpt-a", "gpt-b"]), timeout=1
+    )
+
+    assert carried == ("wildcard-dep", "file-upload-1")
+    assert model_mappings == {"wildcard-dep": "file-upload-1"}
+    assert flat_ids == ["file-upload-1"]
+    assert router.deletes == ()
+    delete_gate.set()
+    await _eventually(lambda: len(router.deletes) == 1)
+    assert router.deletes[0][:2] == ("wildcard-dep", "file-upload-2")

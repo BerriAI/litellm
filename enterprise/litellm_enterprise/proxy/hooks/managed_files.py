@@ -35,7 +35,7 @@ from typing_extensions import ReadOnly, Unpack
 
 import litellm
 from litellm import Router, verbose_logger
-from litellm._internal_context import with_service_target
+from litellm._internal_context import post_response_phase, with_service_target
 from litellm._uuid import uuid
 from litellm.caching.caching import DualCache
 from litellm.constants import (
@@ -446,24 +446,46 @@ async def _delete_provider_file(
     )
 
 
+_REDUNDANT_UPLOAD_DELETES: Final[set[asyncio.Task[None]]] = set()  # mutable-ok: strong refs keep cleanup deletes alive
+
+
 async def _delete_redundant_upload(
     llm_router: Router,
     upload: _ProviderUpload,
-    create_file_request: CreateFileRequest,
+    delete_request: Mapping[str, object],
 ) -> None:
     try:
-        await _delete_provider_file(
-            llm_router,
-            upload.model_id,
-            upload.provider_file_id,
-            {k: v for k, v in create_file_request.items() if k not in _FILE_UPLOAD_ONLY_FIELDS},
-        )
+        await _delete_provider_file(llm_router, upload.model_id, upload.provider_file_id, delete_request)
     except Exception as error:
         verbose_logger.warning(
             f"Could not delete the redundant upload provider_file_id={sanitize_for_log(upload.provider_file_id)} "
             f"at deployment model_id={sanitize_for_log(upload.model_id)}: "
             f"{type(error).__name__} {sanitize_for_log(error)}"
         )
+
+
+async def _delete_redundant_uploads(
+    llm_router: Router,
+    uploads: Sequence[_ProviderUpload],
+    delete_request: Mapping[str, object],
+) -> None:
+    await asyncio.gather(*(_delete_redundant_upload(llm_router, upload, delete_request) for upload in uploads))
+
+
+def _start_deleting_redundant_uploads(
+    llm_router: Router,
+    uploads: Sequence[_ProviderUpload],
+    create_file_request: CreateFileRequest,
+) -> None:
+    if not uploads:
+        return
+    delete_request: Final = MappingProxyType(
+        {k: v for k, v in create_file_request.items() if k not in _FILE_UPLOAD_ONLY_FIELDS}
+    )
+    with post_response_phase():
+        task: Final = asyncio.create_task(_delete_redundant_uploads(llm_router, uploads, delete_request))
+    _REDUNDANT_UPLOAD_DELETES.add(task)
+    task.add_done_callback(_REDUNDANT_UPLOAD_DELETES.discard)
 
 
 def _managed_database(prisma_client: _ManagedResourcePrismaClient) -> _ManagedResourceDatabase:
@@ -2109,8 +2131,9 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         kept_uploads: Final = tuple(
             upload for index, upload in enumerate(uploads) if _is_first_upload_to_its_deployment(uploads, index)
         )
-        for redundant_upload in (upload for upload in uploads if upload not in kept_uploads):
-            await _delete_redundant_upload(llm_router, redundant_upload, create_file_request)
+        _start_deleting_redundant_uploads(
+            llm_router, tuple(upload for upload in uploads if upload not in kept_uploads), create_file_request
+        )
         model_mappings: Final = {upload.model_id: upload.provider_file_id for upload in kept_uploads}
 
         await self.store_unified_file_id(
