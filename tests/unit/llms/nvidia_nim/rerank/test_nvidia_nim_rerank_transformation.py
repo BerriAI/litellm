@@ -189,15 +189,14 @@ async def test_nvidia_nim_ranking_endpoint_image_documents_and_top_n():
 
 class TestNvidiaNimRetrievalRerankRequestTransform:
     """
-    The default /v1/retrieval/{model}/reranking route keeps its existing
-    contract: top_n still maps to top_k, and structured documents keep the
-    prior text-only passage behavior.
+    The /v1/retrieval/{model}/reranking route omits unsupported top_k and
+    applies top_n client-side while preserving text-only passage behavior.
     """
 
-    def _build_request(self, documents, top_n=None):
+    def _build_request(self, documents, top_n=None, non_default_params=None):
         config = NvidiaNimRerankConfig()
         optional_params = config.map_cohere_rerank_params(
-            non_default_params=None,
+            non_default_params=non_default_params,
             model="nvidia/llama-3_2-nv-rerankqa-1b-v2",
             drop_params=False,
             query="which passage shows a cat?",
@@ -210,10 +209,19 @@ class TestNvidiaNimRetrievalRerankRequestTransform:
             headers={},
         )
 
-    def test_top_n_still_maps_to_top_k(self):
+    def test_top_n_is_not_sent_as_top_k(self):
         request_data = self._build_request(["a", "b"], top_n=1)
-        assert request_data["top_k"] == 1
+        assert "top_k" not in request_data
         assert "top_n" not in request_data
+
+    def test_provider_specific_top_k_is_not_forwarded(self):
+        request_data = self._build_request(["a", "b"], non_default_params={"top_k": 300})
+        assert "top_k" not in request_data
+
+    @pytest.mark.parametrize("invalid_top_n", [0, -1, 1.5, "2", True])
+    def test_invalid_top_n_raises_value_error(self, invalid_top_n):
+        with pytest.raises(ValueError, match="top_n"):
+            self._build_request(["a", "b"], top_n=invalid_top_n)
 
     def test_string_documents_unchanged(self):
         request_data = self._build_request(["passage one", "passage two"])
@@ -241,6 +249,85 @@ class TestNvidiaNimRetrievalRerankRequestTransform:
         doc = {"title": "no supported fields here"}
         request_data = self._build_request([doc])
         assert request_data["passages"] == [{"text": json.dumps(doc)}]
+
+
+def _rerank_retrieval_with_top_n(top_n, rankings):
+    config = NvidiaNimRerankConfig()
+    params = config.map_cohere_rerank_params(
+        non_default_params=None,
+        model="nvidia/llama-nemotron-rerank-vl-1b-v2",
+        drop_params=False,
+        query="test",
+        documents=["first", "second", "third"],
+        top_n=top_n,
+    )
+    request = config.transform_rerank_request(
+        model="nvidia/llama-nemotron-rerank-vl-1b-v2",
+        optional_rerank_params=params,
+        headers={},
+    )
+    response = config.transform_rerank_response(
+        model="nvidia/llama-nemotron-rerank-vl-1b-v2",
+        raw_response=httpx.Response(200, json={"rankings": rankings}),
+        model_response=RerankResponse(),
+        logging_obj=MagicMock(),
+        request_data=request,
+    )
+    return request, response
+
+
+class TestNvidiaNimRetrievalRerankResponseTransform:
+    RANKINGS = [
+        {"index": 0, "logit": 0.10},
+        {"index": 1, "logit": 0.90},
+        {"index": 2, "logit": 0.50},
+    ]
+
+    def test_top_n_truncates_by_relevance(self):
+        request, response = _rerank_retrieval_with_top_n(2, self.RANKINGS)
+        assert "top_k" not in request
+        assert [result["index"] for result in response.results] == [1, 2]
+        assert response.meta == {"billed_units": {"total_tokens": 3}}
+
+    def test_top_n_greater_than_document_count_keeps_all(self):
+        _, response = _rerank_retrieval_with_top_n(300, self.RANKINGS)
+        assert len(response.results) == 3
+
+    def test_no_top_n_keeps_all_results(self):
+        _, response = _rerank_retrieval_with_top_n(None, self.RANKINGS)
+        assert len(response.results) == 3
+
+
+@pytest.mark.asyncio()
+async def test_nvidia_nim_retrieval_endpoint_does_not_send_top_k():
+    """Mocked HTTP transport regression: NVIDIA rejects top_k in the body."""
+    mock_response = AsyncMock()
+    mock_response.json = lambda: {
+        "rankings": [{"index": 0, "logit": 0.2}, {"index": 1, "logit": 0.9}]
+    }
+    mock_response.headers = {"key": "value"}
+    mock_response.status_code = 200
+
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        return_value=mock_response,
+    ) as mock_post:
+        response = await litellm.arerank(
+            model="nvidia_nim/nvidia/llama-nemotron-rerank-vl-1b-v2",
+            query="which document is more relevant?",
+            documents=["unrelated text", "relevant text"],
+            top_n=1,
+            api_key="fake-api-key",
+        )
+        mock_post.assert_called_once()
+        assert mock_post.call_args.kwargs["url"] == (
+            "https://ai.api.nvidia.com/v1/retrieval/nvidia/llama-nemotron-rerank-vl-1b-v2/reranking"
+        )
+        body = json.loads(mock_post.call_args.kwargs["data"])
+        assert "top_k" not in body
+        assert "top_n" not in body
+        assert body["passages"] == [{"text": "unrelated text"}, {"text": "relevant text"}]
+        assert [result["index"] for result in response.results] == [1]
 
 
 def _transform_retrieval_response(payload: object) -> RerankResponse:
@@ -309,7 +396,7 @@ def test_transform_rerank_response_usage_shape_errors_do_not_echo_the_payload():
     assert "leaked usage text" not in str(exc_info.value)
 
 
-def test_map_cohere_rerank_params_passes_provider_params_through_and_maps_top_n():
+def test_map_cohere_rerank_params_preserves_top_n_for_local_truncation():
     params = NvidiaNimRerankConfig().map_cohere_rerank_params(
         non_default_params={"truncate": "END"},
         model="nvidia/llama-3_2-nv-rerankqa-1b-v2",
@@ -322,6 +409,6 @@ def test_map_cohere_rerank_params_passes_provider_params_through_and_maps_top_n(
     assert params == {
         "query": "which passage shows a cat?",
         "documents": ["a", {"text": "b"}],
-        "top_k": 1,
+        "top_n": 1,
         "truncate": "END",
     }
