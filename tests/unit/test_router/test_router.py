@@ -2893,11 +2893,11 @@ def test_switch_routing_strategy_installs_lar1_then_restores_the_default_selecto
         },
     )
     assert router.routing_strategy == "lar1"
-    assert "_core_async_get_available_deployment" in router.__dict__
+    assert "_core_async_get_available_deployment" in router._core.__dict__
 
     router._switch_routing_strategy("usage-based-routing-v2", {})
     assert router.lowesttpm_logger_v2 is not None
-    assert "async_get_available_deployment" not in router.__dict__
+    assert "_core_async_get_available_deployment" not in router._core.__dict__
 
 
 @pytest.mark.parametrize(
@@ -24271,7 +24271,7 @@ def _record_phase_events(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, dic
     def record(name: str, attributes: dict[str, str | int]) -> None:
         events.append((name, dict(attributes)))
 
-    monkeypatch.setattr(litellm.router, "phase_event", record)
+    monkeypatch.setattr(litellm.router_python_core, "phase_event", record)
     return events
 
 
@@ -25666,7 +25666,9 @@ def test_get_model_list_from_model_alias_should_not_iterate_for_non_alias_lookup
         ],
         model_group_alias={"alias-1": "gpt-5.5"},
     )
-    router.model_group_alias = NoItemsAliasDict({f"alias-{idx}": "gpt-5.5" for idx in range(200)})
+    # Assigning model_group_alias copies the value (a changeset detaches it), so the tripwire goes
+    # straight onto the core, where the lookup reads it.
+    router._core._core_model_group_alias = NoItemsAliasDict({f"alias-{idx}": "gpt-5.5" for idx in range(200)})
 
     model_alias_list = router.get_model_list_from_model_alias(model_name="gpt-5-mini")
     assert model_alias_list == []
@@ -25686,7 +25688,9 @@ def test_map_team_model_should_not_iterate_aliases_for_non_alias_team_model_name
         ],
         model_group_alias={"alias-1": "gpt-5.5"},
     )
-    router.model_group_alias = NoItemsAliasDict({f"alias-{idx}": "gpt-5.5" for idx in range(200)})
+    # Assigning model_group_alias copies the value (a changeset detaches it), so the tripwire goes
+    # straight onto the core, where the lookup reads it.
+    router._core._core_model_group_alias = NoItemsAliasDict({f"alias-{idx}": "gpt-5.5" for idx in range(200)})
 
     # map_team_model should return the public name unchanged (not the internal UUID name)
     # so the router can find all sibling deployments via team_id filtering
@@ -29139,13 +29143,13 @@ def test_reset_custom_routing_strategy():
     router = _create_custom_routing_router()
     router.set_custom_routing_strategy(SpecialEndpointRoutingStrategy(router))
 
-    assert "get_available_deployment" in router.__dict__
-    assert "_core_async_get_available_deployment" in router.__dict__
+    assert "get_available_deployment" in router._core.__dict__
+    assert "_core_async_get_available_deployment" in router._core.__dict__
 
     router._reset_custom_routing_strategy()
 
-    assert "get_available_deployment" not in router.__dict__
-    assert "async_get_available_deployment" not in router.__dict__
+    assert "get_available_deployment" not in router._core.__dict__
+    assert "_core_async_get_available_deployment" not in router._core.__dict__
     assert router.async_get_available_deployment.__func__ is Router.async_get_available_deployment
 
     router._reset_custom_routing_strategy()
@@ -30985,7 +30989,7 @@ async def test_responses_fallback_wrapper_disconnect_billing_keeps_the_primary_s
 
 
 _SYNC_SECONDS: Final = 10
-_ROUTER_FILE: Final = Router.__init__.__code__.co_filename
+_ROUTER_FILE: Final = Router._update_deployment_indices_after_removal.__code__.co_filename
 _INDEX_LOCK_LINES: Final = frozenset(
     number
     for number, line in enumerate(linecache.getlines(_ROUTER_FILE), start=1)
