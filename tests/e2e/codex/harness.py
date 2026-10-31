@@ -48,7 +48,7 @@ class CodexHarness:
         return self.home / ".codex"
 
     def new_workspace(self, files: Mapping[str, str]) -> Path:
-        workspace: Final = Path(tempfile.mkdtemp(prefix="workspace-", dir=self.home))
+        workspace: Final = Path(tempfile.mkdtemp(prefix="workspace-", dir=self.home)).resolve()
         for name, content in files.items():
             _ = (workspace / name).write_text(content)
         return workspace
