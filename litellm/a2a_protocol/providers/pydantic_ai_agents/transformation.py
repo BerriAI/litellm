@@ -270,6 +270,7 @@ class PydanticAITransformation:
         return PydanticAITransformation._transform_to_a2a_response(
             response_data=raw_response,
             request_id=request_id,
+            params=params,
         )
 
     @staticmethod
@@ -304,9 +305,23 @@ class PydanticAITransformation:
         )
 
     @staticmethod
+    def _request_context_id(
+        params: "_SupportsModelDump | _SupportsPydanticDict | Mapping[str, object] | None",
+    ) -> object:
+        """Pull the contextId out of a request's params, if the caller sent one."""
+        if params is None:
+            return None
+        message: Final = PydanticAITransformation._params_to_dict(params).get("message")
+        if not isinstance(message, dict):
+            return None
+        context_id: Final = message.get("contextId")
+        return context_id if isinstance(context_id, str) and context_id else None
+
+    @staticmethod
     def _transform_to_a2a_response(
         response_data: Mapping[str, object],
         request_id: str,
+        params: "_SupportsModelDump | _SupportsPydanticDict | Mapping[str, object] | None" = None,
     ) -> dict[str, object]:
         """
         Transform Pydantic AI task response to standard A2A non-streaming format.
@@ -328,6 +343,9 @@ class PydanticAITransformation:
         Args:
             response_data: Pydantic AI task response
             request_id: Original request ID
+            params: The request's MessageSendParams. When it carried a contextId the
+                response echoes it, so a caller that keeps conversations apart by
+                contextId keeps seeing the id it sent.
 
         Returns:
             Standard A2A non-streaming response format
@@ -342,6 +360,9 @@ class PydanticAITransformation:
             "parts": parts if parts else [{"kind": "text", "text": full_text}],
             "messageId": message_id,
         }
+        context_id: Final = PydanticAITransformation._request_context_id(params)
+        if context_id is not None:
+            a2a_message["contextId"] = context_id
 
         # Return standard A2A non-streaming format
         return {
@@ -515,8 +536,6 @@ class PydanticAITransformation:
                             "contextId": context_id,
                             "kind": "artifact-update",
                             "taskId": task_id,
-                            "append": i > 0,
-                            "lastChunk": is_last_chunk,
                             "artifact": {
                                 "artifactId": artifact_id,
                                 "parts": [

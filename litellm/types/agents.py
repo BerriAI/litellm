@@ -169,6 +169,12 @@ class AgentCard(TypedDict, total=False):
     supportsAuthenticatedExtendedCard: bool | None
     signatures: list[AgentCardSignature] | None
 
+    # LiteLLM-only: bind the A2A contextId to the calling key so an agent that keeps
+    # conversation memory per contextId doesn't hand one key's conversation to
+    # another. ``"none"`` (default) forwards the id untouched. Stripped from the
+    # card served at /.well-known/agent-card.json.
+    litellm_context_scope: Literal["none", "caller"] | None
+
 
 class AugmentedAgentCard(AgentCard):
     is_public: bool

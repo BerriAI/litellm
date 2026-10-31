@@ -9,6 +9,7 @@ from litellm.proxy.a2a.agent_card import (
     merge_agent_card,
     normalize_protocol_version,
     resolve_served_protocol_version,
+    scope_context_ids,
 )
 
 PROXY_URL = "https://proxy.example/a2a/agent-xyz"
@@ -260,3 +261,43 @@ def test_serves_semver_pinned_protocol_version_as_major_minor():
     merged = merge_agent_card(card, proxy_url=PROXY_URL, proxy_base_url=PROXY_BASE)
     assert merged["protocolVersion"] == "0.3"
     assert merged["supportedInterfaces"][0]["protocolVersion"] == "0.3"
+
+def test_context_scope_setting_survives_the_merge():
+    card = _full_upstream_card()
+    card["litellm_context_scope"] = "caller"
+    merged = merge_agent_card(card, proxy_url=PROXY_URL, proxy_base_url=PROXY_BASE)
+    assert merged["litellm_context_scope"] == "caller"
+
+
+def test_unknown_context_scope_is_rejected():
+    card = _full_upstream_card()
+    card["litellm_context_scope"] = "tenant"
+    with pytest.raises(ValueError, match="litellm_context_scope"):
+        merge_agent_card(card, proxy_url=PROXY_URL, proxy_base_url=PROXY_BASE)
+
+
+def test_scope_context_ids_noop_without_opt_in():
+    params = {"message": {"contextId": "ctx-1", "parts": []}}
+    assert scope_context_ids(params, {}, "sk-alice") == params
+    assert scope_context_ids(params, {"litellm_context_scope": "none"}, "sk-alice") == params
+    # opted in, but no key to scope to
+    assert scope_context_ids(params, {"litellm_context_scope": "caller"}, None) == params
+
+
+def test_scope_context_ids_covers_message_and_top_level():
+    params = {
+        "message": {"contextId": "ctx-1", "parts": []},
+        "contextId": "ctx-1",
+    }
+    scoped = scope_context_ids(params, {"litellm_context_scope": "caller"}, "sk-alice")
+
+    assert scoped["message"]["contextId"].endswith("-ctx-1")
+    assert scoped["message"]["contextId"] != "ctx-1"
+    assert scoped["contextId"] == scoped["message"]["contextId"]
+    # the caller's payload is untouched
+    assert params["message"]["contextId"] == "ctx-1"
+
+
+def test_scope_context_ids_leaves_messages_without_a_context_id():
+    params = {"message": {"parts": []}}
+    assert scope_context_ids(params, {"litellm_context_scope": "caller"}, "sk-alice") == params

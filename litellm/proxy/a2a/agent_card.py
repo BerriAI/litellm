@@ -12,6 +12,8 @@ from collections.abc import Mapping
 from copy import deepcopy
 from typing import Final, Literal
 
+from litellm.a2a_protocol.utils import scope_session_to_principal
+
 SupportedA2AVersion = Literal["0.3", "1.0"]
 
 # Protocol versions LiteLLM can serve to A2A clients. The admin pins one per agent;
@@ -20,6 +22,15 @@ SUPPORTED_A2A_PROTOCOL_VERSIONS: Final[tuple[SupportedA2AVersion, ...]] = ("0.3"
 
 # Default served version when the agent card does not pin one.
 LITELLM_A2A_PROTOCOL_VERSION: Final = "1.0"
+
+# LiteLLM-specific agent card key that opts an agent into per-caller contextId
+# scoping. Agents that keep conversation memory per ``contextId`` otherwise share
+# that memory between every key pointed at them, because the proxy forwards the
+# client-supplied id untouched (the Bedrock AgentCore provider is the one place
+# that already scopes it to the calling key). Admin-only: callers cannot turn it
+# on for themselves, and the served card drops it.
+CONTEXT_SCOPE_CARD_KEY: Final = "litellm_context_scope"
+CONTEXT_SCOPE_VALUES: Final[tuple[str, ...]] = ("none", "caller")
 
 
 _PROTOCOL_VERSION_PATTERN: Final = re.compile(
@@ -87,6 +98,9 @@ _ALLOWED_CAPABILITY_KEYS: Final = {"streaming"}
 # the proxy's auth/budget/logging. The proxy publishes its own entrypoint via
 # ``supportedInterfaces`` instead.
 _ALLOWED_TOP_LEVEL_KEYS: Final = {
+    # LiteLLM-only, not part of the v1.0 AgentCard schema: opts an agent into
+    # per-caller scoping of the A2A contextId. See ``scope_context_ids``.
+    CONTEXT_SCOPE_CARD_KEY,
     "protocolVersion",
     "name",
     "description",
@@ -214,4 +228,50 @@ def merge_agent_card(
     # own scheme regardless of what upstream required.
     base["security"] = deepcopy(LITELLM_SECURITY_REQUIREMENTS)
 
+    scope: Final = base.get(CONTEXT_SCOPE_CARD_KEY)
+    if scope is not None and known_context_scope(scope) is None:
+        raise ValueError(
+            f"Invalid {CONTEXT_SCOPE_CARD_KEY} {scope!r}. Supported values: {', '.join(CONTEXT_SCOPE_VALUES)}."
+        )
+
     return {key: value for key, value in base.items() if key in _ALLOWED_TOP_LEVEL_KEYS}
+
+
+def known_context_scope(value: object) -> str | None:
+    """Return the canonical context scope for ``value``, or ``None`` if it is not one.
+
+    Missing, boolean and null values all mean "not configured" and leave the agent on
+    today's behaviour, so only an explicit ``caller`` turns scoping on.
+    """
+    if isinstance(value, str) and value.strip().lower() in CONTEXT_SCOPE_VALUES:
+        return value.strip().lower()
+    return None
+
+
+def scope_context_ids(
+    params: Mapping[str, object],
+    card: Mapping[str, object] | None,
+    principal: str | None,
+) -> dict[str, object]:
+    """Return ``params`` with every A2A ``contextId`` bound to ``principal``.
+
+    A no-op unless the agent card opts into ``caller`` scoping and there is a key to scope
+    to. Covers ``params.message.contextId`` (what ``message/send`` and ``message/stream``
+    carry) and the top-level ``contextId`` some SDKs emit for ``message/stream``.
+    """
+    if not principal or known_context_scope((card or {}).get(CONTEXT_SCOPE_CARD_KEY)) != "caller":
+        return dict(params)
+
+    scoped: dict[str, object] = dict(params)
+
+    raw_message: Final = scoped.get("message")
+    if isinstance(raw_message, dict):
+        context_id: Final = raw_message.get("contextId")
+        if isinstance(context_id, str) and context_id:
+            scoped["message"] = {**raw_message, "contextId": scope_session_to_principal(context_id, principal)}
+
+    top_level: Final = scoped.get("contextId")
+    if isinstance(top_level, str) and top_level:
+        scoped["contextId"] = scope_session_to_principal(top_level, principal)
+
+    return scoped
