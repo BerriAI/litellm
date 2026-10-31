@@ -2598,13 +2598,14 @@ def _with_placeholder_text(block: object) -> object:
     return {**fields, "text": _EMPTY_TEXT_PLACEHOLDER}
 
 
-def _survives_assistant_conversion(block: object) -> bool:
+def _survives_assistant_conversion(block: object, answered: Callable[[], frozenset[str]]) -> bool:
     """Whether ``anthropic_messages_pt`` keeps this list-content block of an assistant turn.
 
     Mirrors the assistant converter: a ``thinking`` / ``redacted_thinking`` block is kept
-    unless it is unsignable (a signed block is kept even with empty text), and
-    ``server_tool_use`` and ``*_tool_result`` blocks pass through. A redacted block with
-    blank data is dropped under ``drop_params``, which is not known here, so it never counts.
+    unless it is unsignable (a signed block is kept even with empty text),
+    ``server_tool_use`` and ``*_tool_result`` blocks pass through, and a native ``tool_use``
+    is kept when the next turn answers it. A redacted block with blank data is dropped under
+    ``drop_params``, which is not known here, so it never counts.
     """
     fields: Final = _dict_block(block)
     if fields is None:
@@ -2614,6 +2615,8 @@ def _survives_assistant_conversion(block: object) -> bool:
     match fields:
         case {"type": "server_tool_use"}:
             return True
+        case {"type": "tool_use"}:
+            return tool_use_is_answered(native_tool_use_id(fields), answered())
         case {"type": str() as block_type}:
             return block_type.endswith("_tool_result")
         case _:
@@ -2635,12 +2638,16 @@ def _tool_call_survives_conversion(tool_call: object) -> bool:
             return True
 
 
-def _carries_non_text_content(message: AllMessageValues) -> bool:
+def _carries_non_text_content(message: AllMessageValues, answered: Callable[[], frozenset[str]]) -> bool:
     if any(_tool_call_survives_conversion(tool_call) for tool_call in parts_of(message_field(message, "tool_calls"))):
         return True
     content: Final = message_field(message, "content")
     blocks: Final = parts_of(content)
-    return isinstance(content, list) and any(_survives_assistant_conversion(block) for block in blocks)
+    return isinstance(content, list) and any(_survives_assistant_conversion(block, answered) for block in blocks)
+
+
+def _answered_at(answered_by_index: Callable[[], Mapping[int, frozenset[str]]], index: int) -> frozenset[str]:
+    return answered_by_index().get(index, frozenset())
 
 
 def _with_content(message: AllMessageValues, content: object, action: str) -> AllMessageValues:
@@ -2651,6 +2658,7 @@ def _with_content(message: AllMessageValues, content: object, action: str) -> Al
 
 def _sanitize_empty_text_content(
     message: AllMessageValues,
+    answered: Callable[[], frozenset[str]],
 ) -> AllMessageValues:
     """
     Case C: Sanitize empty text content
@@ -2658,8 +2666,8 @@ def _sanitize_empty_text_content(
     Anthropic rejects empty text blocks, so empty or whitespace-only text must never be
     forwarded verbatim. What replaces it depends on what else the turn carries.
 
-    Assistant turns that already carry substantive content (``tool_calls``, or non-text
-    blocks such as ``server_tool_use``) get the empty text dropped. Anthropic accepts an
+    Assistant turns that already carry substantive content (``tool_calls``, an answered
+    ``tool_use``, or other non-text blocks such as ``server_tool_use``) get the empty text dropped. Anthropic accepts an
     assistant turn whose content is just ``tool_use``, so there is nothing to substitute, and
     substituting anyway leaks a protocol diagnostic into the conversation as though the
     assistant had said it, which the model then echoes on later turns.
@@ -2674,7 +2682,9 @@ def _sanitize_empty_text_content(
         return message
 
     content: Final = message_field(message, "content")
-    drop_empty_text: Final = message_field(message, "role") == "assistant" and _carries_non_text_content(message)
+    drop_empty_text: Final = message_field(message, "role") == "assistant" and _carries_non_text_content(
+        message, answered
+    )
 
     if isinstance(content, str):
         if content.strip():
@@ -2960,6 +2970,7 @@ def _pair_tool_calls_with_results(messages: Sequence[AllMessageValues]) -> tuple
     latest_assistant_tool_call_ids: Final = tuple(
         itertools.accumulate(messages, _tool_call_ids_of_the_latest_assistant, initial=frozenset[object]())
     )
+    answered_by_index: Final = cache(partial(answered_ids_by_index, messages))
     sanitized_messages: list[AllMessageValues] = []
     i = 0
 
@@ -2967,7 +2978,7 @@ def _pair_tool_calls_with_results(messages: Sequence[AllMessageValues]) -> tuple
         current_message = messages[i]
 
         # Case C: Sanitize empty text content
-        current_message = _sanitize_empty_text_content(current_message)
+        current_message = _sanitize_empty_text_content(current_message, partial(_answered_at, answered_by_index, i))
 
         # Case A: Check if assistant message has tool_calls without following tool results
         if current_message.get("role") == "assistant":
@@ -3203,7 +3214,11 @@ def anthropic_messages_pt(
     # request will always 400 otherwise. The richer tool-call sanitization
     # (Cases A/B/D in `sanitize_messages_for_tool_calling`) remains gated on
     # `modify_params` because it actually mutates conversation structure.
-    messages = [_sanitize_empty_text_content(m) for m in messages]
+    answered_by_assistant_index: Final = cache(partial(answered_ids_by_index, messages))
+    messages = [
+        _sanitize_empty_text_content(m, partial(_answered_at, answered_by_assistant_index, i))
+        for i, m in enumerate(messages)
+    ]
     replaced_server_tool_answers: Final = server_tool_answers_replaced_by_their_result(messages)
     client_answered_tool_ids: Final = _tool_call_ids_in_tool_messages(messages) - replaced_server_tool_answers
 
@@ -3225,7 +3240,6 @@ def anthropic_messages_pt(
     inline_base64_media: Final = force_base64 or requires_inline_base64_media(model, llm_provider)
 
     tool_result_later_in_turn: Final = _tool_result_later_in_turn(messages, replaced_server_tool_answers)
-    answered_by_assistant_index: Final = cache(partial(answered_ids_by_index, messages))
     msg_i = 0
     while msg_i < len(messages):
         user_content: list[AnthropicMessagesUserMessageValues] = []

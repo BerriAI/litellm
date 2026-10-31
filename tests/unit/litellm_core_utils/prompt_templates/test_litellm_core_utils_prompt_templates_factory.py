@@ -9438,6 +9438,40 @@ def test_anthropic_messages_pt_drops_a_native_tool_use_nobody_answered():
     assert result[1]["content"] == [{"type": "text", "text": "checking"}]
 
 
+def _empty_text_beside_native_tool_use(follow_up: dict[str, object]) -> list[dict[str, object]]:
+    return [
+        {"role": "user", "content": "what is the weather"},
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "text", "text": " "},
+                {"type": "tool_use", "id": "toolu_01", "name": "get_weather", "input": {}},
+            ],
+        },
+        follow_up,
+    ]
+
+
+@pytest.mark.parametrize("modify_params", [False, True])
+def test_anthropic_messages_pt_drops_empty_text_beside_an_answered_native_tool_use(monkeypatch, modify_params):
+    monkeypatch.setattr(litellm, "modify_params", modify_params)
+    messages: Final = _empty_text_beside_native_tool_use({"role": "tool", "tool_call_id": "toolu_01", "content": "sunny"})
+
+    result = anthropic_messages_pt(messages=messages, model="claude-sonnet-5", llm_provider="anthropic")
+
+    assert result[1]["content"] == [{"type": "tool_use", "id": "toolu_01", "name": "get_weather", "input": {}}]
+
+
+@pytest.mark.parametrize("modify_params", [False, True])
+def test_anthropic_messages_pt_keeps_the_placeholder_beside_an_unanswered_native_tool_use(monkeypatch, modify_params):
+    monkeypatch.setattr(litellm, "modify_params", modify_params)
+    messages: Final = _empty_text_beside_native_tool_use({"role": "user", "content": "never mind"})
+
+    result = anthropic_messages_pt(messages=messages, model="claude-sonnet-5", llm_provider="anthropic")
+
+    assert result[1]["content"] == [{"type": "text", "text": _EMPTY_TEXT_PLACEHOLDER}]
+
+
 def _answered_native_tool_use(tool_use: dict[str, object]) -> list[dict[str, object]]:
     return [
         {"role": "user", "content": "what is the weather"},
