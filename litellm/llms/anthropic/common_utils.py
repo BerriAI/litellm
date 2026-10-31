@@ -4,6 +4,7 @@ This file contains common utils for anthropic calls.
 
 import copy
 import json
+import os
 import re
 from collections.abc import Container, Mapping, MutableMapping, Sequence
 from dataclasses import dataclass
@@ -19,6 +20,8 @@ from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm.constants import (
+    ANTHROPIC_COMPATIBLE_MAX_USER_ID_LENGTH,
+    ANTHROPIC_MAX_USER_ID_LENGTH,
     DEFAULT_MODEL_CREATED_AT_TIME,
     DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
@@ -37,7 +40,7 @@ from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import 
     message_field,
     parts_of,
 )
-from litellm.litellm_core_utils.reasoning_effort_utils import non_numeric_thinking_budget_error
+from litellm.litellm_core_utils.reasoning_effort_utils import DroppedThinkingBudget, non_numeric_thinking_budget_error
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.anthropic.wif import (
     aget_anthropic_wif_token,
@@ -58,6 +61,7 @@ from litellm.types.llms.anthropic import (
     ANTHROPIC_THINKING_BINDING_CONTROLS_BETA_HEADER,
     ANTHROPIC_THINKING_DISPLAY_UPDATES_BETA_HEADER,
     ANTHROPIC_TOOL_SEARCH_TOOL_TYPES,
+    LEGACY_THINKING_DISPLAY_UPDATES_PROVIDERS,
     AllAnthropicToolsValues,
     AnthropicMcpServerTool,
     AnthropicMessagesToolChoice,
@@ -126,6 +130,8 @@ _JSON_VALUE: Final = TypeAdapter(JsonValue)
 
 _CLAUDE_CODE_USER_AGENT_PREFIXES: Final = ("claude-cli/", "claude-code/")
 
+NATIVE_COMPACTION_PROVIDERS: Final = frozenset({"anthropic", "azure_ai", "vertex_ai"})
+
 
 def is_claude_tool_target(custom_llm_provider: str | None, model: str) -> bool:
     if custom_llm_provider == "anthropic":
@@ -175,6 +181,40 @@ def tools_without_custom_field(tools: Sequence[object], hoist_defer_loading: boo
     return [_tool_without_custom_field(tool, hoist_defer_loading, drop_custom) for tool in tools]
 
 
+def anthropic_pass_through_api_base() -> str:
+    return os.getenv("ANTHROPIC_API_BASE") or os.getenv("ANTHROPIC_BASE_URL") or "https://api.anthropic.com"
+
+
+def _same_host_and_port(url: httpx.URL, other: str) -> bool:
+    try:
+        other_url: Final = httpx.URL(other)
+    except httpx.InvalidURL:
+        return False
+    return (url.host, url.port) == (other_url.host, other_url.port)
+
+
+def anthropic_upstream_user_id_limit(url: str) -> int | None:
+    upstream: Final = httpx.URL(url)
+    if not upstream.path.removesuffix("/").endswith("/v1/messages"):
+        return None
+    if upstream.host == "api.anthropic.com":
+        return ANTHROPIC_MAX_USER_ID_LENGTH
+    return (
+        ANTHROPIC_COMPATIBLE_MAX_USER_ID_LENGTH
+        if _same_host_and_port(upstream, anthropic_pass_through_api_base())
+        else None
+    )
+
+
+def _has_email_shape(token: str) -> bool:
+    at_sign: Final = token.find("@", 1)
+    return at_sign != -1 and token.find(".", at_sign + 2, -1) != -1
+
+
+def anthropic_accepts_user_id(user_id: str, max_length: int) -> bool:
+    return len(user_id) <= max_length and user_id.isprintable() and not any(map(_has_email_shape, user_id.split()))
+
+
 def is_anthropic_messages_url(url: str) -> bool:
     """Check whether a URL addresses Anthropic's Messages API."""
     parsed_url: Final = urlparse(url)
@@ -204,7 +244,7 @@ def requires_native_compaction_beta(
     optional_params: Mapping[str, object],
     messages: Sequence[object],
 ) -> bool:
-    return custom_llm_provider == "anthropic" and (
+    return custom_llm_provider in NATIVE_COMPACTION_PROVIDERS and (
         optional_params.get("compaction") is not None or carries_signed_compaction_block(messages)
     )
 
@@ -240,6 +280,27 @@ def context_management_betas(context_management: JsonValue) -> tuple[str, ...]:
             (
                 ANTHROPIC_BETA_HEADER_VALUES.CONTEXT_MANAGEMENT_2025_06_27.value,
                 any(edit_type != "compact_20260112" for edit_type in edit_types),
+            ),
+        )
+        if used
+    )
+
+
+def count_tokens_feature_betas(
+    custom_llm_provider: str,
+    optional_params: Mapping[str, object],
+    messages: Sequence[object],
+) -> tuple[str, ...]:
+    return tuple(
+        beta
+        for beta, used in (
+            (
+                ANTHROPIC_BETA_HEADER_VALUES.COMPACT_2026_09_04.value,
+                requires_native_compaction_beta(custom_llm_provider, optional_params, messages),
+            ),
+            (
+                ANTHROPIC_MID_CONVERSATION_TOOL_CHANGES_BETA_HEADER,
+                AnthropicModelInfo().is_mid_conversation_tool_change_used(messages),
             ),
         )
         if used
@@ -610,11 +671,11 @@ def _numeric_budget_tokens(budget_tokens: object) -> int | None:
         return None
 
 
-def _legacy_budget_tokens(budget_tokens: object, *, drop_params: bool) -> int | None:
+def _legacy_budget_tokens(budget_tokens: object, *, drop_params: bool) -> int | DroppedThinkingBudget:
     if (numeric := _numeric_budget_tokens(budget_tokens)) is not None:
         return numeric
     if drop_params or litellm.drop_params is True:
-        return None
+        return DroppedThinkingBudget(budget_tokens)
     raise non_numeric_thinking_budget_error(budget_tokens)
 
 
@@ -645,10 +706,12 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         file_ids: Final = get_file_ids_from_messages(messages)
         return len(file_ids) > 0
 
-    def is_thinking_display_updates_used(self, thinking: AnthropicThinkingParam | None) -> bool:
-        if not isinstance(thinking, dict):
-            return False
-        return thinking.get("type") in ("adaptive", "enabled") and thinking.get("display") == "updates"
+    def is_thinking_display_updates_used(self, thinking: object) -> bool:
+        match thinking:
+            case {"type": "adaptive" | "enabled", "display": "updates"}:
+                return True
+            case _:
+                return False
 
     def thinking_betas(self, thinking: AnthropicThinkingParam | None) -> tuple[str, ...]:
         return (
@@ -1097,6 +1160,22 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         custom_llm_provider: str,
         drop_params: bool,
     ) -> None:
+        dropped: Final = AnthropicModelInfo.translate_legacy_thinking_for_adaptive_model_silently(
+            model=model,
+            optional_params=optional_params,
+            custom_llm_provider=custom_llm_provider,
+            drop_params=drop_params,
+        )
+        if dropped is not None:
+            dropped.warn(model)
+
+    @staticmethod
+    def translate_legacy_thinking_for_adaptive_model_silently(
+        model: str,
+        optional_params: MutableMapping[str, object],  # mutable-ok: in-place out-param like the sibling helpers
+        custom_llm_provider: str,
+        drop_params: bool,
+    ) -> DroppedThinkingBudget | None:
         """Translate legacy ``thinking.type=enabled`` to adaptive for the
         adaptive-thinking models that reject it (4.7+ and the 5 families).
         Models flagged ``supports_legacy_thinking`` (the 4.6 family) accept the
@@ -1105,22 +1184,25 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         ``output_config.effort`` is never overridden.
         """
         if not AnthropicModelInfo._is_adaptive_thinking_model(model, custom_llm_provider):
-            return
+            return None
         if AnthropicModelInfo._supports_legacy_thinking(model, custom_llm_provider):
-            return
+            return None
         thinking: Final = validated_object_mapping(optional_params.get("thinking"))
         if thinking is None or thinking.get("type") != "enabled":
-            return
+            return None
 
         budget_tokens: Final = _legacy_budget_tokens(thinking.get("budget_tokens", 0), drop_params=drop_params)
         display: Final = thinking.get("display")
-        supported_display: Final = {"display": display} if display in ("summarized", "omitted") else {}
+        keeps_display: Final = display in ("summarized", "omitted") or (
+            display == "updates" and custom_llm_provider in LEGACY_THINKING_DISPLAY_UPDATES_PROVIDERS
+        )
+        supported_display: Final = {"display": display} if keeps_display else {}
         carried_keys: Final = carried_thinking_keys(
             thinking, rebuilt_keys=frozenset(("type", "budget_tokens", "display")), drop_params=drop_params
         )
         optional_params["thinking"] = {**carried_keys, "type": "adaptive", **supported_display}
-        if budget_tokens is None:
-            return
+        if isinstance(budget_tokens, DroppedThinkingBudget):
+            return budget_tokens
         effort: Final = AnthropicModelInfo._legacy_budget_to_effort(
             model=model, budget_tokens=budget_tokens, custom_llm_provider=custom_llm_provider
         )
@@ -1129,6 +1211,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
             "effort": effort,
             **(existing_output_config if isinstance(existing_output_config, dict) else MappingProxyType({})),
         }
+        return None
 
     @staticmethod
     def _legacy_budget_to_effort(model: str, budget_tokens: int, custom_llm_provider: str) -> str:
@@ -2435,7 +2518,7 @@ def create_anthropic_model_list_response(
     }
 
 
-class RefusalStopFields(TypedDict, total=False):
+class StopReasonFields(TypedDict, total=False):
     stop_reason: ReadOnly[object]
     stop_details: ReadOnly[object]
 
@@ -2452,16 +2535,38 @@ def _dict_or_empty(value: object) -> object:
     return value if _is_dict(value) else _no_stop_fields()
 
 
-REFUSAL_STOP_FIELDS: Final[TypeAdapter[RefusalStopFields]] = TypeAdapter(
-    Annotated[RefusalStopFields, BeforeValidator(_dict_or_empty)]
+STOP_REASON_FIELDS: Final[TypeAdapter[StopReasonFields]] = TypeAdapter(
+    Annotated[StopReasonFields, BeforeValidator(_dict_or_empty)]
 )
 
+_STOP_REASONS_KEPT_RAW: Final = frozenset({"refusal", "pause_turn"})
 
-def refusal_provider_specific_fields(message: Mapping[str, object]) -> Mapping[str, object]:
+
+def stop_reason_provider_specific_fields(message: Mapping[str, object]) -> Mapping[str, object]:
     stop_reason: Final = message.get("stop_reason")
     stop_details: Final = message.get("stop_details")
     if stop_details is not None:
         return {"stop_reason": stop_reason, "stop_details": stop_details}
-    if stop_reason == "refusal":
+    if stop_reason in _STOP_REASONS_KEPT_RAW:
         return {"stop_reason": stop_reason}
     return {}
+
+
+class _RefusalStopDetails(TypedDict, total=False):
+    explanation: ReadOnly[object]
+
+
+_REFUSAL_STOP_DETAILS: Final[TypeAdapter[_RefusalStopDetails]] = TypeAdapter(
+    Annotated[_RefusalStopDetails, BeforeValidator(_dict_or_empty)]
+)
+
+
+class RefusalParams(TypedDict, total=False):
+    refusal: ReadOnly[str]
+
+
+def refusal_params(message: Mapping[str, object]) -> RefusalParams:
+    if message.get("stop_reason") != "refusal":
+        return {}
+    explanation: Final = _REFUSAL_STOP_DETAILS.validate_python(message.get("stop_details")).get("explanation")
+    return {"refusal": explanation} if isinstance(explanation, str) and explanation else {}
