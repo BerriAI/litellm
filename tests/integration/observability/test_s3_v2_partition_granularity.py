@@ -30,7 +30,7 @@ from _s3_v2_support import (
 from integration._support.client import Gateway, JsonValue, Scenario, eventually, object_value
 from integration._support.database import read_rows, scratch_database
 from integration._support.database_relay import database_relay
-from integration._support.process import OwnedProxy, owned_proxy_process
+from integration._support.process import OwnedProxy, graceful_stop_seconds, owned_proxy_process
 from integration._support.wire import Reply, Request, wire_server
 
 FLUSH: Final = {"DEFAULT_S3_FLUSH_INTERVAL_SECONDS": "1"}
@@ -1158,7 +1158,7 @@ def test_s3_v2_hour_worker_kill_mid_burst_keeps_the_other_worker_logging(gateway
     assert _outside_layout(objects, "hour") == ()
 
 
-@pytest.mark.timeout(180)
+@pytest.mark.timeout(4 * graceful_stop_seconds() + 120)
 def test_s3_v2_hour_proxy_restart_mid_burst_keeps_the_layout_without_duplicates(
     gateway: Gateway, tmp_path: Path
 ) -> None:
