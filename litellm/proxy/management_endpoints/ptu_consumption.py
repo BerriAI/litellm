@@ -12,14 +12,14 @@ from types import MappingProxyType
 from typing import Final
 
 from litellm.litellm_core_utils.ptu_pricing import is_ptu_cost_attribution_enabled
-from litellm.llms.azure.ptu_capacity import PTUCapacity, normalized_tokens, ptu_hours
-from litellm.router import Router
-from litellm.router_utils.common_utils import resolve_model_group_alias
-from litellm.router_utils.ptu_shares import (
+from litellm.litellm_core_utils.ptu_shares import (
     model_group_ptu_capacity,
     routed_deployments,
     team_servable_deployments,
 )
+from litellm.litellm_core_utils.routing_common_utils import resolve_model_group_alias
+from litellm.llms.azure.ptu_capacity import PTUCapacity, normalized_tokens, ptu_hours
+from litellm.router import Router
 from litellm.types.proxy.management_endpoints.common_daily_activity import (
     DailySpendData,
     MetricWithMetadata,
