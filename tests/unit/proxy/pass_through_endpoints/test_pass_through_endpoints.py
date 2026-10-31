@@ -51,7 +51,7 @@ from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     SafeRouteAdder,
     _build_passthrough_failure_request_payload,
     _registered_pass_through_routes,
-    _strip_client_guardrail_header_metadata,
+    _strip_client_guardrail_fields,
     _truncate_upstream_error_body,
     _update_metadata_with_tags_in_header,
     _with_trace_context,
@@ -11922,6 +11922,18 @@ class TestGuardrailResponseHeaders:
         assert headers["x-litellm-applied-guardrails"] == "pre,post"
         assert headers["x-litellm-guardrail-scan-id"] == "scan-1"
 
+    def test_scan_ids_recorded_as_tuples_before_and_after_the_call_are_both_kept(self):
+        headers: Final = HttpPassThroughEndpointHelpers.get_response_headers(
+            headers=httpx.Headers({"content-type": "application/json"}),
+            guardrail_request_data=(
+                {},
+                {"litellm_params": {"metadata": {"guardrail_scan_ids": ("pre-scan",)}}},
+                {"metadata": {"guardrail_scan_ids": ("post-scan",)}},
+            ),
+        )
+
+        assert headers["x-litellm-guardrail-scan-id"] == "pre-scan,post-scan"
+
     def test_a_litellm_params_object_in_the_request_body_is_never_read(self):
         forged: Final = {"metadata": {"applied_guardrails": ["forged"], "guardrail_scan_ids": ["fake"]}}
 
@@ -11983,6 +11995,6 @@ class TestGuardrailResponseHeaders:
             "litellm_metadata": {"guardrail_scan_ids": ["forged-scan"]},
         }
 
-        _strip_client_guardrail_header_metadata(body)
+        _strip_client_guardrail_fields(body)
 
         assert body == {"metadata": {"tags": ["team-a"]}, "litellm_metadata": {}}

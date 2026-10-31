@@ -9,6 +9,7 @@ from base64 import b64encode
 from collections.abc import AsyncGenerator, AsyncIterator, Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
+from functools import reduce
 from itertools import chain, count, groupby, product
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, TypedDict, cast
@@ -192,7 +193,6 @@ _GUARDRAIL_ENTRIES: Final = TypeAdapter(list[object])
 _RESPONSE_HEADERS: Final = TypeAdapter(Mapping[str, str])
 _KEPT_OUT_OF_LITELLM_PARAMS: Final = _METADATA_KEYS | frozenset(wire_names(ProxyRequestState))
 _PRICING_MODEL_OVERRIDE_PARAMS: Final = frozenset(("base_model",))
-# The metadata fields get_logging_caching_headers turns into response headers.
 _GUARDRAIL_HEADER_METADATA_FIELDS: Final = frozenset(
     (
         "applied_guardrails",
@@ -212,10 +212,12 @@ def _is_mergeable_client_metadata(key: str, value: object) -> bool:
     return not key.startswith("user_api_key_") and (key != "model_info" or isinstance(value, Mapping))
 
 
-def _strip_client_guardrail_header_metadata(
+def _strip_client_guardrail_fields(
     data: dict[str, object],  # mutable-ok: strips the request body in place, like strip_client_guardrail_information
 ) -> None:
-    """Drop the metadata fields that become guardrail response headers, so only the guardrails that ran set them."""
+    """Drop the guardrail logging and the metadata fields that become guardrail response headers from a client body,
+    so only the guardrails that ran set them."""
+    strip_client_guardrail_information(data)
     for metadata in (as_str_mapping(data.get(key)) for key in sorted(_METADATA_KEYS)):
         if isinstance(metadata, dict):
             for field in _GUARDRAIL_HEADER_METADATA_FIELDS & metadata.keys():
@@ -223,8 +225,8 @@ def _strip_client_guardrail_header_metadata(
 
 
 def _merged_metadata_entry(prior: object, value: object) -> object:
-    """``value``, or both lists combined without repeats when ``prior`` and ``value`` are lists."""
-    if not isinstance(prior, list | tuple) or not isinstance(value, list):
+    """``value``, or both combined without repeats when ``prior`` and ``value`` are lists or tuples."""
+    if not isinstance(prior, list | tuple) or not isinstance(value, list | tuple):
         return value
     entries: Final = (*_GUARDRAIL_ENTRIES.validate_python(prior), *_GUARDRAIL_ENTRIES.validate_python(value))
     return tuple(
@@ -250,11 +252,17 @@ def _guardrail_response_headers(
         as_str_mapping((as_str_mapping(kwargs) or {}).get("litellm_params")) or {},
         as_str_mapping(post_call_data) or {},
     )
-    merged: Final = dict[str, object]()
-    for scope, metadata_key in product(scopes, sorted(_METADATA_KEYS)):
-        metadata = as_str_mapping(scope.get(metadata_key)) or {}
-        for field in _GUARDRAIL_HEADER_METADATA_FIELDS & metadata.keys():
-            merged[field] = _merged_metadata_entry(merged.get(field), metadata[field])
+    metadatas: Final = tuple(
+        as_str_mapping(scope.get(metadata_key)) or {} for scope, metadata_key in product(scopes, sorted(_METADATA_KEYS))
+    )
+    recorded: Final = chain.from_iterable(
+        ((field, metadata[field]) for field in sorted(_GUARDRAIL_HEADER_METADATA_FIELDS & metadata.keys()))
+        for metadata in metadatas
+    )
+    merged: Final = {
+        field: reduce(_merged_metadata_entry, (value for _, value in entries))
+        for field, entries in groupby(sorted(recorded, key=lambda entry: entry[0]), key=lambda entry: entry[0])
+    }
     headers: Final = _RESPONSE_HEADERS.validate_python(get_logging_caching_headers({"metadata": merged}) or {})
     return MappingProxyType({name: value for name, value in headers.items() if _encodes_as_latin1(value)})
 
@@ -1464,8 +1472,7 @@ async def pass_through_request(
         )
 
         client_body: Final = TypeAdapter(dict[str, object]).validate_python(_parsed_body)
-        strip_client_guardrail_information(client_body)
-        _strip_client_guardrail_header_metadata(client_body)
+        _strip_client_guardrail_fields(client_body)
         if not _key_or_team_allows_client_pricing_override(user_api_key_dict):
             _strip_client_pricing_overrides(client_body)
         eu_jev_client_body: Final = _eu_jev_client_body(custom_llm_provider, client_body)
