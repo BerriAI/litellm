@@ -5311,7 +5311,8 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             total_tokens = self._aggregate_only_total_tokens(usage=_usage)
 
         stash: Final = get_request_stash_for_call(_call_id_from_callback_kwargs(kwargs))
-        reserved_tokens: Final = stash.reserved_tokens if stash is not None else 0
+        open_reservation: Final = stash if stash is not None and not stash.reservation_released else None
+        reserved_tokens: Final = open_reservation.reserved_tokens if open_reservation is not None else 0
         reserved_model: Final = stash.reserved_model if stash is not None else None
         reserved_scopes: Final[frozenset[tuple[str, str]]] = stash.reserved_scopes if stash is not None else frozenset()
         # Reconciliation must target the same model-scoped counter that the
@@ -5372,7 +5373,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 reconcile_model=reconcile_model,
                 reserved_scopes=reserved_scopes,
                 reserved_ceiling=stash.ptu_ceiling if stash is not None else None,
-                reserved_tokens=stash.ptu_reserved_tokens if stash is not None else 0,
+                reserved_tokens=open_reservation.ptu_reserved_tokens if open_reservation is not None else 0,
                 reserved_windows=stash.ptu_reserved_window_identities if stash is not None else frozenset(),
                 total_tokens=total_tokens,
             )
@@ -5505,6 +5506,9 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                         pipeline_operations=io_token_operations,
                         parent_otel_span=litellm_parent_otel_span,
                     )
+            if stash is not None:
+                stash.reserved_tokens = 0
+                stash.ptu_reserved_tokens = 0
 
         except Exception as e:
             verbose_proxy_logger.exception("Error in rate limit success event: %s", e)
