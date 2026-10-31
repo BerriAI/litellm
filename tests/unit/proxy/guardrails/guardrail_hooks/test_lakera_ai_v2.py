@@ -27,7 +27,7 @@ from litellm.proxy.guardrails.guardrail_hooks.lakera_ai_v2 import (
     humanize_lakera_block_reasons,
 )
 from litellm.types.guardrails import LitellmParams, Mode
-from litellm.types.utils import ModelResponse
+from litellm.types.utils import CallTypesLiteral, ModelResponse
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 
 
@@ -1736,6 +1736,11 @@ GEMINI_INSPECTION_MESSAGES: Final = [
     {"role": "user", "content": "hello world"},
     {"role": "assistant", "content": "hi"},
 ]
+EMAIL_AT_START_LAKERA_RESPONSE: Final = {
+    "flagged": True,
+    "breakdown": [{"detector_type": "pii/email", "detected": True, "message_id": 0}],
+    "payload": [{"detector_type": "pii/email", "start": 0, "end": 7, "message_id": 0}],
+}
 PROMPT_ATTACK_ONLY_LAKERA_RESPONSE: Final = {
     "flagged": True,
     "breakdown": [{"detector_type": "prompt_attack", "detected": True, "message_id": 1}],
@@ -1743,7 +1748,10 @@ PROMPT_ATTACK_ONLY_LAKERA_RESPONSE: Final = {
 
 
 async def _run_gemini_pre_call(
-    guardrail: LakeraAIGuardrail, lakera_response: Mapping[str, object], data: dict[str, object]
+    guardrail: LakeraAIGuardrail,
+    lakera_response: Mapping[str, object],
+    data: dict[str, object],
+    call_type: CallTypesLiteral = "pass_through_endpoint",
 ) -> Sequence[object]:
     """Run the pre-call hook against a Lakera double and return the messages each guard request carried."""
     sent: Final = list[object]()  # mutable-ok: the Lakera double records each guard request it receives
@@ -1757,7 +1765,7 @@ async def _run_gemini_pre_call(
         user_api_key_dict=UserAPIKeyAuth(api_key="test_key"),
         cache=MagicMock(),
         data=data,
-        call_type="pass_through_endpoint",
+        call_type=call_type,
     )
     return sent
 
@@ -1769,18 +1777,23 @@ def _without_metadata(data: Mapping[str, object]) -> Mapping[str, object]:
 
 class TestGeminiContents:
     def test_reads_system_instruction_and_text_parts(self):
-        assert _build_lakera_inspection_messages(_gemini_request()) == GEMINI_INSPECTION_MESSAGES
+        assert (
+            _build_lakera_inspection_messages(_gemini_request(), call_type="pass_through_endpoint")
+            == GEMINI_INSPECTION_MESSAGES
+        )
 
     def test_reads_a_single_contents_object_with_a_single_parts_object(self):
         data: Final = {"contents": {"role": "user", "parts": {"text": "hello world"}}}
-        assert _build_lakera_inspection_messages(data) == [{"role": "user", "content": "hello world"}]
+        assert _build_lakera_inspection_messages(data, call_type="pass_through_endpoint") == [
+            {"role": "user", "content": "hello world"}
+        ]
 
     def test_reads_snake_case_system_instruction_and_joins_text_parts(self):
         data: Final = {
             "system_instruction": {"parts": [{"text": "a"}, {"text": "b"}]},
             "contents": [{"parts": [{"text": "c"}]}, {"role": "function", "parts": [{"text": "d"}]}],
         }
-        assert _build_lakera_inspection_messages(data) == [
+        assert _build_lakera_inspection_messages(data, call_type="pass_through_endpoint") == [
             {"role": "system", "content": "a\nb"},
             {"role": "user", "content": "c"},
             {"role": "tool", "content": "d"},
@@ -1789,7 +1802,41 @@ class TestGeminiContents:
     @pytest.mark.parametrize("chat_field", ["messages", "input"])
     def test_a_chat_field_next_to_contents_does_not_hide_the_contents(self, chat_field: str):
         data: Final = {chat_field: [], "contents": [{"parts": [{"text": "card"}]}]}
-        assert _build_lakera_inspection_messages(data) == [{"role": "user", "content": "card"}]
+        assert _build_lakera_inspection_messages(data, call_type="pass_through_endpoint") == [
+            {"role": "user", "content": "card"}
+        ]
+
+    @pytest.mark.parametrize("call_type", ["agenerate_content", "agenerate_content_stream"])
+    def test_reads_contents_on_the_google_generate_content_routes(self, call_type: str):
+        assert _build_lakera_inspection_messages(_gemini_request(), call_type=call_type) == GEMINI_INSPECTION_MESSAGES
+
+    @pytest.mark.parametrize("call_type", ["acompletion", "aresponses", "anthropic_messages", None])
+    def test_contents_on_another_call_type_are_not_read(self, call_type: str | None):
+        data: Final = {**_gemini_request(), "messages": [USER_MSG]}
+        assert _build_lakera_inspection_messages(data, call_type=call_type) == [USER_MSG]
+
+    @pytest.mark.asyncio
+    async def test_a_chat_call_carrying_contents_is_still_masked(self):
+        data: Final[dict[str, object]] = {"messages": [{"role": "user", "content": "a@b.com hi"}], "contents": []}
+        sent: Final = await _run_gemini_pre_call(
+            LakeraAIGuardrail(api_key="test_key", on_flagged="mask"),
+            EMAIL_AT_START_LAKERA_RESPONSE,
+            data,
+            "acompletion",
+        )
+        assert sent == [[{"role": "user", "content": "a@b.com hi"}]]
+        assert data["messages"] == [{"role": "user", "content": "[MASKED EMAIL] hi"}]
+
+    @pytest.mark.asyncio
+    async def test_monitor_still_masks_responses_instructions_next_to_contents(self):
+        data: Final[dict[str, object]] = {"instructions": "a@b.com is the contact", "input": "hi", "contents": []}
+        await _run_gemini_pre_call(
+            LakeraAIGuardrail(api_key="test_key", on_flagged="monitor"),
+            EMAIL_AT_START_LAKERA_RESPONSE,
+            data,
+            "responses",
+        )
+        assert data["instructions"] == "[MASKED EMAIL] is the contact"
 
     @pytest.mark.asyncio
     async def test_a_body_with_messages_and_contents_is_blocked_rather_than_masked(self):

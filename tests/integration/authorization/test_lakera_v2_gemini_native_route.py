@@ -200,3 +200,21 @@ def test_monitor_on_native_route_forwards_the_card_unchanged(rig: NativeGeminiRi
     assert response.status_code == 200, response.text
     assert len(_lakera_messages(rig)) == 1
     assert [_JSON.validate_json(request.body)["contents"] for request in rig.upstream.drain()] == [body["contents"]]
+
+
+def test_a_chat_call_carrying_contents_is_masked_not_blocked(rig: NativeGeminiRig) -> None:
+    gateway: Final = rig.owned.gateway
+    with gateway.scenario() as scenario:
+        key: Final = scenario.key(metadata={"guardrails": ["lakera-native-mask"]})
+        rig.lakera.drain()
+        rig.upstream.drain()
+        response: Final = gateway.request(
+            "POST",
+            "/v1/chat/completions",
+            {"model": MODEL, "messages": [{"role": "user", "content": PII_PROMPT}], "contents": []},
+            key=key,
+        )
+
+    assert response.status_code == 200, response.text
+    assert _lakera_messages(rig) == ((("user", PII_PROMPT),),)
+    assert all(CARD.encode() not in request.body for request in rig.upstream.drain())
