@@ -221,8 +221,16 @@ class UpdatePublicModelGroupsRequest(LiteLLMBaseModel):
     """Request model for updating public model groups"""
 
     model_groups: list[str] = Field(description="List of model group names to make public")
+    previous_model_groups: tuple[str, ...] | None = Field(
+        default=None,
+        description=(
+            "The public model group list the caller started from. When set, only the model groups added or removed "
+            "relative to it change, so model groups another admin published or unpublished meanwhile keep that "
+            "change. When omitted, model_groups replaces the stored list."
+        ),
+    )
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", frozen=True)
 
 
 class _ProxyModelRow(Protocol):
@@ -3381,6 +3389,10 @@ async def update_model(
         )
 
 
+def _set_public_model_groups(public_model_groups: tuple[str, ...]) -> None:
+    litellm.public_model_groups = list(public_model_groups)
+
+
 @router.post(
     "/model_group/make_public",
     description="Update which model groups are public",
@@ -3426,6 +3438,20 @@ async def update_public_model_groups(
                 status_code=500,
                 detail={"error": "Set `'STORE_MODEL_IN_DB='True'` in your env to enable this feature."},
             )
+
+        if request.previous_model_groups is not None:
+            stored_public_model_groups: Final = await proxy_config.apply_list_setting_delta(
+                section_name="litellm_settings",
+                key="public_model_groups",
+                requested=request.model_groups,
+                previous=request.previous_model_groups,
+                on_written=_set_public_model_groups,
+            )
+            return {
+                "message": "Successfully updated public model groups",
+                "public_model_groups": list(stored_public_model_groups),
+                "updated_by": user_api_key_dict.user_id,
+            }
 
         # Load existing config first (this may overwrite in-memory litellm settings
         # from DB values via _update_config_from_db), so set the in-memory value AFTER

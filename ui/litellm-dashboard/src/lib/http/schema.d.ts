@@ -38033,11 +38033,21 @@ export interface components {
         MakeAgentsPublicRequest: {
             /** Agent Ids */
             agent_ids: string[];
+            /**
+             * Previous Agent Ids
+             * @description The public agent list the caller started from. When set, only the agents added or removed relative to it change, so agents another admin published or unpublished meanwhile keep that change. When omitted, agent_ids replaces the stored list.
+             */
+            previous_agent_ids?: string[] | null;
         };
         /** MakeMCPServersPublicRequest */
         MakeMCPServersPublicRequest: {
             /** Mcp Server Ids */
             mcp_server_ids: string[];
+            /**
+             * Previous Mcp Server Ids
+             * @description The public MCP server list the caller started from. When set, only the servers added or removed relative to it change, so servers another admin published or unpublished meanwhile keep that change. When omitted, mcp_server_ids replaces the stored list.
+             */
+            previous_mcp_server_ids?: string[] | null;
         };
         /** ManagedAgentIdentityStatus */
         ManagedAgentIdentityStatus: {
@@ -48720,6 +48730,11 @@ export interface components {
              * @description List of model group names to make public
              */
             model_groups: string[];
+            /**
+             * Previous Model Groups
+             * @description The public model group list the caller started from. When set, only the model groups added or removed relative to it change, so model groups another admin published or unpublished meanwhile keep that change. When omitted, model_groups replaces the stored list.
+             */
+            previous_model_groups?: string[] | null;
         };
         /**
          * UpdateRouterConfig

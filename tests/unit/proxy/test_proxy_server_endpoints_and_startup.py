@@ -50,6 +50,7 @@ from litellm.proxy.proxy_server import app, aws_error_type_exception_handler, in
 from litellm.utils import _invalidate_model_cost_lowercase_map
 from litellm.proxy.common_utils.banner import LITELLM_BANNER
 from tests._master_key import MASTER_KEY
+from tests.unit.proxy.fake_config_table import ConfigRows, ReplicaPrisma, section_locked_transactions
 
 PUBLICLY_KNOWN_KEY: Final = "sk-" + "1234"
 
@@ -9838,6 +9839,7 @@ class _FakePrismaClient:
             if replica_rows is None
             else _LaggingReplicaLitellmConfig(replica_rows, writer=self.writer_db.litellm_config)
         )
+        self.tx = section_locked_transactions(self.writer_db.litellm_config)
         self.jsonify_object = lambda obj: obj
 
 
@@ -9900,6 +9902,58 @@ def test_update_config_writes_only_sent_section(_update_config_setup):
         assert prisma.db.litellm_config.rows["environment_variables"] == {"FOO": "enc:bar"}
     finally:
         restore()
+
+
+@pytest.mark.parametrize(
+    "stored_general_settings, expected_alerting",
+    [({}, ["slack"]), ({"alerting": ["email"]}, ["email", "slack"]), ({"alerting": ["slack", "email"]}, ["slack", "email"])],
+)
+def test_update_config_alert_webhook_turns_on_slack_alerting_once(
+    _update_config_setup, stored_general_settings, expected_alerting
+):
+    webhooks = {"budget_alerts": "https://hooks.example.com/budget"}
+    client, prisma, restore = _update_config_setup(initial_rows={"general_settings": stored_general_settings})
+    try:
+        resp = client.post("/config/update", json={"general_settings": {"alert_to_webhook_url": webhooks}})
+        assert resp.status_code == 200
+        assert prisma.writer_db.litellm_config.rows["general_settings"] == {
+            "alerting": expected_alerting,
+            "alert_to_webhook_url": webhooks,
+        }
+    finally:
+        restore()
+
+
+@pytest.mark.asyncio
+async def test_update_config_and_a_concurrent_publish_both_stay_in_litellm_settings(monkeypatch):
+    from litellm.proxy import proxy_server
+    from litellm.proxy._types import ConfigYAML, LitellmUserRoles, UserAPIKeyAuth
+
+    rows = ConfigRows({"litellm_settings": {"drop_params": True}})
+    proxy_config = proxy_server.ProxyConfig()
+    monkeypatch.setattr(proxy_server, "prisma_client", ReplicaPrisma(rows))
+    monkeypatch.setattr(proxy_server, "store_model_in_db", True)
+    monkeypatch.setattr(proxy_server, "proxy_config", proxy_config)
+    monkeypatch.setattr(proxy_config, "add_deployment", AsyncMock(return_value=None))
+    request = MagicMock()
+    request.json = AsyncMock(return_value={"litellm_settings": {"num_retries": 3}})
+
+    await asyncio.gather(
+        proxy_server.update_config(
+            config_info=ConfigYAML(litellm_settings={"num_retries": 3}),
+            request=request,
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, api_key=MASTER_KEY),
+        ),
+        proxy_config.append_to_list_setting(
+            section_name="litellm_settings",
+            key="public_agent_groups",
+            item="agent-1",
+            listed_as=frozenset({"agent-1"}),
+            on_written=lambda _: None,
+        ),
+    )
+
+    assert rows.stored("litellm_settings") == {"drop_params": True, "num_retries": 3, "public_agent_groups": ["agent-1"]}
 
 
 def test_update_config_keeps_an_environment_variable_the_read_replica_has_not_caught_up_on(_update_config_setup):

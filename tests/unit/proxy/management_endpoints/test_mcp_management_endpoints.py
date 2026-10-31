@@ -46,6 +46,7 @@ from litellm.proxy.mcp_server.mcp_server_manager import MCPServerConfig, MCPServ
 from litellm.proxy.utils import ProxyLogging
 from litellm.types.mcp import MCPAuth, MCPCredentials
 from litellm.types.mcp_server.mcp_server_manager import MCPServer, PinnedMCPTool
+from tests.unit.proxy.fake_config_table import ConfigRows, ReplicaPrisma
 
 
 def generate_mock_mcp_server_db_record(
@@ -313,6 +314,34 @@ async def test_mcp_publication_updates_runtime_only_after_successful_save(
         save.assert_not_awaited()
     else:
         save.assert_awaited_once_with(new_config=expected_config)
+
+
+@pytest.mark.asyncio
+async def test_mcp_publication_from_the_modal_keeps_a_server_another_admin_published(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    manager: Final = MCPServerManager()
+    manager.config_mcp_servers = {
+        server_id: generate_mock_mcp_server_config_record(server_id=server_id)
+        for server_id in ("server-1", "server-2", "server-3")
+    }
+    rows: Final = ConfigRows({"litellm_settings": {"public_mcp_servers": ["server-1", "server-2"]}})
+    monkeypatch.setattr(litellm, "public_mcp_servers", [])
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", ReplicaPrisma(rows))
+    monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_config", ProxyConfig())
+    monkeypatch.setattr("litellm.proxy.mcp_server.mcp_server_manager.global_mcp_server_manager", manager)
+
+    response: Final = await mgmt_endpoints.make_mcp_servers_public(
+        MakeMCPServersPublicRequest(mcp_server_ids=["server-3"], previous_mcp_server_ids=["server-2"]),
+        generate_mock_user_api_key_auth(user_role=LitellmUserRoles.PROXY_ADMIN),
+    )
+
+    assert response["public_mcp_servers"] == ["server-1", "server-3"]
+    assert rows.stored("litellm_settings")["public_mcp_servers"] == ["server-1", "server-3"]
+    assert litellm.public_mcp_servers == ["server-1", "server-3"]
 
 
 class TestMCPCredentialsTokenExchangeProfile:

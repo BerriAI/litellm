@@ -741,7 +741,7 @@ describe("ModelHubTable", () => {
       await user.click(screen.getByRole("button", { name: "Next" }));
       await user.click(screen.getByRole("button", { name: "Save Publication List" }));
 
-      expect(networking.makeMCPPublicCall).toHaveBeenCalledWith("test-token", []);
+      expect(networking.makeMCPPublicCall).toHaveBeenCalledWith("test-token", [], []);
       expect(manageVisibility).toBeDisabled();
       await act(async () => refresh.reject(new Error("Unable to reload the publication list")));
       expect(manageVisibility).toBeDisabled();

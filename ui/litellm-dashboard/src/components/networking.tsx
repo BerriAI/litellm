@@ -545,7 +545,11 @@ registerAuthHeaderNameGetter(getGlobalLitellmHeaderName);
 registerAuthTokenGetter(() => decodeToken(getCookie("token"))?.key ?? null);
 registerErrorHandler(handleError);
 
-export const makeModelGroupPublic = async (accessToken: string, modelGroups: string[]) => {
+export const makeModelGroupPublic = async (
+  accessToken: string,
+  modelGroups: string[],
+  previousModelGroups: string[],
+) => {
   const url = proxyBaseUrl ? `${proxyBaseUrl}/model_group/make_public` : `/model_group/make_public`;
   const response = await fetch(url, {
     method: "POST",
@@ -555,6 +559,7 @@ export const makeModelGroupPublic = async (accessToken: string, modelGroups: str
     },
     body: JSON.stringify({
       model_groups: modelGroups,
+      previous_model_groups: previousModelGroups,
     }),
   });
   return response.json();
@@ -5833,7 +5838,7 @@ export const deleteAgentCall = async (accessToken: string, agentId: string) => {
   }
 };
 
-export const makeAgentsPublicCall = async (accessToken: string, agentIds: string[]) => {
+export const makeAgentsPublicCall = async (accessToken: string, agentIds: string[], previousAgentIds: string[]) => {
   try {
     const url = proxyBaseUrl ? `${proxyBaseUrl}/v1/agents/make_public` : `/v1/agents/make_public`;
 
@@ -5845,6 +5850,7 @@ export const makeAgentsPublicCall = async (accessToken: string, agentIds: string
       },
       body: JSON.stringify({
         agent_ids: agentIds,
+        previous_agent_ids: previousAgentIds,
       }),
     });
 
@@ -5862,7 +5868,11 @@ export const makeAgentsPublicCall = async (accessToken: string, agentIds: string
   }
 };
 
-export const makeMCPPublicCall = async (accessToken: string, mcpServerIds: string[]) => {
+export const makeMCPPublicCall = async (
+  accessToken: string,
+  mcpServerIds: string[],
+  previousMcpServerIds: string[],
+) => {
   try {
     const url = proxyBaseUrl ? `${proxyBaseUrl}/v1/mcp/make_public` : `/v1/mcp/make_public`;
 
@@ -5874,6 +5884,7 @@ export const makeMCPPublicCall = async (accessToken: string, mcpServerIds: strin
       },
       body: JSON.stringify({
         mcp_server_ids: mcpServerIds,
+        previous_mcp_server_ids: previousMcpServerIds,
       }),
     });
 

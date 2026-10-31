@@ -129,6 +129,10 @@ def does_mcp_server_exist(mcp_server_records: Iterable[_HasServerId], mcp_server
     return False
 
 
+def _set_public_mcp_servers(public_mcp_servers: tuple[str, ...]) -> None:
+    litellm.public_mcp_servers = list(public_mcp_servers)
+
+
 DEFAULT_MCP_REGISTRY_VERSION: Final = "1.0.0"
 
 if TYPE_CHECKING:
@@ -3374,8 +3378,6 @@ if MCP_AVAILABLE:
             )
             from litellm.proxy.proxy_server import proxy_config
 
-            # Load existing config
-            config: Final = await proxy_config.get_config()
             # Check if user has admin permissions
             if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
                 raise HTTPException(
@@ -3393,6 +3395,22 @@ if MCP_AVAILABLE:
                         detail=f"MCP Server with ID {server_id} not found",
                     )
 
+            if request.previous_mcp_server_ids is not None:
+                stored_public_mcp_servers: Final = await proxy_config.apply_list_setting_delta(
+                    section_name="litellm_settings",
+                    key="public_mcp_servers",
+                    requested=request.mcp_server_ids,
+                    previous=request.previous_mcp_server_ids,
+                    on_written=_set_public_mcp_servers,
+                )
+                return {
+                    "message": "Successfully updated public mcp servers",
+                    "public_mcp_servers": list(stored_public_mcp_servers),
+                    "updated_by": user_api_key_dict.user_id,
+                }
+
+            # Load existing config
+            config: Final = await proxy_config.get_config()
             # Update config with new settings
             if "litellm_settings" not in config or config["litellm_settings"] is None:
                 config["litellm_settings"] = {}

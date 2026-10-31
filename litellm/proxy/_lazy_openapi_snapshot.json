@@ -4111,6 +4111,21 @@
               },
               "title": "Agent Ids",
               "type": "array"
+            },
+            "previous_agent_ids": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "The public agent list the caller started from. When set, only the agents added or removed relative to it change, so agents another admin published or unpublished meanwhile keep that change. When omitted, agent_ids replaces the stored list.",
+              "title": "Previous Agent Ids"
             }
           },
           "required": [
@@ -42945,6 +42960,21 @@
               },
               "title": "Mcp Server Ids",
               "type": "array"
+            },
+            "previous_mcp_server_ids": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "The public MCP server list the caller started from. When set, only the servers added or removed relative to it change, so servers another admin published or unpublished meanwhile keep that change. When omitted, mcp_server_ids replaces the stored list.",
+              "title": "Previous Mcp Server Ids"
             }
           },
           "required": [

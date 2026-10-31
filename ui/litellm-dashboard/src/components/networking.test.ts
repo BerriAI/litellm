@@ -1225,3 +1225,33 @@ describe("searchToolQueryCall", () => {
     await expect(Networking.searchToolQueryCall("token", "exa-search-2", "litellm")).rejects.toThrow(errorMessage);
   });
 });
+
+describe("AI Hub publication calls", () => {
+  const originalFetch = global.fetch;
+
+  afterEach(() => {
+    global.fetch = originalFetch;
+  });
+
+  it.each([
+    {
+      send: () => Networking.makeAgentsPublicCall("token", ["agent-1"], ["agent-2"]),
+      body: { agent_ids: ["agent-1"], previous_agent_ids: ["agent-2"] },
+    },
+    {
+      send: () => Networking.makeMCPPublicCall("token", ["server-1"], ["server-2"]),
+      body: { mcp_server_ids: ["server-1"], previous_mcp_server_ids: ["server-2"] },
+    },
+    {
+      send: () => Networking.makeModelGroupPublic("token", ["gpt-4"], ["gpt-3.5-turbo"]),
+      body: { model_groups: ["gpt-4"], previous_model_groups: ["gpt-3.5-turbo"] },
+    },
+  ])("sends the selected list with the list it started from: $body", async ({ send, body }) => {
+    const mockFetch = vi.fn().mockResolvedValue(new Response("{}", { status: 200 }));
+    global.fetch = mockFetch;
+
+    await send();
+
+    expect(JSON.parse(String(mockFetch.mock.calls.at(-1)?.[1]?.body))).toEqual(body);
+  });
+});

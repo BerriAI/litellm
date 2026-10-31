@@ -44,6 +44,7 @@ from litellm.proxy.management_helpers.model_quota_policy import REQUIRE_BOTH_LIM
 from litellm.proxy.utils import PrismaClient
 from litellm.router import Router
 from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo, updateDeployment, updateLiteLLMParams
+from tests.unit.proxy.fake_config_table import ConfigRows, ReplicaPrisma
 
 
 async def _passthrough_row(update_data):
@@ -1755,6 +1756,33 @@ class TestUpdateModel:
         mock_prisma.db.litellm_proxymodeltable.update.assert_awaited_once()
         persisted = json.loads(mock_prisma.db.litellm_proxymodeltable.update.await_args.kwargs["data"]["litellm_params"])
         assert persisted["litellm_credential_name"] == "shared-credential"
+
+
+@pytest.mark.asyncio
+async def test_update_public_model_groups_from_the_modal_keeps_a_group_another_admin_published(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import litellm
+    from litellm.proxy.management_endpoints.model_management_endpoints import (
+        UpdatePublicModelGroupsRequest,
+        update_public_model_groups,
+    )
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    rows: Final = ConfigRows({"litellm_settings": {"public_model_groups": ["gpt-a", "gpt-b"]}})
+    monkeypatch.setattr(litellm, "public_model_groups", [])
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", ReplicaPrisma(rows))
+    monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_config", ProxyConfig())
+
+    response: Final = await update_public_model_groups(
+        request=UpdatePublicModelGroupsRequest(model_groups=["gpt-c"], previous_model_groups=["gpt-b"]),
+        user_api_key_dict=UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN),
+    )
+
+    assert response["public_model_groups"] == ["gpt-a", "gpt-c"]
+    assert rows.stored("litellm_settings")["public_model_groups"] == ["gpt-a", "gpt-c"]
+    assert litellm.public_model_groups == ["gpt-a", "gpt-c"]
 
 
 class TestUpdatePublicModelGroups:

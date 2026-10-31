@@ -34,6 +34,7 @@ from litellm.router_utils.pre_call_checks.encrypted_content_affinity_check impor
 from litellm.router_utils.pre_call_checks.model_rate_limit_check import ModelRateLimitingCheck
 from litellm.router_utils.pre_call_checks.prompt_caching_deployment_check import PromptCachingDeploymentCheck
 from litellm.types.router import RetryPolicy, UpdateRouterConfig
+from tests.unit.proxy.fake_config_table import section_locked_transactions
 
 
 @pytest.fixture(autouse=True)
@@ -431,6 +432,7 @@ async def test_config_update_persists_and_reads_back_retry_policy(monkeypatch):
     prisma_client = MagicMock()
     prisma_client.db.litellm_config = fake_table
     prisma_client.writer_db = prisma_client.db
+    prisma_client.tx = section_locked_transactions(fake_table)
 
     async def _apply_router_settings(*args, **kwargs):
         await proxy_server.proxy_config._add_router_settings_from_db_config(
