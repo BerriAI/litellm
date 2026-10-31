@@ -1,3 +1,4 @@
+import copy
 import json
 import logging
 from collections.abc import Mapping
@@ -1212,7 +1213,10 @@ def test_mistral_sends_only_the_text_items_of_a_native_thinking_chunk_beside_an_
                 "content": [
                     {
                         "type": "thinking",
-                        "thinking": [{"type": "text", "text": "It has whiskers."}, {"type": "reference", "reference_ids": [1]}],
+                        "thinking": [
+                            {"type": "text", "text": "It has whiskers."},
+                            {"type": "reference", "reference_ids": [1]},
+                        ],
                     },
                     {"type": "text", "text": "A cat."},
                 ],
@@ -1670,6 +1674,18 @@ def test_mistral_transform_request_drops_an_empty_tool_message_whose_call_id_is_
     )
 
     assert [m.get("role") for m in request["messages"]] == ["user", "assistant"]
+
+
+def test_mistral_request_drops_a_user_name_without_touching_the_callers_message() -> None:
+    messages: Final = [{"role": "user", "content": "Hi"}, {"role": "user", "content": "", "name": "alice"}]
+    messages_before: Final = copy.deepcopy(messages)
+
+    body: Final = MistralConfig().transform_request(
+        model="mistral-medium-latest", messages=messages, optional_params={}, litellm_params={}, headers={}
+    )
+
+    assert "name" not in json.dumps(body["messages"])
+    assert messages == messages_before
 
 
 def _warnings_naming(caplog: pytest.LogCaptureFixture, param: str) -> tuple[str, ...]:
