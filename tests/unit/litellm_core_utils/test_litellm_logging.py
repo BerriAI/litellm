@@ -14417,3 +14417,50 @@ def test_record_native_bedrock_guardrail_bills_each_call_its_own_trace_when_call
     (first_cost, second_cost) = costs
     assert second_cost == pytest.approx(2 * first_cost)
     assert shared_metadata == {"tag": "x"}
+
+
+@pytest.mark.parametrize("call_type", ["asend_message", "send_message", "asend_message_streaming"])
+def test_a2a_payload_id_ignores_client_chosen_jsonrpc_id(logging_obj: Logging, call_type: str) -> None:
+    """Two A2A calls that reuse a JSON-RPC id must not share a standard logging payload id."""
+    from litellm.litellm_core_utils.litellm_logging import get_standard_logging_object_payload
+
+    now: Final = datetime_unit_test(2026, 1, 1, 12, 0, 0)
+    payload_ids: Final = []
+    for call_id in ("litellm-call-a", "litellm-call-b"):
+        payload = get_standard_logging_object_payload(
+            kwargs={
+                "model": "a2a_agent/test",
+                "call_type": call_type,
+                "litellm_call_id": call_id,
+                "litellm_params": {"metadata": {}},
+            },
+            init_response_obj=ModelResponse(id="1"),  # JSON-RPC id chosen by the client
+            start_time=now,
+            end_time=now,
+            logging_obj=logging_obj,
+            status="success",
+        )
+        assert payload is not None
+        payload_ids.append(payload["id"])
+    assert payload_ids == ["litellm-call-a", "litellm-call-b"]
+
+
+def test_non_a2a_payload_id_still_uses_response_id(logging_obj: Logging) -> None:
+    from litellm.litellm_core_utils.litellm_logging import get_standard_logging_object_payload
+
+    now: Final = datetime_unit_test(2026, 1, 1, 12, 0, 0)
+    payload = get_standard_logging_object_payload(
+        kwargs={
+            "model": "gpt-4o",
+            "call_type": "acompletion",
+            "litellm_call_id": "litellm-call-a",
+            "litellm_params": {"metadata": {}},
+        },
+        init_response_obj=ModelResponse(id="chatcmpl-123"),
+        start_time=now,
+        end_time=now,
+        logging_obj=logging_obj,
+        status="success",
+    )
+    assert payload is not None
+    assert payload["id"] == "chatcmpl-123"

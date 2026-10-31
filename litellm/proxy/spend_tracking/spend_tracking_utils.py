@@ -367,10 +367,17 @@ def get_spend_logs_id(
     call_type: str, response_obj: dict, kwargs: Mapping[str, object], metadata: Mapping[str, object] = EMPTY_MAPPING
 ) -> str | None:
     standard_logging_payload = kwargs.get("standard_logging_object")
-    candidate_ids: Final = (
-        response_obj.get("id"),
+    response_id: Final = response_obj.get("id")
+    own_ids: Final = (
         standard_logging_payload.get("id") if isinstance(standard_logging_payload, dict) else None,
         kwargs.get("litellm_call_id"),
+    )
+    # A2A responses carry the client-chosen JSON-RPC id, which is not unique
+    # across calls. Prefer LiteLLM's own ids so request_id stays unique.
+    candidate_ids: Final = (
+        (*own_ids, response_id)
+        if call_type in ("asend_message", "send_message", "asend_message_streaming")
+        else (response_id, *own_ids)
     )
     resolved_id: Final = next(
         (candidate for candidate in candidate_ids if isinstance(candidate, str) and candidate), None
