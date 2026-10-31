@@ -145,7 +145,7 @@ ignored_function_names = [
     "_route_capability_pin",  # Exercised through Decisions routing tests in test_router.py
     "_deployment_serves_route",  # Exercised through mixed-group Decisions tests in test_router.py
     "_without_deployments_that_cannot_serve_route",  # Exercised through Decisions routing tests in test_router.py
-    "_exact_base_model_max_input_tokens",  # Tested through get_router_model_info in test_router_model_cost_isolation.py
+    "exact_base_model_max_input_tokens",  # Tested through get_router_model_info in test_router_model_cost_isolation.py
     "_base_model_widened_window",  # Tested through get_router_model_info in test_router_model_cost_isolation.py
     "_provider_model_id",  # Tested through get_router_model_info in test_router_model_cost_isolation.py
     "_names_route_model",  # Tested through get_router_model_info in test_router_model_cost_isolation.py
