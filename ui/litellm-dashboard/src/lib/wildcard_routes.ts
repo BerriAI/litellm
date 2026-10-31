@@ -1,5 +1,9 @@
-export type WildcardDeployment = { readonly modelGroup: string; readonly underlyingModels: readonly string[] };
-export type WildcardRoute = { readonly model: string; readonly sourceGroup: string };
+export type WildcardDeployment = {
+  readonly modelGroup: string;
+  readonly underlyingModels: readonly string[];
+  readonly blocked?: boolean;
+};
+export type WildcardRoute = { readonly model: string; readonly sourceGroup: string; readonly paused: boolean };
 
 // A linear glob scan rather than a RegExp: patterns are admin-controlled model_name values, and a
 // backtracking regex built from one ("a*a*a*...") can freeze another admin's dashboard.
@@ -52,7 +56,7 @@ const routesThroughPattern = (
       ? []
       : deployment.underlyingModels.filter((model) => routesCapturedIds(pattern, model));
   const models = capturing.length > 0 ? capturing.map((model) => substituteCapture(pattern, model, group)) : [group];
-  return models.map((model) => ({ model, sourceGroup: deployment.modelGroup }));
+  return models.map((model) => ({ model, sourceGroup: deployment.modelGroup, paused: Boolean(deployment.blocked) }));
 };
 
 const PYTHON_ESCAPED_CHARS = new Set(Array.from("()[]{}?*+-|^$\\.&~# \t\n\r\v\f"));
@@ -77,8 +81,15 @@ const isMoreSpecific = (namePattern: string, than: string): boolean => {
 const catchAllRoutes = (group: string, deployments: readonly WildcardDeployment[]): readonly WildcardRoute[] =>
   deployments
     .filter((deployment) => deployment.modelGroup === "*")
-    .flatMap((deployment) => deployment.underlyingModels.filter((model) => routesCapturedIds("*", model)))
-    .map((model) => ({ model: substituteCapture("*", model, group), sourceGroup: "*" }));
+    .flatMap((deployment) =>
+      deployment.underlyingModels
+        .filter((model) => routesCapturedIds("*", model))
+        .map((model) => ({
+          model: substituteCapture("*", model, group),
+          sourceGroup: "*",
+          paused: Boolean(deployment.blocked),
+        })),
+    );
 
 const routesByPrecedence = (group: string, deployments: readonly WildcardDeployment[]): readonly WildcardRoute[] => {
   const matches = deployments.flatMap((deployment) =>

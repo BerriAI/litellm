@@ -744,6 +744,21 @@ describe("autorouter_presets", () => {
       expect(resolveAvailableModel("claude-opus-5-5", availability)).toBeUndefined();
     });
 
+    it("credits no model to a paused group named like the model", () => {
+      const availability = buildModelAvailability(
+        ["claude-opus-5-5"],
+        deploymentRefsFromModelInfo([
+          {
+            model_name: "claude-opus-5-5",
+            litellm_params: { model: "anthropic/claude-opus-5-5" },
+            model_info: { blocked: true },
+          },
+        ]),
+        servedBy("anthropic", "claude-opus-5-5"),
+      );
+      expect(resolveAvailableModel("claude-opus-5-5", availability)).toBeUndefined();
+    });
+
     it("reads both alias forms the router accepts and skips malformed entries", () => {
       const aliases = {
         fast: "haiku-4-5",
@@ -855,6 +870,21 @@ describe("autorouter_presets", () => {
         servedBy("bedrock", "team/opus-5-5"),
       );
       expect(resolveAvailableModel("claude-opus-5-5", availability)).toBeUndefined();
+    });
+
+    it("credits nothing to a listed id whose most specific wildcard is paused", () => {
+      const pausedOpusTeam = {
+        modelGroup: "team/opus-*",
+        underlyingModels: ["anthropic/claude-opus-*"],
+        blocked: true,
+      };
+      const availability = buildModelAvailability(
+        ["team/opus-5-5", "team/haiku-4-5"],
+        [anthropicTeam, pausedOpusTeam],
+        servedBy("anthropic", "team/opus-5-5", "team/haiku-4-5"),
+      );
+      expect(resolveAvailableModel("claude-opus-5-5", availability)).toBeUndefined();
+      expect(resolveAvailableModel("claude-haiku-4-5", availability)).toBe("team/haiku-4-5");
     });
 
     it("keeps replacement patterns in a listed id literal", () => {

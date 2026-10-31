@@ -20,7 +20,7 @@ import { useZodForm } from "@/lib/forms/useZodForm";
 import AccessGroupTagsCombobox from "./AccessGroupTagsCombobox";
 import { getRouterSettingsCall, modelAvailableCall, validateAutoRouterConfig, type Team } from "../networking";
 import { labelWithHint } from "@/components/shared/form/LabelWithHint";
-import { all_admin_roles } from "@/utils/roles";
+import { all_admin_roles, isProxyAdminRole } from "@/utils/roles";
 import { canCreateAutoRouterForTeam, canModifyModel, type ModelWriteScope } from "@/utils/modelPermissions";
 import TeamDropdown from "../common_components/team_dropdown";
 import { type AddAutoRouterValues, handleAddAutoRouterSubmit } from "./handle_add_auto_router_submit";
@@ -258,13 +258,13 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
     queryFn: () => fetchAllModelDeployments(accessToken, userId ?? "", userRole),
     enabled: Boolean(accessToken),
   });
-  const { data: aliasTargets = NO_ALIASES } = useQuery({
+  const { data: aliasTargets = NO_ALIASES, isLoading: aliasesLoading } = useQuery({
     queryKey: ["routerSettings", "modelGroupAlias", accessToken],
     queryFn: async () =>
       modelGroupAliasTargets((await getRouterSettingsCall(accessToken))?.current_values?.model_group_alias),
-    enabled: Boolean(accessToken),
+    enabled: Boolean(accessToken) && isProxyAdminRole(userRole),
   });
-  const modelsLoading = groupsLoading || deploymentsLoading;
+  const modelsLoading = groupsLoading || deploymentsLoading || aliasesLoading;
   useEffect(() => {
     if (!deployments || form.getFieldState("auto_router_name").isDirty) return;
     form.setValue(

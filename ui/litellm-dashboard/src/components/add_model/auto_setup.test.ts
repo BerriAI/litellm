@@ -175,6 +175,23 @@ describe("deployedRouterModels", () => {
     expect(suggest(deployment(name, "anthropic/claude-*", { model_info: { blocked: true } }))).toBeNull();
   });
 
+  it("suggests no id whose most specific wildcard is paused, even when a broader one is live", () => {
+    const groups = ["team/haiku-4-5", "team/opus-5-5"].map((model_group) => ({
+      model_group,
+      mode: "chat",
+      providers: ["anthropic"],
+    }));
+    const rows = [
+      deployment("team/*", "anthropic/claude-*"),
+      deployment("team/opus-*", "anthropic/claude-opus-*", { model_info: { blocked: true } }),
+    ];
+    expect(names(recommendSolverPair(deployedRouterModels(groups, rows), "balanced", "auto"))).toBeNull();
+    expect(names(recommendSolverPair(deployedRouterModels(groups, rows.slice(0, 1)), "balanced", "auto"))).toEqual([
+      "team/haiku-4-5",
+      "team/opus-5-5",
+    ]);
+  });
+
   it("takes no Claude identity for an alias the router sends to another provider", () => {
     const [model] = deployedRouterModels(
       [{ model_group: "sonnet-5", mode: "chat", providers: ["openai"] }],

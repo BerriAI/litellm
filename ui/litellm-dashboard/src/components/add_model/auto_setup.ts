@@ -1,7 +1,7 @@
 import type { AutoRouterDeployment } from "@/app/(dashboard)/hooks/models/useModels";
 import { isAutoRouterDeployment } from "@/app/(dashboard)/hooks/models/useModels";
 import type { ModelGroup } from "@/components/llm_calls/fetch_models";
-import { type WildcardDeployment, wildcardRoutes } from "@/lib/wildcard_routes";
+import { type WildcardDeployment, type WildcardRoute, wildcardRoutes } from "@/lib/wildcard_routes";
 import type { ComplexityRouterConfigValue } from "./ComplexityRouterConfig";
 
 export const ROUTER_FAMILIES = {
@@ -106,18 +106,16 @@ const identityOf = (deployment: AutoRouterDeployment): ModelIdentity | null =>
   parseModel(deployment.litellm_params?.model ?? "") ??
   parseModel(deployment.model_info?.base_model ?? deployment.litellm_params?.base_model ?? "");
 
-const routableDeployments = (deployments: readonly AutoRouterDeployment[]): WildcardDeployment[] =>
+const wildcardDeployments = (deployments: readonly AutoRouterDeployment[]): WildcardDeployment[] =>
   deployments.flatMap((row) => {
     const model = row.litellm_params?.model;
-    return row.model_name && model && !row.model_info?.blocked
-      ? [{ modelGroup: row.model_name, underlyingModels: [model] }]
+    return row.model_name?.includes("*") && model
+      ? [{ modelGroup: row.model_name, underlyingModels: [model], blocked: Boolean(row.model_info?.blocked) }]
       : [];
   });
 
-const routedIdentities = (group: ModelGroup, wildcards: readonly WildcardDeployment[]): (ModelIdentity | null)[] => {
-  const routed = wildcardRoutes(group.model_group, wildcards, group.providers ?? []).map(({ model }) =>
-    parseModel(model),
-  );
+const routedIdentities = (routes: readonly WildcardRoute[], group: ModelGroup): (ModelIdentity | null)[] => {
+  const routed = routes.filter(({ paused }) => !paused).map(({ model }) => parseModel(model));
   return routed.some((identity) => identity !== null) ? routed : [parseModel(group.model_group)];
 };
 
@@ -170,7 +168,7 @@ export const deployedRouterModels = (
   deployments: readonly AutoRouterDeployment[],
   aliasTargets: ReadonlyMap<string, string> = new Map(),
 ): SolverModel[] => {
-  const wildcards = routableDeployments(deployments);
+  const wildcards = wildcardDeployments(deployments);
   return routingModelGroups(groups)
     .map((group) => {
       const routed = { ...group, model_group: aliasTargets.get(group.model_group) ?? group.model_group };
@@ -179,8 +177,10 @@ export const deployedRouterModels = (
       const isRouter = rows.some(isAutoRouterDeployment) || routed.model_group.startsWith("auto_router/");
       const hasWildcard =
         routed.model_group.includes("*") || active.some((row) => row.litellm_params?.model?.includes("*"));
-      const manualOnly = isRouter || hasWildcard || (rows.length > 0 && active.length === 0);
-      const identities = active.length > 0 ? active.map(identityOf) : routedIdentities(routed, wildcards);
+      const routes = rows.length > 0 ? [] : wildcardRoutes(routed.model_group, wildcards, routed.providers ?? []);
+      const paused = rows.length > 0 ? active.length === 0 : routes.length > 0 && routes.every((route) => route.paused);
+      const manualOnly = isRouter || hasWildcard || paused;
+      const identities = active.length > 0 ? active.map(identityOf) : routedIdentities(routes, routed);
       const first = identities[0];
       const homogeneous =
         first &&

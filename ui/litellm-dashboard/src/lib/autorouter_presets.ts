@@ -139,17 +139,20 @@ export const buildModelAvailability = (
         .map((key) => ({ key, modelGroup: group, sourceGroup: deployment.modelGroup })),
     ),
   );
+  const pausedGroups = new Set(Array.from(deploymentGroups).filter((group) => !routableByGroup.has(group)));
+  const servedGroups = new Set(Array.from(groups).filter((group) => !pausedGroups.has(routedGroup(group))));
   const unlistedGroups = Array.from(groups).filter(
     (group) => !group.includes("*") && !deploymentGroups.has(routedGroup(group)),
   );
+  const patternDeployments = deployments.filter(({ modelGroup }) => modelGroup.includes("*"));
   const wildcardEntries = unlistedGroups.flatMap((group) =>
-    wildcardRoutes(routedGroup(group), routableDeployments, groupProviders.get(group) ?? []).map(
-      ({ model, sourceGroup }) => ({
+    wildcardRoutes(routedGroup(group), patternDeployments, groupProviders.get(group) ?? [])
+      .filter(({ paused }) => !paused)
+      .map(({ model, sourceGroup }) => ({
         key: normalizeUnderlyingModel(model),
         modelGroup: group,
         sourceGroup,
-      }),
-    ),
+      })),
   );
   const entries = [...literalEntries, ...wildcardEntries];
   const grouped = new Map<string, Set<string>>();
@@ -176,7 +179,7 @@ export const buildModelAvailability = (
       }),
     ]),
   );
-  return { modelGroups: groups, underlyingIndex, nativeUnderlyingIndex };
+  return { modelGroups: servedGroups, underlyingIndex, nativeUnderlyingIndex };
 };
 
 export const deploymentRefsFromModelInfo = (
