@@ -11,10 +11,11 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, TypeVar, overload
 
 from fastapi import APIRouter, Depends, Query
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, TypeAdapter
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm._logging import verbose_proxy_logger
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.guardrails.usage_tracking import guardrail_status_to_action
@@ -28,6 +29,7 @@ from litellm.repositories.table_repositories import (
     SpendLogGuardrailIndexRepository,
     SpendLogsRepository,
 )
+from litellm.types.llms.base import LiteLLMBaseModel
 
 if TYPE_CHECKING:
     from prisma import models as prisma_models
@@ -42,9 +44,10 @@ if TYPE_CHECKING:
 router: Final = APIRouter()
 
 _EMPTY_UNITS: Final[Mapping[str, int]] = MappingProxyType({})
-_ACTION_SEVERITY: Final[Mapping[str, int]] = MappingProxyType({"passed": 0, "flagged": 1, "blocked": 2})
+_ACTION_SEVERITY: Final[Mapping[str, int]] = MappingProxyType({"not_run": 0, "passed": 1, "flagged": 2, "blocked": 3})
 
 _T = TypeVar("_T")
+_MetricsRowT = TypeVar("_MetricsRowT", bound="_DailyMetricsRow")
 
 _USAGE_MAX_RANGE_DAYS: Final = 366
 
@@ -247,7 +250,7 @@ class _DailyPassBlocked(TypedDict):
     blocked: int
 
 
-class UsageOverviewRow(BaseModel):
+class UsageOverviewRow(LiteLLMBaseModel):
     id: str
     name: str
     type: str
@@ -267,7 +270,7 @@ class UsageOverviewRow(BaseModel):
     )
 
 
-class UsageOverviewResponse(BaseModel):
+class UsageOverviewResponse(LiteLLMBaseModel):
     rows: list[UsageOverviewRow]
     chart: list[UsageChartPoint]  # [{ date, passed, blocked }]
     totalRequests: int
@@ -290,13 +293,13 @@ _EMPTY_OVERVIEW: Final = UsageOverviewResponse(
 )
 
 
-class UsageUnitsDailyPoint(BaseModel):
+class UsageUnitsDailyPoint(LiteLLMBaseModel):
     date: str
     units: Mapping[str, int]
     cost: float | None
 
 
-class UsageDetailResponse(BaseModel):
+class UsageDetailResponse(LiteLLMBaseModel):
     guardrail_id: str
     guardrail_name: str
     type: str
@@ -322,10 +325,10 @@ class UsageDetailResponse(BaseModel):
     untracked_usage_units_by_key: Mapping[str, Mapping[str, int]]
 
 
-class UsageLogEntry(BaseModel):
+class UsageLogEntry(LiteLLMBaseModel):
     id: str
     timestamp: str
-    action: str  # blocked | passed | flagged
+    action: str  # blocked | passed | flagged | not_run
     score: float | None
     latency_ms: float | None
     model: str | None
@@ -334,7 +337,7 @@ class UsageLogEntry(BaseModel):
     reason: str | None
 
 
-class UsageLogsResponse(BaseModel):
+class UsageLogsResponse(LiteLLMBaseModel):
     logs: list[UsageLogEntry]
     total: int
     page: int
@@ -360,10 +363,12 @@ def _trend_from_comparison(current_fail: float, previous_fail: float) -> str:
     return "stable"
 
 
-def _aggregate_daily_metrics(metrics: "Sequence[_DailyMetricsRow]", id_attr: str) -> Mapping[str, _MetricTotals]:
+def _aggregate_daily_metrics(
+    metrics: "Sequence[_MetricsRowT]", id_of: "Callable[[_MetricsRowT], str]"
+) -> Mapping[str, _MetricTotals]:
     agg: Final[dict[str, _MetricTotals]] = {}
     for m in metrics:
-        gid: str = getattr(m, id_attr)
+        gid: str = id_of(m)
         if gid not in agg:
             agg[gid] = {"requests": 0, "passed": 0, "blocked": 0, "flagged": 0}
         agg[gid]["requests"] += int(m.requests_evaluated or 0)
@@ -373,10 +378,12 @@ def _aggregate_daily_metrics(metrics: "Sequence[_DailyMetricsRow]", id_attr: str
     return agg
 
 
-def _prev_fail_rates(metrics_prev: "Sequence[_DailyMetricsRow]", id_attr: str) -> Mapping[str, float]:
+def _prev_fail_rates(
+    metrics_prev: "Sequence[_MetricsRowT]", id_of: "Callable[[_MetricsRowT], str]"
+) -> Mapping[str, float]:
     prev_agg_raw: Final[dict[str, _PrevPeriodCounts]] = {}
     for m in metrics_prev:
-        gid: str = getattr(m, id_attr)
+        gid: str = id_of(m)
         r, b = int(m.requests_evaluated or 0), int(m.blocked_count or 0)
         if gid not in prev_agg_raw:
             prev_agg_raw[gid] = {"req": 0, "blocked": 0}
@@ -429,7 +436,7 @@ def _field_str(mapping: Mapping[str, object], key: str, default: str) -> str:
     return str(mapping.get(key, default))
 
 
-def _get_guardrail_attrs(g: "_DbOrConfigGuardrail") -> tuple[Any, str]:
+def _get_guardrail_attrs(g: "_DbOrConfigGuardrail") -> tuple[str | None, str]:
     """Get (guardrail_id, display_name) from guardrail - handles Prisma model or dict."""
     gid: Final = _get_guardrail_field(g, "guardrail_id")
     name: Final = _get_guardrail_field(g, "guardrail_name")
@@ -592,8 +599,8 @@ async def guardrails_usage_overview(
             Sequence[prisma_models.LiteLLM_DailyGuardrailUsageUnits]
         ] = await _find_daily_guardrail_usage_units(prisma_client, where=units_where)
 
-        agg: Final = _aggregate_daily_metrics(metrics, "guardrail_id")
-        prev_agg: Final = _prev_fail_rates(metrics_prev, "guardrail_id")
+        agg: Final = _aggregate_daily_metrics(metrics, lambda m: m.guardrail_id)
+        prev_agg: Final = _prev_fail_rates(metrics_prev, lambda m: m.guardrail_id)
         units_agg: Final = _by(units_rows, lambda r: r.guardrail_id, _sum_counter_units)
         cost_agg: Final = _by(units_rows, lambda r: r.guardrail_id, _sum_tracked_cost)
         untracked_agg: Final = _by(units_rows, lambda r: r.guardrail_id, _sum_untracked_units)
@@ -811,7 +818,7 @@ def _usage_log_entry_from_row(
     )
 
 
-def _snippet(text: Any, max_len: int = 200) -> str | None:
+def _snippet(text: object, max_len: int = 200) -> str | None:
     if text is None:
         return None
     if isinstance(text, str):
@@ -832,28 +839,41 @@ def _snippet(text: Any, max_len: int = 200) -> str | None:
     return result
 
 
-def _input_snippet_for_log(sl: "prisma_models.LiteLLM_SpendLogs") -> str | None:
-    """Snippet for request input: prefer messages, fall back to proxy_server_request (same as drawer)."""
-    out = _snippet(sl.messages)
+_DECODED_JSON: Final = TypeAdapter(object)
+
+
+def _request_dict(value: object) -> Mapping[str, object] | None:
+    mapping: Final = as_str_mapping(value)
+    return mapping if isinstance(mapping, dict) else None
+
+
+def _proxy_request_snippet(psr: object) -> str | None:
+    request: Final = _request_dict(psr)
+    if request is None:
+        return _snippet(psr)
+    msgs: Final = request.get("messages")
+    body: Final = _request_dict(request.get("body")) if msgs is None else None
+    out: Final = _snippet(body.get("messages") if body is not None else msgs)
     if out:
         return out
-    psr = getattr(sl, "proxy_server_request", None)
+    return _snippet(psr)
+
+
+def _input_snippet_for_log(sl: "prisma_models.LiteLLM_SpendLogs") -> str | None:
+    """Snippet for request input: prefer messages, fall back to proxy_server_request (same as drawer)."""
+    out: Final = _snippet(sl.messages)
+    if out:
+        return out
+    psr: Final[object] = getattr(sl, "proxy_server_request", None)
     if not psr:
         return None
-    if isinstance(psr, str):
-        try:
-            psr = json.loads(psr)
-        except Exception:
-            return _snippet(psr)
-    if isinstance(psr, dict):
-        msgs = psr.get("messages")
-        if msgs is None and isinstance(psr.get("body"), dict):
-            msgs = psr["body"].get("messages")
-        out = _snippet(msgs)
-        if out:
-            return out
+    if not isinstance(psr, str):
+        return _proxy_request_snippet(psr)
+    try:
+        decoded: Final = _DECODED_JSON.validate_python(json.loads(psr))
+    except Exception:
         return _snippet(psr)
-    return _snippet(psr)
+    return _proxy_request_snippet(decoded)
 
 
 @router.get(
@@ -964,8 +984,8 @@ async def policies_usage_overview(
                 }
             },
         )
-        agg: Final = _aggregate_daily_metrics(metrics, "policy_id")
-        prev_agg: Final = _prev_fail_rates(metrics_prev, "policy_id")
+        agg: Final = _aggregate_daily_metrics(metrics, lambda m: m.policy_id)
+        prev_agg: Final = _prev_fail_rates(metrics_prev, lambda m: m.policy_id)
         chart: Final = _chart_from_metrics(metrics)
         total_requests: Final = sum(a["requests"] for a in agg.values())
         total_blocked: Final = sum(a["blocked"] for a in agg.values())

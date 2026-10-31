@@ -1,3 +1,4 @@
+import re
 from collections.abc import Mapping, Sequence
 from datetime import datetime
 from typing import Final, Protocol
@@ -16,10 +17,58 @@ from litellm.proxy._types import (
 from litellm.proxy.auth.auth_checks import jwt_key_mapping_cache_key
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import evict_and_broadcast
-from litellm.proxy.management_endpoints.common_utils import _user_has_admin_view
+from litellm.proxy.management_endpoints.common_utils import (  # noqa: F401  # legacy module exports
+    _user_has_admin_view,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    user_api_key_has_admin_view,
+)
 from litellm.repositories.table_repositories import JWTKeyMappingRepository
 
 router: Final = APIRouter()
+
+_TOKEN_HASH_PATTERN: Final = re.compile(r"[0-9a-f]{64}")
+
+
+def _validated_token_hash(token: str) -> str:
+    """Guards a plaintext key from being stored as a hash of a hash, which would never match."""
+    if _TOKEN_HASH_PATTERN.fullmatch(token) is None:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "`token` must be the SHA-256 hash of a virtual key "
+                "(64 lowercase hex characters). Pass the plaintext as `key` instead."
+            ),
+        )
+    return token
+
+
+_EXACTLY_ONE_IDENTIFIER: Final = (
+    "Provide exactly one of `key` (the plaintext virtual key) or `token` (its SHA-256 hash)."
+)
+_AT_MOST_ONE_IDENTIFIER: Final = (
+    "Provide at most one of `key` (the plaintext virtual key) or `token` (its SHA-256 hash)."
+)
+
+
+def _token_hash_for_create(data: CreateJWTKeyMappingRequest) -> str:
+    """Resolve the token hash to store, from either the plaintext key or its hash."""
+    if data.key is not None and data.token is not None:
+        raise HTTPException(status_code=400, detail=_EXACTLY_ONE_IDENTIFIER)
+    if data.token is not None:
+        return _validated_token_hash(data.token)
+    if data.key is not None:
+        return hash_token(data.key)
+    raise HTTPException(status_code=400, detail=_EXACTLY_ONE_IDENTIFIER)
+
+
+def _token_hash_for_update(data: UpdateJWTKeyMappingRequest) -> str | None:
+    """Resolve the token hash to store, or None to leave the mapped key alone."""
+    if data.key is not None and data.token is not None:
+        raise HTTPException(status_code=400, detail=_AT_MOST_ONE_IDENTIFIER)
+    if data.token is not None:
+        return _validated_token_hash(data.token)
+    if data.key is not None:
+        return hash_token(data.key)
+    return None
 
 
 class _JWTKeyMappingRecord(Protocol):
@@ -27,6 +76,9 @@ class _JWTKeyMappingRecord(Protocol):
 
     @property
     def id(self) -> str: ...
+
+    @property
+    def jwt_issuer(self) -> str: ...
 
     @property
     def jwt_claim_name(self) -> str: ...
@@ -78,6 +130,7 @@ def _to_response(mapping: _JWTKeyMappingRecord) -> JWTKeyMappingResponse:
     """Convert a Prisma mapping object to a safe response (no hashed token)."""
     return JWTKeyMappingResponse(
         id=mapping.id,
+        jwt_issuer=mapping.jwt_issuer or None,
         jwt_claim_name=mapping.jwt_claim_name,
         jwt_claim_value=mapping.jwt_claim_value,
         description=mapping.description,
@@ -107,8 +160,9 @@ async def create_jwt_key_mapping(
         raise HTTPException(status_code=500, detail="Database not connected")
 
     try:
-        hashed_key: Final = hash_token(data.key)
+        hashed_key: Final = _token_hash_for_create(data)
         create_data: Final = {
+            "jwt_issuer": data.jwt_issuer or "",
             "jwt_claim_name": data.jwt_claim_name,
             "jwt_claim_value": data.jwt_claim_value,
             "token": hashed_key,
@@ -120,7 +174,7 @@ async def create_jwt_key_mapping(
 
         new_mapping: Final = await _mapping_table(prisma_client).create(data=create_data)
 
-        cache_key: Final = jwt_key_mapping_cache_key(data.jwt_claim_name, data.jwt_claim_value)
+        cache_key: Final = jwt_key_mapping_cache_key(data.jwt_claim_name, data.jwt_claim_value, data.jwt_issuer)
         await evict_and_broadcast(cache_keys=(cache_key,), user_api_key_cache=user_api_key_cache)
 
         return _to_response(new_mapping)
@@ -131,7 +185,10 @@ async def create_jwt_key_mapping(
         if "unique" in error_str or "p2002" in error_str:
             raise HTTPException(
                 status_code=409,
-                detail=f"A mapping for claim '{data.jwt_claim_name}' = '{data.jwt_claim_value}' already exists.",
+                detail=(
+                    f"A mapping for claim '{data.jwt_claim_name}' = '{data.jwt_claim_value}' "
+                    f"already exists for issuer '{data.jwt_issuer}'."
+                ),
             )
         if "foreign" in error_str or "p2003" in error_str:
             raise HTTPException(
@@ -158,9 +215,13 @@ async def update_jwt_key_mapping(
     if prisma_client is None:
         raise HTTPException(status_code=500, detail="Database not connected")
 
-    update_data: Final = data.model_dump(exclude_unset=True, exclude={"id", "key"})
-    if data.key is not None:
-        update_data["token"] = hash_token(data.key)
+    update_data: Final = data.model_dump(exclude_unset=True, exclude={"id", "key", "token"})
+    token_hash: Final = _token_hash_for_update(data)
+    if token_hash is not None:
+        update_data["token"] = token_hash
+    if "jwt_issuer" in update_data:
+        # DB column is NOT NULL (see schema.prisma); "" is the global/unscoped sentinel.
+        update_data["jwt_issuer"] = update_data["jwt_issuer"] or ""
     update_data["updated_by"] = user_api_key_dict.user_id
 
     try:
@@ -178,9 +239,11 @@ async def update_jwt_key_mapping(
         # Evict only after the write commits: a concurrent request between an
         # early eviction and the commit would re-cache the old mapping and keep
         # it authorized until TTL.
-        old_cache_key: Final = jwt_key_mapping_cache_key(old_mapping.jwt_claim_name, old_mapping.jwt_claim_value)
+        old_cache_key: Final = jwt_key_mapping_cache_key(
+            old_mapping.jwt_claim_name, old_mapping.jwt_claim_value, old_mapping.jwt_issuer
+        )
         new_cache_key: Final = jwt_key_mapping_cache_key(
-            updated_mapping.jwt_claim_name, updated_mapping.jwt_claim_value
+            updated_mapping.jwt_claim_name, updated_mapping.jwt_claim_value, updated_mapping.jwt_issuer
         )
         cache_keys: Final = (old_cache_key,) if old_cache_key == new_cache_key else (old_cache_key, new_cache_key)
         await evict_and_broadcast(cache_keys=cache_keys, user_api_key_cache=user_api_key_cache)
@@ -227,7 +290,9 @@ async def delete_jwt_key_mapping(
 
         # Evict only after the row is gone, else a concurrent request can
         # re-cache the deleted mapping and keep it authorized until TTL.
-        cache_key: Final = jwt_key_mapping_cache_key(old_mapping.jwt_claim_name, old_mapping.jwt_claim_value)
+        cache_key: Final = jwt_key_mapping_cache_key(
+            old_mapping.jwt_claim_name, old_mapping.jwt_claim_value, old_mapping.jwt_issuer
+        )
         await evict_and_broadcast(cache_keys=(cache_key,), user_api_key_cache=user_api_key_cache)
         return {"status": "success"}
     except HTTPException:
@@ -248,7 +313,7 @@ async def list_jwt_key_mappings(
     from litellm.proxy.proxy_server import prisma_client
 
     # Admin Viewer follows the read-parity rule.
-    if not _user_has_admin_view(user_api_key_dict):
+    if not user_api_key_has_admin_view(user_api_key_dict):
         raise HTTPException(status_code=403, detail="Only proxy admins can list JWT key mappings")
 
     if prisma_client is None:
@@ -286,7 +351,7 @@ async def info_jwt_key_mapping(
     from litellm.proxy.proxy_server import prisma_client
 
     # Admin Viewer follows the read-parity rule.
-    if not _user_has_admin_view(user_api_key_dict):
+    if not user_api_key_has_admin_view(user_api_key_dict):
         raise HTTPException(status_code=403, detail="Only proxy admins can get JWT key mapping info")
 
     if prisma_client is None:

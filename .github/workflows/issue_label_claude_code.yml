@@ -1,0 +1,21 @@
+name: Issue label claude code
+
+on:
+  issues:
+    types: [opened]
+
+permissions: {}
+
+jobs:
+  label-claude-code:
+    if: github.repository == 'BerriAI/litellm' && contains(github.event.issue.body, 'claude code')
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    permissions:
+      issues: write
+    steps:
+      - name: Add the claude code label
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ISSUE_URL: ${{ github.event.issue.html_url }}
+        run: gh issue edit "$ISSUE_URL" --add-label "claude code"

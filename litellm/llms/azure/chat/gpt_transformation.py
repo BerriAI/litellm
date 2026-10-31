@@ -1,4 +1,4 @@
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final
 
@@ -9,13 +9,15 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     drop_tool_reference_parts_from_tool_messages,
     flatten_combinators_and_drop_non_python_regex_patterns,
     hoist_images_from_tool_messages,
+    system_messages_first,
     tool_with_sanitized_parameters,
 )
 from litellm.litellm_core_utils.prompt_templates.factory import (
     convert_to_azure_openai_messages,
 )
+from litellm.llms.base_llm.base_utils import map_developer_role_to_system_role
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
-from litellm.llms.openai.chat.gpt_5_transformation import GPT_REASONING_SERIES_MARKERS
+from litellm.llms.openai.chat.gpt_reasoning_transformation import GPT_REASONING_SERIES_MARKERS
 from litellm.types.llms.azure import (
     API_VERSION_MONTH_SUPPORTED_RESPONSE_FORMAT,
     API_VERSION_YEAR_SUPPORTED_RESPONSE_FORMAT,
@@ -28,9 +30,8 @@ from ...base_llm.chat.transformation import BaseConfig
 from ..common_utils import AzureOpenAIError
 
 if TYPE_CHECKING:
-    import tiktoken
-
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
 
     LoggingClass = LiteLLMLoggingObj
 else:
@@ -44,7 +45,7 @@ def sanitized_tools_update(optional_params: Mapping[str, object]) -> Mapping[str
     tools: Final = optional_params.get("tools")
     if not isinstance(tools, list):
         return _NO_TOOLS_UPDATE
-    sanitized: Final = [  # mutable-ok: request tools are a JSON list
+    sanitized: Final = [
         tool_with_sanitized_parameters(tool, flatten_combinators_and_drop_non_python_regex_patterns)
         if isinstance(tool, dict)
         else tool
@@ -93,10 +94,26 @@ class AzureOpenAIConfig(BaseConfig):
         temperature: int | None = None,
         top_p: int | None = None,
     ) -> None:
-        locals_: Final = locals().copy()
+        locals_: Final[Mapping[str, object]] = dict(locals())
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
+
+    def translate_developer_role_to_system_role(
+        self,
+        messages: Sequence[AllMessageValues],
+        *,
+        model: str,
+        custom_llm_provider: str | None,
+        api_base: str | None,
+        model_info: object,
+    ) -> Sequence[AllMessageValues]:
+        """
+        Azure OpenAI accepts `system` messages at any position, so a developer message
+        only changes role. Declared here so `AzureOpenAIGPT5Config` resolves to it
+        ahead of the OpenAI-compatible hoist it also inherits.
+        """
+        return map_developer_role_to_system_role(messages=messages)
 
     @classmethod
     def get_config(cls):
@@ -276,12 +293,20 @@ class AzureOpenAIConfig(BaseConfig):
         litellm_params: dict,
         headers: dict,
     ) -> dict:
-        stripped_messages: Final = drop_tool_reference_parts_from_tool_messages(messages)
+        ordered_messages: Final = system_messages_first(messages) if litellm.openai_system_messages_first else messages
+        stripped_messages: Final = drop_tool_reference_parts_from_tool_messages(ordered_messages)
         azure_messages: Final = convert_to_azure_openai_messages(hoist_images_from_tool_messages(stripped_messages))
+        request_params: Final = MappingProxyType(
+            {
+                key: value
+                for key, value in optional_params.items()
+                if key != "tool_choice" or optional_params.get("tools") or optional_params.get("functions")
+            }
+        )
         return {
             "model": model,
             "messages": azure_messages,
-            **optional_params,
+            **request_params,
             **sanitized_tools_update(optional_params),
         }
 
@@ -295,7 +320,7 @@ class AzureOpenAIConfig(BaseConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: "tiktoken.Encoding | None",
+        encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:

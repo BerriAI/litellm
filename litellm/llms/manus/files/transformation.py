@@ -11,15 +11,17 @@ Reference: https://open.manus.im/docs/openai-compatibility#file-management
 """
 
 import time
-from typing import Any, Final
+from collections.abc import Iterable, Mapping
+from typing import Final
 
 import httpx
 from openai.types.file_deleted import FileDeleted
+from pydantic import ConfigDict, TypeAdapter
 
 import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.prompt_templates.common_utils import extract_file_data
-from litellm.litellm_core_utils.url_utils import encode_url_path_segment
+from litellm.litellm_core_utils.url_utils import encode_url_path_segment, join_api_base
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.files.transformation import (
     BaseFilesConfig,
@@ -38,6 +40,10 @@ from litellm.types.llms.openai import (
 from litellm.types.utils import LlmProviders
 
 MANUS_API_BASE: Final = "https://api.manus.im"
+
+_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(strict=True, hide_input_in_errors=True))
+_JSON_OBJECTS: Final = TypeAdapter(Iterable[Mapping[str, object]], config=ConfigDict(hide_input_in_errors=True))
+_TEXT: Final = TypeAdapter(str, config=ConfigDict(strict=True, hide_input_in_errors=True))
 
 
 class ManusFilesConfig(BaseFilesConfig):
@@ -134,8 +140,8 @@ class ManusFilesConfig(BaseFilesConfig):
 
         # Manus API uses /v1/files endpoint
         if api_base.endswith("/v1"):
-            return f"{api_base}/files"
-        return f"{api_base}/v1/files"
+            return join_api_base(api_base, "files")
+        return join_api_base(api_base, "v1/files")
 
     def get_error_class(
         self,
@@ -337,8 +343,7 @@ class ManusFilesConfig(BaseFilesConfig):
         litellm_params: dict,
     ) -> FileDeleted:
         """Transform delete file response."""
-        response_json: Final = raw_response.json()
-        return FileDeleted(**response_json)
+        return FileDeleted.model_validate(_JSON_OBJECT.validate_python(raw_response.json()))
 
     def transform_list_files_request(
         self,
@@ -366,19 +371,20 @@ class ManusFilesConfig(BaseFilesConfig):
         litellm_params: dict,
     ) -> list[OpenAIFileObject]:
         """Transform list files response."""
-        response_json: Final = raw_response.json()
-        files_data: Final = response_json.get("data", [])
+        response_json: Final = _JSON_OBJECT.validate_python(raw_response.json())
+        files_data: Final = _JSON_OBJECTS.validate_python(response_json.get("data", []))
         return [self._parse_file_dict(f) for f in files_data]
 
-    def _parse_file_dict(self, file_dict: dict[str, Any]) -> OpenAIFileObject:
+    def _parse_file_dict(self, file_dict: Mapping[str, object]) -> OpenAIFileObject:
         """Parse a file dict into OpenAIFileObject."""
         created_at_str: Final = file_dict.get("created_at", "")
         if created_at_str:
+            created_at_text: Final = _TEXT.validate_python(created_at_str)
             try:
                 created_at = int(
                     time.mktime(
                         time.strptime(
-                            created_at_str.replace("Z", "+00:00")[:19],
+                            created_at_text.replace("Z", "+00:00")[:19],
                             "%Y-%m-%dT%H:%M:%S",
                         )
                     )
@@ -388,15 +394,17 @@ class ManusFilesConfig(BaseFilesConfig):
         else:
             created_at = int(time.time())
 
-        return OpenAIFileObject(
-            id=file_dict.get("id", ""),
-            bytes=file_dict.get("bytes", 0),
-            created_at=created_at,
-            filename=file_dict.get("filename", ""),
-            object="file",
-            purpose=file_dict.get("purpose", "assistants"),
-            status=file_dict.get("status", "uploaded"),
-            status_details=file_dict.get("status_details"),
+        return OpenAIFileObject.model_validate(
+            {
+                "id": file_dict.get("id", ""),
+                "bytes": file_dict.get("bytes", 0),
+                "created_at": created_at,
+                "filename": file_dict.get("filename", ""),
+                "object": "file",
+                "purpose": file_dict.get("purpose", "assistants"),
+                "status": file_dict.get("status", "uploaded"),
+                "status_details": file_dict.get("status_details"),
+            }
         )
 
     def transform_file_content_request(
@@ -415,7 +423,7 @@ class ManusFilesConfig(BaseFilesConfig):
             litellm_params=litellm_params,
         )
         encoded_file_id: Final = encode_url_path_segment(file_id, field_name="file_id")
-        return f"{api_base}/{encoded_file_id}/content", {}
+        return join_api_base(api_base, f"{encoded_file_id}/content"), {}
 
     def transform_file_content_response(
         self,

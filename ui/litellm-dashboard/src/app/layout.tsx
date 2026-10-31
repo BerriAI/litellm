@@ -7,7 +7,10 @@ import { ThemeProvider } from "next-themes";
 
 import { AuthProvider } from "@/contexts/AuthContext";
 import ReactQueryProvider from "@/contexts/ReactQueryProvider";
+import HotkeysProvider from "@/contexts/HotkeysProvider";
+import { TerminologyProvider } from "@/contexts/TerminologyContext";
 import { Toaster } from "@/components/ui/sonner";
+import I18nProvider from "@/i18n/I18nProvider";
 
 const inter = Inter({ subsets: ["latin"] });
 
@@ -27,14 +30,20 @@ export default function RootLayout({
     // cannot predict; suppressHydrationWarning confines that mismatch to this element.
     <html lang="en" suppressHydrationWarning>
       <body className={inter.className}>
-        <ThemeProvider attribute="class" defaultTheme="light" enableSystem disableTransitionOnChange>
-          <NuqsAdapter>
-            <ReactQueryProvider>
-              <AuthProvider>{children}</AuthProvider>
-              <Toaster />
-            </ReactQueryProvider>
-          </NuqsAdapter>
-        </ThemeProvider>
+        <I18nProvider>
+          <ThemeProvider attribute="class" defaultTheme="light" enableSystem disableTransitionOnChange>
+            <NuqsAdapter>
+              <ReactQueryProvider>
+                <TerminologyProvider>
+                  <HotkeysProvider>
+                    <AuthProvider>{children}</AuthProvider>
+                  </HotkeysProvider>
+                </TerminologyProvider>
+                <Toaster />
+              </ReactQueryProvider>
+            </NuqsAdapter>
+          </ThemeProvider>
+        </I18nProvider>
       </body>
     </html>
   );

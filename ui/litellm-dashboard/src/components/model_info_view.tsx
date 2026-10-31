@@ -13,20 +13,24 @@ import { ArrowLeft, CheckIcon, CopyIcon, Info } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { copyToClipboard as utilCopyToClipboard } from "../utils/dataUtils";
 import { stripMaskedSecrets } from "../utils/maskedSecretUtils";
+import { editableModelExtraParams, parseModelExtraParams } from "../utils/modelEditParams";
 import { truncateString } from "../utils/textUtils";
 import AutoRouterConnectionTest from "./add_model/auto_router_connection_test";
-import { AutoRouterTestTarget, buildAutoRouterTestTargets } from "./add_model/build_auto_router_test_targets";
-import { normalizeTierModels } from "./add_model/complexity_router_tiers";
+import { buildSavedJevConnectionTestRequest } from "./add_model/build_auto_router_routing_test_request";
+import { AutoRouterTestTarget, buildComplexityRouterTestTargets } from "./add_model/build_auto_router_test_targets";
 import {
   hasAutoRouterEditor,
   isAutoRouterDeployment,
   isComplexityRouter as isComplexityRouterParams,
 } from "./add_model/auto_router_strategies";
-import { canModifyModel } from "@/utils/modelPermissions";
+import { canEditAutoRouter, canModifyModel } from "@/utils/modelPermissions";
+import { isProxyAdminTierRole, teamsUserCanAssign } from "@/utils/roles";
 import { useTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
 import DeleteResourceModal from "./common_components/DeleteResourceModal";
 import EditAutoRouterModal from "./edit_auto_router/edit_auto_router_modal";
 import ReuseCredentialsModal from "./model_add/reuse_credentials";
+import { credentialLabelsByName } from "./shared/credentialOptions";
+import { CredentialIdentity } from "./shared/CredentialIdentity";
 import { toast } from "@/lib/toast";
 import {
   CredentialItem,
@@ -35,17 +39,18 @@ import {
   credentialListCall,
   getGuardrailsList,
   modelDeleteCall,
-  modelInfoV1Call,
   modelPatchUpdateCall,
   tagListCall,
   testConnectionRequest,
 } from "./networking";
 import { Logo } from "@/components/molecules/logo/Logo";
+import { ModelPricingSummary } from "@/components/molecules/models/ModelPricingSummary";
 import UpdateModelCredentialsModal from "./update_model_credentials_modal";
-import ModelInfoEditForm, { type ModelEditFormValues, type TouchedPricingField } from "./ModelInfoEditForm";
+import ModelInfoEditForm, { type ModelEditSubmitValues, type TouchedPricingField } from "./ModelInfoEditForm";
 import { Tag } from "./tag_management/types";
 import { getDisplayModelName } from "./view_model/model_name_display";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import KubernetesPodsCard from "./model_info/KubernetesPodsCard";
 
 interface ModelInfoViewProps {
   modelId: string;
@@ -57,60 +62,6 @@ interface ModelInfoViewProps {
   onModelUpdate?: (updatedModel: any) => void;
   modelAccessGroups: string[] | null;
 }
-
-interface ComplexityRouterTierConfig {
-  tiers?: {
-    SIMPLE?: unknown;
-    MEDIUM?: unknown;
-    COMPLEX?: unknown;
-    REASONING?: unknown;
-  };
-  semantic_keyword_matching?: boolean;
-  embedding_model?: string;
-  default_model?: string;
-}
-
-interface ComplexityRouterModelData {
-  litellm_params?: {
-    complexity_router_config?: ComplexityRouterTierConfig | string;
-    complexity_router_default_model?: string;
-  };
-}
-
-const buildComplexityRouterTestTargets = (
-  modelData: ComplexityRouterModelData | null | undefined,
-): AutoRouterTestTarget[] => {
-  const rawConfig = modelData?.litellm_params?.complexity_router_config;
-  let config: ComplexityRouterTierConfig = {};
-  if (typeof rawConfig === "string") {
-    try {
-      config = JSON.parse(rawConfig);
-    } catch {
-      config = {};
-    }
-  } else if (rawConfig) {
-    config = rawConfig;
-  }
-
-  const tiers: [string, string[]][] =
-    config.tiers && typeof config.tiers === "object"
-      ? Object.entries(config.tiers).map(([tier, models]) => [tier, normalizeTierModels(models)])
-      : [];
-
-  // Mirrors init_complexity_router_deployment (litellm/router.py): litellm_params wins, otherwise
-  // pure tier-derivation. complexity_router_config.default_model is a UI-only marker the backend
-  // never reads — folding it in here could point Test Connection at a model the router never
-  // calls (see PR #36615 discussion).
-  const effectiveDefaultModel = modelData?.litellm_params?.complexity_router_default_model || undefined;
-
-  const testTargetParams = {
-    tiers,
-    semanticMatchingEnabled: Boolean(config.semantic_keyword_matching),
-    embeddingModel: config.embedding_model,
-    defaultModel: effectiveDefaultModel,
-  };
-  return buildAutoRouterTestTargets(testTargetParams);
-};
 
 export default function ModelInfoView({
   modelId,
@@ -142,7 +93,21 @@ export default function ModelInfoView({
   const [credentialsList, setCredentialsList] = useState<CredentialItem[]>([]);
 
   // Fetch model data using hook
-  const { data: rawModelDataResponse, isLoading: isLoadingModel } = useModelsInfo(1, 50, undefined, modelId);
+  const { data: rawModelDataResponse, isLoading: isLoadingModel } = useModelsInfo(
+    1,
+    50,
+    undefined,
+    modelId,
+    undefined,
+    undefined,
+    undefined,
+    false,
+    undefined,
+    undefined,
+    false,
+    undefined,
+    { useStoredParams: true },
+  );
   const { data: modelCostMapData } = useModelCostMap();
   const { data: modelHubData } = useModelHub();
   const { data: teams } = useTeams();
@@ -169,11 +134,25 @@ export default function ModelInfoView({
   // Keep modelData variable name for backwards compatibility
   const modelData = transformedModelData;
 
-  const canEditModel = canModifyModel({ userRole, userID, isViewOnly }, teams ?? null, {
+  const aliasForTeam = (teamId: string | null | undefined): string | null =>
+    teams?.find((team) => team.team_id === teamId)?.team_alias || null;
+  const teamAlias = aliasForTeam(modelData?.model_info?.team_id);
+  const rawModelInfoEntries = Object.entries(modelData?.model_info ?? {}).flatMap((entry) =>
+    entry[0] === "team_id" && teamAlias ? [entry, ["team_alias", teamAlias]] : [entry],
+  );
+  const rawModelData = modelData && { ...modelData, model_info: Object.fromEntries(rawModelInfoEntries) };
+
+  const isAdmin = userRole === "Admin";
+  const actor = { userRole, userID, isViewOnly };
+  const origin = {
     teamId: modelData?.model_info?.team_id,
     isDbModel: modelData?.model_info?.db_model === true,
-  });
-  const isAdmin = userRole === "Admin";
+    createdBy: modelData?.model_info?.created_by,
+    model: modelData?.litellm_params?.model,
+  };
+  const canEditModel = canModifyModel(actor, teams ?? null, origin);
+  const canEditRouter = canEditAutoRouter(actor, teams ?? null, origin);
+  const assignableTeams = useMemo(() => teamsUserCanAssign(teams ?? null, userRole, userID), [teams, userRole, userID]);
   // Editor-aware on purpose: an adaptive or quality router must not offer Edit Auto Router.
   const isAutoRouterModel = hasAutoRouterEditor(modelData?.litellm_params);
   // Broader than the editor check: adaptive and quality routers equally have no upstream
@@ -185,10 +164,11 @@ export default function ModelInfoView({
   const usingExistingCredential =
     modelData?.litellm_params?.litellm_credential_name != null &&
     modelData?.litellm_params?.litellm_credential_name != undefined;
+  const hasChangedModelId = localModelData?.model_info?.id !== modelData?.model_info?.id;
 
   // Initialize localModelData from modelData when available
   useEffect(() => {
-    if (modelData && !localModelData) {
+    if (modelData && (!localModelData || hasChangedModelId)) {
       let processedModelData = modelData;
       if (!processedModelData.litellm_model_name) {
         processedModelData = {
@@ -203,11 +183,9 @@ export default function ModelInfoView({
       setLocalModelData(processedModelData);
 
       // Check if cache control is enabled
-      if (processedModelData?.litellm_params?.cache_control_injection_points) {
-        setShowCacheControl(true);
-      }
+      setShowCacheControl(Boolean(processedModelData?.litellm_params?.cache_control_injection_points));
     }
-  }, [modelData, localModelData]);
+  }, [modelData, localModelData, hasChangedModelId]);
 
   useEffect(() => {
     const getExistingCredential = async () => {
@@ -219,30 +197,6 @@ export default function ModelInfoView({
         credential_values: existingCredentialResponse["credential_values"],
         credential_info: existingCredentialResponse["credential_info"],
       });
-    };
-
-    const getModelInfo = async () => {
-      if (!accessToken) return;
-      // Only fetch if we don't have modelData yet
-      if (modelData) return;
-      let modelInfoResponse = await modelInfoV1Call(accessToken, modelId);
-      let specificModelData = modelInfoResponse.data[0];
-      if (specificModelData && !specificModelData.litellm_model_name) {
-        specificModelData = {
-          ...specificModelData,
-          litellm_model_name:
-            specificModelData?.litellm_params?.litellm_model_name ??
-            specificModelData?.litellm_params?.model ??
-            specificModelData?.model_info?.key ??
-            null,
-        };
-      }
-      setLocalModelData(specificModelData);
-
-      // Check if cache control is enabled
-      if (specificModelData?.litellm_params?.cache_control_injection_points) {
-        setShowCacheControl(true);
-      }
     };
 
     const fetchGuardrails = async () => {
@@ -277,7 +231,6 @@ export default function ModelInfoView({
     };
 
     getExistingCredential();
-    getModelInfo();
     fetchGuardrails();
     fetchTags();
     fetchCredentials();
@@ -298,26 +251,21 @@ export default function ModelInfoView({
   };
 
   const handleModelUpdate = async (
-    values: ModelEditFormValues,
+    values: ModelEditSubmitValues,
     isFieldTouched: (field: TouchedPricingField) => boolean,
   ) => {
     try {
       if (!accessToken) return;
       setIsSaving(true);
 
-      // Parse LiteLLM extra params from JSON text area
-      let parsedExtraParams: Record<string, any> = {};
-      try {
-        parsedExtraParams = values.litellm_extra_params ? JSON.parse(values.litellm_extra_params) : {};
-        delete parsedExtraParams.litellm_credential_name;
-      } catch (e) {
-        toast.fromError("Invalid JSON in LiteLLM Params");
-        setIsSaving(false);
+      const parsedExtraParams = parseModelExtraParams(values.litellm_extra_params);
+      if (parsedExtraParams === null) {
+        toast.fromError("LiteLLM Params must be a valid JSON object");
         return;
       }
 
-      let updatedLitellmParams: Record<string, any> = {
-        ...parsedExtraParams,
+      const updatedLitellmParams: Record<string, unknown> = {
+        ...editableModelExtraParams(parsedExtraParams),
         model: values.litellm_model_name,
         api_base: values.api_base,
         custom_llm_provider: values.custom_llm_provider,
@@ -331,55 +279,30 @@ export default function ModelInfoView({
       };
 
       if (isFieldTouched("input_cost")) {
-        if (values.input_cost !== undefined && values.input_cost !== null && values.input_cost !== "") {
-          updatedLitellmParams.input_cost_per_token = Number(values.input_cost) / 1_000_000;
-        } else {
-          // Explicit null signals the backend to remove the pricing override.
-          updatedLitellmParams.input_cost_per_token = null;
-        }
+        updatedLitellmParams.input_cost_per_token = values.input_cost;
       }
       if (isFieldTouched("output_cost")) {
-        if (values.output_cost !== undefined && values.output_cost !== null && values.output_cost !== "") {
-          updatedLitellmParams.output_cost_per_token = Number(values.output_cost) / 1_000_000;
-        } else {
-          updatedLitellmParams.output_cost_per_token = null;
+        updatedLitellmParams.output_cost_per_token = values.output_cost;
+      }
+      if (isFieldTouched("cache_read_cost")) {
+        updatedLitellmParams.cache_read_input_token_cost = values.cache_read_cost;
+      } else if (isFieldTouched("input_cost")) {
+        const cacheReadCost = values.cache_read_cost ?? values.input_cost;
+        if (cacheReadCost !== null) {
+          updatedLitellmParams.cache_read_input_token_cost = cacheReadCost;
         }
       }
-
-      // Cache Read Cost:
-      //   - explicit value provided → use it
-      //   - field touched but empty → explicit null (signals backend to remove override)
-      //   - only input_cost touched → fall back to input_cost (guarded against null)
-      if (isFieldTouched("cache_read_cost") || isFieldTouched("input_cost")) {
-        if (values.cache_read_cost !== undefined && values.cache_read_cost !== null && values.cache_read_cost !== "") {
-          updatedLitellmParams.cache_read_input_token_cost = Number(values.cache_read_cost) / 1_000_000;
-        } else if (isFieldTouched("cache_read_cost")) {
-          updatedLitellmParams.cache_read_input_token_cost = null;
-        } else if (
-          updatedLitellmParams.input_cost_per_token !== undefined &&
-          updatedLitellmParams.input_cost_per_token !== null
-        ) {
-          updatedLitellmParams.cache_read_input_token_cost = updatedLitellmParams.input_cost_per_token;
-        }
-      }
-
-      // Cache Write Cost: explicit value if provided, else explicit null so the
-      // backend removes the override and falls back to the model-level default.
-      // Sending 0 here would persist a zero rate even when the user intended to unset it.
       if (isFieldTouched("cache_write_cost")) {
-        if (
-          values.cache_write_cost !== undefined &&
-          values.cache_write_cost !== null &&
-          values.cache_write_cost !== ""
-        ) {
-          updatedLitellmParams.cache_creation_input_token_cost = Number(values.cache_write_cost) / 1_000_000;
-        } else {
-          updatedLitellmParams.cache_creation_input_token_cost = null;
-        }
+        updatedLitellmParams.cache_creation_input_token_cost = values.cache_write_cost;
+      }
+      if (isFieldTouched("cache_write_cost_1h")) {
+        updatedLitellmParams.cache_creation_input_token_cost_above_1hr = values.cache_write_cost_1h;
       }
 
-      if (values.litellm_credential_name) {
-        updatedLitellmParams.litellm_credential_name = values.litellm_credential_name;
+      const storedCredentialName: string | null = localModelData?.litellm_params?.litellm_credential_name ?? null;
+      const selectedCredentialName: string | null = values.litellm_credential_name ?? null;
+      if (selectedCredentialName !== storedCredentialName) {
+        updatedLitellmParams.litellm_credential_name = selectedCredentialName;
       } else {
         delete updatedLitellmParams.litellm_credential_name;
       }
@@ -396,8 +319,11 @@ export default function ModelInfoView({
       }
 
       // Handle cache control settings
+      const hadInjectionPoints = Boolean(localModelData?.litellm_params?.cache_control_injection_points);
       if (values.cache_control && (values.cache_control_injection_points?.length ?? 0) > 0) {
         updatedLitellmParams.cache_control_injection_points = values.cache_control_injection_points;
+      } else if (hadInjectionPoints) {
+        updatedLitellmParams.cache_control_injection_points = null;
       } else {
         delete updatedLitellmParams.cache_control_injection_points;
       }
@@ -405,7 +331,7 @@ export default function ModelInfoView({
       // Parse the model_info from the form values
       let updatedModelInfo;
       try {
-        updatedModelInfo = values.model_info ? JSON.parse(values.model_info) : modelData.model_info;
+        updatedModelInfo = values.model_info ? JSON.parse(values.model_info) : modelData?.model_info;
         // Update access_groups from the form
         if (values.model_access_group) {
           updatedModelInfo = {
@@ -420,21 +346,31 @@ export default function ModelInfoView({
             health_check_model: values.health_check_model,
           };
         }
+        if (values.team_id) updatedModelInfo = { ...updatedModelInfo, team_id: values.team_id };
         updatedModelInfo = applyPtuModelInfo(updatedModelInfo, values, ptuCostAttributionEnabled);
       } catch (e) {
         toast.fromError("Invalid JSON in Model Info");
         return;
       }
 
+      const paramsToRemove = Object.keys(editableModelExtraParams(localModelData?.litellm_params ?? {})).filter(
+        (key) => !Object.prototype.hasOwnProperty.call(parsedExtraParams, key),
+      );
       // Final guard: never PATCH a redacted secret. The /model/info snapshot that
-      // seeds this form masks secrets, and any save re-sends the whole params blob;
+      // seeds this form masks secrets;
       // without this strip a masked value would be re-encrypted over the real secret.
       // Credential rotation has its own dedicated path (UpdateModelCredentialsModal).
       const safeLitellmParams = stripMaskedSecrets(updatedLitellmParams);
+      const localLitellmParams = Object.fromEntries(
+        Object.entries({ ...localModelData?.litellm_params, ...safeLitellmParams }).filter(
+          ([key]) => key !== "litellm_credential_name" && !paramsToRemove.includes(key),
+        ),
+      );
 
       const updateData = {
         model_name: values.model_name,
         litellm_params: safeLitellmParams,
+        ...(paramsToRemove.length > 0 && { litellm_params_to_remove: paramsToRemove }),
         model_info: updatedModelInfo,
       };
 
@@ -444,7 +380,10 @@ export default function ModelInfoView({
         ...localModelData,
         model_name: values.model_name,
         litellm_model_name: values.litellm_model_name,
-        litellm_params: safeLitellmParams,
+        litellm_params:
+          selectedCredentialName === null
+            ? localLitellmParams
+            : { ...localLitellmParams, litellm_credential_name: selectedCredentialName },
         model_info: updatedModelInfo,
       };
 
@@ -519,9 +458,7 @@ export default function ModelInfoView({
           // backend silently falls back to deployments[0] and probes
           // the wrong endpoint.
           id: localModelData.model_info?.id,
-          mode: localModelData.model_info?.mode,
         },
-        localModelData.model_info?.mode,
       );
 
       if (response.status === "success") {
@@ -698,10 +635,7 @@ export default function ModelInfoView({
               </Card>
               <Card className="block p-6">
                 <p className="text-sm">Pricing</p>
-                <div className="mt-2">
-                  <p className="text-sm">Input: ${modelData.input_cost}/1M tokens</p>
-                  <p className="text-sm">Output: ${modelData.output_cost}/1M tokens</p>
-                </div>
+                <ModelPricingSummary model={modelData} />
               </Card>
             </div>
 
@@ -738,12 +672,18 @@ export default function ModelInfoView({
               </div>
             </div>
 
+            {modelData?.litellm_params?.kubernetes_pod_discovery === true && isProxyAdminTierRole(userRole ?? "") && (
+              <div className="mb-6">
+                <KubernetesPodsCard modelId={modelId} />
+              </div>
+            )}
+
             {/* Settings Card */}
             <Card className="block p-6">
               <div className="flex justify-between items-center mb-4">
                 <h3 className="text-lg font-medium">Model Settings</h3>
                 <div className="flex gap-2">
-                  {isAutoRouterModel && canEditModel && !isEditing && (
+                  {isAutoRouterModel && canEditRouter && !isEditing && (
                     <Button onClick={() => setIsAutoRouterModalOpen(true)} className="flex items-center">
                       Edit Auto Router
                     </Button>
@@ -763,8 +703,10 @@ export default function ModelInfoView({
               </div>
               {localModelData ? (
                 <ModelInfoEditForm
+                  key={localModelData.model_info?.id}
                   localModelData={localModelData}
                   modelData={modelData}
+                  teamAlias={aliasForTeam(localModelData.model_info?.team_id)}
                   accessToken={accessToken}
                   isEditing={isEditing}
                   isSaving={isSaving}
@@ -779,6 +721,7 @@ export default function ModelInfoView({
                   tagsList={tagsList}
                   credentialsList={credentialsList}
                   healthCheckModelOptions={healthCheckModelOptions}
+                  teams={assignableTeams}
                 />
               ) : (
                 <p className="text-sm">Loading...</p>
@@ -788,7 +731,9 @@ export default function ModelInfoView({
 
           <TabsContent value="raw" keepMounted>
             <Card className="block p-6">
-              <pre className="bg-muted p-4 rounded-sm text-xs overflow-auto">{JSON.stringify(modelData, null, 2)}</pre>
+              <pre className="bg-muted p-4 rounded-sm text-xs overflow-auto">
+                {JSON.stringify(rawModelData, null, 2)}
+              </pre>
             </Card>
           </TabsContent>
         </div>
@@ -837,7 +782,13 @@ export default function ModelInfoView({
             <DialogHeader>
               <DialogTitle>Using Existing Credential</DialogTitle>
             </DialogHeader>
-            <p className="text-sm">{modelData.litellm_params.litellm_credential_name}</p>
+            <CredentialIdentity
+              className="text-sm"
+              credentialName={modelData.litellm_params.litellm_credential_name ?? ""}
+              label={credentialLabelsByName(credentialsList).get(
+                modelData.litellm_params.litellm_credential_name ?? "",
+              )}
+            />
             <DialogFooter>
               <Button variant="outline" onClick={() => setIsCredentialModalOpen(false)}>
                 Cancel
@@ -867,6 +818,7 @@ export default function ModelInfoView({
         modelData={localModelData || modelData}
         accessToken={accessToken || ""}
         userRole={userRole || ""}
+        isMemberManaged={!canEditModel}
       />
 
       <Dialog open={isAutoRouterTestModalOpen} onOpenChange={(open) => !open && setIsAutoRouterTestModalOpen(false)}>
@@ -879,6 +831,11 @@ export default function ModelInfoView({
               key={autoRouterTestId}
               accessToken={accessToken}
               targets={autoRouterTestTargets}
+              jevRequest={buildSavedJevConnectionTestRequest(
+                (localModelData ?? modelData)?.litellm_params?.complexity_router_config,
+                (localModelData ?? modelData)?.model_info?.id,
+                (localModelData ?? modelData)?.model_info?.team_id,
+              )}
             />
           )}
           <DialogFooter>

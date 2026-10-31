@@ -10,15 +10,15 @@ https://platform.openai.com/docs/api-reference/responses-streaming
 
 import asyncio
 import json
-from collections.abc import Callable, Mapping, Sequence
-from typing import TYPE_CHECKING, Final, TypeAlias
+from collections.abc import AsyncIterable, Callable, Mapping, Sequence
+from typing import TYPE_CHECKING, Final, Protocol, TypeAlias, runtime_checkable
 
 from fastapi import Request, Response
-from fastapi.responses import StreamingResponse
 from starlette.types import Message
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_proxy_logger
+from litellm.llms.custom_httpx.sse_lines import split_sse_lines
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.proxy.response_polling.polling_handler import ResponsePollingHandler
@@ -73,6 +73,16 @@ class _StreamEvent(TypedDict, total=False):
 
 class _StreamEventParser:
     parse: Callable[[str], _StreamEvent] = staticmethod(json.loads)
+
+
+@runtime_checkable
+class _StreamsBody(Protocol):
+    @property
+    def body_iterator(self) -> AsyncIterable[str | bytes | memoryview]: ...
+
+
+def _sse_frame_data(frame: str) -> str | None:
+    return next((line[6:].strip() for line in split_sse_lines(frame) if line.startswith("data: ")), None)
 
 
 async def _never_receive() -> Message:
@@ -137,7 +147,7 @@ async def background_streaming_task(
         # Make streaming request.
         # Pre-call checks (rate limits, guardrails, budget) were already run
         # before polling ID creation, so skip them here to avoid double-counting.
-        response: Final[StreamingResponse] = await processor.base_process_llm_request(
+        response: Final = await processor.base_process_llm_request(
             request=detach_request_from_client(request),
             fastapi_response=fastapi_response,
             user_api_key_dict=user_api_key_dict,
@@ -212,20 +222,19 @@ async def background_streaming_task(
                 last_update_time = current_time
 
         # Handle StreamingResponse
-        if not hasattr(response, "body_iterator"):
+        if not isinstance(response, _StreamsBody):
             verbose_proxy_logger.warning(
                 "background_streaming_task: response for %s has no body_iterator; this may indicate a misconfiguration or provider error",
                 polling_id,
             )
 
-        if hasattr(response, "body_iterator"):
+        if isinstance(response, _StreamsBody):
             async for chunk in response.body_iterator:
                 # Parse chunk
                 if isinstance(chunk, bytes):
                     chunk = chunk.decode("utf-8")
 
-                if isinstance(chunk, str) and chunk.startswith("data: "):
-                    chunk_data = chunk[6:].strip()
+                if isinstance(chunk, str) and (chunk_data := _sse_frame_data(chunk)) is not None:
                     if chunk_data == "[DONE]":
                         break
 

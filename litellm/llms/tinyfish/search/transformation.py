@@ -26,6 +26,7 @@ from litellm.secret_managers.main import get_secret_str
 _UrlEncodableParams: Final = TypeAdapter(dict[str, str | int | float | bool])
 _StrList: Final = TypeAdapter(list[str])
 _StrFrozenSet: Final = TypeAdapter(frozenset[str])
+_DecodedJson: Final = TypeAdapter(object)
 
 _TINYFISH_PARAMS_KEY: Final = "_tinyfish_params"
 _TINYFISH_DOCS_URL: Final = "https://docs.tinyfish.ai/search-api"
@@ -218,7 +219,7 @@ class TinyfishSearchConfig(BaseSearchConfig):
             )
 
         try:
-            raw_json: Final[object] = raw_response.json()  # any-ok: httpx Response.json() -> Any
+            raw_json: Final = _DecodedJson.validate_python(raw_response.json())
         except json.JSONDecodeError:
             raise self._wrap_error(
                 error_message=f"Expected JSON response, got: {raw_response.text[:200]}",
@@ -251,7 +252,7 @@ class TinyfishSearchConfig(BaseSearchConfig):
         return self._wrap_error(
             error_message=error.response.text,
             status_code=error.response.status_code,
-            headers=dict(error.response.headers),  # mutable-ok: existing error wrapper requires dict headers
+            headers=dict(error.response.headers),
         )
 
     def _wrap_error(
@@ -276,7 +277,7 @@ class TinyfishSearchConfig(BaseSearchConfig):
         # for other envelope shapes (CDN HTML pages, other JSON envelopes, plain text).
         inner_message = error_message
         try:
-            body: Final[object] = json.loads(error_message)  # any-ok: json.loads -> Any
+            body: Final = _DecodedJson.validate_python(json.loads(error_message))
             if isinstance(body, dict):
                 error_obj: Final[object] = body.get("error")  # any-ok: untyped dict
                 if isinstance(error_obj, dict):

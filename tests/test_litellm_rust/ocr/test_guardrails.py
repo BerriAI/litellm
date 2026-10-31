@@ -8,17 +8,11 @@ from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.content_filter import ContentFilterGuardrail
 from litellm.types.guardrails import BlockedWord, ContentFilterAction, GuardrailEventHooks
 from litellm.types.utils import CallTypes
+from tests.test_litellm_rust.ocr.data import call_aocr
 from tests.test_litellm_rust.support.callback_recorder import RecordingLogger
-from tests.test_litellm_rust.support.recording_server import RecordingServer, ResponseSpec
-from tests.test_litellm_rust.support.requests import OCR_RESPONSE, call_native_aocr
+from tests.test_litellm_rust.support.recording_server import RecordingServer
 
 pytestmark = pytest.mark.requires_rust_extension
-
-
-@pytest.fixture
-def ocr_server(recording_server: RecordingServer) -> RecordingServer:
-    recording_server.default_response = ResponseSpec(body=OCR_RESPONSE)
-    return recording_server
 
 
 class ReplaceOCRMarkdown(CustomGuardrail):
@@ -36,7 +30,7 @@ class ReplaceOCRMarkdown(CustomGuardrail):
 
 @pytest.mark.asyncio
 async def test_native_aocr_post_call_content_filter_blocks_matching_markdown(
-    ocr_server: RecordingServer,
+    server: RecordingServer,
 ) -> None:
     guardrail: Final = ContentFilterGuardrail(
         guardrail_name="block-native-ocr-markdown",
@@ -46,22 +40,22 @@ async def test_native_aocr_post_call_content_filter_blocks_matching_markdown(
     litellm.callbacks.append(guardrail)
 
     with pytest.raises(HTTPException, match="Content blocked") as blocked:
-        await call_native_aocr(ocr_server, guardrails=[guardrail.guardrail_name])
+        await call_aocr(server, guardrails=[guardrail.guardrail_name])
 
     assert blocked.value.status_code == 400
-    assert len(ocr_server.requests) == 1
+    assert len(server.requests) == 1
 
 
 @pytest.mark.asyncio
 async def test_native_aocr_post_call_replacement_reaches_caller_and_success_callback(
-    ocr_server: RecordingServer,
+    server: RecordingServer,
 ) -> None:
     guardrail: Final = ReplaceOCRMarkdown()
     recorder: Final = RecordingLogger()
     litellm.callbacks.append(guardrail)
 
-    response: Final = await call_native_aocr(
-        ocr_server,
+    response: Final = await call_aocr(
+        server,
         callbacks=[recorder],
         guardrails=[guardrail.guardrail_name],
     )
@@ -71,4 +65,4 @@ async def test_native_aocr_post_call_replacement_reaches_caller_and_success_call
     assert response.pages[0].markdown == "Reviewed OCR"
     assert len(success_events) == 1
     assert success_events[0].response.pages[0].markdown == "Reviewed OCR"
-    assert "guardrails" not in ocr_server.requests[0].body
+    assert "guardrails" not in server.requests[0].body

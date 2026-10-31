@@ -92,7 +92,7 @@ class Turn:
 
     user_content: str | None = None
     assistant_content: str | None = None
-    tool_calls: list[dict[str, Any]] = field(default_factory=list)
+    tool_calls: Sequence[Mapping[str, object]] = field(default_factory=list[Mapping[str, object]])
     tool_results: Sequence[Mapping[str, object]] = field(default_factory=list)
     response_status: int | None = None
 
@@ -174,7 +174,7 @@ def _detect_failure(tool_results: Sequence[Mapping[str, object]]) -> bool:
     return False
 
 
-def _signature(call: dict[str, Any]) -> str:
+def _signature(call: Mapping[str, Any]) -> str:
     """Stable signature for loop detection: name + sorted JSON-ish args."""
     name: Final = call.get("name") or call.get("function", {}).get("name", "")
     call_args = call.get("arguments")
@@ -185,7 +185,7 @@ def _signature(call: dict[str, Any]) -> str:
     return f"{name}({call_args})"
 
 
-def _detect_loop(history: list[str], new_calls: list[dict[str, Any]]) -> bool:
+def _detect_loop(history: list[str], new_calls: Sequence[Mapping[str, object]]) -> bool:
     """Fires if any new call's signature appears >= LOOP_REPEAT_THRESHOLD-1 times
     in recent history (so this call would be the Nth)."""
     if not new_calls:
@@ -238,7 +238,7 @@ def detect_response_signals(
     previous_assistant_content: str | None,
     current_assistant_content: str | None,
     tool_call_history: list[str],
-    tool_calls: list[dict[str, Any]],
+    tool_calls: Sequence[Mapping[str, object]],
     tool_results: Sequence[Mapping[str, object]],
     response_status: int | None,
 ) -> SignalDelta:

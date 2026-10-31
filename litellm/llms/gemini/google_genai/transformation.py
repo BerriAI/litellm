@@ -3,7 +3,7 @@ Transformation for Calling Google models in their native format.
 """
 
 from copy import deepcopy
-from typing import TYPE_CHECKING, Any, Final, Literal, cast
+from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, cast
 
 import httpx
 
@@ -13,10 +13,11 @@ from litellm.llms.base_llm.google_genai.transformation import (
     BaseGoogleGenAIGenerateContentConfig,
 )
 from litellm.llms.vertex_ai.common_utils import (
-    _build_vertex_schema,
+    build_vertex_schema,
     supports_response_json_schema,
+    with_integer_enums_that_fit,
 )
-from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexLLM
+from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexGeminiConfig, VertexLLM
 from litellm.types.router import GenericLiteLLMParams
 
 if TYPE_CHECKING:
@@ -33,6 +34,14 @@ else:
     ToolConfigDict = Any
 
 from ..common_utils import get_api_key_from_env
+
+
+class _JsonResponse(Protocol):
+    def json(self) -> object: ...
+
+
+def _json_body(response: _JsonResponse) -> object:
+    return response.json()
 
 
 class GoogleGenAIConfig(BaseGoogleGenAIGenerateContentConfig, VertexLLM):
@@ -101,7 +110,7 @@ class GoogleGenAIConfig(BaseGoogleGenAIGenerateContentConfig, VertexLLM):
         self,
         generate_content_config_dict: GenerateContentConfigDict,
         model: str,
-    ) -> dict[str, Any]:
+    ) -> dict[str, object]:
         """
         Map Google GenAI parameters to provider-specific format.
 
@@ -113,22 +122,22 @@ class GoogleGenAIConfig(BaseGoogleGenAIGenerateContentConfig, VertexLLM):
             Mapped parameters for the provider
         """
         from litellm.llms.vertex_ai.gemini.transformation import (
-            _camel_to_snake,
-            _snake_to_camel,
+            camel_to_snake,
+            snake_to_camel,
         )
 
         _generate_content_config_dict: Final[dict[str, object]] = {}
         supported_google_genai_params: Final = self.get_supported_generate_content_optional_params(model)
         # Create a set with both camelCase and snake_case versions for faster lookup
         supported_params_set: Final = set(supported_google_genai_params)
-        supported_params_set.update(_snake_to_camel(p) for p in supported_google_genai_params)
-        supported_params_set.update(_camel_to_snake(p) for p in supported_google_genai_params if "_" not in p)
+        supported_params_set.update(snake_to_camel(p) for p in supported_google_genai_params)
+        supported_params_set.update(camel_to_snake(p) for p in supported_google_genai_params if "_" not in p)
 
         for param, value in generate_content_config_dict.items():
             # Google GenAI API expects camelCase, so we'll always output in camelCase
             # Check if param (or its variants) is supported
-            param_snake = _camel_to_snake(param)
-            param_camel = _snake_to_camel(param)
+            param_snake = camel_to_snake(param)
+            param_camel = snake_to_camel(param)
 
             # Check if param is supported in any format
             is_supported = (
@@ -327,8 +336,11 @@ class GoogleGenAIConfig(BaseGoogleGenAIGenerateContentConfig, VertexLLM):
         else:
             if json_schema_key is not None:
                 generate_content_config_dict.pop(json_schema_key)
-            generate_content_config_dict[schema_key] = _build_vertex_schema(
-                parameters=deepcopy(value), add_property_ordering=True
+            generate_content_config_dict[schema_key] = with_integer_enums_that_fit(
+                lambda send_integer_enums: build_vertex_schema(
+                    parameters=deepcopy(value), add_property_ordering=True, send_integer_enums=send_integer_enums
+                ),
+                VertexGeminiConfig.is_gemini_3_or_newer(model),
             )
 
     def transform_generate_content_request(
@@ -337,7 +349,7 @@ class GoogleGenAIConfig(BaseGoogleGenAIGenerateContentConfig, VertexLLM):
         contents: GenerateContentContentListUnionDict,
         tools: ToolConfigDict | None,
         generate_content_config_dict: dict,
-        system_instruction: Any | None = None,
+        system_instruction: object | None = None,
     ) -> dict:
         from litellm.types.google_genai.main import (
             GenerateContentConfigDict,
@@ -378,7 +390,7 @@ class GoogleGenAIConfig(BaseGoogleGenAIGenerateContentConfig, VertexLLM):
         from litellm.types.google_genai.main import GenerateContentResponse
 
         try:
-            response = raw_response.json()
+            decoded: Final = _json_body(raw_response)
         except Exception as e:
             raise self.get_error_class(
                 error_message=f"Error transforming generate content response: {e}",
@@ -387,7 +399,9 @@ class GoogleGenAIConfig(BaseGoogleGenAIGenerateContentConfig, VertexLLM):
             )
 
         logging_obj.model_call_details["httpx_response"] = raw_response
-        response = self.convert_citation_sources_to_citations(response)
+        response: Final = self.convert_citation_sources_to_citations(
+            cast(dict[str, object], decoded)  # cast-ok: the body passes through unvalidated, as before it was typed
+        )
 
         return GenerateContentResponse(**response)
 

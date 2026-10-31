@@ -3,12 +3,13 @@ Translates from OpenAI's `/v1/chat/completions` to Moonshot AI's `/v1/chat/compl
 """
 
 from collections.abc import Coroutine, Mapping
-from typing import Any, Final, Literal, cast, overload
+from typing import Final, Literal, cast, overload
 
 import litellm
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     handle_messages_with_content_list_to_str_conversion,
 )
+from litellm.litellm_core_utils.url_utils import ensure_api_route
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
 from litellm.utils import supports_reasoning
@@ -29,7 +30,7 @@ class MoonshotChatConfig(OpenAIGPTConfig):
     @overload
     def _transform_messages(
         self, messages: list[AllMessageValues], model: str, is_async: Literal[True]
-    ) -> Coroutine[Any, Any, list[AllMessageValues]]: ...
+    ) -> Coroutine[object, object, list[AllMessageValues]]: ...
 
     @overload
     def _transform_messages(
@@ -41,7 +42,7 @@ class MoonshotChatConfig(OpenAIGPTConfig):
 
     def _transform_messages(
         self, messages: list[AllMessageValues], model: str, is_async: bool = False
-    ) -> list[AllMessageValues] | Coroutine[Any, Any, list[AllMessageValues]]:
+    ) -> list[AllMessageValues] | Coroutine[object, object, list[AllMessageValues]]:
         """
         Moonshot text-only models don't support content in list format.
         Multimodal models (kimi-k2.5, kimi-latest, etc.) accept the
@@ -74,6 +75,13 @@ class MoonshotChatConfig(OpenAIGPTConfig):
         dynamic_api_key: Final = api_key or get_secret_str("MOONSHOT_API_KEY")
         return api_base, dynamic_api_key
 
+    def get_openai_compatible_provider_info(
+        self,
+        api_base: str | None,
+        api_key: str | None,
+    ) -> tuple[str | None, str | None]:
+        return self._get_openai_compatible_provider_info(api_base, api_key)
+
     def get_complete_url(
         self,
         api_base: str | None,
@@ -86,13 +94,7 @@ class MoonshotChatConfig(OpenAIGPTConfig):
         """
         If api_base is not provided, use the default Moonshot AI /chat/completions endpoint.
         """
-        if not api_base:
-            api_base = "https://api.moonshot.ai/v1"
-
-        if not api_base.endswith("/chat/completions"):
-            api_base = f"{api_base}/chat/completions"
-
-        return api_base
+        return ensure_api_route(api_base or "https://api.moonshot.ai/v1", "chat/completions")
 
     def get_supported_openai_params(self, model: str) -> list:
         """
