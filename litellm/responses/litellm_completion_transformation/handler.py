@@ -227,7 +227,7 @@ class LiteLLMCompletionTransformationHandler:
     ) -> ResponsesAPIResponse | BaseResponsesAPIStreamingIterator:
         previous_response_id: Final[str | None] = responses_api_request.get("previous_response_id")
         request_kwargs: Final = _REQUEST_KWARGS_ADAPTER.validate_python(kwargs)
-        completion_request: Final = (
+        completion_request: Final[Mapping[str, object]] = (
             await LiteLLMCompletionResponsesConfig.async_responses_api_session_handler(
                 previous_response_id=previous_response_id,
                 litellm_completion_request=litellm_completion_request,
@@ -238,7 +238,10 @@ class LiteLLMCompletionTransformationHandler:
                 input_replaces_history=holds_compaction_summary(with_compaction_items_as_params(request_input)),
             )
             if previous_response_id
-            else {**litellm_completion_request, **previous_response_ids_metadata((), request_kwargs)}
+            else {
+                **_REQUEST_KWARGS_ADAPTER.validate_python(litellm_completion_request),
+                **previous_response_ids_metadata((), request_kwargs),
+            }
         )
 
         litellm_completion_response: Final[ModelResponse | litellm.CustomStreamWrapper] = await litellm.acompletion(
@@ -257,11 +260,11 @@ class LiteLLMCompletionTransformationHandler:
 
         elif isinstance(litellm_completion_response, litellm.CustomStreamWrapper):
             return LiteLLMCompletionStreamingIterator(
-                model=completion_request.get("model") or "",
+                model=litellm_completion_request.get("model") or "",
                 litellm_custom_stream_wrapper=litellm_completion_response,
                 request_input=request_input,
                 responses_api_request=responses_api_request,
-                custom_llm_provider=completion_request.get("custom_llm_provider"),
+                custom_llm_provider=litellm_completion_request.get("custom_llm_provider"),
                 litellm_metadata=kwargs.get("litellm_metadata", {}),
                 tool_call_provider_fields=not embeds_thought_signature_in_tool_call_id(
                     _REQUEST_KWARGS_ADAPTER.validate_python(kwargs)
