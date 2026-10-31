@@ -1,4 +1,4 @@
-import { fireEvent, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { renderWithProviders, testQueryClient } from "@/../tests/test-utils";
@@ -14,10 +14,12 @@ let supported: boolean;
 let status: "in_progress" | "completed" | "cancelled";
 let retrievalStatus: number;
 let cancellations: number;
+let acceptance: Promise<void> | undefined;
 const saved = (): Conversation[] => JSON.parse(localStorage.getItem(storageKey) ?? "[]");
 const result = () => ({
   id: "litellm_poll_research",
   status,
+  usage: status === "completed" ? { input_tokens: 4, output_tokens: 9, total_tokens: 13, cost: "0.125" } : undefined,
   output:
     status === "completed"
       ? [
@@ -54,6 +56,7 @@ beforeEach(() => {
   testQueryClient.clear();
   requests.length = 0;
   cancellations = 0;
+  acceptance = undefined;
   supported = true;
   retrievalStatus = 200;
   status = "in_progress";
@@ -72,7 +75,11 @@ beforeEach(() => {
       if (path.endsWith("/responses")) {
         const body = JSON.parse(await request.text());
         requests.push(body);
-        if (body.background) return Response.json({ ...result(), status: "queued" });
+        if (body.background) {
+          await acceptance;
+          request.signal.throwIfAborted();
+          return Response.json({ ...result(), status: "queued" });
+        }
         return new Response(
           'data: {"type":"response.output_text.delta","delta":"Foreground answer"}\n\ndata: {"type":"response.completed","response":{"id":"resp_foreground","output":[]}}\n\n',
           { headers: { "Content-Type": "text/event-stream" } },
@@ -119,6 +126,7 @@ it("should retrieve the completed tool run after closing and reopening without s
   renderChat(id);
   expect(await screen.findByText("There are 12 widgets in stock.")).toBeVisible();
   expect(screen.getByRole("button", { name: "lookup_inventory" })).toBeVisible();
+  expect(screen.getByLabelText(/^Cost:/)).toHaveTextContent("$0.125");
   expect(requests).toHaveLength(1);
   expect(requests[0]).toMatchObject({
     background: true,
@@ -188,3 +196,22 @@ it("should let the user reconnect after an authentication failure without resubm
   expect(await screen.findByText("There are 12 widgets in stock.")).toBeVisible();
   expect(requests).toHaveLength(1);
 });
+
+it.each([false, true])(
+  "should honor Stop before a background submission returns its ID (tools=%s)",
+  async (withTools) => {
+    let accept!: () => void;
+    acceptance = new Promise<void>((resolve) => {
+      accept = resolve;
+    });
+    renderChat();
+    await startResearch(withTools);
+    await waitFor(() => expect(requests).toHaveLength(1));
+    fireEvent.click(screen.getByRole("button", { name: "Stop request" }));
+    await act(async () => accept());
+    expect(await screen.findByText("Cancellation requested")).toBeVisible();
+    expect(cancellations).toBe(1);
+    expect(requests).toHaveLength(1);
+    await waitFor(() => expect(saved()[0]?.messages.at(-1)?.backgroundRun?.status).toBe("cancelled"));
+  },
+);

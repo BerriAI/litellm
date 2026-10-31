@@ -104,6 +104,8 @@ export default function ChatConversationPage() {
   const previousResponsesConversationRef = useRef(activeConversationId);
   const [prevConversationIdForSessionReset, setPrevConversationIdForSessionReset] = useState(activeConversationId);
   const [isRequestInFlight, setIsStreaming] = useState(false);
+  const [cancelOnAcceptance, setCancelOnAcceptance] = useState<string | null>(null);
+  const backgroundRequestRef = useRef(false);
   const lastMessage = activeConversation?.messages.at(-1);
   const background = useBackgroundChat(
     activeConversationId,
@@ -111,6 +113,15 @@ export default function ChatConversationPage() {
     accessToken,
     updateLastAssistantMessage,
   );
+  const { pending: backgroundPending, cancelling: backgroundCancelling, cancel: cancelBackground } = background;
+  useEffect(() => {
+    if (!backgroundPending || backgroundCancelling || !activeConversationId) return;
+    if (cancelOnAcceptance !== activeConversationId) return;
+    void cancelBackground().then(() => {
+      setCancelOnAcceptance((current) => (current === activeConversationId ? null : current));
+    });
+  }, [activeConversationId, backgroundPending, backgroundCancelling, cancelBackground, cancelOnAcceptance]);
+
   const isStreaming = isRequestInFlight || background.pending;
   const supportsBackground = models.some(
     (model) => model.model_group === selectedModel && model.supports_background_chat,
@@ -277,6 +288,7 @@ export default function ChatConversationPage() {
       setAttachmentError(null);
 
       setIsStreaming(true);
+      setCancelOnAcceptance(null);
       abortControllerRef.current = new AbortController();
       requestConversationRef.current = convId;
 
@@ -317,6 +329,7 @@ export default function ChatConversationPage() {
         },
         onUpdate: (updates: AssistantMessageUpdate) => updateLastAssistantMessage(convId, updates),
       };
+      backgroundRequestRef.current = request.background;
       try {
         await runChatRequest(request);
       } finally {
@@ -348,6 +361,10 @@ export default function ChatConversationPage() {
   const handleStop = () => {
     if (background.pending) {
       void background.cancel();
+      return;
+    }
+    if (backgroundRequestRef.current) {
+      setCancelOnAcceptance(activeConversationId);
       return;
     }
     abortControllerRef.current?.abort();
@@ -423,15 +440,17 @@ export default function ChatConversationPage() {
   const showBlankState = !activeConversation || activeConversation.messages.length === 0;
 
   const backgroundHint = () => {
-    if (background.cancelling) return "Requesting cancellation…";
+    if (background.cancelling || (isRequestInFlight && cancelOnAcceptance === activeConversationId))
+      return "Requesting cancellation…";
     if (background.pending && storageUnavailable)
       return "Keep this tab open. This run could not be saved in this browser.";
     if (background.pending) return "Running in the background. You can close this tab and return to this chat.";
-    if (useBackground) return "Replies continue after you close this tab once the server accepts the request.";
+    if (useBackground) return null;
     return "Keep this tab open. Background runs are not available for this chat.";
   };
 
   const inputBar = (inConversation: boolean) => {
+    const hint = mode === "chat" || background.pending ? backgroundHint() : null;
     const chatPlaceholder = inConversation
       ? "Send a message..."
       : "Describe a change, paste an error, or ask a question…";
@@ -579,9 +598,9 @@ export default function ChatConversationPage() {
             Cancellation requested
           </p>
         )}
-        {(background.pending || mode === "chat") && (
+        {hint && (
           <p role="status" className="mt-2 text-xs text-muted-foreground">
-            {backgroundHint()}
+            {hint}
           </p>
         )}
         <p className="moyai-chat-home-composer-hint">

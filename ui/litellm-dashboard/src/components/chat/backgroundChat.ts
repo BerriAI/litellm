@@ -1,6 +1,7 @@
 import OpenAI from "openai";
 import type { Response } from "openai/resources/responses/responses";
 import { getGatewayBaseUrl } from "@/components/networking";
+import { parseUsageCost } from "@/components/llm_calls/usage_cost";
 import { extractPromptCacheTokens } from "@/utils/promptCacheUsage";
 import type { AssistantMessageUpdate, ChatBackgroundRun, MCPEvent } from "./types";
 
@@ -11,7 +12,7 @@ export function backgroundResponseUpdate(response: Response): AssistantMessageUp
   const output = response.output ?? [];
   const content = output
     .filter((item) => item.type === "message")
-    .flatMap((item) => item.content)
+    .flatMap((item) => item.content ?? [])
     .map((part) => (part.type === "output_text" ? part.text : part.refusal))
     .join("");
   const reasoningContent = output
@@ -29,7 +30,7 @@ export function backgroundResponseUpdate(response: Response): AssistantMessageUp
           type: "response.output_item.done",
           item: {
             ...item,
-            tools: item.tools.map((tool) => ({
+            tools: (item.tools ?? []).map((tool) => ({
               name: tool.name,
               input_schema: tool.input_schema,
               description: tool.description ?? "",
@@ -46,6 +47,7 @@ export function backgroundResponseUpdate(response: Response): AssistantMessageUp
     incomplete: "The run ended before completing its answer.",
   };
   const backgroundError = errors[status];
+  const cost = response.usage && "cost" in response.usage ? parseUsageCost(response.usage.cost) : undefined;
   return {
     content,
     reasoningContent,
@@ -59,6 +61,7 @@ export function backgroundResponseUpdate(response: Response): AssistantMessageUp
         totalTokens: response.usage.total_tokens,
         reasoningTokens: response.usage.output_tokens_details?.reasoning_tokens,
         ...extractPromptCacheTokens(response.usage),
+        ...(cost !== undefined ? { cost } : {}),
       },
     }),
   };

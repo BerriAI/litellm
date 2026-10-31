@@ -90,3 +90,56 @@ describe("background response lifecycle", () => {
     });
   });
 });
+
+it.each([
+  [0.125, 0.125],
+  ["0.125", 0.125],
+  [0, 0],
+  ["invalid", undefined],
+])("should preserve valid returned cost %s", (cost, expected) => {
+  const response = {
+    id: "litellm_poll_cost",
+    status: "completed",
+    output: [],
+    usage: { input_tokens: 4, output_tokens: 9, total_tokens: 13, cost },
+  } as ModelResponse;
+  expect(backgroundResponseUpdate(response).usage?.cost).toBe(expected);
+});
+
+it("should keep polling through unfinished output items until the answer and tools arrive", async () => {
+  let polls = 0;
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async () => {
+      polls++;
+      return Response.json({
+        id: "litellm_poll_partial",
+        status: polls === 1 ? "in_progress" : "completed",
+        output:
+          polls === 1
+            ? [
+                { type: "message", id: "message_1" },
+                { type: "mcp_list_tools", id: "tools_1", server_label: "inventory" },
+              ]
+            : [
+                { type: "message", content: [{ type: "output_text", text: "12 widgets" }] },
+                { type: "mcp_list_tools", server_label: "inventory", tools: [{ name: "lookup", input_schema: {} }] },
+              ],
+      });
+    }),
+  );
+  const onUpdate = vi.fn();
+  const polling = {
+    accessToken: "test-token",
+    responseId: "litellm_poll_partial",
+    signal: new AbortController().signal,
+    onUpdate,
+  };
+  await watchBackgroundChat(polling);
+  expect(polls).toBe(2);
+  expect(onUpdate.mock.lastCall?.[0]).toMatchObject({
+    content: "12 widgets",
+    backgroundRun: { status: "completed" },
+    mcpEvents: [{ item: { tools: [{ name: "lookup" }] } }],
+  });
+});
