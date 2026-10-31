@@ -23,6 +23,7 @@ from litellm.responses.litellm_completion_transformation.transformation import (
 )
 from litellm.types.llms.openai import ResponsesAPIStreamEvents
 from litellm.types.utils import Message, ModelResponse
+from tests.unit.proxy.conftest import httpx_transport
 
 
 def test_response_api_handler_merges_metadata_and_service_tier_without_error():
@@ -591,6 +592,31 @@ def _anthropic_message(*content: Mapping[str, object]) -> httpx.Response:
             "usage": {"input_tokens": 1, "output_tokens": 1},
         },
     )
+
+
+@pytest.mark.usefixtures(httpx_transport.__name__)
+@pytest.mark.parametrize("output", ["", [], [{"type": "input_text", "text": ""}]])
+def test_empty_responses_tool_output_reaches_anthropic_without_json_text(
+    respx_mock: respx.MockRouter, output: str | list[dict[str, str]]
+) -> None:
+    route: Final = respx_mock.post(_ANTHROPIC_MESSAGES_URL).mock(
+        return_value=_anthropic_message({"type": "text", "text": "ok"})
+    )
+    response: Final = litellm.responses(
+        model=_MODEL,
+        api_key="mock_api_key",
+        input=[
+            {"role": "user", "content": "Check the weather"},
+            {"type": "function_call", "call_id": "call_empty", "name": "get_weather", "arguments": "{}"},
+            {"type": "function_call_output", "call_id": "call_empty", "output": output},
+        ],
+    )
+    sent: Final = json.loads(route.calls.last.request.content)
+    assert response.output_text == "ok"
+    assert sent["messages"][-1] == {
+        "role": "user",
+        "content": [{"type": "tool_result", "tool_use_id": "call_empty", "content": ""}],
+    }
 
 
 def _replay(output: Sequence[BaseModel]) -> list[object]:
@@ -1569,3 +1595,57 @@ async def test_previous_response_id_keeps_the_tools_an_earlier_codex_tool_search
         [("tool_result", "toolu_standup"), ("text", None)],
     ]
     assert prisma_client.db.queries == 1
+
+
+async def _codex_follow_up_body(**kwargs: object) -> Mapping[str, object]:
+    anthropic: Final = _RecordingRawAnthropicMessages()
+    with patch("litellm.proxy.proxy_server.prisma_client", _FakePrismaClient([_SEARCH_TURN, _CALENDAR_TURN])):
+        await litellm.aresponses(
+            model=_MODEL,
+            previous_response_id="chatcmpl-calendar-turn",
+            input=[{"type": "function_call_output", "call_id": "toolu_standup", "output": "Created Standup."}],
+            tools=[_CODEX_TOOL_SEARCH, _SHELL_TOOL],
+            api_key="sk-ant-fake",
+            client=AsyncHTTPHandler(transport=httpx.MockTransport(anthropic)),
+            **kwargs,
+        )
+    return json.loads(anthropic.body)
+
+
+@pytest.mark.asyncio
+async def test_codex_tool_search_follow_up_rejects_text_verbosity_anthropic_does_not_support(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    anthropic: Final = _RecordingRawAnthropicMessages()
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", _FakePrismaClient([_SEARCH_TURN, _CALENDAR_TURN])),
+        pytest.raises(litellm.UnsupportedParamsError, match="verbosity"),
+    ):
+        await litellm.aresponses(
+            model=_MODEL,
+            previous_response_id="chatcmpl-calendar-turn",
+            input=[{"type": "function_call_output", "call_id": "toolu_standup", "output": "Created Standup."}],
+            tools=[_CODEX_TOOL_SEARCH, _SHELL_TOOL],
+            text={"verbosity": "low"},
+            api_key="sk-ant-fake",
+            num_retries=0,
+            client=AsyncHTTPHandler(transport=httpx.MockTransport(anthropic)),
+        )
+
+    assert anthropic.body == ""
+
+
+@pytest.mark.asyncio
+async def test_codex_tool_search_follow_up_text_verbosity_follows_provider_param_validation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    without_text: Final = await _codex_follow_up_body()
+
+    dropped: Final = await _codex_follow_up_body(text={"verbosity": "low"}, drop_params=True)
+    allowed: Final = await _codex_follow_up_body(text={"verbosity": "low"}, allowed_openai_params=["verbosity"])
+
+    assert dropped == without_text
+    assert allowed == {**without_text, "verbosity": "low"}

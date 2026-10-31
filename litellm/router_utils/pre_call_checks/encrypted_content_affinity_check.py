@@ -50,14 +50,15 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     encrypted_content_of_block,
     strip_encrypted_reasoning_from_messages,
 )
+from litellm.litellm_core_utils.routing_common_utils import as_excluded_deployment_ids, as_retry_skipped_deployment_ids
 from litellm.responses.utils import ResponsesAPIRequestUtils
-from litellm.router_utils.common_utils import as_excluded_deployment_ids, as_retry_skipped_deployment_ids
+from litellm.router_deprecated import RenamedRouterAttribute, renamed_router_param
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.router import Deployment
 from litellm.utils import get_order_filtered_deployments
 
 if TYPE_CHECKING:
-    from litellm.router import Router
+    from litellm.router_api import RoutingContext
 
 _REQUEST_KWARGS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 
@@ -74,14 +75,17 @@ class EncryptedContentAffinityCheck(CustomLogger):
     per-model group ``model_group_affinity_config``.
     """
 
+    router: Final = RenamedRouterAttribute()  # deprecated: the router attribute before ``ctx``
+
+    @renamed_router_param("router")
     def __init__(
         self,
-        router: Optional["Router"] = None,
+        ctx: Optional["RoutingContext"] = None,
         enable_global_affinity: bool = True,
         model_group_affinity_config: dict[str, list[str]] | None = None,
     ) -> None:
         super().__init__()
-        self.router = router
+        self.ctx = ctx
         self.enable_global_affinity = enable_global_affinity
         self.model_group_affinity_config: dict[str, list[str]] = model_group_affinity_config or {}
 
@@ -254,9 +258,9 @@ class EncryptedContentAffinityCheck(CustomLogger):
         deployment's ``(api_base, api_key)``, alongside the originating
         deployment object (or ``None`` if it was removed / router unavailable).
         """
-        if self.router is None:
+        if self.ctx is None:
             return [], None
-        originating: Final = self.router.get_deployment(model_id=model_id)
+        originating: Final = self.ctx.registry().deployment(model_id)
         if originating is None:
             return [], None
         boundary: Final = self._encryption_boundary_key(originating.litellm_params.model_dump(exclude_none=True))
@@ -268,8 +272,9 @@ class EncryptedContentAffinityCheck(CustomLogger):
         return matches, originating
 
     @staticmethod
+    @renamed_router_param("router")
     def strip_reasoning_the_targets_cannot_decrypt(
-        router: "Router | None",
+        ctx: "RoutingContext | None",
         request_input: object,
         anthropic_messages: object,
         target_deployments: Sequence[Mapping[str, object]],
@@ -302,9 +307,9 @@ class EncryptedContentAffinityCheck(CustomLogger):
                 return False
             if origin_model_id in target_ids:
                 return True
-            if router is None:
+            if ctx is None:
                 return False
-            origin: Final = router.get_deployment(model_id=origin_model_id)
+            origin: Final = ctx.registry().deployment(origin_model_id)
             origin_boundary: Final = (
                 EncryptedContentAffinityCheck._encryption_boundary_key(
                     origin.litellm_params.model_dump(exclude_none=True)
@@ -419,7 +424,7 @@ class EncryptedContentAffinityCheck(CustomLogger):
             )
             request_kwargs["_encrypted_content_affinity_pinned"] = True
             self.strip_reasoning_the_targets_cannot_decrypt(
-                self.router, request_input, anthropic_messages, (deployment,), unmarked_origin=model_id
+                self.ctx, request_input, anthropic_messages, (deployment,), unmarked_origin=model_id
             )
             return [deployment]
 
@@ -437,7 +442,7 @@ class EncryptedContentAffinityCheck(CustomLogger):
             )
             request_kwargs["_encrypted_content_affinity_pinned"] = True
             self.strip_reasoning_the_targets_cannot_decrypt(
-                self.router, request_input, anthropic_messages, boundary_matches, unmarked_origin=model_id
+                self.ctx, request_input, anthropic_messages, boundary_matches, unmarked_origin=model_id
             )
             return boundary_matches
 

@@ -2263,7 +2263,6 @@ def test_ProxyConfig_merge_config_and_db_search_tools_prefers_db_duplicate():
 @pytest.mark.asyncio
 async def test_ProxyConfig__init_search_tools_in_db_loads_merged_tools(monkeypatch):
     from litellm.proxy import proxy_server
-    from litellm.router_utils.search_api_router import SearchAPIRouter
 
     pc = ProxyConfig()
     pc.update_config_state(
@@ -2289,28 +2288,24 @@ async def test_ProxyConfig__init_search_tools_in_db_loads_merged_tools(monkeypat
             },
         }
     ]
-    fake_router = MagicMock()
+    router = litellm.Router()
     mock_get_db_tools = AsyncMock(return_value=db_tools)
-    mock_update_router = AsyncMock()
 
-    monkeypatch.setattr(proxy_server, "llm_router", fake_router)
+    monkeypatch.setattr(proxy_server, "llm_router", router)
     monkeypatch.setattr(
         "litellm.proxy.search_endpoints.search_tool_registry.SearchToolRegistry.get_all_search_tools_from_db",
         mock_get_db_tools,
     )
-    monkeypatch.setattr(SearchAPIRouter, "update_router_search_tools", mock_update_router)
 
     await pc._init_search_tools_in_db(prisma_client=MagicMock())
 
     mock_get_db_tools.assert_awaited_once()
-    mock_update_router.assert_awaited_once()
-    update_kwargs = mock_update_router.await_args.kwargs
-    assert update_kwargs["router_instance"] is fake_router
-    assert [tool["search_tool_name"] for tool in update_kwargs["search_tools"]] == [
+    loaded_tools = router.settings().search_tools
+    assert [tool["search_tool_name"] for tool in loaded_tools] == [
         "config-only",
         "shared-search",
     ]
-    assert update_kwargs["search_tools"][1]["litellm_params"]["api_key"] == "fake-db-key"
+    assert loaded_tools[1]["litellm_params"]["api_key"] == "fake-db-key"
 
 
 @pytest.mark.asyncio
@@ -2320,11 +2315,10 @@ async def test_ProxyConfig__init_search_tools_in_db_clears_router_when_last_tool
 
     pc = ProxyConfig()
     pc.update_config_state({})
-    fake_router = MagicMock()
-    fake_router.search_tools = [{"search_tool_name": "deleted-search", "litellm_params": {}}]
+    router = litellm.Router(search_tools=[{"search_tool_name": "deleted-search", "litellm_params": {}}])
     mock_get_db_tools = AsyncMock(return_value=[])
 
-    monkeypatch.setattr(proxy_server, "llm_router", fake_router)
+    monkeypatch.setattr(proxy_server, "llm_router", router)
     monkeypatch.setattr(
         "litellm.proxy.search_endpoints.search_tool_registry.SearchToolRegistry.get_all_search_tools_from_db",
         mock_get_db_tools,
@@ -2333,7 +2327,7 @@ async def test_ProxyConfig__init_search_tools_in_db_clears_router_when_last_tool
     await pc._init_search_tools_in_db(prisma_client=MagicMock())
 
     mock_get_db_tools.assert_awaited_once()
-    assert fake_router.search_tools == []
+    assert router.settings().search_tools == []
 
 
 @pytest.mark.asyncio
@@ -2347,8 +2341,7 @@ async def test_ProxyConfig__init_search_tools_in_db_keeps_loaded_tools_whose_par
         "search_tool_name": "rotated-search",
         "litellm_params": {"search_provider": "perplexity", "api_key": "pplx-loaded"},
     }
-    fake_router = MagicMock()
-    fake_router.settings.return_value = RouterSettings(
+    router = litellm.Router(
         search_tools=[
             loaded_tool,
             {
@@ -2378,7 +2371,7 @@ async def test_ProxyConfig__init_search_tools_in_db_keeps_loaded_tools_whose_par
             "litellm_params": {"search_provider": "Tavily", "api_key": "tvly-edited"},
         },
     ]
-    monkeypatch.setattr(proxy_server, "llm_router", fake_router)
+    monkeypatch.setattr(proxy_server, "llm_router", router)
     monkeypatch.setattr(
         "litellm.proxy.search_endpoints.search_tool_registry.SearchToolRegistry.get_all_search_tools_from_db",
         AsyncMock(return_value=db_tools),
@@ -2386,7 +2379,7 @@ async def test_ProxyConfig__init_search_tools_in_db_keeps_loaded_tools_whose_par
 
     await pc._init_search_tools_in_db(prisma_client=MagicMock())
 
-    assert [tool["litellm_params"] for tool in fake_router.search_tools] == [
+    assert [tool["litellm_params"] for tool in router.settings().search_tools] == [
         {"search_provider": "perplexity", "api_key": "pplx-loaded"},
         {"search_provider": "tavily", "api_key": "tvly-fresh"},
         {"search_provider": "Tavily", "api_key": "tvly-edited"},

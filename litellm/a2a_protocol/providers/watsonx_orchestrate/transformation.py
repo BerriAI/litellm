@@ -206,6 +206,8 @@ class WatsonxOrchestrateTransformation:
                     "contextId": context_id,
                     "kind": "artifact-update",
                     "taskId": task_id,
+                    "append": i > 0,
+                    "lastChunk": is_last,
                     "artifact": {
                         "artifactId": artifact_id,
                         "parts": [{"kind": "text", "text": chunk_text}],
