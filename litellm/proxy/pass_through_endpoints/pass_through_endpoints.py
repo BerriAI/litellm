@@ -2558,6 +2558,21 @@ def _rewrite_vertex_live_setup_model(text_data: str, setup_model_rewriter: Calla
     return json.dumps({**message, "setup": {**setup, "model": rewritten_model}})
 
 
+VERTEX_LIVE_UNDECODABLE_BINARY_CLOSE_REASON: Final = "Rejected Request: binary messages must be UTF-8 encoded JSON"
+
+
+def _rewrite_vertex_live_binary_setup_model(
+    bytes_data: bytes, setup_model_rewriter: Callable[[str], str] | None
+) -> bytes | None:
+    if setup_model_rewriter is None:
+        return bytes_data
+    try:
+        text_data: Final = bytes_data.decode("utf-8")
+    except UnicodeDecodeError:
+        return None
+    return _rewrite_vertex_live_setup_model(text_data, setup_model_rewriter).encode("utf-8")
+
+
 def _resolved_vertex_live_setup(
     setup_data: Mapping[str, object], setup_model_rewriter: Callable[[str], str] | None
 ) -> Mapping[str, object]:
@@ -2875,7 +2890,12 @@ async def websocket_passthrough_request(
                             if meter is not None:
                                 metered_total += meter.measure(text_data)
                         elif bytes_data is not None:
-                            await upstream_ws.send(bytes_data)
+                            rewritten_bytes = _rewrite_vertex_live_binary_setup_model(bytes_data, setup_model_rewriter)
+                            if rewritten_bytes is None:
+                                await websocket.close(code=1008, reason=VERTEX_LIVE_UNDECODABLE_BINARY_CLOSE_REASON)
+                                await upstream_ws.close()
+                                break
+                            await upstream_ws.send(rewritten_bytes)
                 except asyncio.CancelledError:
                     raise
                 except Exception:

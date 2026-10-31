@@ -86,6 +86,7 @@ from litellm.llms.vllm.common_utils import endpoint_under_api_base
 from litellm.passthrough.main import AsyncPassthroughStreamingResponse, is_provider_error
 from litellm.proxy._types import *
 from litellm.proxy.auth.auth_checks import enforced_model_allowlists
+from litellm.proxy.auth.auth_utils import deployment_clientside_auth_params
 from litellm.proxy.auth.handle_jwt import JWTHandler
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.auth.user_api_key_auth import (  # noqa: F401  # legacy module exports
@@ -4002,6 +4003,10 @@ VERTEX_LIVE_UNCONFIGURED_CLOSE_REASON: Final = (
     "Vertex AI auth failed: set a use_in_pass_through vertex model, default_vertex_config, or DEFAULT_VERTEXAI_* env"
 )
 
+VERTEX_LIVE_UNPINNED_PROJECT_CLOSE_REASON: Final = (
+    "Rejected Request: vertex_project must come from the proxy's configuration, see allow_client_side_credentials"
+)
+
 VERTEX_PUBLISHER_MODEL_PREFIX: Final = "publishers/google/models/"
 
 VERTEX_PUBLISHERS_SEGMENT: Final = "publishers/"
@@ -4026,11 +4031,25 @@ def _get_llm_router() -> Router | None:
     return llm_router
 
 
-def _resolve_vertex_live_credentials(
+@dataclass(frozen=True, slots=True)
+class _ConfiguredVertexLiveTarget:
+    credentials: VertexPassThroughCredentials | None
+
+
+@dataclass(frozen=True, slots=True)
+class _DeploymentVertexLiveTarget:
+    credentials: VertexPassThroughCredentials
+    deployment_params: LiteLLMParamsTypedDict
+
+
+_VertexLiveTarget = _ConfiguredVertexLiveTarget | _DeploymentVertexLiveTarget
+
+
+def _resolve_vertex_live_target(
     vertex_project: str | None,
     vertex_location: str | None,
     model: str | None,
-) -> VertexPassThroughCredentials | None:
+) -> _VertexLiveTarget:
     """
     Resolution order: an explicit project/location registration, then ``default_vertex_config`` (which the proxy
     fills from the ``DEFAULT_VERTEXAI_*`` env vars whenever the yaml leaves it out), then any DB model entry
@@ -4044,36 +4063,133 @@ def _resolve_vertex_live_credentials(
         location=vertex_location,
     )
     if keyed is not None and keyed.vertex_project is not None:
-        return keyed
-    from_deployments: Final = passthrough_endpoint_router.get_vertex_credentials_from_router_deployments(model=model)
+        return _ConfiguredVertexLiveTarget(credentials=keyed)
+    from_deployments: Final = passthrough_endpoint_router.get_vertex_deployment_from_router(model=model)
     if from_deployments is not None:
-        return from_deployments
+        deployment, credentials = from_deployments
+        return _DeploymentVertexLiveTarget(credentials=credentials, deployment_params=deployment["litellm_params"])
     if keyed is not None:
-        return keyed
+        return _ConfiguredVertexLiveTarget(credentials=keyed)
     passthrough_endpoint_router.set_default_vertex_config()
-    return passthrough_endpoint_router.get_vertex_credentials(
-        project_id=vertex_project,
-        location=vertex_location,
+    return _ConfiguredVertexLiveTarget(
+        credentials=passthrough_endpoint_router.get_vertex_credentials(
+            project_id=vertex_project,
+            location=vertex_location,
+        )
     )
+
+
+def _requested_vertex_live_target(
+    credentials: VertexPassThroughCredentials, vertex_project: str | None, vertex_location: str | None
+) -> tuple[tuple[str, str | None, str | None], ...]:
+    return (
+        ("vertex_project", vertex_project, credentials.vertex_project),
+        ("vertex_location", vertex_location, credentials.vertex_location),
+    )
+
+
+def _proxy_configured_vertex_projects() -> frozenset[str]:
+    return frozenset(
+        project
+        for project in (
+            litellm.vertex_project,
+            get_secret_str("VERTEXAI_PROJECT"),
+            get_secret_str("DEFAULT_VERTEXAI_PROJECT"),
+        )
+        if project
+    )
+
+
+def _names_an_unconfigured_project(
+    credentials: VertexPassThroughCredentials | None, vertex_project: str | None
+) -> bool:
+    return (
+        bool(vertex_project)
+        and (credentials is None or credentials.vertex_project is None)
+        and vertex_project not in _proxy_configured_vertex_projects()
+    )
+
+
+def _live_target_override_reason(
+    target: _VertexLiveTarget,
+    vertex_project: str | None,
+    vertex_location: str | None,
+    allow_client_side_credentials: bool,
+) -> str | None:
+    if allow_client_side_credentials:
+        return None
+    match target:
+        case _ConfiguredVertexLiveTarget(credentials=credentials) if _names_an_unconfigured_project(
+            credentials, vertex_project
+        ):
+            return VERTEX_LIVE_UNPINNED_PROJECT_CLOSE_REASON
+        case _ConfiguredVertexLiveTarget(credentials=VertexPassThroughCredentials() as credentials):
+            configured_field: Final = next(
+                (
+                    name
+                    for name, asked, pinned in _requested_vertex_live_target(
+                        credentials, vertex_project, vertex_location
+                    )
+                    if asked and pinned and asked != pinned
+                ),
+                None,
+            )
+            if configured_field is None:
+                return None
+            return (
+                f"Rejected Request: {configured_field} is pinned by default_vertex_config, "
+                "see allow_client_side_credentials"
+            )
+        case _ConfiguredVertexLiveTarget():
+            return None
+        case _DeploymentVertexLiveTarget(credentials=credentials, deployment_params=deployment_params):
+            opted_in: Final = deployment_clientside_auth_params(deployment_params) or ()
+            deployment_field: Final = next(
+                (
+                    name
+                    for name, asked, pinned in _requested_vertex_live_target(
+                        credentials, vertex_project, vertex_location
+                    )
+                    if asked and asked != pinned and name not in opted_in
+                ),
+                None,
+            )
+            if deployment_field is None:
+                return None
+            return (
+                f"Rejected Request: {deployment_field} is pinned by the deployment, "
+                "see configurable_clientside_auth_params"
+            )
+
+
+_VERTEX_RESOURCE_PROJECT_AND_LOCATION: Final = re.compile(r"projects/[^/]+/locations/(?P<location>[^/]+)/")
 
 
 def _build_vertex_live_setup_model_rewriter(
     vertex_project: str | None,
     vertex_location: str | None,
+    configured_location: str | None,
     llm_router: Router | None,
+    keeps_caller_resource_path: bool,
 ) -> Callable[[str], str] | None:
     """
     Rewrite the ``setup`` frame's model into the full Vertex resource path the Live API requires.
 
     Clients address the gateway the way they address LiteLLM (bare id or model alias); Vertex reads anything
-    that is not a ``projects/...`` path as a project name and closes the socket
+    that is not a ``projects/...`` path as a project name and closes the socket. A ``projects/...`` path
+    picks the project the proxy's token is spent on, so it is moved onto the connection's project, and onto its
+    region when one is configured, unless ``allow_client_side_credentials`` lets callers choose them
     """
     if vertex_project is None or vertex_location is None:
         return None
 
     def rewrite(setup_model: str) -> str:
         if setup_model.startswith("projects/"):
-            return setup_model
+            resource_prefix: Final = _VERTEX_RESOURCE_PROJECT_AND_LOCATION.match(setup_model)
+            if keeps_caller_resource_path or resource_prefix is None:
+                return setup_model
+            location: Final = configured_location or resource_prefix.group("location")
+            return f"projects/{vertex_project}/locations/{location}/{setup_model[resource_prefix.end() :]}"
         aliased: Final = _resolve_alias_to_upstream_model(setup_model, llm_router)
         return f"projects/{vertex_project}/locations/{vertex_location}/{_vertex_publisher_model_suffix(aliased)}"
 
@@ -4127,11 +4243,22 @@ async def vertex_ai_live_websocket_passthrough(
     await websocket.accept()
 
     incoming_headers: Final = dict(websocket.headers)
-    vertex_credentials_config: Final = _resolve_vertex_live_credentials(
+    live_target: Final = _resolve_vertex_live_target(
         vertex_project=vertex_project,
         vertex_location=vertex_location,
         model=model,
     )
+    allow_client_side_credentials: Final = _proxy_general_settings().get("allow_client_side_credentials") is True
+    override_reason: Final = _live_target_override_reason(
+        live_target,
+        vertex_project=vertex_project,
+        vertex_location=vertex_location,
+        allow_client_side_credentials=allow_client_side_credentials,
+    )
+    if override_reason is not None:
+        await websocket.close(code=1008, reason=override_reason)
+        return
+    vertex_credentials_config: Final = live_target.credentials
 
     configured_project: Final = vertex_project or (
         vertex_credentials_config.vertex_project if vertex_credentials_config is not None else None
@@ -4213,7 +4340,9 @@ async def vertex_ai_live_websocket_passthrough(
         setup_model_rewriter=_build_vertex_live_setup_model_rewriter(
             vertex_project=resolved_project,
             vertex_location=resolved_location,
+            configured_location=configured_location,
             llm_router=_get_llm_router(),
+            keeps_caller_resource_path=allow_client_side_credentials,
         ),
     )
 
