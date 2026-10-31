@@ -48,7 +48,7 @@ from litellm.constants import (
     VECTOR_STORE_CALLER_METADATA_KWARG,
     X_LITELLM_DISABLE_CALLBACKS,
 )
-from litellm.integrations.custom_guardrail import without_server_streaming_classification
+from litellm.integrations.custom_guardrail import merged_guardrail_entries, without_server_streaming_classification
 from litellm.litellm_core_utils.core_helpers import is_codex_user_agent, normalize_drop_params
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
@@ -112,6 +112,7 @@ _EXPLICIT_SESSION_HEADERS: Final = frozenset({"x-litellm-trace-id", "x-litellm-s
 # ``session-id``/``thread-id``; builds before the codex-api split sent
 # ``session_id``/``conversation_id``. Ordered session before thread.
 _CODEX_SESSION_ID_HEADERS: Final = ("session-id", "session_id", "thread-id", "conversation_id")
+_BEDROCK_SESSION_ID_METADATA_KEYS: Final = ("sessionId", "threadId", "conversationId")
 # Session-id values must be non-empty strings of alphanumerics, hyphens, or underscores
 # (covers UUIDs and most common session-id formats).
 _SESSION_ID_VALUE_RE: Final = re.compile(r"^[a-zA-Z0-9_\-]{8,}$")
@@ -1055,6 +1056,22 @@ def _get_anthropic_session_id_from_metadata(metadata: object) -> str | None:
     return session_id
 
 
+def _get_bedrock_session_id_from_request_metadata(
+    normalized_headers: Mapping[str, str], request_body: Mapping[str, object]
+) -> str | None:
+    """Read the conversation id a Bedrock SDK client tags its calls with: Converse's ``requestMetadata``
+    body field or InvokeModel's ``X-Amzn-Bedrock-Request-Metadata`` JSON header. Only the Bedrock
+    pass-through route nests the client's body under ``data``."""
+    if request_body.get("custom_llm_provider") != "bedrock" or not isinstance(request_body.get("data"), Mapping):
+        return None
+    header: Final = normalized_headers.get("x-amzn-bedrock-request-metadata")
+    body_tags: Final = _request_fields(_request_fields(request_body.get("data")).get("requestMetadata"))
+    header_tags: Final = _request_fields(safe_json_loads(header) if header else None)
+    tag_sources: Final = itertools.product((body_tags, header_tags), _BEDROCK_SESSION_ID_METADATA_KEYS)
+    values: Final = (tags.get(key) for tags, key in tag_sources)
+    return next((value for value in values if isinstance(value, str) and value), None)
+
+
 def _is_llm_inference_route(request: Request) -> bool:
     route: Final = get_request_route(request)
     return RouteChecks.is_llm_api_route(route=route) and not RouteChecks.check_route_access(
@@ -1967,6 +1984,14 @@ class LiteLLMProxyRequestSetup:
                     body_metadata["user_id"] = session_id
                 verbose_proxy_logger.debug("Extracted session_id from Anthropic metadata.user_id")
 
+        if "litellm_session_id" not in data:
+            bedrock_session_id: Final = _get_bedrock_session_id_from_request_metadata(normalized_headers, request_body)
+            metadata_session_id: Final = _caller_trace_field(request_body, _metadata_variable_name, "session_id")
+            if bedrock_session_id and metadata_session_id in (None, bedrock_session_id):
+                metadata_from_headers["session_id"] = bedrock_session_id
+                data["litellm_session_id"] = bedrock_session_id  # rebind-ok: data is an out-param
+                verbose_proxy_logger.debug("Extracted session_id from Bedrock request metadata")
+
         # Last-resort fallback: the W3C standards for trace/session propagation
         # (https://www.w3.org/TR/trace-context/, https://www.w3.org/TR/baggage/).
         # Lower priority than everything above - only fires when neither the
@@ -2566,6 +2591,7 @@ def refresh_proxy_server_request_body_snapshot(
                 VECTOR_STORE_CALLER_METADATA_KWARG,
                 STREAM_USAGE_INJECTED_FIELD,
                 "_litellm_strip_stream_usage",
+                "_headroom_request_context",
             }
         )
         | _TRANSPORT_ONLY_CREDENTIAL_KEYS
@@ -3947,30 +3973,14 @@ def add_guardrails_from_key_or_team_metadata(
     """
     from litellm.proxy.utils import premium_user_check
 
-    # Initialize guardrails set (avoiding duplicates)
-    combined_guardrails: Final = set()
-
-    # Add key-level guardrails first
-    if key_metadata and "guardrails" in key_metadata:
-        if isinstance(key_metadata["guardrails"], list) and len(key_metadata["guardrails"]) > 0:
-            premium_user_check()
-            combined_guardrails.update(key_metadata["guardrails"])
-
-    # Add team-level guardrails (set automatically handles duplicates)
-    if team_metadata and "guardrails" in team_metadata:
-        if isinstance(team_metadata["guardrails"], list) and len(team_metadata["guardrails"]) > 0:
-            premium_user_check()
-            combined_guardrails.update(team_metadata["guardrails"])
-
-    # Add project-level guardrails (set automatically handles duplicates)
-    if project_metadata and "guardrails" in project_metadata:
-        if isinstance(project_metadata["guardrails"], list) and len(project_metadata["guardrails"]) > 0:
-            premium_user_check()
-            combined_guardrails.update(project_metadata["guardrails"])
-
-    # Set combined guardrails in metadata as list
-    if combined_guardrails:
-        data[metadata_variable_name]["guardrails"] = list(combined_guardrails)
+    configured_guardrails: Final = tuple(
+        metadata["guardrails"]
+        for metadata in (key_metadata, team_metadata, project_metadata)
+        if metadata and isinstance(metadata.get("guardrails"), list) and len(metadata["guardrails"]) > 0
+    )
+    if configured_guardrails:
+        premium_user_check()
+        data[metadata_variable_name]["guardrails"] = merged_guardrail_entries(*configured_guardrails)
 
 
 _add_guardrails_from_key_or_team_metadata: Final = add_guardrails_from_key_or_team_metadata
@@ -4065,14 +4075,10 @@ def _add_guardrails_from_policies_in_metadata(
     if metadata_variable_name not in data:
         data[metadata_variable_name] = {}
 
-    existing_guardrails = data[metadata_variable_name].get("guardrails", [])
-    if not isinstance(existing_guardrails, list):
-        existing_guardrails = []
-
-    # Combine existing guardrails with policy-resolved guardrails (no duplicates)
-    combined: Final = set(existing_guardrails)
-    combined.update(resolved_guardrails)
-    data[metadata_variable_name]["guardrails"] = list(combined)
+    existing_guardrails: Final = data[metadata_variable_name].get("guardrails", [])
+    data[metadata_variable_name]["guardrails"] = merged_guardrail_entries(
+        existing_guardrails if isinstance(existing_guardrails, list) else (), resolved_guardrails
+    )
 
     # Store applied policies in metadata for tracking
     if "applied_policies" not in data[metadata_variable_name]:
@@ -4307,10 +4313,11 @@ def _apply_resolved_guardrails_to_metadata(
         return
 
     existing_guardrails: Final = data[metadata_variable_name].get("guardrails", [])
-    existing_guardrails_list: Final = existing_guardrails if isinstance(existing_guardrails, list) else []
+    existing_guardrails_list: Final = (
+        _REQUEST_ENTRIES.validate_python(existing_guardrails) if isinstance(existing_guardrails, list) else ()
+    )
 
-    # Combine existing guardrails with policy-resolved guardrails (no duplicates)
-    combined: Final = list(dict.fromkeys((*existing_guardrails_list, *resolved_guardrails)))
+    combined: Final = merged_guardrail_entries(existing_guardrails_list, resolved_guardrails)
     data[metadata_variable_name]["guardrails"] = combined
 
     verbose_proxy_logger.debug("Policy engine: added guardrails to request metadata: %s", combined)
@@ -4327,7 +4334,7 @@ def _policy_match_tags(request_data: Mapping[str, object], metadata_variable_nam
 
 
 async def add_guardrails_from_policy_engine(
-    data: dict,
+    data: dict[str, object],  # mutable-ok: pops the request's policies and records the resolved guardrails in place
     metadata_variable_name: str,
     user_api_key_dict: UserAPIKeyAuth,
 ) -> None:
@@ -4370,11 +4377,13 @@ async def add_guardrails_from_policy_engine(
     all_tags: Final = _policy_match_tags(data, metadata_variable_name)
     _team_alias: Final = user_api_key_dict.team_alias
     _key_alias: Final = user_api_key_dict.key_alias
-    context: Final = PolicyMatchContext(
-        team_alias=_team_alias if isinstance(_team_alias, str) else None,
-        key_alias=_key_alias if isinstance(_key_alias, str) else None,
-        model=data.get("model"),
-        tags=all_tags,
+    context: Final = PolicyMatchContext.model_validate(
+        {
+            "team_alias": _team_alias if isinstance(_team_alias, str) else None,
+            "key_alias": _key_alias if isinstance(_key_alias, str) else None,
+            "model": data.get("model"),
+            "tags": all_tags,
+        }
     )
 
     verbose_proxy_logger.debug(

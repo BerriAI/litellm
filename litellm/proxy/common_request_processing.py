@@ -151,7 +151,7 @@ from litellm.router_utils.common_utils import resolve_model_group_alias, resolve
 from litellm.types.extraction import ExtractionResponse
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.router import RouterRateLimitError
-from litellm.types.router_weights import validate_router_weights
+from litellm.types.router_weights import RouterWeights, validate_router_weights
 
 _LateResponseT = TypeVar("_LateResponseT", bound=Response)
 _LlmCallT = TypeVar("_LlmCallT")
@@ -892,6 +892,61 @@ async def _resolve_per_request_model_group_alias(
         llm_router=llm_router,
     )
     return target
+
+
+async def hierarchical_router_settings_updates(
+    requested_model: object,
+    user_api_key_dict: UserAPIKeyAuth,
+    llm_router: Router,
+    proxy_config: ProxyConfig,
+    proxy_logging_obj: ProxyLogging,
+    apply_model_group_alias: bool,
+) -> Mapping[str, object]:
+    # Apply hierarchical router_settings (Key > Team)
+    # Global router_settings are already on the Router object itself.
+    # This sits with the other alias rewrites, and ahead of the guardrail
+    # merge and the pre-call hooks, so everything that keys off the model
+    # group -- model-level guardrails, per-model budgets and rate limits,
+    # the logging object -- sees the group that will actually serve.
+    from litellm.proxy.proxy_server import prisma_client
+
+    router_settings: Final[Mapping[str, object] | None] = _ROUTER_SETTINGS_ADAPTER.validate_python(
+        await proxy_config._get_hierarchical_router_settings(
+            user_api_key_dict=user_api_key_dict,
+            prisma_client=prisma_client,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+    )
+    if router_settings is None:
+        return MappingProxyType({})
+
+    # If router_settings found (from key or team), apply them
+    # Pass settings as per-request overrides instead of creating a new Router
+    # This avoids expensive Router instantiation on each request
+    def validated_router_weights() -> RouterWeights | None:
+        try:
+            return validate_router_weights(router_settings.get("weights"))
+        except ValidationError:
+            verbose_proxy_logger.warning("Ignoring invalid saved router weights; update team/key router_settings")
+            return None
+
+    router_weights: Final = validated_router_weights()
+    alias_target: Final = (
+        await _resolve_per_request_model_group_alias(
+            requested_model=requested_model,
+            router_settings=router_settings,
+            user_api_key_dict=user_api_key_dict,
+            llm_router=llm_router,
+        )
+        if apply_model_group_alias
+        else None
+    )
+    settings_updates: Final[Mapping[str, object]] = {
+        "router_settings_override": router_settings,
+        "_router_weights": router_weights,
+        **({"model": alias_target} if alias_target is not None else {}),
+    }
+    return MappingProxyType(settings_updates)
 
 
 _REQUEST_MODEL: Final[TypeAdapter[str | list[str] | None]] = TypeAdapter(str | list[str] | None)
@@ -2495,41 +2550,17 @@ class ProxyBaseLLMRequestProcessing:
         ):
             self.data["model"] = user_api_key_dict.aliases[self.data["model"]]
 
-        # Apply hierarchical router_settings (Key > Team)
-        # Global router_settings are already on the Router object itself.
-        # This sits with the other alias rewrites, and ahead of the guardrail
-        # merge and the pre-call hooks, so everything that keys off the model
-        # group -- model-level guardrails, per-model budgets and rate limits,
-        # the logging object -- sees the group that will actually serve.
         if llm_router is not None and proxy_config is not None:
-            from litellm.proxy.proxy_server import prisma_client
-
-            router_settings: Final = await proxy_config._get_hierarchical_router_settings(
-                user_api_key_dict=user_api_key_dict,
-                prisma_client=prisma_client,
-                proxy_logging_obj=proxy_logging_obj,
-            )
-
-            # If router_settings found (from key or team), apply them
-            # Pass settings as per-request overrides instead of creating a new Router
-            # This avoids expensive Router instantiation on each request
-            if router_settings is not None:
-                self.data["router_settings_override"] = router_settings
-                try:
-                    self.data["_router_weights"] = validate_router_weights(router_settings.get("weights"))
-                except ValidationError:
-                    self.data["_router_weights"] = None
-                    verbose_proxy_logger.warning(
-                        "Ignoring invalid saved router weights; update team/key router_settings"
-                    )
-                alias_target: Final = await _resolve_per_request_model_group_alias(
+            self.data.update(
+                await hierarchical_router_settings_updates(
                     requested_model=self.data.get("model"),
-                    router_settings=router_settings,
                     user_api_key_dict=user_api_key_dict,
                     llm_router=llm_router,
+                    proxy_config=proxy_config,
+                    proxy_logging_obj=proxy_logging_obj,
+                    apply_model_group_alias=True,
                 )
-                if alias_target is not None:
-                    self.data["model"] = alias_target
+            )
 
         aliased_model: Final = self.data.get("model")
         if llm_router is not None and route_type in ROUTER_SCHEDULED_ROUTE_TYPES and isinstance(aliased_model, str):

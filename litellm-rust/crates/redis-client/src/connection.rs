@@ -33,11 +33,11 @@ impl Connection {
             .response_timeout(timeout)
             .retries(RETRIES);
         let builder = match &endpoint.username {
-            Some(username) => builder.username(username),
+            Some(username) => builder.username(username.expose()),
             None => builder,
         };
         let builder = match &endpoint.password {
-            Some(password) => builder.password(password),
+            Some(password) => builder.password(password.expose()),
             None => builder,
         };
         let config = ClusterConfig::new()
