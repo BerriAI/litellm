@@ -1,7 +1,8 @@
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
-from typing import Final, Literal, TypeAlias
+from typing import Final, Literal, Protocol, TypeAlias
 
 from pydantic import Field
 from typing_extensions import ReadOnly, TypedDict
@@ -79,6 +80,19 @@ class PassthroughStandardLoggingPayload(TypedDict, total=False):
     """
 
     end_time: ReadOnly[datetime]
+
+
+@dataclass(frozen=True, slots=True)
+class WebSocketSessionUsage:
+    model: str
+    custom_llm_provider: str
+    response_cost: float | None
+
+
+class WebSocketSessionMeter(Protocol):
+    def measure(self, client_text: str) -> int: ...
+
+    def price(self, total: int) -> WebSocketSessionUsage: ...
 
 
 class PassThroughGuardrailSettings(LiteLLMPydanticObjectBase):

@@ -2,6 +2,8 @@ import asyncio
 import copy
 import logging
 from collections.abc import Iterator, Mapping
+from datetime import datetime
+from queue import Queue
 from types import SimpleNamespace
 from typing import Any, Dict, Final, cast
 
@@ -13,7 +15,9 @@ from starlette.requests import Request
 from starlette.responses import Response
 
 import litellm
-from litellm._logging import verbose_proxy_logger
+from litellm._logging import session_id_var, trace_id_var, verbose_proxy_logger
+from litellm.caching.caching import DualCache
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.models.team import LiteLLM_TeamTableCachedObj
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -21,6 +25,7 @@ from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.image_endpoints import endpoints
 from litellm.proxy.proxy_server import PrismaClient, ProxyConfig
 from litellm.proxy.utils import ProxyLogging
+from litellm.router_utils.router_callbacks.track_deployment_metrics import get_deployment_failures_for_current_minute
 from litellm.types.utils import ImageObject, ImageResponse
 from litellm.utils import custom_llm_setup
 
@@ -445,6 +450,7 @@ def _image_generation_client(
     monkeypatch: pytest.MonkeyPatch,
     user_api_key_dict: UserAPIKeyAuth,
     team_settings: Mapping[str, object] | None = None,
+    working_params: Mapping[str, object] | None = None,
 ) -> tuple[TestClient, _ImageRouterHandler]:
     from litellm.proxy import proxy_server
 
@@ -467,8 +473,16 @@ def _image_generation_client(
 
     router: Final = litellm.Router(
         model_list=[
-            {"model_name": "A", "litellm_params": {"model": "image-regression/failing"}},
-            {"model_name": "B", "litellm_params": {"model": "image-regression/working"}},
+            {
+                "model_name": "A",
+                "litellm_params": {"model": "image-regression/failing"},
+                "model_info": {"id": "image-regression-failing"},
+            },
+            {
+                "model_name": "B",
+                "litellm_params": {"model": "image-regression/working", **(working_params or {})},
+                "model_info": {"id": "image-regression-working"},
+            },
         ],
         num_retries=0,
     )
@@ -483,8 +497,142 @@ def _image_generation_client(
 
     app: Final = FastAPI()
     app.include_router(endpoints.router)
+    app.add_exception_handler(ProxyException, proxy_server.openai_exception_handler)
     app.dependency_overrides[user_api_key_auth] = lambda: user_api_key_dict
     return TestClient(app, raise_server_exceptions=False), handler
+
+
+class _ImageOutcomeLogger(CustomLogger):
+    def __init__(self) -> None:
+        self.events: Queue[tuple[object, object, object]] = Queue()
+        self.messages: Queue[object] = Queue()
+        self.correlation: Queue[tuple[str, str]] = Queue()
+
+    async def async_log_failure_event(
+        self,
+        kwargs: dict[str, object],
+        response_obj: object,
+        start_time: datetime,
+        end_time: datetime,
+    ) -> None:
+        self.messages.put(kwargs.get("messages"))
+        self.correlation.put((trace_id_var.get(), session_id_var.get()))
+        self.events.put((kwargs.get("call_type"), kwargs.get("litellm_call_id"), kwargs.get("exception")))
+
+    async def async_log_success_event(
+        self,
+        kwargs: dict[str, object],
+        response_obj: object,
+        start_time: datetime,
+        end_time: datetime,
+    ) -> None:
+        self.messages.put(kwargs.get("messages"))
+        self.events.put((kwargs.get("call_type"), kwargs.get("litellm_call_id"), response_obj))
+
+
+class _RewritingImageLogger(_ImageOutcomeLogger):
+    async def async_pre_call_hook(
+        self, user_api_key_dict: UserAPIKeyAuth, cache: DualCache, data: dict[str, object], call_type: str
+    ) -> dict[str, object]:
+        return {**data, "messages": [{"role": "user", "content": "sanitized prompt"}]}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "path", ("/v1/images/generations", "/images/generations", "/openai/deployments/B/images/generations")
+)
+async def test_router_refused_image_generation_reaches_failure_callbacks(
+    monkeypatch: pytest.MonkeyPatch, path: str
+) -> None:
+    from litellm.proxy import proxy_server
+
+    logger: Final = _ImageOutcomeLogger()
+    monkeypatch.setattr(litellm, "callbacks", [logger])
+    client, handler = _image_generation_client(
+        monkeypatch, UserAPIKeyAuth(), working_params={"max_budget": 1, "budget_duration": "1d"}
+    )
+    router: Final = proxy_server.llm_router
+    assert router is not None and router.router_budget_logger is not None
+    router.router_budget_logger.dual_cache.set_cache("deployment_spend:image-regression-working:1d", 2)
+
+    with client:
+        response: Final = client.post(
+            path, json={"model": "B", "prompt": "draw a tree"}, headers={"x-litellm-call-id": "refused-image"}
+        )
+        assert response.status_code == 429, response.text
+        call_type, call_id, exception = logger.events.get(timeout=5)
+
+    assert (call_type, call_id) == ("aimage_generation", "refused-image")
+    assert isinstance(exception, ValueError) and "crossed budget" in str(exception)
+    assert handler.calls == []
+    assert logger.events.empty()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("supply_logging", (False, True))
+async def test_image_router_refusal_without_or_with_caller_logging(
+    monkeypatch: pytest.MonkeyPatch, supply_logging: bool
+) -> None:
+    from litellm.proxy import proxy_server
+
+    logger: Final = _ImageOutcomeLogger()
+    monkeypatch.setattr(litellm, "callbacks", [logger])
+    monkeypatch.setattr(litellm, "request_correlation_in_logs", True)
+    _image_generation_client(monkeypatch, UserAPIKeyAuth(), working_params={"max_budget": 1, "budget_duration": "1d"})
+    router: Final = proxy_server.llm_router
+    assert router is not None and router.router_budget_logger is not None
+    router.router_budget_logger.dual_cache.set_cache("deployment_spend:image-regression-working:1d", 2)
+    kwargs: Final[dict[str, object]] = {"litellm_trace_id": "refused-trace", "litellm_session_id": "refused-session"}
+    if supply_logging:
+        logging_obj, _ = litellm.utils.function_setup(
+            "aimage_generation", litellm.utils.Rules(), datetime.now(),
+            model="B", prompt="draw a tree", litellm_call_id="supplied-image", **kwargs,
+        )
+        kwargs.update(litellm_logging_obj=logging_obj, litellm_call_id="supplied-image")
+
+    context_before: Final = (trace_id_var.get(), session_id_var.get())
+    with pytest.raises(ValueError, match="crossed budget"):
+        await router.aimage_generation(model="B", prompt="draw a tree", **kwargs)
+    assert (trace_id_var.get(), session_id_var.get()) == context_before
+    call_type, call_id, exception = await asyncio.to_thread(logger.events.get, timeout=5)
+    assert call_type == "aimage_generation" and isinstance(exception, ValueError)
+    assert call_id == "supplied-image" if supply_logging else isinstance(call_id, str) and call_id
+    assert logger.events.empty()
+    assert logger.correlation.get_nowait() == ("refused-trace", "refused-session")
+
+
+@pytest.mark.parametrize(("model", "status_code"), (("A", 429), ("B", 200)))
+@pytest.mark.parametrize("rewrite_prompt", (False, True))
+def test_image_generation_provider_outcome_is_logged_once(
+    monkeypatch: pytest.MonkeyPatch, model: str, status_code: int, rewrite_prompt: bool
+) -> None:
+    logger: Final = _RewritingImageLogger() if rewrite_prompt else _ImageOutcomeLogger()
+    monkeypatch.setattr(litellm, "callbacks", [logger])
+    client, handler = _image_generation_client(monkeypatch, UserAPIKeyAuth())
+    with client:
+        response: Final = client.post(
+            "/v1/images/generations",
+            json={"model": model, "prompt": "draw a tree"},
+            headers={"x-litellm-call-id": "provider-image"},
+        )
+        assert response.status_code == status_code, response.text
+        call_type, call_id, outcome = logger.events.get(timeout=5)
+    assert (call_type, call_id) == ("aimage_generation", "provider-image")
+    assert isinstance(outcome, litellm.RateLimitError if model == "A" else ImageResponse)
+    assert logger.messages.get_nowait() == [
+        {"role": "user", "content": "sanitized prompt" if rewrite_prompt else "draw a tree"}
+    ]
+    assert len(handler.calls) == 1
+    assert logger.events.empty()
+
+
+def test_image_generation_missing_prompt_keeps_its_validation_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    client, handler = _image_generation_client(monkeypatch, UserAPIKeyAuth())
+    with client:
+        response: Final = client.post("/v1/images/generations", json={"model": "B"})
+    assert response.status_code == 400, response.text
+    assert response.json()["error"]["param"] == "prompt"
+    assert handler.calls == []
 
 
 def test_image_generation_uses_key_router_settings_fallbacks(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -526,7 +674,7 @@ def test_image_generation_without_router_settings_does_not_use_fallback(monkeypa
 
     response: Final = client.post("/v1/images/generations", json={"model": "A", "prompt": "draw a tree"})
 
-    assert response.status_code == 500, response.text
+    assert response.status_code == 429, response.text
     assert handler.calls == ["failing"], response.text
 
 
@@ -547,12 +695,23 @@ def test_image_generation_uses_key_model_group_alias(monkeypatch: pytest.MonkeyP
 
 
 def test_image_generation_uses_key_num_retries(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy import proxy_server
+
+    logger: Final = _ImageOutcomeLogger()
+    monkeypatch.setattr(litellm, "callbacks", [logger])
     client, handler = _image_generation_client(
         monkeypatch,
         UserAPIKeyAuth(router_settings={"num_retries": 2}),
     )
 
-    response: Final = client.post("/v1/images/generations", json={"model": "A", "prompt": "draw a tree"})
+    with client:
+        response: Final = client.post("/v1/images/generations", json={"model": "A", "prompt": "draw a tree"})
+        events: Final = [logger.events.get(timeout=5) for _ in range(3)]
 
-    assert response.status_code == 500, response.text
+    assert response.status_code == 429, response.text
     assert handler.calls == ["failing", "failing", "failing"], response.text
+    assert all(isinstance(event[2], litellm.RateLimitError) for event in events)
+    assert logger.events.empty()
+    router: Final = proxy_server.llm_router
+    assert router is not None
+    assert get_deployment_failures_for_current_minute(router, "image-regression-failing") == 3

@@ -154,6 +154,8 @@ from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY,
     EndpointType,
     PassthroughStandardLoggingPayload,
+    WebSocketSessionMeter,
+    WebSocketSessionUsage,
     WebsocketUpstreamFrameKind,
 )
 from litellm.types.utils import TRUSTED_CALLBACK_VARS_FIELD, CallTypes, Usage
@@ -2904,6 +2906,17 @@ _EXPLICIT_SUCCESS_KWARGS: Final = frozenset({"logging_obj", "passthrough_logging
 WALKOUT_TURN_DRAIN_SECONDS: Final = 600.0
 
 
+def _metered_client_text(meter: WebSocketSessionMeter | None, client_text: str) -> int:
+    return 0 if meter is None else meter.measure(client_text)
+
+
+def _log_session_usage(logging_obj: LiteLLMLoggingObj, usage: WebSocketSessionUsage) -> None:
+    logging_obj.model = usage.model  # rebind-ok: the spend logger reads model and cost off the shared logging object
+    logging_obj.model_call_details["model"] = usage.model  # rebind-ok: same shared logging object
+    logging_obj.model_call_details["custom_llm_provider"] = usage.custom_llm_provider  # rebind-ok: same
+    logging_obj.model_call_details["response_cost"] = usage.response_cost  # rebind-ok: same
+
+
 async def websocket_passthrough_request(
     websocket: WebSocket,
     target: str,
@@ -2919,6 +2932,7 @@ async def websocket_passthrough_request(
     walkout_turn_drain_seconds: float = WALKOUT_TURN_DRAIN_SECONDS,
     builtin_provider_route: bool = False,
     model: str | None = None,
+    meter: WebSocketSessionMeter | None = None,
 ):
     """
     WebSocket passthrough request handler.
@@ -2939,6 +2953,7 @@ async def websocket_passthrough_request(
             left or was refused, so the provider's usage for it still reaches spend
         builtin_provider_route: Whether a built-in provider route serves the connection, so its URL names the provider
         model: The model the caller named before connecting, logged on a failure before the setup frame arrives
+        meter: Prices the session from the client text frames delivered upstream, for an upstream that reports no usage
     """
     from litellm.litellm_core_utils.litellm_logging import Logging
     from litellm.proxy.proxy_server import proxy_config, proxy_logging_obj
@@ -2949,6 +2964,7 @@ async def websocket_passthrough_request(
     # Initialize tracking variables
     start_time: Final = datetime.now()
     websocket_messages: Final[list[dict[str, object]]] = []
+    metered_total = 0  # rebind-ok: forward_client_to_upstream adds the measure of each client text frame it delivers
     litellm_call_id: Final = str(uuid.uuid4())
 
     verbose_proxy_logger.info("WebSocket passthrough (%s): Starting WebSocket connection to %s", endpoint, target)
@@ -3166,6 +3182,7 @@ async def websocket_passthrough_request(
 
             async def forward_client_to_upstream() -> None:
                 """Forward messages from client to upstream WebSocket"""
+                nonlocal metered_total
                 try:
                     while True:
                         message = await websocket.receive()
@@ -3245,6 +3262,7 @@ async def websocket_passthrough_request(
                                 _RefuseClientFrame,
                             ):
                                 break
+                            metered_total += _metered_client_text(meter, text_data)
                         elif bytes_data is not None:
                             if isinstance(
                                 await _relay_client_frame(
@@ -3370,6 +3388,9 @@ async def websocket_passthrough_request(
                     code=upstream_close.code,
                     reason=_truncated_close_reason(upstream_close.reason),
                 )
+
+            if meter is not None:
+                _log_session_usage(logging_obj, meter.price(metered_total))
 
             if _session_end_needs_a_row(upstream_frame_kind, websocket_messages, ledger):
                 lanes_in_flight: Final = (
