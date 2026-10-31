@@ -377,6 +377,22 @@ class TestTruncateBase64InMessagesAsync:
         assert threading.get_ident() not in offload_threads
 
     @pytest.mark.asyncio
+    async def test_plain_text_over_the_inline_limit_is_copied_off_the_event_loop(
+        self, monkeypatch: pytest.MonkeyPatch, scan_threads: Sequence[int]
+    ):
+        monkeypatch.setattr(logging_utils, "BASE64_TRUNCATION_OFFLOAD_THRESHOLD_CHARS", 1_000)
+        monkeypatch.setattr(logging_utils, "BASE64_TRUNCATION_INLINE_COPY_MAX_CHARS", 10_000)
+        messages: Final = _tool_result_messages('data: {"choices": [{"delta": {"content": "a; b"}}]}\n\n' * 400)
+
+        result: Final = await truncate_base64_in_messages_async(messages)
+        offload_threads: Final = tuple(scan_threads)
+
+        assert result == messages
+        assert result is not messages
+        assert offload_threads
+        assert threading.get_ident() not in offload_threads
+
+    @pytest.mark.asyncio
     async def test_none_and_disabled_truncation_short_circuit(self, monkeypatch, scan_threads):
         assert await truncate_base64_in_messages_async(None) is None
         monkeypatch.setattr(logging_utils, "MAX_BASE64_LENGTH_FOR_LOGGING", 0)
