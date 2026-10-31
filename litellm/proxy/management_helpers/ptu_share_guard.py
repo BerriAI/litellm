@@ -5,8 +5,8 @@ from typing import Final
 
 from fastapi import HTTPException
 
+from litellm.litellm_core_utils.ptu_shares import deployments_shared_with
 from litellm.router import Router
-from litellm.router_utils.ptu_shares import deployments_shared_with
 
 
 def raise_if_teams_hold_ptu_shares(team_ids: Sequence[str], llm_router: Router | None) -> None:
