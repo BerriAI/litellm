@@ -23,7 +23,11 @@ from litellm.proxy.management_endpoints.daily_activity_routes import (
     router,
 )
 from litellm.router import Router
-from litellm.types.proxy.management_endpoints.common_daily_activity import KeySpendMetrics, SpendMetrics
+from litellm.types.proxy.management_endpoints.common_daily_activity import (
+    KeySpendMetrics,
+    SpendAnalyticsPaginatedResponse,
+    SpendMetrics,
+)
 from litellm.types.repositories.daily_activity import (
     AggregatedRows,
     DailyActivityScope,
@@ -908,6 +912,50 @@ def test_key_page_route_rejects_invalid_bounds(
 
     assert response.status_code == 422, response.text
     repository.key_page.assert_not_awaited()
+
+
+def _entity_spend_by_day(body: SpendAnalyticsPaginatedResponse) -> dict[str, dict[str, float]]:
+    return {
+        day.date.isoformat(): {entity_id: entity.metrics.spend for entity_id, entity in day.breakdown.entities.items()}
+        for day in body.results
+    }
+
+
+def test_admin_user_aggregate_breaks_spend_down_per_user_with_email_and_alias(
+    daily_activity_client: tuple[TestClient, _FakeRepository],
+) -> None:
+    client, _ = daily_activity_client
+    response: Final = client.get("/user/daily/activity/aggregated", params=_DATE_PARAMS)
+
+    assert response.status_code == 200, response.text
+    body: Final = SpendAnalyticsPaginatedResponse.model_validate_json(response.content)
+    spend_by_day: Final = _entity_spend_by_day(body)
+    assert spend_by_day == {
+        "2025-01-01": {"user-a": 12.5, "user-b": 100.0},
+        "2025-01-02": {"user-a": 2.0},
+    }, response.text
+    assert sum(spend for day in spend_by_day.values() for spend in day.values()) == body.metadata.total_spend
+    entities: Final = next(day for day in body.results if day.date.isoformat() == "2025-01-01").breakdown.entities
+    assert entities["user-a"].metadata == {"user_email": "user@example.test", "user_alias": "Alias A"}
+    assert entities["user-b"].metadata == {"user_email": "other-user@example.test", "user_alias": None}
+
+
+def test_non_admin_user_aggregate_breaks_down_only_their_own_spend(
+    daily_activity_client: tuple[TestClient, _FakeRepository],
+) -> None:
+    client, _ = daily_activity_client
+    response: Final = client.get(
+        "/user/daily/activity/aggregated",
+        params=_DATE_PARAMS,
+        headers={"x-user-role": LitellmUserRoles.INTERNAL_USER.value, "x-user-id": "user-a"},
+    )
+
+    assert response.status_code == 200, response.text
+    assert _entity_spend_by_day(SpendAnalyticsPaginatedResponse.model_validate_json(response.content)) == {
+        "2025-01-01": {"user-a": 12.5},
+        "2025-01-02": {"user-a": 2.0},
+    }, response.text
+    assert "other-user@example.test" not in response.text
 
 
 def test_user_page_route_ranks_users_by_spend_and_attaches_metadata(
