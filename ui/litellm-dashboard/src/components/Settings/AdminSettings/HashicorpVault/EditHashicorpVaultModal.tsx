@@ -4,7 +4,9 @@ import { useHashicorpVaultConfig } from "@/app/(dashboard)/hooks/configOverrides
 import { useUpdateHashicorpVaultConfig } from "@/app/(dashboard)/hooks/configOverrides/useUpdateHashicorpVaultConfig";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { toast } from "@/lib/toast";
+import type { ParseKeys } from "i18next";
 import React, { useMemo } from "react";
+import { useTranslation } from "react-i18next";
 import { z } from "zod";
 import { FieldGroup } from "@/components/ui/field";
 import { FormField } from "@/components/shared/form/FormField";
@@ -14,18 +16,19 @@ import { Input } from "@/components/ui/input";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import { Separator } from "@/components/ui/separator";
 import { useZodForm } from "@/lib/forms/useZodForm";
+import i18n from "@/i18n/i18n";
 import { SENSITIVE_FIELDS, FIELD_LABELS } from "./constants";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
 interface VaultFieldGroup {
-  title: string;
-  subtitle?: string;
+  title: ParseKeys;
+  subtitle?: ParseKeys;
   fields: string[];
 }
 
 const FIELD_GROUPS: VaultFieldGroup[] = [
   {
-    title: "Connection",
+    title: "adminPanel.hashicorpVault.editModal.groups.connection.title",
     fields: [
       "vault_addr",
       "vault_namespace",
@@ -36,18 +39,18 @@ const FIELD_GROUPS: VaultFieldGroup[] = [
     ],
   },
   {
-    title: "Token Authentication",
-    subtitle: "Use a Vault token to authenticate. Only one auth method is required.",
+    title: "adminPanel.hashicorpVault.editModal.groups.token.title",
+    subtitle: "adminPanel.hashicorpVault.editModal.groups.token.subtitle",
     fields: ["vault_token"],
   },
   {
-    title: "AppRole Authentication",
-    subtitle: "Use AppRole credentials to authenticate. Only one auth method is required.",
+    title: "adminPanel.hashicorpVault.editModal.groups.appRole.title",
+    subtitle: "adminPanel.hashicorpVault.editModal.groups.appRole.subtitle",
     fields: ["approle_role_id", "approle_secret_id", "approle_mount_path"],
   },
   {
-    title: "TLS",
-    subtitle: "Optional client certificate for mTLS.",
+    title: "adminPanel.hashicorpVault.editModal.groups.tls.title",
+    subtitle: "adminPanel.hashicorpVault.editModal.groups.tls.subtitle",
     fields: ["client_cert", "client_key", "vault_cert_role"],
   },
 ];
@@ -61,7 +64,7 @@ const buildSchema = (fields: readonly string[]): z.ZodType<VaultFormValues, Vaul
         name,
         name === "vault_addr"
           ? z.string().refine((value) => value.length === 0 || /^https?:\/\/.+/.test(value), {
-              message: "Must start with http:// or https://",
+              error: () => i18n.t("adminPanel.hashicorpVault.editModal.errors.invalidUrl"),
             })
           : z.string(),
       ]),
@@ -75,6 +78,7 @@ interface EditHashicorpVaultModalProps {
 }
 
 const EditHashicorpVaultModal: React.FC<EditHashicorpVaultModalProps> = ({ isVisible, onCancel, onSuccess }) => {
+  const { t } = useTranslation();
   const { accessToken } = useAuthorized();
   const { data } = useHashicorpVaultConfig();
   const { mutate, isPending } = useUpdateHashicorpVaultConfig(accessToken);
@@ -112,7 +116,7 @@ const EditHashicorpVaultModal: React.FC<EditHashicorpVaultModalProps> = ({ isVis
 
     mutate(config, {
       onSuccess: () => {
-        toast.success("Hashicorp Vault configuration updated successfully");
+        toast.success(t("adminPanel.hashicorpVault.toasts.updated"));
         onSuccess();
       },
       onError: (err) => {
@@ -133,10 +137,17 @@ const EditHashicorpVaultModal: React.FC<EditHashicorpVaultModalProps> = ({ isVis
     const isSensitive = SENSITIVE_FIELDS.has(fieldName);
     const existingValue = rawValues[fieldName];
     const hasExistingValue = isSensitive && existingValue != null && existingValue !== "";
-    const placeholder = hasExistingValue ? `Leave blank to keep existing (${existingValue})` : fieldSchema?.description;
+    const placeholder = hasExistingValue
+      ? t("adminPanel.hashicorpVault.editModal.keepExistingPlaceholder", { value: existingValue })
+      : fieldSchema?.description;
 
     return (
-      <FormField key={fieldName} control={form.control} name={fieldName} label={FIELD_LABELS[fieldName] ?? fieldName}>
+      <FormField
+        key={fieldName}
+        control={form.control}
+        name={fieldName}
+        label={(FIELD_LABELS[fieldName] && t(FIELD_LABELS[fieldName])) ?? fieldName}
+      >
         {({ ref, ...field }) =>
           isSensitive ? (
             <PasswordInput ref={ref} placeholder={placeholder} {...field} />
@@ -152,14 +163,14 @@ const EditHashicorpVaultModal: React.FC<EditHashicorpVaultModalProps> = ({ isVis
     <Dialog open={isVisible} onOpenChange={(open) => !open && handleCancel()}>
       <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-[700px]">
         <DialogHeader>
-          <DialogTitle>Edit Hashicorp Vault Configuration</DialogTitle>
+          <DialogTitle>{t("adminPanel.hashicorpVault.editModal.title")}</DialogTitle>
         </DialogHeader>
         <form onSubmit={form.handleSubmit(handleSubmit)}>
           {FIELD_GROUPS.map((group, index) => (
             <div key={group.title}>
               {index > 0 && <Separator className="my-6" />}
-              <h5 className="mb-1 text-base font-semibold text-foreground">{group.title}</h5>
-              {group.subtitle && <p className="mb-4 text-sm text-muted-foreground">{group.subtitle}</p>}
+              <h5 className="mb-1 text-base font-semibold text-foreground">{t(group.title)}</h5>
+              {group.subtitle && <p className="mb-4 text-sm text-muted-foreground">{t(group.subtitle)}</p>}
               <FieldGroup>{group.fields.map(renderField)}</FieldGroup>
             </div>
           ))}
@@ -167,11 +178,13 @@ const EditHashicorpVaultModal: React.FC<EditHashicorpVaultModalProps> = ({ isVis
         <DialogFooter>
           <div className="flex items-center justify-end gap-2">
             <Button type="button" variant="outline" onClick={handleCancel} disabled={isPending}>
-              Cancel
+              {t("adminPanel.hashicorpVault.editModal.cancel")}
             </Button>
             <Button type="button" disabled={isPending} onClick={() => void form.handleSubmit(handleSubmit)()}>
               {isPending && <UiLoadingSpinner className="size-4 mr-1" />}
-              {isPending ? "Saving..." : "Save"}
+              {isPending
+                ? t("adminPanel.hashicorpVault.editModal.saving")
+                : t("adminPanel.hashicorpVault.editModal.save")}
             </Button>
           </div>
         </DialogFooter>
