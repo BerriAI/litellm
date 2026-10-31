@@ -1,5 +1,6 @@
 import json
 import uuid
+from collections.abc import Callable
 from typing import Final
 
 from integration._support.client import Gateway, Scenario
@@ -55,15 +56,10 @@ def _register_agent(gateway: Gateway, scenario: Scenario, name: str, url: str, s
     return identity
 
 
-def test_agent_reads_redact_credentials_filter_by_key_permission_and_keep_the_stored_credential_for_calls(
-    gateway: Gateway,
-) -> None:
-    marker: Final = "agentread" + uuid.uuid4().hex[:12]
-    secret: Final = "sk-agent-" + uuid.uuid4().hex
-
+def _authorized_peer(card_url: Callable[[], str], name: str) -> Callable[[Request], Reply]:
     def upstream(request: Request) -> Reply:
         if request.method == "GET":
-            return Reply(body=json.dumps(_peer_card(wire.url, marker)).encode())
+            return Reply(body=json.dumps(_peer_card(card_url(), name)).encode())
         body: Final = json.loads(request.body)
         return Reply(
             body=json.dumps(
@@ -80,7 +76,38 @@ def test_agent_reads_redact_credentials_filter_by_key_permission_and_keep_the_st
             ).encode()
         )
 
-    with wire_server(upstream) as wire, gateway.scenario() as scenario:
+    return upstream
+
+
+def _send_ping(gateway: Gateway, agent_id: str, key: str, message_id: str) -> None:
+    response: Final = gateway.client.post(
+        f"/a2a/{agent_id}",
+        headers={"Authorization": f"Bearer {key}"},
+        json={
+            "jsonrpc": "2.0",
+            "id": message_id,
+            "method": "message/send",
+            "params": {
+                "message": {
+                    "kind": "message",
+                    "role": "user",
+                    "messageId": message_id + "-in",
+                    "parts": [{"kind": "text", "text": "ping"}],
+                }
+            },
+        },
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["result"]["parts"] == [{"kind": "text", "text": "authorized"}], response.text
+
+
+def test_agent_reads_redact_credentials_filter_by_key_permission_and_keep_the_stored_credential_for_calls(
+    gateway: Gateway,
+) -> None:
+    marker: Final = "agentread" + uuid.uuid4().hex[:12]
+    secret: Final = "sk-agent-" + uuid.uuid4().hex
+
+    with wire_server(_authorized_peer(lambda: wire.url, marker)) as wire, gateway.scenario() as scenario:
         visible: Final = _register_agent(gateway, scenario, marker + "-visible", wire.url, secret)
         hidden: Final = _register_agent(gateway, scenario, marker + "-hidden", wire.url, secret)
         restricted: Final = scenario.key(object_permission={"agents": [visible]})
@@ -122,25 +149,7 @@ def test_agent_reads_redact_credentials_filter_by_key_permission_and_keep_the_st
         )
         assert stored == [{"api_key": secret}], stored
 
-        invoked: Final = gateway.client.post(
-            f"/a2a/{visible}",
-            headers={"Authorization": f"Bearer {restricted}"},
-            json={
-                "jsonrpc": "2.0",
-                "id": marker,
-                "method": "message/send",
-                "params": {
-                    "message": {
-                        "kind": "message",
-                        "role": "user",
-                        "messageId": marker + "-in",
-                        "parts": [{"kind": "text", "text": "ping"}],
-                    }
-                },
-            },
-        )
-        assert invoked.status_code == 200, invoked.text
-        assert invoked.json()["result"]["parts"] == [{"kind": "text", "text": "authorized"}], invoked.text
+        _send_ping(gateway, visible, restricted, marker)
         posts: Final = tuple(item for item in wire.drain() if item.method == "POST")
         assert [post.headers["authorization"] for post in posts] == [f"Bearer {secret}"], posts
 
@@ -195,26 +204,7 @@ def test_agent_updates_restore_echoed_static_header_markers_for_upstream_calls(g
     marker: Final = "agent-header-update-" + uuid.uuid4().hex[:12]
     secret: Final = "Bearer agent-header-" + uuid.uuid4().hex
 
-    def upstream(request: Request) -> Reply:
-        if request.method == "GET":
-            return Reply(body=json.dumps(_peer_card(wire.url, marker)).encode())
-        body: Final = json.loads(request.body)
-        return Reply(
-            body=json.dumps(
-                {
-                    "jsonrpc": "2.0",
-                    "id": body["id"],
-                    "result": {
-                        "kind": "message",
-                        "role": "agent",
-                        "messageId": "peer-message",
-                        "parts": [{"kind": "text", "text": "authorized"}],
-                    },
-                }
-            ).encode()
-        )
-
-    with wire_server(upstream) as wire, gateway.scenario() as scenario:
+    with wire_server(_authorized_peer(lambda: wire.url, marker)) as wire, gateway.scenario() as scenario:
         created: Final = gateway.request(
             "POST",
             "/v1/agents",
@@ -238,27 +228,6 @@ def test_agent_updates_restore_echoed_static_header_markers_for_upstream_calls(g
 
         scenario.cleanups.callback(cleanup)
 
-        def send_message(message_id: str) -> None:
-            response: Final = gateway.client.post(
-                f"/a2a/{created_agent.agent_id}",
-                headers={"Authorization": f"Bearer {gateway.key}"},
-                json={
-                    "jsonrpc": "2.0",
-                    "id": message_id,
-                    "method": "message/send",
-                    "params": {
-                        "message": {
-                            "kind": "message",
-                            "role": "user",
-                            "messageId": message_id + "-in",
-                            "parts": [{"kind": "text", "text": "ping"}],
-                        }
-                    },
-                },
-            )
-            assert response.status_code == 200, response.text
-            assert response.json()["result"]["parts"] == [{"kind": "text", "text": "authorized"}], response.text
-
         patched: Final = gateway.request(
             "PATCH",
             f"/v1/agents/{created_agent.agent_id}",
@@ -281,7 +250,7 @@ def test_agent_updates_restore_echoed_static_header_markers_for_upstream_calls(g
             (created_agent.agent_id,),
         ) == [{"static_headers": {"Authorization": secret, "X-Tenant": "tenant-b"}}]
 
-        send_message(marker + "-patch")
+        _send_ping(gateway, created_agent.agent_id, gateway.key, marker + "-patch")
         patched_posts: Final = tuple(item for item in wire.drain() if item.method == "POST")
         assert [
             (post.headers["authorization"], post.headers["x-tenant"]) for post in patched_posts
@@ -312,7 +281,7 @@ def test_agent_updates_restore_echoed_static_header_markers_for_upstream_calls(g
             (created_agent.agent_id,),
         ) == [{"static_headers": {"Authorization": secret, "X-Tenant": "tenant-b"}}]
 
-        send_message(marker + "-put")
+        _send_ping(gateway, created_agent.agent_id, gateway.key, marker + "-put")
         updated_posts: Final = tuple(item for item in wire.drain() if item.method == "POST")
         assert [
             (post.headers["authorization"], post.headers["x-tenant"]) for post in updated_posts
@@ -324,26 +293,7 @@ def test_agent_patch_replaces_real_static_header_values_for_upstream_calls(gatew
     marker: Final = "agent-header-rotation-" + uuid.uuid4().hex[:12]
     replacement: Final = "Bearer agent-header-replacement-" + uuid.uuid4().hex
 
-    def upstream(request: Request) -> Reply:
-        if request.method == "GET":
-            return Reply(body=json.dumps(_peer_card(wire.url, marker)).encode())
-        body: Final = json.loads(request.body)
-        return Reply(
-            body=json.dumps(
-                {
-                    "jsonrpc": "2.0",
-                    "id": body["id"],
-                    "result": {
-                        "kind": "message",
-                        "role": "agent",
-                        "messageId": "peer-message",
-                        "parts": [{"kind": "text", "text": "authorized"}],
-                    },
-                }
-            ).encode()
-        )
-
-    with wire_server(upstream) as wire, gateway.scenario() as scenario:
+    with wire_server(_authorized_peer(lambda: wire.url, marker)) as wire, gateway.scenario() as scenario:
         agent_id: Final = _register_agent(gateway, scenario, marker, wire.url, marker)
         patched: Final = gateway.request(
             "PATCH",
@@ -356,24 +306,7 @@ def test_agent_patch_replaces_real_static_header_values_for_upstream_calls(gatew
             (agent_id,),
         ) == [{"static_headers": {"Authorization": replacement}}]
 
-        invoked: Final = gateway.client.post(
-            f"/a2a/{agent_id}",
-            headers={"Authorization": f"Bearer {gateway.key}"},
-            json={
-                "jsonrpc": "2.0",
-                "id": marker,
-                "method": "message/send",
-                "params": {
-                    "message": {
-                        "kind": "message",
-                        "role": "user",
-                        "messageId": marker + "-in",
-                        "parts": [{"kind": "text", "text": "ping"}],
-                    }
-                },
-            },
-        )
-        assert invoked.status_code == 200, invoked.text
+        _send_ping(gateway, agent_id, gateway.key, marker)
         posts: Final = tuple(item for item in wire.drain() if item.method == "POST")
         assert [post.headers["authorization"] for post in posts] == [replacement], posts
 
