@@ -11361,8 +11361,25 @@ class TestInheritAuthGuardrails:
 
     @staticmethod
     async def _run(
-        body: dict[str, object], *, inherit: bool, user_api_key_dict: UserAPIKeyAuth
+        body: dict[str, object],
+        *,
+        inherit: bool,
+        user_api_key_dict: UserAPIKeyAuth,
+        guardrails: tuple[CustomGuardrail, ...] = (),
     ) -> tuple[list[dict[str, object]], AsyncMock]:
+        _, pre_call_data, post_call = await TestInheritAuthGuardrails._run_with_response(
+            body, inherit=inherit, user_api_key_dict=user_api_key_dict, guardrails=guardrails
+        )
+        return pre_call_data, post_call
+
+    @staticmethod
+    async def _run_with_response(
+        body: dict[str, object],
+        *,
+        inherit: bool,
+        user_api_key_dict: UserAPIKeyAuth,
+        guardrails: tuple[CustomGuardrail, ...] = (),
+    ) -> tuple[Response, list[dict[str, object]], AsyncMock]:
         pre_call_data: Final[list[dict[str, object]]] = []
 
         async def _record_pre_call(**kwargs: object) -> object:
@@ -11376,7 +11393,7 @@ class TestInheritAuthGuardrails:
         upstream: Final = httpx.Response(
             status_code=200,
             headers={"content-type": "application/json"},
-            content=b'{"id": "chatcmpl-1"}',
+            content=b'{\n  "id":"chatcmpl-1"\n}',
             request=httpx.Request("POST", "https://api.openai.com/v1/chat/completions"),
         )
         request: Final = MagicMock()
@@ -11404,7 +11421,8 @@ class TestInheritAuthGuardrails:
             )
             stack.enter_context(patch(f"{module}.read_request_body", new_callable=AsyncMock, return_value=body))
             stack.enter_context(patch(f"{module}.safe_get_request_headers", return_value={}))
-            await pass_through_request(
+            stack.enter_context(patch.object(litellm, "callbacks", list(guardrails)))
+            response: Final = await pass_through_request(
                 request=request,
                 target="https://api.openai.com/v1/chat/completions",
                 custom_headers={},
@@ -11412,7 +11430,11 @@ class TestInheritAuthGuardrails:
                 stream=False,
                 inherit_auth_guardrails=inherit,
             )
-        return pre_call_data, proxy_logging.post_call_success_hook
+        return response, pre_call_data, proxy_logging.post_call_success_hook
+
+    @staticmethod
+    def _guardrail(name: str, event_hook: GuardrailEventHooks, *, default_on: bool = False) -> CustomGuardrail:
+        return CustomGuardrail(guardrail_name=name, event_hook=event_hook, default_on=default_on)
 
     @staticmethod
     def _chat_body(**extra: object) -> dict[str, object]:
@@ -11427,7 +11449,15 @@ class TestInheritAuthGuardrails:
             project_metadata={"guardrails": ["project-guard"]},
         )
 
-        pre_call, post_call = await self._run(self._chat_body(), inherit=True, user_api_key_dict=auth)
+        pre_call, post_call = await self._run(
+            self._chat_body(),
+            inherit=True,
+            user_api_key_dict=auth,
+            guardrails=(
+                self._guardrail("key-guard", GuardrailEventHooks.pre_call),
+                self._guardrail("team-guard", GuardrailEventHooks.post_call),
+            ),
+        )
 
         assert sorted(pre_call[0]["metadata"]["guardrails"]) == ["key-guard", "project-guard", "team-guard"]
         post_call.assert_awaited_once()
@@ -11436,6 +11466,24 @@ class TestInheritAuthGuardrails:
             "project-guard",
             "team-guard",
         ]
+
+    @pytest.mark.asyncio
+    async def test_pre_call_only_guardrails_relay_the_response_untouched(self):
+        auth: Final = UserAPIKeyAuth(api_key="sk-test", metadata={"guardrails": ["key-guard"]})
+
+        response, pre_call, post_call = await self._run_with_response(
+            self._chat_body(),
+            inherit=True,
+            user_api_key_dict=auth,
+            guardrails=(
+                self._guardrail("key-guard", GuardrailEventHooks.pre_call),
+                self._guardrail("global-post", GuardrailEventHooks.post_call, default_on=True),
+            ),
+        )
+
+        assert pre_call[0]["metadata"]["guardrails"] == ["key-guard"]
+        post_call.assert_not_awaited()
+        assert response.body == b'{\n  "id":"chatcmpl-1"\n}'
 
     @pytest.mark.asyncio
     async def test_request_body_guardrails_are_added_to_the_key_guardrails(self):
