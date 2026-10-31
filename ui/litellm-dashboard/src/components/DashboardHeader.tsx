@@ -1,5 +1,7 @@
 "use client";
 
+import LanguageSwitcher from "@/components/LanguageSwitcher";
+import { useTranslation } from "@/i18n/useTranslation";
 import { useTerminology } from "@/contexts/TerminologyContext";
 import {
   Breadcrumb,
@@ -41,6 +43,7 @@ export function DashboardHeader({
   navigationTrigger?: ReactNode;
   deploymentHealth?: ReactNode;
 }) {
+  const { t } = useTranslation();
   const term = useTerminology();
   const { title } = getBreadcrumb(usePathname());
   const isDesktop = useMediaQuery("(min-width: 768px)", { initializeWithValue: false });
@@ -68,7 +71,7 @@ export function DashboardHeader({
           </BreadcrumbItem>
           <BreadcrumbSeparator className="max-md:hidden" />
           <BreadcrumbItem className="min-w-0">
-            <BreadcrumbPage className="truncate">{term(title)}</BreadcrumbPage>
+            <BreadcrumbPage className="truncate">{term(t(title, { defaultValue: title }))}</BreadcrumbPage>
           </BreadcrumbItem>
         </BreadcrumbList>
       </Breadcrumb>
@@ -88,6 +91,7 @@ export function DashboardHeader({
           <BlogDropdown />
           {!hideCommunityLinks && <CommunityEngagementButtons />}
           <ToolbarSeparator />
+          <LanguageSwitcher />
           <ThemeToggle />
           {deploymentHealth}
           <NotificationsBell accessToken={accessToken} />
@@ -98,15 +102,16 @@ export function DashboardHeader({
           <NotificationsBell accessToken={accessToken} />
           <Popover open={!isDesktop && mobileToolsOpen} onOpenChange={setMobileToolsOpen}>
             <PopoverTrigger
-              render={<Button variant="ghost" size="icon" className="size-11" aria-label="More options" />}
+              render={<Button variant="ghost" size="icon" className="size-11" aria-label={t("More options")} />}
             >
               <Ellipsis />
             </PopoverTrigger>
             <PopoverContent align="end" className="max-w-[calc(100vw-2rem)]">
-              <PopoverTitle>Gateway tools</PopoverTitle>
+              <PopoverTitle>{t("Gateway tools")}</PopoverTitle>
               <ViewSwitcher />
               {showWorkerSwitch && <WorkerDropdown onWorkerSwitch={handleWorkerSwitch} />}
               <div className="flex flex-wrap items-center gap-2">
+                <LanguageSwitcher />
                 <ThemeToggle />
                 <DocsLink />
                 <BlogDropdown />
