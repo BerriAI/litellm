@@ -10,8 +10,10 @@ import ast
 import asyncio
 import contextlib
 import contextvars
+import gc
 import os
 import re
+import weakref
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -1615,6 +1617,32 @@ def test_restamp_shows_the_handlers_own_error_with_the_prompt_scrubbed(monkeypat
     assert span.attributes["error.message"] == f"blocked: {'redacted-by-litellm' if redact else secret}"
     assert "_raised" in span.attributes["litellm.provider.error.stack_trace"]
     assert "router.py" not in span.attributes["litellm.provider.error.stack_trace"]
+
+
+def test_failure_hook_lets_the_failed_requests_span_be_freed(monkeypatch):
+    """The proxy keeps the request's root span in the request's own metadata. What the failure hook
+    keeps for the handler's restamp must not hold that span alive once the request is done."""
+    import litellm
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    monkeypatch.setattr(litellm, "turn_off_message_logging", True)
+    logger, _ = _logger()
+    server = logger._emitter.start_span(SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME)
+    server_ref: Final = weakref.ref(server)
+    asyncio.run(
+        logger.async_post_call_failure_hook(
+            request_data={
+                "messages": [{"role": "user", "content": "my ssn is 123-45-6789"}],
+                "metadata": {"litellm_parent_otel_span": server},
+            },
+            original_exception=_proxy_exc("blocked", 400),
+            user_api_key_dict=UserAPIKeyAuth(parent_otel_span=server),
+        )
+    )
+    del server
+    gc.collect()
+
+    assert server_ref() is None
 
 
 def test_record_error_attributes_on_span_does_not_duplicate_an_already_stamped_error():
