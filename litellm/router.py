@@ -1332,6 +1332,36 @@ def _base_model_widened_window(
     return MappingProxyType({"max_input_tokens": base_max_input_tokens})
 
 
+_NO_PROMOTED_FIELDS: Final[Mapping[str, object]] = MappingProxyType({})
+_NESTED_MODEL_INFO_WARNING: Final = (
+    "model=%s: 'model_info' is nested inside 'litellm_params'. It belongs at the deployment "
+    "level; applying it anyway, but please move it."
+)
+
+
+def _model_info_nested_under_litellm_params(
+    litellm_params: Mapping[str, object], model_info: Mapping[str, object]
+) -> Mapping[str, object]:
+    """
+    Fields from a `model_info` block misplaced inside `litellm_params`, which would otherwise
+    be dropped: `model_info` is a declared field on GenericLiteLLMParams, so the misplaced
+    block validates and is then ignored by every cost path.
+
+    Deployment-level values win, and a nested `id` never displaces the generated
+    deployment id.
+    """
+    nested: Final = litellm_params.get("model_info")
+    if not isinstance(nested, dict):
+        return _NO_PROMOTED_FIELDS
+    return MappingProxyType(
+        {
+            key: value
+            for key, value in _MODEL_INFO_ADAPTER.validate_python(nested).items()
+            if key != "id" and value is not None and model_info.get(key) is None
+        }
+    )
+
+
 _SETTING_ATTRIBUTES: Final = frozenset("_core_" + name for name in SETTING_FIELDS)
 
 
@@ -10940,6 +10970,15 @@ class Router(DeprecatedRouterMembers):
         - None: If the deployment is not active for the current environment (if 'supported_environments' is set in litellm_params)
         """
         try:
+            _promoted_model_info: Final = _model_info_nested_under_litellm_params(
+                _LITELLM_PARAMS_ADAPTER.validate_python(_litellm_params),
+                _MODEL_INFO_ADAPTER.validate_python(_model_info),
+            )
+            if _promoted_model_info:
+                verbose_router_logger.warning(_NESTED_MODEL_INFO_WARNING, _model_name)
+                _model_info.update(  # pyright: ignore[reportUnknownMemberType]  # _model_info is an untyped config dict
+                    _promoted_model_info
+                )
             config_sourced: Final = _model_info.get("db_model") is not True
             identity_error: Final = (
                 ptu_identity_error(
@@ -11787,6 +11826,15 @@ class Router(DeprecatedRouterMembers):
         declared_params: Final = deployment.litellm_params.model_dump(exclude_none=True)
         warn_on_provider_credential_mismatch(model_name=deployment.model_name, litellm_params=declared_params)
         warn_on_ignored_model_capability_flags(model_name=deployment.model_name, litellm_params=declared_params)
+
+        _promoted_model_info: Final = _model_info_nested_under_litellm_params(
+            deployment.litellm_params.model_dump(), deployment.model_info.model_dump()
+        )
+        if _promoted_model_info:
+            verbose_router_logger.warning(_NESTED_MODEL_INFO_WARNING, deployment.model_name)
+            for _key, _value in _promoted_model_info.items():
+                setattr(deployment.model_info, _key, _value)
+
         warn_on_unenforced_endpoint_flag(
             model_name=deployment.model_name, model_info=deployment.model_info.model_dump()
         )
