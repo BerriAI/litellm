@@ -13740,7 +13740,11 @@ async def audio_transcriptions(
                     replacement: Final = await proxy_logging_obj.post_call_failure_hook(
                         user_api_key_dict=user_api_key_dict,
                         original_exception=stream_error,
-                        request_data=data,
+                        request_data=(
+                            {**data, "litellm_logging_obj": stream_logging_obj}
+                            if isinstance(stream_logging_obj, LiteLLMLoggingObj)
+                            else data
+                        ),
                     )
                     yield _transcription_sse_error_frame(stream_error if replacement is None else replacement)
                     yield TRANSCRIPTION_STREAM_DONE_FRAME

@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import io
 import json
+import math
+import wave
 from collections.abc import AsyncIterator, Callable, Mapping
 from contextlib import AbstractContextManager
 from typing import Final
@@ -31,6 +33,7 @@ from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.proxy import proxy_server
 from litellm.proxy._types import ProxyErrorTypes, ProxyException
 from litellm.proxy.route_llm_request import route_request
+from litellm.proxy.utils import _failure_fields_to_lift
 from litellm.types.guardrails import GuardrailEventHooks, GuardrailStreamScope
 from litellm.types.llms.openai import HttpxBinaryResponseContent
 from litellm.types.proxy.policy_engine.pipeline_types import GuardrailPipeline, PipelineStep
@@ -739,6 +742,74 @@ def test_streamed_transcription_frames_keep_the_provider_event_shape(
 
     assert response.status_code == 200
     assert _sse_events(response.text) == provider_events
+
+
+class _FirstDeltaThenReset(httpx.AsyncByteStream):
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        yield b'data: {"type":"transcript.text.delta","delta":"Good"}\n\n'
+        raise httpx.ReadError("connection reset")
+
+
+def _silent_wav(seconds: int) -> bytes:
+    buffer: Final = io.BytesIO()
+    with wave.open(buffer, "wb") as wav:
+        wav.setnchannels(1)
+        wav.setsampwidth(2)
+        wav.setframerate(16_000)
+        wav.writeframes(b"\x00\x00" * 16_000 * seconds)
+    return buffer.getvalue()
+
+
+@pytest.mark.usefixtures("patched_transcription")
+def test_a_streamed_transcription_that_fails_mid_transcript_bills_the_uploaded_seconds(
+    client: TestClient,
+    auth_as: Callable[[], AbstractContextManager[None]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    upstream: Final = AsyncOpenAI(
+        api_key="sk-test",
+        base_url="https://upstream.example/v1",
+        http_client=httpx.AsyncClient(
+            transport=httpx.MockTransport(
+                lambda request: httpx.Response(
+                    200, headers={"content-type": "text/event-stream"}, stream=_FirstDeltaThenReset()
+                )
+            )
+        ),
+    )
+
+    async def route_to_the_sdk(
+        data: Mapping[str, object], route_type: str, llm_router: object, user_model: object
+    ) -> object:
+        return litellm.atranscription(model="openai/gpt-transcribe", file=data["file"], stream=True, client=upstream)
+
+    four_second_upload: Final = _silent_wav(4)
+
+    async def stream_form(request: object) -> FormData:
+        return FormData(
+            [
+                ("file", UploadFile(filename="sample.wav", file=io.BytesIO(four_second_upload))),
+                ("model", "gpt-transcribe"),
+                ("stream", "true"),
+            ]
+        )
+
+    monkeypatch.setattr(proxy_server, "get_form_data", stream_form)
+    monkeypatch.setattr(proxy_server, "route_request", route_to_the_sdk)
+
+    with auth_as():
+        response: Final = client.post(
+            "/v1/audio/transcriptions",
+            files={"file": ("sample.wav", four_second_upload, "audio/wav")},
+            data={"model": "gpt-transcribe", "stream": "true"},
+        )
+
+    assert response.status_code == 200
+    assert '"error"' in response.text
+    failure_request: Final = proxy_server.proxy_logging_obj.post_call_failure_hook.await_args.kwargs["request_data"]
+    billed_cost: Final = _failure_fields_to_lift(failure_request)["response_cost"]
+    assert isinstance(billed_cost, float)
+    assert math.isclose(billed_cost, 4 * litellm.model_cost["gpt-transcribe"]["input_cost_per_second"])
 
 
 async def _scribe_stream_form(request: object) -> FormData:
