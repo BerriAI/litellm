@@ -1,7 +1,7 @@
 import base64
 import json
 import uuid
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from typing import Final
 
 import pytest
@@ -120,6 +120,15 @@ def _credentials(model: str) -> dict[str, str]:
     return {"api_key": "synthetic-bedrock-bearer", "aws_region_name": "us-east-1"}
 
 
+def _content_before_eof(response: CustomStreamWrapper, cut: bool) -> Iterator[str]:
+    fragments: Final = (str(chunk.choices[0].delta.content or "") for chunk in response)
+    if cut:
+        with pytest.raises(MidStreamFallbackError, match="Stream ended before a finish_reason was received"):
+            yield from fragments
+    else:
+        yield from fragments
+
+
 @pytest.mark.parametrize("model", [_ANTHROPIC_MODEL, _BEDROCK_INVOKE_MODEL], ids=["anthropic", "bedrock_invoke"])
 @pytest.mark.parametrize(
     ("shape", "cut"),
@@ -142,12 +151,6 @@ def test_sync_stream_cut_before_the_json_tool_block_closes_still_yields_the_whol
             **_credentials(model),
         )
         assert isinstance(response, CustomStreamWrapper), type(response)
-        fragments: Final[list[str]] = []
-        if cut:
-            with pytest.raises(MidStreamFallbackError, match="Stream ended before a finish_reason was received"):
-                fragments.extend(str(chunk.choices[0].delta.content or "") for chunk in response)
-        else:
-            fragments.extend(str(chunk.choices[0].delta.content or "") for chunk in response)
-        text: Final = "".join(fragments)
+        text: Final = "".join(_content_before_eof(response, cut))
         assert len(wire.drain()) == 1
     assert json.loads(text) == _payload(marker_hex), text
