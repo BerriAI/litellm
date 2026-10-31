@@ -1666,6 +1666,7 @@ async def new_team(
     - object_permission: Optional[LiteLLM_ObjectPermissionBase] - team-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"], "agents": ["agent_1", "agent_2"], "agent_access_groups": ["dev_group"]}. IF null or {} then no object permission.
     - team_member_budget: Optional[float] - The maximum budget allocated to an individual team member.
     - team_member_budget_duration: Optional[str] - The duration of the budget for the team member. Doc [here](https://docs.litellm.ai/docs/proxy/team_budgets)
+    - team_member_budget_limits: Optional[list] - Default concurrent spending caps for each member, e.g. [{"budget_duration": "24h", "max_budget": 20}, {"budget_duration": "30d", "max_budget": 200}]. Each window resets independently at its UTC calendar boundary. A member override replaces these defaults; an empty list disables the defaults.
     - team_member_model_max_budget: Optional[dict] - Per-model budgets shared by team members without an override.
     - team_member_rpm_limit: Optional[int] - The RPM (Requests Per Minute) limit for individual team members.
     - team_member_tpm_limit: Optional[int] - The TPM (Tokens Per Minute) limit for individual team members.
@@ -2441,6 +2442,7 @@ async def update_team(
     - object_permission: Optional[LiteLLM_ObjectPermissionBase] - team-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"], "agents": ["agent_1", "agent_2"], "agent_access_groups": ["dev_group"]}. IF null or {} then no object permission.
     - team_member_budget: Optional[float] - The maximum budget allocated to an individual team member.
     - team_member_budget_duration: Optional[str] - The duration of the budget for the team member. Doc [here](https://docs.litellm.ai/docs/proxy/team_budgets)
+    - team_member_budget_limits: Optional[list] - Default concurrent spending caps for each member, e.g. [{"budget_duration": "24h", "max_budget": 20}, {"budget_duration": "30d", "max_budget": 200}]. Each window resets independently at its UTC calendar boundary. A member override replaces these defaults; an empty list disables the defaults.
     - team_member_model_max_budget: Optional[dict] - Per-model budgets shared by team members without an override.
     - team_member_rpm_limit: Optional[int] - The RPM (Requests Per Minute) limit for individual team members.
     - team_member_tpm_limit: Optional[int] - The TPM (Tokens Per Minute) limit for individual team members.
@@ -3724,6 +3726,8 @@ async def team_member_add(
     If user doesn't exist, new user row will also be added to User Table
 
     Only proxy_admin or admin of team, allowed to access this endpoint.
+
+    - budget_limits: Optional[list] - Concurrent caps for the added member, using budget_duration (1h, 24h, 7d, or 30d) and max_budget. Omit or send [] to inherit team defaults.
     ```
 
     curl -X POST 'http://0.0.0.0:4000/team/member_add' \
@@ -4133,6 +4137,8 @@ async def team_member_update(
     [BETA]
 
     Update team member budgets and team member role
+
+    - budget_limits: Optional[list] - Replace this member's concurrent spending caps. Each entry has budget_duration (1h, 24h, 7d, or 30d) and max_budget. Omit to preserve the override; send [] to restore team defaults.
     """
     from litellm.proxy.proxy_server import (
         litellm_proxy_admin_name,
