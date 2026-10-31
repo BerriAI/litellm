@@ -12991,6 +12991,13 @@ class _ModelMappingHook(CustomLogger):
         return data
 
 
+class _TaggingHook(CustomLogger):
+    """A customer callback that adds a tag to the request."""
+
+    async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
+        return {**data, "metadata": {**(data.get("metadata") or {}), "tags": ["over-budget-tag"]}}
+
+
 class _EmailMaskingHook(CustomLogger):
     async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
         _mask_emails(data)
@@ -13418,6 +13425,21 @@ class TestUnroutableModelFailureLogHidesUnscannedContent:
 
         assert (first.status, limited.status, guardrail.calls) == (400, 429, 0)
         assert _shows_no_raw_content(limited), limited.failure_dumps
+
+    @pytest.mark.asyncio
+    async def test_failure_log_hides_content_when_a_tag_budget_rejects_after_a_skipped_guardrail(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        async def over_budget(**_: object) -> None:
+            raise litellm.BudgetExceededError(current_cost=10.0, max_budget=5.0)
+
+        monkeypatch.setattr(litellm.proxy.common_request_processing, "tag_max_budget_check_for_tags", over_budget)
+        guardrail: Final = _VendorGuardrail(behavior="mask")
+
+        sent: Final = await _send(monkeypatch, [_TaggingHook(), guardrail])
+
+        assert (sent.status, guardrail.calls) == (422, 0), sent.message
+        assert _shows_no_raw_content(sent), sent.failure_dumps
 
     @pytest.mark.asyncio
     async def test_built_in_hook_after_a_skipped_guardrail_is_not_sent_the_content_it_would_have_masked(
