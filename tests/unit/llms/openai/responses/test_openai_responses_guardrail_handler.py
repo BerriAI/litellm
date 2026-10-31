@@ -4516,7 +4516,7 @@ class TestBuildBlockSseChunks:
         assert completed["usage"] == {"input_tokens": 7, "output_tokens": 21, "total_tokens": 28}
 
     def test_continuation_numbers_every_event_after_the_last_one_relayed(self):
-        yielded = [
+        yielded: Final = [
             {"type": "response.created", "sequence_number": 0, "response": {"id": "resp_live", "output": []}},
             {
                 "type": "response.output_item.added",
@@ -4534,7 +4534,7 @@ class TestBuildBlockSseChunks:
             },
         ]
 
-        payloads = self._payloads(
+        payloads: Final = self._payloads(
             OpenAIResponsesHandler().build_block_sse_chunks(
                 self._exc(original_response=yielded), stream_started=True, responses_so_far=yielded
             )

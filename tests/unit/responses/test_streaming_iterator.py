@@ -2867,13 +2867,15 @@ async def test_websocket_turns_logging_survives_garbage_collection(terminal_even
     ids=["message", "reasoning_and_tool"],
 )
 def test_synthetic_stream_serializes_every_event_position_from_zero(output: list[dict[str, object]]):
-    transformed: Final = ResponsesAPIResponse(
-        id="resp_seq",
-        created_at=int(datetime.now().timestamp()),
-        status="completed",
-        model="claude-sonnet-5-5",
-        object="response",
-        output=output,
+    transformed: Final = ResponsesAPIResponse.model_validate(
+        {
+            "id": "resp_seq",
+            "created_at": int(datetime.now().timestamp()),
+            "status": "completed",
+            "model": "claude-sonnet-5-5",
+            "object": "response",
+            "output": output,
+        }
     )
 
     events: Final = streaming_module.build_synthetic_response_events(

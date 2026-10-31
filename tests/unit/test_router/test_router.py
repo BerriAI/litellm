@@ -6791,8 +6791,8 @@ async def test_aresponses_stream_keeps_numbering_after_a_mid_stream_fallback():
 
     from litellm.exceptions import MidStreamFallbackError
 
-    router = _InjectedFallbackRouter(_AsyncList([delta(0, "c"), delta(1, "d")]))
-    primary = _make_responses_iterator(
+    router: Final = _InjectedFallbackRouter(_AsyncList([delta(0, "c"), delta(1, "d")]))
+    primary: Final = _make_responses_iterator(
         chunks=[delta(0, "a"), delta(1, "b")],
         error=MidStreamFallbackError(
             message="primary died",
@@ -6804,14 +6804,55 @@ async def test_aresponses_stream_keeps_numbering_after_a_mid_stream_fallback():
         model="primary",
     )
 
-    wrapped = await router._aresponses_streaming_iterator(
+    wrapped: Final = await router._aresponses_streaming_iterator(
         response=primary,
         initial_kwargs={"model": "primary", "stream": True, "input": "Hi", "original_generic_function": litellm.aresponses},
     )
-    events = [event async for event in wrapped]
+    events: Final = [event async for event in wrapped]
 
     assert [(event.delta, event.sequence_number) for event in events] == [("a", 0), ("b", 1), ("c", 2), ("d", 3)]
 
+
+
+@pytest.mark.asyncio
+async def test_aresponses_stream_fallback_keeps_higher_numbers_and_passes_unnumbered_events():
+    from litellm.exceptions import MidStreamFallbackError
+    from litellm.types.llms.openai import OutputTextDeltaEvent, ResponsesAPIStreamEvents
+
+    def delta(text: str) -> OutputTextDeltaEvent:
+        return OutputTextDeltaEvent(
+            type=ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA, item_id="msg_1", output_index=0, content_index=0, delta=text
+        )
+
+    def numbered(sequence_number: int, text: str) -> OutputTextDeltaEvent:
+        return delta(text).model_copy(update={"sequence_number": sequence_number})
+
+    router: Final = _InjectedFallbackRouter(_AsyncList([numbered(7, "c"), delta("d"), numbered(8, "e")]))
+    primary: Final = _make_responses_iterator(
+        chunks=[numbered(0, "a"), numbered(1, "b")],
+        error=MidStreamFallbackError(
+            message="primary died",
+            model="primary",
+            llm_provider="anthropic",
+            is_pre_first_chunk=False,
+            generated_content="ab",
+        ),
+        model="primary",
+    )
+
+    wrapped: Final = await router._aresponses_streaming_iterator(
+        response=primary,
+        initial_kwargs={"model": "primary", "stream": True, "input": "Hi", "original_generic_function": litellm.aresponses},
+    )
+    events: Final = [event async for event in wrapped]
+
+    assert [(event.delta, event.get("sequence_number")) for event in events] == [
+        ("a", 0),
+        ("b", 1),
+        ("c", 7),
+        ("d", None),
+        ("e", 8),
+    ]
 
 @pytest.mark.asyncio
 async def test_aresponses_streaming_iterator_unwraps_content_policy_trigger_for_fallback_dispatch():
