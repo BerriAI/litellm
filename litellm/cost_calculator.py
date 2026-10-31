@@ -3781,25 +3781,37 @@ def handle_realtime_transcription_cost_calculation(
     return total_cost
 
 
+_TRANSCRIPTION_SESSION_EVENT_TYPES: Final = frozenset(
+    {"transcription_session.created", "transcription_session.updated", "session.created", "session.updated"}
+)
+
+
+def _str_field(mapping: Mapping[str, object] | None, key: str) -> str | None:
+    value: Final = None if mapping is None else mapping.get(key)
+    return value if isinstance(value, str) and value else None
+
+
+def _configured_transcription_model(session: Mapping[str, object]) -> str | None:
+    audio_input: Final = as_str_mapping((as_str_mapping(session.get("audio")) or {}).get("input"))
+    nested: Final = _str_field(as_str_mapping((audio_input or {}).get("transcription")), "model")
+    return nested or _str_field(as_str_mapping(session.get("input_audio_transcription")), "model")
+
+
 def _get_transcription_model_name_from_results(
     results: OpenAIRealtimeStreamList,
 ) -> str | None:
-    """Resolve the ASR model from a transcription_session.* / session.* event."""
-    for result in results:
-        if result.get("type") in (
-            "transcription_session.created",
-            "transcription_session.updated",
-            "session.created",
-            "session.updated",
-        ):
-            session = cast(dict, result).get("session", {}) or {}
-            transcription = ((session.get("audio", {}) or {}).get("input", {}) or {}).get(
-                "transcription", {}
-            ) or session.get("input_audio_transcription", {})
-            model = (transcription or {}).get("model") or session.get("model")
-            if model:
-                return model
-    return None
+    sessions: Final = tuple(
+        session
+        for result in results
+        if result.get("type") in _TRANSCRIPTION_SESSION_EVENT_TYPES
+        and (session := as_str_mapping(result.get("session"))) is not None
+    )
+    configured: Final = next(
+        (model for session in reversed(sessions) if (model := _configured_transcription_model(session))), None
+    )
+    return configured or next(
+        (session_model for session in sessions if (session_model := _str_field(session, "model"))), None
+    )
 
 
 _TranscriptionRateKey: TypeAlias = Literal[
