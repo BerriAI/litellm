@@ -10,6 +10,7 @@ from integration._support.wire import Reply, Request, wire_server
 from pydantic import JsonValue
 
 import litellm
+from litellm.exceptions import MidStreamFallbackError
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 
 _JSON_TOOL: Final = "json_tool_call"
@@ -141,6 +142,13 @@ def test_sync_stream_cut_before_the_json_tool_block_closes_still_yields_the_whol
             **_credentials(model),
         )
         assert isinstance(response, CustomStreamWrapper), type(response)
-        text: Final = "".join(str(chunk.choices[0].delta.content or "") for chunk in tuple(response))
+        fragments: Final[list[str]] = []
+        if cut:
+            with pytest.raises(MidStreamFallbackError, match="Stream ended before a finish_reason was received"):
+                for chunk in response:
+                    fragments.append(str(chunk.choices[0].delta.content or ""))
+        else:
+            fragments.extend(str(chunk.choices[0].delta.content or "") for chunk in response)
+        text: Final = "".join(fragments)
         assert len(wire.drain()) == 1
     assert json.loads(text) == _payload(marker_hex), text

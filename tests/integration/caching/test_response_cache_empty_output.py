@@ -426,8 +426,16 @@ def test_streamed_chat_without_choices_is_never_assembled_or_cached(gateway: Gat
     with gateway.scenario() as scenario:
         handle: Final = scripted(scenario, CHAT_STREAM_WITHOUT_CHOICES)
         model: Final = scenario.model(api_base=handle.api_base())
-        empty: Final = _never_replayed(partial(_streamed_chat, gateway, model, text), upstream, handle.scenario_id)
-        assert all(answer.text == "" for answer in empty), empty
+        request: Final = chat_body(model, text, stream=True)
+        for attempt in range(1, 4):
+            refused: Final = gateway.request("POST", "/v1/chat/completions", request)
+            assert refused.status_code == 500, refused.text
+            assert "Stream ended before a finish_reason was received" in refused.text, refused.text
+            assert upstream.calls(handle.scenario_id) == attempt, "the unfinished stream was served from cache"
+        rescript(handle, CHAT_STREAM)
+        answer: Final = _streamed_chat(gateway, model, text)
+        assert answer[1] == "streamed response", answer
+        assert upstream.calls(handle.scenario_id) == 4
 
 
 def _streamed_text(gateway: Gateway, model: str, text: str) -> _Answer:
