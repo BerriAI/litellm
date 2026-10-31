@@ -31,6 +31,13 @@ class AccountingConflictError(ValueError):
     pass
 
 
+@dataclass(frozen=True, slots=True)
+class UsageWrite:
+    event: InboundUsageEvent | OutboundUsageEvent
+    envelope: str
+    targets: tuple[DeliveryTarget, ...] = ()
+
+
 _Transaction: TypeAlias = AbstractAsyncContextManager["Prisma"]
 
 
@@ -106,6 +113,35 @@ SELECT event_id FROM "LiteLLM_AccountingEvent" WHERE kind = 'cost' AND source_ev
 """
 _LOCK_EVENT: Final = """
 SELECT payload_hash FROM "LiteLLM_AccountingEvent" WHERE event_id = $1 FOR UPDATE
+"""
+_INSERT_USAGE_BATCH: Final = """
+INSERT INTO "LiteLLM_AccountingEvent"
+    (event_id, kind, schema_version, payload_hash, occurred_at, payload)
+SELECT event_id, kind::"AccountingEventKind", 1, payload_hash, occurred_at::timestamp, payload
+FROM jsonb_to_recordset($1::jsonb) AS records(
+    event_id text, kind text, payload_hash text, occurred_at text, payload jsonb)
+ORDER BY event_id
+ON CONFLICT (event_id) DO NOTHING RETURNING event_id
+"""
+_LOCK_USAGE_BATCH: Final = """
+SELECT event_id, payload_hash FROM "LiteLLM_AccountingEvent"
+WHERE event_id IN (SELECT value FROM jsonb_array_elements_text($1::jsonb))
+ORDER BY event_id FOR UPDATE
+"""
+_LOAD_USAGE_BATCH: Final = """
+SELECT event.payload, ARRAY(
+    SELECT target::text FROM "LiteLLM_AccountingDelivery" delivery
+    WHERE delivery.event_id = event.event_id ORDER BY target::text
+) AS targets
+FROM "LiteLLM_AccountingEvent" event
+WHERE event.event_id IN (SELECT value FROM jsonb_array_elements_text($1::jsonb))
+    AND event.kind = 'outbound_usage' AND event.schema_version = 1
+"""
+_INSERT_USAGE_DELIVERIES: Final = """
+INSERT INTO "LiteLLM_AccountingDelivery" (event_id, target, version)
+SELECT records.event_id, destination.value::"AccountingDeliveryTarget", 1
+FROM jsonb_to_recordset($1::jsonb) AS records(event_id text, targets jsonb)
+CROSS JOIN LATERAL jsonb_array_elements_text(records.targets) AS destination
 """
 _COMPLETED_FAMILY: Final = """
 root.source_event_id IS NULL AND root.kind IN ('inbound_usage', 'outbound_usage')
@@ -198,6 +234,53 @@ class AccountingLedger:
                 yield db
 
         return cls(transaction)
+
+    async def insert_usage_batch(self, writes: tuple[UsageWrite, ...]) -> None:
+        records: Final = tuple(_prepare(write.event, write.targets, write.envelope, 1, 1) for write in writes)
+        if not records:
+            return
+        unique: Final = {record.event_id: record for record in records}
+        if any(record.payload_hash != unique[record.event_id].payload_hash for record in records):
+            raise AccountingConflictError("Batch contains conflicting copies of a usage identity")
+        batch: Final = _json(
+            tuple(
+                {
+                    "event_id": record.event_id,
+                    "kind": record.kind.value,
+                    "payload_hash": record.payload_hash,
+                    "occurred_at": record.occurred_at.astimezone(timezone.utc).isoformat(),
+                    "payload": _JSON.validate_json(record.payload),
+                }
+                for record in unique.values()
+            )
+        )
+        async with self._transaction() as db:
+            inserted: Final = _STRINGS.validate_python(await db.query_raw(_INSERT_USAGE_BATCH, batch))
+            accepted: Final = _STRINGS.validate_python(await db.query_raw(_LOCK_USAGE_BATCH, _json(tuple(unique))))
+            if len(accepted) != len(unique) or any(
+                row["payload_hash"] != unique[row["event_id"]].payload_hash for row in accepted
+            ):
+                raise AccountingConflictError("Usage identity conflicts with accepted content or delivery set")
+            deliveries: Final = _json(
+                tuple({"event_id": row["event_id"], "targets": unique[row["event_id"]].targets} for row in inserted)
+            )
+            await db.execute_raw(_INSERT_USAGE_DELIVERIES, deliveries)
+
+    async def load_usage_batch(self, event_ids: tuple[str, ...]) -> tuple[UsageWrite, ...]:
+        if not event_ids:
+            return ()
+        async with self._transaction() as db:
+            rows: Final = TypeAdapter(tuple[dict[str, JsonValue], ...]).validate_python(
+                await db.query_raw(_LOAD_USAGE_BATCH, _json(event_ids))
+            )
+        return tuple(
+            UsageWrite(
+                OutboundUsageEvent.model_validate(_JSON.validate_python(row["payload"])["event"]),
+                _json(row["payload"]),
+                TypeAdapter(tuple[DeliveryTarget, ...]).validate_python(row["targets"]),
+            )
+            for row in rows
+        )
 
     async def insert_event(
         self,

@@ -2,6 +2,7 @@ import type { DailyData, SpendMetrics } from "@/components/UsagePage/types";
 import { stackedUsageColor } from "@/components/shared/charts";
 import { EMPTY_DAILY_ACTIVITY_METADATA, type DailyActivityMetadata } from "@/components/UsagePage/dailyActivityApi";
 import type { GatewayActivity } from "../gatewayActivity";
+import { subscriptionCoveredProviders } from "../SubscriptionCost/types";
 
 export type BreakdownDimension = "models" | "model_groups" | "providers";
 
@@ -38,6 +39,15 @@ export const rollUpBreakdown = (results: readonly DailyData[], dimension: Breakd
     ]);
   }, new Map());
   return [...totals.values()].sort((a, b) => b.spend - a.spend);
+};
+
+export const providerSpendRows = (results: readonly DailyData[]) => {
+  const covered = subscriptionCoveredProviders(results);
+  return rollUpBreakdown(results, "providers").map(({ key, ...row }) => ({
+    provider: key,
+    ...row,
+    subscription_covered: covered.has(key),
+  }));
 };
 
 export const modelColorMap = (results: readonly DailyData[]): ReadonlyMap<string, string> => {

@@ -5,6 +5,7 @@ Tests that invoke_agent_a2a properly integrates with add_litellm_data_to_request
 """
 
 import asyncio
+import importlib.util
 import json
 import socket
 import sys
@@ -17,8 +18,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 import respx
+from pydantic import BaseModel, ConfigDict
 
 import litellm
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.agents import AgentCaller
 
@@ -44,6 +47,7 @@ def _sse_upstream_response(*lines: str, first_line_delay: float = 0.0) -> httpx.
 class CapturedAgentCall:
     request_id: object
     agent_extra_headers: dict[str, str] | None
+    agent_name: object
 
 
 @pytest.mark.asyncio
@@ -627,7 +631,11 @@ async def _invoke_message_method(
 
     kwargs: Final = downstream.call_args.kwargs
     request_id: Final = kwargs["request"].__dict__["id"] if is_send else kwargs["request_id"]
-    return CapturedAgentCall(request_id=request_id, agent_extra_headers=kwargs.get("agent_extra_headers"))
+    return CapturedAgentCall(
+        request_id=request_id,
+        agent_extra_headers=kwargs.get("agent_extra_headers"),
+        agent_name=kwargs.get("agent_name"),
+    )
 
 
 @pytest.mark.asyncio
@@ -1682,6 +1690,76 @@ def test_build_message_send_params_proto_fallback_ignores_unknown_fields():
         }
     )
     assert result.message.role.value == "user"
+
+
+@pytest.mark.asyncio
+async def test_message_stream_names_the_agent_by_its_card_name():
+    agent: Final = _make_agent_mock()
+    agent.agent_card_params = {"url": "http://backend-agent:10001", "name": "trip-planner"}
+
+    captured: Final = await _invoke_message_method(
+        "message/stream",
+        _make_request_mock("message/stream", _HELLO_MESSAGE_PARAMS),
+        UserAPIKeyAuth(api_key="sk-test", user_id="u1"),
+        agent=agent,
+    )
+
+    assert captured.agent_name == "trip-planner"
+
+
+class _StreamedSpend(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    call_type: str
+    model: str
+    response_cost: float
+
+
+class _StreamedSpendRecorder(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.logged: Final = asyncio.Event()
+        self.spend: _StreamedSpend | None = None
+
+    async def async_log_success_event(
+        self, kwargs: Mapping[str, object], response_obj: object, start_time: object, end_time: object
+    ) -> None:
+        spend: Final = _StreamedSpend.model_validate(kwargs["standard_logging_object"])
+        if spend.call_type != "asend_message_streaming":
+            return
+        self.spend = spend
+        self.logged.set()
+
+
+@pytest.mark.skipif(importlib.util.find_spec("a2a") is None, reason="needs the optional a2a-sdk")
+@pytest.mark.asyncio
+async def test_handle_stream_message_bills_a_bridge_agent_under_its_name(monkeypatch: pytest.MonkeyPatch):
+    from litellm.proxy.agent_endpoints.a2a_endpoints import _handle_stream_message
+
+    recorder: Final = _StreamedSpendRecorder()
+    monkeypatch.setattr(litellm, "callbacks", [recorder])
+    monkeypatch.setattr(litellm, "success_callback", [recorder])
+    monkeypatch.setattr(litellm, "_async_success_callback", [recorder])
+
+    response: Final = await _handle_stream_message(
+        api_base=None,
+        request_id="req-1",
+        params=dict(_HELLO_MESSAGE_PARAMS),
+        litellm_params={
+            "custom_llm_provider": "langgraph",
+            "model": "agent",
+            "mock_response": "pong",
+            "cost_per_query": 0.25,
+        },
+        agent_id="agent-1",
+        agent_name="trip-planner",
+    )
+    _ = [chunk async for chunk in response.body_iterator]
+
+    await asyncio.wait_for(recorder.logged.wait(), timeout=10)
+    assert recorder.spend == _StreamedSpend(
+        call_type="asend_message_streaming", model="a2a_agent/trip-planner", response_cost=0.25
+    )
 
 
 @pytest.mark.asyncio

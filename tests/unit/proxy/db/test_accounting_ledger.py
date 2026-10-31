@@ -6,7 +6,7 @@ from typing import Final, Literal, NoReturn
 import pytest
 
 from litellm.accounting import InboundUsageEvent, Metric, MetricName, Outcome
-from litellm.proxy.db.accounting_ledger import AccountingLedger
+from litellm.proxy.db.accounting_ledger import AccountingConflictError, AccountingLedger, UsageWrite
 from litellm.types.utils import CallTypes
 
 
@@ -101,3 +101,18 @@ async def test_unknown_delivery_target_is_rejected_before_database_access(event:
             ("unknown",),  # pyright: ignore[reportArgumentType]  # Exercise an unknown runtime target
             envelope=envelope,
         )
+
+
+@pytest.mark.asyncio
+async def test_empty_usage_batches_do_not_open_a_transaction() -> None:
+    ledger: Final = AccountingLedger(_no_transaction)
+    await ledger.insert_usage_batch(())
+    assert await ledger.load_usage_batch(()) == ()
+
+
+@pytest.mark.asyncio
+async def test_conflicting_usage_within_one_batch_is_rejected_before_database_access(event: InboundUsageEvent) -> None:
+    original: Final = UsageWrite(event, json.dumps({"event": event.model_dump(mode="json")}))
+    changed: Final = UsageWrite(event, json.dumps({"event": event.model_dump(mode="json"), "pricing": {"rate": 2}}))
+    with pytest.raises(AccountingConflictError, match="conflicting copies"):
+        await AccountingLedger(_no_transaction).insert_usage_batch((original, changed))

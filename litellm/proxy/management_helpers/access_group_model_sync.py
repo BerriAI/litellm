@@ -61,7 +61,7 @@ def raw_executor(prisma_client: object) -> RawExecutor:
 def _config_sourced_sibling(llm_router: Router, deployment_id: str, model_id: str) -> bool:
     if deployment_id == model_id:
         return False
-    deployment: Final = llm_router.get_deployment(model_id=deployment_id)
+    deployment: Final = llm_router.registry().deployment(deployment_id)
     return deployment is not None and not deployment.model_info.db_model
 
 
@@ -70,7 +70,7 @@ def _served_by_a_config_deployment(llm_router: Router | None, model_name: str, m
         return False
     return any(
         _config_sourced_sibling(llm_router, deployment_id, model_id)
-        for deployment_id in llm_router.get_model_ids(model_name=model_name)
+        for deployment_id in llm_router.registry().names(model_name, kind="ids")
     )
 
 

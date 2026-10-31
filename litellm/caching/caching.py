@@ -18,7 +18,7 @@ from contextlib import contextmanager
 from enum import Enum
 from typing import Any, Final, Literal, cast
 
-from pydantic import BaseModel, TypeAdapter
+from pydantic import BaseModel, ConfigDict, TypeAdapter
 
 import litellm
 from litellm._internal_context import current_service_target, service_target
@@ -31,7 +31,6 @@ from litellm.types.utils import EmbeddingResponse, is_litellm_owned_kwarg
 
 from .azure_blob_cache import AzureBlobCache
 from .base_cache import BaseCache
-from .disk_cache import DiskCache
 from .dual_cache import DualCache  # noqa: F401  # re-exported, callers import DualCache from litellm.caching.caching
 from .gcs_cache import GCSCache
 from .in_memory_cache import InMemoryCache
@@ -44,6 +43,9 @@ from .s3_cache import S3Cache
 RESPONSE_CACHE_TARGET: Final = "llm_response"
 _ALWAYS_KEYED_PROVIDER_PARAMS: Final = frozenset({"continuation_token"})
 _DECODED_LITERAL: Final = TypeAdapter(object)
+_REDIS_STARTUP_NODES_ADAPTER: Final = TypeAdapter(
+    list[dict[str, object]], config=ConfigDict(strict=True, hide_input_in_errors=True)
+)
 
 
 @contextmanager
@@ -153,7 +155,7 @@ class Cache:
         Initializes the cache based on the given type.
 
         Args:
-            type (str, optional): The type of cache to initialize. Can be "local", "redis", "redis-semantic", "qdrant-semantic", "s3" or "disk". Defaults to "local".
+            type (str, optional): The type of cache to initialize. Can be "local", "redis", "redis-semantic", "qdrant-semantic" or "s3". Defaults to "local".
 
             # Redis Cache Args
             host (str, optional): The host address for the Redis cache. Required if type is "redis".
@@ -173,9 +175,6 @@ class Cache:
             semantic_cache_embedding_timeout (float, optional): Seconds a semantic-cache lookup may spend embedding the prompt before it gives up and lets the request continue to the LLM. Defaults to SEMANTIC_CACHE_EMBEDDING_TIMEOUT_SECONDS.
             semantic_cache_scope (str, optional): "key" isolates semantic-cache buckets per key/team/org. "end_user" additionally isolates per end user (falls back to the key scope when the request carries no end-user id). Defaults to "key".
             max_messages (int, optional): Requests with more `messages` (or Responses API `input` items) than this are neither looked up nor stored, so long agent conversations never serve or create a cache entry. None disables the limit. Defaults to 4.
-
-            # Disk Cache Args
-            disk_cache_dir (str, optional): The directory for the disk cache. Defaults to None.
 
             # S3 Cache Args
             s3_bucket_name (str, optional): The bucket name for the s3 cache. Defaults to None.
@@ -211,7 +210,7 @@ class Cache:
             if not redis_startup_nodes:
                 _env_cluster_nodes: Final = litellm.get_secret("REDIS_CLUSTER_NODES")
                 if _env_cluster_nodes is not None and isinstance(_env_cluster_nodes, str):
-                    redis_startup_nodes = json.loads(_env_cluster_nodes)
+                    redis_startup_nodes = _REDIS_STARTUP_NODES_ADAPTER.validate_python(json.loads(_env_cluster_nodes))
 
             if redis_startup_nodes:
                 # Only pass GCP parameters if they are provided
@@ -306,8 +305,11 @@ class Cache:
                 account_url=azure_account_url,
                 container=azure_blob_container,
             )
-        elif type == LiteLLMCacheType.DISK:
-            self.cache = DiskCache(disk_cache_dir=disk_cache_dir)
+        else:
+            supported_types: Final = ", ".join(member.value for member in LiteLLMCacheType)
+            raise ValueError(f"Unsupported cache type {type!r}. Supported types: {supported_types}")
+        if disk_cache_dir is not None:
+            verbose_logger.warning("Ignoring disk_cache_dir, the disk cache backend was removed")
         if "cache" not in litellm.input_callback:
             litellm.input_callback.append("cache")
         if "cache" not in litellm.success_callback:
@@ -1044,7 +1046,7 @@ def enable_cache(
     Enable cache with the specified configuration.
 
     Args:
-        type (Optional[Literal["local", "redis", "s3", "disk"]]): The type of cache to enable. Defaults to "local".
+        type (Optional[Literal["local", "redis", "s3"]]): The type of cache to enable. Defaults to "local".
         host (Optional[str]): The host address of the cache server. Defaults to None.
         port (Optional[str]): The port number of the cache server. Defaults to None.
         password (Optional[str]): The password for the cache server. Defaults to None.
@@ -1056,7 +1058,7 @@ def enable_cache(
         None
 
     Raises:
-        None
+        ValueError: If no cache is set yet and the cache type is unsupported.
     """
     print_verbose("LiteLLM: Enabling Cache")
     if "cache" not in litellm.input_callback:
@@ -1091,7 +1093,7 @@ def update_cache(
     Update the cache for LiteLLM.
 
     Args:
-        type (Optional[Literal["local", "redis", "s3", "disk"]]): The type of cache. Defaults to "local".
+        type (Optional[Literal["local", "redis", "s3"]]): The type of cache. Defaults to "local".
         host (Optional[str]): The host of the cache. Defaults to None.
         port (Optional[str]): The port of the cache. Defaults to None.
         password (Optional[str]): The password for the cache. Defaults to None.

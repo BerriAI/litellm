@@ -141,12 +141,56 @@ response = client.chat.completions.create(
 )
 ```
 
-[**Docs: LLM Providers**](https://docs.litellm.ai/docs/providers)
+</details>
+
+<details>
+<summary><b>Auto Routing</b> - Choose a model for each prompt (Python SDK + AI Gateway)</summary>
+
+### Python SDK
+
+[**Docs: Autorouter SDK**](https://docs.litellm.ai/docs/autorouter_sdk)
+
+Install with `uv add litellm` and set `OPENAI_API_KEY` for the models below.
+
+```python
+import asyncio
+from litellm import Router
+
+router = Router(model_list=[
+    {"model_name": "fast", "litellm_params": {"model": "openai/gpt-6-luna"}},
+    {"model_name": "capable", "litellm_params": {"model": "openai/gpt-6.1-sol"}},
+    {"model_name": "auto", "litellm_params": {
+        "model": "auto_router/complexity_router",
+        "complexity_router_config": {
+            "classifier_type": "heuristic",
+            "tiers": {"SIMPLE": "fast", "MEDIUM": "fast",
+                      "COMPLEX": "capable", "REASONING": "capable"},
+            "return_raw_model_name": True,
+        },
+        "complexity_router_default_model": "capable",
+    }},
+])
+response = asyncio.run(router.acompletion(
+    model="auto", messages=[{"role": "user", "content": "What is 2+2?"}],
+))
+print(response.model, response.choices[0].message.content)
+```
+
+### AI Gateway (Proxy Server)
+
+[**Create an Auto Router**](https://docs.litellm.ai/docs/auto_router/setup), then call its model name. Replace `auto` and the URL below with yours, and set `LITELLM_API_KEY` to your virtual key.
+
+```shell
+curl http://localhost:4000/v1/chat/completions \
+  -H "Authorization: Bearer $LITELLM_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"auto","messages":[{"role":"user","content":"What is 2+2?"}]}'
+```
 
 </details>
 
 <details>
-<summary><b>Agents</b> - Invoke A2A Agents (Python SDK + AI Gateway)</summary>
+<summary><b>A2A</b> - Invoke A2A Agents (Python SDK + AI Gateway)</summary>
 
 [**Supported Providers**](https://docs.litellm.ai/docs/a2a#add-a2a-agents) - LangGraph, Vertex AI Agent Engine, Azure AI Foundry, Bedrock AgentCore, Pydantic AI
 
@@ -335,6 +379,7 @@ Set `LITELLM_PROXY_API_BASE` and `LITELLM_PROXY_API_KEY` and every model call th
 | [Bytez (`bytez`)](https://docs.litellm.ai/docs/providers/bytez) | ✅ | ✅ | ✅ |  |  |  |  |  |  |  |
 | [Cerebras (`cerebras`)](https://docs.litellm.ai/docs/providers/cerebras) | ✅ | ✅ | ✅ |  |  |  |  |  |  |  |
 | [Clarifai (`clarifai`)](https://docs.litellm.ai/docs/providers/clarifai) | ✅ | ✅ | ✅ |  |  |  |  |  |  |  |
+| [CLF AI Gateway (`clf_ai_gateway`)](https://docs.litellm.ai/docs/providers/clf_ai_gateway) | ✅ | ✅ | ✅ |  |  |  |  |  |  |  |
 | [Cloudflare AI Workers (`cloudflare`)](https://docs.litellm.ai/docs/providers/cloudflare_workers) | ✅ | ✅ | ✅ |  |  |  |  |  |  |  |
 | [Codestral (`codestral`)](https://docs.litellm.ai/docs/providers/codestral) | ✅ | ✅ | ✅ |  |  |  |  |  |  |  |
 | [Cognition (`cognition`)](https://docs.litellm.ai/docs/providers/cognition) | ✅ | ✅ | ✅ |  |  |  |  |  |  |  |
@@ -354,6 +399,7 @@ Set `LITELLM_PROXY_API_BASE` and `LITELLM_PROXY_API_KEY` and every model call th
 | [Eden AI (`edenai`)](https://docs.litellm.ai/docs/providers/edenai) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |  |  |  |
 | [ElevenLabs (`elevenlabs`)](https://docs.litellm.ai/docs/providers/elevenlabs) | ✅ | ✅ | ✅ |  |  | ✅ | ✅ |  |  |  |
 | [Empower (`empower`)](https://docs.litellm.ai/docs/providers/empower) | ✅ | ✅ | ✅ |  |  |  |  |  |  |  |
+| [eu/jev Decisions API (`eu_jev`)](https://docs.litellm.ai/docs/pass_through/eu_jev) |  |  |  |  |  |  |  |  |  |  |
 | [Fal AI (`fal_ai`)](https://docs.litellm.ai/docs/providers/fal_ai) | ✅ | ✅ | ✅ |  | ✅ |  |  |  |  |  |
 | [Featherless AI (`featherless_ai`)](https://docs.litellm.ai/docs/providers/featherless_ai) | ✅ | ✅ | ✅ |  |  |  |  |  |  |  |
 | [Fireworks AI (`fireworks_ai`)](https://docs.litellm.ai/docs/providers/fireworks_ai) | ✅ | ✅ | ✅ |  |  |  |  |  |  |  |
@@ -442,7 +488,7 @@ You can use LiteLLM through either the Proxy Server or Python SDK. Both give you
 <tr>
 <th style={{width: '14%'}}></th>
 <th style={{width: '43%'}}><strong><a href="https://docs.litellm.ai/docs/simple_proxy">LiteLLM AI Gateway</a></strong></th>
-<th style={{width: '43%'}}><strong><a href="https://docs.litellm.ai/docs/">LiteLLM Python SDK</a></strong></th>
+<th style={{width: '43%'}}><strong><a href="https://docs.litellm.ai/docs/python_sdk">LiteLLM Python SDK</a></strong></th>
 </tr>
 </thead>
 <tbody>

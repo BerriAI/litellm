@@ -15,7 +15,7 @@ dependencies = [
     # When changing a floor, verify it installs + imports on every supported
     # Python with: `uv pip install --resolution=lowest-direct .`
     "fastuuid>=0.14.0,<1.0; python_version < '3.15'",
-    "filelock>=3.16.1,<4.0",
+    "filelock>=3.16.1,<5",
     "httpx[http2]>=0.28.0,<1.0",
     "openai>=2.20.0,<4.0.0",
     "python-dotenv>=1.0.0,<2.0",
@@ -84,8 +84,8 @@ proxy = [
     "mcp>=2.3.0,<3",
     "httpx2>=2.10.0,<3",
     "pydantic>=2.12.0,<3",
-    "litellm-proxy-extras==0.4.111",
-    "litellm-enterprise==0.1.80",
+    "litellm-proxy-extras==0.4.112",
+    "litellm-enterprise==0.1.81",
     "RestrictedPython>=8.5,<9.0",
     "rich>=13.9.4,<14.0",
     "InquirerPy>=0.3.4,<1.0",
@@ -130,7 +130,6 @@ utils = [
     # Not in Docker or PyPI proxy extra.
     "numpydoc>=1.8.0,<2.0",
 ]
-caching = ["diskcache>=5.6.3,<6.0"]
 mcp = ["mcp>=2.3.0,<3", "httpx2>=2.10.0,<3", "pydantic>=2.12.0,<3"]
 # Driver for the MongoDB Atlas vector store; Atlas Vector Search has no HTTP query API.
 # The floor is 4.9 because that is the release AsyncMongoClient landed in.
@@ -197,7 +196,7 @@ proxy-runtime = [
 ]
 
 [project.scripts]
-litellm = "litellm:run_server"
+litellm = "litellm_cli.main:proxy_server"
 lite = "litellm_cli.main:cli"
 litellm-proxy = "litellm_cli.main:litellm_proxy_cli"
 
@@ -252,7 +251,7 @@ e2e-dev = [
     "mcp>=2.3.0,<3",
 ]
 admin-mcp = [
-    "litellm-admin-mcp @ https://github.com/BerriAI/liteadmin-mcp/archive/d35ec9c19c117d4c50cc1eccf6ce1296aac25a1a.tar.gz#sha256=86b930f6706fb2da10d53d1798ee7fd14e44fb0afdef0da122cf0e6bb88fa2c3 ; python_version >= '3.12'",
+    "litellm-admin-mcp @ https://github.com/BerriAI/liteadmin-mcp/archive/31fb096904ae05684c0779110a93b135b5601182.tar.gz#sha256=5803a20a00a18177f4591706956f31be311879543049b8b38143ad90bb1cb0a6 ; python_version >= '3.12'",
 ]
 proxy-dev = [
     { include-group = "admin-mcp" },
@@ -312,6 +311,7 @@ benchmarks = [
     "pytest-codspeed==4.3.0",
     "mcp>=2.3.0,<3",
     "a2a-sdk==1.1.0",
+    "pypdf>=6.21.2,<7.0",
 ]
 
 [build-system]
@@ -335,6 +335,7 @@ include = [
     "litellm/proxy/public_endpoints/whats_new.json",
     "litellm/proxy/common_utils/codex_base_instructions.md",
     "litellm/proxy/common_utils/codex_bundled_models_0.159.3.json",
+    { path = "model_prices_and_context_window.json", format = "sdist" },
 ]
 exclude = [
     "litellm/proxy/enterprise",
@@ -357,6 +358,7 @@ cache-keys = [
     { file = "litellm-rust/Cargo.lock" },
     { file = "litellm-rust/Cargo.toml" },
     { file = "litellm-rust/crates/**/*" },
+    { file = "model_prices_and_context_window.json" },
 ]
 constraint-dependencies = [
     "tornado>=6.5.8",

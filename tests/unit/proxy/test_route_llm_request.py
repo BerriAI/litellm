@@ -18,6 +18,9 @@ from uuid import uuid4
 from typing import Final
 from unittest.mock import MagicMock
 
+from litellm.router_api import RouterSettings
+from tests.unit.proxy.router_entry_point_stubs import route_entry_points_to_stubs
+
 from fakeredis import TcpFakeServer
 from fastapi import HTTPException
 
@@ -28,6 +31,7 @@ from litellm.proxy.route_llm_request import (
     JSON_OBJECT_ADAPTER,
     ProxyModelNotFoundError,
     UserConfigRouters,
+    endpoint_unsupported_by_model,
     route_request,
     user_config_routers,
 )
@@ -60,7 +64,7 @@ async def test_route_request_dynamic_credentials(route_type, required_body_param
         "api_base": "https://api.openai.com/v1 ",
         **required_body_params,
     }
-    llm_router = MagicMock()
+    llm_router = route_entry_points_to_stubs(MagicMock())
     # Ensure that the dynamic method exists on the llm_router mock.
     getattr(llm_router, route_type).return_value = "fake_response"
 
@@ -283,7 +287,7 @@ async def test_route_request_no_model_required():
         # Test data without model parameter
         data = {"input": "test input", "query": "test query", "api_key": "test-key"}
 
-        llm_router = MagicMock()
+        llm_router = route_entry_points_to_stubs(MagicMock())
         getattr(llm_router, route_type).return_value = "fake_response"
 
         response = await route_request(data, llm_router, None, route_type)
@@ -316,7 +320,7 @@ async def test_route_request_no_model_required_with_router_settings():
             "model": "test-model",  # Include dummy model to avoid KeyError
         }
 
-        llm_router = MagicMock()
+        llm_router = route_entry_points_to_stubs(MagicMock())
         # Set up router settings
         llm_router.router_general_settings.pass_through_all_models = False
         llm_router.default_deployment = None
@@ -356,7 +360,7 @@ async def test_route_request_vector_store_routes_model_none_no_api_key_in_body()
     ]
 
     for route_type, data in cases:
-        llm_router = MagicMock()
+        llm_router = route_entry_points_to_stubs(MagicMock())
         llm_router.router_general_settings.pass_through_all_models = False
         llm_router.default_deployment = None
         llm_router.pattern_router.patterns = []
@@ -420,7 +424,7 @@ async def test_route_request_with_router_settings_override():
         },
     }
 
-    llm_router = MagicMock()
+    llm_router = route_entry_points_to_stubs(MagicMock())
     llm_router.acompletion.return_value = "success"
 
     response = await route_request(data, llm_router, None, "acompletion")
@@ -489,7 +493,7 @@ async def test_route_request_with_router_settings_override_preserves_existing():
         },
     }
 
-    llm_router = MagicMock()
+    llm_router = route_entry_points_to_stubs(MagicMock())
     llm_router.acompletion.return_value = "success"
 
     response = await route_request(data, llm_router, None, "acompletion")
@@ -652,7 +656,7 @@ async def test_route_request_rejects_mock_params_by_default(monkeypatch):
         "messages": [{"role": "user", "content": "Hello"}],
         "mock_testing_fallbacks": True,
     }
-    llm_router = MagicMock()
+    llm_router = route_entry_points_to_stubs(MagicMock())
 
     with pytest.raises(HTTPException) as exc_info:
         await route_request(data, llm_router, None, "acompletion")
@@ -681,7 +685,7 @@ async def test_route_request_forwards_mock_params_when_opted_in(monkeypatch):
         "messages": [{"role": "user", "content": "Hello"}],
         "mock_testing_fallbacks": True,
     }
-    llm_router = MagicMock()
+    llm_router = route_entry_points_to_stubs(MagicMock())
     llm_router.acompletion.return_value = "ok"
 
     await route_request(data, llm_router, None, "acompletion")
@@ -705,7 +709,7 @@ async def test_route_request_maps_generation_config_for_google_routes(route_type
             "imageConfig": {"aspectRatio": "9:16", "imageSize": "4K"},
         },
     }
-    llm_router = MagicMock()
+    llm_router = route_entry_points_to_stubs(MagicMock())
     getattr(llm_router, route_type).return_value = "ok"
 
     await route_request(data, llm_router, None, route_type)
@@ -729,7 +733,7 @@ async def test_route_request_preserves_existing_config_for_google_routes(route_t
         "config": {"existing": True},
         "generationConfig": {"shouldNotWin": True},
     }
-    llm_router = MagicMock()
+    llm_router = route_entry_points_to_stubs(MagicMock())
     getattr(llm_router, route_type).return_value = "ok"
 
     await route_request(data, llm_router, None, route_type)
@@ -1009,7 +1013,7 @@ async def test_route_request_merges_enable_tag_filtering_from_override():
         },
     }
 
-    llm_router = MagicMock()
+    llm_router = route_entry_points_to_stubs(MagicMock())
     llm_router.acompletion.return_value = "success"
 
     response = await route_request(data, llm_router, None, "acompletion")
@@ -1031,7 +1035,7 @@ async def test_route_request_strips_client_supplied_enable_tag_filtering():
         "enable_tag_filtering": True,
     }
 
-    llm_router = MagicMock()
+    llm_router = route_entry_points_to_stubs(MagicMock())
     llm_router.acompletion.return_value = "ok"
 
     await route_request(data, llm_router, None, "acompletion")
@@ -1055,7 +1059,7 @@ async def test_route_request_override_enable_tag_filtering_beats_body_value():
         },
     }
 
-    llm_router = MagicMock()
+    llm_router = route_entry_points_to_stubs(MagicMock())
     llm_router.acompletion.return_value = "ok"
 
     await route_request(data, llm_router, None, "acompletion")
@@ -1779,7 +1783,13 @@ def test_required_present_body_param_ignores_global_router_defaults_for_user_con
     "llm_router",
     [
         pytest.param(MagicMock(), id="magicmock-router"),
-        pytest.param(SimpleNamespace(get_model_list=lambda **_kwargs: ()), id="router-without-defaults-attr"),
+        pytest.param(
+            SimpleNamespace(
+                registry=lambda: SimpleNamespace(deployments=lambda *_args, **_kwargs: ()),
+                settings=lambda: RouterSettings(_unset=frozenset({"default_litellm_params"})),
+            ),
+            id="router-without-defaults-attr",
+        ),
     ],
 )
 def test_required_present_body_param_ignores_non_mapping_router_defaults(llm_router: object) -> None:
@@ -1866,7 +1876,7 @@ async def test_route_request_rejects_chat_completion_without_messages():
     Router.acompletion() and surface the resulting TypeError as a 500."""
     from litellm.proxy.route_llm_request import ProxyMissingRequiredParamError
 
-    llm_router = MagicMock()
+    llm_router = route_entry_points_to_stubs(MagicMock())
 
     with pytest.raises(ProxyMissingRequiredParamError) as exc_info:
         await route_request({"model": "gpt-4o"}, llm_router, None, "acompletion")
@@ -1880,7 +1890,7 @@ async def test_route_request_rejects_chat_completion_without_messages():
 async def test_route_request_rejects_responses_without_input():
     from litellm.proxy.route_llm_request import ProxyMissingRequiredParamError
 
-    llm_router = MagicMock()
+    llm_router = route_entry_points_to_stubs(MagicMock())
 
     with pytest.raises(ProxyMissingRequiredParamError) as exc_info:
         await route_request({"model": "gpt-4o"}, llm_router, None, "aresponses")
@@ -3027,3 +3037,27 @@ async def test_user_config_routers_discard_the_least_recently_used_router_past_c
     assert first_handler() is not None
     assert second_handler() is None
     routers.clear()
+
+
+def test_fallback_probe_skips_only_a_loaded_model_that_refuses_the_route() -> None:
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "chat-fallback",
+                "litellm_params": {"model": "openai/gpt-5.4-nano", "api_key": "unit-provider-key"},
+            },
+            {
+                "model_name": "embed-only",
+                "litellm_params": {"model": "openai/text-embedding-3-small", "api_key": "unit-provider-key"},
+                "model_info": {"enforce_supported_endpoints": True, "supported_endpoints": ["/v1/embeddings"]},
+            },
+        ],
+        num_retries=0,
+    )
+
+    def skipped(model: str) -> bool:
+        return endpoint_unsupported_by_model("acompletion", {"model": model}, router, None)
+
+    assert skipped("embed-only") is True
+    assert skipped("chat-fallback") is False
+    assert skipped("added-on-another-worker") is False

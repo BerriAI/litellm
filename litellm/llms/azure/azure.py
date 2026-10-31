@@ -42,6 +42,7 @@ from ..openai.common_utils import (
     build_output_token_limit_response,
     is_output_token_limit_error,
     model_dump_provider_response,
+    upstream_error_response,
 )
 from .common_utils import (
     AzureOpenAIError,
@@ -399,6 +400,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
             raise AzureOpenAIError(
                 status_code=status_code,
                 message=str(e),
+                response=upstream_error_response(e),
                 headers=error_headers,
                 body=error_body,
             )
@@ -662,6 +664,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
             raise AzureOpenAIError(
                 status_code=status_code,
                 message=message,
+                response=upstream_error_response(e),
                 headers=error_headers,
                 body=error_body,
             )
@@ -855,7 +858,12 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
             if error_headers is None and error_response:
                 error_headers = getattr(error_response, "headers", None)
                 error_text = error_response.text
-            raise AzureOpenAIError(status_code=status_code, message=error_text, headers=error_headers)
+            raise AzureOpenAIError(
+                status_code=status_code,
+                message=error_text,
+                response=upstream_error_response(e),
+                headers=error_headers,
+            )
 
     async def make_async_azure_httpx_request(
         self,
@@ -1190,7 +1198,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         except Exception as e:
             error_code: Final[object] = getattr(e, "status_code", None)
             if error_code is not None:
-                raise AzureOpenAIError(status_code=error_code, message=str(e))
+                raise AzureOpenAIError(status_code=error_code, message=str(e), response=upstream_error_response(e))
             else:
                 raise AzureOpenAIError(status_code=500, message=str(e))
 

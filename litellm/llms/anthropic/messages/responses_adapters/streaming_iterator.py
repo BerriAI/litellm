@@ -2,7 +2,7 @@
 ## Translates OpenAI call to Anthropic `/v1/messages` format
 import asyncio
 from collections import deque
-from collections.abc import AsyncGenerator, Awaitable, Callable, Iterator, Mapping
+from collections.abc import AsyncGenerator, Awaitable, Callable, Iterator, Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final
 
 import anyio
@@ -27,6 +27,7 @@ from litellm.responses.streaming_iterator import (
     partial_responses_incomplete_event_on_disconnect,
     stream_error_status_and_message,
 )
+from litellm.types.llms.anthropic import AppliedEdit, ContextManagementResponse
 from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicUsage
 from litellm.types.llms.base import LiteLLMBaseModel
 
@@ -129,8 +130,10 @@ class AnthropicResponsesStreamWrapper:
         model: str,
         litellm_logging_obj: "LiteLLMLoggingObject | None" = None,
         safeguards_evaluator: "SafeguardsEvaluator | None" = None,
+        applied_edits: Sequence[AppliedEdit] | None = None,
     ) -> None:
         self.responses_stream = responses_stream
+        self._applied_edits: Final = tuple(applied_edits or ())
         self.model = model
         self.litellm_logging_obj = litellm_logging_obj
         self.safeguards_evaluator: Final = safeguards_evaluator
@@ -445,6 +448,11 @@ class AnthropicResponsesStreamWrapper:
                     "type": "message_delta",
                     "delta": message_delta_payload,
                     "usage": dict(anthropic_usage),
+                    **(
+                        {"context_management": ContextManagementResponse(applied_edits=list(self._applied_edits))}
+                        if self._applied_edits
+                        else {}
+                    ),
                 }
             )
             self._chunk_queue.append({"type": "message_stop"})

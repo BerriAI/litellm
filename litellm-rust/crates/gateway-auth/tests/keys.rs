@@ -1,10 +1,10 @@
 use std::time::{Duration, SystemTime};
 
-use litellm_auth_types::SecretValue;
 use litellm_gateway_auth::{
     Error,
     keys::{KeyHash, KeyLookup, KeyStatus, LookupFuture, verify_key},
 };
+use litellm_secret_value::SecretValue;
 use rstest::{fixture, rstest};
 
 struct Lookup {
