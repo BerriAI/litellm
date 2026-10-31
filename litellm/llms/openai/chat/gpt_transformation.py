@@ -85,7 +85,7 @@ else:
 
 _NO_TOOLS_UPDATE: Final[Mapping[str, object]] = MappingProxyType({})
 
-_ROLES_WHOSE_FILES_ARE_DOWNLOADED: Final = frozenset({"user", "tool"})
+_ROLES_WHOSE_FILES_ARE_DOWNLOADED: Final = ("user", "tool")
 _NOTHING_PREFETCHED: Final[Mapping[str, "str | litellm.ImageFetchError"]] = MappingProxyType({})
 _prefetched_pdf_urls: Final[ContextVar[Mapping[str, "str | litellm.ImageFetchError"]]] = ContextVar(
     "prefetched_pdf_urls"

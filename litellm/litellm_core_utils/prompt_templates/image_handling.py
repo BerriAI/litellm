@@ -7,9 +7,10 @@ import base64
 import time
 from collections.abc import AsyncIterator, Callable, Iterable, Mapping
 from dataclasses import dataclass
+from http import HTTPStatus
 from itertools import chain, takewhile
 from types import MappingProxyType
-from typing import Final
+from typing import Final, TypeAlias
 
 import httpx
 from httpx import Response
@@ -39,7 +40,8 @@ def _header_value(response: Response, name: str) -> str | None:
 def _process_image_response(response: Response, url: str) -> str:
     if response.status_code != 200:
         raise litellm.ImageFetchError(
-            f"Error: Unable to fetch image from URL. Status code: {response.status_code}, url={url}"
+            f"Error: Unable to fetch image from URL. Status code: {response.status_code}, url={url}",
+            url_status_code=response.status_code,
         )
 
     # Check size before downloading if Content-Length header is present
@@ -229,7 +231,9 @@ def _parse_remote_file(fields: Mapping[str, object]) -> _RemoteFile | None:
 
 
 def _parse_remote_source(fields: Mapping[str, object]) -> _RemoteSource | None:
-    source: Final = _as_mapping(fields.get("source")) if fields.get("type") in _ANTHROPIC_MEDIA_BLOCK_TYPES else None
+    part_type: Final = fields.get("type")
+    is_media_block: Final = isinstance(part_type, str) and part_type in _ANTHROPIC_MEDIA_BLOCK_TYPES
+    source: Final = _as_mapping(fields.get("source")) if is_media_block else None
     url: Final = _remote_url(source.get("url")) if source is not None and source.get("type") == "url" else None
     return _RemoteSource(fields, source, url) if source is not None and url is not None else None
 
@@ -326,21 +330,31 @@ async def async_convert_urls_to_base64(
         raise
 
 
+_FetchOutcome: TypeAlias = "str | litellm.ImageFetchError | None"
+_UNREAD_DOWNLOADS: Final[set[asyncio.Task[_FetchOutcome]]] = set()  # mutable-ok: cancelling a download aborts uvloop
+
+
 async def _fetch_outcome(
     url: str, in_flight: asyncio.Semaphore, timeout: float | httpx.Timeout | None
-) -> "str | litellm.ImageFetchError":
+) -> _FetchOutcome:
     try:
         return await _fetch_data_url(url, in_flight, timeout)
     except litellm.ImageFetchError as error:
-        return error
+        return None if error.url_status_code == HTTPStatus.TOO_MANY_REQUESTS else error
+
+
+def _kept_until_done(download: "asyncio.Task[_FetchOutcome]") -> "asyncio.Task[_FetchOutcome]":
+    _UNREAD_DOWNLOADS.add(download)
+    download.add_done_callback(_UNREAD_DOWNLOADS.discard)
+    return download
 
 
 async def _outcomes_through_first_failure(
-    downloads: "tuple[asyncio.Task[str | litellm.ImageFetchError], ...]",
-) -> "AsyncIterator[str | litellm.ImageFetchError]":
+    downloads: "tuple[asyncio.Task[_FetchOutcome], ...]",
+) -> AsyncIterator[_FetchOutcome]:
     for download in downloads:
-        yield await download
-        if isinstance(download.result(), litellm.ImageFetchError):
+        yield (outcome := await asyncio.shield(download))
+        if isinstance(outcome, litellm.ImageFetchError):
             return
 
 
@@ -348,14 +362,12 @@ async def async_fetch_urls_to_base64(
     remote_urls: tuple[str, ...], timeout: float | httpx.Timeout | None = None
 ) -> "Mapping[str, str | litellm.ImageFetchError]":
     in_flight: Final = asyncio.Semaphore(MAX_CONCURRENT_REMOTE_MEDIA_FETCHES)
-    downloads: Final = tuple(asyncio.create_task(_fetch_outcome(url, in_flight, timeout)) for url in remote_urls)
-    try:
-        outcomes: Final = tuple([outcome async for outcome in _outcomes_through_first_failure(downloads)])
-    finally:
-        for download in downloads:
-            download.cancel()
-        await asyncio.gather(*downloads, return_exceptions=True)
-    return MappingProxyType(dict(zip(remote_urls[: len(outcomes)], outcomes, strict=True)))
+    downloads: Final = tuple(
+        _kept_until_done(asyncio.create_task(_fetch_outcome(url, in_flight, timeout))) for url in remote_urls
+    )
+    outcomes: Final = tuple([outcome async for outcome in _outcomes_through_first_failure(downloads)])
+    downloaded: Final = zip(remote_urls[: len(outcomes)], outcomes, strict=True)
+    return MappingProxyType({url: outcome for url, outcome in downloaded if outcome is not None})
 
 
 def _remote_urls_in_parts(parts: Iterable[object], should_inline: Callable[[RemoteMedia], bool]) -> tuple[str, ...]:
