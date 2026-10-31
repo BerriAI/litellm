@@ -107,6 +107,7 @@ class ExceptionCheckers:
             "exceeds the available context size",  # llama.cpp/Lemonade
             "exceeds the maximum number of tokens allowed",  # Gemini
             '"code": "context_length_exceeded"',
+            "prompt is too long",
         ]
         for substring in known_exception_substrings:
             if substring in _error_str_lowercase:
