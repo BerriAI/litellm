@@ -1509,11 +1509,20 @@ def _delta_reasoning_items(delta: object) -> Sequence[object]:
     return cast(Sequence[object], items) if isinstance(items, list) else ()  # cast-ok: items forwarded verbatim
 
 
-def _chunk_reasoning_items(chunk: object) -> Sequence[object]:
+def _chunk_first_delta(chunk: object) -> object:
     choices: Final = _field_of(chunk, "choices")
     if not isinstance(choices, list) or not choices:
-        return ()
-    return _delta_reasoning_items(_field_of(cast(Sequence[object], choices)[0], "delta"))  # cast-ok: untyped chunk
+        return None
+    return _field_of(cast(Sequence[object], choices)[0], "delta")  # cast-ok: untyped chunk
+
+
+def _chunk_reasoning_items(chunk: object) -> Sequence[object]:
+    return _delta_reasoning_items(_chunk_first_delta(chunk))
+
+
+def _chunk_refusal(chunk: object) -> str:
+    refusal: Final = _field_of(_chunk_first_delta(chunk), "refusal")
+    return refusal if isinstance(refusal, str) else ""
 
 
 _NON_TEXT_DELTA_FIELDS: Final = (
@@ -1526,6 +1535,7 @@ _NON_TEXT_DELTA_FIELDS: Final = (
     "audio",
     "images",
     "provider_specific_fields",
+    "refusal",
 )
 
 
@@ -1674,6 +1684,9 @@ def _assembled_message_fields(processor: ChunkProcessor, chunks: Sequence) -> It
         yield "reasoning_content", processor.get_combined_reasoning_content(reasoning_chunks)
 
     typed_chunks: Final = cast(Sequence[object], chunks)  # cast-ok: chunks are untyped upstream
+    combined_refusal: Final = "".join(_chunk_refusal(chunk) for chunk in typed_chunks)
+    if combined_refusal:
+        yield "refusal", combined_refusal
     reasoning_items: Final = tuple(chain.from_iterable(_chunk_reasoning_items(chunk) for chunk in typed_chunks))
     if reasoning_items:
         yield "reasoning_items", list(reasoning_items)

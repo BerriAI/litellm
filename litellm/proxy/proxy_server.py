@@ -181,6 +181,7 @@ from litellm.proxy.common_utils.token_count_settings import (
 )
 from litellm.proxy.management_helpers.auto_router_availability import AutoRouterCatalogEntry, build_auto_router_catalog
 from litellm.proxy.management_helpers.model_group_custom_fields import model_group_custom_fields
+from litellm.proxy.management_helpers.utils import management_endpoint_span_wrapper
 from litellm.repositories import database as database_runtime
 from litellm.router_strategy.auto_router.auto_router_model_naming import (
     GATED_AUTO_ROUTER_CAPABILITIES,
@@ -472,7 +473,6 @@ from litellm.proxy.common_request_processing import (  # noqa: F401, RUF100  # l
     log_llm_api_exception,
     open_sse_before_first_byte,
     proxy_exception_from_route_error,
-    request_litellm_call_id,
     resolve_litellm_call_id,
     should_return_raw_model_name,
     sse_error_payload,
@@ -839,11 +839,15 @@ from litellm.proxy.spend_tracking.spend_event_producer import (
     SpendEventProducer,
     build_spend_event_producer,
 )
+from litellm.proxy.spend_tracking.usage_capture import UsageBatchWriter, UsageCaptureRuntime
+from litellm.proxy.spend_tracking.usage_meter import UsageCaptureSettings
 from litellm.proxy.telemetry.endpoints import router as telemetry_router
 from litellm.proxy.telemetry.middleware import TelemetryMiddleware
 from litellm.proxy.telemetry.runtime import TelemetryRuntime
 from litellm.proxy.telemetry.settings import describe_errors as describe_telemetry_errors
 from litellm.proxy.telemetry.settings import load_settings as load_telemetry_settings
+from litellm.router import router_arguments
+from litellm.router_config import build_router_config
 
 try:
     from litellm.proxy.enterprise_billing.billing_metrics import (
@@ -1328,6 +1332,7 @@ async def _flush_spend_around_logging_drain_on_shutdown(
     finally:
         await worker.stop(discard_pending=True, timeout=GracefulShutdownManager.remaining(2.0, clock=clock))
     await drain_tasks(GracefulShutdownManager.remaining(5.0, clock=clock))
+    await usage_capture.stop(GracefulShutdownManager.remaining(clock=clock))
     await flush_spend()
 
 
@@ -3201,9 +3206,39 @@ def load_from_azure_key_vault(use_azure_key_vault: bool = False):
 
 spend_event_producer: SpendEventProducer | None = None
 
+usage_capture: Final = UsageCaptureRuntime()
+
+
+def _configure_usage_capture() -> None:
+    settings: Final = _GENERAL_SETTINGS_VIEW.validate_python(general_settings)
+    capture_settings: Final = settings.get("accounting_capture")
+    if settings.get("accounting_sync_ack") and capture_settings is None:
+        raise ValueError("accounting_sync_ack requires accounting_capture")
+    if capture_settings is None:
+        if usage_capture.meter is not None:
+            raise ValueError("Disabling accounting_capture requires a worker restart")
+        return
+    if (
+        prisma_client is None
+        or CollectorSettings().enabled
+        or os.getenv("SPEND_LOGS_URL")
+        or litellm.apply_search_free_tier
+    ):
+        raise ValueError(
+            "Usage capture requires local Prisma writes and disabled collector, remote writer and search free tier"
+        )
+    from litellm.proxy.db.accounting_ledger import AccountingLedger
+
+    ledger: Final = AccountingLedger.for_client(prisma_client)
+    writer: Final = UsageBatchWriter(ledger.insert_usage_batch, ledger.load_usage_batch)
+    usage_capture.start(
+        writer.write, UsageCaptureSettings.model_validate(capture_settings), load=ledger.load_usage_batch
+    )
+
 
 def cost_tracking():
     global prisma_client, spend_event_producer
+    _configure_usage_capture()
     if prisma_client is not None:
         from litellm.integrations.shadow_eval_logger import ShadowEvalLogger
 
@@ -7374,20 +7409,24 @@ class ProxyConfig:
                     verbose_proxy_logger.warning(
                         "Key '%s' is not a valid argument for Router.__init__(). Ignoring this key.", k
                     )
-        router = litellm.Router(
-            **router_params,
-            assistants_config=assistants_config,
-            search_tools=search_tools,
-            router_general_settings=RouterGeneralSettings(
-                async_only_mode=True  # only init async clients
-            ),
-            ignore_invalid_deployments=True,  # don't raise an error if a deployment is invalid
-            fallback_access_check=router_fallback_access_check,
-            fallback_budget_check=RouterFallbackBudgetCheck(
-                is_enforced=router_fallback_budget_check.is_enforced,
-                team_member_model_budget_limiter=model_max_budget_limiter,
-            ),
-            auto_router_capability_limit=_license_check.auto_router_capability_limit,
+        router = litellm.Router.from_config(
+            build_router_config(
+                router_arguments(
+                    **router_params,
+                    assistants_config=assistants_config,
+                    search_tools=search_tools,
+                    router_general_settings=RouterGeneralSettings(
+                        async_only_mode=True  # only init async clients
+                    ),
+                    ignore_invalid_deployments=True,  # don't raise an error if a deployment is invalid
+                    fallback_access_check=router_fallback_access_check,
+                    fallback_budget_check=RouterFallbackBudgetCheck(
+                        is_enforced=router_fallback_budget_check.is_enforced,
+                        team_member_model_budget_limiter=model_max_budget_limiter,
+                    ),
+                    auto_router_capability_limit=_license_check.auto_router_capability_limit,
+                )
+            )
         )
 
         if redis_usage_cache is not None and router.health().store.redis_cache is None:
@@ -7877,19 +7916,23 @@ class ProxyConfig:
                 # Router can function with model_list=[] if search_tools are configured
                 if len(_model_list) > 0 or search_tools:
                     verbose_proxy_logger.debug("_model_list: %s", _model_list)
-                    llm_router = litellm.Router(
-                        model_list=_model_list,
-                        router_general_settings=RouterGeneralSettings(
-                            async_only_mode=True  # only init async clients
-                        ),
-                        search_tools=search_tools,
-                        ignore_invalid_deployments=True,
-                        fallback_access_check=router_fallback_access_check,
-                        fallback_budget_check=RouterFallbackBudgetCheck(
-                            is_enforced=router_fallback_budget_check.is_enforced,
-                            team_member_model_budget_limiter=model_max_budget_limiter,
-                        ),
-                        auto_router_capability_limit=_license_check.auto_router_capability_limit,
+                    llm_router = litellm.Router.from_config(
+                        build_router_config(
+                            router_arguments(
+                                model_list=_model_list,
+                                router_general_settings=RouterGeneralSettings(
+                                    async_only_mode=True  # only init async clients
+                                ),
+                                search_tools=search_tools,
+                                ignore_invalid_deployments=True,
+                                fallback_access_check=router_fallback_access_check,
+                                fallback_budget_check=RouterFallbackBudgetCheck(
+                                    is_enforced=router_fallback_budget_check.is_enforced,
+                                    team_member_model_budget_limiter=model_max_budget_limiter,
+                                ),
+                                auto_router_capability_limit=_license_check.auto_router_capability_limit,
+                            )
+                        )
                     )
                     verbose_proxy_logger.debug("updated llm_router: %s", llm_router)
             else:
@@ -12339,6 +12382,7 @@ async def _deployment_hidden_by_listing_callbacks(deployment: Deployment, user_a
 @router.get(
     "/models", dependencies=[Depends(user_api_key_auth)], tags=["model management"]
 )  # if project requires model list
+@management_endpoint_span_wrapper
 async def model_list(
     request: Request = None,  # pyright: ignore[reportArgumentType]  # FastAPI always injects the Request; the None default only serves direct in-process callers
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
@@ -12649,6 +12693,7 @@ async def model_list(
     dependencies=[Depends(user_api_key_auth)],
     tags=["model management"],
 )
+@management_endpoint_span_wrapper
 async def model_info(
     model_id: str,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
@@ -13003,8 +13048,10 @@ async def completion(
     """
     global user_temperature, user_request_timeout, user_max_tokens, user_api_base
     data = {}
+    base_llm_response_processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:
         data = await read_request_body(request=request)  # rebind-ok: pre-existing rebinding on a rename-only line
+        base_llm_response_processor.data = data
         if user_api_key_dict is not None:
             if data.get("metadata") is None:
                 data["metadata"] = {}
@@ -13018,7 +13065,6 @@ async def completion(
                 data["metadata"]["user_api_key_org_alias"] = user_api_key_dict.organization_alias
             if hasattr(user_api_key_dict, "agent_id") and user_api_key_dict.agent_id is not None:
                 data["metadata"]["agent_id"] = user_api_key_dict.agent_id
-        base_llm_response_processor: Final = ProxyBaseLLMRequestProcessing(data=data)
         return await base_llm_response_processor.base_process_llm_request(
             request=request,
             fastapi_response=fastapi_response,
@@ -13120,9 +13166,12 @@ async def completion(
             return _response
     except Exception as e:
         await proxy_logging_obj.post_call_failure_hook(
-            user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data
+            user_api_key_dict=user_api_key_dict,
+            original_exception=e,
+            request_data=base_llm_response_processor.data,
+            dispatched_call_type=base_llm_response_processor.route_type,
         )
-        litellm_call_id: Final = request_litellm_call_id(data)
+        litellm_call_id: Final = base_llm_response_processor.litellm_call_id
         log_llm_api_exception(e, litellm_call_id)
         if isinstance(e, ProxyException):
             raise with_litellm_call_id(e, litellm_call_id)
@@ -21985,9 +22034,9 @@ async def toolset_mcp_route(toolset_name: str, request: Request):
     Namespace a toolset as its own MCP endpoint.
 
     Connecting to /toolset/<name>/mcp exposes exactly the tools defined in
-    the toolset. Access is enforced: non-admin API keys must have the toolset
-    listed in their object_permission.mcp_toolsets grant list, or the request
-    will be rejected with a 403.
+    the toolset. Access is enforced: API keys other than an admin's key with no
+    team must hold the toolset through one of their grant sources, or the
+    request will be rejected with a 403.
     """
     try:
         from litellm.proxy.mcp_server.mcp_server_manager import (

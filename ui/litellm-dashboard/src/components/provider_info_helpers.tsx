@@ -30,6 +30,7 @@ import googleLogo from "../../public/assets/logos/google.svg";
 import groqLogo from "../../public/assets/logos/groq.svg";
 import huggingfaceLogo from "../../public/assets/logos/huggingface.svg";
 import hyperbolicLogo from "../../public/assets/logos/hyperbolic.svg";
+import hostingerLogo from "../../public/assets/logos/hostinger.png";
 import infinityLogo from "../../public/assets/logos/infinity.png";
 import jinaLogo from "../../public/assets/logos/jina.png";
 import lambdaLogo from "../../public/assets/logos/lambda.svg";
@@ -131,6 +132,7 @@ export enum Providers {
   Hosted_Vllm = "Hosted vLLM",
   HUGGINGFACE = "Huggingface",
   HYPERBOLIC = "Hyperbolic",
+  HOSTINGER_ROUTER = "Hostinger Router",
   Infinity = "Infinity",
   JinaAI = "Jina AI",
   OPENCODE_GO = "OpenCode Go",
@@ -263,6 +265,7 @@ export const provider_map: Record<string, string> = {
   Hosted_Vllm: "hosted_vllm",
   HUGGINGFACE: "huggingface",
   HYPERBOLIC: "hyperbolic",
+  HOSTINGER_ROUTER: "hostinger_router",
   Infinity: "infinity",
   JinaAI: "jina_ai",
   OPENCODE_GO: "opencode_go",
@@ -389,6 +392,7 @@ export const providerLogoMap: Partial<Record<Providers, string>> = {
   [Providers.Hosted_Vllm]: vllmLogo.src,
   [Providers.HUGGINGFACE]: huggingfaceLogo.src,
   [Providers.HYPERBOLIC]: hyperbolicLogo.src,
+  [Providers.HOSTINGER_ROUTER]: hostingerLogo.src,
   [Providers.Infinity]: infinityLogo.src,
   [Providers.JinaAI]: jinaLogo.src,
   [Providers.OPENCODE_GO]: opencodeLogo.src,
@@ -493,6 +497,7 @@ const providerPlaceholderMap: Partial<Record<Providers, string>> = {
   [Providers.EDENAI]: "edenai/openai/gpt-mini-latest",
   [Providers.FalAI]: "fal_ai/fal-ai/flux-pro/v1.1-ultra",
   [Providers.Google_AI_Studio]: "gemini-pro",
+  [Providers.HOSTINGER_ROUTER]: "hostinger_router/claude-sonnet-5",
   [Providers.JinaAI]: "jina_ai/",
   [Providers.META]: "meta/muse-spark-1.1",
   [Providers.MICROSOFT_365_COPILOT]: "microsoft_365_copilot/chat",

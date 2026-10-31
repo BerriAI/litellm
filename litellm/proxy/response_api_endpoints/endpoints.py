@@ -36,7 +36,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.anthropic_interface.exceptions.exception_mapping_utils import AnthropicExceptionMapping
 from litellm.caching.dual_cache import DualCache
 from litellm.constants import EMPTY_MAPPING, MANAGED_BACKGROUND_RESPONSE_METADATA_KEY, TERMINAL_RESPONSE_STATUSES
-from litellm.exceptions import EndpointNotSupportedByModelError
+from litellm.exceptions import EndpointNotSupportedByModelError, RateLimitError
 from litellm.integrations.custom_guardrail import ModifyResponseException, guardrail_request_data_with_streaming
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, get_metadata_variable_name_from_kwargs
 from litellm.litellm_core_utils.internal_call_metadata import is_background_response, requests_background
@@ -103,6 +103,7 @@ from litellm.responses.streaming_iterator import (
     ResponsesWsFrameGuard,
     ResponsesWsFrameRejection,
     spawn_logging_task,
+    turn_refusal_frame,
 )
 from litellm.router import Router
 from litellm.types.llms.base import LiteLLMBaseModel
@@ -2627,6 +2628,12 @@ async def _responses_websocket_session(
             route_type="_aresponses_websocket",
             skip_guardrails=True,
         )
+    except RateLimitError as e:
+        verbose_proxy_logger.info("Responses WebSocket refused at open by a rate limit: %s", e)
+        with contextlib.suppress(WebSocketDisconnect, RuntimeError, OSError):
+            await websocket.send_text(turn_refusal_frame(e))
+        await websocket.close(code=1008, reason="Rate limit exceeded")
+        return
     except Exception as e:
         verbose_proxy_logger.exception("Responses WebSocket pre-call error")
         try:
