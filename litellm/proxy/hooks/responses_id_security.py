@@ -170,24 +170,32 @@ class ResponsesIDSecurity(CustomLogger):
             if overriding_extra_body is None
             else overriding_extra_body.get("prompt_cache_options")
         )
-        retained_id: Final = data.get(ADDRESSED_COMPARISON_RESPONSE_ID_FIELD)
         requested_id: Final = None if options is None else options.get("comparison_response_id")
         if options is None or not isinstance(requested_id, str):
             return {}
-        addressed_id: Final = requested_id if self._is_encrypted_response_id(requested_id) else retained_id
-        if not isinstance(addressed_id, str) or not self._is_encrypted_response_id(addressed_id):
-            return {}
-        original_response_id, user_id, team_id = self._decrypt_response_id(addressed_id)
-        if requested_id not in (addressed_id, original_response_id):
-            return {}
-        self.check_user_access_to_response_id(user_id, team_id, user_api_key_dict)
-        authorized_options: Final = {**options, "comparison_response_id": original_response_id}
+        addressed_id: Final = self._comparison_addressed_id(
+            requested_id, data.get(ADDRESSED_COMPARISON_RESPONSE_ID_FIELD)
+        )
+        authorized_options: Final = {
+            **options,
+            "comparison_response_id": self.authorize_response_id(addressed_id, user_api_key_dict),
+        }
         authorized_field: Final[Mapping[str, object]] = (
             {"prompt_cache_options": authorized_options}
             if overriding_extra_body is None
             else {"extra_body": {**overriding_extra_body, "prompt_cache_options": authorized_options}}
         )
         return {**authorized_field, ADDRESSED_COMPARISON_RESPONSE_ID_FIELD: addressed_id}
+
+    def _comparison_addressed_id(self, requested_id: str, retained_id: object) -> str:
+        if (
+            not isinstance(retained_id, str)
+            or self._is_encrypted_response_id(requested_id)
+            or not self._is_encrypted_response_id(retained_id)
+        ):
+            return requested_id
+        original_response_id, _, _ = self._decrypt_response_id(retained_id)
+        return retained_id if original_response_id == requested_id else requested_id
 
     def authorize_response_id(
         self,
