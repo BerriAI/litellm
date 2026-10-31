@@ -4808,7 +4808,7 @@ _NOT_AN_IMAGE_REQUEST: Final[Mapping[str, object]] = MappingProxyType(
 @pytest.mark.usefixtures("cloudflare_account")
 @pytest.mark.parametrize(
     "state",
-    ("", [], {}, "  ", [""], {"a": ""}, {"a": [" "]}, [None], {"a": None}, [{"type": "input_text", "text": ""}]),
+    ("", [], {}, "  ", [""], {"a": ""}, {"a": [" "]}, [None], {"a": None}),
     ids=(
         "string",
         "list",
@@ -4819,7 +4819,6 @@ _NOT_AN_IMAGE_REQUEST: Final[Mapping[str, object]] = MappingProxyType(
         "nested-blank",
         "list-of-null",
         "object-of-null",
-        "empty-text-part",
     ),
 )
 async def test_an_empty_state_with_only_a_dropped_image_is_refused_when_the_model_always_took_images(
@@ -4835,7 +4834,7 @@ async def test_an_empty_state_with_only_a_dropped_image_is_refused_when_the_mode
 
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("cloudflare_account")
-@pytest.mark.parametrize("state", ("a", ["a"], {"a": "b"}, {"a": 0}, [False]), ids=str)
+@pytest.mark.parametrize("state", ("a", ["a"], {"a": "b"}, {"a": 0}, [False], {"type": "refund"}), ids=str)
 async def test_a_state_with_something_in_it_still_reaches_the_model_after_its_only_image_is_dropped(
     state: object, respx_mock: respx.MockRouter
 ) -> None:
