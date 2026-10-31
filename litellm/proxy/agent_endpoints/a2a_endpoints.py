@@ -11,7 +11,7 @@ The A2A SDK can point to LiteLLM's URL and invoke agents registered with LiteLLM
 """
 
 import json
-from collections.abc import AsyncGenerator, Mapping
+from collections.abc import AsyncGenerator, Callable, Coroutine, Mapping
 from copy import deepcopy
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Protocol
@@ -19,7 +19,8 @@ from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import JSONResponse, StreamingResponse
-from pydantic import TypeAdapter, ValidationError
+from fastapi.routing import APIRoute
+from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -27,7 +28,7 @@ from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.url_utils import SSRFError, validate_url
 from litellm.llms.a2a.common_utils import resolve_a2a_hop_auth_header
 from litellm.llms.custom_httpx.sse_lines import aiter_sse_lines
-from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 from litellm.proxy.a2a.version_convert import (
     A2AVersion,
     normalize_agent_card,
@@ -42,6 +43,7 @@ from litellm.proxy.agent_endpoints.databricks_oauth import (
 )
 from litellm.proxy.agent_endpoints.utils import merge_agent_headers
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_utils.openai_error_payload import status_typed_proxy_exception
 from litellm.proxy.common_utils.sse_keepalive import (
     SSE_COMMENT_PING,
     coerce_keepalive_interval,
@@ -219,6 +221,57 @@ def _jsonrpc_error(
         },
         status_code=status_code,
     )
+
+
+class _JsonRpcRequestId(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    id: str | int | None = None
+
+
+async def _jsonrpc_request_id(request: Request) -> str | int | None:
+    try:
+        return _JsonRpcRequestId.model_validate_json(await request.body()).id
+    except ValidationError:
+        return None
+
+
+async def _jsonrpc_refusal(request: Request, refusal: ProxyException | HTTPException) -> JSONResponse:
+    from litellm.proxy.proxy_server import (
+        _close_dangling_otel_server_span,  # pyright: ignore[reportPrivateUsage]  # proxy_server keeps the span-close helper private; a route that answers an error itself must stamp the OTel server span like the global ProxyException handler does
+    )
+
+    error: Final = refusal if isinstance(refusal, ProxyException) else status_typed_proxy_exception(refusal)
+    _close_dangling_otel_server_span(request, int(error.code), exc=refusal)
+    return JSONResponse(
+        content={
+            "jsonrpc": "2.0",
+            "id": await _jsonrpc_request_id(request),
+            "error": {
+                "code": -32000,
+                "message": error.message,
+                "data": {"type": error.type, "param": error.param, "code": error.code},
+            },
+        },
+        status_code=int(error.code),
+        headers=error.headers if isinstance(refusal, ProxyException) else refusal.headers,
+    )
+
+
+class _JsonRpcRefusalRoute(APIRoute):
+    def get_route_handler(self) -> Callable[[Request], Coroutine[object, object, Response]]:
+        handler: Final = super().get_route_handler()
+
+        async def answer_refusals_as_jsonrpc(request: Request) -> Response:
+            try:
+                return await handler(request)
+            except (ProxyException, HTTPException) as refusal:
+                return await _jsonrpc_refusal(request, refusal)
+
+        return answer_refusals_as_jsonrpc
+
+
+jsonrpc_router: Final = APIRouter(route_class=_JsonRpcRefusalRoute)
 
 
 async def _get_agent(agent_id: str) -> "AgentResponse | None":
@@ -649,17 +702,17 @@ async def get_agent_card(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post(
+@jsonrpc_router.post(
     "/a2a/{agent_id}",
     tags=["[beta] A2A Agents"],
     dependencies=[Depends(user_api_key_auth)],
 )
-@router.post(
+@jsonrpc_router.post(
     "/a2a/{agent_id}/message/send",
     tags=["[beta] A2A Agents"],
     dependencies=[Depends(user_api_key_auth)],
 )
-@router.post(
+@jsonrpc_router.post(
     "/v1/a2a/{agent_id}/message/send",
     tags=["[beta] A2A Agents"],
     dependencies=[Depends(user_api_key_auth)],
@@ -1055,3 +1108,6 @@ async def invoke_agent_a2a(
         if isinstance(e, litellm.BadRequestError):
             return _jsonrpc_error(body.get("id"), -32602, e.message, 400)
         return _jsonrpc_error(body.get("id"), -32603, f"Internal error: {e}", 500)
+
+
+router.include_router(jsonrpc_router)
