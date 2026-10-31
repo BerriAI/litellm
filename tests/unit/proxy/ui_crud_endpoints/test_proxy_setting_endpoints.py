@@ -722,6 +722,115 @@ class TestProxySettingEndpoints:
         create_sso_settings = json.loads(create_data["sso_settings"])
         assert create_sso_settings["google_client_id"] == "new_google_client_id"
 
+    def _patch_sso_settings(self, monkeypatch, stored, body):
+        """PATCH /update/sso_settings against a stored row; returns (response, saved row)."""
+        import json
+        from unittest.mock import AsyncMock, MagicMock
+
+        monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
+        mock_prisma = MagicMock()
+        stored_record = None
+        if stored is not None:
+            stored_record = MagicMock()
+            stored_record.sso_settings = stored
+        mock_prisma.db.litellm_ssoconfig.find_unique = AsyncMock(
+            return_value=stored_record
+        )
+        mock_prisma.db.litellm_ssoconfig.upsert = AsyncMock()
+        mock_prisma.writer_db.litellm_config.find_unique = AsyncMock(return_value=None)
+        monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+
+        from litellm.proxy.proxy_server import proxy_config
+
+        monkeypatch.setattr(
+            proxy_config, "encrypt_env_variables", lambda environment_variables: environment_variables
+        )
+        monkeypatch.setattr(proxy_config, "decrypt_db_variables", lambda variables: variables)
+
+        response = client.patch("/update/sso_settings", json=body)
+        upsert_kwargs = mock_prisma.db.litellm_ssoconfig.upsert.call_args.kwargs
+        return response, json.loads(upsert_kwargs["data"]["update"]["sso_settings"])
+
+    _STORED_GENERIC_SSO = {
+        "generic_client_id": "stored-client-id",
+        "generic_client_secret": "stored-client-secret",
+        "generic_authorization_endpoint": "https://idp.example.com/authorize",
+        "user_email": "admin@example.com",
+        "role_mappings": {
+            "provider": "generic",
+            "group_claim": "groups",
+            "default_role": "internal_user",
+            "roles": {"proxy_admin": ["admins"]},
+        },
+    }
+
+    def test_update_sso_settings_omitted_fields_keep_stored_values(
+        self, mock_proxy_config, mock_auth, monkeypatch
+    ):
+        monkeypatch.setenv("GENERIC_CLIENT_SECRET", "stored-client-secret")
+        new_role_mappings = {
+            "provider": "generic",
+            "group_claim": "roles",
+            "default_role": "internal_user",
+            "roles": {"proxy_admin": ["platform-admins"]},
+        }
+
+        response, saved = self._patch_sso_settings(
+            monkeypatch, self._STORED_GENERIC_SSO, {"role_mappings": new_role_mappings}
+        )
+
+        assert response.status_code == 200
+        assert saved["generic_client_secret"] == "stored-client-secret"
+        assert saved["generic_client_id"] == "stored-client-id"
+        assert saved["user_email"] == "admin@example.com"
+        assert saved["role_mappings"]["group_claim"] == "roles"
+        assert os.environ["GENERIC_CLIENT_SECRET"] == "stored-client-secret"
+
+    def test_update_sso_settings_null_clears_only_that_field(
+        self, mock_proxy_config, mock_auth, monkeypatch
+    ):
+        monkeypatch.setenv("GENERIC_CLIENT_SECRET", "stored-client-secret")
+        monkeypatch.setenv("GENERIC_CLIENT_ID", "stored-client-id")
+
+        response, saved = self._patch_sso_settings(
+            monkeypatch,
+            self._STORED_GENERIC_SSO,
+            {"generic_client_secret": None, "role_mappings": None},
+        )
+
+        assert response.status_code == 200
+        assert saved["generic_client_secret"] is None
+        assert saved["role_mappings"] is None
+        assert saved["generic_client_id"] == "stored-client-id"
+        assert "GENERIC_CLIENT_SECRET" not in os.environ
+        assert os.environ["GENERIC_CLIENT_ID"] == "stored-client-id"
+
+    def test_update_sso_settings_new_value_replaces_stored_value(
+        self, mock_proxy_config, mock_auth, monkeypatch
+    ):
+        response, saved = self._patch_sso_settings(
+            monkeypatch, self._STORED_GENERIC_SSO, {"generic_client_secret": "rotated-secret"}
+        )
+
+        assert response.status_code == 200
+        assert saved["generic_client_secret"] == "rotated-secret"
+        assert saved["generic_client_id"] == "stored-client-id"
+        assert os.environ["GENERIC_CLIENT_SECRET"] == "rotated-secret"
+
+    def test_update_sso_settings_omitted_field_leaves_env_only_value_alone(
+        self, mock_proxy_config, mock_auth, monkeypatch
+    ):
+        monkeypatch.setenv("GENERIC_CLIENT_SECRET", "env-only-secret")
+
+        response, saved = self._patch_sso_settings(
+            monkeypatch, None, {"user_email": "admin@example.com"}
+        )
+
+        assert response.status_code == 200
+        assert saved["user_email"] == "admin@example.com"
+        assert saved["generic_client_secret"] is None
+        assert os.environ["GENERIC_CLIENT_SECRET"] == "env-only-secret"
+
     def test_update_sso_settings_maps_saml_fields_to_env_vars(
         self, mock_proxy_config, mock_auth, monkeypatch
     ):

@@ -1310,9 +1310,14 @@ async def update_sso_settings(
     if "general_settings" not in config:
         config["general_settings"] = {}
 
-    # Update environment variables in config and in memory
-    sso_data: Final = sso_config.model_dump()
-    for field_name, value in sso_data.items():
+    # PATCH semantics: omitted fields keep their stored value, an explicit null clears it
+    submitted: Final = sso_config.model_dump(include=sso_config.model_fields_set)
+    stored_values: Final = before_sso_data or {}
+    sso_data: Final = {
+        field_name: submitted[field_name] if field_name in submitted else stored_values.get(field_name)
+        for field_name in SSOConfig.model_fields
+    }
+    for field_name, value in submitted.items():
         if field_name in SSO_FIELD_ENV_VARS:
             env_var_name = SSO_FIELD_ENV_VARS[field_name]
             if value:
