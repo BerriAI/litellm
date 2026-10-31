@@ -437,6 +437,8 @@ _NAMED_UNKNOWN_VOICE_KEYS: Final = 10
 
 _NAMED_VOICE_KEY_CHARS: Final = 100
 
+_NAMED_AUDIO_FORMAT_CHARS: Final = 100
+
 
 def _gemini_speech_config_wrapper(value: Mapping[str, object]) -> Mapping[str, object] | None:
     camel_config: Final = as_str_mapping(value.get("speechConfig"))
@@ -467,6 +469,31 @@ def reject_unknown_gemini_tts_voice_keys(
         message=(
             f"{model} does not support the voice keys {named_voice_keys(unknown_keys)}. Remove them, or set "
             "drop_params to ignore them."
+        ),
+        model=model,
+        llm_provider=llm_provider,
+    )
+
+
+def _named_audio_format(audio_format: object) -> str:
+    if isinstance(audio_format, str):
+        return repr(audio_format[:_NAMED_AUDIO_FORMAT_CHARS])
+    return repr(audio_format)[:_NAMED_AUDIO_FORMAT_CHARS]
+
+
+def unsupported_gemini_tts_audio_format(
+    model: str, audio: Mapping[str, object], drop_params: bool, llm_provider: str | None
+) -> UnsupportedParamsError | None:
+    nested_config: Final = _gemini_speech_config_wrapper(audio) or {}
+    audio_format: Final = next(
+        (item for item in (audio.get("format"), nested_config.get("format")) if item not in (None, "pcm16")), None
+    )
+    if audio_format is None or drops_unsupported_params(drop_params):
+        return None
+    return UnsupportedParamsError(
+        message=(
+            f"{model} does not take the audio format {_named_audio_format(audio_format)}. Set format "
+            "to 'pcm16' or leave it out, or set drop_params to drop it."
         ),
         model=model,
         llm_provider=llm_provider,
@@ -1555,15 +1582,11 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             languageCode: "en-US",
         }
         """
-        # Validate audio format - Gemini TTS only supports pcm16
-        audio_format: Final = value.get("format")
-        if audio_format is not None and audio_format != "pcm16":
-            raise ValueError(
-                f"Unsupported audio format for Gemini TTS models: {audio_format}. "
-                f"Gemini TTS models only support 'pcm16' format as they return audio data in L16 PCM format. "
-                f"Please set audio format to 'pcm16'."
-            )
-
+        audio_format_error: Final = unsupported_gemini_tts_audio_format(
+            "Gemini TTS", value, drop_unknown_fields, self.custom_llm_provider
+        )
+        if audio_format_error is not None:
+            raise audio_format_error
         camel_speech_config: Final = value.get("speechConfig")
         snake_speech_config: Final = value.get("speech_config")
         speech_config_value: Final = (
@@ -1601,6 +1624,11 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
     def _map_chat_audio_params(
         self, model: str, value: Mapping[str, object], drop_params: bool
     ) -> dict[str, object]:  # mutable-ok: the public forwarding interface returns a concrete request dictionary
+        audio_format_error: Final = unsupported_gemini_tts_audio_format(
+            model, value, drop_params, self.custom_llm_provider
+        )
+        if audio_format_error is not None:
+            raise audio_format_error
         if _gemini_speech_config_wrapper(value) is not None:
             reject_unknown_gemini_tts_voice_keys(model, value, drop_params, self.custom_llm_provider)
         return self._map_audio_params(value, drop_unknown_fields=drops_unsupported_params(drop_params))
