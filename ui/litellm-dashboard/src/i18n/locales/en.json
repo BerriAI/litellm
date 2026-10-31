@@ -1605,7 +1605,7 @@
       },
       "resetSpendDialog": {
         "title": "Reset Team Member Spend",
-        "prompt": "Reset current period spend for <strong>{{member}}</strong> in this team to <strong>$0</strong>?",
+        "prompt": "Reset current period spend for <member /> in this team to <strong>$0</strong>?",
         "summary": "Current period spend: <strong>${{amount}}</strong>. This is the value checked against the member's budget. Total spend and logs are preserved.",
         "summaryWithPeriod": "Current period spend ({{period}}): <strong>${{amount}}</strong>. This is the value checked against the member's budget. Total spend and logs are preserved.",
         "cancel": "Cancel",
@@ -1613,7 +1613,7 @@
       },
       "resetBudgetDialog": {
         "title": "Reset Team Member Budget",
-        "prompt": "Remove the custom budget for <strong>{{member}}</strong> and put them back on the team default of <strong>{{budget}}</strong>?",
+        "prompt": "Remove the custom budget for <member /> and put them back on the team default of <strong>{{budget}}</strong>?",
         "summary": "Custom budget: <strong>{{budget}}</strong>. Their spend is kept. Future changes to the team's member budget will apply to them again.",
         "cancel": "Cancel",
         "confirm": "Use team default"
