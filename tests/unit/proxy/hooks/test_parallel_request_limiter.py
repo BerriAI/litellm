@@ -196,9 +196,10 @@ def _realtime_session_events(input_tokens: int, output_tokens: int) -> list[dict
     ],
     ids=["responses-websocket-turn", "realtime-session", "events-of-a-non-socket-call"],
 )
+@pytest.mark.parametrize("opened_this_minute", [True, False], ids=["opened-this-minute", "opened-last-minute"])
 @pytest.mark.asyncio
 async def test_async_log_success_event_counts_socket_session_tokens(
-    call_type: str, events: list[dict[str, object]], tokens: int
+    call_type: str, events: list[dict[str, object]], tokens: int, opened_this_minute: bool
 ):
     api_key: Final = hash_token("sk-socket-session")
     handler: Final = PROXY_MaxParallelRequestsHandler(
@@ -206,7 +207,7 @@ async def test_async_log_success_event_counts_socket_session_tokens(
     )
     precise_minute: Final = FROZEN_INSTANT.strftime("%Y-%m-%d-%H-%M")
     scope_ids: Final = (api_key, "socket-user", "socket-team", "socket-end-user")
-    for scope_id in scope_ids:
+    for scope_id in scope_ids if opened_this_minute else ():
         await handler.internal_usage_cache.async_set_cache(
             key=f"{scope_id}::{precise_minute}::request_count",
             value={"current_requests": 1, "current_tpm": 0, "current_rpm": 1},
