@@ -22064,7 +22064,7 @@
         },
         "mode": "chat",
         "output_cost_per_token": 3.74997e-06,
-        "source": "https://www.databricks.com/product/pricing/proprietary-foundation-model-serving",
+        "source": "https://docs.databricks.com/aws/en/machine-learning/foundation-model-apis/supported-models",
         "supported_modalities": [
             "text",
             "image",
@@ -22082,7 +22082,9 @@
         "input_cost_per_token_priority": 1.35002e-06,
         "output_cost_per_token_priority": 6.75003e-06,
         "cache_read_input_token_cost_priority": 1.3503e-07,
-        "cache_creation_input_token_cost_priority": 1.35002e-06
+        "cache_creation_input_token_cost_priority": 1.35002e-06,
+        "supports_audio_input": true,
+        "supports_video_input": true
     },
     "databricks/databricks-gemini-3-7-flash": {
         "cache_creation_input_token_cost": 7.4998e-07,
@@ -22096,7 +22098,7 @@
         },
         "mode": "chat",
         "output_cost_per_token": 3.74997e-06,
-        "source": "https://www.databricks.com/product/pricing/proprietary-foundation-model-serving",
+        "source": "https://docs.databricks.com/aws/en/machine-learning/foundation-model-apis/supported-models",
         "supported_modalities": [
             "text",
             "image",
@@ -22114,7 +22116,9 @@
         "input_cost_per_token_priority": 1.35002e-06,
         "output_cost_per_token_priority": 6.75003e-06,
         "cache_read_input_token_cost_priority": 1.3503e-07,
-        "cache_creation_input_token_cost_priority": 1.35002e-06
+        "cache_creation_input_token_cost_priority": 1.35002e-06,
+        "supports_audio_input": true,
+        "supports_video_input": true
     },
     "databricks/databricks-gemini-3-6-flash": {
         "cache_creation_input_token_cost": 7.4998e-07,
@@ -22130,7 +22134,7 @@
         "mode": "chat",
         "output_cost_per_token": 3.74997e-06,
         "output_dbu_cost_per_token": 5.3571e-05,
-        "source": "https://www.databricks.com/product/pricing/proprietary-foundation-model-serving",
+        "source": "https://docs.databricks.com/aws/en/machine-learning/foundation-model-apis/supported-models",
         "supported_modalities": [
             "text",
             "image",
@@ -22149,7 +22153,9 @@
         "input_cost_per_token_priority": 1.35002e-06,
         "output_cost_per_token_priority": 6.75003e-06,
         "cache_read_input_token_cost_priority": 1.3503e-07,
-        "cache_creation_input_token_cost_priority": 1.35002e-06
+        "cache_creation_input_token_cost_priority": 1.35002e-06,
+        "supports_audio_input": true,
+        "supports_video_input": true
     },
     "databricks/databricks-gemini-3-5-flash": {
         "cache_creation_input_token_cost": 1.87502e-06,
@@ -22165,7 +22171,7 @@
         "mode": "chat",
         "output_cost_per_token": 1.124998e-05,
         "output_dbu_cost_per_token": 0.000160714,
-        "source": "https://www.databricks.com/product/pricing/proprietary-foundation-model-serving",
+        "source": "https://docs.databricks.com/aws/en/machine-learning/foundation-model-apis/supported-models",
         "supported_modalities": [
             "text",
             "image",
@@ -22183,7 +22189,9 @@
         "input_cost_per_token_priority": 3.37498e-06,
         "output_cost_per_token_priority": 2.025002e-05,
         "cache_read_input_token_cost_priority": 3.3747e-07,
-        "cache_creation_input_token_cost_priority": 3.37498e-06
+        "cache_creation_input_token_cost_priority": 3.37498e-06,
+        "supports_audio_input": true,
+        "supports_video_input": true
     },
     "databricks/databricks-gemini-3-5-flash-lite": {
         "cache_creation_input_token_cost": 3.7499e-07,
@@ -22199,7 +22207,7 @@
         "mode": "chat",
         "output_cost_per_token": 3.12501e-06,
         "output_dbu_cost_per_token": 4.4643e-05,
-        "source": "https://www.databricks.com/product/pricing/proprietary-foundation-model-serving",
+        "source": "https://docs.databricks.com/aws/en/machine-learning/foundation-model-apis/supported-models",
         "supported_modalities": [
             "text",
             "image",
@@ -22219,7 +22227,9 @@
         "input_cost_per_token_priority": 6.7501e-07,
         "output_cost_per_token_priority": 5.62499e-06,
         "cache_read_input_token_cost_priority": 6.748e-08,
-        "cache_creation_input_token_cost_priority": 6.7501e-07
+        "cache_creation_input_token_cost_priority": 6.7501e-07,
+        "supports_audio_input": true,
+        "supports_video_input": true
     },
     "databricks/databricks-gemma-3-12b": {
         "cache_creation_input_token_cost": 1.5001e-07,
@@ -29419,6 +29429,7 @@
         "web_search_billing_unit": "per_query"
     },
     "gemini-3.1-flash-lite-image": {
+        "deprecation_date": "2027-06-28",
         "cache_read_input_token_cost": 2.5e-08,
         "cache_read_input_token_cost_batches": 1.25e-08,
         "cache_read_input_token_cost_flex": 1.25e-08,
@@ -30418,6 +30429,7 @@
         "google_maps_grounding_cost_per_query": 0.014
     },
     "vertex_ai/gemini-3.8-flash": {
+        "deprecation_date": "2027-09-02",
         "cache_read_input_token_cost": 7.5e-08,
         "cache_read_input_token_cost_batches": 3.75e-08,
         "cache_read_input_token_cost_flex": 3.75e-08,
@@ -30524,6 +30536,7 @@
         "supports_native_streaming": true
     },
     "vertex_ai/gemini-3.8-live": {
+        "deprecation_date": "2027-09-25",
         "gemini_audio_only_live": true,
         "input_cost_per_audio_token": 3e-06,
         "input_cost_per_image_token": 1e-06,
@@ -32696,6 +32709,7 @@
         "google_maps_grounding_cost_per_query": 0.014
     },
     "gemini-3.8-flash": {
+        "deprecation_date": "2027-09-02",
         "cache_read_input_token_cost": 7.5e-08,
         "cache_read_input_token_cost_batches": 3.75e-08,
         "cache_read_input_token_cost_flex": 3.75e-08,
@@ -48954,6 +48968,7 @@
         "source": "https://api.together.ai/v1/models"
     },
     "together_ai/Qwen/Qwen3.8-2.4T-A95B": {
+        "deprecation_date": "2026-11-04",
         "cache_read_input_token_cost": 2.5e-07,
         "input_cost_per_token": 2e-06,
         "litellm_provider": "together_ai",
@@ -52673,6 +52688,7 @@
 
     },
     "vertex_ai/gemini-3.1-flash-lite-image": {
+        "deprecation_date": "2027-06-28",
         "cache_read_input_token_cost": 2.5e-08,
         "cache_read_input_token_cost_batches": 1.25e-08,
         "cache_read_input_token_cost_flex": 1.25e-08,
@@ -76773,6 +76789,7 @@
         "web_search_billing_unit": "per_query"
     },
     "vertex_ai/gemini-4-argon": {
+        "deprecation_date": "2027-10-13",
         "cache_read_input_token_cost": 1e-07,
         "cache_read_input_token_cost_batches": 5e-08,
         "cache_read_input_token_cost_flex": 5e-08,
