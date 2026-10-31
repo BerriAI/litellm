@@ -20,6 +20,8 @@ flag_management:
   # the stale line maps mark comment lines of since-edited files as missed,
   # sinking patch coverage on unrelated PRs.
   individual_flags:
+    - name: accounting-ledger
+      carryforward: false
     - name: proxy-mgmt-behavior
       carryforward: false
     - name: security

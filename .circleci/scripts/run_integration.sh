@@ -256,6 +256,7 @@ fi
 
 env -i PATH="$PATH" HOME="$HOME" PYTHONPATH="$PYTHONPATH" \
   INTEGRATION_RUN_ID="$integration_identity" \
+  PYTEST_ADDOPTS="${PYTEST_ADDOPTS:-}" \
   DATABASE_URL="$DATABASE_URL" \
   "${shared_services[@]}" "${worker_coverage[@]}" \
   INTEGRATION_WORKERS="${INTEGRATION_WORKERS:-1}" \
