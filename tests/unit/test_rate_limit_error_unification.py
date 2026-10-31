@@ -18,6 +18,9 @@ the new behavior:
    internal modules.
 """
 
+from typing import Final
+
+import fakeredis
 import pytest
 from fastapi import HTTPException
 
@@ -831,16 +834,22 @@ class TestProxyHooksActuallyRaiseProxyRateLimitError:
     ):
         """Drive `_PROXY_MaxBudgetPerSessionHandler` past its budget and
         assert the unified class is raised."""
-        from unittest.mock import AsyncMock, MagicMock, patch
+        from unittest.mock import MagicMock, patch
 
         from litellm.caching.caching import DualCache
         from litellm.proxy._types import UserAPIKeyAuth
         from litellm.proxy.hooks.max_budget_per_session_limiter import (
             PROXY_MaxBudgetPerSessionHandler,
         )
+        from litellm.proxy.utils import InternalUsageCache
+        from tests._support.fake_redis import fake_redis_cache
 
-        internal_cache = MagicMock()
-        internal_cache.async_get_cache = AsyncMock(return_value=10.0)
+        internal_cache: Final = InternalUsageCache(DualCache(redis_cache=fake_redis_cache(fakeredis.FakeServer())))
+        await internal_cache.async_set_cache(
+            key="{session_budget:session-over-budget}:spend",
+            value=10.0,
+            litellm_parent_otel_span=None,
+        )
         handler = PROXY_MaxBudgetPerSessionHandler(
             internal_usage_cache=internal_cache,
         )
