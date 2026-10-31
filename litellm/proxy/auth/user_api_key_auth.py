@@ -1198,6 +1198,8 @@ def _should_route_jwt_to_oauth2_override(token: str, jwt_handler: JWTHandler) ->
 def get_bearer_token(
     api_key: str,
 ) -> str:
+    if api_key.startswith("Token "):  # Deepgram SDKs send their key as `Token <key>`
+        return api_key[len("Token ") :]
     if api_key.startswith("Bearer "):  # ensure Bearer token passed in
         api_key = api_key.replace("Bearer ", "")  # extract the token
     elif api_key.startswith("Basic "):
@@ -1322,12 +1324,10 @@ async def user_api_key_auth_websocket_for_model(
             await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
             raise HTTPException(status_code=403, detail="No API key provided")
     else:
-        # Extract the API key from the Bearer token
-        if not authorization.startswith("Bearer "):
+        api_key = get_bearer_token(authorization).strip()
+        if not api_key:
             await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
             raise HTTPException(status_code=403, detail="Invalid Authorization header format")
-
-        api_key = authorization[len("Bearer ") :].strip()
 
     # Call user_api_key_auth with the extracted API key
     # Note: You'll need to modify this to work with WebSocket context if needed
