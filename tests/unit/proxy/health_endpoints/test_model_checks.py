@@ -9,6 +9,7 @@ from litellm.proxy.health_endpoints.model_checks import (
     CHAT_COMPLETIONS_SCRIPT,
     MESSAGES_SCRIPT,
     RESPONSES_SCRIPT,
+    TEST_MODEL_REQUESTS_DIR,
     WEATHER_TOOL_RESULT,
     CalledTurn,
     EndpointScript,
@@ -371,3 +372,18 @@ def test_payload_lists_the_checks_in_order_with_their_details():
     assert all(check["status"] == "pass" for check in payload["checks"])
     assert payload["cache_read_percent"] == 96.0
     assert isinstance(payload["duration_ms"], int)
+
+
+def test_the_three_request_files_send_one_system_prompt_and_one_tool_so_endpoint_verdicts_are_comparable():
+    bodies: Final = {
+        path.stem: json.loads(path.read_text(encoding="utf-8")) for path in TEST_MODEL_REQUESTS_DIR.glob("*.json")
+    }
+    chat, messages, responses = bodies["chat_completions"], bodies["messages"], bodies["responses"]
+
+    assert set(bodies) == {"chat_completions", "messages", "responses"}, bodies.keys()
+    assert chat["messages"][0]["content"] == responses["instructions"] == messages["system"]
+    assert chat["tools"][0]["function"]["parameters"] == responses["tools"][0]["parameters"]
+    assert chat["tools"][0]["function"]["parameters"] == messages["tools"][0]["input_schema"]
+    assert CHAT_COMPLETIONS_SCRIPT.turn_one() == chat
+    assert RESPONSES_SCRIPT.turn_one() == responses
+    assert MESSAGES_SCRIPT.turn_one() == messages

@@ -27,6 +27,8 @@ from integration._support.wire import Reply, Request, Wire, wire_server
 from integration.cost_calculation.cost_tracking_case import JsonResponse
 from pydantic import JsonValue
 
+from litellm.proxy.health_endpoints.model_checks import TEST_MODEL_REQUESTS_DIR
+
 _DECISIONS_PROBE_REPLY: Final = JsonResponse(
     content_type="application/json",
     body={
@@ -1438,6 +1440,9 @@ def test_health_check_of_gpt_transcribe_probes_without_verbose_json_and_reports_
 
 
 _TEST_MODEL_TOOL_CALL_ID: Final = "call_boston_wire"
+_TEST_MODEL_CHAT_REQUEST: Final = JSON_OBJECT.validate_json(
+    (TEST_MODEL_REQUESTS_DIR / "chat_completions.json").read_text(encoding="utf-8")
+)
 
 
 def _test_model_chat_reply(request: Request, *, cached_tokens: int) -> Reply:
@@ -1446,14 +1451,14 @@ def _test_model_chat_reply(request: Request, *, cached_tokens: int) -> Reply:
     assert "cache_control" not in request.body.decode(), request.body.decode()
     messages: Final = body["messages"]
     assert isinstance(messages, list) and isinstance(messages[0], dict), body
-    assert messages[0]["role"] == "system", messages[0]
     tool_turn: Final = any(isinstance(message, dict) and message.get("role") == "tool" for message in messages)
+    assert messages[: len(_TEST_MODEL_CHAT_REQUEST["messages"])] == _TEST_MODEL_CHAT_REQUEST["messages"], messages
+    assert body["tools"] == _TEST_MODEL_CHAT_REQUEST["tools"], body["tools"]
     if tool_turn:
         assert isinstance(messages[-1], dict), messages
         assert messages[-1]["tool_call_id"] == _TEST_MODEL_TOOL_CALL_ID, messages[-1]
         message: dict[str, JsonValue] = {"role": "assistant", "content": "Boston is 72F and sunny."}
     else:
-        assert body["tools"], body
         message = {
             "role": "assistant",
             "content": None,

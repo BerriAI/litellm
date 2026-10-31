@@ -1,9 +1,10 @@
 """Live checks behind ``POST /health/test_model``.
 
-One two-turn tool-call conversation per selected endpoint, scripted in that endpoint's native request shape
-with no prompt-cache markers, so the second turn can only report cached tokens when the provider caches the
-repeated prefix on its own. Three verdicts come out of the two turns: the conversation itself (both turns
-parse, the tool call lands, the tool result is used), prompt caching, and cost tracking.
+One two-turn tool-call conversation per selected endpoint. Turn 1 is the JSON body in ``test_model_requests/``
+for that endpoint, in its native request shape with no prompt-cache markers, so the second turn can only report
+cached tokens when the provider caches the repeated prefix on its own. Turn 2 is built from turn 1's reply, since
+it has to carry the tool call id the model returned. Three verdicts come out of the two turns: the conversation
+itself (both turns parse, the tool call lands, the tool result is used), prompt caching, and cost tracking.
 """
 
 from __future__ import annotations
@@ -12,6 +13,7 @@ import json
 import time
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
+from pathlib import Path
 from types import MappingProxyType
 from typing import Final, Literal, TypeAlias
 
@@ -27,50 +29,7 @@ EndpointStatus: TypeAlias = Literal["success", "warning", "error"]
 TEST_MODEL_ENDPOINTS: Final[tuple[TestModelEndpoint, ...]] = ("/v1/chat/completions", "/v1/responses", "/v1/messages")
 WEATHER_TOOL_NAME: Final = "get_weather"
 WEATHER_TOOL_RESULT: Final = "72F and sunny"
-WEATHER_QUESTION: Final = "What is the weather in Boston right now? Use the get_weather tool to find out."
-MAX_OUTPUT_TOKENS: Final = 2048
-THINKING_BUDGET_TOKENS: Final = 1024
-
-_WEATHER_PARAMETERS: Final[Mapping[str, object]] = MappingProxyType(
-    {
-        "type": "object",
-        "properties": {
-            "location": {"type": "string", "description": "City name, for example Boston"},
-            "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]},
-        },
-        "required": ["location"],
-    }
-)
-_WEATHER_DESCRIPTION: Final = "Get the current weather for a city"
-
-_CITIES: Final = ("Boston", "Denver", "Lisbon", "Osaka", "Nairobi", "Perth", "Quito", "Reykjavik")
-_SECTION_SENTENCES: Final = (
-    "Section {n}: deliveries routed through the {city} hub are scanned at intake, weighed on the calibrated "
-    "scale, and matched against the manifest before any label is printed or any pallet leaves the dock.",
-    "Agents handling {city} tickets confirm the tracking number, the declared value, and the delivery window "
-    "with the sender before promising a reroute, and record the promise in the ticket with a timestamp.",
-    "If a parcel bound for {city} misses its scheduled scan by more than {hours} hours, the agent opens a "
-    "trace request, notifies the recipient in plain language, and schedules a follow-up for the next shift.",
-    "Refunds for {city} shipments above {amount} dollars need a supervisor code, a photo of the damage when "
-    "one exists, and the original invoice number, and are paid to the original payment method within ten days.",
-)
-_SECTION_COUNT: Final = 32
-
-SYSTEM_PROMPT: Final = "\n\n".join(
-    (
-        "You are the support assistant for Northwind Logistics. Follow the playbook below exactly.",
-        *(
-            " ".join(
-                sentence.format(n=n, city=_CITIES[n % len(_CITIES)], hours=4 + (n % 5), amount=100 * (1 + (n % 7)))
-                for sentence in _SECTION_SENTENCES
-            )
-            for n in range(1, _SECTION_COUNT + 1)
-        ),
-        f"When the user asks about the weather, call the {WEATHER_TOOL_NAME} tool with the city name. After a "
-        "tool result arrives, answer in one short sentence that repeats the temperature exactly as the tool "
-        "reported it.",
-    )
-)
+TEST_MODEL_REQUESTS_DIR: Final = Path(__file__).resolve().parent / "test_model_requests"
 
 
 @dataclass(frozen=True, slots=True)
@@ -232,6 +191,18 @@ _JSON_DOCUMENT: Final = TypeAdapter(object)
 _EMPTY_ASSISTANT: Final[Mapping[str, object]] = MappingProxyType({"role": "assistant", "content": None})
 
 
+def _request_file(name: str) -> Callable[[], Mapping[str, object]]:
+    """Turn 1 of each script is a plain JSON request body on disk, replayable with curl, parsed fresh per call so
+    the provider code never touches a shared copy."""
+    text: Final = (TEST_MODEL_REQUESTS_DIR / f"{name}.json").read_text(encoding="utf-8")
+    return lambda: _PLAIN_OBJECT.validate_json(text)
+
+
+_CHAT_TURN_ONE: Final = _request_file("chat_completions")
+_RESPONSES_TURN_ONE: Final = _request_file("responses")
+_MESSAGES_TURN_ONE: Final = _request_file("messages")
+
+
 def _plain(response: object) -> Mapping[str, object] | None:
     if isinstance(response, BaseModel):
         return _PLAIN_OBJECT.validate_python(response.model_dump(exclude_none=True))
@@ -254,29 +225,8 @@ def _arguments(raw: str) -> Mapping[str, object] | None:
     return MappingProxyType(_PLAIN_OBJECT.validate_python(parsed)) if isinstance(parsed, dict) else None
 
 
-def _chat_turn_one() -> Mapping[str, object]:
-    return {
-        "messages": [
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": WEATHER_QUESTION},
-        ],
-        "tools": [
-            {
-                "type": "function",
-                "function": {
-                    "name": WEATHER_TOOL_NAME,
-                    "description": _WEATHER_DESCRIPTION,
-                    "parameters": dict(_WEATHER_PARAMETERS),
-                },
-            }
-        ],
-        "reasoning_effort": "low",
-        "max_tokens": MAX_OUTPUT_TOKENS,
-    }
-
-
 def _chat_turn_two(turn_one: ParsedTurn) -> Mapping[str, object]:
-    first: Final = _chat_turn_one()
+    first: Final = _CHAT_TURN_ONE()
     tool_call_id: Final = turn_one.tool_call.id if turn_one.tool_call is not None else ""
     return {
         **first,
@@ -332,25 +282,8 @@ def _parse_chat(response: object) -> ParsedTurn | str:
     )
 
 
-def _responses_turn_one() -> Mapping[str, object]:
-    return {
-        "instructions": SYSTEM_PROMPT,
-        "input": [{"role": "user", "content": WEATHER_QUESTION}],
-        "tools": [
-            {
-                "type": "function",
-                "name": WEATHER_TOOL_NAME,
-                "description": _WEATHER_DESCRIPTION,
-                "parameters": dict(_WEATHER_PARAMETERS),
-            }
-        ],
-        "reasoning": {"effort": "low"},
-        "max_output_tokens": MAX_OUTPUT_TOKENS,
-    }
-
-
 def _responses_turn_two(turn_one: ParsedTurn) -> Mapping[str, object]:
-    first: Final = _responses_turn_one()
+    first: Final = _RESPONSES_TURN_ONE()
     call_id: Final = turn_one.tool_call.id if turn_one.tool_call is not None else ""
     return {
         **first,
@@ -398,24 +331,8 @@ def _parse_responses(response: object) -> ParsedTurn | str:
     )
 
 
-def _messages_turn_one() -> Mapping[str, object]:
-    return {
-        "system": SYSTEM_PROMPT,
-        "messages": [{"role": "user", "content": WEATHER_QUESTION}],
-        "tools": [
-            {
-                "name": WEATHER_TOOL_NAME,
-                "description": _WEATHER_DESCRIPTION,
-                "input_schema": dict(_WEATHER_PARAMETERS),
-            }
-        ],
-        "thinking": {"type": "enabled", "budget_tokens": THINKING_BUDGET_TOKENS},
-        "max_tokens": MAX_OUTPUT_TOKENS,
-    }
-
-
 def _messages_turn_two(turn_one: ParsedTurn) -> Mapping[str, object]:
-    first: Final = _messages_turn_one()
+    first: Final = _MESSAGES_TURN_ONE()
     tool_use_id: Final = turn_one.tool_call.id if turn_one.tool_call is not None else ""
     return {
         **first,
@@ -463,7 +380,7 @@ CHAT_COMPLETIONS_SCRIPT: Final = EndpointScript(
     endpoint="/v1/chat/completions",
     route_type="acompletion",
     metadata_key="metadata",
-    turn_one=_chat_turn_one,
+    turn_one=_CHAT_TURN_ONE,
     turn_two=_chat_turn_two,
     parse=_parse_chat,
 )
@@ -471,7 +388,7 @@ RESPONSES_SCRIPT: Final = EndpointScript(
     endpoint="/v1/responses",
     route_type="aresponses",
     metadata_key="litellm_metadata",
-    turn_one=_responses_turn_one,
+    turn_one=_RESPONSES_TURN_ONE,
     turn_two=_responses_turn_two,
     parse=_parse_responses,
 )
@@ -479,7 +396,7 @@ MESSAGES_SCRIPT: Final = EndpointScript(
     endpoint="/v1/messages",
     route_type="anthropic_messages",
     metadata_key="litellm_metadata",
-    turn_one=_messages_turn_one,
+    turn_one=_MESSAGES_TURN_ONE,
     turn_two=_messages_turn_two,
     parse=_parse_messages,
 )
