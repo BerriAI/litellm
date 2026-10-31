@@ -860,6 +860,10 @@ async def test_callback_overload_is_visible_without_suppressing_legacy_tracking(
     monkeypatch.setattr(proxy_server, "usage_capture", runtime)
     kwargs: Final = {"call_type": "acompletion", "litellm_call_id": "one", "litellm_params": {}}
     try:
+        for start, end in ((None, NOW), (NOW, None)):
+            missing_timestamp: Final = captured_callback_kwargs(kwargs, {"id": "one"}, start, end)
+            assert missing_timestamp == kwargs
+        assert "Usage capture requires callback start and end timestamps" in caplog.text
         admitted: Final = captured_callback_kwargs(kwargs, {"id": "one"}, NOW, NOW)
         await database.entered.wait()
         rejected: Final = captured_callback_kwargs({**kwargs, "litellm_call_id": "two"}, {"id": "two"}, NOW, NOW)
@@ -1336,3 +1340,91 @@ async def test_retry_dependencies_do_not_resubmit_usage_or_expand_final_submissi
     final: Final = json.loads(captured.writes[-1].envelope)
     assert final["related_attempt_ids"] == ["caller-attempt-0"]
     assert final["usage"]["prompt_tokens"] == 3
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("prepared", [False, True])
+@pytest.mark.parametrize(
+    ("call_type", "response", "field", "quantity"),
+    [
+        ("arerank", {"id": "rerank", "results": [], "meta": {"tokens": {"input_tokens": 7}}}, "prompt_tokens", 7),
+        ("aocr", {"id": "ocr", "usage_info": {"pages_processed": 3}}, "pages_processed", 3),
+        (
+            "acompletion",
+            {"id": "google", "usageMetadata": {"promptTokenCount": 7, "totalTokenCount": 7}},
+            "prompt_tokens",
+            7,
+        ),
+    ],
+)
+async def test_capture_preserves_native_usage_before_and_after_preparation(
+    prepared: bool, call_type: str, response: dict[str, object], field: str, quantity: int
+) -> None:
+    from litellm._internal_context import internal_sub_call
+    from litellm.proxy.spend_tracking.usage_capture import capture_logging_usage
+
+    database: Final = StoredUsage()
+    meter: Final = DurableUsageMeter(database.insert, UsageCaptureSettings(), wait_for_batch=_manual_flush)
+    logger: Final = _logger(call_type)
+    logger.model_call_details["response_cost"] = 0.25
+    if prepared:
+        assert logger.prepare_response_cost(response, NOW) is not None
+    with internal_sub_call("parent"):
+        capture_logging_usage(meter, logger, response, NOW, NOW)
+    await meter.close()
+    assert len(database.rows) == 1
+    envelope: Final = json.loads(database.rows[0].envelope)
+    assert envelope["usage"][field] == quantity
+    assert envelope["usage_source"] == "measured"
+    assert envelope["ownership"] == "included_in_parent"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tokens", [(120000, 120000), (210000, 30000)])
+@pytest.mark.parametrize("priced", [False, True])
+async def test_batch_capture_retains_request_basis_for_later_tiered_pricing(
+    tokens: tuple[int, int], priced: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import litellm
+    from litellm.batches.batch_utils import batch_cost_and_usage
+    from litellm.cost_calculator import batch_cost_calculator
+    from litellm.proxy.spend_tracking.usage_capture import capture_logging_usage
+    from litellm.types.utils import Usage
+
+    rates: Final = {
+        "input_cost_per_token_batches": 0.001,
+        "input_cost_per_token_above_200k_tokens_batches": 0.002,
+        "output_cost_per_token_batches": 0.0,
+        "litellm_provider": "openai",
+        "mode": "chat",
+    }
+    monkeypatch.setitem(litellm.model_cost, "capture-model", rates if priced else {"litellm_provider": "openai"})
+    rows: Final = [
+        {
+            "response": {
+                "status_code": 200,
+                "body": {
+                    "model": "capture-model",
+                    "usage": {"prompt_tokens": n, "completion_tokens": 0, "total_tokens": n},
+                },
+            }
+        }
+        for n in tokens
+    ]
+    result: Final = batch_cost_and_usage(rows, "openai", model_info=rates if priced else {})
+    database: Final = StoredUsage()
+    meter: Final = DurableUsageMeter(database.insert, UsageCaptureSettings(), wait_for_batch=_manual_flush)
+    logger: Final = _logger("aretrieve_batch")
+    logger.model_call_details["response_cost"] = result.cost
+    capture_logging_usage(meter, logger, {"id": "batch", "status": "completed", "usage": result.usage}, NOW, NOW)
+    await meter.close()
+    envelope: Final = json.loads(database.rows[-1].envelope)
+    retained: Final = envelope["usage"]["batch_usage_by_request"]
+    assert sorted(row["usage"]["prompt_tokens"] for row in retained) == sorted(tokens)
+    reconstructed: Final = sum(
+        sum(batch_cost_calculator(Usage(**row["usage"]), row["model"], "openai", model_info=rates)) for row in retained
+    )
+    expected: Final = sum(n * (0.002 if n > 200000 else 0.001) for n in tokens)
+    assert reconstructed == pytest.approx(expected)
+    assert result.cost == pytest.approx(expected if priced else 0)
+    assert envelope["usage"]["prompt_tokens"] == sum(tokens)

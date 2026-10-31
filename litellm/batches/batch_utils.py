@@ -342,6 +342,13 @@ def _combined_reported_batch_usage(usages: tuple[Usage | None, ...]) -> Mapping[
     return {**BaseTokenUsageProcessor.combine_usage_objects(usage_objects=reported).model_dump(), **quantities}
 
 
+def _batch_usage_by_request(usages: tuple[tuple[str | None, Usage | None], ...]) -> tuple[Mapping[str, object], ...]:
+    rows: Final = tuple(
+        {"model": model, "usage": usage.model_dump() if usage is not None else None} for model, usage in usages
+    )
+    return tuple(sorted(rows, key=lambda row: json.dumps(row, sort_keys=True)))
+
+
 def _batch_usage_by_model(usages: tuple[tuple[str | None, Usage | None], ...]) -> Mapping[str, object]:
     ordered: Final = sorted(usages, key=lambda item: item[0] or "")
     return {
@@ -414,6 +421,7 @@ def _aggregate_batch_cost_usage_models(
         reasoning_tokens=sum(stats.reasoning_tokens for stats in line_stats),
         **cache_token_params,
         batch_usage_by_model=_batch_usage_by_model(tuple((stats.model, stats.usage) for stats in line_stats)),
+        batch_usage_by_request=_batch_usage_by_request(tuple((stats.model, stats.usage) for stats in line_stats)),
         batch_unknown_usage_requests=sum(stats.usage is None for stats in line_stats),
     )
     batch_models: Final = [model_name] if model_name else [stats.model for stats in line_stats if stats.model]
@@ -494,6 +502,9 @@ def calculate_vertex_ai_batch_cost_and_usage(
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
             batch_usage_by_model=_batch_usage_by_model(
+                tuple((model, stats.usage if stats is not None else None) for model, stats in observations)
+            ),
+            batch_usage_by_request=_batch_usage_by_request(
                 tuple((model, stats.usage if stats is not None else None) for model, stats in observations)
             ),
             batch_unknown_usage_requests=sum(stats is None for stats in row_stats),

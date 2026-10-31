@@ -489,6 +489,11 @@ class _CaptureBuilder:
                 {
                     "batch_usage_by_model": batch,
                     "batch_unknown_usage_requests": parsed.get("batch_unknown_usage_requests"),
+                    **(
+                        {"batch_usage_by_request": parsed["batch_usage_by_request"]}
+                        if "batch_usage_by_request" in parsed
+                        else {}
+                    ),
                 }
             )
             if unknown
@@ -542,13 +547,16 @@ def capture_callback(
 
 
 def captured_callback_kwargs(
-    kwargs: Mapping[str, object], response: object, start_time: datetime, end_time: datetime
+    kwargs: Mapping[str, object], response: object, start_time: datetime | None, end_time: datetime | None
 ) -> Mapping[str, object]:
     from litellm.proxy.proxy_server import usage_capture
 
     usage_meter: Final = usage_capture.meter
 
     if usage_meter is None:
+        return kwargs
+    if start_time is None or end_time is None:
+        verbose_proxy_logger.error("Usage capture requires callback start and end timestamps")
         return kwargs
     try:
         return {**kwargs, "_accounting_capture": capture_callback(usage_meter, kwargs, response, start_time, end_time)}

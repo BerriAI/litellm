@@ -7006,39 +7006,13 @@ class StandardLoggingPayloadSetup:
 
     @staticmethod
     def get_usage_from_response_obj(response_obj: dict | None, combined_usage_object: Usage | None = None) -> Usage:
-        ## BASE CASE ##
         if combined_usage_object is not None:
             return combined_usage_object
-        if response_obj is None:
-            return Usage(
-                prompt_tokens=0,
-                completion_tokens=0,
-                total_tokens=0,
-            )
-
-        usage: Final = response_obj.get("usage", None)
-        if usage is None:
-            rerank_usage: Final = get_rerank_usage(_RESPONSE_MAPPING.validate_python(response_obj))
-            if rerank_usage is not None:
-                return Usage(**rerank_usage)
-        if usage is None or (not isinstance(usage, dict) and not isinstance(usage, Usage)):
-            return Usage(
-                prompt_tokens=0,
-                completion_tokens=0,
-                total_tokens=0,
-            )
-        elif isinstance(usage, Usage):
-            return usage
-        elif isinstance(usage, ResponseAPIUsage):
-            return ResponseAPILoggingUtils.transform_response_api_usage_to_chat_usage(usage)
-        elif isinstance(usage, dict):
-            if ResponseAPILoggingUtils.is_response_api_usage(usage):
-                return ResponseAPILoggingUtils.transform_response_api_usage_to_chat_usage(usage)
-            if InteractionsUsageObjectTransformation.is_interactions_usage_object(usage):
-                return InteractionsUsageObjectTransformation.transform_interactions_usage_object(usage)
-            return Usage(**usage)
-
-        raise ValueError(f"usage is required, got={usage} of type {type(usage)}")
+        reported: Final = response_obj.get("usage") if response_obj else None
+        if isinstance(reported, Usage):
+            return reported
+        normalized: Final = StandardLoggingPayloadSetup.get_usage_as_dict(response_obj)
+        return Usage(**normalized) if normalized else Usage(prompt_tokens=0, completion_tokens=0, total_tokens=0)
 
     @staticmethod
     def get_usage_as_dict(

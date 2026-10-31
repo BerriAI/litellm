@@ -4427,7 +4427,27 @@ async def test_sync_ack_preserves_async_request_support(
             },
         )
     else:
-        respx_mock.post().respond(200, json=upstream)
+        respx_mock.post(url__regex=r".*/responses$").respond(
+            200,
+            json={
+                "id": "resp_message",
+                "object": "response",
+                "created_at": 1,
+                "model": "gpt-5-mini",
+                "status": "completed",
+                "output": [
+                    {
+                        "id": "msg_reply",
+                        "type": "message",
+                        "role": "assistant",
+                        "status": "completed",
+                        "content": [{"type": "output_text", "text": "hi", "annotations": []}],
+                    }
+                ],
+                "usage": {"input_tokens": 3, "output_tokens": 2, "total_tokens": 5},
+            },
+        )
+        respx_mock.post(url__regex=r".*/chat/completions$").respond(200, json=upstream)
     runtime: Final = UsageCaptureRuntime()
     monkeypatch.setattr(proxy_server, "usage_capture", runtime)
     monkeypatch.setattr(

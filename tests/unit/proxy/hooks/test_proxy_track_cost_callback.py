@@ -3987,3 +3987,93 @@ async def test_failure_capture_overload_does_not_skip_budget_release(
         await runtime.stop(1)
     await receipt
     assert database.committed == ("occupied-one", "occupied-two")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", [False, True])
+@pytest.mark.parametrize("complete", [False, True])
+@pytest.mark.parametrize("deferred", [False, True])
+async def test_capture_and_legacy_share_resolved_key_attribution(
+    failure: bool, complete: bool, deferred: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from pydantic import TypeAdapter
+
+    from litellm.accounting import DeliveryTarget, DimensionName
+    from litellm.proxy import proxy_server
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.proxy.spend_tracking.usage_capture import UsageCaptureRuntime
+    from litellm.proxy.spend_tracking.usage_meter import UsageCaptureSettings
+    from tests.unit.proxy.spend_tracking.test_usage_capture import StoredUsage
+
+    key: Final = UserAPIKeyAuth(
+        api_key="a" * 64,
+        user_id="owner",
+        team_id="team",
+        org_id="org",
+        project_id="project",
+        key_alias="key",
+        team_alias="team-alias",
+        request_route="/v1/chat/completions",
+    )
+    cache: Final = UserApiKeyCache()
+    await cache.async_set_cache(key="a" * 64, value=key)
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", cache)
+    monkeypatch.setattr(proxy_server, "prisma_client", object())
+    writer: Final = _RecordingSpendWriter()
+    monkeypatch.setattr(proxy_server, "proxy_logging_obj", SimpleNamespace(db_spend_update_writer=writer))
+    database: Final = StoredUsage()
+    runtime: Final = UsageCaptureRuntime()
+    runtime.start(database.insert, UsageCaptureSettings())
+    monkeypatch.setattr(proxy_server, "usage_capture", runtime)
+    owner: Final = "original-owner" if deferred else "owner"
+    metadata: Final = {
+        "user_api_key": "a" * 64,
+        **(
+            {
+                "user_api_key_user_id": owner,
+                "user_api_key_team_id": "team",
+                "user_api_key_org_id": "org",
+                "user_api_key_project_id": None if deferred and not complete else "project",
+                "user_api_key_alias": "key",
+                "user_api_key_team_alias": "team-alias",
+            }
+            if complete or deferred
+            else {}
+        ),
+    }
+    kwargs: Final = {
+        "call_type": "aretrieve_batch" if deferred else "call_mcp_tool",
+        "litellm_call_id": "attributed",
+        "model": "MCP: echo",
+        "response_cost": 0.25,
+        "start_time": _CALL_START,
+        "litellm_params": {"metadata": metadata},
+    }
+    logger: Final = ProxyDBLogger(spend_writer=lambda: cast(DBSpendUpdateWriter, writer))
+    try:
+        if failure:
+            await logger.async_post_call_failure_hook(
+                kwargs,
+                HTTPException(401, "model not allowed"),
+                key if complete else UserAPIKeyAuth(api_key="a" * 64, request_route="/v1/chat/completions"),
+            )
+        else:
+            await logger.async_log_success_event(kwargs, {"id": "tool"}, _CALL_START, _CALL_START)
+    finally:
+        await runtime.stop(1)
+    assert len(writer.rows) == 1
+    assert len(database.rows) == 2
+    dimensions: Final = {item.name: item.value for item in database.rows[-1].event.dimensions}
+    assert {
+        name: dimensions.get(name)
+        for name in (DimensionName.USER, DimensionName.TEAM, DimensionName.ORGANIZATION, DimensionName.PROJECT)
+    } == {
+        DimensionName.USER: owner,
+        DimensionName.TEAM: "team",
+        DimensionName.ORGANIZATION: "org",
+        DimensionName.PROJECT: None if deferred and not complete else "project",
+    }
+    assert set(database.rows[-1].targets) >= {DeliveryTarget.DAILY_TEAM_SPEND, DeliveryTarget.DAILY_ORGANIZATION_SPEND}
+    legacy: Final = TypeAdapter(dict[str, object]).validate_python(writer.rows[0]["kwargs"])
+    payload: Final = get_logging_payload(legacy, {"id": "tool"}, _CALL_START, _CALL_START)
+    assert (payload["user"], payload["team_id"], payload["organization_id"]) == (owner, "team", "org")

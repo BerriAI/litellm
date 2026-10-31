@@ -649,7 +649,7 @@ def get_logging_payload(
         _usage: Final = (
             chat_usage_of_batch.model_dump()
             if chat_usage_of_batch is not None
-            else response_obj_dict.get("usage", None) or {}
+            else StandardLoggingPayloadSetup.get_usage_as_dict(response_obj_dict)
         )
         if isinstance(_usage, litellm.Usage):
             usage = dict(_usage)
