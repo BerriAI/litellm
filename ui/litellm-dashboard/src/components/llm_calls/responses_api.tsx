@@ -115,6 +115,7 @@ export async function makeOpenAIResponsesRequest(
   customHeaders?: CustomHeaders,
   onResponseHeaders?: ResponseHeadersListener,
   onBackgroundResponse?: (response: OpenAIResponse) => void,
+  research?: { instructions: string },
 ) {
   if (!accessToken) {
     throw new Error("Virtual Key is required");
@@ -233,9 +234,12 @@ export async function makeOpenAIResponsesRequest(
       });
     }
 
+    if (research) tools.push({ type: "web_search" });
+
     const requestBody = {
       model: selectedModel,
       input: formattedInput,
+      ...(research && { instructions: research.instructions }),
       litellm_trace_id: traceId,
       ...(previousResponseId ? { previous_response_id: previousResponseId } : {}),
       ...(vector_store_ids ? { vector_store_ids } : {}),

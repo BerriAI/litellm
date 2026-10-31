@@ -1,4 +1,4 @@
-import { act, fireEvent, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { renderWithProviders, testQueryClient } from "@/../tests/test-utils";
@@ -11,11 +11,17 @@ vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn(), replace: 
 const storageKey = "litellm_chat_history_v1:background-user";
 const requests: Record<string, unknown>[] = [];
 let supported: boolean;
+let webSearchSupported: boolean;
 let status: "in_progress" | "completed" | "cancelled";
 let retrievalStatus: number;
 let cancellations: number;
 let acceptance: Promise<void> | undefined;
 const saved = (): Conversation[] => JSON.parse(localStorage.getItem(storageKey) ?? "[]");
+const hasMCPTools = () => {
+  const tools = requests.at(-1)?.tools;
+  return Array.isArray(tools) && tools.some((tool) => tool.type === "mcp");
+};
+
 const result = () => ({
   id: "litellm_poll_research",
   status,
@@ -33,8 +39,25 @@ const result = () => ({
             output: "12 widgets",
             server_label: "inventory",
           },
-          { type: "message", content: [{ type: "output_text", text: "There are 12 widgets in stock." }] },
-        ].filter((item) => item.type !== "mcp_call" || Boolean(requests.at(-1)?.tools))
+          {
+            type: "message",
+            content: [
+              {
+                type: "output_text",
+                text: "There are 12 widgets in stock.",
+                annotations: [
+                  {
+                    type: "url_citation",
+                    url: "https://example.com/inventory",
+                    title: "Inventory report",
+                    start_index: 0,
+                    end_index: 6,
+                  },
+                ],
+              },
+            ],
+          },
+        ].filter((item) => item.type !== "mcp_call" || hasMCPTools())
       : [],
 });
 
@@ -60,6 +83,7 @@ beforeEach(() => {
   cancellations = 0;
   acceptance = undefined;
   supported = true;
+  webSearchSupported = true;
   retrievalStatus = 200;
   status = "in_progress";
   vi.stubGlobal(
@@ -70,7 +94,15 @@ beforeEach(() => {
       const path = new URL(request.url).pathname;
       if (path.endsWith("/model_group/info"))
         return Response.json({
-          data: [{ model_group: "research-chat", mode: "chat", supports_background_chat: supported }],
+          data: [
+            {
+              model_group: "research-chat",
+              mode: "chat",
+              supports_background_chat: supported,
+              supports_web_search: webSearchSupported,
+              supports_reasoning: true,
+            },
+          ],
         });
       if (path.endsWith("/v1/mcp/server")) return Response.json([{ server_id: "inventory", server_name: "inventory" }]);
       if (path.endsWith("/mcp-rest/tools/list")) return Response.json({ tools: [{ name: "lookup_inventory" }] });
@@ -227,3 +259,50 @@ it.each([false, true])(
     await waitFor(() => expect(saved()[0]?.messages.at(-1)?.backgroundRun?.status).toBe("cancelled"));
   },
 );
+
+it("should restore a web research report and its source links after closing and reopening twice", async () => {
+  const first = renderChat();
+  await screen.findByRole("button", { name: "research-chat" });
+  fireEvent.click(screen.getByRole("button", { name: "Connect tools" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Deep research", exact: true }));
+  fireEvent.change(screen.getByRole("textbox", { name: "Message", exact: true }), {
+    target: { value: "Research the inventory" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Send", exact: true }));
+  await waitFor(() => expect(saved()[0]?.messages.at(-1)?.backgroundRun?.id).toBe("litellm_poll_research"));
+  expect(requests).toHaveLength(1);
+  expect(requests[0]).toMatchObject({ background: true, stream: false, tools: [{ type: "web_search" }] });
+  expect(requests[0].instructions).toEqual(expect.stringContaining("sources you actually consulted"));
+  expect(saved()[0]?.messages.at(-1)?.research).toBe(true);
+  const id = saved()[0].id;
+  first.unmount();
+  expect(cancellations).toBe(0);
+  status = "completed";
+  const second = renderChat(id);
+  const sources = await screen.findByLabelText("Sources");
+  expect(within(sources).getByRole("link", { name: "Inventory report" })).toHaveAttribute(
+    "href",
+    "https://example.com/inventory",
+  );
+  await waitFor(() =>
+    expect(saved()[0]?.messages.at(-1)?.citations).toEqual([
+      { url: "https://example.com/inventory", title: "Inventory report" },
+    ]),
+  );
+  second.unmount();
+  renderChat(id);
+  expect(
+    within(await screen.findByLabelText("Sources")).getByRole("link", { name: "Inventory report" }),
+  ).toHaveAttribute("href", "https://example.com/inventory");
+  expect(requests).toHaveLength(1);
+});
+
+it("should explain when the selected model cannot search instead of sending an unsupported research request", async () => {
+  webSearchSupported = false;
+  renderChat();
+  await screen.findByRole("button", { name: "research-chat" });
+  fireEvent.click(screen.getByRole("button", { name: "Connect tools" }));
+  expect(await screen.findByRole("button", { name: "Deep research", exact: true })).toBeDisabled();
+  expect(screen.getByText("Choose a reasoning model with web search.")).toBeVisible();
+  expect(requests).toHaveLength(0);
+});

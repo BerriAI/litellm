@@ -64,7 +64,7 @@ vi.mock("@/contexts/ChatShellContext", () => ({
   },
 }));
 
-const ONE_TURN_ARG_COUNT = 28;
+const ONE_TURN_ARG_COUNT = 29;
 const ON_TIMING_DATA_INDEX = 7;
 const ON_USAGE_DATA_INDEX = 8;
 const ON_TOTAL_LATENCY_INDEX = 24;
@@ -116,6 +116,7 @@ describe("/ui/chat request metrics", () => {
 
     const call = mockMakeOpenAIResponsesRequest.mock.calls[0];
     expect(call).toHaveLength(ONE_TURN_ARG_COUNT);
+    expect(call[28]).toBeUndefined();
     expect(typeof call[ON_TIMING_DATA_INDEX]).toBe("function");
     expect(typeof call[ON_USAGE_DATA_INDEX]).toBe("function");
     expect(typeof call[ON_TOTAL_LATENCY_INDEX]).toBe("function");
