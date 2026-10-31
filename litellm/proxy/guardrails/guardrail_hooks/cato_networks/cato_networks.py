@@ -22,7 +22,7 @@ from websockets.exceptions import ConnectionClosed
 from litellm import DualCache
 from litellm._logging import verbose_proxy_logger
 from litellm._version import version as litellm_version
-from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.integrations.custom_guardrail import APPLY_GUARDRAIL_ONLY_CALL_TYPES, CustomGuardrail
 from litellm.litellm_core_utils.core_helpers import iter_items
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
@@ -30,6 +30,9 @@ from litellm.llms.custom_httpx.http_handler import (
     httpxSpecialProvider,
 )
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.common_utils.callback_utils import (
+    add_guardrail_to_applied_guardrails_header,  # pyright: ignore[reportUnknownVariableType]  # callback_utils types request_data as a bare dict
+)
 from litellm.proxy.guardrails._content_utils import (
     apply_redacted_messages_back,
     build_inspection_messages,
@@ -173,6 +176,7 @@ class CatoNetworksGuardrail(CustomGuardrail):
             hook="pre_call",
             key_alias=user_api_key_dict.key_alias,
             user_email=self._resolve_cato_user_email(user_api_key_dict),
+            call_type=call_type,
         )
 
     async def async_moderation_hook(
@@ -190,6 +194,7 @@ class CatoNetworksGuardrail(CustomGuardrail):
             hook="moderation",
             key_alias=user_api_key_dict.key_alias,
             user_email=self._resolve_cato_user_email(user_api_key_dict),
+            call_type=call_type,
         )
 
     @classmethod
@@ -294,7 +299,13 @@ class CatoNetworksGuardrail(CustomGuardrail):
         hook: str,
         key_alias: str | None,
         user_email: str | None = None,
+        call_type: CallTypesLiteral | None = None,
     ) -> dict:
+        messages: Final = self._inspection_messages(data)  # pyright: ignore[reportUnknownVariableType,reportUnknownMemberType]  # hook request data is an untyped dict
+        if not messages and call_type in APPLY_GUARDRAIL_ONLY_CALL_TYPES:
+            return data  # pyright: ignore[reportUnknownVariableType]  # hook request data is an untyped dict
+        if call_type in APPLY_GUARDRAIL_ONLY_CALL_TYPES:
+            add_guardrail_to_applied_guardrails_header(request_data=data, guardrail_name=self.guardrail_name)
         call_id: Final = data.get("litellm_call_id")
         headers: Final = self._build_cato_headers(
             hook=hook,
@@ -305,7 +316,7 @@ class CatoNetworksGuardrail(CustomGuardrail):
         response: Final = await self.async_handler.post(
             f"{self.api_base}/fw/v1/analyze",
             headers=headers,
-            json={"messages": self._inspection_messages(data)},
+            json={"messages": messages},
             timeout=self.timeout,
         )
         response.raise_for_status()

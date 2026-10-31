@@ -1,9 +1,9 @@
 import copy
 import json
 import os
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
-from itertools import accumulate
+from itertools import accumulate, chain
 from typing import TYPE_CHECKING, Any, Final, Literal, NoReturn, Optional, TypeAlias
 
 from pydantic import TypeAdapter
@@ -23,6 +23,7 @@ from litellm.constants import (
 )
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.core_helpers import (
+    as_str_mapping,
     get_metadata_variable_name_from_kwargs,
     get_or_create_metadata_bucket,
 )
@@ -478,16 +479,33 @@ def _serialize_scan_metadata_header(entries: Iterable[object], *, max_length: in
     return f"[{','.join(encoded[:kept])}]"
 
 
+_REQUEST_BODY: Final = TypeAdapter(Mapping[str, object])
+_LIST_ENTRIES: Final = TypeAdapter(tuple[object, ...])
+
+
+def _list_entries(value: object) -> tuple[object, ...]:
+    return _LIST_ENTRIES.validate_python(value) if isinstance(value, (list, tuple)) else ()
+
+
+def _bucket_list_entries(buckets: Sequence[Mapping[str, object]], key: str) -> tuple[object, ...]:
+    values: Final = tuple(bucket.get(key) for bucket in buckets)
+    distinct_values: Final = {id(value): value for value in values}
+    entries: Final = tuple(chain.from_iterable(_list_entries(value) for value in distinct_values.values()))
+    return entries if key == GUARDRAIL_SCAN_METADATA_METADATA_KEY else tuple(dict.fromkeys(entries))
+
+
 def get_logging_caching_headers(request_data: dict) -> dict | None:
     _metadata: Final[dict] = {}
-    metadata_bucket: Final = request_data.get("metadata")
-    litellm_metadata_bucket: Final = request_data.get("litellm_metadata")
-    if isinstance(metadata_bucket, dict):
-        _metadata.update(metadata_bucket)
-    if isinstance(litellm_metadata_bucket, dict):
+    request: Final = _REQUEST_BODY.validate_python(request_data)
+    found_buckets: Final = (as_str_mapping(request.get(name)) for name in ("metadata", "litellm_metadata"))
+    buckets: Final = tuple(bucket for bucket in found_buckets if bucket is not None)
+    for bucket in buckets:
         # Batch/file routes store proxy tracking in litellm_metadata while
         # user-facing metadata stays in metadata; merge both for headers.
-        _metadata.update(litellm_metadata_bucket)
+        _metadata.update(bucket)
+    for list_key in ("applied_guardrails", GUARDRAIL_SCAN_IDS_METADATA_KEY, GUARDRAIL_SCAN_METADATA_METADATA_KEY):
+        if any(list_key in bucket for bucket in buckets):
+            _metadata[list_key] = _bucket_list_entries(buckets, list_key)
     headers: Final = {}
     if "applied_guardrails" in _metadata:
         headers["x-litellm-applied-guardrails"] = ",".join(_metadata["applied_guardrails"])

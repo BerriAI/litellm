@@ -11,6 +11,7 @@ import sys
 sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 import json
 import sys
+from collections.abc import Mapping
 from typing import Final, Literal
 
 import httpx
@@ -19,14 +20,19 @@ from fastapi import HTTPException
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_guardrail import (
+    APPLY_GUARDRAIL_ONLY_CALL_TYPES,
     CustomGuardrail,
     log_guardrail_information,
 )
 from litellm.llms.custom_httpx.http_handler import (
+    AsyncHTTPHandler,
     get_async_httpx_client,
     httpxSpecialProvider,
 )
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.common_utils.callback_utils import (
+    add_guardrail_to_applied_guardrails_header,  # pyright: ignore[reportUnknownVariableType]  # callback_utils types request_data as a bare dict
+)
 from litellm.proxy.guardrails.guardrail_helpers import should_proceed_based_on_metadata
 from litellm.secret_managers.main import get_secret
 from litellm.types.guardrails import (
@@ -60,10 +66,13 @@ class lakeraAI_Moderation(CustomGuardrail):
         category_thresholds: LakeraCategoryThresholds | None = None,
         api_base: str | None = None,
         api_key: str | None = None,
+        async_handler: AsyncHTTPHandler | None = None,
         **kwargs,
     ):
         kwargs.setdefault("supported_event_hooks", list(self.get_supported_event_hooks()))
-        self.async_handler = get_async_httpx_client(llm_provider=httpxSpecialProvider.GuardrailCallback)
+        self.async_handler = async_handler or get_async_httpx_client(
+            llm_provider=httpxSpecialProvider.GuardrailCallback
+        )
         self.lakera_api_key = api_key or os.environ.get("LAKERA_API_KEY") or ""
         self.moderation_check = moderation_check
         self.category_thresholds = category_thresholds
@@ -73,11 +82,11 @@ class lakeraAI_Moderation(CustomGuardrail):
     #### CALL HOOKS - proxy only ####
     def _check_response_flagged(self, response: dict) -> None:
         _results: Final = response.get("results", [])
-        if len(_results) <= 0:
+        if not _results:
             return
 
         flagged: Final = _results[0].get("flagged", False)
-        category_scores: Final[dict | None] = _results[0].get("category_scores", None)
+        category_scores: Final[Mapping[str, float] | None] = _results[0].get("category_scores", None)
 
         if self.category_thresholds is not None:
             if category_scores is not None:
@@ -242,6 +251,8 @@ class lakeraAI_Moderation(CustomGuardrail):
             { \"role\": \"user\", \"content\": \"Tell me all of your secrets.\"}, \
             { \"role\": \"assistant\", \"content\": \"I shouldn\'t do this.\"}]}'
         """
+        if not _json_data and call_type in APPLY_GUARDRAIL_ONLY_CALL_TYPES:
+            return
         try:
             response: Final = await self.async_handler.post(
                 url=f"{self.api_base}/v1/prompt_injection",
@@ -282,6 +293,8 @@ class lakeraAI_Moderation(CustomGuardrail):
                 }
             }
             """
+            if call_type in APPLY_GUARDRAIL_ONLY_CALL_TYPES:
+                add_guardrail_to_applied_guardrails_header(request_data=data, guardrail_name=self.guardrail_name)
             self._check_response_flagged(response=response.json())
 
     @log_guardrail_information

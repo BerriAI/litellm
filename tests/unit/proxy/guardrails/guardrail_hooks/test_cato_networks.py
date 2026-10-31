@@ -3,7 +3,11 @@ import json
 import ssl
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from collections.abc import Mapping, Sequence
+from typing import Final
+from litellm.types.utils import CallTypesLiteral
 import pytest
+import respx
 from fastapi.exceptions import HTTPException
 from httpx import Request, Response
 from websockets.exceptions import ConnectionClosed
@@ -2785,3 +2789,46 @@ async def test_cato_still_inspects_every_conversational_call_type(call_type: str
             )
 
     mock_post.assert_called_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("httpx_transport")
+@pytest.mark.parametrize(
+    ("call_type", "request_fields", "cato_calls", "applied"),
+    [
+        pytest.param(
+            "adecisions", {"input": [{"role": "user", "content": "Is this a refund?"}]}, 1, ["cato"], id="decisions"
+        ),
+        pytest.param("aextraction", {"state": {"invoice": "INV-1"}}, 0, None, id="extraction"),
+        pytest.param("acompletion", {"messages": [{"role": "user", "content": "Refund?"}]}, 1, None, id="chat"),
+        pytest.param(
+            "aresponses",
+            {"input": [{"role": "user", "content": [{"type": "input_image", "image_url": "https://a.test/i.png"}]}]},
+            1,
+            None,
+            id="responses-image-only",
+        ),
+    ],
+)
+async def test_cato_skips_requests_without_text_and_lists_itself_only_on_apply_guardrail_routes(
+    respx_mock: respx.MockRouter,
+    call_type: CallTypesLiteral,
+    request_fields: Mapping[str, object],
+    cato_calls: int,
+    applied: Sequence[str] | None,
+) -> None:
+    analyze: Final = respx_mock.post("http://cato.test/fw/v1/analyze").respond(
+        json={"analysis_result": {}, "required_action": None}
+    )
+    guardrail: Final = CatoNetworksGuardrail(api_key="cato-key", api_base="http://cato.test", guardrail_name="cato")
+    metadata: Final[dict[str, object]] = {}
+
+    await guardrail.async_pre_call_hook(
+        user_api_key_dict=UserAPIKeyAuth(),
+        cache=DualCache(),
+        data={**request_fields, "metadata": metadata},
+        call_type=call_type,
+    )
+
+    assert analyze.call_count == cato_calls
+    assert metadata.get("applied_guardrails") == applied

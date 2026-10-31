@@ -7,6 +7,7 @@ from fastapi import HTTPException
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.dual_cache import DualCache
 from litellm.integrations.custom_guardrail import (
+    APPLY_GUARDRAIL_ONLY_CALL_TYPES,
     CustomGuardrail,
     log_guardrail_information,
 )
@@ -167,6 +168,8 @@ class PangeaHandler(CustomGuardrail):
             messages = transformer.get_messages()
         else:
             messages = data.get("messages")
+        if not messages and call_type in APPLY_GUARDRAIL_ONLY_CALL_TYPES:
+            return
 
         ai_guard_payload: Final = {
             "debug": False,

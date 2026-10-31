@@ -285,7 +285,7 @@ def test_process_guardrail_metadata_calls_header_helper(proxy_logging, monkeypat
 
     monkeypatch.setattr(callback_utils, "add_guardrail_to_applied_guardrails_header", fake_add)
     data = {"metadata": {"guardrails": ["g1", "g2"]}}
-    proxy_logging._process_guardrail_metadata(data)
+    proxy_logging._process_guardrail_metadata(data, "completion")
     snapshot = {
         "call_count": len(calls),
         "first_name": calls[0]["name"],
@@ -310,7 +310,7 @@ def test_process_guardrail_metadata_skips_already_applied(proxy_logging, monkeyp
 
     monkeypatch.setattr(callback_utils, "add_guardrail_to_applied_guardrails_header", fake_add)
     data = {"metadata": {"guardrails": ["g1", "g2"], "applied_guardrails": ["g1"]}}
-    proxy_logging._process_guardrail_metadata(data)
+    proxy_logging._process_guardrail_metadata(data, "completion")
     assert calls == ["g2"]
 
 
@@ -322,12 +322,12 @@ def test_process_guardrail_metadata_no_metadata_is_noop(proxy_logging, monkeypat
         "add_guardrail_to_applied_guardrails_header",
         MagicMock(side_effect=AssertionError("should not be called")),
     )
-    proxy_logging._process_guardrail_metadata({})
+    proxy_logging._process_guardrail_metadata({}, "completion")
 
 
 def test_process_guardrail_metadata_invalid_data_raises(proxy_logging):
     with pytest.raises(AttributeError):
-        proxy_logging._process_guardrail_metadata(None)  # type: ignore[arg-type]
+        proxy_logging._process_guardrail_metadata(None, "completion")  # type: ignore[arg-type]
 
 
 # ---------------------------------------------------------------------------
@@ -1228,11 +1228,13 @@ def _logging_obj(*, log_parked: bool, call_type: str = "acompletion") -> LiteLLM
     ("first_on_pass", "expected_calls", "expected_header"),
     [("allow", (1, 0), ["first"]), ("next", (1, 1), ["first", "second"])],
 )
+@pytest.mark.parametrize("call_type", ("completion", "aextraction", "adecisions", "asystemone"))
 async def test_pre_call_hook_names_only_the_pre_call_pipeline_steps_that_ran(
     proxy_logging: ProxyLogging, make_user_api_key_auth: Callable[..., UserAPIKeyAuth], monkeypatch: pytest.MonkeyPatch,
     first_on_pass: str,
     expected_calls: tuple[int, int],
     expected_header: list[str],
+    call_type: CallTypesLiteral,
 ) -> None:
     first: Final = _PipelineStepGuardrail("first", "pre_call")
     second: Final = _PipelineStepGuardrail("second", "pre_call")
@@ -1241,7 +1243,7 @@ async def test_pre_call_hook_names_only_the_pre_call_pipeline_steps_that_ran(
     result: Final = await proxy_logging.pre_call_hook(
         user_api_key_dict=make_user_api_key_auth(),
         data=_two_step_pipeline_data("pre_call", first_on_pass),
-        call_type="completion",
+        call_type=call_type,
     )
 
     assert (first.calls, second.calls) == expected_calls

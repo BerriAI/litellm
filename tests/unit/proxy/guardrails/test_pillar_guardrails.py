@@ -16,7 +16,10 @@ from unittest.mock import Mock, patch
 import json
 from urllib.parse import unquote
 
+from collections.abc import Awaitable, Callable, Mapping, Sequence
+from typing import Final
 import pytest
+import respx
 from fastapi.exceptions import HTTPException
 from httpx import Request, Response
 
@@ -24,6 +27,7 @@ from httpx import Request, Response
 import litellm
 from litellm import DualCache
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.types.utils import CallTypesLiteral
 from litellm.proxy.common_utils.callback_utils import get_logging_caching_headers
 from litellm.proxy.guardrails.guardrail_hooks.pillar import (
     PillarGuardrail,
@@ -1513,3 +1517,58 @@ async def test_mcp_call_masking(
 if __name__ == "__main__":
     # Run the tests
     pytest.main([__file__, "-v"])
+
+
+_INPUT_HOOKS = [
+    pytest.param(
+        "pre_call",
+        lambda guardrail, data, call_type: guardrail.async_pre_call_hook(
+            user_api_key_dict=UserAPIKeyAuth(), cache=DualCache(), data=data, call_type=call_type
+        ),
+        id="pre_call",
+    ),
+    pytest.param(
+        "during_call",
+        lambda guardrail, data, call_type: guardrail.async_moderation_hook(
+            data=data, user_api_key_dict=UserAPIKeyAuth(), call_type=call_type
+        ),
+        id="during_call",
+    ),
+]
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("httpx_transport")
+@pytest.mark.parametrize(("event_hook", "run_hook"), _INPUT_HOOKS)
+@pytest.mark.parametrize(
+    ("request_fields", "call_type", "applied"),
+    [
+        pytest.param({"messages": [{"role": "user", "content": "hi"}]}, "completion", ["pillar-test"], id="messages"),
+        pytest.param({"state": "hi"}, "aextraction", None, id="no-messages-on-extraction"),
+        pytest.param({"state": "hi"}, "completion", ["pillar-test"], id="no-messages-on-chat"),
+    ],
+)
+async def test_input_hooks_list_the_guardrail_only_when_they_scanned_text(
+    respx_mock: respx.MockRouter,
+    event_hook: str,
+    run_hook: Callable[[PillarGuardrail, Mapping[str, object], CallTypesLiteral], Awaitable[object]],
+    request_fields: Mapping[str, object],
+    call_type: CallTypesLiteral,
+    applied: Sequence[str] | None,
+) -> None:
+    respx_mock.post(url__startswith="https://api.pillar.security/api/v1/protect").respond(
+        json={"session_id": "s", "flagged": False, "scanners": {}, "evidence": []}
+    )
+    guardrail: Final = PillarGuardrail(
+        guardrail_name="pillar-test",
+        api_key="test-pillar-key",
+        api_base="https://api.pillar.security",
+        on_flagged_action="block",
+        event_hook=event_hook,
+        default_on=True,
+    )
+    metadata: Final[dict[str, object]] = {}
+
+    await run_hook(guardrail, {**request_fields, "metadata": metadata}, call_type)
+
+    assert metadata.get("applied_guardrails") == applied

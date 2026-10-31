@@ -1,9 +1,14 @@
 from unittest.mock import AsyncMock, patch
 
 import httpx
+from collections.abc import Mapping, Sequence
+from typing import Final
 import pytest
+import respx
 from fastapi import HTTPException
 
+from litellm import DualCache
+from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_hooks.pangea import initialize_guardrail
 from litellm.proxy.guardrails.guardrail_hooks.pangea.pangea import (
     PangeaGuardrailMissingSecrets,
@@ -368,3 +373,42 @@ async def test_pangea_ai_guard_response_transformed(pangea_guardrail):
         )
 
     assert response.choices[0]["message"]["content"] == "Yes, here is an SSN: <US_SSN>"
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("httpx_transport")
+@pytest.mark.parametrize(
+    ("call_type", "request_fields", "pangea_calls", "applied"),
+    [
+        pytest.param(
+            "acompletion", {"messages": [{"role": "user", "content": "hi"}]}, 1, ["pangea-ai-guard"], id="chat"
+        ),
+        pytest.param("aextraction", {"state": {"invoice": "INV-1"}}, 0, None, id="extraction"),
+        pytest.param("adecisions", {"input": "Is this a refund?"}, 0, None, id="decisions"),
+        pytest.param("aresponses", {"input": "Is this a refund?"}, 1, ["pangea-ai-guard"], id="responses"),
+    ],
+)
+async def test_pangea_skips_requests_without_messages_only_on_apply_guardrail_routes(
+    respx_mock: respx.MockRouter,
+    call_type: str,
+    request_fields: Mapping[str, object],
+    pangea_calls: int,
+    applied: Sequence[str] | None,
+) -> None:
+    guard: Final = respx_mock.post("https://ai-guard.aws.us.pangea.cloud/v1beta/guard").respond(
+        json={"result": {"blocked": False, "transformed": False}}
+    )
+    guardrail: Final = PangeaHandler(
+        mode="pre_call", guardrail_name="pangea-ai-guard", api_key="pts_pangeatokenid", default_on=True
+    )
+    metadata: Final[dict[str, object]] = {}
+
+    await guardrail.async_pre_call_hook(
+        user_api_key_dict=UserAPIKeyAuth(),
+        cache=DualCache(),
+        data={**request_fields, "metadata": metadata},
+        call_type=call_type,
+    )
+
+    assert guard.call_count == pangea_calls
+    assert metadata.get("applied_guardrails") == applied

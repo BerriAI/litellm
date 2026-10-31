@@ -20,6 +20,9 @@ from litellm.integrations.custom_guardrail import (
     log_guardrail_information,  # pyright: ignore[reportUnknownVariableType]  # decorator is untyped upstream
 )
 from litellm.litellm_core_utils.llm_judge import attached_auth, caller_team_for, default_router_provider, judge_target
+from litellm.proxy.common_utils.callback_utils import (
+    add_guardrail_to_applied_guardrails_header,  # pyright: ignore[reportUnknownVariableType]  # callback_utils types request_data as a bare dict
+)
 from litellm.types.decisions import MAX_DECISION_QUESTIONS, OpenAIDecisionResponse, OpenAIPredicateAnswer
 from litellm.types.guardrails import GuardrailEventHooks, Mode
 from litellm.types.llms.openai import ChatCompletionAssistantToolCall, ChatCompletionToolCallChunk
@@ -347,6 +350,7 @@ class DecisionModelGuardrail(CustomGuardrail):
 
         status: Final = "guardrail_intervened" if intervened else ("guardrail_flagged" if flagged else "success")
         self._log(request_data, verdicts, status, start_time)
+        add_guardrail_to_applied_guardrails_header(request_data=request_data, guardrail_name=self.guardrail_name)
         if intervened:
             raise HTTPException(
                 status_code=400,

@@ -15,7 +15,11 @@ import httpx
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
-from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.integrations.custom_guardrail import (
+    APPLY_GUARDRAIL_ONLY_CALL_TYPES,
+    CustomGuardrail,
+    is_apply_guardrail_only_route,
+)
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
@@ -328,8 +332,8 @@ class DynamoAIGuardrails(CustomGuardrail):
                 error_message: Final = self._create_error_message(processed_result)
                 raise ValueError(error_message)
 
-        # Add guardrail to applied guardrails header
-        add_guardrail_to_applied_guardrails_header(request_data=data, guardrail_name=self.guardrail_name)
+        if _messages or call_type not in APPLY_GUARDRAIL_ONLY_CALL_TYPES:
+            add_guardrail_to_applied_guardrails_header(request_data=data, guardrail_name=self.guardrail_name)
 
         return data
 
@@ -373,8 +377,8 @@ class DynamoAIGuardrails(CustomGuardrail):
                 error_message: Final = self._create_error_message(processed_result)
                 raise ValueError(error_message)
 
-        # Add guardrail to applied guardrails header
-        add_guardrail_to_applied_guardrails_header(request_data=data, guardrail_name=self.guardrail_name)
+        if _messages or call_type not in APPLY_GUARDRAIL_ONLY_CALL_TYPES:
+            add_guardrail_to_applied_guardrails_header(request_data=data, guardrail_name=self.guardrail_name)
 
         return data
 
@@ -441,8 +445,10 @@ class DynamoAIGuardrails(CustomGuardrail):
                     error_message: Final = self._create_error_message(processed_result)
                     raise ValueError(error_message)
 
-        # Add guardrail to applied guardrails header
-        add_guardrail_to_applied_guardrails_header(request_data=data, guardrail_name=self.guardrail_name)
+        if isinstance(response, litellm.ModelResponse) or not is_apply_guardrail_only_route(
+            user_api_key_dict.request_route
+        ):
+            add_guardrail_to_applied_guardrails_header(request_data=data, guardrail_name=self.guardrail_name)
 
     async def async_post_call_streaming_iterator_hook(
         self,

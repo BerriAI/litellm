@@ -185,6 +185,7 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
     """
 
     use_native_lifecycle_hooks: ClassVar[bool] = True
+    adds_itself_to_applied_guardrails: ClassVar[bool] = True
 
     @classmethod
     def get_supported_event_hooks(cls) -> list[GuardrailEventHooks]:
@@ -291,7 +292,7 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
             return _redact_scanned_content(armor_response)
         return armor_response
 
-    def _raise_if_fail_closed(self, e: ModelArmorAPIError) -> None:
+    def _raise_if_fail_closed(self, e: ModelArmorAPIError | httpx.HTTPError) -> None:
         if self.optional_params.get("fail_on_error", True):
             raise e from None
 
@@ -1325,8 +1326,14 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
                 end_time=error_end_time,
                 duration=error_end_time - start_time,
             )
+            self._raise_if_fail_closed(e)
             return inputs
 
+        from litellm.proxy.common_utils.callback_utils import (
+            add_guardrail_to_applied_guardrails_header,
+        )
+
+        add_guardrail_to_applied_guardrails_header(request_data=request_data, guardrail_name=self.guardrail_name)
         flagged: Final = self._should_block_content(armor_response, allow_sanitization=False)
         end_time: Final = time.time()
         self.add_standard_logging_guardrail_information_to_request_data(

@@ -1,21 +1,28 @@
 import asyncio
 import json
 from types import SimpleNamespace
+from collections.abc import Awaitable, Callable, Mapping
 from typing import Final
 from unittest.mock import AsyncMock
 
 import pytest
 from httpx import Request, Response
+from pydantic import TypeAdapter
 
 import litellm
 from litellm.caching.caching_handler import _PENDING_CACHE_WRITES
+from litellm.caching.dual_cache import DualCache
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.exceptions import GuardrailRaisedException
+from litellm.litellm_core_utils.core_helpers import get_metadata_variable_name_from_kwargs
+from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_hooks.llm_shield_proxy.llm_shield_proxy import (
     GUARDRAIL_NAME,
     LLMShieldProxyGuardrail,
 )
 from litellm.proxy.guardrails.init_guardrails import init_guardrails_v2
+from litellm.proxy.utils import ProxyLogging
+from litellm.types.extraction import ExtractionAnswer, ExtractionResponse, ExtractionUsage
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.llms.openai import (
     FunctionCallArgumentsDeltaEvent,
@@ -1887,7 +1894,75 @@ class TestCompletionsRestoration:
         assert "".join(chunk.choices[0].text or "" for chunk in out) == "Mail [EMAIL_1"
 
 
+_SHIELD_TEXTS: Final = TypeAdapter(tuple[str, ...])
+
+
+def _pseudonymizing_shield(original: str, placeholder: str) -> Callable[..., Awaitable[Response]]:
+    async def post(url: str, headers: Mapping[str, str], json: Mapping[str, object], timeout: float) -> Response:
+        texts: Final = _SHIELD_TEXTS.validate_python(json["texts"])
+        swap: Final = (original, placeholder) if url.endswith("/redact") else (placeholder, original)
+        return _response({"texts": [text.replace(*swap) for text in texts]})
+
+    return post
+
+
 class TestProxyWiring:
+    @pytest.mark.asyncio
+    async def test_extraction_request_is_redacted_and_the_answer_restored(self, monkeypatch: pytest.MonkeyPatch):
+        guardrail: Final = _guardrail(event_hook=["pre_call", "post_call"])
+        guardrail.async_handler.post = _pseudonymizing_shield("alice@example.com", "[EMAIL_1]")
+        monkeypatch.setattr(litellm, "callbacks", [guardrail])
+        proxy_logging: Final = ProxyLogging(user_api_key_cache=DualCache())
+        caller: Final = UserAPIKeyAuth(api_key="sk-9876", request_route="/v1/extraction")
+
+        sent: Final = await proxy_logging.pre_call_hook(
+            user_api_key_dict=caller,
+            data={
+                "model": "m",
+                "state": "Write to alice@example.com",
+                "fields": {"email": {"type": "text", "instructions": "The address after alice@example.com"}},
+            },
+            call_type="aextraction",
+        )
+        reply: Final = ExtractionResponse(
+            model="m",
+            answers={"email": ExtractionAnswer(type="text", value="[EMAIL_1]")},
+            truncated=False,
+            usage=ExtractionUsage(input_tokens=1, output_tokens=1),
+        )
+        restored: Final = await proxy_logging.post_call_success_hook(
+            data=sent, response=reply, user_api_key_dict=caller
+        )
+
+        assert (sent["state"], sent["fields"]["email"]["instructions"]) == (
+            "Write to [EMAIL_1]",
+            "The address after [EMAIL_1]",
+        )
+        assert restored.answers["email"].value == "alice@example.com"
+
+    @pytest.mark.asyncio
+    async def test_decision_request_is_redacted_and_keeps_its_routing_tags(self, monkeypatch: pytest.MonkeyPatch):
+        guardrail: Final = _guardrail()
+        guardrail.async_handler.post = _pseudonymizing_shield("alice@example.com", "[EMAIL_1]")
+        monkeypatch.setattr(litellm, "callbacks", [guardrail])
+
+        sent: Final = await ProxyLogging(user_api_key_cache=DualCache()).pre_call_hook(
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-9876"),
+            data={
+                "model": "m",
+                "input": "Refund alice@example.com",
+                "questions": [{"type": "predicate", "instructions": "Is alice@example.com owed money?"}],
+                "metadata": {"tags": ["prod"]},
+            },
+            call_type="adecisions",
+        )
+
+        assert (sent["input"], sent["questions"][0]["instructions"]) == (
+            "Refund [EMAIL_1]",
+            "Is [EMAIL_1] owed money?",
+        )
+        assert sent[get_metadata_variable_name_from_kwargs(sent)]["tags"] == ["prod"]
+
     def test_dashboard_config_model_is_exposed(self):
         """The guardrail garden reads the provider's fields from `get_config_model`."""
         model = LLMShieldProxyGuardrail.get_config_model()

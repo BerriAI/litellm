@@ -34,6 +34,7 @@ from litellm import DualCache
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_guardrail import (
+    APPLY_GUARDRAIL_ONLY_CALL_TYPES,
     GUARDRAIL_SESSIONS_TARGET,
     CustomGuardrail,
     log_guardrail_information,
@@ -45,6 +46,9 @@ from litellm.llms.custom_httpx.http_handler import (
     httpxSpecialProvider,
 )
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.common_utils.callback_utils import (
+    add_guardrail_to_applied_guardrails_header,  # pyright: ignore[reportUnknownVariableType]  # callback_utils types request_data as a bare dict
+)
 from litellm.proxy.guardrails._content_utils import (
     build_inspection_messages,
     has_non_string_content,
@@ -204,7 +208,7 @@ class LassoGuardrail(CustomGuardrail):
         # The conversation_id is being stored in the cache so it can be used by the post_call hook
         self._get_or_generate_conversation_id(data, global_cache)
 
-        return await self._run_lasso_guardrail(data, global_cache, message_type="PROMPT")
+        return await self._run_lasso_guardrail(data, global_cache, message_type="PROMPT", call_type=call_type)
 
     @log_guardrail_information
     async def async_moderation_hook(
@@ -232,7 +236,7 @@ class LassoGuardrail(CustomGuardrail):
         if self.should_run_guardrail(data=data, event_type=event_type) is not True:
             return data
 
-        return await self._run_lasso_guardrail(data, cache, message_type="PROMPT")
+        return await self._run_lasso_guardrail(data, cache, message_type="PROMPT", call_type=call_type)
 
     @log_guardrail_information
     async def async_post_call_success_hook(
@@ -372,6 +376,7 @@ class LassoGuardrail(CustomGuardrail):
         data: dict,
         cache: DualCache,
         message_type: Literal["PROMPT", "COMPLETION"] = "PROMPT",
+        call_type: str | None = None,
     ):
         """
         Run the Lasso guardrail with the specified message type.
@@ -392,6 +397,7 @@ class LassoGuardrail(CustomGuardrail):
             data: The request data containing messages
             cache: The cache instance for storing conversation_id (optional for post-call)
             message_type: Either "PROMPT" for input or "COMPLETION" for output
+            call_type: The request's call type, which decides whether Lasso lists itself as applied
 
         Raises:
             LassoGuardrailAPIError: If the Lasso API call fails
@@ -409,6 +415,8 @@ class LassoGuardrail(CustomGuardrail):
         messages: Final[Sequence[Mapping[str, object]]] = [*expanded_messages, *input_messages]
         if not messages:
             return data
+        if call_type in APPLY_GUARDRAIL_ONLY_CALL_TYPES:
+            add_guardrail_to_applied_guardrails_header(request_data=data, guardrail_name=self.guardrail_name)
 
         # Lasso's classifix endpoint returns masked text that we copy back
         # into ``data["messages"]``. For multimodal/Responses-API input we
