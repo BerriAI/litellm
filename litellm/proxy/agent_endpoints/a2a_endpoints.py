@@ -172,13 +172,19 @@ def _caller_identity_headers(user_api_key_dict: UserAPIKeyAuth) -> Mapping[str, 
 async def _resolve_backend_auth(
     litellm_params: dict[str, object],
     custom_llm_provider: object,
+    static_headers: Mapping[str, str] | None = None,
 ) -> AgentBackendAuth:
     databricks_auth: Final = await resolve_databricks_backend_auth(litellm_params)
     if has_databricks_oauth(litellm_params):
         return databricks_auth
+    has_static_auth: Final = bool(static_headers and any(str(k).lower() == "authorization" for k in static_headers))
     return AgentBackendAuth(
         litellm_params=databricks_auth.litellm_params,
-        header=await resolve_a2a_hop_auth_header(litellm_params, custom_llm_provider),
+        header=await resolve_a2a_hop_auth_header(
+            litellm_params,
+            custom_llm_provider,
+            has_static_auth=has_static_auth,
+        ),
     )
 
 
@@ -834,7 +840,7 @@ async def invoke_agent_a2a(
                     if header_name:
                         dynamic_headers[header_name] = val
 
-        backend_auth: Final = await _resolve_backend_auth(litellm_params, custom_llm_provider)
+        backend_auth: Final = await _resolve_backend_auth(litellm_params, custom_llm_provider, static_headers)
         agent_extra_headers: Final = _forwarding_headers(
             caller_identity=caller_identity,
             request_data=data,

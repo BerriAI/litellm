@@ -2781,7 +2781,9 @@ async def test_forward_jsonrpc_sse_is_untouched_while_keepalives_are_unconfigure
 
 
 @pytest.mark.asyncio
-async def test_forward_jsonrpc_sse_keeps_unicode_line_separators_inside_an_event(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_forward_jsonrpc_sse_keeps_unicode_line_separators_inside_an_event(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setattr(litellm, "sse_keepalive_ping_interval_seconds", None)
     separated_text: Final = "before\u2028between\u2029after"
     event: Final = {
@@ -2941,3 +2943,416 @@ async def test_failed_upstream_stream_relays_its_body_only_when_that_is_a_json_o
         "id": "req-1",
         "method": "tasks/resubscribe",
     }
+
+
+@pytest.mark.asyncio
+async def test_resolve_backend_auth_resolves_api_key_to_bearer_header():
+    from litellm.proxy.agent_endpoints.a2a_endpoints import _resolve_backend_auth
+
+    auth = await _resolve_backend_auth(
+        litellm_params={"api_key": "backend-secret-key"},
+        custom_llm_provider=None,
+    )
+    assert auth.header == {"Authorization": "Bearer backend-secret-key"}
+
+
+@pytest.mark.asyncio
+async def test_resolve_backend_auth_respects_static_headers_authorization():
+    from litellm.proxy.agent_endpoints.a2a_endpoints import _resolve_backend_auth
+
+    auth = await _resolve_backend_auth(
+        litellm_params={"api_key": "backend-secret-key"},
+        custom_llm_provider=None,
+        static_headers={"Authorization": "Basic dXNlcjpwYXNz"},
+    )
+    assert auth.header is None
+
+
+@pytest.mark.asyncio
+async def test_resolve_backend_auth_ignores_api_key_for_bridge_agent():
+    from litellm.proxy.agent_endpoints.a2a_endpoints import _resolve_backend_auth
+
+    auth = await _resolve_backend_auth(
+        litellm_params={"api_key": "model-provider-key"},
+        custom_llm_provider="openai",
+    )
+    assert auth.header is None
+
+
+@pytest.mark.skipif(importlib.util.find_spec("a2a") is None, reason="needs the optional a2a-sdk")
+@pytest.mark.asyncio
+async def test_invoke_agent_a2a_forwards_api_key_as_bearer_authorization():
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.agent_endpoints.a2a_endpoints import invoke_agent_a2a
+
+    mock_response = MagicMock()
+    mock_response.model_dump.return_value = {
+        "jsonrpc": "2.0",
+        "id": "test-id",
+        "result": {"status": "success"},
+    }
+
+    mock_agent = MagicMock()
+    mock_agent.agent_id = "test-agent-key"
+    mock_agent.agent_name = "test-agent-key"
+    mock_agent.agent_card_params = {
+        "url": "http://backend-agent:10001",
+        "name": "Test Agent Key",
+    }
+    mock_agent.litellm_params = {"api_key": "my-secret-agent-key"}
+    mock_agent.static_headers = None
+    mock_agent.extra_headers = None
+    mock_agent.identity_managed = False
+
+    mock_request = MagicMock()
+    mock_request.json = AsyncMock(
+        return_value={
+            "jsonrpc": "2.0",
+            "id": "test-id",
+            "method": "message/send",
+            "params": {
+                "message": {
+                    "role": "user",
+                    "parts": [{"kind": "text", "text": "Hello"}],
+                    "messageId": "msg-123",
+                }
+            },
+        }
+    )
+    mock_request.headers = {}
+
+    user_auth = UserAPIKeyAuth(
+        api_key="sk-test-key",
+        user_id="test-user",
+        team_id="test-team",
+    )
+
+    with (
+        patch("litellm.proxy.agent_endpoints.a2a_endpoints._get_agent", return_value=mock_agent),
+        patch("litellm.a2a_protocol.asend_message", new_callable=AsyncMock, return_value=mock_response) as mock_send,
+        patch(
+            "litellm.proxy.agent_endpoints.auth.agent_permission_handler.AgentRequestHandler.is_agent_allowed",
+            return_value=True,
+        ),
+        patch(
+            "litellm.proxy.common_request_processing.ProxyBaseLLMRequestProcessing.common_processing_pre_call_logic",
+            new_callable=AsyncMock,
+        ) as mock_pre_call,
+    ):
+        mock_pre_call.return_value = ({}, MagicMock())
+        fastapi_response = MagicMock()
+
+        await invoke_agent_a2a(
+            agent_id="test-agent-key",
+            request=mock_request,
+            fastapi_response=fastapi_response,
+            user_api_key_dict=user_auth,
+        )
+
+        assert mock_send.called
+        extra_headers = mock_send.call_args.kwargs.get("agent_extra_headers")
+        assert extra_headers is not None
+        assert extra_headers.get("Authorization") == "Bearer my-secret-agent-key"
+
+
+@pytest.mark.skipif(importlib.util.find_spec("a2a") is None, reason="needs the optional a2a-sdk")
+@pytest.mark.asyncio
+async def test_invoke_agent_a2a_preserves_static_authorization_over_api_key():
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.agent_endpoints.a2a_endpoints import invoke_agent_a2a
+
+    mock_response = MagicMock()
+    mock_response.model_dump.return_value = {
+        "jsonrpc": "2.0",
+        "id": "test-id",
+        "result": {"status": "success"},
+    }
+
+    mock_agent = MagicMock()
+    mock_agent.agent_id = "test-agent-static"
+    mock_agent.agent_name = "test-agent-static"
+    mock_agent.agent_card_params = {
+        "url": "http://backend-agent:10001",
+        "name": "Test Agent Static",
+    }
+    mock_agent.litellm_params = {"api_key": "my-secret-agent-key"}
+    mock_agent.static_headers = {"Authorization": "CustomToken static-val"}
+    mock_agent.extra_headers = None
+    mock_agent.identity_managed = False
+
+    mock_request = MagicMock()
+    mock_request.json = AsyncMock(
+        return_value={
+            "jsonrpc": "2.0",
+            "id": "test-id",
+            "method": "message/send",
+            "params": {
+                "message": {
+                    "role": "user",
+                    "parts": [{"kind": "text", "text": "Hello"}],
+                    "messageId": "msg-123",
+                }
+            },
+        }
+    )
+    mock_request.headers = {}
+
+    user_auth = UserAPIKeyAuth(
+        api_key="sk-test-key",
+        user_id="test-user",
+        team_id="test-team",
+    )
+
+    with (
+        patch("litellm.proxy.agent_endpoints.a2a_endpoints._get_agent", return_value=mock_agent),
+        patch("litellm.a2a_protocol.asend_message", new_callable=AsyncMock, return_value=mock_response) as mock_send,
+        patch(
+            "litellm.proxy.agent_endpoints.auth.agent_permission_handler.AgentRequestHandler.is_agent_allowed",
+            return_value=True,
+        ),
+        patch(
+            "litellm.proxy.common_request_processing.ProxyBaseLLMRequestProcessing.common_processing_pre_call_logic",
+            new_callable=AsyncMock,
+        ) as mock_pre_call,
+    ):
+        mock_pre_call.return_value = ({}, MagicMock())
+        fastapi_response = MagicMock()
+
+        await invoke_agent_a2a(
+            agent_id="test-agent-static",
+            request=mock_request,
+            fastapi_response=fastapi_response,
+            user_api_key_dict=user_auth,
+        )
+
+        assert mock_send.called
+        extra_headers = mock_send.call_args.kwargs.get("agent_extra_headers")
+        assert extra_headers is not None
+        assert extra_headers.get("Authorization") == "CustomToken static-val"
+
+
+@pytest.mark.asyncio
+async def test_invoke_agent_a2a_delivers_api_key_bearer_over_wire(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+):
+    """Verify that litellm_params.api_key is delivered over the wire as Authorization: Bearer."""
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.agent_endpoints.a2a_endpoints import invoke_agent_a2a
+
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    upstream = respx_mock.post("http://backend-agent:10001/").mock(
+        return_value=httpx.Response(
+            200,
+            json={"jsonrpc": "2.0", "id": "req-wire", "result": {"id": "task-1", "status": {"state": "completed"}}},
+        )
+    )
+
+    mock_agent = MagicMock()
+    mock_agent.agent_id = "test-agent-wire"
+    mock_agent.agent_name = "test-agent-wire"
+    mock_agent.agent_card_params = {
+        "url": "http://backend-agent:10001/",
+        "name": "Test Wire Agent",
+    }
+    mock_agent.litellm_params = {"api_key": "backend-secret-wire-key"}
+    mock_agent.static_headers = None
+    mock_agent.extra_headers = None
+    mock_agent.identity_managed = False
+
+    mock_request = MagicMock()
+    mock_request.json = AsyncMock(
+        return_value={
+            "jsonrpc": "2.0",
+            "id": "req-wire",
+            "method": "tasks/get",
+            "params": {"id": "task-1"},
+        }
+    )
+    mock_request.headers = {}
+
+    user_auth = UserAPIKeyAuth(
+        api_key="sk-test-key",
+        user_id="test-user",
+        team_id="test-team",
+    )
+
+    with (
+        patch("litellm.proxy.agent_endpoints.a2a_endpoints._get_agent", return_value=mock_agent),
+        patch(
+            "litellm.proxy.agent_endpoints.auth.agent_permission_handler.AgentRequestHandler.is_agent_allowed",
+            return_value=True,
+        ),
+        patch(
+            "litellm.proxy.common_request_processing.ProxyBaseLLMRequestProcessing.common_processing_pre_call_logic",
+            new_callable=AsyncMock,
+        ) as mock_pre_call,
+    ):
+        mock_pre_call.return_value = ({}, MagicMock())
+        fastapi_response = MagicMock()
+
+        resp = await invoke_agent_a2a(
+            agent_id="test-agent-wire",
+            request=mock_request,
+            fastapi_response=fastapi_response,
+            user_api_key_dict=user_auth,
+        )
+
+    assert upstream.called
+    assert upstream.calls.last.request.headers.get("Authorization") == "Bearer backend-secret-wire-key"
+    body = json.loads(resp.body.decode())
+    assert body["jsonrpc"] == "2.0"
+    assert body["result"]["id"] == "task-1"
+
+
+@pytest.mark.asyncio
+async def test_invoke_agent_a2a_delivers_static_authorization_over_wire_even_with_api_key(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+):
+    """Verify that static_headers Authorization is preserved over the wire even when api_key is set."""
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.agent_endpoints.a2a_endpoints import invoke_agent_a2a
+
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    upstream = respx_mock.post("http://backend-agent:10001/").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "jsonrpc": "2.0",
+                "id": "req-wire-static",
+                "result": {"id": "task-2", "status": {"state": "completed"}},
+            },
+        )
+    )
+
+    mock_agent = MagicMock()
+    mock_agent.agent_id = "test-agent-wire-static"
+    mock_agent.agent_name = "test-agent-wire-static"
+    mock_agent.agent_card_params = {
+        "url": "http://backend-agent:10001/",
+        "name": "Test Wire Static Agent",
+    }
+    mock_agent.litellm_params = {"api_key": "backend-secret-wire-key"}
+    mock_agent.static_headers = {"Authorization": "CustomToken static-secret"}
+    mock_agent.extra_headers = None
+    mock_agent.identity_managed = False
+
+    mock_request = MagicMock()
+    mock_request.json = AsyncMock(
+        return_value={
+            "jsonrpc": "2.0",
+            "id": "req-wire-static",
+            "method": "tasks/get",
+            "params": {"id": "task-2"},
+        }
+    )
+    mock_request.headers = {}
+
+    user_auth = UserAPIKeyAuth(
+        api_key="sk-test-key",
+        user_id="test-user",
+        team_id="test-team",
+    )
+
+    with (
+        patch("litellm.proxy.agent_endpoints.a2a_endpoints._get_agent", return_value=mock_agent),
+        patch(
+            "litellm.proxy.agent_endpoints.auth.agent_permission_handler.AgentRequestHandler.is_agent_allowed",
+            return_value=True,
+        ),
+        patch(
+            "litellm.proxy.common_request_processing.ProxyBaseLLMRequestProcessing.common_processing_pre_call_logic",
+            new_callable=AsyncMock,
+        ) as mock_pre_call,
+    ):
+        mock_pre_call.return_value = ({}, MagicMock())
+        fastapi_response = MagicMock()
+
+        resp = await invoke_agent_a2a(
+            agent_id="test-agent-wire-static",
+            request=mock_request,
+            fastapi_response=fastapi_response,
+            user_api_key_dict=user_auth,
+        )
+
+    assert upstream.called
+    assert upstream.calls.last.request.headers.get("Authorization") == "CustomToken static-secret"
+    body = json.loads(resp.body.decode())
+    assert body["jsonrpc"] == "2.0"
+    assert body["result"]["id"] == "task-2"
+
+
+@pytest.mark.asyncio
+async def test_invoke_agent_a2a_delivers_api_key_bearer_over_wire_streaming(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+):
+    """Verify that litellm_params.api_key is delivered over the wire as Authorization: Bearer on SSE streams."""
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.agent_endpoints.a2a_endpoints import invoke_agent_a2a
+
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    upstream = respx_mock.post("http://backend-agent:10001/").mock(
+        return_value=httpx.Response(
+            200,
+            headers={"Content-Type": "text/event-stream"},
+            content=b'data: {"jsonrpc": "2.0", "id": "req-wire-sse", "result": {"kind": "task"}}\n\n',
+        )
+    )
+
+    mock_agent = MagicMock()
+    mock_agent.agent_id = "test-agent-wire-sse"
+    mock_agent.agent_name = "test-agent-wire-sse"
+    mock_agent.agent_card_params = {
+        "url": "http://backend-agent:10001/",
+        "name": "Test Wire SSE Agent",
+    }
+    mock_agent.litellm_params = {"api_key": "backend-secret-sse-key"}
+    mock_agent.static_headers = None
+    mock_agent.extra_headers = None
+    mock_agent.identity_managed = False
+
+    mock_request = MagicMock()
+    mock_request.json = AsyncMock(
+        return_value={
+            "jsonrpc": "2.0",
+            "id": "req-wire-sse",
+            "method": "tasks/resubscribe",
+            "params": {"taskId": "task-1"},
+        }
+    )
+    mock_request.headers = {}
+
+    user_auth = UserAPIKeyAuth(
+        api_key="sk-test-key",
+        user_id="test-user",
+        team_id="test-team",
+    )
+
+    with (
+        patch("litellm.proxy.agent_endpoints.a2a_endpoints._get_agent", return_value=mock_agent),
+        patch(
+            "litellm.proxy.agent_endpoints.auth.agent_permission_handler.AgentRequestHandler.is_agent_allowed",
+            return_value=True,
+        ),
+        patch(
+            "litellm.proxy.common_request_processing.ProxyBaseLLMRequestProcessing.common_processing_pre_call_logic",
+            new_callable=AsyncMock,
+        ) as mock_pre_call,
+    ):
+        mock_pre_call.return_value = ({}, MagicMock())
+        fastapi_response = MagicMock()
+
+        resp = await invoke_agent_a2a(
+            agent_id="test-agent-wire-sse",
+            request=mock_request,
+            fastapi_response=fastapi_response,
+            user_api_key_dict=user_auth,
+        )
+
+        chunks = [chunk async for chunk in resp.body_iterator]
+
+    assert upstream.called
+    assert upstream.calls.last.request.headers.get("Authorization") == "Bearer backend-secret-sse-key"
+    assert len(chunks) > 0

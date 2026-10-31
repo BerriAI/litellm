@@ -315,3 +315,14 @@ async def test_card_resolver_discovery_error_is_404_when_every_probe_is_404():
         await resolver.get_agent_card()
 
     assert raised.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_card_resolver_fallback_when_a2a_sdk_missing():
+    """Verify LiteLLMA2ACardResolver fallback base class doesn't crash on import or instantiation."""
+    from litellm.a2a_protocol.card_resolver import _FallbackA2ACardResolver
+
+    fallback = _FallbackA2ACardResolver(base_url="http://agent:8000")
+    assert fallback.base_url == "http://agent:8000"
+    with pytest.raises(ImportError, match="a2a"):
+        await fallback.get_agent_card()

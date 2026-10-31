@@ -47,7 +47,15 @@ def _registry_api_key(agent_litellm_params: Mapping[str, object]) -> str | None:
     if _agent_authenticates_with_entra(agent_litellm_params):
         return get_azure_ai_agent_entra_token(agent_litellm_params)
     configured_api_key: Final = agent_litellm_params.get("api_key")
-    return configured_api_key if isinstance(configured_api_key, str) else None
+    if isinstance(configured_api_key, str):
+        token = configured_api_key.strip()
+        if token.startswith("os.environ/"):
+            from litellm.secret_managers.main import get_secret_str
+
+            resolved = get_secret_str(token)
+            return resolved.strip() if resolved else None
+        return token if token else None
+    return None
 
 
 def _registry_headers(agent_litellm_params: Mapping[str, object]) -> dict[str, object] | None:
@@ -189,7 +197,12 @@ class A2AConfig(BaseConfig):
         content_type_default: Final = (
             () if "content-type" in headers or "Content-Type" in headers else (("Content-Type", "application/json"),)
         )
-        bearer: Final = () if api_key is None else (("Authorization", f"Bearer {api_key}"),)
+        has_auth: Final = any(str(k).lower() == "authorization" for k in headers)
+        bearer: Final = (
+            ()
+            if api_key is None or has_auth
+            else (("Authorization", api_key if api_key.lower().startswith("bearer ") else f"Bearer {api_key}"),)
+        )
         return dict((*headers.items(), *content_type_default, *bearer))
 
     def get_complete_url(
