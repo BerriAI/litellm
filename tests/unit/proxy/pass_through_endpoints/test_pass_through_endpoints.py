@@ -11905,6 +11905,20 @@ class TestInheritAuthGuardrails:
         assert response.body == b'{\n  "id":"chatcmpl-1"\n}'
 
     @pytest.mark.asyncio
+    async def test_a_named_default_on_post_call_guardrail_still_checks_the_response(self):
+        auth: Final = UserAPIKeyAuth(api_key="sk-test", metadata={"guardrails": ["global-post"]})
+
+        _, post_call = await self._run(
+            self._chat_body(),
+            inherit=True,
+            user_api_key_dict=auth,
+            guardrails=(self._guardrail("global-post", GuardrailEventHooks.post_call, default_on=True),),
+        )
+
+        post_call.assert_awaited_once()
+        assert post_call.call_args.kwargs["data"]["metadata"]["guardrails"] == ["global-post"]
+
+    @pytest.mark.asyncio
     async def test_request_body_guardrails_are_added_to_the_key_guardrails(self):
         auth: Final = UserAPIKeyAuth(api_key="sk-test", metadata={"guardrails": ["key-guard"]})
 

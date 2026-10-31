@@ -1746,7 +1746,7 @@ async def _run_gemini_pre_call(
     guardrail: LakeraAIGuardrail, lakera_response: Mapping[str, object], data: dict[str, object]
 ) -> Sequence[object]:
     """Run the pre-call hook against a Lakera double and return the messages each guard request carried."""
-    sent: Final = list[object]()
+    sent: Final = list[object]()  # mutable-ok: the Lakera double records each guard request it receives
 
     def respond(request: httpx.Request) -> httpx.Response:
         sent.append(json.loads(request.content)["messages"])
