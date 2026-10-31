@@ -8,7 +8,7 @@ import io
 import json
 import mimetypes
 import re
-from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Hashable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from graphlib import CycleError, TopologicalSorter
 from itertools import chain, groupby, islice
@@ -3229,3 +3229,7 @@ def is_present_non_string(value: object) -> bool:
 
 def invalid_type_message(field_path: str, value: object) -> str:
     return f"Invalid type for '{field_path}': expected a string, got {type(value).__name__}"
+
+
+def is_unhashable_value_behind(error: TypeError, value: object) -> bool:
+    return not isinstance(value, Hashable) and f"unhashable type: '{type(value).__name__}'" in str(error)

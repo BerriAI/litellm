@@ -2,7 +2,8 @@ import copy
 import json
 import re
 import time
-from collections.abc import Callable, Hashable, Iterable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
+from functools import partial
 from itertools import chain
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, ClassVar, Final, NoReturn, cast
@@ -31,6 +32,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     invalid_type_message,
     is_object_schema,
     is_present_non_string,
+    is_unhashable_value_behind,
     sanitize_input_schema_for_anthropic,
     schema_fragment_ref,
     schema_grammar_branch_count,
@@ -180,10 +182,6 @@ NATIVE_OUTPUT_MAX_OPTIONAL_PARAMETERS: Final = 24
 NATIVE_OUTPUT_MAX_GRAMMAR_BRANCHES: Final = 2048
 
 
-def _is_unhashable(value: object) -> bool:
-    return not isinstance(value, Hashable)
-
-
 def _tool_call_ids_failing(
     index: int, tool_calls: object, fails: Callable[[object], bool]
 ) -> Iterator[tuple[str, object]]:
@@ -211,27 +209,31 @@ def _assistant_tool_call_ids_failing(
     )
 
 
-def _unhashable_tool_answer_ids(messages: Sequence[object]) -> Iterator[tuple[str, object]]:
+def _tool_answer_ids_failing(
+    messages: Sequence[object], fails: Callable[[object], bool]
+) -> Iterator[tuple[str, object]]:
     answers: Final = (
         (index, message_field(message, "tool_call_id"))
         for index, message in enumerate(messages)
         if message_field(message, "role") in ("tool", "function")
     )
-    return (
-        (f"messages[{index}].tool_call_id", tool_call_id)
-        for index, tool_call_id in answers
-        if _is_unhashable(tool_call_id)
-    )
+    return ((f"messages[{index}].tool_call_id", tool_call_id) for index, tool_call_id in answers if fails(tool_call_id))
+
+
+def _is_non_string_value_behind(error: AttributeError, value: object) -> bool:
+    return is_present_non_string(value) and value is error.obj
 
 
 def _tool_call_ids_behind(messages: Sequence[object], error: Exception) -> Iterable[tuple[str, object]]:
     match error:
         case TypeError():
+            caused_error: Final = partial(is_unhashable_value_behind, error)
             return chain(
-                _assistant_tool_call_ids_failing(messages, _is_unhashable), _unhashable_tool_answer_ids(messages)
+                _assistant_tool_call_ids_failing(messages, caused_error),
+                _tool_answer_ids_failing(messages, caused_error),
             )
         case AttributeError():
-            return _assistant_tool_call_ids_failing(messages, is_present_non_string)
+            return _assistant_tool_call_ids_failing(messages, partial(_is_non_string_value_behind, error))
         case _:
             return ()
 

@@ -10123,21 +10123,50 @@ def test_chat_transform_request_keeps_a_conversion_error_that_a_dropped_orphan_a
             "'dict' object has no attribute 'strip'",
             id="object_tool_call_arguments",
         ),
+        pytest.param(
+            [{"role": "user", "content": [{"type": "image_url", "image_url": ["x"]}]}],
+            "list indices must be integers or slices, not str",
+            id="list_image_url",
+        ),
     ],
 )
-def test_chat_transform_request_never_blames_a_numeric_tool_answer_id_for_another_failure(
+@pytest.mark.parametrize("dropped_answer_id", [7, {"id": "toolu_01"}], ids=["int", "object"])
+def test_chat_transform_request_never_blames_a_dropped_tool_answer_id_for_another_failure(
     local_model_cost_map,
     monkeypatch: pytest.MonkeyPatch,
     later_turn: list[dict[str, object]],
     real_cause: str,
+    dropped_answer_id: object,
 ):
     monkeypatch.setattr(litellm, "modify_params", True)
 
     with pytest.raises(AnthropicError) as raised:
-        _chat_request(AnthropicConfig(), UNFLAGGED_CLAUDE, [*_orphan_answer_with(7)[:3], *later_turn])
+        _chat_request(AnthropicConfig(), UNFLAGGED_CLAUDE, [*_orphan_answer_with(dropped_answer_id)[:3], *later_turn])
 
     assert raised.value.status_code == 400
     assert raised.value.message.startswith(real_cause)
+
+
+def test_chat_transform_request_never_blames_a_numeric_assistant_tool_call_id_for_an_earlier_failure(
+    local_model_cost_map,
+):
+    with pytest.raises(AnthropicError) as raised:
+        _chat_request(
+            AnthropicConfig(),
+            UNFLAGGED_CLAUDE,
+            [
+                {"role": "user", "content": ["hi", "there"]},
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [{"id": 5, "type": "function", "function": {"name": "get_weather", "arguments": "{}"}}],
+                },
+                {"role": "tool", "tool_call_id": "5", "content": "rain"},
+            ],
+        )
+
+    assert raised.value.status_code == 400
+    assert raised.value.message.startswith("'str' object has no attribute 'get'")
 
 
 def test_chat_transform_request_names_no_field_for_a_failure_outside_roles_and_tool_call_ids(local_model_cost_map):

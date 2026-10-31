@@ -5,7 +5,7 @@ Handles transforming from Responses API -> LiteLLM completion  (Chat Completion 
 import json
 import re
 import uuid
-from collections.abc import Awaitable, Callable, Hashable, Iterable, Iterator, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from functools import partial
 from itertools import accumulate, chain, groupby, islice
@@ -57,7 +57,11 @@ from litellm.litellm_core_utils.hidden_params import (
     set_hidden_params,
 )
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.litellm_core_utils.prompt_templates.common_utils import invalid_type_message, is_present_non_string
+from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    invalid_type_message,
+    is_present_non_string,
+    is_unhashable_value_behind,
+)
 from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import message_field, parts_of
 from litellm.llms.anthropic.common_utils import supports_anthropic_cache_control
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
@@ -456,14 +460,16 @@ def _is_tool_output_item(item: object) -> bool:
 
 
 def _unhashable_tool_output_call_id_error(
-    input: str | ResponseInputParam, read_input: str | ResponseInputParam
+    input: str | ResponseInputParam, read_input: str | ResponseInputParam, error: TypeError
 ) -> BadRequestError | None:
     call_ids: Final = (
         (f"input[{index}].call_id", message_field(item, "call_id"))
         for index, item in _read_positions(parts_of(input), read_input)
         if _is_tool_output_item(item)
     )
-    return _first_invalid_input_type((path, call_id) for path, call_id in call_ids if not isinstance(call_id, Hashable))
+    return _first_invalid_input_type(
+        (path, call_id) for path, call_id in call_ids if is_unhashable_value_behind(error, call_id)
+    )
 
 
 def _carries_non_string_field(message: object) -> bool:
@@ -1401,7 +1407,7 @@ class LiteLLMCompletionResponsesConfig:
             )
         except TypeError as error:
             call_id_error: Final = _unhashable_tool_output_call_id_error(
-                dumped_input if caller_input is None else caller_input, read_input
+                dumped_input if caller_input is None else caller_input, read_input, error
             )
             if call_id_error is None:
                 raise

@@ -7160,13 +7160,14 @@ def test_a_malformed_call_id_after_a_compaction_item_is_named_by_its_index_in_th
     assert "'input[4].call_id'" in raised.value.message
 
 
-def test_a_conversion_failure_elsewhere_is_never_blamed_on_a_numeric_call_id() -> None:
+@pytest.mark.parametrize("call_id", [7, {"id": "call_weather"}], ids=["int", "object"])
+def test_a_conversion_failure_elsewhere_is_never_blamed_on_a_call_id(call_id: object) -> None:
     history: Final = cast(
         ResponseInputParam,
         [
             _WEATHER_ASK,
-            {"type": "function_call_output", "call_id": 7, "output": "sunny"},
             {"type": ["message"], "role": "user", "content": "Go on"},
+            {"type": "function_call_output", "call_id": call_id, "output": "sunny"},
         ],
     )
 

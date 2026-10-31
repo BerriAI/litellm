@@ -86,7 +86,13 @@ async def test_claude_count_request_counts_additional_tools_input_items_as_tools
     policy: Final = DropPolicy(drop_params=False, additional_drop_params=frozenset())
 
     hoisted: Final = await _claude_count(
-        {"input": [{"type": "additional_tools", "tools": [_WEATHER_TOOL]}, _QUESTION]}, policy
+        {
+            "input": [
+                {"type": "additional_tools", "role": "developer", "content": "Reply PINEAPPLE.", "tools": [_WEATHER_TOOL]},
+                _QUESTION,
+            ]
+        },
+        policy,
     )
 
     assert isinstance(hoisted, ChatCountRequest)

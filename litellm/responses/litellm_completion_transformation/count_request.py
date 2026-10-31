@@ -125,7 +125,16 @@ def _with_hoisted_additional_tools(responses_request: Mapping[str, object], drop
     hoisted: Final = hoist_additional_tools(input_items, top_level_tools, drop_params=drop_params)
     if not hoisted.hoisted:
         return responses_request
-    return {**responses_request, "tools": list(hoisted.tools)}
+    return {**responses_request, "input": hoisted.input, "tools": list(hoisted.tools)}
+
+
+def _caller_input(responses_request: Mapping[str, object]) -> ResponseInputParam | None:
+    responses_input: Final = responses_request.get("input")
+    return (
+        cast(ResponseInputParam, responses_input)  # cast-ok: forwarded as sent, as inference does
+        if isinstance(responses_input, list)
+        else None
+    )
 
 
 def _with_emulated_file_search(responses_request: Mapping[str, object]) -> Mapping[str, object]:
@@ -200,6 +209,7 @@ async def chat_count_request(
                 ),
                 custom_llm_provider,
                 policy.drop_params,
+                caller_input=_caller_input(responses_request),
             ),
             model,
             custom_llm_provider,
