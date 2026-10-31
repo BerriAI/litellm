@@ -3,7 +3,7 @@
 import sys
 import weakref
 from collections import OrderedDict
-from collections.abc import Callable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
 from contextlib import contextmanager, nullcontext
 from dataclasses import replace
 from datetime import datetime
@@ -107,22 +107,22 @@ def _span_error_from_exception(
     *,
     status_code: int | None = None,
     traceback_str: str | None = None,
-    request_data: Mapping[str, object] | None = None,
+    scrub_texts: Collection[str] | None = None,
 ) -> SpanError:
     """A ``SpanError`` for a proxy-level failure that never produced a
     ``StandardLoggingPayload`` (auth / validation / malformed-body rejections),
     mirroring ``_parse_error``'s field mapping so it stamps the same v2 keys a
     failed LLM call does. ``status_code`` pins ``error.code`` to the real response
-    status, matching v1's SERVER-span behavior. ``request_data`` scrubs the
-    request's own text out of the error when its message logging is redacted."""
+    status, matching v1's SERVER-span behavior. ``scrub_texts`` is the request's
+    own text to scrub out of the error, set when its message logging is redacted."""
     from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
-    from litellm.litellm_core_utils.redact_messages import scrubbed_error_information_for_request
+    from litellm.litellm_core_utils.redact_messages import scrubbed_error_information
 
     raw_info: Final = StandardLoggingPayloadSetup.get_error_information(
         original_exception=exception,
         traceback_str=traceback_str,
     )
-    info: Final = raw_info if request_data is None else scrubbed_error_information_for_request(raw_info, request_data)
+    info: Final = raw_info if scrub_texts is None else scrubbed_error_information(raw_info, scrub_texts)
     return SpanError(
         error_type=info.get("error_class") or info.get("error_code") or None,
         message=info.get("error_message") or None,
@@ -132,7 +132,8 @@ def _span_error_from_exception(
     )
 
 
-_failed_request_by_span: Final[weakref.WeakKeyDictionary[Span, Mapping[str, object]]] = weakref.WeakKeyDictionary()
+# The request text each failure hook scrubbed out of its span's error, or None when the request isn't redacted.
+_scrub_texts_by_span: Final[weakref.WeakKeyDictionary[Span, frozenset[str] | None]] = weakref.WeakKeyDictionary()
 
 
 # Any callback whose class belongs to one of these modules is "the OTel
@@ -858,9 +859,7 @@ class OpenTelemetryV2(CustomLogger):
         already_stamped: Final = Error.TYPE in (getattr(span, "attributes", None) or ())
         stamp_error(
             span,
-            _span_error_from_exception(
-                exception, status_code=status_code, request_data=_failed_request_by_span.get(span)
-            ),
+            _span_error_from_exception(exception, status_code=status_code, scrub_texts=_scrub_texts_by_span.get(span)),
             record_event=not already_stamped,
         )
 
@@ -886,10 +885,13 @@ class OpenTelemetryV2(CustomLogger):
         span: Final = mcp_message_transport_span() or request_root_span() or user_api_key_dict.parent_otel_span
         if span is None or not is_recordable_span(span):
             return
-        _failed_request_by_span[span] = request_data
+        from litellm.litellm_core_utils.redact_messages import failure_request_texts, should_redact_failed_request
+
+        scrub_texts: Final = failure_request_texts(request_data) if should_redact_failed_request(request_data) else None
+        _scrub_texts_by_span[span] = scrub_texts
         stamp_error(
             span,
-            _span_error_from_exception(original_exception, traceback_str=traceback_str, request_data=request_data),
+            _span_error_from_exception(original_exception, traceback_str=traceback_str, scrub_texts=scrub_texts),
         )
         return
 
