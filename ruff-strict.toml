@@ -35,6 +35,18 @@ external = [
 # hook signatures inherit `Any` for `response` from CustomLogger, so narrowing them here
 # would break the override rather than describe it.
 "litellm/proxy/guardrails/guardrail_hooks/llm_shield_proxy/llm_shield_proxy.py" = ["ANN401"]
+# The only modules allowed to import redis-py (TID251 bans it elsewhere). The transport and
+# the caches own the connection and breaker, the rest wait for their own move. Only shrink it.
+"litellm/redis/transport/redis_py.py" = ["TID251"]
+"litellm/caching/redis_cache.py" = ["TID251"]
+"litellm/caching/redis_cluster_cache.py" = ["TID251"]
+"litellm/_redis.py" = ["TID251"]
+"litellm/_redis_credential_provider.py" = ["TID251"]
+"litellm/caching/redis_batch.py" = ["TID251"]
+"litellm/caching/redis_cluster_node_isolation.py" = ["TID251"]
+"litellm/caching/valkey_semantic_cache.py" = ["TID251"]
+"litellm/llms/valkey/vector_stores/transformation.py" = ["TID251"]
+"litellm/proxy/db/db_transaction_queue/redis_update_buffer.py" = ["TID251"]
 
 [lint.mccabe]
 max-complexity = 15
@@ -65,6 +77,7 @@ max-args = 5
 "typing_extensions.TypeGuard".msg = "Same as typing.TypeGuard."
 "typing.TypeIs".msg = "Unverified narrowing (the body is trusted). Parse into a concrete type instead."
 "typing_extensions.TypeIs".msg = "Same as typing.TypeIs."
+"redis".msg = "Reach Redis through litellm.redis (see .agents/skills/redis-access)."
 # Dispatched public entry points: import them from their dispatch module so every
 # supported call path selects Rust or Python in one place. Only the dispatch
 # modules and internal recursive calls may reach the Python implementation
