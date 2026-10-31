@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import base64
 import binascii
-import hashlib
 import hmac
 import math
 from collections.abc import Awaitable, Iterator, Mapping, Sequence
@@ -41,12 +40,12 @@ from litellm.proxy.mcp_server.idp_token_exchange import (
     read_token_exchange_prerequisites,
 )
 from litellm.proxy.mcp_server.oauth_utils import proxy_base_url_from_env
+from litellm.redis.stores.mcp_single_use import AssertionRedeemed
 
 ID_JAG_REQUIRED_CLAIMS: Final = ("iss", "sub", "aud", "exp", "iat", "jti", "client_id")
 REJECTED_ASSERTION: Final = "assertion was rejected"
 TEAM_HEADER: Final = "x-litellm-team-id"
 _INACTIVE_SUBJECT: Final = frozenset(("no_active_key", "unresolvable"))
-_REPLAY_KEY_PREFIX: Final = "mcp_gateway_dcr:id_jag:"
 SCOPE_MCP: Final = "litellm:mcp"
 SCOPE_LLM: Final = "litellm:llm"
 _RESOURCE_CLAIM_ADAPTER: Final = TypeAdapter(list[str])
@@ -479,7 +478,7 @@ async def identity_from_id_jag(
     marker: Final = _replay_marker(verified, redemption)
     if isinstance(marker, SubjectTokenRefusal):
         return marker
-    replay_key, replay_ttl_seconds = marker
+    replay, replay_ttl_seconds = marker
     mcp_resource: Final = resource_names_mcp(verified, prerequisites.base_url)
     if isinstance(mcp_resource, SubjectTokenRefusal):
         return mcp_resource
@@ -502,7 +501,7 @@ async def identity_from_id_jag(
     return AssertionIdentity(
         user_id=subject.user_id,
         team_id=subject.team_id,
-        replay_key=replay_key,
+        replay=replay,
         replay_ttl_seconds=replay_ttl_seconds,
         scope=scope.scope,
         allowed_routes=scope.allowed_routes,
@@ -511,8 +510,8 @@ async def identity_from_id_jag(
 
 def _replay_marker(
     verified: Mapping[str, object], redemption: AssertionRedemption
-) -> tuple[str, int] | SubjectTokenRefusal:
-    """The single-use key and its lifetime for a verified assertion, once the assertion is bound to
+) -> tuple[AssertionRedeemed, int] | SubjectTokenRefusal:
+    """The single-use marker and its lifetime for a verified assertion, once the assertion is bound to
     the presenting app, carries no proof-of-possession the gateway cannot check, and is still alive."""
     if verified.get("client_id") != redemption.client_id:
         return _rejected("the assertion's client_id is not the requesting app that presented it")
@@ -526,7 +525,7 @@ def _replay_marker(
     replay_ttl_seconds: Final = math.ceil(exp + redemption.leeway_seconds - redemption.now)
     if replay_ttl_seconds <= 0:
         return _rejected("the assertion has expired")
-    return _REPLAY_KEY_PREFIX + hashlib.sha256(f"{issuer}\n{jti}".encode()).hexdigest(), replay_ttl_seconds
+    return AssertionRedeemed(issuer=issuer, jti=jti), replay_ttl_seconds
 
 
 def _rejected(reason: str) -> SubjectTokenRefusal:
