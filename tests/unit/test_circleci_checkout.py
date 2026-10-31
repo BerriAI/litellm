@@ -198,23 +198,24 @@ def test_a_docs_only_pr_job_still_skips_backend_work_after_the_checkout(tmp_path
 
 @pytest.mark.parametrize("shell", (LINUX_SHELL, WINDOWS_SHELL), ids=("linux", "windows-bash-exe"))
 @pytest.mark.parametrize(("failing_fetches", "checked_out"), ((2, True), (3, False)))
-def test_a_fetch_that_fails_is_retried_and_the_step_fails_once_retries_run_out(
+def test_a_fetch_that_fails_is_retried_and_the_step_stops_at_the_fetch_once_retries_run_out(
     tmp_path: Path, shell: tuple[str, ...], failing_fetches: int, checked_out: bool
 ) -> None:
     upstream: Final = _publish_two_commits(tmp_path)
-    fetches: Final = tmp_path / "fetches"
-    _stub(tmp_path / "bin", "sleep", "exit 0")
+    calls: Final = tmp_path / "calls"
+    _stub(tmp_path / "bin", "sleep", f'echo sleep >> "{calls}"')
     _stub(
         tmp_path / "bin",
         "git",
-        f'''if [ "$1" = fetch ]; then
-  echo x >> "{fetches}"
-  [ "$(wc -l < "{fetches}")" -le {failing_fetches} ] && exit 128
-fi
+        f'''echo "$1" >> "{calls}"
+if [ "$1" = fetch ] && [ "$(grep -c '^fetch$' "{calls}")" -le {failing_fetches} ]; then exit 128; fi
 exec "{shutil.which("git")}" "$@"''',
     )
     result: Final = _run_checkout(tmp_path, upstream, {"CIRCLE_SHA1": upstream.older}, shell)
     assert (result.returncode == 0) is checked_out, result.stderr
-    assert len(fetches.read_text().splitlines()) == min(failing_fetches + 1, 3)
+    steps: Final = calls.read_text().splitlines()
+    assert steps.count("fetch") == min(failing_fetches + 1, 3)
+    assert steps.count("sleep") == steps.count("fetch") - 1
+    assert ("checkout" in steps) is checked_out
     head: Final = subprocess.run(["git", "rev-parse", "HEAD"], cwd=tmp_path / "job", capture_output=True, text=True)
     assert (head.stdout.strip() == upstream.older) is checked_out

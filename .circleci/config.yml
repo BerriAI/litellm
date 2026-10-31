@@ -40,8 +40,9 @@ commands:
             [[ "$revision" =~ ^[0-9a-f]{40}$ ]] || exit 1
             git init
             git remote add origin https://github.com/BerriAI/litellm.git
-            for _ in 1 2 3; do
+            for attempt in 1 2 3; do
               git fetch --filter=blob:none origin "$revision" && break
+              [[ $attempt -lt 3 ]] || exit 1
               sleep 5
             done
             git checkout --detach FETCH_HEAD
