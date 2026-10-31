@@ -8,6 +8,7 @@ import time
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from copy import deepcopy
 from functools import lru_cache, partial
+from itertools import chain
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Protocol, Union, cast, get_args
 
@@ -507,6 +508,28 @@ def mapped_gemini_speech_config(
             "prebuiltVoiceConfig": {"voiceName": OPENAI_TO_GEMINI_TTS_VOICES.get(voice_name.lower(), voice_name)}
         },
     }
+
+
+def _as_chat_tool(member: JsonValue) -> JsonValue:
+    if not isinstance(member, dict) or "function" in member or "name" not in member:
+        return member
+    return {
+        "type": member.get("type", "function"),
+        "function": {key: value for key, value in member.items() if key != "type"},
+    }
+
+
+def _namespace_members_or_tool(tool: JsonValue) -> tuple[JsonValue, ...]:
+    if not isinstance(tool, dict) or tool.get("type") != "namespace":
+        return (tool,)
+    members: Final = tool.get("tools")
+    return tuple(map(_as_chat_tool, members)) if isinstance(members, list) else ()
+
+
+def _with_namespace_members_inlined(tools: JsonValue) -> JsonValue:
+    if not isinstance(tools, list):
+        return tools
+    return list(chain.from_iterable(map(_namespace_members_or_tool, tools)))
 
 
 class VertexAIBaseConfig:
@@ -1062,7 +1085,8 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         # remove 'strict' from tools
         remove_strict_from_schema(schema_value)
 
-        for tool in cast(list[dict], schema_value):  # cast-ok: a deep copy keeps the caller's tool shape
+        inlined_tools: Final = _with_namespace_members_inlined(schema_value)
+        for tool in cast(list[dict], inlined_tools):  # cast-ok: a deep copy keeps the caller's tool shape
             openai_function_object: ChatCompletionToolParamFunctionChunk | None = None
             if "function" in tool:  # tools list
                 _openai_function_object = ChatCompletionToolParamFunctionChunk(**tool["function"])

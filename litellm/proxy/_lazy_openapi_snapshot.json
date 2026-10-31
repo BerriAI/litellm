@@ -19632,7 +19632,7 @@
                   "type": "null"
                 }
               ],
-              "description": "Regex pattern applied to the tool's function name",
+              "description": "Regex pattern applied to the tool's name, or to its type when the tool has no name",
               "title": "Tool Name"
             },
             "tool_type": {

@@ -1,13 +1,16 @@
 import json
 import re
-from collections.abc import AsyncGenerator, AsyncIterable, Mapping, Sequence
-from typing import Any, Final, Literal, TypedDict
+from collections.abc import AsyncGenerator, AsyncIterable, Callable, Mapping, Sequence
+from dataclasses import dataclass
+from functools import partial
+from itertools import chain
+from types import MappingProxyType
+from typing import Any, Final, Literal, TypeAlias, TypedDict
 
 from fastapi import HTTPException
 from pydantic import TypeAdapter
 from typing_extensions import ReadOnly, Required
 
-from litellm import ChatCompletionToolParam
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.dual_cache import DualCache
 from litellm.completion_extras.litellm_responses_transformation.transformation import (
@@ -19,6 +22,7 @@ from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     log_guardrail_information,
 )
+from litellm.llms.base_llm.guardrail_translation.utils import anthropic_tool_names
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.callback_utils import (
     add_guardrail_to_applied_guardrails_header,
@@ -30,7 +34,10 @@ from litellm.proxy.guardrails.anthropic_sse import (
     is_raw_sse_stream,
     is_sse_error_stream,
 )
+from litellm.responses.additional_tools import ADDITIONAL_TOOLS_INPUT_ITEM_TYPE
 from litellm.types.guardrails import GuardrailEventHooks, LitellmParams
+from litellm.types.llms.anthropic import ANTHROPIC_HOSTED_TOOLS
+from litellm.types.llms.vertex_ai import VertexToolName
 from litellm.types.proxy.guardrails.guardrail_hooks.tool_permission import (
     PermissionError,
     ToolPermissionRule,
@@ -48,8 +55,46 @@ from litellm.types.utils import (
 )
 
 GUARDRAIL_NAME: Final = "tool_permission"
+_MCP_TOOLSET_TYPE: Final = "mcp_toolset"
+_HOSTED_SERVER_NAME_FIELDS: Final = MappingProxyType({"mcp": "server_label", _MCP_TOOLSET_TYPE: "mcp_server_name"})
+_TOOL_CARRYING_INPUT_TYPES: Final = frozenset({"tool_search_output", ADDITIONAL_TOOLS_INPUT_ITEM_TYPE})
+_DECLARATION_KEYS: Final = ("functionDeclarations", "function_declarations")
+_NON_TOOL_PART_KEYS: Final = frozenset({*_DECLARATION_KEYS, "cachePoint", "type"})
+_TOOL_CONFIG_KEYS: Final = ("toolConfig", "tool_config")
+_FUNCTION_CALLING_CONFIG_KEYS: Final = ("functionCallingConfig", "function_calling_config")
+_ALLOWED_FUNCTION_NAMES_KEYS: Final = ("allowedFunctionNames", "allowed_function_names")
+_FORCED_FUNCTION_CALLING_MODES: Final = frozenset({"ANY", "VALIDATED"})
+_NAME_IDENTIFIED_TYPES: Final = frozenset({"function", "custom", "namespace", *_HOSTED_SERVER_NAME_FIELDS})
+_TEXT_EDITOR_TOOL_NAMES: Final = frozenset({"str_replace_editor", "str_replace_based_edit_tool"})
+_TYPE_VERSION_SUFFIX: Final = re.compile(r"_\d{8}$")
+_GEMINI_TYPED_HOSTED_TOOLS: Final = ("computer_use", "web_search", "web_search_preview")
+_NAMED_CHOICE_TYPES: Final = frozenset({"tool", "function", "custom", "allowed_tools", "any", "auto", "none"})
 _DECODED_ARGUMENTS: Final = TypeAdapter(object)
 _REQUEST_DATA: Final = TypeAdapter(object)
+_ToolTarget: TypeAlias = tuple[str | None, str | None]
+
+
+def _snake_case(name: str) -> str:
+    return re.sub(r"(?<!^)(?=[A-Z])", "_", name).lower()
+
+
+def _camel_case(name: str) -> str:
+    head, *rest = name.split("_")
+    return head + "".join(part.title() for part in rest)
+
+
+_GEMINI_HOSTED_TOOL_KEYS: Final = frozenset(
+    chain.from_iterable((_snake_case(tool.value), _camel_case(tool.value)) for tool in VertexToolName)
+)
+
+
+def _name_identifies_tool(name: str, tool_type: str) -> bool:
+    stem: Final = _TYPE_VERSION_SUFFIX.sub("", tool_type)
+    return (
+        tool_type in _NAME_IDENTIFIED_TYPES
+        or name == stem
+        or (stem == ANTHROPIC_HOSTED_TOOLS.TEXT_EDITOR.value and name in _TEXT_EDITOR_TOOL_NAMES)
+    )
 
 
 def _object_mapping(value: object) -> Mapping[str, object] | None:
@@ -66,6 +111,286 @@ def _function_tool_name(tool: object) -> str | None:
     fields: Final = _object_mapping(tool)
     name: Final = fields.get("name") if fields is not None and fields.get("type") == "function" else None
     return name if isinstance(name, str) else None
+
+
+def _non_empty_string(value: object) -> str | None:
+    return value if isinstance(value, str) and value else None
+
+
+def _request_tool_names(tool: object) -> tuple[str, ...]:
+    fields: Final = _object_mapping(tool)
+    custom: Final = (
+        _object_mapping(fields.get("custom")) if fields is not None and fields.get("type") == "custom" else None
+    )
+    custom_name: Final = _non_empty_string(custom.get("name")) if custom is not None else None
+    server_field: Final = _HOSTED_SERVER_NAME_FIELDS.get(str(fields.get("type"))) if fields is not None else None
+    server_name: Final = (
+        _non_empty_string(fields.get(server_field)) if fields is not None and server_field is not None else None
+    )
+    extra_names: Final = tuple(name for name in (_function_name(tool), custom_name, server_name) if name is not None)
+    return tuple(dict.fromkeys(anthropic_tool_names(tool) + extra_names))
+
+
+def _function_name(tool: object) -> str | None:
+    fields: Final = _object_mapping(tool)
+    function: Final = _object_mapping(fields.get("function")) if fields is not None else None
+    return _non_empty_string(function.get("name")) if function is not None else None
+
+
+def _namespace_function_targets(tool: object) -> tuple[_ToolTarget, ...]:
+    function_name: Final = _function_name(tool)
+    return ((function_name, "function"),) if function_name is not None else ()
+
+
+def _gemini_hosted_key_targets(tool: object) -> tuple[_ToolTarget, ...]:
+    fields: Final = _object_mapping(tool)
+    if fields is None or fields.get("type") in _GEMINI_TYPED_HOSTED_TOOLS:
+        return ()
+    keys: Final = tuple(key for key in fields if key != "type")
+    return (_part_target(fields, keys[0]),) if len(keys) == 1 and keys[0] in _GEMINI_HOSTED_TOOL_KEYS else ()
+
+
+def _namespace_members(tool: object) -> Sequence[object]:
+    fields: Final = _object_mapping(tool)
+    members: Final = (
+        _object_list(fields.get("tools")) if fields is not None and fields.get("type") == "namespace" else None
+    )
+    return members or ()
+
+
+def _qualified_member_name(namespace: str, name: str) -> str:
+    return f"{namespace}__{name}"
+
+
+def _qualified_target(namespace: str | None, target: _ToolTarget) -> _ToolTarget:
+    name, tool_type = target
+    return (
+        (_qualified_member_name(namespace, name), tool_type) if namespace is not None and name is not None else target
+    )
+
+
+def _member_name(member: object) -> str | None:
+    fields: Final = _object_mapping(member)
+    return _non_empty_string(fields.get("name")) if fields is not None else None
+
+
+def _declaration_targets(declaration: object) -> tuple[_ToolTarget, ...]:
+    name: Final = _member_name(declaration)
+    return ((name, "function"),) if name is not None else ()
+
+
+@dataclass(frozen=True, slots=True)
+class _MemberGroup:
+    key: str
+    members: Sequence[object]
+    targets_of: Callable[[object], tuple[_ToolTarget, ...]]
+
+
+def _member_group(
+    tool: object, namespace_member_targets: Callable[[str | None, object], tuple[_ToolTarget, ...]]
+) -> _MemberGroup | None:
+    fields: Final = _object_mapping(tool)
+    if fields is None:
+        return None
+    members: Final = _namespace_members(tool)
+    if members:
+        return _MemberGroup("tools", members, partial(namespace_member_targets, _member_name(tool)))
+    key: Final = next((key for key in _DECLARATION_KEYS if _object_list(fields.get(key))), None)
+    declarations: Final = _object_list(fields.get(key)) if key is not None else None
+    return _MemberGroup(key, declarations, _declaration_targets) if key is not None and declarations else None
+
+
+def _keyed_tool_fields(tool: object) -> Mapping[str, object] | None:
+    fields: Final = _object_mapping(tool)
+    if fields is None or isinstance(fields.get("type"), str) or _request_tool_names(tool):
+        return None
+    return fields
+
+
+def _part_keys(fields: Mapping[str, object]) -> tuple[str, ...]:
+    return tuple(key for key in fields if key not in _NON_TOOL_PART_KEYS)
+
+
+def _part_target(fields: Mapping[str, object], key: str) -> _ToolTarget:
+    return (_member_name(fields.get(key)), key)
+
+
+def _input_item_tools(item: object) -> Sequence[object] | None:
+    fields: Final = _object_mapping(item)
+    carries_tools: Final = fields is not None and fields.get("type") in _TOOL_CARRYING_INPUT_TYPES
+    return _object_list(fields.get("tools")) if fields is not None and carries_tools else None
+
+
+def _request_list(data: object, key: str) -> Sequence[object] | None:
+    fields: Final = _object_mapping(data)
+    return _object_list(fields.get(key)) if fields is not None else None
+
+
+def _input_items(data: object) -> Sequence[object]:
+    return _request_list(data, "input") or ()
+
+
+def _tools_in_items(items: Sequence[object]) -> tuple[object, ...]:
+    return tuple(chain.from_iterable(_input_item_tools(item) or () for item in items))
+
+
+def _extra_body(data: object) -> Mapping[str, object] | None:
+    fields: Final = _object_mapping(data)
+    return _object_mapping(fields.get("extra_body")) if fields is not None else None
+
+
+def _extra_body_tools(data: object) -> Sequence[object] | None:
+    return _request_list(_extra_body(data), "tools")
+
+
+def _sent_tools(data: object) -> tuple[object, ...]:
+    return (
+        *(_request_list(data, "tools") or ()),
+        *(_request_list(data, "functions") or ()),
+        *(_extra_body_tools(data) or ()),
+        *_tools_in_items(_input_items(data)),
+    )
+
+
+def _mcp_server_target(server: object) -> _ToolTarget:
+    fields: Final = _object_mapping(server)
+    return (_non_empty_string(fields.get("name")) if fields is not None else None, _MCP_TOOLSET_TYPE)
+
+
+def _reference_name(part: object) -> str | None:
+    fields: Final = _object_mapping(part)
+    is_reference: Final = fields is not None and fields.get("type") == "tool_reference"
+    return _non_empty_string(fields.get("tool_name")) if fields is not None and is_reference else None
+
+
+def _references_one_of(part: object, names: frozenset[str]) -> bool:
+    name: Final = _reference_name(part)
+    return name is not None and name in names
+
+
+def _without_references_to(parts: Sequence[object], names: frozenset[str]) -> Sequence[object]:
+    removed: Final = [name for name in map(_reference_name, parts) if name is not None and name in names]
+    kept: Final = [part for part in parts if not _references_one_of(part, names)]
+    if kept or not removed:
+        return kept
+    return [{"type": "text", "text": f"Permission denied: tool {', '.join(removed)} is not available"}]
+
+
+def _tool_result_without_references(fields: Mapping[str, object], names: frozenset[str]) -> object:
+    parts: Final = _object_list(fields.get("content"))
+    return {**fields, "content": _without_references_to(parts, names)} if parts else fields
+
+
+def _search_result_without_references(fields: Mapping[str, object], names: frozenset[str]) -> object:
+    result: Final = _object_mapping(fields.get("content"))
+    references: Final = _object_list(result.get("tool_references")) if result is not None else None
+    if result is None or references is None:
+        return fields
+    kept: Final = [reference for reference in references if not _references_one_of(reference, names)]
+    return {**fields, "content": {**result, "tool_references": kept}}
+
+
+def _without_references_in_block(block: object, names: frozenset[str]) -> object:
+    fields: Final = _object_mapping(block)
+    if fields is None:
+        return block
+    match fields.get("type"):
+        case "tool_result":
+            return _tool_result_without_references(fields, names)
+        case "tool_search_tool_result":
+            return _search_result_without_references(fields, names)
+        case _:
+            return block
+
+
+def _without_references_in_message(message: object, names: frozenset[str]) -> object:
+    fields: Final = _object_mapping(message)
+    content: Final = _object_list(fields.get("content")) if fields is not None else None
+    if fields is None or content is None:
+        return message
+    if fields.get("role") == "tool":
+        return {**fields, "content": _without_references_to(content, names)}
+    return {**fields, "content": [_without_references_in_block(block, names) for block in content]}
+
+
+def _allowed_tool_entries(tool_choice: Mapping[str, object]) -> Sequence[object] | None:
+    if tool_choice.get("type") != "allowed_tools":
+        return None
+    nested: Final = _object_mapping(tool_choice.get("allowed_tools"))
+    return _object_list((nested if nested is not None else tool_choice).get("tools"))
+
+
+def _is_removed_entry(entry: object, removed_names: frozenset[str], removed_types: frozenset[str]) -> bool:
+    names: Final = _request_tool_names(entry)
+    if names:
+        return any(name in removed_names for name in names)
+    fields: Final = _object_mapping(entry)
+    entry_type: Final = _non_empty_string(fields.get("type")) if fields is not None else None
+    return entry_type is not None and entry_type in removed_types
+
+
+def _with_allowed_tool_entries(tool_choice: Mapping[str, object], entries: list[object]) -> dict[str, object]:
+    nested: Final = _object_mapping(tool_choice.get("allowed_tools"))
+    if nested is None:
+        return {**tool_choice, "tools": entries}
+    return {**tool_choice, "allowed_tools": {**nested, "tools": entries}}
+
+
+def _is_denied_target(
+    target: _ToolTarget, denied_targets: frozenset[_ToolTarget], denied_names: frozenset[str]
+) -> bool:
+    return target in denied_targets or target[0] in denied_names
+
+
+def _kept_members(group: _MemberGroup | None, is_denied: Callable[[_ToolTarget], bool]) -> tuple[object, ...]:
+    if group is None:
+        return ()
+    return tuple(member for member in group.members if not any(map(is_denied, group.targets_of(member))))
+
+
+def _none_tool_choice(tool_choice: object) -> object:
+    choice: Final = _object_mapping(tool_choice)
+    return {"type": "none"} if choice is not None and choice.get("type") in ("tool", "any") else "none"
+
+
+def _requires_a_tool(tool_choice: object) -> bool:
+    choice: Final = _object_mapping(tool_choice)
+    return tool_choice == "required" or (choice is not None and choice.get("type") == "any")
+
+
+def _kept_allowed_function_names(config: Mapping[str, object], removed_names: frozenset[str]) -> Mapping[str, object]:
+    listed: Final = tuple((key, _object_list(config.get(key))) for key in _ALLOWED_FUNCTION_NAMES_KEYS)
+    return {key: [name for name in names if name not in removed_names] for key, names in listed if names is not None}
+
+
+def _rewritten_function_calling_config(
+    config: Mapping[str, object], removed_names: frozenset[str], functions_remain: bool
+) -> Mapping[str, object]:
+    kept_names: Final = _kept_allowed_function_names(config, removed_names)
+    had_names: Final = any(_object_list(config.get(key)) for key in _ALLOWED_FUNCTION_NAMES_KEYS)
+    every_listed_name_removed: Final = had_names and not any(kept_names.values())
+    forces_a_function: Final = str(config.get("mode", "")).upper() in _FORCED_FUNCTION_CALLING_MODES
+    if not every_listed_name_removed and (functions_remain or not forces_a_function):
+        return {**config, **kept_names}
+    return {**{key: value for key, value in config.items() if key not in _ALLOWED_FUNCTION_NAMES_KEYS}, "mode": "NONE"}
+
+
+def _rewritten_tool_config_field(
+    key: str, value: object, removed_names: frozenset[str], functions_remain: bool
+) -> object:
+    config: Final = _object_mapping(value)
+    if key not in _FUNCTION_CALLING_CONFIG_KEYS or config is None:
+        return value
+    return _rewritten_function_calling_config(config, removed_names, functions_remain)
+
+
+def _rewritten_tool_config(tool_config: object, removed_names: frozenset[str], functions_remain: bool) -> object:
+    fields: Final = _object_mapping(tool_config)
+    if fields is None:
+        return tool_config
+    return {
+        key: _rewritten_tool_config_field(key, value, removed_names, functions_remain) for key, value in fields.items()
+    }
 
 
 class _ToolPermissionRuleFields(TypedDict, total=False):
@@ -258,7 +583,7 @@ class ToolPermissionGuardrail(CustomGuardrail):
         name_required: Final = rule.tool_name is not None
         type_required: Final = rule.tool_type is not None
 
-        name_matched: Final = self._matches_regex(name_pattern, tool_name) if name_required else True
+        name_matched: Final = self._matches_regex(name_pattern, tool_name or tool_type) if name_required else True
         type_matched: Final = self._matches_regex(type_pattern, tool_type) if type_required else True
 
         overall_match: Final = name_matched and type_matched
@@ -319,6 +644,32 @@ class ToolPermissionGuardrail(CustomGuardrail):
         )
         verbose_proxy_logger.debug(message)
         return is_allowed, None, message
+
+    def _is_name_rule_for(self, rule: ToolPermissionRule, tool_name: str, tool_type: str | None) -> bool:
+        return rule.tool_name is not None and self._rule_matches_tool(rule, tool_name=tool_name, tool_type=tool_type)[0]
+
+    def _first_name_rule(self, tool_name: str, tool_type: str | None) -> ToolPermissionRule | None:
+        return next((rule for rule in self.rules if self._is_name_rule_for(rule, tool_name, tool_type)), None)
+
+    def _deciding_member_name(self, qualified: str, bare: str, tool_type: str | None) -> str:
+        qualified_rule: Final = self._first_name_rule(qualified, tool_type)
+        bare_rule: Final = self._first_name_rule(bare, tool_type)
+        if bare_rule is None or bare_rule is qualified_rule:
+            return qualified
+        if qualified_rule is None or self._is_name_rule_for(qualified_rule, bare, tool_type):
+            return bare
+        if self._is_name_rule_for(bare_rule, qualified, tool_type):
+            return qualified
+        return bare if bare_rule.decision == "deny" else qualified
+
+    def _check_target_permission(
+        self, target: _ToolTarget, bare_names: Mapping[str, str]
+    ) -> tuple[bool, str | None, str | None]:
+        name, tool_type = target
+        bare_name: Final = bare_names.get(name) if name is not None else None
+        if name is None or bare_name is None:
+            return self._check_tool_permission(name, tool_type)
+        return self._check_tool_permission(self._deciding_member_name(name, bare_name, tool_type), tool_type)
 
     def _parse_tool_call_arguments(
         self, tool_call: ChatCompletionMessageToolCall
@@ -619,27 +970,80 @@ class ToolPermissionGuardrail(CustomGuardrail):
         if not any(_is_tool_use_block(block) for block in kept_blocks):
             response["stop_reason"] = "end_turn"  # rebind-ok: dropping every tool_use ends the turn
 
-    def _get_request_tool_name(self, tool: object) -> tuple[str | None, str | None]:
-        tool_type: Final = self._get_mapping_value(tool, "type")
-        if tool_type != "function":
-            return None, tool_type
+    def _unqualified_member_targets(self, member: object) -> tuple[_ToolTarget, ...]:
+        fields: Final = _object_mapping(member)
+        if fields is None:
+            return ()
+        targets: Final = self._get_request_tool_targets(member)
+        own_name: Final = _member_name(member)
+        judged_names: Final = frozenset(name for name, _ in targets)
+        own_target: Final = (
+            ((own_name, _non_empty_string(fields.get("type"))),)
+            if own_name is not None and own_name not in judged_names
+            else ()
+        )
+        return targets + own_target
 
-        function: Final = self._get_mapping_value(tool, "function")
-        tool_name: Final = self._get_mapping_value(function, "name")
-        return tool_name, tool_type
+    def _namespace_member_targets(self, namespace: str | None, member: object) -> tuple[_ToolTarget, ...]:
+        return tuple(_qualified_target(namespace, target) for target in self._unqualified_member_targets(member))
 
-    def _get_legacy_function_name(self, function: object) -> str | None:
-        return self._get_mapping_value(function, "name")
+    def _bare_member_names(self, tool: object) -> tuple[tuple[str, str], ...]:
+        namespace: Final = _member_name(tool)
+        members: Final = _namespace_members(tool)
+        if namespace is None or not members:
+            return ()
+        targets: Final = chain.from_iterable(map(self._unqualified_member_targets, members))
+        return tuple((_qualified_member_name(namespace, name), name) for name, _ in targets if name is not None)
 
-    def _get_named_tool_choice(self, data: dict) -> str | None:
-        tool_choice: Final = data.get("tool_choice")
+    def _get_request_tool_targets(self, tool: object) -> tuple[_ToolTarget, ...]:
+        group: Final = _member_group(tool, self._namespace_member_targets)
+        member_targets: Final = (
+            tuple(chain.from_iterable(map(group.targets_of, group.members))) if group is not None else ()
+        )
+        keyed: Final = _keyed_tool_fields(tool)
+        part_targets: Final = tuple(_part_target(keyed, key) for key in _part_keys(keyed)) if keyed is not None else ()
+        return member_targets + part_targets + self._own_tool_targets(tool)
+
+    def _own_tool_targets(self, tool: object) -> tuple[_ToolTarget, ...]:
+        if _keyed_tool_fields(tool) is not None:
+            return ()
+        named: Final = _namespace_function_targets(tool) if _namespace_members(tool) else self._named_tool_targets(tool)
+        return named + _gemini_hosted_key_targets(tool)
+
+    def _named_tool_targets(self, tool: object) -> tuple[_ToolTarget, ...]:
+        raw_type: Final = self._get_mapping_value(tool, "type")
+        tool_type: Final = raw_type if isinstance(raw_type, str) else None
+        anthropic_custom: Final = (
+            tool_type == "custom"
+            and self._get_mapping_value(tool, "input_schema") is not None
+            and _object_mapping(self._get_mapping_value(tool, "custom")) is None
+        )
+        normalized_type: Final = "function" if tool_type is None or anthropic_custom else tool_type
+        names: Final = _request_tool_names(tool)
+        named_targets: Final = tuple((name, normalized_type) for name in names)
+        if names and all(_name_identifies_tool(name, normalized_type) for name in names):
+            return named_targets
+        if names:
+            return (*named_targets, (None, normalized_type))
+        return ((None, tool_type),) if tool_type is not None else ()
+
+    def _get_named_tool_choice(self, tool_choice: object) -> str | None:
         if not tool_choice or tool_choice in ("auto", "none", "required"):
             return None
         if isinstance(tool_choice, str):
             return tool_choice
-        if self._get_mapping_value(tool_choice, "type") != "function":
+        choice: Final = _object_mapping(tool_choice)
+        if choice is None:
             return None
-        return self._get_mapping_value(self._get_mapping_value(tool_choice, "function"), "name")
+        choice_type: Final = choice.get("type")
+        server_field: Final = _HOSTED_SERVER_NAME_FIELDS.get(str(choice_type))
+        if server_field is not None:
+            return _non_empty_string(choice.get(server_field))
+        if choice_type not in ("tool", "function", "custom"):
+            return None
+        nested: Final = _object_mapping(choice.get(str(choice_type)))
+        nested_name: Final = _non_empty_string(nested.get("name")) if nested is not None else None
+        return nested_name or _non_empty_string(choice.get("name"))
 
     def _get_named_function_call(self, data: dict) -> str | None:
         function_call: Final = data.get("function_call")
@@ -649,82 +1053,229 @@ class ToolPermissionGuardrail(CustomGuardrail):
             return function_call
         return self._get_mapping_value(function_call, "name")
 
-    def _collect_request_tools(self, data: dict) -> list[tuple[str, str | None]]:
-        request_tools: Final[list[tuple[str, str | None]]] = []
+    def _collect_request_tools(self, data: dict) -> list[_ToolTarget]:
+        request_tools: Final[list[_ToolTarget]] = []
+        request: Final = _REQUEST_DATA.validate_python(data)
 
-        for tool in data.get("tools") or []:
-            tool_name, tool_type = self._get_request_tool_name(tool)
-            if tool_name is not None:
-                request_tools.append((tool_name, tool_type))
+        for tool in _request_list(request, "tools") or ():
+            request_tools.extend(self._get_request_tool_targets(tool))
+        for extra_body_tool in _extra_body_tools(request) or ():
+            request_tools.extend(self._get_request_tool_targets(extra_body_tool))
+        request_tools.extend(map(_mcp_server_target, _request_list(request, "mcp_servers") or ()))
 
-        for function in data.get("functions") or []:
-            function_name = self._get_legacy_function_name(function)
-            if function_name is not None:
-                request_tools.append((function_name, "function"))
+        for function in _request_list(request, "functions") or ():
+            request_tools.extend(self._legacy_function_targets(function))
 
+        listed_names: Final = frozenset(name for name, _ in request_tools)
         for forced_tool_name in (
-            self._get_named_tool_choice(data),
+            self._get_named_tool_choice(_REQUEST_DATA.validate_python(data.get("tool_choice"))),
             self._get_named_function_call(data),
         ):
-            if forced_tool_name is not None:
+            if forced_tool_name is not None and forced_tool_name not in listed_names:
                 request_tools.append((forced_tool_name, "function"))
 
-        replayed: Final = map(_function_tool_name, replayed_tool_search_tools(_REQUEST_DATA.validate_python(data)))
+        replayed: Final = map(_function_tool_name, replayed_tool_search_tools(request))
         request_tools.extend((name, "function") for name in replayed if name is not None)
+        for input_tool in _tools_in_items(_input_items(request)):
+            request_tools.extend(self._get_request_tool_targets(input_tool))
 
         return request_tools
+
+    def _legacy_function_targets(self, function: object) -> tuple[_ToolTarget, ...]:
+        targets: Final = self._get_request_tool_targets(function)
+        as_functions: Final = tuple((name, "function") for name, _ in targets if name is not None)
+        return tuple(dict.fromkeys(targets + as_functions))
+
+    def _rewritten_extra_body(
+        self,
+        extra_body: Mapping[str, object],
+        kept_tools: tuple[object, ...] | None,
+        rewrite_choice: Callable[[object], object],
+    ) -> dict[str, object]:
+        choice: Final = extra_body.get("tool_choice")
+        return {
+            **extra_body,
+            **({"tools": list(kept_tools)} if kept_tools is not None else {}),
+            **({"tool_choice": rewrite_choice(choice)} if choice is not None else {}),
+        }
+
+    def _tool_names_in(self, tools: Sequence[object]) -> frozenset[str]:
+        targets: Final = chain.from_iterable(self._get_request_tool_targets(tool) for tool in tools)
+        return frozenset(name for name, _ in targets if name is not None)
+
+    def _kept_tools(
+        self,
+        tool: object,
+        denied_targets: frozenset[_ToolTarget],
+        denied_names: frozenset[str],
+    ) -> tuple[object, ...]:
+        is_denied: Final = partial(_is_denied_target, denied_targets=denied_targets, denied_names=denied_names)
+        group: Final = _member_group(tool, self._namespace_member_targets)
+        keyed: Final = _keyed_tool_fields(tool)
+        fields: Final = _object_mapping(tool)
+        if fields is None or (group is None and keyed is None):
+            return () if any(map(is_denied, self._get_request_tool_targets(tool))) else (tool,)
+        own_targets: Final = self._own_tool_targets(tool)
+        if any(map(is_denied, own_targets)):
+            return ()
+        kept_members: Final = _kept_members(group, is_denied)
+        denied_keys: Final = (
+            frozenset(key for key in _part_keys(keyed) if is_denied(_part_target(keyed, key)))
+            if keyed is not None
+            else frozenset[str]()
+        )
+        if not denied_keys and len(kept_members) == len(group.members if group is not None else ()):
+            return (tool,)
+        emptied_group: Final = frozenset({group.key}) if group is not None and not kept_members else frozenset[str]()
+        dropped_keys: Final = denied_keys | emptied_group
+        kept_fields: Final = {
+            key: list(kept_members) if group is not None and key == group.key else value
+            for key, value in fields.items()
+            if key not in dropped_keys
+        }
+        own_name_left: Final = any(name is not None for name, _ in own_targets)
+        parts_left: Final = bool(kept_members) or own_name_left or (keyed is not None and bool(_part_keys(kept_fields)))
+        return (kept_fields,) if parts_left else ()
+
+    def _kept_tool_list(
+        self,
+        tools: Sequence[object],
+        denied_targets: frozenset[_ToolTarget],
+        denied_names: frozenset[str],
+    ) -> tuple[object, ...]:
+        return tuple(chain.from_iterable(self._kept_tools(tool, denied_targets, denied_names) for tool in tools))
+
+    def _kept_input_items(
+        self,
+        item: object,
+        denied_targets: frozenset[_ToolTarget],
+        denied_names: frozenset[str],
+    ) -> tuple[object, ...]:
+        fields: Final = _object_mapping(item)
+        tools: Final = _input_item_tools(item)
+        if fields is None or tools is None:
+            return (item,)
+        kept: Final = self._kept_tool_list(tools, denied_targets, denied_names)
+        emptied: Final = bool(tools) and not kept and fields.get("type") == ADDITIONAL_TOOLS_INPUT_ITEM_TYPE
+        return () if emptied else ({**fields, "tools": list(kept)},)
+
+    def _tool_types_in(self, tools: Sequence[object]) -> frozenset[str]:
+        targets: Final = chain.from_iterable(self._get_request_tool_targets(tool) for tool in tools)
+        return frozenset(tool_type for _, tool_type in targets if tool_type is not None)
+
+    def _rewritten_tool_choice(
+        self, tool_choice: object, removed_names: frozenset[str], removed_types: frozenset[str], tools_remain: bool
+    ) -> object:
+        named: Final = self._get_named_tool_choice(tool_choice)
+        if named is not None and named in removed_names:
+            return _none_tool_choice(tool_choice)
+        choice: Final = _object_mapping(tool_choice)
+        hosted_type: Final = _non_empty_string(choice.get("type")) if choice is not None else None
+        if hosted_type not in _NAMED_CHOICE_TYPES and hosted_type in removed_types:
+            return _none_tool_choice(tool_choice)
+        allowed: Final = _allowed_tool_entries(choice) if choice is not None else None
+        if choice is not None and allowed is not None:
+            kept: Final = [entry for entry in allowed if not _is_removed_entry(entry, removed_names, removed_types)]
+            return _with_allowed_tool_entries(choice, kept) if kept and tools_remain else _none_tool_choice(choice)
+        if not tools_remain and (named is not None or _requires_a_tool(tool_choice)):
+            return _none_tool_choice(tool_choice)
+        return tool_choice
 
     def _modify_request_with_permission_errors(
         self,
         data: dict,
-        denied_tool_names: list[str],
+        denied_targets: frozenset[_ToolTarget],
     ):
         """
-        Modify the request to replace denied tool_calls blocks with error results
-
-        Args:
-            data: The model request to modify
-            denied_tools: List of (tool_use, error) tuples for denied tools
+        Remove denied tools from the request, and relax any tool_choice that would still require one
         """
-        if not denied_tool_names:
+        if not denied_targets:
             return data
 
-        verbose_proxy_logger.info("Blocking %s unauthorized tool uses", len(denied_tool_names))
+        verbose_proxy_logger.info("Blocking %s unauthorized tool uses", len(denied_targets))
 
-        # Create a mapping of tool_use_id to error result
-        error_tool_names: Final = set()
-        for tool_use in denied_tool_names:
-            error_tool_names.add(tool_use)
+        denied_names: Final = frozenset(name for name, _ in denied_targets if name is not None)
+        is_denied: Final = partial(_is_denied_target, denied_targets=denied_targets, denied_names=denied_names)
+        kept_tool_list: Final = partial(self._kept_tool_list, denied_targets=denied_targets, denied_names=denied_names)
 
-        tools: Final[list[ChatCompletionToolParam] | None] = data.get("tools")
-        if tools is not None:
-            new_tools: Final = []
-            for tool in tools:
-                tool_name, tool_type = self._get_request_tool_name(tool)
-                if tool_type == "function" and tool_name in error_tool_names:
-                    continue
-                new_tools.append(tool)
-            data["tools"] = new_tools
+        request: Final = _REQUEST_DATA.validate_python(data)
+        sent_tools: Final = _sent_tools(request)
 
-        functions: Final = data.get("functions")
-        if functions is not None:
-            data["functions"] = [
-                function for function in functions if self._get_legacy_function_name(function) not in error_tool_names
-            ]
+        tools: Final = _request_list(request, "tools")
+        kept_tools: Final = None if tools is None else kept_tool_list(tools)
+        if kept_tools is not None:
+            data["tools"] = list(kept_tools)  # rebind-ok: rewrite mode edits the request in place
 
-        named_tool_choice: Final = self._get_named_tool_choice(data)
-        if named_tool_choice in error_tool_names:
-            data["tool_choice"] = "none"
+        extra_body: Final = _extra_body(request)
+        extra_body_tools: Final = _extra_body_tools(request)
+        kept_extra_body_tools: Final = None if extra_body_tools is None else kept_tool_list(extra_body_tools)
+
+        functions: Final = _request_list(request, "functions")
+        kept_functions: Final = None if functions is None else kept_tool_list(functions)
+        if kept_functions is not None:
+            data["functions"] = list(kept_functions)  # rebind-ok: rewrite mode edits the request in place
+
+        mcp_servers: Final = _request_list(request, "mcp_servers")
+        kept_mcp_servers: Final = (
+            None
+            if mcp_servers is None
+            else tuple(server for server in mcp_servers if not is_denied(_mcp_server_target(server)))
+        )
+        if kept_mcp_servers is not None:
+            data["mcp_servers"] = list(kept_mcp_servers)  # rebind-ok: rewrite mode edits the request in place
+
+        input_items: Final = _input_items(request)
+        rewrites_input: Final = any(_input_item_tools(item) is not None for item in input_items)
+        kept_input_items: Final = (
+            tuple(
+                chain.from_iterable(self._kept_input_items(item, denied_targets, denied_names) for item in input_items)
+            )
+            if rewrites_input
+            else input_items
+        )
+        if rewrites_input:
+            data["input"] = list(kept_input_items)  # rebind-ok: rewrite mode edits the request in place
+
+        kept_sent_tools: Final = (
+            *(kept_tools or ()),
+            *(kept_functions or ()),
+            *(kept_extra_body_tools or ()),
+            *_tools_in_items(kept_input_items),
+        )
+        removed_names: Final = denied_names | (self._tool_names_in(sent_tools) - self._tool_names_in(kept_sent_tools))
+        kept_types: Final = self._tool_types_in(kept_sent_tools)
+        removed_types: Final = self._tool_types_in(sent_tools) - kept_types
+
+        tools_remain: Final = bool(kept_sent_tools) or bool(kept_mcp_servers)
+        rewrite_choice: Final = partial(
+            self._rewritten_tool_choice,
+            removed_names=removed_names,
+            removed_types=removed_types,
+            tools_remain=tools_remain,
+        )
+        tool_choice: Final = _REQUEST_DATA.validate_python(data.get("tool_choice"))
+        if tool_choice is not None:
+            data["tool_choice"] = rewrite_choice(tool_choice)  # rebind-ok: rewrite mode edits the request in place
+        if extra_body is not None and (kept_extra_body_tools is not None or "tool_choice" in extra_body):
+            data["extra_body"] = self._rewritten_extra_body(  # rebind-ok: rewrite mode edits the request in place
+                extra_body, kept_extra_body_tools, rewrite_choice
+            )
 
         named_function_call: Final = self._get_named_function_call(data)
-        if named_function_call in error_tool_names:
-            data["function_call"] = "none"
+        if named_function_call in removed_names:
+            data["function_call"] = "none"  # rebind-ok: rewrite mode edits the request in place
 
-        messages: Final = without_tool_search_items_loading(
-            _REQUEST_DATA.validate_python(data), frozenset(denied_tool_names)
-        )
+        functions_remain: Final = "function" in kept_types
+        for config_key in (key for key in _TOOL_CONFIG_KEYS if key in data):
+            data[config_key] = _rewritten_tool_config(  # rebind-ok: rewrite mode edits the request in place
+                data[config_key], removed_names, functions_remain
+            )
+
+        messages: Final = without_tool_search_items_loading(_REQUEST_DATA.validate_python(data), denied_names)
         if messages is not None:
-            data["messages"] = messages  # rebind-ok: rewrite mode edits the request in place
+            data["messages"] = [  # rebind-ok: rewrite mode edits the request in place
+                _without_references_in_message(message, removed_names) for message in messages
+            ]
 
         return data
 
@@ -843,25 +1394,28 @@ class ToolPermissionGuardrail(CustomGuardrail):
             )
             return data
 
-        # Check permissions for each tool
-        denied_tool_names: Final = []
-        for tool_name, tool_type in new_tools:
-            is_allowed, _, message = self._check_tool_permission(tool_name, tool_type)
+        bare_names: Final = MappingProxyType(
+            dict(chain.from_iterable(map(self._bare_member_names, _sent_tools(_REQUEST_DATA.validate_python(data)))))
+        )
+        decisions: Final = tuple((target, self._check_target_permission(target, bare_names)) for target in new_tools)
+        denied: Final = tuple(
+            (target, message)
+            for target, (is_allowed, _, message) in decisions
+            if not is_allowed and message is not None
+        )
+        for _, message in denied:
+            verbose_proxy_logger.info("Tool Permission Guardrail: %s", message)
+        if denied and self.on_disallowed_action == "block":
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "Violated guardrail policy",
+                    "detection_message": denied[0][1],
+                },
+            )
 
-            if not is_allowed and message is not None:
-                verbose_proxy_logger.info("Tool Permission Guardrail: %s", message)
-                if self.on_disallowed_action == "block":
-                    raise HTTPException(
-                        status_code=400,
-                        detail={
-                            "error": "Violated guardrail policy",
-                            "detection_message": message,
-                        },
-                    )
-                denied_tool_names.append(tool_name)
-
-        if denied_tool_names:
-            data = self._modify_request_with_permission_errors(data, denied_tool_names)
+        if denied:
+            self._modify_request_with_permission_errors(data, frozenset(target for target, _ in denied))
 
         verbose_proxy_logger.debug("Tool Permission Guardrail Pre-Call Hook: All tools allowed")
 

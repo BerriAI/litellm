@@ -47811,7 +47811,7 @@ export interface components {
             id: string;
             /**
              * Tool Name
-             * @description Regex pattern applied to the tool's function name
+             * @description Regex pattern applied to the tool's name, or to its type when the tool has no name
              */
             tool_name?: string | null;
             /**
