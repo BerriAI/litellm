@@ -2429,7 +2429,9 @@ class ScheduledJobStaggerSettings(LiteLLMPydanticObjectBase):
     )
 
 
-SPEND_LOGS_METADATA_ALWAYS_KEPT_FIELDS: Final = frozenset({"status", "cold_storage_object_key"})
+SPEND_LOGS_METADATA_ALWAYS_KEPT_FIELDS: Final = frozenset(
+    {"status", "cold_storage_object_key", "litellm_previous_response_ids"}
+)
 
 
 def _known_spend_logs_metadata_field(name: str) -> str:
@@ -3771,6 +3773,8 @@ class SpendLogsMetadata(TypedDict):
     requester_ip_address: str | None
     user_agent: ReadOnly[str | None]
     litellm_call_id: str | None
+    litellm_previous_response_ids: ReadOnly[NotRequired[list[str] | None]]
+    """Spend log request ids of the bridged /v1/responses turns this turn continues, root first."""
     applied_guardrails: list[str] | None
     mcp_tool_call_metadata: StandardLoggingMCPToolCall | None
     vector_store_request_metadata: list[StandardLoggingVectorStoreRequest] | None

@@ -22,6 +22,7 @@ import httpx
 import pytest
 
 import litellm
+from litellm.constants import PREVIOUS_RESPONSE_IDS_METADATA_KEY
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.responses.litellm_completion_transformation.handler import (
     LiteLLMCompletionTransformationHandler,
@@ -54,6 +55,28 @@ def test_sync_fallback_tags_skip_responses_api_bridge():
             )
 
     assert captured.get("_skip_responses_api_bridge") is True
+
+
+@pytest.mark.asyncio
+async def test_a_first_turn_stores_an_empty_path_to_the_root_so_a_fork_off_it_replays_only_it():
+    handler = LiteLLMCompletionTransformationHandler()
+    captured: dict = {}
+
+    async def fake_acompletion(**kwargs):
+        captured.update(kwargs)
+        raise _StopForwarding()
+
+    with patch("litellm.acompletion", fake_acompletion), pytest.raises(_StopForwarding):
+        await handler.response_api_handler(
+            model="gpt-4o",
+            input="hello",
+            responses_api_request={},
+            custom_llm_provider="openai",
+            _is_async=True,
+            litellm_metadata={"user_api_key": "hashed"},
+        )
+
+    assert captured["litellm_metadata"] == {"user_api_key": "hashed", PREVIOUS_RESPONSE_IDS_METADATA_KEY: []}
 
 
 @pytest.mark.asyncio

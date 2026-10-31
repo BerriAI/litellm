@@ -42,6 +42,7 @@ from litellm._logging import verbose_logger
 from litellm.caching import InMemoryCache
 from litellm.constants import (
     CALLER_SESSION_ID_METADATA_KEY,
+    PREVIOUS_RESPONSE_IDS_METADATA_KEY,
     REDACTED_BY_LITELLM,
     REDACTED_TOOL_CALL_ARGUMENTS_PLACEHOLDER,
 )
@@ -917,6 +918,9 @@ class ChatCompletionSession(TypedDict, total=False):
     messages: list[SessionMessage]
     litellm_session_id: str | None
     instructions: ReadOnly[str | None]
+    previous_response_ids: ReadOnly[tuple[str, ...]]
+    """Spend log request ids of the replayed turns, root first, stored on the new turn so a follow-up or a fork
+    rebuilds exactly this path instead of the whole session."""
 
 
 ########### End of Initialize Classes used for Responses API  ###########
@@ -924,10 +928,23 @@ class ChatCompletionSession(TypedDict, total=False):
 
 def _chain_session_metadata(chain_session: str, request_kwargs: Mapping[str, object]) -> Mapping[str, object]:
     key: Final = "litellm_metadata" if request_kwargs.get("litellm_metadata") else "metadata"
+    return _with_metadata(key, {CALLER_SESSION_ID_METADATA_KEY: chain_session}, request_kwargs)
+
+
+def previous_response_ids_metadata(
+    previous_response_ids: Sequence[str], request_kwargs: Mapping[str, object]
+) -> Mapping[str, object]:
+    """The proxy's ``litellm_metadata`` carrying the path to the root, so the spend log row of this turn stores it."""
+    return _with_metadata(
+        "litellm_metadata", {PREVIOUS_RESPONSE_IDS_METADATA_KEY: list(previous_response_ids)}, request_kwargs
+    )
+
+
+def _with_metadata(key: str, extra: Mapping[str, object], request_kwargs: Mapping[str, object]) -> Mapping[str, object]:
     metadata: Final = request_kwargs.get(key)
     if not isinstance(metadata, dict):
         return MappingProxyType({})
-    return {key: {**_STR_KEY_DICT_ADAPTER.validate_python(metadata), CALLER_SESSION_ID_METADATA_KEY: chain_session}}
+    return {key: {**_STR_KEY_DICT_ADAPTER.validate_python(metadata), **extra}}
 
 
 class LiteLLMCompletionResponsesConfig:
@@ -1562,7 +1579,13 @@ class LiteLLMCompletionResponsesConfig:
             if chain_session and litellm.request_correlation_in_logs
             else MappingProxyType({})
         )
-        return {**litellm_completion_request, **chain_session_metadata}
+        replayed_path: Final = chat_completion_session.get("previous_response_ids")
+        path_metadata: Final[Mapping[str, object]] = (
+            previous_response_ids_metadata(replayed_path, {**request_kwargs, **chain_session_metadata})
+            if replayed_path is not None
+            else MappingProxyType({})
+        )
+        return {**litellm_completion_request, **chain_session_metadata, **path_metadata}
 
     @staticmethod
     def _transform_response_input_param_to_chat_completion_message(

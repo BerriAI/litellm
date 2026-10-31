@@ -22,6 +22,7 @@ from litellm.responses.litellm_completion_transformation.streaming_iterator impo
 from litellm.responses.litellm_completion_transformation.tool_search import has_client_tool_search
 from litellm.responses.litellm_completion_transformation.transformation import (
     LiteLLMCompletionResponsesConfig,
+    previous_response_ids_metadata,
     with_compaction_items_as_params,
 )
 from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
@@ -225,19 +226,23 @@ class LiteLLMCompletionTransformationHandler:
         **kwargs,
     ) -> ResponsesAPIResponse | BaseResponsesAPIStreamingIterator:
         previous_response_id: Final[str | None] = responses_api_request.get("previous_response_id")
-        if previous_response_id:
-            litellm_completion_request = await LiteLLMCompletionResponsesConfig.async_responses_api_session_handler(
+        request_kwargs: Final = _REQUEST_KWARGS_ADAPTER.validate_python(kwargs)
+        completion_request: Final = (
+            await LiteLLMCompletionResponsesConfig.async_responses_api_session_handler(
                 previous_response_id=previous_response_id,
                 litellm_completion_request=litellm_completion_request,
                 instructions=responses_api_request.get("instructions"),
-                request_kwargs=_REQUEST_KWARGS_ADAPTER.validate_python(kwargs),
+                request_kwargs=request_kwargs,
                 previous_response_client_ids=previous_response_client_ids,
                 stored_turns=stored_turns,
                 input_replaces_history=holds_compaction_summary(with_compaction_items_as_params(request_input)),
             )
+            if previous_response_id
+            else {**litellm_completion_request, **previous_response_ids_metadata((), request_kwargs)}
+        )
 
         litellm_completion_response: Final[ModelResponse | litellm.CustomStreamWrapper] = await litellm.acompletion(
-            **{**kwargs, **litellm_completion_request, "_skip_responses_api_bridge": True},
+            **{**kwargs, **completion_request, "_skip_responses_api_bridge": True},
         )
         if isinstance(litellm_completion_response, ModelResponse):
             responses_api_response: Final[ResponsesAPIResponse] = (
@@ -252,11 +257,11 @@ class LiteLLMCompletionTransformationHandler:
 
         elif isinstance(litellm_completion_response, litellm.CustomStreamWrapper):
             return LiteLLMCompletionStreamingIterator(
-                model=litellm_completion_request.get("model") or "",
+                model=completion_request.get("model") or "",
                 litellm_custom_stream_wrapper=litellm_completion_response,
                 request_input=request_input,
                 responses_api_request=responses_api_request,
-                custom_llm_provider=litellm_completion_request.get("custom_llm_provider"),
+                custom_llm_provider=completion_request.get("custom_llm_provider"),
                 litellm_metadata=kwargs.get("litellm_metadata", {}),
                 tool_call_provider_fields=not embeds_thought_signature_in_tool_call_id(
                     _REQUEST_KWARGS_ADAPTER.validate_python(kwargs)
