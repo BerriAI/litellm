@@ -1690,7 +1690,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 optional_params["responseLogprobs"] = value
             elif param == "top_logprobs":
                 optional_params["logprobs"] = value
-                optional_params["responseLogprobs"] = True
+                optional_params["responseLogprobs"] = True  # rebind-ok: this mapping fills optional_params in place
             elif (param == "tools" or param == "functions") and isinstance(value, list) and value:
                 # Pass optional_params so _map_function can add toolConfig if needed
                 mapped_tools = with_integer_enums_that_fit(
