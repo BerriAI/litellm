@@ -4108,8 +4108,8 @@ def test_translate_anthropic_tool_choice_none():
     assert result == "none"
 
 
-def test_translate_anthropic_to_openai_drops_anthropic_only_params():
-    adapter = LiteLLMAnthropicMessagesAdapter()
+def test_translate_anthropic_to_openai_drops_anthropic_only_params() -> None:
+    adapter: Final = LiteLLMAnthropicMessagesAdapter()
 
     new_kwargs, _ = adapter.translate_anthropic_to_openai(
         {
