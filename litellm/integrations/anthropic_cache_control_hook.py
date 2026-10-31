@@ -32,6 +32,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     tool_call_ids_answered_by_client,
     tool_call_ids_answered_in,
 )
+from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import string_field
 from litellm.llms.anthropic.common_utils import (
     is_claude_code_one_shot_subagent_request,
     supports_anthropic_cache_control,
@@ -128,7 +129,7 @@ def _message_mark_reaches_provider(fields: Mapping[str, object]) -> bool:
         return False
     return (
         not isinstance(fields.get("content"), list)
-        or fields.get("role") in _ROLES_SENDING_MESSAGE_MARK_WITH_LIST_CONTENT
+        or string_field(fields, "role") in _ROLES_SENDING_MESSAGE_MARK_WITH_LIST_CONTENT
     )
 
 

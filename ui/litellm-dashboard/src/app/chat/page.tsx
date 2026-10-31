@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useCallback, useEffect, useRef, useState, useLayoutEffect } from "react";
-import { Plus, ChevronDown, Paperclip, ImageIcon, X } from "lucide-react";
+import { Plus, ChevronDown, Paperclip, ImageIcon, BookOpen, X } from "lucide-react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Button } from "@/components/ui/button";
 import { toast } from "@/lib/toast";
@@ -15,6 +15,7 @@ import type { AssistantMessageUpdate, ChatAttachment, ChatMessage } from "@/comp
 import ChatModelPicker, { isChatModel, modelChatMode, type ChatMode } from "@/components/chat/ChatModelPicker";
 import MoyaiChatComposer from "@/components/chat/moyai/MoyaiChatComposer";
 import MoyaiChatHome from "@/components/chat/moyai/MoyaiChatHome";
+import { useBackgroundChat } from "@/components/chat/useBackgroundChat";
 import { runChatRequest } from "@/components/chat/runChatRequest";
 import { readChatAttachment, MAX_CHAT_ATTACHMENTS, CHAT_ATTACHMENT_ACCEPT } from "@/components/chat/attachmentHelpers";
 import ChatFileChip from "@/components/chat/ChatFileChip";
@@ -23,6 +24,14 @@ import { useQueryState } from "nuqs";
 const LOCALSTORAGE_MODEL_KEY = "litellm_chat_selected_model";
 
 type ReplayMessage = Pick<ChatMessage, "role" | "content" | "attachments" | "generatedImages" | "mcpEvents">;
+
+function getPreviousMessages(
+  override: ReplayMessage[] | undefined,
+  previousResponseId: string | null,
+  conversation: { messages: ReplayMessage[] } | undefined | null,
+): ReplayMessage[] {
+  return override ?? (previousResponseId ? [] : conversation?.messages ?? []);
+}
 
 function hasMessageContent(text: string, images: ChatAttachment[], mode: ChatMode): boolean {
   return Boolean(text.trim()) || (mode === "chat" && images.length > 0);
@@ -90,6 +99,7 @@ export default function ChatConversationPage() {
   const [selectedModel, setSelectedModel] = useState<string | null>(null);
   const [models, setModels] = useState<ModelGroup[]>([]);
   const [mode, setMode] = useState<ChatMode>("chat");
+  const [research, setResearch] = useState(false);
   const [attachments, setAttachments] = useState<ChatAttachment[]>([]);
   const [attachmentError, setAttachmentError] = useState<string | null>(null);
   const [isReadingAttachments, setIsReadingAttachments] = useState(false);
@@ -102,7 +112,38 @@ export default function ChatConversationPage() {
   const responsesSessionGenerationRef = useRef(0);
   const previousResponsesConversationRef = useRef(activeConversationId);
   const [prevConversationIdForSessionReset, setPrevConversationIdForSessionReset] = useState(activeConversationId);
-  const [isStreaming, setIsStreaming] = useState(false);
+  const [isRequestInFlight, setIsStreaming] = useState(false);
+  const [cancelOnAcceptance, setCancelOnAcceptance] = useState<string | null>(null);
+  const backgroundRequestRef = useRef(false);
+  const lastMessage = activeConversation?.messages.at(-1);
+  const background = useBackgroundChat(
+    activeConversationId,
+    lastMessage?.backgroundRun,
+    accessToken,
+    updateLastAssistantMessage,
+  );
+  const { pending: backgroundPending, cancelling: backgroundCancelling, cancel: cancelBackground } = background;
+  useEffect(() => {
+    if (!backgroundPending || backgroundCancelling || !activeConversationId) return;
+    if (cancelOnAcceptance !== activeConversationId) return;
+    void cancelBackground().then(() => {
+      setCancelOnAcceptance((current) => (current === activeConversationId ? null : current));
+    });
+  }, [activeConversationId, backgroundPending, backgroundCancelling, cancelBackground, cancelOnAcceptance]);
+
+  const isStreaming = isRequestInFlight || background.pending;
+  const supportsBackground = models.some(
+    (model) => model.model_group === selectedModel && model.supports_background_chat,
+  );
+  const useBackground = mode === "chat" && supportsBackground && !storageUnavailable;
+  const canResearch =
+    useBackground &&
+    models.some(
+      (model) => model.model_group === selectedModel && model.supports_web_search && model.supports_reasoning,
+    );
+  let researchUnavailableReason = "Choose a reasoning model with web search.";
+  if (!useBackground) researchUnavailableReason = "Enable background chats in Admin Settings to use deep research.";
+  if (storageUnavailable) researchUnavailableReason = "Allow chat history storage to use deep research.";
   const [inputText, setInputText] = useState("");
   const [mcpPopoverOpen, setMcpPopoverOpen] = useState(false);
   const [storageBannerDismissed, setStorageBannerDismissed] = useState(false);
@@ -178,6 +219,7 @@ export default function ChatConversationPage() {
         return;
       }
       responsesSessionGenerationRef.current += 1;
+      setResearch(false);
       setSelectedModel(model.model_group);
       setMode(modelChatMode(model));
       setResponsesSessionId(null);
@@ -229,16 +271,28 @@ export default function ChatConversationPage() {
   );
 
   const handleSend = useCallback(
-    async (
-      text: string,
-      historyOverride?: ReplayMessage[],
-      attachmentOverride?: ChatAttachment[],
-      generationModel?: string,
-    ) => {
+    async ({
+      text,
+      historyOverride,
+      attachmentOverride,
+      generationModel,
+      research: researchRequested,
+    }: {
+      text: string;
+      historyOverride?: ReplayMessage[];
+      attachmentOverride?: ChatAttachment[];
+      generationModel?: string;
+      research: boolean;
+    }) => {
       const trimmed = text.trim();
       const images = attachmentOverride ?? attachments;
       const requestMode = generationModel ? "image" : mode;
       const model = generationModel ?? selectedModel;
+      const doResearch = requestMode === "chat" && researchRequested;
+      if (doResearch && !canResearch) {
+        setAttachmentError("Deep research needs a reasoning model with web search and background chats enabled.");
+        return;
+      }
       if (!hasMessageContent(trimmed, images, requestMode) || !model) return;
       if (isStreaming || abortControllerRef.current || readAttachmentsRef.current) return;
       const sessionGeneration = responsesSessionGenerationRef.current;
@@ -257,13 +311,16 @@ export default function ChatConversationPage() {
         content: trimmed,
         attachments: images.length > 0 ? images : undefined,
         imageGeneration,
+        research: doResearch,
       };
       appendMessage(convId, userMessage);
-      appendMessage(convId, { role: "assistant", content: "", imageGeneration });
+      const assistantMessage = { role: "assistant" as const, content: "", imageGeneration, research: doResearch };
+      appendMessage(convId, assistantMessage);
       setAttachments([]);
       setAttachmentError(null);
 
       setIsStreaming(true);
+      setCancelOnAcceptance(null);
       abortControllerRef.current = new AbortController();
       requestConversationRef.current = convId;
 
@@ -284,7 +341,7 @@ export default function ChatConversationPage() {
       const previousResponseId = historyOverride ? null : responsesSessionId;
 
       const history: ReplayMessage[] = [
-        ...(historyOverride ?? (previousResponseId ? [] : activeConversation?.messages ?? [])),
+        ...getPreviousMessages(historyOverride, previousResponseId, activeConversation),
         userMessage,
       ];
       const requestController = abortControllerRef.current;
@@ -297,12 +354,15 @@ export default function ChatConversationPage() {
         signal: requestController.signal,
         messages: history,
         previousResponseId,
+        background: requestMode === "chat" && useBackground,
+        research: doResearch,
         mcpServers: selectedMCPServers,
         onResponseId: (id: string | null) => {
           if (responsesSessionGenerationRef.current === sessionGeneration) setResponsesSessionId(id);
         },
         onUpdate: (updates: AssistantMessageUpdate) => updateLastAssistantMessage(convId, updates),
       };
+      backgroundRequestRef.current = request.background;
       try {
         await runChatRequest(request);
       } finally {
@@ -318,6 +378,7 @@ export default function ChatConversationPage() {
       activeConversation,
       selectedModel,
       selectedMCPServers,
+      canResearch,
       mode,
       attachments,
       accessToken,
@@ -326,13 +387,22 @@ export default function ChatConversationPage() {
       updateLastAssistantMessage,
       isStreaming,
       responsesSessionId,
+      useBackground,
       setConversationIdInUrl,
     ],
   );
 
-  const handleStop = useCallback(() => {
+  const handleStop = () => {
+    if (background.pending) {
+      void background.cancel();
+      return;
+    }
+    if (backgroundRequestRef.current) {
+      setCancelOnAcceptance(activeConversationId);
+      return;
+    }
     abortControllerRef.current?.abort();
-  }, []);
+  };
 
   const handleEditAndResend = useCallback(
     (messageId: string, newContent: string) => {
@@ -349,11 +419,31 @@ export default function ChatConversationPage() {
         return;
       }
       if (!newContent.trim() && !original.attachments?.length) return;
+      if (original.research && !canResearch) {
+        setAttachmentError("Choose a reasoning model with web search and background chats before resending research.");
+        return;
+      }
       const priorMessages = msgs.slice(0, idx);
       truncateFromMessage(activeConversationId, messageId);
-      handleSend(newContent, priorMessages, original.attachments ?? [], original.imageGeneration?.model);
+      const editedRequest = {
+        text: newContent,
+        historyOverride: priorMessages,
+        attachmentOverride: original.attachments ?? [],
+        generationModel: original.imageGeneration?.model,
+        research: original.research ?? false,
+      };
+      handleSend(editedRequest);
     },
-    [activeConversationId, isStreaming, activeConversation, truncateFromMessage, handleSend, mode, selectedModel],
+    [
+      activeConversationId,
+      isStreaming,
+      activeConversation,
+      truncateFromMessage,
+      handleSend,
+      mode,
+      selectedModel,
+      canResearch,
+    ],
   );
 
   // Track scroll position to show/hide scroll-to-bottom button
@@ -403,9 +493,25 @@ export default function ChatConversationPage() {
 
   const showBlankState = !activeConversation || activeConversation.messages.length === 0;
 
+  const backgroundHint = () => {
+    if (background.cancelling || (isRequestInFlight && cancelOnAcceptance === activeConversationId))
+      return "Requesting cancellation…";
+    if (background.pending && storageUnavailable)
+      return "Keep this tab open. This run could not be saved in this browser.";
+    if (background.pending) return "Running in the background. You can close this tab and return to this chat.";
+    if (useBackground) return null;
+    return "Keep this tab open. Background runs are not available for this chat.";
+  };
+
   const inputBar = (inConversation: boolean) => {
+    const hint = mode === "chat" || background.pending ? backgroundHint() : null;
+    const chatPlaceholder = inConversation
+      ? "Send a message..."
+      : "Describe a change, paste an error, or ask a question…";
     const preparing = isLoadingModels || isReadingAttachments;
-    const submitDisabled = !hasMessageContent(inputText, attachments, mode) || !selectedModel || preparing;
+    const researchBlocked = research && !canResearch;
+    const submitDisabled =
+      !hasMessageContent(inputText, attachments, mode) || !selectedModel || preparing || researchBlocked;
     return (
       <div
         onDragOver={(event) => {
@@ -422,15 +528,9 @@ export default function ChatConversationPage() {
           inConversation={inConversation}
           value={inputText}
           onChange={setInputText}
-          onSubmit={() => void handleSend(inputText)}
+          onSubmit={() => void handleSend({ text: inputText, research })}
           onCancel={handleStop}
-          placeholder={
-            mode === "image"
-              ? "Describe the image you want to create…"
-              : inConversation
-                ? "Send a message..."
-                : "Describe a change, paste an error, or ask a question…"
-          }
+          placeholder={mode === "image" ? "Describe the image you want to create…" : chatPlaceholder}
           isLoading={isStreaming}
           submitLabel={mode === "image" ? "Generate image" : "Send"}
           submitDisabled={submitDisabled}
@@ -500,6 +600,25 @@ export default function ChatConversationPage() {
                     }
                   />
                   <PopoverContent side="top" align="start" className="p-0 w-auto">
+                    <div className="border-b p-2">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="w-full justify-start"
+                        aria-pressed={research}
+                        disabled={!canResearch}
+                        onClick={() => {
+                          setResearch(!research);
+                          setMcpPopoverOpen(false);
+                        }}
+                      >
+                        <BookOpen className="size-4" />
+                        Deep research
+                      </Button>
+                      {!canResearch && (
+                        <p className="max-w-64 px-2 pb-1 text-xs text-muted-foreground">{researchUnavailableReason}</p>
+                      )}
+                    </div>
                     <MCPConnectPicker
                       accessToken={accessToken}
                       selectedServers={selectedMCPServers}
@@ -507,6 +626,19 @@ export default function ChatConversationPage() {
                     />
                   </PopoverContent>
                 </Popover>
+                {research && (
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    disabled={isStreaming}
+                    aria-label="Turn off deep research"
+                    onClick={() => setResearch(false)}
+                  >
+                    <BookOpen className="size-3.5" />
+                    Deep research
+                    <X className="size-3.5" />
+                  </Button>
+                )}
               </>
             ) : (
               <span className="flex items-center gap-2 text-xs text-muted-foreground">
@@ -534,6 +666,29 @@ export default function ChatConversationPage() {
             {mode === "image"
               ? "No image-generation models are available. Ask your admin to add one to Model Hub."
               : "No chat models are available for your account."}
+          </p>
+        )}
+        {background.connectionError && (
+          <div role="alert" className="mt-2 flex items-center gap-2 text-sm text-destructive">
+            <span>{background.connectionError}</span>
+            <Button variant="ghost" size="sm" onClick={background.reconnect}>
+              Reconnect
+            </Button>
+          </div>
+        )}
+        {lastMessage?.backgroundError && (
+          <p role="alert" className="mt-2 text-sm text-destructive">
+            {lastMessage.backgroundError}
+          </p>
+        )}
+        {lastMessage?.backgroundRun?.status === "cancelled" && (
+          <p role="status" className="mt-2 text-xs text-muted-foreground">
+            Cancellation requested
+          </p>
+        )}
+        {hint && (
+          <p role="status" className="mt-2 text-xs text-muted-foreground">
+            {hint}
           </p>
         )}
         <p className="moyai-chat-home-composer-hint">

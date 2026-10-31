@@ -64,7 +64,7 @@ vi.mock("@/contexts/ChatShellContext", () => ({
   },
 }));
 
-const ONE_TURN_ARG_COUNT = 25;
+const ONE_TURN_ARG_COUNT = 29;
 const ON_TIMING_DATA_INDEX = 7;
 const ON_USAGE_DATA_INDEX = 8;
 const ON_TOTAL_LATENCY_INDEX = 24;
