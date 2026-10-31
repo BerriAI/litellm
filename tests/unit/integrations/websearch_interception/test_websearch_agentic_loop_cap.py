@@ -12,6 +12,7 @@ config.yaml through to the settings the loop actually reads.
 """
 
 import json
+import time
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -24,6 +25,7 @@ from litellm.integrations.websearch_interception.handler import (
     WebSearchInterceptionLogger,
 )
 from litellm.integrations.websearch_interception.tools import get_litellm_web_search_tool
+from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.agentic_loop_settings import DEFAULT_MAX_AGENTIC_LOOPS
 from litellm.llms.anthropic.messages.native.fake_stream_iterator import (
     FakeAnthropicMessagesStreamIterator,
@@ -31,6 +33,7 @@ from litellm.llms.anthropic.messages.native.fake_stream_iterator import (
 from litellm.llms.base_llm.search.transformation import SearchResponse, SearchResult
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.secret_managers.main import get_secret
+from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.types.integrations.custom_logger import (
     AgenticLoopPlan,
     AgenticLoopRequestPatch,
@@ -38,6 +41,7 @@ from litellm.types.integrations.custom_logger import (
 )
 
 INTERNAL_TOOL_NAME = "litellm_web_search"
+CODE_EXECUTION_TOOL_NAME = "litellm_code_execution"
 
 
 @pytest.fixture(autouse=True)
@@ -99,6 +103,29 @@ def _tool_use_names(response: dict) -> list[str]:
     return [block.get("name") for block in response["content"] if block.get("type") == "tool_use"]
 
 
+def _responses_turn(*function_calls: tuple[str, str]) -> ResponsesAPIResponse:
+    return ResponsesAPIResponse(
+        id="resp_1",
+        created_at=0,
+        status="completed",
+        model="claude-sonnet-4-5",
+        object="response",
+        output=[
+            {
+                "type": "message",
+                "id": "msg_1",
+                "status": "completed",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "Let me check one more source.", "annotations": []}],
+            },
+            *(
+                {"type": "function_call", "id": f"fc_{call_id}", "call_id": call_id, "name": name, "arguments": "{}"}
+                for call_id, name in function_calls
+            ),
+        ],
+    )
+
+
 class _InterceptingCallback(CustomLogger):
     """
     Stands in for the websearch interceptor: asks for another loop whenever the
@@ -152,12 +179,44 @@ class _InterceptingCallback(CustomLogger):
         return response
 
 
-def _logging_obj(callback: CustomLogger, converted_stream: bool = False) -> MagicMock:
+class _ResponsesInterceptingCallback(_InterceptingCallback):
+    async def async_should_run_agentic_loop(
+        self, response, model, messages, tools, stream, custom_llm_provider, kwargs
+    ):
+        calls = [
+            {"id": item.call_id, "call_id": item.call_id, "name": item.name}
+            for item in response.output
+            if item.type == "function_call" and item.name == INTERNAL_TOOL_NAME
+        ]
+        return bool(calls), {"tool_calls": calls}
+
+
+def _logging_obj(*callbacks: CustomLogger, converted_stream: bool = False) -> MagicMock:
     logging_obj = MagicMock()
     logging_obj.model_call_details = {"websearch_interception_converted_stream": converted_stream}
-    logging_obj.dynamic_success_callbacks = [callback]
+    logging_obj.dynamic_success_callbacks = list(callbacks)
     logging_obj.litellm_call_id = "call-abc"
     return logging_obj
+
+
+class _CodeExecutionGate(CustomLogger):
+    async def async_should_run_agentic_loop(
+        self, response, model, messages, tools, stream, custom_llm_provider, kwargs
+    ):
+        calls = (
+            [
+                {"id": block["id"], "name": block["name"]}
+                for block in response["content"]
+                if block.get("type") == "tool_use" and block.get("name") == CODE_EXECUTION_TOOL_NAME
+            ]
+            if isinstance(response, dict)
+            else [
+                {"call_id": item.call_id, "name": item.name}
+                for item in response.output
+                if item.type == "function_call" and item.name == CODE_EXECUTION_TOOL_NAME
+            ]
+        )
+        return bool(calls), {"tool_calls": calls}
 
 
 async def _run_hooks(
@@ -314,6 +373,48 @@ class TestCappedLoopReturnsTerminalResponse:
         assert _tool_use_names(result) == ["get_weather"]
         assert result["stop_reason"] == "tool_use"
 
+    @pytest.mark.asyncio
+    async def test_every_hooks_internal_call_is_dropped_and_the_clients_survives(self):
+        response = _response_asking_for_another_search()
+        response["content"] += [
+            {"id": "toolu_code_1", "type": "tool_use", "name": CODE_EXECUTION_TOOL_NAME, "input": {}},
+            {"id": "toolu_client_1", "type": "tool_use", "name": "get_weather", "input": {}},
+        ]
+
+        result = await self.handler._call_agentic_completion_hooks(
+            response=response,
+            model="claude-sonnet-4-5",
+            messages=[{"role": "user", "content": "who won the world cup"}],
+            anthropic_messages_provider_config=MagicMock(),
+            anthropic_messages_optional_request_params={},
+            logging_obj=_logging_obj(self.callback, _CodeExecutionGate()),
+            stream=False,
+            custom_llm_provider="anthropic",
+            kwargs={"_agentic_loop_depth": 3, "max_agentic_loops": 3},
+        )
+
+        assert _tool_use_names(result) == ["get_weather"]
+        assert self.callback.plan_calls == 0
+
+    @pytest.mark.asyncio
+    async def test_responses_surface_drops_every_hooks_internal_call_and_keeps_the_clients(self):
+        result = await self.handler._call_agentic_completion_hooks(
+            response=_responses_turn(
+                ("call_search", INTERNAL_TOOL_NAME), ("call_code", CODE_EXECUTION_TOOL_NAME), ("call_client", "lookup")
+            ),
+            model="claude-sonnet-4-5",
+            messages=[{"role": "user", "content": "who won the world cup"}],
+            anthropic_messages_provider_config=MagicMock(),
+            anthropic_messages_optional_request_params={},
+            logging_obj=_logging_obj(_ResponsesInterceptingCallback(), _CodeExecutionGate()),
+            stream=False,
+            custom_llm_provider="anthropic",
+            kwargs={"_agentic_loop_depth": 3, "max_agentic_loops": 3},
+            api_surface="responses",
+        )
+
+        assert [getattr(item, "call_id", None) for item in result.output] == [None, "call_client"]
+
     def test_only_the_refused_tool_calls_are_dropped(self):
         """
         A block is matched on the id the rail refused, not on the tool name, so a
@@ -347,6 +448,18 @@ class TestCappedLoopReturnsTerminalResponse:
         assert _tool_use_names(result) == []
         assert result["stop_reason"] == "end_turn"
 
+    def test_a_name_only_refusal_keeps_the_native_search_blocks_sharing_that_name(self):
+        response = _response_asking_for_another_search()
+        response["content"][-1] = {"type": "tool_use", "name": "web_search", "input": {}}
+
+        result = BaseLLMHTTPHandler._finalize_refused_agentic_response(
+            response=response,
+            tool_calls={"tool_calls": [{"name": "web_search", "input": {}}]},
+        )
+
+        assert _block_types(result) == ["server_tool_use", "web_search_tool_result", "text"]
+        assert result["stop_reason"] == "end_turn"
+
     @pytest.mark.asyncio
     async def test_streaming_caller_is_left_to_its_existing_behavior(self):
         """
@@ -365,19 +478,34 @@ class TestCappedLoopReturnsTerminalResponse:
         assert self.callback.plan_calls == 0
 
     @pytest.mark.asyncio
-    async def test_responses_surface_is_left_to_its_existing_behavior(self):
-        """
-        The responses surface carries a pydantic model rather than the anthropic
-        dict this finalizer rewrites, so it keeps raising instead of being handed
-        a response that was never actually finalized.
-        """
-        with pytest.raises(AgenticLoopSafetyError):
-            await _run_hooks(
-                self.handler,
-                self.callback,
-                kwargs={"_agentic_loop_depth": 3, "max_agentic_loops": 3},
-                api_surface="responses",
-            )
+    async def test_responses_surface_drops_the_refused_function_call_and_keeps_the_answer(self):
+        response = _responses_turn(("call_search", INTERNAL_TOOL_NAME), ("call_client", "lookup"))
+        callback = _ResponsesInterceptingCallback()
+
+        result = await _run_hooks(
+            self.handler,
+            callback,
+            kwargs={"_agentic_loop_depth": 3, "max_agentic_loops": 3},
+            response=response,
+            api_surface="responses",
+        )
+
+        assert isinstance(result, ResponsesAPIResponse)
+        assert [(item.type, getattr(item, "name", None)) for item in result.output] == [
+            ("message", None),
+            ("function_call", "lookup"),
+        ]
+        assert callback.plan_calls == 0
+
+    def test_responses_refusal_by_call_id_alone_keeps_the_calls_it_did_not_list(self):
+        response = _responses_turn(("call_search", INTERNAL_TOOL_NAME), ("call_unlisted", INTERNAL_TOOL_NAME))
+
+        result = BaseLLMHTTPHandler._finalize_refused_agentic_response(
+            response=response,
+            tool_calls={"tool_calls": [{"call_id": "call_search", "name": INTERNAL_TOOL_NAME}]},
+        )
+
+        assert [getattr(item, "call_id", None) for item in result.output] == [None, "call_unlisted"]
 
     @pytest.mark.asyncio
     async def test_non_dict_response_is_returned_untouched(self):
@@ -507,6 +635,133 @@ def _response_asking_for_searches(*queries: str) -> dict:
         "stop_reason": "tool_use",
         "usage": {"input_tokens": 10, "output_tokens": 5},
     }
+
+
+def _request_logging_obj(call_type: str, *callbacks: CustomLogger) -> Logging:
+    logging_obj = Logging(
+        model="claude-sonnet-4-5",
+        messages=[{"role": "user", "content": "who won the world cup"}],
+        stream=False,
+        call_type=call_type,
+        start_time=time.time(),
+        litellm_call_id="call-abc",
+        function_id="f",
+        dynamic_success_callbacks=list(callbacks),
+    )
+    logging_obj.update_environment_variables(
+        model="claude-sonnet-4-5", user="", optional_params={}, litellm_params={}, custom_llm_provider="anthropic"
+    )
+    return logging_obj
+
+
+def _assert_first_call_billed(logging_obj: Logging, *, input_tokens: int, output_tokens: int) -> None:
+    price = litellm.model_cost["claude-sonnet-4-5"]
+    assert logging_obj.model_call_details["combined_usage_object"].total_tokens == input_tokens + output_tokens
+    assert logging_obj.model_call_details["response_cost"] == pytest.approx(
+        input_tokens * price["input_cost_per_token"] + output_tokens * price["output_cost_per_token"]
+    )
+
+
+class TestFailedFollowUpCallReachesTheClient:
+    def setup_method(self):
+        self.handler = BaseLLMHTTPHandler()
+        self.logger = WebSearchInterceptionLogger(enabled_providers=["anthropic"])
+
+    @staticmethod
+    async def _rate_limited_follow_up(**call_kwargs):
+        raise RateLimitError(
+            "UserByModelByMinuteUncachedInputTokens", llm_provider="anthropic", model="claude-sonnet-4-5"
+        )
+
+    @staticmethod
+    async def _search(query, kwargs=None, rich=None):
+        found = SearchResult(title="Result", url="https://example.com", snippet="A result.", date=None)
+        return ("Title: Result\nURL: https://example.com", SearchResponse(results=[found]))
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("converted_stream", (False, True), ids=("non_streaming", "streaming_client"))
+    async def test_follow_up_rate_limit_is_raised_to_the_caller(self, monkeypatch, converted_stream):
+        monkeypatch.setattr("litellm.anthropic_interface.messages.acreate", self._rate_limited_follow_up)
+
+        with (
+            patch.object(self.logger, "_execute_search", side_effect=self._search),
+            pytest.raises(RateLimitError, match="UserByModelByMinuteUncachedInputTokens"),
+        ):
+            await self.handler._call_agentic_completion_hooks(
+                response=_response_asking_for_searches("who won the world cup"),
+                model="claude-sonnet-4-5",
+                messages=[{"role": "user", "content": "who won the world cup"}],
+                anthropic_messages_provider_config=MagicMock(),
+                anthropic_messages_optional_request_params={"tools": [get_litellm_web_search_tool()]},
+                logging_obj=_logging_obj(self.logger, converted_stream=converted_stream),
+                stream=False,
+                custom_llm_provider="anthropic",
+                kwargs={"_agentic_loop_depth": 0, "max_agentic_loops": 3, WEBSEARCH_EMIT_NATIVE_BLOCKS_KEY: True},
+            )
+
+    @pytest.mark.asyncio
+    async def test_follow_up_rate_limit_bills_the_first_call_on_the_failure_log(self, monkeypatch):
+        monkeypatch.setattr("litellm.anthropic_interface.messages.acreate", self._rate_limited_follow_up)
+        logging_obj = _request_logging_obj("anthropic_messages", self.logger)
+
+        with (
+            patch.object(self.logger, "_execute_search", side_effect=self._search),
+            pytest.raises(RateLimitError),
+        ):
+            await self.handler._call_agentic_completion_hooks(
+                response=_response_asking_for_searches("who won the world cup"),
+                model="claude-sonnet-4-5",
+                messages=[{"role": "user", "content": "who won the world cup"}],
+                anthropic_messages_provider_config=MagicMock(),
+                anthropic_messages_optional_request_params={"tools": [get_litellm_web_search_tool()]},
+                logging_obj=logging_obj,
+                stream=False,
+                custom_llm_provider="anthropic",
+                kwargs={"_agentic_loop_depth": 0, "max_agentic_loops": 3, WEBSEARCH_EMIT_NATIVE_BLOCKS_KEY: True},
+            )
+
+        _assert_first_call_billed(logging_obj, input_tokens=10, output_tokens=5)
+
+    @pytest.mark.asyncio
+    async def test_responses_follow_up_rate_limit_bills_the_first_call_on_the_failure_log(self, monkeypatch):
+        monkeypatch.setattr(litellm, "aresponses", self._rate_limited_follow_up)
+        callback = _ResponsesInterceptingCallback()
+        logging_obj = _request_logging_obj("aresponses", callback)
+        first_call = _responses_turn(("call_search", INTERNAL_TOOL_NAME)).model_copy(
+            update={"usage": {"input_tokens": 13, "output_tokens": 6, "total_tokens": 19}}
+        )
+
+        with pytest.raises(RateLimitError):
+            await self.handler._call_agentic_completion_hooks(
+                response=first_call,
+                model="claude-sonnet-4-5",
+                messages=[{"role": "user", "content": "who won the world cup"}],
+                anthropic_messages_provider_config=MagicMock(),
+                anthropic_messages_optional_request_params={},
+                logging_obj=logging_obj,
+                stream=False,
+                custom_llm_provider="anthropic",
+                kwargs={"_agentic_loop_depth": 0, "max_agentic_loops": 3},
+                api_surface="responses",
+            )
+
+        _assert_first_call_billed(logging_obj, input_tokens=13, output_tokens=6)
+
+    @pytest.mark.asyncio
+    async def test_responses_follow_up_rate_limit_is_raised_to_the_caller(self, monkeypatch):
+        monkeypatch.setattr(litellm, "aresponses", self._rate_limited_follow_up)
+        callback = _ResponsesInterceptingCallback()
+
+        with pytest.raises(RateLimitError, match="UserByModelByMinuteUncachedInputTokens"):
+            await _run_hooks(
+                self.handler,
+                callback,
+                kwargs={"_agentic_loop_depth": 0, "max_agentic_loops": 3},
+                response=_responses_turn(("call_search", INTERNAL_TOOL_NAME)),
+                api_surface="responses",
+            )
+
+        assert callback.plan_calls == 1
 
 
 class TestFailedSearchEndsTheTurn:

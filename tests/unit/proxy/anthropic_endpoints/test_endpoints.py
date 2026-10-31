@@ -2,6 +2,7 @@
 Test for anthropic_endpoints/endpoints.py, focusing on handling dictionary objects in streaming responses
 """
 
+import datetime
 import json
 import logging
 import unittest
@@ -246,6 +247,86 @@ class TestBlockedResponseUsage:
         assert fastapi_response.headers["x-litellm-call-id"] == _BLOCK_CALL_ID
         assert isinstance(response, Mapping)
         assert response["content"] == [{"type": "text", "text": _BLOCK_TEXT}]
+
+
+class TestAnthropicResponseReportsWhatAFailedAgenticFollowUpBills:
+    async def _error_response_cost(self, raise_the_follow_up_error: bool) -> float:
+        import litellm
+        import litellm.proxy.anthropic_endpoints.endpoints as ep
+        import litellm.proxy.proxy_server as proxy_server
+        from litellm.litellm_core_utils.chat_completion_agentic_loop import bill_first_round_on_failure
+        from litellm.proxy.proxy_server import ProxyConfig
+        from litellm.proxy.utils import ProxyLogging
+        from litellm.types.utils import ModelResponse, Usage
+
+        proxy_logging: Final = ProxyLogging(user_api_key_cache=DualCache())
+        proxy_logging.alert_types = []
+        follow_up_error: Final = litellm.RateLimitError(message="rate limited", llm_provider="openai", model="gpt-4o")
+
+        async def failing_follow_up() -> ModelResponse:
+            raise follow_up_error
+
+        async def fail_after_the_first_call(self: ProxyBaseLLMRequestProcessing, **kwargs: object) -> None:
+            _, logging_obj = await self.common_processing_pre_call_logic(
+                request=kwargs["request"],
+                general_settings={},
+                user_api_key_dict=kwargs["user_api_key_dict"],
+                proxy_logging_obj=proxy_logging,
+                proxy_config=MagicMock(spec=ProxyConfig),
+                route_type="anthropic_messages",
+            )
+            logging_obj.model_call_details.update(first_api_call_start_time=datetime.datetime.now())
+            with pytest.raises(litellm.RateLimitError):
+                await bill_first_round_on_failure(
+                    failing_follow_up(),
+                    logging_obj=logging_obj,
+                    response=ModelResponse(
+                        model="gpt-4o", usage=Usage(prompt_tokens=559, completion_tokens=113, total_tokens=672)
+                    ),
+                    stream=False,
+                )
+            raise (
+                follow_up_error
+                if raise_the_follow_up_error
+                else litellm.RateLimitError(message="rate limited", llm_provider="openai", model="gpt-4o")
+            )
+
+        request: Final = MagicMock(spec=Request)
+        request.headers = {}
+        with (
+            patch.object(
+                ep,
+                "read_request_body",
+                new=AsyncMock(
+                    return_value={
+                        "model": "gpt-4o",
+                        "max_tokens": 64,
+                        "messages": [{"role": "user", "content": "what is 6*7?"}],
+                    }
+                ),
+            ),
+            patch.object(ep.ProxyBaseLLMRequestProcessing, "base_process_llm_request", new=fail_after_the_first_call),
+            patch.object(proxy_server, "proxy_logging_obj", proxy_logging),
+        ):
+            response: Final = await ep.anthropic_response(
+                fastapi_response=Response(),
+                request=request,
+                user_api_key_dict=UserAPIKeyAuth(request_route="/v1/messages"),
+            )
+
+        assert response.status_code == 429
+        return float(response.headers["x-litellm-response-cost"])
+
+    @pytest.mark.asyncio
+    async def test_the_error_response_reports_the_served_first_call_its_failure_row_bills(self) -> None:
+        import litellm
+
+        price: Final = litellm.model_cost["gpt-4o"]
+
+        assert await self._error_response_cost(raise_the_follow_up_error=True) == pytest.approx(
+            559 * price["input_cost_per_token"] + 113 * price["output_cost_per_token"]
+        )
+        assert await self._error_response_cost(raise_the_follow_up_error=False) == 0
 
 
 class TestProxyExceptionAnthropicEnvelope:

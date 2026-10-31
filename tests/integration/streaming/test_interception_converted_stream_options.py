@@ -216,10 +216,17 @@ def scenario(rig: _Rig) -> Iterator[Scenario]:
         yield opened
 
 
-def _deploy(rig: _Rig, scenario: Scenario, mode: iv.Mode, *, api_key: str = iv.AZURE_KEY) -> _Deployment:
+def _deploy(
+    rig: _Rig,
+    scenario: Scenario,
+    mode: iv.Mode,
+    *,
+    api_key: str = iv.AZURE_KEY,
+    pricing: Mapping[str, JsonValue] = MappingProxyType({}),
+) -> _Deployment:
     name: Final = iv.deployment(mode)
     model: Final = scenario.model(
-        model=f"azure/{name}", api_base=rig.wire.url, api_key=api_key, api_version=iv.API_VERSION
+        model=f"azure/{name}", api_base=rig.wire.url, api_key=api_key, api_version=iv.API_VERSION, **pricing
     )
     return _Deployment(model, name)
 
@@ -754,58 +761,34 @@ def test_wrong_azure_key_surfaces_azures_401(rig: _Rig, scenario: Scenario) -> N
     assert len(_upstream(rig, deployment).model_calls) == 1
 
 
-def _tool_call(call: Mapping[str, JsonValue]) -> tuple[str, Mapping[str, JsonValue]]:
-    function: Final = object_value(call["function"])
-    return string_value(function["name"]), iv.JSON_OBJECT.validate_json(string_value(function["arguments"]))
+def _assert_failed_once(call_id: str, *, spend: float) -> None:
+    rows: Final = eventually(
+        lambda: read_rows('SELECT status, spend FROM "LiteLLM_SpendLogs" WHERE litellm_call_id = %s', (call_id,)),
+        lambda found: len(found) >= 1,
+        seconds=70,
+    )
+    assert [row["status"] for row in rows] == ["failure"], rows
+    assert float(rows[0]["spend"]) == pytest.approx(spend), rows
 
 
-def _stream_choices(stream: _Stream) -> Iterator[Mapping[str, JsonValue]]:
-    for frame in stream.frames:
-        yield from rv.ITEMS.validate_python(frame.get("choices") or [])
-
-
-def _streamed_tool_calls(stream: _Stream) -> Iterator[tuple[str, Mapping[str, JsonValue]]]:
-    for choice in _stream_choices(stream):
-        yield from map(
-            _tool_call, rv.ITEMS.validate_python(object_value(choice.get("delta") or {}).get("tool_calls") or [])
-        )
-
-
-def _handed_back(deployment: _Deployment) -> list[tuple[str, Mapping[str, JsonValue]]]:
-    return [(iv.SEARCH_TOOL, {"query": iv.query(deployment.name)})]
-
-
-def _assert_succeeded_once(model: str, identity: str) -> None:
-    rows: Final = _spend_rows(model, 1)
-    assert [string_value(row["request_id"]) for row in rows if row["status"] == "success"] == [identity], rows
-
-
-def test_failed_follow_up_call_hands_the_search_tool_call_back_with_its_usage(rig: _Rig, scenario: Scenario) -> None:
-    deployment: Final = _deploy(rig, scenario, "followup-fails")
-    stream: Final = _chat(rig, _chat_body(deployment, extra={**_NO_CACHE, "stream_options": dict(_USAGE)}))
-    assert stream.status == 200 and stream.content == "", stream.text
-    assert list(_streamed_tool_calls(stream)) == _handed_back(deployment), stream.text
-    finished: Final = [choice["finish_reason"] for choice in _stream_choices(stream) if choice.get("finish_reason")]
-    assert finished == ["tool_calls"], stream.text
-    assert [_totals(usage) for usage in stream.usages] == [iv.FIRST_USAGE["total_tokens"]], stream.text
-    (identity,) = stream.ids
+@pytest.mark.parametrize("stream", [True, False], ids=["stream", "json"])
+def test_failed_follow_up_call_answers_with_the_providers_error_instead_of_the_search_tool_call(
+    rig: _Rig, scenario: Scenario, stream: bool
+) -> None:
+    deployment: Final = _deploy(
+        rig, scenario, "followup-fails", pricing={"input_cost_per_token": 0.001, "output_cost_per_token": 0.002}
+    )
+    extra: Final = {**_NO_CACHE, "stream_options": dict(_USAGE)} if stream else _NO_CACHE
+    body: Final = _chat_body(deployment, stream=stream, extra=extra)
+    response: Final = rig.gateway.request("POST", "/v1/chat/completions", body)
+    assert response.status_code == 500 and iv.FOLLOWUP_FAILURE in response.text, response.text
+    assert iv.SEARCH_TOOL not in response.text, response.text
     _assert_upstream(_upstream(rig, deployment), model_calls=2, searches=1)
-    _assert_succeeded_once(deployment.model, identity)
+    _assert_failed_once(
+        response.headers["x-litellm-call-id"],
+        spend=iv.FIRST_USAGE["prompt_tokens"] * 0.001 + iv.FIRST_USAGE["completion_tokens"] * 0.002,
+    )
     assert rig.gateway.chat(_deploy(rig, scenario, "plain").model)["object"] == "chat.completion"
-
-
-def test_failed_follow_up_call_on_a_json_request_hands_the_search_tool_call_back(rig: _Rig, scenario: Scenario) -> None:
-    deployment: Final = _deploy(rig, scenario, "followup-fails")
-    response: Final = rig.gateway.request("POST", "/v1/chat/completions", _chat_body(deployment, stream=False))
-    assert response.status_code == 200, response.text
-    body: Final = iv.JSON_OBJECT.validate_json(response.content)
-    (choice,) = rv.ITEMS.validate_python(body["choices"])
-    calls: Final = rv.ITEMS.validate_python(object_value(choice["message"])["tool_calls"])
-    assert [_tool_call(call) for call in calls] == _handed_back(deployment), body
-    assert choice["finish_reason"] == "tool_calls", body
-    assert _totals(object_value(body["usage"])) == iv.FIRST_USAGE["total_tokens"], body
-    _assert_upstream(_upstream(rig, deployment), model_calls=2, searches=1)
-    _assert_succeeded_once(deployment.model, string_value(body["id"]))
 
 
 def test_search_outage_still_restreams_the_follow_up_answer(rig: _Rig, scenario: Scenario) -> None:

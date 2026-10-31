@@ -5,16 +5,23 @@ All sandbox dependencies are injected: a FakeSandbox stands in for the real e2b
 config and records how it is called.
 """
 
+import asyncio
 import time
+from collections.abc import Mapping
 from typing import Final
 
+import httpx
 import pytest
+import respx
+
+import litellm
 
 from litellm.integrations.code_interpreter_interception.handler import (
     _INTERCEPTION_ACTIVE_KEY as _ACTIVE_KEY,
 )
 from litellm.integrations.code_interpreter_interception.handler import (
     _SANDBOX_KEY,
+    _SANDBOX_UNAVAILABLE_OUTPUT,
     _SESSION_SCOPED_KEY,
     LITELLM_CODE_EXECUTION_TOOL_NAME,
     CodeInterpreterInterceptionLogger,
@@ -23,6 +30,7 @@ from litellm.llms.base_llm.sandbox.transformation import CodeExecutionResult
 from litellm.types.integrations.custom_logger import (
     CHAT_COMPLETION_AGENTIC_SURFACE,
     CODE_INTERPRETER_STREAM_OPTIONS_KEY,
+    AgenticLoopPlan,
     NON_CODE_INTERPRETER_INTERCEPTION_INTERNAL_PREFIXES,
     is_interception_internal_key,
 )
@@ -831,11 +839,7 @@ async def test_post_hook_delete_is_idempotent_across_loop_levels():
 
 
 @pytest.mark.asyncio
-async def test_build_plan_deletes_sandbox_when_execution_raises():
-    """If sandbox execution raises before a plan is built (e.g. E2B aborts
-    output over its cap), the cached sandbox must be deleted before re-raising,
-    otherwise a caller can leak paid containers until the prune TTL."""
-
+async def test_a_failed_code_run_still_deletes_its_sandbox_once_the_loop_ends():
     class RaisingSandbox(FakeSandbox):
         async def arun_code(self, *, container, code, **kwargs):
             raise ValueError("output exceeded cap")
@@ -843,13 +847,11 @@ async def test_build_plan_deletes_sandbox_when_execution_raises():
     sandbox = RaisingSandbox()
     logger = CodeInterpreterInterceptionLogger(sandbox_config=sandbox)
 
-    with pytest.raises(ValueError, match="exceeded cap"):
-        await _build_plan(logger, sandbox, call_id="k1")
+    plan = await _build_plan(logger, sandbox, call_id="k1")
+    await logger.async_agentic_loop_cleanup_hook(plan=plan, kwargs={})
 
-    assert len(sandbox.create_calls) == 1, "the sandbox must have been created"
-    assert len(sandbox.delete_calls) == 1, (
-        "a build failure must delete the cached sandbox so it does not keep running and billing"
-    )
+    assert len(sandbox.create_calls) == 1
+    assert len(sandbox.delete_calls) == 1
     assert "sbxkey1" not in logger._container_cache
 
 
@@ -1448,3 +1450,215 @@ async def test_per_identity_cap_evicts_lru_session():
         "the entry with the oldest last_accessed timestamp must be evicted first (LRU)"
     )
     assert len(sandbox.delete_calls) == 1, "evicted sandbox must be deleted, not just removed from cache"
+
+
+class _SandboxThatCannotStart(FakeSandbox):
+    async def acreate_sandbox(self, **kwargs):
+        raise ConnectionError("sandbox provider unreachable")
+
+
+class _SandboxThatCannotRunCode(FakeSandbox):
+    async def arun_code(self, *, container, code, **kwargs):
+        raise TimeoutError("sandbox run timed out")
+
+
+_SANDBOX_FAILURES: Final = (
+    pytest.param(None, id="no_sandbox"),
+    pytest.param(_SandboxThatCannotStart(), id="create_fails"),
+    pytest.param(_SandboxThatCannotRunCode(), id="run_fails"),
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sandbox", _SANDBOX_FAILURES)
+async def test_a_sandbox_failure_answers_the_responses_tool_call_with_a_fixed_failure(sandbox):
+    plan: Final = await _build_plan(CodeInterpreterInterceptionLogger(sandbox_config=sandbox), sandbox)
+
+    outputs: Final = [message for message in _iter_messages(plan) if message.get("type") == "function_call_output"]
+    assert plan.run_agentic_loop is True
+    assert [(output["call_id"], output["output"]) for output in outputs] == [("c1", _SANDBOX_UNAVAILABLE_OUTPUT)]
+    assert [call["status"] for call in plan.metadata["code_interpreter_calls"]] == ["failed"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sandbox", _SANDBOX_FAILURES)
+async def test_a_sandbox_failure_answers_the_chat_tool_call_with_a_fixed_failure(sandbox):
+    logger: Final = CodeInterpreterInterceptionLogger(sandbox_config=sandbox)
+
+    plan: Final = await logger.async_build_agentic_loop_plan(
+        tools={
+            "tool_calls": [
+                {"id": "call_1", "name": LITELLM_CODE_EXECUTION_TOOL_NAME, "arguments": '{"code":"print(40 + 2)"}'}
+            ]
+        },
+        model="gpt-5",
+        messages=[{"role": "user", "content": "x"}],
+        response={"choices": [{"message": {"tool_calls": [_chat_function_call_item()]}}]},
+        anthropic_messages_provider_config=None,
+        anthropic_messages_optional_request_params={"tools": []},
+        logging_obj=FakeLogging(litellm_call_id="k1"),
+        stream=False,
+        kwargs={
+            "litellm_call_id": "k1",
+            _ACTIVE_KEY: True,
+            _SANDBOX_KEY: "sbxkey1",
+            "_agentic_loop_api_surface": CHAT_COMPLETION_AGENTIC_SURFACE,
+        },
+    )
+
+    tool_messages: Final = [message for message in _iter_messages(plan) if message.get("role") == "tool"]
+    assert plan.run_agentic_loop is True
+    assert [(message["tool_call_id"], message["content"]) for message in tool_messages] == [
+        ("call_1", _SANDBOX_UNAVAILABLE_OUTPUT)
+    ]
+    assert [call["status"] for call in plan.metadata["code_interpreter_calls"]] == ["failed"]
+
+
+_SESSION_PLAN_SURFACES: Final = (
+    pytest.param({}, FakeResponse(output=[_function_call_item()]), id="responses"),
+    pytest.param(
+        {_ACTIVE_KEY: True, "_agentic_loop_api_surface": CHAT_COMPLETION_AGENTIC_SURFACE},
+        {"choices": [{"message": {"tool_calls": [_chat_function_call_item()]}}]},
+        id="chat",
+    ),
+)
+
+
+async def _build_session_plan(
+    logger: CodeInterpreterInterceptionLogger,
+    request_id: str,
+    surface_kwargs: Mapping[str, object] | None = None,
+    response: object | None = None,
+) -> AgenticLoopPlan:
+    return await logger.async_build_agentic_loop_plan(
+        tools={
+            "tool_calls": [
+                {
+                    "id": "call_1",
+                    "call_id": "c1",
+                    "name": LITELLM_CODE_EXECUTION_TOOL_NAME,
+                    "arguments": '{"code":"print(1)"}',
+                }
+            ]
+        },
+        model="gpt-5",
+        messages=[{"role": "user", "content": "x"}],
+        response=response or FakeResponse(output=[_function_call_item()]),
+        anthropic_messages_provider_config=None,
+        anthropic_messages_optional_request_params={"tools": []},
+        logging_obj=FakeLogging(litellm_call_id=request_id),
+        stream=False,
+        kwargs={
+            "litellm_call_id": request_id,
+            _SANDBOX_KEY: "conv-1",
+            _SESSION_SCOPED_KEY: True,
+            **(surface_kwargs or {}),
+        },
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("surface_kwargs", "response"), _SESSION_PLAN_SURFACES)
+async def test_a_session_sandbox_whose_code_run_fails_is_not_reused_by_the_next_request(
+    surface_kwargs: Mapping[str, object], response: object
+) -> None:
+    sandbox: Final = _SandboxThatCannotRunCode()
+    logger: Final = CodeInterpreterInterceptionLogger(sandbox_config=sandbox)
+
+    await _build_session_plan(logger, "req1", surface_kwargs, response)
+    await _build_session_plan(logger, "req2", surface_kwargs, response)
+
+    assert len(sandbox.create_calls) == 2
+    assert len(sandbox.delete_calls) == 2
+
+
+class _SandboxWhoseFirstContainerDies(FakeSandbox):
+    def __init__(self) -> None:
+        super().__init__()
+        self.handles: list[FakeHandle] = []
+        self.first_run_started = asyncio.Event()
+        self.first_run_may_finish = asyncio.Event()
+
+    async def acreate_sandbox(self, **kwargs: object) -> FakeHandle:
+        self.create_calls.append(kwargs)
+        handle: Final = FakeHandle(sandbox_id=f"sbx_{len(self.handles)}")
+        self.handles.append(handle)
+        return handle
+
+    async def arun_code(self, *, container: FakeHandle, code: str, **kwargs: object) -> CodeExecutionResult:
+        self.run_calls.append({"container": container, "code": code})
+        if len(self.run_calls) == 1:
+            self.first_run_started.set()
+            await self.first_run_may_finish.wait()
+        if container is self.handles[0]:
+            raise TimeoutError("sandbox expired")
+        return CodeExecutionResult(stdout=self.stdout)
+
+
+@pytest.mark.asyncio
+async def test_a_late_failure_on_a_dead_session_sandbox_keeps_its_healthy_replacement() -> None:
+    sandbox: Final = _SandboxWhoseFirstContainerDies()
+    logger: Final = CodeInterpreterInterceptionLogger(sandbox_config=sandbox)
+
+    slow_request: Final = asyncio.create_task(_build_session_plan(logger, "req-slow"))
+    await sandbox.first_run_started.wait()
+    await _build_session_plan(logger, "req-fails-fast")
+    await _build_session_plan(logger, "req-gets-replacement")
+    sandbox.first_run_may_finish.set()
+    await slow_request
+    await _build_session_plan(logger, "req-after")
+
+    assert [call["container"] for call in sandbox.delete_calls] == [sandbox.handles[0]]
+    assert [call["container"] for call in sandbox.run_calls[-2:]] == [sandbox.handles[1], sandbox.handles[1]]
+
+
+def _anthropic_message(content: list[dict[str, object]], stop_reason: str) -> dict[str, object]:
+    return {
+        "id": "msg_1",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-sonnet-5-5",
+        "content": content,
+        "stop_reason": stop_reason,
+        "stop_sequence": None,
+        "usage": {"input_tokens": 10, "output_tokens": 5},
+    }
+
+
+@pytest.mark.asyncio
+async def test_a_responses_request_bridged_to_claude_runs_the_code_and_ends_without_the_internal_call(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    sandbox: Final = FakeSandbox(stdout="42")
+    monkeypatch.setattr(litellm, "callbacks", [CodeInterpreterInterceptionLogger(sandbox_config=sandbox)])
+    provider: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(
+        side_effect=[
+            httpx.Response(
+                200,
+                json=_anthropic_message(
+                    [
+                        {
+                            "type": "tool_use",
+                            "id": "toolu_1",
+                            "name": LITELLM_CODE_EXECUTION_TOOL_NAME,
+                            "input": {"code": "print(40 + 2)"},
+                        }
+                    ],
+                    "tool_use",
+                ),
+            ),
+            httpx.Response(200, json=_anthropic_message([{"type": "text", "text": "The answer is 42."}], "end_turn")),
+        ]
+    )
+
+    response: Final = await litellm.aresponses(
+        model="anthropic/claude-sonnet-5-5",
+        input="compute 40 + 2",
+        api_key="sk-test",
+        tools=[{"type": "code_interpreter", "container": {"type": "auto"}}],
+    )
+
+    assert provider.call_count == 2
+    assert [run["code"] for run in sandbox.run_calls] == ["print(40 + 2)"]
+    assert not [item for item in response.output if getattr(item, "type", None) == "function_call"]

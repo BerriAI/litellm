@@ -4293,6 +4293,62 @@ class TestHandleLLMApiExceptionPricesWhatTheServerDispatched:
         assert resent >= dispatched_after_trim
 
 
+class TestHandleLLMApiExceptionReportsWhatAFailedAgenticFollowUpBills:
+    async def _error_response_cost(self, raise_the_follow_up_error: bool) -> float:
+        from litellm.litellm_core_utils.chat_completion_agentic_loop import bill_first_round_on_failure
+        from litellm.types.utils import ModelResponse, Usage
+
+        processing_obj: Final = ProxyBaseLLMRequestProcessing(
+            data={"model": "gpt-4o", "messages": [{"role": "user", "content": "what is 6*7?"}]}
+        )
+        caller: Final = ProxyUserAPIKeyAuth(request_route="/v1/chat/completions")
+        mock_request: Final = MagicMock(spec=Request)
+        mock_request.headers = {}
+        proxy_logging: Final = ProxyLogging(user_api_key_cache=DualCache())
+        proxy_logging.alert_types = []
+        _, logging_obj = await processing_obj.common_processing_pre_call_logic(
+            request=mock_request,
+            general_settings={},
+            user_api_key_dict=caller,
+            proxy_logging_obj=proxy_logging,
+            proxy_config=MagicMock(spec=ProxyConfig),
+            route_type="acompletion",
+        )
+        logging_obj.model_call_details.update(first_api_call_start_time=datetime.datetime.now())
+        follow_up_error: Final = litellm.RateLimitError(message="rate limited", llm_provider="openai", model="gpt-4o")
+
+        async def failing_follow_up() -> ModelResponse:
+            raise follow_up_error
+
+        with pytest.raises(litellm.RateLimitError):
+            await bill_first_round_on_failure(
+                failing_follow_up(),
+                logging_obj=logging_obj,
+                response=ModelResponse(
+                    model="gpt-4o", usage=Usage(prompt_tokens=559, completion_tokens=113, total_tokens=672)
+                ),
+                stream=False,
+            )
+        with pytest.raises(ProxyException) as raised:
+            await processing_obj.handle_llm_api_exception(
+                e=follow_up_error
+                if raise_the_follow_up_error
+                else litellm.RateLimitError(message="rate limited", llm_provider="openai", model="gpt-4o"),
+                user_api_key_dict=caller,
+                proxy_logging_obj=proxy_logging,
+            )
+        return float(raised.value.headers["x-litellm-response-cost"])
+
+    @pytest.mark.asyncio
+    async def test_the_error_response_reports_the_served_first_call_its_failure_row_bills(self) -> None:
+        price: Final = litellm.model_cost["gpt-4o"]
+
+        assert await self._error_response_cost(raise_the_follow_up_error=True) == pytest.approx(
+            559 * price["input_cost_per_token"] + 113 * price["output_cost_per_token"]
+        )
+        assert await self._error_response_cost(raise_the_follow_up_error=False) == 0
+
+
 @pytest.mark.asyncio
 class TestHandleLLMApiExceptionDictDetail:
     """
