@@ -275,7 +275,7 @@ class AccountingLedger:
             )
         return tuple(
             UsageWrite(
-                OutboundUsageEvent.model_validate(_JSON.validate_python(row["payload"])["event"]),
+                OutboundUsageEvent.model_validate_json(_json(_JSON.validate_python(row["payload"])["event"])),
                 _json(row["payload"]),
                 TypeAdapter(tuple[DeliveryTarget, ...]).validate_python(row["targets"]),
             )

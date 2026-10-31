@@ -116,3 +116,34 @@ async def test_conflicting_usage_within_one_batch_is_rejected_before_database_ac
     changed: Final = UsageWrite(event, json.dumps({"event": event.model_dump(mode="json"), "pricing": {"rate": 2}}))
     with pytest.raises(AccountingConflictError, match="conflicting copies"):
         await AccountingLedger(_no_transaction).insert_usage_batch((original, changed))
+
+
+@pytest.mark.asyncio
+async def test_loaded_usage_preserves_decimal_metrics_from_jsonb(event: InboundUsageEvent) -> None:
+    from collections.abc import AsyncIterator
+    from contextlib import asynccontextmanager
+    from typing import cast
+    from unittest.mock import AsyncMock
+
+    from prisma import Prisma
+
+    from litellm.accounting import OutboundUsageEvent
+
+    outbound: Final = OutboundUsageEvent(
+        **event.model_dump(exclude={"metrics"}),
+        attempt_id="attempt",
+        retry_of_attempt_id=None,
+        metrics=(Metric(name=MetricName.PROMPT_TOKENS, value=Decimal("120000")),),
+    )
+    payload: Final = {"event": outbound.model_dump(mode="json"), "usage": {"prompt_tokens": 120000}}
+    database: Final = AsyncMock(spec=Prisma)
+    database.query_raw.return_value = [{"payload": payload, "targets": []}]
+
+    @asynccontextmanager
+    async def transaction() -> AsyncIterator[Prisma]:
+        yield cast(Prisma, database)
+
+    recovered: Final = await AccountingLedger(transaction).load_usage_batch((outbound.event_id,))
+    assert len(recovered) == 1
+    assert recovered[0].event == outbound
+    assert json.loads(recovered[0].envelope) == payload
