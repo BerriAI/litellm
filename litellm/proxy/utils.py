@@ -1687,13 +1687,17 @@ def _is_custom_pre_call_hook(callback: CustomLogger) -> bool:
 async def _skipped_for_unroutable_model(
     guardrail: CustomGuardrail,
     data: Mapping[str, object],
+    call_type: str,
     probe: "UnroutableModelProbe | None",
     caps: _CallbackCapabilities,
 ) -> bool:
+    event_type: Final = (
+        GuardrailEventHooks.pre_mcp_call if call_type in MCP_GUARDRAIL_CALL_TYPES else GuardrailEventHooks.pre_call
+    )
     return (
         probe is not None
         and caps.resolved_callbacks.index(guardrail) > caps.last_custom_pre_call_hook
-        and guardrail.should_run_guardrail(data=data, event_type=GuardrailEventHooks.pre_call)  # pyright: ignore[reportUnknownMemberType]  # takes the untyped request dict
+        and guardrail.should_run_guardrail(data=data, event_type=event_type)  # pyright: ignore[reportUnknownMemberType]  # takes the untyped request dict
         and await probe.refuses(data)
     )
 
@@ -3147,6 +3151,7 @@ class ProxyLogging:
                         if await _skipped_for_unroutable_model(
                             _callback,
                             data,  # pyright: ignore[reportUnknownArgumentType]  # data is the untyped request dict
+                            call_type,
                             probe,
                             caps,
                         ):
@@ -3226,6 +3231,7 @@ class ProxyLogging:
                             if not await _skipped_for_unroutable_model(
                                 guardrail,
                                 data,  # pyright: ignore[reportUnknownArgumentType]  # data is the untyped request dict
+                                call_type,
                                 probe,
                                 caps,
                             )
