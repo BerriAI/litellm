@@ -2793,13 +2793,6 @@ async def refuse_websocket(websocket: WebSocket, refusal: WebsocketFrameModelRef
     await websocket.close(code=CloseCode.POLICY_VIOLATION, reason=_refusal_close_reason(refusal.message))
 
 
-async def _refuse_client_frame(
-    websocket: WebSocket, upstream_ws: ClientConnection, refusal: WebsocketFrameModelRefused
-) -> None:
-    await refuse_websocket(websocket, refusal)
-    await upstream_ws.close()
-
-
 def _stamp_billed_turn(kwargs: Mapping[str, object], turn: _TurnAuthorization) -> None:
     """Charge a turn to the access groups that authorized its model, and its model budget to the model it asked for,
     since the provider may answer under a dated snapshot name the budget was never set on."""
@@ -2894,11 +2887,11 @@ async def _relay_client_frame(
     gate: WebsocketFrameModelGate | None,
     ledger: _WebsocketTurnLedger,
 ) -> _ForwardClientFrame | _RefuseClientFrame:
-    """Forward one client frame upstream, or refuse it and end the session."""
+    """Forward one client frame upstream, or refuse it and close the client."""
     verdict: Final = await _client_frame_verdict(websocket, checked_frame, gate)
     match verdict:
         case _RefuseClientFrame(refusal=refusal):
-            await _refuse_client_frame(websocket, upstream_ws, refusal)
+            await refuse_websocket(websocket, refusal)
         case _ForwardClientFrame(starts_turn=True, turn=turn, lane=lane):
             ledger.queue_turn(lane, turn)
             await upstream_ws.send(forwarded_frame)
@@ -2943,7 +2936,7 @@ async def websocket_passthrough_request(
         upstream_frame_kind: Optional sort of upstream frames into the one that ends a billable turn and the ones
             that open the session, so each turn logs its own spend and keeps the session's provider-named model
         walkout_turn_drain_seconds: How long to keep reading a turn the provider is still running after the client
-            left, so the provider's usage for it still reaches spend
+            left or was refused, so the provider's usage for it still reaches spend
         builtin_provider_route: Whether a built-in provider route serves the connection, so its URL names the provider
         model: The model the caller named before connecting, logged on a failure before the setup frame arrives
     """
@@ -3174,8 +3167,6 @@ async def websocket_passthrough_request(
                         message = await websocket.receive()
                         message_type = message.get("type")
                         if message_type == "websocket.disconnect":
-                            if not _turn_in_flight(upstream_frame_kind, websocket_messages):
-                                await upstream_ws.close()
                             break
 
                         text_data: str | None = message.get("text")
@@ -3258,6 +3249,8 @@ async def websocket_passthrough_request(
                                 _RefuseClientFrame,
                             ):
                                 break
+                    if not _turn_in_flight(upstream_frame_kind, websocket_messages):
+                        await upstream_ws.close()
                 except asyncio.CancelledError:
                     raise
                 except Exception:

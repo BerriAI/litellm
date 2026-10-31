@@ -8052,14 +8052,13 @@ async def test_websocket_passthrough_still_bills_a_session_the_client_walked_out
 
 
 class ScriptedUpstreamWebSocket:
-    """Answers each client frame with its scripted reply, and flushes what was still in flight when it is closed"""
+    """Answers each client frame with its scripted reply"""
 
-    def __init__(self, *opening: str, replies: Sequence[Sequence[str]] = (), in_flight: Sequence[str] = ()):
+    def __init__(self, *opening: str, replies: Sequence[Sequence[str]] = ()):
         self._frames: asyncio.Queue[str | None] = asyncio.Queue()
         for frame in opening:
             self._frames.put_nowait(frame)
         self._replies = iter(replies)
-        self._in_flight = in_flight
         self._closed = False
         self.send = AsyncMock(side_effect=self._reply)
         self.close = AsyncMock(side_effect=self._flush_and_close)
@@ -8072,8 +8071,6 @@ class ScriptedUpstreamWebSocket:
         if self._closed:
             return
         self._closed = True
-        for frame in self._in_flight:
-            self._frames.put_nowait(frame)
         self._frames.put_nowait(None)
         while not self._frames.empty():
             await asyncio.sleep(0)
@@ -8586,8 +8583,8 @@ async def test_websocket_passthrough_still_bills_the_answer_in_flight_when_a_lat
     """
     A refused frame closes the client while the provider may still be sending the
     answer to an earlier, allowed frame. That answer cannot go to a closed client,
-    but it was paid for, so it has to reach spend instead of turning the whole
-    session into a failure that bills nothing.
+    but the provider bills it once it ends, so the gateway keeps reading until it
+    ends and its usage reaches spend.
     """
     gate: Final = RecordingFrameModelGate(MappingProxyType({"gpt-5.4": KEY_MODEL_REFUSAL}))
     client: Final = _turn_taking_client(
@@ -8597,10 +8594,19 @@ async def test_websocket_passthrough_still_bills_the_answer_in_flight_when_a_lat
         ],
         answered_by='"response.created"',
     )
-    created, completed = _responses_turn("gpt-5.4-mini")
-    upstream_ws: Final = ScriptedUpstreamWebSocket(replies=[[created]], in_flight=[completed])
+    refused: Final = asyncio.Event()
+    close_client: Final = client.close.side_effect
 
-    relayed: Final = await _relay_turns(client, upstream_ws, gate)
+    def close_client_and_note_the_refusal(*args: object, **kwargs: object) -> None:
+        close_client(*args, **kwargs)
+        refused.set()
+
+    client.close = AsyncMock(side_effect=close_client_and_note_the_refusal)
+    upstream_ws: Final = UpstreamFinishingTheTurnAfterTheClientLeft(
+        refused, _responses_turn_started("gpt-5.4-mini"), (_responses_turn_ended("gpt-5.4-mini"),)
+    )
+
+    relayed: Final = await _relay_turns(client, upstream_ws, gate, walkout_turn_drain_seconds=5)
 
     assert [json.loads(text.args[0])["type"] for text in client.send_text.await_args_list] == [
         "response.created",
