@@ -13,8 +13,6 @@ if TYPE_CHECKING:
     from litellm.integrations.custom_guardrail import CustomGuardrail
     from litellm.types.guardrails import Guardrail, LitellmParams
 
-# The package's own settings a config entry may carry beside LiteLLM's. The package validates their values and
-# names a bad one at startup
 PACKAGE_SETTINGS: Final = frozenset(
     {
         "enforcement_mode",

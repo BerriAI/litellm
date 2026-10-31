@@ -101,3 +101,14 @@ describe("decision model presets", () => {
     }
   });
 });
+
+describe("collieai preset", () => {
+  it("opens the CollieAi card as an always-on guardrail on both halves of the call", () => {
+    expect(GUARDRAIL_PRESETS["collieai"]).toEqual({
+      provider: "CollieAi",
+      guardrailNameSuggestion: "CollieAi",
+      mode: ["pre_call", "post_call"],
+      defaultOn: true,
+    });
+  });
+});

@@ -18,8 +18,9 @@ from litellm.proxy.guardrails.guardrail_endpoints import get_provider_specific_p
 from litellm.proxy.guardrails.guardrail_hooks.collieai import CollieAiGuardrail, initialize_guardrail
 from litellm.proxy.guardrails.guardrail_hooks.collieai.collieai import (
     MISSING_PACKAGE_MESSAGE,
+    PACKAGE_MODULE,
     has_readiness_guard,
-    missing_package,
+    load_base,
     package_guardrail,
 )
 from litellm.proxy.guardrails.guardrail_registry import InMemoryGuardrailHandler
@@ -126,7 +127,9 @@ def test_points_at_app_collieai_io_unless_told_otherwise() -> None:
 def test_ui_form_defaults_are_what_the_package_gets() -> None:
     optional: Final = CollieAiGuardrailConfigModelOptionalParams()
     model: Final = CollieAiGuardrailConfigModel(api_key=API_KEY)
-    callback: Final = _init(_params(**model.model_dump(exclude={"api_key", "optional_params"}), **optional.model_dump()))
+    callback: Final = _init(
+        _params(**model.model_dump(exclude={"api_key", "optional_params"}), **optional.model_dump())
+    )
 
     assert callback.given["api_base"] == model.api_base
     assert callback.given["deadline_ms"] == optional.deadline_ms
@@ -161,11 +164,26 @@ def test_only_a_current_package_s_guardrail_class_is_taken() -> None:
     assert package_guardrail(SimpleNamespace(require_guardrail=guard, CollieAIGuardrail=ValueError)) is None
 
 
+def test_builds_on_the_package_only_when_it_is_current() -> None:
+    current: Final = SimpleNamespace(require_guardrail=object(), CollieAIGuardrail=_RecordingGuardrail)
+    too_old: Final = SimpleNamespace(CollieAIGuardrail=_RecordingGuardrail)
+
+    assert load_base({PACKAGE_MODULE: current}.__getitem__) is _RecordingGuardrail
+    with pytest.raises(ImportError, match="pip install") as raised:
+        load_base({PACKAGE_MODULE: too_old}.__getitem__)(guardrail_name="collieai")
+
+    assert str(raised.value) == MISSING_PACKAGE_MESSAGE
+    assert raised.value.__cause__ is None
+
+
 def test_without_the_package_building_the_guardrail_names_what_to_install() -> None:
     cause: Final = ImportError("No module named 'collieai_guardrail'")
 
+    def import_module(name: str) -> object:
+        raise cause
+
     with pytest.raises(ImportError, match="pip install") as raised:
-        missing_package(cause)(guardrail_name="collieai")
+        load_base(import_module)(guardrail_name="collieai")
 
     assert str(raised.value) == MISSING_PACKAGE_MESSAGE
     assert raised.value.__cause__ is cause

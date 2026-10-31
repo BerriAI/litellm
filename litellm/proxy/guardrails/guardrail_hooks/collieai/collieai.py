@@ -7,6 +7,7 @@ Source:  https://github.com/CollieAi/collieai-litellm-guardrail
 from __future__ import annotations
 
 import importlib
+from collections.abc import Callable
 from typing import Final
 
 from litellm.integrations.custom_guardrail import CustomGuardrail
@@ -14,7 +15,7 @@ from litellm.types.proxy.guardrails.guardrail_hooks.collieai import CollieAiGuar
 
 PACKAGE_MODULE: Final = "collieai_guardrail.guardrail"
 MISSING_PACKAGE_MESSAGE: Final = (
-    "collieai-litellm-guardrail>=1.0.0 is required for the CollieAi guardrail. "
+    "collieai-litellm-guardrail>=1.0.0 (Python 3.11 or newer) is required for the CollieAi guardrail. "
     'Install it with: pip install "collieai-litellm-guardrail>=1.0.0"'
 )
 
@@ -42,9 +43,9 @@ def missing_package(import_error: ImportError | None) -> type[CustomGuardrail]:
     return MissingPackage
 
 
-def load_base() -> type[CustomGuardrail]:
+def load_base(import_module: Callable[[str], object] = importlib.import_module) -> type[CustomGuardrail]:
     try:
-        package: Final = importlib.import_module(PACKAGE_MODULE)
+        package: Final = import_module(PACKAGE_MODULE)
     except ImportError as import_error:
         return missing_package(import_error)
     return package_guardrail(package) or missing_package(None)
