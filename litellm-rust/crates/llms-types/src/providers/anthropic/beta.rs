@@ -243,7 +243,7 @@ impl AnthropicBeta {
                 BetaProvider::VertexAi,
                 BetaProvider::Databricks,
             ],
-            Self::Compact20260112 => &[BetaProvider::AzureAi, BetaProvider::BedrockConverse],
+            Self::Compact20260112 => &[BetaProvider::BedrockConverse],
             Self::ComputerUse20250124
             | Self::ComputerUse20251124
             | Self::Context1m20250807
@@ -252,16 +252,13 @@ impl AnthropicBeta {
             Self::DangerousToolUse20260903 => &[BetaProvider::BedrockConverse],
             Self::Effort20251124 => &[BetaProvider::VertexAi],
             Self::FastMode20260201 | Self::Oauth20250420 => &[
-                BetaProvider::AzureAi,
                 BetaProvider::BedrockConverse,
                 BetaProvider::Bedrock,
                 BetaProvider::BedrockMantle,
                 BetaProvider::VertexAi,
                 BetaProvider::Databricks,
             ],
-            Self::FineGrainedToolStreaming20250514 => {
-                &[BetaProvider::AzureAi, BetaProvider::VertexAi]
-            }
+            Self::FineGrainedToolStreaming20250514 => &[BetaProvider::VertexAi],
             Self::InterleavedThinking20250514 | Self::WebSearch20250305 => {
                 &[BetaProvider::BedrockConverse, BetaProvider::Bedrock]
             }
@@ -278,7 +275,6 @@ impl AnthropicBeta {
                 BetaProvider::Databricks,
             ],
             Self::Output128k20250219 | Self::TokenEfficientTools20250219 => &[
-                BetaProvider::AzureAi,
                 BetaProvider::BedrockConverse,
                 BetaProvider::Bedrock,
                 BetaProvider::VertexAi,
@@ -296,7 +292,6 @@ impl AnthropicBeta {
                 BetaProvider::Databricks,
             ],
             Self::InlineTools20260915 => &[
-                BetaProvider::AzureAi,
                 BetaProvider::BedrockConverse,
                 BetaProvider::Bedrock,
                 BetaProvider::BedrockMantle,

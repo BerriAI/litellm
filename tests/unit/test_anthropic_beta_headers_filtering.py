@@ -598,6 +598,27 @@ def test_direct_deployment_headers_keep_every_anthropic_row_beta(bundled_config:
     assert result == {"anthropic-beta": f"{DIRECT_ONLY_BETA},thinking-binding-controls-2026-08-01"}
 
 
+# Foundry's /anthropic/v1/messages answered 200 to each of these on claude-sonnet-5-5, 2026-10-31
+FOUNDRY_ACCEPTED_ANTHROPIC_ROW_BETAS: Final = (
+    "compact-2026-01-12",
+    "fast-mode-2026-02-01",
+    "fine-grained-tool-streaming-2025-05-14",
+    "inline-tools-2026-09-15",
+    "oauth-2025-04-20",
+    "output-128k-2025-02-19",
+    "token-efficient-tools-2025-02-19",
+)
+
+
+def test_foundry_deployment_keeps_the_anthropic_row_betas_foundry_accepts(bundled_config: None) -> None:
+    result: Final[dict[str, str]] = update_headers_with_filtered_beta(
+        headers={"anthropic-beta": ",".join((DIRECT_ONLY_BETA, *FOUNDRY_ACCEPTED_ANTHROPIC_ROW_BETAS))},
+        provider="anthropic",
+        api_base=FOUNDRY_API_BASE,
+    )
+    assert sorted(result["anthropic-beta"].split(",")) == sorted(FOUNDRY_ACCEPTED_ANTHROPIC_ROW_BETAS)
+
+
 def test_foundry_deployment_request_filters_header_and_body_betas_together(bundled_config: None) -> None:
     headers: dict[str, str]
     data: dict[str, object]
