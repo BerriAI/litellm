@@ -59,6 +59,7 @@ def test_sync_fallback_tags_skip_responses_api_bridge():
 
 @pytest.mark.asyncio
 async def test_a_first_turn_stores_an_empty_path_to_the_root_so_a_fork_off_it_replays_only_it():
+    litellm_metadata: Final[dict[str, object]] = {"user_api_key": "hashed"}
     handler = LiteLLMCompletionTransformationHandler()
     captured: dict = {}
 
@@ -73,10 +74,11 @@ async def test_a_first_turn_stores_an_empty_path_to_the_root_so_a_fork_off_it_re
             responses_api_request={},
             custom_llm_provider="openai",
             _is_async=True,
-            litellm_metadata={"user_api_key": "hashed"},
+            litellm_metadata=litellm_metadata,
         )
 
     assert captured["litellm_metadata"] == {"user_api_key": "hashed", PREVIOUS_RESPONSE_IDS_METADATA_KEY: []}
+    assert captured["litellm_metadata"] is litellm_metadata
 
 
 @pytest.mark.asyncio
@@ -346,9 +348,7 @@ async def test_bridged_next_turn_replays_a_turn_stored_under_the_id_the_client_h
         )
 
     assert provider.request_body is not None, "the bridged turn never reached the provider"
-    assert [
-        (message["role"], json.dumps(message["content"])) for message in provider.request_body["messages"]
-    ] == [
+    assert [(message["role"], json.dumps(message["content"])) for message in provider.request_body["messages"]] == [
         ("user", json.dumps([{"type": "text", "text": "My favorite number is 7."}])),
         ("assistant", json.dumps([{"type": "text", "text": "Noted."}])),
         ("user", json.dumps([{"type": "text", "text": "Double it"}])),

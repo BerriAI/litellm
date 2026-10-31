@@ -944,7 +944,12 @@ def _with_metadata(key: str, extra: Mapping[str, object], request_kwargs: Mappin
     metadata: Final = request_kwargs.get(key)
     if not isinstance(metadata, dict):
         return MappingProxyType({})
-    return {key: {**_STR_KEY_DICT_ADAPTER.validate_python(metadata), **extra}}
+    _STR_KEY_DICT_ADAPTER.validate_python(metadata)
+    channel: Final = cast(  # cast-ok: validated on the line above, and the router dedupes io token refunds by popping sentinels from this exact dict, so a copy would refund twice
+        "dict[str, object]", metadata
+    )
+    channel.update(extra)
+    return {key: channel}
 
 
 class LiteLLMCompletionResponsesConfig:
