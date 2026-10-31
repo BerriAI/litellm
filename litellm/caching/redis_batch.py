@@ -1,10 +1,10 @@
-"""One Redis pipeline for several independent operations, each with its own result and its own failure.
+"""``RedisCache``-shaped operations on the transport's pipeline engine, and the request scope that hands each
+backend one engine per request.
 
-A ``RedisBatch`` collects MGETs, Lua scripts and increments declared by unrelated callers and sends them
-in one ``pipeline(transaction=False)`` round trip. Every declaration returns an awaitable; awaiting one
-flushes whatever has been declared so far, so callers keep their existing ``await`` shape and their own
-error handling while sharing the wire. Redis Cluster clients run each operation on its own, as before:
-a cluster pipeline is per node anyway and the existing per-operation paths already group by slot.
+A ``RedisBatch`` collects MGETs, Lua scripts and increments declared by unrelated callers and sends them in one
+round trip, together with any transport commands declared on the same engine. Every declaration returns an
+awaitable; awaiting one flushes whatever has been declared so far, so callers keep their existing ``await`` shape
+and their own error handling while sharing the wire. Redis Cluster clients run each operation on its own.
 """
 
 from __future__ import annotations
@@ -12,131 +12,58 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
-import logging
-import time
 import weakref
-from collections.abc import Awaitable, Callable, Generator, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from contextvars import ContextVar, Token
-from dataclasses import dataclass, field
 from datetime import timedelta
 from types import MappingProxyType, TracebackType
-from typing import Final, Generic, Protocol, TypeVar
+from typing import Final, Protocol
 
-from litellm._internal_context import (
-    REDIS_FAMILIES_METADATA_KEY,
-    current_service_target,
-    service_caller,
-    service_target,
-)
-from litellm._logging import verbose_logger
-from litellm.caching.redis_cache import (
-    RedisCache,
-    _get_call_stack_info,  # pyright: ignore[reportPrivateUsage]  # same caller chain every RedisCache method reports
-    _run_under_circuit_breaker,  # pyright: ignore[reportPrivateUsage]  # same health signal as every RedisCache method
-    log_redis_failure,
-)
+from litellm.caching.redis_cache import RedisCache
 from litellm.caching.redis_cluster_cache import RedisClusterCache
-from litellm.types.services import ServiceTypes
+from litellm.redis.transport.batch import (
+    MIXED_PIPELINE_TARGET,
+    BatchResult,
+    PipelineBackend,
+    PipelineBatch,
+    SettledHook,
+)
+from litellm.redis.transport.client import RedisPipeline
+from litellm.redis.transport.contract import Arg
 
-_T = TypeVar("_T")
-_ScriptArg = str | bytes | int | float
-SettledHook = Callable[[asyncio.Future[_T]], Awaitable[None] | None]
+__all__ = (
+    "MIXED_PIPELINE_TARGET",
+    "POST_CALL_FLUSH_DEADLINE_SECONDS",
+    "BatchResult",
+    "RedisBatch",
+    "RegisteredScript",
+    "RequestRedisBatches",
+    "SettledHook",
+    "active_post_call_redis_batch",
+    "active_request_redis_batch",
+    "active_request_redis_batches",
+    "drain_post_call_redis_batches",
+    "flush_post_call_redis_batches",
+    "post_call_batch_engine",
+    "request_batch_engine",
+    "request_redis_batch_scope",
+)
+
 POST_CALL_FLUSH_DEADLINE_SECONDS: Final = 1.0
 
 
 class RegisteredScript(Protocol):
-    def __call__(self, keys: Sequence[str], args: Sequence[_ScriptArg]) -> Awaitable[object]: ...
+    def __call__(self, keys: Sequence[str], args: Sequence[Arg]) -> Awaitable[object]: ...
 
 
-class _RedisPipeline(Protocol):
-    def mget(self, keys: Sequence[str]) -> object: ...
-    def evalsha(self, sha: str, numkeys: int, *keys_and_args: _ScriptArg) -> object: ...
-    def incrbyfloat(self, name: str, amount: float) -> object: ...
-    def expire(self, name: str, time: timedelta) -> object: ...
-    def set(self, name: str, value: str, ex: timedelta | None = None) -> object: ...
-    def delete(self, *names: str) -> object: ...
-    async def execute(self, raise_on_error: bool = True) -> list[object]: ...
-
-
-class _Op(Generic[_T]):
-    """One declared operation: how many pipeline replies it consumes, how to turn them into a result, and
-    how to run on its own when the batch cannot pipeline (cluster client, or a reply the pipeline cannot
-    settle, like NOSCRIPT)."""
-
-    __slots__ = ("caller", "future", "settled_hooks", "target")
-
-    def __init__(self) -> None:
-        self.future: Final[asyncio.Future[_T]] = asyncio.get_running_loop().create_future()
-        self.future.add_done_callback(_mark_retrieved)
-        self.settled_hooks: Final[list[SettledHook[_T]]] = []  # mutable-ok: append-only registry
-        self.target: Final = current_service_target()
-        self.caller: Final = _get_call_stack_info()
-
-    async def run_settled_hooks(self) -> None:
-        for hook in self.settled_hooks:
-            await self._run_settled_hook(hook)
-
-    async def _run_settled_hook(self, hook: SettledHook[_T]) -> None:
-        try:
-            follow_up: Final = hook(self.future)
-            if follow_up is not None:
-                await follow_up
-        except Exception as e:  # noqa: BLE001  # one owner's follow-up must not stop the others
-            verbose_logger.warning("redis batch settled hook failed: %s", e)
-
-    def enqueue(self, pipe: _RedisPipeline) -> int:
-        raise NotImplementedError
-
-    def resolve(self, replies: Sequence[object]) -> _T:
-        raise NotImplementedError
-
-    async def run_alone(self) -> _T:
-        raise NotImplementedError
-
-    def settle(self, replies: Sequence[object]) -> Awaitable[None] | None:
-        """Resolve from pipeline replies; return a coroutine when the op has to be retried on its own."""
-        failure: Final = next((reply for reply in replies if isinstance(reply, Exception)), None)
-        if failure is None:
-            try:
-                self.future.set_result(self.resolve(replies))
-            except Exception as e:  # noqa: BLE001  # a reply this op cannot decode fails this op alone
-                self.future.set_exception(e)
-            return None
-        if _is_missing_script(failure):
-            return self._settle_alone()
-        self.future.set_exception(failure)
-        return None
-
-    async def _settle_alone(self) -> None:
-        try:
-            with service_target(self.target), service_caller(self.caller):
-                self.future.set_result(await self.run_alone())
-        except Exception as e:  # noqa: BLE001  # the declaring caller owns the failure of its own operation
-            self.future.set_exception(e)
-
-
-def _is_missing_script(failure: Exception) -> bool:
-    """Imported lazily: this module is reachable from a base ``import litellm`` while redis is not a base dependency."""
-    from redis.exceptions import NoScriptError
-
-    return isinstance(failure, NoScriptError)
-
-
-def _mark_retrieved(future: asyncio.Future[object]) -> None:
-    """A caller that stops awaiting (cancelled request) must not leave an 'exception never retrieved' log."""
-    if not future.cancelled():
-        future.exception()
-
-
-class _MGet(_Op[Mapping[str, object]]):
+class _MGet:
     __slots__ = ("_keys", "_redis_cache")
 
     def __init__(self, redis_cache: RedisCache, keys: Sequence[str]) -> None:
-        super().__init__()
         self._redis_cache: Final = redis_cache
         self._keys: Final[tuple[str, ...]] = tuple(dict.fromkeys(keys))
 
-    def enqueue(self, pipe: _RedisPipeline) -> int:
+    def enqueue(self, pipe: RedisPipeline) -> int:
         pipe.mget(tuple(self._redis_cache.check_and_fix_namespace(key=key) for key in self._keys))
         return 1
 
@@ -148,6 +75,9 @@ class _MGet(_Op[Mapping[str, object]]):
             {key: self._redis_cache._get_cache_logic(value) for key, value in zip(self._keys, values)}  # pyright: ignore[reportPrivateUsage, reportUnknownMemberType, reportUnknownArgumentType]  # shared decode with async_batch_get_cache
         )
 
+    def recover(self, error: Exception) -> Mapping[str, object]:
+        raise error
+
     async def run_alone(self) -> Mapping[str, object]:
         found: Mapping[str, object] = await self._redis_cache.async_batch_get_cache(key_list=list(self._keys))  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # untyped cache API
         if any(key not in found for key in self._keys):
@@ -155,7 +85,7 @@ class _MGet(_Op[Mapping[str, object]]):
         return found
 
 
-class _Script(_Op[object]):
+class _Script:
     __slots__ = ("_args", "_keys", "_redis_cache", "_run", "_sha")
 
     def __init__(
@@ -164,16 +94,15 @@ class _Script(_Op[object]):
         source: str,
         run: RegisteredScript,
         keys: Sequence[str],
-        args: Sequence[_ScriptArg],
+        args: Sequence[Arg],
     ) -> None:
-        super().__init__()
         self._redis_cache: Final = redis_cache
         self._sha: Final = hashlib.sha1(source.encode()).hexdigest()  # noqa: S324  # EVALSHA identifies scripts by SHA-1
         self._run: Final = run
         self._keys: Final[tuple[str, ...]] = tuple(keys)
-        self._args: Final[tuple[_ScriptArg, ...]] = tuple(args)
+        self._args: Final[tuple[Arg, ...]] = tuple(args)
 
-    def enqueue(self, pipe: _RedisPipeline) -> int:
+    def enqueue(self, pipe: RedisPipeline) -> int:
         namespaced: Final = tuple(self._redis_cache.check_and_fix_namespace(key=key) for key in self._keys)
         pipe.evalsha(self._sha, len(namespaced), *namespaced, *self._args)
         return 1
@@ -181,21 +110,23 @@ class _Script(_Op[object]):
     def resolve(self, replies: Sequence[object]) -> object:
         return replies[0]
 
+    def recover(self, error: Exception) -> object:
+        raise error
+
     async def run_alone(self) -> object:
         return await self._run(keys=self._keys, args=self._args)
 
 
-class _Increment(_Op[float]):
+class _Increment:
     __slots__ = ("_key", "_redis_cache", "_ttl", "_value")
 
     def __init__(self, redis_cache: RedisCache, key: str, value: float, ttl: int | None) -> None:
-        super().__init__()
         self._redis_cache: Final = redis_cache
         self._key: Final = key
         self._value: Final = value
         self._ttl: Final = ttl
 
-    def enqueue(self, pipe: _RedisPipeline) -> int:
+    def enqueue(self, pipe: RedisPipeline) -> int:
         name: Final = self._redis_cache.check_and_fix_namespace(key=self._key)
         pipe.incrbyfloat(name, self._value)
         if self._ttl is None:
@@ -209,6 +140,9 @@ class _Increment(_Op[float]):
             raise TypeError(f"INCRBYFLOAT reply is not numeric: {type(reply).__name__}")
         return float(reply)
 
+    def recover(self, error: Exception) -> float:
+        raise error
+
     async def run_alone(self) -> float:
         value: object = await self._redis_cache.async_increment(key=self._key, value=self._value, ttl=self._ttl)  # pyright: ignore[reportUnknownMemberType]  # untyped cache API
         if not isinstance(value, (int, float)):
@@ -216,19 +150,18 @@ class _Increment(_Op[float]):
         return float(value)
 
 
-class _Set(_Op[None]):
+class _Set:
     """SET with the cache's TTL rules, same encoding as ``async_set_cache_pipeline_with_ttls``."""
 
     __slots__ = ("_key", "_redis_cache", "_ttl", "_value")
 
     def __init__(self, redis_cache: RedisCache, key: str, value: object, ttl: float | None) -> None:
-        super().__init__()
         self._redis_cache: Final = redis_cache
         self._key: Final = key
         self._value: Final = value
         self._ttl: Final = ttl
 
-    def enqueue(self, pipe: _RedisPipeline) -> int:
+    def enqueue(self, pipe: RedisPipeline) -> int:
         ttl: Final = self._redis_cache.get_ttl(ttl=self._ttl)  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # untyped cache API
         pipe.set(
             self._redis_cache.check_and_fix_namespace(key=self._key),
@@ -240,195 +173,104 @@ class _Set(_Op[None]):
     def resolve(self, replies: Sequence[object]) -> None:
         return None
 
+    def recover(self, error: Exception) -> None:
+        raise error
+
     async def run_alone(self) -> None:
         await self._redis_cache.async_set_cache_pipeline_with_ttls(((self._key, self._value, self._ttl),))
 
 
-class _Delete(_Op[None]):
+class _Delete:
     """DEL of one key, the pipelined twin of ``async_delete_cache``."""
 
     __slots__ = ("_key", "_redis_cache")
 
     def __init__(self, redis_cache: RedisCache, key: str) -> None:
-        super().__init__()
         self._redis_cache: Final = redis_cache
         self._key: Final = key
 
-    def enqueue(self, pipe: _RedisPipeline) -> int:
+    def enqueue(self, pipe: RedisPipeline) -> int:
         pipe.delete(self._redis_cache.check_and_fix_namespace(key=self._key))
         return 1
 
     def resolve(self, replies: Sequence[object]) -> None:
         return None
 
+    def recover(self, error: Exception) -> None:
+        raise error
+
     async def run_alone(self) -> None:
         await self._redis_cache.async_delete_cache(self._key)
 
 
-class BatchResult(Generic[_T]):
-    """Awaitable handle for one declared operation; awaiting it flushes the batch it belongs to."""
-
-    __slots__ = ("_batch", "_op")
-
-    def __init__(self, batch: RedisBatch, op: _Op[_T]) -> None:
-        self._batch: Final = batch
-        self._op: Final = op
-
-    def __await__(self) -> Generator[object, None, _T]:
-        return self._wait().__await__()
-
-    async def _wait(self) -> _T:
-        if not self._op.future.done():
-            await self._batch.flush()
-        return self._op.future.result()
-
-    @property
-    def done(self) -> bool:
-        return self._op.future.done()
-
-    def on_settled(self, hook: SettledHook[_T]) -> None:
-        """For an owner that does not await: runs inside the flush once this operation has its result or
-        failure (or was cancelled with the pipeline), so the flush completes with the follow-up done."""
-        self._op.settled_hooks.append(hook)
+def pipeline_backend(redis_cache: RedisCache) -> PipelineBackend:
+    return PipelineBackend(
+        client=redis_cache.init_async_client,
+        breaker=redis_cache._circuit_breaker,  # pyright: ignore[reportPrivateUsage]  # same breaker as the cache's own methods
+        admit=redis_cache._admit_async_call,  # pyright: ignore[reportPrivateUsage]  # same connection gate as the cache's own methods
+        service_logging=redis_cache.service_logger_obj,
+        runs_alone=isinstance(redis_cache, RedisClusterCache),
+    )
 
 
-@dataclass(slots=True)
 class RedisBatch:
     """Operations declared here go out in one pipeline the next time any of them is awaited or ``flush`` runs."""
 
-    redis_cache: RedisCache
-    name: str = "redis_batch"
-    _pending: list[_Op[object]] = field(default_factory=list)  # mutable-ok: drained by flush
-    _flush_hooks: list[Callable[[], None]] = field(default_factory=list)  # mutable-ok: append-only registry
-    _lock: asyncio.Lock = field(default_factory=asyncio.Lock)
-    _misses: set[str] = field(default_factory=set)  # mutable-ok: keys an MGET of this request read as absent
-    flushes: int = 0
+    __slots__ = ("engine", "redis_cache")
+
+    def __init__(self, redis_cache: RedisCache, name: str = "redis_batch") -> None:
+        self.redis_cache: Final = redis_cache
+        self.engine: Final = PipelineBatch(pipeline_backend(redis_cache), name=name)
+
+    @property
+    def name(self) -> str:
+        return self.engine.name
+
+    @property
+    def flushes(self) -> int:
+        return self.engine.flushes
+
+    @property
+    def pending(self) -> int:
+        return self.engine.pending
 
     def mget(self, keys: Sequence[str]) -> BatchResult[Mapping[str, object]]:
-        op: Final = _MGet(self.redis_cache, keys)
-        op.future.add_done_callback(self._note_misses)
-        return self._declare(op)
+        result: Final = self.engine.declare(_MGet(self.redis_cache, keys))
+        result.on_settled(self._note_misses)
+        return result
 
     def _note_misses(self, future: asyncio.Future[Mapping[str, object]]) -> None:
         if future.cancelled() or future.exception() is not None:
             return
-        self._misses.update(key for key, value in future.result().items() if value is None)
+        self.engine.note_missing(key for key, value in future.result().items() if value is None)
 
     def read_as_missing(self, key: str) -> bool:
         """True when an MGET on this batch already found no value under ``key`` and nothing has set it since,
         so a per-key GET later in the same request can be answered without another round trip."""
-        return key in self._misses
+        return self.engine.read_as_missing(key)
 
     def script(
-        self, source: str, run: RegisteredScript, keys: Sequence[str], args: Sequence[_ScriptArg]
+        self, source: str, run: RegisteredScript, keys: Sequence[str], args: Sequence[Arg]
     ) -> BatchResult[object]:
-        return self._declare(_Script(self.redis_cache, source, run, keys, args))
+        return self.engine.declare(_Script(self.redis_cache, source, run, keys, args))
 
     def increment(self, key: str, value: float, ttl: int | None = None) -> BatchResult[float]:
-        return self._declare(_Increment(self.redis_cache, key, value, ttl))
+        return self.engine.declare(_Increment(self.redis_cache, key, value, ttl))
 
     def set(self, key: str, value: object, ttl: float | None = None) -> BatchResult[None]:
-        self._misses.discard(key)
-        return self._declare(_Set(self.redis_cache, key, value, ttl))
+        self.engine.note_present(key)
+        return self.engine.declare(_Set(self.redis_cache, key, value, ttl))
 
     def delete(self, key: str) -> BatchResult[None]:
-        self._misses.add(key)
-        return self._declare(_Delete(self.redis_cache, key))
+        self.engine.note_missing((key,))
+        return self.engine.declare(_Delete(self.redis_cache, key))
 
     def add_flush_hook(self, hook: Callable[[], None]) -> None:
         """Called at the start of every flush so lazily bound readers can declare their keys into the same trip."""
-        self._flush_hooks.append(hook)
-
-    @property
-    def pending(self) -> int:
-        return len(self._pending)
-
-    def _declare(self, op: _Op[_T]) -> BatchResult[_T]:
-        self._pending.append(op)  # pyright: ignore[reportArgumentType]  # heterogeneous ops share the flush loop
-        return BatchResult(self, op)
+        self.engine.add_flush_hook(hook)
 
     async def flush(self) -> None:
-        async with self._lock:
-            for hook in self._flush_hooks:
-                hook()
-            ops: Final = tuple(self._pending)
-            self._pending.clear()
-            if not ops:
-                return
-            self.flushes += 1
-            try:
-                if isinstance(self.redis_cache, RedisClusterCache):
-                    await asyncio.gather(*(op._settle_alone() for op in ops))  # pyright: ignore[reportPrivateUsage]  # batch owns its ops
-                else:
-                    await self._flush_pipeline(ops)
-            finally:
-                for op in ops:
-                    if not op.future.done():
-                        op.future.cancel()
-                await asyncio.gather(*(op.run_settled_hooks() for op in ops))
-
-    async def _flush_pipeline(self, ops: Sequence[_Op[object]]) -> None:
-        start_time: Final = time.time()
-        target, metadata = _pipeline_service_event(ops)
-        widths: list[int] = []  # mutable-ok: filled while enqueuing
-
-        async def run() -> list[object]:
-            client: Final = self.redis_cache.init_async_client()
-            async with client.pipeline(transaction=False) as pipe:
-                widths.extend(op.enqueue(pipe) for op in ops)
-                return await pipe.execute(raise_on_error=False)
-
-        try:
-            replies: Final = await _run_under_circuit_breaker(self.redis_cache._circuit_breaker, self.name, run)  # pyright: ignore[reportPrivateUsage]  # same breaker as the cache's own methods
-        except Exception as e:  # noqa: BLE001  # each declaring caller applies its own Redis fallback
-            log_redis_failure(verbose_logger, logging.WARNING, f"{self.name}: pipeline of {len(ops)} ops failed", e)
-            with service_target(target):
-                asyncio.create_task(
-                    self.redis_cache.service_logger_obj.async_service_failure_hook(
-                        service=ServiceTypes.REDIS,
-                        duration=time.time() - start_time,
-                        error=e,
-                        call_type=self.name,
-                        start_time=start_time,
-                        end_time=time.time(),
-                        event_metadata=metadata,
-                    )
-                )
-            for op in ops:
-                op.future.set_exception(e)
-            return
-        with service_target(target):
-            asyncio.create_task(
-                self.redis_cache.service_logger_obj.async_service_success_hook(
-                    service=ServiceTypes.REDIS,
-                    duration=time.time() - start_time,
-                    call_type=self.name,
-                    start_time=start_time,
-                    end_time=time.time(),
-                    event_metadata=metadata,
-                )
-            )
-        retries: list[Awaitable[None]] = []  # mutable-ok: collected while slicing replies
-        offset = 0
-        for op, width in zip(ops, widths):
-            retry = op.settle(replies[offset : offset + width])
-            offset += width
-            if retry is not None:
-                retries.append(retry)
-        if retries:
-            await asyncio.gather(*retries)
-
-
-MIXED_PIPELINE_TARGET: Final = "mixed"
-
-
-def _pipeline_service_event(ops: Sequence[_Op[object]]) -> tuple[str | None, dict[str, int | str]]:
-    """The target and metadata of one pipeline flush: the one key family every op was declared under, or
-    ``"mixed"`` plus the sorted families when owners of several families share the trip."""
-    families: Final = sorted({op.target for op in ops if op.target is not None})
-    if len(families) > 1:
-        return MIXED_PIPELINE_TARGET, {"op_count": len(ops), REDIS_FAMILIES_METADATA_KEY: ",".join(families)}
-    return next(iter(families), None), {"op_count": len(ops)}
+        await self.engine.flush()
 
 
 def _backend_key(redis_cache: RedisCache) -> object:
@@ -576,3 +418,14 @@ class request_redis_batch_scope:
     ) -> None:
         if self._token is not None:
             _active_request_batches.reset(self._token)
+
+
+def request_batch_engine(redis_cache: RedisCache) -> PipelineBatch | None:
+    """The engine the transport declares request-scoped commands on, shared with this backend's ``RedisBatch``."""
+    batch: Final = active_request_redis_batch(redis_cache)
+    return None if batch is None else batch.engine
+
+
+def post_call_batch_engine(redis_cache: RedisCache) -> PipelineBatch | None:
+    batch: Final = active_post_call_redis_batch(redis_cache)
+    return None if batch is None else batch.engine

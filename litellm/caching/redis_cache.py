@@ -42,6 +42,8 @@ from litellm.constants import (
 )
 from litellm.litellm_core_utils.core_helpers import get_parent_otel_span_from_kwargs
 from litellm.litellm_core_utils.coroutine_checker import coroutine_checker
+from litellm.redis.transport.client import AsyncPubSubClient, AsyncRedisCommands
+from litellm.redis.transport.contract import RedisFailure, RedisTransport
 from litellm.types.caching import (
     RedisPipelineIncrementOperation,
     RedisPipelineLpopOperation,
@@ -72,7 +74,7 @@ else:
     Span = Any
 
 
-class _AsyncRedisCommands(Protocol):
+class _AsyncRedisCommands(AsyncRedisCommands, Protocol):
     """Async redis commands this cache issues.
 
     redis-py's type stubs omit these methods on RedisCluster, so the union returned by
@@ -89,11 +91,7 @@ class _AsyncRedisCommands(Protocol):
 
     def rpush(self, name: str, *values: str | bytes | float) -> Awaitable[int]: ...
 
-    def lpop(self, name: str, count: int | None = None) -> Awaitable[object]: ...
-
     def pipeline(self, transaction: bool = True) -> "Pipeline[bytes]": ...
-
-    def eval(self, script: str, numkeys: int, *keys_and_args: str | bytes | float) -> Awaitable[object]: ...
 
 
 _GENERIC_CALLER_MODULES: Final = frozenset(
@@ -151,7 +149,11 @@ def _decoded_counts(values: Sequence[bytes | str | None]) -> tuple[int | None, .
 
 def _is_generic_caller_frame(frame: FrameType) -> bool:
     module: Final = frame.f_globals.get("__name__")
-    return module in _GENERIC_CALLER_MODULES or frame.f_code.co_name in _GENERIC_CALLER_FRAME_NAMES
+    return (
+        module in _GENERIC_CALLER_MODULES
+        or (isinstance(module, str) and module.startswith("litellm.redis."))
+        or frame.f_code.co_name in _GENERIC_CALLER_FRAME_NAMES
+    )
 
 
 def _ends_call_stack(frame: FrameType) -> bool:
@@ -512,25 +514,45 @@ def log_redis_failure(
     if isinstance(exc, RedisCircuitBreakerOpenError):
         logger.debug("%s: %s", message, exc, stacklevel=2)
         return
-    exc_info: Final = exc if with_traceback else None
-    if not is_redis_timeout_failure(exc):
-        logger.log(level, "%s: %s", message, exc, exc_info=exc_info, stacklevel=2)
+    _log_throttling_timeouts(
+        logger, level, message, exc, timeout=is_redis_timeout_failure(exc), exc_info=exc if with_traceback else None
+    )
+
+
+def log_redis_failure_value(logger: logging.Logger, level: int, message: str, failure: RedisFailure) -> None:
+    if failure.kind == "breaker_open":
+        logger.debug("%s: %s", message, failure.message, stacklevel=2)
+        return
+    _log_throttling_timeouts(logger, level, message, failure.message, timeout=failure.timeout, exc_info=None)
+
+
+def _log_throttling_timeouts(
+    logger: logging.Logger,
+    level: int,
+    message: str,
+    detail: object,
+    *,
+    timeout: bool,
+    exc_info: BaseException | None,
+) -> None:
+    if not timeout:
+        logger.log(level, "%s: %s", message, detail, exc_info=exc_info, stacklevel=3)
         return
     suppressed: Final = _redis_timeout_log_throttle.admit()
     if suppressed is None:
-        logger.debug("%s: %s", message, exc, stacklevel=2)
+        logger.debug("%s: %s", message, detail, stacklevel=3)
         return
     if suppressed == 0:
-        logger.log(level, "%s: %s", message, exc, exc_info=exc_info, stacklevel=2)
+        logger.log(level, "%s: %s", message, detail, exc_info=exc_info, stacklevel=3)
         return
     logger.log(
         level,
         "%s: %s (%d more Redis timeouts since the previous Redis timeout line were logged at DEBUG)",
         message,
-        exc,
+        detail,
         suppressed,
         exc_info=exc_info,
-        stacklevel=2,
+        stacklevel=3,
     )
 
 
@@ -582,6 +604,12 @@ async def _run_under_circuit_breaker(
         raise
     _exit_circuit_breaker(breaker, admission)
     return result
+
+
+def is_redis_error(exc: BaseException) -> bool:
+    from redis.exceptions import RedisError
+
+    return isinstance(exc, RedisError)
 
 
 def _run_under_circuit_breaker_sync(
@@ -828,6 +856,27 @@ class RedisCache(BaseCache):
 
     def _async_commands(self) -> _AsyncRedisCommands:
         return self.init_async_client()
+
+    def _pubsub_commands(self) -> AsyncPubSubClient:
+        return self.init_pubsub_client()  # pyright: ignore[reportUnknownVariableType]  # redis generics
+
+    def transport(self) -> RedisTransport:
+        from litellm.caching.redis_batch import post_call_batch_engine, request_batch_engine
+        from litellm.redis.transport.events import RedisServiceEvents
+        from litellm.redis.transport.redis_py import RedisPyTransport
+
+        return RedisPyTransport(
+            client=self._async_commands,
+            namespace=self.namespace,
+            breaker=self._circuit_breaker,
+            admit=self._admit_async_call,
+            events=RedisServiceEvents(self.service_logger_obj),
+            multi_get=lambda keys: self._async_run_redis_mget_operation(list(keys)),
+            server_version=self._parse_redis_major_version,
+            pubsub_client=self._pubsub_commands,
+            request_engine=lambda: request_batch_engine(self),
+            post_call_engine=lambda: post_call_batch_engine(self),
+        )
 
     def check_and_fix_namespace(self, key: str) -> str:
         """

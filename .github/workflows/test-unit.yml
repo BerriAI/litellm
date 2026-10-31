@@ -682,6 +682,7 @@ jobs:
           - shard: caching-local
             test-path: >-
               tests/unit/caching
+              tests/unit/redis
             python-version: "3.12"
             workers: 2
             reruns: 0
