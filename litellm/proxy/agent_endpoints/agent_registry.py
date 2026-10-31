@@ -74,6 +74,9 @@ class AgentRecord(Protocol):
     def agent_name(self) -> str: ...
 
     @property
+    def static_headers(self) -> object: ...
+
+    @property
     def litellm_params(self) -> Mapping[str, object] | None: ...
 
     @property
@@ -280,6 +283,43 @@ def parse_agent_litellm_params(value: object) -> Mapping[str, object]:
 
 
 _KILL_SWITCH_ADAPTER: Final[TypeAdapter[AgentKillSwitchConfig | None]] = TypeAdapter(AgentKillSwitchConfig | None)
+_AGENT_STATIC_HEADERS_ADAPTER: Final[TypeAdapter[Mapping[str, str]]] = TypeAdapter(Mapping[str, str])
+_EMPTY_AGENT_STATIC_HEADERS: Final[Mapping[str, str]] = MappingProxyType({})
+
+
+def redact_agent_static_headers(
+    headers: Mapping[str, str] | None,
+) -> dict[str, str] | None:  # mutable-ok: AgentResponse.static_headers is a plain dict
+    if headers is None:
+        return None
+    return {name: REDACTED_BY_LITELM_STRING for name in headers}
+
+
+def parse_agent_static_headers(value: object) -> Mapping[str, str]:
+    if value is None:
+        return _EMPTY_AGENT_STATIC_HEADERS
+    try:
+        parsed: Final = (
+            _AGENT_STATIC_HEADERS_ADAPTER.validate_json(value)
+            if isinstance(value, str)
+            else _AGENT_STATIC_HEADERS_ADAPTER.validate_python(value)
+        )
+    except ValidationError:
+        return _EMPTY_AGENT_STATIC_HEADERS
+    return MappingProxyType(dict(parsed))
+
+
+def serialize_agent_static_headers(incoming: Mapping[str, str] | None, existing: object) -> str:
+    if incoming is None:
+        return safe_dumps({})
+    existing_headers: Final = parse_agent_static_headers(existing)
+    return safe_dumps(
+        {
+            name: existing_headers[name] if value == REDACTED_BY_LITELM_STRING else value
+            for name, value in incoming.items()
+            if value != REDACTED_BY_LITELM_STRING or name in existing_headers
+        }
+    )
 
 
 def parse_agent_kill_switch(value: object) -> AgentKillSwitchConfig | None:
@@ -615,7 +655,9 @@ class AgentRegistry:
 
             # Serialize static_headers
             static_headers_obj: Final = agent.get("static_headers")
-            static_headers_val: Final[str | None] = safe_dumps(dict(static_headers_obj)) if static_headers_obj else None
+            static_headers_val: Final[str | None] = (
+                serialize_agent_static_headers(static_headers_obj, None) if static_headers_obj else None
+            )
 
             extra_headers_val: Final = agent.get("extra_headers")
             access_group_ids_val: Final = agent.get("access_group_ids")
@@ -751,7 +793,9 @@ class AgentRegistry:
                     update_data[rate_field] = agent.get(rate_field)
             if "static_headers" in agent:
                 headers_value: Final = agent.get("static_headers")
-                update_data["static_headers"] = safe_dumps(dict(headers_value) if headers_value is not None else {})
+                update_data["static_headers"] = serialize_agent_static_headers(
+                    headers_value, existing_agent.get("static_headers")
+                )
             if "extra_headers" in agent:
                 extra_headers_value: Final = agent.get("extra_headers")
                 update_data["extra_headers"] = extra_headers_value if extra_headers_value is not None else []
@@ -828,8 +872,8 @@ class AgentRegistry:
 
             # Serialize static_headers for update
             static_headers_obj_u: Final = agent.get("static_headers")
-            static_headers_val_u: Final[str] = (
-                safe_dumps(dict(static_headers_obj_u)) if static_headers_obj_u is not None else safe_dumps({})
+            static_headers_val_u: Final[str] = serialize_agent_static_headers(
+                static_headers_obj_u, existing_row.static_headers if existing_row is not None else None
             )
             extra_headers_val_u: Final = agent.get("extra_headers") or []
             access_group_ids_val_u: Final = tuple(dict.fromkeys(agent.get("access_group_ids") or ()))

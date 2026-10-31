@@ -38,6 +38,7 @@ from litellm.proxy.agent_endpoints.agent_registry import (
     AgentIdWhere,
     parse_agent_kill_switch,
     parse_agent_litellm_params,
+    redact_agent_static_headers,
     redact_sensitive_agent_litellm_params,
 )
 from litellm.proxy.agent_endpoints.agent_search import (
@@ -187,10 +188,10 @@ def _redact_sensitive_agent_fields(
 ) -> list[AgentResponse]:
     """
     Return copies of the given agents with credential-bearing litellm_params
-    values and kill-switch auth secrets replaced by a fixed marker (never
-    returned to ANY caller, admin included) and, for non-admin callers,
-    virtual-key, header and kill-switch fields stripped entirely. The original
-    objects are not modified.
+    values, static-header values and kill-switch auth secrets replaced by a
+    fixed marker (never returned to ANY caller, admin included) and, for
+    non-admin callers, virtual-key, header and kill-switch fields stripped
+    entirely. The original objects are not modified.
     """
     from litellm.proxy.proxy_server import general_settings, jwt_handler
 
@@ -207,6 +208,7 @@ def _redact_sensitive_agent_fields(
             copy.keys = None
             copy.kill_switch = None
             copy.identity = None
+        copy.static_headers = redact_agent_static_headers(copy.static_headers)
         if copy.litellm_params:
             copy.litellm_params = _redact_agent_litellm_params_dict(copy.litellm_params)
         copy.kill_switch = redact_kill_switch(copy.kill_switch)
