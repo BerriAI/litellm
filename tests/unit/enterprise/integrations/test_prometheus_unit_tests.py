@@ -241,21 +241,21 @@ async def test_router_cooldown_event_callback():
 
     Ensures that the router_cooldown_event_callback function correctly logs the cooldown event to the PrometheusLogger
     """
-    # Mock Router instance
-    mock_router = MagicMock()
+    # Mock routing context
+    mock_ctx = MagicMock()
     mock_deployment = {
         "litellm_params": {"model": "gpt-5-mini"},
         "model_name": "gpt-5-mini",
         "model_info": ModelInfo(id="test-model-id"),
     }
-    mock_router.get_deployment.return_value = mock_deployment
+    mock_ctx.registry.return_value.deployment.return_value = mock_deployment
 
     # Create a real PrometheusLogger instance
     prometheus_logger = CustomPrometheusLogger()
     litellm.callbacks = [prometheus_logger]
 
     await router_cooldown_event_callback(
-        litellm_router_instance=mock_router,
+        ctx=mock_ctx,
         deployment_id="test-deployment",
         exception_status="429",
         cooldown_time=60.0,
@@ -263,8 +263,8 @@ async def test_router_cooldown_event_callback():
 
     await asyncio.sleep(0.5)
 
-    # Assert that the router's get_deployment method was called
-    mock_router.get_deployment.assert_called_once_with(model_id="test-deployment")
+    # Assert that the router's deployment lookup was called
+    mock_ctx.registry.return_value.deployment.assert_called_once_with("test-deployment")
 
     print(
         "prometheus_logger.deployment_complete_outages",
@@ -301,21 +301,21 @@ async def test_router_cooldown_event_callback_no_prometheus():
 
     Ensures that the router_cooldown_event_callback function does not raise an error when no PrometheusLogger is found
     """
-    # Mock Router instance
-    mock_router = MagicMock()
+    # Mock routing context
+    mock_ctx = MagicMock()
     mock_deployment = {
         "litellm_params": {"model": "gpt-5-mini"},
         "model_name": "gpt-5-mini",
         "model_info": ModelInfo(id="test-model-id"),
     }
-    mock_router.get_deployment.return_value = mock_deployment
+    mock_ctx.registry.return_value.deployment.return_value = mock_deployment
 
     await router_cooldown_event_callback(
-        litellm_router_instance=mock_router,
+        ctx=mock_ctx,
         deployment_id="test-deployment",
         exception_status="429",
         cooldown_time=60.0,
     )
 
-    # Assert that the router's get_deployment method was called
-    mock_router.get_deployment.assert_called_once_with(model_id="test-deployment")
+    # Assert that the router's deployment lookup was called
+    mock_ctx.registry.return_value.deployment.assert_called_once_with("test-deployment")
