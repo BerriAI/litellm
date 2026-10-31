@@ -61,18 +61,6 @@ class _AzureGatewayClientParams(TypedDict, total=False, extra_items=object):
     timeout: ReadOnly[float | httpx.Timeout]
 
 
-LITELLM_PARAM_FIELDS: Final = TypeAdapter(Mapping[str, object])
-
-
-def declared_base_models(litellm_params: Mapping[str, object]) -> tuple[str, ...]:
-    model_info: Final = litellm_params.get("model_info")
-    info_base_model: Final = (
-        LITELLM_PARAM_FIELDS.validate_python(model_info).get("base_model") if isinstance(model_info, Mapping) else None
-    )
-    candidates: Final = (litellm_params.get("base_model"), info_base_model)
-    return tuple(name for name in candidates if isinstance(name, str) and name)
-
-
 class AzureOpenAIError(BaseLLMException):
     def __init__(
         self,

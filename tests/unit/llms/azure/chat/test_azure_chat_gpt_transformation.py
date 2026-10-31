@@ -867,17 +867,28 @@ def test_azure_drop_params_cuts_part_breakpoints_down_to_what_azure_chat_accepts
     assert _azure_request_parts(config, model, litellm_params) == _TRIMMED_AZURE_PARTS
 
 
+@pytest.mark.parametrize("litellm_params", [{}, {"drop_params": False}], ids=("no-drop-params", "drop-params-false"))
+def test_azure_sends_part_breakpoints_as_written_without_drop_params(
+    registered_azure_breakpoint_reader: None, litellm_params: dict[str, object]
+) -> None:
+    assert _azure_request_parts(AzureOpenAIConfig(), "unit-breakpoint-reader", litellm_params) == list(
+        _MARKED_AZURE_PARTS
+    )
+
+
 @pytest.mark.parametrize(
     "model, litellm_params",
     [
-        ("unit-breakpoint-reader", {}),
-        ("unit-breakpoint-reader", {"drop_params": False}),
         ("unit-breakpoint-ignorer", {"drop_params": True}),
         ("unit-breakpoint-reader", {"drop_params": True, "base_model": "azure/unit-breakpoint-ignorer"}),
+        ("my-azure-alias", {"drop_params": True, "model_info": {"base_model": "azure/unit-breakpoint-ignorer"}}),
     ],
-    ids=("no-drop-params", "drop-params-false", "known-non-reader", "base-model-known-non-reader"),
+    ids=("known-non-reader", "base-model-known-non-reader", "model-info-base-model-known-non-reader"),
 )
-def test_azure_sends_part_breakpoints_as_written_without_drop_params_or_to_a_known_non_reader(
+def test_azure_drop_params_strips_part_breakpoints_from_a_known_non_reader(
     registered_azure_breakpoint_reader: None, model: str, litellm_params: dict[str, object]
 ) -> None:
-    assert _azure_request_parts(AzureOpenAIConfig(), model, litellm_params) == list(_MARKED_AZURE_PARTS)
+    assert _azure_request_parts(AzureOpenAIConfig(), model, litellm_params) == [
+        {"type": "text", "text": "Stable prefix"},
+        {"type": "text", "text": "Implicit"},
+    ]

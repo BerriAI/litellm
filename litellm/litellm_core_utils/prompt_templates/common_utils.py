@@ -2220,6 +2220,12 @@ def prompt_cache_breakpoint_for_wire(marker: object, drop_params: bool) -> objec
     return prompt_cache_breakpoint_within(_PROMPT_CACHE_BREAKPOINT, marker)
 
 
+def prompt_cache_breakpoint_with_readable_mode(marker: object, drop_params: bool) -> object:
+    """The client's marker as written, or None under drop_params when no target could read its mode, so the
+    target's own config decides which ttl and keys it keeps."""
+    return None if prompt_cache_breakpoint_for_wire(marker, drop_params) is None else marker
+
+
 def whole_prompt_cache_breakpoint_or_none(marker: object) -> PromptCacheBreakpoint | None:
     return _accepted_prompt_cache_breakpoint(_PROMPT_CACHE_BREAKPOINT, marker)
 

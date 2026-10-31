@@ -194,13 +194,24 @@ def test_marker_with_an_unknown_key(bridge: _Bridge, mode: Mode, expected: JsonV
 
 
 @pytest.mark.parametrize(
-    ("mode", "expected"), (("on", pcb.EXPLICIT), ("off", _UNSUPPORTED_TTL)), ids=("ttl-dropped-on", "verbatim-off")
+    ("mode", "expected"), (("on", None), ("off", _UNSUPPORTED_TTL)), ids=("dropped-on", "verbatim-off")
 )
 def test_marker_with_an_unsupported_ttl(bridge: _Bridge, mode: Mode, expected: JsonValue) -> None:
     marker: Final = uuid.uuid4().hex
     call_id: Final = _completion(_chat(bridge, bridge.model(mode), [_user(marker, _UNSUPPORTED_TTL)]), marker)
     pcb.assert_marker(_user_block_on_wire(bridge, marker), expected)
     bridge.spend.landed(bridge.model(mode), call_id, marker)
+
+
+def test_marker_with_an_unsupported_ttl_keeps_its_mode_on_a_host_opted_in_with_prompt_cache_options(
+    bridge: _Bridge,
+) -> None:
+    marker: Final = uuid.uuid4().hex
+    with bridge.gateway.scenario() as scenario:
+        model: Final = scenario.model(model=pcb.MODEL, api_base=bridge.api_base, drop_params=True, **_OPTED_IN)
+        call_id: Final = _completion(_chat(bridge, model, [_user(marker, _UNSUPPORTED_TTL)]), marker)
+        pcb.assert_marker(_user_block_on_wire(bridge, marker), pcb.EXPLICIT)
+        bridge.spend.landed(model, call_id, marker)
 
 
 def _second_block_on_wire(bridge: _Bridge, marker: str) -> dict[str, JsonValue]:

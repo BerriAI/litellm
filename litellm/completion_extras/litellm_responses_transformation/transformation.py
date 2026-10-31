@@ -36,7 +36,7 @@ from litellm.completion_extras.litellm_responses_transformation.history import (
 from litellm.integrations.anthropic_cache_control_hook import supports_openai_prompt_cache_breakpoint
 from litellm.litellm_core_utils.hidden_params import get_hidden_params, get_or_create_hidden_params
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
-    prompt_cache_breakpoint_for_wire,
+    prompt_cache_breakpoint_with_readable_mode,
     responses_reasoning_items_from_thinking_blocks,
     with_prompt_cache_breakpoint,
 )
@@ -1666,7 +1666,9 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                     if original_type == "text":
                         converted = with_prompt_cache_breakpoint(
                             self._convert_content_str_to_input_text(item.get("text", ""), role),
-                            prompt_cache_breakpoint_for_wire(item.get("prompt_cache_breakpoint"), drop_params),
+                            prompt_cache_breakpoint_with_readable_mode(
+                                item.get("prompt_cache_breakpoint"), drop_params
+                            ),
                         )
                         result.append(converted)
                         verbose_logger.debug("Chat provider:   text -> %s", converted)
@@ -1679,14 +1681,18 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                                     cast(ChatCompletionImageObject, item), role
                                 ),
                             ),
-                            prompt_cache_breakpoint_for_wire(item.get("prompt_cache_breakpoint"), drop_params),
+                            prompt_cache_breakpoint_with_readable_mode(
+                                item.get("prompt_cache_breakpoint"), drop_params
+                            ),
                         )
                         result.append(converted)
                         verbose_logger.debug("Chat provider:   image_url -> %s", converted)
                     elif original_type == "input_audio":
                         converted = with_prompt_cache_breakpoint(
                             {"type": "input_audio", "input_audio": item.get("input_audio")},
-                            prompt_cache_breakpoint_for_wire(item.get("prompt_cache_breakpoint"), drop_params),
+                            prompt_cache_breakpoint_with_readable_mode(
+                                item.get("prompt_cache_breakpoint"), drop_params
+                            ),
                         )
                         result.append(converted)
                         verbose_logger.debug("Chat provider:   input_audio -> %s", converted)
@@ -1702,7 +1708,9 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                                 _input_file_from_file_value(
                                     cast("ChatCompletionFileObject", item).get("file"),  # cast-ok: type tag checked
                                 ),
-                                prompt_cache_breakpoint_for_wire(item.get("prompt_cache_breakpoint"), drop_params),
+                                prompt_cache_breakpoint_with_readable_mode(
+                                    item.get("prompt_cache_breakpoint"), drop_params
+                                ),
                             )
                             result.append(converted)
                             verbose_logger.debug("Chat provider:   file -> %s", converted)
@@ -1726,7 +1734,9 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                             # Default to input_text for unknown types
                             converted = with_prompt_cache_breakpoint(
                                 self._convert_content_str_to_input_text(str(item.get("text", item)), role),
-                                prompt_cache_breakpoint_for_wire(item.get("prompt_cache_breakpoint"), drop_params),
+                                prompt_cache_breakpoint_with_readable_mode(
+                                    item.get("prompt_cache_breakpoint"), drop_params
+                                ),
                             )
                             result.append(converted)
                             verbose_logger.debug("Chat provider:   unknown(%s) -> %s", original_type, converted)

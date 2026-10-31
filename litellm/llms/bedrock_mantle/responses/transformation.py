@@ -115,7 +115,9 @@ class BedrockMantleResponsesAPIConfig(BedrockMantleAuthMixin, OpenAIResponsesAPI
             headers["OpenAI-Project"] = litellm_params.aws_bedrock_project_id
         return headers
 
-    def _prompt_cache_breakpoint_to_wire(self, litellm_params: GenericLiteLLMParams) -> Callable[[object], object]:
+    def _prompt_cache_breakpoint_to_wire(
+        self, litellm_params: GenericLiteLLMParams, reads_breakpoints: bool, known_support: bool | None
+    ) -> Callable[[object], object]:
         return partial(chat_completion_prompt_cache_breakpoint_for_wire, drop_params=True)
 
     def supports_native_file_search(self) -> bool:

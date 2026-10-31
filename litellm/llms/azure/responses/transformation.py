@@ -83,8 +83,12 @@ class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
     def _is_gpt_5_model(model: str) -> bool:
         return AzureOpenAIGPT5Config.is_model_gpt_5_model(model)
 
-    def _prompt_cache_breakpoint_to_wire(self, litellm_params: GenericLiteLLMParams) -> Callable[[object], object]:
-        return partial(prompt_cache_breakpoint_within, _AZURE_RESPONSES_PROMPT_CACHE_BREAKPOINT)
+    def _prompt_cache_breakpoint_to_wire(
+        self, litellm_params: GenericLiteLLMParams, reads_breakpoints: bool, known_support: bool | None
+    ) -> Callable[[object], object]:
+        if reads_breakpoints or known_support is True:
+            return partial(prompt_cache_breakpoint_within, _AZURE_RESPONSES_PROMPT_CACHE_BREAKPOINT)
+        return super()._prompt_cache_breakpoint_to_wire(litellm_params, reads_breakpoints, known_support)
 
     @staticmethod
     def _supports_reasoning_effort_none(model: str) -> bool:

@@ -12,7 +12,7 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm.integrations.anthropic_cache_control_hook import (
     AnthropicCacheControlHook,
-    openai_prompt_cache_breakpoint_support,
+    deployment_prompt_cache_breakpoint_support,
     targets_openai_api,
 )
 from litellm.litellm_core_utils.core_helpers import normalize_drop_params, process_response_headers
@@ -102,13 +102,6 @@ _PROVIDERS_WITH_STRICT_COMPACT_PARAMS: Final = frozenset(
 )
 _INPUT_ITEM: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
 _CONTENT_PARTS: Final[TypeAdapter[Sequence[Mapping[str, object]]]] = TypeAdapter(Sequence[Mapping[str, object]])
-
-
-class _DeclaredModel(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="ignore", from_attributes=True)
-
-    base_model: object = None
-    model_info: object = None
 
 
 class _DeploymentHost(BaseModel):
@@ -702,28 +695,30 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
     ) -> str | ResponseInputParam:
         if not isinstance(input, list) or not drops_params(litellm_params):
             return input
-        keeps_markers: Final = reads_breakpoints or self._keeps_prompt_cache_breakpoints(
-            model=model, litellm_params=litellm_params
+        known_support: Final = self._prompt_cache_breakpoint_support(model=model, litellm_params=litellm_params)
+        to_wire: Final = (
+            self._prompt_cache_breakpoint_to_wire(litellm_params, reads_breakpoints, known_support)
+            if reads_breakpoints or known_support is not False
+            else None
         )
-        to_wire: Final = self._prompt_cache_breakpoint_to_wire(litellm_params) if keeps_markers else None
         wire_safe_items: Final = tuple(_item_with_wire_safe_prompt_cache_breakpoints(item, to_wire) for item in input)
         if _same_objects(wire_safe_items, input):
             return input
         wire_safe_input: Final = list(wire_safe_items)
         return cast("ResponseInputParam", wire_safe_input)  # cast-ok: items keep their shape, minus a rejected marker
 
-    def _prompt_cache_breakpoint_to_wire(self, litellm_params: GenericLiteLLMParams) -> Callable[[object], object]:
-        if self._targets_openai_api(litellm_params):
+    def _prompt_cache_breakpoint_to_wire(
+        self, litellm_params: GenericLiteLLMParams, reads_breakpoints: bool, known_support: bool | None
+    ) -> Callable[[object], object]:
+        opted_in_openai_host: Final = reads_breakpoints and self.custom_llm_provider == LlmProviders.OPENAI
+        if opted_in_openai_host or self._targets_openai_api(litellm_params):
             return partial(prompt_cache_breakpoint_for_wire, drop_params=True)
         return whole_prompt_cache_breakpoint_or_none
 
-    def _keeps_prompt_cache_breakpoints(self, model: str, litellm_params: GenericLiteLLMParams) -> bool:
-        provider: Final = _provider_name(self.custom_llm_provider)
-        base_model: Final = self._declared_base_model(model=model, litellm_params=litellm_params)
-        known_support: Final = (
-            openai_prompt_cache_breakpoint_support(name, provider) for name in dict.fromkeys((base_model, model))
+    def _prompt_cache_breakpoint_support(self, model: str, litellm_params: GenericLiteLLMParams) -> bool | None:
+        return deployment_prompt_cache_breakpoint_support(
+            model, _provider_name(self.custom_llm_provider), litellm_params
         )
-        return next((support for support in known_support if support is not None), None) is not False
 
     def _targets_openai_api(self, litellm_params: GenericLiteLLMParams) -> bool:
         host: Final = _DeploymentHost.model_validate(litellm_params)
@@ -891,13 +886,6 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         model_info: Final[object] = getattr(litellm_params, "model_info", None)
         base_model: Final[object] = model_info.get("base_model") if isinstance(model_info, dict) else None
         return base_model if isinstance(base_model, str) and base_model else model
-
-    @staticmethod
-    def _declared_base_model(model: str, litellm_params: GenericLiteLLMParams) -> str:
-        declared: Final = _DeclaredModel.model_validate(litellm_params)
-        model_info: Final = _json_object_or_none(declared.model_info)
-        candidates: Final = (declared.base_model, None if model_info is None else model_info.get("base_model"))
-        return next((name for name in candidates if isinstance(name, str) and name), model)
 
     @staticmethod
     def _sanitized_tool_entry(
