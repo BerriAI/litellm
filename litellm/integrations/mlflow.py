@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING, Any, Final
 
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.redact_messages import scrubbed_exception_text
 
 if TYPE_CHECKING:
     from litellm.types.utils import StandardLoggingPayload
@@ -88,7 +89,19 @@ class MlflowLogger(CustomLogger):
 
             # Record exception info as event
             if exception := kwargs.get("exception"):
-                span.add_event(SpanEvent.from_exception(exception))
+                scrubbed: Final = scrubbed_exception_text(kwargs)
+                span.add_event(
+                    SpanEvent.from_exception(exception)
+                    if scrubbed is None
+                    else SpanEvent(
+                        name="exception",
+                        attributes={
+                            "exception.message": scrubbed[0],
+                            "exception.type": exception.__class__.__name__,
+                            "exception.stacktrace": scrubbed[1],
+                        },
+                    )
+                )
 
             self._extract_and_set_chat_attributes(span, kwargs, response_obj)
             self._end_span_or_trace(
