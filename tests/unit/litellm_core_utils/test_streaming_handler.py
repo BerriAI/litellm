@@ -7953,6 +7953,86 @@ def test_aamazing_unit_test_custom_stream_wrapper_n():
         ), f"idx={idx} translated chunk = {chunk_dict} != openai chunk = {chunks[idx]}"
 
 
+@pytest.mark.parametrize("async_stream", [False, True])
+@pytest.mark.parametrize("transport", ["sdk", "http_handler"])
+@pytest.mark.parametrize("separate_finish", [False, True])
+@pytest.mark.parametrize(
+    "delta_kind,finish_reason,expected",
+    [
+        ("tool", "stop", "tool_calls"),
+        ("tool", "length", "length"),
+        ("tool", "content_filter", "content_filter"),
+        ("tool", "tool_calls", "tool_calls"),
+        ("empty_tools", "stop", "stop"),
+        ("text", "stop", "stop"),
+        ("function", "stop", "stop"),
+    ],
+)
+async def test_openai_compatible_tool_stream_finish_reason(
+    async_stream: bool,
+    transport: str,
+    separate_finish: bool,
+    delta_kind: str,
+    finish_reason: str,
+    expected: str,
+    logging_obj: Logging,
+) -> None:
+    function: Final = {"name": "get_weather", "arguments": "{}"}
+    delta: Final = {
+        "tool": {"tool_calls": [{"index": 0, "id": "call_1", "type": "function", "function": function}]},
+        "empty_tools": {"content": "Hello", "tool_calls": []},
+        "text": {"content": "Hello"},
+        "function": {"function_call": function},
+    }[delta_kind]
+    choices: Final = (
+        {"index": 0, "delta": {"role": "assistant", **delta}, "finish_reason": None if separate_finish else finish_reason},
+        *(({"index": 0, "delta": {}, "finish_reason": finish_reason},) if separate_finish else ()),
+    )
+    body: Final = "".join(
+        "data: " + json.dumps({
+            "id": "chatcmpl-tool-stop", "object": "chat.completion.chunk", "created": 1,
+            "model": "m", "choices": [choice],
+        }) + "\n\n"
+        for choice in choices
+    ) + "data: [DONE]\n\n"
+    raw_response: Final = httpx.Response(
+        200, content=body, headers={"content-type": "text/event-stream"},
+        request=httpx.Request("POST", "https://provider.example/v1/chat/completions"),
+    )
+    client: Final = AsyncOpenAI(api_key="unused") if async_stream else OpenAI(api_key="unused")
+    stream: Final = (
+        (
+            AsyncStream(cast_to=ChatCompletionChunk, response=raw_response, client=client)
+            if isinstance(client, AsyncOpenAI)
+            else Stream(cast_to=ChatCompletionChunk, response=raw_response, client=client)
+        )
+        if transport == "sdk"
+        else OpenAIChatCompletionStreamingHandler(
+            streaming_response=raw_response.aiter_lines() if async_stream else raw_response.iter_lines(),
+            sync_stream=not async_stream,
+        )
+    )
+    response: Final = CustomStreamWrapper(
+        completion_stream=stream, model="m", logging_obj=logging_obj,
+        custom_llm_provider="openai" if transport == "sdk" else "hosted_vllm",
+    )
+    try:
+        received: Final = [chunk async for chunk in response] if async_stream else list(response)
+        assert [chunk.choices[0].finish_reason for chunk in received if chunk.choices[0].finish_reason] == [expected]
+        assembled: Final = litellm.stream_chunk_builder(received)
+        assert assembled.choices[0].finish_reason == expected
+        assert litellm.stream_chunk_builder(response.chunks).choices[0].finish_reason == expected
+        if delta_kind == "tool":
+            assert [tool.model_dump() for tool in assembled.choices[0].message.tool_calls] == [
+                {"id": "call_1", "type": "function", "function": function}
+            ]
+    finally:
+        if isinstance(client, AsyncOpenAI):
+            await client.close()
+        else:
+            client.close()
+
+
 def test_unit_test_custom_stream_wrapper_function_call():
     """
     Test if model returns a tool call, the finish reason is correctly set to 'tool_calls'
