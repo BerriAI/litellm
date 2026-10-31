@@ -10,9 +10,9 @@ and uses LiteLLM auth.
 import re
 from collections.abc import Mapping
 from copy import deepcopy
-from typing import Final, Literal
+from typing import Final, Literal, cast
 
-from litellm.litellm_core_utils.core_helpers import as_str_mapping, iter_items
+from litellm.litellm_core_utils.core_helpers import iter_items
 
 SupportedA2AVersion = Literal["0.3", "1.0"]
 
@@ -60,10 +60,14 @@ def point_agent_card_at_proxy(
         tuple(iter_items(agent_card.get("supportedInterfaces"))) if isinstance(interfaces, list) else ()
     )
     first: Final[object] = interface_items[0] if interface_items else None
-    first_mapping: Final = as_str_mapping(first)
     pointed_interfaces: Final = (
-        {"supportedInterfaces": [{**first_mapping, "url": proxy_url}, *interface_items[1:]]}
-        if isinstance(first, dict) and first_mapping is not None
+        {
+            "supportedInterfaces": [
+                {**cast(dict[str, object], first), "url": proxy_url},  # cast-ok: card interface keys are strings
+                *interface_items[1:],
+            ]
+        }
+        if isinstance(first, dict)
         else {}
     )
     return deepcopy({**agent_card, "url": proxy_url, **pointed_interfaces})
