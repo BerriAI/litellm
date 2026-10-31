@@ -27,6 +27,12 @@ class NativeClickHouseSpendStorage:
     def insert_rows(self, rows: Sequence[Mapping[str, object]]) -> Future[None]: ...
 
 @final
+class NativeDatabase:
+    @staticmethod
+    def connect() -> Future[NativeDatabase]: ...
+    def close(self) -> Future[None]: ...
+
+@final
 class NativeDiagnosticProcessor:
     def __new__(cls, minimum_custom_key_length: int) -> NativeDiagnosticProcessor: ...
     def redact_text(self, text: str) -> str: ...
@@ -208,6 +214,7 @@ __all__ = [
     "HuggingFaceEncoding",
     "NativeClickHouseSpendConfig",
     "NativeClickHouseSpendStorage",
+    "NativeDatabase",
     "NativeDiagnosticProcessor",
     "ProcessReservedForForking",
     "ResponsesWebSocketConnection",
