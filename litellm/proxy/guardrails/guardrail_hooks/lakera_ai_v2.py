@@ -221,6 +221,9 @@ def _unmaskable_reason(
 
 
 def _gemini_items(value: object) -> Sequence[object]:
+    """A repeated Gemini field as a sequence: a JSON array, or the single object Google also accepts in its place."""
+    if isinstance(value, dict):
+        return (value,)
     return _OBJECT_LIST.validate_python(value) if isinstance(value, list) else ()
 
 
@@ -235,7 +238,7 @@ def _has_gemini_contents(data: object) -> bool:
     """True if ``data`` is a Gemini ``generateContent`` body, which carries its prompt in
     ``contents`` and ``systemInstruction`` instead of ``messages``."""
     fields: Final = as_str_mapping(data) or {}
-    return isinstance(fields.get("contents"), list) or isinstance(
+    return isinstance(fields.get("contents"), list | dict) or isinstance(
         fields.get("systemInstruction") or fields.get("system_instruction"), dict
     )
 

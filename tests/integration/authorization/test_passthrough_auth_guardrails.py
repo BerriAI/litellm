@@ -19,12 +19,15 @@ from pydantic import JsonValue, TypeAdapter
 
 GUARDRAIL: Final = "passthrough-auth-guardrail"
 GLOBAL_POST_CALL: Final = "passthrough-global-post-call"
+KEY_POST_CALL: Final = "passthrough-key-post-call"
+GUARDED_MODEL: Final = "passthrough-guarded-model"
 BLOCK_MARKER: Final = "block-this-prompt"
 OPENAI_ROUTE: Final = "/openai/v1/chat/completions"
 ANTHROPIC_ROUTE: Final = "/anthropic/v1/messages"
 GEMINI_ROUTE: Final = "/gemini/v1beta/models/gemini-2.5-flash:generateContent"
 _CONFIG: Final = Path(__file__).resolve().parents[1] / "proxy_config.yaml"
 _JSON: Final = TypeAdapter(dict[str, JsonValue])
+_JSON_LIST: Final = TypeAdapter(list[JsonValue])
 
 Level = Literal["key", "team", "project"]
 
@@ -53,8 +56,20 @@ def _openai_reply(_request: Request) -> Reply:
     return Reply(body=_OPENAI_BODY)
 
 
-def _vendor_down(_request: Request) -> Reply:
-    return Reply(status=500, body=b'{"error": "guardrail vendor down"}')
+def _lakera_clean(_request: Request) -> Reply:
+    return Reply(body=json.dumps({"flagged": False, "breakdown": [], "payload": []}).encode())
+
+
+def _lakera_flagged(_request: Request) -> Reply:
+    return Reply(
+        body=json.dumps(
+            {
+                "flagged": True,
+                "breakdown": [{"detector_type": "prompt_attack", "detected": True, "message_id": 0}],
+                "payload": [],
+            }
+        ).encode()
+    )
 
 
 def _anthropic_reply(_request: Request) -> Reply:
@@ -77,6 +92,7 @@ class AuthGuardrailRig:
     owned: OwnedProxy
     vendor: Wire
     post_call_vendor: Wire
+    key_post_call_vendor: Wire
     upstreams: Mapping[str, Wire]
 
 
@@ -85,7 +101,8 @@ def rig(session_gateway: Gateway, tmp_path_factory: pytest.TempPathFactory) -> I
     directory: Final = tmp_path_factory.mktemp("passthrough-auth-guardrails")
     with ExitStack() as stack:
         vendor: Final = stack.enter_context(wire_server(_verdict))
-        post_call_vendor: Final = stack.enter_context(wire_server(_vendor_down))
+        post_call_vendor: Final = stack.enter_context(wire_server(_lakera_clean))
+        key_post_call_vendor: Final = stack.enter_context(wire_server(_lakera_flagged))
         upstreams: Final = MappingProxyType(
             {
                 OPENAI_ROUTE: stack.enter_context(wire_server(_openai_reply)),
@@ -99,6 +116,17 @@ def rig(session_gateway: Gateway, tmp_path_factory: pytest.TempPathFactory) -> I
             yaml.safe_dump(
                 {
                     **config,
+                    "model_list": [
+                        *_JSON_LIST.validate_python(config.get("model_list") or []),
+                        {
+                            "model_name": GUARDED_MODEL,
+                            "litellm_params": {
+                                "model": "openai/gpt-5.6",
+                                "api_key": "synthetic-openai-key",
+                                "guardrails": [GUARDRAIL],
+                            },
+                        },
+                    ],
                     "guardrails": [
                         {
                             "guardrail_name": GUARDRAIL,
@@ -111,9 +139,19 @@ def rig(session_gateway: Gateway, tmp_path_factory: pytest.TempPathFactory) -> I
                             },
                         },
                         {
+                            "guardrail_name": KEY_POST_CALL,
+                            "litellm_params": {
+                                "guardrail": "lakera_v2",
+                                "mode": "post_call",
+                                "default_on": False,
+                                "api_base": key_post_call_vendor.url,
+                                "api_key": "synthetic-guardrail-key",
+                            },
+                        },
+                        {
                             "guardrail_name": GLOBAL_POST_CALL,
                             "litellm_params": {
-                                "guardrail": "generic_guardrail_api",
+                                "guardrail": "lakera_v2",
                                 "mode": "post_call",
                                 "default_on": True,
                                 "api_base": post_call_vendor.url,
@@ -133,7 +171,7 @@ def rig(session_gateway: Gateway, tmp_path_factory: pytest.TempPathFactory) -> I
             "GEMINI_API_KEY": "synthetic-gemini-key",
         }
         owned: Final = stack.enter_context(owned_proxy_process(session_gateway, directory, environment, config=path))
-        yield AuthGuardrailRig(owned, vendor, post_call_vendor, upstreams)
+        yield AuthGuardrailRig(owned, vendor, post_call_vendor, key_post_call_vendor, upstreams)
 
 
 def _key_with_guardrail(scenario: Scenario, level: Level) -> str:
@@ -155,6 +193,7 @@ def _send(gateway: Gateway, route: str, body: Mapping[str, JsonValue], key: str)
 def _drain(rig: AuthGuardrailRig) -> None:
     rig.vendor.drain()
     rig.post_call_vendor.drain()
+    rig.key_post_call_vendor.drain()
     for upstream in rig.upstreams.values():
         upstream.drain()
 
@@ -228,3 +267,21 @@ def test_pre_call_guardrail_relays_the_provider_reply_untouched(rig: AuthGuardra
         assert response.content == _OPENAI_BODY
         assert len(rig.vendor.drain()) == 1
         assert rig.post_call_vendor.drain() == ()
+
+
+def test_key_post_call_guardrail_runs_on_a_model_with_its_own_guardrails(rig: AuthGuardrailRig) -> None:
+    gateway: Final = rig.owned.gateway
+    with gateway.scenario() as scenario:
+        key: Final = scenario.key(metadata={"guardrails": [KEY_POST_CALL]})
+        _drain(rig)
+
+        response: Final = _send(
+            gateway,
+            OPENAI_ROUTE,
+            {**_route_body(OPENAI_ROUTE, "What is the capital of France?"), "model": GUARDED_MODEL},
+            key,
+        )
+
+        assert response.status_code == 400, response.text
+        assert len(rig.key_post_call_vendor.drain()) == 1
+        assert len(rig.upstreams[OPENAI_ROUTE].drain()) == 1
