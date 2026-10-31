@@ -6,6 +6,7 @@ regardless of the routing strategy being used.
 """
 
 import asyncio
+from collections.abc import Callable, Mapping
 from datetime import datetime, timedelta, timezone
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock
@@ -17,6 +18,7 @@ import litellm
 from litellm import Router
 from litellm.caching.dual_cache import DualCache
 from litellm.caching.redis_cache import RedisCircuitBreakerOpenError
+from litellm.router_utils.pre_call_checks.io_token_rate_limit_check import io_token_limits_by_cache_key
 from litellm.router_utils.pre_call_checks.model_rate_limit_check import (
     ModelRateLimitingCheck,
 )
@@ -483,12 +485,72 @@ class Clock:
         return self.now
 
 
+class _ReadsThatFinishOnceAllStarted:
+    def __init__(self, expected: int, usage: int):
+        self.expected = expected
+        self.usage = usage
+        self.started = 0
+        self.all_started = asyncio.Event()
+
+    async def async_get_cache(self, key: str, parent_otel_span: object = None) -> int:
+        self.started += 1
+        if self.started == self.expected:
+            self.all_started.set()
+        await self.all_started.wait()
+        return self.usage
+
+
 def _pre_call(check: ModelRateLimitingCheck, deployment: dict[str, object]) -> object:
     return check.pre_call_check(deployment)
 
 
 async def _async_pre_call(check: ModelRateLimitingCheck, deployment: dict[str, object]) -> object:
     return await check.async_pre_call_check(deployment)
+
+
+def _rejects(check: ModelRateLimitingCheck, deployment: dict[str, object]) -> bool:
+    try:
+        _pre_call(check, deployment)
+    except litellm.RateLimitError:
+        return True
+    return False
+
+
+async def _async_rejects(check: ModelRateLimitingCheck, deployment: dict[str, object]) -> bool:
+    try:
+        await _async_pre_call(check, deployment)
+    except litellm.RateLimitError:
+        return True
+    return False
+
+
+_FRESH_LIMITS: Final = (
+    {"rpm": 0},
+    {"rpm": 0.0},
+    {"rpm": 0.5},
+    {"rpm": False},
+    {"rpd": 0},
+    {"tpm": 0},
+    {"tpd": 0},
+    {"itpm": 0},
+    {"otpm": 0},
+    {"rpm": 1, "tpm": 1},
+)
+
+
+def _redis_batch_answering(usage: int) -> Callable[[list[str]], dict[str, int]]:
+    def batch_get_cache(key_list: list[str]) -> dict[str, int]:
+        return dict.fromkeys(key_list, usage)
+
+    return batch_get_cache
+
+
+def _deployment_with(limits: Mapping[str, float]) -> dict[str, object]:
+    return {
+        "litellm_params": {"model": "gpt-4.1-mini", **limits},
+        "model_info": {"id": "limit-test-id"},
+        "model_name": "daily-model",
+    }
 
 
 async def _async_log_success(check: ModelRateLimitingCheck, kwargs: dict[str, object]) -> None:
@@ -538,6 +600,132 @@ class TestDailyLimits:
             await _async_pre_call(check, deployment)
 
         assert "TPD limit=100, current usage=120" in str(exc_info.value)
+
+    @pytest.mark.asyncio
+    async def test_deployments_at_their_rpm_or_rpd_limit_are_reported_and_ones_below_are_not(self):
+        minute_spent = {
+            "litellm_params": {"model": "gpt-4.1-mini", "rpm": 1},
+            "model_info": {"id": "minute-test-id"},
+            "model_name": "daily-model",
+        }
+        below_limits = {
+            "litellm_params": {"model": "gpt-4.1-mini", "rpm": 2, "rpd": 2},
+            "model_info": {"id": "below-test-id"},
+            "model_name": "daily-model",
+        }
+        check = ModelRateLimitingCheck(dual_cache=DualCache(), clock=Clock(DAY_ONE))
+
+        await _async_pre_call(check, RPD_DEPLOYMENT)
+        await _async_pre_call(check, RPD_DEPLOYMENT)
+        await _async_pre_call(check, minute_spent)
+        await _async_pre_call(check, below_limits)
+
+        assert await check.async_deployment_ids_at_limit(
+            [RPD_DEPLOYMENT, minute_spent, below_limits], None
+        ) == frozenset({"daily-test-id", "minute-test-id"})
+
+    @pytest.mark.asyncio
+    async def test_deployment_limit_reads_wait_on_redis_together_rather_than_one_by_one(self):
+        deployments = [
+            {
+                "litellm_params": {"model": "gpt-4.1-mini", "rpm": 5},
+                "model_info": {"id": f"concurrent-{index}"},
+                "model_name": "daily-model",
+            }
+            for index in range(3)
+        ]
+        reads = _ReadsThatFinishOnceAllStarted(expected=len(deployments), usage=5)
+        redis_cache = MagicMock()
+        redis_cache.async_get_cache = reads.async_get_cache
+        check = ModelRateLimitingCheck(dual_cache=DualCache(redis_cache=redis_cache), clock=Clock(DAY_ONE))
+
+        at_limit = await asyncio.wait_for(check.async_deployment_ids_at_limit(deployments, None), timeout=5)
+
+        assert at_limit == frozenset({"concurrent-0", "concurrent-1", "concurrent-2"})
+
+    def test_sync_deployment_limit_reads_reach_redis_in_one_round_trip(self):
+        deployments: list[dict[str, object]] = [
+            {
+                "litellm_params": {"model": "gpt-4.1-mini", "rpm": 5, "rpd": 50},
+                "model_info": {"id": f"batched-{index}"},
+                "model_name": "daily-model",
+            }
+            for index in range(3)
+        ]
+        redis_cache = MagicMock()
+        redis_cache.batch_get_cache.side_effect = _redis_batch_answering(5)
+        check = ModelRateLimitingCheck(dual_cache=DualCache(redis_cache=redis_cache), clock=Clock(DAY_ONE))
+
+        at_limit = check.deployment_ids_at_limit(deployments)
+
+        assert at_limit == frozenset({"batched-0", "batched-1", "batched-2"})
+        assert redis_cache.batch_get_cache.call_count == 1
+        assert len(redis_cache.batch_get_cache.call_args.kwargs["key_list"]) == 6
+
+    @pytest.mark.parametrize(
+        "redis_batch_get",
+        [_redis_batch_answering(0), RedisCircuitBreakerOpenError()],
+        ids=["redis-behind-this-worker", "redis-circuit-open"],
+    )
+    def test_sync_a_deployment_this_worker_counted_to_its_limit_stays_at_its_limit(
+        self, redis_batch_get: Callable[[list[str]], dict[str, int]] | Exception
+    ):
+        spent: dict[str, object] = {
+            "litellm_params": {"model": "gpt-4.1-mini", "rpm": 1},
+            "model_info": {"id": "spent-test-id"},
+            "model_name": "daily-model",
+        }
+        redis_cache = MagicMock()
+        redis_cache.batch_get_cache.side_effect = redis_batch_get
+        dual_cache = DualCache(redis_cache=redis_cache)
+        check = ModelRateLimitingCheck(dual_cache=dual_cache, clock=Clock(DAY_ONE))
+        _, rpm_key = check._get_cache_keys(spent, DAY_ONE.strftime("%H-%M"))
+        dual_cache.set_cache(key=rpm_key, value=1, local_only=True)
+
+        assert check.deployment_ids_at_limit([spent, _deployment_with({"rpd": 2})]) == frozenset({"spent-test-id"})
+        assert rpm_key not in redis_cache.batch_get_cache.call_args.kwargs["key_list"]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("limit_kind", ["itpm", "otpm"])
+    @pytest.mark.parametrize(("used", "reported"), [(99, False), (100, True)], ids=["room-left", "used-up"])
+    async def test_a_deployment_is_reported_at_its_token_limit_once_no_token_is_left(
+        self, limit_kind: str, used: int, reported: bool
+    ):
+        deployment = _deployment_with({limit_kind: 100})
+        dual_cache = DualCache()
+        check = ModelRateLimitingCheck(dual_cache=dual_cache, clock=Clock(DAY_ONE))
+        token_key = next(
+            key
+            for key, limit in io_token_limits_by_cache_key(deployment, DAY_ONE.strftime("%H-%M"))
+            if limit is not None
+        )
+        dual_cache.set_cache(key=token_key, value=used, local_only=True)
+
+        assert ("limit-test-id" in check.deployment_ids_at_limit([deployment])) is reported
+        assert ("limit-test-id" in await check.async_deployment_ids_at_limit([deployment], None)) is reported
+
+    @pytest.mark.parametrize("limits", _FRESH_LIMITS, ids=lambda limits: ",".join(f"{kind}={value!r}" for kind, value in limits.items()))
+    def test_a_deployment_is_reported_at_its_limit_exactly_when_its_next_request_is_rejected(
+        self, limits: Mapping[str, float]
+    ):
+        deployment = _deployment_with(limits)
+        check = ModelRateLimitingCheck(dual_cache=DualCache(), clock=Clock(DAY_ONE))
+
+        reported = "limit-test-id" in check.deployment_ids_at_limit([deployment])
+
+        assert reported == _rejects(check, deployment)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("limits", _FRESH_LIMITS, ids=lambda limits: ",".join(f"{kind}={value!r}" for kind, value in limits.items()))
+    async def test_async_a_deployment_is_reported_at_its_limit_exactly_when_its_next_request_is_rejected(
+        self, limits: Mapping[str, float]
+    ):
+        deployment = _deployment_with(limits)
+        check = ModelRateLimitingCheck(dual_cache=DualCache(), clock=Clock(DAY_ONE))
+
+        reported = "limit-test-id" in await check.async_deployment_ids_at_limit([deployment], None)
+
+        assert reported == await _async_rejects(check, deployment)
 
     def test_pre_call_check_minute_rejected_request_does_not_spend_rpd(self):
         clock = Clock(DAY_ONE)

@@ -152,6 +152,16 @@ def _get_cache_keys(deployment: dict, current_minute: str) -> tuple[str, str] | 
     return itpm_key, otpm_key
 
 
+def io_token_limits_by_cache_key(
+    deployment: dict[str, object],  # mutable-ok: the io token readers take router deployment dicts
+    current_minute: str,
+) -> tuple[tuple[str, int | None], ...]:
+    cache_keys: Final = _get_cache_keys(deployment, current_minute)
+    if cache_keys is None:
+        return ()
+    return tuple(zip(cache_keys, get_deployment_io_token_limits(deployment), strict=True))
+
+
 def _served_model(deployment: object) -> str:
     params: Final = deployment.get("litellm_params") if is_str_keyed_mapping(deployment) else None
     served: Final = params.get("model") if is_str_keyed_mapping(params) else None

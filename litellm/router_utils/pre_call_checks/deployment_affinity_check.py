@@ -13,8 +13,8 @@ where routing to a consistent deployment is still beneficial.
 """
 
 import hashlib
-from collections.abc import Callable, Mapping, Sequence
-from typing import Final, cast
+from collections.abc import Awaitable, Callable, Mapping, Sequence
+from typing import Final, TypeVar, cast
 
 from pydantic import TypeAdapter
 from typing_extensions import ReadOnly, TypedDict
@@ -30,10 +30,16 @@ from litellm.caching.affinity_cache import (
 from litellm.caching.dual_cache import DualCache
 from litellm.constants import SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY, SESSION_ID_GENERATED_METADATA_KEY
 from litellm.integrations.custom_logger import CustomLogger, Span
-from litellm.litellm_core_utils.routing_common_utils import deployment_ids_failed_in_request
+from litellm.litellm_core_utils.routing_common_utils import (
+    deployment_ids_failed_in_request,
+    web_search_alternatives_to_pin,
+    web_search_capable_deployments,
+)
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import CallTypes
+
+_DeploymentT: Final = TypeVar("_DeploymentT", bound=dict[str, object])
 
 
 class DeploymentAffinityCacheValue(TypedDict, closed=True):
@@ -110,6 +116,8 @@ class DeploymentAffinityCheck(CustomLogger):
         model_group_affinity_config: dict[str, list[str]] | None = None,
         is_priority_group: Callable[[str], bool] | None = None,
         session_affinity_repin_on_failover: bool = False,
+        deployment_ids_at_limit: Callable[[Sequence[dict[str, object]], Span | None], Awaitable[frozenset[str]]]
+        | None = None,
     ):
         super().__init__()
         self.cache = cache
@@ -120,6 +128,7 @@ class DeploymentAffinityCheck(CustomLogger):
         self.model_group_affinity_config: dict[str, list[str]] = model_group_affinity_config or {}
         self.is_priority_group = is_priority_group
         self.session_affinity_repin_on_failover = session_affinity_repin_on_failover
+        self.deployment_ids_at_limit = deployment_ids_at_limit
 
     def _get_effective_flags(self, model_group: str) -> tuple[bool, bool, bool]:
         """
@@ -366,7 +375,7 @@ class DeploymentAffinityCheck(CustomLogger):
         return self._pinned_model_id(winner)
 
     @staticmethod
-    def _find_deployment_by_model_id(healthy_deployments: list[dict], model_id: str) -> dict | None:
+    def _find_deployment_by_model_id(healthy_deployments: Sequence[_DeploymentT], model_id: str) -> _DeploymentT | None:
         for deployment in healthy_deployments:
             model_info = deployment.get("model_info")
             if not isinstance(model_info, dict):
@@ -391,7 +400,7 @@ class DeploymentAffinityCheck(CustomLogger):
         2. cached API-key deployment affinity
         """
         request_kwargs = request_kwargs or {}
-        typed_healthy_deployments: Final = cast(list[dict], healthy_deployments)
+        typed_healthy_deployments: Final = cast(list[dict[str, object]], healthy_deployments)  # cast-ok: router dicts
         if request_kwargs.get("_target_order") is not None:
             return typed_healthy_deployments
 
@@ -463,17 +472,16 @@ class DeploymentAffinityCheck(CustomLogger):
                     session_model_id = session_cache_result
 
                 if session_model_id and session_model_id not in failed_deployment_ids:
-                    session_deployment: Final = self._find_deployment_by_model_id(
-                        healthy_deployments=typed_healthy_deployments,
-                        model_id=session_model_id,
+                    session_deployments: Final = await self._pinned_deployments(
+                        typed_healthy_deployments, session_model_id, request_kwargs, parent_otel_span
                     )
-                    if session_deployment is not None:
+                    if session_deployments is not None:
                         verbose_router_logger.debug(
                             "DeploymentAffinityCheck: session-id affinity hit -> deployment=%s session_id=%s",
                             session_model_id,
                             session_id,
                         )
-                        return [session_deployment]
+                        return list(session_deployments)
                     else:
                         verbose_router_logger.debug(
                             "DeploymentAffinityCheck: session-id pinned deployment=%s not found in healthy_deployments",
@@ -500,11 +508,10 @@ class DeploymentAffinityCheck(CustomLogger):
         if not model_id or model_id in failed_deployment_ids:
             return typed_healthy_deployments
 
-        deployment = self._find_deployment_by_model_id(
-            healthy_deployments=typed_healthy_deployments,
-            model_id=model_id,
+        pinned_deployments: Final = await self._pinned_deployments(
+            typed_healthy_deployments, model_id, request_kwargs, parent_otel_span
         )
-        if deployment is None:
+        if pinned_deployments is None:
             verbose_router_logger.debug(
                 "DeploymentAffinityCheck: pinned deployment=%s not found in healthy_deployments",
                 model_id,
@@ -516,7 +523,34 @@ class DeploymentAffinityCheck(CustomLogger):
             model_id,
             self._shorten_for_logs(self._hash_user_key(user_key)),
         )
-        return [deployment]
+        return list(pinned_deployments)
+
+    async def _pinned_deployments(
+        self,
+        healthy_deployments: list[_DeploymentT],  # mutable-ok: router deployment-list contract
+        model_id: str,
+        request_kwargs: Mapping[str, object],
+        parent_otel_span: Span | None,
+    ) -> tuple[_DeploymentT, ...] | None:
+        pinned: Final = self._find_deployment_by_model_id(healthy_deployments=healthy_deployments, model_id=model_id)
+        if pinned is None:
+            return None
+        at_rate_limit: Final = await self._web_search_deployment_ids_at_limit(
+            healthy_deployments, request_kwargs, parent_otel_span
+        )
+        return (*web_search_alternatives_to_pin(pinned, healthy_deployments, request_kwargs, at_rate_limit), pinned)
+
+    async def _web_search_deployment_ids_at_limit(
+        self,
+        deployments: Sequence[_DeploymentT],
+        request_kwargs: Mapping[str, object],
+        parent_otel_span: Span | None,
+    ) -> frozenset[str]:
+        if self.deployment_ids_at_limit is None:
+            return frozenset()
+        return await self.deployment_ids_at_limit(
+            web_search_capable_deployments(deployments, request_kwargs), parent_otel_span
+        )
 
     async def _read_shared_session_pin(self, cache_key: str, ttl_seconds: int, parent_otel_span: Span | None) -> object:
         redis_cache: Final = self.cache.redis_cache
