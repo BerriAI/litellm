@@ -9265,21 +9265,19 @@ class PythonCore(DeprecatedRouterMembers):
                             lookup_groups=lookup_groups,
                         )
                     )
-                    if context_window_fallback_model_group is None:
-                        raise original_exception
+                    if context_window_fallback_model_group is not None:
+                        input_kwargs.update(
+                            {
+                                "fallback_model_group": context_window_fallback_model_group,
+                                "original_model_group": original_model_group,
+                            }
+                        )
 
-                    input_kwargs.update(
-                        {
-                            "fallback_model_group": context_window_fallback_model_group,
-                            "original_model_group": original_model_group,
-                        }
-                    )
-
-                    response = await run_async_fallback(
-                        *args,
-                        **input_kwargs,
-                    )
-                    return response
+                        response = await run_async_fallback(
+                            *args,
+                            **input_kwargs,
+                        )
+                        return response
 
                 else:
                     error_message = f"model={model_group}. context_window_fallbacks={mask_sensitive_structure(context_window_fallbacks)}. fallbacks={mask_sensitive_structure(fallbacks)}.\n\nSet 'context_window_fallback' - https://docs.litellm.ai/docs/routing#fallbacks"

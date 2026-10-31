@@ -19340,6 +19340,28 @@ async def test_anthropic_messages_stream_overflow_before_content_takes_the_conte
 
 
 @pytest.mark.asyncio
+async def test_anthropic_messages_stream_overflow_on_a_group_missing_from_the_context_window_chain_takes_its_fallbacks() -> (
+    None
+):
+    router: Final = _anthropic_messages_retry_router(
+        num_retries=0, fallbacks=[{"glm": ["fb"]}], context_window_fallbacks=[{"other": ["cw"]}]
+    )
+    provider: Final = _AnthropicMessagesScriptedProvider(
+        _anthropic_messages_overflow_before_content,
+        lambda: _AnthropicMessagesFakeByteStream(
+            [_anthropic_messages_message_start_chunk(), _anthropic_messages_content_chunk("from fb")]
+        ),
+    )
+
+    stream: Final = await _anthropic_messages_stream_through_router(router, provider)
+    body: Final = [chunk async for chunk in stream]
+
+    assert body == [_anthropic_messages_message_start_chunk(), _anthropic_messages_content_chunk("from fb")]
+    assert [model in _ANTHROPIC_MESSAGES_RETRY_GROUP for model, _, _ in provider.calls] == [True, False]
+    assert [model for model, _, _ in provider.calls][-1] == "anthropic/fb-model"
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("context_window_fallbacks", "request_kwargs"),
     [
@@ -19451,8 +19473,10 @@ async def test_anthropic_messages_policy_retry_retries_an_overflow_only_when_the
         pytest.param([{"glm": ["cw"]}], {}, True, id="router-context-window-fallback"),
         pytest.param(None, {"context_window_fallbacks": [{"glm": ["cw"]}]}, True, id="request-context-window-fallback"),
         pytest.param(None, {}, False, id="no-fallback-configured"),
+        pytest.param(None, {"fallbacks": [{"glm": ["fb"]}]}, True, id="request-plain-fallback"),
         pytest.param([{"glm": ["cw"]}], {"disable_fallbacks": True}, False, id="fallbacks-disabled-for-the-request"),
         pytest.param(None, {"context_window_fallbacks": ["cw"]}, True, id="request-chain-in-a-non-standard-shape"),
+        pytest.param(None, {"context_window_fallbacks": [{}]}, False, id="request-chain-of-an-empty-entry"),
     ],
 )
 def test_stream_can_fall_back_on_overflow_counts_context_window_fallbacks(
