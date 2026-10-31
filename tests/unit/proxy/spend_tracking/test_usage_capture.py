@@ -1551,3 +1551,59 @@ async def test_large_batch_recovers_partial_commit_with_frozen_pricing_and_rejec
     assert database.rows == before_conflict
     assert transactions.qsize() > 2
     assert meter.pending_bytes == meter.pending_records == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("outcome", ["drain", "cancel", "failure"])
+async def test_batch_callback_handoff_is_bounded_and_runtime_owns_persistence(
+    outcome: str, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy.spend_tracking.usage_capture import CapturedUsage, UsageCaptureRuntime, captured_callback_kwargs
+
+    database: Final = StoredUsage()
+    entered: Final = asyncio.Event()
+    release: Final = asyncio.Event()
+
+    async def persist(writes: tuple[UsageWrite, ...]) -> None:
+        entered.set()
+        await release.wait()
+        if outcome == "failure":
+            raise RuntimeError("Persistence unavailable")
+        await database.insert(writes)
+
+    runtime: Final = UsageCaptureRuntime()
+    runtime.start(persist, UsageCaptureSettings(batch_size=2, max_pending_records=2), load=database.load)
+    monkeypatch.setattr(proxy_server, "usage_capture", runtime)
+    kwargs: Final = {"call_type": "aretrieve_batch", "litellm_call_id": "poll", "litellm_params": {}}
+    response: Final = {
+        "id": "batch",
+        "status": "completed",
+        "usage": {"batch_usage_by_request": ({"model": "model", "usage": {"prompt_tokens": 2}},) * 3},
+    }
+    callback: Final = asyncio.create_task(captured_callback_kwargs(kwargs, response, NOW, NOW))
+    try:
+        await entered.wait()
+        assert callback.done(), "Batch persistence must not consume the legacy callback deadline"
+        captured: Final = (await callback)["_accounting_capture"]
+        assert isinstance(captured, CapturedUsage) and not captured.receipt.done()
+        second: Final = await captured_callback_kwargs(kwargs, response, NOW, NOW)
+        assert isinstance(second.get("_accounting_capture"), CapturedUsage)
+        overflow: Final = await captured_callback_kwargs(kwargs, response, NOW, NOW)
+        assert "_accounting_capture" not in overflow
+        assert "Batch capture producer capacity exhausted" in caplog.text
+        if outcome != "cancel":
+            release.set()
+        await runtime.stop(0 if outcome == "cancel" else 1)
+        assert captured.receipt.done()
+        assert captured.receipt.cancelled() is (outcome == "cancel")
+        if outcome == "failure":
+            assert isinstance(captured.receipt.exception(), RuntimeError)
+            assert "Batch usage capture failed" in caplog.text
+        assert len(database.rows) == (4 if outcome == "drain" else 0)
+        with pytest.raises(UsageCaptureError, match="active ledger writer"):
+            runtime.submit_batch(kwargs, response, NOW, NOW)
+    finally:
+        release.set()
+        await asyncio.gather(callback, return_exceptions=True)
+        await runtime.stop(1)

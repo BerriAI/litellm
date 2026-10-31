@@ -619,6 +619,49 @@ def _batch_row_write(root: UsageWrite, row: Mapping[str, JsonValue], index: int)
     )
 
 
+@dataclass(frozen=True, slots=True)
+class _BatchCapture:
+    payload: SpendLogsPayload
+    root: UsageWrite
+    rows: tuple[Mapping[str, JsonValue], ...]
+    prerequisites: tuple[asyncio.Future[None], ...]
+
+
+def _prepare_batch_capture(
+    kwargs: Mapping[str, object], response: object, start_time: datetime, end_time: datetime
+) -> _BatchCapture:
+    from litellm.proxy.db.db_spend_update_writer import get_llm_router
+    from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
+
+    rows: Final = tuple(sorted(_batch_rows(response), key=_json))
+    builder: Final = _CaptureBuilder(kwargs, response)
+    payload: Final = get_logging_payload(
+        dict(kwargs), response, start_time, end_time, llm_router=get_llm_router(), capture_usage=builder.observe
+    )
+    if len(builder.writes) != 1 or _terminal_facts(builder.writes[0]) is None:
+        raise UsageCaptureError("Batch rows require one terminal job observation")
+    return _BatchCapture(
+        payload, _batch_root(builder.writes[0], rows), rows, tuple(prior.receipt for prior in _prior_captures(kwargs))
+    )
+
+
+async def _persist_batch_capture(
+    meter: DurableUsageMeter,
+    load: Callable[[tuple[str, ...]], Awaitable[tuple[UsageWrite, ...]]],
+    capture: _BatchCapture,
+) -> None:
+    for receipt in capture.prerequisites:
+        await asyncio.shield(receipt)
+    await meter.record_writes((capture.root,))
+    accepted: Final = await load((capture.root.event.event_id,))
+    if len(accepted) != 1:
+        raise UsageCaptureError("Committed batch snapshot could not be loaded")
+    frozen: Final = _reuse_terminal_snapshot(capture.root, accepted[0])
+    remaining: Final = iter(enumerate(capture.rows))
+    while group := tuple(islice(remaining, meter.settings.batch_size)):
+        await meter.record_writes(tuple(_batch_row_write(frozen, row, index) for index, row in group))
+
+
 async def capture_batch_callback(
     meter: DurableUsageMeter,
     load: Callable[[tuple[str, ...]], Awaitable[tuple[UsageWrite, ...]]] | None,
@@ -627,32 +670,13 @@ async def capture_batch_callback(
     start_time: datetime,
     end_time: datetime,
 ) -> CapturedUsage:
-    from litellm.proxy.db.db_spend_update_writer import get_llm_router
-    from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
-
     if load is None:
         raise UsageCaptureError("Batch capture requires the existing ledger snapshot reader")
-    rows: Final = tuple(sorted(_batch_rows(response), key=_json))
-    builder: Final = _CaptureBuilder(kwargs, response)
-    payload: Final = get_logging_payload(
-        dict(kwargs), response, start_time, end_time, llm_router=get_llm_router(), capture_usage=builder.observe
-    )
-    if len(builder.writes) != 1 or _terminal_facts(builder.writes[0]) is None:
-        raise UsageCaptureError("Batch rows require one terminal job observation")
-    root: Final = _batch_root(builder.writes[0], rows)
-    for prior in _prior_captures(kwargs):
-        await asyncio.shield(prior.receipt)
-    await meter.record_writes((root,))
-    accepted: Final = await load((root.event.event_id,))
-    if len(accepted) != 1:
-        raise UsageCaptureError("Committed batch snapshot could not be loaded")
-    frozen: Final = _reuse_terminal_snapshot(root, accepted[0])
-    remaining: Final = iter(enumerate(rows))
-    while group := tuple(islice(remaining, meter.settings.batch_size)):
-        await meter.record_writes(tuple(_batch_row_write(frozen, row, index) for index, row in group))
+    capture: Final = _prepare_batch_capture(kwargs, response, start_time, end_time)
+    await _persist_batch_capture(meter, load, capture)
     receipt: Final[asyncio.Future[None]] = asyncio.get_running_loop().create_future()
     receipt.set_result(None)
-    return CapturedUsage(payload, (frozen,), receipt)
+    return CapturedUsage(capture.payload, (capture.root,), receipt)
 
 
 async def captured_callback_kwargs(
@@ -669,7 +693,7 @@ async def captured_callback_kwargs(
         return kwargs
     try:
         captured: Final = (
-            await capture_batch_callback(usage_meter, usage_capture.load, kwargs, response, start_time, end_time)
+            usage_capture.submit_batch(kwargs, response, start_time, end_time)
             if _batch_rows(response)
             else capture_callback(usage_meter, kwargs, response, start_time, end_time)
         )
@@ -926,6 +950,8 @@ class UsageBatchWriter:
 
 class UsageCaptureRuntime:
     def __init__(self) -> None:
+        self._batches: Final[set[asyncio.Task[None]]] = set()  # mutable-ok: owned producer lifecycle
+        self._stopping = False
         self.meter: DurableUsageMeter | None = None
         self.load: Callable[[tuple[str, ...]], Awaitable[tuple[UsageWrite, ...]]] | None = None
 
@@ -945,18 +971,51 @@ class UsageCaptureRuntime:
         meter: Final = DurableUsageMeter(write_batch, settings)
         self.meter = meter
         self.load = load
+        self._stopping = False
         Logging.usage_capture_callback = lambda logger, response, start, end, freeze: capture_logging_usage(
             meter, logger, response, start, end, freeze
         )
+
+    def submit_batch(
+        self, kwargs: Mapping[str, object], response: object, start_time: datetime, end_time: datetime
+    ) -> CapturedUsage:
+        meter: Final = self.meter
+        load: Final = self.load
+        if meter is None or load is None or self._stopping:
+            raise UsageCaptureError("Batch capture requires an active ledger writer and snapshot reader")
+        if len(self._batches) >= meter.settings.max_pending_records:
+            raise UsageCaptureError("Batch capture producer capacity exhausted")
+        capture: Final = _prepare_batch_capture(kwargs, response, start_time, end_time)
+        task: Final = asyncio.create_task(_persist_batch_capture(meter, load, capture), name="accounting batch capture")
+        self._batches.add(task)
+        task.add_done_callback(self._batch_finished)
+        return CapturedUsage(capture.payload, (capture.root,), task)
+
+    def _batch_finished(self, task: asyncio.Task[None]) -> None:
+        self._batches.discard(task)
+        if task.cancelled():
+            verbose_proxy_logger.error("Batch usage capture stopped before complete persistence")
+        elif (error := task.exception()) is not None:
+            verbose_proxy_logger.error("Batch usage capture failed", exc_info=error)
 
     async def stop(self, timeout: float) -> None:
         from litellm.litellm_core_utils.litellm_logging import Logging
 
         if self.meter is None:
             return
+        self._stopping = True
+        deadline: Final = asyncio.get_running_loop().time() + timeout
         try:
-            await self.meter.stop(timeout)
+            if self._batches:
+                await asyncio.wait(tuple(self._batches), timeout=max(0, timeout))
         finally:
-            Logging.usage_capture_callback = None
-            self.meter = None
-            self.load = None
+            remaining: Final = tuple(self._batches)
+            for task in remaining:
+                task.cancel()
+            await asyncio.gather(*remaining, return_exceptions=True)
+            try:
+                await self.meter.stop(max(0, deadline - asyncio.get_running_loop().time()))
+            finally:
+                Logging.usage_capture_callback = None
+                self.meter = None
+                self.load = None

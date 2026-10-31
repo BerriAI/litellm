@@ -114,6 +114,7 @@ class DurableUsageMeter:
         self._admission: Final = Lock()
         self._queue: Final[deque[_Pending]] = deque()  # mutable-ok: one bounded producer/consumer queue
         self._wakeup: Final = asyncio.Event()
+        self._capacity_changed: Final = asyncio.Event()
         self._task: asyncio.Task[None] | None = None
         self._closed = False
         self.pending_bytes = 0
@@ -165,11 +166,13 @@ class DurableUsageMeter:
         if size > self.settings.max_pending_bytes:
             raise UsageCaptureError("One usage observation exceeds capture capacity")
         while (receipt := self._submit_available(writes)) is None:
-            await self.flush()
+            self._wakeup.set()
+            await self._capacity_changed.wait()
         self._wakeup.set()
         await asyncio.shield(receipt)
 
     def _submit_available(self, writes: tuple[UsageWrite, ...]) -> asyncio.Future[None] | None:
+        self._capacity_changed.clear()
         try:
             receipt: Final = self.submit(writes)
         except UsageCaptureError:
@@ -265,6 +268,7 @@ class DurableUsageMeter:
             with self._admission:
                 self.pending_bytes -= item.size
                 self.pending_records -= len(item.writes)
+            self._capacity_changed.set()
             if item.committed.done():
                 continue
             if error is None:

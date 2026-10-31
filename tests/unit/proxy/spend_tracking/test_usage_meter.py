@@ -427,3 +427,38 @@ async def test_cancelling_bounded_capture_preserves_admitted_writes_without_admi
     await meter.close()
     assert database.committed == ("0", "1")
     assert meter.pending_bytes == meter.pending_records == 0
+
+
+@pytest.mark.asyncio
+async def test_capacity_wait_retries_admission_before_other_producers_finish() -> None:
+    entered: Final = asyncio.Queue[tuple[str, ...]]()
+    release: Final = asyncio.Queue[None]()
+
+    async def persist(writes: tuple[UsageWrite, ...]) -> None:
+        entered.put_nowait(tuple(write.event.event_id for write in writes))
+        await release.get()
+
+    meter: Final = DurableUsageMeter(
+        persist, UsageCaptureSettings(batch_size=2, max_pending_records=3), wait_for_batch=_manual_flush
+    )
+    initial: Final = meter.submit((_write("first"), _write("second")))
+    remaining: Final = meter.submit((_write("remaining"),))
+    assert await entered.get() == ("first", "second")
+    recording: Final = asyncio.create_task(meter.record_writes((_write("target"),)))
+    try:
+        await asyncio.sleep(0)
+        release.put_nowait(None)
+        assert await entered.get() == ("remaining",)
+        await asyncio.sleep(0)
+        assert meter.pending_records == 2
+        release.put_nowait(None)
+        assert await entered.get() == ("target",)
+        release.put_nowait(None)
+        await recording
+        await asyncio.gather(initial, remaining)
+    finally:
+        recording.cancel()
+        await asyncio.gather(recording, return_exceptions=True)
+        release.put_nowait(None)
+        release.put_nowait(None)
+        await meter.close()

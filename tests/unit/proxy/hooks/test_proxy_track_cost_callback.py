@@ -4001,6 +4001,7 @@ async def test_capture_and_legacy_share_resolved_key_attribution(
     from litellm.accounting import DeliveryTarget, DimensionName
     from litellm.proxy import proxy_server
     from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.proxy.hooks.proxy_track_cost_callback import track_batch_accounting
     from litellm.proxy.spend_tracking.usage_capture import UsageCaptureRuntime
     from litellm.proxy.spend_tracking.usage_meter import UsageCaptureSettings
     from tests.unit.proxy.spend_tracking.test_usage_capture import StoredUsage
@@ -4025,14 +4026,15 @@ async def test_capture_and_legacy_share_resolved_key_attribution(
     runtime: Final = UsageCaptureRuntime()
     runtime.start(database.insert, UsageCaptureSettings())
     monkeypatch.setattr(proxy_server, "usage_capture", runtime)
-    owner: Final = "original-owner" if deferred else "owner"
+    rejected: Final = failure and deferred and not complete
+    owner: Final = "original-owner" if deferred and not rejected else "owner"
     metadata: Final = {
-        "user_api_key": "a" * 64,
+        "user_api_key": "b" * 64 if rejected else "a" * 64,
         **(
             {
-                "user_api_key_user_id": owner,
-                "user_api_key_team_id": "team",
-                "user_api_key_org_id": "org",
+                "user_api_key_user_id": "forged-owner" if rejected else owner,
+                "user_api_key_team_id": "forged-team" if rejected else "team",
+                "user_api_key_org_id": "forged-org" if rejected else "org",
                 "user_api_key_project_id": None if deferred and not complete else "project",
                 "user_api_key_alias": "key",
                 "user_api_key_team_alias": "team-alias",
@@ -4049,21 +4051,28 @@ async def test_capture_and_legacy_share_resolved_key_attribution(
         "start_time": _CALL_START,
         "litellm_params": {"metadata": metadata},
     }
+    if rejected:
+        from litellm.proxy.utils import REJECTED_BEFORE_REQUEST_SETUP, REJECTED_BEFORE_REQUEST_SETUP_KEY
+
+        kwargs[REJECTED_BEFORE_REQUEST_SETUP_KEY] = REJECTED_BEFORE_REQUEST_SETUP
     logger: Final = ProxyDBLogger(spend_writer=lambda: cast(DBSpendUpdateWriter, writer))
     try:
-        if failure:
-            await logger.async_post_call_failure_hook(
-                kwargs,
-                HTTPException(401, "model not allowed"),
-                key if complete else UserAPIKeyAuth(api_key="a" * 64, request_route="/v1/chat/completions"),
-            )
-        else:
-            await logger.async_log_success_event(kwargs, {"id": "tool"}, _CALL_START, _CALL_START)
+        with track_batch_accounting("attributed" if deferred and not rejected else "other"):
+            if failure:
+                await logger.async_post_call_failure_hook(
+                    kwargs,
+                    HTTPException(401, "model not allowed"),
+                    key if complete else UserAPIKeyAuth(api_key="a" * 64, request_route="/v1/chat/completions"),
+                )
+            else:
+                await logger.async_log_success_event(kwargs, {"id": "tool"}, _CALL_START, _CALL_START)
     finally:
         await runtime.stop(1)
     assert len(writer.rows) == 1
     assert len(database.rows) == 2
     dimensions: Final = {item.name: item.value for item in database.rows[-1].event.dimensions}
+    if rejected:
+        assert dimensions.get(DimensionName.KEY) == key.api_key
     assert {
         name: dimensions.get(name)
         for name in (DimensionName.USER, DimensionName.TEAM, DimensionName.ORGANIZATION, DimensionName.PROJECT)
@@ -4071,7 +4080,7 @@ async def test_capture_and_legacy_share_resolved_key_attribution(
         DimensionName.USER: owner,
         DimensionName.TEAM: "team",
         DimensionName.ORGANIZATION: "org",
-        DimensionName.PROJECT: None if deferred and not complete else "project",
+        DimensionName.PROJECT: None if deferred and not complete and not rejected else "project",
     }
     assert set(database.rows[-1].targets) >= {DeliveryTarget.DAILY_TEAM_SPEND, DeliveryTarget.DAILY_ORGANIZATION_SPEND}
     legacy: Final = TypeAdapter(dict[str, object]).validate_python(writer.rows[0]["kwargs"])

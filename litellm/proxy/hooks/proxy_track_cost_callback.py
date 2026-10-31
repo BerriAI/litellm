@@ -630,7 +630,10 @@ class _ProxyDBLogger(CustomLogger):
 
         if usage_capture.meter is None:
             return None
-        captured_identity: Final = str(request_data.get("call_type")) in _CAPTURED_IDENTITY_CALL_TYPES
+        captured_identity: Final = (
+            _batch_accounting_for(request_data.get("litellm_call_id")) is not None
+            and request_data.get(REJECTED_BEFORE_REQUEST_SETUP_KEY) is not REJECTED_BEFORE_REQUEST_SETUP
+        )
         current_identity: Final = {
             **LiteLLMProxyRequestSetup.get_sanitized_user_information_from_key(user_api_key_dict=auth),
             "user_api_key": LiteLLMProxyRequestSetup.get_logged_api_key(auth),
