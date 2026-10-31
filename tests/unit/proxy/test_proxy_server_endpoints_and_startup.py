@@ -10,7 +10,7 @@ import subprocess
 import sys
 import time
 import types
-from collections.abc import Callable
+from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Final
@@ -1788,6 +1788,69 @@ async def test_proxy_startup_refuses_an_unsafe_master_key_even_when_the_database
     assert "sk-$(openssl rand -hex 32)" in announced[0]
     key_can_have_encrypted_the_database = general_settings.get("master_key") is not None
     assert ("could not be checked" in announced[0]) == key_can_have_encrypted_the_database
+
+
+class _DatabaseSetUpInFipsMode:
+    async def query_raw(self, query: str, *args: object) -> Sequence[Mapping[str, object]]:
+        return [{"?column?": 1}]
+
+    async def execute_raw(self, query: str, *args: object) -> int:
+        raise AssertionError("a refused boot must not write to the database")
+
+
+class _PrismaClientOnAFipsDatabase:
+    def __init__(self) -> None:
+        self.writer_db: Final = _DatabaseSetUpInFipsMode()
+
+    async def aclose(self) -> None:
+        pass
+
+
+@pytest.mark.asyncio
+async def test_proxy_startup_refuses_a_database_set_up_in_fips_mode_when_fips_mode_is_off(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from litellm.proxy.common_utils.fips import FipsModeError
+    from litellm.proxy.proxy_server import proxy_startup_event
+
+    _boot_with_general_settings(monkeypatch, tmp_path, {"master_key": "sk-a-safe-master-key"})
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", _PrismaClientOnAFipsDatabase())
+
+    with pytest.raises(FipsModeError, match=r"set up with general_settings\.fips_mode: true"):
+        async with proxy_startup_event(FastAPI()):
+            pass
+
+
+@pytest.mark.asyncio
+async def test_proxy_startup_reads_fips_mode_from_the_config_file(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from litellm.proxy.common_utils.fips import FipsModeError
+    from litellm.proxy.proxy_server import proxy_startup_event
+
+    _boot_with_general_settings(monkeypatch, tmp_path, {"master_key": "sk-a-safe-master-key", "fips_mode": True})
+    monkeypatch.setattr("litellm.proxy.common_utils.fips.openssl_enforces_fips", lambda: False)
+
+    with pytest.raises(FipsModeError, match=r"general_settings\.fips_mode is on but OpenSSL does not enforce FIPS"):
+        async with proxy_startup_event(FastAPI()):
+            pass
+
+
+@pytest.mark.asyncio
+async def test_proxy_startup_refuses_a_fips_mode_reference_to_an_unset_variable(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from litellm.proxy.common_utils.fips import FipsModeError
+    from litellm.proxy.proxy_server import proxy_startup_event
+
+    _boot_with_general_settings(
+        monkeypatch, tmp_path, {"master_key": "sk-a-safe-master-key", "fips_mode": "os.environ/FIPS_MODE_NOT_SET"}
+    )
+    monkeypatch.delenv("FIPS_MODE_NOT_SET", raising=False)
+
+    with pytest.raises(FipsModeError, match=r"general_settings\.fips_mode has no value"):
+        async with proxy_startup_event(FastAPI()):
+            pass
 
 
 class _DatabaseWithOneStoredCredential:

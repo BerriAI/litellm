@@ -500,6 +500,7 @@ from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     encrypt_value_helper,
 )
 from litellm.proxy.common_utils.error_body_call_id import JSON_OBJECT, error_body_call_id, with_call_id
+from litellm.proxy.common_utils.fips import enforce_fips_database, enforce_fips_mode, is_fips_mode
 from litellm.proxy.common_utils.healthy_model_filter import (
     get_hidden_unhealthy_model_names,
     is_healthy_only_listing_default,
@@ -992,6 +993,7 @@ from litellm.proxy.utils import (  # noqa: F401, RUF100  # legacy module exports
 from litellm.proxy.video_endpoints.endpoints import router as video_router
 from litellm.repositories.base_repository import SupportsModelDump
 from litellm.repositories.credentials_repository import CredentialsRepository
+from litellm.repositories.fips_repository import FipsRepository
 from litellm.repositories.prisma_protocols import TableActions
 from litellm.responses.streaming_iterator import drain_logging_tasks
 from litellm.router import (
@@ -1606,6 +1608,8 @@ async def _proxy_lifespan(app: FastAPI, resources: AsyncExitStack) -> AsyncGener
             if decoded_worker_config is not None:
                 await initialize_from_worker_config(decoded_worker_config)
 
+    enforce_fips_mode(general_settings_view())
+
     async with AsyncExitStack() as boot_database:
         enforce_master_key_boot_verdict(
             await with_stored_secrets_counted(
@@ -1637,6 +1641,12 @@ async def _proxy_lifespan(app: FastAPI, resources: AsyncExitStack) -> AsyncGener
         )
 
     database: Final = existing_database or await _own_database(resources, prisma_client)
+
+    await enforce_fips_database(
+        None if prisma_client is None else FipsRepository(prisma_client),
+        fips_mode=is_fips_mode(general_settings_view()),
+        database_is_configured=get_secret("DATABASE_URL", None) is not None,
+    )
 
     await migrate_if_requested(
         environ=os.environ,
