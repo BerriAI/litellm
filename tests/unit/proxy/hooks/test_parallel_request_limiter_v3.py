@@ -4890,9 +4890,11 @@ async def test_sse_keepalive_releases_parallel_capacity_when_the_reader_leaves_d
         assert await anext(response.body_iterator) == SSE_COMMENT_PING_BYTES
         await admitted.wait()
 
+        reading: Final = asyncio.Event()
+
         async def read_until_cancelled() -> None:
             async for _ in response.body_iterator:
-                continue
+                reading.set()
 
         if leaves_by == "close":
             body: Final = response.body_iterator
@@ -4900,7 +4902,7 @@ async def test_sse_keepalive_releases_parallel_capacity_when_the_reader_leaves_d
             await body.aclose()
         else:
             reader: Final = asyncio.ensure_future(read_until_cancelled())
-            await asyncio.sleep(0.01)
+            await reading.wait()
             reader.cancel()
             with pytest.raises(asyncio.CancelledError):
                 await reader
