@@ -35435,6 +35435,11 @@
               "description": "Validation Error"
             }
           },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
           "summary": "Vertex Discovery Proxy Route",
           "tags": [
             "llm_passthrough"
@@ -35474,6 +35479,11 @@
               "description": "Validation Error"
             }
           },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
           "summary": "Vertex Discovery Proxy Route",
           "tags": [
             "llm_passthrough"
@@ -35513,6 +35523,11 @@
               "description": "Validation Error"
             }
           },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
           "summary": "Vertex Discovery Proxy Route",
           "tags": [
             "llm_passthrough"
@@ -35552,6 +35567,11 @@
               "description": "Validation Error"
             }
           },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
           "summary": "Vertex Discovery Proxy Route",
           "tags": [
             "llm_passthrough"
@@ -35591,6 +35611,11 @@
               "description": "Validation Error"
             }
           },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
           "summary": "Vertex Discovery Proxy Route",
           "tags": [
             "llm_passthrough"
