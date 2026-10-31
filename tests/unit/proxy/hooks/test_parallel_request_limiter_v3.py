@@ -51,6 +51,7 @@ from litellm.proxy.hooks.parallel_request_limiter_v3 import (
 from litellm.proxy.spend_tracking.input_tokens import models_counted_for
 from litellm.proxy.spend_tracking.ptu_feature_flag import PTU_COST_ATTRIBUTION_ENV_VAR
 from litellm.proxy.utils import InternalUsageCache, ProxyLogging, hash_token
+from litellm.responses.streaming_iterator import _record_usage_for_failure
 from litellm.responses.utils import ResponseAPILoggingUtils
 from litellm.router_utils.ptu_shares import PTUTeamCeiling
 from litellm.types.caching import RedisPipelineIncrementOperation
@@ -3907,6 +3908,58 @@ async def test_a_later_socket_turn_is_refused_once_a_tpm_window_it_counts_toward
     assert await _tokens_counted(handler, local_cache, "api_key", api_key) == tokens_before_check
 
 
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "agent_limits",
+    [{"tpm_limit": _SOCKET_TURN_TPM_LIMIT}, {"session_tpm_limit": _SOCKET_TURN_TPM_LIMIT}],
+    ids=["agent", "agent-session"],
+)
+async def test_a_later_socket_turn_is_refused_once_the_sockets_agent_tpm_window_has_no_tokens_left_v3(
+    agent_limits: dict[str, int],
+) -> None:
+    from litellm.types.agents import AgentResponse
+
+    api_key: Final = hash_token("sk-socket-agent-turn")
+    local_cache: Final = DualCache()
+    handler: Final = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(local_cache))
+    user_api_key_dict: Final = UserAPIKeyAuth(api_key=api_key)
+    agent: Final = AgentResponse(
+        agent_id="agent-ws", agent_name="ws-agent", agent_card_params={"name": "WS Agent"}, **agent_limits
+    )
+    turn_metadata: Final = {"user_api_key_hash": api_key, "agent_id": "agent-ws", "session_id": "sess-ws"}
+
+    async def log_turn(call_id: str, total_tokens: int) -> None:
+        await handler.async_log_success_event(
+            kwargs=_socket_turn_kwargs(call_id, turn_metadata),
+            response_obj=_responses_websocket_turn_events(total_tokens=total_tokens),
+            start_time=None,
+            end_time=None,
+        )
+
+    with patch(
+        "litellm.proxy.agent_endpoints.agent_registry.global_agent_registry.get_agent_by_id",
+        side_effect=lambda agent_id: agent if agent_id == "agent-ws" else None,
+    ):
+        await handler.async_pre_call_hook(
+            user_api_key_dict=user_api_key_dict,
+            cache=local_cache,
+            data={
+                "model": "gpt-5.4",
+                "litellm_call_id": "socket-open",
+                "metadata": {"agent_id": "agent-ws", "session_id": "sess-ws"},
+            },
+            call_type=CallTypes.aresponses_websocket.value,
+        )
+        await log_turn("turn-1", _SOCKET_TURN_TPM_LIMIT // 10)
+        await handler.enforce_token_limits_for_frame(user_api_key_dict=user_api_key_dict, requested_model="gpt-5.4")
+        await log_turn("turn-2", _SOCKET_TURN_TPM_LIMIT)
+
+        with pytest.raises(ProxyRateLimitError) as exc_info:
+            await handler.enforce_token_limits_for_frame(user_api_key_dict=user_api_key_dict, requested_model="gpt-5.4")
+
+    assert exc_info.value.status_code == 429
+
 @pytest.mark.asyncio
 async def test_the_socket_turn_check_ignores_request_limits_and_charges_nothing_v3(monkeypatch) -> None:
     monkeypatch.setenv("LITELLM_RATE_LIMIT_WINDOW_SIZE", "60")
@@ -4030,6 +4083,58 @@ async def test_a_failed_socket_turn_counts_its_recorded_partial_usage_v3(
     assert await _tokens_counted(handler, local_cache, "api_key", api_key) == counted
     assert await _tokens_counted(handler, local_cache, "tag", _SOCKET_TURN_TAG) == counted
 
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "failed_usage, counted",
+    [({"input_tokens": 20, "output_tokens": 7, "total_tokens": 27}, 27), (None, 0)],
+    ids=["failed-response-reports-usage", "failed-response-without-usage"],
+)
+async def test_a_native_socket_turn_that_fails_counts_the_usage_its_failed_response_reports_v3(
+    failed_usage: dict[str, int] | None, counted: int
+) -> None:
+    api_key: Final = hash_token("sk-native-failed-socket-turn")
+    local_cache: Final = DualCache()
+    handler: Final = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(local_cache))
+    _socket_with_tpm_limited_tag()
+    turn_logging: Final = LiteLLMLoggingObj(
+        model="gpt-5.6",
+        messages=[],
+        stream=True,
+        call_type=CallTypes.aresponses_websocket.value,
+        start_time=datetime.now(),
+        litellm_call_id="native-failed-turn",
+        function_id="native-failed-turn",
+    )
+    _record_usage_for_failure(
+        turn_logging,
+        (
+            {"type": "response.created", "response": {"id": "resp_failed", "status": "in_progress"}},
+            {
+                "type": "response.failed",
+                "response": {
+                    "id": "resp_failed",
+                    "status": "failed",
+                    "error": {"code": "server_error", "message": "upstream failed mid-turn"},
+                    "usage": failed_usage,
+                },
+            },
+        ),
+    )
+
+    await handler.async_log_failure_event(
+        kwargs={
+            **_socket_turn_kwargs("native-failed-turn", {"user_api_key_hash": api_key}),
+            "combined_usage_object": turn_logging.model_call_details.get("combined_usage_object"),
+        },
+        response_obj=None,
+        start_time=None,
+        end_time=None,
+    )
+
+    assert await _tokens_counted(handler, local_cache, "api_key", api_key) == counted
+    assert await _tokens_counted(handler, local_cache, "tag", _SOCKET_TURN_TAG) == counted
 
 class _InlineLoggingWorker:
     def __init__(self) -> None:
@@ -9314,6 +9419,34 @@ def test_usage_that_only_reports_a_total_charges_that_total_to_the_ptu_counter()
 
     assert _ptu_increment(handler, ops) == 150
 
+
+
+@pytest.mark.parametrize(
+    "call_type, session_events",
+    [
+        (CallTypes.aresponses_websocket.value, _responses_websocket_turn_events(total_tokens=150)),
+        (
+            CallTypes.arealtime.value,
+            [{"type": "response.done", "response": {"usage": {"input_tokens": 100, "output_tokens": 50, "total_tokens": 150}}}],
+        ),
+    ],
+    ids=["responses-websocket-turn", "realtime-session"],
+)
+def test_a_socket_sessions_usage_charges_the_key_but_leaves_the_team_ptu_counter_alone(
+    call_type: str, session_events: list[dict[str, object]]
+) -> None:
+    resolve, _ = _ptu_ceiling_for("t", "test-model", tpm_limit=500, ratio=4.0)
+    handler: Final = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(DualCache()), ptu_team_ceiling_resolver=resolve
+    )
+
+    ops: Final = handler._build_success_event_pipeline_operations(
+        kwargs={**_ptu_success_kwargs(), "call_type": call_type}, response_obj=session_events, rate_limit_type="total"
+    )
+
+    key_window: Final = handler.create_rate_limit_keys("api_key", hash_token("sk-ptu"), "tokens")
+    assert next(op["increment_value"] for op in ops if op["key"] == key_window) == 150
+    assert not _ptu_increment(handler, ops)
 
 def test_success_accounting_charges_no_ptu_counter_without_a_ceiling():
     resolve, _ = _ptu_ceiling_for("u", "test-model", tpm_limit=500, ratio=4.0)

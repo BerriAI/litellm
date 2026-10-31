@@ -746,6 +746,7 @@ class RequestRateLimiterStash:
     batch_tpd_refund_ops: tuple[ReservationAwareIncrementOperation, ...] = ()
     reservation_released: bool = False
     tpm_limited_tags: frozenset[str] = field(default_factory=frozenset)
+    socket_agent_windows: tuple[RateLimitDescriptor, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -882,6 +883,10 @@ def _is_socket_turn(kwargs: Mapping[str, object]) -> bool:
         and connection_call_id == connection_stash.owner_litellm_call_id
     )
 
+
+_NATIVE_SOCKET_CALL_TYPES: Final = frozenset({CallTypes.aresponses_websocket.value, CallTypes.arealtime.value})
+
+_AGENT_DESCRIPTOR_KEYS: Final = frozenset({"agent", "agent_session"})
 
 _SOCKET_TURN_UNCOUNTED_DESCRIPTOR_KEYS: Final = frozenset(
     {PROJECT_ITPM_DESCRIPTOR_KEY, PROJECT_OTPM_DESCRIPTOR_KEY, PTU_TEAM_DESCRIPTOR_KEY}
@@ -3028,6 +3033,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
     ) -> None:
         connection_stash: Final = get_request_stash()
         tags: Final = sorted(connection_stash.tpm_limited_tags) if connection_stash is not None else []
+        agent_windows: Final = connection_stash.socket_agent_windows if connection_stash is not None else ()
         hidden_stash: Final = _request_stash.set(None)
         try:
             descriptors: Final = await self._build_request_rate_limit_descriptors(
@@ -3037,7 +3043,10 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             )
         finally:
             _request_stash.reset(hidden_stash)
-        tpm_windows: Final = _socket_turn_tpm_windows(descriptors)
+        built_scopes: Final = frozenset((d["key"], d["value"]) for d in descriptors)
+        tpm_windows: Final = _socket_turn_tpm_windows(
+            (*descriptors, *(d for d in agent_windows if (d["key"], d["value"]) not in built_scopes))
+        )
         response: Final = await self.should_rate_limit(
             tpm_windows, parent_otel_span=user_api_key_dict.parent_otel_span, read_only=True, skip_parallel_check=True
         )
@@ -4412,6 +4421,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             for d in descriptors
             if d["key"] == "tag" and d["rate_limit"] is not None and d["rate_limit"].get("tokens_per_unit") is not None
         )
+        stash.socket_agent_windows = tuple(d for d in descriptors if d["key"] in _AGENT_DESCRIPTOR_KEYS)
 
         # Only check rate limits if we have descriptors with actual limits
         if descriptors:
@@ -5445,16 +5455,17 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 reserved_tokens=reserved_tokens,
             )
         )
+        ptu_skips_socket_usage: Final = kwargs.get("call_type") in _NATIVE_SOCKET_CALL_TYPES
         pipeline_operations.extend(
             self._build_team_ptu_tpm_ops(
                 standard_logging_metadata,  # pyright: ignore[reportUnknownArgumentType]  # untyped logging metadata
-                usage_source=response_obj if _usage is None else _usage,
+                usage_source=response_obj if _usage is None or ptu_skips_socket_usage else _usage,
                 reconcile_model=reconcile_model,
                 reserved_scopes=reserved_scopes,
                 reserved_ceiling=stash.ptu_ceiling if stash is not None else None,
                 reserved_tokens=stash.ptu_reserved_tokens if stash is not None else 0,
                 reserved_windows=stash.ptu_reserved_window_identities if stash is not None else frozenset(),
-                total_tokens=total_tokens,
+                total_tokens=0 if ptu_skips_socket_usage else total_tokens,
             )
         )
 
