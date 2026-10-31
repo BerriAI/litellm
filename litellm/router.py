@@ -7225,6 +7225,16 @@ class Router(DeprecatedRouterMembers):
             return False
         return True
 
+    def _stream_overflow_retry_declined(self, trigger: Exception, kwargs: Mapping[str, object]) -> bool:
+        """
+        An overflow resends the same prompt to the same windows, so only a retry policy that names its error
+        class retries it, never a grant made for the error that opened the retries.
+        """
+        return (
+            isinstance(trigger, litellm.ContextWindowExceededError)
+            and self._anthropic_messages_policy_retries(trigger, kwargs) is None
+        )
+
     async def _astream_retry_same_group(
         self,
         e: "MidStreamFallbackError",
@@ -7250,7 +7260,7 @@ class Router(DeprecatedRouterMembers):
         last_error = e  # rebind-ok: the newest failure is what the fallback chain and the caller see
         for attempt in range(attempted_retries_for_request(initial_kwargs), budget):
             trigger = _mid_stream_retry_trigger(last_error)
-            if isinstance(trigger, litellm.ContextWindowExceededError) or (
+            if self._stream_overflow_retry_declined(trigger, initial_kwargs) or (
                 not policy_applies
                 and not self._stream_should_retry(trigger, healthy_deployments, all_deployments, initial_kwargs)
             ):

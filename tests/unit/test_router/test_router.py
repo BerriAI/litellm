@@ -19416,11 +19416,18 @@ async def test_anthropic_messages_stream_context_window_only_group_passes_a_refu
     assert len(provider.calls) == 1
 
 
+@pytest.mark.parametrize(
+    ("retry_policy", "expected_calls"),
+    [
+        (RetryPolicy(InternalServerErrorRetries=3), 2),
+        (RetryPolicy(InternalServerErrorRetries=2, BadRequestErrorRetries=2), 3),
+    ],
+)
 @pytest.mark.asyncio
-async def test_anthropic_messages_policy_retry_stops_at_a_context_window_error() -> None:
-    router: Final = _anthropic_messages_retry_router(
-        num_retries=0, retry_policy=RetryPolicy(InternalServerErrorRetries=3)
-    )
+async def test_anthropic_messages_policy_retry_retries_an_overflow_only_when_the_policy_names_it(
+    retry_policy: RetryPolicy, expected_calls: int
+) -> None:
+    router: Final = _anthropic_messages_retry_router(num_retries=0, retry_policy=retry_policy)
     provider: Final = _AnthropicMessagesScriptedProvider(
         lambda: _AnthropicMessagesRaisingByteStream(
             [_anthropic_messages_message_start_chunk()],
@@ -19435,7 +19442,7 @@ async def test_anthropic_messages_policy_retry_stops_at_a_context_window_error()
     with pytest.raises(litellm.ContextWindowExceededError):
         [chunk async for chunk in stream]
 
-    assert len(provider.calls) == 2
+    assert len(provider.calls) == expected_calls
 
 
 @pytest.mark.parametrize(
