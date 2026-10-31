@@ -77,6 +77,9 @@ _PROVIDERS_RESOLVING_THEIR_OWN_IMAGE_BASE: Final = (
 # Cache for ImageEditRequestUtils to avoid repeated __getattr__ calls
 _ImageEditRequestUtils_cache: type["ImageEditRequestUtils"] | None = None
 
+# Kept out of all_litellm_params because that list is stripped before drop_params is applied.
+_IMAGE_EDIT_CONTROL_KWARGS: Final = frozenset(("drop_params", "additional_drop_params"))
+
 
 def _get_ImageEditRequestUtils() -> type["ImageEditRequestUtils"]:
     """Get ImageEditRequestUtils, loading it lazily if needed."""
@@ -886,7 +889,11 @@ def image_edit(
             "style",
             "async_call",
         ]
-        non_default_params: Final = filter_out_litellm_params(kwargs, excluding=openai_params)
+        non_default_params: Final = {
+            key: value
+            for key, value in filter_out_litellm_params(kwargs, excluding=openai_params).items()
+            if key not in _IMAGE_EDIT_CONTROL_KWARGS
+        }
         litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
         litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id", None)
         model_info: Final = kwargs.get("model_info", None)
