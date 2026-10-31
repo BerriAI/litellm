@@ -100,7 +100,7 @@ def _assert_non_admin_refusal(response: httpx.Response, route: str, user_id: str
                 f"new keys/users/teams. Route={route}. Your role=internal_user. Your user_id={masked_user_id}"
             ),
             "type": "auth_error",
-            "param": "None",
+            "param": None,
             "code": "401",
         }
     }, response.text
@@ -244,7 +244,7 @@ def test_saved_vault_config_reads_back_masked_and_refuses_non_admins(
                         "message": "user not allowed to access this route, role= proxy_admin_viewer. "
                         "Trying to access: /config_overrides/hashicorp_vault",
                         "type": "auth_error",
-                        "param": "None",
+                        "param": None,
                         "code": "403",
                     }
                 }, viewer_post.text
@@ -386,7 +386,7 @@ def test_saved_cyberark_config_reads_back_masked_and_refuses_non_admins(
                         "message": "user not allowed to access this route, role= proxy_admin_viewer. "
                         "Trying to access: /config_overrides/cyberark",
                         "type": "auth_error",
-                        "param": "None",
+                        "param": None,
                         "code": "403",
                     }
                 }, viewer_post.text

@@ -8,17 +8,19 @@ import httpx
 import pytest
 import respx
 
-
 import litellm
 from litellm import ChatCompletionUsageBlock, stream_chunk_builder
-from litellm.types.utils import GenericStreamingChunk
-from litellm.litellm_core_utils.streaming_chunk_builder_utils import ChunkProcessor, stream_chunk_builder_text_completion
+from litellm.litellm_core_utils.streaming_chunk_builder_utils import (
+    ChunkProcessor,
+    stream_chunk_builder_text_completion,
+)
 from litellm.llms.anthropic.chat.handler import ModelResponseIterator
 from litellm.types.utils import (
     ChatCompletionDeltaToolCall,
     ChatCompletionMessageToolCall,
     Delta,
     Function,
+    GenericStreamingChunk,
     ModelResponseStream,
     PromptTokensDetails,
     ServerToolUse,
@@ -196,11 +198,7 @@ def test_get_combined_thinking_content_preserves_interleaved_blocks():
                 }
             ]
         ),
-        make_chunk(
-            thinking_blocks=[
-                {"type": "thinking", "thinking": None, "signature": "sig_block1"}
-            ]
-        ),
+        make_chunk(thinking_blocks=[{"type": "thinking", "thinking": None, "signature": "sig_block1"}]),
         make_chunk(
             thinking_blocks=[
                 {
@@ -218,16 +216,10 @@ def test_get_combined_thinking_content_preserves_interleaved_blocks():
                 }
             ]
         ),
-        make_chunk(
-            thinking_blocks=[
-                {"type": "thinking", "thinking": None, "signature": "sig_block2"}
-            ]
-        ),
+        make_chunk(thinking_blocks=[{"type": "thinking", "thinking": None, "signature": "sig_block2"}]),
     ]
 
-    thinking_chunks = [
-        chunk for chunk in chunks if chunk["choices"][0]["delta"].get("thinking_blocks")
-    ]
+    thinking_chunks = [chunk for chunk in chunks if chunk["choices"][0]["delta"].get("thinking_blocks")]
     processor = ChunkProcessor(chunks=chunks)
     result = processor.get_combined_thinking_content(thinking_chunks)
 
@@ -297,9 +289,7 @@ def test_cache_read_input_tokens_retained():
             prompt_tokens=11779,
             total_tokens=11784,
             completion_tokens_details=None,
-            prompt_tokens_details=PromptTokensDetails(
-                audio_tokens=None, cached_tokens=11775
-            ),
+            prompt_tokens_details=PromptTokensDetails(audio_tokens=None, cached_tokens=11775),
             cache_creation_input_tokens=4,
             cache_read_input_tokens=11775,
         ),
@@ -333,9 +323,7 @@ def test_cache_read_input_tokens_retained():
             prompt_tokens=0,
             total_tokens=214,
             completion_tokens_details=None,
-            prompt_tokens_details=PromptTokensDetails(
-                audio_tokens=None, cached_tokens=0
-            ),
+            prompt_tokens_details=PromptTokensDetails(audio_tokens=None, cached_tokens=0),
             cache_creation_input_tokens=0,
             cache_read_input_tokens=0,
         ),
@@ -395,10 +383,7 @@ def test_streaming_preserves_anthropic_1hr_cache_creation_breakdown():
     )
     # Sanity: the delta event genuinely lacks the breakdown - this is the input
     # condition that used to defeat cost calc.
-    assert (
-        getattr(message_delta_usage.prompt_tokens_details, "cache_creation_token_details", None)
-        is None
-    )
+    assert getattr(message_delta_usage.prompt_tokens_details, "cache_creation_token_details", None) is None
 
     def _usage_chunk(usage, finish_reason):
         return ModelResponseStream(
@@ -517,9 +502,7 @@ def test_cache_read_input_tokens_retained_genericstreamingchunk():
             prompt_tokens=1234,
             total_tokens=1239,
             completion_tokens_details=None,
-            prompt_tokens_details=PromptTokensDetails(
-                audio_tokens=None, cached_tokens=543
-            ).model_dump(),
+            prompt_tokens_details=PromptTokensDetails(audio_tokens=None, cached_tokens=543).model_dump(),
         ),
         index=2,
     )
@@ -535,6 +518,7 @@ def test_cache_read_input_tokens_retained_genericstreamingchunk():
     )
 
     assert usage.prompt_tokens_details.cached_tokens == 543
+
 
 def test_stream_chunk_builder_litellm_usage_chunks():
     """
@@ -609,9 +593,7 @@ def test_stream_chunk_builder_litellm_usage_chunks():
     chunks = [chunk1, chunk2]
     processor = ChunkProcessor(chunks=chunks)
 
-    usage = processor.calculate_usage(
-        chunks=chunks, model="gemini/gemini-2.5-flash-lite", completion_output=""
-    )
+    usage = processor.calculate_usage(chunks=chunks, model="gemini/gemini-2.5-flash-lite", completion_output="")
 
     assert usage.prompt_tokens == 50
     assert usage.completion_tokens == 27
@@ -655,15 +637,11 @@ def test_calculate_usage_honors_openai_sdk_completion_usage_chunks():
         provider_specific_fields=None,
         stream_options={"include_usage": True},
     )
-    usage_chunk.usage = CompletionUsage(
-        prompt_tokens=20, completion_tokens=60, total_tokens=80, cost=0.000704
-    )
+    usage_chunk.usage = CompletionUsage(prompt_tokens=20, completion_tokens=60, total_tokens=80, cost=0.000704)
     assert type(usage_chunk.usage) is CompletionUsage
 
     chunks = [content_chunk, usage_chunk]
-    usage = ChunkProcessor(chunks=chunks).calculate_usage(
-        chunks=chunks, model="mantle-claude", completion_output=""
-    )
+    usage = ChunkProcessor(chunks=chunks).calculate_usage(chunks=chunks, model="mantle-claude", completion_output="")
 
     assert usage.prompt_tokens == 20
     assert usage.completion_tokens == 60
@@ -686,9 +664,7 @@ def test_get_model_from_chunks_azure_model_router():
         {"model": "gpt-4.1-nano-2025-04-14", "id": "chatcmpl-123", "choices": []},
     ]
 
-    result = ChunkProcessor._get_model_from_chunks(
-        chunks=chunks, first_chunk_model="azure-model-router"
-    )
+    result = ChunkProcessor._get_model_from_chunks(chunks=chunks, first_chunk_model="azure-model-router")
 
     # Should return the actual model, not the request model
     assert result == "gpt-4.1-nano-2025-04-14"
@@ -699,9 +675,7 @@ def test_get_model_from_chunks_azure_model_router():
         {"model": "gpt-4", "id": "chatcmpl-456", "choices": []},
     ]
 
-    result_same = ChunkProcessor._get_model_from_chunks(
-        chunks=chunks_same_model, first_chunk_model="gpt-4"
-    )
+    result_same = ChunkProcessor._get_model_from_chunks(chunks=chunks_same_model, first_chunk_model="gpt-4")
 
     # Should return the first chunk's model when all are the same
     assert result_same == "gpt-4"
@@ -777,9 +751,7 @@ def test_stream_chunk_builder_anthropic_web_search():
     chunks = [chunk1, chunk2]
     processor = ChunkProcessor(chunks=chunks)
 
-    usage = processor.calculate_usage(
-        chunks=chunks, model="claude-sonnet-4-5-20250929", completion_output=""
-    )
+    usage = processor.calculate_usage(chunks=chunks, model="claude-sonnet-4-5-20250929", completion_output="")
 
     assert usage.prompt_tokens == 50
     assert usage.completion_tokens == 27
@@ -931,15 +903,76 @@ def test_stream_chunk_builder_dict_snapshot_preserves_hidden_provider_fields():
         ],
     )
     chunk_dict = chunk.model_dump()
-    chunk_dict["_hidden_params"] = {
-        "provider_specific_fields": {"traffic_type": "default"}
-    }
+    chunk_dict["_hidden_params"] = {"provider_specific_fields": {"traffic_type": "default"}}
 
     response = stream_chunk_builder(chunks=[chunk_dict])
     assert response is not None
-    assert (
-        response._hidden_params["provider_specific_fields"]["traffic_type"] == "default"
+    assert response._hidden_params["provider_specific_fields"]["traffic_type"] == "default"
+
+
+def test_stream_chunk_builder_finds_upstream_provider_in_later_chunk_regression() -> None:
+    first: Final = ModelResponseStream(
+        id="chatcmpl-provider",
+        created=1,
+        model="gpt-4.1-mini",
+        object="chat.completion.chunk",
+        choices=[
+            StreamingChoices(
+                finish_reason=None,
+                index=0,
+                delta=Delta(content="hello", role="assistant"),
+            )
+        ],
     )
+    later: Final = ModelResponseStream(
+        id="chatcmpl-provider",
+        created=1,
+        model="gpt-4.1-mini",
+        object="chat.completion.chunk",
+        choices=[
+            StreamingChoices(
+                finish_reason="stop",
+                index=0,
+                delta=Delta(content=" world", role=None),
+            )
+        ],
+    )
+    first_hidden_params: Final = {"origin": "first"}
+    later_hidden_params: Final = {"upstream_provider": "serving-site-a"}
+    chunks: Final = [
+        {**first.model_dump(), "_hidden_params": first_hidden_params},
+        {**later.model_dump(), "_hidden_params": later_hidden_params},
+    ]
+
+    response: Final = stream_chunk_builder(chunks=chunks)
+
+    assert response is not None
+    assert response._hidden_params.get("upstream_provider") == "serving-site-a"
+    assert first_hidden_params.get("upstream_provider") is None
+    assert later_hidden_params.get("upstream_provider") == "serving-site-a"
+
+
+def test_stream_chunk_builder_preserves_source_provider_metadata_guard() -> None:
+    chunk: Final = ModelResponseStream(
+        id="chatcmpl-provider",
+        created=1,
+        model="gpt-4.1-mini",
+        object="chat.completion.chunk",
+        choices=[
+            StreamingChoices(
+                finish_reason="stop",
+                index=0,
+                delta=Delta(content="hello", role="assistant"),
+            )
+        ],
+    )
+    hidden_params: Final = {"upstream_provider": "serving-site-a"}
+    chunk_dict: Final = {**chunk.model_dump(), "_hidden_params": hidden_params}
+
+    response: Final = stream_chunk_builder(chunks=[chunk_dict])
+
+    assert response is not None
+    assert chunk_dict["_hidden_params"]["upstream_provider"] == "serving-site-a"
 
 
 def test_stream_chunk_builder_propagates_vertex_ai_metadata_from_chunks():
@@ -984,10 +1017,7 @@ def test_stream_chunk_builder_propagates_vertex_ai_metadata_from_chunks():
     assert getattr(response, "vertex_ai_grounding_metadata") == grounding_metadata
     assert getattr(response, "vertex_ai_url_context_metadata") == url_context_metadata
     assert response._hidden_params["vertex_ai_grounding_metadata"] == grounding_metadata
-    assert (
-        response._hidden_params["vertex_ai_url_context_metadata"]
-        == url_context_metadata
-    )
+    assert response._hidden_params["vertex_ai_url_context_metadata"] == url_context_metadata
 
     dumped = response.model_dump()
     assert dumped["vertex_ai_grounding_metadata"] == grounding_metadata
@@ -1034,9 +1064,7 @@ def test_stream_chunk_builder_uses_assembled_model_for_provider_metadata():
 
 def test_stream_chunk_builder_propagates_vertex_ai_safety_results():
     """Assembled response must expose safety data under the non-streaming field name."""
-    safety_ratings = [
-        [{"category": "HARM_CATEGORY_HATE_SPEECH", "probability": "NEGLIGIBLE"}]
-    ]
+    safety_ratings = [[{"category": "HARM_CATEGORY_HATE_SPEECH", "probability": "NEGLIGIBLE"}]]
 
     chunk = ModelResponseStream(
         id="chatcmpl-vertex-safety",
@@ -1078,18 +1106,12 @@ def test_stream_chunk_builder_propagates_vertex_ai_metadata_from_dict_chunks():
             )
         ],
     ).model_dump()
-    chunk_dict["_hidden_params"] = {
-        "vertex_ai_grounding_metadata": [{"webSearchQueries": ["test query"]}]
-    }
+    chunk_dict["_hidden_params"] = {"vertex_ai_grounding_metadata": [{"webSearchQueries": ["test query"]}]}
 
     response = stream_chunk_builder(chunks=[chunk_dict])
     assert response is not None
-    assert getattr(response, "vertex_ai_grounding_metadata") == [
-        {"webSearchQueries": ["test query"]}
-    ]
-    assert response.model_dump()["vertex_ai_grounding_metadata"] == [
-        {"webSearchQueries": ["test query"]}
-    ]
+    assert getattr(response, "vertex_ai_grounding_metadata") == [{"webSearchQueries": ["test query"]}]
+    assert response.model_dump()["vertex_ai_grounding_metadata"] == [{"webSearchQueries": ["test query"]}]
 
 
 def test_cost_field_in_usage_chunks():
@@ -1098,35 +1120,92 @@ def test_cost_field_in_usage_chunks():
         id="chatcmpl-1",
         created=1745513206,
         model="openrouter/claude",
-        choices=[
-            StreamingChoices(finish_reason=None, index=0, delta=Delta(content="Hi"))
-        ],
+        choices=[StreamingChoices(finish_reason=None, index=0, delta=Delta(content="Hi"))],
         usage=chunk1_usage,
     )
 
-    chunk2_usage = Usage(
-        completion_tokens=5, prompt_tokens=10, total_tokens=15, cost=0.00025
-    )
+    chunk2_usage = Usage(completion_tokens=5, prompt_tokens=10, total_tokens=15, cost=0.00025)
     chunk2 = ModelResponseStream(
         id="chatcmpl-1",
         created=1745513207,
         model="openrouter/claude",
-        choices=[
-            StreamingChoices(finish_reason="stop", index=0, delta=Delta(content=""))
-        ],
+        choices=[StreamingChoices(finish_reason="stop", index=0, delta=Delta(content=""))],
         usage=chunk2_usage,
     )
 
     processor = ChunkProcessor(chunks=[chunk1, chunk2])
-    usage = processor.calculate_usage(
-        chunks=[chunk1, chunk2], model="openrouter/claude", completion_output="Hi"
-    )
+    usage = processor.calculate_usage(chunks=[chunk1, chunk2], model="openrouter/claude", completion_output="Hi")
 
     assert hasattr(usage, "cost")
     assert usage.cost == 0.00025
     assert usage.prompt_tokens == 10
     assert usage.completion_tokens == 5
 
+
+def test_the_rebuilt_response_keeps_the_upstream_cost_a_stamped_usage_chunk_saved(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(litellm, "cost_margin_config", {"global": 0.5})
+    text_chunk = ModelResponseStream(
+        id="chatcmpl-1",
+        model="gpt-4.1",
+        choices=[StreamingChoices(finish_reason="stop", index=0, delta=Delta(content="Hi"))],
+    )
+    usage_chunk = ModelResponseStream(
+        id="chatcmpl-1",
+        model="gpt-4.1",
+        choices=[],
+        usage=Usage(completion_tokens=5, prompt_tokens=10, total_tokens=15, cost=0.0015),
+    )
+    usage_chunk._hidden_params = {"response_cost": 0.0015, "upstream_usage_cost": 0.001}
+
+    rebuilt = stream_chunk_builder([text_chunk, usage_chunk], messages=[{"role": "user", "content": "hi"}])
+
+    assert rebuilt is not None
+    assert rebuilt._hidden_params["upstream_usage_cost"] == 0.001
+    assert litellm.completion_cost(rebuilt, custom_llm_provider="openai") == pytest.approx(0.0015), (
+        "the upstream's 0.001 gets the 50% margin once, litellm's 0.0015 bill is not margined again"
+    )
+
+
+
+def _perplexity_usage_chunk(cost: Mapping[str, float], finish_reason: str | None) -> ModelResponseStream:
+    return ModelResponseStream(
+        id="chatcmpl-pplx",
+        created=1745513206,
+        model="sonar",
+        choices=[StreamingChoices(finish_reason=finish_reason, index=0, delta=Delta(content="ok"))],
+        usage={"prompt_tokens": 26, "completion_tokens": 1, "total_tokens": 27, "cost": dict(cost)},
+    )
+
+
+@pytest.mark.parametrize("poisoned_field", ["request_cost", "total_cost"])
+def test_a_non_finite_final_stream_cost_does_not_fall_back_to_an_earlier_chunk_cost(poisoned_field: str):
+    final_cost: Final = {"input_tokens_cost": 0.0012, "output_tokens_cost": 1e-05, "request_cost": 0.0025}
+    chunks: Final = [
+        _perplexity_usage_chunk({"input_tokens_cost": 0, "output_tokens_cost": 0, "total_cost": 0}, None),
+        _perplexity_usage_chunk({**final_cost, "total_cost": 0.00371, poisoned_field: float("nan")}, "stop"),
+    ]
+
+    response: Final = stream_chunk_builder(chunks=chunks)
+
+    assert response is not None
+    assert getattr(response.usage, "cost", None) is None
+    assert response.usage.total_tokens == 27
+
+
+@pytest.mark.parametrize("provider_key", ["dropped_non_finite_cost", "_dropped_non_finite_cost"])
+def test_a_provider_usage_key_named_like_the_dropped_cost_flag_keeps_the_stream_cost(provider_key: str):
+    chunk: Final = ModelResponseStream(
+        id="chatcmpl-flag-key",
+        created=1745513206,
+        model="sonar",
+        choices=[StreamingChoices(finish_reason="stop", index=0, delta=Delta(content="ok"))],
+        usage={"prompt_tokens": 26, "completion_tokens": 1, "total_tokens": 27, "cost": 0.00371, provider_key: True},
+    )
+
+    response: Final = stream_chunk_builder(chunks=[chunk])
+
+    assert response is not None
+    assert getattr(response.usage, "cost", None) == 0.00371
 
 def test_stream_chunk_builder_tolerates_trailing_chunk_without_choices():
     """Regression for https://github.com/BerriAI/litellm/issues/32051
@@ -1203,25 +1282,19 @@ def test_prompt_tokens_details_survive_later_usage_chunk_without_details():
         id="chatcmpl-1",
         created=1745513206,
         model="openai/gpt-5.6-sol",
-        choices=[
-            StreamingChoices(finish_reason=None, index=0, delta=Delta(content="Hi"))
-        ],
+        choices=[StreamingChoices(finish_reason=None, index=0, delta=Delta(content="Hi"))],
         usage=Usage(
             prompt_tokens=6017,
             completion_tokens=4,
             total_tokens=6021,
-            prompt_tokens_details=PromptTokensDetailsWrapper(
-                cached_tokens=6004, cache_write_tokens=10
-            ),
+            prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=6004, cache_write_tokens=10),
         ),
     )
     chunk_without_details = ModelResponseStream(
         id="chatcmpl-1",
         created=1745513207,
         model="openai/gpt-5.6-sol",
-        choices=[
-            StreamingChoices(finish_reason="stop", index=0, delta=Delta(content=""))
-        ],
+        choices=[StreamingChoices(finish_reason="stop", index=0, delta=Delta(content=""))],
         usage=Usage(prompt_tokens=6017, completion_tokens=4, total_tokens=6021),
     )
 
@@ -1361,10 +1434,116 @@ def test_stream_chunk_builder_keeps_each_choices_tool_call_arguments_apart():
         ]
     )
 
-    assert [(tool_call.id, tool_call.function.arguments) for tool_call in response.choices[0].message.tool_calls] == [
-        ("call_a", '{"fruit": "persimmon"}'),
-        ("call_b", '{"fruit": "durian"}'),
+    assert [
+        (choice.index, [(tool_call.id, tool_call.function.arguments) for tool_call in choice.message.tool_calls])
+        for choice in response.choices
+    ] == [
+        (0, [("call_a", '{"fruit": "persimmon"}')]),
+        (1, [("call_b", '{"fruit": "durian"}')]),
     ]
+
+
+def test_stream_chunk_builder_rebuilds_each_choice_of_a_multi_choice_text_stream_on_its_own():
+    def chunk(choice_index: int, content: str, finish_reason: str | None = None) -> ModelResponseStream:
+        return ModelResponseStream(
+            id="chatcmpl-123",
+            object="chat.completion.chunk",
+            created=1234567890,
+            model="gpt-4.1-mini",
+            choices=[StreamingChoices(index=choice_index, delta=Delta(content=content), finish_reason=finish_reason)],
+        )
+
+    response = stream_chunk_builder(
+        chunks=[
+            chunk(0, "The persim"),
+            chunk(1, "The"),
+            chunk(1, " persimmon is"),
+            chunk(0, "mon is ripe.", finish_reason="stop"),
+            chunk(1, " ripe and", finish_reason="length"),
+        ]
+    )
+
+    assert [(choice.index, choice.message.content, choice.finish_reason) for choice in response.choices] == [
+        (0, "The persimmon is ripe.", "stop"),
+        (1, "The persimmon is ripe and", "length"),
+    ]
+
+
+def test_stream_chunk_builder_gives_a_choice_without_a_finish_chunk_the_finish_reason_its_content_implies():
+    def chunk(choice_index: int, delta: Delta, finish_reason: str | None = None) -> ModelResponseStream:
+        return ModelResponseStream(
+            id="chatcmpl-123",
+            object="chat.completion.chunk",
+            created=1234567890,
+            model="gpt-4.1-mini",
+            choices=[StreamingChoices(index=choice_index, delta=delta, finish_reason=finish_reason)],
+        )
+
+    def tool_call(call_id: str) -> list[ChatCompletionDeltaToolCall]:
+        return [
+            ChatCompletionDeltaToolCall(
+                id=call_id, index=0, type="function", function=Function(name="lookup_fruit", arguments="{}")
+            )
+        ]
+
+    response = stream_chunk_builder(
+        chunks=[
+            chunk(0, Delta(tool_calls=tool_call("call_a"))),
+            chunk(1, Delta(tool_calls=tool_call("call_b"))),
+            chunk(2, Delta(content="Kiwis are fuzzy.")),
+            chunk(0, Delta(), finish_reason="tool_calls"),
+        ]
+    )
+
+    assert [(choice.index, choice.finish_reason) for choice in response.choices] == [
+        (0, "tool_calls"),
+        (1, "tool_calls"),
+        (2, "stop"),
+    ]
+
+
+def test_stream_chunk_builder_keeps_each_choices_function_call_annotations_and_images_on_that_choice():
+    def chunk(choice_index: int, delta: Delta) -> ModelResponseStream:
+        return ModelResponseStream(
+            id="chatcmpl-123",
+            object="chat.completion.chunk",
+            created=1234567890,
+            model="gpt-4.1-mini",
+            choices=[StreamingChoices(index=choice_index, delta=delta, finish_reason=None)],
+        )
+
+    citation: Final = {
+        "type": "url_citation",
+        "url_citation": {"start_index": 0, "end_index": 5, "url": "https://example.com/kiwi", "title": "Kiwi"},
+    }
+    image: Final = {"type": "image_url", "index": 0, "image_url": {"url": "data:image/png;base64,a2l3aQ=="}}
+
+    response = stream_chunk_builder(
+        chunks=[
+            chunk(0, Delta(function_call={"name": "lookup_fruit", "arguments": '{"fruit": '})),
+            chunk(1, Delta(content="Kiwis are")),
+            chunk(0, Delta(function_call={"arguments": '"kiwi"}'})),
+            chunk(1, Delta(content=" fuzzy.", annotations=[citation])),
+            chunk(1, Delta(images=[image])),
+        ]
+    )
+
+    function_choice, cited_choice = response.choices
+    assert (
+        function_choice.index,
+        function_choice.message.content,
+        function_choice.message.function_call.name,
+        function_choice.message.function_call.arguments,
+        getattr(function_choice.message, "annotations", None),
+        getattr(function_choice.message, "images", None),
+    ) == (0, None, "lookup_fruit", '{"fruit": "kiwi"}', None, None)
+    assert (
+        cited_choice.index,
+        cited_choice.message.content,
+        cited_choice.message.function_call,
+        cited_choice.message.annotations,
+        cited_choice.message.images,
+    ) == (1, "Kiwis are fuzzy.", None, [citation], [image])
 
 
 def test_get_combined_tool_content_joins_many_dict_shaped_argument_fragments_in_order():
@@ -1559,9 +1738,7 @@ def test_calculate_usage_fills_unknown_split_from_reasoning_estimate(
     assert usage.completion_tokens_details.text_tokens == expected_text_tokens
 
 
-def _openai_chunk(
-    choices: Sequence[Mapping[str, object]], usage: Mapping[str, int] | None = None
-) -> dict[str, object]:
+def _openai_chunk(choices: Sequence[Mapping[str, object]], usage: Mapping[str, int] | None = None) -> dict[str, object]:
     base: Final = {
         "id": "chatcmpl-lit6552",
         "object": "chat.completion.chunk",
@@ -1996,7 +2173,11 @@ def test_stream_chunk_builder_litellm_tool_call(respx_mock: respx.MockRouter) ->
     )
 
     assert [tool_call.to_dict() for tool_call in response.choices[0].message.tool_calls] == [
-        {"function": {"arguments": '{"city":"Boston"}', "name": "get_weather"}, "id": "call_weather", "type": "function"}
+        {
+            "function": {"arguments": '{"city":"Boston"}', "name": "get_weather"},
+            "id": "call_weather",
+            "type": "function",
+        }
     ]
     assert (response.usage.prompt_tokens, response.usage.completion_tokens, response.usage.total_tokens) == (5, 3, 8)
 
@@ -2018,7 +2199,9 @@ def test_stream_chunk_builder_litellm_tool_call_regular_message(respx_mock: resp
 
 
 def test_stream_chunk_builder_multiple_tool_calls() -> None:
-    def tool_call_chunk(*tool_calls: ChatCompletionDeltaToolCall, finish_reason: str | None = None) -> ModelResponseStream:
+    def tool_call_chunk(
+        *tool_calls: ChatCompletionDeltaToolCall, finish_reason: str | None = None
+    ) -> ModelResponseStream:
         return _legacy_stream_chunk("openai/gpt-4o", tool_calls=tool_calls, finish_reason=finish_reason)
 
     chunks: Final = (
@@ -2029,7 +2212,9 @@ def test_stream_chunk_builder_multiple_tool_calls() -> None:
         ),
         tool_call_chunk(ChatCompletionDeltaToolCall(index=0, function=Function(arguments='{"base": 3, '))),
         tool_call_chunk(
-            ChatCompletionDeltaToolCall(id="call_add", index=1, type="function", function=Function(name="add", arguments=""))
+            ChatCompletionDeltaToolCall(
+                id="call_add", index=1, type="function", function=Function(name="add", arguments="")
+            )
         ),
         tool_call_chunk(ChatCompletionDeltaToolCall(index=0, function=Function(arguments='"exponent": 5}'))),
         tool_call_chunk(
@@ -2043,7 +2228,11 @@ def test_stream_chunk_builder_multiple_tool_calls() -> None:
     assert response is not None
     assert response.choices[0].finish_reason == "tool_calls"
     assert [tool_call.to_dict() for tool_call in response.choices[0].message.tool_calls] == [
-        {"function": {"arguments": '{"base": 3, "exponent": 5}', "name": "exponentiate"}, "id": "call_exp", "type": "function"},
+        {
+            "function": {"arguments": '{"base": 3, "exponent": 5}', "name": "exponentiate"},
+            "id": "call_exp",
+            "type": "function",
+        },
         {"function": {"arguments": '{"x": 1, "y": 2}', "name": "add"}, "id": "call_add", "type": "function"},
     ]
 
@@ -2077,9 +2266,7 @@ def test_grok_bug() -> None:
     response: Final = stream_chunk_builder(chunks=chunks)
 
     assert response is not None
-    assert json.loads(response.choices[0].message.tool_calls[0].function.arguments) == {
-        "location": "Boston"
-    }
+    assert json.loads(response.choices[0].message.tool_calls[0].function.arguments) == {"location": "Boston"}
 
 
 def test_stream_chunk_builder_openai_audio_output_usage() -> None:
@@ -2196,7 +2383,9 @@ def test_stream_chunk_builder_keeps_usage_dict_set_on_a_typed_text_completion_ch
 
 
 @pytest.mark.parametrize("build", [litellm.stream_chunk_builder, litellm.stream_chunk_builder_text_completion])
-def test_stream_chunk_builder_rebuilds_dict_text_completion_chunks(build: Callable[..., TextCompletionResponse]) -> None:
+def test_stream_chunk_builder_rebuilds_dict_text_completion_chunks(
+    build: Callable[..., TextCompletionResponse],
+) -> None:
     def chunk(choices: list[dict[str, object]], **extra: object) -> dict[str, object]:
         return {
             "id": "cmpl-1",
@@ -2450,7 +2639,9 @@ def test_stream_chunk_builder_rebuilds_text_completion_choice_indexes_that_are_n
         ]
     )
 
-    assert tuple(choice.model_dump(include={"index", "text", "finish_reason"}) for choice in response.choices) == expected
+    assert (
+        tuple(choice.model_dump(include={"index", "text", "finish_reason"}) for choice in response.choices) == expected
+    )
 
 
 def test_stream_chunk_builder_text_completion_survives_uncountable_prompt() -> None:
@@ -2517,3 +2708,86 @@ def test_stream_chunk_builder_keeps_reasoning_items_on_text_only_replies():
     assert response is not None
     assert response.choices[0].message.content == "Hello world"
     assert response.choices[0].message.reasoning_items == reasoning_items
+
+
+def test_stream_chunk_builder_carries_the_bedrock_guardrail_trace_and_records_it_on_the_logging_object(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A Bedrock stream reports its guardrail trace on the last chunk only; the built response carries it like the
+    non-streaming response and the call bills it as guardrail cost."""
+    from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+
+    monkeypatch.setattr(
+        litellm,
+        "model_cost",
+        {
+            "bedrock/guardrails": {
+                "litellm_provider": "bedrock",
+                "mode": "guardrails",
+                "guardrail_cost_per_unit": {"topicPolicyUnits": 0.00015},
+            }
+        },
+    )
+    trace = {"guardrail": {"inputAssessment": {"gid": {"invocationMetrics": {"usage": {"topicPolicyUnits": 2}}}}}}
+    chunks = [
+        ModelResponseStream(id="s", model="m", choices=[StreamingChoices(index=0, delta=Delta(content="hi"))]),
+        ModelResponseStream(
+            id="s",
+            model="m",
+            choices=[StreamingChoices(index=0, delta=Delta(), finish_reason="stop")],
+            provider_specific_fields={"trace": trace},
+        ),
+    ]
+    logging_obj = Logging(
+        model="bedrock/m",
+        messages=[{"role": "user", "content": "q"}],
+        stream=True,
+        call_type="acompletion",
+        start_time=None,
+        litellm_call_id="call",
+        function_id="fn",
+    )
+    logging_obj.model_call_details["litellm_params"] = {"metadata": {}}
+    built = stream_chunk_builder(chunks=chunks, messages=[{"role": "user", "content": "q"}], logging_obj=logging_obj)
+    assert built is not None
+    assert getattr(built, "trace") == trace
+    (entry,) = logging_obj.model_call_details["litellm_params"]["metadata"]["standard_logging_guardrail_information"]
+    assert entry["guardrail_usage"] == {"topicPolicyUnits": 2}
+    assert entry["guardrail_cost"] == pytest.approx(2 * 0.00015)
+
+
+@pytest.mark.parametrize(
+    ("base_model", "counted_as"), [("azure/gpt-6.1-sol", "azure/gpt-6.1-sol"), ("claude-sonnet-4-5", "my-gpt-6")]
+)
+def test_stream_chunk_builder_counts_a_custom_named_deployments_missing_usage_with_its_base_model_only_when_openai(
+    base_model: str, counted_as: str
+) -> None:
+    from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+
+    messages: Final = [{"role": "user", "content": "日本語のテキストとहिन्दी पाठ और русский текст. " * 20}]
+    chunks: Final = [
+        ModelResponseStream(id="s", model="my-gpt-6", choices=[StreamingChoices(index=0, delta=Delta(content="hi"))]),
+        ModelResponseStream(
+            id="s", model="my-gpt-6", choices=[StreamingChoices(index=0, delta=Delta(), finish_reason="stop")]
+        ),
+    ]
+    logging_obj: Final = Logging(
+        model="my-gpt-6",
+        messages=messages,
+        stream=True,
+        call_type="acompletion",
+        start_time=None,
+        litellm_call_id="call",
+        function_id="fn",
+    )
+    logging_obj.model_call_details["litellm_params"] = {"metadata": {"model_info": {"base_model": base_model}}}
+
+    built: Final = stream_chunk_builder(chunks=chunks, messages=messages, logging_obj=logging_obj)
+
+    assert built is not None
+    assert litellm.token_counter(model=base_model, messages=messages) != litellm.token_counter(
+        model="my-gpt-6", messages=messages
+    )
+    assert built.usage.prompt_tokens == litellm.token_counter(model=counted_as, messages=messages)

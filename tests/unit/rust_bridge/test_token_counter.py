@@ -16,6 +16,7 @@ import litellm
 from litellm.constants import TIKTOKEN_ENCODE_CHUNK_SIZE_CHARS
 from litellm.litellm_core_utils.token_counter import openai_tokenizer_encoding
 from litellm.proxy.spend_tracking.input_tokens import count_input_tokens_for_model
+from litellm.rust_bridge import _native as native
 from litellm.rust_bridge import token_counter as bridge
 from litellm.rust_bridge import tokenizer as tokenizer_dispatch
 from litellm.rust_bridge._native import Tokenizer
@@ -143,9 +144,10 @@ async def test_each_tokenizer_gets_its_own_cached_counter(fake_tokenizers: None)
         ("gemini/gemini-2.5-pro", "cl100k_base"),
         ("mistral/mistral-large-latest", "cl100k_base"),
         ("my-router-alias", "cl100k_base"),
-        ("azure/gpt-4o", "cl100k_base"),
         ("command-r-plus", "cl100k_base"),
         ("gpt-4o", "o200k_base"),
+        ("azure/gpt-4o", "o200k_base"),
+        ("eu/gpt-5.6-sol", "o200k_base"),
         ("gpt-4o-mini", "o200k_base"),
         ("gpt-4o-2024-08-06", "o200k_base"),
         ("gpt-4.1", "o200k_base"),
@@ -313,7 +315,6 @@ PARITY_MODELS: Final[tuple[tuple[str, bridge.RustTokenizer], ...]] = (
 async def test_native_count_matches_python_budget_counter(
     request_body: dict[str, object], model: str, tokenizer: bridge.RustTokenizer
 ) -> None:
-    native: Final = pytest.importorskip("litellm.rust_bridge._native")
     body: Final = json.dumps(request_body).replace(MODEL, model)
     parsed: Final = json.loads(body)
 
@@ -328,7 +329,6 @@ async def test_tiktoken_counts_long_text_exactly_where_python_chunks(
     model: str, tokenizer: bridge.RustTokenizer
 ) -> None:
     """Python encodes tiktoken text in fixed-size chunks (drift of up to one token per chunk boundary); Rust does not."""
-    native: Final = pytest.importorskip("litellm.rust_bridge._native")
     text: Final = "x " * 20_000
     body: Final = {"model": model, "messages": [{"role": "user", "content": text}]}
     encoding: Final = Tokenizer.from_tiktoken(tokenizer)
@@ -362,7 +362,6 @@ DECLINED_REQUESTS: Final[tuple[dict[str, object], ...]] = (
 async def test_native_declines_shapes_python_prices_differently(
     request_body: dict[str, object], tokenizer: bridge.RustTokenizer
 ) -> None:
-    native: Final = pytest.importorskip("litellm.rust_bridge._native")
     raw, _ = _counted(request_body, MODEL_BY_TOKENIZER[tokenizer])
 
     with pytest.raises(native.RustBridgeDeclined):

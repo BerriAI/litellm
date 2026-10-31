@@ -4,12 +4,15 @@ from dataclasses import dataclass
 from itertools import chain
 from typing import BinaryIO, Final, NoReturn
 
+from pydantic import TypeAdapter
 from typing_extensions import assert_never
 
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.proxy._types import ProxyException
 from litellm.proxy.openai_files_endpoints.file_usage_caps import FileUsageLimit, describe_limit_source
 
 _MB: Final = 1024 * 1024
+_DECODED_LINE: Final = TypeAdapter(object)
 
 
 @dataclass(frozen=True, slots=True)
@@ -95,10 +98,10 @@ def _iter_lines(file_source: bytes | BinaryIO) -> Iterator[bytes]:
 
 def _check_line(line_number: int, raw_line: bytes, line_shape: BatchLineShape) -> BatchFileValidationFailure | None:
     try:
-        parsed: Final = json.loads(raw_line)
+        parsed: Final = as_str_mapping(_DECODED_LINE.validate_python(json.loads(raw_line)))
     except (ValueError, RecursionError):
         return BatchFileInvalidJsonLine(line_number=line_number)
-    if not isinstance(parsed, dict):
+    if parsed is None:
         return BatchFileLineNotObject(line_number=line_number)
     missing: Final = next((key for key in line_shape.required_keys if key not in parsed), None)
     if missing is None:
