@@ -87,7 +87,7 @@ from litellm.responses.mcp.parked_stream_dispatch import IN_FLIGHT_ROUND
 from litellm.router import Router
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.utils import ModelResponseListIterator
-from litellm.router_utils.add_retry_fallback_headers import prepare_response_for_header_attachment
+from litellm.litellm_core_utils.add_retry_fallback_headers import prepare_response_for_header_attachment
 
 
 def test_attach_guardrail_information_copies_recorded_entries_onto_model_response():

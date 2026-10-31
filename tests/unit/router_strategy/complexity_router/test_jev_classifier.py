@@ -18,6 +18,7 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.typesafe.decisions.transformation import TypeSafeDecisionsConfig
+from litellm.router_api import RoutingContext
 from litellm.router_strategy.complexity_router.complexity_router import ComplexityRouter, _ClassifierCircuitBreaker
 from litellm.router_strategy.complexity_router.config import ComplexityRouterConfig, JevClassifierConfig
 from litellm.router_strategy.complexity_router.jev_classifier import (
@@ -85,7 +86,7 @@ async def test_jev_logging_failure_preserves_verdict_and_keeps_circuit_closed(
     handler.client = httpx.AsyncClient(transport=httpx.MockTransport(respond))
     router: Final = ComplexityRouter(
         "jev-logging-failure",
-        litellm.Router(model_list=[]),
+        RoutingContext(litellm.Router(model_list=[])),
         {"classifier_type": "jev", "jev_classifier_config": {}, "tiers": {"SIMPLE": "cheap"}},
         jev_client=HttpJevClassifierClient("test", "https://typesafe.test", handler),
         derive_savings_baseline=False,
@@ -201,7 +202,7 @@ async def test_jev_accounts_once_with_parent_identity_even_when_the_verdict_fail
     provider: Final = HttpJevClassifierClient("test", "https://typesafe.test", handler)
     router: Final = ComplexityRouter(
         "jev-router",
-        litellm.Router(model_list=[]),
+        RoutingContext(litellm.Router(model_list=[])),
         {
             "classifier_type": "jev" if legacy else "oss_classifier",
             "jev_classifier_config" if legacy else "opensource_classifier_config": {
@@ -283,7 +284,7 @@ async def test_jev_uses_bounded_history_and_separates_operator_instructions(incl
     handler.client = httpx.AsyncClient(transport=httpx.MockTransport(respond))
     router: Final = ComplexityRouter(
         "jev-context",
-        litellm.Router(model_list=[]),
+        RoutingContext(litellm.Router(model_list=[])),
         {
             "classifier_type": "jev",
             "jev_classifier_config": {"instructions": "operator-only rubric"},
@@ -347,7 +348,7 @@ async def test_jev_encrypted_task_skips_provider_without_disabling_plaintext_cla
     handler.client = httpx.AsyncClient(transport=transport)
     router: Final = ComplexityRouter(
         "jev-encrypted",
-        litellm.Router(model_list=[]),
+        RoutingContext(litellm.Router(model_list=[])),
         {
             "classifier_type": "jev",
             "jev_classifier_config": {},
@@ -415,7 +416,7 @@ async def test_jev_cancellation_propagates_without_opening_timeout_breaker() -> 
     handler.client = httpx.AsyncClient(transport=httpx.MockTransport(respond))
     router: Final = ComplexityRouter(
         "jev-cancellation",
-        litellm.Router(model_list=[]),
+        RoutingContext(litellm.Router(model_list=[])),
         {"classifier_type": "jev", "jev_classifier_config": {}, "tiers": {"SIMPLE": "cheap"}},
         jev_client=HttpJevClassifierClient("test", "https://typesafe.test", handler),
         derive_savings_baseline=False,
@@ -524,7 +525,7 @@ async def test_oss_routes_with_its_own_credentials_and_accounts_the_checkpoint(
     monkeypatch.setattr(litellm, "_async_success_callback", [recorder])
     router: Final = ComplexityRouter(
         f"{provider}-route",
-        litellm.Router(model_list=[]),
+        RoutingContext(litellm.Router(model_list=[])),
         {
             "classifier_type": "jev" if legacy else "oss_classifier",
             "jev_classifier_config" if legacy else "opensource_classifier_config": {
@@ -591,7 +592,7 @@ async def test_databricks_routes_through_the_serving_endpoint_and_accounts_the_e
     monkeypatch.setattr(litellm, "_async_success_callback", [recorder])
     router: Final = ComplexityRouter(
         "databricks-route",
-        litellm.Router(model_list=[]),
+        RoutingContext(litellm.Router(model_list=[])),
         {
             "classifier_type": "jev" if legacy else "oss_classifier",
             "jev_classifier_config" if legacy else "opensource_classifier_config": {
@@ -648,7 +649,7 @@ async def test_databricks_routes_through_ai_decide_without_a_model_field_and_acc
     monkeypatch.setattr(litellm, "_async_success_callback", [recorder])
     router: Final = ComplexityRouter(
         "databricks-route",
-        litellm.Router(model_list=[]),
+        RoutingContext(litellm.Router(model_list=[])),
         {
             "classifier_type": "jev" if legacy else "oss_classifier",
             "jev_classifier_config" if legacy else "opensource_classifier_config": {
@@ -688,7 +689,7 @@ def test_databricks_without_a_base_or_key_fails_at_client_build(monkeypatch: pyt
     with pytest.raises(ValueError, match="DATABRICKS_API_BASE"):
         ComplexityRouter(
             "databricks-route",
-            litellm.Router(model_list=[]),
+            RoutingContext(litellm.Router(model_list=[])),
             {
                 "classifier_type": "oss_classifier",
                 "opensource_classifier_config": {"provider": "databricks", "model": "ai_decide"},
@@ -773,7 +774,9 @@ async def test_jev_connection_resolves_only_explicit_environment_references(
     expected_key: Final = (
         "default-key"
         if connection == "defaults"
-        else "resolved-key" if connection in ("key-reference", "references") else "literal-key"
+        else "resolved-key"
+        if connection in ("key-reference", "references")
+        else "literal-key"
     )
     assert outcome.cause == "jev_classifier"
     assert route.calls[0].request.headers["authorization"] == f"Bearer {expected_key}"
@@ -1083,7 +1086,8 @@ async def test_jev_bounds_complete_input_without_changing_forwarded_messages(
     handler: Final = AsyncHTTPHandler()
     handler.client = httpx.AsyncClient()
     classifier: Final = ComplexityRouter(
-        "bounded-classifier", litellm.Router(model_list=[]),
+        "bounded-classifier",
+        litellm.Router(model_list=[]),
         {
             "classifier_type": "oss_classifier",
             "opensource_classifier_config": {"instructions": rubric},
@@ -1142,8 +1146,12 @@ async def test_jev_bounds_complete_input_without_changing_forwarded_messages(
     ],
 )
 async def test_jev_budget_uses_effective_headers_and_every_deployment(
-    mode: str, default_header: str | None, explicit_cap: int | None,
-    other_member: str | None, expected_status: str, monkeypatch: pytest.MonkeyPatch
+    mode: str,
+    default_header: str | None,
+    explicit_cap: int | None,
+    other_member: str | None,
+    expected_status: str,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     monkeypatch.setitem(litellm.model_cost, "typesafe/jev-latest", deepcopy(litellm.model_cost["typesafe/jev-latest"]))
@@ -1151,7 +1159,9 @@ async def test_jev_budget_uses_effective_headers_and_every_deployment(
     deployment: Final = {
         "model_name": "budget-model",
         "litellm_params": {
-            "model": "typesafe/jev-latest", "api_key": "test", "api_base": "https://budget.test",
+            "model": "typesafe/jev-latest",
+            "api_key": "test",
+            "api_base": "https://budget.test",
             "extra_headers": {header: mode},
         },
         "model_info": {"max_input_tokens": explicit_cap} if explicit_cap is not None else {},
@@ -1160,7 +1170,8 @@ async def test_jev_budget_uses_effective_headers_and_every_deployment(
         "model_name": "budget-model",
         "litellm_params": {
             "model": "databricks/unknown-budget-endpoint" if other_member == "unknown" else "typesafe/jev-latest",
-            "api_key": "test", "api_base": "https://budget.test",
+            "api_key": "test",
+            "api_base": "https://budget.test",
         },
     }
     router: Final = litellm.Router(
@@ -1169,16 +1180,18 @@ async def test_jev_budget_uses_effective_headers_and_every_deployment(
         num_retries=0,
     )
     classifier: Final = ComplexityRouter(
-        "bounded-classifier", router,
-        {"classifier_type": "oss_classifier", "opensource_classifier_config": {"deployment_name": "budget-model"},
-         "tiers": {"SIMPLE": "cheap"}},
+        "bounded-classifier",
+        router,
+        {
+            "classifier_type": "oss_classifier",
+            "opensource_classifier_config": {"deployment_name": "budget-model"},
+            "tiers": {"SIMPLE": "cheap"},
+        },
         derive_savings_baseline=False,
     )
     ask: Final = "Explain this code " + "word001 word002 word003 " * 12000
     with respx.mock(assert_all_called=True) as upstream:
-        route: Final = upstream.route(method="POST").respond(
-            json={"answers": {"tier": _answer().model_dump()}}
-        )
+        route: Final = upstream.route(method="POST").respond(json={"answers": {"tier": _answer().model_dump()}})
         outcome: Final = await classifier.aclassify(ask)
     assert outcome.cause == "jev_classifier"
     telemetry: Final = outcome.classifier_input_telemetry
@@ -1202,29 +1215,55 @@ async def test_jev_untrimmable_rubric_uses_configured_fallback_without_a_provide
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     monkeypatch.setitem(litellm.model_cost, "typesafe/jev-latest", deepcopy(litellm.model_cost["typesafe/jev-latest"]))
-    router: Final = litellm.Router(model_list=[{
-        "model_name": "budget-model",
-        "litellm_params": {"model": "typesafe/jev-latest", "api_key": "test", "api_base": "https://budget.test"},
-        "model_info": {"max_input_tokens": 128 if oversized_field == "criteria" else 1024},
-    }])
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "budget-model",
+                "litellm_params": {
+                    "model": "typesafe/jev-latest",
+                    "api_key": "test",
+                    "api_base": "https://budget.test",
+                },
+                "model_info": {"max_input_tokens": 128 if oversized_field == "criteria" else 1024},
+            }
+        ]
+    )
     rubric: Final = "word001 word002 word003 " * 2000
     classifier: Final = ComplexityRouter(
-        "bounded-classifier", router,
-        {"classifier_type": "oss_classifier", "opensource_classifier_config": {
-            "deployment_name": "budget-model", "instructions": rubric if oversized_field == "instructions" else "Choose",
-        }, "tiers": {"SIMPLE": "cheap", "REASONING": "deep"},
-         **({"tier_definitions": [{"name": name, "description": "word001 " * 50}
-                                  for name in ("SIMPLE", "REASONING")], "fallback_tier": "SIMPLE"}
-            if fallback == "custom" else {"classifier_fallback": fallback, "default_model": "default"})},
+        "bounded-classifier",
+        router,
+        {
+            "classifier_type": "oss_classifier",
+            "opensource_classifier_config": {
+                "deployment_name": "budget-model",
+                "instructions": rubric if oversized_field == "instructions" else "Choose",
+            },
+            "tiers": {"SIMPLE": "cheap", "REASONING": "deep"},
+            **(
+                {
+                    "tier_definitions": [
+                        {"name": name, "description": "word001 " * 50} for name in ("SIMPLE", "REASONING")
+                    ],
+                    "fallback_tier": "SIMPLE",
+                }
+                if fallback == "custom"
+                else {"classifier_fallback": fallback, "default_model": "default"}
+            ),
+        },
         derive_savings_baseline=False,
     )
     with respx.mock(assert_all_called=False) as upstream:
         route: Final = upstream.route(method="POST").respond(json={"answers": {"tier": _answer().model_dump()}})
         outcome: Final = await classifier.aclassify("What is two plus two?")
     assert route.call_count == 0
-    assert outcome.cause == {
-        "heuristic": "heuristic_scorer", "default_model": "default_model_fallback", "custom": "classifier_fallback",
-    }[fallback]
+    assert (
+        outcome.cause
+        == {
+            "heuristic": "heuristic_scorer",
+            "default_model": "default_model_fallback",
+            "custom": "classifier_fallback",
+        }[fallback]
+    )
     assert outcome.classifier_failure_reason == "unsupported_input"
     assert outcome.classifier_input_telemetry is not None
     assert outcome.classifier_input_telemetry["classifier_input_budget_status"] == "untrimmable_input"
@@ -1241,10 +1280,17 @@ async def test_jev_open_breaker_preserves_input_budget_in_fallback_decision(fall
     handler: Final = AsyncHTTPHandler()
     handler.client = httpx.AsyncClient(transport=transport)
     classifier: Final = ComplexityRouter(
-        "breaker-budget", litellm.Router(model_list=[]),
-        {"classifier_type": "oss_classifier", "opensource_classifier_config": {},
-         "tiers": {"SIMPLE": "cheap", "REASONING": "deep"}, "classifier_fallback": fallback,
-         "default_model": "default", "session_affinity": False, "deployment_affinity": False},
+        "breaker-budget",
+        litellm.Router(model_list=[]),
+        {
+            "classifier_type": "oss_classifier",
+            "opensource_classifier_config": {},
+            "tiers": {"SIMPLE": "cheap", "REASONING": "deep"},
+            "classifier_fallback": fallback,
+            "default_model": "default",
+            "session_affinity": False,
+            "deployment_affinity": False,
+        },
         jev_client=HttpJevClassifierClient("test", "https://budget.test", handler),
         derive_savings_baseline=False,
     )
@@ -1254,7 +1300,8 @@ async def test_jev_open_breaker_preserves_input_budget_in_fallback_decision(fall
             model="breaker-budget", request_kwargs={}, messages=[{"role": "user", "content": "Explain budgets"}]
         )
         second: Final = await classifier.async_pre_routing_hook(
-            model="breaker-budget", request_kwargs={},
+            model="breaker-budget",
+            request_kwargs={},
             messages=[{"role": "user", "content": "Explain this code " + "word001 word002 word003 " * 12000}],
         )
         assert first is not None and first.routing_decision is not None

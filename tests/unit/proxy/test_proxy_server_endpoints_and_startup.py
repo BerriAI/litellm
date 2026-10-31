@@ -15398,12 +15398,12 @@ async def test_load_config_router_budget_checks_fallback_targets_against_the_cal
 
     # on by default: an over-budget caller is refused the paid fallback with no config at all
     monkeypatch.setattr(proxy_server, "general_settings", {}, raising=False)
-    assert await router.fallback_budget_check(model="m", request_kwargs=over_budget, llm_router=router) is False
-    assert await router.fallback_budget_check(model="m", request_kwargs=under_budget, llm_router=router) is True
+    assert await router.fallback_budget_check(model="m", request_kwargs=over_budget, ctx=router._core_ctx) is False
+    assert await router.fallback_budget_check(model="m", request_kwargs=under_budget, ctx=router._core_ctx) is True
 
     # explicit opt-out restores the unguarded behaviour
     monkeypatch.setattr(proxy_server, "general_settings", {"enforce_fallback_budget": False}, raising=False)
-    assert await router.fallback_budget_check(model="m", request_kwargs=over_budget, llm_router=router) is True
+    assert await router.fallback_budget_check(model="m", request_kwargs=over_budget, ctx=router._core_ctx) is True
 
 
 @pytest.mark.asyncio
