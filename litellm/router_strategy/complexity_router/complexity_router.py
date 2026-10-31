@@ -2424,7 +2424,7 @@ class ComplexityRouter(CustomLogger):
             verdict: Final = JevVerdict(
                 label=answer.choice,
                 probabilities=answer.probabilities,
-                confidence=answer.confidence,
+                confidence=answer.selected_confidence,
                 model=model,
                 cost=response.classifier_cost
                 if config.deployment_name
@@ -2440,7 +2440,7 @@ class ComplexityRouter(CustomLogger):
                 score=None,
                 signals=(
                     f"{config.provider}-classifier:{tier_name}",
-                    f"{config.provider}-confidence={answer.confidence:.6f}",
+                    f"{config.provider}-confidence={answer.selected_confidence:.6f}",
                     *(
                         f"tier-probability:{label}={probability:.6f}"
                         for label, probability in answer.probabilities.items()

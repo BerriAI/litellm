@@ -30,6 +30,7 @@ class ParallelAIDecisionsConfig(BaseDecisionsConfig):
     path = "/v1/decisions"
     api_key_env = ("PARALLEL_AI_API_KEY", "PARALLEL_API_KEY")
     api_base_env = ("PARALLEL_AI_API_BASE",)
+    openai_evidence_fields = frozenset({"citations", "decision_id", "mode"})
 
     def get_default_api_base(self) -> str:
         return "https://api.parallel.ai"
@@ -37,20 +38,18 @@ class ParallelAIDecisionsConfig(BaseDecisionsConfig):
     def resolve_connection(self, api_base: str | None, api_key: str | None) -> tuple[str | None, str | None]:
         configured_base: Final = self.resolve_api_base(None)
         resolved_base: Final = api_base or configured_base
+        destination: Final = self._decisions_url(resolved_base)
         if api_key:
             return resolved_base, api_key
-        # Compare actual endpoint URLs before loading a server-managed secret.
-        trusted_urls: Final = frozenset(
-            httpx.URL(self.get_complete_url(base, "decision"))
-            for base in (self.get_default_api_base(), configured_base)
-            if base
-        )
-        if resolved_base and httpx.URL(self.get_complete_url(resolved_base, "decision")) not in trusted_urls:
+        if destination not in {self._decisions_url(None), self._decisions_url(configured_base)}:
             raise ValueError(
                 "Parallel Decisions requires an explicit api_key for a custom api_base unless "
                 "the destination is configured in PARALLEL_AI_API_BASE"
             )
         return resolved_base, self.resolve_api_key(None)
+
+    def _decisions_url(self, api_base: str | None) -> httpx.URL:
+        return httpx.URL(self.get_complete_url(api_base or self.get_default_api_base(), "decision"))
 
     def validate_environment(
         self,
@@ -83,7 +82,6 @@ class ParallelAIDecisionsConfig(BaseDecisionsConfig):
 
     def parse_response(self, payload: object, request: DecisionsIRRequest) -> DecisionsIRResponse:
         response: Final = _ParallelResponse.model_validate(payload)
-        # Missing answers become IR refusals in the shared System One parser.
         return super().parse_response(
             {
                 **response.model_dump(),

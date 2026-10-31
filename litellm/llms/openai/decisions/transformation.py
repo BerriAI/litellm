@@ -307,7 +307,10 @@ def _openai_answer(question: DecisionsIRQuestion, answer: DecisionsIRAnswer) -> 
 
 
 def ir_to_openai_response(
-    response: DecisionsIRResponse, request: DecisionsIRRequest, requested_model: str
+    response: DecisionsIRResponse,
+    request: DecisionsIRRequest,
+    requested_model: str,
+    evidence_fields: frozenset[str] = frozenset(),
 ) -> OpenAIDecisionResponse:
     usage: Final = response.usage or DecisionsIRUsage()
     formatted: Final = OpenAIDecisionResponse(
@@ -327,8 +330,7 @@ def ir_to_openai_response(
             total_tokens=usage.input_tokens + usage.output_tokens,
         ),
     )
-    # Keep provider evidence without letting extras replace normalized fields.
-    return OpenAIDecisionResponse.model_validate({**response.extra, **formatted.model_dump()})
+    return formatted.model_copy(update={name: response.extra[name] for name in evidence_fields & response.extra.keys()})
 
 
 class OpenAIDecisionsConfig(BaseDecisionsConfig):

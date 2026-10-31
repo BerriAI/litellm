@@ -608,7 +608,6 @@ def cost_per_token(
             "input_cost_per_query", decisions_model_info.get("input_cost_per_query")
         )
         if isinstance(request_price, (int, float)):
-            # One Decisions request can answer many questions for the same flat fee.
             return float(request_price), 0.0
         if decisions_overrides:
             return generic_cost_per_token(

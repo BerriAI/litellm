@@ -1,4 +1,5 @@
 from collections.abc import Mapping
+from dataclasses import replace
 from typing import Final
 
 import pytest
@@ -104,6 +105,19 @@ def test_an_openai_response_reaches_the_caller_unchanged() -> None:
     parsed: Final = OpenAIDecisionsConfig().parse_response(_OPENAI_RESPONSE, ir)
 
     assert ir_to_openai_response(parsed, ir, "requested").model_dump(mode="json") == _OPENAI_RESPONSE
+
+
+def test_provider_extras_stay_off_the_openai_response_unless_the_provider_names_them() -> None:
+    ir: Final = _openai_ir(_OPENAI_REQUEST)
+    parsed: Final = replace(
+        OpenAIDecisionsConfig().parse_response(_OPENAI_RESPONSE, ir), extra={"provider": "upstream", "citations": []}
+    )
+
+    assert ir_to_openai_response(parsed, ir, "requested").model_dump(mode="json") == _OPENAI_RESPONSE
+    assert ir_to_openai_response(parsed, ir, "requested", frozenset({"citations"})).model_dump(mode="json") == {
+        **_OPENAI_RESPONSE,
+        "citations": [],
+    }
 
 
 def test_answers_openai_did_not_return_are_refusals() -> None:

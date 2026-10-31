@@ -131,7 +131,9 @@ def test_all_answers_usage_and_evidence_survive_response_translation(surface: st
     formatted: Final = (
         ir_to_systemone_response(response, REQUEST)
         if surface == "systemone"
-        else ir_to_openai_response(response, REQUEST, "parallel_ai/decision")
+        else ir_to_openai_response(
+            response, REQUEST, "parallel_ai/decision", ParallelAIDecisionsConfig.openai_evidence_fields
+        )
     )
     result: Final = formatted.model_dump(mode="json")
     assert result["citations"] == PAYLOAD["citations"]
@@ -182,7 +184,9 @@ def test_optional_confidence_is_preserved_without_inventing_a_value(confidence: 
     formatted: Final = (
         ir_to_systemone_response(response, REQUEST)
         if surface == "systemone"
-        else ir_to_openai_response(response, REQUEST, "parallel_ai/decision")
+        else ir_to_openai_response(
+            response, REQUEST, "parallel_ai/decision", ParallelAIDecisionsConfig.openai_evidence_fields
+        )
     )
     answers: Final = formatted.model_dump(mode="json")["answers"]
     values: Final = answers.values() if isinstance(answers, dict) else answers
@@ -192,11 +196,21 @@ def test_optional_confidence_is_preserved_without_inventing_a_value(confidence: 
 def test_provider_extras_cannot_replace_normalized_response_fields() -> None:
     response: Final = ParallelAIDecisionsConfig().parse_response(PAYLOAD, REQUEST)
     with_collision: Final = replace(response, extra={**response.extra, "model": "wrong", "answers": [], "usage": {}})
-    formatted: Final = ir_to_openai_response(with_collision, REQUEST, "parallel_ai/decision")
+    formatted: Final = ir_to_openai_response(
+        with_collision, REQUEST, "parallel_ai/decision", ParallelAIDecisionsConfig.openai_evidence_fields
+    )
     assert formatted.model == "decision"
     assert len(formatted.answers) == 4
     assert formatted.usage.input_tokens == 4212
     assert formatted.model_dump()["citations"] == PAYLOAD["citations"]
+
+
+def test_undocumented_parallel_fields_stay_off_the_openai_response() -> None:
+    response: Final = ParallelAIDecisionsConfig().parse_response({**PAYLOAD, "internal_trace_id": "trace"}, REQUEST)
+    formatted: Final = ir_to_openai_response(
+        response, REQUEST, "parallel_ai/decision", ParallelAIDecisionsConfig.openai_evidence_fields
+    )
+    assert "internal_trace_id" not in formatted.model_dump()
 
 
 @pytest.mark.parametrize("tokens", [0, 100, 32000])
@@ -246,11 +260,12 @@ async def test_untrusted_base_cannot_receive_environment_key(
     )
     sync_call: Final = litellm.systemone if surface == "systemone" else litellm.decisions
     async_call: Final = litellm.asystemone if surface == "systemone" else litellm.adecisions
+
+    async def call() -> object:
+        return await async_call(**connection, **fields) if use_async else sync_call(**connection, **fields)
+
     with pytest.raises(litellm.BadRequestError, match="explicit api_key"):
-        if use_async:
-            await async_call(**connection, **fields)
-        else:
-            sync_call(**connection, **fields)
+        await call()
     assert not route.called
     await GLOBAL_LOGGING_WORKER.clear_queue()
 
@@ -289,6 +304,20 @@ def test_operator_base_retains_environment_key(api_base: str | None, monkeypatch
     resolved_base, key = ParallelAIDecisionsConfig().resolve_connection(api_base, None)
     assert resolved_base == (api_base or "https://gateway.example/parallel")
     assert key == "server-secret"
+
+
+@pytest.mark.parametrize("api_key", [None, "caller-key"])
+@pytest.mark.parametrize("api_base", ["https://api.parallel.ai\t", "https://api.parallel.ai\r\nHost: attacker.example"])
+def test_malformed_destination_is_a_bad_request(api_base: str, api_key: str | None) -> None:
+    with pytest.raises(litellm.BadRequestError):
+        litellm.decisions(
+            model="parallel_ai/decision",
+            api_base=api_base,
+            api_key=api_key,
+            input="Example",
+            questions=[{"type": "predicate", "name": "available", "instructions": "Available?"}],
+            num_retries=0,
+        )
 
 
 def test_custom_destination_uses_explicit_key_instead_of_environment(monkeypatch: pytest.MonkeyPatch) -> None:

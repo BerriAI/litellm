@@ -58,7 +58,11 @@ class JevChoiceAnswer(LiteLLMBaseModel):
     type: Literal["choice"]
     choice: str
     probabilities: Mapping[str, JevProbability]
-    confidence: JevProbability
+    confidence: JevProbability | None = None
+
+    @property
+    def selected_confidence(self) -> float:
+        return self.probabilities.get(self.choice, 0.0) if self.confidence is None else self.confidence
 
 
 class JevUsage(LiteLLMBaseModel):
