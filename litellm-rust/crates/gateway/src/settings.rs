@@ -1,6 +1,6 @@
 use std::ffi::OsString;
 
-use litellm_auth_types::SecretValue;
+use litellm_secret_value::SecretValue;
 use litellm_tracing::Level;
 use serde::{Deserialize, de::DeserializeOwned};
 

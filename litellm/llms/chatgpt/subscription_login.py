@@ -4,7 +4,7 @@ from typing import Final
 
 from pydantic import TypeAdapter, ValidationError
 
-from litellm.exceptions import CallerCredentialAuthenticationError
+from litellm.exceptions import BadRequestError, CallerCredentialAuthenticationError
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.llms.chatgpt.common_utils import CHATGPT_ACCOUNT_ID_HEADER, CHATGPT_API_BASE, chatgpt_client_api_base
 from litellm.types.utils import CredentialItem, chatgpt_subscription_login_litellm_params
@@ -37,6 +37,23 @@ def locked_chatgpt_credential_name(deployment_params: object) -> str | None:
     if names_chatgpt_subscription_login(credential_name) or _is_chatgpt_call(params, params.get("model")):
         return credential_name
     return None
+
+
+def reject_chatgpt_credential_override(
+    deployment_params: object, request_kwargs: Mapping[str, object], model: str
+) -> None:
+    locked_name: Final = locked_chatgpt_credential_name(deployment_params)
+    if (
+        locked_name is None
+        or "litellm_credential_name" not in request_kwargs
+        or request_kwargs["litellm_credential_name"] == locked_name
+    ):
+        return
+    raise BadRequestError(
+        message="litellm_credential_name cannot be overridden on a deployment that uses a ChatGPT subscription login",
+        model=model,
+        llm_provider="",
+    )
 
 
 def _str_keyed(value: object) -> Mapping[str, object] | None:

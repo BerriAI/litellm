@@ -13,7 +13,7 @@ from litellm.llms.chatgpt.subscription_login import (
     attach_chatgpt_subscription_login,
     names_chatgpt_subscription_login,
 )
-from litellm.router_utils.clientside_credential_handler import get_dynamic_litellm_params
+from litellm.litellm_core_utils.clientside_credential_handler import get_dynamic_litellm_params
 from litellm.types.proxy.litellm_pre_call_utils import RedactedDict
 from litellm.types.utils import CredentialItem
 
