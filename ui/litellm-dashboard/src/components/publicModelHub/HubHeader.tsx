@@ -20,6 +20,8 @@ import { CopyIconButton } from "./HubParts";
 import { StatusBadge } from "./HubStatus";
 import type { HubInfo } from "./useHubData";
 
+export type HubStatus = "loading" | "operational" | "degraded" | "unavailable";
+
 function LinksMenu({ info }: { info: HubInfo | undefined }) {
   const links = usefulLinkList(info?.useful_links);
   if (links.length === 0) return null;
@@ -75,13 +77,7 @@ function BaseUrlField() {
   );
 }
 
-export function HubHeader({
-  info,
-  status,
-}: {
-  info: HubInfo | undefined;
-  status: "loading" | "operational" | "unavailable";
-}) {
+export function HubHeader({ info, status }: { info: HubInfo | undefined; status: HubStatus }) {
   return (
     <header className="flex flex-col gap-4">
       <div className="flex flex-col gap-1">

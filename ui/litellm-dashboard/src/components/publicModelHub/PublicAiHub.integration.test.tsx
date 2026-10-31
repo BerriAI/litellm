@@ -2,11 +2,14 @@ import { fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { agentHubPublicModelsCall, mcpHubPublicServersCall, skillHubPublicCall } from "@/components/networking";
+
 import { renderWithProviders, screen, testQueryClient, waitFor } from "../../../tests/test-utils";
 import PublicAiHub from "./PublicAiHub";
 
-const { apiGetMock, uiSettings, replaceMock, hubInfo } = vi.hoisted(() => ({
+const { apiGetMock, navigation, uiSettings, replaceMock, hubInfo } = vi.hoisted(() => ({
   apiGetMock: vi.fn(),
+  navigation: { params: new URLSearchParams() },
   uiSettings: { values: {} as Record<string, unknown> },
   replaceMock: vi.fn(),
   hubInfo: {
@@ -18,7 +21,7 @@ const { apiGetMock, uiSettings, replaceMock, hubInfo } = vi.hoisted(() => ({
 }));
 
 vi.mock("next/navigation", () => ({
-  useSearchParams: () => new URLSearchParams(),
+  useSearchParams: () => navigation.params,
   usePathname: () => "/model_hub_table",
   useRouter: () => ({ push: vi.fn(), replace: vi.fn(), refresh: vi.fn() }),
 }));
@@ -75,10 +78,18 @@ const page = (data: unknown[]) => ({
   links: { self: MODEL_HUB_PATH, first: MODEL_HUB_PATH, prev: null, next: null, last: MODEL_HUB_PATH },
 });
 
+const OFF_PAGE_MODEL = { model_group: "o1-pro", providers: ["openai"], mode: "chat", description: "Deep reasoning" };
+
 const respondWithModels = () =>
-  apiGetMock.mockImplementation((path: string) =>
-    Promise.resolve(path === MODEL_HUB_PATH ? page(MODELS) : { ...page([]), meta: { page: 1, page_size: 100 } }),
-  );
+  apiGetMock.mockImplementation((path: string, options?: { query?: Record<string, unknown> }) => {
+    if (path !== MODEL_HUB_PATH) return Promise.resolve({ ...page([]), meta: { page: 1, page_size: 100 } });
+    return Promise.resolve(options?.query?.q === "o1-pro" ? page([OFF_PAGE_MODEL]) : page(MODELS));
+  });
+
+const tokenExpiringIn = (seconds: number) => {
+  const encode = (value: object) => btoa(JSON.stringify(value)).replace(/=+$/, "");
+  return `${encode({ alg: "HS256" })}.${encode({ exp: Math.floor(Date.now() / 1000) + seconds })}.signature`;
+};
 
 beforeAll(() => {
   Object.defineProperty(window, "matchMedia", {
@@ -96,6 +107,8 @@ beforeEach(() => {
   vi.clearAllMocks();
   testQueryClient.clear();
   uiSettings.values = {};
+  navigation.params = new URLSearchParams();
+  document.cookie = "token=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/";
   respondWithModels();
   vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("{}", { status: 404 }));
   Object.defineProperty(window, "location", {
@@ -152,12 +165,63 @@ describe("PublicAiHub", () => {
     expect(screen.getByText("LiteLLM v1.90.0")).toBeInTheDocument();
   });
 
-  it("says the hub is unavailable when the public models call fails", async () => {
-    apiGetMock.mockRejectedValue(new Error("Public model hub is not enabled"));
+  it("keeps agents reachable when only the models call fails", async () => {
+    const user = userEvent.setup();
+    apiGetMock.mockRejectedValue(new Error("No models configured"));
+    renderWithProviders(<PublicAiHub accessToken={null} />);
+
+    expect(await screen.findByText("Couldn't load models")).toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: "Search models" })).toBeInTheDocument();
+    await user.click(screen.getByRole("tab", { name: /^Agents\s*1$/ }));
+    expect(await screen.findByRole("link", { name: /research-assistant/ })).toBeInTheDocument();
+  });
+
+  it("says the hub is unavailable when every hub call fails", async () => {
+    apiGetMock.mockRejectedValue(new Error("Not found"));
+    vi.mocked(agentHubPublicModelsCall).mockRejectedValueOnce(new Error("Not found"));
+    vi.mocked(mcpHubPublicServersCall).mockRejectedValueOnce(new Error("Not found"));
+    vi.mocked(skillHubPublicCall).mockRejectedValueOnce(new Error("Not found"));
     renderWithProviders(<PublicAiHub accessToken={null} />);
 
     expect(await screen.findByText("This AI Hub isn't available")).toBeInTheDocument();
     expect(screen.queryByRole("tablist")).not.toBeInTheDocument();
+  });
+
+  it("keeps the page's other query params in each row's link", async () => {
+    navigation.params = new URLSearchParams("tab=agents&key=abc");
+    renderWithProviders(<PublicAiHub accessToken={null} />, { searchParams: { tab: "agents", key: "abc" } });
+
+    expect(await screen.findByRole("link", { name: /research-assistant/ })).toHaveAttribute(
+      "href",
+      "?tab=agents&key=abc&open=research-assistant",
+    );
+  });
+
+  it("clears the open item when switching tabs", async () => {
+    const onUrlUpdate = vi.fn();
+    const user = userEvent.setup();
+    renderWithProviders(<PublicAiHub accessToken={null} />, { searchParams: { open: "gpt-5" }, onUrlUpdate });
+
+    expect(await screen.findByRole("heading", { level: 2, name: "gpt-5" })).toBeInTheDocument();
+    await user.click(screen.getByRole("tab", { name: /^Agents/ }));
+
+    await waitFor(() =>
+      expect(onUrlUpdate).toHaveBeenLastCalledWith(expect.objectContaining({ queryString: "?tab=agents" })),
+    );
+  });
+
+  it("opens a shared link to a model that is not on the first page", async () => {
+    renderWithProviders(<PublicAiHub accessToken={null} />, { searchParams: { open: "o1-pro" } });
+
+    expect(await screen.findByRole("heading", { level: 2, name: "o1-pro" })).toBeInTheDocument();
+    expect(screen.getByText("Deep reasoning")).toBeInTheDocument();
+  });
+
+  it("says when a shared link names something that is no longer listed", async () => {
+    renderWithProviders(<PublicAiHub accessToken={null} />, { searchParams: { open: "retired-model" } });
+
+    expect(await screen.findByText("\u201cretired-model\u201d isn't listed here")).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { level: 2, name: "claude-sonnet-4-5" })).not.toBeInTheDocument();
   });
 
   it("sends visitors without a session to login when the admin requires it", async () => {
@@ -165,5 +229,14 @@ describe("PublicAiHub", () => {
     renderWithProviders(<PublicAiHub accessToken={null} />);
 
     await waitFor(() => expect(replaceMock).toHaveBeenCalledWith(expect.stringContaining("login")));
+  });
+
+  it("keeps a signed-in visitor on the hub when the admin requires sign-in", async () => {
+    uiSettings.values = { require_auth_for_public_ai_hub: true };
+    document.cookie = `token=${tokenExpiringIn(3600)}; path=/`;
+    renderWithProviders(<PublicAiHub accessToken={null} />);
+
+    expect(await screen.findByRole("heading", { level: 2, name: "claude-sonnet-4-5" })).toBeInTheDocument();
+    expect(replaceMock).not.toHaveBeenCalled();
   });
 });

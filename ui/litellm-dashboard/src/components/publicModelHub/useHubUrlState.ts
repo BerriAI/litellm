@@ -28,5 +28,5 @@ export function useHubUrlState() {
 
 export function useOpenHref() {
   const params = useSearchParams();
-  return useCallback((key: string) => serializeOpen(params?.toString() ?? "", { open: key }), [params]);
+  return useCallback((key: string) => serializeOpen(params ?? new URLSearchParams(), { open: key }), [params]);
 }

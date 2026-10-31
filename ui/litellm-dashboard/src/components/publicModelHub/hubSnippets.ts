@@ -72,15 +72,15 @@ response = await client.send_message(request)`,
   },
 ];
 
-export const mcpEndpoint = (server: MCPServerData): string => `${gatewayUrl()}/${server.server_name}/mcp`;
+export const mcpEndpoint = (server: MCPServerData): string => `${gatewayUrl()}/${server.name}/mcp`;
 
 export const mcpSnippet = (server: MCPServerData): string => `from fastmcp import Client
 
 client = Client({
     "mcpServers": {
-        "${server.server_name}": {
+        "${server.name}": {
             "url": "${mcpEndpoint(server)}",
-            "headers": {"x-litellm-api-key": "Bearer $LITELLM_API_KEY"},
+            "headers": {"x-litellm-api-key": "Bearer your_api_key"},
         }
     }
 })

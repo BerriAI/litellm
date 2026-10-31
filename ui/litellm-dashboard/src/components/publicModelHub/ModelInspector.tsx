@@ -22,6 +22,12 @@ import { curlSnippet, modelSnippet } from "./hubSnippets";
 import { HealthBadge } from "./HubStatus";
 import { InspectorHeader } from "./InspectorHeader";
 
+const summary = (model: ModelGroupInfo): string | undefined => {
+  if (model.description) return model.description;
+  const providers = (model.providers ?? []).map(providerName).join(", ");
+  return model.mode && providers ? `${modeLabel(model.mode)} model from ${providers}` : undefined;
+};
+
 const tokens = (value: number | undefined) => (value ? `${formatTokens(value)} tokens` : null);
 
 const modelFacts = (model: ModelGroupInfo): Fact[][] => {
@@ -133,9 +139,7 @@ export function ModelInspector({ model }: { model: ModelGroupInfo }) {
         title={model.model_group}
         copyLabel="Copy model name"
         status={<HealthBadge model={model} />}
-        description={
-          model.description || `${modeLabel(model.mode)} model from ${providers.map(providerName).join(", ")}`
-        }
+        description={summary(model)}
       />
       {model.model_group.includes("*") && (
         <Alert>

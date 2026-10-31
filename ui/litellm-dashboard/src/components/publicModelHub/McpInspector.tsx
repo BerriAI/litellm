@@ -10,11 +10,7 @@ import { InspectorHeader } from "./InspectorHeader";
 export function McpInspector({ server }: { server: MCPServerData }) {
   return (
     <div className="flex flex-col gap-6 p-6">
-      <InspectorHeader
-        title={server.server_name}
-        copyLabel="Copy server name"
-        description={server.mcp_info?.description}
-      />
+      <InspectorHeader title={server.name} copyLabel="Copy server name" description={server.mcp_info?.description} />
       <Facts
         groups={[
           [

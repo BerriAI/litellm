@@ -9,13 +9,14 @@ import { ItemActions, ItemContent, ItemDescription, ItemMedia } from "@/componen
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Toggle } from "@/components/ui/toggle";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { displayMode } from "@/lib/decisionModels";
 
 import { FilterChip } from "./FilterChip";
 import { featureFacetLabel, firstPlus, formatPerMillion, formatTokens, modeLabel, providerName } from "./hubFormat";
 import { HubMasterDetail } from "./HubMasterDetail";
-import { NoResults } from "./HubEmpty";
+import { LoadFailed, NoResults } from "./HubEmpty";
 import { Joined, ProviderAvatar, RowTitle, SearchInput } from "./HubParts";
-import type { HubData } from "./useHubData";
+import { type HubData, useOpenedModel } from "./useHubData";
 import { ModelInspector } from "./ModelInspector";
 
 const SORTS = [
@@ -128,7 +129,10 @@ function ModelsToolbar({ hub }: { hub: HubData }) {
         <FilterChip
           label="Mode"
           noun="modes"
-          options={facets.modes.map((m) => ({ value: m, label: modeLabel(m) }))}
+          options={[...new Set(facets.modes.map((m) => displayMode(m) ?? m))].map((m) => ({
+            value: m,
+            label: modeLabel(m),
+          }))}
           value={models.modeValues}
           onChange={models.onModesChange}
         />
@@ -194,6 +198,7 @@ export function ModelsPane({
   onSelect: (key: string | null) => void;
 }) {
   const { models } = hub;
+  const opened = useOpenedModel(selected, models.rows, !models.isLoading);
   const clear = () => {
     models.onSearchChange("");
     models.onColumnFiltersChange([]);
@@ -203,15 +208,21 @@ export function ModelsPane({
       rows={models.rows}
       loading={models.isLoading}
       selectedKey={selected}
+      opened={opened.model}
+      openPending={opened.pending}
       getKey={(model) => model.model_group}
       onSelect={onSelect}
       empty={
-        <NoResults
-          icon={<Boxes />}
-          noun="models"
-          query={models.searchValue}
-          onClear={models.hasActiveQuery ? clear : undefined}
-        />
+        models.error ? (
+          <LoadFailed noun="models" onRetry={models.refetch} />
+        ) : (
+          <NoResults
+            icon={<Boxes />}
+            noun="models"
+            query={models.searchValue}
+            onClear={models.hasActiveQuery ? clear : undefined}
+          />
+        )
       }
       toolbar={<ModelsToolbar hub={hub} />}
       renderItem={(model) => <ModelRow model={model} />}

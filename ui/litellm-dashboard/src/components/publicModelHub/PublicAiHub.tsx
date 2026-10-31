@@ -7,7 +7,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { ThemeProvider } from "@/contexts/ThemeContext";
 
-import { HubHeader } from "./HubHeader";
+import { HubHeader, type HubStatus } from "./HubHeader";
 import { HubNotEnabled } from "./HubEmpty";
 import { ModelsPane } from "./ModelsPane";
 import { AgentsPane, McpPane, SkillsPane } from "./ResourcePanes";
@@ -24,9 +24,11 @@ function TabLabel({ children, count }: { children: ReactNode; count: number | un
   );
 }
 
-const hubStatus = (hub: HubData) => {
+const hubStatus = (hub: HubData): HubStatus => {
+  const failures = [hub.models.error, hub.agents.error, hub.mcp.error, hub.skills.error].filter(Boolean);
+  if (failures.length === 4) return "unavailable";
   if (hub.models.isLoading) return "loading";
-  return hub.models.error ? "unavailable" : "operational";
+  return failures.length > 0 ? "degraded" : "operational";
 };
 
 function HubTabs({ hub }: { hub: HubData }) {
@@ -55,13 +57,31 @@ function HubTabs({ hub }: { hub: HubData }) {
         <ModelsPane hub={hub} {...paneProps} />
       </TabsContent>
       <TabsContent value="agents">
-        <AgentsPane rows={hub.agents.data} loading={hub.agents.isPending} {...paneProps} />
+        <AgentsPane
+          rows={hub.agents.data}
+          loading={hub.agents.isPending}
+          error={hub.agents.isError}
+          onRetry={() => void hub.agents.refetch()}
+          {...paneProps}
+        />
       </TabsContent>
       <TabsContent value="mcp">
-        <McpPane rows={hub.mcp.data} loading={hub.mcp.isPending} {...paneProps} />
+        <McpPane
+          rows={hub.mcp.data}
+          loading={hub.mcp.isPending}
+          error={hub.mcp.isError}
+          onRetry={() => void hub.mcp.refetch()}
+          {...paneProps}
+        />
       </TabsContent>
       <TabsContent value="skills">
-        <SkillsPane rows={hub.skills.data} loading={hub.skills.isPending} {...paneProps} />
+        <SkillsPane
+          rows={hub.skills.data}
+          loading={hub.skills.isPending}
+          error={hub.skills.isError}
+          onRetry={() => void hub.skills.refetch()}
+          {...paneProps}
+        />
       </TabsContent>
     </Tabs>
   );

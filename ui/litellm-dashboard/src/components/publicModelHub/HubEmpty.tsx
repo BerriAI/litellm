@@ -1,6 +1,6 @@
 "use client";
 
-import { LayoutGrid } from "lucide-react";
+import { LayoutGrid, SearchX, TriangleAlert } from "lucide-react";
 import * as React from "react";
 
 import { Button } from "@/components/ui/button";
@@ -53,6 +53,39 @@ export function HubNotEnabled() {
         </EmptyMedia>
         <EmptyTitle className={SECTION_TITLE}>This AI Hub isn&apos;t available</EmptyTitle>
         <EmptyDescription>Ask your proxy admin to make it public from their Admin UI</EmptyDescription>
+      </EmptyHeader>
+    </Empty>
+  );
+}
+
+export function LoadFailed({ noun, onRetry }: { noun: string; onRetry: () => void }) {
+  return (
+    <Empty>
+      <EmptyHeader>
+        <EmptyMedia variant="icon">
+          <TriangleAlert />
+        </EmptyMedia>
+        <EmptyTitle className={SECTION_TITLE}>Couldn&apos;t load {noun}</EmptyTitle>
+        <EmptyDescription>The gateway returned an error. Try again in a moment</EmptyDescription>
+      </EmptyHeader>
+      <EmptyContent>
+        <Button variant="outline" size="sm" onClick={onRetry}>
+          Try again
+        </Button>
+      </EmptyContent>
+    </Empty>
+  );
+}
+
+export function NotListed({ name }: { name: string }) {
+  return (
+    <Empty className="h-full">
+      <EmptyHeader>
+        <EmptyMedia variant="icon">
+          <SearchX />
+        </EmptyMedia>
+        <EmptyTitle className={SECTION_TITLE}>&ldquo;{name}&rdquo; isn&apos;t listed here</EmptyTitle>
+        <EmptyDescription>It may have been renamed or unpublished</EmptyDescription>
       </EmptyHeader>
     </Empty>
   );

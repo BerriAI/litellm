@@ -34,6 +34,7 @@ describe("modeLabel", () => {
     expect(modeLabel("image_generation")).toBe("Image generation");
     expect(modeLabel("audio_speech")).toBe("Text to speech");
     expect(modeLabel("custom_thing")).toBe("Custom thing");
+    expect(modeLabel("evaluation")).toBe("Decisions");
     expect(modeLabel(undefined)).toBe("-");
   });
 });
@@ -50,10 +51,13 @@ describe("formatTokens", () => {
 });
 
 describe("formatPerMillion", () => {
-  it("prices per million tokens with two decimals", () => {
+  it("prices per million tokens with at least two decimals and keeps sub-cent prices", () => {
     expect(formatPerMillion(0.000003)).toBe("$3.00");
     expect(formatPerMillion(0.0000165)).toBe("$16.50");
-    expect(formatPerMillion(0)).toBe("-");
+    expect(formatPerMillion(3.75e-8)).toBe("$0.0375");
+    expect(formatPerMillion(2e-9)).toBe("$0.002");
+    expect(formatPerMillion(0)).toBe("Free");
+    expect(formatPerMillion(undefined)).toBe("-");
   });
 });
 
@@ -70,8 +74,14 @@ describe("capabilities", () => {
   });
 
   it("lists an agent's enabled capabilities", () => {
-    const agent = { capabilities: { streaming: true, pushNotifications: true, stateTransitionHistory: false } };
-    expect(agentCapabilities(agent as AgentCard)).toEqual(["Streaming", "Push notifications"]);
+    const agent = {
+      capabilities: { streaming: true, pushNotifications: true, stateTransitionHistory: true, x: false },
+    };
+    expect(agentCapabilities(agent as AgentCard)).toEqual([
+      "Streaming",
+      "Push notifications",
+      "State transition history",
+    ]);
   });
 });
 
@@ -90,8 +100,10 @@ describe("relativeTime", () => {
     expect(relativeTime("2026-10-31T11:59:45Z", now)).toBe("just now");
     expect(relativeTime("2026-10-31T11:45:00Z", now)).toBe("15 min ago");
     expect(relativeTime("2026-10-31T09:00:00Z", now)).toBe("3 h ago");
+    expect(relativeTime("2026-10-30T12:00:00Z", now)).toBe("1 day ago");
     expect(relativeTime("2026-10-29T12:00:00Z", now)).toBe("2 days ago");
     expect(relativeTime(undefined, now)).toBe("-");
+    expect(relativeTime("not-a-date", now)).toBe("-");
   });
 });
 

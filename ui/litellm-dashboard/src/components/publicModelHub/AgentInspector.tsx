@@ -12,8 +12,11 @@ import { Badges, CodeBlock, EndpointField, Facts, PaneSection } from "./HubParts
 import { agentSnippets } from "./hubSnippets";
 import { InspectorHeader } from "./InspectorHeader";
 
-const modes = (agent: AgentCard) =>
-  `${(agent.defaultInputModes ?? []).join(", ")} / ${(agent.defaultOutputModes ?? []).join(", ")}`;
+const modes = (agent: AgentCard) => {
+  const input = (agent.defaultInputModes ?? []).join(", ");
+  const output = (agent.defaultOutputModes ?? []).join(", ");
+  return input || output ? `${input || "-"} / ${output || "-"}` : null;
+};
 
 export function AgentInspector({ agent }: { agent: AgentCard }) {
   const capabilities = agentCapabilities(agent);

@@ -8,6 +8,7 @@ import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/cva.config";
 
+import { NotListed } from "./HubEmpty";
 import { InSheet } from "./InspectorHeader";
 import { useOpenHref } from "./useHubUrlState";
 import { useIsNarrow } from "./useIsNarrow";
@@ -104,6 +105,8 @@ export function HubMasterDetail<T>({
   rows,
   loading,
   selectedKey,
+  opened,
+  openPending = false,
   getKey,
   onSelect,
   renderItem,
@@ -116,6 +119,8 @@ export function HubMasterDetail<T>({
   rows: T[];
   loading: boolean;
   selectedKey: string | null;
+  opened?: T;
+  openPending?: boolean;
   getKey: (row: T) => string;
   onSelect: (key: string | null) => void;
   renderItem: (row: T) => React.ReactNode;
@@ -124,11 +129,16 @@ export function HubMasterDetail<T>({
   footer?: React.ReactNode;
 }) {
   const narrow = useIsNarrow();
-  const chosen = rows.find((row) => getKey(row) === selectedKey);
-  const selected = chosen ?? rows[0];
+  const chosen = selectedKey === null ? undefined : opened ?? rows.find((row) => getKey(row) === selectedKey);
+  const selected = selectedKey === null ? rows[0] : chosen;
   const [sheetRow, setSheetRow] = React.useState<T | undefined>(chosen);
   if (chosen !== undefined && chosen !== sheetRow) setSheetRow(chosen);
   const isEmpty = !loading && rows.length === 0;
+  const detail = () => {
+    if (loading || (selected === undefined && openPending)) return <DetailSkeleton />;
+    if (selected === undefined) return selectedKey && <NotListed name={selectedKey} />;
+    return renderDetail(selected);
+  };
   const list = isEmpty ? (
     empty
   ) : (
@@ -158,11 +168,7 @@ export function HubMasterDetail<T>({
         </div>
         <ScrollArea className="min-h-0 flex-1">{loading ? <ListSkeleton /> : list}</ScrollArea>
       </div>
-      {!isEmpty && (
-        <ScrollArea className="hidden min-h-0 lg:block">
-          {loading ? <DetailSkeleton /> : selected && renderDetail(selected)}
-        </ScrollArea>
-      )}
+      {!isEmpty && <ScrollArea className="hidden min-h-0 lg:block">{detail()}</ScrollArea>}
       <DetailSheet
         open={narrow && chosen !== undefined}
         title={sheetRow ? getKey(sheetRow) : "Details"}

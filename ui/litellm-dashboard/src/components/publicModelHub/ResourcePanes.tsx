@@ -6,24 +6,22 @@ import * as React from "react";
 import type { Plugin } from "@/components/claude_code_plugins/types";
 import type { AgentCard, MCPServerData } from "@/components/PublicModelHubTableColumns";
 import { ItemActions, ItemContent, ItemDescription, ItemMedia } from "@/components/ui/item";
+import { matchesSearchTerm } from "@/utils/searchUtils";
 
 import { AgentInspector } from "./AgentInspector";
 import { FilterChip } from "./FilterChip";
 import { mcpAuthLabel } from "./hubFormat";
 import { HubMasterDetail } from "./HubMasterDetail";
-import { NoResults } from "./HubEmpty";
+import { LoadFailed, NoResults } from "./HubEmpty";
 import { RowTitle, SearchInput } from "./HubParts";
 import { McpInspector } from "./McpInspector";
 import { SkillInspector } from "./SkillInspector";
 
-const matches = (fields: (string | null | undefined)[], query: string) => {
-  const needle = query.trim().toLowerCase();
-  return !needle || fields.some((field) => field?.toLowerCase().includes(needle));
-};
-
 interface ResourcePaneProps<T> {
   rows: T[];
   loading: boolean;
+  error: boolean;
+  onRetry: () => void;
   noun: string;
   icon: React.ReactNode;
   search: (row: T) => (string | null | undefined)[];
@@ -40,6 +38,8 @@ interface ResourcePaneProps<T> {
 function ResourcePane<T>({
   rows,
   loading,
+  error,
+  onRetry,
   noun,
   icon,
   search,
@@ -55,8 +55,11 @@ function ResourcePane<T>({
   const [query, setQuery] = React.useState("");
   const [chosen, setChosen] = React.useState<string[]>([]);
   const options = [...new Set(rows.flatMap(filter.values))].sort();
-  const shown = rows.filter(
-    (row) => matches(search(row), query) && (chosen.length === 0 || filter.values(row).some((v) => chosen.includes(v))),
+  const sorted = [...rows].sort((a, b) => title(a).localeCompare(title(b)));
+  const shown = sorted.filter(
+    (row) =>
+      matchesSearchTerm(query, search(row)) &&
+      (chosen.length === 0 || filter.values(row).some((v) => chosen.includes(v))),
   );
   const filtered = query.trim() !== "" || chosen.length > 0;
   const clear = () => {
@@ -68,9 +71,16 @@ function ResourcePane<T>({
       rows={shown}
       loading={loading}
       selectedKey={selected}
+      opened={rows.find((row) => getKey(row) === selected)}
       getKey={getKey}
       onSelect={onSelect}
-      empty={<NoResults icon={icon} noun={noun} query={query} onClear={filtered ? clear : undefined} />}
+      empty={
+        error ? (
+          <LoadFailed noun={noun} onRetry={onRetry} />
+        ) : (
+          <NoResults icon={icon} noun={noun} query={query} onClear={filtered ? clear : undefined} />
+        )
+      }
       toolbar={
         <div className="flex items-center gap-2">
           <SearchInput value={query} onChange={setQuery} placeholder={`Search ${noun}`} />
@@ -105,6 +115,8 @@ function ResourcePane<T>({
 interface PaneProps<T> {
   rows: T[] | undefined;
   loading: boolean;
+  error: boolean;
+  onRetry: () => void;
   selected: string | null;
   onSelect: (key: string | null) => void;
 }
@@ -138,16 +150,16 @@ export function McpPane({ rows, ...props }: PaneProps<MCPServerData>) {
       rows={rows ?? []}
       noun="MCP servers"
       icon={<Server />}
-      search={(server) => [server.server_name, server.mcp_info?.description]}
+      search={(server) => [server.name, server.mcp_info?.description]}
       filter={{
         label: "Transport",
         noun: "transports",
         values: (server) => (server.transport ? [server.transport] : []),
       }}
-      getKey={(server) => server.server_name}
-      title={(server) => server.server_name}
+      getKey={(server) => server.name}
+      title={(server) => server.name}
       description={(server) => server.mcp_info?.description}
-      meta={(server) => mcpAuthLabel(server.auth_type)}
+      meta={(server) => (server.auth_type ? mcpAuthLabel(server.auth_type) : undefined)}
       renderDetail={(server) => <McpInspector server={server} />}
     />
   );

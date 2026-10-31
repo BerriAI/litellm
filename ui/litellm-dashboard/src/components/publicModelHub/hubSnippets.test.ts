@@ -18,7 +18,7 @@ const model = (overrides: Partial<ModelGroupInfo>): ModelGroupInfo => ({
   ...overrides,
 });
 
-const server = { server_id: "s1", server_name: "github" } as MCPServerData;
+const server = { server_id: "s1", name: "github", server_name: "github" } as MCPServerData;
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -44,6 +44,11 @@ describe("MCP and skill snippets", () => {
   it("builds the MCP endpoint from the gateway and the server name", () => {
     expect(mcpEndpoint(server)).toBe("https://gateway.example.com/github/mcp");
     expect(mcpSnippet(server)).toContain('"url": "https://gateway.example.com/github/mcp"');
+  });
+
+  it("routes a server without a server name through its listed name", () => {
+    const aliased = { server_id: "s2", name: "my_alias", server_name: null } as unknown as MCPServerData;
+    expect(mcpEndpoint(aliased)).toBe("https://gateway.example.com/my_alias/mcp");
   });
 
   it("adds the gateway's marketplace", () => {

@@ -1,6 +1,7 @@
 import { getProxyBaseUrl } from "@/components/networking";
 import type { AgentCard, ModelGroupInfo } from "@/components/PublicModelHubTableColumns";
 import { getProviderLogoAndName } from "@/components/provider_info_helpers";
+import { displayMode } from "@/lib/decisionModels";
 
 export const SECTION_TITLE = "text-[15px] leading-[22px] font-semibold";
 
@@ -23,8 +24,10 @@ const MODE_LABELS: Record<string, string> = {
 
 const sentenceCase = (text: string): string => text.replaceAll("_", " ").replace(/^./, (c) => c.toUpperCase());
 
-export const modeLabel = (mode: string | null | undefined): string =>
-  mode ? MODE_LABELS[mode] ?? sentenceCase(mode) : "-";
+export const modeLabel = (mode: string | null | undefined): string => {
+  const shown = displayMode(mode);
+  return shown ? MODE_LABELS[shown] ?? sentenceCase(shown) : "-";
+};
 
 export const formatTokens = (tokens: number | null | undefined): string => {
   if (!tokens) return "-";
@@ -33,8 +36,20 @@ export const formatTokens = (tokens: number | null | undefined): string => {
   return String(tokens);
 };
 
-export const formatPerMillion = (cost: number | null | undefined): string =>
-  cost ? `$${(cost * 1_000_000).toFixed(2)}` : "-";
+const PER_MILLION_FORMAT: Intl.NumberFormatOptions = {
+  style: "currency",
+  currency: "USD",
+  minimumFractionDigits: 2,
+  maximumFractionDigits: 4,
+  useGrouping: false,
+};
+
+const PER_MILLION = new Intl.NumberFormat("en-US", PER_MILLION_FORMAT);
+
+export const formatPerMillion = (cost: number | null | undefined): string => {
+  if (cost === 0) return "Free";
+  return cost ? PER_MILLION.format(cost * 1_000_000) : "-";
+};
 
 export const providerName = (provider: string): string =>
   getProviderLogoAndName(provider).displayName.replace(/\s*\(.*\)$/, "");
@@ -73,7 +88,7 @@ export const modelCapabilities = (model: ModelGroupInfo): string[] =>
 export const agentCapabilities = (agent: AgentCard): string[] =>
   Object.entries(agent.capabilities ?? {})
     .filter(([, on]) => on === true)
-    .map(([key]) => (key === "pushNotifications" ? "Push notifications" : sentenceCase(key)));
+    .map(([key]) => sentenceCase(key.replace(/([a-z])([A-Z])/g, "$1_$2").toLowerCase()));
 
 export type HealthTone = "success" | "error" | "neutral";
 
@@ -86,13 +101,15 @@ export const healthOf = (model: ModelGroupInfo): { tone: HealthTone; label: stri
   HEALTH[model.health_status ?? ""] ?? { tone: "neutral", label: "Not checked" };
 
 export const relativeTime = (iso: string | null | undefined, now: number = Date.now()): string => {
-  if (!iso) return "-";
-  const minutes = Math.max(0, Math.round((now - new Date(iso).getTime()) / 60_000));
+  const then = iso ? new Date(iso).getTime() : NaN;
+  if (Number.isNaN(then)) return "-";
+  const minutes = Math.max(0, Math.round((now - then) / 60_000));
   if (minutes < 1) return "just now";
   if (minutes < 60) return `${minutes} min ago`;
   const hours = Math.round(minutes / 60);
   if (hours < 24) return `${hours} h ago`;
-  return `${Math.round(hours / 24)} days ago`;
+  const days = Math.round(hours / 24);
+  return `${days} ${days === 1 ? "day" : "days"} ago`;
 };
 
 export const gatewayUrl = (): string => getProxyBaseUrl();
