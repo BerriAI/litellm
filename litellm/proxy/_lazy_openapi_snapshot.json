@@ -54,6 +54,57 @@
           ],
           "title": "ValidationError",
           "type": "object"
+        },
+        "_A2AJsonRpcResponse": {
+          "additionalProperties": true,
+          "properties": {
+            "error": {
+              "anyOf": [
+                {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Error"
+            },
+            "id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Id"
+            },
+            "jsonrpc": {
+              "const": "2.0",
+              "title": "Jsonrpc",
+              "type": "string"
+            },
+            "result": {
+              "anyOf": [
+                {},
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Result"
+            }
+          },
+          "required": [
+            "jsonrpc",
+            "id"
+          ],
+          "title": "_A2AJsonRpcResponse",
+          "type": "object"
         }
       }
     },
@@ -242,6 +293,119 @@
           ]
         }
       },
+      "/a2a/{agent_id}/message/stream": {
+        "post": {
+          "description": "Invoke an agent using the A2A protocol (JSON-RPC 2.0).\n\nSupported methods:\n- message/send: Send a message and get a response\n- message/stream: Send a message and stream the response",
+          "operationId": "invoke_agent_a2a_a2a__agent_id__message_stream_post",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "agent_id",
+              "required": true,
+              "schema": {
+                "title": "Agent Id",
+                "type": "string"
+              }
+            }
+          ],
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "id": "stream-1",
+                  "jsonrpc": "2.0",
+                  "method": "message/stream",
+                  "params": {
+                    "message": {
+                      "kind": "message",
+                      "messageId": "message-1",
+                      "parts": [
+                        {
+                          "kind": "text",
+                          "text": "Hello"
+                        }
+                      ],
+                      "role": "user"
+                    }
+                  }
+                },
+                "schema": {
+                  "additionalProperties": true,
+                  "properties": {
+                    "id": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "integer"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "title": "Id"
+                    },
+                    "jsonrpc": {
+                      "const": "2.0",
+                      "title": "Jsonrpc",
+                      "type": "string"
+                    },
+                    "method": {
+                      "title": "Method",
+                      "type": "string"
+                    },
+                    "params": {
+                      "additionalProperties": true,
+                      "title": "Params",
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "jsonrpc",
+                    "method",
+                    "params"
+                  ],
+                  "title": "_A2AJsonRpcRequest",
+                  "type": "object"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/_A2AJsonRpcResponse"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Invoke Agent A2A",
+          "tags": [
+            "a2a"
+          ]
+        }
+      },
       "/v1/a2a/{agent_id}/message/send": {
         "post": {
           "description": "Invoke an agent using the A2A protocol (JSON-RPC 2.0).\n\nSupported methods:\n- message/send: Send a message and get a response\n- message/stream: Send a message and stream the response",
@@ -262,6 +426,119 @@
               "content": {
                 "application/json": {
                   "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Invoke Agent A2A",
+          "tags": [
+            "a2a"
+          ]
+        }
+      },
+      "/v1/a2a/{agent_id}/message/stream": {
+        "post": {
+          "description": "Invoke an agent using the A2A protocol (JSON-RPC 2.0).\n\nSupported methods:\n- message/send: Send a message and get a response\n- message/stream: Send a message and stream the response",
+          "operationId": "invoke_agent_a2a_v1_a2a__agent_id__message_stream_post",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "agent_id",
+              "required": true,
+              "schema": {
+                "title": "Agent Id",
+                "type": "string"
+              }
+            }
+          ],
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "id": "stream-1",
+                  "jsonrpc": "2.0",
+                  "method": "message/stream",
+                  "params": {
+                    "message": {
+                      "kind": "message",
+                      "messageId": "message-1",
+                      "parts": [
+                        {
+                          "kind": "text",
+                          "text": "Hello"
+                        }
+                      ],
+                      "role": "user"
+                    }
+                  }
+                },
+                "schema": {
+                  "additionalProperties": true,
+                  "properties": {
+                    "id": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "integer"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "title": "Id"
+                    },
+                    "jsonrpc": {
+                      "const": "2.0",
+                      "title": "Jsonrpc",
+                      "type": "string"
+                    },
+                    "method": {
+                      "title": "Method",
+                      "type": "string"
+                    },
+                    "params": {
+                      "additionalProperties": true,
+                      "title": "Params",
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "jsonrpc",
+                    "method",
+                    "params"
+                  ],
+                  "title": "_A2AJsonRpcRequest",
+                  "type": "object"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/_A2AJsonRpcResponse"
+                  }
                 }
               },
               "description": "Successful Response"
