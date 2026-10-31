@@ -1,6 +1,7 @@
 import asyncio
 import importlib
 import json
+from collections.abc import Mapping
 from datetime import datetime, timedelta
 from typing import Final
 
@@ -1110,6 +1111,44 @@ def test_convert_to_model_response_object_with_logprobs():
 
     assert result.system_fingerprint is None
     assert result._hidden_params is not None
+
+
+@pytest.mark.parametrize(
+    "upstream_logprobs",
+    [
+        pytest.param({"content": [{"token": "Hi", "logprob": None}]}, id="null-content-logprob"),
+        pytest.param(
+            {
+                "content": [{"token": "Hi", "logprob": -0.1, "top_logprobs": []}],
+                "refusal": [{"token": "I", "logprob": None}],
+            },
+            id="null-refusal-logprob",
+        ),
+    ],
+)
+def test_convert_to_model_response_object_passes_nonconforming_logprobs_through(
+    upstream_logprobs: Mapping[str, object],
+) -> None:
+    result: Final = convert_to_model_response_object(
+        response_object={
+            "id": "chatcmpl-123",
+            "object": "chat.completion",
+            "created": 1702685778,
+            "model": "test-model",
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {"role": "assistant", "content": "Hi"},
+                    "logprobs": upstream_logprobs,
+                    "finish_reason": "stop",
+                }
+            ],
+        },
+        model_response_object=ModelResponse(),
+    )
+
+    assert json.loads(result.model_dump_json())["choices"][0]["logprobs"] == upstream_logprobs
+
 
 def test_convert_to_model_response_object_error():
     """Test error handling for None response object."""
@@ -3048,6 +3087,50 @@ def test_convert_to_model_response_object_function_output():
     assert result.usage.completion_tokens_details == CompletionTokensDetailsWrapper(reasoning_tokens=0)
 
     assert result._hidden_params is not None
+
+
+@pytest.mark.parametrize(
+    "reported_cost",
+    [
+        float("nan"),
+        float("inf"),
+        {"input_tokens_cost": 0.0001, "request_cost": 0.005, "total_cost": float("nan")},
+        {"input_tokens_cost": float("inf"), "request_cost": 0.005, "total_cost": 0.0051},
+    ],
+    ids=["nan", "inf", "breakdown-with-nan-total", "breakdown-with-inf-part"],
+)
+def test_a_non_finite_provider_usage_cost_is_dropped_so_the_response_is_strict_json(reported_cost: object):
+    response: Final = convert_to_model_response_object(
+        response_object={
+            "id": "chatcmpl-non-finite-cost",
+            "object": "chat.completion",
+            "created": 1,
+            "model": "gpt-4o",
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 3, "completion_tokens": 1, "total_tokens": 4, "cost": reported_cost},
+        },
+        model_response_object=ModelResponse(),
+    )
+
+    usage: Final = json.loads(json.dumps(response.model_dump(), allow_nan=False))["usage"]
+    assert "cost" not in usage
+    assert usage["total_tokens"] == 4
+
+
+def test_a_finite_provider_cost_breakdown_with_non_string_keys_is_kept():
+    response: Final = convert_to_model_response_object(
+        response_object={
+            "id": "chatcmpl-int-key-cost",
+            "object": "chat.completion",
+            "created": 1,
+            "model": "gpt-4o",
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 3, "completion_tokens": 1, "total_tokens": 4, "cost": {1: 0.5}},
+        },
+        model_response_object=ModelResponse(),
+    )
+
+    assert response.usage.cost == {1: 0.5}
 
 
 _URL_CITATION: Final = {

@@ -315,7 +315,7 @@ async fn azure_oidc_acquires_the_requested_scope_and_preserves_failures(#[case] 
             Box<
                 dyn std::future::Future<
                         Output = Result<
-                            litellm_secrets::SecretValue,
+                            litellm_secret_value::SecretValue,
                             litellm_secrets::azure::Error,
                         >,
                     > + Send
@@ -331,7 +331,7 @@ async fn azure_oidc_acquires_the_requested_scope_and_preserves_failures(#[case] 
                 if self.0 {
                     Err(litellm_secrets::azure::Error::MissingCredentials)
                 } else {
-                    Ok(litellm_secrets::SecretValue::new("azure-token"))
+                    Ok(litellm_secret_value::SecretValue::new("azure-token"))
                 }
             })
         }
@@ -346,7 +346,7 @@ async fn azure_oidc_acquires_the_requested_scope_and_preserves_failures(#[case] 
     let result = resolver
         .get_secret_str(
             "oidc/azure/api://audience/path",
-            Some(litellm_secrets::SecretValue::new("fallback")),
+            Some(litellm_secret_value::SecretValue::new("fallback")),
         )
         .await;
     if failed {
