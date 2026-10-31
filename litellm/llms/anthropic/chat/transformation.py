@@ -2384,6 +2384,8 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 llm_provider=self._resolved_provider,
                 drop_params=drop_params,
             )
+        except litellm.BadRequestError as e:
+            raise AnthropicError(status_code=400, message=str(e))
         except Exception as e:
             raise AnthropicError(
                 status_code=400,
