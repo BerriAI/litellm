@@ -513,14 +513,20 @@ async def test_failed_attempt_keeps_its_usage_without_claiming_the_callers_succe
     runtime.start(database.insert, UsageCaptureSettings())
     logger: Final = _logger()
     try:
-        logger.record_partial_usage_for_failure(Usage(prompt_tokens=5, completion_tokens=2, total_tokens=7), 0.4)
-        logger.carry_failed_attempt_usage()
+        for _ in range(2):
+            logger.record_partial_usage_for_failure(Usage(prompt_tokens=5, completion_tokens=2, total_tokens=7), 0.4)
+            logger.carry_failed_attempt_usage()
         logger.capture_usage_before_logging(
             ModelResponse(id="fallback", usage=Usage(prompt_tokens=3, total_tokens=3)), NOW, NOW
         )
     finally:
         await runtime.stop(1)
-    assert tuple(row.event.event_id for row in database.rows) == ("caller-attempt-0", "caller:inbound", "fallback")
+    assert tuple(row.event.event_id for row in database.rows) == (
+        "caller-attempt-0",
+        "caller-attempt-1",
+        "caller:inbound",
+        "fallback",
+    )
     failed: Final = json.loads(database.rows[0].envelope)
     assert failed["usage"]["total_tokens"] == 7
     assert failed["parent_request_id"] == "caller"
@@ -529,7 +535,12 @@ async def test_failed_attempt_keeps_its_usage_without_claiming_the_callers_succe
     assert failed["event"]["retry_of_attempt_id"] is None
     assert failed["event"]["outcome"] == "failed"
     assert failed["pricing"]["reported_cost"] == 0.4
-    assert database.rows[1].event.outcome is Outcome.SUCCEEDED
+    assert all(json.loads(row.envelope)["included_attempt_ids"] == [] for row in database.rows[:2])
+    successful: Final = json.loads(database.rows[-1].envelope)
+    assert successful["included_attempt_ids"] == ["caller-attempt-0", "caller-attempt-1"]
+    assert successful["usage"]["total_tokens"] == 3
+    assert successful["charge_eligible"] is True
+    assert database.rows[2].event.outcome is Outcome.SUCCEEDED
 
 
 @pytest.mark.asyncio

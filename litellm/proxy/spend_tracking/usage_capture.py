@@ -413,7 +413,9 @@ def capture_context(payload: SpendLogsPayload, kwargs: Mapping[str, object], res
         if kwargs.get("_accounting_usage_observed") is UsageObservation.ESTIMATED
         else "measured",
         included_attempt_ids=TypeAdapter(tuple[str, ...]).validate_python(
-            kwargs.get("_accounting_included_attempt_ids", ())
+            kwargs.get(
+                "_accounting_included_attempt_ids", () if retry else kwargs.get("_accounting_prior_attempt_ids", ())
+            )
         ),
         provider_timestamps=_json(
             {
