@@ -20,6 +20,7 @@ import litellm
 from litellm import Router
 from litellm.caching.redis_cache import RedisPipelineIncrementOperation
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.router_api import RoutingContext
 from litellm.types.router import DeploymentTypedDict, FallbackAccessCheck, RoutingGroup, RoutingStrategy
 from litellm.utils import Rules, function_setup
 
@@ -1567,7 +1568,7 @@ async def _call_and_get_cooldowns(router, model):
             messages=[{"role": "user", "content": "hi"}],
             mock_response="litellm.RateLimitError",
         )
-    return await async_get_cooldown_deployments(litellm_router_instance=router, parent_otel_span=None)
+    return await async_get_cooldown_deployments(ctx=router._core_ctx, parent_otel_span=None)
 
 
 @pytest.mark.asyncio
@@ -2060,7 +2061,7 @@ async def test_priority_group_preserves_responses_continuity_on_a_backup() -> No
 
 
 def _recording_fallback_gate(allowed: frozenset[str], checked: list[str]) -> FallbackAccessCheck:
-    async def check(*, model: str, request_kwargs: Mapping[str, object], llm_router: Router) -> bool:
+    async def check(*, model: str, request_kwargs: Mapping[str, object], ctx: RoutingContext) -> bool:
         checked.append(model)
         return model in allowed
 

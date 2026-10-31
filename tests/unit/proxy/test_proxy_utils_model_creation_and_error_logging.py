@@ -1844,6 +1844,26 @@ class TestPostCallFailureHookLLMExceptionAlerting:
         alerting_handler = await self._alerted(HTTPException(status_code=429, detail="rate limited"))
         assert alerting_handler.called is False
 
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("status_code, should_alert", ((400, False), (422, False), (429, False), (500, True)))
+    async def test_budget_exceeded_alerts_only_for_server_status(
+        self, status_code: int, should_alert: bool, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(litellm, "budget_exceeded_status_code", status_code)
+        exc: Final = litellm.BudgetExceededError(current_cost=1.0, max_budget=0.5)
+        assert (await self._alerted(exc)).called is should_alert
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "exc",
+        (
+            litellm.AuthenticationError(message="invalid provider key", model="test-model", llm_provider="openai"),
+            litellm.RateLimitError(message="provider quota exceeded", model="test-model", llm_provider="openai"),
+        ),
+    )
+    async def test_provider_client_status_still_alerts(self, exc: Exception) -> None:
+        assert (await self._alerted(exc)).called is True
+
 
 class TestPostCallFailureHookProxyExceptionLogging:
     """A guardrail block raises a ProxyException; on an LLM route it must still
@@ -4109,3 +4129,32 @@ def test_handle_exception_on_proxy_logs_bug_report_only_for_unmapped_500(caplog)
     assert provider_result.code == internal_result.code == "500"
     assert ISSUE_URL_BASE in caplog.text
     assert ISSUE_URL_BASE not in internal_result.message
+
+
+def test_is_client_error_exception_budget_exceeded_is_client_error() -> None:
+    from litellm.exceptions import BudgetExceededError
+    from litellm.proxy.utils import _is_client_error_exception
+
+    exc: Final = BudgetExceededError(current_cost=100.56, max_budget=100.0)
+    assert _is_client_error_exception(exc) is True
+
+
+def test_is_client_error_exception_budget_exceeded_5xx_is_not_client_error() -> None:
+    from litellm.exceptions import BudgetExceededError
+    from litellm.proxy.utils import _is_client_error_exception
+
+    exc: Final = BudgetExceededError(current_cost=100.56, max_budget=100.0)
+    exc.status_code = 500
+    assert _is_client_error_exception(exc) is False
+
+
+def test_is_client_error_exception_existing_behaviour_unchanged() -> None:
+    from litellm.proxy._types import ProxyException
+    from litellm.proxy.utils import _is_client_error_exception
+
+    assert _is_client_error_exception(HTTPException(status_code=400, detail="x")) is True
+    assert _is_client_error_exception(HTTPException(status_code=500, detail="x")) is False
+    assert _is_client_error_exception(
+        ProxyException(message="x", type="x", param=None, code="429")
+    ) is True
+    assert _is_client_error_exception(ValueError("x")) is False

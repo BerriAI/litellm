@@ -3,6 +3,7 @@ import asyncio
 import copy
 import json
 import posixpath
+import re
 import traceback
 from base64 import b64encode
 from collections.abc import AsyncGenerator, AsyncIterator, Callable, Iterable, Mapping, Sequence
@@ -77,6 +78,7 @@ from litellm.llms.base_llm.managed_resources.utils import (
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.llms.eu_jev.common_utils import eu_jev_scoped_model, eu_jev_upstream_body
 from litellm.llms.oss_decision import validate_oss_request
+from litellm.llms.vertex_ai.common_utils import get_vertex_model_id_from_url
 from litellm.passthrough import BasePassthroughUtils
 from litellm.proxy._lazy_features import lazy_owned_routes
 from litellm.proxy._types import (
@@ -146,12 +148,15 @@ from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY,
     EndpointType,
     PassthroughStandardLoggingPayload,
+    WebSocketSessionMeter,
+    WebSocketSessionUsage,
 )
-from litellm.types.utils import TRUSTED_CALLBACK_VARS_FIELD, Usage
+from litellm.types.utils import TRUSTED_CALLBACK_VARS_FIELD, CallTypes, Usage
 
 from .llm_provider_handlers.tinyfish_passthrough_logging_handler import (
     is_tinyfish_agent_url,
 )
+from .llm_provider_handlers.vertex_passthrough_logging_handler import VertexPassthroughLoggingHandler
 from .streaming_handler import PassThroughStreamingHandler
 from .success_handler import PassThroughEndpointLogging
 from .upstream_usage_headers import (
@@ -874,13 +879,45 @@ def _carry_guardrail_logging_info(request_data: dict, guardrail_data: dict | Non
     metadata.setdefault("standard_logging_guardrail_information", list(entries))
 
 
+_GOOGLE_PASSTHROUGH_PROVIDERS: Final = frozenset(
+    (litellm.LlmProviders.GEMINI.value, litellm.LlmProviders.VERTEX_AI.value)
+)
+
+
+def _passthrough_google_provider(url_route: str, custom_llm_provider: str | None) -> str | None:
+    if custom_llm_provider is not None:
+        return custom_llm_provider if custom_llm_provider in _GOOGLE_PASSTHROUGH_PROVIDERS else None
+    if VertexPassthroughLoggingHandler.is_google_ai_url(url_route):
+        return VertexPassthroughLoggingHandler.custom_llm_provider_from_url(url_route)
+    return None
+
+
+_OPERATION_POLL_SUFFIX: Final = re.compile(r"/operations/[^/]+$")
+
+
+def _without_operation_poll_suffix(model: str | None) -> str | None:
+    return _OPERATION_POLL_SUFFIX.sub("", model) if model else model
+
+
+def _passthrough_google_model(url_route: str, google_provider: str | None) -> str | None:
+    match google_provider:
+        case "gemini":
+            return _without_operation_poll_suffix(get_vertex_model_id_from_url(urlparse(url_route).path))
+        case "vertex_ai":
+            return _without_operation_poll_suffix(VertexPassthroughLoggingHandler.model_from_url_route(url_route))
+        case _:
+            return None
+
+
 def _build_passthrough_failure_request_payload(
     parsed_body: dict | None,
     kwargs: dict | None,
     logging_obj: LiteLLMLoggingObj | None,
     custom_llm_provider: str | None,
     upstream_usage: UpstreamReportedUsage | None = None,
+    url: httpx.URL | None = None,
     upstream_model: str | None = None,
+    builtin_provider_route: bool = False,
 ) -> dict:
     """Build the ``request_data`` dict passed to ``post_call_failure_hook``.
 
@@ -893,16 +930,25 @@ def _build_passthrough_failure_request_payload(
     comes paired with a usage object, so both keys are written together.
     ``upstream_model`` is the model name the upstream reported, which replaces
     the body's ``model`` on the failure row just as it does on a success row.
+    ``builtin_provider_route`` lets a Gemini or Vertex URL name the failure's
+    model and provider. A user-defined route never gets that, since its URL
+    names an upstream model rather than a LiteLLM-managed one.
     """
     request_payload: Final[dict] = dict(cast(Mapping[str, object], parsed_body or {}))  # cast-ok: json body
     if kwargs:
         request_payload.update(kwargs)
     if logging_obj is not None:
         request_payload["litellm_logging_obj"] = logging_obj
-    if "model" not in request_payload and parsed_body and isinstance(parsed_body, dict):
-        request_payload["model"] = parsed_body.get("model", "")
-    if "custom_llm_provider" not in request_payload and custom_llm_provider:
-        request_payload["custom_llm_provider"] = custom_llm_provider
+    url_route: Final = str(url) if url is not None else ""
+    google_provider: Final = (
+        _passthrough_google_provider(url_route, custom_llm_provider) if builtin_provider_route else None
+    )
+    if "model" not in request_payload:
+        request_payload["model"] = _passthrough_google_model(url_route, google_provider) or ""
+    resolved_provider: Final = custom_llm_provider or google_provider
+    request_payload.pop("custom_llm_provider", None)
+    if resolved_provider:
+        request_payload["custom_llm_provider"] = resolved_provider
     if upstream_usage is not None:
         request_payload["response_cost"] = upstream_usage.response_cost or 0.0
         request_payload["combined_usage_object"] = Usage(total_tokens=upstream_usage.total_tokens or 0)
@@ -1203,6 +1249,7 @@ async def pass_through_request(
     # Initialize variables
     #########################################################
     litellm_call_id: Final = str(uuid.uuid4())
+    builtin_provider_route: Final = not request_dispatched_to_pass_through_endpoint(request)
     url: httpx.URL | None = None
 
     # parsed request body
@@ -1612,6 +1659,8 @@ async def pass_through_request(
                     logging_obj=logging_obj,
                     custom_llm_provider=custom_llm_provider,
                     upstream_usage=upstream_usage,
+                    url=url,
+                    builtin_provider_route=builtin_provider_route,
                     upstream_model=upstream_model,
                 ),
                 logging_obj=logging_obj,
@@ -1651,6 +1700,8 @@ async def pass_through_request(
                                 kwargs=kwargs,
                                 logging_obj=logging_obj,
                                 custom_llm_provider=custom_llm_provider,
+                                url=url,
+                                builtin_provider_route=builtin_provider_route,
                             ),
                         ),
                         managed_id_provider=_managed_id_provider,
@@ -1710,6 +1761,8 @@ async def pass_through_request(
                     logging_obj=logging_obj,
                     custom_llm_provider=custom_llm_provider,
                     upstream_usage=upstream_usage,
+                    url=url,
+                    builtin_provider_route=builtin_provider_route,
                     upstream_model=upstream_model,
                 ),
                 logging_obj=logging_obj,
@@ -1749,6 +1802,8 @@ async def pass_through_request(
                                 kwargs=kwargs,
                                 logging_obj=logging_obj,
                                 custom_llm_provider=custom_llm_provider,
+                                url=url,
+                                builtin_provider_route=builtin_provider_route,
                             ),
                         ),
                         managed_id_provider=_managed_id_provider,
@@ -1811,6 +1866,8 @@ async def pass_through_request(
             logging_obj=logging_obj,
             custom_llm_provider=custom_llm_provider,
             upstream_usage=upstream_usage,
+            url=url,
+            builtin_provider_route=builtin_provider_route,
             upstream_model=upstream_model,
         )
         failure_request_payload["response_body"] = response_body
@@ -1991,7 +2048,14 @@ async def pass_through_request(
             await proxy_logging_obj.post_call_failure_hook(
                 user_api_key_dict=user_api_key_dict,
                 original_exception=e,
-                request_data=e.request_data,
+                request_data=_build_passthrough_failure_request_payload(
+                    parsed_body=e.request_data,
+                    kwargs={"call_type": CallTypes.pass_through.value, "litellm_call_id": litellm_call_id},
+                    logging_obj=None,
+                    custom_llm_provider=custom_llm_provider,
+                    url=url,
+                    builtin_provider_route=builtin_provider_route,
+                ),
             )
         except Exception:
             verbose_proxy_logger.warning(
@@ -2010,6 +2074,7 @@ async def pass_through_request(
             content=json.dumps(error_body),
             status_code=200,
             media_type="application/json",
+            headers={"x-litellm-call-id": litellm_call_id},
         )
     except Exception as e:
         custom_headers = ProxyBaseLLMRequestProcessing.get_custom_headers(
@@ -2033,19 +2098,14 @@ async def pass_through_request(
         # Monitoring: Trigger post_call_failure_hook
         # for pass through endpoint failure
         #########################################################
-        request_payload: Final[dict] = _parsed_body or {}
-        # add user_api_key_dict, litellm_call_id, passthrough_logging_payloa for logging
-        if kwargs:
-            for key, value in kwargs.items():
-                request_payload[key] = value
-        if logging_obj is not None:
-            request_payload["litellm_logging_obj"] = logging_obj
-
-        if "model" not in request_payload and _parsed_body and isinstance(_parsed_body, dict):
-            request_payload["model"] = _parsed_body.get("model", "")
-        if "custom_llm_provider" not in request_payload and custom_llm_provider:
-            request_payload["custom_llm_provider"] = custom_llm_provider
-
+        request_payload: Final = _build_passthrough_failure_request_payload(
+            parsed_body=_parsed_body,
+            kwargs=kwargs,
+            logging_obj=logging_obj,
+            custom_llm_provider=custom_llm_provider,
+            url=url,
+            builtin_provider_route=builtin_provider_route,
+        )
         _carry_guardrail_logging_info(request_payload, post_call_guardrail_data)
 
         await proxy_logging_obj.post_call_failure_hook(
@@ -2537,6 +2597,13 @@ def _with_trace_context(headers: Mapping[str, str], parent_span: object) -> dict
     return inject_trace_context(headers, parent_span=parent_span)
 
 
+def _log_session_usage(logging_obj: LiteLLMLoggingObj, usage: WebSocketSessionUsage) -> None:
+    logging_obj.model = usage.model  # rebind-ok: the spend logger reads model and cost off the shared logging object
+    logging_obj.model_call_details["model"] = usage.model  # rebind-ok: same shared logging object
+    logging_obj.model_call_details["custom_llm_provider"] = usage.custom_llm_provider  # rebind-ok: same
+    logging_obj.model_call_details["response_cost"] = usage.response_cost  # rebind-ok: same
+
+
 async def websocket_passthrough_request(
     websocket: WebSocket,
     target: str,
@@ -2547,6 +2614,9 @@ async def websocket_passthrough_request(
     cost_per_request: float | None = None,
     accept_websocket: bool = True,
     setup_model_rewriter: Callable[[str], str] | None = None,
+    builtin_provider_route: bool = False,
+    model: str | None = None,
+    meter: WebSocketSessionMeter | None = None,
 ):
     """
     WebSocket passthrough request handler.
@@ -2560,6 +2630,9 @@ async def websocket_passthrough_request(
         endpoint: The endpoint path (for logging purposes)
         cost_per_request: Optional field - cost per request to the target endpoint
         setup_model_rewriter: Optional rewrite of the setup frame's model before it reaches the upstream
+        builtin_provider_route: Whether a built-in provider route serves the connection, so its URL names the provider
+        model: The model the caller named before connecting, logged on a failure before the setup frame arrives
+        meter: Prices the session from the client text frames delivered upstream, for an upstream that reports no usage
     """
     from litellm.litellm_core_utils.litellm_logging import Logging
     from litellm.proxy.proxy_server import proxy_config, proxy_logging_obj
@@ -2570,6 +2643,7 @@ async def websocket_passthrough_request(
     # Initialize tracking variables
     start_time: Final = datetime.now()
     websocket_messages: Final[list[dict[str, object]]] = []
+    metered_total = 0  # rebind-ok: forward_client_to_upstream adds the measure of each client text frame it delivers
     litellm_call_id: Final = str(uuid.uuid4())
 
     verbose_proxy_logger.info("WebSocket passthrough (%s): Starting WebSocket connection to %s", endpoint, target)
@@ -2688,6 +2762,7 @@ async def websocket_passthrough_request(
 
             async def forward_client_to_upstream() -> None:
                 """Forward messages from client to upstream WebSocket"""
+                nonlocal metered_total
                 try:
                     while True:
                         message = await websocket.receive()
@@ -2757,6 +2832,8 @@ async def websocket_passthrough_request(
                                     # Not a JSON message or doesn't contain setup data
 
                             await upstream_ws.send(_rewrite_vertex_live_setup_model(text_data, setup_model_rewriter))
+                            if meter is not None:
+                                metered_total += meter.measure(text_data)
                         elif bytes_data is not None:
                             await upstream_ws.send(bytes_data)
                 except asyncio.CancelledError:
@@ -2883,6 +2960,8 @@ async def websocket_passthrough_request(
                     self.url = target_url
 
             mock_response: Final = MockWebSocketResponse(target)
+            if meter is not None:
+                _log_session_usage(logging_obj, meter.price(metered_total))
 
             # Use the same success handler as HTTP passthrough endpoints
             GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(
@@ -2912,19 +2991,17 @@ async def websocket_passthrough_request(
     except InvalidStatus as exc:
         verbose_proxy_logger.exception("WebSocket passthrough (%s): upstream rejected WebSocket connection", endpoint)
 
-        # Prepare request payload for logging
-        request_payload = {}
-        if kwargs:
-            for key, value in kwargs.items():
-                request_payload[key] = value
-        if logging_obj is not None:
-            request_payload["litellm_logging_obj"] = logging_obj
-
-        # Log the connection failure using the same pattern as HTTP
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict,
             original_exception=exc,
-            request_data=request_payload,
+            request_data=_build_passthrough_failure_request_payload(
+                parsed_body=None if model is None else {"model": model},
+                kwargs=kwargs,
+                logging_obj=logging_obj,
+                custom_llm_provider=None,
+                url=httpx.URL(target),
+                builtin_provider_route=builtin_provider_route,
+            ),
             traceback_str=traceback.format_exc(
                 limit=MAXIMUM_TRACEBACK_LINES_TO_LOG,
             ),
@@ -2940,19 +3017,17 @@ async def websocket_passthrough_request(
             "WebSocket passthrough (%s): unexpected error while proxying WebSocket", endpoint
         )
 
-        # Prepare request payload for logging
-        request_payload = {}
-        if kwargs:
-            for key, value in kwargs.items():
-                request_payload[key] = value
-        if logging_obj is not None:
-            request_payload["litellm_logging_obj"] = logging_obj
-
-        # Log the unexpected error using the same pattern as HTTP
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict,
             original_exception=e,
-            request_data=request_payload,
+            request_data=_build_passthrough_failure_request_payload(
+                parsed_body=None if model is None else {"model": model},
+                kwargs=kwargs,
+                logging_obj=logging_obj,
+                custom_llm_provider=None,
+                url=httpx.URL(target),
+                builtin_provider_route=builtin_provider_route,
+            ),
             traceback_str=traceback.format_exc(
                 limit=MAXIMUM_TRACEBACK_LINES_TO_LOG,
             ),

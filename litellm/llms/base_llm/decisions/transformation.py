@@ -1,7 +1,7 @@
 import json
 from abc import ABC
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from itertools import chain
 from types import MappingProxyType
 from typing import Final
@@ -511,6 +511,12 @@ def _is_decisions_model(model: str, custom_llm_provider: str) -> bool:
     return is_decisions_model_mode(model_mode)
 
 
+@dataclass(frozen=True, slots=True)
+class DecisionsInputLimits:
+    max_request_tokens: int | None = None
+    max_question_tokens: int | None = None
+
+
 class BaseDecisionsConfig(ABC):
     path: str = "/v1/systemone"
     api_key_env: tuple[str, ...] = ()
@@ -532,6 +538,19 @@ class BaseDecisionsConfig(ABC):
 
     def provider_reported_cost(self, response: DecisionsIRResponse) -> float | None:
         return None
+
+    def get_input_limits(
+        self, model: str, custom_llm_provider: str, headers: Mapping[str, str]
+    ) -> DecisionsInputLimits:
+        try:
+            limit: Final = litellm.get_model_info(model=model, custom_llm_provider=custom_llm_provider).get(
+                "max_input_tokens"
+            )
+        except Exception:  # noqa: BLE001  # get_model_info raises bare Exception for an unmapped model
+            return DecisionsInputLimits()
+        return DecisionsInputLimits(
+            max_request_tokens=limit if isinstance(limit, int) and not isinstance(limit, bool) and limit > 0 else None
+        )
 
     def missing_api_base_message(self, custom_llm_provider: str) -> str:
         return f"api_base is required for Decisions provider '{custom_llm_provider}'"

@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 import litellm
+from litellm.router_api import RouterSettings, RoutingObservers
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 
 
@@ -13,9 +14,10 @@ async def test_send_llm_exception_alert_success():
     """
     Test that the function sends an alert when the router.slack_alerting_logger is set.
     """
-    # Create a mock LitellmRouter instance
-    mock_router = MagicMock()
-    mock_router.slack_alerting_logger = AsyncMock()
+    # A routing context whose observers carry a slack_alerting_logger
+    slack_alerting_logger = AsyncMock()
+    ctx = MagicMock()
+    ctx.observers.return_value = RoutingObservers(slack_alerting_logger=slack_alerting_logger)
 
     # Create a mock exception
     mock_exception = Exception("Test exception")
@@ -32,10 +34,10 @@ async def test_send_llm_exception_alert_success():
     # Call the function
     from litellm.router_utils.handle_error import send_llm_exception_alert
 
-    await send_llm_exception_alert(mock_router, request_kwargs, error_traceback, mock_exception)
+    await send_llm_exception_alert(ctx, request_kwargs, error_traceback, mock_exception)
 
     # Assert that the slack_alerting_logger's send_alert method was called
-    mock_router.slack_alerting_logger.send_alert.assert_called_once()
+    slack_alerting_logger.send_alert.assert_called_once()
 
 
 @pytest.mark.asyncio
@@ -43,9 +45,9 @@ async def test_send_llm_exception_alert_no_logger():
     """
     Test that the function does error out when no slack_alerting_logger is set
     """
-    # Create a mock LitellmRouter instance without a slack_alerting_logger
-    mock_router = MagicMock()
-    mock_router.slack_alerting_logger = None
+    # A routing context whose observers have no slack_alerting_logger
+    ctx = MagicMock()
+    ctx.observers.return_value = RoutingObservers(slack_alerting_logger=None)
 
     # Create a mock exception
     mock_exception = Exception("Test exception")
@@ -62,7 +64,7 @@ async def test_send_llm_exception_alert_no_logger():
     # Call the function
     from litellm.router_utils.handle_error import send_llm_exception_alert
 
-    await send_llm_exception_alert(mock_router, request_kwargs, error_traceback, mock_exception)
+    await send_llm_exception_alert(ctx, request_kwargs, error_traceback, mock_exception)
 
 
 @pytest.mark.asyncio
@@ -70,9 +72,10 @@ async def test_send_llm_exception_alert_when_proxy_server_request_in_kwargs():
     """
     Test that the function does not send an alert when the request kwargs contains a proxy_server_request key.
     """
-    # Create a mock LitellmRouter instance with a slack_alerting_logger
-    mock_router = MagicMock()
-    mock_router.slack_alerting_logger = AsyncMock()
+    # A routing context whose observers carry a slack_alerting_logger
+    slack_alerting_logger = AsyncMock()
+    ctx = MagicMock()
+    ctx.observers.return_value = RoutingObservers(slack_alerting_logger=slack_alerting_logger)
 
     # Create a mock exception
     mock_exception = Exception("Test exception")
@@ -90,11 +93,11 @@ async def test_send_llm_exception_alert_when_proxy_server_request_in_kwargs():
     # Call the function
     from litellm.router_utils.handle_error import send_llm_exception_alert
 
-    await send_llm_exception_alert(mock_router, request_kwargs, error_traceback, mock_exception)
+    await send_llm_exception_alert(ctx, request_kwargs, error_traceback, mock_exception)
 
     # Assert that no exception was raised and the function completed successfully
 
-    mock_router.slack_alerting_logger.send_alert.assert_not_called()
+    slack_alerting_logger.send_alert.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -108,11 +111,11 @@ async def test_async_raise_no_deployment_exception():
     from litellm.router_utils.handle_error import async_raise_no_deployment_exception
     from litellm.types.router import RouterRateLimitError
 
-    # Create a mock LitellmRouter instance
-    mock_router = MagicMock()
-    mock_router.get_model_ids.return_value = ["deployment-1", "deployment-2"]
-    mock_router.cooldown_cache.get_min_cooldown.return_value = 30.0
-    mock_router.enable_pre_call_checks = True
+    # A routing context: the group's deployment ids, their cooldown store and the router settings
+    ctx = MagicMock()
+    ctx.registry.return_value.names.return_value = ["deployment-1", "deployment-2"]
+    ctx.health.return_value.cooldowns.get_min_cooldown.return_value = 30.0
+    ctx.settings.return_value = RouterSettings(enable_pre_call_checks=True)
 
     # Mock the _async_get_cooldown_deployments_with_debug_info function
     # It should return a list of tuples where each tuple contains (model_id, debug_info)
@@ -128,7 +131,7 @@ async def test_async_raise_no_deployment_exception():
     ):
         # Call the function
         result = await async_raise_no_deployment_exception(
-            litellm_router_instance=mock_router,
+            ctx=ctx,
             model="gpt-5-mini",
             parent_otel_span=None,
         )
@@ -150,8 +153,8 @@ async def test_async_raise_no_deployment_exception():
         assert isinstance(item, str), f"Expected string ID, got {type(item)}: {item}"
 
     # Verify mock calls
-    mock_router.get_model_ids.assert_called_once_with(model_name="gpt-5-mini")
-    mock_router.cooldown_cache.get_min_cooldown.assert_called_once_with(
+    ctx.registry().names.assert_called_once_with("gpt-5-mini", kind="ids")
+    ctx.health().cooldowns.get_min_cooldown.assert_called_once_with(
         model_ids=["deployment-1", "deployment-2"], parent_otel_span=None
     )
 
@@ -166,11 +169,11 @@ async def test_async_raise_no_deployment_exception_empty_cooldown_list():
     from litellm.router_utils.handle_error import async_raise_no_deployment_exception
     from litellm.types.router import RouterRateLimitError
 
-    # Create a mock LitellmRouter instance
-    mock_router = MagicMock()
-    mock_router.get_model_ids.return_value = ["deployment-1", "deployment-2"]
-    mock_router.cooldown_cache.get_min_cooldown.return_value = 15.0
-    mock_router.enable_pre_call_checks = False
+    # A routing context: the group's deployment ids, their cooldown store and the router settings
+    ctx = MagicMock()
+    ctx.registry.return_value.names.return_value = ["deployment-1", "deployment-2"]
+    ctx.health.return_value.cooldowns.get_min_cooldown.return_value = 15.0
+    ctx.settings.return_value = RouterSettings(enable_pre_call_checks=False)
 
     # Mock empty cooldown list
     mock_cooldown_list: List = []
@@ -181,7 +184,7 @@ async def test_async_raise_no_deployment_exception_empty_cooldown_list():
     ):
         # Call the function
         result = await async_raise_no_deployment_exception(
-            litellm_router_instance=mock_router,
+            ctx=ctx,
             model="claude-3-sonnet",
             parent_otel_span=None,
         )
@@ -211,11 +214,11 @@ async def test_async_raise_no_deployment_exception_none_cooldown_list():
     from litellm.router_utils.handle_error import async_raise_no_deployment_exception
     from litellm.types.router import RouterRateLimitError
 
-    # Create a mock LitellmRouter instance
-    mock_router = MagicMock()
-    mock_router.get_model_ids.return_value = []
-    mock_router.cooldown_cache.get_min_cooldown.return_value = 45.0
-    mock_router.enable_pre_call_checks = True
+    # A routing context: the group's deployment ids, their cooldown store and the router settings
+    ctx = MagicMock()
+    ctx.registry.return_value.names.return_value = []
+    ctx.health.return_value.cooldowns.get_min_cooldown.return_value = 45.0
+    ctx.settings.return_value = RouterSettings(enable_pre_call_checks=True)
 
     # Mock None cooldown list (though this shouldn't happen in practice)
     mock_cooldown_list = None
@@ -226,7 +229,7 @@ async def test_async_raise_no_deployment_exception_none_cooldown_list():
     ):
         # After the defensive fix, this should handle None gracefully and return empty list
         result = await async_raise_no_deployment_exception(
-            litellm_router_instance=mock_router,
+            ctx=ctx,
             model="gpt-5.5",
             parent_otel_span=None,
         )

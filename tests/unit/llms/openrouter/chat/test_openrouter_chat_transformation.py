@@ -1,6 +1,7 @@
 
 import json
 from typing import Final
+from unittest.mock import MagicMock
 
 import httpx
 import pytest
@@ -464,6 +465,34 @@ def test_openrouter_cost_tracking_non_streaming():
     )
 
 
+
+@pytest.mark.parametrize("cost", [float("nan"), float("inf")])
+def test_openrouter_chat_leaves_a_non_finite_provider_cost_out_of_the_response_headers(cost: float) -> None:
+    body: Final = {
+        "id": "gen-123",
+        "object": "chat.completion",
+        "created": 1234567890,
+        "model": "openai/gpt-5.6-luna",
+        "choices": [{"message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop", "index": 0}],
+        "usage": {"prompt_tokens": 10, "completion_tokens": 1, "total_tokens": 11, "cost": cost},
+    }
+
+    result: Final = OpenrouterConfig().transform_response(
+        model="openrouter/openai/gpt-5.6-luna",
+        raw_response=httpx.Response(
+            200, content=json.dumps(body).encode(), headers={"content-type": "application/json"}
+        ),
+        model_response=litellm.ModelResponse(),
+        logging_obj=MagicMock(),
+        request_data={},
+        messages=[{"role": "user", "content": "Reply with ok"}],
+        optional_params={},
+        litellm_params={},
+        encoding=None,
+    )
+
+    assert "llm_provider-x-litellm-response-cost" not in result._hidden_params.get("additional_headers", {})
+
 def test_openrouter_cost_tracking_streaming():
     """
     Test OpenRouter cost tracking for streaming completions.
@@ -843,3 +872,120 @@ def test_openrouter_streaming_reasoning_is_preserved() -> None:
     assembled: Final = litellm.stream_chunk_builder(chunks=list(stream_chunks), messages=messages)
     assert assembled is not None
     assert assembled.choices[0].message.reasoning_content == "Consider the evidence. Apply the rule."
+
+
+def _transform_openrouter_response(body: dict[str, object]) -> litellm.ModelResponse:
+    return OpenrouterConfig().transform_response(
+        model="openrouter/openai/gpt-4o-mini",
+        raw_response=httpx.Response(200, json=body),
+        model_response=litellm.ModelResponse(),
+        logging_obj=MagicMock(),
+        request_data={},
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params={},
+        litellm_params={},
+        encoding=None,
+    )
+
+
+def test_openrouter_nonstream_provider_without_usage_is_preserved_regression() -> None:
+    response: Final = _transform_openrouter_response(
+        {
+            "id": "gen-provider-no-usage",
+            "object": "chat.completion",
+            "created": 1,
+            "model": "openai/gpt-4o-mini",
+            "provider": "serving-site-a",
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {"role": "assistant", "content": "hi"},
+                    "finish_reason": "stop",
+                }
+            ],
+        }
+    )
+
+    assert response._hidden_params.get("upstream_provider") == "serving-site-a"
+
+
+@pytest.mark.parametrize(
+    ("provider_fields", "case"),
+    [
+        pytest.param({}, "missing", id="missing"),
+        pytest.param({"provider": None}, "null", id="null"),
+        pytest.param({"provider": ""}, "empty", id="empty"),
+        pytest.param({"provider": 123}, "non-string", id="non-string"),
+    ],
+)
+def test_openrouter_invalid_provider_keeps_reported_cost_guard(
+    provider_fields: dict[str, object], case: str
+) -> None:
+    response: Final = _transform_openrouter_response(
+        {
+            "id": f"gen-invalid-provider-{case}",
+            "object": "chat.completion",
+            "created": 1,
+            "model": "openai/gpt-4o-mini",
+            **provider_fields,
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {"role": "assistant", "content": "hi"},
+                    "finish_reason": "stop",
+                }
+            ],
+            "usage": {
+                "prompt_tokens": 10,
+                "completion_tokens": 20,
+                "total_tokens": 30,
+                "cost": 0.00015,
+            },
+        }
+    )
+
+    assert response._hidden_params.get("upstream_provider") is None
+    assert response._hidden_params["additional_headers"][OPENROUTER_COST_HEADER] == 0.00015
+
+
+def test_openrouter_streaming_chunk_preserves_provider_regression() -> None:
+    chunk: Final = {
+        "id": "gen-provider-stream",
+        "object": "chat.completion.chunk",
+        "created": 1,
+        "model": "openai/gpt-4o-mini",
+        "provider": "serving-site-a",
+        "choices": [{"index": 0, "delta": {"content": "hi"}, "finish_reason": None}],
+    }
+
+    response: Final = OpenRouterChatCompletionStreamingHandler(
+        streaming_response=None, sync_stream=True
+    ).chunk_parser(chunk)
+
+    assert response._hidden_params.get("upstream_provider") == "serving-site-a"
+
+
+@pytest.mark.parametrize(
+    ("provider_fields", "case"),
+    [
+        pytest.param({}, "missing", id="missing"),
+        pytest.param({"provider": None}, "null", id="null"),
+        pytest.param({"provider": ""}, "empty", id="empty"),
+        pytest.param({"provider": 123}, "non-string", id="non-string"),
+    ],
+)
+def test_openrouter_streaming_chunk_ignores_invalid_provider_guard(provider_fields: dict[str, object], case: str) -> None:
+    chunk: Final = {
+        "id": f"gen-invalid-provider-{case}",
+        "object": "chat.completion.chunk",
+        "created": 1,
+        "model": "openai/gpt-4o-mini",
+        **provider_fields,
+        "choices": [{"index": 0, "delta": {"content": "hi"}, "finish_reason": None}],
+    }
+
+    response: Final = OpenRouterChatCompletionStreamingHandler(
+        streaming_response=None, sync_stream=True
+    ).chunk_parser(chunk)
+
+    assert response._hidden_params.get("upstream_provider") is None

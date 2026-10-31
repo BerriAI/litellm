@@ -1,4 +1,5 @@
 import builtins
+import math
 from collections.abc import Iterable, Mapping, Sequence
 from enum import Enum
 from os import PathLike
@@ -83,6 +84,7 @@ from typing_extensions import (
     override,
 )
 
+from litellm._logging import verbose_logger
 from litellm.types.llms.base import BaseLiteLLMOpenAIResponseObject, LiteLLMBaseModel
 from litellm.types.responses.main import (
     CustomToolCallOutputItem,
@@ -400,7 +402,7 @@ class OpenAIFileObject(LiteLLMBaseModel):
     filename: str
     """The name of the file."""
 
-    object: Literal["file"]
+    object: Literal["file"] = "file"
     """The object type, which is always `file`."""
 
     purpose: OpenAIFilesPurpose
@@ -437,6 +439,11 @@ class OpenAIFileObject(LiteLLMBaseModel):
     """Set by the LiteLLM proxy on a saved batch output file entry built without provider metadata; stripped from API responses."""
 
     _hidden_params: dict = PrivateAttr(default={"response_cost": 0.0})  # no cost for writing a file
+
+    @field_validator("object", mode="before")
+    @classmethod
+    def _default_missing_object_type(cls, value: _JsonValue) -> _JsonValue:
+        return "file" if value is None else value
 
     @property
     def hidden_params(self) -> dict[str, builtins.object]:  # mutable-ok: API requires mutation
@@ -1446,9 +1453,11 @@ class ResponseAPIUsage(BaseLiteLLMOpenAIResponseObject):
     @classmethod
     def parse_cost(cls, v: object) -> object:
         """Normalise cost: accept either a float or a dict with a ``total_cost`` key."""
-        if isinstance(v, dict):
-            return v.get("total_cost")
-        return v
+        cost: Final = v.get("total_cost") if isinstance(v, dict) else v
+        if isinstance(cost, float) and not math.isfinite(cost):
+            verbose_logger.warning("Dropping a non-finite provider usage cost")
+            return None
+        return cost
 
     model_config = ConfigDict(extra="allow")
 
