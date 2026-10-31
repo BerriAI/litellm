@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import functools
+import itertools
 import json
 from collections import Counter, OrderedDict
 from collections.abc import AsyncIterator, Callable, ItemsView, Iterable, Iterator, KeysView, Mapping
@@ -347,6 +348,24 @@ def test_responses_sse_chunk_never_shows_what_a_nested_value_hides_from_its_repr
     assert "hook-canary" not in frame
 
 
+class _OnceMaskedReprString(str):
+    def __init__(self, value: str) -> None:
+        super().__init__()
+        self.reprs: Final = itertools.count()
+
+    def __repr__(self) -> str:
+        return "'***'" if next(self.reprs) == 0 else super().__repr__()
+
+
+def test_responses_sse_chunk_prints_a_nested_string_once_the_way_base_printed_it() -> None:
+    frame: Final = _format_responses_sse_chunk(
+        chunk={"type": "response.output_text.delta", "v": _OnceMaskedReprString("hook-canary")}
+    )
+
+    assert isinstance(frame, str)
+    assert json.loads(frame.removeprefix("data: "))["v"] == "'***'"
+
+
 @pytest.mark.parametrize(
     "nested",
     [*_MASKED_IN_EVERY_FRAME, _MaskedStrModel(token="hook-canary")],
@@ -549,6 +568,32 @@ def test_responses_hook_error_frame_keeps_its_message_whatever_status_code_it_ca
     assert json.loads(frame.split("data: ", 1)[1])["message"] == "rig status"
 
 
+class _StatusCarryingError(Exception):
+    def __init__(self, status_code: object) -> None:
+        super().__init__("rig status")
+        self.status_code: Final = status_code
+
+
+@pytest.mark.parametrize(
+    ("status_code", "code"),
+    [
+        (429, "rate_limit_exceeded"),
+        ("429", "rate_limit_exceeded"),
+        (429.0, "rate_limit_exceeded"),
+        ("abc", "server_error"),
+        (429.5, "server_error"),
+    ],
+    ids=["int", "decimal_string", "integral_float", "word", "fractional_float"],
+)
+def test_responses_failure_event_reads_a_numeric_status_code_the_way_base_did(status_code: object, code: str) -> None:
+    frame: Final = ResponsesStreamErrorState().format_failure(_StatusCarryingError(status_code))
+
+    assert frame is not None
+    failure: Final = ResponseFailedEvent.model_validate_json(frame.split("data: ", 1)[1])
+    assert failure.response.error is not None
+    assert failure.response.error["code"] == code
+
+
 class _RigColor(Enum):
     RED = 1
 
@@ -716,6 +761,19 @@ def test_responses_error_event_keeps_a_detail_nested_past_the_recursion_limit() 
     payload: Final = json.loads(frame.split("data: ", 1)[1])
     assert payload["error"]["provider_specific_fields"]["guardrail"] == "rig-guard"
     assert "'leaf': 1" in frame
+
+
+def test_responses_stream_frames_keep_a_value_nested_700_levels_deep_as_json() -> None:
+    nested: Final = functools.reduce(lambda inner, _: {"x": inner}, range(700), {"leaf": 1})
+
+    chunk_frame: Final = _format_responses_sse_chunk(chunk={"type": "response.output_text.delta", "nested": nested})
+    error_frame: Final = ResponsesStreamErrorState().format_error(
+        {"message": "blocked", "provider_specific_fields": {"detail": nested}}
+    )
+
+    assert isinstance(chunk_frame, str)
+    assert json.loads(chunk_frame.removeprefix("data: "))["nested"] == nested
+    assert json.loads(error_frame.split("data: ", 1)[1])["error"]["provider_specific_fields"]["detail"] == nested
 
 
 @pytest.mark.parametrize(
@@ -2123,6 +2181,8 @@ async def test_responses_stream_keeps_tool_deltas_and_only_emits_a_valid_termina
             True,
         ),
         ("error", {"error": {"message": "denied", "code": "529"}}, True),
+        ("response.completed", {"sequence_number": 4, "note": "typeless"}, False),
+        ("error", {"sequence_number": 4, "note": "no error object"}, False),
     ],
 )
 async def test_a_responses_stream_failing_after_a_pre_framed_event_adds_a_failure_only_without_a_terminal(
@@ -2150,6 +2210,26 @@ async def test_a_responses_stream_failing_after_a_pre_framed_event_adds_a_failur
         failure: Final = ResponseFailedEvent.model_validate_json(frames[1].split("data: ", 1)[1])
         assert frames[1].startswith("event: response.failed\n")
         assert failure.sequence_number == 5
+
+
+@pytest.mark.parametrize("sequence_number", ["9" * 4300, "-7", str(2**63)], ids=["4300_digits", "negative", "past_int64"])
+def test_responses_error_event_after_an_out_of_range_pre_framed_sequence_number_stays_parseable(
+    sequence_number: str,
+) -> None:
+    state: Final = ResponsesStreamErrorState()
+    state.observe_frames(
+        'data: {"type": "response.output_text.delta", "sequence_number": 4}\n\n'
+        f'data: {{"type": "response.output_text.delta", "sequence_number": {sequence_number}}}\n\n'
+    )
+
+    error_frame: Final = state.format_error_message('data: {"error": {"message": "scan failed"}}\n\n')
+    failure_frame: Final = state.format_failure(RuntimeError("stream closed"))
+
+    error_event: Final = json.loads(error_frame.split("data: ", 1)[1])
+    assert failure_frame is not None
+    assert error_event["message"] == "scan failed"
+    assert error_event["sequence_number"] == 5
+    assert json.loads(failure_frame.split("data: ", 1)[1])["sequence_number"] == 5
 
 
 # ---------------------------------------------------------------------------

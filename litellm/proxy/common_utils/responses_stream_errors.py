@@ -9,7 +9,7 @@ from itertools import chain, groupby, zip_longest
 from types import MappingProxyType
 from typing import Final
 
-from pydantic import BaseModel, ConfigDict, ValidationError, field_validator
+from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError, field_validator
 from typing_extensions import TypeIs  # noqa: TID251  # the guards narrow hook values to object items, isinstance cannot
 
 from litellm._logging import redact_internal_details_from_client_message
@@ -33,6 +33,10 @@ class _StreamEvent(LiteLLMBaseModel):
     type: str | None = None
     sequence_number: int | None = None
     response: _ResponseIdentity | None = None
+    error: object = None
+
+
+_LAX_INT: Final = TypeAdapter(int)
 
 
 class _FailureDetails(LiteLLMBaseModel):
@@ -46,7 +50,12 @@ class _FailureDetails(LiteLLMBaseModel):
     @field_validator("status_code", mode="before")
     @classmethod
     def normalize_status_code(cls, value: object) -> int | None:
-        return value if isinstance(value, int) and not isinstance(value, bool) else None
+        if isinstance(value, bool):
+            return None
+        try:
+            return _LAX_INT.validate_python(value)
+        except ValidationError:
+            return None
 
     @field_validator("message", mode="before")
     @classmethod
@@ -120,10 +129,10 @@ def _is_proxy(value: object) -> TypeIs[Mapping[object, object]]:  # guard-ok: ma
     return isinstance(value, MappingProxyType)
 
 
-def _printed_proxy_items(proxy: Mapping[object, object], printed: str) -> Iterable[tuple[object, object]] | None:
+def _printed_proxy_snapshot(proxy: Mapping[object, object], printed: str) -> Mapping[object, object] | None:
     snapshot: Final = dict(proxy)
     shown: Final = repr(snapshot)
-    return snapshot.items() if printed in (shown, f"mappingproxy({shown})") else None
+    return snapshot if printed in (shown, f"mappingproxy({shown})") else None
 
 
 def _repr_prints_its_fields(model: BaseModel) -> bool:
@@ -139,18 +148,27 @@ def _plain_scalar(value: str | float) -> str | float:
     return float.__float__(value)
 
 
-def _repr_shows_its_value(value: str | float) -> bool:
+def _repr_shows_its_value(value: str | float, printed: str) -> bool:
     plain: Final = _plain_scalar(value)
     if isinstance(value, Enum):
-        return repr(value) == f"<{type(value).__name__}.{value.name}: {plain!r}>"
-    return repr(value) == repr(plain)
+        return printed == f"<{type(value).__name__}.{value.name}: {plain!r}>"
+    return printed == repr(plain)
+
+
+def _printed_text(value: object) -> object:
+    printed: Final = repr(value)
+    if isinstance(value, (str, int, float)) and _repr_shows_its_value(value, printed):
+        return _plain_scalar(value)
+    return printed
+
+
+def _dumped_text(value: object) -> object:
+    return _plain_scalar(value) if isinstance(value, (str, int, float)) else str(value)
 
 
 def _text(value: object, form: _BaseForm) -> object:
     try:
-        if isinstance(value, (str, int, float)) and (form is _BaseForm.DUMPED or _repr_shows_its_value(value)):
-            return _plain_scalar(value)
-        return repr(value) if form is _BaseForm.PRINTED else str(value)
+        return _printed_text(value) if form is _BaseForm.PRINTED else _dumped_text(value)
     except Exception:  # noqa: BLE001  # hook values run their own __repr__ and __str__, so a failure drops the value
         return _DROPPED
 
@@ -205,8 +223,8 @@ def _expansion(value: object, form: _BaseForm) -> tuple[Iterable[tuple[object, o
     if shown_items is not None:
         return shown_items, form
     if _is_proxy(value):
-        proxy_items: Final = _printed_proxy_items(value, repr(value) if form is _BaseForm.PRINTED else str(value))
-        return None if proxy_items is None else (proxy_items, _BaseForm.PRINTED)
+        snapshot: Final = _printed_proxy_snapshot(value, repr(value) if form is _BaseForm.PRINTED else str(value))
+        return None if snapshot is None else (snapshot.items(), _BaseForm.PRINTED)
     if form is _BaseForm.PRINTED and isinstance(value, BaseModel) and _repr_prints_its_fields(value):
         return value.__repr_args__(), _BaseForm.PRINTED
     return None
@@ -227,23 +245,18 @@ def _json_safe(value: object, form: _BaseForm, path: frozenset[int]) -> object:
         if expansion is None:
             return _text(value, form)
         items, inner = expansion
-        return _items_json(items, inner, inner_path)
+        pairs: Final = [(_json_key(key, inner), _json_safe(item, inner, inner_path)) for key, item in items]
+        return {key: item for key, item in pairs if key is not _DROPPED and item is not _DROPPED}
     except Exception:  # noqa: BLE001  # hook values run their own printers and can nest past the recursion limit
         return _text(value, form)
-
-
-def _items_json(
-    items: Iterable[tuple[object, object]], form: _BaseForm, path: frozenset[int]
-) -> Mapping[object, object]:
-    pairs: Final = [(_json_key(key, form), _json_safe(item, form, path)) for key, item in items]
-    return {key: item for key, item in pairs if key is not _DROPPED and item is not _DROPPED}
 
 
 def _proxy_chunk_data(proxy: Mapping[object, object]) -> str:
     printed: Final = format(proxy, "")
     try:
-        items: Final = _printed_proxy_items(proxy, printed)
-        return printed if items is None else json.dumps(_items_json(items, _BaseForm.PRINTED, frozenset((id(proxy),))))
+        snapshot: Final = _printed_proxy_snapshot(proxy, printed)
+        shown: Final = None if snapshot is None else _json_safe(snapshot, _BaseForm.PRINTED, frozenset((id(proxy),)))
+        return json.dumps(shown) if isinstance(shown, dict) else printed
     except Exception:  # noqa: BLE001  # hook values run their own printers, so the text base printed stands
         return printed
 
@@ -364,6 +377,7 @@ def _error_event(
 
 SSE_LINE_BREAK: Final = re.compile(r"\r\n|\r|\n")
 _TERMINAL_EVENT_TYPES: Final = frozenset(("response.completed", "response.failed", "response.incomplete", "error"))
+_MAX_SEQUENCE_NUMBER: Final = 2**63 - 1
 
 
 def _field_values(lines: Sequence[str], name: str) -> tuple[str, ...]:
@@ -379,11 +393,10 @@ def _parsed_event(data: str) -> _StreamEvent:
 
 
 def _block_event(lines: Sequence[str]) -> _StreamEvent:
-    named: Final = _field_values(lines, "event")
     parsed: Final = _parsed_event("\n".join(_field_values(lines, "data")))
-    if parsed.type in _TERMINAL_EVENT_TYPES or not named:
+    if parsed.type in _TERMINAL_EVENT_TYPES or not parsed.error or _field_values(lines, "event")[-1:] != ("error",):
         return parsed
-    return parsed.model_copy(update={"type": named[-1]})
+    return parsed.model_copy(update={"type": "error"})
 
 
 def _frame_events(frames: str) -> tuple[_StreamEvent, ...]:
@@ -404,7 +417,7 @@ class ResponsesStreamErrorState:
         self._pending_event = _StreamEvent.model_validate(chunk) if isinstance(chunk, (BaseModel, Mapping)) else None
 
     def _record(self, event: _StreamEvent) -> None:
-        if event.sequence_number is not None:
+        if event.sequence_number is not None and 0 <= event.sequence_number <= _MAX_SEQUENCE_NUMBER:
             self.sequence_number = max(self.sequence_number, event.sequence_number)
         if event.response is not None:
             self.response_id = event.response.id or self.response_id
