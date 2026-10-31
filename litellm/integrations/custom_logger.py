@@ -3,13 +3,12 @@
 import re
 import traceback
 from collections.abc import AsyncGenerator, Mapping, Sequence
-from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Optional
 
 from pydantic import BaseModel
 
 from litellm._logging import verbose_logger
-from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH_SENSITIVE_DATA_MASKER, EMPTY_MAPPING
+from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH_SENSITIVE_DATA_MASKER
 from litellm.types.integrations.argilla import ArgillaItem
 from litellm.types.integrations.custom_logger import AgenticLoopPlan
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionRequest
@@ -912,45 +911,11 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         This is useful for logging payloads that contain sensitive information.
         """
         import litellm
-        from litellm.litellm_core_utils.classifier_logging import CLASSIFIER_AUDIT_FIELDS
-        from litellm.litellm_core_utils.redact_messages import (
-            redacted_litellm_params,
-            redacted_standard_logging_payload,
+        from litellm.litellm_core_utils.redact_messages import redacted_standard_logging_details
+
+        return redacted_standard_logging_details(
+            model_call_details, self, excluded_fields=getattr(litellm, "standard_logging_payload_excluded_fields", None)
         )
-
-        turn_off_message_logging: Final[bool] = getattr(self, "turn_off_message_logging", False)
-        excluded_fields: Final[list[str] | None] = getattr(litellm, "standard_logging_payload_excluded_fields", None)
-
-        # Early return if no processing needed
-        if turn_off_message_logging is False and not excluded_fields:
-            return model_call_details
-
-        params: Final = model_call_details.get("litellm_params")
-        redacted_params: Final = (
-            MappingProxyType({"litellm_params": redacted_litellm_params(params)})
-            if turn_off_message_logging and isinstance(params, Mapping)
-            else EMPTY_MAPPING
-        )
-        standard_logging_object: Final = model_call_details.get("standard_logging_object")
-        if standard_logging_object is None:
-            return {**model_call_details, **redacted_params}
-
-        # Make a copy of just the standard_logging_object to avoid modifying the original
-        standard_logging_object_copy: Final = {
-            key: value
-            for key, value in standard_logging_object.items()
-            if key not in (excluded_fields or ()) and not (turn_off_message_logging and key in CLASSIFIER_AUDIT_FIELDS)
-        }
-
-        return {
-            **model_call_details,
-            **redacted_params,
-            "standard_logging_object": (
-                redacted_standard_logging_payload(standard_logging_object_copy)
-                if turn_off_message_logging and not self.redacts_messages_itself()
-                else standard_logging_object_copy
-            ),
-        }
 
     async def get_proxy_server_request_from_cold_storage_with_object_key(
         self,
