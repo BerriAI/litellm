@@ -40,10 +40,11 @@ const HEALTH_STATUS_TONES: Record<string, StatusTone> = {
   unhealthy: "error",
   checking: "info",
   none: "neutral",
+  skipped: "neutral",
 };
 
 // healthy > checking > unknown > unhealthy, matching the legacy health table ordering.
-const HEALTH_STATUS_ORDER: Record<string, number> = { healthy: 0, checking: 1, unknown: 2, unhealthy: 3 };
+const HEALTH_STATUS_ORDER: Record<string, number> = { healthy: 0, checking: 1, unknown: 2, skipped: 2, unhealthy: 3 };
 
 const NEVER_CHECKED = "Never checked";
 const CHECK_IN_PROGRESS = "Check in progress...";

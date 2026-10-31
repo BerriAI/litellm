@@ -648,12 +648,12 @@ from litellm.proxy.guardrails.init_guardrails import (
     initialize_guardrails,
 )
 from litellm.proxy.health_check import (
-    DEPLOYMENT_ADAPTER,
+    DEPLOYMENTS_ADAPTER,
+    background_check_deployments,
     filter_deployments_to_model_groups,
     health_check_filter_kwargs_from_general_settings,
     parse_background_health_check_model_groups,
     perform_health_check,
-    skips_background_health_check,
 )
 from litellm.proxy.health_endpoints._health_endpoints import router as health_router
 from litellm.proxy.health_endpoints.deployment_warning_endpoints import router as deployment_warning_router
@@ -4823,13 +4823,14 @@ async def _run_background_health_check():
         scoped_model_groups = (
             llm_router.settings().background_health_check_model_groups if llm_router is not None else None
         )
-        _llm_model_list = list(filter_deployments_to_model_groups(_llm_model_list, scoped_model_groups))
-        _llm_model_list = [
-            m for m in _llm_model_list if not skips_background_health_check(DEPLOYMENT_ADAPTER.validate_python(m))
-        ]
+        group_deployments = DEPLOYMENTS_ADAPTER.validate_python(
+            filter_deployments_to_model_groups(_llm_model_list, scoped_model_groups)
+        )
+        _llm_model_list = list(await asyncio.to_thread(background_check_deployments, group_deployments))
         if scoped_model_groups is not None and not _llm_model_list:
             verbose_proxy_logger.warning(
-                "background_health_check_model_groups matched no deployments; groups=%s",
+                "background_health_check_model_groups %s; groups=%s",
+                "matched only deployments the background loop skips" if group_deployments else "matched no deployments",
                 sorted(scoped_model_groups),
             )
         model_count_enabled = len(_llm_model_list)

@@ -2694,9 +2694,8 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     health_check_skip_disabled_background_models: bool = Field(
         False,
         description=(
-            "When true, deployments the background health loop skips (model_info.disable_background_health_check, "
-            "which defaults to true for image_generation, image_edit, and video_generation deployments) "
-            "are skipped for on-demand GET /health as well."
+            "When true, deployments with model_info.disable_background_health_check "
+            "are skipped for on-demand GET /health as well as the background health loop."
         ),
     )
     background_health_check_model_groups: tuple[str, ...] | None = Field(
@@ -2707,9 +2706,9 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
             "whose model_name is listed, and enable_health_check_routing filters unhealthy "
             "deployments only within the listed groups; every other group, including newly "
             "added deployments, is skipped and keeps its configured routing strategy. "
-            "When unset, every deployment participates except those that set "
-            "model_info.disable_background_health_check, which defaults to true for "
-            "image_generation, image_edit, and video_generation deployments."
+            "When unset, all deployments participate (opt out per deployment via "
+            "model_info.disable_background_health_check). Set or unset, deployments whose check would "
+            "generate billed media take part only with model_info.disable_background_health_check: false."
         ),
     )
     model_list_healthy_only: bool | None = Field(

@@ -2636,10 +2636,12 @@ async def test_health_endpoint_omits_model_id_warning_when_no_deployment_matches
 
 
 @pytest.mark.asyncio
-async def test_targeted_health_runs_live_for_media_the_background_loop_skips_by_default():
+@pytest.mark.parametrize("use_background_health_checks", [True, False])
+async def test_targeted_health_answers_without_probing_billed_media(use_background_health_checks):
     from fastapi import Response
 
     from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.health_check import BILLED_MEDIA_NOT_CHECKED_WARNING
     from litellm.proxy.health_endpoints._health_endpoints import health_endpoint
 
     model_list = [
@@ -2653,12 +2655,20 @@ async def test_targeted_health_runs_live_for_media_the_background_loop_skips_by_
             "litellm_params": {"model": "gemini/gemini-3-pro-image"},
             "model_info": {"id": "image-off", "mode": "image_generation", "disable_background_health_check": True},
         },
+        {
+            "model_name": "image-opted-in",
+            "litellm_params": {"model": "gemini/gemini-3-pro-image"},
+            "model_info": {"id": "image-on", "mode": "image_generation", "disable_background_health_check": False},
+        },
         {"model_name": "chat", "litellm_params": {"model": "openai/gpt-4o-mini"}, "model_info": {"id": "chat-1"}},
     ]
     cached = {
-        "healthy_endpoints": [{"model": "openai/gpt-4o-mini", "model_id": "chat-1"}],
+        "healthy_endpoints": [
+            {"model": "openai/gpt-4o-mini", "model_id": "chat-1"},
+            {"model": "gemini/gemini-3-pro-image", "model_id": "image-on"},
+        ],
         "unhealthy_endpoints": [],
-        "healthy_count": 1,
+        "healthy_count": 2,
         "unhealthy_count": 0,
     }
     live_model_ids: list[str | None] = []
@@ -2666,19 +2676,19 @@ async def test_targeted_health_runs_live_for_media_the_background_loop_skips_by_
     async def fake_perform(**kwargs):
         live_model_ids.append(kwargs["model_id"])
         return {
-            "healthy_endpoints": [{"model": "gemini/gemini-3-pro-image", "model_id": kwargs["model_id"]}],
+            "healthy_endpoints": [{"model": "probed", "model_id": kwargs["model_id"]}],
             "unhealthy_endpoints": [],
             "healthy_count": 1,
             "unhealthy_count": 0,
         }
 
     admin = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, token="admin-token")
-    responses = {model_id: Response() for model_id in ("image-1", "image-off", "chat-1")}
+    responses = {model_id: Response() for model_id in ("image-1", "image-off", "image-on", "chat-1")}
     with (
         _proxy_health_globals(
             model_list,
             litellm.Router(model_list=copy.deepcopy(model_list)),
-            use_background_health_checks=True,
+            use_background_health_checks=use_background_health_checks,
             health_check_results=cached,
         ),
         patch(  # test-quality-ok: whether the live probe ran is the assertion; no injection seam
@@ -2693,12 +2703,16 @@ async def test_targeted_health_runs_live_for_media_the_background_loop_skips_by_
             for model_id, response in responses.items()
         }
 
-    assert live_model_ids == ["image-1"]
-    assert results["image-1"]["healthy_count"] == 1
-    assert responses["image-1"].status_code == 200
-    assert results["chat-1"]["healthy_count"] == 1
-    assert results["image-off"]["healthy_count"] == 0
-    assert responses["image-off"].status_code == 503
+    assert live_model_ids == ([] if use_background_health_checks else ["image-on", "chat-1"])
+    for skipped in ("image-1", "image-off"):
+        assert responses[skipped].status_code == 200
+        assert results[skipped]["healthy_endpoints"] == results[skipped]["unhealthy_endpoints"] == []
+        assert results[skipped]["healthy_count"] == results[skipped]["unhealthy_count"] == 0
+        assert results[skipped]["warnings"] == [BILLED_MEDIA_NOT_CHECKED_WARNING]
+    for checked in ("image-on", "chat-1"):
+        assert responses[checked].status_code == 200
+        assert results[checked]["healthy_count"] == 1
+        assert "warnings" not in results[checked]
 
 
 @pytest.mark.asyncio

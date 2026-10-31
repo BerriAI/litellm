@@ -105,6 +105,35 @@ describe("HealthCheckComponent", () => {
     expect(mockIndividualModelHealthCheckCall).not.toHaveBeenCalledWith("token", "gpt-4");
   });
 
+  it("shows a model the proxy declined to check as skipped, never healthy, even with an old saved result", async () => {
+    const warning = "Not checked, because this health check would generate billed media.";
+    const declinedResponse = {
+      healthy_count: 0,
+      unhealthy_count: 0,
+      healthy_endpoints: [],
+      unhealthy_endpoints: [],
+      warnings: [warning],
+    };
+    mockIndividualModelHealthCheckCall.mockResolvedValue(declinedResponse);
+    mockLatestHealthChecksCall.mockResolvedValue({
+      latest_health_checks: { "image-1": { status: "healthy", checked_at: "2026-10-01T00:00:00Z" } },
+    });
+    await renderHealthCheck({ modelData: { data: [makeModel("image-1", "image")] }, allModelsOnProxy: ["image-1"] });
+
+    for (const runButton of ["run-health-check-btn", "run-health-checks"]) {
+      await act(async () => {
+        screen.getByTestId(runButton).click();
+      });
+      await act(async () => {
+        await new Promise((r) => setTimeout(r, 50));
+      });
+
+      expect(screen.getByText("skipped")).toBeInTheDocument();
+      expect(screen.queryByText("healthy")).not.toBeInTheDocument();
+      expect(screen.getByText(warning)).toBeInTheDocument();
+    }
+  });
+
   it("should page through results with the shared pagination footer", async () => {
     const onPageIndexChange = vi.fn();
     await renderHealthCheck({

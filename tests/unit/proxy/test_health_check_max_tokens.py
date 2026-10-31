@@ -1227,9 +1227,10 @@ def test_a_dependency_that_opted_out_of_health_checks_is_never_probed():
     ]
 
 
-def test_health_skip_flag_skips_media_by_the_mode_the_probe_would_run():
-    """Modes as model_prices_and_context_window.json listed them on 2026-10-29: gemini/gemini-3-pro-image and
-    gpt-image-1 are image_generation, openai/text-embedding-3-small is embedding."""
+def test_health_checks_skip_billed_media_by_the_mode_the_probe_would_run():
+    """Modes and prices as model_prices_and_context_window.json listed them on 2026-10-30: gemini/gemini-3-pro-image
+    and gpt-image-1 are image_generation, openai/text-embedding-3-small is embedding, gemini/lyria-3-clip-preview and
+    vertex_ai/lyria-002 bill per clip with no token price, and gemini/gemini-3.1-pro-preview also has a token price."""
 
     def deployment(model_id: str, model: str, **model_info: object) -> dict[str, object]:
         return {
@@ -1238,22 +1239,32 @@ def test_health_skip_flag_skips_media_by_the_mode_the_probe_would_run():
             "model_info": {"id": model_id, **model_info},
         }
 
-    skipped = (
+    billed = (
         deployment("cost-map-image", "gemini/gemini-3-pro-image"),
         deployment("azure-ai-image", "azure_ai/gpt-image-1"),
         deployment("wildcard-probing-an-image", "openai/*", health_check_model="openai/gpt-image-1"),
+        deployment("clip-priced-chat", "gemini/lyria-3-clip-preview"),
+        deployment("clip-priced-speech", "vertex_ai/lyria-002", mode="audio_speech"),
+        deployment("image-with-bad-max-tokens", "openai/x", mode="image_generation", health_check_max_tokens="abc"),
+        deployment("opted-out-image", "gemini/gemini-3-pro-image", disable_background_health_check=True),
     )
     probed = (
         deployment("chat", "openai/gpt-4o-mini"),
         deployment("embedding", "openai/text-embedding-3-small"),
+        deployment("token-priced-chat-with-image-price", "gemini/gemini-3.1-pro-preview"),
         deployment("wildcard", "openai/*"),
         deployment("unknown", "openai/my-fine-tune"),
         deployment("no-provider-prefix", "my-fine-tune"),
+        deployment("bad-max-tokens", "openai/my-fine-tune", health_check_max_tokens="abc"),
         deployment("image-opted-in", "gemini/gemini-3-pro-image", disable_background_health_check=False),
     )
+    opted_out_chat = deployment("opted-out-chat", "openai/gpt-4o-mini", disable_background_health_check=True)
 
-    assert hc_module._health_check_eligible([*skipped, *probed], skip_disabled=True) == probed
-    assert hc_module._health_check_eligible([*skipped, *probed], skip_disabled=False) == (*skipped, *probed)
+    assert hc_module._health_check_eligible([*billed, *probed, opted_out_chat], skip_disabled=True) == probed
+    assert hc_module._health_check_eligible([*billed, *probed, opted_out_chat], skip_disabled=False) == (
+        *probed,
+        opted_out_chat,
+    )
 
 
 def test_narrowing_by_an_id_that_matches_nothing_keeps_the_whole_list():

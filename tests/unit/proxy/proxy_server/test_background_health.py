@@ -775,6 +775,69 @@ async def test_run_background_health_check_probes_only_listed_model_groups(monke
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "listed_group, expected_reason",
+    [
+        ("image-group", "matched only deployments the background loop skips"),
+        ("no-such-group", "matched no deployments"),
+    ],
+)
+async def test_run_background_health_check_names_why_listed_model_groups_probe_nothing(
+    monkeypatch, listed_group, expected_reason
+):
+    monkeypatch.setattr(proxy_server, "health_check_interval", 60)
+    monkeypatch.setattr(proxy_server, "health_check_concurrency", 1)
+    monkeypatch.setattr(proxy_server, "health_check_details", True)
+    monkeypatch.setattr(proxy_server, "use_shared_health_check", False)
+    monkeypatch.setattr(proxy_server, "redis_usage_cache", None)
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    monkeypatch.setattr(proxy_server, "background_health_check_loop_active", False)
+    monkeypatch.setattr(
+        proxy_server,
+        "llm_router",
+        SimpleNamespace(
+            settings=lambda: RouterSettings(background_health_check_model_groups=frozenset({listed_group}))
+        ),
+    )
+    monkeypatch.setattr(
+        proxy_server,
+        "llm_model_list",
+        [
+            {
+                "model_name": "image-group",
+                "litellm_params": {"model": "gemini/gemini-3-pro-image"},
+                "model_info": {"id": "image", "mode": "image_generation"},
+            },
+        ],
+    )
+    monkeypatch.setattr(
+        proxy_server,
+        "health_check_results",
+        {"healthy_endpoints": [], "unhealthy_endpoints": []},
+    )
+    monkeypatch.setattr(
+        proxy_server,
+        "_run_direct_health_check_with_instrumentation",
+        AsyncMock(return_value=([], [], {})),
+    )
+    monkeypatch.setattr(proxy_server, "_schedule_background_health_check_db_save", lambda *a, **kw: None)
+    monkeypatch.setattr(proxy_server, "_write_health_state_to_router_cache", lambda *a, **kw: None)
+    monkeypatch.setattr(proxy_server, "health_check_filter_kwargs_from_general_settings", lambda _gs: {})
+    warn = MagicMock()
+    monkeypatch.setattr("litellm.proxy.proxy_server.verbose_proxy_logger.warning", warn)
+
+    async def _stop_sleep(_seconds):
+        raise asyncio.CancelledError()
+
+    monkeypatch.setattr(proxy_server.asyncio, "sleep", _stop_sleep)
+
+    with pytest.raises(asyncio.CancelledError):
+        await _run_background_health_check()
+
+    assert [call.args[1:] for call in warn.call_args_list] == [(expected_reason, [listed_group])]
+
+
+@pytest.mark.asyncio
 async def test_run_background_health_check_skips_billed_media_generation_unless_opted_in(monkeypatch):
     monkeypatch.setattr(proxy_server, "health_check_interval", 60)
     monkeypatch.setattr(proxy_server, "health_check_concurrency", 1)
@@ -815,6 +878,11 @@ async def test_run_background_health_check_skips_billed_media_generation_unless_
                 "model_info": {"id": "embedding", "mode": "embedding"},
             },
             {"model_name": "fine-tune", "litellm_params": {"model": "openai/my-fine-tune"}, "model_info": {"id": "fine-tune"}},
+            {
+                "model_name": "bad-max-tokens",
+                "litellm_params": {"model": "openai/my-fine-tune"},
+                "model_info": {"id": "bad-max-tokens", "health_check_max_tokens": "abc"},
+            },
             {
                 "model_name": "azure-ai-image",
                 "litellm_params": {"model": "azure_ai/gpt-image-1", "api_base": "https://example.services.ai.azure.com"},
@@ -864,4 +932,4 @@ async def test_run_background_health_check_skips_billed_media_generation_unless_
     with pytest.raises(asyncio.CancelledError):
         await _run_background_health_check()
 
-    assert probed["ids"] == ["chat", "speech", "embedding", "fine-tune", "image-opted-in"]
+    assert probed["ids"] == ["chat", "speech", "embedding", "fine-tune", "bad-max-tokens", "image-opted-in"]
