@@ -1922,3 +1922,44 @@ class TestBedrockMantleResponsesPricing:
     def test_models_registered(self, local_cost_map):
         assert "bedrock_mantle/openai.gpt-5.5" in litellm.bedrock_mantle_models
         assert "bedrock_mantle/openai.gpt-5.4" in litellm.bedrock_mantle_models
+
+
+def _mantle_marked_part(litellm_params: GenericLiteLLMParams, marker: object) -> object:
+    body: Final = BedrockMantleResponsesAPIConfig().transform_responses_api_request(
+        model="openai.gpt-6.1-sol",
+        input=[
+            {
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": "Stable prefix", "prompt_cache_breakpoint": marker}],
+            }
+        ],
+        response_api_optional_request_params={},
+        litellm_params=litellm_params,
+        headers={},
+    )
+    return body["input"][0]["content"][0]
+
+
+@pytest.mark.parametrize(
+    "marker, wire_part",
+    [
+        (
+            {"mode": "explicit", "ttl": "30m"},
+            {"type": "input_text", "text": "Stable prefix", "prompt_cache_breakpoint": {"mode": "explicit"}},
+        ),
+        ({"mode": "implicit"}, {"type": "input_text", "text": "Stable prefix"}),
+    ],
+    ids=("ttl-dropped", "implicit-dropped"),
+)
+def test_mantle_drop_params_cuts_a_responses_breakpoint_down_to_its_mode(
+    monkeypatch: pytest.MonkeyPatch, marker: dict[str, str], wire_part: dict[str, object]
+) -> None:
+    """Bedrock Mantle Responses answered 400 for a 30m breakpoint ttl and 200 for a bare explicit mode on 2026-10-29."""
+    monkeypatch.setattr(litellm, "drop_params", False)
+    assert _mantle_marked_part(GenericLiteLLMParams(drop_params=True), marker) == wire_part
+    assert _mantle_marked_part(GenericLiteLLMParams(), marker) == {
+        "type": "input_text",
+        "text": "Stable prefix",
+        "prompt_cache_breakpoint": marker,
+    }

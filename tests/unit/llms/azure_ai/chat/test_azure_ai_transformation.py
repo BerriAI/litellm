@@ -1271,6 +1271,12 @@ def test_azure_ai_falls_back_to_the_model_name_when_the_base_model_row_does_not_
             {"type": "text", "text": "stable", "prompt_cache_breakpoint": {"mode": "explicit"}},
         ),
         ({"type": "ephemeral"}, {"drop_params": True}, {"type": "text", "text": "stable"}),
+        ({"mode": "implicit"}, {"drop_params": True}, {"type": "text", "text": "stable"}),
+        (
+            {"mode": "explicit", "ttl": "1h"},
+            {"drop_params": True},
+            {"type": "text", "text": "stable", "prompt_cache_breakpoint": {"mode": "explicit"}},
+        ),
         (
             {"mode": "explicit", "ttl": "30m"},
             {},
