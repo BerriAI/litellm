@@ -24,6 +24,7 @@ from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 from litellm.proxy.common_request_processing import RESPONSES_SSE_FRAMING, ProxyBaseLLMRequestProcessing
 from litellm.proxy.common_utils.responses_stream_errors import (
     event_error_object,
+    frame_event_type,
     responses_error_fields,
     sse_error_object,
 )
@@ -264,7 +265,7 @@ async def background_streaming_task(
 
                     try:
                         event: _StreamEvent = _StreamEventParser.parse(chunk_data)
-                        event_type = event.get("type", "")
+                        event_type = frame_event_type(chunk) or event.get("type", "")
 
                         # Process different event types based on OpenAI streaming spec
                         if event_type == "response.output_item.added":

@@ -361,12 +361,12 @@ class _OnceMaskedReprString(str):
     "wrap,printed",
     [
         (lambda value: value, "'***'"),
-        (lambda value: MappingProxyType({"v": value}), "mappingproxy({'v': '***'})"),
+        (lambda value: MappingProxyType({"v": value}), {"v": "'***'"}),
     ],
     ids=["dict_value", "nested_mapping_proxy"],
 )
 def test_responses_sse_chunk_prints_a_nested_string_once_the_way_base_printed_it(
-    wrap: Callable[[str], object], printed: str
+    wrap: Callable[[str], object], printed: object
 ) -> None:
     frame: Final = _format_responses_sse_chunk(
         chunk={"type": "response.output_text.delta", "v": wrap(_OnceMaskedReprString("hook-canary"))}
@@ -449,6 +449,53 @@ class _PrintsOnceDict(dict[str, str]):
 _DELTA_STORAGE: Final = {"type": "response.output_text.delta", "token": "shown"}
 
 
+class _AlternatingReprString(str):
+    def __init__(self, value: str) -> None:
+        super().__init__()
+        self.reprs: Final = itertools.count()
+
+    def __repr__(self) -> str:
+        return "'***'" if next(self.reprs) % 2 == 0 else super().__repr__()
+
+
+class _ReprOnceString(str):
+    def __init__(self, value: str) -> None:
+        super().__init__()
+        self.reprs: Final = itertools.count()
+
+    def __repr__(self) -> str:
+        if next(self.reprs):
+            raise RuntimeError("rig repr works once")
+        return super().__repr__()
+
+
+_PROXY_PLACEMENTS: Final[tuple[Callable[[str], object], ...]] = (
+    lambda value: {"type": "response.output_text.delta", "meta": MappingProxyType({"v": value})},
+    lambda value: MappingProxyType({"type": "response.output_text.delta", "v": value}),
+    lambda value: {"type": "response.output_text.delta", "meta": [MappingProxyType({"v": value})]},
+)
+
+
+@pytest.mark.parametrize("place", _PROXY_PLACEMENTS, ids=["nested_proxy", "whole_proxy", "proxy_in_list"])
+def test_responses_sse_chunk_prints_each_proxy_item_once(place: Callable[[str], object]) -> None:
+    masked: Final = _format_responses_sse_chunk(chunk=place(_AlternatingReprString("hook-canary")))
+    shown: Final = _format_responses_sse_chunk(chunk=place(_ReprOnceString("hook-value")))
+
+    assert isinstance(masked, str)
+    assert isinstance(shown, str)
+    assert "'***'" in masked
+    assert "hook-canary" not in masked
+    assert "hook-value" in shown
+
+
+def test_responses_error_event_prints_each_proxy_item_once() -> None:
+    frame: Final = ResponsesStreamErrorState().format_error(
+        {"message": "blocked", "provider_specific_fields": MappingProxyType({"v": _AlternatingReprString("hook-canary")})}
+    )
+
+    assert json.loads(frame.split("data: ", 1)[1])["error"]["provider_specific_fields"] == {"v": "'***'"}
+
+
 @pytest.mark.parametrize(
     ("make_underlying", "printed"),
     [
@@ -456,8 +503,8 @@ _DELTA_STORAGE: Final = {"type": "response.output_text.delta", "token": "shown"}
             lambda: _MaskedStrHolder(type="response.output_text.delta", member=_RaisingRepr()),
             "{'type': 'response.output_text.delta', 'member': 'MASKED'}",
         ),
-        (lambda: _KeysRefusedDict(_DELTA_STORAGE), repr(_DELTA_STORAGE)),
-        (lambda: _ItemRefusedDict(_DELTA_STORAGE), repr(_DELTA_STORAGE)),
+        (lambda: _KeysRefusedDict(_DELTA_STORAGE), json.dumps(_DELTA_STORAGE)),
+        (lambda: _ItemRefusedDict(_DELTA_STORAGE), json.dumps(_DELTA_STORAGE)),
         (
             lambda: _PrintsOnceDict(type="response.output_text.delta", token="hook-canary"),
             "{'type': 'response.output_text.delta', 'token': 'MASKED'}",
@@ -465,7 +512,7 @@ _DELTA_STORAGE: Final = {"type": "response.output_text.delta", "token": "shown"}
     ],
     ids=["member_repr_raises", "keys_raise", "item_lookup_raises", "str_works_once"],
 )
-def test_responses_sse_chunk_sends_a_whole_proxy_it_cannot_read_as_the_text_base_printed_once(
+def test_responses_sse_chunk_sends_a_whole_proxy_as_its_mapping_printed_once(
     make_underlying: Callable[[], Mapping[str, object]], printed: str
 ) -> None:
     frame: Final = _format_responses_sse_chunk(chunk=MappingProxyType(make_underlying()))
@@ -773,8 +820,11 @@ def test_responses_error_event_keeps_a_detail_nested_past_the_recursion_limit() 
     assert "'leaf': 1" in frame
 
 
-def test_responses_stream_frames_keep_a_value_nested_700_levels_deep_as_json() -> None:
-    nested: Final = functools.reduce(lambda inner, _: {"x": inner}, range(700), {"leaf": 1})
+@pytest.mark.parametrize("mapping", [dict, MappingProxyType], ids=["dict", "mapping_proxy"])
+def test_responses_stream_frames_keep_a_value_nested_700_levels_deep_as_json(
+    mapping: Callable[[Mapping[str, object]], Mapping[str, object]],
+) -> None:
+    nested: Final = functools.reduce(lambda inner, _: mapping({"x": inner}), range(700), mapping({"leaf": 1}))
 
     chunk_frame: Final = _format_responses_sse_chunk(chunk={"type": "response.output_text.delta", "nested": nested})
     error_frame: Final = ResponsesStreamErrorState().format_error(

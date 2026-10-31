@@ -1558,23 +1558,38 @@ class TestBackgroundStreamingTerminalEvents:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
-        ("nested_error", "expected_error"),
+        ("data_type", "nested_error", "expected_error"),
         [
             (
+                {"type": "error"},
                 {"type": "guardrail_error", "code": "400", "message": "output blocked by policy"},
                 {"code": "invalid_request_error", "message": "output blocked by policy"},
             ),
-            ("output blocked by policy", {"code": "server_error", "message": "output blocked by policy"}),
+            ({"type": "error"}, "output blocked by policy", {"code": "server_error", "message": "output blocked by policy"}),
+            (
+                {},
+                {"code": "400", "message": "output blocked by policy"},
+                {"code": "invalid_request_error", "message": "output blocked by policy"},
+            ),
+            (
+                {"type": "response.output_text.delta"},
+                {"code": "400", "message": "output blocked by policy"},
+                {"code": "invalid_request_error", "message": "output blocked by policy"},
+            ),
         ],
+        ids=["typed_object", "typed_string", "untyped_object", "delta_typed_object"],
     )
     async def test_a_nested_only_error_event_keeps_its_reason(
-        self, nested_error: Mapping[str, str] | str, expected_error: Mapping[str, str]
+        self,
+        data_type: Mapping[str, str],
+        nested_error: Mapping[str, str] | str,
+        expected_error: Mapping[str, str],
     ):
         from litellm.proxy.response_polling.background_streaming import (
             background_streaming_task,
         )
 
-        error_event: Final = {"type": "error", "sequence_number": 9, "error": nested_error}
+        error_event: Final = {**data_type, "sequence_number": 9, "error": nested_error}
 
         async def _body_iterator():
             yield b'data: {"type": "response.in_progress"}\n\n'

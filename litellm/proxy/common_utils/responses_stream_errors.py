@@ -1,3 +1,4 @@
+import gc
 import json
 import re
 import time
@@ -215,7 +216,17 @@ def _shown_items(value: object, form: _BaseForm) -> Iterable[tuple[object, objec
     return _stored_items(value)
 
 
+def _proxy_items(proxy: Mapping[object, object], form: _BaseForm) -> Iterable[tuple[object, object]] | None:
+    mapping: Final[object] = gc.get_referents(proxy)[0]
+    if form is _BaseForm.DUMPED and not _str_prints_every_item(type(mapping)):
+        return None
+    return _shown_items(mapping, _BaseForm.PRINTED)
+
+
 def _expansion(value: object, form: _BaseForm) -> tuple[Iterable[tuple[object, object]], _BaseForm] | None:
+    if _is_proxy(value):
+        proxy_items: Final = _proxy_items(value, form)
+        return None if proxy_items is None else (proxy_items, _BaseForm.PRINTED)
     shown_items: Final = _shown_items(value, form)
     if shown_items is not None:
         return shown_items, form
@@ -230,8 +241,6 @@ def _json_safe(value: object, form: _BaseForm, path: frozenset[int]) -> object:
     if id(value) in path:
         return _text(value, form)
     inner_path: Final = path | frozenset((id(value),))
-    if _is_proxy(value):
-        return _proxy_value(value, form, inner_path)
     try:
         sequence: Final = _shown_sequence(value, form)
         if sequence is not None:
@@ -247,45 +256,18 @@ def _json_safe(value: object, form: _BaseForm, path: frozenset[int]) -> object:
         return _text(value, form)
 
 
-def _printed_proxy_value(proxy: Mapping[object, object], printed: str, path: frozenset[int]) -> object:
-    snapshot: Final = dict(proxy)
-    expanded: Final = _json_safe(snapshot, _BaseForm.PRINTED, path)
-    shown: Final = repr(snapshot)
-    return expanded if printed in (shown, f"mappingproxy({shown})") else printed
-
-
-def _proxy_value(proxy: Mapping[object, object], form: _BaseForm, path: frozenset[int]) -> object:
-    printed: Final = _text(proxy, form)
-    if not isinstance(printed, str):
-        return printed
-    try:
-        return _printed_proxy_value(proxy, printed, path)
-    except Exception:  # noqa: BLE001  # hook values run their own printers, so the text base printed stands
-        return printed
-
-
-def _proxy_chunk_json(proxy: Mapping[object, object], printed: str) -> str:
-    shown: Final = _printed_proxy_value(proxy, printed, frozenset((id(proxy),)))
-    return json.dumps(shown) if isinstance(shown, dict) else printed
-
-
-def _proxy_chunk_data(proxy: Mapping[object, object]) -> str:
-    printed: Final = format(proxy, "")
-    try:
-        return _proxy_chunk_json(proxy, printed)
-    except Exception:  # noqa: BLE001  # hook values run their own printers, so the text base printed stands
-        return printed
+def _chunk_json(shown: object) -> str | None:
+    if isinstance(shown, str):
+        return shown
+    return None if shown is _DROPPED else json.dumps(shown)
 
 
 def responses_chunk_data(chunk: object) -> str | None:
     if _is_proxy(chunk):
-        return _proxy_chunk_data(chunk)
+        return _chunk_json(_json_safe(chunk, _BaseForm.DUMPED, frozenset()))
     if not _is_dict(chunk) or not _format_prints_every_item(type(chunk)):
         return None
-    shown: Final = _json_safe(chunk, _BaseForm.PRINTED, frozenset())
-    if isinstance(shown, str):
-        return shown
-    return None if shown is _DROPPED else json.dumps(shown)
+    return _chunk_json(_json_safe(chunk, _BaseForm.PRINTED, frozenset()))
 
 
 def _dumped_detail(error: Mapping[str, object]) -> Mapping[str, object]:
@@ -429,6 +411,10 @@ def _block_event(lines: Sequence[str]) -> _StreamEvent:
 def _frame_events(frames: str) -> tuple[_StreamEvent, ...]:
     blocks: Final = groupby(SSE_LINE_BREAK.split(frames), key=bool)
     return tuple(_block_event(tuple(lines)) for filled, lines in blocks if filled)
+
+
+def frame_event_type(frame: str) -> str | None:
+    return next((event.type for event in _frame_events(frame)), None)
 
 
 class ResponsesStreamErrorState:
