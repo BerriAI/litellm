@@ -54,6 +54,7 @@ from litellm.constants import (
 )
 from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
+    guardrail_entry_names,
     guardrail_request_data_with_streaming,
     without_server_streaming_classification,
 )
@@ -886,14 +887,14 @@ async def _inherit_auth_guardrails(
         user_api_key_dict=user_api_key_dict,
     )
     merged: Final = (as_str_mapping(parsed_body["metadata"]) or {}).get("guardrails")
-    if not isinstance(merged, list) or not merged or not _named_guardrail_runs_post_call(parsed_body):
-        return None
-    return _GUARDRAIL_ENTRIES.validate_python(merged)
+    entries: Final = _GUARDRAIL_ENTRIES.validate_python(merged) if isinstance(merged, list) else []
+    return entries if entries and _named_guardrail_runs_post_call(parsed_body, entries) else None
 
 
-def _named_guardrail_runs_post_call(data: Mapping[str, object]) -> bool:
+def _named_guardrail_runs_post_call(data: Mapping[str, object], entries: Sequence[object]) -> bool:
+    names: Final = frozenset(chain.from_iterable(map(guardrail_entry_names, entries)))
     return any(
-        guardrail.default_on is not True
+        guardrail.guardrail_name in names
         and guardrail.should_run_guardrail(  # pyright: ignore[reportUnknownMemberType]  # takes the untyped request dict
             data=data, event_type=GuardrailEventHooks.post_call
         )
