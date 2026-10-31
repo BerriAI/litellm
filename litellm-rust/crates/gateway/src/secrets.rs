@@ -1,8 +1,8 @@
 use std::{collections::BTreeMap, sync::Arc};
 
 use futures_util::future::BoxFuture;
-use litellm_auth_types::SecretValue;
 use litellm_config::{Object, Value};
+use litellm_secret_value::SecretValue;
 use litellm_secrets::source::SecretSource;
 
 use crate::Error;

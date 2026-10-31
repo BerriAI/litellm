@@ -12,6 +12,7 @@ from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm.constants import (
+    ANTHROPIC_BILLING_METADATA_PREFIX,
     ANTHROPIC_MIN_THINKING_BUDGET_TOKENS,
     ANTHROPIC_WEB_SEARCH_TOOL_MAX_USES,
     DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS,
@@ -47,6 +48,7 @@ from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import 
     place_mid_conversation_system,
     split_leading_system_run,
 )
+from litellm.litellm_core_utils.reasoning_effort_utils import OPAQUE_VALUE, warn_non_string_reasoning_effort
 from litellm.llms.base_llm.base_utils import (
     ResponseFormatSchema,
     as_json_object,
@@ -1950,6 +1952,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 if isinstance(effort_value, dict):
                     effort_value = effort_value.get("effort")
                 if not isinstance(effort_value, str):
+                    warn_non_string_reasoning_effort(OPAQUE_VALUE.validate_python(value), model)
                     continue
                 mapped_thinking = AnthropicConfig._map_reasoning_effort(
                     reasoning_effort=effort_value,
@@ -2066,7 +2069,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                     if not system_message_block["content"]:
                         continue
                     if self.should_strip_billing_metadata() and system_message_block["content"].startswith(
-                        "x-anthropic-billing-header:"
+                        ANTHROPIC_BILLING_METADATA_PREFIX
                     ):
                         continue
                     anthropic_system_message_content = AnthropicSystemMessageContent(
@@ -2086,7 +2089,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                             self.should_strip_billing_metadata()
                             and _content.get("type") == "text"
                             and text_value
-                            and text_value.startswith("x-anthropic-billing-header:")
+                            and text_value.startswith(ANTHROPIC_BILLING_METADATA_PREFIX)
                         ):
                             continue
                         anthropic_system_message_content = AnthropicSystemMessageContent(

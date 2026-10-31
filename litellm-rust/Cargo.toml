@@ -37,6 +37,7 @@ litellm-callbacks-legacy-python = { path = "crates/callbacks-legacy-python" }
 litellm-framer = { path = "crates/framer" }
 litellm-auth = { path = "crates/auth" }
 litellm-auth-types = { path = "crates/auth-types" }
+litellm-secret-value = { path = "crates/secret-value" }
 litellm-auth-aws = { path = "crates/auth-aws" }
 litellm-auth-azure = { path = "crates/auth-azure" }
 litellm-auth-gcp = { path = "crates/auth-gcp" }

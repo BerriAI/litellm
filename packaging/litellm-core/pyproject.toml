@@ -11,7 +11,7 @@ authors = [
 ]
 dependencies = [
     "fastuuid>=0.14.0,<1.0; python_version < '3.15'",
-    "filelock>=3.16.1,<4.0",
+    "filelock>=3.16.1,<5",
     "httpx[http2]>=0.28.0,<1.0",
     "openai>=2.20.0,<4.0.0",
     "python-dateutil>=2.8.2,<3.0",
@@ -56,6 +56,7 @@ editable-profile = "dev"
 include = [
     { path = "rust-toolchain.toml", format = "sdist" },
     { path = ".cargo/config.toml", format = "sdist" },
+    { path = "model_prices_and_context_window.json", format = "sdist" },
     "litellm/router_strategy/complexity_router/artifacts/*.json",
     "litellm/router_strategy/complexity_router/fuse_presets.json",
     "litellm/proxy/model_insights_tasks.json",

@@ -416,12 +416,11 @@ def test_context_window_fallback_fires_for_the_overflow_on_streamed_messages(cwf
     _assert_fell_back(cwf_rig, "overflow", prompt, text)
 
 
-def test_context_window_fallback_does_not_fire_on_streamed_responses(cwf_rig: Rig) -> None:
+def test_context_window_fallback_fires_on_streamed_responses(cwf_rig: Rig) -> None:
     prompt: Final = _prompt("cwf responses stream")
     response, text = _consumed(cwf_rig.gateway, "/v1/responses", _responses(cwf_rig.models["cwf"], prompt, True))
     assert response.status_code == 200, text
-    assert _GENERIC in str(_only_failed(text)["message"]), text
-    _assert_no_fallback(cwf_rig, "overflow", prompt)
+    _assert_fell_back(cwf_rig, "overflow", prompt, text)
 
 
 def test_plain_fallback_fires_for_the_overflow_on_chat_completions(fb_rig: Rig) -> None:
@@ -459,12 +458,11 @@ def test_plain_fallback_fires_for_the_overflow_on_streamed_messages(fb_rig: Rig)
     _assert_fell_back(fb_rig, "overflow", prompt, text)
 
 
-def test_plain_fallback_does_not_fire_on_streamed_responses(fb_rig: Rig) -> None:
+def test_plain_fallback_fires_on_streamed_responses(fb_rig: Rig) -> None:
     prompt: Final = _prompt("fb responses stream")
     response, text = _consumed(fb_rig.gateway, "/v1/responses", _responses(fb_rig.models["fb"], prompt, True))
     assert response.status_code == 200, text
-    assert _GENERIC in str(_only_failed(text)["message"]), text
-    _assert_no_fallback(fb_rig, "overflow", prompt)
+    _assert_fell_back(fb_rig, "overflow", prompt, text)
 
 
 def test_streamed_messages_overflow_on_an_openai_fallback_deployment_returns_the_error_event_without_falling_back(

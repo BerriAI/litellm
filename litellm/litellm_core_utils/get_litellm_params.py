@@ -77,6 +77,7 @@ OPTIONAL_KWARGS_KEYS: Final = (
             "otpm",
             "tpd",
             "rpd",
+            "daily_reset_time",
             "use_xai_oauth",
             "chatgpt_auth_file",
             "github_copilot_auth_type",
@@ -84,6 +85,7 @@ OPTIONAL_KWARGS_KEYS: Final = (
             "github_copilot_user_session",
             "fireworks_forward_user_id",
             "responses_api_version",
+            "allowed_openai_params",
             PROVIDER_AFFINITY_HEADER_KWARG_KEY,
         }
     )

@@ -6,6 +6,7 @@ import re
 from collections.abc import AsyncIterator, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Final, cast
 from unittest.mock import AsyncMock, MagicMock, call, patch
@@ -2226,6 +2227,60 @@ async def test_shutdown_drain_finishes_the_rollups_update_database_started():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("response_cost", [float("nan"), float("inf"), float("-inf")])
+async def test_update_database_records_a_non_finite_response_cost_as_zero(response_cost: float) -> None:
+    db_writer: Final = DBSpendUpdateWriter()
+    prisma: Final = _tool_usage_prisma()
+    prisma.get_request_status = MagicMock(return_value="success")
+    response: Final = litellm.ModelResponse(
+        model="gpt-5.6-luna",
+        usage=litellm.Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15),
+    )
+    with (
+        patch("litellm.proxy.proxy_server.disable_spend_logs", False),
+        patch("litellm.proxy.proxy_server.prisma_client", prisma),
+        patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
+        patch("litellm.proxy.proxy_server.litellm_proxy_budget_name", "test-budget"),
+    ):
+        await db_writer.update_database(
+            token="test-token",
+            user_id="test-user",
+            end_user_id=None,
+            team_id="test-team",
+            org_id=None,
+            kwargs={
+                "model": "gpt-5.6-luna",
+                "custom_llm_provider": "openai",
+                "call_type": "acompletion",
+                "litellm_call_id": "req-non-finite-cost",
+                "response_cost": response_cost,
+                "litellm_params": {"metadata": {"user_api_key": "hashed-key", "user_api_key_team_id": "test-team"}},
+            },
+            completion_response=response,
+            start_time=datetime.now(timezone.utc),
+            end_time=datetime.now(timezone.utc),
+            response_cost=response_cost,
+        )
+        await drain_logging_tasks()
+
+    assert [row["spend"] for row in prisma.spend_log_transactions] == [0]
+    spend: Final = await db_writer.spend_update_queue.flush_and_get_aggregated_db_spend_update_transactions()
+    assert spend["key_list_transactions"] == {"test-token": 0}
+    assert spend["team_list_transactions"] == {"test-team": 0}
+    daily_user: Final = (
+        await db_writer.daily_spend_update_queue.flush_and_get_aggregated_daily_spend_update_transactions()
+    )
+    daily_team: Final = (
+        await db_writer.daily_team_spend_update_queue.flush_and_get_aggregated_daily_spend_update_transactions()
+    )
+    assert daily_user is not None and daily_team is not None
+    (user_row,) = daily_user.values()
+    (team_row,) = daily_team.values()
+    assert (user_row["api_requests"], user_row["spend"]) == (1, 0)
+    assert (team_row["api_requests"], team_row["spend"]) == (1, 0)
+
+
+@pytest.mark.asyncio
 async def test_shutdown_drain_waits_for_an_in_flight_rollup_enqueue():
     """
     Regression for LIT-6027. A rollup enqueue that is still in flight when the shutdown drain
@@ -4325,6 +4380,36 @@ async def test_insert_spend_log_asks_for_an_immediate_flush_only_on_rows_the_bri
     assert prisma.spend_log_flush_requested.is_set() is expects_flush
 
 
+
+@pytest.mark.asyncio
+@pytest.mark.timeout(30)
+async def test_a_chatgpt_responses_row_queues_without_a_default_chatgpt_login(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setenv("CHATGPT_TOKEN_DIR", str(tmp_path / "no-default-login"))
+    monkeypatch.delenv("CHATGPT_AUTH_FILE", raising=False)
+    own_login: Final = tmp_path / "team" / "auth.json"
+    own_login.parent.mkdir()
+    own_login.write_text(json.dumps({"access_token": "at-team", "account_id": "acct-team"}))
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "chatgpt-team",
+                "litellm_params": {"model": "chatgpt/gpt-5.6-terra", "chatgpt_auth_file": str(own_login)},
+                "model_info": {"id": "dep-chatgpt"},
+            }
+        ]
+    )
+    prisma: Final = _tool_usage_prisma()
+    prisma.spend_log_flush_requested = asyncio.Event()
+    payload: Final = {"request_id": "req-1", "call_type": "aresponses", "model_id": "dep-chatgpt"}
+
+    await DBSpendUpdateWriter()._insert_spend_log_to_db(payload=payload, prisma_client=prisma, llm_router=router)
+
+    assert prisma.spend_log_transactions == [payload]
+    assert prisma.spend_log_flush_requested.is_set() is False
+
+
 def _batch_cost_payload() -> dict:
     return {
         **_minimal_spend_payload(),
@@ -5317,3 +5402,53 @@ def test_record_request_error_feeds_the_failure_rollup_with_the_logged_status() 
             status_code=503,
         ): 1
     }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("disable_error_logs", [False, True])
+@pytest.mark.parametrize("status", ["success", "failure"])
+async def test_completed_spend_survives_error_log_suppression(
+    monkeypatch: pytest.MonkeyPatch, disable_error_logs: bool, status: str
+) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.types.utils import ModelResponse, Usage
+
+    writer: Final = DBSpendUpdateWriter()
+    prisma: Final = _tool_usage_prisma()
+    prisma.get_request_status.return_value = status
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+    monkeypatch.setattr(proxy_server, "disable_spend_logs", False)
+    monkeypatch.setattr(proxy_server, "general_settings", {"disable_error_logs": disable_error_logs})
+    now: Final = datetime(2026, 10, 20, 12, tzinfo=timezone.utc)
+    result: Final = ModelResponse(
+        model="gpt-4o-mini", usage=Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15)
+    )
+    assert await writer.update_database(
+        token="test-token",
+        user_id="test-user",
+        end_user_id=None,
+        team_id=None,
+        org_id=None,
+        kwargs={
+            "model": "gpt-4o-mini",
+            "litellm_call_id": "completed-call",
+            "litellm_params": {
+                "metadata": {
+                    "user_api_key": "test-token",
+                    "user_api_key_user_id": "test-user",
+                    "status": status,
+                }
+            },
+        },
+        completion_response=result,
+        start_time=now,
+        end_time=now,
+        response_cost=0.23,
+    )
+    await drain_logging_tasks()
+    assert len(prisma.spend_log_transactions) == (0 if status == "failure" and disable_error_logs else 1)
+    updates: Final = await writer.daily_spend_update_queue.flush_all_updates_from_in_memory_queue()
+    rows: Final = [row for update in updates for row in update.values()]
+    assert len(rows) == 1
+    assert rows[0]["spend"] == pytest.approx(0.23)
+    assert (rows[0]["prompt_tokens"], rows[0]["completion_tokens"]) == (10, 5)

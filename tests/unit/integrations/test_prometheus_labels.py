@@ -238,6 +238,53 @@ def test_extract_api_provider_from_request_data_failure_path():
     assert extract({"model": "some-unknown-model-xyz"}) is None
 
 
+_PASS_THROUGH_CALL_TYPE: Final = "pass_through_endpoint"
+
+
+@pytest.mark.parametrize(
+    "request_data, expected_provider",
+    [
+        ({"model": "gpt-4o-mini", "call_type": "acompletion", "custom_llm_provider": "anthropic"}, "openai"),
+        ({"model": "gpt-4o-mini", "litellm_params": {"custom_llm_provider": "humanloop"}}, "humanloop"),
+        ({"model": "gemini-3.8-flash", "call_type": _PASS_THROUGH_CALL_TYPE}, "vertex_ai"),
+        (
+            {"model": "gemini-3.8-flash", "call_type": _PASS_THROUGH_CALL_TYPE, "custom_llm_provider": "gemini"},
+            "gemini",
+        ),
+        (
+            {
+                "call_type": _PASS_THROUGH_CALL_TYPE,
+                "custom_llm_provider": "gemini",
+                "standard_logging_object": {"custom_llm_provider": "vertex_ai"},
+            },
+            "vertex_ai",
+        ),
+    ],
+)
+def test_extract_api_provider_reads_the_request_declared_provider_only_on_pass_through_failures(
+    request_data: dict[str, object], expected_provider: str
+):
+    from litellm.integrations.prometheus import PrometheusLogger
+
+    assert PrometheusLogger._extract_api_provider_from_request_data(request_data) == expected_provider
+
+
+@pytest.mark.parametrize(
+    "declared_provider",
+    ["azure", "bedrock", "openrouter", "client-supplied-value", "", {"nested": "object"}, 42],
+)
+def test_extract_api_provider_ignores_pass_through_declared_values_outside_gemini_and_vertex(
+    declared_provider: object,
+):
+    from litellm.integrations.prometheus import PrometheusLogger
+
+    extract = PrometheusLogger._extract_api_provider_from_request_data
+    declared = {"call_type": _PASS_THROUGH_CALL_TYPE, "custom_llm_provider": declared_provider}
+
+    assert extract({"model": "gpt-4o-mini", **declared}) == "openai"
+    assert extract({"model": "no-such-model", **declared}) is None
+
+
 def test_extract_api_provider_swallows_unknown_model_but_logs_unexpected_errors():
     """
     get_llm_provider raises BadRequestError for a model that maps to no
@@ -847,6 +894,56 @@ async def test_failure_hook_prefers_request_data_provider_over_exception_provide
         },
         err,
     ) == ["azure"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "call_type, custom_llm_provider, expected_requested_model",
+    [
+        (_PASS_THROUGH_CALL_TYPE, "vertex_ai", "gcp/google/gemini-2.5-flash"),
+        ("acompletion", "vertex_ai", "other"),
+        (_PASS_THROUGH_CALL_TYPE, "bedrock", "other"),
+    ],
+)
+async def test_failure_hook_labels_a_pass_through_failure_with_the_router_model_the_client_requested(
+    call_type: str, custom_llm_provider: str, expected_requested_model: str
+):
+    from unittest.mock import patch
+
+    from litellm.integrations.prometheus import PrometheusLogger
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gcp/google/gemini-2.5-flash",
+                "litellm_params": {
+                    "model": "vertex_ai/gemini-2.5-flash",
+                    "vertex_project": "p",
+                    "vertex_location": "us-central1",
+                },
+            }
+        ]
+    )
+    _clear_prometheus_registry()
+    try:
+        with patch("litellm.proxy.proxy_server.llm_router", router, create=True):  # test-quality-ok: production reads proxy_server.llm_router lazily, no injection seam
+            await PrometheusLogger().async_post_call_failure_hook(
+                request_data={
+                    "model": "gemini-2.5-flash",
+                    "call_type": call_type,
+                    "custom_llm_provider": custom_llm_provider,
+                    "metadata": {},
+                    "litellm_params": {"metadata": {"model_group": "gcp/google/gemini-2.5-flash"}},
+                },
+                original_exception=Exception("upstream 400"),
+                user_api_key_dict=UserAPIKeyAuth(token="tok"),
+            )
+        assert {
+            s.labels.get("requested_model") for s in _collected_samples("litellm_proxy_failed_requests_metric_total")
+        } == {expected_requested_model}
+    finally:
+        _clear_prometheus_registry()
 
 
 def test_model_group_in_deployment_metrics():
