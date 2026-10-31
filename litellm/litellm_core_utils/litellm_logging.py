@@ -124,6 +124,7 @@ from litellm.litellm_core_utils.logging_utils import (
 from litellm.litellm_core_utils.model_param_helper import ModelParamHelper
 from litellm.litellm_core_utils.ptu_pricing import is_spilled_over_ptu_request
 from litellm.litellm_core_utils.redact_messages import (
+    failure_details_for_custom_logger,
     failure_request_texts,
     redact_message_input_output_from_custom_logger,
     redact_message_input_output_from_logging,
@@ -4497,7 +4498,7 @@ class Logging(LiteLLMLoggingBaseClass):
                             start_time=start_time,
                             end_time=end_time,
                             response_obj=result,
-                            kwargs=self.model_call_details,
+                            kwargs=failure_details_for_custom_logger(self.model_call_details, callback),
                         )
                     if callback == "langfuse":
                         global langFuseLogger
@@ -4632,7 +4633,7 @@ class Logging(LiteLLMLoggingBaseClass):
                     continue
                 if isinstance(callback, CustomLogger):  # custom logger class
                     await callback.async_log_failure_event(
-                        kwargs=self.model_call_details,
+                        kwargs=failure_details_for_custom_logger(self.model_call_details, callback),
                         response_obj=result,
                         start_time=start_time,
                         end_time=end_time,

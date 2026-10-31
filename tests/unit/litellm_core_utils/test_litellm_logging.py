@@ -11750,6 +11750,11 @@ class _FailureCapture(CustomLogger):
         self.async_kwargs = kwargs
 
 
+class _SelfRedactingFailureCapture(_FailureCapture):
+    def redacts_messages_itself(self) -> bool:
+        return True
+
+
 def _prompt_failure_logging_obj(litellm_params: Mapping[str, object] | None = None) -> LitellmLogging:
     logging_obj: Final = LitellmLogging(
         model="gpt-4o",
@@ -11817,6 +11822,41 @@ async def test_failure_with_redaction_off_logs_the_error_as_raised(monkeypatch):
 
     assert SCRUB_PROMPT in kwargs["standard_logging_object"]["error_information"]["error_message"]
     assert SCRUB_PROMPT in kwargs["traceback_exception"]
+
+
+@pytest.mark.asyncio
+async def test_failure_redacts_messages_and_error_for_a_callback_that_opted_out_of_message_logging(monkeypatch):
+    opted_out: Final = _FailureCapture(message_logging=False)
+    logging_everything: Final = _FailureCapture()
+    monkeypatch.setattr(litellm, "turn_off_message_logging", False)
+    monkeypatch.setattr(litellm, "_async_failure_callback", [opted_out, logging_everything])
+
+    await _prompt_failure_logging_obj().async_failure_handler(_prompt_echo_error(), "Traceback")
+
+    assert opted_out.async_kwargs is not None and logging_everything.async_kwargs is not None
+    assert SCRUB_PROMPT not in json.dumps(opted_out.async_kwargs["standard_logging_object"], default=str)
+    assert opted_out.async_kwargs["messages"] == [{"role": "user", "content": "redacted-by-litellm"}]
+    assert SCRUB_PROMPT in logging_everything.async_kwargs["standard_logging_object"]["error_str"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("capture_type", [_FailureCapture, _SelfRedactingFailureCapture])
+async def test_failure_scrubs_the_error_for_a_callback_with_its_own_turn_off_message_logging(monkeypatch, capture_type):
+    capture: Final = capture_type(turn_off_message_logging=True)
+
+    kwargs: Final = await _async_failure_payload(monkeypatch, redact=False, error=_prompt_echo_error(), capture=capture)
+
+    assert SCRUB_PROMPT not in kwargs["standard_logging_object"]["error_str"]
+    assert SCRUB_PROMPT not in kwargs["standard_logging_object"]["error_information"]["error_message"]
+
+
+@pytest.mark.asyncio
+async def test_failure_payload_keeps_the_excluded_fields(monkeypatch):
+    monkeypatch.setattr(litellm, "standard_logging_payload_excluded_fields", ["metadata"])
+
+    kwargs: Final = await _async_failure_payload(monkeypatch, redact=False, error=_prompt_echo_error())
+
+    assert "metadata" in kwargs["standard_logging_object"]
 
 
 @pytest.mark.asyncio

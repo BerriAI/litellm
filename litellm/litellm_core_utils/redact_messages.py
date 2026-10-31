@@ -16,14 +16,15 @@ import json
 import re
 from collections.abc import Collection, Mapping, Sequence
 from dataclasses import replace
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final
 
 from pydantic import BaseModel, JsonValue, TypeAdapter, ValidationError
 
 import litellm
-from litellm.constants import REDACTED_BY_LITELLM
+from litellm.constants import EMPTY_MAPPING, REDACTED_BY_LITELLM
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.litellm_core_utils.classifier_logging import without_classifier_audit
+from litellm.litellm_core_utils.classifier_logging import CLASSIFIER_AUDIT_FIELDS, without_classifier_audit
 from litellm.litellm_core_utils.core_helpers import (
     get_metadata_variable_name_from_kwargs,
 )
@@ -63,6 +64,80 @@ def redact_message_input_output_from_custom_logger(
     if _opted_out_of_message_logging(custom_logger):
         return perform_redaction(litellm_logging_obj.model_call_details, result, redact_streaming_responses=False)
     return result
+
+
+def failure_details_for_custom_logger(
+    model_call_details: dict[str, object],  # mutable-ok: the kwargs dict a CustomLogger failure hook receives
+    custom_logger: CustomLogger,
+) -> dict[str, object]:  # mutable-ok: the kwargs dict a CustomLogger failure hook receives
+    """
+    The per-callback message redaction the success path applies, for a failure event, with the
+    request's text also scrubbed out of the error. The excluded fields are left out, since several
+    callbacks index the payload's fields on failure.
+    """
+    redacted: Final = redacted_standard_logging_details(model_call_details, custom_logger, excluded_fields=None)
+    if redacted is model_call_details and not _opted_out_of_message_logging(custom_logger):
+        return model_call_details
+    texts: Final = failure_request_texts(model_call_details)
+    payload: Final = _as_mapping(redacted.get("standard_logging_object"))
+    traceback_exception: Final = redacted.get("traceback_exception")
+    return redacted_model_call_details_for_custom_logger(
+        {
+            **redacted,
+            **(
+                {"standard_logging_object": {**payload, **scrubbed_error_fields(payload, texts)}}
+                if payload is not None
+                else {}
+            ),
+            **(
+                {"traceback_exception": scrub_request_text(traceback_exception, texts)}
+                if isinstance(traceback_exception, str)
+                else {}
+            ),
+        },
+        custom_logger,
+    )
+
+
+def redacted_standard_logging_details(
+    model_call_details: dict[str, object],  # mutable-ok: the kwargs dict a CustomLogger hook receives
+    custom_logger: CustomLogger,
+    *,
+    excluded_fields: Sequence[str] | None,
+) -> dict[str, object]:  # mutable-ok: the kwargs dict a CustomLogger hook receives
+    """``CustomLogger.redact_standard_logging_payload_from_model_call_details`` with the excluded fields passed in."""
+    turn_off_message_logging: Final[bool] = getattr(custom_logger, "turn_off_message_logging", False)
+
+    # Early return if no processing needed
+    if turn_off_message_logging is False and not excluded_fields:
+        return model_call_details
+
+    params: Final = _as_mapping(model_call_details.get("litellm_params"))
+    redacted_params: Final = (
+        MappingProxyType({"litellm_params": redacted_litellm_params(params)})
+        if turn_off_message_logging and params is not None
+        else EMPTY_MAPPING
+    )
+    standard_logging_object: Final = _as_mapping(model_call_details.get("standard_logging_object"))
+    if standard_logging_object is None:
+        return {**model_call_details, **redacted_params}
+
+    # Make a copy of just the standard_logging_object to avoid modifying the original
+    standard_logging_object_copy: Final = {
+        key: value
+        for key, value in standard_logging_object.items()
+        if key not in (excluded_fields or ()) and not (turn_off_message_logging and key in CLASSIFIER_AUDIT_FIELDS)
+    }
+
+    return {
+        **model_call_details,
+        **redacted_params,
+        "standard_logging_object": (
+            redacted_standard_logging_payload(standard_logging_object_copy)
+            if turn_off_message_logging and not custom_logger.redacts_messages_itself()
+            else standard_logging_object_copy
+        ),
+    }
 
 
 def redacted_model_call_details_for_custom_logger(model_call_details: dict, custom_logger: CustomLogger) -> dict:
