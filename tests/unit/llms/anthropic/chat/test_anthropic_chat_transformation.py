@@ -10219,14 +10219,14 @@ def test_chat_transform_request_keeps_a_conversion_error_that_a_dropped_orphan_a
                     "tool_calls": [
                         {
                             **_WEATHER_CALL["tool_calls"][0],
-                            "function": {"name": "get_weather", "arguments": {"city": "Paris"}},
+                            "function": {"name": "get_weather", "arguments": ["Paris"]},
                         }
                     ],
                 },
                 {"role": "tool", "tool_call_id": "toolu_01", "content": "rain"},
             ],
-            "'dict' object has no attribute 'strip'",
-            id="object_tool_call_arguments",
+            "'list' object has no attribute 'strip'",
+            id="list_tool_call_arguments",
         ),
         pytest.param(
             [{"role": "user", "content": [{"type": "image_url", "image_url": ["x"]}]}],

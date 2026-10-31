@@ -2468,7 +2468,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 drop_params=drop_params,
             )
         except litellm.BadRequestError as e:
-            raise AnthropicError(status_code=400, message=str(e))
+            raise non_string_message_field_error(messages, e) or AnthropicError(status_code=400, message=str(e))
         except Exception as e:
             conversion_field_error: Final = non_string_message_field_error(messages, e)
             raise conversion_field_error or AnthropicError(
