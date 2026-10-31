@@ -11384,7 +11384,7 @@ async def test_client_passes_stored_response_call_types_to_both_deployment_hooks
             return None
 
         async def async_post_call_success_deployment_hook(
-            self, request_data: dict, response: object, call_type: CallTypes | None
+            self, request_data: Mapping[str, object], response: object, call_type: CallTypes | None
         ) -> object:
             self.hook_calls = (*self.hook_calls, ("post", call_type))
             return None
