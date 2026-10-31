@@ -5,7 +5,7 @@ from httpx import Response
 
 from litellm.constants import PLACEHOLDER_API_KEY
 from litellm.litellm_core_utils.litellm_logging import Logging
-from litellm.llms.base_llm.passthrough.transformation import BasePassthroughConfig
+from litellm.llms.base_llm.passthrough.transformation import BasePassthroughConfig, relayed_json_object
 from litellm.llms.openai_like.passthrough.transformation import (
     logged_openai_like_response,
     logged_openai_like_stream,
@@ -83,7 +83,10 @@ class VLLMPassthroughConfig(VLLMModelInfo, BasePassthroughConfig):
         request_data: Mapping[str, object],
         logging_obj: Logging,
         endpoint: str,
-    ) -> "LoggedRelayResponse | None":
+    ) -> "LoggedRelayResponse | Mapping[str, object] | None":
+        if endpoint.strip("/").rsplit("/", 1)[-1] in ("pooling", "score", "rerank", "classify"):
+            body: Final = relayed_json_object(httpx_response)
+            return dict(body) if body is not None else None
         if relays_text_completion(endpoint):
             return logged_text_completion_response(httpx_response, logging_obj, endpoint)
         return logged_openai_like_response(model, httpx_response, request_data, logging_obj, endpoint)
