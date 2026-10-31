@@ -888,7 +888,7 @@ async def _inherit_auth_guardrails(
     merged: Final = (as_str_mapping(parsed_body["metadata"]) or {}).get("guardrails")
     if not isinstance(merged, list) or not merged or not _named_guardrail_runs_post_call(parsed_body):
         return None
-    return tuple(_GUARDRAIL_ENTRIES.validate_python(merged))
+    return _GUARDRAIL_ENTRIES.validate_python(merged)
 
 
 def _named_guardrail_runs_post_call(data: Mapping[str, object]) -> bool:
