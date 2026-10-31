@@ -15603,6 +15603,10 @@
               ],
               "title": "Metadata"
             },
+            "response_format": {
+              "$ref": "#/components/schemas/GuardrailResponseFormat",
+              "default": "standard"
+            },
             "text": {
               "title": "Text",
               "type": "string"
@@ -17023,6 +17027,14 @@
           "title": "GuardrailInfoResponse",
           "type": "object"
         },
+        "GuardrailResponseFormat": {
+          "enum": [
+            "standard",
+            "native"
+          ],
+          "title": "GuardrailResponseFormat",
+          "type": "string"
+        },
         "GuardrailSubmissionItem": {
           "properties": {
             "created_at": {
@@ -17275,6 +17287,7 @@
           "title": "HTTPValidationError",
           "type": "object"
         },
+        "JsonValue": {},
         "LakeraCategoryThresholds": {
           "additionalProperties": true,
           "properties": {
@@ -20585,7 +20598,24 @@
               "content": {
                 "application/json": {
                   "schema": {
-                    "$ref": "#/components/schemas/ApplyGuardrailResponse"
+                    "anyOf": [
+                      {
+                        "$ref": "#/components/schemas/ApplyGuardrailResponse"
+                      },
+                      {
+                        "additionalProperties": {
+                          "$ref": "#/components/schemas/JsonValue"
+                        },
+                        "type": "object"
+                      },
+                      {
+                        "items": {
+                          "$ref": "#/components/schemas/JsonValue"
+                        },
+                        "type": "array"
+                      }
+                    ],
+                    "title": "Response Apply Guardrail Apply Guardrail Post"
                   }
                 }
               },
@@ -20677,7 +20707,24 @@
               "content": {
                 "application/json": {
                   "schema": {
-                    "$ref": "#/components/schemas/ApplyGuardrailResponse"
+                    "anyOf": [
+                      {
+                        "$ref": "#/components/schemas/ApplyGuardrailResponse"
+                      },
+                      {
+                        "additionalProperties": {
+                          "$ref": "#/components/schemas/JsonValue"
+                        },
+                        "type": "object"
+                      },
+                      {
+                        "items": {
+                          "$ref": "#/components/schemas/JsonValue"
+                        },
+                        "type": "array"
+                      }
+                    ],
+                    "title": "Response Apply Guardrail Guardrails Apply Guardrail Post"
                   }
                 }
               },
