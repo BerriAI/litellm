@@ -6,6 +6,7 @@ from pydantic import ConfigDict, Field
 from typing_extensions import TypedDict
 
 from litellm.types.llms.base import LiteLLMBaseModel
+from litellm.types.repositories.daily_activity import TagSpendRow
 
 
 class GroupByDimension(str, Enum):
@@ -197,6 +198,15 @@ class DailyActivityKeySearchResponse(LiteLLMBaseModel):
 class DailyActivityKeyPageResponse(LiteLLMBaseModel):
     api_keys: list[KeySpendActivityRow]
     total_api_keys: int
+    offset: int
+    limit: int
+
+
+class DailyActivityTagPageResponse(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    tags: list[TagSpendRow]  # mutable-ok: response contract requires a JSON array
+    total_tags: int
     offset: int
     limit: int
 

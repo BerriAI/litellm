@@ -1,3 +1,4 @@
+from dataclasses import replace
 from datetime import datetime, timezone
 from typing import Final
 
@@ -15,6 +16,7 @@ from litellm.repositories.daily_activity_sql import (
     build_key_page_sql,
     build_key_search_sql,
     build_model_top_keys_sql,
+    build_tag_page_sql,
     build_user_page_sql,
     build_where_clause,
 )
@@ -137,6 +139,19 @@ def test_key_page_sql_orders_exact_spend_and_binds_scope_before_page() -> None:
 def test_key_page_sql_rejects_invalid_page_bounds(offset: int, limit: int, error: str) -> None:
     with pytest.raises(ValueError, match=error):
         build_key_page_sql(_scope(), offset=offset, limit=limit)
+
+
+@pytest.mark.parametrize(
+    ("offset", "limit", "error"),
+    (
+        (0, 0, "limit must be between"),
+        (0, constants.USAGE_TAG_PAGE_MAX + 1, "limit must be between"),
+        (-1, 1, "offset must be non-negative"),
+    ),
+)
+def test_tag_page_sql_rejects_invalid_page_bounds(offset: int, limit: int, error: str) -> None:
+    with pytest.raises(ValueError, match=error):
+        build_tag_page_sql(_scope(table=DailyActivityTable.TEAM), team_id="team-a", offset=offset, limit=limit)
 
 
 def test_user_page_sql_groups_by_user_id_with_deterministic_spend_order() -> None:
