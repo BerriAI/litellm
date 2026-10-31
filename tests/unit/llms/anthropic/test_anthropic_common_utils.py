@@ -59,27 +59,32 @@ def test_is_anthropic_messages_url(url: str, expected: bool) -> None:
 @pytest.mark.parametrize(
     ("configured_base", "url", "expected"),
     [
-        pytest.param(None, "https://api.anthropic.com/v1/messages", True, id="default-upstream"),
-        pytest.param(None, "https://api.anthropic.com:443/v1/messages/", True, id="default-upstream-explicit-port"),
-        pytest.param("http://relay.test:8080", "https://api.anthropic.com/v1/messages", True, id="direct-target"),
-        pytest.param("http://relay.test:8080", "http://relay.test:8080/v1/messages", True, id="configured-upstream"),
-        pytest.param("http://relay.test:8080/a", "http://relay.test:8080/a/v1/messages", True, id="configured-prefix"),
-        pytest.param("http://relay.test:8080", "http://relay.test:8081/v1/messages", False, id="other-port"),
-        pytest.param(None, "https://other-vendor.test/v1/messages", False, id="other-vendor"),
-        pytest.param(None, "https://api.anthropic.com/v1/messages/count_tokens", False, id="count-tokens"),
+        pytest.param(None, "https://api.anthropic.com/v1/messages", 512, id="default-upstream"),
+        pytest.param(None, "https://api.anthropic.com:443/v1/messages/", 512, id="default-upstream-explicit-port"),
+        pytest.param("http://relay.test:8080", "https://api.anthropic.com/v1/messages", 512, id="direct-target"),
+        pytest.param("https://api.anthropic.com", "https://api.anthropic.com/v1/messages", 512, id="configured-default"),
+        pytest.param("http://relay.test:8080", "http://relay.test:8080/v1/messages", 255, id="configured-upstream"),
+        pytest.param("http://relay.test:8080/a", "http://relay.test:8080/a/v1/messages", 255, id="configured-prefix"),
+        pytest.param("https://Relay.Test", "https://relay.test/v1/messages", 255, id="configured-upper-case-host"),
+        pytest.param("https://relay.test:443", "https://relay.test/v1/messages", 255, id="configured-https-port"),
+        pytest.param("http://relay.test:80/a", "http://relay.test/a/v1/messages", 255, id="configured-http-port"),
+        pytest.param("http://relay.test:8080", "http://relay.test:8081/v1/messages", None, id="other-port"),
+        pytest.param("http://relay.test:notaport", "http://relay.test/v1/messages", None, id="invalid-configured-base"),
+        pytest.param(None, "https://other-vendor.test/v1/messages", None, id="other-vendor"),
+        pytest.param(None, "https://api.anthropic.com/v1/messages/count_tokens", None, id="count-tokens"),
     ],
 )
-def test_is_anthropic_upstream_messages_url(
-    monkeypatch: pytest.MonkeyPatch, configured_base: str | None, url: str, expected: bool
+def test_anthropic_upstream_user_id_limit(
+    monkeypatch: pytest.MonkeyPatch, configured_base: str | None, url: str, expected: int | None
 ) -> None:
-    from litellm.llms.anthropic.common_utils import is_anthropic_upstream_messages_url
+    from litellm.llms.anthropic.common_utils import anthropic_upstream_user_id_limit
 
     monkeypatch.delenv("ANTHROPIC_BASE_URL", raising=False)
     monkeypatch.delenv("ANTHROPIC_API_BASE", raising=False)
     if configured_base is not None:
         monkeypatch.setenv("ANTHROPIC_API_BASE", configured_base)
 
-    assert is_anthropic_upstream_messages_url(url) is expected
+    assert anthropic_upstream_user_id_limit(url) == expected
 
 
 def test_anthropic_pass_through_api_base_prefers_the_api_base_variable(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -121,9 +126,10 @@ def test_anthropic_pass_through_api_base_prefers_the_api_base_variable(monkeypat
     ],
 )
 def test_anthropic_accepts_user_id(user_id: str, expected: bool) -> None:
+    from litellm.constants import ANTHROPIC_MAX_USER_ID_LENGTH
     from litellm.llms.anthropic.common_utils import anthropic_accepts_user_id
 
-    assert anthropic_accepts_user_id(user_id) is expected
+    assert anthropic_accepts_user_id(user_id, ANTHROPIC_MAX_USER_ID_LENGTH) is expected
 
 
 @pytest.mark.parametrize("character", ["a", "\u00e9", "\U0001f600"], ids=["ascii", "two-bytes", "four-bytes"])
@@ -131,8 +137,10 @@ def test_anthropic_accepts_user_id_counts_characters_up_to_the_limit(character: 
     from litellm.constants import ANTHROPIC_MAX_USER_ID_LENGTH
     from litellm.llms.anthropic.common_utils import anthropic_accepts_user_id
 
-    assert anthropic_accepts_user_id(character * ANTHROPIC_MAX_USER_ID_LENGTH) is True
-    assert anthropic_accepts_user_id(character * (ANTHROPIC_MAX_USER_ID_LENGTH + 1)) is False
+    assert anthropic_accepts_user_id(character * ANTHROPIC_MAX_USER_ID_LENGTH, ANTHROPIC_MAX_USER_ID_LENGTH) is True
+    assert (
+        anthropic_accepts_user_id(character * (ANTHROPIC_MAX_USER_ID_LENGTH + 1), ANTHROPIC_MAX_USER_ID_LENGTH) is False
+    )
 
 
 def test_anthropic_model_not_found_maps_to_not_found_but_authentication_error_does_not() -> None:

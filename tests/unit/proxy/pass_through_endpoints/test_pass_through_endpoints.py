@@ -32,7 +32,7 @@ from starlette.datastructures import UploadFile as StarletteUploadFile
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.dual_cache import DualCache
-from litellm.constants import ANTHROPIC_MAX_USER_ID_LENGTH, DEFAULT_REQUEST_TIMEOUT_SECONDS
+from litellm.constants import ANTHROPIC_COMPATIBLE_MAX_USER_ID_LENGTH, ANTHROPIC_MAX_USER_ID_LENGTH, DEFAULT_REQUEST_TIMEOUT_SECONDS
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.prometheus import PrometheusLogger
@@ -6668,8 +6668,8 @@ async def _relay_through_pass_through(
             mock_proxy_logging, _ = _enter_relay_logging_mocks(stack, {})
             mock_proxy_logging.pre_call_hook = AsyncMock(side_effect=return_hook_data)
             mock_proxy_logging.post_call_success_hook = AsyncMock(side_effect=return_hook_response)
-            mock_proxy_logging.has_pre_call_guardrails = partial(
-                ProxyLogging.has_pre_call_guardrails, mock_proxy_logging
+            mock_proxy_logging.request_has_pre_call_guardrails = partial(
+                ProxyLogging.request_has_pre_call_guardrails, mock_proxy_logging
             )
             response: Final = await pass_through_request(
                 request=request,
@@ -6785,14 +6785,41 @@ async def test_pass_through_treats_the_configured_anthropic_base_as_anthropic(
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("no_configured_anthropic_base")
 @pytest.mark.parametrize(
-    "default_on, event_hook, guardrails_config, litellm_metadata, forwarded",
+    "user_id_length, target, forwarded",
     [
-        (False, GuardrailEventHooks.pre_call, None, None, True),
-        (False, GuardrailEventHooks.pre_call, {"unregistered-guard": {}}, None, True),
-        (True, GuardrailEventHooks.post_call, None, None, True),
-        (True, GuardrailEventHooks.pre_call, None, None, False),
-        (False, GuardrailEventHooks.pre_call, {"pii-guard": {}}, None, False),
-        (False, GuardrailEventHooks.pre_call, None, {"guardrails": ["pii-guard"]}, False),
+        (ANTHROPIC_COMPATIBLE_MAX_USER_ID_LENGTH, "http://gateway.test/v1/messages", True),
+        (ANTHROPIC_COMPATIBLE_MAX_USER_ID_LENGTH + 1, "http://gateway.test/v1/messages", False),
+        (ANTHROPIC_MAX_USER_ID_LENGTH, _ANTHROPIC_MESSAGES, True),
+    ],
+    ids=["at-the-configured-base-limit", "over-the-configured-base-limit", "direct-anthropic-keeps-its-limit"],
+)
+async def test_pass_through_caps_the_user_id_for_a_configured_anthropic_compatible_base(
+    monkeypatch: pytest.MonkeyPatch, user_id_length: int, target: str, forwarded: bool
+) -> None:
+    monkeypatch.setenv("ANTHROPIC_API_BASE", "http://gateway.test")
+    client_body: Final = MappingProxyType({**_MESSAGES_BODY, "metadata": {"user_id": "u" * user_id_length}})
+
+    relayed: Final = await _relay_through_pass_through(client_body, target, guardrails_config=None)
+
+    assert relayed == (client_body if forwarded else _MESSAGES_BODY)
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("no_configured_anthropic_base")
+@pytest.mark.parametrize(
+    "default_on, event_hook, guardrails_config, client_fields, stream_scope, forwarded",
+    [
+        (False, GuardrailEventHooks.pre_call, None, {}, None, True),
+        (False, GuardrailEventHooks.pre_call, {"unregistered-guard": {}}, {}, None, True),
+        (True, GuardrailEventHooks.post_call, None, {}, None, True),
+        (True, GuardrailEventHooks.pre_call, None, {}, None, False),
+        (False, GuardrailEventHooks.pre_call, {"pii-guard": {}}, {}, None, False),
+        (False, GuardrailEventHooks.pre_call, None, {"litellm_metadata": {"guardrails": ["pii-guard"]}}, None, False),
+        (False, GuardrailEventHooks.pre_call, {"pii-guard": {}}, {"litellm_metadata": {"guardrails": []}}, None, False),
+        (True, GuardrailEventHooks.pre_call, None, {"stream": True}, "streaming", False),
+        (True, GuardrailEventHooks.pre_call, None, {}, "streaming", True),
+        (True, GuardrailEventHooks.pre_call, None, {"stream": True}, "non_streaming", True),
+        (True, GuardrailEventHooks.pre_call, None, {}, "non_streaming", False),
     ],
     ids=[
         "guardrail-not-requested",
@@ -6801,30 +6828,35 @@ async def test_pass_through_treats_the_configured_anthropic_base_as_anthropic(
         "default-on-pre-call-guardrail",
         "guardrail-on-the-route",
         "guardrail-in-litellm-metadata",
+        "route-guardrail-beside-an-empty-client-list",
+        "streaming-guardrail-on-a-stream",
+        "streaming-guardrail-off-a-stream",
+        "non-streaming-guardrail-on-a-stream",
+        "non-streaming-guardrail-off-a-stream",
     ],
 )
 async def test_pass_through_keeps_the_user_id_from_routes_a_guardrail_scans(
     default_on: bool,
     event_hook: GuardrailEventHooks,
     guardrails_config: dict[str, object] | None,
-    litellm_metadata: Mapping[str, object] | None,
+    client_fields: Mapping[str, object],
+    stream_scope: str | None,
     forwarded: bool,
 ) -> None:
-    guardrail: Final = CustomGuardrail(guardrail_name="pii-guard", default_on=default_on, event_hook=event_hook)
-    client_body: Final = MappingProxyType(
-        {
-            **_MESSAGES_BODY,
-            "metadata": {"user_id": "user-1"},
-            **({} if litellm_metadata is None else {"litellm_metadata": litellm_metadata}),
-        }
+    guardrail: Final = CustomGuardrail(
+        guardrail_name="pii-guard", default_on=default_on, event_hook=event_hook, stream_scope=stream_scope
     )
+    client_body: Final = MappingProxyType({**_MESSAGES_BODY, "metadata": {"user_id": "user-1"}, **client_fields})
+    body_without_client_fields: Final = {k: v for k, v in client_body.items() if k not in ("metadata", "litellm_metadata")}
 
     with patch.object(litellm, "callbacks", [guardrail]):
         relayed: Final = await _relay_through_pass_through(
             client_body, _ANTHROPIC_MESSAGES, guardrails_config=guardrails_config
         )
 
-    assert relayed == ({**_MESSAGES_BODY, "metadata": {"user_id": "user-1"}} if forwarded else _MESSAGES_BODY)
+    assert relayed == (
+        {**body_without_client_fields, "metadata": {"user_id": "user-1"}} if forwarded else body_without_client_fields
+    )
 
 
 @pytest.mark.asyncio

@@ -73,8 +73,8 @@ from litellm.litellm_core_utils.redact_messages import should_redact_message_log
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.llms.anthropic.common_utils import (
     anthropic_accepts_user_id,
+    anthropic_upstream_user_id_limit,
     is_anthropic_messages_url,
-    is_anthropic_upstream_messages_url,
 )
 from litellm.llms.base_llm.managed_resources.utils import (
     resolve_passthrough_managed_id_provider,
@@ -1198,14 +1198,18 @@ def _anthropic_user_id_to_forward(
     url: str,
     has_pre_call_guardrails: Callable[[Mapping[str, object]], bool],
 ) -> str | None:
-    if body is None or not is_anthropic_upstream_messages_url(url):
+    if body is None:
         return None
-    metadata: Final = _json_object(body.get("metadata"))
-    user_id: Final = metadata.get("user_id")
-    if not isinstance(user_id, str) or not anthropic_accepts_user_id(user_id):
+    user_id: Final = _json_object(body.get("metadata")).get("user_id")
+    if not isinstance(user_id, str):
         return None
-    request_metadata: Final = {**metadata, **_json_object(body.get("litellm_metadata"))}
-    return None if has_pre_call_guardrails(request_metadata) else user_id
+    max_length: Final = anthropic_upstream_user_id_limit(url)
+    if max_length is None or not anthropic_accepts_user_id(user_id, max_length):
+        return None
+    if has_pre_call_guardrails(body):
+        verbose_proxy_logger.debug("Not forwarding metadata.user_id because a pre-call guardrail cannot scan it")
+        return None
+    return user_id
 
 
 def _with_anthropic_user_id(body: Mapping[str, object] | None, user_id: str | None) -> Mapping[str, object] | None:
@@ -1452,7 +1456,7 @@ async def pass_through_request(
         )
         hooked_body: Final = cast("Mapping[str, object] | None", _parsed_body)  # cast-ok: json
         client_user_id: Final = _anthropic_user_id_to_forward(
-            hooked_body, str(url), proxy_logging_obj.has_pre_call_guardrails
+            hooked_body, str(url), proxy_logging_obj.request_has_pre_call_guardrails
         )
         kwargs = HttpPassThroughEndpointHelpers.init_kwargs_for_pass_through_endpoint(  # rebind-ok: pre-existing rebinding on a rename-only line
             user_api_key_dict=user_api_key_dict,
