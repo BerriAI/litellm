@@ -365,15 +365,16 @@ def test_agent_list_and_detail_cards_use_proxy_urls_for_scoped_keys(gateway: Gat
         assert public_card.status_code == 200, public_card.text
         assert listed.status_code == 200, listed.text
         assert detailed.status_code == 200, detailed.text
+        assert wire.url not in listed.text
+        assert wire.url not in detailed.text
         public_urls: Final = (
             public_card.json()["url"],
             public_card.json()["supportedInterfaces"][0]["url"],
         )
         listed_agent: Final = next(item for item in listed.json() if item["agent_id"] == agent_id)
-        for response, body in ((listed, listed_agent), (detailed, detailed.json())):
+        for body in (listed_agent, detailed.json()):
             card: Final = body["agent_card_params"]
             assert (card["url"], card["supportedInterfaces"][0]["url"]) == public_urls
-            assert wire.url not in response.text
 
         admin_listed: Final = gateway.request("GET", "/v1/agents")
         assert admin_listed.status_code == 200, admin_listed.text
