@@ -1168,31 +1168,29 @@ async def test_request_level_enable_tag_filtering_false_cannot_disable_global():
 # --- model_info.enable_tag_filtering per-chain override ---
 
 
-class _FakeRouterForChainOverride:
-    def __init__(self, all_deployments):
-        self._all_deployments = all_deployments
-
-    def get_all_deployments(self, model_name):
-        return self._all_deployments
+def _chain_override_router(*model_infos: dict) -> litellm.Router:
+    return litellm.Router(
+        model_list=[
+            {"model_name": "gpt-4", "litellm_params": {"model": "gpt-4"}, "model_info": {"id": f"gpt-4-{i}", **info}}
+            for i, info in enumerate(model_infos)
+        ]
+    )
 
 
 def test_chain_tag_filtering_override_reads_any_member():
     from litellm.router_strategy.tag_based_routing import _chain_tag_filtering_override
 
-    deployments = [
-        {"model_info": {}},
-        {"model_info": {"enable_tag_filtering": False}},
-    ]
-    router = _FakeRouterForChainOverride(deployments)
-    assert _chain_tag_filtering_override(router, "gpt-4", deployments) is False
+    router = _chain_override_router({}, {"enable_tag_filtering": False})
+    deployments = router.registry().deployments("gpt-4", source="all")
+    assert _chain_tag_filtering_override(router._core_ctx, "gpt-4", deployments) is False
 
 
 def test_chain_tag_filtering_override_none_when_unset_anywhere():
     from litellm.router_strategy.tag_based_routing import _chain_tag_filtering_override
 
-    deployments = [{"model_info": {}}, {}]
-    router = _FakeRouterForChainOverride(deployments)
-    assert _chain_tag_filtering_override(router, "gpt-4", deployments) is None
+    router = _chain_override_router({}, {})
+    deployments = router.registry().deployments("gpt-4", source="all")
+    assert _chain_tag_filtering_override(router._core_ctx, "gpt-4", deployments) is None
 
 
 def test_chain_tag_filtering_override_survives_the_overriding_member_going_unhealthy():
@@ -1203,27 +1201,28 @@ def test_chain_tag_filtering_override_survives_the_overriding_member_going_unhea
     # the one deployment that carries the group's only explicit override.
     from litellm.router_strategy.tag_based_routing import _chain_tag_filtering_override
 
-    all_deployments = [
-        {"model_info": {"enable_tag_filtering": True}},
-        {"model_info": {}},
-    ]
-    router = _FakeRouterForChainOverride(all_deployments)
+    router = _chain_override_router({"enable_tag_filtering": True}, {})
+    all_deployments = router.registry().deployments("gpt-4", source="all")
     # The overriding deployment (index 0) is cooled down and absent from
     # healthy_deployments -- the override must still be found via the full-group
     # lookup, not silently lost.
     healthy_deployments = [all_deployments[1]]
-    assert _chain_tag_filtering_override(router, "gpt-4", healthy_deployments) is True
+    assert _chain_tag_filtering_override(router._core_ctx, "gpt-4", healthy_deployments) is True
 
 
 def test_chain_tag_filtering_override_falls_back_to_healthy_deployments_on_lookup_error():
     from litellm.router_strategy.tag_based_routing import _chain_tag_filtering_override
 
-    class _BrokenRouter:
-        def get_all_deployments(self, model_name):
+    class _BrokenRegistry:
+        def deployments(self, model_name, *, source):
             raise RuntimeError("model group not found")
 
+    class _BrokenCtx:
+        def registry(self):
+            return _BrokenRegistry()
+
     healthy_deployments = [{"model_info": {"enable_tag_filtering": False}}]
-    assert _chain_tag_filtering_override(_BrokenRouter(), "gpt-4", healthy_deployments) is False
+    assert _chain_tag_filtering_override(_BrokenCtx(), "gpt-4", healthy_deployments) is False
 
 
 @pytest.mark.asyncio()
@@ -2754,14 +2753,14 @@ def test_tag_known_to_group_true_for_real_tag():
     from litellm.router_strategy.tag_based_routing import _tag_known_to_group
 
     router = _quality_high_cost_low_router()
-    assert _tag_known_to_group(router, "gpt-4", ["quality:high"], frozenset()) is True
+    assert _tag_known_to_group(router._core_ctx, "gpt-4", ["quality:high"], frozenset()) is True
 
 
 def test_tag_known_to_group_false_for_foreign_tag():
     from litellm.router_strategy.tag_based_routing import _tag_known_to_group
 
     router = _quality_high_cost_low_router()
-    assert _tag_known_to_group(router, "gpt-4", ["llm-preference-include:unrelated"], frozenset()) is False
+    assert _tag_known_to_group(router._core_ctx, "gpt-4", ["llm-preference-include:unrelated"], frozenset()) is False
 
 
 def test_inherited_constraint_sets_none_when_inherited_tags_absent():
@@ -3456,7 +3455,7 @@ async def _routed_to(router: litellm.Router, metadata: dict[str, object]) -> str
 async def _pool(router: litellm.Router, metadata: dict[str, object]) -> frozenset[str]:
     request_deployments: Final = router.get_model_list(model_name="chat")
     deployments: Final = await get_deployments_for_tag(
-        llm_router_instance=router,
+        ctx=router._core_ctx,
         model="chat",
         healthy_deployments=request_deployments,
         request_deployments=request_deployments,
