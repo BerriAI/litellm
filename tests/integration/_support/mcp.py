@@ -64,7 +64,9 @@ class Confirmation(BaseModel):
     confirmed: bool
 
 
-def math_service(name: str = "integration-math", *, rich: bool = False) -> MCPServer:
+def math_service(
+    name: str = "integration-math", *, rich: bool = False, on_slow: Callable[[], None] | None = None
+) -> MCPServer:
     service: Final = MCPServer(name)
     service.add_tool(add)
     service.add_tool(multiply)
@@ -78,6 +80,8 @@ def math_service(name: str = "integration-math", *, rich: bool = False) -> MCPSe
 
     @service.tool()
     async def slow(seconds: float) -> str:
+        if on_slow is not None:
+            on_slow()
         await asyncio.sleep(seconds)
         return "slept"
 
@@ -271,8 +275,10 @@ def _draining_sse_watcher(app: Callable[[Scope, Receive, Send], object]):
 
 
 @contextmanager
-def mcp_peer(transport: Literal["http", "sse"] = "http", *, rich: bool = False) -> Iterator[McpPeer]:
-    service: Final = math_service(rich=rich)
+def mcp_peer(
+    transport: Literal["http", "sse"] = "http", *, rich: bool = False, on_slow: Callable[[], None] | None = None
+) -> Iterator[McpPeer]:
+    service: Final = math_service(rich=rich, on_slow=on_slow)
     security: Final = TransportSecuritySettings(enable_dns_rebinding_protection=False)
     app: Final = (
         _draining_sse_watcher(service.sse_app(transport_security=security))
