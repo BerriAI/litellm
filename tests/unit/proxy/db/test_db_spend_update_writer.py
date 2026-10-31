@@ -20,14 +20,20 @@ from redis.exceptions import DataError
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm._service_logger import ServiceTypes
-from litellm.constants import SPEND_ROLLUP_LOCK_TIMEOUT_MS
-from litellm.proxy._types import DailyTagSpendTransaction, Litellm_EntityType, SpendUpdateQueueItem
+from litellm.constants import SPEND_ROLLUP_LOCK_TIMEOUT_MS, USER_API_KEY_IS_VIRTUAL_KEY_METADATA_KEY
+from litellm.proxy._types import (
+    DailyTagSpendTransaction,
+    Litellm_EntityType,
+    SpendLogsPayload,
+    SpendUpdateQueueItem,
+)
 from litellm.proxy.db.db_spend_update_writer import (
     _TEAM_ADVISORY_LOCK_SQL,
     _TEAM_MEMBER_SPEND_SQL,
     DBSpendUpdateWriter,
     _spend_tables_left_to_send,
     _SpendTableName,
+    _virtual_key_team_id,
 )
 from litellm.proxy.db.db_transaction_queue.daily_spend_update_queue import DailySpendUpdateQueue
 from litellm.proxy.db.db_transaction_queue.redis_update_buffer import RedisUpdateBuffer
@@ -1339,6 +1345,45 @@ async def test_batch_database_updates_queues_org_member_spend_for_the_request_us
 
 
 @pytest.mark.asyncio
+async def test_batch_database_updates_puts_the_virtual_key_team_on_tag_rows():
+    db_writer: Final = DBSpendUpdateWriter()
+    prisma: Final = MagicMock()
+    prisma.get_request_status = MagicMock(return_value="success")
+    await db_writer._batch_database_updates(
+        response_cost=0.01,
+        user_id="u1",
+        hashed_token="a" * 64,
+        team_id="team-a",
+        org_id=None,
+        end_user_id=None,
+        prisma_client=prisma,
+        litellm_proxy_budget_name=None,
+        payload=cast(
+            SpendLogsPayload,
+            {
+                "request_id": "req-1",
+                "request_tags": '["cost-center:cc-42"]',
+                "team_id": "team-a",
+                "user": "u1",
+                "startTime": "2026-10-29T00:00:00",
+                "api_key": "a" * 64,
+                "model": "gpt-4o",
+                "custom_llm_provider": "openai",
+                "model_group": "gpt-4o",
+                "prompt_tokens": 10,
+                "completion_tokens": 5,
+                "spend": 0.01,
+                "metadata": '{"usage_object": {}}',
+            },
+        ),
+        virtual_key_team_id="team-a",
+    )
+    queued: Final = await db_writer.daily_tag_spend_update_queue.flush_and_get_aggregated_daily_spend_update_transactions()
+
+    assert [cast(DailyTagSpendTransaction, txn).get("team_id") for txn in queued.values()] == ["team-a"]
+
+
+@pytest.mark.asyncio
 async def test_project_spend_is_persisted_to_project_table_and_project_cache_is_evicted():
     db_writer: Final = DBSpendUpdateWriter()
     await db_writer._batch_database_updates(
@@ -1492,6 +1537,72 @@ async def test_add_spend_log_transaction_to_daily_tag_transaction_with_request_i
             assert transaction["request_id"] == request_id, (
                 f"request_id should be {request_id} but got {transaction.get('request_id')}"
             )
+
+
+@pytest.mark.parametrize(
+    ("bucket", "marker", "team_id", "expected"),
+    [
+        ("metadata", True, "team-a", "team-a"),
+        ("litellm_metadata", True, "team-a", "team-a"),
+        ("metadata", True, None, ""),
+        ("metadata", False, "team-a", ""),
+        ("metadata", "true", "team-a", ""),
+        ("metadata", None, "team-a", ""),
+    ],
+    ids=[
+        "virtual-key",
+        "virtual-key-litellm-metadata",
+        "virtual-key-without-team",
+        "jwt-or-custom-auth",
+        "non-boolean-marker",
+        "no-marker",
+    ],
+)
+def test_tag_team_comes_only_from_a_request_marked_as_a_virtual_key(
+    bucket: str, marker: object, team_id: str | None, expected: str
+) -> None:
+    metadata: Final = {
+        "user_api_key_team_id": team_id,
+        **({USER_API_KEY_IS_VIRTUAL_KEY_METADATA_KEY: marker} if marker is not None else {}),
+    }
+
+    assert _virtual_key_team_id({"litellm_params": {bucket: metadata}}) == expected
+
+
+@pytest.mark.asyncio
+async def test_every_tag_row_of_a_request_carries_its_virtual_key_team() -> None:
+    writer: Final = DBSpendUpdateWriter()
+    prisma: Final = MagicMock()
+    prisma.get_request_status = MagicMock(return_value="success")
+    payload: Final = cast(
+        SpendLogsPayload,
+        {
+            "request_id": "req-1",
+            "request_tags": '["cost-center:cc-42", "prod"]',
+            "team_id": "team-from-jwt",
+            "user": "user-1",
+            "startTime": "2026-10-29T00:00:00",
+            "api_key": "a" * 64,
+            "model": "gpt-4o",
+            "custom_llm_provider": "openai",
+            "model_group": "gpt-4o",
+            "prompt_tokens": 10,
+            "completion_tokens": 5,
+            "spend": 0.01,
+            "metadata": '{"usage_object": {}}',
+        },
+    )
+
+    await writer.add_spend_log_transaction_to_daily_tag_transaction(
+        payload=payload, prisma_client=prisma, virtual_key_team_id="team-a"
+    )
+    queued: Final = await writer.daily_tag_spend_update_queue.flush_and_get_aggregated_daily_spend_update_transactions()
+    tag_rows: Final = tuple(cast(DailyTagSpendTransaction, txn) for txn in queued.values())
+
+    assert sorted((txn["tag"], txn.get("team_id")) for txn in tag_rows) == [
+        ("cost-center:cc-42", "team-a"),
+        ("prod", "team-a"),
+    ], queued
 
 
 @pytest.mark.asyncio
