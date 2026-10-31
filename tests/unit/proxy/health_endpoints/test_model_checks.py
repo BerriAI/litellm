@@ -215,11 +215,13 @@ def test_every_endpoint_passes_all_three_checks_and_feeds_each_reply_back_in_its
     turn_three: Final = provider.sent[2]
     sent_json: Final = json.dumps(provider.sent[1:])
     assert _TOOL_CALL_ID in sent_json and WEATHER_TOOL_RESULT in sent_json, sent_json
-    assert "cache_control" not in sent_json and "cachePoint" not in sent_json, sent_json
+    if script is MESSAGES_SCRIPT:
+        assert turn_two["system"][0]["cache_control"] == {"type": "ephemeral"}, turn_two["system"]
+    else:
+        assert "cache_control" not in sent_json and "cachePoint" not in sent_json, sent_json
     assert "<turn " not in sent_json, sent_json
     assert turn_three[key][: len(turn_two[key])] == turn_two[key], turn_three
-    follow_up: Final = turn_three[key][-1]
-    assert follow_up["role"] == "user" and "Repeat the temperature" in json.dumps(follow_up), follow_up
+    assert "Repeat the temperature" in json.dumps(turn_three[key][-2:]), turn_three[key][-2:]
     assert "<system-reminder>" in json.dumps(turn_three[key][-2:]), turn_three[key][-2:]
     if script is CHAT_COMPLETIONS_SCRIPT:
         tool_message: Final = turn_two["messages"][-1]
@@ -243,10 +245,8 @@ def test_every_endpoint_passes_all_three_checks_and_feeds_each_reply_back_in_its
             {"type": "tool_result", "tool_use_id": _TOOL_CALL_ID, "content": WEATHER_TOOL_RESULT}
         ]
         assert turn_two["messages"][-2]["content"][0]["type"] == "thinking"
-        assert turn_three["messages"][-2] == {
-            "role": "assistant",
-            "content": [{"type": "text", "text": _TURN_TWO_ANSWER}],
-        }, turn_three
+        assert [m["role"] for m in turn_three["messages"][-3:]] == ["assistant", "user", "system"], turn_three
+        assert turn_three["messages"][-3]["content"] == [{"type": "text", "text": _TURN_TWO_ANSWER}], turn_three
 
 
 def test_a_model_that_answers_in_text_instead_of_calling_the_tool_fails_the_conversation_and_stops():
@@ -482,8 +482,9 @@ def test_the_three_request_files_send_one_system_prompt_and_one_tool_so_endpoint
         assert "<turn 1 response: assistant output>" in appended and "<turn 1 response: tool call id>" in appended, name
         third: Final = json.dumps(file["turn_3_appended_messages"])
         assert "<turn 2 response: assistant output>" in third, (name, third)
-        assert file["turn_3_appended_messages"][-1]["role"] == "user", (name, third)
-    assert chat["messages"][0]["content"] == responses["instructions"] == messages["system"]
+        assert "user" in {m["role"] for m in file["turn_3_appended_messages"][-2:]}, (name, third)
+    assert chat["messages"][0]["content"] == responses["instructions"] == messages["system"][0]["text"]
+    assert messages["system"][0]["cache_control"] == {"type": "ephemeral"}, messages["system"]
     assert chat["tools"][0]["function"]["parameters"] == responses["tools"][0]["parameters"]
     assert chat["tools"][0]["function"]["parameters"] == messages["tools"][0]["input_schema"]
     assert CHAT_COMPLETIONS_SCRIPT.turn_one() == chat

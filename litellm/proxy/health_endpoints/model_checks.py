@@ -1,11 +1,13 @@
 """Live checks behind ``POST /health/test_model``.
 
 One three-turn tool-call conversation per selected endpoint, read from that endpoint's file in
-``test_model_requests/``. ``turn_1`` is the full first request body in the endpoint's native shape with no
-prompt-cache markers, so later turns can only report cached tokens when the provider caches the repeated prefix on
-its own. ``turn_2_appended_messages`` lists what the second request adds after turn 1's messages (the model's tool
+``test_model_requests/``. ``turn_1`` is the full first request body in the endpoint's native shape. Chat Completions
+and Responses carry no prompt-cache markers, so later turns can only report cached tokens when the provider caches
+the repeated prefix on its own. Messages mirrors Claude Code: ``cache_control`` on the system prompt and a
+mid-conversation ``role: system`` reminder, so a proxy that hoists that reminder into the system prompt shows up as a
+cache miss. ``turn_2_appended_messages`` lists what the second request adds after turn 1's messages (the model's tool
 call echoed back plus the tool result), ``turn_3_appended_messages`` what the third adds after that (the model's
-answer echoed back plus a user follow-up), with ``<turn 1 response: assistant output>``,
+answer echoed back, the reminder, a user follow-up), with ``<turn 1 response: assistant output>``,
 ``<turn 1 response: tool call id>`` and ``<turn 2 response: assistant output>`` filled in from the model's replies.
 Three verdicts come out of the three turns: the conversation itself (every turn parses, the tool call lands, the
 tool result is used, the follow-up is answered from the earlier turn), prompt caching, and cost tracking.
