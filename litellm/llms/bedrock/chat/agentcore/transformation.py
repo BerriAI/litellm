@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any, Final, Optional, Union
 from urllib.parse import quote
 
 import httpx
+from pydantic import TypeAdapter
 
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
@@ -50,6 +51,8 @@ else:
     LiteLLMLoggingObj = Any
     HTTPHandler = Any
     AsyncHTTPHandler = Any
+
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
@@ -314,7 +317,7 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
             return None
 
         try:
-            data: Final[object] = json.loads(json_str)
+            data: Final = _DECODED_JSON.validate_python(json.loads(json_str))
             # Skip non-dict data (some lines contain JSON strings)
             return data if isinstance(data, dict) else None
         except json.JSONDecodeError:
@@ -482,7 +485,7 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
         if "application/json" in content_type:
             # Direct JSON response
             verbose_logger.debug("Parsing JSON response")
-            response_json: Final[object] = raw_response.json()
+            response_json: Final = _DECODED_JSON.validate_python(raw_response.json())
             verbose_logger.debug("Response JSON: %s", response_json)
             return self._parse_json_response(response_json)
         else:
@@ -541,6 +544,17 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
 
         return AgentCoreParsedResponse(content=content, usage=usage_data, final_message=final_message)
 
+    @staticmethod
+    def _message_stop_chunk(model: str) -> ModelResponseStream:
+        chunk: Final = ModelResponseStream(
+            id=f"chatcmpl-{uuid.uuid4()}",
+            created=0,
+            model=model,
+            object="chat.completion.chunk",
+        )
+        chunk.choices = [StreamingChoices(finish_reason="stop", index=0, delta=Delta())]
+        return chunk
+
     def _stream_agentcore_response_sync(
         self,
         response: httpx.Response,
@@ -550,6 +564,8 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
         Internal sync generator that parses SSE and yields ModelResponse chunks.
         """
         buffer = ""
+        sent_finish = False  # rebind-ok: flips when a finish chunk goes out
+        message_stopped = False  # rebind-ok: flips on messageStop, the only end some runtimes send
         for text_chunk in response.iter_text():
             buffer += text_chunk
 
@@ -566,7 +582,7 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
                     continue
 
                 try:
-                    data_obj = json.loads(json_str)
+                    data_obj = _DECODED_JSON.validate_python(json.loads(json_str))
                     if not isinstance(data_obj, dict):
                         continue
 
@@ -621,7 +637,9 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
                                     total_tokens=usage_data.get("totalTokens", 0),
                                 ),
                             )
+                            sent_finish = True
                             yield chunk
+                        message_stopped |= "messageStop" in event_payload
 
                     # Process final message
                     if "message" in data_obj and isinstance(data_obj["message"], dict):
@@ -638,11 +656,15 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
                                 delta=Delta(),
                             )
                         ]
+                        sent_finish = True
                         yield chunk
 
                 except json.JSONDecodeError:
                     verbose_logger.debug("Skipping non-JSON SSE line: %s", line[:100])
                     continue
+
+        if message_stopped and not sent_finish:
+            yield self._message_stop_chunk(model)
 
     def get_sync_custom_stream_wrapper(
         self,
@@ -706,7 +728,7 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
             )
             try:
                 body: Final = response.read()
-                response_json: Final[object] = json.loads(body)
+                response_json: Final = _DECODED_JSON.validate_python(json.loads(body))
             except (json.JSONDecodeError, Exception) as e:
                 raise BedrockError(
                     status_code=response.status_code,
@@ -772,6 +794,8 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
         Internal async generator that parses SSE and yields ModelResponse chunks.
         """
         buffer = ""
+        sent_finish = False  # rebind-ok: flips when a finish chunk goes out
+        message_stopped = False  # rebind-ok: flips on messageStop, the only end some runtimes send
         async for text_chunk in response.aiter_text():
             buffer += text_chunk
 
@@ -788,7 +812,7 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
                     continue
 
                 try:
-                    data_obj = json.loads(json_str)
+                    data_obj = _DECODED_JSON.validate_python(json.loads(json_str))
                     if not isinstance(data_obj, dict):
                         continue
 
@@ -843,7 +867,9 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
                                     total_tokens=usage_data.get("totalTokens", 0),
                                 ),
                             )
+                            sent_finish = True
                             yield chunk
+                        message_stopped |= "messageStop" in event_payload
 
                     # Process final message
                     if "message" in data_obj and isinstance(data_obj["message"], dict):
@@ -860,11 +886,15 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
                                 delta=Delta(),
                             )
                         ]
+                        sent_finish = True
                         yield chunk
 
                 except json.JSONDecodeError:
                     verbose_logger.debug("Skipping non-JSON SSE line: %s", line[:100])
                     continue
+
+        if message_stopped and not sent_finish:
+            yield self._message_stop_chunk(model)
 
     async def get_async_custom_stream_wrapper(
         self,
@@ -928,7 +958,7 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
             )
             try:
                 body: Final = await response.aread()
-                response_json: Final[object] = json.loads(body)
+                response_json: Final = _DECODED_JSON.validate_python(json.loads(body))
             except (json.JSONDecodeError, Exception) as e:
                 raise BedrockError(
                     status_code=response.status_code,

@@ -2,17 +2,21 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 import uuid
+from collections.abc import Callable
+from types import MappingProxyType
 from typing import Final, Literal
 from urllib.parse import parse_qsl, urlsplit
 
+import httpx
 import openai
 import pytest
 from integration._support.client import Gateway, Scenario, eventually, object_value, string_value
 from integration._support.responses_vendor import same_response
 from integration._support.wire import Reply, Request, Wire, wire_server
 from integration._support.worker_readiness import wait_for_worker_readiness
-from openai.types.responses import Response, ResponseStreamEvent
+from openai.types.responses import Response, ResponseCreatedEvent, ResponseStreamEvent
 from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter
 
 _MODEL: Final = "gpt-5"
@@ -87,11 +91,14 @@ def _stream(identity: str) -> tuple[bytes, ...]:
     ) + (b"data: [DONE]\n\n",)
 
 
-def _deployment(scenario: Scenario, wire: Wire, api_key: str = _API_KEY) -> str:
+def _deployment(
+    scenario: Scenario, wire: Wire, api_key: str = _API_KEY, provider: str = "openai", **parameters: JsonValue
+) -> str:
     model: Final = scenario.model(
-        model=f"openai/{_MODEL}",
+        model=f"{provider}/{_MODEL}",
         api_key=api_key,
         api_base=f"{wire.url}/v1",
+        **parameters,
     )
     _wait_for_workers(scenario.gateway, model, 1)
     return model
@@ -297,9 +304,6 @@ def test_streamed_response_ids_are_stable_and_retrievable_on_each_alias(
 
 @pytest.mark.parametrize("prefix", _ALIASES)
 def test_retrieve_query_reaches_the_provider(gateway: Gateway, prefix: str) -> None:
-    pytest.skip(
-        "BUG: GET /v1/responses/{id} drops include and starting_after; streamed GET returns 500 for provider SSE"
-    )
     normal_raw_id: Final = f"resp_query_normal_{uuid.uuid4().hex}"
     stream_raw_id: Final = f"resp_query_stream_{uuid.uuid4().hex}"
     normal_include: Final = ["message.output_text.logprobs", "reasoning.encrypted_content"]
@@ -411,6 +415,241 @@ def test_retrieve_query_reaches_the_provider(gateway: Gateway, prefix: str) -> N
                 for request in requests[2:]
             )
             assert actual_queries == expected_queries, requests
+
+
+def _resumed_delta() -> bytes:
+    event: Final = {
+        "type": "response.output_text.delta",
+        "sequence_number": 4,
+        "item_id": "msg_resumed",
+        "output_index": 0,
+        "content_index": 0,
+        "delta": "resumed",
+        "logprobs": [],
+    }
+    return f"data: {json.dumps(event)}\n\n".encode()
+
+
+def _sorted_query(request: Request) -> tuple[tuple[str, str], ...]:
+    return tuple(sorted(parse_qsl(urlsplit(request.target).query, keep_blank_values=True)))
+
+
+@pytest.mark.parametrize("prefix", _ALIASES)
+def test_resuming_past_the_last_event_ends_the_stream_without_events(gateway: Gateway, prefix: str) -> None:
+    raw_id: Final = f"resp_resume_end_{uuid.uuid4().hex}"
+
+    def respond(request: Request) -> Reply:
+        if request.method == "GET" and request.target == "/v1/models":
+            return model_discovery_reply(_MODEL)
+        if request.method == "POST":
+            return Reply(body=_response(raw_id))
+        return Reply(content_type="text/event-stream", chunks=())
+
+    with wire_server(respond) as wire, gateway.scenario() as scenario:
+        model: Final = _deployment(scenario, wire)
+        client: Final = _client(gateway, gateway.key, prefix)
+        created: Final = client.responses.create(model=model, input="resume past the end")
+        events: Final = tuple(client.responses.retrieve(created.id, stream=True, starting_after=7))
+        requests: Final = drain_contract_requests(wire)
+
+    assert events == ()
+    assert [(request.method, urlsplit(request.target).path) for request in requests] == [
+        ("POST", "/v1/responses"),
+        ("GET", f"/v1/responses/{raw_id}"),
+    ], requests
+    assert _sorted_query(requests[1]) == (("starting_after", "7"), ("stream", "true")), requests[1]
+
+
+@pytest.mark.parametrize("prefix", _ALIASES)
+def test_a_client_leaving_a_resumed_stream_releases_the_provider_connection(gateway: Gateway, prefix: str) -> None:
+    raw_id: Final = f"resp_resume_leave_{uuid.uuid4().hex}"
+    release: Final = threading.Event()
+
+    def respond(request: Request) -> Reply:
+        if request.method == "GET" and request.target == "/v1/models":
+            return model_discovery_reply(_MODEL)
+        if request.method == "POST":
+            return Reply(body=_response(raw_id))
+        return Reply(
+            content_type="text/event-stream",
+            chunks=(_resumed_delta(), b"data: [DONE]\n\n"),
+            gate_after_first=release,
+            heartbeat=b": keepalive\n\n",
+            pause_between_chunks=0.05,
+        )
+
+    with wire_server(respond) as wire, gateway.scenario() as scenario:
+        model: Final = _deployment(scenario, wire)
+        client: Final = _client(gateway, gateway.key, prefix)
+        created: Final = client.responses.create(model=model, input="leave a resumed stream")
+        stream: Final = client.responses.retrieve(created.id, stream=True, starting_after=3)
+        try:
+            first: Final = next(iter(stream))
+            stream.close()
+            left_from: Final = wire.disconnected.get(timeout=30)
+        finally:
+            release.set()
+
+    assert first.type == "response.output_text.delta"
+    assert urlsplit(left_from).path == f"/v1/responses/{raw_id}"
+
+
+def _created_then(raw_id: str, read: Reply) -> Callable[[Request], Reply]:
+    def respond(request: Request) -> Reply:
+        if request.method == "GET" and request.target == "/v1/models":
+            return model_discovery_reply(_MODEL)
+        if request.method == "POST":
+            return Reply(body=_response(raw_id))
+        return read
+
+    return respond
+
+
+def _event_types(answer: httpx.Response) -> list[JsonValue]:
+    return [
+        _JSON_OBJECT.validate_json(line.removeprefix("data: "))["type"]
+        for line in answer.text.splitlines()
+        if line.startswith("data: {")
+    ]
+
+
+_MALFORMED_RESUMES: Final = MappingProxyType(
+    {
+        "stream": {"stream": "maybe"},
+        "starting_after": {"stream": "true", "starting_after": "-1"},
+    }
+)
+
+
+@pytest.mark.parametrize("param", tuple(_MALFORMED_RESUMES))
+@pytest.mark.parametrize("prefix", _ALIASES)
+def test_a_malformed_resume_query_is_refused_without_calling_the_provider(
+    gateway: Gateway, prefix: str, param: str
+) -> None:
+    raw_id: Final = f"resp_malformed_{uuid.uuid4().hex}"
+    replay: Final = Reply(content_type="text/event-stream", chunks=_stream(raw_id))
+
+    with wire_server(_created_then(raw_id, replay)) as wire, gateway.scenario() as scenario:
+        model: Final = _deployment(scenario, wire)
+        created: Final = _client(gateway, gateway.key, prefix).responses.create(model=model, input="malformed resume")
+        refused: Final = gateway.request("GET", f"{prefix}/responses/{created.id}", params=_MALFORMED_RESUMES[param])
+        requests: Final = drain_contract_requests(wire)
+
+    assert refused.status_code == 400, refused.text
+    assert object_value(_JSON_OBJECT.validate_json(refused.content)["error"])["param"] == param, refused.text
+    assert [request.method for request in requests] == ["POST"], requests
+
+
+@pytest.mark.parametrize("prefix", _ALIASES)
+def test_a_malformed_resume_cursor_replays_the_whole_stream_when_drop_params_is_on(
+    gateway: Gateway, prefix: str
+) -> None:
+    raw_id: Final = f"resp_malformed_dropped_{uuid.uuid4().hex}"
+    replay: Final = Reply(content_type="text/event-stream", chunks=_stream(raw_id))
+
+    with wire_server(_created_then(raw_id, replay)) as wire, gateway.scenario() as scenario:
+        model: Final = _deployment(scenario, wire, drop_params=True)
+        created: Final = _client(gateway, gateway.key, prefix).responses.create(model=model, input="dropped cursor")
+        replayed: Final = gateway.request(
+            "GET", f"{prefix}/responses/{created.id}", params=_MALFORMED_RESUMES["starting_after"]
+        )
+        requests: Final = drain_contract_requests(wire)
+
+    assert replayed.status_code == 200, replayed.text
+    assert _event_types(replayed) == ["response.created", "response.completed"], replayed.text
+    assert [request.method for request in requests] == ["POST", "GET"], requests
+    assert _sorted_query(requests[1]) == (("stream", "true"),), requests[1]
+
+
+@pytest.mark.parametrize("prefix", _ALIASES)
+def test_resuming_on_a_provider_that_cannot_replay_is_refused_without_calling_it(gateway: Gateway, prefix: str) -> None:
+    raw_id: Final = f"resp_no_replay_{uuid.uuid4().hex}"
+
+    with wire_server(_created_then(raw_id, Reply(body=_response(raw_id)))) as wire, gateway.scenario() as scenario:
+        model: Final = _deployment(scenario, wire, provider="litellm_proxy")
+        created: Final = _client(gateway, gateway.key, prefix).responses.create(model=model, input="cannot replay")
+        refused: Final = gateway.request(
+            "GET", f"{prefix}/responses/{created.id}", params={"stream": "true", "starting_after": "3"}
+        )
+        requests: Final = drain_contract_requests(wire)
+
+    assert refused.status_code == 400, refused.text
+    message: Final = string_value(object_value(_JSON_OBJECT.validate_json(refused.content)["error"])["message"])
+    assert "litellm_proxy does not support streaming a stored response" in message, refused.text
+    assert [request.method for request in requests] == ["POST"], requests
+
+
+@pytest.mark.parametrize("prefix", _ALIASES)
+def test_resuming_on_a_provider_that_cannot_replay_answers_the_stored_response_when_drop_params_is_on(
+    gateway: Gateway, prefix: str
+) -> None:
+    raw_id: Final = f"resp_no_replay_dropped_{uuid.uuid4().hex}"
+
+    with wire_server(_created_then(raw_id, Reply(body=_response(raw_id)))) as wire, gateway.scenario() as scenario:
+        model: Final = _deployment(scenario, wire, provider="litellm_proxy", drop_params=True)
+        created: Final = _client(gateway, gateway.key, prefix).responses.create(model=model, input="dropped replay")
+        answered: Final = gateway.request(
+            "GET", f"{prefix}/responses/{created.id}", params={"stream": "true", "starting_after": "3"}
+        )
+        requests: Final = drain_contract_requests(wire)
+
+    assert answered.status_code == 200, answered.text
+    body: Final = _JSON_OBJECT.validate_json(answered.content)
+    assert (body["object"], body["status"], same_response(string_value(body["id"]), created.id)) == (
+        "response",
+        "completed",
+        True,
+    ), answered.text
+    assert [request.method for request in requests] == ["POST", "GET"], requests
+    assert _sorted_query(requests[1]) == (), requests[1]
+
+
+@pytest.mark.parametrize("prefix", _ALIASES)
+def test_a_resumed_stream_waits_out_the_stream_timeout_not_the_request_timeout(gateway: Gateway, prefix: str) -> None:
+    raw_id: Final = f"resp_slow_replay_{uuid.uuid4().hex}"
+    slow: Final = Reply(content_type="text/event-stream", chunks=_stream(raw_id), pause_between_chunks=2)
+
+    with wire_server(_created_then(raw_id, slow)) as wire, gateway.scenario() as scenario:
+        model: Final = _deployment(scenario, wire, timeout=1, stream_timeout=30)
+        client: Final = _client(gateway, gateway.key, prefix)
+        created: Final = client.responses.create(model=model, input="slow replay")
+        events: Final = tuple(client.responses.retrieve(created.id, stream=True, starting_after=3))
+
+    assert [event.type for event in events] == ["response.created", "response.completed"], events
+
+
+@pytest.mark.parametrize("prefix", _ALIASES)
+def test_a_plain_retrieve_on_a_deployment_set_to_stream_answers_the_response_object(
+    gateway: Gateway, prefix: str
+) -> None:
+    raw_id: Final = f"resp_streaming_deployment_{uuid.uuid4().hex}"
+
+    def respond(request: Request) -> Reply:
+        if request.method == "GET" and request.target == "/v1/models":
+            return model_discovery_reply(_MODEL)
+        if request.method == "POST":
+            return Reply(content_type="text/event-stream", chunks=_stream(raw_id))
+        return Reply(body=_response(raw_id))
+
+    with wire_server(respond) as wire, gateway.scenario() as scenario:
+        model: Final = _deployment(scenario, wire, stream=True)
+        events: Final = tuple(
+            _client(gateway, gateway.key, prefix).responses.create(model=model, input="forced stream", stream=True)
+        )
+        created_id: Final = next(event.response.id for event in events if isinstance(event, ResponseCreatedEvent))
+        retrieved: Final = gateway.request("GET", f"{prefix}/responses/{created_id}")
+        requests: Final = drain_contract_requests(wire)
+
+    assert retrieved.status_code == 200, retrieved.text
+    assert retrieved.headers["content-type"].startswith("application/json"), retrieved.headers
+    body: Final = _JSON_OBJECT.validate_json(retrieved.content)
+    assert (body["object"], body["status"], same_response(string_value(body["id"]), created_id)) == (
+        "response",
+        "completed",
+        True,
+    ), retrieved.text
+    assert [request.method for request in requests] == ["POST", "GET"], requests
+    assert _sorted_query(requests[1]) == (), requests[1]
 
 
 @pytest.mark.parametrize("prefix", _ALIASES)

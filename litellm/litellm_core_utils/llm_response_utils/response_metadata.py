@@ -27,6 +27,15 @@ def _timing_window_start(
     return start_time, False
 
 
+def response_ms_since_logging_start(logging_obj: LiteLLMLoggingObject) -> float | None:
+    reported_ms: Final = logging_obj.response_timing_metrics.get("_response_ms")
+    if reported_ms is None:
+        return None
+    logging_start: Final = logging_obj.start_time
+    window_start: Final = _timing_window_start(logging_start, logging_obj)[0]
+    return reported_ms - max(0.0, logging_start.timestamp() - window_start.timestamp()) * 1000
+
+
 def _union_duration_ms(windows: object, lower: float, upper: float) -> float | None:
     if not isinstance(windows, (list, tuple)):
         return None

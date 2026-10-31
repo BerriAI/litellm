@@ -55,19 +55,27 @@ async fn set_writes_encoded_object_and_headers(#[future(awt)] server: MockServer
     Ok(Some(json!({"value": "entry"})))
 )]
 #[case::missing("missing", ResponseTemplate::new(404), Ok(None))]
-#[case::server_error("server-error", ResponseTemplate::new(500), Err(Error::Unavailable))]
-#[case::unauthorized("unauthorized", ResponseTemplate::new(401), Err(Error::Unavailable))]
+#[case::server_error(
+    "server-error",
+    ResponseTemplate::new(500),
+    Err("cache is unavailable: GCS answered 500 Internal Server Error")
+)]
+#[case::unauthorized(
+    "unauthorized",
+    ResponseTemplate::new(401),
+    Err("cache is unavailable: GCS answered 401 Unauthorized")
+)]
 #[case::invalid(
     "invalid",
     ResponseTemplate::new(200).set_body_string("not json"),
-    Err(Error::InvalidEntry)
+    Err("invalid cache entry: ")
 )]
 #[tokio::test]
 async fn get_maps_statuses_and_decode_failures(
     #[future(awt)] server: MockServer,
     #[case] key: &str,
     #[case] response: ResponseTemplate,
-    #[case] expected: Result<Option<Value>, Error>,
+    #[case] expected: Result<Option<Value>, &str>,
 ) {
     Mock::given(method("GET"))
         .and(path(format!("/storage/v1/b/bucket/o/{key}")))
@@ -76,8 +84,21 @@ async fn get_maps_statuses_and_decode_failures(
         .mount(&server)
         .await;
     let cache = support::cache(&server, None);
-    assert_eq!(cache.get_cache(key, &context()), expected);
-    assert_eq!(cache.async_get_cache(key, &context()).await, expected);
+    let outcome = |result: Result<Option<Value>, Error>| {
+        result.map_err(|error| litellm_error::Report::new(&error).to_string())
+    };
+    let sync = outcome(cache.get_cache(key, &context()));
+    let asynchronous = outcome(cache.async_get_cache(key, &context()).await);
+    match expected {
+        Ok(value) => {
+            assert_eq!(sync, Ok(value.clone()));
+            assert_eq!(asynchronous, Ok(value));
+        }
+        Err(prefix) => {
+            assert!(sync.unwrap_err().starts_with(prefix));
+            assert!(asynchronous.unwrap_err().starts_with(prefix));
+        }
+    }
 }
 
 #[rstest]
@@ -97,7 +118,7 @@ async fn cache_exposes_its_configuration(#[future(awt)] server: MockServer) {
             path_service_account: Some("/secrets/sa.json".into()),
             ..support::config(&server, Some("folder"))
         },
-        litellm_http::Client::plain_for_test(),
+        litellm_http::Client::for_test(),
         litellm_cache::JsonCodec::<Value>::new(),
     );
     assert_eq!(cache.bucket_name(), "bucket");
@@ -257,7 +278,7 @@ struct FailingTokenSource;
 
 impl TokenSource for FailingTokenSource {
     fn bearer_token(&self) -> Pin<Box<dyn Future<Output = Result<String, Error>> + Send + '_>> {
-        Box::pin(async { Err(Error::Unavailable) })
+        Box::pin(async { Err(Error::Unavailable(None)) })
     }
 }
 
@@ -267,14 +288,14 @@ async fn token_source_failure_skips_http(#[future(awt)] server: MockServer) {
     let cache = support::cache_with_token(&server, None, Arc::new(FailingTokenSource));
     assert_eq!(
         cache.get_cache("key", &context()).unwrap_err(),
-        Error::Unavailable
+        Error::Unavailable(None)
     );
     assert_eq!(
         cache
             .async_set_cache("key", json!(1), context())
             .await
             .unwrap_err(),
-        Error::Unavailable
+        Error::Unavailable(None)
     );
     assert_eq!(server.received_requests().await.unwrap().len(), 0);
 }

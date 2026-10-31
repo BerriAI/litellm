@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-if [ "${GITHUB_ACTIONS:-}" = true ]; then
-  echo "Integration contracts are owned by CircleCI" >&2
-  exit 1
-fi
-
 suite="${1:?integration suite required}"
 mode="${2:-standard}"
 side="${3:-}"
+requested_workers="${INTEGRATION_WORKERS:-}"
+license_env=()
+if [ -n "${LITELLM_LICENSE:-}" ]; then
+  license_env=("LITELLM_LICENSE=$LITELLM_LICENSE")
+fi
 if [ "$mode" = replica ]; then
   results="test-results/integration-${suite}-replica"
 elif [ "$mode" = parity ]; then
@@ -84,7 +84,7 @@ if [ "$suite" = browser ]; then
   export LITELLM_UI_PATH="$PWD/ui/litellm-dashboard/out"
   test -f "$LITELLM_UI_PATH/index.html"
 fi
-export INTEGRATION_SEED="$(.venv/bin/python -c 'import hashlib,os; print(int(hashlib.sha256((os.environ.get("CIRCLE_SHA1", "local") + os.environ.get("CIRCLE_WORKFLOW_ID", "local")).encode()).hexdigest()[:8],16))')"
+export INTEGRATION_SEED="$(.venv/bin/python -c 'import hashlib,os; print(int(hashlib.sha256(((os.environ.get("CIRCLE_SHA1") or os.environ.get("GITHUB_SHA") or "local") + (os.environ.get("CIRCLE_WORKFLOW_ID") or os.environ.get("GITHUB_RUN_ID") or "local")).encode()).hexdigest()[:8],16))')"
 export INTEGRATION_ORDER_SEED="$INTEGRATION_SEED"
 
 uv run --no-sync prisma generate --schema litellm/proxy/schema.prisma > "$results/prisma-generate.log" 2>&1
@@ -107,7 +107,7 @@ sudo iptables -N integration_only
 guard_created=true
 sudo iptables -A integration_only -o lo -j ACCEPT
 sudo iptables -A integration_only -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
-for service in postgres-db redis-cache; do
+for service in "${INTEGRATION_POSTGRES_CONTAINER:-postgres-db}" "${INTEGRATION_REDIS_CONTAINER:-redis-cache}"; do
   address="$(docker inspect --format '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$service")"
   sudo iptables -A integration_only -d "$address" -j ACCEPT
 done
@@ -144,6 +144,9 @@ if [ "$suite" = security ]; then
 fi
 if [ "$suite" = mcp ]; then
   export INTEGRATION_WORKERS=2 INTEGRATION_COVERAGE=1
+fi
+if [ -n "$requested_workers" ]; then
+  export INTEGRATION_WORKERS="$requested_workers"
 fi
 isolated_workers=false
 if [ "${INTEGRATION_WORKERS:-1}" -gt 1 ]; then
@@ -185,7 +188,7 @@ start_proxy() {
     "${database_env[@]}" REDIS_HOST="$REDIS_HOST" REDIS_PORT="$REDIS_PORT" \
     INTEGRATION_UPSTREAM_URL="$INTEGRATION_UPSTREAM_URL" \
     LITELLM_MASTER_KEY="$LITELLM_MASTER_KEY" LITELLM_SALT_KEY="$LITELLM_SALT_KEY" LITELLM_UI_PATH="$LITELLM_UI_PATH" PROXY_BASE_URL="http://127.0.0.1:$port" \
-    LITELLM_LICENSE="${LITELLM_LICENSE:-}" \
+    "${license_env[@]}" \
     LITELLM_MODE=PRODUCTION STORE_MODEL_IN_DB=True LITELLM_ENABLE_MCP_STDIO=true "${cost_map_env[@]}" \
     AWS_EC2_METADATA_DISABLED=true DO_NOT_TRACK=1 COVERAGE_FILE="$coverage_data" \
     "${proxy_command[@]}" --config tests/integration/proxy_config.yaml \
@@ -257,7 +260,7 @@ env -i PATH="$PATH" HOME="$HOME" PYTHONPATH="$PYTHONPATH" \
   "${shared_services[@]}" "${worker_coverage[@]}" \
   INTEGRATION_WORKERS="${INTEGRATION_WORKERS:-1}" \
   LITELLM_MODE=PRODUCTION \
-  LITELLM_LICENSE="${LITELLM_LICENSE:-}" \
+  "${license_env[@]}" \
   INTEGRATION_SEED="$INTEGRATION_SEED" \
   INTEGRATION_ORDER_SEED="$INTEGRATION_ORDER_SEED" \
   INTEGRATION_CASE_SHARDS="${CIRCLE_NODE_TOTAL:-1}" INTEGRATION_CASE_SHARD_INDEX="${CIRCLE_NODE_INDEX:-0}" \

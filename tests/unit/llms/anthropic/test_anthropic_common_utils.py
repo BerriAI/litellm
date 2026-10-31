@@ -11,6 +11,7 @@ Verifies that:
 """
 
 import json
+import logging
 import os
 import sys
 import threading
@@ -25,6 +26,7 @@ import pytest
 import respx
 
 import litellm
+from litellm.llms.anthropic.common_utils import ToolsWithoutStrict, is_claude_tool_target, tools_without_strict
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../..")))
@@ -52,6 +54,98 @@ def test_is_anthropic_messages_url(url: str, expected: bool) -> None:
     from litellm.llms.anthropic.common_utils import is_anthropic_messages_url
 
     assert is_anthropic_messages_url(url) is expected
+
+
+@pytest.mark.parametrize(
+    ("configured_base", "url", "expected"),
+    [
+        pytest.param(None, "https://api.anthropic.com/v1/messages", 512, id="default-upstream"),
+        pytest.param(None, "https://api.anthropic.com:443/v1/messages/", 512, id="default-upstream-explicit-port"),
+        pytest.param("http://relay.test:8080", "https://api.anthropic.com/v1/messages", 512, id="direct-target"),
+        pytest.param("https://api.anthropic.com", "https://api.anthropic.com/v1/messages", 512, id="configured-default"),
+        pytest.param("http://relay.test:8080", "http://relay.test:8080/v1/messages", 255, id="configured-upstream"),
+        pytest.param("http://relay.test:8080/a", "http://relay.test:8080/a/v1/messages", 255, id="configured-prefix"),
+        pytest.param("https://Relay.Test", "https://relay.test/v1/messages", 255, id="configured-upper-case-host"),
+        pytest.param("https://relay.test:443", "https://relay.test/v1/messages", 255, id="configured-https-port"),
+        pytest.param("http://relay.test:80/a", "http://relay.test/a/v1/messages", 255, id="configured-http-port"),
+        pytest.param("http://relay.test:8080", "http://relay.test:8081/v1/messages", None, id="other-port"),
+        pytest.param("http://relay.test:notaport", "http://relay.test/v1/messages", None, id="invalid-configured-base"),
+        pytest.param(None, "https://other-vendor.test/v1/messages", None, id="other-vendor"),
+        pytest.param(None, "https://api.anthropic.com/v1/messages/count_tokens", None, id="count-tokens"),
+    ],
+)
+def test_anthropic_upstream_user_id_limit(
+    monkeypatch: pytest.MonkeyPatch, configured_base: str | None, url: str, expected: int | None
+) -> None:
+    from litellm.llms.anthropic.common_utils import anthropic_upstream_user_id_limit
+
+    monkeypatch.delenv("ANTHROPIC_BASE_URL", raising=False)
+    monkeypatch.delenv("ANTHROPIC_API_BASE", raising=False)
+    if configured_base is not None:
+        monkeypatch.setenv("ANTHROPIC_API_BASE", configured_base)
+
+    assert anthropic_upstream_user_id_limit(url) == expected
+
+
+def test_anthropic_pass_through_api_base_prefers_the_api_base_variable(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.llms.anthropic.common_utils import anthropic_pass_through_api_base
+
+    monkeypatch.setenv("ANTHROPIC_BASE_URL", "http://fallback.test")
+    monkeypatch.setenv("ANTHROPIC_API_BASE", "http://preferred.test")
+    assert anthropic_pass_through_api_base() == "http://preferred.test"
+
+    monkeypatch.delenv("ANTHROPIC_API_BASE")
+    assert anthropic_pass_through_api_base() == "http://fallback.test"
+
+
+# Each row was sent to https://api.anthropic.com/v1/messages on 2026-10-30, False rows answered 400.
+@pytest.mark.parametrize(
+    ("user_id", "expected"),
+    [
+        pytest.param("user-1", True, id="opaque"),
+        pytest.param("", True, id="empty"),
+        pytest.param('{"device_id":"abc","session_id":"def"}', True, id="claude-code-shape"),
+        pytest.param("1234567890", True, id="digits"),
+        pytest.param("+14155550100", True, id="phone-shape"),
+        pytest.param("a@b", True, id="no-dot"),
+        pytest.param("@b.co", True, id="nothing-before-at-sign"),
+        pytest.param("a@.co", True, id="nothing-between-at-sign-and-dot"),
+        pytest.param("a@b.", True, id="nothing-after-dot"),
+        pytest.param("a @ b.co", True, id="spaces-around-at-sign"),
+        pytest.param("a\u00a0@b.co", False, id="no-break-space-before-at-sign"),
+        pytest.param("a@b\n.co", False, id="newline-before-dot"),
+        pytest.param("line one\nline two", False, id="newline"),
+        pytest.param("a\tb", False, id="tab"),
+        pytest.param("a\x1f@b.co", False, id="unit-separator-before-at-sign"),
+        pytest.param("a@\x1cb.co", False, id="file-separator-after-at-sign"),
+        pytest.param("a\u200bb", False, id="zero-width-space"),
+        pytest.param("a@b.co", False, id="email"),
+        pytest.param("user a@b.co here", False, id="email-inside-text"),
+        pytest.param('{"device_id":"a@b.co"}', False, id="email-inside-json"),
+        pytest.param("a@@example.com", False, id="doubled-at-sign"),
+        pytest.param("@@example.com", False, id="leading-doubled-at-sign"),
+        pytest.param("a@b@c.co", False, id="two-at-signs"),
+        pytest.param("a@b..co", False, id="doubled-dot"),
+        pytest.param("a@.b.co", False, id="dot-after-at-sign"),
+        pytest.param("a@b.c d", False, id="email-before-space"),
+    ],
+)
+def test_anthropic_accepts_user_id(user_id: str, expected: bool) -> None:
+    from litellm.constants import ANTHROPIC_MAX_USER_ID_LENGTH
+    from litellm.llms.anthropic.common_utils import anthropic_accepts_user_id
+
+    assert anthropic_accepts_user_id(user_id, ANTHROPIC_MAX_USER_ID_LENGTH) is expected
+
+
+@pytest.mark.parametrize("character", ["a", "\u00e9", "\U0001f600"], ids=["ascii", "two-bytes", "four-bytes"])
+def test_anthropic_accepts_user_id_counts_characters_up_to_the_limit(character: str) -> None:
+    from litellm.constants import ANTHROPIC_MAX_USER_ID_LENGTH
+    from litellm.llms.anthropic.common_utils import anthropic_accepts_user_id
+
+    assert anthropic_accepts_user_id(character * ANTHROPIC_MAX_USER_ID_LENGTH, ANTHROPIC_MAX_USER_ID_LENGTH) is True
+    assert (
+        anthropic_accepts_user_id(character * (ANTHROPIC_MAX_USER_ID_LENGTH + 1), ANTHROPIC_MAX_USER_ID_LENGTH) is False
+    )
 
 
 def test_anthropic_model_not_found_maps_to_not_found_but_authentication_error_does_not() -> None:
@@ -436,7 +530,7 @@ class TestPassthroughOAuth:
 
     def test_passthrough_oauth_no_x_api_key(self):
         """Passthrough endpoint should not add x-api-key for OAuth tokens."""
-        from litellm.llms.anthropic.pass_through.messages.transformation import (
+        from litellm.llms.anthropic.messages.native.transformation import (
             AnthropicMessagesConfig,
         )
 
@@ -459,7 +553,7 @@ class TestPassthroughOAuth:
 
     def test_passthrough_regular_key_uses_x_api_key(self):
         """Passthrough endpoint should still use x-api-key for regular API keys."""
-        from litellm.llms.anthropic.pass_through.messages.transformation import (
+        from litellm.llms.anthropic.messages.native.transformation import (
             AnthropicMessagesConfig,
         )
 
@@ -1265,7 +1359,7 @@ class TestPassthroughAuthToken:
         """Passthrough endpoint should use Bearer auth when only ANTHROPIC_AUTH_TOKEN is set."""
         from unittest.mock import patch as mock_patch
 
-        from litellm.llms.anthropic.pass_through.messages.transformation import (
+        from litellm.llms.anthropic.messages.native.transformation import (
             AnthropicMessagesConfig,
         )
 
@@ -1289,7 +1383,7 @@ class TestPassthroughAuthToken:
         """Passthrough endpoint should prefer ANTHROPIC_API_KEY over ANTHROPIC_AUTH_TOKEN."""
         from unittest.mock import patch as mock_patch
 
-        from litellm.llms.anthropic.pass_through.messages.transformation import (
+        from litellm.llms.anthropic.messages.native.transformation import (
             AnthropicMessagesConfig,
         )
 
@@ -1320,7 +1414,7 @@ class TestPassthroughAuthToken:
         from unittest.mock import patch as mock_patch
 
         import litellm
-        from litellm.llms.anthropic.pass_through.messages.transformation import (
+        from litellm.llms.anthropic.messages.native.transformation import (
             AnthropicMessagesConfig,
         )
 
@@ -1342,7 +1436,7 @@ class TestPassthroughAuthToken:
         """A client-forwarded x-api-key header, whatever its casing, should satisfy validation without env credentials."""
         from unittest.mock import patch as mock_patch
 
-        from litellm.llms.anthropic.pass_through.messages.transformation import (
+        from litellm.llms.anthropic.messages.native.transformation import (
             AnthropicMessagesConfig,
         )
 
@@ -1365,7 +1459,7 @@ class TestPassthroughAuthToken:
         """get_complete_url should use ANTHROPIC_BASE_URL when api_base is None."""
         from unittest.mock import patch as mock_patch
 
-        from litellm.llms.anthropic.pass_through.messages.transformation import (
+        from litellm.llms.anthropic.messages.native.transformation import (
             AnthropicMessagesConfig,
         )
 
@@ -2043,7 +2137,7 @@ class TestAnthropicThinkingSignatureSelfHeal:
     def test_anthropic_messages_config_http_retry_helpers(self):
         import httpx
 
-        from litellm.llms.anthropic.pass_through.messages.transformation import (
+        from litellm.llms.anthropic.messages.native.transformation import (
             AnthropicMessagesConfig,
         )
 
@@ -2113,7 +2207,7 @@ class TestAnthropicThinkingSignatureSelfHeal:
     def test_anthropic_messages_retry_honors_thinking_block_binding(
         self, thinking: Mapping[str, object], error_message: str, expected: bool
     ) -> None:
-        from litellm.llms.anthropic.pass_through.messages.transformation import (
+        from litellm.llms.anthropic.messages.native.transformation import (
             AnthropicMessagesConfig,
         )
 
@@ -2865,7 +2959,7 @@ class TestWifServerOwnedAuthHeaderStrip:
         """The passthrough surface hands the caller's own credential upstream rather than minting.
         That check was case-sensitive, so X-Api-Key slipped past it and the caller's key would have
         travelled beside a minted Bearer."""
-        from litellm.llms.anthropic.pass_through.messages.transformation import (
+        from litellm.llms.anthropic.messages.native.transformation import (
             AnthropicMessagesConfig,
         )
 
@@ -3084,7 +3178,7 @@ class TestMessagesEnvAuthBetaMerge:
     def test_client_beta_survives_env_auth_injection(self, monkeypatch, clean_anthropic_env):
         """Regression: headers.update(auth_header) silently clobbered the client's
         anthropic-beta on the native /v1/messages route."""
-        from litellm.llms.anthropic.pass_through.messages.transformation import (
+        from litellm.llms.anthropic.messages.native.transformation import (
             AnthropicMessagesConfig,
         )
 
@@ -3166,7 +3260,7 @@ class TestWifLitellmParamsPlumbing:
         assert len(poster.requests) == 1
 
     def test_messages_mints_from_litellm_params(self, wif_engine):
-        from litellm.llms.anthropic.pass_through.messages.transformation import (
+        from litellm.llms.anthropic.messages.native.transformation import (
             AnthropicMessagesConfig,
         )
 
@@ -3245,7 +3339,7 @@ class TestWifAsyncSeam:
 
     @pytest.mark.asyncio
     async def test_avalidate_messages_environment_mints_off_loop(self, wif_async_engine, monkeypatch):
-        from litellm.llms.anthropic.pass_through.messages.transformation import (
+        from litellm.llms.anthropic.messages.native.transformation import (
             AnthropicMessagesConfig,
         )
 
@@ -3268,7 +3362,7 @@ class TestWifAsyncSeam:
     async def test_avalidate_delegates_to_subclass_sync_override(self):
         """A provider subclass that only overrides the sync method must keep its
         behavior when the handler goes through the async variant."""
-        from litellm.llms.anthropic.pass_through.messages.transformation import (
+        from litellm.llms.anthropic.messages.native.transformation import (
             AnthropicMessagesConfig,
         )
 
@@ -3542,11 +3636,10 @@ class TestWifProviderAllowlist:
         monkeypatch.setenv("WIF_TEST_JWT", "jwt-assertion-value")
 
     def test_vertex_anthropic_never_mints_or_sends_the_assertion(self, monkeypatch, wif_engine):
+        import litellm
         from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.transformation import (
             VertexAIAnthropicConfig,
         )
-
-        import litellm
 
         poster, calls = wif_engine
         self._env_only_wif(monkeypatch)
@@ -3773,7 +3866,7 @@ class TestModelDiscovery:
         )
         monkeypatch.setattr("litellm.module_level_client", client)
 
-        with pytest.raises(Exception, match="invalid x-api-key") as exc_info:  # noqa: B017, PT011  # the callee raises a bare Exception; match pins the sanitized text
+        with pytest.raises(Exception, match="invalid x-api-key") as exc_info:  # noqa: B017  # the callee raises a bare Exception; match pins the sanitized text
             AnthropicModelInfo().get_models(api_base="https://api.anthropic.com")
 
         assert "invalid x-api-key" in str(exc_info.value)
@@ -3945,10 +4038,10 @@ class TestWifDisabledOnClientRedirectedBase:
         """Setting the sentinel is only half of it. get_litellm_params rebuilds litellm_params from
         kwargs, so a field it does not carry is dropped on the way and the deployment federates for
         the caller-chosen base after all."""
-        from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
-        from litellm.router_utils.clientside_credential_handler import (
+        from litellm.litellm_core_utils.clientside_credential_handler import (
             DISABLE_WORKLOAD_IDENTITY_PARAM,
         )
+        from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
 
         funneled = get_litellm_params(**{DISABLE_WORKLOAD_IDENTITY_PARAM: True})
 
@@ -3957,7 +4050,7 @@ class TestWifDisabledOnClientRedirectedBase:
     def test_the_sentinel_is_not_client_settable(self):
         """It is server-owned in both directions: a caller must not be able to set it, and must not
         be able to clear it either."""
-        from litellm.router_utils.clientside_credential_handler import (
+        from litellm.litellm_core_utils.clientside_credential_handler import (
             DISABLE_WORKLOAD_IDENTITY_PARAM,
         )
         from litellm.types.router import reject_server_owned_wif_params
@@ -3968,11 +4061,11 @@ class TestWifDisabledOnClientRedirectedBase:
     def test_base_override_clears_wif_and_sets_the_sentinel(self):
         """A federation token minted for a client-chosen api_base would send the workload's assertion,
         and then the minted bearer, to that host."""
-        from litellm.llms.anthropic.wif import resolve_anthropic_wif_params
-        from litellm.router_utils.clientside_credential_handler import (
+        from litellm.litellm_core_utils.clientside_credential_handler import (
             DISABLE_WORKLOAD_IDENTITY_PARAM,
             get_dynamic_litellm_params,
         )
+        from litellm.llms.anthropic.wif import resolve_anthropic_wif_params
 
         admin_deployment = {
             "model": "anthropic/claude-sonnet-5",
@@ -3993,8 +4086,8 @@ class TestWifDisabledOnClientRedirectedBase:
     def test_sentinel_blocks_env_var_configured_federation(self, monkeypatch):
         """Environment-configured federation cannot be cleared out of a dict, so the sentinel is what
         stops it on a redirected deployment."""
+        from litellm.litellm_core_utils.clientside_credential_handler import DISABLE_WORKLOAD_IDENTITY_PARAM
         from litellm.llms.anthropic.wif import resolve_anthropic_wif_params
-        from litellm.router_utils.clientside_credential_handler import DISABLE_WORKLOAD_IDENTITY_PARAM
 
         monkeypatch.setenv("ANTHROPIC_FEDERATION_RULE_ID", "fdrl_env")
         monkeypatch.setenv("ANTHROPIC_ORGANIZATION_ID", "org-env")
@@ -4008,11 +4101,11 @@ class TestWifDisabledOnClientRedirectedBase:
         """Same failure mode the legacy-path test above guards against, for the internal_issuer
         identity source: a signing_key_ref resolved for a client-chosen api_base would mint an
         assertion, and then a bearer token, for that host."""
-        from litellm.llms.anthropic.wif import resolve_anthropic_wif_params
-        from litellm.router_utils.clientside_credential_handler import (
+        from litellm.litellm_core_utils.clientside_credential_handler import (
             DISABLE_WORKLOAD_IDENTITY_PARAM,
             get_dynamic_litellm_params,
         )
+        from litellm.llms.anthropic.wif import resolve_anthropic_wif_params
 
         admin_deployment = {
             "model": "anthropic/claude-sonnet-5",
@@ -4037,11 +4130,11 @@ class TestWifDisabledOnClientRedirectedBase:
     def test_base_override_clears_keycloak_fields(self):
         """Same as the internal_issuer case above, for the keycloak identity source: a
         client_secret_ref resolved for a client-chosen api_base must not follow it there."""
-        from litellm.llms.anthropic.wif import resolve_anthropic_wif_params
-        from litellm.router_utils.clientside_credential_handler import (
+        from litellm.litellm_core_utils.clientside_credential_handler import (
             DISABLE_WORKLOAD_IDENTITY_PARAM,
             get_dynamic_litellm_params,
         )
+        from litellm.llms.anthropic.wif import resolve_anthropic_wif_params
 
         admin_deployment = {
             "model": "anthropic/claude-sonnet-5",
@@ -4236,15 +4329,18 @@ def test_thinking_display_beta_requires_active_thinking(thinking: object, expect
 
 @pytest.mark.usefixtures("local_model_cost_map")
 @pytest.mark.parametrize(
-    ("display", "expected_thinking"),
+    ("provider", "display", "expected_thinking"),
     (
-        ("summarized", {"type": "adaptive", "display": "summarized"}),
-        ("omitted", {"type": "adaptive", "display": "omitted"}),
-        ("updates", {"type": "adaptive"}),
+        ("azure_ai", "summarized", {"type": "adaptive", "display": "summarized"}),
+        ("azure_ai", "omitted", {"type": "adaptive", "display": "omitted"}),
+        ("azure_ai", "updates", {"type": "adaptive", "display": "updates"}),
+        ("vertex_ai", "updates", {"type": "adaptive", "display": "updates"}),
+        ("anthropic", "updates", {"type": "adaptive", "display": "updates"}),
+        ("databricks", "updates", {"type": "adaptive"}),
     ),
 )
 def test_shared_legacy_thinking_translation_preserves_supported_display(
-    display: str, expected_thinking: dict[str, str]
+    provider: str, display: str, expected_thinking: dict[str, str]
 ) -> None:
     from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 
@@ -4255,7 +4351,7 @@ def test_shared_legacy_thinking_translation_preserves_supported_display(
     AnthropicModelInfo.translate_legacy_thinking_for_adaptive_model(
         model="claude-opus-5",
         optional_params=optional_params,
-        custom_llm_provider="azure_ai",
+        custom_llm_provider=provider,
         drop_params=False,
     )
 
@@ -4294,7 +4390,14 @@ def test_shared_legacy_thinking_translation_carries_block_binding(
 
 @pytest.mark.usefixtures("local_model_cost_map")
 @pytest.mark.parametrize(
-    ("custom_llm_provider", "model", "requested_thinking", "rejected_keys", "expected_thinking"),
+    (
+        "custom_llm_provider",
+        "model",
+        "requested_thinking",
+        "rejected_keys",
+        "expected_thinking",
+        "provider_rejects_block_binding",
+    ),
     (
         (
             "anthropic",
@@ -4302,6 +4405,7 @@ def test_shared_legacy_thinking_translation_carries_block_binding(
             {"type": "enabled", "budget_tokens": 2048},
             {"not_a_thinking_key": True},
             {"type": "adaptive"},
+            False,
         ),
         (
             "bedrock",
@@ -4309,6 +4413,7 @@ def test_shared_legacy_thinking_translation_carries_block_binding(
             {"type": "enabled", "budget_tokens": 2048},
             {"not_a_thinking_key": True},
             {"type": "adaptive"},
+            False,
         ),
         (
             "bedrock",
@@ -4316,6 +4421,7 @@ def test_shared_legacy_thinking_translation_carries_block_binding(
             {"type": "enabled", "budget_tokens": 2048},
             {"not_a_thinking_key": True},
             {"type": "adaptive"},
+            False,
         ),
         (
             "bedrock",
@@ -4323,6 +4429,7 @@ def test_shared_legacy_thinking_translation_carries_block_binding(
             {"type": "adaptive", "display": "updates"},
             {"not_a_thinking_key": True, "budget_tokens": 2048},
             {"type": "adaptive", "display": "updates"},
+            False,
         ),
         (
             "vertex_ai",
@@ -4330,6 +4437,7 @@ def test_shared_legacy_thinking_translation_carries_block_binding(
             {"type": "enabled", "budget_tokens": 2048},
             {"not_a_thinking_key": True},
             {"type": "adaptive"},
+            False,
         ),
         (
             "databricks",
@@ -4337,6 +4445,7 @@ def test_shared_legacy_thinking_translation_carries_block_binding(
             {"type": "enabled", "budget_tokens": 2048},
             {"not_a_thinking_key": True},
             {"type": "adaptive"},
+            True,
         ),
     ),
     ids=(
@@ -4355,6 +4464,7 @@ def test_chat_thinking_drops_unknown_keys_only_under_drop_params(
     requested_thinking: dict[str, object],
     rejected_keys: dict[str, object],
     expected_thinking: dict[str, object],
+    provider_rejects_block_binding: bool,
     drop_params_source: str | None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -4369,7 +4479,10 @@ def test_chat_thinking_drops_unknown_keys_only_under_drop_params(
     )
 
     kept_rejected_keys: Final = {} if drop_params_source else rejected_keys
-    assert optional_params["thinking"] == {**expected_thinking, "block_binding": block_binding, **kept_rejected_keys}
+    kept_block_binding: Final = (
+        {} if drop_params_source and provider_rejects_block_binding else {"block_binding": block_binding}
+    )
+    assert optional_params["thinking"] == {**expected_thinking, **kept_block_binding, **kept_rejected_keys}
 
 
 @pytest.mark.usefixtures("local_model_cost_map", "local_beta_headers_config")
@@ -4512,13 +4625,106 @@ def test_shared_legacy_thinking_translation_rejects_a_non_numeric_budget(budget_
 
 @pytest.mark.usefixtures("local_model_cost_map")
 @pytest.mark.parametrize("budget_tokens", _NON_NUMERIC_BUDGETS)
-def test_shared_legacy_thinking_translation_drops_a_non_numeric_budget_under_drop_params(budget_tokens: object) -> None:
+def test_shared_legacy_thinking_translation_drops_a_non_numeric_budget_under_drop_params(
+    budget_tokens: object, caplog: pytest.LogCaptureFixture
+) -> None:
     from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 
     optional_params: Final = {"thinking": {"type": "enabled", "budget_tokens": budget_tokens}}
 
-    AnthropicModelInfo.translate_legacy_thinking_for_adaptive_model(
-        model="claude-opus-5", optional_params=optional_params, custom_llm_provider="azure_ai", drop_params=True
-    )
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        AnthropicModelInfo.translate_legacy_thinking_for_adaptive_model(
+            model="claude-opus-5", optional_params=optional_params, custom_llm_provider="azure_ai", drop_params=True
+        )
+    drop_warnings: Final = [record.getMessage() for record in caplog.records if "Dropping" in record.getMessage()]
 
     assert optional_params == {"thinking": {"type": "adaptive"}}
+    assert len(drop_warnings) == 1
+    assert all(
+        fragment in drop_warnings[0]
+        for fragment in (f"thinking.budget_tokens={budget_tokens!r}", "claude-opus-5", "(drop_params=True)")
+    )
+
+
+_SIGNED_COMPACTION_BLOCK: Final = {"type": "compaction", "content": "summary so far", "signature": "sig"}
+
+
+@pytest.mark.parametrize(
+    "provider,expected",
+    [("anthropic", True), ("vertex_ai", True), ("azure_ai", True), ("bedrock", False), ("bedrock_converse", False)],
+)
+@pytest.mark.parametrize(
+    "optional_params,messages",
+    [
+        ({"compaction": {"type": "summarize"}}, [{"role": "user", "content": "hi"}]),
+        ({}, [{"role": "assistant", "content": [_SIGNED_COMPACTION_BLOCK]}, {"role": "user", "content": "go on"}]),
+    ],
+    ids=["compaction_param", "signed_compaction_block"],
+)
+def test_requires_native_compaction_beta_per_provider(
+    provider: str, expected: bool, optional_params: dict[str, object], messages: list[object]
+) -> None:
+    from litellm.llms.anthropic.common_utils import requires_native_compaction_beta
+
+    assert requires_native_compaction_beta(provider, optional_params, messages) is expected
+
+
+@pytest.mark.parametrize("provider", ["anthropic", "azure_ai", "vertex_ai"])
+@pytest.mark.parametrize(
+    "optional_params,messages",
+    [
+        ({"max_tokens": 64}, [{"role": "user", "content": "hi"}]),
+        ({}, [{"role": "assistant", "content": [{"type": "compaction", "content": "unsigned"}]}]),
+        ({"compaction": None}, [{"role": "user", "content": "hi"}]),
+    ],
+    ids=["no_signal", "unsigned_block", "compaction_none"],
+)
+def test_requires_native_compaction_beta_is_false_without_a_signal(
+    provider: str, optional_params: dict[str, object], messages: list[object]
+) -> None:
+    from litellm.llms.anthropic.common_utils import requires_native_compaction_beta
+
+    assert requires_native_compaction_beta(provider, optional_params, messages) is False
+
+
+@pytest.mark.parametrize(
+    ("custom_llm_provider", "model", "expected"),
+    [
+        ("anthropic", "claude-sonnet-5", True),
+        ("bedrock", "us.anthropic.claude-sonnet-5-20260501-v1:0", True),
+        ("bedrock", "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/abc123", True),
+        ("bedrock", "us.amazon.nova-2-lite-v1:0", False),
+        ("vertex_ai", "claude-sonnet-5", True),
+        ("vertex_ai", "gemini-3.8-flash", False),
+        ("azure_ai", "claude-sonnet-4-6", True),
+        ("azure_ai", "gpt-5.6", False),
+        ("openai", "gpt-5.6", False),
+        ("gemini", "gemini-3.8-flash", False),
+    ],
+)
+def test_is_claude_tool_target(custom_llm_provider: str, model: str, expected: bool):
+    assert is_claude_tool_target(custom_llm_provider=custom_llm_provider, model=model) is expected
+
+
+@pytest.mark.parametrize(
+    "tools",
+    [
+        None,
+        "lookup_record",
+        [],
+        [{"name": "a"}],
+        [{"name": "a", "strict": False}],
+        [{"name": "a", "strict": True}, "b"],
+    ],
+    ids=["absent", "not_a_list", "empty", "no_strict_key", "strict_false_only", "malformed_tool"],
+)
+def test_tools_without_strict_is_none_unless_every_tool_is_an_object_and_one_is_strict(tools: object) -> None:
+    assert tools_without_strict(tools) is None
+
+
+def test_tools_without_strict_drops_only_the_strict_key_and_counts_the_strict_tools() -> None:
+    tools: Final = [{"name": "a", "strict": True}, {"name": "b"}, {"name": "c", "strict": False}]
+
+    assert tools_without_strict(tools) == ToolsWithoutStrict(
+        tools=({"name": "a"}, {"name": "b"}, {"name": "c"}), dropped_count=1
+    )

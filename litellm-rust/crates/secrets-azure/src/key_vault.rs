@@ -3,7 +3,9 @@ use std::sync::Arc;
 use litellm_auth_azure::{AzureAuthInputs, AzureAuthService, ConfigValue};
 use litellm_auth_types::{InputSource, Sourced};
 use litellm_core_utils::settings::Lookup;
-use litellm_secrets_types::{AzureOperationContext, BaseSecretManager, Secret, SecretValue};
+use litellm_secret_value::SecretValue;
+use litellm_secrets_types::{AzureOperationContext, BaseSecretManager, Secret};
+
 use percent_encoding::{AsciiSet, NON_ALPHANUMERIC};
 use serde::Deserialize;
 
@@ -38,7 +40,7 @@ impl AzureKeyVault {
         environment: Arc<dyn Lookup + Send + Sync>,
     ) -> Result<Self, Error> {
         if vault.host_str().is_none() {
-            return Err(Error::VaultUri);
+            return Err(Error::VaultUri(None));
         }
         let inputs = AzureAuthInputs {
             azure_scope: ConfigValue::Value(Sourced::new(
@@ -64,9 +66,9 @@ impl AzureKeyVault {
         let value = environment
             .get(AZURE_KEY_VAULT_URI)
             .ok_or(Error::MissingEnvironment(AZURE_KEY_VAULT_URI))?;
-        let vault = reqwest::Url::parse(&value).map_err(|_| Error::VaultUri)?;
+        let vault = reqwest::Url::parse(&value).map_err(|error| Error::VaultUri(Some(error)))?;
         if vault.scheme() != "https" || vault.host_str().is_none() {
-            return Err(Error::VaultUri);
+            return Err(Error::VaultUri(None));
         }
         Self::with_client(client, vault, environment)
     }
@@ -95,7 +97,7 @@ impl AzureKeyVault {
         let url = self
             .vault
             .join(&format!("secrets/{encoded_name}?api-version={API_VERSION}"))
-            .map_err(|_| Error::VaultUri)?;
+            .map_err(|error| Error::VaultUri(Some(error)))?;
         let response = self
             .client
             .get(url)
@@ -103,14 +105,17 @@ impl AzureKeyVault {
             .header(reqwest::header::ACCEPT, "application/json")
             .send()
             .await
-            .map_err(Error::Http)?;
+            .map_err(|error| Error::Http(error.into()))?;
         if response.status() == reqwest::StatusCode::NOT_FOUND {
             return Ok(None);
         }
         if response.status() != reqwest::StatusCode::OK {
             return Err(Error::Status(response.status().as_u16()));
         }
-        let payload: SecretResponse = response.json().await.map_err(Error::Http)?;
+        let payload: SecretResponse = response
+            .json()
+            .await
+            .map_err(|error| Error::Http(error.into()))?;
         let value = payload.value.ok_or(Error::MissingValue)?;
         Ok(Some(SecretValue::new(value)))
     }

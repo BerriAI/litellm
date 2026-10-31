@@ -3348,10 +3348,10 @@ GEMINI_GEMINI_3_1_PRO_CACHE_CREATION: Final = CostTrackingTestCase(
     response=RoutedResponse(
         content_type="application/x-routed",
         routes={
-            "GET /models/gemini-3.1-pro:cachedContents": JsonResponse(
+            "GET /cachedContents": JsonResponse(
                 content_type="application/json", body={"cachedContents": []}
             ),
-            "POST /models/gemini-3.1-pro:cachedContents": JsonResponse(
+            "POST /cachedContents": JsonResponse(
                 content_type="application/json",
                 body={
                     "name": "cachedContents/$REQUEST_ID",

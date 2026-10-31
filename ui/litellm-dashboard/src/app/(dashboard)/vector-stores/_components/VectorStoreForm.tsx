@@ -36,7 +36,7 @@ import { useZodForm } from "@/lib/forms/useZodForm";
 import { SearchSelect } from "@/components/shared/SearchSelect";
 import { credentialOptions } from "@/components/shared/credentialOptions";
 
-const EMBEDDING_MODEL_RENAME_PROVIDERS = new Set(["milvus", "valkey", "mongodb"]);
+const EMBEDDING_MODEL_RENAME_PROVIDERS = new Set(["milvus", "valkey", "mongodb", "opensearch"]);
 
 export const buildVectorStoreLitellmParams = (
   provider: string,
@@ -83,6 +83,9 @@ const PROVIDER_FIELD_NAMES = [
   "valkey_ssl",
   "valkey_text_field",
   "valkey_embedding_field",
+  "opensearch_embedding_field",
+  "opensearch_text_field",
+  "opensearch_index_name",
 ] as const;
 
 type ProviderFieldName = (typeof PROVIDER_FIELD_NAMES)[number];
@@ -119,6 +122,9 @@ const vectorStoreShape = {
   valkey_ssl: optionalText,
   valkey_text_field: optionalText,
   valkey_embedding_field: optionalText,
+  opensearch_embedding_field: optionalText,
+  opensearch_text_field: optionalText,
+  opensearch_index_name: optionalText,
 };
 
 const vectorStoreSchema = z.object(vectorStoreShape).superRefine((values, ctx) => {
@@ -143,6 +149,7 @@ const VECTOR_STORE_ID_PLACEHOLDERS: Record<string, string> = {
   "vertex_ai/search_api": 'my-datastore_1234567890 (data store ID from Vertex AI / "Agent Search" console)',
   valkey: "my-search-index (FT index name in Valkey)",
   mongodb: "my-vector-index (MongoDB Vector Search index name)",
+  opensearch: "my-knn-index (OpenSearch index name)",
 };
 
 const VERTEX_SEARCH_API_WITH_ENGINE_PLACEHOLDER = "Any identifier you'll use to reference this in LiteLLM";
@@ -159,6 +166,8 @@ const EMPTY_VALUES: VectorStoreFormValues = {
   valkey_ssl: "false",
   valkey_text_field: "text",
   valkey_embedding_field: "embedding",
+  opensearch_embedding_field: "embedding",
+  opensearch_text_field: "text",
 };
 
 const labelWithHint = (label: string, hint: string): React.ReactNode => (
@@ -372,6 +381,35 @@ const VectorStoreForm: React.FC<VectorStoreFormProps> = ({
                       When a query comes in, LiteLLM converts it to an embedding with the model below and returns the
                       closest matching documents from your index.
                     </p>
+                  </AlertDescription>
+                </Alert>
+              )}
+
+              {selectedProvider === "opensearch" && (
+                <Alert variant="info">
+                  <Info />
+                  <AlertTitle>OpenSearch Setup Required</AlertTitle>
+                  <AlertDescription>
+                    <p>
+                      LiteLLM searches a k-NN index you already have in an OpenSearch Serverless collection or an
+                      OpenSearch Service domain. It does not create the index or upload documents. Before creating this
+                      vector store, make sure:
+                    </p>
+                    <ol style={{ marginLeft: "16px", marginTop: "8px", listStyleType: "decimal" }}>
+                      <li>
+                        The index has a knn_vector field holding each document&apos;s embedding. Enter the index name as
+                        the Vector Store ID, or under Index Name when another endpoint already uses that ID
+                      </li>
+                      <li>
+                        You know which embedding model created those embeddings. That model must be added to this proxy
+                        under Models so you can pick it below. Using a different model returns wrong results
+                      </li>
+                      <li>
+                        The proxy has AWS credentials that can read the index, either its own (environment variables or
+                        an IAM role) or a saved credential picked under Existing Credentials. A Serverless collection
+                        needs a data access policy for them, and a domain needs its access policy to allow them
+                      </li>
+                    </ol>
                   </AlertDescription>
                 </Alert>
               )}

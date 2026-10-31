@@ -1,12 +1,18 @@
 import { useRef, type ReactNode } from "react";
-import { ArrowUp, Box, CreditCard, KeyRound, Square } from "lucide-react";
+import { ArrowUp, BarChart3, Box, CreditCard, KeyRound, Square } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { InputGroup, InputGroupTextarea } from "@/components/ui/input-group";
+import { ARIA_AGENT_LABEL } from "./aria-brand";
 
 const suggestions = [
   { label: "Create a key", icon: KeyRound },
   { label: "Add a model", icon: Box },
   { label: "Set a budget", icon: CreditCard },
+];
+const usageSuggestions = [
+  { label: "Summarize my usage", icon: BarChart3 },
+  { label: "Compare models", icon: Box },
+  { label: "Explain my costs", icon: CreditCard },
 ];
 
 export function LiteAdminHomeComposer({
@@ -18,6 +24,7 @@ export function LiteAdminHomeComposer({
   isLoading,
   submitDisabled,
   modelPicker,
+  usage = false,
 }: {
   value: string;
   onChange: (value: string) => void;
@@ -27,6 +34,7 @@ export function LiteAdminHomeComposer({
   isLoading: boolean;
   submitDisabled: boolean;
   modelPicker: ReactNode;
+  usage?: boolean;
 }) {
   const inputRef = useRef<HTMLTextAreaElement>(null);
   return (
@@ -41,15 +49,15 @@ export function LiteAdminHomeComposer({
             if (!submitDisabled && !isLoading) onSubmit();
           }
         }}
-        placeholder="What would you like to do?"
-        aria-label="Message LiteAdmin"
+        placeholder={usage ? "Ask Aria about spend, models, or usage…" : "What would you like to do?"}
+        aria-label={`Message ${ARIA_AGENT_LABEL}`}
         disabled={disabled}
-        rows={2}
-        className="min-h-24 max-h-48 w-full rounded-t-xl px-5 pt-5 pb-2 text-sm placeholder:text-muted-foreground [field-sizing:content]"
+        rows={usage ? 1 : 2}
+        className={`${usage ? "min-h-16" : "min-h-24"} max-h-48 w-full rounded-t-xl px-5 pt-5 pb-2 text-sm placeholder:text-muted-foreground [field-sizing:content]`}
       />
       <div className="flex w-full flex-wrap items-center justify-between gap-3 px-4 pb-4">
         <div className="flex flex-wrap gap-2">
-          {suggestions.map(({ label, icon: Icon }) => (
+          {(usage ? usageSuggestions : suggestions).map(({ label, icon: Icon }) => (
             <Button
               key={label}
               type="button"

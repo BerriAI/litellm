@@ -318,19 +318,35 @@ def _spend_metadata(logging_obj: "LiteLLMLoggingObj") -> Mapping[str, object]:
     }
 
 
+def _sent_tags_are_a_list(litellm_params: Mapping[str, object]) -> bool:
+    """Whether the first non-empty ``tags`` in ``metadata`` then ``litellm_metadata`` is absent or a list."""
+    buckets: Final = (litellm_params.get("metadata"), litellm_params.get("litellm_metadata"))
+    sent: Final = next(
+        (
+            tags
+            for bucket in buckets
+            if isinstance(bucket, Mapping) and (tags := _OBJECT_MAPPING.validate_python(bucket).get("tags"))
+        ),
+        None,
+    )
+    return sent is None or isinstance(sent, list)
+
+
 def _request_tags(litellm_params: Mapping[str, object]) -> Mapping[str, object]:
     from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
 
     try:
-        return {
-            "tags": StandardLoggingPayloadSetup.get_request_tags(
-                litellm_params=_OBJECT_DICT.validate_python(litellm_params),
-                proxy_server_request=_OBJECT_DICT.validate_python(litellm_params.get("proxy_server_request") or {}),
-            )
-        }
+        if _sent_tags_are_a_list(litellm_params):
+            return {
+                "tags": StandardLoggingPayloadSetup.get_request_tags(
+                    litellm_params=_OBJECT_DICT.validate_python(litellm_params),
+                    proxy_server_request=_OBJECT_DICT.validate_python(litellm_params.get("proxy_server_request") or {}),
+                )
+            }
     except AttributeError:
-        verbose_logger.debug("Keeping a background interaction's request tags as sent: they are not a list")
-        return {}
+        pass
+    verbose_logger.debug("Keeping a background interaction's request tags as sent: they are not a list")
+    return {}
 
 
 def _create_context(logging_obj: "LiteLLMLoggingObj", custom_llm_provider: str) -> BackgroundInteractionCreateContext:

@@ -32,22 +32,31 @@ def _in_us_west_2() -> str:
         ({}, TokenCountSettings(framing=97, count_model=_OPUS_US_EAST_1)),
         (
             {"token_count_framing": 5, "token_count_model": {"model": "custom-model", "region": "ap-southeast-4"}},
-            TokenCountSettings(framing=5, count_model=TokenCountModel(model="custom-model", region="ap-southeast-4")),
+            TokenCountSettings(
+                framing=5,
+                count_model=TokenCountModel(model="custom-model", region="ap-southeast-4", configured=True),
+            ),
         ),
         (
             {"token_count_model": {"model": "custom-model", "litellm_provider": "bedrock_mantle"}},
             TokenCountSettings(
                 framing=97,
-                count_model=TokenCountModel(model="custom-model", region=None, litellm_provider="bedrock_mantle"),
+                count_model=TokenCountModel(
+                    model="custom-model", region=None, litellm_provider="bedrock_mantle", configured=True
+                ),
             ),
         ),
         (
             {"token_count_model": {"model": "custom-model"}},
-            TokenCountSettings(framing=97, count_model=TokenCountModel(model="custom-model", region=None)),
+            TokenCountSettings(
+                framing=97, count_model=TokenCountModel(model="custom-model", region=None, configured=True)
+            ),
         ),
         (
             {"token_count_model": {"model": "custom-model", "region": " "}},
-            TokenCountSettings(framing=97, count_model=TokenCountModel(model="custom-model", region=None)),
+            TokenCountSettings(
+                framing=97, count_model=TokenCountModel(model="custom-model", region=None, configured=True)
+            ),
         ),
         ({"token_count_framing": 0}, TokenCountSettings(framing=0, count_model=_OPUS_US_EAST_1)),
         (
@@ -80,26 +89,26 @@ def test_config_overrides_the_cost_map_default_key_by_key(
 
 
 @pytest.mark.parametrize(
-    ("deployment_region", "configured", "expected_region"),
+    ("deployment_region", "configured", "expected"),
     [
-        ("us-west-2", {}, "us-east-1"),
-        ("eu-central-1", {}, None),
-        ("ca-central-1", {}, None),
-        ("us-gov-west-1", {}, None),
+        ("us-west-2", {}, _OPUS_US_EAST_1),
+        ("eu-central-1", {}, TokenCountModel(model="anthropic.claude-opus-5-5", region=None)),
+        ("ca-central-1", {}, TokenCountModel(model="anthropic.claude-opus-5-5", region=None)),
+        ("us-gov-west-1", {}, TokenCountModel(model="anthropic.claude-opus-5-5", region=None)),
         (
             "eu-central-1",
             {"token_count_model": {"model": "anthropic.claude-opus-5-5", "region": "us-east-1"}},
-            "us-east-1",
+            TokenCountModel(model="anthropic.claude-opus-5-5", region="us-east-1", configured=True),
         ),
     ],
 )
 def test_shipped_count_region_never_takes_the_prompt_out_of_the_deployment_geography(
-    deployment_region: str, configured: dict[str, object], expected_region: str | None
+    deployment_region: str, configured: dict[str, object], expected: TokenCountModel
 ) -> None:
     settings: Final = resolve_token_count_settings(
         configured=configured, default=_DEFAULT, deployment_region=lambda: deployment_region
     )
-    assert settings.count_model == TokenCountModel(model="anthropic.claude-opus-5-5", region=expected_region)
+    assert settings.count_model == expected
 
 
 @pytest.mark.parametrize("prefix", ("", "bedrock/", "bedrock_mantle/"))
@@ -183,7 +192,7 @@ def test_every_shipped_token_count_model_resolves_to_a_mapped_aws_model() -> Non
     for name, count_model in count_models.items():
         model: Final = count_model["model"]
         assert get_bedrock_base_model(model) in aws_models
-        assert cost_map[name]["litellm_provider"] in ("bedrock", "bedrock_converse")
+        assert cost_map[name]["litellm_provider"] in ("bedrock", "bedrock_converse", "bedrock_mantle")
         assert "region" not in count_model or count_model["region"].strip()
 
 
@@ -220,3 +229,10 @@ def test_hint_lands_in_the_upstream_error_message_and_keeps_its_envelope(message
 
     assert (json.loads(hinted.message) if isinstance(expected, dict) else hinted.message) == expected
     assert hinted.status_code == 404
+
+
+def test_hint_stays_off_an_error_raised_before_any_provider_call() -> None:
+    message: Final = "Invalid request for token counting: LiteLLM cannot count a tool of type 'mcp' for this model"
+    failure: Final = ProviderCountFailure(status_code=400, message=message, rejected_before_provider_call=True)
+
+    assert failure.with_hint("Enable eu-west-1").message == message

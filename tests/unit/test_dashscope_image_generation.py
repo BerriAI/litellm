@@ -5,21 +5,28 @@ qwen-image-3.0, qwen-image-3.0-pro).
 Run in docker: pytest tests/unit/test_dashscope_image_generation.py -v
 """
 
+from typing import Final
 from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
+import respx
 from pydantic import ValidationError
 
 import litellm
-from litellm.llms.dashscope.image_generation.transformation import (
-    DashScopeImageGenerationConfig,
-    DEFAULT_API_BASE,
-)
-from litellm.types.utils import ImageResponse
-from litellm.utils import get_llm_provider
+from litellm.cost_calculator import default_image_cost_calculator
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
-
+from litellm.llms.dashscope.common_utils import (
+    DASHSCOPE_DEFAULT_ORIGIN,
+    DASHSCOPE_IMAGE_PATH,
+)
+from litellm.llms.dashscope.image_generation.transformation import (
+    DEFAULT_API_BASE,
+    DashScopeImageGenerationConfig,
+)
+from litellm.litellm_core_utils.llm_cost_calc.utils import CostCalculatorUtils
+from litellm.types.utils import ImageResponse, ModelInfo
+from litellm.utils import get_llm_provider
 
 # ---------------------------------------------------------------------------
 # 1. Provider detection
@@ -76,6 +83,47 @@ class TestDashScopeImageGenerationConfig:
     ):
         url = self.cfg.get_complete_url(chat_api_base, None, "qwen-image-3.0", {}, {})
         assert url == DEFAULT_API_BASE
+
+    @pytest.mark.parametrize(
+        ("api_base", "expected"),
+        [
+            (
+                "https://dashscope.aliyuncs.com",
+                "https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation",
+            ),
+            (
+                "https://llm-abc123.cn-beijing.maas.aliyuncs.com",
+                "https://llm-abc123.cn-beijing.maas.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation",
+            ),
+            (
+                "https://llm-abc123.cn-beijing.maas.aliyuncs.com/apps/anthropic",
+                "https://llm-abc123.cn-beijing.maas.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation",
+            ),
+            (
+                "https://dashscope-us.aliyuncs.com/api/v1/",
+                "https://dashscope-us.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation",
+            ),
+        ],
+    )
+    def test_get_complete_url_derives_from_the_domain(
+        self, api_base: str, expected: str
+    ):
+        url: Final = self.cfg.get_complete_url(api_base, None, "qwen-image-3.0", {}, {})
+        assert url == expected
+
+    @pytest.mark.parametrize(
+        "endpoint_url",
+        [
+            "https://dashscope.aliyuncs.com/api/v1/services/aigc/image-generation/generation",
+            "https://dashscope-intl.aliyuncs.com/api/v1/services/aigc/text2image/image-synthesis",
+        ],
+    )
+    def test_get_complete_url_keeps_a_full_dashscope_endpoint_url(
+        self, monkeypatch: pytest.MonkeyPatch, endpoint_url: str
+    ):
+        monkeypatch.setenv("DASHSCOPE_API_BASE_IMAGE", "https://images.example.com/generate")
+        url: Final = self.cfg.get_complete_url(endpoint_url, None, "qwen-image-3.0", {}, {})
+        assert url == endpoint_url
 
     def test_validate_environment_sets_auth_header(self):
         headers = self.cfg.validate_environment(
@@ -458,6 +506,81 @@ def test_litellm_image_generation_dashscope_end_to_end(model: str):
             assert body["parameters"]["size"] == "1024*1024"
 
 
+
+@pytest.mark.parametrize(
+    ("api_base", "chat_base_env", "image_base_env", "expected_url"),
+    [
+        (None, "", "", DEFAULT_API_BASE),
+        ("https://dashscope.aliyuncs.com", "", "", f"{DASHSCOPE_DEFAULT_ORIGIN}{DASHSCOPE_IMAGE_PATH}"),
+        (None, "", "https://images.example.com/generate", "https://images.example.com/generate"),
+        (
+            "https://dashscope.aliyuncs.com/compatible-mode/v1",
+            "",
+            "https://images.example.com/generate",
+            "https://images.example.com/generate",
+        ),
+        (None, "https://gateway.example.com/dashscope/images", "", "https://gateway.example.com/dashscope/images"),
+        (None, "https://dashscope-us.aliyuncs.com", "https://images.example.com/generate", "https://images.example.com/generate"),
+        (
+            None,
+            f"https://dashscope-us.aliyuncs.com{DASHSCOPE_IMAGE_PATH}",
+            "https://images.example.com/generate",
+            f"https://dashscope-us.aliyuncs.com{DASHSCOPE_IMAGE_PATH}",
+        ),
+        (
+            None,
+            "https://gateway.example.com/dashscope/images",
+            "https://images.example.com/generate",
+            "https://gateway.example.com/dashscope/images",
+        ),
+        (
+            None,
+            "https://dashscope-us.aliyuncs.com/compatible-mode/v1",
+            "https://images.example.com/generate",
+            "https://images.example.com/generate",
+        ),
+        (
+            "https://dashscope-us.aliyuncs.com",
+            "",
+            "https://images.example.com/generate",
+            f"https://dashscope-us.aliyuncs.com{DASHSCOPE_IMAGE_PATH}",
+        ),
+        (
+            None,
+            "https://dashscope-us.aliyuncs.com",
+            "",
+            f"https://dashscope-us.aliyuncs.com{DASHSCOPE_IMAGE_PATH}",
+        ),
+        (
+            "https://dashscope-intl.aliyuncs.com",
+            "https://gateway.example.com/dashscope/images",
+            "",
+            f"https://dashscope-intl.aliyuncs.com{DASHSCOPE_IMAGE_PATH}",
+        ),
+    ],
+)
+def test_image_generation_resolves_from_the_configured_base_not_the_chat_default(
+    monkeypatch: pytest.MonkeyPatch,
+    api_base: str | None,
+    chat_base_env: str,
+    image_base_env: str,
+    expected_url: str,
+):
+    monkeypatch.setenv("DASHSCOPE_API_BASE", chat_base_env)
+    monkeypatch.setenv("DASHSCOPE_API_BASE_IMAGE", image_base_env)
+    image_url: Final = "https://dashscope-result.oss.aliyuncs.com/t.png"
+
+    with respx.mock(assert_all_called=True) as upstream:
+        upstream.post(expected_url).respond(
+            200, json={"output": {"choices": [{"message": {"content": [{"image": image_url}]}}]}}
+        )
+        response: Final = litellm.image_generation(
+            model="dashscope/qwen-image-3.0", prompt="a puppy", api_key="sk-test-key", api_base=api_base
+        )
+
+    assert response.data[0].url == image_url
+
+
 def _transform_response(payload: object) -> ImageResponse:
     return DashScopeImageGenerationConfig().transform_image_generation_response(
         model="qwen-image-2.0",
@@ -491,6 +614,16 @@ def test_transform_response_without_image_content_has_no_images(
     payload: dict[str, object],
 ):
     assert _transform_response(payload).data == []
+
+
+@pytest.mark.parametrize("usage", [None, "n/a", ["input_image_count", 2]])
+def test_transform_response_returns_the_images_whatever_shape_usage_has(usage: object):
+    response = _transform_response(
+        {"output": {"choices": [{"message": {"content": [{"image": "https://a.example/1.png"}]}}]}, "usage": usage}
+    )
+
+    assert [image.url for image in response.data] == ["https://a.example/1.png"]
+    assert "billable_input_image_count" not in response.hidden_params
 
 
 def test_transform_response_skips_content_items_without_an_image():
@@ -551,3 +684,50 @@ def test_transform_response_rejects_malformed_payloads_without_echoing_them(
         _transform_response(payload)
 
     assert "input_value" not in str(exc_info.value)
+
+
+@pytest.mark.parametrize(
+    ("model", "usage"),
+    (
+        ("qwen-image-2.0", {"width": 2048, "height": 1536, "image_count": 1}),
+        (
+            "qwen-image-3.0",
+            {"output_width": 2048, "output_height": 1536, "output_image_count": 1, "input_image_count": 0},
+        ),
+    ),
+)
+def test_a_per_pixel_deployment_bills_the_size_dashscope_rendered_when_the_caller_sent_none(
+    model: str, usage: dict[str, int]
+):
+    response = _transform_response(
+        {
+            "output": {"choices": [{"message": {"content": [{"image": "https://a.example/1.png"}]}}]},
+            "usage": usage,
+        }
+    )
+
+    cost = CostCalculatorUtils.route_image_generation_cost_calculator(
+        model=model,
+        completion_response=response,
+        custom_llm_provider="dashscope",
+        call_type="image_generation",
+        model_info=ModelInfo(input_cost_per_pixel=1e-08),
+    )
+
+    assert cost == pytest.approx(2048 * 1536 * 1e-08)
+
+
+@pytest.mark.parametrize("model", ("qwen-image-2.0", "qwen-image-2.0-pro", "qwen-image-3.0"))
+@pytest.mark.usefixtures("local_model_cost_map")
+def test_a_shared_row_bills_a_generated_image_the_same_on_the_default_calculator_released_proxies_use(model: str):
+    dashscope_cost: Final = CostCalculatorUtils.route_image_generation_cost_calculator(
+        model=model,
+        completion_response=ImageResponse(data=[{"url": "https://a.example/1.png"}]),
+        custom_llm_provider="dashscope",
+        call_type="image_generation",
+    )
+
+    assert dashscope_cost > 0
+    assert default_image_cost_calculator(model=f"dashscope/{model}", custom_llm_provider="dashscope") == pytest.approx(
+        dashscope_cost
+    )

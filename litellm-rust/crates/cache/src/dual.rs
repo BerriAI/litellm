@@ -2,7 +2,7 @@ use std::{sync::Arc, time::Duration};
 
 use crate::{
     BaseCache, BatchCache, BatchEntry, BulkDeleteCache, CacheContext, ClaimCache, CounterCache,
-    DeleteCache, Error, FlushCache, IncrementOperation, SetCache, TtlCache,
+    DeleteCache, Error, FlushCache, IncrementOperation, SetCache, ShortBatch, TtlCache,
 };
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -98,7 +98,7 @@ impl<L1, L2> DualCache<L1, L2> {
     fn remote<T>(&self, result: Result<T, Error>) -> Result<Option<T>, Error> {
         match result {
             Ok(value) => Ok(Some(value)),
-            Err(Error::Unavailable)
+            Err(Error::Unavailable(_))
                 if self.remote_failure_policy == RemoteFailurePolicy::UseLocal =>
             {
                 Ok(None)
@@ -136,7 +136,10 @@ where
         remote: Vec<BatchEntry<V>>,
     ) -> Result<Vec<BatchEntry<V>>, Error> {
         if missing.len() != remote.len() {
-            return Err(Error::Unavailable);
+            return Err(Error::unavailable(ShortBatch {
+                requested: missing.len(),
+                returned: remote.len(),
+            }));
         }
         for (index, entry) in missing.into_iter().zip(remote) {
             if let BatchEntry::Hit(value) = &entry {
@@ -389,7 +392,10 @@ where
         }
         let values = self.l2.async_increment_pipeline(operations.clone()).await?;
         if values.len() != operations.len() {
-            return Err(Error::Unavailable);
+            return Err(Error::unavailable(ShortBatch {
+                requested: operations.len(),
+                returned: values.len(),
+            }));
         }
         for (operation, value) in operations.iter().zip(&values) {
             self.l1

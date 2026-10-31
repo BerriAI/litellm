@@ -10,12 +10,16 @@ See: https://github.com/BerriAI/litellm/pull/22247
 
 import asyncio, gc, httpx, importlib, litellm, os, threading, time, weakref
 import warnings
+from typing import Final
 
+import aiohttp
 import pytest
+from openai import AsyncOpenAI
 
 
 from litellm.caching.evicted_client_closer import EvictedClientCloser
 from litellm.caching.llm_caching_handler import LLMClientCache
+from litellm.llms.custom_httpx.aiohttp_transport import LiteLLMAiohttpTransport
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.llms.custom_httpx.http_handler import(
@@ -26,6 +30,41 @@ from litellm.llms.custom_httpx.http_handler import(
 from litellm.types.utils import LlmProviders
 from litellm.utils import _invalidate_model_cost_lowercase_map
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
+from tests.unit.caching._event_loop_reuse import runs_until_a_loop_address_repeats
+
+
+async def _get_and_set_cache(cache: LLMClientCache) -> object | None:
+    cached: Final = await cache.async_get_cache("client")
+    await cache.async_set_cache("client", object())
+    return cached
+
+
+def _cache_result_on_new_loop(cache: LLMClientCache) -> tuple[int, object | None]:
+    loop: Final = asyncio.new_event_loop()
+    loop_id: Final = id(loop)
+    try:
+        result: Final = loop.run_until_complete(_get_and_set_cache(cache))
+    finally:
+        loop.close()
+    del loop
+    gc.collect()
+    return loop_id, result
+
+
+async def _get_cache_key(cache: LLMClientCache) -> str:
+    return cache.update_cache_key_with_event_loop("client")
+
+
+def _cache_key_on_new_loop(cache: LLMClientCache) -> tuple[int, str]:
+    loop: Final = asyncio.new_event_loop()
+    loop_id: Final = id(loop)
+    try:
+        key: Final = loop.run_until_complete(_get_cache_key(cache))
+    finally:
+        loop.close()
+    del loop
+    gc.collect()
+    return loop_id, key
 
 
 class MockAsyncClient:
@@ -46,6 +85,44 @@ class MockSyncClient:
 
     def close(self):
         self.closed = True
+
+
+def test_async_client_cache_does_not_reuse_clients_between_collected_loops() -> None:
+    cache: Final = LLMClientCache()
+    runs: Final = runs_until_a_loop_address_repeats(lambda: _cache_result_on_new_loop(cache))
+
+    assert all(result is None for _, result in runs)
+
+
+def test_async_client_cache_keys_differ_for_every_collected_loop() -> None:
+    cache: Final = LLMClientCache()
+    runs: Final = runs_until_a_loop_address_repeats(lambda: _cache_key_on_new_loop(cache))
+    keys: Final = tuple(key for _, key in runs)
+
+    assert len(set(keys)) == len(keys)
+
+
+class _LoopWithoutWeakReferences:
+    __slots__ = ()
+
+
+def _cache_key_while_running(cache: LLMClientCache, loop: _LoopWithoutWeakReferences) -> str:
+    asyncio._set_running_loop(loop)
+    try:
+        return cache.update_cache_key_with_event_loop("client")
+    finally:
+        asyncio._set_running_loop(None)
+
+
+def test_cache_keys_stay_per_loop_on_loops_without_weak_references() -> None:
+    cache: Final = LLMClientCache()
+    loop_a: Final = _LoopWithoutWeakReferences()
+    loop_b: Final = _LoopWithoutWeakReferences()
+
+    first_key_on_a: Final = _cache_key_while_running(cache, loop_a)
+
+    assert _cache_key_while_running(cache, loop_a) == first_key_on_a
+    assert _cache_key_while_running(cache, loop_b) != first_key_on_a
 
 
 @pytest.mark.asyncio
@@ -202,6 +279,36 @@ async def test_evicted_litellm_owned_client_is_closed_once_the_grace_window_elap
     await asyncio.sleep(0.1)
 
     assert client.closed is True
+
+
+@pytest.mark.asyncio
+async def test_an_evicted_owned_client_collected_inside_its_grace_window_still_closes_its_aiohttp_session():
+    """
+    The closer holds an evicted client weakly for the whole grace window. An SDK
+    process that exits, or a proxy that evicts and never calls the cache again,
+    collects the client first, so only its own finalizer can still close the
+    aiohttp session (LIT-9767).
+    """
+    clock = _FakeClock()
+    cache = LLMClientCache(
+        max_size_in_memory=2,
+        evicted_client_closer=EvictedClientCloser(grace_seconds=900.0, clock=clock),
+    )
+    session = aiohttp.ClientSession()
+    client = AsyncOpenAI(
+        api_key="sk-evicted",
+        http_client=httpx.AsyncClient(transport=LiteLLMAiohttpTransport(client=session)),
+    )
+    cache.set_cache("client-key", client, litellm_owned_client=True, ttl=600)
+
+    cache.ttl_dict = {key: 0 for key in cache.ttl_dict}
+    cache.expiration_heap = [(0, key) for _, key in cache.expiration_heap]
+    cache.evict_cache()
+    del client
+    gc.collect()
+    await asyncio.gather(*LiteLLMAiohttpTransport._background_close_tasks)
+
+    assert session.closed, "the evicted client was collected inside the grace window and left its session open"
 
 
 @pytest.mark.asyncio

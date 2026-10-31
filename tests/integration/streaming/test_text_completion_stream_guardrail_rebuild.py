@@ -27,7 +27,12 @@ _PROXY_CONFIG: Final = Path(__file__).resolve().parents[1] / "proxy_config.yaml"
 _PROVIDER_KEY: Final = "synthetic-provider-key"
 _GUARDRAIL: Final = "audit-text-rebuild-tool-permission"
 _TEXT_MODEL: Final = f"audit-text-instruct-{uuid.uuid4().hex}"
+_GOVERNED_MODEL: Final = f"audit-text-governed-{uuid.uuid4().hex}"
+_KEYWORD_FILTER: Final = "audit-text-keyword-filter"
+_POLICY: Final = "audit-text-post-call-governance"
 _PIECES: Final = ("Hello", " streamed", " world")
+_MASKED_PIECES: Final = ("A pers", "im", "mon tart")
+_BLOCKED_PIECES: Final = ("A kum", "quat tart")
 _PROMPT_TOKENS: Final = 11
 _COMPLETION_TOKENS: Final = 3
 _USAGE: Final[dict[str, JsonValue]] = {
@@ -97,6 +102,14 @@ def _text_choice(text: str, finish_reason: str | None) -> dict[str, JsonValue]:
     return {"text": text, "index": 0, "logprobs": None, "finish_reason": finish_reason}
 
 
+def _pieces_for(identity: str) -> tuple[str, ...]:
+    if identity.startswith("cmpl-mask-"):
+        return _MASKED_PIECES
+    if identity.startswith("cmpl-block-"):
+        return _BLOCKED_PIECES
+    return _PIECES
+
+
 def _respond(request: Request) -> Reply:
     body: Final = JSON_OBJECT.validate_json(request.body)
     assert body.get("stream") is True, body
@@ -106,12 +119,23 @@ def _respond(request: Request) -> Reply:
     return Reply(
         content_type="text/event-stream",
         chunks=(
-            *(_text_frame(identity, [_text_choice(piece, None)]) for piece in _PIECES),
+            *(_text_frame(identity, [_text_choice(piece, None)]) for piece in _pieces_for(identity)),
             _text_frame(identity, [_text_choice("", "length")]),
             _text_frame(identity, [], usage=_USAGE),
             b"data: [DONE]\n\n",
         ),
     )
+
+
+def _text_deployment(model_name: str, wire: Wire) -> dict[str, JsonValue]:
+    return {
+        "model_name": model_name,
+        "litellm_params": {
+            "model": "text-completion-openai/gpt-3.5-turbo-instruct",
+            "api_base": f"{wire.url}/v1",
+            "api_key": _PROVIDER_KEY,
+        },
+    }
 
 
 def _config(directory: Path, wire: Wire) -> Path:
@@ -120,14 +144,8 @@ def _config(directory: Path, wire: Wire) -> Path:
         **base,
         "model_list": [
             *list_value(base["model_list"]),
-            {
-                "model_name": _TEXT_MODEL,
-                "litellm_params": {
-                    "model": "text-completion-openai/gpt-3.5-turbo-instruct",
-                    "api_base": f"{wire.url}/v1",
-                    "api_key": _PROVIDER_KEY,
-                },
-            },
+            _text_deployment(_TEXT_MODEL, wire),
+            _text_deployment(_GOVERNED_MODEL, wire),
         ],
         "guardrails": [
             {
@@ -139,8 +157,30 @@ def _config(directory: Path, wire: Wire) -> Path:
                     "default_action": "allow",
                     "rules": [],
                 },
-            }
+            },
+            {
+                "guardrail_name": _KEYWORD_FILTER,
+                "litellm_params": {
+                    "guardrail": "litellm_content_filter",
+                    "mode": "post_call",
+                    "default_on": False,
+                    "blocked_words": [
+                        {"keyword": "persimmon", "action": "MASK"},
+                        {"keyword": "kumquat", "action": "BLOCK"},
+                    ],
+                },
+            },
         ],
+        "policies": {
+            _POLICY: {
+                "guardrails": {"add": [_KEYWORD_FILTER]},
+                "pipeline": {
+                    "mode": "post_call",
+                    "steps": [{"guardrail": _KEYWORD_FILTER, "on_pass": "allow", "on_fail": "block"}],
+                },
+            }
+        },
+        "policy_attachments": [{"policy": _POLICY, "models": [_GOVERNED_MODEL]}],
     }
     path: Final = directory / f"text-rebuild-{uuid.uuid4().hex}.yaml"
     path.write_text(yaml.safe_dump(config))
@@ -163,14 +203,14 @@ def rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[_Rig]:
             yield _Rig(wire, owned)
 
 
-def _stream(rig: _Rig, identity: str) -> _Stream:
+def _stream(rig: _Rig, identity: str, model: str = _TEXT_MODEL) -> _Stream:
     gateway: Final = rig.proxy.gateway
     with gateway.client.stream(
         "POST",
         "/v1/completions",
         headers={"Authorization": f"Bearer {gateway.key}"},
         json={
-            "model": _TEXT_MODEL,
+            "model": model,
             "prompt": identity,
             "max_tokens": 16,
             "stream": True,
@@ -210,6 +250,37 @@ def test_guarded_text_completion_stream_reaches_the_caller_whole_with_its_usage(
     )
     assert (row["prompt_tokens"], row["completion_tokens"]) == (_PROMPT_TOKENS, _COMPLETION_TOKENS), row
     assert _GUARDRAIL in list_value(object_value(row["metadata"])["applied_guardrails"]), row
+
+
+def test_post_call_pipeline_masks_a_streamed_text_completion(rig: _Rig) -> None:
+    identity: Final = f"cmpl-mask-{uuid.uuid4().hex}"
+
+    stream: Final = _stream(rig, identity, _GOVERNED_MODEL)
+
+    assert stream.status == 200, stream.body
+    assert stream.body.rstrip().endswith(b"data: [DONE]"), stream.body[-400:]
+    assert stream.text == "A [KEYWORD_REDACTED] tart", stream.frames
+    assert b"persimmon" not in stream.body, stream.body
+    assert stream.finish_reasons == ("length",), stream.frames
+    assert [(usage["prompt_tokens"], usage["completion_tokens"]) for usage in stream.usages] == [
+        (_PROMPT_TOKENS, _COMPLETION_TOKENS)
+    ], stream.frames
+    (row,) = eventually(
+        lambda: rig.proxy.gateway.rows('SELECT metadata FROM "LiteLLM_SpendLogs" WHERE request_id = %s', (identity,)),
+        lambda rows: len(rows) == 1,
+        seconds=70,
+    )
+    assert _KEYWORD_FILTER in list_value(object_value(row["metadata"])["applied_guardrails"]), row
+
+
+def test_post_call_pipeline_blocks_a_streamed_text_completion(rig: _Rig) -> None:
+    identity: Final = f"cmpl-block-{uuid.uuid4().hex}"
+
+    stream: Final = _stream(rig, identity, _GOVERNED_MODEL)
+
+    assert stream.status == 400, stream.body
+    assert b"Content blocked: keyword 'kumquat' detected" in stream.body, stream.body
+    assert b"quat tart" not in stream.body, stream.body
 
 
 def _together_chunk(choices: list[JsonValue], **extra: JsonValue) -> bytes:

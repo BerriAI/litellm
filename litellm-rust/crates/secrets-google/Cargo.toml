@@ -6,6 +6,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+litellm-secret-value.workspace = true
 litellm-http.workspace = true
 moka.workspace = true
 tokio.workspace = true
@@ -17,6 +18,7 @@ base64.workspace = true
 crc32c = "0.6.8"
 serde_json.workspace = true
 thiserror.workspace = true
+url.workspace = true
 veil.workspace = true
 google-cloud-kms-v1 = "1.14.0"
 google-cloud-gax = { version = "1.14.0", default-features = false }
