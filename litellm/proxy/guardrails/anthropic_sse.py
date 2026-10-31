@@ -19,7 +19,6 @@ from litellm.llms.anthropic.messages.stream_assembly import (
     anthropic_sse_error_events,
     anthropic_sse_event_type,
     anthropic_sse_event_types,
-    anthropic_sse_events_without_blocks,
     anthropic_sse_started_blocks,
     anthropic_sse_stopped_block_index,
     anthropic_sse_unfinished_blocks,
@@ -36,6 +35,7 @@ from litellm.llms.anthropic.messages.stream_assembly import (
 from litellm.llms.anthropic.messages.stream_assembly import (
     is_raw_sse_stream as is_raw_sse_stream,  # noqa: PLC0414  # public re-export
 )
+from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicMessagesResponse
 from litellm.types.utils import Choices, ModelResponse
 
 
@@ -114,23 +114,6 @@ def _rewritten_message_delta_fields(
 
 
 _MESSAGE_END_EVENT_TYPES: Final = frozenset({"message_delta", "message_stop"})
-_TOOL_CALL_BLOCK_TYPES: Final = ("tool_use", "server_tool_use", "mcp_tool_use")
-
-
-def without_cut_off_tool_use(source_chunks: Sequence[object]) -> Sequence[object]:
-    """The stream as the upstream sent it, minus the events of a tool call the failed upstream cut off.
-
-    Assembly leaves that call out of what a guardrail checks, since its input is a JSON prefix, yet a
-    client SDK's stream snapshot still holds it, so it must not reach the client unchecked.
-    """
-    if not anthropic_sse_error_events(source_chunks):
-        return source_chunks
-    cut_off: Final = frozenset(
-        index
-        for index, block in anthropic_sse_unfinished_blocks(source_chunks).items()
-        if block.get("type") in _TOOL_CALL_BLOCK_TYPES
-    )
-    return anthropic_sse_events_without_blocks(source_chunks, cut_off) if cut_off else source_chunks
 
 
 def _text_block_left_open(rewritten_chunks: Sequence[bytes], source_chunks: Sequence[object]) -> int | None:
@@ -151,6 +134,15 @@ def _text_block_left_open(rewritten_chunks: Sequence[bytes], source_chunks: Sequ
     return last_index if rewritten_blocks[last_index].get("type") == "text" else None
 
 
+def _is_empty_text(block: object) -> bool:
+    fields: Final = as_str_mapping(block)
+    return fields is not None and fields.get("type") == "text" and not fields.get("text")
+
+
+def _without_empty_text(response: AnthropicMessagesResponse) -> AnthropicMessagesResponse:
+    return {**response, "content": [block for block in response.get("content") or () if not _is_empty_text(block)]}
+
+
 def _sent_by_the_failed_upstream(chunk: bytes, block_left_open: int | None, end_events_sent: frozenset[str]) -> bool:
     event: Final = chunk.decode()
     event_type: Final = anthropic_sse_event_type(event)
@@ -169,8 +161,9 @@ def anthropic_sse_chunks_from_response(
     the input the classifier judged. Their free-text ``explanation`` was written about the text the
     guardrail rewrote, so it is dropped unless the caller rewrites no text (``keep_explanations``).
     A source stream that ended in an upstream ``error`` event ends with that event again, never
-    with a ``message_delta`` or ``message_stop`` the upstream did not send, and with its cut-off
-    text block left open unless another block follows it.
+    with a ``message_delta`` or ``message_stop`` the upstream did not send, with its cut-off text
+    block left open unless another block follows it, and with no finished text block when it read
+    no text, since Claude Code does not retry a stream that shows a finished block.
     """
     from litellm.llms.anthropic.messages.adapters.transformation import (
         LiteLLMAnthropicMessagesAdapter,
@@ -190,11 +183,11 @@ def anthropic_sse_chunks_from_response(
     unchanged_tool_use_ids: Final = _unchanged_tool_use_ids(
         source_content or (), anthropic_response.get("content") or ()
     )
+    error_events: Final = anthropic_sse_error_events(source_chunks)
     rewritten_chunks: Final = FakeAnthropicMessagesStreamIterator(
-        response=anthropic_response,
+        response=_without_empty_text(anthropic_response) if error_events else anthropic_response,
         message_delta_fields=_rewritten_message_delta_fields(source_chunks, unchanged_tool_use_ids, keep_explanations),
     ).chunks
-    error_events: Final = anthropic_sse_error_events(source_chunks)
     if not error_events:
         return tuple(rewritten_chunks)
     block_left_open: Final = _text_block_left_open(rewritten_chunks, source_chunks)

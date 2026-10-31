@@ -5,7 +5,9 @@ import pytest
 
 from litellm.llms.anthropic.messages.stream_assembly import (
     anthropic_message_delta_fields,
+    anthropic_sse_error_events,
     assemble_anthropic_sse_stream,
+    has_unreadable_json_event,
     is_anthropic_sse_stream,
     is_raw_sse_stream,
     is_sse_error_stream,
@@ -249,7 +251,9 @@ def test_assemble_anthropic_sse_stream_returns_none_without_a_message_to_build(c
         ((b'id: 1\ndata: {"type": "error", "error": {}}\n\n',), False),
         ((b'\xef\xbb\xbfdata: {"type": "message_start"}\n\n', ANTHROPIC_ERROR), False),
         ((b'event: message_stop\ndata: {"error": {}}\n\n',), False),
-        ((b"data:\n\n", ANTHROPIC_ERROR), True),
+        ((b"data:\n\n", ANTHROPIC_ERROR), False),
+        ((b': x\x0cdata: {"type": "content_block_start"}\n\n', ANTHROPIC_ERROR), False),
+        ((b'event: ping\x0cdata: {"type": "content_block_start"}\n\n', ANTHROPIC_ERROR), False),
     ],
     ids=[
         "anthropic-error",
@@ -277,7 +281,9 @@ def test_assemble_anthropic_sse_stream_returns_none_without_a_message_to_build(c
         "error-with-an-id-field",
         "content-behind-a-byte-order-mark",
         "error-under-a-content-event-name",
-        "empty-data-line",
+        "error-behind-an-empty-data-line",
+        "content-behind-a-form-feed-in-a-comment",
+        "content-behind-a-form-feed-in-an-event-line",
     ],
 )
 def test_is_sse_error_stream_is_true_only_for_frames_that_are_all_errors(chunks: tuple[object, ...], expected: bool):
@@ -287,41 +293,28 @@ def test_is_sse_error_stream_is_true_only_for_frames_that_are_all_errors(chunks:
 @pytest.mark.parametrize(
     "frame",
     [
-        TOOL_CALL_OVER_TWO_DATA_LINES,
-        _wrapped_in_ignored_fields(b" "),
-        b'event: content_block_start\ndata: {"index": 0, "content_block": {"type": "tool_use"}}\n\n',
-        b'event: content_block_start\ndata: {"type": "ping", "content_block": {"type": "tool_use"}}\n\n',
-        b'event: content_block_start\n data: {"type": "error"}\ndata: {"type": "content_block_start"}\n\n',
+        b'event: error\ndata: {"type": "error"}\ndata: {"type": "content_block_start"}\n\n',
+        b'event: error\ndata: {"type": "error"}\x0cdata: {"type": "content_block_start"}\n\n',
+        b'event: error\rdata: {"type": "error"}\r\rdata: {"type": "content_block_start"}\r\r',
+        b'data: {"type": "error"}\n\n',
     ],
-    ids=[
-        "over-two-data-lines",
-        "between-ignored-fields",
-        "type-only-on-the-event-line",
-        "event-line-disagrees-with-the-data",
-        "error-on-an-ignored-field-beside-the-real-data",
-    ],
+    ids=["second-data-line", "behind-a-form-feed", "glued-frame-with-cr-line-ends", "no-event-line"],
 )
-def test_assembly_through_an_upstream_error_refuses_a_frame_a_client_may_read_differently(frame: bytes):
-    chunks: Final = (ANTHROPIC_STREAM[0], frame, ANTHROPIC_ERROR)
-
-    assert assemble_anthropic_sse_stream(chunks, through_upstream_error=True) is None
+def test_error_event_is_the_event_name_and_the_data_line_assembly_read(frame: bytes):
+    assert anthropic_sse_error_events((frame,)) == ('event: error\ndata: {"type": "error"}',)
 
 
-@pytest.mark.parametrize(
-    "frame",
-    [
-        b": keepalive\n\n",
-        b'event: ping\ndata: {"type": "ping"}\n\n',
-        b'event: not_known_yet\ndata: {"type": "not_known_yet"}\n\n',
-        b"data: some words\n\n",
-        b"data: 5\n\n",
-    ],
-    ids=["comment", "ping", "event-type-no-client-reads", "words-no-event-names", "non-object-no-event-names"],
-)
-def test_assembly_through_an_upstream_error_keeps_a_frame_every_reader_agrees_on(frame: bytes):
-    chunks: Final = (*ANTHROPIC_STREAM[:4], frame, ANTHROPIC_ERROR)
+def test_line_separators_inside_a_json_string_do_not_make_frames():
+    text = "a\u2028\u2028data: 5\u2028\u2028event: error\u2028data: upstream broke\u2028\u2028b"
+    delta = {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": text}}
+    frame = f"event: content_block_delta\ndata: {json.dumps(delta, ensure_ascii=False)}\n\n".encode()
 
-    assert assemble_anthropic_sse_stream(chunks, through_upstream_error=True) is not None
+    assert not has_unreadable_json_event((frame,))
+    assert anthropic_sse_error_events((frame,)) == ()
+
+
+def test_error_event_with_no_data_stays_a_bare_event_line():
+    assert anthropic_sse_error_events((b"event: error\n\n",)) == ("event: error",)
 
 
 @pytest.mark.parametrize(

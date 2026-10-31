@@ -462,6 +462,11 @@ def _sse_frames(sse_stream: str) -> Sequence[str]:
     return "\n".join(split_sse_lines(sse_stream)).split("\n\n")
 
 
+def _frames_of_the_widest_reader(sse_stream: str) -> Sequence[str]:
+    """The stream's frames as httpx's ``str.splitlines`` reads them, past a form feed or U+2028 in any line."""
+    return "\n".join(sse_stream.splitlines()).split("\n\n")
+
+
 def _sse_field(line: str) -> tuple[str, str]:
     name, _, value = line.partition(":")
     return name, value.removeprefix(" ")
@@ -474,7 +479,7 @@ def _sse_fields(frame: str) -> tuple[tuple[str, str], ...]:
 
 def _carries_no_data(fields: Sequence[tuple[str, str]]) -> bool:
     match fields:
-        case () | (("event", _),) | (("data", "" | "[DONE]"),):
+        case () | (("event", _),) | (("data", "[DONE]"),):
             return True
         case _:
             return False
@@ -486,27 +491,6 @@ def _json_mapping(payload: str) -> Mapping[str, object] | None:
     except ValueError:
         return None
     return as_str_mapping(value)
-
-
-def _payload_type(payload: str) -> object:
-    event: Final = _json_mapping(payload)
-    return event.get("type") if event is not None else None
-
-
-def _is_read_the_same_by_every_reader(fields: Sequence[tuple[str, str]]) -> bool:
-    """Whether the frame is one a client and this module read alike, whichever way either goes about it.
-
-    A client joins ``data:`` lines, ignores a field whose name is not exact, and an SDK takes an event's
-    type from its ``event:`` line and skips data with no event name, while assembly reads only one
-    ``data:`` line and the data's ``type``.
-    """
-    match fields:
-        case (("data", _),) | (("event", "error"), ("data", _)):
-            return True
-        case (("event", name), ("data", payload)):
-            return _payload_type(payload) == name
-        case _:
-            return _carries_no_data(fields)
 
 
 def _parsed_sse_events(sse_stream: str) -> tuple[Mapping[str, object], ...]:
@@ -605,20 +589,26 @@ def _is_error_event(event: str) -> bool:
 
 
 def _error_events(sse_stream: str) -> tuple[str, ...]:
-    return tuple(event for event in split_sse_chunk_into_events(sse_stream) if _is_error_event(event))
+    return tuple(event for event in _sse_frames(sse_stream) if _is_error_event(event))
+
+
+def _plain_error_event(event: str) -> str:
+    data_line: Final = (_sse_data_payload(event) or "").splitlines()[:1]
+    return "\n".join(("event: error", *(f"data: {line}" for line in data_line)))
 
 
 def anthropic_sse_error_events(all_chunks: Sequence[object]) -> tuple[str, ...]:
-    """The ``error`` events of the stream, as raw SSE event text.
+    """The ``error`` events of the stream, each as an ``event:`` line and the ``data:`` line assembly read.
 
     A stream whose upstream fails after it started ends with an ``error`` event in place of
     ``message_stop``. That frame is the outcome the client is owed, not content, so assembly through
-    the upstream error leaves it out and a caller re-emitting a rewritten response puts it back.
+    the upstream error leaves it out and a caller re-emitting a rewritten response puts it back,
+    without any other line of the frame, since that is content no guardrail read.
     A frame counts by its data ``type``, or by its SSE ``event:`` name unless its data is another
     Anthropic event, since a client SDK raises on the name alone and an upstream that is not
     Anthropic may send anything as the data.
     """
-    return _error_events(_joined_sse_stream(all_chunks) or "")
+    return tuple(_plain_error_event(event) for event in _error_events(_joined_sse_stream(all_chunks) or ""))
 
 
 def anthropic_sse_stopped_block_index(event: str) -> object:
@@ -672,37 +662,15 @@ def _sse_events_with_data(sse_stream: str) -> tuple[tuple[str, Mapping[str, obje
     )
 
 
-def _event_block_index(event: str) -> int | None:
-    event_data: Final = _sse_event_data(event)
-    return _block_index(event_data) if event_data is not None else None
-
-
-def anthropic_sse_events_without_blocks(
-    all_chunks: Sequence[object], block_indices: frozenset[int]
-) -> tuple[bytes, ...]:
-    """The stream's events as raw SSE frames, minus every event of the content blocks at ``block_indices``."""
-    sse_stream: Final = _joined_sse_stream(all_chunks) or ""
-    return tuple(
-        f"{event}\n\n".encode()
-        for event in split_sse_chunk_into_events(sse_stream)
-        if _event_block_index(event) not in block_indices
-    )
-
-
-def _content_events_before_upstream_error(sse_stream: str) -> tuple[str, ...] | None:
+def _content_events_before_upstream_error(sse_stream: str) -> tuple[str, ...]:
     """The stream's events minus its upstream ``error`` and every cut-off block assembly cannot read.
 
     A cut-off text block is still text the client was sent, so it stays. A cut-off tool call's
     input is a JSON prefix, and a cut-off thinking block has no signature, so neither is a block the
     client can act on, and both are left out.
-
-    None when a frame could read differently to a client, since a guardrail would then pass a stream
-    holding content it never saw.
     """
     if not _error_events(sse_stream):
         return (sse_stream,)
-    if not all(_is_read_the_same_by_every_reader(_sse_fields(frame)) for frame in _sse_frames(sse_stream)):
-        return None
     events: Final = _sse_events_with_data(sse_stream)
     cut_off: Final = frozenset(
         index
@@ -741,8 +709,6 @@ def assemble_anthropic_sse_stream(
     content_events: Final = (
         _content_events_before_upstream_error(sse_stream) if through_upstream_error else (sse_stream,)
     )
-    if content_events is None:
-        return None
     try:
         assembled: Final = build_complete_streaming_response(
             all_chunks=content_events,
@@ -793,6 +759,6 @@ def is_sse_error_stream(all_chunks: Sequence[object]) -> bool:
     sse_stream: Final = _joined_sse_stream(all_chunks)
     if sse_stream is None:
         return False
-    frames: Final = tuple(_sse_fields(frame) for frame in _sse_frames(sse_stream))
+    frames: Final = tuple(_sse_fields(frame) for frame in _frames_of_the_widest_reader(sse_stream))
     with_data: Final = tuple(fields for fields in frames if not _carries_no_data(fields))
     return len(with_data) > 0 and all(_is_error_frame(fields) for fields in with_data)

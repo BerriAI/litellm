@@ -25,10 +25,10 @@ from litellm.proxy.common_utils.callback_utils import (
 )
 from litellm.proxy.guardrails.anthropic_sse import (
     anthropic_sse_chunks_from_response,
+    anthropic_sse_error_events,
     assemble_anthropic_sse_stream,
     is_raw_sse_stream,
     is_sse_error_stream,
-    without_cut_off_tool_use,
 )
 from litellm.types.guardrails import GuardrailEventHooks, LitellmParams
 from litellm.types.proxy.guardrails.guardrail_hooks.tool_permission import (
@@ -952,7 +952,9 @@ class ToolPermissionGuardrail(CustomGuardrail):
                 yield chunk
             return
 
-        anthropic_response: Final = assemble_anthropic_sse_stream(all_chunks, through_upstream_error=True)
+        anthropic_response: Final = assemble_anthropic_sse_stream(
+            all_chunks, restore_identity=bool(anthropic_sse_error_events(all_chunks)), through_upstream_error=True
+        )
         if anthropic_response is None:
             if is_raw_sse_stream(all_chunks) and not is_sse_error_stream(all_chunks):
                 raise GuardrailRaisedException(
@@ -972,10 +974,16 @@ class ToolPermissionGuardrail(CustomGuardrail):
     def _anthropic_stream_to_deliver(
         self, anthropic_response: ModelResponse, source_chunks: Sequence[object]
     ) -> Sequence[object]:
+        """The frames the client gets: on a failed upstream only what the check read, never the upstream's own.
+
+        Assembly reads past an upstream error, and a client can read a frame of a broken stream that assembly
+        does not, so forwarding those frames would pass a tool call nobody checked.
+        """
         denials: Final = self._check_assembled_stream(anthropic_response)
-        if not denials:
-            return without_cut_off_tool_use(source_chunks)
-        self._modify_response_with_permission_errors(anthropic_response, denials)
+        if denials:
+            self._modify_response_with_permission_errors(anthropic_response, denials)
+        elif not anthropic_sse_error_events(source_chunks):
+            return source_chunks
         return anthropic_sse_chunks_from_response(anthropic_response, source_chunks, keep_explanations=True)
 
     def _check_assembled_stream(

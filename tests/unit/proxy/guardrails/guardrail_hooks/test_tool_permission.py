@@ -1474,25 +1474,50 @@ class TestToolPermissionGuardrailAnthropicMessages:
             if isinstance(block := event.get("content_block"), dict) and block.get("type") == "tool_use"
         ]
 
+    def _client_blocks(self, chunks: list[bytes]) -> list[tuple[object, ...]]:
+        events: Final = self._events(chunks)
+        stopped: Final = {event["index"] for event in events if event["type"] == "content_block_stop"}
+
+        def content_of(index: object) -> str:
+            deltas: Final = (e["delta"] for e in events if e["type"] == "content_block_delta" and e["index"] == index)
+            return "".join(delta.get("text") or delta.get("partial_json") or "" for delta in deltas)
+
+        return [
+            (event["content_block"]["type"], event["content_block"].get("name"), content_of(event["index"]), event["index"] in stopped)
+            for event in events
+            if event["type"] == "content_block_start"
+        ]
+
     @pytest.mark.asyncio
-    @pytest.mark.parametrize(
-        "delivered_events", [0, 1, 3, 7], ids=["before-message-start", "before-content", "mid-text", "after-allowed-tool"]
-    )
-    async def test_stream_ended_by_an_upstream_error_is_passed_through_verbatim(self, delivered_events: int):
-        chunks: Final = self._ended_by_upstream_error(self._sse_chunks("Bash")[:delivered_events])
+    async def test_stream_of_only_an_upstream_error_is_passed_through_verbatim(self):
+        chunks: Final = self._ended_by_upstream_error([])
 
         out: Final = await self._drain(self.blocking, chunks)
 
         assert out == chunks, "the client must see the upstream error, not a guardrail block that hides it"
 
     @pytest.mark.asyncio
-    async def test_non_object_data_frame_in_a_stream_ended_by_an_upstream_error_is_passed_through_verbatim(self):
+    @pytest.mark.parametrize("delivered_events", [1, 3, 7], ids=["before-content", "mid-text", "after-allowed-tool"])
+    async def test_stream_ended_by_an_upstream_error_gives_the_client_what_the_check_read(self, delivered_events: int):
+        delivered: Final = self._sse_chunks("Bash")[:delivered_events]
+
+        out: Final = await self._drain(self.blocking, self._ended_by_upstream_error(delivered))
+
+        events: Final = self._events(out)
+        assert self._client_blocks(out) == self._client_blocks(delivered)
+        assert events[0]["message"]["id"] == "msg_1", "only the frames are rebuilt, the message stays the upstream's"
+        assert events[-1] == self.UPSTREAM_ERROR, "the client must see the upstream error, not a guardrail block"
+        assert {"message_delta", "message_stop"}.isdisjoint(event["type"] for event in events)
+
+    @pytest.mark.asyncio
+    async def test_non_object_data_frame_in_a_stream_ended_by_an_upstream_error_is_left_out(self):
         sse_chunks: Final = self._sse_chunks("Bash")
         chunks: Final = self._ended_by_upstream_error([sse_chunks[0], b"data: 5\n\n", *sse_chunks[1:3]])
 
         out: Final = await self._drain(self.blocking, chunks)
 
-        assert out == chunks
+        assert self._client_blocks(out) == self._client_blocks(sse_chunks[:3])
+        assert b"data: 5" not in b"".join(out)
 
     @pytest.mark.asyncio
     async def test_allowed_stream_led_by_a_non_object_data_line_is_passed_through_verbatim(self):
@@ -1530,7 +1555,8 @@ class TestToolPermissionGuardrailAnthropicMessages:
 
         out: Final = await self._drain(self.blocking, chunks)
 
-        assert b"".join(out) == b"".join([*delivered, error_frame])
+        assert self._client_blocks(out[:-1]) == self._client_blocks(delivered)
+        assert out[-1] == error_frame
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("block_type", ["server_tool_use", "mcp_tool_use"])
@@ -1540,7 +1566,8 @@ class TestToolPermissionGuardrailAnthropicMessages:
 
         out: Final = await self._drain(self.blocking, chunks)
 
-        assert b"".join(out) == b"".join([*delivered, *self._ended_by_upstream_error([])])
+        assert self._client_blocks(out) == self._client_blocks(delivered)
+        assert self._events(out)[-1] == self.UPSTREAM_ERROR
 
     @pytest.mark.asyncio
     async def test_error_name_on_a_message_delta_frame_keeps_the_stream_as_sent(self):
@@ -1580,16 +1607,95 @@ class TestToolPermissionGuardrailAnthropicMessages:
         with pytest.raises(GuardrailRaisedException, match="could not be verified"):
             await self._drain(self.blocking, chunks)
 
+    DENIED_CALL_EVENTS: Final = (
+        {"type": "content_block_start", "index": 0,
+         "content_block": {"type": "tool_use", "id": "tu_1", "name": "Read", "input": {}}},
+        {"type": "content_block_delta", "index": 0,
+         "delta": {"type": "input_json_delta", "partial_json": '{"command": "ls"}'}},
+        {"type": "content_block_stop", "index": 0},
+    )
+    DENIED_CALL: Final = tuple(f"event: {e['type']}\ndata: {json.dumps(e)}\n\n".encode() for e in DENIED_CALL_EVENTS)
+    THINKING_AT_THE_SAME_INDEX: Final = (
+        b'event: content_block_start\ndata: {"type": "content_block_start", "index": 0, '
+        b'"content_block": {"type": "thinking", "thinking": "", "signature": ""}}\n\n'
+    )
+    ERROR_WITH_CR_LINE_ENDS: Final = f"event: error\rdata: {json.dumps(UPSTREAM_ERROR)}\r\r".encode()
+    DENIED_CALLS_ASSEMBLY_CANNOT_READ: Final = {
+        "reused-block-index": (*DENIED_CALL[:2], THINKING_AT_THE_SAME_INDEX),
+        "cr-line-ends": tuple(frame.replace(b"\n", b"\r") for frame in DENIED_CALL),
+        "behind-a-glued-crlf-ping": (b'event: ping\r\ndata: {"type": "ping"}\r\n\r\n' + b"".join(DENIED_CALL),),
+        "finished-mcp-call": tuple(frame.replace(b'"tool_use"', b'"mcp_tool_use"') for frame in DENIED_CALL),
+        "behind-a-form-feed": tuple(
+            b'data: {"type": "ping"}\x0c' + frame.split(b"\n", 1)[1] for frame in DENIED_CALL
+        ),
+        "over-two-data-lines": tuple(frame.replace(b", ", b",\ndata: ", 1) for frame in DENIED_CALL),
+        "glued-to-the-error-frame": (ERROR_WITH_CR_LINE_ENDS + b"".join(DENIED_CALL).replace(b"\n", b"\r"),),
+    }
+
     @pytest.mark.asyncio
-    async def test_denied_tool_use_split_over_data_lines_after_a_plain_message_start_is_blocked(self):
-        def over_two_data_lines(frame: bytes) -> bytes:
-            return frame.replace(b", ", b",\ndata: ", 1)
+    @pytest.mark.parametrize("frames", DENIED_CALLS_ASSEMBLY_CANNOT_READ.values(), ids=DENIED_CALLS_ASSEMBLY_CANNOT_READ)
+    async def test_denied_call_assembly_cannot_read_never_reaches_the_client_past_an_upstream_error(
+        self, frames: tuple[bytes, ...]
+    ):
+        chunks: Final = self._ended_by_upstream_error([self._sse_chunks("Read")[0], *frames])
 
-        message_start, *content = self._sse_chunks("Bash")
-        chunks: Final = self._ended_by_upstream_error([message_start, *map(over_two_data_lines, content)])
+        out: Final = await self._drain(self.blocking, chunks)
 
-        with pytest.raises(GuardrailRaisedException, match="could not be verified"):
-            await self._drain(self.blocking, chunks)
+        assert b"Read" not in b"".join(out)
+        assert self._events(out)[-1] == self.UPSTREAM_ERROR
+
+    @pytest.mark.asyncio
+    async def test_denied_call_inside_message_start_never_reaches_the_client_past_an_upstream_error(self):
+        message_start, *_ = self._sse_chunks("Read")
+        call: Final = json.dumps(self._tool_use("Read")).encode()
+        chunks: Final = self._ended_by_upstream_error([message_start.replace(b'"content": []', b'"content": [' + call + b"]")])
+
+        out: Final = await self._drain(self.blocking, chunks)
+
+        assert b"Read" not in b"".join(out)
+        assert self._events(out)[-1] == self.UPSTREAM_ERROR
+
+    @pytest.mark.asyncio
+    async def test_client_gets_the_input_the_check_read_when_deltas_interleave_before_an_upstream_error(self):
+        guardrail: Final = ToolPermissionGuardrail(
+            guardrail_name="anthropic-param-block",
+            rules=[
+                {"id": "read_any", "tool_name": r"^Read$", "decision": "allow"},
+                {
+                    "id": "bash_ls_only",
+                    "tool_name": r"^Bash$",
+                    "decision": "allow",
+                    "allowed_param_patterns": {"command": r"^ls$"},
+                },
+            ],
+            default_action="deny",
+            on_disallowed_action="block",
+        )
+
+        def tool_start(index: int, tool_id: str, name: str) -> dict[str, object]:
+            block: Final = {"type": "tool_use", "id": tool_id, "name": name, "input": {}}
+            return {"type": "content_block_start", "index": index, "content_block": block}
+
+        def tool_input(index: int, command: str) -> dict[str, object]:
+            partial_json: Final = json.dumps({"command": command})
+            return {"type": "content_block_delta", "index": index, "delta": {"type": "input_json_delta", "partial_json": partial_json}}
+
+        events: Final = (
+            tool_start(0, "tu_1", "Read"),
+            tool_start(1, "tu_2", "Bash"),
+            tool_input(0, "ls"),
+            {"type": "content_block_start", "index": 2, "content_block": {"type": "text", "text": ""}},
+            tool_input(1, "rm -rf /"),
+            {"type": "content_block_stop", "index": 0},
+            {"type": "content_block_stop", "index": 1},
+            {"type": "content_block_stop", "index": 2},
+        )
+        frames: Final = [f"event: {e['type']}\ndata: {json.dumps(e)}\n\n".encode() for e in events]
+
+        out: Final = await self._drain(guardrail, self._ended_by_upstream_error([self._sse_chunks("Bash")[0], *frames]))
+
+        assert b"rm -rf" not in b"".join(out)
+        assert self._events(out)[-1] == self.UPSTREAM_ERROR
 
     @pytest.mark.asyncio
     async def test_denied_tool_use_named_only_by_its_event_lines_beside_an_upstream_error_is_blocked(self):
@@ -1673,17 +1779,18 @@ class TestToolPermissionGuardrailAnthropicMessages:
     @pytest.mark.parametrize(
         ("sent_events", "cut_off_index"), [(1, 0), (4, 1)], ids=["tool-call-first", "after-finished-text"]
     )
-    async def test_stream_cut_off_mid_tool_call_with_nothing_denied_reaches_the_client_as_sent_without_that_call(
+    async def test_stream_cut_off_mid_tool_call_with_nothing_denied_shows_the_client_no_block_the_upstream_did_not_finish(
         self, sent_events: int, cut_off_index: int
     ):
         """Claude Code retries a stream that failed before any block finished, but not one that shows a
-        finished block, so the cut-off call is dropped from the stream as sent rather than rewritten."""
+        finished block, so the rebuilt stream must not finish a block for the upstream."""
         sent_before_the_cut: Final = self._sse_chunks("Bash")[:sent_events]
         chunks: Final = self._ended_by_upstream_error([*sent_before_the_cut, *self._cut_off_tool_use(cut_off_index, "Bash")])
 
-        events: Final = self._events(await self._drain(self.blocking, chunks))
+        out: Final = await self._drain(self.blocking, chunks)
 
-        assert events == self._events(self._ended_by_upstream_error(sent_before_the_cut))
+        assert self._client_blocks(out) == self._client_blocks(sent_before_the_cut)
+        assert self._events(out)[-1] == self.UPSTREAM_ERROR
 
     @pytest.mark.asyncio
     async def test_unfinished_allowed_tool_call_with_no_upstream_error_reaches_the_client_as_sent(self):
