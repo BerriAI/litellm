@@ -10,7 +10,6 @@ from typing import Final
 from zipfile import ZipFile
 
 import pytest
-from pydantic import JsonValue, TypeAdapter
 from integration._support.client import (
     JSON_OBJECT,
     Gateway,
@@ -21,6 +20,7 @@ from integration._support.client import (
 )
 from integration._support.process import OwnedProxy, graceful_stop_seconds, owned_proxy_process
 from integration._support.wire import Reply, Request, Wire, wire_server
+from pydantic import JsonValue, TypeAdapter
 
 pytestmark: Final = pytest.mark.timeout(int(2 * graceful_stop_seconds() + 120))
 
