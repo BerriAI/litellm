@@ -307,7 +307,7 @@ except (ImportError, AttributeError, TypeError):
 # Convert to str (if necessary)
 claude_json_str = json.dumps(json_data)
 import importlib.metadata
-from collections.abc import AsyncIterator, Callable, Collection, Iterable, Iterator, Mapping, Sequence, Sized
+from collections.abc import AsyncIterator, Awaitable, Callable, Collection, Iterable, Iterator, Mapping, Sequence, Sized
 from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypeAlias, TypeVar, cast, runtime_checkable
 
 from typing_extensions import assert_never
@@ -2286,13 +2286,18 @@ def client(original_function):
                         kwargs["num_retries"] = num_retries
                         return litellm.responses_with_retries(*args, **kwargs)
             elif call_type in (CallTypes.decisions.value, CallTypes.systemone.value):
-                decision_num_retries, decision_kwargs = _get_wrapper_num_retries(kwargs=kwargs, exception=e)
+                decision_num_retries, decision_kwargs = _get_wrapper_num_retries(
+                    kwargs=cast("dict[str, object]", kwargs),  # cast-ok: decorator kwargs always have string keys
+                    exception=e,
+                )
                 if (
                     decision_num_retries
                     and not _is_litellm_router_call(decision_kwargs, is_async=False)
                     and isinstance(e, openai.APIError)
                 ):
-                    return litellm.completion_with_retries(
+                    return cast(  # cast-ok: legacy retry helper forwards arbitrary SDK arguments
+                        "Callable[..., object]", litellm.completion_with_retries
+                    )(
                         *args,
                         **{**decision_kwargs, "num_retries": decision_num_retries, "original_function": wrapper},
                     )
@@ -2625,7 +2630,9 @@ def client(original_function):
                     and not _is_litellm_router_call(kwargs, is_async=True)
                     and isinstance(e, openai.APIError)
                 ):
-                    return await litellm.acompletion_with_retries(
+                    return await cast(  # cast-ok: legacy retry helper forwards arbitrary SDK arguments
+                        "Callable[..., Awaitable[object]]", litellm.acompletion_with_retries
+                    )(
                         *args,
                         **{
                             **kwargs,
