@@ -4,6 +4,7 @@ from contextlib import nullcontext
 from typing import Final
 from unittest.mock import Mock
 
+import httpx
 import pytest
 from cryptography.exceptions import InternalError
 from cryptography.hazmat.bindings._rust import openssl as rust_openssl
@@ -135,12 +136,16 @@ def test_enforce_fips_mode(
 class _Database:
     """Prisma's raw-query edge over a database whose only LiteLLM table besides LiteLLM_Config is the key table."""
 
-    def __init__(self, *, marked_fips: bool, holds_rows: bool, readable: bool = True) -> None:
+    def __init__(self, *, marked_fips: bool, holds_rows: bool, readable: bool = True, dropped_reads: int = 0) -> None:
         self.marked_fips = marked_fips
         self.holds_rows = holds_rows
         self.readable = readable
+        self.dropped_reads = dropped_reads
 
     async def query_raw(self, query: str, *args: object) -> Sequence[Mapping[str, object]]:
+        if self.dropped_reads:
+            self.dropped_reads -= 1
+            raise httpx.ReadError("connection dropped")
         if not self.readable:
             raise RuntimeError('relation "LiteLLM_Config" does not exist')
         if "information_schema.tables" in query:
@@ -158,6 +163,11 @@ class _Prisma:
     def __init__(self, database: _Database) -> None:
         self.writer_db: Final = database
 
+    async def attempt_db_reconnect(
+        self, *, reason: str, timeout_seconds: float | None = None, lock_timeout_seconds: float | None = None
+    ) -> bool:
+        return True
+
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
@@ -170,6 +180,19 @@ class _Prisma:
         (False, _Database(marked_fips=True, holds_rows=True), "set up with general_settings.fips_mode: true", True),
         (False, _Database(marked_fips=False, holds_rows=True), None, False),
         (False, _Database(marked_fips=True, holds_rows=True, readable=False), None, True),
+        (
+            True,
+            _Database(marked_fips=False, holds_rows=True, dropped_reads=1),
+            "already holds data written without it",
+            False,
+        ),
+        (
+            False,
+            _Database(marked_fips=True, holds_rows=True, dropped_reads=1),
+            "set up with general_settings.fips_mode: true",
+            True,
+        ),
+        (False, _Database(marked_fips=True, holds_rows=True, dropped_reads=2), None, True),
     ],
     ids=[
         "fips-on-new-database",
@@ -179,6 +202,9 @@ class _Prisma:
         "fips-off-fips-database",
         "fips-off-used-database",
         "fips-off-unreadable-database",
+        "fips-on-used-database-after-a-dropped-connection",
+        "fips-off-fips-database-after-a-dropped-connection",
+        "fips-off-fips-database-dropped-twice",
     ],
 )
 async def test_enforce_fips_database(

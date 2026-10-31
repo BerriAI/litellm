@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import Final, Protocol, cast  # noqa: TID251  # Prisma delegates query_raw and execute_raw dynamically
 
 from litellm.proxy.db.create_views import SupportsRawQueries
+from litellm.proxy.db.exception_handler import call_with_db_reconnect_retry
 
 FIPS_MARKER: Final = "fips_mode"
 _IS_MARKED: Final = 'SELECT 1 FROM "LiteLLM_Config" WHERE param_name = $1'
@@ -25,6 +26,10 @@ class _WithWriter(Protocol):
     @property
     def writer_db(self) -> object: ...
 
+    async def attempt_db_reconnect(
+        self, *, reason: str, timeout_seconds: float | None = None, lock_timeout_seconds: float | None = None
+    ) -> bool: ...
+
 
 @dataclass(frozen=True, slots=True)
 class FipsDatabaseState:
@@ -33,7 +38,8 @@ class FipsDatabaseState:
 
 
 class FipsRepository:
-    """Reads and writes go to the writer, since a replica may not have the marker yet."""
+    """Reads and writes go to the writer, since a replica may not have the marker yet. A read that loses its
+    connection reconnects and runs once more."""
 
     def __init__(self, prisma_client: _WithWriter) -> None:
         self._prisma_client: Final = prisma_client
@@ -44,10 +50,20 @@ class FipsRepository:
         return cast(SupportsRawQueries, writer)  # cast-ok: Prisma delegates database methods dynamically
 
     async def is_marked_fips(self) -> bool:
-        return bool(await self._writer.query_raw(_IS_MARKED, FIPS_MARKER))
+        return await call_with_db_reconnect_retry(
+            self._prisma_client, self._read_marker, reason="fips_startup_read_marker_failure"
+        )
 
     async def state(self) -> FipsDatabaseState:
         """The marker and whether any other LiteLLM row exists, read in one statement so they agree."""
+        return await call_with_db_reconnect_retry(
+            self._prisma_client, self._read_state, reason="fips_startup_read_state_failure"
+        )
+
+    async def _read_marker(self) -> bool:
+        return bool(await self._writer.query_raw(_IS_MARKED, FIPS_MARKER))
+
+    async def _read_state(self) -> FipsDatabaseState:
         writer: Final = self._writer
         tables: Final = tuple(str(row["table_name"]) for row in await writer.query_raw(_OTHER_TABLES))
         any_row_in_other_tables: Final = "".join(f" OR EXISTS (SELECT 1 FROM {_quoted(table)})" for table in tables)
