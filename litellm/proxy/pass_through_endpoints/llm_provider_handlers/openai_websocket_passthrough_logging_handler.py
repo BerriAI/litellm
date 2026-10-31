@@ -22,12 +22,15 @@ WebsocketMessages: TypeAlias = Sequence[Mapping[str, object]]
 OPENAI_WEBSOCKET_PROVIDER: Final = LlmProviders.OPENAI.value
 
 _SESSION_CREATED: Final = "session.created"
+_SESSION_UPDATED: Final = "session.updated"
 _RESPONSE_CREATED: Final = "response.created"
 _ERROR: Final = "error"
 _REALTIME_RESPONSE_DONE: Final = "response.done"
+_TRANSCRIPTION_COMPLETED: Final = "conversation.item.input_audio_transcription.completed"
 _RESPONSES_TURN_ENDS: Final = frozenset({"response.completed", "response.incomplete", "response.failed"})
 _TURN_ENDS: Final = _RESPONSES_TURN_ENDS | {_REALTIME_RESPONSE_DONE}
-_MODEL_NAMING_EVENTS: Final = _TURN_ENDS | {_SESSION_CREATED, _RESPONSE_CREATED}
+_MODEL_NAMING_EVENTS: Final = _TURN_ENDS | {_SESSION_CREATED, _SESSION_UPDATED, _RESPONSE_CREATED}
+_REALTIME_BILLED_EVENTS: Final = frozenset({_REALTIME_RESPONSE_DONE, _TRANSCRIPTION_COMPLETED})
 _RESPONSE_COST_HEADER: Final = "llm_provider-x-litellm-response-cost"
 
 
@@ -37,10 +40,29 @@ class _NamedModel(BaseModel):
     model: str | None = None
 
 
+class _AudioInput(BaseModel):
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+    transcription: _NamedModel | None = None
+
+
+class _SessionAudio(BaseModel):
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+    input: _AudioInput | None = None
+
+
+class _NamedSession(BaseModel):
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+    model: str | None = None
+    audio: _SessionAudio | None = None
+
+
 class _ModelNamingEvent(BaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True)
 
-    session: _NamedModel | None = None
+    session: _NamedSession | None = None
     response: _NamedModel | None = None
 
 
@@ -75,14 +97,11 @@ def _event_model(event: Mapping[str, object]) -> str | None:
         naming: Final = _MODEL_NAMING_EVENT.validate_python(event)
     except ValidationError:
         return None
-    return next(
-        (
-            container.model
-            for container in (naming.session, naming.response)
-            if container is not None and container.model
-        ),
-        None,
-    )
+    session: Final = naming.session or _NamedSession()
+    response: Final = naming.response or _NamedModel()
+    audio_input: Final = (session.audio or _SessionAudio()).input or _AudioInput()
+    transcription: Final = audio_input.transcription or _NamedModel()
+    return session.model or response.model or transcription.model or None
 
 
 def observed_websocket_model(messages: WebsocketMessages) -> str | None:
@@ -103,7 +122,7 @@ def openai_websocket_frame_kind(frame: Mapping[str, object]) -> WebsocketUpstrea
 
 
 def _realtime_billing(messages: WebsocketMessages, model: str, logging_obj: LiteLLMLoggingObj) -> _Billing | None:
-    if not any(event.get("type") == _REALTIME_RESPONSE_DONE for event in messages):
+    if not any(event.get("type") in _REALTIME_BILLED_EVENTS for event in messages):
         return None
     results: Final = cast(  # cast-ok: the realtime cost helpers read raw provider frames through their TypedDict view
         OpenAIRealtimeStreamList, tuple(event for event in messages if "type" in event)

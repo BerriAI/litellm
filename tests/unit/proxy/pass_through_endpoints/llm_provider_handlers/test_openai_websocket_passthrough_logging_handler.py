@@ -19,6 +19,7 @@ from litellm.proxy.pass_through_endpoints.llm_provider_handlers.openai_websocket
 REALTIME_MODEL: Final = "gpt-realtime-2.1"
 RESPONSES_MODEL: Final = "gpt-5.4-mini"
 REASONING_MODEL: Final = "gpt-5.4"
+TRANSCRIPTION_MODEL: Final = "gpt-4o-mini-transcribe"
 SESSION_START: Final = datetime(2026, 1, 1, 12, 0, 0)
 
 
@@ -306,6 +307,83 @@ def test_a_turn_the_caller_walked_out_of_still_names_the_model_it_ran():
     assert handled["result"] is None
     assert handled["kwargs"] == {"model": REASONING_MODEL, "custom_llm_provider": "openai"}
     assert logging_obj.model_call_details["model"] == REASONING_MODEL
+
+
+def _transcription_session(model: str) -> tuple[dict[str, object], ...]:
+    return (
+        {"type": "session.created", "session": {"type": "transcription", "audio": {"input": {"transcription": None}}}},
+        {
+            "type": "session.updated",
+            "session": {"type": "transcription", "audio": {"input": {"transcription": {"model": model}}}},
+        },
+    )
+
+
+def _transcription_completed(usage: Mapping[str, object]) -> dict[str, object]:
+    return {
+        "type": "conversation.item.input_audio_transcription.completed",
+        "item_id": "item_fake",
+        "transcript": "hello",
+        "usage": usage,
+    }
+
+
+@pytest.mark.parametrize(
+    ("usage", "billed_units"),
+    [
+        ({"type": "duration", "seconds": 3}, ((3, "input_cost_per_second"),)),
+        (
+            {
+                "type": "tokens",
+                "input_tokens": 30,
+                "output_tokens": 11,
+                "input_token_details": {"text_tokens": 0, "audio_tokens": 30},
+            },
+            ((30, "input_cost_per_audio_token"), (11, "output_cost_per_token")),
+        ),
+    ],
+)
+def test_a_transcription_session_is_billed_for_every_clip_it_transcribed(usage, billed_units):
+    handled: Final = _handle(
+        [
+            *_transcription_session(TRANSCRIPTION_MODEL),
+            _transcription_completed(usage),
+            _transcription_completed(usage),
+        ],
+        url_route="/openai_passthrough/v1/realtime",
+    )
+
+    logged_cost: Final = litellm.response_cost_calculator(
+        response_object=handled["result"],
+        model=handled["kwargs"]["model"],
+        custom_llm_provider="openai",
+        call_type="completion",
+        optional_params={},
+    )
+
+    prices: Final = litellm.model_cost[TRANSCRIPTION_MODEL]
+    expected_cost: Final = 2 * sum(units * prices[rate] for units, rate in billed_units)
+    assert expected_cost > 0
+    assert handled["kwargs"]["model"] == TRANSCRIPTION_MODEL
+    assert handled["kwargs"]["response_cost"] == pytest.approx(expected_cost)
+    assert logged_cost == pytest.approx(expected_cost)
+
+
+def test_a_conversation_that_also_transcribes_the_caller_is_logged_on_its_own_model():
+    handled: Final = _handle(
+        [
+            {
+                "type": "session.created",
+                "session": {
+                    "model": REALTIME_MODEL,
+                    "audio": {"input": {"transcription": {"model": TRANSCRIPTION_MODEL}}},
+                },
+            },
+            _realtime_response_done(text_in=10, audio_in=0, text_out=5, audio_out=0),
+        ]
+    )
+
+    assert handled["kwargs"]["model"] == REALTIME_MODEL
 
 
 @pytest.mark.parametrize("event", ["response.incomplete", "response.failed"])
