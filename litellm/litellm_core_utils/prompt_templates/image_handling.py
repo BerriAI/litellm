@@ -5,7 +5,7 @@ Helper functions to handle images passed in messages
 import asyncio
 import base64
 import time
-from collections.abc import AsyncIterator, Callable, Iterable, Mapping
+from collections.abc import AsyncIterator, Callable, Iterable, Iterator, Mapping
 from dataclasses import dataclass
 from itertools import chain, takewhile
 from types import MappingProxyType
@@ -209,10 +209,6 @@ def inline_remote_image_urls(media: RemoteMedia) -> bool:
     return media.part_type == "image_url"
 
 
-def inline_remote_file_urls(media: RemoteMedia) -> bool:
-    return media.part_type == "file"
-
-
 def _parse_remote_image(fields: Mapping[str, object]) -> _RemoteImage | None:
     if fields.get("type") != "image_url":
         return None
@@ -229,9 +225,7 @@ def _parse_remote_file(fields: Mapping[str, object]) -> _RemoteFile | None:
 
 
 def _parse_remote_source(fields: Mapping[str, object]) -> _RemoteSource | None:
-    part_type: Final = fields.get("type")
-    is_media_block: Final = isinstance(part_type, str) and part_type in _ANTHROPIC_MEDIA_BLOCK_TYPES
-    source: Final = _as_mapping(fields.get("source")) if is_media_block else None
+    source: Final = _as_mapping(fields.get("source")) if fields.get("type") in _ANTHROPIC_MEDIA_BLOCK_TYPES else None
     url: Final = _remote_url(source.get("url")) if source is not None and source.get("type") == "url" else None
     return _RemoteSource(fields, source, url) if source is not None and url is not None else None
 
@@ -351,29 +345,47 @@ async def async_fetch_urls_to_base64(
     return MappingProxyType(dict(zip(remote_urls[: len(outcomes)], outcomes, strict=True)))
 
 
-def _remote_urls_in_parts(parts: Iterable[object], should_inline: Callable[[RemoteMedia], bool]) -> tuple[str, ...]:
+def _remote_urls_to_inline(
+    messages: Iterable[AllMessageValues], should_inline: Callable[[RemoteMedia], bool]
+) -> tuple[str, ...]:
+    parts: Final = chain.from_iterable(_content_parts(message) for message in messages)
     remotes: Final = (remote for part in parts if (remote := _parse_remote_part(part)) is not None)
     return tuple(dict.fromkeys(remote.url for remote in remotes if should_inline(_remote_media(remote))))
 
 
-def _remote_urls_to_inline(
-    messages: Iterable[AllMessageValues], should_inline: Callable[[RemoteMedia], bool]
-) -> tuple[str, ...]:
-    return _remote_urls_in_parts(chain.from_iterable(_content_parts(message) for message in messages), should_inline)
+def _message_parts(messages: Iterable[AllMessageValues]) -> Iterator[object]:
+    return chain.from_iterable(_content_parts(message) for message in messages)
 
 
-def _is_not_a_file_part_missing_its_file(part: object) -> bool:
+def _file_of_file_part(part: object) -> Mapping[str, object] | None:
     fields: Final = _as_mapping(part)
-    return fields is None or fields.get("type") != "file" or fields.get("file") is not None
+    return _as_mapping(fields.get("file")) if fields is not None and fields.get("type") == "file" else None
 
 
-def has_remote_file_urls(messages: Iterable[AllMessageValues]) -> bool:
-    return bool(_remote_urls_to_inline(messages, inline_remote_file_urls))
+def _file_id_url(part: object, url_starts: tuple[str, ...]) -> str | None:
+    file: Final = _file_of_file_part(part)
+    file_id: Final = file.get("file_id") if file is not None else None
+    return file_id if isinstance(file_id, str) and file_id.startswith(url_starts) else None
 
 
-def remote_file_urls(messages: Iterable[AllMessageValues]) -> tuple[str, ...]:
-    parts: Final = chain.from_iterable(_content_parts(message) for message in messages)
-    return _remote_urls_in_parts(takewhile(_is_not_a_file_part_missing_its_file, parts), inline_remote_file_urls)
+def _is_readable_file_part_or_other_part(part: object) -> bool:
+    fields: Final = _as_mapping(part)
+    if fields is None or fields.get("type") != "file":
+        return fields is not None
+    file: Final = _file_of_file_part(part)
+    file_id: Final = file.get("file_id") if file is not None else None
+    return file is not None and (not file_id or isinstance(file_id, str))
+
+
+def has_file_id_urls(messages: Iterable[AllMessageValues], url_starts: tuple[str, ...]) -> bool:
+    return any(_file_id_url(part, url_starts) is not None for part in _message_parts(messages))
+
+
+def file_id_urls_before_an_unreadable_part(
+    messages: Iterable[AllMessageValues], url_starts: tuple[str, ...]
+) -> tuple[str, ...]:
+    readable_parts: Final = takewhile(_is_readable_file_part_or_other_part, _message_parts(messages))
+    return tuple(dict.fromkeys(url for part in readable_parts if (url := _file_id_url(part, url_starts)) is not None))
 
 
 def inline_remote_media(

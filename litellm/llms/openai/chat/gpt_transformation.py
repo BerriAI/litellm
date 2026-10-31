@@ -36,8 +36,8 @@ from litellm.litellm_core_utils.prompt_templates.image_handling import (
     async_convert_url_to_base64,
     async_fetch_urls_to_base64,
     convert_url_to_base64,
-    has_remote_file_urls,
-    remote_file_urls,
+    file_id_urls_before_an_unreadable_part,
+    has_file_id_urls,
 )
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
@@ -86,6 +86,7 @@ else:
 _NO_TOOLS_UPDATE: Final[Mapping[str, object]] = MappingProxyType({})
 
 _ROLES_WHOSE_FILES_ARE_DOWNLOADED: Final = ("user", "tool")
+_PDF_URL_STARTS: Final = ("https://", "http://", "www.")
 _NOTHING_PREFETCHED: Final[Mapping[str, "str | litellm.ImageFetchError"]] = MappingProxyType({})
 _prefetched_pdf_urls: Final[ContextVar[Mapping[str, "str | litellm.ImageFetchError"]]] = ContextVar(
     "prefetched_pdf_urls"
@@ -330,9 +331,8 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         )
 
     def contains_pdf_url(self, content_item: ChatCompletionFileObjectFile) -> bool:
-        potential_pdf_url_starts: Final = ["https://", "http://", "www."]
         file_id: Final = content_item.get("file_id")
-        if file_id and any(file_id.startswith(start) for start in potential_pdf_url_starts):
+        if file_id and any(file_id.startswith(start) for start in _PDF_URL_STARTS):
             return True
         return False
 
@@ -687,6 +687,9 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
     def _flattens_content_lists(self) -> bool:
         return False
 
+    def _with_provider_roles(self, messages: Sequence[AllMessageValues], model: str) -> Sequence[AllMessageValues]:
+        return messages
+
     async def async_transform_request(
         self,
         model: str,
@@ -695,10 +698,14 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         litellm_params: dict,
         headers: dict,
     ) -> dict:
-        if not has_remote_file_urls(messages):
+        if not has_file_id_urls(messages, _PDF_URL_STARTS):
             return self.transform_request(model, messages, optional_params, litellm_params, headers)
-        pdf_urls: Final = remote_file_urls(
-            message for message in messages if message.get("role") in _ROLES_WHOSE_FILES_ARE_DOWNLOADED
+        sent_messages: Final = self._with_provider_roles(
+            self._prompt_cache_ordered_messages(messages, litellm_params), model
+        )
+        pdf_urls: Final = file_id_urls_before_an_unreadable_part(
+            (message for message in sent_messages if message.get("role") in _ROLES_WHOSE_FILES_ARE_DOWNLOADED),
+            _PDF_URL_STARTS,
         )
         prefetched: Final = (
             _NOTHING_PREFETCHED if self._flattens_content_lists() else await async_fetch_urls_to_base64(pdf_urls)
