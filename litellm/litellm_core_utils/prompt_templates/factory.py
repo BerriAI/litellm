@@ -8,7 +8,9 @@ import re
 import xml.etree.ElementTree as ET
 from collections.abc import Callable, Container, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, replace
+from email.message import Message
 from enum import Enum
+from functools import cache, partial
 from types import MappingProxyType
 from typing import Annotated, Any, Final, TypeAlias, TypedDict, TypeVar, cast, overload
 
@@ -24,13 +26,16 @@ from litellm._uuid import uuid
 from litellm.constants import REDACTED_BY_LITELLM
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, attribute_or_none
 from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import (
+    answered_ids_by_index,
     anthropic_system_messages,
     find_anthropic_server_tool_result,
     is_anthropic_tool_search_use,
     message_field,
+    native_tool_use_id,
     parts_of,
     place_mid_conversation_system,
     split_leading_system_run,
+    tool_use_is_answered,
 )
 from litellm.litellm_core_utils.url_utils import async_safe_get, safe_get
 from litellm.llms.custom_httpx.http_handler import HTTPHandler, get_async_httpx_client, header_value
@@ -72,7 +77,9 @@ from .common_utils import (
     is_unsignable_thinking_block,
     native_redacted_thinking_data,
     parse_tool_call_arguments,
+    replace_invalid_tool_use_id_chars,
     salvage_concatenated_tool_arguments,
+    sanitize_anthropic_tool_use_id,
 )
 from .image_handling import convert_url_to_base64
 
@@ -872,6 +879,18 @@ def convert_generic_image_chunk_to_openai_image_obj(
     return "data:{};{},{}".format(media_type, image_chunk["type"], image_chunk["data"])
 
 
+_CHARSET_AWARE_MEDIA_TYPE: Final = "text/plain"
+
+
+def _media_type_with_original_parameters(format_override: str, original_media_type: str) -> str:
+    if format_override.strip().lower() != _CHARSET_AWARE_MEDIA_TYPE:
+        return format_override
+    base_type, separator, parameters = original_media_type.partition(";")
+    if not separator or base_type.strip().lower() != format_override.strip().lower():
+        return format_override
+    return f"{format_override}{separator}{parameters}"
+
+
 def convert_to_anthropic_image_obj(openai_image_url: str, format: str | None) -> GenericImageParsingChunk:
     """
     Input:
@@ -890,7 +909,7 @@ def convert_to_anthropic_image_obj(openai_image_url: str, format: str | None) ->
         # Extract the media type and base64 data
         media_type, base64_data = openai_image_url.split("data:")[1].split(";base64,")
 
-        if format:
+        if isinstance(format, str) and format:
             media_type = format
         else:
             media_type = media_type.replace("\\/", "/")
@@ -932,8 +951,14 @@ def create_anthropic_image_param(
         # as these providers don't support URL sources for images
         if is_bedrock_invoke or image_url.startswith("http://"):
             base64_url: Final = convert_url_to_base64(url=image_url)
-            image_chunk = convert_to_anthropic_image_obj(openai_image_url=base64_url, format=format)
-            return _anthropic_content_element_factory(image_chunk)
+            return anthropic_content_element_factory(
+                convert_to_anthropic_image_obj(openai_image_url=base64_url, format=format)
+            )
+        elif isinstance(format, str) and format.partition(";")[0].strip().lower() == "application/pdf":
+            return AnthropicMessagesDocumentParam(
+                type="document",
+                source=AnthropicContentParamSourceUrl(type="url", url=image_url),
+            )
         else:
             # HTTPS URL - pass directly for regular Anthropic
             return AnthropicMessagesImageParam(
@@ -945,8 +970,9 @@ def create_anthropic_image_param(
             )
     else:
         # Convert to base64 for data URIs or other formats
-        image_chunk = convert_to_anthropic_image_obj(openai_image_url=image_url, format=format)
-        return _anthropic_content_element_factory(image_chunk)
+        return anthropic_content_element_factory(
+            convert_to_anthropic_image_obj(openai_image_url=image_url, format=format)
+        )
 
 
 # The following XML functions will be deprecated once JSON schema support is available on Bedrock and Vertex
@@ -1759,20 +1785,9 @@ def convert_to_gemini_tool_call_result(
     return _part
 
 
-_TOOL_USE_ID_FALLBACK: Final = "tool_use_id"
-_ANTHROPIC_TOOL_USE_ID_INVALID_CHARS: Final = re.compile(r"[^a-zA-Z0-9_-]")
 _BEDROCK_TOOL_USE_ID_INVALID_CHARS: Final = re.compile(r"[^a-zA-Z0-9_.:-]")
 _BEDROCK_TOOL_USE_ID_MAX_LEN: Final = 64
 _BEDROCK_TOOL_USE_ID_HASH_LEN: Final = 8
-
-
-def _replace_invalid_tool_use_id_chars(tool_use_id: str, invalid_chars: re.Pattern[str]) -> str:
-    return invalid_chars.sub("_", tool_use_id) or _TOOL_USE_ID_FALLBACK
-
-
-def sanitize_anthropic_tool_use_id(tool_use_id: str) -> str:
-    """Anthropic requires tool_use_id to match ^[a-zA-Z0-9_-]+$."""
-    return _replace_invalid_tool_use_id_chars(tool_use_id, _ANTHROPIC_TOOL_USE_ID_INVALID_CHARS)
 
 
 def _sanitize_bedrock_tool_use_id(tool_use_id: str) -> str:
@@ -1781,7 +1796,7 @@ def _sanitize_bedrock_tool_use_id(tool_use_id: str) -> str:
     Ids that need rewriting get a short hash of the original appended so two ids that only
     differ in a replaced char or past the cut still map to distinct values.
     """
-    sanitized: Final = _replace_invalid_tool_use_id_chars(tool_use_id, _BEDROCK_TOOL_USE_ID_INVALID_CHARS)
+    sanitized: Final = replace_invalid_tool_use_id_chars(tool_use_id, _BEDROCK_TOOL_USE_ID_INVALID_CHARS)
     if sanitized == tool_use_id and len(sanitized) <= _BEDROCK_TOOL_USE_ID_MAX_LEN:
         return sanitized
     digest: Final = hashlib.sha256(tool_use_id.encode()).hexdigest()[:_BEDROCK_TOOL_USE_ID_HASH_LEN]
@@ -1791,15 +1806,87 @@ def _sanitize_bedrock_tool_use_id(tool_use_id: str) -> str:
 _ANTHROPIC_DOCUMENT_BASE64_MEDIA_TYPES: Final = {"application/pdf", "text/plain"}
 
 
-def _is_anthropic_document_data_uri(url: str) -> bool:
-    # Anthropic's base64 document source accepts only application/pdf and
-    # text/plain (see select_anthropic_content_block_type_for_file). Routing
-    # other mimes here would produce a document block the API rejects, so we
-    # leave them on the image code path.
+_PDF_SIGNATURE: Final = b"%PDF-"
+
+
+def _declared_media_type_for_data_uri(url: str, format_override: str | None) -> str | None:
+    if format_override and select_anthropic_content_block_type_for_file(format_override) != "container_upload":
+        return format_override
     match: Final = re.match(r"data:([^;,]+)", url)
-    if not match:
+    return match.group(1) if match else None
+
+
+def _base64_holds_a_pdf(data: str) -> bool:
+    try:
+        return base64.b64decode(data[:8]).startswith(_PDF_SIGNATURE)
+    except ValueError:
         return False
-    return match.group(1) in _ANTHROPIC_DOCUMENT_BASE64_MEDIA_TYPES
+
+
+def _data_uri_holds_a_pdf(url: str) -> bool:
+    _, _, payload = url.partition(",")
+    return _base64_holds_a_pdf(payload)
+
+
+def _data_uri_media_type(url: str) -> str:
+    header, separator, _ = url.partition(";base64,")
+    return header.removeprefix("data:") if separator and url.startswith("data:") else ""
+
+
+def anthropic_document_media_type_for_data_uri(url: str, format_override: str | None = None) -> str | None:
+    if not url.startswith("data:"):
+        return None
+    if _data_uri_holds_a_pdf(url):
+        return "application/pdf"
+    declared: Final = (_declared_media_type_for_data_uri(url, format_override) or "").lower()
+    return declared if declared in _ANTHROPIC_DOCUMENT_BASE64_MEDIA_TYPES else None
+
+
+def _anthropic_text_document_source(
+    media_type_with_parameters: str, data: str
+) -> AnthropicContentParamSourceText | None:
+    media_type, _, _ = media_type_with_parameters.partition(";")
+    if media_type.strip().lower() != "text/plain":
+        return None
+    content_type_header: Final = Message()
+    content_type_header["content-type"] = media_type_with_parameters
+    charset: Final = content_type_header.get_content_charset("utf-8")
+    try:
+        text: Final = base64.b64decode(data).decode(charset)
+    except (LookupError, UnicodeDecodeError) as decode_error:
+        raise litellm.BadRequestError(
+            message=f"Text attachment could not be read as {charset!r}: {decode_error}. "
+            "Send it as utf-8, or name its encoding (text/plain;charset=...) in the data URI "
+            "or in a file block's format.",
+            model=None,
+            llm_provider="anthropic",
+        ) from decode_error
+    return AnthropicContentParamSourceText(type="text", media_type="text/plain", data=text)
+
+
+def anthropic_document_block_from_data_uri(
+    url: str,
+    original_content_element: Mapping[str, object] | AllMessageValues,
+    media_type: str,
+) -> AnthropicMessagesDocumentParam:
+    synth_file_message: Final[ChatCompletionFileObject] = {
+        "type": "file",
+        "file": {"file_data": url, "format": media_type},
+    }
+    document_block: Final = anthropic_process_openai_file_message(synth_file_message)
+    return cast(
+        AnthropicMessagesDocumentParam,
+        add_cache_control_to_content(
+            anthropic_content_element=cast(AnthropicMessagesDocumentParam, document_block),
+            original_content_element=original_content_element,
+        ),
+    )
+
+
+def requires_inline_base64_media(model: str, llm_provider: str | None) -> bool:
+    if model.lower().startswith("invoke/"):
+        return True
+    return llm_provider is not None and llm_provider.startswith("vertex_ai")
 
 
 def convert_to_anthropic_tool_result(
@@ -1848,6 +1935,8 @@ def convert_to_anthropic_tool_result(
     ) = ""
     if isinstance(message["content"], str):
         anthropic_content = message["content"]
+    elif isinstance(message["content"], (Mapping, int, float)):
+        anthropic_content = json.dumps(message["content"])
     elif isinstance(message["content"], list):
         content_list: Final = message["content"]
         anthropic_content_list: list[
@@ -1872,20 +1961,13 @@ def convert_to_anthropic_tool_result(
                 image_url_value = content["image_url"]
                 format = image_url_value.get("format") if isinstance(image_url_value, dict) else None
                 url_str = image_url_value.get("url") if isinstance(image_url_value, dict) else image_url_value
-                # Data URIs with non-image mime types (e.g. application/pdf) must
-                # translate to Anthropic document blocks, not image blocks —
-                # wrapping a PDF in `type: "image"` is rejected by the API.
-                if isinstance(url_str, str) and _is_anthropic_document_data_uri(url_str):
-                    synth_file_message: ChatCompletionFileObject = {
-                        "type": "file",
-                        "file": {"file_data": url_str},
-                    }
-                    _document_block = anthropic_process_openai_file_message(synth_file_message)
-                    _document_block = add_cache_control_to_content(
-                        anthropic_content_element=cast(AnthropicMessagesDocumentParam, _document_block),
-                        original_content_element=content,
+                if (
+                    isinstance(url_str, str)
+                    and (document_media_type := anthropic_document_media_type_for_data_uri(url_str, format)) is not None
+                ):
+                    anthropic_content_list.append(
+                        anthropic_document_block_from_data_uri(url_str, content, document_media_type)
                     )
-                    anthropic_content_list.append(cast(AnthropicMessagesDocumentParam, _document_block))
                 else:
                     _anthropic_image_param = create_anthropic_image_param(
                         image_url_value,
@@ -2064,6 +2146,7 @@ def convert_to_anthropic_tool_invoke(
     web_search_results: Sequence[object] | None = None,
     tool_results: Sequence[object] | None = None,
     answered_tool_ids: Container[str] = frozenset(),
+    drop_params: bool = False,
 ) -> list[_AnthropicToolInvokeItem]:
     """
     OpenAI tool invokes:
@@ -2118,10 +2201,8 @@ def convert_to_anthropic_tool_invoke(
             str,
             get_attribute_or_key(get_attribute_or_key(tool, "function"), "name"),
         )
-        tool_input = parse_tool_call_arguments(
-            get_attribute_or_key(get_attribute_or_key(tool, "function"), "arguments"),
-            tool_name=tool_name,
-            context="Anthropic tool invoke",
+        tool_input = _tool_call_input(
+            get_attribute_or_key(get_attribute_or_key(tool, "function"), "arguments"), tool_name, drop_params
         )
 
         server_tool_result = (
@@ -2170,7 +2251,7 @@ def add_cache_control_to_content(
     | AnthropicMessagesDocumentParam
     | AnthropicMessagesToolUseParam
     | ChatCompletionThinkingBlock,
-    original_content_element: dict | AllMessageValues | ChatCompletionFileObject,
+    original_content_element: Mapping[str, object] | AllMessageValues | ChatCompletionFileObject,
 ):
     cache_control_param: Final = original_content_element.get("cache_control")
     if cache_control_param is not None and isinstance(cache_control_param, dict):
@@ -2181,16 +2262,91 @@ def add_cache_control_to_content(
     return anthropic_content_element
 
 
-def _anthropic_content_element_factory(
+_TOOL_USE_INPUT: Final = TypeAdapter(dict[str, object])
+
+
+def _object_unless_dropped(value: object, drop_params: bool) -> object:
+    if not drop_params:
+        return value
+    try:
+        return _TOOL_USE_INPUT.validate_python(value)
+    except ValidationError:
+        return {}
+
+
+def _tool_call_input(arguments: str | Mapping[str, object] | None, tool_name: str, drop_params: bool) -> object:
+    try:
+        return _object_unless_dropped(
+            parse_tool_call_arguments(arguments, tool_name=tool_name, context="Anthropic tool invoke"), drop_params
+        )
+    except ValueError:
+        if drop_params:
+            return {}
+        raise
+
+
+def _tool_use_input_object(value: object, tool_name: str) -> dict[str, object]:
+    try:
+        return _TOOL_USE_INPUT.validate_python(value)
+    except ValidationError as error:
+        raise ValueError(
+            f"Tool input for tool '{tool_name}' (Anthropic assistant tool_use block) must be a JSON object, "
+            f"got {type(value).__name__}. Pass drop_params=True to send an empty object in its place"
+        ) from error
+
+
+def _parsed_native_tool_use_input(raw: object, tool_name: str) -> object:
+    if not isinstance(raw, str):
+        return raw
+    return parse_tool_call_arguments(
+        "{}" if raw == REDACTED_BY_LITELLM else raw,
+        tool_name=tool_name,
+        context="Anthropic assistant tool_use block",
+    )
+
+
+def _native_tool_use_input(raw: object, tool_name: str, drop_params: bool) -> dict[str, object]:
+    try:
+        return _tool_use_input_object(_parsed_native_tool_use_input(raw, tool_name), tool_name)
+    except ValueError:
+        if drop_params:
+            return {}
+        raise
+
+
+def _tool_call_ids(message: Mapping[str, object]) -> frozenset[str]:
+    return frozenset(native_tool_use_id(tool_call) for tool_call in parts_of(message.get("tool_calls")))
+
+
+def _anthropic_native_tool_use_block(
+    block: Mapping[str, object], tool_use_id: str, drop_params: bool
+) -> AnthropicMessagesToolUseParam:
+    tool_name: Final = str(block.get("name", ""))
+    tool_use_param: Final = AnthropicMessagesToolUseParam(
+        type="tool_use",
+        id=tool_use_id,
+        name=tool_name,
+        input=_native_tool_use_input(block.get("input"), tool_name, drop_params),
+    )
+    add_cache_control_to_content(
+        anthropic_content_element=tool_use_param,
+        original_content_element=dict(block),
+    )
+    return tool_use_param
+
+
+def anthropic_content_element_factory(
     image_chunk: GenericImageParsingChunk,
 ) -> AnthropicMessagesImageParam | AnthropicMessagesDocumentParam:
-    if image_chunk["media_type"] == "application/pdf":
+    if image_chunk["media_type"].partition(";")[0].strip().lower() == "application/pdf" or _base64_holds_a_pdf(
+        image_chunk["data"]
+    ):
         _anthropic_content_element: AnthropicMessagesDocumentParam | AnthropicMessagesImageParam = (
             AnthropicMessagesDocumentParam(
                 type="document",
                 source=AnthropicContentParamSource(
                     type="base64",
-                    media_type=image_chunk["media_type"],
+                    media_type="application/pdf",
                     data=image_chunk["data"],
                 ),
             )
@@ -2209,11 +2365,14 @@ def _anthropic_content_element_factory(
 
 
 def select_anthropic_content_block_type_for_file(
-    format: str,
+    format: object,
 ) -> Literal["document", "image", "container_upload"]:
-    if format == "application/pdf" or format == "text/plain":
+    if not isinstance(format, str):
+        return "container_upload"
+    media_type: Final = format.strip().lower()
+    if media_type == "application/pdf" or media_type == "text/plain":
         return "document"
-    elif format in ["image/jpeg", "image/png", "image/gif", "image/webp"]:
+    elif media_type in ["image/jpeg", "image/png", "image/gif", "image/webp"]:
         return "image"
     else:
         return "container_upload"
@@ -2253,11 +2412,27 @@ def anthropic_process_openai_file_message(
             openai_image_url=file_data,
             format=format,
         )
+        if _base64_holds_a_pdf(image_chunk["data"]):
+            return AnthropicMessagesDocumentParam(
+                type="document",
+                source=AnthropicContentParamSource(
+                    type="base64",
+                    media_type="application/pdf",
+                    data=image_chunk["data"],
+                ),
+            )
+        text_source: Final = _anthropic_text_document_source(
+            _media_type_with_original_parameters(image_chunk["media_type"], _data_uri_media_type(file_data)),
+            image_chunk["data"],
+        )
+        if text_source is not None:
+            return AnthropicMessagesDocumentParam(type="document", source=text_source)
+        media_type, _, _ = image_chunk["media_type"].partition(";")
         anthropic_document_param: Final = AnthropicMessagesDocumentParam(
             type="document",
             source=AnthropicContentParamSource(
                 type="base64",
-                media_type=image_chunk["media_type"],
+                media_type=media_type.strip().lower(),
                 data=image_chunk["data"],
             ),
         )
@@ -2567,8 +2742,13 @@ def _tool_call_ids_of_the_latest_assistant(
     if message.get("role") != "assistant":
         return latest_ids
     tool_calls: Final = message.get("tool_calls") or ()
+    native_tool_uses: Final = (
+        part for part in parts_of(message.get("content")) if message_field(part, "type") == "tool_use"
+    )
     return frozenset(
-        tool_call_id for tool_call_id in map(_tool_call_id, cast(Iterable[object], tool_calls)) if tool_call_id
+        tool_call_id
+        for tool_call_id in map(_tool_call_id, (*cast(Iterable[object], tool_calls), *native_tool_uses))
+        if tool_call_id
     )
 
 
@@ -2904,6 +3084,7 @@ def anthropic_messages_pt(
     model: str,
     llm_provider: str,
     drop_params: bool = False,
+    force_base64: bool = False,
 ) -> _AnthropicMessageList:
     """
     format messages for anthropic
@@ -2948,13 +3129,10 @@ def anthropic_messages_pt(
         else:
             messages.append(DEFAULT_USER_CONTINUE_MESSAGE_TYPED)
 
-    # Bedrock invoke models have format: invoke/...
-    # Vertex AI Anthropic also doesn't support URL sources for images
-    is_bedrock_invoke = model.lower().startswith("invoke/")
-    is_vertex_ai = llm_provider.startswith("vertex_ai") if llm_provider else False
-    force_base64 = is_bedrock_invoke or is_vertex_ai
+    inline_base64_media: Final = force_base64 or requires_inline_base64_media(model, llm_provider)
 
     tool_result_later_in_turn: Final = _tool_result_later_in_turn(messages, replaced_server_tool_answers)
+    answered_by_assistant_index: Final = cache(partial(answered_ids_by_index, messages))
     msg_i = 0
     while msg_i < len(messages):
         user_content: list[AnthropicMessagesUserMessageValues] = []
@@ -2975,26 +3153,27 @@ def anthropic_messages_pt(
                     for m in user_block_content:
                         if m.get("type", "") == "image_url":
                             m = cast(ChatCompletionImageObject, m)
-                            format = m["image_url"].get("format") if isinstance(m["image_url"], dict) else None
-                            # Convert ChatCompletionImageUrlObject to dict if needed
                             image_url_value = m["image_url"]
+                            url_str = image_url_value if isinstance(image_url_value, str) else image_url_value["url"]
+                            format = image_url_value.get("format") if isinstance(image_url_value, dict) else None
+                            if (
+                                document_media_type := anthropic_document_media_type_for_data_uri(url_str, format)
+                            ) is not None:
+                                user_content.append(
+                                    anthropic_document_block_from_data_uri(url_str, dict(m), document_media_type)
+                                )
+                                continue
                             if isinstance(image_url_value, str):
                                 image_url_input: str | dict[str, object] = image_url_value
                             else:
-                                # ChatCompletionImageUrlObject or dict case - convert to dict
                                 image_url_input = {
                                     "url": image_url_value["url"],
                                     "format": image_url_value.get("format"),
                                 }
-                            # Bedrock invoke models have format: invoke/...
-                            # Vertex AI Anthropic also doesn't support URL sources for images
-                            is_bedrock_invoke = model.lower().startswith("invoke/")
-                            is_vertex_ai = llm_provider.startswith("vertex_ai") if llm_provider else False
-                            force_base64 = is_bedrock_invoke or is_vertex_ai
                             _anthropic_content_element = create_anthropic_image_param(
                                 image_url_input,
                                 format=format,
-                                is_bedrock_invoke=force_base64,
+                                is_bedrock_invoke=inline_base64_media,
                             )
                             _content_element = add_cache_control_to_content(
                                 anthropic_content_element=_anthropic_content_element,
@@ -3063,7 +3242,7 @@ def anthropic_messages_pt(
             ) and message_field(user_message_types_block, "tool_call_id") not in replaced_server_tool_answers:
                 # OpenAI's tool message content will always be a string
                 user_content.append(
-                    convert_to_anthropic_tool_result(user_message_types_block, force_base64=force_base64)
+                    convert_to_anthropic_tool_result(user_message_types_block, force_base64=inline_base64_media)
                 )
 
             msg_i += 1
@@ -3133,6 +3312,7 @@ def anthropic_messages_pt(
                     web_search_results=_web_search_results_tc,
                     tool_results=_tool_results_tc,
                     answered_tool_ids=client_answered_tool_ids,
+                    drop_params=drop_params,
                 )
 
                 # Group tool invoke results into (server_tool_use, result) pairs
@@ -3238,9 +3418,11 @@ def anthropic_messages_pt(
                 ):  # IMPORTANT: ADD THIS FIRST, ELSE ANTHROPIC WILL RAISE AN ERROR
                     assistant_content.extend(thinking_blocks)
                 if _content_is_list and _content_list is not None:
+                    tool_call_ids = _tool_call_ids(assistant_content_block)
                     for m in _with_missing_thinking_blocks(_content_list, thinking_blocks or ()):
                         if not isinstance(m, dict):
                             continue
+                        block_type: str = str(m.get("type", ""))
                         # handle thinking blocks
                         if (thinking_block := _as_thinking_block(m)) is not None:
                             assistant_content.extend(
@@ -3250,7 +3432,7 @@ def anthropic_messages_pt(
                         text_block = cast(str, m.get("text", ""))
                         # handle text
                         if (
-                            m.get("type", "") == "text" and len(text_block) > 0
+                            block_type == "text" and len(text_block) > 0
                         ):  # don't pass empty text blocks. anthropic api raises errors.
                             anthropic_message = AnthropicMessagesTextParam(type="text", text=text_block)
                             _cached_message = add_cache_control_to_content(
@@ -3261,8 +3443,20 @@ def anthropic_messages_pt(
                             assistant_content.append(cast(AnthropicMessagesTextParam, _cached_message))
                         # handle server_tool_use blocks (tool search, web search, etc.)
                         # Pass through as-is since these are Anthropic-native content types
-                        elif m.get("type", "") == "server_tool_use" or m.get("type", "").endswith("_tool_result"):
+                        elif block_type == "server_tool_use" or block_type.endswith("_tool_result"):
                             assistant_content.append(m)
+                        elif block_type == "tool_use":
+                            tool_use_id = native_tool_use_id(m)
+                            if (
+                                tool_use_id in unique_tool_ids
+                                or tool_use_id in tool_call_ids
+                                or not tool_use_is_answered(
+                                    tool_use_id, answered_by_assistant_index().get(msg_i, frozenset())
+                                )
+                            ):
+                                continue
+                            unique_tool_ids.add(tool_use_id)
+                            assistant_content.append(_anthropic_native_tool_use_block(m, tool_use_id, drop_params))
                 elif (
                     "content" in assistant_content_block
                     and isinstance(assistant_content_block["content"], str)
@@ -3298,6 +3492,7 @@ def anthropic_messages_pt(
                     web_search_results=_web_search_results,
                     tool_results=_tool_results,
                     answered_tool_ids=client_answered_tool_ids,
+                    drop_params=drop_params,
                 )
 
                 # Prevent "tool_use ids must be unique" errors by filtering duplicates
@@ -3906,8 +4101,6 @@ def stringify_json_tool_call_content(messages: list) -> list:
 
 
 ###### AMAZON BEDROCK #######
-
-from email.message import Message
 
 import httpx
 

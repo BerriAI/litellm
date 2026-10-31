@@ -536,6 +536,23 @@ def test_flagged_placement_keeps_a_system_before_an_assistant_turn_whose_empty_t
     assert _roles(placed) == ["user", "system", "assistant", "user"]
 
 
+def test_flagged_placement_keeps_a_system_before_an_answered_native_tool_use():
+    placed = place_mid_conversation_system(
+        [
+            {"role": "user", "content": "weather?"},
+            {"role": "system", "content": "Be terse."},
+            {
+                "role": "assistant",
+                "content": [{"type": "tool_use", "id": "functions.get_weather:0", "name": "get_weather", "input": {}}],
+            },
+            {"role": "tool", "tool_call_id": "functions.get_weather:0", "content": "sunny"},
+        ],
+        supports_mid_conversation_system=True,
+    )
+
+    assert _roles(placed) == ["user", "system", "assistant", "tool"]
+
+
 def test_anthropic_system_blocks_keeps_text_parts_with_their_cache_control_and_drops_the_rest():
     run = [
         {"role": "system", "content": "one", "cache_control": {"type": "ephemeral", "ttl": "1h"}},

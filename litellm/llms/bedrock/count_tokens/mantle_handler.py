@@ -99,7 +99,7 @@ class BedrockMantleCountTokensHandler(BaseAWSLLM):
                     response=response,
                 )
             return _COUNT_RESPONSE.validate_json(response.content)
-        except BedrockError:
+        except (BedrockError, litellm.BadRequestError):
             raise
         except httpx.HTTPStatusError as e:
             raise BedrockError(

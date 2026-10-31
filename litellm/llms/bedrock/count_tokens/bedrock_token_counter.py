@@ -49,6 +49,7 @@ class CountTokensFailure:
     status_code: int
     message: str
     tokenizer_type: str
+    rejected_before_provider_call: bool = False
 
 
 CountTokensOutcome = CountedTokens | CountTokensFailure
@@ -120,6 +121,10 @@ class BedrockTokenCounter(BaseTokenCounter):
                 client=self._client,
             )
             reply: Final = _CountTokensReply.model_validate(result)
+        except litellm.BadRequestError as e:
+            return CountTokensFailure(
+                status_code=400, message=e.message, tokenizer_type=tokenizer_type, rejected_before_provider_call=True
+            )
         except BedrockError as e:
             verbose_logger.debug(
                 "%s CountTokens API error: status=%s, message=%s", tokenizer_type, e.status_code, e.message
@@ -214,6 +219,7 @@ class BedrockTokenCounter(BaseTokenCounter):
                     error=True,
                     error_message=outcome.message,
                     status_code=outcome.status_code,
+                    rejected_before_provider_call=outcome.rejected_before_provider_call,
                 )
             case _:
                 assert_never(outcome)

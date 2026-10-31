@@ -2073,6 +2073,47 @@ async def test_framing_keeps_the_400_for_blocks_the_provider_counter_cannot_conv
     assert "search_result" in raised.value.message
 
 
+@pytest.mark.parametrize(
+    "litellm_params",
+    [
+        {"model": "anthropic/claude-opus-5-5", "api_key": "sk-unused-framed"},
+        {
+            "model": "azure_ai/claude-opus-5-5",
+            "api_key": "sk-unused-framed",
+            "api_base": "https://framed.services.ai.azure.com/anthropic",
+        },
+    ],
+    ids=["anthropic", "azure_ai"],
+)
+@pytest.mark.asyncio
+async def test_framing_keeps_the_400_for_a_text_attachment_the_claude_counter_cannot_decode(
+    monkeypatch: pytest.MonkeyPatch, litellm_params: dict[str, str]
+):
+    monkeypatch.setattr(
+        litellm.proxy.proxy_server,
+        "llm_router",
+        Router(
+            model_list=[
+                {"model_name": "framed", "litellm_params": litellm_params, "model_info": {"token_count_framing": 100}}
+            ]
+        ),
+    )
+    text_attachment: Final = "data:text/plain;charset=bogus-cs;base64," + base64.b64encode(b"hello").decode()
+
+    with pytest.raises(ProxyException) as raised:
+        await count_request_tokens(
+            request=TokenCountRequest(
+                model="framed",
+                messages=[{"role": "user", "content": [{"type": "image_url", "image_url": {"url": text_attachment}}]}],
+            ),
+            call_endpoint=True,
+            messages_format="anthropic",
+        )
+
+    assert raised.value.code == "400"
+    assert "bogus-cs" in raised.value.message
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "unreadable_body",
