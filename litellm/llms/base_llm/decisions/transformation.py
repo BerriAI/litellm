@@ -264,7 +264,9 @@ def _holds_no_text(value: object, depth: int = 0) -> bool:
     if depth >= DEFAULT_MAX_RECURSE_DEPTH:
         return True
     if _is_json_object(value):
-        return all(_holds_no_text(item, depth + 1) for item in value.values())
+        return all(
+            _holds_no_text(item, depth + 1) for key, item in value.items() if key != "type" or "text" not in value
+        )
     if _is_json_array(value):
         return all(_holds_no_text(item, depth + 1) for item in value)
     return False

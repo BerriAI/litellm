@@ -4808,7 +4808,19 @@ _NOT_AN_IMAGE_REQUEST: Final[Mapping[str, object]] = MappingProxyType(
 @pytest.mark.usefixtures("cloudflare_account")
 @pytest.mark.parametrize(
     "state",
-    ("", [], {}, "  ", [""], {"a": ""}, {"a": [" "]}, [None], {"a": None}),
+    (
+        "",
+        [],
+        {},
+        "  ",
+        [""],
+        {"a": ""},
+        {"a": [" "]},
+        [None],
+        {"a": None},
+        [{"type": "input_text", "text": ""}],
+        [{"type": "text", "text": " "}],
+    ),
     ids=(
         "string",
         "list",
@@ -4819,6 +4831,8 @@ _NOT_AN_IMAGE_REQUEST: Final[Mapping[str, object]] = MappingProxyType(
         "nested-blank",
         "list-of-null",
         "object-of-null",
+        "input-text-part-with-empty-text",
+        "text-part-with-blank-text",
     ),
 )
 async def test_an_empty_state_with_only_a_dropped_image_is_refused_when_the_model_always_took_images(
@@ -4888,6 +4902,35 @@ def test_a_blank_state_still_reaches_the_model_when_its_only_download_is_a_type_
     sent: Final = json.loads(route.calls.last.request.content)
     assert sent["state"] == state
     assert sent.get("images", []) == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("cloudflare_account")
+@pytest.mark.parametrize("sync", (False, True), ids=("async", "sync"))
+async def test_a_blank_state_is_refused_when_its_downloads_drop_for_their_type_after_the_count_drop(
+    sync: bool, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "user_url_validation", False)
+    respx_mock.get(url__regex=r"^https://images\.example/screen-\d\.gif$").respond(
+        content=b"GIF89a", headers={"content-type": "image/gif"}
+    )
+    route: Final = respx_mock.post(f"{_CLOUDFLARE_RUN_URL}/clef").respond(json=_RESPONSE)
+    request_kwargs: Final = {
+        "model": "cloudflare/clef",
+        "state": "",
+        "questions": _SYSTEMONE_PREDICATE,
+        "images": [f"https://images.example/screen-{index}.gif" for index in range(5)],
+        "drop_params": True,
+    }
+
+    if sync:
+        with pytest.raises(litellm.BadRequestError):
+            litellm.systemone(**request_kwargs)
+    else:
+        with pytest.raises(litellm.BadRequestError):
+            await litellm.asystemone(**request_kwargs)
+
+    assert not route.called
 
 
 @pytest.mark.usefixtures("cloudflare_account")

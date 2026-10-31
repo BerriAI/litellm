@@ -845,7 +845,11 @@ def _kept_images(call: DecisionsCall) -> tuple[bool, ...]:
     return tuple(budget.kept for budget in islice(budgets, 1, None))
 
 
-def _with_images_within_limits(call: DecisionsCall, kept: Sequence[bool]) -> DecisionsCall:
+def _drops_images(before: DecisionsCall, after: DecisionsCall) -> bool:
+    return len(input_images(after.ir_request.input)) < len(input_images(before.ir_request.input))
+
+
+def _with_images_within_limits(call: DecisionsCall, kept: Sequence[bool], dropped_past_count: bool) -> DecisionsCall:
     if all(kept):
         return call
     kept_input: Final = _with_images_kept(call.ir_request.input, kept)
@@ -853,7 +857,7 @@ def _with_images_within_limits(call: DecisionsCall, kept: Sequence[bool]) -> Dec
     if error is None:
         return replace(call, ir_request=replace(call.ir_request, input=kept_input))
     type_checked: Final = _checked_image_types(call)
-    if input_images(type_checked.ir_request.input) == input_images(kept_input):
+    if not dropped_past_count and input_images(type_checked.ir_request.input) == input_images(kept_input):
         return type_checked
     return _dropped_or_refused(call, kept_input, error)
 
@@ -1035,10 +1039,11 @@ def _posted_without_refused_images(
 
 
 async def asend(call: DecisionsCall) -> DecisionsResponse | OpenAIDecisionResponse:
-    supported: Final = _refused_over_count(_checked_image_types(call))
+    type_checked: Final = _checked_image_types(call)
+    supported: Final = _refused_over_count(type_checked)
     fetched: Final = await _async_with_remote_images_inlined(supported)
     kept: Final = _kept_images(fetched)
-    inlined: Final = _with_images_within_limits(fetched, kept)
+    inlined: Final = _with_images_within_limits(fetched, kept, _drops_images(type_checked, supported))
     body: Final = _request_body(inlined)
     try:
         response: Final = await _aposted_without_refused_images(
@@ -1050,10 +1055,11 @@ async def asend(call: DecisionsCall) -> DecisionsResponse | OpenAIDecisionRespon
 
 
 def send(call: DecisionsCall) -> DecisionsResponse | OpenAIDecisionResponse:
-    supported: Final = _refused_over_count(_checked_image_types(call))
+    type_checked: Final = _checked_image_types(call)
+    supported: Final = _refused_over_count(type_checked)
     fetched: Final = _with_remote_images_inlined(supported)
     kept: Final = _kept_images(fetched)
-    inlined: Final = _with_images_within_limits(fetched, kept)
+    inlined: Final = _with_images_within_limits(fetched, kept, _drops_images(type_checked, supported))
     body: Final = _request_body(inlined)
     try:
         response: Final = _posted_without_refused_images(inlined, body, _logged_body(supported, fetched, kept, body))
