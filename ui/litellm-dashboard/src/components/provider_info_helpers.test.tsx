@@ -403,6 +403,10 @@ describe("provider_info_helpers", () => {
       expect(getPlaceholder("ZeroGPU")).toBe("zerogpu/gpt-oss-120b");
     });
 
+    it("should return flonno/qwen3.8-27b placeholder for Flonno provider", () => {
+      expect(getPlaceholder("Flonno")).toBe("flonno/qwen3.8-27b");
+    });
+
     it("should return a chatgpt/ placeholder for the CHATGPT dropdown key", () => {
       expect(getPlaceholder("CHATGPT")).toBe("chatgpt/gpt-5.4");
     });

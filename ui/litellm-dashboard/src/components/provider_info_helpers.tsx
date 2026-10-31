@@ -31,6 +31,7 @@ import groqLogo from "../../public/assets/logos/groq.svg";
 import huggingfaceLogo from "../../public/assets/logos/huggingface.svg";
 import hyperbolicLogo from "../../public/assets/logos/hyperbolic.svg";
 import hostingerLogo from "../../public/assets/logos/hostinger.png";
+import flonnoLogo from "../../public/assets/logos/flonno.png";
 import infinityLogo from "../../public/assets/logos/infinity.png";
 import jinaLogo from "../../public/assets/logos/jina.png";
 import lambdaLogo from "../../public/assets/logos/lambda.svg";
@@ -121,6 +122,7 @@ export enum Providers {
   FalAI = "Fal AI",
   FEATHERLESS_AI = "Featherless Ai",
   FireworksAI = "Fireworks AI",
+  Flonno = "Flonno",
   FRIENDLIAI = "Friendliai",
   GALADRIEL = "Galadriel",
   GIGACHAT = "GigaChat",
@@ -254,6 +256,7 @@ export const provider_map: Record<string, string> = {
   FalAI: "fal_ai",
   FEATHERLESS_AI: "featherless_ai",
   FireworksAI: "fireworks_ai",
+  Flonno: "flonno",
   FRIENDLIAI: "friendliai",
   GALADRIEL: "galadriel",
   GIGACHAT: "gigachat",
@@ -384,6 +387,7 @@ export const providerLogoMap: Partial<Record<Providers, string>> = {
   [Providers.FalAI]: falAiLogo.src,
   [Providers.FEATHERLESS_AI]: featherlessLogo.src,
   [Providers.FireworksAI]: fireworksLogo.src,
+  [Providers.Flonno]: flonnoLogo.src,
   [Providers.FRIENDLIAI]: friendliLogo.src,
   [Providers.GIGACHAT]: gigachatLogo.src,
   [Providers.GITHUB_COPILOT]: githubCopilotLogo.src,
@@ -522,6 +526,7 @@ const providerPlaceholderMap: Partial<Record<Providers, string>> = {
   [Providers.ZAI]: "zai/glm-4.5",
   [Providers.BIGMODEL]: "bigmodel/glm-5.3",
   [Providers.ZeroGPU]: "zerogpu/gpt-oss-120b",
+  [Providers.Flonno]: "flonno/qwen3.8-27b",
 };
 
 export const getPlaceholder = (selectedProvider: string): string => {
