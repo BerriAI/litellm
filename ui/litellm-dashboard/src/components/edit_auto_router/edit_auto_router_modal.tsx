@@ -1,3 +1,4 @@
+import EditSwitchyardRouter from "./EditSwitchyardRouter";
 import { useQuery } from "@tanstack/react-query";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { autoRouterListKey, fetchAllModelDeployments } from "@/app/(dashboard)/hooks/models/useModels";
@@ -34,7 +35,7 @@ import {
   getCustomTierRowsError,
   resolveComplexityDefaultModel,
 } from "../add_model/tier_rows";
-import { isComplexityRouter } from "../add_model/auto_router_strategies";
+import { autoRouterStrategy, isComplexityRouter } from "../add_model/auto_router_strategies";
 import {
   type BuildComplexityRouterConfigParams,
   type StoredComplexityRouterConfig,
@@ -806,4 +807,11 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
   );
 };
 
-export default EditAutoRouterModal;
+const AutoRouterEditor: React.FC<EditAutoRouterModalProps> = (props) =>
+  autoRouterStrategy(props.modelData?.litellm_params).kind === "switchyard" ? (
+    props.isVisible && <EditSwitchyardRouter key={props.modelData?.model_info?.id} {...props} />
+  ) : (
+    <EditAutoRouterModal {...props} />
+  );
+
+export default AutoRouterEditor;

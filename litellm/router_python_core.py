@@ -536,6 +536,7 @@ if TYPE_CHECKING:
     from litellm.router_strategy.quality_router.quality_router import (
         QualityRouter,
     )
+    from litellm.router_strategy.switchyard_router.switchyard_router import SwitchyardAutoRouter
     from litellm.types.llms.anthropic_messages.anthropic_response import (
         AnthropicMessagesResponse,
     )
@@ -1769,6 +1770,9 @@ class PythonCore(DeprecatedRouterMembers):
         self._core_provider_default_deployment_ids: list[str] = []
         self._core_pattern_router = PatternMatchRouter()
         self._core_team_pattern_routers: dict[str, PatternMatchRouter] = {}  # {"TEAM_ID": PatternMatchRouter}
+        self._core_switchyard_routers: dict[  # mutable-ok: registry lifecycle mutates model entries
+            str, list[TaggedPreRoutingStrategy[SwitchyardAutoRouter]]
+        ] = {}
         self._core_auto_routers: dict[str, list[TaggedPreRoutingStrategy[AutoRouter]]] = {}
         self._core_complexity_routers: dict[str, list[TaggedPreRoutingStrategy[ComplexityRouter]]] = {}
         self._core_adaptive_routers: dict[str, list[TaggedPreRoutingStrategy[AdaptiveRouter]]] = {}
@@ -3726,6 +3730,13 @@ class PythonCore(DeprecatedRouterMembers):
             kwargs["stream"] = stream
             kwargs["original_function"] = self._acompletion
 
+            if self._core_switchyard_routers:
+                from litellm.router_strategy.switchyard_router.switchyard_router import SwitchyardAutoRouter
+
+                selected: Final = self._select_pre_routing_strategy(model, kwargs)
+                if selected is not None and isinstance(selected.strategy, SwitchyardAutoRouter):
+                    return await self._execute_switchyard(selected, model, kwargs)
+
             self._update_kwargs_before_fallbacks(model=model, kwargs=kwargs)
             start_time: Final = time.time()
             is_prompt_management_model: Final = self._is_prompt_management_model(model)
@@ -3772,6 +3783,100 @@ class PythonCore(DeprecatedRouterMembers):
                 )
             )
             raise e
+
+    async def _execute_switchyard(
+        self,
+        selected: TaggedPreRoutingStrategy[PreRoutingStrategy],
+        model: str,
+        request_kwargs: Mapping[str, object],
+    ) -> ModelResponse | CustomStreamWrapper | AsyncIterable[ModelResponseStream]:
+        from litellm.router_strategy.switchyard_router.execution import (
+            ACTIVE_SWITCHYARD,
+            FinalizingStream,
+            SwitchyardReplay,
+            child_call_kwargs,
+            scoped_switchyard_headers,
+            switchyard_execution,
+        )
+        from litellm.router_strategy.switchyard_router.switchyard_router import SwitchyardAutoRouter
+
+        strategy: Final = selected.strategy
+        if not isinstance(strategy, SwitchyardAutoRouter):
+            raise TypeError("Expected a Switchyard execution strategy")
+        if ACTIVE_SWITCHYARD.get():
+            raise ValueError("Switchyard targets cannot be auto-router deployments")
+        marker: Final = self._selected_strategy_marker_deployment(model, selected.tags, request_kwargs)
+        await router_host().authorize_strategy_inference(
+            deployment=marker, request_kwargs=request_kwargs, llm_router=self._core_public()
+        )
+        defaults: Final = dict(self._forwardable_alias_marker_params(model, selected.tags, request_kwargs))
+        forwarded: Final = tuple(key for key in defaults if key not in request_kwargs)
+        values: Final = {
+            **defaults,
+            **request_kwargs,
+            **({_ALIAS_MARKER_FORWARDED_PARAMS_KWARG: forwarded} if forwarded else {}),
+        }
+        config: Final = strategy.config
+        affinity: Final = (
+            config.custom
+            if config.algorithm == "custom"
+            else config.stage.classifier
+            if config.algorithm == "stage"
+            else config.capability
+        )
+        message_hash_fallback: Final = affinity.message_hash_fallback if affinity is not None else False
+        headers: Final = scoped_switchyard_headers(values, message_hash_fallback, strategy.session_namespace)
+
+        async def execute_model(target: str, payload: Mapping[str, object]) -> ModelResponse | CustomStreamWrapper:
+            child: Final = dict(child_call_kwargs(values, payload))
+            decision: Final[StandardLoggingRoutingDecision] = {
+                "router_model_name": selected.deployment.model_name if selected.deployment else model,
+                "router_type": "switchyard",
+                "routed_model": target,
+                "signals": (f"algorithm:{config.algorithm}",),
+                **(
+                    {"router_config_fingerprint": selected.definition_fingerprint}
+                    if selected.definition_fingerprint is not None
+                    else {}
+                ),
+            }
+            self._record_routing_decision(child, decision)
+            request_tags: Final = get_routing_tags_from_request_kwargs(values)
+            if (
+                selected.tags
+                and request_tags
+                and is_valid_deployment_tag(selected.tags, request_tags, self._core_tag_filtering_match_any)
+            ):
+                self._stamp_or_clear_metadata_key(
+                    child,
+                    CONSUMED_REQUEST_TAGS_METADATA_KEY,
+                    ConsumedRequestTagsStamp(model_group=target, tags=selected.tags),
+                )
+            if self._select_pre_routing_strategy(target, child) is not None:
+                raise ValueError("Switchyard targets cannot be auto-router deployments")
+            child_messages: Final = TypeAdapter(list[AllMessageValues]).validate_python(child.get("messages"))
+            child_stream: Final = child.get("stream") is True
+            child_options: Final = {key: value for key, value in child.items() if key not in {"messages", "stream"}}
+            return await self.acompletion(model=target, messages=child_messages, stream=child_stream, **child_options)
+
+        async def finalize() -> None:
+            await router_host().finalize_strategy_request(request_kwargs=request_kwargs)
+
+        try:
+            with switchyard_execution():
+                response: Final = await strategy.execute(values, execute_model, headers=headers)
+        except BaseException:
+            await finalize()
+            raise
+        if isinstance(response, CustomStreamWrapper):
+            return FinalizingStream(
+                response.__aiter__(), finalize, response.aclose, get_hidden_params_dict(response), response.logging_obj
+            )
+        await finalize()
+        if request_kwargs.get("stream") is True and isinstance(response, ModelResponse):
+            options: Final = request_kwargs.get("stream_options")
+            return SwitchyardReplay(response, isinstance(options, Mapping) and options.get("include_usage") is True)
+        return response
 
     @staticmethod
     def _combine_fallback_usage(
@@ -11126,6 +11231,17 @@ class PythonCore(DeprecatedRouterMembers):
         """Deployment tags used to disambiguate strategy registries keyed by model_name."""
         return tuple(deployment.litellm_params.tags or ())
 
+    def init_switchyard_router_deployment(self, deployment: Deployment) -> None:
+        from litellm.router_strategy.switchyard_router import SwitchyardAutoRouter, SwitchyardRouterConfig
+
+        config: Final = SwitchyardRouterConfig.model_validate(deployment.litellm_params.switchyard_router_config)
+        self._register_pre_routing_strategy(
+            registry=self._core_switchyard_routers,
+            deployment=deployment,
+            strategy=SwitchyardAutoRouter(config),
+            strategy_label="Switchyard",
+        )
+
     def init_auto_router_deployment(self, deployment: Deployment):
         """
         Initialize the auto-router deployment.
@@ -11365,7 +11481,12 @@ class PythonCore(DeprecatedRouterMembers):
             return
         model_name: Final = deployment.model_name
         tags: Final = self._deployment_tags(deployment)
-        for registry in (self._core_auto_routers, self._core_complexity_routers, self._core_quality_routers):
+        for registry in (
+            self._core_auto_routers,
+            self._core_complexity_routers,
+            self._core_quality_routers,
+            self._core_switchyard_routers,
+        ):
             self._unregister_pre_routing_strategy(registry, model_name, tags)
         if self._unregister_pre_routing_strategy(self._core_adaptive_routers, model_name, tags):
             self._sync_adaptive_router_hooks()
@@ -11575,6 +11696,7 @@ class PythonCore(DeprecatedRouterMembers):
         self._core_team_public_model_names = frozenset()
         # Reset per-strategy router registries so hot-reload doesn't leave
         # stale routers pointing at the old model_list.
+        self._core_switchyard_routers = {}
         self._core_quality_routers = {}
         self._core_complexity_routers = {}
         self._core_auto_routers = {}
@@ -11770,6 +11892,9 @@ class PythonCore(DeprecatedRouterMembers):
         #########################################################
         # Check if this is an auto-router deployment
         #########################################################
+        if classify_strategy_router_model(deployment.litellm_params.model) == "switchyard":
+            self.init_switchyard_router_deployment(deployment)
+
         if self._is_auto_router_deployment(litellm_params=deployment.litellm_params):
             self.init_auto_router_deployment(deployment=deployment)
 
@@ -16417,6 +16542,7 @@ class PythonCore(DeprecatedRouterMembers):
             self._core_complexity_routers,
             self._core_adaptive_routers,
             self._core_quality_routers,
+            self._core_switchyard_routers,
         )
         if not any(registries):
             return None
@@ -16510,7 +16636,9 @@ class PythonCore(DeprecatedRouterMembers):
         registered_model_name: str,
         request_kwargs: Mapping[str, object],
     ) -> str:
-        if is_native_compaction_call():
+        from litellm.router_strategy.switchyard_router.execution import ACTIVE_SWITCHYARD
+
+        if is_native_compaction_call() or ACTIVE_SWITCHYARD.get():
             return registered_model_name
         if not any(
             (
@@ -16518,6 +16646,7 @@ class PythonCore(DeprecatedRouterMembers):
                 self._core_complexity_routers,
                 self._core_adaptive_routers,
                 self._core_quality_routers,
+                self._core_switchyard_routers,
             )
         ):
             return registered_model_name
@@ -16573,8 +16702,11 @@ class PythonCore(DeprecatedRouterMembers):
         spend metadata is stamped before routing and the response carries the tier group the
         strategy picked.
         """
+        from litellm.router_strategy.switchyard_router.execution import ACTIVE_SWITCHYARD
+
         self._restore_client_output_ceiling(request_kwargs)
-        self._record_routing_decision(request_kwargs=request_kwargs, routing_decision=None)
+        if not ACTIVE_SWITCHYARD.get():
+            self._record_routing_decision(request_kwargs=request_kwargs, routing_decision=None)
         requested_registered_model_name: Final = self._core_get_model_from_alias(model=model) or model
         registered_model_name: Final = await self._resolve_claude_code_session_router(
             model=model,
@@ -16597,6 +16729,8 @@ class PythonCore(DeprecatedRouterMembers):
             model=registered_model_name, request_kwargs=request_kwargs
         )
         if selected_strategy is None:
+            if ACTIVE_SWITCHYARD.get():
+                return None
             await arm_compaction(request_kwargs, None)
             self._stamp_or_clear_metadata_key(
                 request_kwargs=request_kwargs, key=SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY, value=None

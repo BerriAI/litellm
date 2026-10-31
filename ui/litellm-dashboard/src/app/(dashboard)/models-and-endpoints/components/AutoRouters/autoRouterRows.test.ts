@@ -43,6 +43,27 @@ const semanticDeployment = {
 };
 
 describe("autoRouterRows", () => {
+  it("shows Switchyard targets and permits editing database-backed routers", () => {
+    const deployment = {
+      model_name: "switchyard",
+      model_info: { id: "switchyard-id", db_model: true },
+      litellm_params: {
+        model: "auto_router/switchyard_router",
+        switchyard_router_config: {
+          algorithm: "capability",
+          models: { efficient: ["small"], capable: ["large", "small"], judge: ["judge"] },
+        },
+      },
+    };
+    const row = toAutoRouterRow(deployment, 0, ADMIN, null);
+    const expected = {
+      kind: "switchyard",
+      typeLabel: "Switchyard",
+      canEdit: true,
+      targets: ["small", "large", "judge"],
+    };
+    expect(row).toMatchObject(expected);
+  });
   it("classifies a complexity router and unions its tier models as targets", () => {
     const row = toAutoRouterRow(complexityDeployment, 0, ADMIN, null);
 

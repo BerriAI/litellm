@@ -13,10 +13,12 @@
  * prefixes are matched first, and only a bare `auto_router/<name>` is the semantic router.
  */
 
-export type AutoRouterKind = "complexity" | "adaptive" | "quality" | "semantic";
+export type AutoRouterKind = "complexity" | "adaptive" | "quality" | "semantic" | "switchyard";
 
 export interface AutoRouterParams {
   model?: string | null;
+  switchyard_router_config?: unknown;
+  switchyard_router_default_model?: string | null;
   complexity_router_config?: unknown;
   complexity_router_default_model?: string | null;
   auto_router_config?: unknown;
@@ -42,6 +44,14 @@ const startsWith = (params: AutoRouterParams, prefix: string): boolean => params
 
 /** Ordered; the semantic entry matches anything left and must stay last. */
 export const AUTO_ROUTER_STRATEGIES: readonly AutoRouterStrategy[] = [
+  {
+    kind: "switchyard",
+    label: "Switchyard",
+    configKey: "switchyard_router_config",
+    defaultModelKey: "switchyard_router_default_model",
+    hasEditor: true,
+    matches: (p) => startsWith(p, "auto_router/switchyard_router") || p.switchyard_router_config != null,
+  },
   {
     kind: "complexity",
     label: "Complexity",
@@ -87,8 +97,9 @@ export const isComplexityRouter = (params: AutoRouterParams | null | undefined):
 /** Any `auto_router/*` deployment, whatever its strategy. Use for listing and filtering. */
 export const isAutoRouterDeployment = (params: AutoRouterParams | null | undefined): boolean =>
   params?.model?.startsWith("auto_router/") === true ||
-  params?.complexity_router_config != null ||
-  params?.auto_router_config != null;
+  [params?.complexity_router_config, params?.auto_router_config, params?.switchyard_router_config].some(
+    (config) => config != null,
+  );
 
 /**
  * Whether EditAutoRouterModal understands this deployment. It only speaks complexity and

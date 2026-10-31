@@ -7,7 +7,7 @@ target up at call time, so patches of the proxy functions apply.
 """
 
 from collections.abc import Mapping, Sequence
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Final
 
 from litellm.router_host import CompressionPolicy, RouterHost
 
@@ -44,6 +44,15 @@ class ProxyRouterHost(RouterHost):
             request_kwargs=request_kwargs,
             llm_router=llm_router,
         )
+
+    async def finalize_strategy_request(self, request_kwargs: Mapping[str, object]) -> None:
+        from litellm.litellm_core_utils.core_helpers import budget_reservation_from_metadata
+        from litellm.proxy.spend_tracking.budget_reservation import release_or_invalidate_budget_reservation
+
+        for key in ("metadata", "litellm_metadata"):
+            metadata: Final = request_kwargs.get(key)
+            if isinstance(metadata, Mapping):
+                await release_or_invalidate_budget_reservation(budget_reservation_from_metadata(metadata))
 
     def compression_policy(
         self,

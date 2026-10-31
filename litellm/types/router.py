@@ -676,6 +676,7 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
     adaptive_router_default_model: str | None = None
     adaptive_router_config: dict | None = None
     # quality-router params
+    switchyard_router_config: Mapping[str, object] | None = None
     quality_router_config: dict | None = None
     quality_router_default_model: str | None = None
 

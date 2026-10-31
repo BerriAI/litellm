@@ -12,6 +12,7 @@ the router silently dropping the deployment at load time under
 
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
+from itertools import chain
 from types import MappingProxyType
 from typing import Final, Literal, TypeAlias
 
@@ -26,7 +27,7 @@ from litellm.router_strategy.complexity_router.config import (
 
 AUTO_ROUTER_MODEL_PREFIX: Final = "auto_router/"
 
-StrategyRouterKind = Literal["semantic", "complexity", "adaptive", "quality"]
+StrategyRouterKind = Literal["semantic", "complexity", "adaptive", "quality", "switchyard"]
 
 StrategyRouterDependencyRole: TypeAlias = Literal[
     "tier", "default", "classifier", "embedding", "evaluation", "compactor"
@@ -52,6 +53,7 @@ STRATEGY_ROUTER_PARAM_FIELDS: Final[frozenset[str]] = frozenset(
         "complexity_router_default_model",
         "adaptive_router_config",
         "quality_router_config",
+        "switchyard_router_config",
         "quality_router_default_model",
     }
 )
@@ -64,6 +66,7 @@ _REQUIRED_FIELD_GROUPS: Final[Mapping[StrategyRouterKind, tuple[tuple[str, ...],
     ),
     "complexity": (("complexity_router_config", "complexity_router_default_model"),),
     "adaptive": (("adaptive_router_config",),),
+    "switchyard": (("switchyard_router_config",),),
     "quality": (("quality_router_config", "quality_router_default_model"),),
 }
 
@@ -82,6 +85,8 @@ def classify_strategy_router_model(model: str) -> StrategyRouterKind | None:
         return "complexity"
     if remainder.startswith("adaptive_router"):
         return "adaptive"
+    if remainder.startswith("switchyard"):
+        return "switchyard"
     if remainder.startswith("quality_router"):
         return "quality"
     return "semantic"
@@ -141,6 +146,12 @@ def strategy_router_dependencies(
         return _named(litellm_params.get("auto_router_default_model"), "default") + _named(
             litellm_params.get("auto_router_embedding_model"), "embedding"
         )
+    if kind == "switchyard":
+        models: Final = _mapping(_mapping(litellm_params.get("switchyard_router_config")).get("models"))
+        dependencies: Final = tuple(
+            _pool(names, "classifier" if group == "judge" else "tier") for group, names in models.items()
+        )
+        return tuple(dict.fromkeys(chain.from_iterable(dependencies)))
     if kind == "adaptive":
         return _pool(_mapping(litellm_params.get("adaptive_router_config")).get("available_models"), "tier")
     if kind == "quality":
@@ -361,6 +372,22 @@ def capability_limit_violation(*, capability: GatedAutoRouterCapability, held: i
         f"At most {limit} auto-router(s) {capability.subject} can be registered but this would make "
         f"{held}. {capability.remedy}"
     )
+
+
+def validate_switchyard_router_config_write(config: Mapping[str, object] | None) -> str | None:
+    from pydantic import ValidationError
+
+    from litellm.router_strategy.switchyard_router.config import SwitchyardRouterConfig
+
+    if config is None:
+        return None
+    try:
+        _ = SwitchyardRouterConfig.model_validate(config)
+    except ValidationError as exc:
+        first: Final = exc.errors()[0]
+        location: Final = ".".join(str(part) for part in first.get("loc", ())) or "switchyard_router_config"
+        return f"switchyard_router_config is invalid at {location}: {first.get('msg', 'invalid value')}"
+    return None
 
 
 def validate_complexity_router_config_write(complexity_router_config: Mapping[str, object] | None) -> str | None:

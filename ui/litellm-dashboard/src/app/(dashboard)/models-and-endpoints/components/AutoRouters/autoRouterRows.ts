@@ -83,6 +83,10 @@ const configManaged = (label: string, config: Record<string, unknown>): Presenta
 
 /** How each strategy renders itself, given its own config object. */
 const PRESENTERS: Record<AutoRouterKind, (config: Record<string, unknown>) => Presentation> = {
+  switchyard: (config) => ({
+    typeLabel: "Switchyard",
+    targets: dedupe(Object.values(asRecord(config.models)).flatMap(asStringArray)),
+  }),
   complexity: (config) => ({
     typeLabel: complexityTypeLabel(config),
     targets: dedupe(Object.values(asRecord(config.tiers)).flatMap(normalizeTierModels)),

@@ -790,3 +790,20 @@ def test_inferred_custom_tiers_claim_existing_gateway_capability(
 ) -> None:
     capabilities: Final = claimed_capabilities({"classifier_type": classifier, "tiers": tiers})
     assert any(capability.key == "tier_or_classifier_prompt" for capability in capabilities) is expected
+
+
+def test_switchyard_dependencies_include_targets_and_judges():
+    params: Final = {
+        "model": "auto_router/switchyard",
+        "switchyard_router_config": {"models": {"efficient": ["fast"], "capable": ["strong"], "judge": ["judge"]}},
+    }
+    dependencies: Final = strategy_router_dependencies(params)
+    assert {(entry.model_name, entry.role) for entry in dependencies} == {
+        ("fast", "tier"),
+        ("strong", "tier"),
+        ("judge", "classifier"),
+    }
+    assert (
+        validate_strategy_router_model_write("auto_router/switchyard", frozenset({"switchyard_router_config"})) is None
+    )
+    assert validate_strategy_router_model_write("auto_router/switchyard", frozenset()) is not None

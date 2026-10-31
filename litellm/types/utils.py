@@ -3284,6 +3284,7 @@ ClassifierFailureReason = Literal[
 
 
 InternalCallOrigin = Literal[
+    "switchyard_router",
     "autorouter_classifier",
     "autorouter_compaction",
     "shadow_eval_router",
@@ -3314,7 +3315,7 @@ class StandardLoggingRoutingDecision(TypedDict, total=False):
     """Per-request provenance for a pre-routing strategy (auto-router) decision."""
 
     router_model_name: str
-    router_type: ReadOnly[Literal["complexity", "adaptive", "quality", "semantic"]]
+    router_type: ReadOnly[Literal["complexity", "adaptive", "quality", "semantic", "switchyard"]]
     router_config_id: ReadOnly[str]
     router_config_updated_at: ReadOnly[str]
     router_config_fingerprint: ReadOnly[str]

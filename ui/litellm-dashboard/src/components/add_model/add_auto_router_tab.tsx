@@ -1,3 +1,4 @@
+import SwitchyardStrategyPicker from "./SwitchyardStrategyPicker";
 import { AutoRouterAvailabilityContext, useAutoRouterAvailability } from "./AutoRouterAvailability";
 import { decisionDeploymentName } from "./jev_classifier_config";
 import DecisionModelSelect from "./DecisionModelSelect";
@@ -91,7 +92,7 @@ import {
   type FamilyPreference,
 } from "./auto_setup";
 
-interface AddAutoRouterTabProps {
+export interface AddAutoRouterTabProps {
   handleOk: () => void;
   accessToken: string;
   userRole: string;
@@ -843,4 +844,10 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
   );
 };
 
-export default AddAutoRouterTab;
+const AddAutoRouterWithStrategy: React.FC<AddAutoRouterTabProps> = (props) => (
+  <SwitchyardStrategyPicker {...props}>
+    <AddAutoRouterTab {...props} />
+  </SwitchyardStrategyPicker>
+);
+
+export default AddAutoRouterWithStrategy;

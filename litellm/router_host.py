@@ -63,6 +63,9 @@ class RouterHost:
                 response=httpx.Response(status_code=403, request=httpx.Request("POST", "https://litellm.invalid")),
             )
 
+    async def finalize_strategy_request(self, request_kwargs: Mapping[str, object]) -> None:
+        """Release admission held by a virtual request whose children settle their own usage."""
+
     def compression_policy(
         self,
         llm_router: "Router | None",

@@ -116,6 +116,8 @@ export interface AutoRouterDeployment extends AutoRouterCandidateDeployment {
     auto_router_embedding_model?: string | null;
     adaptive_router_config?: unknown;
     adaptive_router_default_model?: string | null;
+    switchyard_router_config?: unknown;
+    switchyard_router_default_model?: string | null;
     quality_router_config?: unknown;
     quality_router_default_model?: string | null;
   } | null;

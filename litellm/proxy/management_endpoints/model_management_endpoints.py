@@ -145,6 +145,7 @@ from litellm.router_strategy.auto_router.auto_router_model_naming import (
     validate_complexity_router_config_placement,
     validate_complexity_router_config_write,
     validate_strategy_router_model_write,
+    validate_switchyard_router_config_write,
 )
 from litellm.router_strategy.auto_router.auto_router_tuning_baseline import (
     is_mutable_tuned_candidate,
@@ -374,6 +375,9 @@ def _strategy_router_write_violation(
     """
     if incoming_params is None:
         return None
+    switchyard_violation: Final = validate_switchyard_router_config_write(incoming_params.switchyard_router_config)
+    if switchyard_violation is not None:
+        return switchyard_violation
     config_violation: Final = validate_complexity_router_config_write(
         complexity_router_config=(
             _effective_complexity_router_config(incoming_params, existing_params)
