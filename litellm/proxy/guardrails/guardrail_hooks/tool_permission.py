@@ -35,6 +35,7 @@ from litellm.proxy.guardrails.anthropic_sse import (
 from litellm.responses.additional_tools import ADDITIONAL_TOOLS_INPUT_ITEM_TYPE
 from litellm.types.guardrails import GuardrailEventHooks, LitellmParams
 from litellm.types.llms.anthropic import ANTHROPIC_HOSTED_TOOLS
+from litellm.types.llms.vertex_ai import VertexToolName
 from litellm.types.proxy.guardrails.guardrail_hooks.tool_permission import (
     PermissionError,
     ToolPermissionRule,
@@ -64,6 +65,7 @@ _FORCED_FUNCTION_CALLING_MODES: Final = frozenset({"ANY", "VALIDATED"})
 _NAME_IDENTIFIED_TYPES: Final = frozenset({"function", "custom", "namespace", *_HOSTED_SERVER_NAME_FIELDS})
 _TEXT_EDITOR_TOOL_NAMES: Final = frozenset({"str_replace_editor", "str_replace_based_edit_tool"})
 _TYPE_VERSION_SUFFIX: Final = re.compile(r"_\d{8}$")
+_GEMINI_HOSTED_TOOL_KEYS: Final = frozenset(tool.value.replace("_", "").lower() for tool in VertexToolName)
 _NAMED_CHOICE_TYPES: Final = frozenset({"tool", "function", "custom", "allowed_tools", "any", "auto", "none"})
 _DECODED_ARGUMENTS: Final = TypeAdapter(object)
 _REQUEST_DATA: Final = TypeAdapter(object)
@@ -109,10 +111,27 @@ def _request_tool_names(tool: object) -> tuple[str, ...]:
     server_name: Final = (
         _non_empty_string(fields.get(server_field)) if fields is not None and server_field is not None else None
     )
-    function: Final = _object_mapping(fields.get("function")) if fields is not None else None
-    function_name: Final = _non_empty_string(function.get("name")) if function is not None else None
-    extra_names: Final = tuple(name for name in (function_name, custom_name, server_name) if name is not None)
+    extra_names: Final = tuple(name for name in (_function_name(tool), custom_name, server_name) if name is not None)
     return tuple(dict.fromkeys(anthropic_tool_names(tool) + extra_names))
+
+
+def _function_name(tool: object) -> str | None:
+    fields: Final = _object_mapping(tool)
+    function: Final = _object_mapping(fields.get("function")) if fields is not None else None
+    return _non_empty_string(function.get("name")) if function is not None else None
+
+
+def _namespace_function_targets(tool: object) -> tuple[_ToolTarget, ...]:
+    function_name: Final = _function_name(tool)
+    return ((function_name, "function"),) if function_name is not None else ()
+
+
+def _gemini_hosted_key_targets(tool: object) -> tuple[_ToolTarget, ...]:
+    fields: Final = _object_mapping(tool)
+    if fields is None:
+        return ()
+    hosted_keys: Final = (key for key in fields if key.replace("_", "").lower() in _GEMINI_HOSTED_TOOL_KEYS)
+    return tuple(_part_target(fields, key) for key in hosted_keys)
 
 
 def _namespace_members(tool: object) -> Sequence[object]:
@@ -950,8 +969,12 @@ class ToolPermissionGuardrail(CustomGuardrail):
         return member_targets + part_targets + self._own_tool_targets(tool)
 
     def _own_tool_targets(self, tool: object) -> tuple[_ToolTarget, ...]:
-        if _keyed_tool_fields(tool) is not None or _namespace_members(tool):
+        if _keyed_tool_fields(tool) is not None:
             return ()
+        named: Final = _namespace_function_targets(tool) if _namespace_members(tool) else self._named_tool_targets(tool)
+        return named + _gemini_hosted_key_targets(tool)
+
+    def _named_tool_targets(self, tool: object) -> tuple[_ToolTarget, ...]:
         raw_type: Final = self._get_mapping_value(tool, "type")
         tool_type: Final = raw_type if isinstance(raw_type, str) else None
         anthropic_custom: Final = (
@@ -1043,7 +1066,8 @@ class ToolPermissionGuardrail(CustomGuardrail):
         fields: Final = _object_mapping(tool)
         if fields is None or (group is None and keyed is None):
             return () if any(map(is_denied, self._get_request_tool_targets(tool))) else (tool,)
-        if any(map(is_denied, self._own_tool_targets(tool))):
+        own_targets: Final = self._own_tool_targets(tool)
+        if any(map(is_denied, own_targets)):
             return ()
         kept_members: Final = _kept_members(group, is_denied)
         denied_keys: Final = (
@@ -1060,7 +1084,8 @@ class ToolPermissionGuardrail(CustomGuardrail):
             for key, value in fields.items()
             if key not in dropped_keys
         }
-        parts_left: Final = bool(kept_members) or (keyed is not None and bool(_part_keys(kept_fields)))
+        own_name_left: Final = any(name is not None for name, _ in own_targets)
+        parts_left: Final = bool(kept_members) or own_name_left or (keyed is not None and bool(_part_keys(kept_fields)))
         return (kept_fields,) if parts_left else ()
 
     def _kept_tool_list(

@@ -2354,6 +2354,12 @@ class TestToolPermissionGuardrailAnthropicMessages:
             {"type": "custom", "name": "get_weather", "function": {"name": "delete_db"}},
             {"type": "mcp", "server_label": "get_weather", "function": {"name": "delete_db"}},
             {
+                "type": "namespace",
+                "name": "github",
+                "tools": [{"type": "function", "name": "create_issue"}],
+                "function": {"name": "delete_db"},
+            },
+            {
                 "type": "computer_20251124",
                 "name": "computer",
                 "function": {"name": "delete_db", "parameters": {"display_width_px": 1024, "display_height_px": 768}},
@@ -2364,6 +2370,7 @@ class TestToolPermissionGuardrailAnthropicMessages:
             "snake_case_declarations_list",
             "custom_top_level_name",
             "mcp_server_label",
+            "namespace_with_members",
             "computer_top_level_name",
         ],
     )
@@ -2371,7 +2378,7 @@ class TestToolPermissionGuardrailAnthropicMessages:
         self, tool: dict[str, object], on_disallowed_action: Literal["block", "rewrite"]
     ) -> None:
         guardrail = self._pre_call(
-            [{"id": "allow_known", "tool_name": r"^(get_weather|computer)$", "decision": "allow"}],
+            [{"id": "allow_known", "tool_name": r"^(get_weather|computer|github__create_issue)$", "decision": "allow"}],
             on_disallowed_action,
             default_action="deny",
         )
@@ -2387,6 +2394,59 @@ class TestToolPermissionGuardrailAnthropicMessages:
         result = await self._run_pre_call(guardrail, data, "acompletion")
 
         assert result["tools"] == [weather]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("on_disallowed_action", ["block", "rewrite"])
+    @pytest.mark.parametrize(
+        ("tool", "hosted_key"),
+        [
+            ({"type": "get_weather", "googleSearch": {}}, "googleSearch"),
+            ({"type": "function", "codeExecution": {}}, "codeExecution"),
+            ({"type": "get_weather", "url_context": {}}, "url_context"),
+        ],
+        ids=["named_type_google_search", "function_type_code_execution", "named_type_url_context"],
+    )
+    async def test_pre_call_judges_a_gemini_hosted_tool_key_whatever_the_tool_type(
+        self, tool: dict[str, object], hosted_key: str, on_disallowed_action: Literal["block", "rewrite"]
+    ) -> None:
+        guardrail = self._pre_call(
+            [
+                {"id": "allow_weather", "tool_name": r"^get_weather$", "decision": "allow"},
+                {"id": "allow_functions", "tool_type": r"^function$", "decision": "allow"},
+            ],
+            on_disallowed_action,
+            default_action="deny",
+        )
+        weather = {"type": "function", "function": {"name": "get_weather"}}
+        data = {"model": "gemini-3", "messages": [{"role": "user", "content": "hi"}], "tools": [weather, tool]}
+
+        if on_disallowed_action == "block":
+            with pytest.raises(HTTPException) as excinfo:
+                await self._run_pre_call(guardrail, data, "acompletion")
+            assert excinfo.value.detail["detection_message"] == f"Tool '{hosted_key}' denied by default action"
+            return
+
+        result = await self._run_pre_call(guardrail, data, "acompletion")
+
+        assert result["tools"] == [weather]
+
+    @pytest.mark.asyncio
+    async def test_rewrite_keeps_an_allowed_function_whose_declaration_list_is_denied(self) -> None:
+        guardrail = self._pre_call(
+            [{"id": "allow_weather", "tool_name": r"^get_weather$", "decision": "allow"}],
+            "rewrite",
+            default_action="deny",
+        )
+        tool = {
+            "type": "function",
+            "function": {"name": "get_weather"},
+            "functionDeclarations": [{"name": "delete_db"}],
+        }
+        data = {"model": "gemini-3", "messages": [{"role": "user", "content": "hi"}], "tools": [tool]}
+
+        result = await self._run_pre_call(guardrail, data, "acompletion")
+
+        assert result["tools"] == [{"type": "function", "function": {"name": "get_weather"}}]
 
     @pytest.mark.asyncio
     async def test_pre_call_allows_a_custom_tool_by_its_function_name(self) -> None:
