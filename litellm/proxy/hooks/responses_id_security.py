@@ -24,7 +24,13 @@ from litellm.types.llms.openai import (
     BaseLiteLLMOpenAIResponseObject,
     ResponsesAPIResponse,
 )
-from litellm.types.utils import ADDRESSED_RESPONSE_ID_FIELD, CallTypesLiteral, LLMResponseTypes, SpecialEnums
+from litellm.types.utils import (
+    ADDRESSED_COMPARISON_RESPONSE_ID_FIELD,
+    ADDRESSED_RESPONSE_ID_FIELD,
+    CallTypesLiteral,
+    LLMResponseTypes,
+    SpecialEnums,
+)
 
 if TYPE_CHECKING:
     from litellm.caching.caching import DualCache
@@ -155,37 +161,29 @@ class ResponsesIDSecurity(CustomLogger):
         data: Mapping[str, object],
         user_api_key_dict: "UserAPIKeyAuth",
     ) -> Mapping[str, object]:
-        options: Final = self._authorized_prompt_cache_options(data.get("prompt_cache_options"), user_api_key_dict)
         extra_body: Final = as_str_mapping(data.get("extra_body"))
-        extra_body_options: Final = (
-            None
-            if extra_body is None
-            else self._authorized_prompt_cache_options(extra_body.get("prompt_cache_options"), user_api_key_dict)
+        overriding_extra_body: Final = (
+            extra_body if extra_body is not None and "prompt_cache_options" in extra_body else None
         )
-        options_field: Final[Mapping[str, object]] = {} if options is None else {"prompt_cache_options": options}
-        extra_body_field: Final[Mapping[str, object]] = (
-            {}
-            if extra_body is None or extra_body_options is None
-            else {"extra_body": {**extra_body, "prompt_cache_options": extra_body_options}}
+        options: Final = as_str_mapping(
+            data.get("prompt_cache_options")
+            if overriding_extra_body is None
+            else overriding_extra_body.get("prompt_cache_options")
         )
-        return {**options_field, **extra_body_field}
-
-    def _authorized_prompt_cache_options(
-        self,
-        prompt_cache_options: object,
-        user_api_key_dict: "UserAPIKeyAuth",
-    ) -> Mapping[str, object] | None:
-        options: Final = as_str_mapping(prompt_cache_options)
-        comparison_response_id: Final = None if options is None else options.get("comparison_response_id")
-        if (
-            options is None
-            or not isinstance(comparison_response_id, str)
-            or not self._is_encrypted_response_id(comparison_response_id)
-        ):
-            return None
-        original_response_id, user_id, team_id = self._decrypt_response_id(comparison_response_id)
+        retained_id: Final = data.get(ADDRESSED_COMPARISON_RESPONSE_ID_FIELD)
+        requested_id: Final = None if options is None else options.get("comparison_response_id")
+        addressed_id: Final = retained_id if isinstance(retained_id, str) and retained_id else requested_id
+        if options is None or not isinstance(addressed_id, str) or not self._is_encrypted_response_id(addressed_id):
+            return {}
+        original_response_id, user_id, team_id = self._decrypt_response_id(addressed_id)
         self.check_user_access_to_response_id(user_id, team_id, user_api_key_dict)
-        return {**options, "comparison_response_id": original_response_id}
+        authorized_options: Final = {**options, "comparison_response_id": original_response_id}
+        authorized_field: Final[Mapping[str, object]] = (
+            {"prompt_cache_options": authorized_options}
+            if overriding_extra_body is None
+            else {"extra_body": {**overriding_extra_body, "prompt_cache_options": authorized_options}}
+        )
+        return {**authorized_field, ADDRESSED_COMPARISON_RESPONSE_ID_FIELD: addressed_id}
 
     def authorize_response_id(
         self,
