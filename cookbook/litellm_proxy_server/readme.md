@@ -7,7 +7,7 @@
 ![Downloads](https://img.shields.io/pypi/dm/litellm)
 [![litellm](https://img.shields.io/badge/%20%F0%9F%9A%85%20liteLLM-OpenAI%7CAzure%7CAnthropic%7CPalm%7CCohere%7CReplicate%7CHugging%20Face-blue?color=green)](https://github.com/BerriAI/litellm)
 
-[![Deploy on Railway](https://railway.app/button.svg)](https://railway.app/template/DYqQAW?referralCode=t3ukrU)
+[![Deploy on Railway](https://railway.app/button.svg)](https://railway.com/deploy/litellm)
 
 ![4BC6491E-86D0-4833-B061-9F54524B2579](https://github.com/BerriAI/litellm/assets/17561003/f5dd237b-db5e-42e1-b1ac-f05683b1d724)
 
@@ -33,7 +33,7 @@
   - Call all models using the OpenAI format - `completion(model, messages)`
   - Text responses will always be available at `['choices'][0]['message']['content']`
 - **Error Handling** Using Model Fallbacks (if `GPT-4` fails, try `llama2`)
-- **Logging** - Log Requests, Responses and Errors to `Supabase`, `Posthog`, `Mixpanel`, `Sentry`, `Lunary`,`Athina`, `Helicone` (Any of the supported providers here: https://litellm.readthedocs.io/en/latest/advanced/
+- **Logging** - Log Requests, Responses and Errors to `Supabase`, `Posthog`, `Mixpanel`, `Sentry`, `Lunary`,`Athina`, `Helicone` (Any of the supported providers here: https://docs.litellm.ai/docs/proxy/logging
 
   **Example: Logs sent to Supabase**
   <img width="1015" alt="Screenshot 2023-08-11 at 4 02 46 PM" src="https://github.com/ishaan-jaff/proxy-server/assets/29436595/237557b8-ba09-4917-982c-8f3e1b2c8d08">
@@ -52,10 +52,10 @@ This endpoint is used to generate chat completions for 50+ support LLM API Model
 
 This API endpoint accepts all inputs in raw JSON and expects the following inputs
 
-- `model` (string, required): ID of the model to use for chat completions. See all supported models [here]: (https://litellm.readthedocs.io/en/latest/supported/):
+- `model` (string, required): ID of the model to use for chat completions. See all supported models [here]: (https://docs.litellm.ai/docs/providers):
   eg `gpt-3.5-turbo`, `gpt-4`, `claude-2`, `command-nightly`, `stabilityai/stablecode-completion-alpha-3b-4k`
 - `messages` (array, required): A list of messages representing the conversation context. Each message should have a `role` (system, user, assistant, or function), `content` (message text), and `name` (for function role).
-- Additional Optional parameters: `temperature`, `functions`, `function_call`, `top_p`, `n`, `stream`. See the full list of supported inputs here: https://litellm.readthedocs.io/en/latest/input/
+- Additional Optional parameters: `temperature`, `functions`, `function_call`, `top_p`, `n`, `stream`. See the full list of supported inputs here: https://docs.litellm.ai/docs/completion/input
 
 #### Example JSON body
 
@@ -102,7 +102,7 @@ print(response.text)
 ### Output [Response Format]
 
 Responses from the server are given in the following format.
-All responses from the server are returned in the following format (for all LLM models). More info on output here: https://litellm.readthedocs.io/en/latest/output/
+All responses from the server are returned in the following format (for all LLM models). More info on output here: https://docs.litellm.ai/docs/completion/output
 
 ```json
 {
@@ -155,7 +155,7 @@ All responses from the server are returned in the following format (for all LLM 
 
 1. Quick Start: Deploy on Railway
 
-   [![Deploy on Railway](https://railway.app/button.svg)](https://railway.app/template/DYqQAW?referralCode=t3ukrU)
+   [![Deploy on Railway](https://railway.app/button.svg)](https://railway.com/deploy/litellm)
 
 2. `GCP`, `AWS`, `Azure`
    This project includes a `Dockerfile` allowing you to build and deploy a Docker Project on your providers
