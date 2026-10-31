@@ -12,13 +12,13 @@ from datetime import date
 from typing import Final, Generic, TypeAlias, TypeVar
 
 from litellm.litellm_core_utils.ptu_pricing import parsed_ptu_shares, ptu_terms
+from litellm.litellm_core_utils.routing_common_utils import get_request_team_id, team_may_use_deployment
 from litellm.llms.azure.ptu_capacity import (
     PTUCapacity,
     deployment_ptu_capacity,
     is_azure_deployment,
     is_str_keyed_mapping,
 )
-from litellm.router_utils.common_utils import get_request_team_id, team_may_use_deployment
 
 _DeploymentT: Final = TypeVar("_DeploymentT", bound=Mapping[str, object])
 WildcardRoute: TypeAlias = Callable[[str], Sequence[Mapping[str, object]]]
