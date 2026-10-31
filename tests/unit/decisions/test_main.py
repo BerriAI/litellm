@@ -772,18 +772,42 @@ async def test_invalid_question_is_rejected_before_http(respx_mock: respx.MockRo
 
 
 def test_upstream_bad_request_maps_to_litellm_error(respx_mock: respx.MockRouter) -> None:
+    error_payload: Final = {"error": {"message": "invalid decision"}}
     respx_mock.post("https://api.perplexity.ai/v1/decisions").respond(
         status_code=400,
-        json={"error": {"message": "invalid decision"}},
+        json=error_payload,
     )
 
-    with pytest.raises(litellm.BadRequestError):
+    with pytest.raises(litellm.BadRequestError) as exc_info:
         litellm.systemone(
             model="perplexity/pplx-decider-v1-27b",
             state="review",
             questions={"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
             api_key="caller-key",
         )
+    assert exc_info.value.body == error_payload
+    assert exc_info.value.response is not None
+    assert json.loads(exc_info.value.response.text) == error_payload
+
+
+async def test_decisions_upstream_error_preserves_body_and_response(respx_mock: respx.MockRouter) -> None:
+    error_payload: Final = {"detail": {"error_type": "api_usage_error", "message": "Unknown model: jev-9"}}
+    respx_mock.post("https://api.typesafe.ai/v1/systemone").respond(
+        status_code=400,
+        json=error_payload,
+    )
+
+    with pytest.raises(litellm.BadRequestError) as exc_info:
+        await litellm.asystemone(
+            model="typesafe/jev-1.13.0",
+            state={"finding": "x"},
+            questions={"exp": {"type": "noul", "instructions": "Is it exploitable?"}},
+            api_key="sk-test",
+        )
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.body == error_payload
+    assert exc_info.value.response is not None
+    assert json.loads(exc_info.value.response.text) == error_payload
 
 
 def test_unreachable_upstream_maps_to_a_connection_error(respx_mock: respx.MockRouter) -> None:

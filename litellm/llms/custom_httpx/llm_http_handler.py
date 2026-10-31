@@ -4,7 +4,7 @@ import inspect
 import json
 import ssl
 from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Coroutine, Iterator, Mapping, Sequence
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from functools import lru_cache, partial, reduce
 from itertools import chain
 from types import MappingProxyType
@@ -647,6 +647,14 @@ def _unwrap_provider_error(error: Exception) -> Exception:
             return current
         current = current.__cause__
     return error
+
+
+def _parse_error_body(text: object) -> object | None:
+    if not isinstance(text, str) or not text.strip().startswith(("{", "[")):
+        return None
+    with suppress(json.JSONDecodeError, ValueError):
+        return json.loads(text)
+    return None
 
 
 def _merge_messages_header_sources(*sources: Mapping[str, object] | None) -> Mapping[str, object]:
@@ -6831,11 +6839,15 @@ class BaseLLMHTTPHandler:
         else:
             error_headers = {}
 
+        parsed_body: Final = _parse_error_body(error_text)
+
         if provider_config is None:
             raise BaseLLMException(
                 status_code=status_code,
                 message=error_text,
                 headers=error_headers,
+                response=error_response if isinstance(error_response, httpx.Response) else None,
+                body=parsed_body,
                 status_code_is_synthesized=not isinstance(received_status_code, int),
             )
 
@@ -6844,6 +6856,11 @@ class BaseLLMHTTPHandler:
             status_code=status_code,
             headers=error_headers,
         )
+        if isinstance(provider_error, BaseLLMException):
+            if isinstance(error_response, httpx.Response):
+                provider_error.response = error_response
+            if isinstance(parsed_body, dict) and provider_error.body is None:
+                provider_error.body = parsed_body
         if not isinstance(received_status_code, int):
             provider_error.status_code_is_synthesized = True
         raise provider_error
