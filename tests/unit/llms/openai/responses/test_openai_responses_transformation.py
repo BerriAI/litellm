@@ -3346,6 +3346,23 @@ class TestMalformedParamsFollowDropParams:
                 },
                 id="allowed-tools-naming-a-tool-not-sent",
             ),
+            pytest.param(
+                {
+                    "tool_choice": {
+                        "type": "allowed_tools",
+                        "mode": "auto",
+                        "tools": [
+                            {
+                                "type": "allowed_tools",
+                                "mode": "auto",
+                                "tools": [{"type": "function", "name": "get_weather"}],
+                            }
+                        ],
+                    },
+                    "tools": [_WEATHER_TOOL, {"type": "web_search"}],
+                },
+                id="allowed-tools-nested-in-allowed-tools",
+            ),
             pytest.param({"parallel_tool_calls": "true"}, id="parallel-tool-calls-string"),
             pytest.param({"previous_response_id": 12}, id="previous-response-id-int"),
             pytest.param({"previous_response_id": ""}, id="previous-response-id-empty"),

@@ -337,11 +337,19 @@ def _names_a_sent_tool(tool_choice: object, tools: tuple[Mapping[str, object], .
     choice: Final = as_str_mapping(tool_choice)
     if choice is None:
         return False
+    if choice.get("type") != "allowed_tools":
+        return _sent_tools_include(choice, tools)
+    allowed: Final = choice.get("tools")
+    entries: Final = tuple(map(as_str_mapping, _json_array_or_empty(allowed)))
+    return not isinstance(allowed, list | tuple) or all(
+        entry is not None and _sent_tools_include(entry, tools) for entry in entries
+    )
+
+
+def _sent_tools_include(choice: Mapping[str, object], tools: tuple[Mapping[str, object], ...]) -> bool:
     match choice.get("type"):
         case "allowed_tools":
-            allowed: Final = choice.get("tools")
-            entries: Final = _json_array_or_empty(allowed)
-            return not isinstance(allowed, list | tuple) or all(_names_a_sent_tool(entry, tools) for entry in entries)
+            return False
         case "function":
             return any(tool.get("type") == "function" and tool.get("name") == choice.get("name") for tool in tools)
         case "custom":
