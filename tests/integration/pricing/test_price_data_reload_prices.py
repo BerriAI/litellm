@@ -25,9 +25,12 @@ _GEO: Final = f"au.{_ROW}"
 _FINETUNE: Final = "ft:gpt-audit-reload-2025-01-01"
 _CLAUDE: Final = "claude-audit-reload-sonnet"
 _MINI: Final = "gpt-audit-reload-mini"
+_FREE: Final = "gpt-audit-reload-free"
 _USAGE: Final = re.compile(r"bill (\d+) (\d+) (\d+)")
 _CUSTOM: Final = MappingProxyType({"input_cost_per_token": 1.1e-06, "output_cost_per_token": 2.3e-06})
-_COST_MAP_LIMITS: Final = MappingProxyType({"MODEL_COST_MAP_MIN_MODEL_COUNT": "1", "MODEL_COST_MAP_MAX_SHRINK_RATIO": "0"})
+_COST_MAP_LIMITS: Final = MappingProxyType(
+    {"MODEL_COST_MAP_MIN_MODEL_COUNT": "1", "MODEL_COST_MAP_MAX_SHRINK_RATIO": "0"}
+)
 _PUBLISHED_SCALE: Final = 2.0
 _CATALOG: Final[Mapping[str, Mapping[str, JsonValue]]] = MappingProxyType(
     {
@@ -59,6 +62,12 @@ _CATALOG: Final[Mapping[str, Mapping[str, JsonValue]]] = MappingProxyType(
             "input_cost_per_token": 3e-06,
             "output_cost_per_token": 1.5e-05,
             "cache_read_input_token_cost": 3e-07,
+        },
+        _FREE: {
+            "litellm_provider": "openai",
+            "mode": "chat",
+            "input_cost_per_token": 0.0,
+            "output_cost_per_token": 0.0,
         },
         _MINI: {
             "litellm_provider": "openai",
@@ -352,8 +361,18 @@ def test_price_data_reload_reprices_catalog_deployments_and_keeps_custom_prices(
             _Usage(2000, 1000, 1000),
             _catalog_rates(_FINETUNE),
         ),
-        _Deployment("finetune-custom", f"openai/{_FINETUNE}:org:suffix:z", _CUSTOM, _Usage(2000, 0, 1000), _custom_rates),
+        _Deployment(
+            "finetune-custom", f"openai/{_FINETUNE}:org:suffix:z", _CUSTOM, _Usage(2000, 0, 1000), _custom_rates
+        ),
         _Deployment("cross-provider-unpriced", f"azure/{_CLAUDE}", {}, _Usage(2000, 1000, 1000), _unpriced),
+        _Deployment("catalog-free", f"openai/{_FREE}", {}, _Usage(2000, 1000, 1000), _catalog_rates(_FREE)),
+        _Deployment(
+            "cross-provider-free",
+            f"azure/{_CLAUDE}",
+            {"input_cost_per_token": 0.0, "output_cost_per_token": 0.0},
+            _Usage(2000, 1000, 1000),
+            _catalog_rates(_FREE),
+        ),
         _Deployment(
             "region-custom-above-threshold",
             f"bedrock/ap-northeast-1.{_ROW}",
