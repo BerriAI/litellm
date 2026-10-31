@@ -52,6 +52,20 @@ _REDIS_STARTUP_NODES_ADAPTER: Final = TypeAdapter(
 )
 
 
+def _keyed_provider_params_in_extra_body(kwargs: Mapping[str, object]) -> str:
+    raw_extra_body: Final = kwargs.get("extra_body")
+    if not isinstance(raw_extra_body, dict):
+        return ""
+    extra_body: Final = cast(  # cast-ok: isinstance leaves the key and value types unknown
+        Mapping[str, object], raw_extra_body
+    )
+    return "".join(
+        f"extra_body.{param}: {extra_body[param]}"
+        for param in sorted(_ALWAYS_KEYED_PROVIDER_PARAMS)
+        if extra_body.get(param)
+    )
+
+
 @contextmanager
 def response_cache_phase(operation: Literal["get", "set"]) -> Generator[None]:
     """The ``cache.get llm_response`` / ``cache.set llm_response`` span a response-cache read or write runs
@@ -429,7 +443,10 @@ class Cache:
             "" if embeds_thought_signature_in_tool_call_id(kwargs) else "thought_signature_in_tool_call_id: False"
         )
         hashed_cache_key = Cache._get_hashed_cache_key(
-            cache_key + reasoning_summary_material + tool_call_id_shape_material
+            cache_key
+            + _keyed_provider_params_in_extra_body(kwargs)
+            + reasoning_summary_material
+            + tool_call_id_shape_material
         )
         hashed_cache_key = self._add_namespace_to_cache_key(hashed_cache_key, **kwargs)
         verbose_logger.debug(
