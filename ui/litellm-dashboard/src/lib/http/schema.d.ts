@@ -41886,6 +41886,8 @@ export interface components {
         };
         /** PromptCacheOptions */
         PromptCacheOptions: {
+            /** Comparison Response Id */
+            comparison_response_id?: string;
             /**
              * Mode
              * @enum {string}

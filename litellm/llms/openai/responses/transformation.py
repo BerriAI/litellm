@@ -15,7 +15,7 @@ from litellm.integrations.anthropic_cache_control_hook import (
     openai_prompt_cache_breakpoint_support,
     targets_openai_api,
 )
-from litellm.litellm_core_utils.core_helpers import normalize_drop_params, process_response_headers
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, normalize_drop_params, process_response_headers
 from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
     safe_convert_created_field,
@@ -44,6 +44,7 @@ from litellm.responses.litellm_completion_transformation.tool_search import (
     tools_with_anthropic_tool_search_mapped,
     tools_without_anthropic_tool_search,
 )
+from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.openai import *
@@ -623,10 +624,44 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
                 "model": model,
                 "input": replay_safe_input,
                 **response_api_optional_request_params,
+                **self._prompt_cache_options_with_original_comparison_id(request_params),
             },
         )
 
         return final_request_params
+
+    def transform_extra_body(
+        self,
+        extra_body: Mapping[str, object],
+        request: Mapping[str, object],
+        model: str,
+        litellm_params: GenericLiteLLMParams,
+    ) -> Mapping[str, object]:
+        return {**extra_body, **self._prompt_cache_options_with_original_comparison_id(extra_body)}
+
+    def _prompt_cache_options_with_original_comparison_id(self, params: Mapping[str, object]) -> Mapping[str, object]:
+        options: Final = as_str_mapping(params.get("prompt_cache_options"))
+        comparison_response_id: Final = None if options is None else options.get("comparison_response_id")
+        if (
+            self.custom_llm_provider != LlmProviders.OPENAI
+            or options is None
+            or not isinstance(comparison_response_id, str)
+            or not comparison_response_id.startswith("resp_")
+        ):
+            return {}
+        decoded_id: Final = ResponsesAPIRequestUtils.decode_responses_api_response_id(comparison_response_id)
+        decoded_provider: Final = decoded_id.get("custom_llm_provider")
+        original_response_id: Final = decoded_id.get("response_id", comparison_response_id)
+        rebuilt_envelope: Final = ResponsesAPIRequestUtils.update_responses_api_response_id_with_model_id(
+            {"id": original_response_id}, decoded_provider, {"model_info": {"id": decoded_id.get("model_id")}}
+        )
+        if (
+            decoded_provider != LlmProviders.OPENAI
+            or original_response_id == comparison_response_id
+            or rebuilt_envelope.get("id") != comparison_response_id
+        ):
+            return {}
+        return {"prompt_cache_options": {**options, "comparison_response_id": original_response_id}}
 
     def _prepared_input_and_tools(
         self,

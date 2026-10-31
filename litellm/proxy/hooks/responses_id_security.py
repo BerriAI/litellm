@@ -14,6 +14,7 @@ from pydantic import TypeAdapter, ValidationError
 
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.proxy._types import LitellmUserRoles
 from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     decrypt_value_helper,
@@ -23,7 +24,13 @@ from litellm.types.llms.openai import (
     BaseLiteLLMOpenAIResponseObject,
     ResponsesAPIResponse,
 )
-from litellm.types.utils import ADDRESSED_RESPONSE_ID_FIELD, CallTypesLiteral, LLMResponseTypes, SpecialEnums
+from litellm.types.utils import (
+    ADDRESSED_COMPARISON_RESPONSE_ID_FIELD,
+    ADDRESSED_RESPONSE_ID_FIELD,
+    CallTypesLiteral,
+    LLMResponseTypes,
+    SpecialEnums,
+)
 
 if TYPE_CHECKING:
     from litellm.caching.caching import DualCache
@@ -135,6 +142,9 @@ class ResponsesIDSecurity(CustomLogger):
         addressed_id_field: Final = _ADDRESSED_RESPONSE_ID_FIELD_BY_CALL_TYPE.get(call_type)
         if addressed_id_field is None:
             return None
+        if call_type == "aresponses":
+            request_data: Final = cast("dict[str, object]", data)  # cast-ok: the hook signature leaves the body untyped
+            request_data.update(self._authorized_comparison_response_id_fields(request_data, user_api_key_dict))
         retained_id: Final = data.get(ADDRESSED_RESPONSE_ID_FIELD)
         addressed_id: Final = (
             retained_id if isinstance(retained_id, str) and retained_id else data.get(addressed_id_field)
@@ -145,6 +155,39 @@ class ResponsesIDSecurity(CustomLogger):
         data[addressed_id_field] = authorized_id
         data[ADDRESSED_RESPONSE_ID_FIELD] = addressed_id
         return data
+
+    def _authorized_comparison_response_id_fields(
+        self,
+        data: Mapping[str, object],
+        user_api_key_dict: "UserAPIKeyAuth",
+    ) -> Mapping[str, object]:
+        extra_body: Final = as_str_mapping(data.get("extra_body"))
+        overriding_extra_body: Final = (
+            extra_body if extra_body is not None and "prompt_cache_options" in extra_body else None
+        )
+        options: Final = as_str_mapping(
+            data.get("prompt_cache_options")
+            if overriding_extra_body is None
+            else overriding_extra_body.get("prompt_cache_options")
+        )
+        retained_id: Final = data.get(ADDRESSED_COMPARISON_RESPONSE_ID_FIELD)
+        requested_id: Final = None if options is None else options.get("comparison_response_id")
+        if options is None or not isinstance(requested_id, str):
+            return {}
+        addressed_id: Final = requested_id if self._is_encrypted_response_id(requested_id) else retained_id
+        if not isinstance(addressed_id, str) or not self._is_encrypted_response_id(addressed_id):
+            return {}
+        original_response_id, user_id, team_id = self._decrypt_response_id(addressed_id)
+        if requested_id not in (addressed_id, original_response_id):
+            return {}
+        self.check_user_access_to_response_id(user_id, team_id, user_api_key_dict)
+        authorized_options: Final = {**options, "comparison_response_id": original_response_id}
+        authorized_field: Final[Mapping[str, object]] = (
+            {"prompt_cache_options": authorized_options}
+            if overriding_extra_body is None
+            else {"extra_body": {**overriding_extra_body, "prompt_cache_options": authorized_options}}
+        )
+        return {**authorized_field, ADDRESSED_COMPARISON_RESPONSE_ID_FIELD: addressed_id}
 
     def authorize_response_id(
         self,
