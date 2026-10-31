@@ -5873,6 +5873,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/get/background_chat_settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Background Chat Settings
+         * @description Get saved background-response settings and the prerequisites for changing them.
+         */
+        get: operations["get_background_chat_settings_get_background_chat_settings_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/get/config/callbacks": {
         parameters: {
             query?: never;
@@ -18264,6 +18284,26 @@ export interface paths {
         patch: operations["typesafe_proxy_route_typesafe__endpoint__patch"];
         trace?: never;
     };
+    "/update/background_chat_settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Update Background Chat Settings
+         * @description Save background-response polling settings for the proxy configuration refresh.
+         */
+        patch: operations["update_background_chat_settings_update_background_chat_settings_patch"];
+        trace?: never;
+    };
     "/update/default_team_settings": {
         parameters: {
             query?: never;
@@ -27204,6 +27244,37 @@ export interface components {
             Value: string;
         } & {
             [key: string]: unknown;
+        };
+        /** BackgroundChatSettings */
+        BackgroundChatSettings: {
+            /**
+             * Enabled
+             * @description Enable cache-backed background Responses for Chat and API requests.
+             */
+            enabled: boolean;
+        };
+        /** BackgroundChatSettingsResponse */
+        BackgroundChatSettingsResponse: {
+            /**
+             * Can Save
+             * @description Whether database-backed configuration updates are available.
+             */
+            can_save: boolean;
+            /**
+             * Enabled
+             * @description Enable cache-backed background Responses for Chat and API requests.
+             */
+            enabled: boolean;
+            /**
+             * Managed By Config
+             * @description Whether the responses configuration is owned by the config file.
+             */
+            managed_by_config: boolean;
+            /**
+             * Redis Configured
+             * @description Whether this proxy has coordination Redis configured.
+             */
+            redis_configured: boolean;
         };
         /** BaseLitellmParams */
         BaseLitellmParams: {
@@ -38852,6 +38923,12 @@ export interface components {
             supported_openai_params: string[] | null;
             /** Supported Reasoning Efforts */
             supported_reasoning_efforts?: string[] | null;
+            /**
+             * Supports Background Chat
+             * @description Whether cache-backed background Responses runs are enabled for this model group
+             * @default false
+             */
+            supports_background_chat: boolean;
             /**
              * Supports Fast Mode
              * @default false
@@ -61119,6 +61196,26 @@ export interface operations {
             };
         };
     };
+    get_background_chat_settings_get_background_chat_settings_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BackgroundChatSettingsResponse"];
+                };
+            };
+        };
+    };
     get_config_get_config_callbacks_get: {
         parameters: {
             query?: never;
@@ -76426,6 +76523,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_background_chat_settings_update_background_chat_settings_patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BackgroundChatSettings"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BackgroundChatSettingsResponse"];
                 };
             };
             /** @description Validation Error */
