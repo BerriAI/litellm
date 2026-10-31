@@ -2671,7 +2671,8 @@ async def websocket_passthrough_request(
         cost_per_request: Optional field - cost per request to the target endpoint
         setup_model_rewriter: Optional rewrite of the setup frame's model before it reaches the upstream
         builtin_provider_route: Whether a built-in provider route serves the connection, so its URL names the provider
-        model: The model the caller named before connecting, logged on a failure before the setup frame arrives
+        model: The model the route checked the key against before connecting. Pre-call hooks such as per-model rate
+            limits apply to it, and a failure before the setup frame arrives is logged with it
         meter: Prices the session from the client text frames delivered upstream, for an upstream that reports no usage
     """
     from litellm.litellm_core_utils.litellm_logging import Logging
@@ -2781,7 +2782,9 @@ async def websocket_passthrough_request(
     )
 
     ### CALL HOOKS ### - modify incoming data / reject request before calling the model
-    websocket_hook_data: Final = guardrail_request_data_with_streaming(MappingProxyType({}), is_streaming=True)
+    websocket_hook_data: Final = guardrail_request_data_with_streaming(
+        MappingProxyType({} if model is None else {"model": model}), is_streaming=True
+    )
     await proxy_logging_obj.pre_call_hook(
         user_api_key_dict=user_api_key_dict,
         data=websocket_hook_data,

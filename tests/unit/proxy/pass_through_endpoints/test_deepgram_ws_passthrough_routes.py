@@ -2,33 +2,40 @@
 target URL."""
 
 import asyncio
-from collections.abc import Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
+from datetime import datetime
 from types import MappingProxyType, SimpleNamespace
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 from starlette.routing import WebSocketRoute
-from starlette.websockets import WebSocketDisconnect
+from starlette.types import Message
+from starlette.websockets import WebSocket, WebSocketDisconnect
+from websockets.exceptions import ConnectionClosedOK
+from websockets.frames import Close
 
 import litellm
 from litellm.caching.dual_cache import DualCache
+from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.constants import WEBSOCKET_CLOSE_REASON_MAX_BYTES
 from litellm.litellm_core_utils.get_model_cost_map import adopt_model_cost_map
 from litellm.llms.deepgram.common_utils import DeepgramSpeakMeter
 from litellm.proxy._lazy_features import LAZY_FEATURES
 from litellm.proxy._types import LiteLLMRoutes, UserAPIKeyAuth
 from litellm.proxy.auth.auth_checks import cache_key_object
+from litellm.proxy.hooks.parallel_request_limiter_v3 import PROXY_MaxParallelRequestsHandler_v3
 from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     _websocket_relay,
     deepgram_listen_websocket_route,
     deepgram_speak_websocket_route,
     router,
 )
-from litellm.proxy.utils import hash_token
+from litellm.proxy.pass_through_endpoints.pass_through_endpoints import websocket_passthrough_request
+from litellm.proxy.utils import InternalUsageCache, ProxyLogging, hash_token
 from litellm.types.passthrough_endpoints.pass_through_endpoints import WebSocketSessionMeter
 
 GET_CREDENTIALS: Final = (
@@ -87,6 +94,7 @@ class _FakeRelay:
         endpoint: str,
         accept_websocket: bool,
         meter: WebSocketSessionMeter | None = None,
+        model: str | None = None,
     ) -> None:
         self.calls.append(
             _RelayCall(
@@ -534,6 +542,137 @@ async def test_deepgram_speak_relays_with_provider_auth_and_meters_the_session(
     ]
     assert websocket.accepts == [None]
     assert websocket.closed is None
+
+
+def _client_that_hangs_up(path: str, query: str) -> WebSocket:
+    handshake: Final = iter(({"type": "websocket.connect"},))
+
+    async def receive() -> Message:
+        return next(handshake, {"type": "websocket.disconnect", "code": 1000})
+
+    async def send(message: Message) -> None:
+        return None
+
+    return WebSocket({"type": "websocket", "path": path, "query_string": query.encode(), "headers": []}, receive, send)
+
+
+class _UpstreamThatClosesAtOnce:
+    async def recv(self, decode: bool | None = None) -> str:
+        raise ConnectionClosedOK(rcvd=Close(1000, ""), sent=Close(1000, ""), rcvd_then_sent=True)
+
+    async def send(self, message: str | bytes) -> None:
+        return None
+
+    async def close(self, code: int = 1000, reason: str = "") -> None:
+        return None
+
+
+class _UpstreamConnect:
+    async def __aenter__(self) -> _UpstreamThatClosesAtOnce:
+        return _UpstreamThatClosesAtOnce()
+
+    async def __aexit__(self, *exc_info: object) -> bool:
+        return False
+
+
+def _upstream_dials_under_the_real_rate_limiter(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    from litellm.proxy import proxy_server
+
+    fixed_now: Final = datetime.fromisoformat("2026-10-31T12:00:00+00:00")
+    limiter: Final = PROXY_MaxParallelRequestsHandler_v3(
+        internal_usage_cache=InternalUsageCache(DualCache(in_memory_cache=InMemoryCache(clock=fixed_now.timestamp))),
+        time_provider=lambda: fixed_now,
+        model_group_resolver=lambda _model: None,
+    )
+    monkeypatch.setattr(litellm, "callbacks", [limiter])
+    monkeypatch.setattr(
+        proxy_server, "proxy_logging_obj", ProxyLogging(user_api_key_cache=proxy_server.user_api_key_cache)
+    )
+    dialed: Final[list[str]] = []
+
+    def dial(target: str, additional_headers: Mapping[str, str]) -> _UpstreamConnect:
+        dialed.append(target)
+        return _UpstreamConnect()
+
+    monkeypatch.setattr("litellm.proxy.pass_through_endpoints.pass_through_endpoints.connect", dial)
+    return dialed
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("route", "path", "limited_model", "first_query", "second_query", "first_target"),
+    [
+        pytest.param(
+            deepgram_listen_websocket_route,
+            "/deepgram/v1/listen",
+            "nova-3",
+            "model=nova-3",
+            "model=nova-3&model=nova-2",
+            "wss://api.deepgram.com/v1/listen?model=nova-3",
+            id="listen repeated model",
+        ),
+        pytest.param(
+            deepgram_listen_websocket_route,
+            "/deepgram/v1/listen",
+            "nova-3",
+            "",
+            "",
+            "wss://api.deepgram.com/v1/listen?model=nova-3",
+            id="listen default model",
+        ),
+        pytest.param(
+            deepgram_speak_websocket_route,
+            "/deepgram/v1/speak",
+            "aura-2-thalia-en",
+            "model=aura-2-thalia-en",
+            "model=aura-2-thalia-en&model=aura-asteria-en",
+            "wss://api.deepgram.com/v1/speak?model=aura-2-thalia-en",
+            id="speak repeated model",
+        ),
+        pytest.param(
+            deepgram_speak_websocket_route,
+            "/deepgram/v1/speak",
+            "aura-asteria-en",
+            "",
+            "",
+            "wss://api.deepgram.com/v1/speak?model=aura-asteria-en",
+            id="speak default model",
+        ),
+    ],
+)
+async def test_deepgram_routes_refuse_a_second_session_over_the_keys_model_rpm_limit(
+    route: Callable[..., Awaitable[None]],
+    path: str,
+    limited_model: str,
+    first_query: str,
+    second_query: str,
+    first_target: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("DEEPGRAM_API_BASE", raising=False)
+    monkeypatch.setenv("DEEPGRAM_API_KEY", "dg-provider-key")
+    dialed: Final = _upstream_dials_under_the_real_rate_limiter(monkeypatch)
+    caller: Final = UserAPIKeyAuth(
+        api_key=hash_token("sk-deepgram-model-rpm"), metadata={"model_rpm_limit": {limited_model: 1}}
+    )
+
+    async def session(query: str) -> None:
+        await route(
+            websocket=_client_that_hangs_up(path, query),
+            user_api_key_dict=caller,
+            relay=websocket_passthrough_request,
+        )
+
+    await asyncio.create_task(session(first_query))
+    with pytest.raises(HTTPException) as refused:
+        await asyncio.create_task(session(second_query))
+
+    assert (refused.value.status_code, refused.value.detail, dialed) == (
+        429,
+        f"Rate limit exceeded for model_per_key: {caller.api_key}:{limited_model}. Limit type: requests. "
+        "Current limit: 1, Remaining: 0. Limit resets at: 2026-10-31 12:01:00 UTC",
+        [first_target],
+    )
 
 
 @pytest.mark.asyncio
