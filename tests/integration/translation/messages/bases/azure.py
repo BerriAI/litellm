@@ -409,7 +409,7 @@ GPT_6_LUNA_TEST_CASE: Final = TranslationTestCase(
         **MESSAGES_BRIDGE_RESPONSE,
         "id": "resp_0534b0c3898d6d1b006ad023ba700c8195b63f1819ab327ab3",
         "model": "azure/gpt-6-luna",
-        "usage": {"input_tokens": 309, "output_tokens": 114},
+        "usage": {"input_tokens": 309, "output_tokens": 114, "output_tokens_details": {"thinking_tokens": 50}},
         "content": [
             {
                 "type": "text",
@@ -543,7 +543,7 @@ GPT_6_1_SOL_TEST_CASE: Final = TranslationTestCase(
         **MESSAGES_BRIDGE_RESPONSE,
         "id": "resp_0a4a896afe94ce65006ad023b047248193999d7c3a0c4fec39",
         "model": "azure/gpt-6.1-sol",
-        "usage": {"input_tokens": 309, "output_tokens": 137},
+        "usage": {"input_tokens": 309, "output_tokens": 137, "output_tokens_details": {"thinking_tokens": 72}},
         "content": [
             {
                 "type": "text",
@@ -679,7 +679,7 @@ GPT_6_ASTRA_TEST_CASE: Final = TranslationTestCase(
         **MESSAGES_BRIDGE_RESPONSE,
         "id": "resp_019af305501e4822006ad023c3a50881958c4cf40623699cf8",
         "model": "azure/gpt-6-astra",
-        "usage": {"input_tokens": 309, "output_tokens": 138},
+        "usage": {"input_tokens": 309, "output_tokens": 138, "output_tokens_details": {"thinking_tokens": 72}},
         "content": [
             {
                 "type": "text",
@@ -812,7 +812,7 @@ GPT_5_6_TERRA_TEST_CASE: Final = TranslationTestCase(
         **MESSAGES_BRIDGE_RESPONSE,
         "id": "resp_0d178c5d2401a624006ad023cf1c588194ab41d5803ed29401",
         "model": "azure/gpt-5.6-terra",
-        "usage": {"input_tokens": 309, "output_tokens": 92},
+        "usage": {"input_tokens": 309, "output_tokens": 92, "output_tokens_details": {"thinking_tokens": 22}},
         "content": [
             {
                 "type": "text",

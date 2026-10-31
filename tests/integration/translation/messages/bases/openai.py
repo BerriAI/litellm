@@ -394,7 +394,7 @@ GPT_6_LUNA_TEST_CASE: Final = TranslationTestCase(
         **MESSAGES_BRIDGE_RESPONSE,
         "id": "resp_bGl0ZWxsbTpjdXN0b21fbGxtX3Byb3ZpZGVyOm9wZW5haTttb2RlbF9pZDo0ZmY4OWU3OTgyMGFkZDVjMmM1ZmZlM2MyODk4ZDNkOGEzZDczY2IxY2ExN2JmZGMxYTRmNTRlZmFlNzhkMTIzO3Jlc3BvbnNlX2lkOnJlc3BfMDNlYzQ5MWM1Y2FhZTAyOTAwNmFkMDIzOWMwODM0ODdkMDk5YTIxZDYwYmU2YjVmZGU=",
         "model": "openai/gpt-6-luna",
-        "usage": {"input_tokens": 309, "output_tokens": 214},
+        "usage": {"input_tokens": 309, "output_tokens": 214, "output_tokens_details": {"thinking_tokens": 150}},
         "content": [
             {
                 "type": "redacted_thinking",
@@ -517,7 +517,7 @@ GPT_6_1_SOL_TEST_CASE: Final = TranslationTestCase(
         **MESSAGES_BRIDGE_RESPONSE,
         "id": "resp_bGl0ZWxsbTpjdXN0b21fbGxtX3Byb3ZpZGVyOm9wZW5haTttb2RlbF9pZDphMTYxN2NmYzNlODRjNzYxNDdjNTgxMmFhMjIwNGU0MDczOTM0M2YyMTg4YzQxNzIxMzRlOTc1ZTQ0YzQ3MjgyO3Jlc3BvbnNlX2lkOnJlc3BfMGFmNjdjYjc4YmVhZDJjNjAwNmFkMDIzYTcyNzM0ODdkMGIxNzY4Yjc3ZjY5NTZiNzM=",
         "model": "openai/gpt-6.1-sol",
-        "usage": {"input_tokens": 309, "output_tokens": 140},
+        "usage": {"input_tokens": 309, "output_tokens": 140, "output_tokens_details": {"thinking_tokens": 75}},
         "content": [
             {
                 "type": "redacted_thinking",
@@ -640,7 +640,7 @@ GPT_6_ASTRA_TEST_CASE: Final = TranslationTestCase(
         **MESSAGES_BRIDGE_RESPONSE,
         "id": "resp_bGl0ZWxsbTpjdXN0b21fbGxtX3Byb3ZpZGVyOm9wZW5haTttb2RlbF9pZDphODRkZDk3MTcwNzk0ZDlhYzQ5ODhlZWMzOTJmN2Q5YjQwN2MyNDY1YmJhZTA4MGE1ZGYzMThlOTViOTA2NzlkO3Jlc3BvbnNlX2lkOnJlc3BfMDk2NGE0MWY1ODE1M2FjNTAwNmFkMDIzOGY5YmMwODdkMGE5ZTc5ZmRhMzc1YmVlM2M=",
         "model": "openai/gpt-6-astra",
-        "usage": {"input_tokens": 309, "output_tokens": 152},
+        "usage": {"input_tokens": 309, "output_tokens": 152, "output_tokens_details": {"thinking_tokens": 87}},
         "content": [
             {
                 "type": "redacted_thinking",
@@ -764,7 +764,7 @@ GPT_5_6_TERRA_TEST_CASE: Final = TranslationTestCase(
         **MESSAGES_BRIDGE_RESPONSE,
         "id": "resp_bGl0ZWxsbTpjdXN0b21fbGxtX3Byb3ZpZGVyOm9wZW5haTttb2RlbF9pZDo0Mjg5MWEzMzRjNTlhMjhlMjQ2MjQ0YTQ4YTJjOGVlMTM5NGYyZGNhZWMxYmVjZDhmZDk2N2NmNjYxNWNmZDM5O3Jlc3BvbnNlX2lkOnJlc3BfMDg1MjZjY2FiOWFhNjUzZTAwNmFkMDIzODg0YTFjODdkMDlhMjNmNmQ1YzYxZDY1ZDM=",
         "model": "openai/gpt-5.6-terra",
-        "usage": {"input_tokens": 309, "output_tokens": 107},
+        "usage": {"input_tokens": 309, "output_tokens": 107, "output_tokens_details": {"thinking_tokens": 42}},
         "content": [
             {
                 "type": "redacted_thinking",

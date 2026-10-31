@@ -465,7 +465,11 @@ def test_messages_stream_opens_thinking_block_at_index_zero_for_reasoning_conten
         "message_stop",
     ), text
     message_delta: Final = next(event for event in events if event["type"] == "message_delta")
-    assert message_delta["usage"] == {"input_tokens": 11, "output_tokens": 6}, text
+    assert message_delta["usage"] == {
+        "input_tokens": 11,
+        "output_tokens": 6,
+        "output_tokens_details": {"thinking_tokens": 4},
+    }, text
     requests: Final = wire.drain()
     assert len(requests) == 1
     outbound: Final = json.loads(requests[0].body)
