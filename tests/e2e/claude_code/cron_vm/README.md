@@ -52,7 +52,7 @@ than as a GitHub Action or on a dedicated VM. Trade-offs:
    the stable venv doesn't install) is never loaded. The tag's own
    `tests/e2e/` is deliberately not used.
 3. **Resolves and installs the Claude Code CLI under test**:
-   `pr_gate_version_resolver.py` (run on the venv, the image has no
+   `tests/e2e/cli_harness/npm_version_resolver.py` (run on the venv, the image has no
    Python of its own) picks the newest `@anthropic-ai/claude-code` npm
    release published at least 3 days ago, the same buffer the PR gate
    uses, unless `CLAUDE_CODE_VERSION` pins one, and
