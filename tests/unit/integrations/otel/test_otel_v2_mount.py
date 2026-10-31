@@ -7,8 +7,10 @@ surface and the server-span + shared-provider behavior it produces.
 
 import asyncio
 import contextvars
+import sys
 from contextlib import nullcontext
 from datetime import datetime, timezone
+from types import ModuleType
 from typing import Final
 
 import pytest
@@ -19,7 +21,7 @@ pytest.importorskip("opentelemetry.instrumentation.fastapi")
 fastapi = pytest.importorskip("fastapi")
 
 from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
-from fastapi import FastAPI, HTTPException, Request, Response  # noqa: E402  # optional dependencies are skipped first
+from fastapi import APIRouter, FastAPI, HTTPException, Request, Response  # noqa: E402  # optional dependencies are skipped first
 from fastapi.responses import StreamingResponse  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 from starlette.routing import Route  # noqa: E402
@@ -54,6 +56,7 @@ from litellm.integrations.otel.mount import (  # noqa: E402
     trace_response_expose_headers,
     trace_response_headers,
 )
+from litellm.proxy._lazy_features import LazyFeature, attach_lazy_features  # noqa: E402
 from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (  # noqa: E402
     HttpPassThroughEndpointHelpers,
 )
@@ -689,3 +692,84 @@ def test_url_exclusions_cover_unhandled_error_handlers_after_repeated_mount(
     assert tuple(span.name for span in exporter.get_finished_spans()) == (
         () if path == "/excluded" else ("auth", "error SDK span", "error handler", "GET /included")
     )
+
+
+def _lazy_feature(monkeypatch: pytest.MonkeyPatch, method: str, route: str, prefix: str) -> LazyFeature:
+    async def served() -> Response:
+        return Response(status_code=200)
+
+    router: Final = APIRouter()
+    router.add_api_route(route, served, methods=[method])
+    module: Final = ModuleType(f"tests.unit.integrations.otel.lazy_route_{prefix.strip('/')}")
+    module.router = router  # pyright: ignore[reportAttributeAccessIssue]  # fixture module built at test time
+    monkeypatch.setitem(sys.modules, module.__name__, module)
+    return LazyFeature(name=f"lazy {prefix}", module_path=module.__name__, path_prefixes=(prefix,))
+
+
+@pytest.mark.parametrize(
+    ("method", "route", "path", "expected"),
+    [
+        ("POST", "/lazy/messages", "/lazy/messages", ("POST /lazy/messages", "/lazy/messages")),
+        ("GET", "/openai/{endpoint:path}", "/openai/v1/models", ("GET /openai/v1/models", "/openai/v1/models")),
+    ],
+)
+async def test_requests_that_load_a_lazy_route_name_their_server_span_after_it(
+    monkeypatch: pytest.MonkeyPatch, method: str, route: str, path: str, expected: tuple[str, str]
+) -> None:
+    monkeypatch.setenv("LITELLM_OTEL_V2", "1")
+    monkeypatch.delenv("LITELLM_DISABLE_LAZY_ROUTES", raising=False)
+    provider, exporter = _exporting_provider()
+    app: Final = FastAPI()
+    attach_lazy_features(app, (_lazy_feature(monkeypatch, method, route, "/" + path.split("/")[1]),))
+    instrument_fastapi_app(app, tracer_provider=provider)
+
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url="http://testserver") as client:
+        responses: Final = await asyncio.gather(*(client.request(method, path) for _ in range(3)))
+
+    assert [response.status_code for response in responses] == [200, 200, 200]
+    assert [
+        (span.name, (span.attributes or {}).get("http.route"))
+        for span in exporter.get_finished_spans()
+        if span.kind is SpanKind.SERVER
+    ] == [expected, expected, expected]
+
+
+class _HeldUntilReleased:
+    def __init__(self, app, held: asyncio.Event, released: asyncio.Event) -> None:
+        self.app = app
+        self.held = held
+        self.released = released
+
+    async def __call__(self, scope, receive, send):
+        if (b"x-held", b"1") in scope.get("headers", ()):
+            self.held.set()
+            await self.released.wait()
+        await self.app(scope, receive, send)
+
+
+async def test_a_request_held_while_a_lazy_route_loads_names_its_server_span_after_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LITELLM_OTEL_V2", "1")
+    monkeypatch.delenv("LITELLM_DISABLE_LAZY_ROUTES", raising=False)
+    provider, exporter = _exporting_provider()
+    held: Final = asyncio.Event()
+    released: Final = asyncio.Event()
+    app: Final = FastAPI()
+    attach_lazy_features(app, (_lazy_feature(monkeypatch, "POST", "/lazy/messages", "/lazy"),))
+    app.add_middleware(_HeldUntilReleased, held=held, released=released)
+    instrument_fastapi_app(app, tracer_provider=provider)
+
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url="http://testserver") as client:
+        waiting: Final = asyncio.ensure_future(client.post("/lazy/messages", headers={"x-held": "1"}))
+        await held.wait()
+        loading: Final = await client.post("/lazy/messages")
+        released.set()
+        statuses: Final = (loading.status_code, (await waiting).status_code)
+
+    assert statuses == (200, 200)
+    assert [
+        (span.name, (span.attributes or {}).get("http.route"))
+        for span in exporter.get_finished_spans()
+        if span.kind is SpanKind.SERVER
+    ] == [("POST /lazy/messages", "/lazy/messages")] * 2
