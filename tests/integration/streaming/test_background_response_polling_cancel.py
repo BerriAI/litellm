@@ -167,3 +167,35 @@ def test_a_background_response_cancelled_just_before_its_stream_finishes_stays_c
         _cancel(proxy, polling_id)
         cancel_sent.set()
         held(lambda: _status(proxy, polling_id), lambda status: status == "cancelled", holding=3)
+
+
+@pytest.mark.timeout(2 * _OWNED_PROXY_SECONDS + 3 * _STREAM_SECONDS + 60)
+def test_a_delete_sent_to_another_proxy_stops_the_background_stream_and_the_response_stays_gone(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    identity: Final = f"resp_{uuid.uuid4().hex}"
+    requested: Final = threading.Event()
+    slow_stream: Final = Reply(
+        content_type="text/event-stream",
+        chunks=(
+            frame(created(identity)),
+            *(frame(delta(identity, "word ")) for _ in range(_DELTAS)),
+            frame(completed(identity, "word " * _DELTAS)),
+        ),
+        pause_between_chunks=_DELTA_PAUSE_SECONDS,
+    )
+    with (
+        wire_server(_serving(slow_stream, requested)) as wire,
+        _proxies_sharing_one_redis(gateway, tmp_path, wire, 2) as (streaming, deleting),
+    ):
+        polling_id: Final = _create_background_response(streaming)
+        eventually(requested.is_set, lambda seen: seen, seconds=30)
+        deleted: Final = deleting.request("DELETE", f"/v1/responses/{polling_id}")
+        assert deleted.status_code == 200, deleted.text
+        eventually(lambda: wire.disconnected.qsize(), lambda dropped: dropped == 1, seconds=_STREAM_SECONDS)
+        held(
+            lambda: streaming.request("GET", f"/v1/responses/{polling_id}").status_code,
+            lambda status_code: status_code == 404,
+            holding=_STREAM_SECONDS,
+            seconds=2 * _STREAM_SECONDS,
+        )

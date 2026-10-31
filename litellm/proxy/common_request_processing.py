@@ -1351,7 +1351,7 @@ def ttft_keepalive_interval(request_data: Mapping[str, object], llm_router: Rout
     return resolve_ttft_keepalive_interval(deployments, litellm.sse_keepalive_ping_interval_seconds)
 
 
-async def _aclose_late_response(produced: Response) -> None:
+async def aclose_streaming_response(produced: object) -> None:
     """Run the cleanup Starlette would have run, for a response it never called.
 
     Closing an already-closed async generator is a no-op, so this is safe to call
@@ -1374,6 +1374,21 @@ async def _aclose_late_response(produced: Response) -> None:
             verbose_proxy_logger.debug("error closing relayed streaming generator: %s", exc)
 
 
+async def _abandon_late_producer(produce_task: "asyncio.Future[_LateResponseT]") -> None:
+    if not produce_task.done():
+        produce_task.cancel()
+        with anyio.CancelScope(shield=True):
+            with contextlib.suppress(BaseException):
+                await produce_task
+    elif not produce_task.cancelled():
+        # The upstream may have answered while nobody was draining this
+        # relay, e.g. the client vanished first. Nothing else holds that
+        # response, so its stream only gets closed here.
+        with anyio.CancelScope(shield=True):
+            with contextlib.suppress(BaseException):
+                await aclose_streaming_response(produce_task.result())
+
+
 async def _relay_late_response(produced: Response) -> AsyncGenerator[bytes, None]:
     """Replay a Response that was built after a keepalive had already opened the wire."""
     if not isinstance(produced, StreamingResponse):
@@ -1390,7 +1405,7 @@ async def _relay_late_response(produced: Response) -> AsyncGenerator[bytes, None
         # Starlette never called this response, so the cleanup its __call__ would
         # have run has to happen here or the upstream LLM connection leaks.
         with anyio.CancelScope(shield=True):
-            await _aclose_late_response(produced)
+            await aclose_streaming_response(produced)
 
 
 async def _sanitized_late_failure(
@@ -1446,7 +1461,11 @@ async def open_sse_before_first_byte(
     # Share admission state with stream cleanup before the producer copies this context.
     get_or_create_request_stash()
     produce_task: Final = asyncio.ensure_future(produce_response)
-    await asyncio.wait((produce_task,), timeout=interval)
+    try:
+        await asyncio.wait((produce_task,), timeout=interval)
+    except BaseException:
+        await _abandon_late_producer(produce_task)
+        raise
     if produce_task.done():
         # Fast path: the upstream answered inside one interval, so nothing was
         # written early and this is byte-identical to not being wrapped at all.
@@ -1474,18 +1493,7 @@ async def open_sse_before_first_byte(
             async for chunk in _relay_late_response(produced):
                 yield chunk
         finally:
-            if not produce_task.done():
-                produce_task.cancel()
-                with anyio.CancelScope(shield=True):
-                    with contextlib.suppress(BaseException):
-                        await produce_task
-            elif not produce_task.cancelled():
-                # The upstream may have answered while nobody was draining this
-                # relay, e.g. the client vanished first. Nothing else holds that
-                # response, so its stream only gets closed here.
-                with anyio.CancelScope(shield=True):
-                    with contextlib.suppress(BaseException):
-                        await _aclose_late_response(produce_task.result())
+            await _abandon_late_producer(produce_task)
 
     verbose_proxy_logger.info(
         "no upstream response after %ss, opening the SSE response early and sending keepalives", interval

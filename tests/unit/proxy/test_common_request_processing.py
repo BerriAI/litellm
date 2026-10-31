@@ -10587,6 +10587,28 @@ async def test_ttft_keepalive_cancels_the_in_flight_call_when_the_client_gives_u
     assert upstream_cancelled.is_set()
 
 
+@pytest.mark.asyncio
+async def test_ttft_keepalive_cancels_the_in_flight_call_when_its_caller_is_cancelled_before_the_first_ping():
+    upstream_started = asyncio.Event()
+    upstream_cancelled = asyncio.Event()
+
+    async def never_answers():
+        upstream_started.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            upstream_cancelled.set()
+            raise
+
+    caller = asyncio.create_task(open_sse_before_first_byte(never_answers(), ping_interval_seconds=60))
+    await upstream_started.wait()
+    caller.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await caller
+
+    assert upstream_cancelled.is_set()
+
+
 @pytest.mark.parametrize(
     "request_data, global_interval, expected",
     [

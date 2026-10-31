@@ -21,20 +21,30 @@ _JSON_LIST: Final = TypeAdapter(list[object])
 _SCRIPT_REPLY: Final = TypeAdapter(int)
 _WRITTEN: Final = 1
 
+
+def _encoded_state(state: Mapping[str, object]) -> str:
+    return json.dumps(json.dumps({"status": state["status"], **state}))
+
+
+_CANCELLED_PREFIX: Final = _encoded_state({"status": "cancelled"}).removesuffix('}"')
+
 _WRITE_UNLESS_CANCELLED_SCRIPT: Final = """
-local current = redis.call('GET', KEYS[1])
-if current == false then
+if redis.call('EXISTS', KEYS[1]) == 0 then
   return 0
 end
-local decoded, stored = pcall(cjson.decode, current)
-if decoded and type(stored) == 'string' then
-  decoded, stored = pcall(cjson.decode, stored)
-end
-if decoded and type(stored) == 'table' and stored['status'] == 'cancelled' then
+if redis.call('GETRANGE', KEYS[1], 0, string.len(ARGV[3]) - 1) == ARGV[3] then
   return 0
 end
 redis.call('SET', KEYS[1], ARGV[1], 'EX', ARGV[2])
 return 1
+"""
+
+_CANCELLED_OR_GONE_SCRIPT: Final = """
+local head = redis.call('GETRANGE', KEYS[1], 0, string.len(ARGV[1]) - 1)
+if head == '' or head == ARGV[1] then
+  return 1
+end
+return 0
 """
 
 
@@ -233,7 +243,9 @@ class ResponsePollingHandler:
         write_unless_cancelled: Final = self.redis_cache.async_register_script(_WRITE_UNLESS_CANCELLED_SCRIPT)
         try:
             written: Final = _SCRIPT_REPLY.validate_python(
-                await write_unless_cancelled(keys=(cache_key,), args=(json.dumps(json.dumps(state)), int(self.ttl)))
+                await write_unless_cancelled(
+                    keys=(cache_key,), args=(_encoded_state(state), int(self.ttl), _CANCELLED_PREFIX)
+                )
             )
         except Exception as write_error:  # noqa: BLE001  # a Redis fault must not end the background stream
             verbose_proxy_logger.error("Failed to write the polling state for %s: %s", polling_id, write_error)
@@ -262,6 +274,14 @@ class ResponsePollingHandler:
             return _JSON_OBJECT.validate_python(json.loads(cached_state))
 
         return None
+
+    @with_service_target(_RESPONSE_POLLING_TARGET)
+    async def is_cancelled_or_gone(self, polling_id: str) -> bool:
+        if not self.redis_cache:
+            return False
+        cancelled_or_gone: Final = self.redis_cache.async_register_script(_CANCELLED_OR_GONE_SCRIPT)
+        reply: Final = await cancelled_or_gone(keys=(self.get_cache_key(polling_id),), args=(_CANCELLED_PREFIX,))
+        return _SCRIPT_REPLY.validate_python(reply) == 1
 
     async def cancel_polling(self, polling_id: str) -> bool:
         """
