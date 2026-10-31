@@ -253,6 +253,7 @@ class GuardrailSpanData:
     mode: str | None = None
     status: str | None = None
     masked_entity_count: int | None = None
+    choice_index: int | None = None
     provider: str | None = None
     action: str | None = None
     # The guardrail verdict / provider response (e.g. the moderation result),
@@ -313,6 +314,7 @@ class GuardrailSpanData:
             mode=_guardrail_mode_str(get("guardrail_mode")),
             status=status,
             masked_entity_count=_total_masked_entities(get("masked_entity_count")),
+            choice_index=as_int(get("choice_index")),
             provider=as_str(get("guardrail_provider")),
             action=as_str(get("guardrail_action")),
             response_json=_json_or_none(response) if response is not None else None,
