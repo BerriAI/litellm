@@ -234,7 +234,12 @@ async def _jsonrpc_request_id(request: Request) -> str | int | None:
 
 
 async def _jsonrpc_refusal(request: Request, refusal: ProxyException | HTTPException) -> JSONResponse:
+    from litellm.proxy.proxy_server import (
+        _close_dangling_otel_server_span,  # pyright: ignore[reportPrivateUsage]  # proxy_server keeps the span-close helper private; a route that answers an error itself must stamp the OTel server span like the global ProxyException handler does
+    )
+
     error: Final = refusal if isinstance(refusal, ProxyException) else status_typed_proxy_exception(refusal)
+    _close_dangling_otel_server_span(request, int(error.code), exc=refusal)
     return JSONResponse(
         content={
             "jsonrpc": "2.0",

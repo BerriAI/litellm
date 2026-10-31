@@ -1,3 +1,4 @@
+import itertools
 import json
 import uuid
 from collections.abc import Callable
@@ -342,8 +343,10 @@ def test_a2a_refusals_answer_as_jsonrpc_errors_that_echo_the_callers_request_id(
         }
         requests: Final = tuple(
             (path, method, request_id)
-            for path in (f"/a2a/{agent}", f"/a2a/{agent}/message/send", f"/v1/a2a/{agent}/message/send")
-            for method, request_id in (("message/send", marker), ("message/stream", 7), ("SendMessage", "l10"))
+            for path, (method, request_id) in itertools.product(
+                (f"/a2a/{agent}", f"/a2a/{agent}/message/send", f"/v1/a2a/{agent}/message/send"),
+                (("message/send", marker), ("message/stream", 7), ("SendMessage", "l10")),
+            )
         )
         for label, key, status, message_start, error_type in refused_callers:
             for path, method, request_id in requests:
