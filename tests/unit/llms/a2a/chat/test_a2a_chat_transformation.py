@@ -226,3 +226,52 @@ def test_transform_response_reports_an_undecodable_body_as_an_agent_error():
 
     assert exc_info.value.status_code == 502
     assert exc_info.value.message.startswith("Failed to parse A2A response: ")
+
+
+def test_registry_api_key_resolves_os_environ(monkeypatch: pytest.MonkeyPatch):
+    from litellm.llms.a2a.chat.transformation import _registry_api_key
+
+    monkeypatch.setenv("TEST_A2A_AGENT_KEY", "env-resolved-key-42")
+    assert _registry_api_key({"api_key": "os.environ/TEST_A2A_AGENT_KEY"}) == "env-resolved-key-42"
+    assert _registry_api_key({"api_key": "os.environ/NON_EXISTENT_VAR"}) is None
+    assert _registry_api_key({"api_key": "direct-key"}) == "direct-key"
+    assert _registry_api_key({"api_key": "   "}) is None
+    assert _registry_api_key({}) is None
+
+
+def test_validate_environment_sets_bearer_and_preserves_existing_auth():
+    config = A2AConfig()
+
+    # Plain api_key -> added as Bearer Authorization
+    headers = config.validate_environment(
+        headers={},
+        model="a2a/test-agent",
+        messages=[],
+        optional_params={},
+        litellm_params={},
+        api_key="my-key",
+    )
+    assert headers["Authorization"] == "Bearer my-key"
+    assert headers["Content-Type"] == "application/json"
+
+    # api_key already with Bearer -> not duplicated
+    headers = config.validate_environment(
+        headers={},
+        model="a2a/test-agent",
+        messages=[],
+        optional_params={},
+        litellm_params={},
+        api_key="Bearer existing-bearer",
+    )
+    assert headers["Authorization"] == "Bearer existing-bearer"
+
+    # Existing Authorization header in headers -> preserved, not overwritten
+    headers = config.validate_environment(
+        headers={"Authorization": "Basic dXNlcjpwYXNz"},
+        model="a2a/test-agent",
+        messages=[],
+        optional_params={},
+        litellm_params={},
+        api_key="should-not-override",
+    )
+    assert headers["Authorization"] == "Basic dXNlcjpwYXNz"
