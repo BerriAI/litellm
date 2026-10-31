@@ -23,6 +23,7 @@ from typing_extensions import NotRequired, TypedDict
 import litellm
 from litellm import verbose_logger
 from litellm._uuid import uuid
+from litellm.constants import FAILURE_LOG_MASK_TIMEOUT_SECONDS
 from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.litellm_core_utils.core_helpers import (
     UPSTREAM_USAGE_COST,
@@ -2549,7 +2550,8 @@ class CustomStreamWrapper:
         """Let this stream's failure log read its own deployment before a fallback reuses the logging object."""
         if self._failure_logging is None:
             return
-        await asyncio.wait((self._failure_logging,), timeout=timeout)
+        mask_wait: Final = FAILURE_LOG_MASK_TIMEOUT_SECONDS if self.logging_obj.masks_failure_log else 0.0
+        await asyncio.wait((self._failure_logging,), timeout=None if timeout is None else timeout + mask_wait)
 
     def bill_failure_after_earlier_rounds(self, earlier: "BilledRoundsSpend") -> None:
         self._earlier_rounds_spend = earlier

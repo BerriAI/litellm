@@ -1,3 +1,4 @@
+import json
 from unittest.mock import AsyncMock, patch
 
 import httpx
@@ -227,3 +228,55 @@ async def test_guardrails_ai_process_input():
 
         # Should keep original content when no output fields are present
         assert result["messages"][0]["content"] == "Original message"
+
+
+@pytest.mark.asyncio
+async def test_guardrails_ai_logging_only_masks_the_failure_log(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.integrations.custom_logger import CustomLogger
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+    from litellm.proxy.guardrails.guardrail_hooks.guardrails_ai.guardrails_ai import GuardrailsAIResponse
+    from litellm.types.guardrails import GuardrailEventHooks
+
+    logged: list[object] = []
+
+    class _FailureLogRecorder(CustomLogger):
+        async def async_log_failure_event(
+            self, kwargs: dict[str, object], response_obj: object, start_time: object, end_time: object
+        ) -> None:
+            logged.append(kwargs["messages"])
+
+    guardrail = GuardrailsAI(
+        guardrail_name="pii-guard",
+        guard_name="pii-guard",
+        api_base="http://test.example.com",
+        event_hook=GuardrailEventHooks.logging_only,
+    )
+    validated: list[object] = []
+
+    def _validate(request: httpx.Request) -> httpx.Response:
+        validated.append((request.url.path, json.loads(request.content)["llmOutput"]))
+        return httpx.Response(
+            200,
+            json=GuardrailsAIResponse(
+                callId="call-1",
+                rawLlmOutput="My name is John Smith",
+                validatedOutput="My name is <PERSON>",
+                validationPassed=True,
+            ),
+        )
+
+    for name in ("input_callback", "success_callback", "failure_callback", "_async_success_callback"):
+        monkeypatch.setattr(litellm, name, [])
+    monkeypatch.setattr(litellm, "_async_failure_callback", [])
+    monkeypatch.setattr(litellm, "callbacks", [guardrail, _FailureLogRecorder()])
+    monkeypatch.setattr(litellm, "module_level_aclient", AsyncHTTPHandler(transport=httpx.MockTransport(_validate)))
+
+    with pytest.raises(litellm.AuthenticationError):
+        await litellm.acompletion(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": "My name is John Smith"}],
+            mock_response=litellm.AuthenticationError(message="bad key", llm_provider="openai", model="gpt-4o-mini"),
+        )
+
+    assert validated == [("/guards/pii-guard/validate", "My name is John Smith")]
+    assert logged == [[{"role": "user", "content": "My name is <PERSON>"}]]

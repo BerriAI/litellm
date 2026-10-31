@@ -8,18 +8,20 @@ import json
 from collections.abc import Callable
 from datetime import datetime
 from types import MappingProxyType
-from typing import Final
+from typing import ClassVar, Final
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastapi import HTTPException
 
 import litellm
-from litellm.constants import PROXY_REJECTED_BEFORE_ROUTING_KEY
+from litellm.constants import PROXY_REJECTED_BEFORE_ROUTING_KEY, REDACTED_BY_LITELLM
 from litellm.exceptions import GuardrailRaisedException
+from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import ProxyErrorTypes, UserAPIKeyAuth
 from litellm.proxy.utils import REJECTED_BEFORE_REQUEST_SETUP, REJECTED_BEFORE_REQUEST_SETUP_KEY, ProxyLogging
+from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import CachingDetails
 
 
@@ -498,6 +500,181 @@ async def test_proxy_only_failure_log_keeps_caller_tags_only_after_auth(
 
     assert len(recorded) == 1
     assert recorded[0]["standard_logging_object"]["request_tags"] == logged_tags
+
+
+class _PromptMaskingGuardrail(CustomGuardrail):
+    masks_logged_request: ClassVar[bool] = True
+
+    def __init__(self) -> None:
+        super().__init__(guardrail_name="prompt-masker", event_hook=GuardrailEventHooks.logging_only)
+        self.scans = 0
+
+    async def async_logging_hook(
+        self, kwargs: dict[str, object], result: object, call_type: str
+    ) -> tuple[dict[str, object], object]:
+        self.scans += 1
+        return {**kwargs, "messages": [{"role": "user", "content": "My name is <PERSON>"}]}, result
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("error_type", "masker_scans", "logged_content"),
+    [(ProxyErrorTypes.auth_error, 0, REDACTED_BY_LITELLM), (None, 1, "My name is <PERSON>")],
+)
+async def test_proxy_only_failure_log_masks_after_auth_and_redacts_before_it(
+    proxy_logging,
+    monkeypatch: pytest.MonkeyPatch,
+    error_type: ProxyErrorTypes | None,
+    masker_scans: int,
+    logged_content: str,
+) -> None:
+    from litellm.proxy import proxy_server
+
+    recorded: Final[list[dict[str, object]]] = []
+
+    class _RecordingLogger(CustomLogger):
+        async def async_log_failure_event(
+            self, kwargs: dict[str, object], response_obj: object, start_time: object, end_time: object
+        ) -> None:
+            recorded.append(kwargs)
+
+    masker: Final = _PromptMaskingGuardrail()
+    monkeypatch.setattr(proxy_server, "llm_router", None)
+    monkeypatch.setattr(litellm, "callbacks", [masker, _RecordingLogger()])
+    proxy_logging.alert_types = []
+
+    await proxy_logging.post_call_failure_hook(
+        request_data={"model": "internal-model", "messages": [{"role": "user", "content": "My name is John Smith"}]},
+        original_exception=HTTPException(status_code=401, detail="Invalid proxy server token passed"),
+        user_api_key_dict=UserAPIKeyAuth(request_route="/chat/completions"),
+        error_type=error_type,
+        route="/chat/completions",
+    )
+
+    logged_messages: Final = [{"role": "user", "content": logged_content}]
+    assert masker.scans == masker_scans
+    assert [(kwargs["messages"], kwargs["standard_logging_object"]["messages"]) for kwargs in recorded] == [
+        (logged_messages, logged_messages)
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("error_type", "logged_content"),
+    [(ProxyErrorTypes.auth_error, REDACTED_BY_LITELLM), (None, "My name is <PERSON>")],
+)
+async def test_failure_hooks_get_the_request_body_with_the_prompt_the_failure_log_masked(
+    proxy_logging, monkeypatch: pytest.MonkeyPatch, error_type: ProxyErrorTypes | None, logged_content: str
+) -> None:
+    from litellm.proxy import proxy_server
+
+    received_bodies: Final[list[object]] = []
+
+    class _SpendLogLikeHook(CustomLogger):
+        async def async_post_call_failure_hook(
+            self,
+            request_data: dict[str, object],
+            original_exception: Exception,
+            user_api_key_dict: UserAPIKeyAuth,
+            traceback_str: str | None = None,
+        ) -> None:
+            received_bodies.append(request_data["proxy_server_request"])
+
+    monkeypatch.setattr(proxy_server, "llm_router", None)
+    monkeypatch.setattr(litellm, "callbacks", [_PromptMaskingGuardrail(), _SpendLogLikeHook()])
+    proxy_logging.alert_types = []
+    messages: Final = [{"role": "user", "content": "My name is John Smith"}]
+
+    await proxy_logging.post_call_failure_hook(
+        request_data={
+            "model": "internal-model",
+            "messages": messages,
+            "proxy_server_request": {
+                "url": "http://localhost/chat/completions",
+                "body": {"model": "internal-model", "messages": list(messages)},
+            },
+        },
+        original_exception=HTTPException(status_code=429, detail="Rate limit exceeded"),
+        user_api_key_dict=UserAPIKeyAuth(request_route="/chat/completions"),
+        error_type=error_type,
+        route="/chat/completions",
+    )
+
+    assert received_bodies == [
+        {
+            "url": "http://localhost/chat/completions",
+            "body": {"model": "internal-model", "messages": [{"role": "user", "content": logged_content}]},
+        }
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("maskers", "logged_content"),
+    [((), "My name is John Smith"), ((_PromptMaskingGuardrail(),), "My name is <PERSON>")],
+    ids=["without_a_masker", "with_a_masker"],
+)
+async def test_failure_hooks_get_the_request_body_the_failure_log_carried_after_the_router_retried_the_call(
+    proxy_logging: ProxyLogging, monkeypatch: pytest.MonkeyPatch, maskers: tuple[CustomGuardrail, ...], logged_content: str
+) -> None:
+    from litellm.proxy import proxy_server
+
+    received_bodies: Final[list[object]] = []
+
+    class _SpendLogLikeHook(CustomLogger):
+        async def async_post_call_failure_hook(
+            self,
+            request_data: dict[str, object],
+            original_exception: Exception,
+            user_api_key_dict: UserAPIKeyAuth,
+            traceback_str: str | None = None,
+        ) -> None:
+            received_bodies.append(request_data["proxy_server_request"])
+
+    monkeypatch.setattr(proxy_server, "llm_router", None)
+    monkeypatch.setattr(litellm, "callbacks", [*maskers, _SpendLogLikeHook()])
+    proxy_logging.alert_types = []
+    messages: Final = [{"role": "user", "content": "My name is John Smith"}]
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "internal-model",
+                "litellm_params": {
+                    "model": "openai/gpt-4.1",
+                    "api_key": "sk-test",
+                    "mock_response": "litellm.RateLimitError",
+                },
+            }
+        ],
+        num_retries=1,
+        retry_after=0,
+    )
+    logging_obj, _ = litellm.utils.function_setup(
+        original_function="acompletion",
+        rules_obj=litellm.utils.Rules(),
+        start_time=datetime(2026, 1, 1),
+        model="internal-model",
+        messages=messages,
+        litellm_call_id="retried-call",
+    )
+    with pytest.raises(litellm.RateLimitError):
+        await router.acompletion(model="internal-model", messages=messages, litellm_logging_obj=logging_obj)
+
+    await proxy_logging.post_call_failure_hook(
+        request_data={
+            "model": "internal-model",
+            "messages": messages,
+            "litellm_logging_obj": logging_obj,
+            "proxy_server_request": {"body": {"model": "internal-model", "messages": messages}},
+        },
+        original_exception=HTTPException(status_code=429, detail="Rate limit exceeded"),
+        user_api_key_dict=UserAPIKeyAuth(request_route="/chat/completions"),
+        route="/chat/completions",
+    )
+
+    assert received_bodies == [
+        {"body": {"model": "internal-model", "messages": [{"role": "user", "content": logged_content}]}}
+    ]
 
 
 @pytest.mark.asyncio

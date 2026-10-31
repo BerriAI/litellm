@@ -7,7 +7,7 @@
 
 import json
 import os
-from typing import TYPE_CHECKING, Final, Literal, TypedDict
+from typing import TYPE_CHECKING, ClassVar, Final, Literal, TypedDict
 
 from fastapi import HTTPException
 
@@ -48,6 +48,8 @@ class GuardrailsAIResponsePreCall(TypedDict):
 
 
 class GuardrailsAI(CustomGuardrail):
+    masks_logged_request: ClassVar[bool] = True
+
     def __init__(
         self,
         guard_name: str,

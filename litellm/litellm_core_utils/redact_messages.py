@@ -67,11 +67,11 @@ def redacted_model_call_details_for_custom_logger(model_call_details: dict, cust
         return model_call_details
     return {
         **{key: value for key, value in model_call_details.items() if key != SERVED_OUTPUT_TEXTS_KEY},
-        **_redacted_entries_for_opted_out_logger(model_call_details),
+        **redacted_request_entries(model_call_details),
     }
 
 
-def _redacted_entries_for_opted_out_logger(model_call_details: Mapping[str, object]) -> Mapping[str, object]:
+def redacted_request_entries(model_call_details: Mapping[str, object]) -> Mapping[str, object]:
     optional_params: Final = _as_mapping(model_call_details.get("optional_params"))
     litellm_params: Final = _as_mapping(model_call_details.get("litellm_params"))
     standard_logging_object: Final = _as_mapping(model_call_details.get("standard_logging_object"))

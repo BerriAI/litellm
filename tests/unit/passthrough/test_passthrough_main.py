@@ -646,6 +646,7 @@ async def test_allm_passthrough_route_429_streaming_raises():
     mock_logging_obj.update_environment_variables = MagicMock()
     mock_logging_obj.async_flush_passthrough_collected_chunks = AsyncMock()
     mock_logging_obj.async_failure_handler = AsyncMock()
+    mock_logging_obj.async_mask_failure_log_request = AsyncMock()
 
     with (
         patch(

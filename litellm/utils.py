@@ -10,6 +10,7 @@ import binascii
 import contextvars
 import copy
 import datetime
+import functools
 import hashlib
 import inspect
 import io
@@ -2542,12 +2543,16 @@ def client(original_function):
             end_time = _deployment_call_end_time if _deployment_call_end_time is not None else datetime.datetime.now()  # noqa: DTZ005  # matches the naive datetimes this whole function already times start_time/end_time with
             if logging_obj and not _is_litellm_internal_call:
                 unbind_budget_reservation_from_callbacks(logging_obj.litellm_params)
-                try:
-                    logging_obj.failure_handler(
-                        e, traceback_exception, start_time, end_time, for_async_request=True
-                    )  # DO NOT MAKE THREADED - router retry fallback relies on this!
-                except Exception as e:
-                    raise e
+                run_failure_handler: Final = functools.partial(
+                    logging_obj.failure_handler, e, traceback_exception, start_time, end_time, for_async_request=True
+                )
+                await logging_obj.async_mask_failure_log_request(
+                    on_cancelled=run_failure_handler,
+                    on_cancelled_async=functools.partial(
+                        logging_obj.async_failure_handler, e, traceback_exception, start_time, end_time
+                    ),
+                )
+                run_failure_handler()  # DO NOT MAKE THREADED - router retry fallback relies on this!
                 try:
                     await logging_obj.async_failure_handler(e, traceback_exception, start_time, end_time)
                 except Exception as e:

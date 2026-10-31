@@ -17,7 +17,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime
 from itertools import accumulate, count, pairwise
-from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Protocol, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, Optional, Protocol, cast
 
 import aiohttp
 from pydantic import ConfigDict, JsonValue, TypeAdapter, with_config
@@ -250,6 +250,7 @@ def _resolve_overlapping_spans(analyze_results: Sequence[PresidioAnalyzeResponse
 
 
 class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
+    masks_logged_request: ClassVar[bool] = True
     user_api_key_cache = None
     ad_hoc_recognizers: list[str] | None = None
 
@@ -401,7 +402,8 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             async with self._session_lock:
                 if self._http_session is None or self._http_session.closed:
                     self._http_session = aiohttp.ClientSession()
-                yield self._http_session
+                session: Final = self._http_session
+            yield session
         else:
             # Background thread/loop -> use loop-bound session cache
             # This avoids "attached to a different loop" or "no running event loop" errors
