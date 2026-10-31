@@ -33,11 +33,16 @@ export interface ModelDescriptor {
   readonly version: string;
   readonly detail: string;
   readonly tooltip: string;
+  readonly inputCost: number | undefined;
+  readonly outputCost: number | undefined;
+  readonly pricing: string | undefined;
+  readonly priceCategory: "low" | "medium" | "high" | "very_high" | undefined;
   readonly maxInputTokens: number;
   readonly maxOutputTokens: number;
   readonly imageInput: boolean;
   readonly toolCalling: boolean;
   readonly configurationSchema: ConfigurationSchema | undefined;
+  readonly mode: string;
 }
 
 export type ModelGroupsParseResult =
@@ -86,7 +91,7 @@ export const parseModelGroups = (body: unknown): ModelGroupsParseResult => {
   return { kind: "ok", groups };
 };
 
-const isChatGroup = (group: ModelGroupInfo): boolean => group.mode === undefined || group.mode === "chat";
+const isChatGroup = (group: ModelGroupInfo): boolean => group.mode === undefined || group.mode === "chat" || group.mode === "responses";
 
 export const formatUsdPerMillionTokens = (costPerToken: number): string => {
   const perMillion = costPerToken * 1_000_000;
@@ -104,6 +109,38 @@ const pricingDetail = (group: ModelGroupInfo): string => {
   const input = group.inputCostPerToken === undefined ? "n/a" : formatUsdPerMillionTokens(group.inputCostPerToken);
   const output = group.outputCostPerToken === undefined ? "n/a" : formatUsdPerMillionTokens(group.outputCostPerToken);
   return `${input} in / ${output} out per 1M tokens`;
+};
+
+const priceCategoryFor = (inputCost: number, outputCost: number): "low" | "medium" | "high" | "very_high" => {
+  const blended = (3 * inputCost + outputCost) / 4;
+  if (blended < 1) {
+    return "low";
+  }
+  if (blended < 8) {
+    return "medium";
+  }
+  return blended < 40 ? "high" : "very_high";
+};
+
+const pricingFor = (
+  group: ModelGroupInfo,
+): Pick<ModelDescriptor, "inputCost" | "outputCost" | "pricing" | "priceCategory"> => {
+  const inputCost = group.inputCostPerToken === undefined ? undefined : group.inputCostPerToken * 1_000_000;
+  const outputCost = group.outputCostPerToken === undefined ? undefined : group.outputCostPerToken * 1_000_000;
+  if (inputCost === undefined || outputCost === undefined) {
+    return {
+      inputCost,
+      outputCost,
+      pricing: undefined,
+      priceCategory: undefined,
+    };
+  }
+  return {
+    inputCost,
+    outputCost,
+    pricing: `${formatUsdPerMillionTokens(group.inputCostPerToken ?? 0)} in / ${formatUsdPerMillionTokens(group.outputCostPerToken ?? 0)} out per 1M tokens`,
+    priceCategory: priceCategoryFor(inputCost, outputCost),
+  };
 };
 
 const capitalize = (value: string): string => value.charAt(0).toUpperCase() + value.slice(1);
@@ -152,11 +189,13 @@ const describeGroup = (group: ModelGroupInfo): ModelDescriptor => ({
   version: "1.0",
   detail: pricingDetail(group),
   tooltip: tooltipFor(group),
+  ...pricingFor(group),
   maxInputTokens: group.maxInputTokens ?? ASSUMED_MAX_INPUT_TOKENS,
   maxOutputTokens: group.maxOutputTokens ?? ASSUMED_MAX_OUTPUT_TOKENS,
   imageInput: group.supportsVision,
   toolCalling: group.supportsFunctionCalling,
   configurationSchema: effortSchema(group.supportedReasoningEfforts),
+  mode: group.mode ?? "chat",
 });
 
 export const describeModels = (groups: readonly ModelGroupInfo[]): readonly ModelDescriptor[] =>
@@ -168,3 +207,6 @@ export const reasoningEffortFrom = (configuration: ConfigurationValues | undefin
 };
 
 export const estimateTokens = (text: string): number => Math.ceil(text.length / 4);
+
+export const MODE_CHAT = "chat";
+export const MODE_RESPONSES = "responses";

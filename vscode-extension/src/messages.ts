@@ -8,9 +8,24 @@ import type {
   ChatCompletionTool,
   ChatCompletionToolMessageParam,
 } from "openai/resources/chat/completions";
-import { estimateTokens } from "./models";
+import type {
+  FunctionTool,
+  ResponseCreateParamsStreaming,
+  ResponseInputContent,
+  ResponseInputItem,
+} from "openai/resources/responses/responses";
+import { MODE_CHAT, MODE_RESPONSES, estimateTokens } from "./models";
 
 export interface ChatRequestInput {
+  readonly model: string;
+  readonly messages: readonly vscode.LanguageModelChatRequestMessage[];
+  readonly tools: readonly vscode.LanguageModelChatTool[];
+  readonly requireToolCall: boolean;
+  readonly reasoningEffort: string | undefined;
+  readonly modelOptions: { readonly [key: string]: unknown };
+}
+
+export interface ResponsesRequestInput {
   readonly model: string;
   readonly messages: readonly vscode.LanguageModelChatRequestMessage[];
   readonly tools: readonly vscode.LanguageModelChatTool[];
@@ -186,3 +201,92 @@ export const buildChatCompletionParams = (input: ChatRequestInput): ChatCompleti
     ? {}
     : { reasoning_effort: input.reasoningEffort as ChatCompletionCreateParamsStreaming["reasoning_effort"] }),
 });
+
+const inputContent = (parts: readonly unknown[]): readonly ResponseInputContent[] =>
+  parts.flatMap((part): readonly ResponseInputContent[] => {
+    if (isImagePart(part)) {
+      return [{ type: "input_image", image_url: dataUrl(part), detail: "auto" }];
+    }
+    const text = textOf(part);
+    return text === "" ? [] : [{ type: "input_text", text }];
+  });
+
+const responsesUserItems = (parts: readonly unknown[]): readonly ResponseInputItem[] => {
+  const toolResults = parts.filter(isToolResultPart);
+  const toolResultImages = toolResults.flatMap((result) => result.content.filter(isImagePart));
+  const remaining = parts.filter((part) => !isToolResultPart(part));
+  const userContent = inputContent([...remaining, ...toolResultImages]);
+  const outputs: readonly ResponseInputItem[] = toolResults.map((result) => ({
+    type: "function_call_output",
+    call_id: result.callId,
+    output: result.content.filter((item) => !isImagePart(item)).map(textOf).join(""),
+  }));
+  const userItem: readonly ResponseInputItem[] =
+    userContent.length === 0 ? [] : [{ type: "message", role: "user", content: [...userContent] }];
+  return [...outputs, ...userItem];
+};
+
+const responsesAssistantItems = (parts: readonly unknown[]): readonly ResponseInputItem[] => {
+  const text = parts.filter(isTextPart).map((part) => part.value).join("");
+  const message: readonly ResponseInputItem[] = text === "" ? [] : [{ type: "message", role: "assistant", content: text }];
+  const calls: readonly ResponseInputItem[] = parts.filter(isToolCallPart).map((part) => ({
+    type: "function_call",
+    call_id: part.callId,
+    name: part.name,
+    arguments: JSON.stringify(part.input),
+  }));
+  return [...message, ...calls];
+};
+
+const convertResponsesMessage = (message: vscode.LanguageModelChatRequestMessage): readonly ResponseInputItem[] => {
+  const role: number = message.role;
+  switch (role) {
+    case USER_ROLE:
+      return responsesUserItems(message.content);
+    case ASSISTANT_ROLE:
+      return responsesAssistantItems(message.content);
+    case SYSTEM_ROLE:
+      return [{ type: "message", role: "system", content: message.content.map(textOf).join("") }];
+    default:
+      return [];
+  }
+};
+
+export const toResponsesInput = (messages: readonly vscode.LanguageModelChatRequestMessage[]): readonly ResponseInputItem[] =>
+  messages.flatMap(convertResponsesMessage);
+
+const EMPTY_OBJECT_SCHEMA = { type: "object", properties: {} } as const;
+
+const toResponsesTool = (tool: vscode.LanguageModelChatTool): FunctionTool => ({
+  type: "function",
+  name: tool.name,
+  description: tool.description,
+  parameters: (tool.inputSchema as Record<string, unknown> | undefined) ?? EMPTY_OBJECT_SCHEMA,
+  strict: false,
+});
+
+const RESPONSES_NUMERIC_OPTIONS = ["temperature", "top_p"] as const;
+
+const responsesModelOptions = (modelOptions: { readonly [key: string]: unknown }): Record<string, number> =>
+  Object.fromEntries([
+    ...RESPONSES_NUMERIC_OPTIONS.flatMap((key) => {
+      const value = modelOptions[key];
+      return typeof value === "number" ? [[key, value] as const] : [];
+    }),
+    ...(typeof modelOptions.max_tokens === "number" ? [["max_output_tokens", modelOptions.max_tokens] as const] : []),
+  ]);
+
+export const buildResponsesCompletionParams = (input: ResponsesRequestInput): ResponseCreateParamsStreaming => ({
+  model: input.model,
+  input: [...toResponsesInput(input.messages)],
+  stream: true,
+  ...responsesModelOptions(input.modelOptions),
+  ...(input.tools.length === 0 ? {} : { tools: input.tools.map(toResponsesTool) }),
+  ...(input.tools.length === 0 || !input.requireToolCall ? {} : { tool_choice: "required" }),
+  ...(input.reasoningEffort === undefined
+    ? {}
+    : { reasoning: { effort: input.reasoningEffort as NonNullable<ResponseCreateParamsStreaming["reasoning"]>["effort"] } }),
+});
+
+export { MODE_CHAT, MODE_RESPONSES } from "./models";
+export { estimateTokens } from "./models";

@@ -1,14 +1,18 @@
 import * as vscode from "vscode";
-import { gatewayConfigFrom, summarizeErrorBody, type GatewayClient, type GatewayConfig, type GatewayConfigResult, type ModelGroupsResult } from "./gateway";
-import { buildChatCompletionParams, estimateMessageTokens } from "./messages";
-import { describeModels, estimateTokens, reasoningEffortFrom, type ModelDescriptor } from "./models";
+import { APIError } from "openai";
+import { isResponsesMode, gatewayConfigFrom, summarizeErrorBody, type GatewayClient, type GatewayConfig, type GatewayConfigResult, type ModelGroupsResult } from "./gateway";
+import { buildChatCompletionParams, buildResponsesCompletionParams, estimateMessageTokens } from "./messages";
+import { describeModels, estimateTokens, reasoningEffortFrom, MODE_CHAT, MODE_RESPONSES, type ModelDescriptor, type ModelGroupInfo } from "./models";
 import { responseParts, type ResponsePart } from "./stream";
 
 export interface LiteLLMModel extends vscode.LanguageModelChatInformation {
   readonly gateway: GatewayConfig;
+  readonly mode: string;
 }
 
 export const TRUNCATED_MESSAGE = "The model stopped at its output token limit before finishing the response";
+export const GATEWAY_TIMEOUT_MESSAGE =
+  "LiteLLM gateway timed out (HTTP 504). Check the gateway or upstream model and try again.";
 
 const RECONFIGURE_HINT =
   'Fix it from the gear on its row in Manage Language Models: "Update API Key" for the key, "Open in Language Models (JSON)" for the URL';
@@ -31,18 +35,23 @@ const discoveryFailure = (result: Exclude<ModelGroupsResult, { kind: "ok" }>, ba
   }
 };
 
-const toModel = (descriptor: ModelDescriptor, gateway: GatewayConfig): LiteLLMModel => ({
+const toModel = (descriptor: ModelDescriptor, gateway: GatewayConfig, mode: string): LiteLLMModel => ({
   id: descriptor.id,
   name: descriptor.name,
   family: descriptor.family,
   version: descriptor.version,
   detail: descriptor.detail,
   tooltip: descriptor.tooltip,
+  ...(descriptor.inputCost === undefined ? {} : { inputCost: descriptor.inputCost }),
+  ...(descriptor.outputCost === undefined ? {} : { outputCost: descriptor.outputCost }),
+  ...(descriptor.pricing === undefined ? {} : { pricing: descriptor.pricing }),
+  ...(descriptor.priceCategory === undefined ? {} : { priceCategory: descriptor.priceCategory }),
   maxInputTokens: descriptor.maxInputTokens,
   maxOutputTokens: descriptor.maxOutputTokens,
   capabilities: { imageInput: descriptor.imageInput, toolCalling: descriptor.toolCalling },
   ...(descriptor.configurationSchema === undefined ? {} : { configurationSchema: descriptor.configurationSchema }),
   gateway,
+  mode,
 });
 
 const toVscodePart = (part: ResponsePart): vscode.LanguageModelResponsePart => {
@@ -57,6 +66,9 @@ const toVscodePart = (part: ResponsePart): vscode.LanguageModelResponsePart => {
       throw new Error(TRUNCATED_MESSAGE);
   }
 };
+
+const chatRequestError = (error: unknown): unknown =>
+  error instanceof APIError && error.status === 504 ? new Error(GATEWAY_TIMEOUT_MESSAGE) : error;
 
 const withAbortSignal = async <T>(token: vscode.CancellationToken, run: (signal: AbortSignal) => Promise<T>): Promise<T> => {
   const controller = new AbortController();
@@ -97,10 +109,28 @@ export class LiteLLMChatProvider implements vscode.LanguageModelChatProvider<Lit
     if (result.kind !== "ok") {
       throw new Error(discoveryFailure(result, configured.config.baseUrl));
     }
-    return describeModels(result.groups).map((descriptor) => toModel(descriptor, configured.config));
+    return describeModels(result.groups).map((descriptor) => toModel(descriptor, configured.config, descriptor.mode));
   }
 
   async provideLanguageModelChatResponse(
+    model: LiteLLMModel,
+    messages: readonly vscode.LanguageModelChatRequestMessage[],
+    options: vscode.ProvideLanguageModelChatResponseOptions,
+    progress: vscode.Progress<vscode.LanguageModelResponsePart>,
+    token: vscode.CancellationToken,
+  ): Promise<void> {
+    if (model.mode === MODE_RESPONSES) {
+      await this.streamResponses(model, messages, options, progress, token);
+    } else {
+      await this.streamChat(model, messages, options, progress, token);
+    }
+  }
+
+  async provideTokenCount(_model: LiteLLMModel, text: string | vscode.LanguageModelChatRequestMessage): Promise<number> {
+    return typeof text === "string" ? estimateTokens(text) : estimateMessageTokens(text);
+  }
+
+  private async streamChat(
     model: LiteLLMModel,
     messages: readonly vscode.LanguageModelChatRequestMessage[],
     options: vscode.ProvideLanguageModelChatResponseOptions,
@@ -126,11 +156,37 @@ export class LiteLLMChatProvider implements vscode.LanguageModelChatProvider<Lit
       if (token.isCancellationRequested) {
         return;
       }
-      throw error;
+      throw chatRequestError(error);
     }
   }
 
-  async provideTokenCount(_model: LiteLLMModel, text: string | vscode.LanguageModelChatRequestMessage): Promise<number> {
-    return typeof text === "string" ? estimateTokens(text) : estimateMessageTokens(text);
+  private async streamResponses(
+    model: LiteLLMModel,
+    messages: readonly vscode.LanguageModelChatRequestMessage[],
+    options: vscode.ProvideLanguageModelChatResponseOptions,
+    progress: vscode.Progress<vscode.LanguageModelResponsePart>,
+    token: vscode.CancellationToken,
+  ): Promise<void> {
+    const params = buildResponsesCompletionParams({
+      model: model.id,
+      messages,
+      tools: options.tools ?? [],
+      requireToolCall: options.toolMode === vscode.LanguageModelChatToolMode.Required,
+      reasoningEffort: reasoningEffortFrom(options.modelConfiguration),
+      modelOptions: options.modelOptions ?? {},
+    });
+    try {
+      await withAbortSignal(token, async (signal) => {
+        const chunks = await this.gateway.streamResponsesCompletion(model.gateway, params, signal);
+        for await (const part of responseParts(chunks)) {
+          progress.report(toVscodePart(part));
+        }
+      });
+    } catch (error) {
+      if (token.isCancellationRequested) {
+        return;
+      }
+      throw chatRequestError(error);
+    }
   }
 }

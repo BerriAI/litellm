@@ -4,7 +4,7 @@ Chat in VS Code with every model your [LiteLLM AI Gateway](https://docs.litellm.
 
 ## What you get
 
-The model list comes from the gateway's `GET /model_group/info` endpoint, scoped to the virtual key you configure, so the picker shows exactly the chat models that key can use. Each model carries its input and output price per 1M tokens in the picker and in the Language Models editor, and its context limits come from the gateway too, so VS Code sizes prompts correctly. A model whose gateway entry lists `supported_reasoning_efforts` gets a Reasoning Effort submenu in the picker's Configure Model menu, and the chosen effort is sent as `reasoning_effort` on every request to that model. Requests go to `POST /v1/chat/completions` on the gateway as streaming chat completions with tools and images passed through, so routing, fallbacks, guardrails, and spend tracking all apply as usual
+The model list comes from the gateway's `GET /model_group/info` endpoint, scoped to the virtual key you configure, so the picker shows exactly the chat models that key can use. Each model carries its input and output price per 1M tokens in the picker and in the Language Models editor, and its context limits come from the gateway too, so VS Code sizes prompts correctly. A model whose gateway entry lists `supported_reasoning_efforts` gets a Reasoning Effort submenu in the picker's Configure Model menu, and the chosen effort is sent as `reasoning_effort` on every request to that model. Chat-mode models use streaming `POST /v1/chat/completions`; Responses-mode models use streaming `POST /v1/responses`. Both pass tools and images through, so routing, fallbacks, guardrails, and spend tracking apply as usual
 
 ## Setup
 
@@ -17,7 +17,7 @@ Add the same provider again with another name to reach a second gateway or a sec
 
 ## Requirements
 
-VS Code 1.115 or newer and a LiteLLM AI Gateway the key can reach. The key needs access to at least one model group whose mode is `chat`
+VS Code 1.115 or newer and a LiteLLM AI Gateway the key can reach. The key needs access to at least one model group whose mode is `chat` or `responses`
 
 ## Development
 
