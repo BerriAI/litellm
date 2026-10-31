@@ -9,6 +9,10 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import REDACTED_BY_LITELLM, REDACTED_TOOL_CALL_ARGUMENTS_PLACEHOLDER
 from litellm.litellm_core_utils.cold_storage_handler import ColdStorageHandler
+from litellm.responses.litellm_completion_transformation.client_tool_search import (
+    bridge_client_tool_search,
+    client_tool_search_loaded_tools,
+)
 from litellm.responses.litellm_completion_transformation.compaction_items import (
     holds_compaction_summary,
     input_items,
@@ -54,8 +58,15 @@ def _normalize_redacted_tool_call_arguments(message: Message) -> None:
 _MCP_TOOL_CALL_TYPES: Final = frozenset((CallTypes.list_mcp_tools.value, CallTypes.call_mcp_tool.value))
 
 
+_FAILED_TURN_STATUS: Final = "failure"
+
+
+def _is_a_failed_turn(spend_log: "SpendLogsPayload") -> bool:
+    return "status" in spend_log and spend_log["status"] == _FAILED_TURN_STATUS
+
+
 def _is_a_conversation_turn(spend_log: "SpendLogsPayload") -> bool:
-    return spend_log.get("call_type") not in _MCP_TOOL_CALL_TYPES
+    return spend_log.get("call_type") not in _MCP_TOOL_CALL_TYPES and not _is_a_failed_turn(spend_log)
 
 
 _MCP_AUTO_EXECUTE_OUTPUT_TYPES: Final = frozenset(("mcp_tools_fetched", "tool_execution_results"))
@@ -79,6 +90,12 @@ def _stored_responses_api_output(stored_response: object) -> ResponseInputParam 
 class _ReplayStart:
     index: int
     at_output: bool
+
+
+@dataclass(frozen=True, slots=True)
+class StoredTurns:
+    spend_logs: tuple["SpendLogsPayload", ...]
+    proxy_server_requests: tuple[Mapping[str, object] | None, ...]
 
 
 def _compaction_point(
@@ -183,6 +200,8 @@ class ResponsesSessionHandler:
         previous_response_id: str,
         item_cache_control: bool = False,
         client_response_ids: tuple[str, ...] = (),
+        tool_call_provider_fields: bool = False,
+        stored_turns: StoredTurns | None = None,
     ) -> ChatCompletionSession:
         """
         Return the chat completion message history for a previous response id
@@ -193,23 +212,21 @@ class ResponsesSessionHandler:
         )
 
         verbose_proxy_logger.debug("inside get_chat_completion_message_history_for_previous_response_id")
-        all_spend_logs: Final = [
-            spend_log
-            for spend_log in await ResponsesSessionHandler.get_all_spend_logs_for_previous_response_id(
+        turns: Final = (
+            stored_turns
+            if stored_turns is not None
+            else await ResponsesSessionHandler.get_stored_turns_for_previous_response_id(
                 previous_response_id, client_response_ids
             )
-            if _is_a_conversation_turn(spend_log)
-        ]
+        )
+        all_spend_logs: Final = turns.spend_logs
         verbose_proxy_logger.debug("found %s spend logs for this response id", len(all_spend_logs))
 
         litellm_session_id: str | None = None
         if len(all_spend_logs) > 0:
             litellm_session_id = all_spend_logs[0].get("session_id")
 
-        proxy_server_requests: Final = [
-            await ResponsesSessionHandler.get_proxy_server_request_from_spend_log(spend_log=spend_log)
-            for spend_log in all_spend_logs
-        ]
+        proxy_server_requests: Final = turns.proxy_server_requests
         replayable_turns: Final = _turns_through_referenced_response(
             all_spend_logs, _referenced_request_ids(previous_response_id, client_response_ids)
         )
@@ -225,9 +242,13 @@ class ResponsesSessionHandler:
                 for index in range(start.index, replayed_turns)
             ],
             item_cache_control,
+            tool_call_provider_fields,
         )
         history_before_replay: Final = ResponsesSessionHandler._history_of_turns(
-            all_spend_logs[: start.index], proxy_server_requests[: start.index], item_cache_control
+            all_spend_logs[: start.index],
+            proxy_server_requests[: start.index],
+            item_cache_control,
+            tool_call_provider_fields,
         )
         chat_completion_message_history: Final = (
             list(with_stored_calls_the_input_answers(replayed_history, history_before_replay))
@@ -246,10 +267,50 @@ class ResponsesSessionHandler:
         )
 
     @staticmethod
+    async def get_stored_turns_for_previous_response_id(
+        previous_response_id: str,
+        client_response_ids: tuple[str, ...] = (),
+    ) -> StoredTurns:
+        spend_logs: Final = tuple(
+            spend_log
+            for spend_log in await ResponsesSessionHandler.get_all_spend_logs_for_previous_response_id(
+                previous_response_id, client_response_ids
+            )
+            if _is_a_conversation_turn(spend_log)
+        )
+        return StoredTurns(
+            spend_logs=spend_logs,
+            proxy_server_requests=tuple(
+                [
+                    await ResponsesSessionHandler.get_proxy_server_request_from_spend_log(spend_log=spend_log)
+                    for spend_log in spend_logs
+                ]
+            ),
+        )
+
+    @staticmethod
+    def client_tool_search_tools_loaded_before(
+        stored_turns: StoredTurns,
+        previous_response_id: str,
+        client_response_ids: tuple[str, ...] = (),
+    ) -> tuple[Mapping[str, object], ...]:
+        turns: Final = _turns_through_referenced_response(
+            stored_turns.spend_logs, _referenced_request_ids(previous_response_id, client_response_ids)
+        )
+        return tuple(
+            chain.from_iterable(
+                client_tool_search_loaded_tools(request.get("input"))
+                for request in stored_turns.proxy_server_requests[:turns]
+                if request is not None
+            )
+        )
+
+    @staticmethod
     def _history_of_turns(
         spend_logs: Sequence["SpendLogsPayload"],
         proxy_server_requests: Sequence[Mapping[str, object] | None],
         item_cache_control: bool,
+        tool_call_provider_fields: bool,
     ) -> list["SessionMessage"]:
         return list(
             chain.from_iterable(
@@ -258,6 +319,7 @@ class ResponsesSessionHandler:
                     proxy_server_request_dict=proxy_server_request,
                     chat_completion_message_history=[],
                     item_cache_control=item_cache_control,
+                    tool_call_provider_fields=tool_call_provider_fields,
                 )
                 for spend_log, proxy_server_request in zip(spend_logs, proxy_server_requests, strict=True)
             )
@@ -275,6 +337,7 @@ class ResponsesSessionHandler:
             | Message
         ],
         item_cache_control: bool = False,
+        tool_call_provider_fields: bool = False,
     ):
         """
         Extend the chat completion message history with the spend log payload
@@ -303,10 +366,11 @@ class ResponsesSessionHandler:
         if response_input_param:
             chat_completion_message_history.extend(
                 LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
-                    input=response_input_param,
+                    input=bridge_client_tool_search(response_input_param, None).input,
                     responses_api_request={},
                     replay_reasoning=True,
                     item_cache_control=item_cache_control,
+                    tool_call_provider_fields=tool_call_provider_fields,
                     only_since_compaction=True,
                 )
             )
@@ -318,10 +382,11 @@ class ResponsesSessionHandler:
         if (responses_api_output := _stored_responses_api_output(_response_output)) is not None:
             chat_completion_message_history.extend(
                 LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
-                    input=responses_api_output,
+                    input=bridge_client_tool_search(responses_api_output, None).input,
                     responses_api_request={},
                     replay_reasoning=True,
                     item_cache_control=item_cache_control,
+                    tool_call_provider_fields=tool_call_provider_fields,
                     only_since_compaction=True,
                 )
             )

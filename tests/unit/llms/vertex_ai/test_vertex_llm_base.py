@@ -6,13 +6,17 @@ import os
 import pathlib
 import re
 import traceback
-from typing import Final
+from datetime import datetime, timedelta
+from threading import Event
+from typing import Final, Literal
 from unittest.mock import MagicMock, call, patch
 
 import google.auth.exceptions
 import pytest
+import requests
+import responses
 
-from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
+from litellm.constants import DEFAULT_MAX_LRU_CACHE_SIZE, DEFAULT_MAX_RECURSE_DEPTH
 
 
 import litellm
@@ -2589,3 +2593,120 @@ def test_get_access_token_reraises_malformed_service_account_credentials_without
     assert [record.getMessage().split(". Error: ")[0] for record in caplog.records] == [
         "Failed to load vertex credentials. Check to see if credentials containing partial/invalid information"
     ]
+
+
+def _authorized_user_cache_credentials(identity: str) -> str:
+    return json.dumps(
+        {
+            "type": "authorized_user",
+            "client_id": identity,
+            "client_secret": "synthetic-secret",
+            "refresh_token": identity,
+            "quota_project_id": identity,
+        }
+    )
+
+
+@pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize("inferred_project", [False, True], ids=["explicit", "inferred"])
+@pytest.mark.asyncio
+async def test_credential_cache_bounds_retention_and_reloads_least_recently_used(
+    is_async: bool, inferred_project: bool
+) -> None:
+    vertex: Final = VertexBase()
+    limit: Final = max(0, DEFAULT_MAX_LRU_CACHE_SIZE)
+    with (
+        patch("google.auth._helpers.utcnow", return_value=datetime(2025, 1, 1)),
+        responses.RequestsMock() as oauth,
+    ):
+        def token_response(request: requests.PreparedRequest) -> tuple[int, dict[str, str], str]:
+            return 200, {}, json.dumps({"access_token": f"token-{len(oauth.calls) + 1}", "expires_in": 3600})
+
+        oauth.add_callback(responses.POST, "https://oauth2.googleapis.com/token", callback=token_response)
+
+        async def access(index: int, infer: bool = False) -> tuple[str, str]:
+            identity: Final = f"project-{index}"
+            credentials: Final = _authorized_user_cache_credentials(identity)
+            project: Final = None if infer else identity
+            result: Final = (
+                await vertex.get_access_token_async(credentials, project)
+                if is_async
+                else vertex.get_access_token(credentials, project)
+            )
+            assert result[1] == identity
+            assert len(vertex._credentials_project_mapping) <= limit
+            return result
+
+        if limit == 0:
+            assert await access(0, inferred_project) == ("token-1", "project-0")
+            assert await access(0, inferred_project) == ("token-2", "project-0")
+            return
+
+        for index in range(limit):
+            assert await access(index) == (f"token-{index + 1}", f"project-{index}")
+        assert await access(0) == ("token-1", "project-0")
+        assert len(oauth.calls) == limit
+        assert await access(limit, inferred_project) == (f"token-{limit + 1}", f"project-{limit}")
+        assert len(oauth.calls) == limit + 1
+        if limit > (2 if inferred_project else 1):
+            assert await access(0) == ("token-1", "project-0")
+            assert len(oauth.calls) == limit + 1
+        evicted: Final = 1 if limit > 1 else 0
+        assert await access(evicted) == (f"token-{limit + 2}", f"project-{evicted}")
+        assert len(oauth.calls) == limit + 2
+
+
+@pytest.mark.parametrize("mode", ["sync", "async", "background"])
+@pytest.mark.skipif(DEFAULT_MAX_LRU_CACHE_SIZE < 2, reason="Eviction during refresh requires two retained entries")
+@pytest.mark.asyncio
+async def test_evicted_credentials_finish_refresh_without_being_readmitted(
+    mode: Literal["sync", "async", "background"],
+) -> None:
+    vertex: Final = VertexBase()
+    limit: Final = DEFAULT_MAX_LRU_CACHE_SIZE
+    now: Final = datetime(2025, 1, 1)
+    refresh_started: Final = Event()
+    release_refresh: Final = Event()
+    donor: Final = _authorized_user_cache_credentials("donor")
+    target: Final = _authorized_user_cache_credentials("target")
+    with patch("google.auth._helpers.utcnow", return_value=now) as clock, responses.RequestsMock() as oauth:
+        def token_response(request: requests.PreparedRequest) -> tuple[int, dict[str, str], str]:
+            body: Final = request.body.decode() if isinstance(request.body, bytes) else request.body
+            assert isinstance(body, str)
+            is_target: Final = "refresh_token=target" in body
+            if is_target and len(oauth.calls) == limit:
+                refresh_started.set()
+                assert release_refresh.wait(5), "OAuth refresh was not released"
+            return 200, {}, json.dumps(
+                {"access_token": f"token-{len(oauth.calls) + 1}", "expires_in": 3600 if is_target else 86400}
+            )
+
+        oauth.add_callback(responses.POST, "https://oauth2.googleapis.com/token", callback=token_response)
+        assert vertex.get_access_token(donor, None) == ("token-1", "donor")
+        assert vertex.get_access_token(donor, None) == ("token-1", "donor")
+        for index in range(limit - 2):
+            assert vertex.get_access_token(donor, f"filler-{index}") == (f"token-{index + 2}", f"filler-{index}")
+        assert vertex.get_access_token(target, "target") == (f"token-{limit}", "target")
+        clock.return_value = now + timedelta(seconds=3550 if mode == "background" else 7200)
+        refresh: Final = asyncio.create_task(
+            asyncio.to_thread(vertex.get_access_token, target, "target")
+            if mode == "sync"
+            else vertex.get_access_token_async(target, "target")
+        )
+        try:
+            assert await asyncio.to_thread(refresh_started.wait, 5), "OAuth refresh did not start"
+            for index in range(limit - 2):
+                assert vertex.get_access_token(donor, f"filler-{index}") == (f"token-{index + 2}", f"filler-{index}")
+            assert vertex.get_access_token(donor, None) == ("token-1", "donor")
+            assert len(vertex._credentials_project_mapping) == limit
+            assert (target, "target") not in vertex._credentials_project_mapping
+        finally:
+            release_refresh.set()
+            completed: Final = await refresh
+            await asyncio.gather(*tuple(vertex._background_refresh_tasks.values()))
+        expected_token: Final = f"token-{limit if mode == 'background' else limit + 1}"
+        assert completed == (expected_token, "target")
+        assert len(oauth.calls) == limit + 1
+        assert (target, "target") not in vertex._credentials_project_mapping
+        assert vertex.get_access_token(target, "target") == (f"token-{limit + 2}", "target")
+        assert len(vertex._credentials_project_mapping) == limit

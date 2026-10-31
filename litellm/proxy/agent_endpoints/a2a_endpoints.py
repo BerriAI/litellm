@@ -26,6 +26,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.url_utils import SSRFError, validate_url
 from litellm.llms.a2a.common_utils import resolve_a2a_hop_auth_header
+from litellm.llms.custom_httpx.sse_lines import aiter_sse_lines
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.a2a.version_convert import (
     A2AVersion,
@@ -320,7 +321,7 @@ async def _a2a_sse_event_source(
                 "error": {"code": -32603, "message": resp.reason_phrase},
             }
             return
-        async for line in resp.aiter_lines():
+        async for line in aiter_sse_lines(resp.aiter_text()):
             stripped = line.strip()
             if not stripped.startswith("data:"):
                 continue
@@ -430,6 +431,7 @@ async def _handle_stream_message(
     proxy_server_request: dict[str, object] | None = None,
     *,
     agent_extra_headers: dict[str, str] | None = None,
+    agent_name: str | None = None,
     user_api_key_dict: UserAPIKeyAuth | None = None,
     request_data: dict[str, object] | None = None,
     proxy_logging_obj: ProxyLogging | None = None,
@@ -503,6 +505,7 @@ async def _handle_stream_message(
                 metadata=metadata,
                 proxy_server_request=proxy_server_request,
                 agent_extra_headers=agent_extra_headers,
+                agent_name=agent_name,
             )
 
             if (
@@ -931,6 +934,7 @@ async def invoke_agent_a2a(
                 metadata=data.get("metadata", {}),
                 proxy_server_request=data.get("proxy_server_request"),
                 agent_extra_headers=agent_extra_headers,
+                agent_name=str(agent_name),
                 user_api_key_dict=user_api_key_auth_for_call,
                 request_data=data,
                 proxy_logging_obj=proxy_logging_obj,

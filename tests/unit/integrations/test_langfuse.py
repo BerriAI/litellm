@@ -830,6 +830,31 @@ class TestLangfuseUsageDetails(unittest.TestCase):
         assert generation_metadata["litellm_response_cost"] == 0.25
         assert generation_metadata["api_base"] == "https://real-api-base"
 
+    def test_caller_sent_is_silent_experiment_cannot_hide_the_mirrored_call_flag(self):
+        payload = self._build_standard_logging_payload(trace_id="canary-trace-id")
+        payload["metadata"]["is_silent_experiment"] = True
+        payload["metadata"]["requester_metadata"] = {"is_silent_experiment": False}
+        kwargs = self._build_langfuse_kwargs(payload)
+        metadata = self._canary_request_metadata()
+        self.use_real_langfuse_client()
+
+        self.logger._log_langfuse_v2(
+            user_id="user-1",
+            metadata=metadata,
+            litellm_params={"metadata": metadata},
+            output=None,
+            start_time=datetime.datetime(2024, 1, 1, 12, 0, 0),
+            end_time=datetime.datetime(2024, 1, 1, 12, 0, 1),
+            kwargs=kwargs,
+            optional_params={},
+            input=None,
+            response_obj=None,
+            level="INFO",
+            litellm_call_id="canary-call-id",
+        )
+
+        assert self.exported_generation_metadata()["is_silent_experiment"] is True
+
     def test_generation_metadata_carries_the_call_id_and_response_id(self):
         """
         v2's generation id was ``time-<hh-mm-ss-us>_<response id>``, so a generation could
