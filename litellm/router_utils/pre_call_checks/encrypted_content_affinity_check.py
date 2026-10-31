@@ -47,6 +47,7 @@ from litellm._logging import verbose_router_logger
 from litellm.exceptions import AuthenticationError, BadRequestError
 from litellm.integrations.custom_logger import CustomLogger, Span
 from litellm.litellm_core_utils.get_llm_provider_logic import declared_authenticating_provider, get_llm_provider
+from litellm.litellm_core_utils.litellm_logging import has_sensitive_keyword
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     anthropic_content_lists,
     encrypted_content_of_block,
@@ -270,19 +271,27 @@ class EncryptedContentAffinityCheck(CustomLogger):
     def _account_scope(litellm_params: Mapping[str, object]) -> frozenset[tuple[str, object]]:
         organization: Final = litellm_params.get("organization")
         header_scope: Final = frozenset(
-            (name.lower(), value)
+            (name.lower(), str(value))
             for name, value in EncryptedContentAffinityCheck._header_items(litellm_params)
-            if name.lower() in _ACCOUNT_SCOPE_HEADERS
+            if name.lower() in _ACCOUNT_SCOPE_HEADERS or has_sensitive_keyword(name)
         )
         if not organization:
             return header_scope
-        return header_scope | {("openai-organization", organization)}
+        return header_scope | {("openai-organization", str(organization))}
 
     @staticmethod
     def _header_items(litellm_params: Mapping[str, object]) -> Iterator[tuple[str, object]]:
-        for headers in (litellm_params.get("headers"), litellm_params.get("extra_headers")):
-            if isinstance(headers, Mapping):
-                yield from _REQUEST_KWARGS_ADAPTER.validate_python(headers).items()
+        headers: Final = EncryptedContentAffinityCheck._header_mapping(litellm_params.get("headers"))
+        extra_headers: Final = EncryptedContentAffinityCheck._header_mapping(litellm_params.get("extra_headers"))
+        overridden: Final = frozenset(name.lower() for name in extra_headers)
+        yield from ((name, value) for name, value in headers.items() if name.lower() not in overridden)
+        yield from extra_headers.items()
+
+    @staticmethod
+    def _header_mapping(headers: object) -> Mapping[str, object]:
+        if isinstance(headers, Mapping):
+            return _REQUEST_KWARGS_ADAPTER.validate_python(headers)
+        return {}
 
     @staticmethod
     def _provider_route(litellm_params: Mapping[str, object]) -> _ProviderRoute | None:
@@ -337,7 +346,7 @@ class EncryptedContentAffinityCheck(CustomLogger):
     ) -> tuple[list[dict], Deployment | None]:
         """
         Deployments in ``healthy_deployments`` sharing the originating
-        deployment's ``(api_base, api_key)``, alongside the originating
+        deployment's encryption boundary, alongside the originating
         deployment object (or ``None`` if it was removed / router unavailable).
         """
         if self.ctx is None:
@@ -375,12 +384,15 @@ class EncryptedContentAffinityCheck(CustomLogger):
             for target in target_deployments
             if isinstance((model_info := target.get("model_info")), Mapping) and model_info.get("id") is not None
         )
-        target_boundaries: Final = frozenset(
-            boundary
-            for target in target_deployments
-            if (boundary := EncryptedContentAffinityCheck._encryption_boundary_key(target.get("litellm_params")))
-            is not None
-        )
+
+        @cache
+        def target_boundaries() -> frozenset[tuple[object, object, frozenset[tuple[str, object]]]]:
+            return frozenset(
+                boundary
+                for target in target_deployments
+                if (boundary := EncryptedContentAffinityCheck._encryption_boundary_key(target.get("litellm_params")))
+                is not None
+            )
 
         @cache
         def target_can_decrypt(marked_origin: str | None) -> bool:
@@ -399,7 +411,7 @@ class EncryptedContentAffinityCheck(CustomLogger):
                 if origin is not None
                 else None
             )
-            return origin_boundary is not None and origin_boundary in target_boundaries
+            return origin_boundary is not None and origin_boundary in target_boundaries()
 
         def should_strip_input_item(item: Mapping[str, object]) -> bool:
             return not target_can_decrypt(EncryptedContentAffinityCheck._model_id_of_input_item(item))

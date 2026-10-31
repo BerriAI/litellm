@@ -678,20 +678,25 @@ class ResponsesAPIRequestUtils:
             return
         items: Final = cast(list[object], request_input)  # cast-ok: untyped client json
         stripped: Final = tuple(
-            ResponsesAPIRequestUtils._without_encrypted_reasoning(item)
-            if should_strip is None or (isinstance(item, Mapping) and should_strip(cast(Mapping[str, object], item)))
+            ResponsesAPIRequestUtils._without_encrypted_reasoning(reasoning)
+            if (reasoning := ResponsesAPIRequestUtils._encrypted_reasoning_item(item)) is not None
+            and (should_strip is None or should_strip(reasoning))
             else item
             for item in items
         )
         items[:] = (item for item in stripped if item is not None)
 
     @staticmethod
-    def _without_encrypted_reasoning(item: object) -> object | None:
+    def _encrypted_reasoning_item(item: object) -> Mapping[str, object] | None:
         if not isinstance(item, dict):
-            return item
+            return None
         reasoning: Final = cast(Mapping[str, object], item)  # cast-ok: untyped client json
         if reasoning.get("type") != "reasoning" or not reasoning.get("encrypted_content"):
-            return reasoning
+            return None
+        return reasoning
+
+    @staticmethod
+    def _without_encrypted_reasoning(reasoning: Mapping[str, object]) -> object | None:
         readable: Final = any(
             ResponsesAPIRequestUtils._has_readable_text(reasoning.get(key)) for key in ("summary", "content")
         )

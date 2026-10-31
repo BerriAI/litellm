@@ -23,10 +23,12 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 import litellm
+from litellm.integrations.custom_secret_manager import CustomSecretManager
 from litellm.models.credentials import CredentialItem
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.router_api import RoutingContext
 from litellm.types.llms.openai import ResponsesAPIResponse
+from litellm.types.secret_managers.main import KeyManagementSettings, KeyManagementSystem
 
 
 @pytest.fixture(autouse=True)
@@ -1170,8 +1172,8 @@ def test_boundary_key_resolves_named_credential_values_the_way_the_request_does(
             )
         ],
     ):
-        boundary = EncryptedContentAffinityCheck._encryption_boundary_key(deployment)
-        sent_params = with_named_credential(deployment)
+        boundary: Final = EncryptedContentAffinityCheck._encryption_boundary_key(deployment)
+        sent_params: Final = with_named_credential(deployment)
 
     assert boundary is not None
     assert boundary == EncryptedContentAffinityCheck._encryption_boundary_key(
@@ -2829,6 +2831,16 @@ def no_process_wide_api_base(monkeypatch: pytest.MonkeyPatch) -> None:
             True,
             id="same OpenAI organization beside unrelated headers",
         ),
+        pytest.param(
+            {
+                **OPENAI_SHARED_KEY,
+                "headers": {"OpenAI-Organization": "org-a"},
+                "extra_headers": {"openai-organization": "org-b"},
+            },
+            {**OPENAI_SHARED_KEY, "extra_headers": {"OpenAI-Organization": "org-b"}},
+            True,
+            id="extra headers override the organization the headers set",
+        ),
     ],
 )
 def test_hop_strip_keeps_reasoning_between_same_key_deployments_on_the_default_endpoint(
@@ -2896,6 +2908,131 @@ def test_hop_strip_resolves_a_missing_key_from_the_environment(
     )
 
     assert request_input[0] == (original_reasoning if target_can_decrypt else SUMMARY_ONLY_REASONING)
+
+
+def test_hop_strip_leaves_input_items_that_are_not_objects_as_sent():
+    from litellm.router_utils.pre_call_checks.encrypted_content_affinity_check import (
+        EncryptedContentAffinityCheck,
+    )
+
+    request_input: Final = ["and sunsets?", *_reasoning_input_minted_by("origin")]
+
+    EncryptedContentAffinityCheck.strip_reasoning_the_targets_cannot_decrypt(
+        None, request_input, None, (), unmarked_origin=None
+    )
+
+    assert request_input == ["and sunsets?", SUMMARY_ONLY_REASONING, {"role": "user", "content": "and sunsets?"}]
+
+
+GATEWAY_BASE: Final = {"model": "openai/gpt-5.5", "api_base": "https://gateway.example.com/v1"}
+
+
+@pytest.mark.parametrize(
+    "origin_params, target_params, target_can_decrypt",
+    [
+        pytest.param(
+            {**GATEWAY_BASE, "extra_headers": {"Authorization": "Bearer sk-account-a"}},
+            {**GATEWAY_BASE, "extra_headers": {"Authorization": "Bearer sk-account-b"}},
+            False,
+            id="environment key replaced by different Authorization headers",
+        ),
+        pytest.param(
+            {**GATEWAY_BASE, "api_key": "shared-key", "headers": {"api-key": "account-a"}},
+            {**GATEWAY_BASE, "api_key": "shared-key", "headers": {"api-key": "account-b"}},
+            False,
+            id="explicit key beside different api-key headers",
+        ),
+        pytest.param(
+            {**GATEWAY_BASE, "extra_headers": {"Authorization": "Bearer sk-account-a"}},
+            {**GATEWAY_BASE, "extra_headers": {"authorization": "Bearer sk-account-a"}},
+            True,
+            id="same Authorization header on both",
+        ),
+    ],
+)
+def test_hop_strip_keeps_accounts_that_sign_in_through_headers_apart(
+    monkeypatch: pytest.MonkeyPatch,
+    origin_params: dict[str, object],
+    target_params: dict[str, object],
+    target_can_decrypt: bool,
+):
+    from litellm.router_utils.pre_call_checks.encrypted_content_affinity_check import (
+        EncryptedContentAffinityCheck,
+    )
+
+    monkeypatch.setenv("OPENAI_API_KEY", "env-key")
+    router: Final = litellm.Router(
+        model_list=[
+            _default_endpoint_deployment("origin", origin_params),
+            _default_endpoint_deployment("target", target_params),
+        ]
+    )
+    ctx: Final = RoutingContext(router)
+    reasoning: Final = _reasoning_input_minted_by("origin")[0]
+    original_reasoning: Final = dict(reasoning)
+    request_input: Final = [reasoning, {"role": "user", "content": "and sunsets?"}]
+
+    EncryptedContentAffinityCheck.strip_reasoning_the_targets_cannot_decrypt(
+        ctx, request_input, None, (_deployment_of(ctx, "target"),), unmarked_origin=None
+    )
+
+    assert request_input[0] == (original_reasoning if target_can_decrypt else SUMMARY_ONLY_REASONING)
+
+
+class _SecretReadCounter(CustomSecretManager):
+    def __init__(self) -> None:
+        super().__init__(secret_manager_name="read-counter")
+        self.reads: int = 0
+
+    async def async_read_secret(
+        self, secret_name: str, optional_params: Mapping[str, object] | None = None, timeout: object = None
+    ) -> str | None:
+        self.reads += 1
+        return None
+
+    def sync_read_secret(
+        self, secret_name: str, optional_params: Mapping[str, object] | None = None, timeout: object = None
+    ) -> str | None:
+        self.reads += 1
+        return None
+
+
+@pytest.mark.parametrize(
+    "reasoning_minted_by",
+    [
+        pytest.param(None, id="no reasoning in the input"),
+        pytest.param("target", id="reasoning the hop's target minted"),
+    ],
+)
+def test_hop_strip_reads_no_secrets_when_no_reasoning_needs_a_boundary(
+    monkeypatch: pytest.MonkeyPatch, reasoning_minted_by: str | None
+):
+    from litellm.router_utils.pre_call_checks.encrypted_content_affinity_check import (
+        EncryptedContentAffinityCheck,
+    )
+
+    router: Final = litellm.Router(
+        model_list=[
+            _default_endpoint_deployment("origin", OPENAI_SHARED_KEY),
+            _default_endpoint_deployment("target", OPENAI_SHARED_KEY),
+        ]
+    )
+    ctx: Final = RoutingContext(router)
+    secret_reads: Final = _SecretReadCounter()
+    monkeypatch.setattr(litellm, "secret_manager_client", secret_reads)
+    monkeypatch.setattr(litellm, "_key_management_system", KeyManagementSystem.CUSTOM)
+    monkeypatch.setattr(litellm, "_key_management_settings", KeyManagementSettings(access_mode="read_only"))
+    request_input: Final = (
+        _reasoning_input_minted_by(reasoning_minted_by)
+        if reasoning_minted_by
+        else [{"role": "user", "content": "and sunsets?"}]
+    )
+
+    EncryptedContentAffinityCheck.strip_reasoning_the_targets_cannot_decrypt(
+        ctx, request_input, None, (_deployment_of(ctx, "target"),), unmarked_origin="origin"
+    )
+
+    assert secret_reads.reads == 0
 
 
 def test_boundary_key_puts_pydantic_and_plain_params_on_one_default_endpoint_boundary():
