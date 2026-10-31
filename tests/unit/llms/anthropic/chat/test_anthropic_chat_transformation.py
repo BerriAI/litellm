@@ -9715,6 +9715,75 @@ def test_end_turn_response_carries_no_stop_details():
     assert "stop_reason" not in provider_fields
 
 
+def test_refusal_explanation_reaches_the_client_as_the_message_refusal():
+    result: Final = _transform_message_body(ANTHROPIC_DOCS_REFUSAL_MESSAGE)
+
+    assert result.choices[0].message.refusal == ANTHROPIC_DOCS_REFUSAL_MESSAGE["stop_details"]["explanation"]
+
+
+@pytest.mark.parametrize(
+    "stop_details",
+    [None, {"type": "refusal", "category": "cyber", "explanation": None}, {"type": "refusal", "explanation": ""}],
+    ids=["no_stop_details", "null_explanation", "empty_explanation"],
+)
+def test_refusal_without_an_explanation_sets_no_message_refusal(stop_details: dict | None):
+    result: Final = _transform_message_body(_refusal_message_body("refusal", stop_details))
+
+    assert result.choices[0].message.get("refusal") is None
+
+
+_RAN_SEARCH: Final = {
+    "type": "server_tool_use",
+    "id": "srvtoolu_ran",
+    "name": "web_search",
+    "input": {"query": "tokyo"},
+}
+_RAN_SEARCH_RESULT: Final = {
+    "type": "web_search_tool_result",
+    "tool_use_id": "srvtoolu_ran",
+    "content": [
+        {"type": "web_search_result", "url": "https://tokyo.example", "title": "Tokyo", "encrypted_content": "e"}
+    ],
+}
+_PENDING_SEARCH: Final = {
+    "type": "server_tool_use",
+    "id": "srvtoolu_pending",
+    "name": "web_search",
+    "input": {"query": "next city"},
+}
+
+
+def _paused_turn(*content: dict) -> dict:
+    return {**_refusal_message_body("pause_turn", None), "content": list(content)}
+
+
+def test_pause_turn_is_an_unfinished_turn_that_keeps_its_native_stop_reason():
+    result: Final = _transform_message_body(_paused_turn(_RAN_SEARCH, _RAN_SEARCH_RESULT, _PENDING_SEARCH))
+
+    assert result.choices[0].finish_reason == "length"
+    assert result.choices[0].message.provider_specific_fields["stop_reason"] == "pause_turn"
+
+
+@pytest.mark.parametrize(
+    ("content", "expected_calls"),
+    [
+        (
+            (_RAN_SEARCH, _RAN_SEARCH_RESULT, _PENDING_SEARCH),
+            [("ws_srvtoolu_ran", "completed", "tokyo"), ("ws_srvtoolu_pending", "in_progress", "next city")],
+        ),
+        ((_PENDING_SEARCH,), [("ws_srvtoolu_pending", "in_progress", "next city")]),
+    ],
+    ids=["after_a_finished_search", "before_any_search_result"],
+)
+def test_pause_turn_lists_the_search_it_has_not_run_yet_as_in_progress(
+    content: tuple[dict, ...], expected_calls: list[tuple[str, str, str]]
+):
+    result: Final = _transform_message_body(_paused_turn(*content))
+
+    calls: Final = result.choices[0].message.provider_specific_fields["web_search_calls"]
+    assert [(call.id, call.status, call.action.query) for call in calls] == expected_calls
+
+
 def _json_mode_message_body(stop_reason: str, stop_details: dict | None) -> dict:
     return {
         **_refusal_message_body(stop_reason, stop_details),
@@ -9741,6 +9810,7 @@ def test_json_mode_refusal_keeps_stop_details_on_the_message():
     message: Final = result.choices[0].message
     assert json.loads(message.content) == {"answer": "Hello"}
     assert message.provider_specific_fields == {"stop_reason": "refusal", "stop_details": stop_details}
+    assert message.refusal == stop_details["explanation"]
 
 
 def test_json_mode_tool_use_turn_adds_no_stop_fields_to_the_message():

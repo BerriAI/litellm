@@ -33337,7 +33337,7 @@ export interface components {
          */
         GenericResponseOutputItem: {
             /** Content */
-            content: components["schemas"]["OutputText"][];
+            content: (components["schemas"]["OutputText"] | components["schemas"]["ResponseOutputRefusal"])[];
             /** Id */
             id: string;
             /** Phase */
@@ -35908,6 +35908,8 @@ export interface components {
             tags?: string[] | null;
             /** Tenant Id */
             tenant_id?: string | null;
+            /** Thought Signature In Tool Call Id */
+            thought_signature_in_tool_call_id?: boolean | null;
             /** Tiered Pricing */
             tiered_pricing?: {
                 [key: string]: unknown;
@@ -51436,6 +51438,8 @@ export interface components {
             tags?: string[] | null;
             /** Tenant Id */
             tenant_id?: string | null;
+            /** Thought Signature In Tool Call Id */
+            thought_signature_in_tool_call_id?: boolean | null;
             /** Tiered Pricing */
             tiered_pricing?: {
                 [key: string]: unknown;

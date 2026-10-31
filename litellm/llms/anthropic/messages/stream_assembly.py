@@ -155,6 +155,8 @@ def collapse_pure_text_chunks(
             continue
 
         json_str = ev[idx + len("data:") :].strip()
+        if not json_str.startswith("{"):
+            continue
         try:
             data = json.loads(json_str)
         except (json.JSONDecodeError, ValueError):
@@ -206,6 +208,11 @@ def collapse_pure_text_chunks(
     return out
 
 
+def _has_non_object_data(event_str: str) -> bool:
+    data_start: Final = event_str.find("data:")
+    return data_start != -1 and not event_str[data_start + len("data:") :].lstrip().startswith("{")
+
+
 def build_complete_streaming_response_legacy(
     all_chunks: Sequence[str | bytes],
     litellm_logging_obj: LiteLLMLoggingObj,
@@ -243,6 +250,8 @@ def build_complete_streaming_response_legacy(
                 # text payload happens to contain "[DONE]" is not dropped.
                 if any(line.strip() == "data: [DONE]" for line in event_str.split("\n")):
                     continue
+                if _has_non_object_data(event_str):
+                    continue
                 transformed_openai_chunk = anthropic_model_response_iterator.convert_str_chunk_to_generic_chunk(
                     chunk=event_str
                 )
@@ -268,19 +277,23 @@ def build_complete_streaming_response_legacy(
     return complete_streaming_response
 
 
-def extract_sse_data(event_str: str) -> dict | None:
-    """Parse the JSON object from the ``data:`` line of an Anthropic SSE event."""
+def _sse_data_payload(event_str: str) -> str | None:
     for line in split_sse_lines(event_str):
         stripped = line.strip()
         if stripped.startswith("data:"):
-            payload = stripped[len("data:") :].strip()
-            if not payload or payload == "[DONE]":
-                return None
-            try:
-                return json.loads(payload)
-            except (ValueError, TypeError):
-                return None
+            return stripped[len("data:") :].strip()
     return None
+
+
+def extract_sse_data(event_str: str) -> dict | None:
+    """Parse the JSON object from the ``data:`` line of an Anthropic SSE event."""
+    payload: Final = _sse_data_payload(event_str)
+    if payload is None or not payload.startswith("{"):
+        return None
+    try:
+        return json.loads(payload)
+    except (ValueError, TypeError):
+        return None
 
 
 def build_usage_only_response_from_chunks(
@@ -415,27 +428,81 @@ _ANTHROPIC_EVENT_TYPES: Final = frozenset(
 )
 
 
+_ERROR_PAYLOAD_KEYS: Final = frozenset({"type", "error", "request_id"})
+
+
+def _is_anthropic_event_type(event_type: object) -> bool:
+    return isinstance(event_type, str) and event_type in _ANTHROPIC_EVENT_TYPES
+
+
 def is_raw_sse_stream(all_chunks: Sequence[object]) -> bool:
     return any(isinstance(chunk, (str, bytes)) for chunk in all_chunks)
 
 
-def _joined_sse_stream(all_chunks: Sequence[object]) -> str | None:
-    raw: Final = b"".join(
+def _joined_sse_bytes(all_chunks: Sequence[object]) -> bytes:
+    return b"".join(
         chunk if isinstance(chunk, bytes) else chunk.encode("utf-8")
         for chunk in all_chunks
         if isinstance(chunk, (str, bytes))
     )
+
+
+def _joined_sse_stream(all_chunks: Sequence[object]) -> str | None:
     try:
-        return codecs.getincrementaldecoder("utf-8")().decode(raw, final=False)
+        return codecs.getincrementaldecoder("utf-8")().decode(_joined_sse_bytes(all_chunks), final=False)
     except UnicodeDecodeError:
         return None
+
+
+def _sse_event_data(event: str) -> Mapping[str, object] | None:
+    return as_str_mapping(extract_sse_data(event))
+
+
+_JSON_ESCAPED_LINE_BREAKS: Final = MappingProxyType(
+    str.maketrans({"\x85": "\\u0085", "\u2028": "\\u2028", "\u2029": "\\u2029"})
+)
+
+
+def _sse_frames(sse_stream: str) -> Sequence[str]:
+    return "\n".join(split_sse_lines(sse_stream)).split("\n\n")
+
+
+def _frames_of_the_widest_reader(sse_stream: str) -> Sequence[str]:
+    """The stream's frames as httpx's ``str.splitlines`` reads them, past a form feed or U+2028 in any line."""
+    return "\n".join(sse_stream.splitlines()).split("\n\n")
+
+
+def _sse_field(line: str) -> tuple[str, str]:
+    name, _, value = line.partition(":")
+    return name, value.removeprefix(" ")
+
+
+def _sse_fields(frame: str) -> tuple[tuple[str, str], ...]:
+    """The frame's fields as a client reads them: a name matches exactly and a comment is no field."""
+    return tuple(_sse_field(line) for line in frame.split("\n") if line and not line.startswith(":"))
+
+
+def _carries_no_data(fields: Sequence[tuple[str, str]]) -> bool:
+    match fields:
+        case () | (("event", _),) | (("data", "[DONE]"),):
+            return True
+        case _:
+            return False
+
+
+def _json_mapping(payload: str) -> Mapping[str, object] | None:
+    try:
+        value: Final[object] = json.loads(payload)
+    except ValueError:
+        return None
+    return as_str_mapping(value)
 
 
 def _parsed_sse_events(sse_stream: str) -> tuple[Mapping[str, object], ...]:
     return tuple(
         event_data
         for event in split_sse_chunk_into_events(sse_stream)
-        if (event_data := extract_sse_data(event)) is not None
+        if (event_data := _sse_event_data(event)) is not None
     )
 
 
@@ -444,7 +511,8 @@ def _anthropic_message_start(sse_stream: str) -> Mapping[str, object] | None:
         (
             message
             for event_data in _parsed_sse_events(sse_stream)
-            if event_data.get("type") == "message_start" and isinstance(message := event_data.get("message"), dict)
+            if event_data.get("type") == "message_start"
+            and (message := as_str_mapping(event_data.get("message"))) is not None
         ),
         None,
     )
@@ -482,11 +550,151 @@ def is_anthropic_sse_stream(all_chunks: Sequence[object]) -> bool:
     sse_stream: Final = _joined_sse_stream(all_chunks)
     if sse_stream is None:
         return False
-    return any(event.get("type") in _ANTHROPIC_EVENT_TYPES for event in _parsed_sse_events(sse_stream))
+    return any(_is_anthropic_event_type(event.get("type")) for event in _parsed_sse_events(sse_stream))
+
+
+def _is_json_no_reader_can_take(payload: str) -> bool:
+    try:
+        value: Final[object] = json.loads(payload)
+    except ValueError:
+        return False
+    if value is None:
+        return False
+    event: Final = as_str_mapping(value)
+    return event is None or isinstance(event.get("type"), (list, dict))
+
+
+def has_unreadable_json_event(all_chunks: Sequence[object]) -> bool:
+    """Whether a frame's data is JSON that no reader of these streams can take as an event."""
+    sse_stream: Final = codecs.getincrementaldecoder("utf-8")(errors="replace").decode(
+        _joined_sse_bytes(all_chunks), final=False
+    )
+    return any(_is_json_no_reader_can_take(_sse_data_payload(event) or "") for event in _sse_frames(sse_stream))
+
+
+def anthropic_sse_event_type(event: str) -> object:
+    return next((event_data.get("type") for event_data in _parsed_sse_events(event)), None)
+
+
+def anthropic_sse_event_types(all_chunks: Sequence[object]) -> frozenset[str]:
+    """The string ``type`` of every event the stream sent."""
+    event_types: Final = (event.get("type") for event in _parsed_sse_events(_joined_sse_stream(all_chunks) or ""))
+    return frozenset(event_type for event_type in event_types if isinstance(event_type, str))
+
+
+def _is_named_error_event(event: str) -> bool:
+    names: Final = tuple(value for name, value in _sse_fields(event) if name == "event")
+    return names[-1:] == ("error",)
+
+
+def _is_error_event(event: str) -> bool:
+    event_type: Final = anthropic_sse_event_type(event)
+    return event_type == "error" or (_is_named_error_event(event) and not _is_anthropic_event_type(event_type))
+
+
+def _frames_a_client_dispatches(sse_stream: str) -> Sequence[str]:
+    return "\n".join((*split_sse_lines(sse_stream), "")).split("\n\n")[:-1]
+
+
+def _error_events(sse_stream: str) -> tuple[str, ...]:
+    return tuple(event for event in _frames_a_client_dispatches(sse_stream) if _is_error_event(event))
+
+
+def _plain_error_event(event: str) -> str:
+    payload: Final = _sse_data_payload(event) or ""
+    one_line: Final = payload.translate(_JSON_ESCAPED_LINE_BREAKS) if _json_mapping(payload) is not None else payload
+    return "\n".join(("event: error", *(f"data: {line}" for line in one_line.splitlines()[:1])))
+
+
+def anthropic_sse_error_events(all_chunks: Sequence[object]) -> tuple[str, ...]:
+    """The ``error`` events of the stream, each as an ``event:`` line and the ``data:`` line assembly read.
+
+    A stream whose upstream fails after it started ends with an ``error`` event in place of
+    ``message_stop``. That frame is the outcome the client is owed, not content, so assembly through
+    the upstream error leaves it out and a caller re-emitting a rewritten response puts it back,
+    without any other line of the frame, since that is content no guardrail read.
+    A frame counts by its data ``type``, or by its SSE ``event:`` name unless its data is another
+    Anthropic event, since a client SDK raises on the name alone and an upstream that is not
+    Anthropic may send anything as the data.
+    """
+    return tuple(_plain_error_event(event) for event in _error_events(_joined_sse_stream(all_chunks) or ""))
+
+
+def anthropic_sse_stopped_block_index(event: str) -> object:
+    return next(
+        (
+            event_data.get("index")
+            for event_data in _parsed_sse_events(event)
+            if event_data.get("type") == "content_block_stop"
+        ),
+        None,
+    )
+
+
+def _block_index(event_data: Mapping[str, object]) -> int | None:
+    index: Final = event_data.get("index")
+    return index if isinstance(index, int) else None
+
+
+def _started_blocks(events: Sequence[Mapping[str, object]]) -> Mapping[int, Mapping[str, object]]:
+    starts: Final = (event for event in events if event.get("type") == "content_block_start")
+    return MappingProxyType(
+        {
+            index: block
+            for event in starts
+            if (index := _block_index(event)) is not None
+            and (block := as_str_mapping(event.get("content_block"))) is not None
+        }
+    )
+
+
+def anthropic_sse_started_blocks(all_chunks: Sequence[object]) -> Mapping[int, Mapping[str, object]]:
+    """The ``content_block`` each ``content_block_start`` of the stream opened, by block index."""
+    return _started_blocks(_parsed_sse_events(_joined_sse_stream(all_chunks) or ""))
+
+
+def _unfinished_blocks(events: Sequence[Mapping[str, object]]) -> Mapping[int, Mapping[str, object]]:
+    stopped: Final = frozenset(_block_index(event) for event in events if event.get("type") == "content_block_stop")
+    return MappingProxyType({index: block for index, block in _started_blocks(events).items() if index not in stopped})
+
+
+def anthropic_sse_unfinished_blocks(all_chunks: Sequence[object]) -> Mapping[int, Mapping[str, object]]:
+    """The blocks the stream opened and never stopped, which only a failed upstream leaves."""
+    return _unfinished_blocks(_parsed_sse_events(_joined_sse_stream(all_chunks) or ""))
+
+
+def _sse_events_with_data(sse_stream: str) -> tuple[tuple[str, Mapping[str, object]], ...]:
+    return tuple(
+        (event, event_data)
+        for event in split_sse_chunk_into_events(sse_stream)
+        if (event_data := _sse_event_data(event)) is not None
+    )
+
+
+def _content_events_before_upstream_error(sse_stream: str) -> tuple[str, ...]:
+    """The stream's events minus its upstream ``error`` and every cut-off block assembly cannot read.
+
+    A cut-off text block is still text the client was sent, so it stays. A cut-off tool call's
+    input is a JSON prefix, and a cut-off thinking block has no signature, so neither is a block the
+    client can act on, and both are left out.
+    """
+    if not _error_events(sse_stream):
+        return (sse_stream,)
+    events: Final = _sse_events_with_data(sse_stream)
+    cut_off: Final = frozenset(
+        index
+        for index, block in _unfinished_blocks(tuple(event_data for _, event_data in events)).items()
+        if block.get("type") != "text"
+    )
+    return tuple(
+        event
+        for event, event_data in events
+        if event_data.get("type") != "error" and _block_index(event_data) not in cut_off
+    )
 
 
 def assemble_anthropic_sse_stream(
-    all_chunks: Sequence[object], *, restore_identity: bool = False
+    all_chunks: Sequence[object], *, restore_identity: bool = False, through_upstream_error: bool = False
 ) -> ModelResponse | None:
     """Assemble raw Anthropic SSE frames into a ModelResponse.
 
@@ -494,6 +702,11 @@ def assemble_anthropic_sse_stream(
     assembler does not carry through. It is off by default so callers that re-emit the assembled
     response keep the wire shape they had before this helper was shared. The writes land on a
     freshly built object that is unreachable from caller state until returned.
+
+    A stream whose upstream failed after it started ends with an ``error`` event in place of
+    ``message_stop`` and assembles to None, unless ``through_upstream_error`` asks for the content
+    the client was sent before the failure. That is for a guardrail that scans the stream and then
+    passes the upstream error on; a caller recording what was served keeps None.
     """
     sse_stream: Final = _joined_sse_stream(all_chunks)
     if sse_stream is None:
@@ -502,9 +715,12 @@ def assemble_anthropic_sse_stream(
     if message_start is None:
         return None
     model: Final = message_start.get("model") if restore_identity else None
+    content_events: Final = (
+        _content_events_before_upstream_error(sse_stream) if through_upstream_error else (sse_stream,)
+    )
     try:
         assembled: Final = build_complete_streaming_response(
-            all_chunks=(sse_stream,),
+            all_chunks=content_events,
             litellm_logging_obj=None,  # pyright: ignore[reportArgumentType]  # only forwarded to stream_chunk_builder, which accepts None
             model=model if isinstance(model, str) else "",
         )
@@ -522,6 +738,21 @@ def assemble_anthropic_sse_stream(
     return assembled
 
 
+def _is_error_payload(payload: str) -> bool:
+    event: Final = _json_mapping(payload)
+    if event is None or not _ERROR_PAYLOAD_KEYS.issuperset(event):
+        return False
+    return event.get("type") == "error" or ("type" not in event and isinstance(event.get("error"), Mapping))
+
+
+def _is_error_frame(fields: Sequence[tuple[str, str]]) -> bool:
+    match fields:
+        case (("data", payload),) | (("event", "error"), ("data", payload)):
+            return _is_error_payload(payload)
+        case _:
+            return False
+
+
 def is_sse_error_stream(all_chunks: Sequence[object]) -> bool:
     """Whether the buffered stream carries nothing but error frames.
 
@@ -537,7 +768,6 @@ def is_sse_error_stream(all_chunks: Sequence[object]) -> bool:
     sse_stream: Final = _joined_sse_stream(all_chunks)
     if sse_stream is None:
         return False
-    events: Final = _parsed_sse_events(sse_stream)
-    return len(events) > 0 and all(
-        event.get("type") == "error" or isinstance(event.get("error"), Mapping) for event in events
-    )
+    frames: Final = tuple(_sse_fields(frame) for frame in _frames_of_the_widest_reader(sse_stream))
+    with_data: Final = tuple(fields for fields in frames if not _carries_no_data(fields))
+    return len(with_data) > 0 and all(_is_error_frame(fields) for fields in with_data)

@@ -311,6 +311,7 @@ _FINISH_REASON_MAP: Final[dict[str, OpenAIChatCompletionFinishReason]] = {
     "tool_use": "tool_calls",
     "refusal": "content_filter",
     "compaction": "length",
+    "pause_turn": "length",
     "model_context_window_exceeded": "length",
     # Cohere
     "COMPLETE": "stop",
