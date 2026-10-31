@@ -1,6 +1,7 @@
 import json
 import os
 import uuid
+from collections.abc import Mapping
 from email.message import Message
 from email.parser import BytesParser
 from email.policy import HTTP
@@ -10,13 +11,23 @@ from typing import Final
 import httpx
 import pytest
 import yaml
-from integration._support.client import JSON_OBJECT, Gateway, Scenario, eventually, object_value, string_value
+from integration._support.client import (
+    JSON_OBJECT,
+    Gateway,
+    Scenario,
+    eventually,
+    list_value,
+    object_value,
+    string_value,
+)
 from integration._support.database import scratch_database
 from integration._support.process import owned_proxy
 from integration._support.upstream import ScenarioHandle, delete_scenario, register_scenario
 from integration._support.wire import Reply, Request, Wire, wire_server
 from integration.cost_calculation.cost_tracking_case import JsonResponse
 from pydantic import JsonValue
+
+from litellm.proxy.health_endpoints.model_checks import TEST_MODEL_REQUESTS_DIR
 
 _DECISIONS_PROBE_REPLY: Final = JsonResponse(
     content_type="application/json",
@@ -1426,3 +1437,148 @@ def test_health_check_of_gpt_transcribe_probes_without_verbose_json_and_reports_
         (request.method, request.target, tuple(sorted(_multipart_text_fields(_multipart_parts(request)).items())))
         for request in requests
     } == {("POST", "/v1/audio/transcriptions", (("model", "gpt-transcribe"),))}
+
+
+_TEST_MODEL_TOOL_CALL_ID: Final = "call_boston_wire"
+_TEST_MODEL_CHAT_REQUEST: Final = JSON_OBJECT.validate_python(
+    JSON_OBJECT.validate_json((TEST_MODEL_REQUESTS_DIR / "chat_completions.json").read_text(encoding="utf-8"))["turn_1"]
+)
+
+
+def _test_model_chat_reply(request: Request, *, cached_tokens: int) -> Reply:
+    assert request.target == "/v1/chat/completions", request.target
+    body: Final = JSON_OBJECT.validate_json(request.body)
+    assert "cache_control" not in request.body.decode(), request.body.decode()
+    messages: Final = body["messages"]
+    assert isinstance(messages, list) and isinstance(messages[0], dict), body
+    tool_turn: Final = any(isinstance(message, dict) and message.get("role") == "tool" for message in messages)
+    assert messages[: len(_TEST_MODEL_CHAT_REQUEST["messages"])] == _TEST_MODEL_CHAT_REQUEST["messages"], messages
+    assert body["tools"] == _TEST_MODEL_CHAT_REQUEST["tools"], body["tools"]
+    assert isinstance(messages[-1], dict), messages
+    if tool_turn and messages[-1]["role"] == "user":
+        assert messages[-3] == {"role": "assistant", "content": "Boston is 72F and sunny."}, messages[-3]
+        assert isinstance(messages[-2], dict) and messages[-2]["role"] == "system", messages[-2]
+        message: dict[str, JsonValue] = {"role": "assistant", "content": "Yes, 72F is warm enough for a walk."}
+    elif tool_turn:
+        assert messages[-1]["tool_call_id"] == _TEST_MODEL_TOOL_CALL_ID, messages[-1]
+        message = {"role": "assistant", "content": "Boston is 72F and sunny."}
+    else:
+        message = {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": _TEST_MODEL_TOOL_CALL_ID,
+                    "type": "function",
+                    "function": {"name": "get_weather", "arguments": json.dumps({"location": "Boston"})},
+                }
+            ],
+        }
+    return Reply(
+        body=json.dumps(
+            {
+                "id": f"chatcmpl-{uuid.uuid4().hex}",
+                "object": "chat.completion",
+                "created": 1,
+                "model": body["model"],
+                "choices": [{"index": 0, "finish_reason": "stop", "message": message}],
+                "usage": {
+                    "prompt_tokens": 5000,
+                    "completion_tokens": 12,
+                    "total_tokens": 5012,
+                    "prompt_tokens_details": {"cached_tokens": cached_tokens if tool_turn else 0},
+                },
+            }
+        ).encode()
+    )
+
+
+def _check_statuses(endpoint_result: Mapping[str, JsonValue]) -> dict[str, tuple[str, str]]:
+    return {
+        string_value(object_value(check)["name"]): (
+            string_value(object_value(check)["status"]),
+            string_value(object_value(check)["detail"]),
+        )
+        for check in list_value(endpoint_result["checks"])
+    }
+
+
+@pytest.mark.timeout(240)
+def test_health_test_model_runs_the_tool_conversation_against_a_saved_deployment_and_finds_its_spend_rows(
+    gateway: Gateway,
+) -> None:
+    with (
+        gateway.scenario() as scenario,
+        wire_server(lambda request: _test_model_chat_reply(request, cached_tokens=4800)) as wire,
+    ):
+        model_name: Final = scenario.model(api_base=f"{wire.url}/v1", api_key="synthetic-test-model-key")
+        model_id: Final = next(
+            string_value(object_value(info["model_info"])["id"])
+            for info in (object_value(entry) for entry in list_value(gateway.get("/v1/model/info")["data"]))
+            if info["model_name"] == model_name
+        )
+
+        response: Final = gateway.request(
+            "POST", "/health/test_model", {"model_id": model_id, "endpoints": ["/v1/chat/completions"]}
+        )
+
+        assert response.status_code == 200, response.text
+        payload: Final = JSON_OBJECT.validate_json(response.content)
+        assert payload["status"] == "success", response.text
+        assert payload["model_id"] == model_id, response.text
+        endpoint_result: Final = object_value(list_value(payload["endpoints"])[0])
+        assert endpoint_result["endpoint"] == "/v1/chat/completions", response.text
+        checks: Final = _check_statuses(endpoint_result)
+        assert checks["conversation"][0] == "pass", response.text
+        assert checks["prompt_caching"] == (
+            "pass",
+            "turn 2 read 4800 of 5000 input tokens from cache (96.0%), "
+            "turn 3 read 4800 of 5000 input tokens from cache (96.0%)",
+        ), response.text
+        assert checks["cost_tracking"][0] == "pass", response.text
+        assert "spend log rows written" in checks["cost_tracking"][1], response.text
+        assert endpoint_result["cache_read_tokens"] == 4800, response.text
+        requests: Final = wire.drain()
+        assert [request.headers["authorization"] for request in requests] == ["Bearer synthetic-test-model-key"] * 3, (
+            response.text
+        )
+        rows: Final = gateway.rows(
+            'SELECT "spend", "request_tags"::text AS tags FROM "LiteLLM_SpendLogs" WHERE "model_id" = %s',
+            (model_id,),
+        )
+        assert len(rows) == 3, rows
+        assert all(isinstance(row["spend"], int | float) and row["spend"] > 0 for row in rows), rows
+        assert all("litellm_test_model:" in string_value(row["tags"]) for row in rows), rows
+
+
+@pytest.mark.timeout(240)
+def test_health_test_model_names_the_check_that_failed_for_an_unsaved_model_that_never_caches(
+    gateway: Gateway,
+) -> None:
+    with wire_server(lambda request: _test_model_chat_reply(request, cached_tokens=0)) as wire:
+        response: Final = gateway.request(
+            "POST",
+            "/health/test_model",
+            {
+                "litellm_params": {
+                    "model": f"openai/unpriced-{uuid.uuid4().hex}",
+                    "api_base": f"{wire.url}/v1",
+                    "api_key": "synthetic-unsaved-key",
+                },
+                "endpoints": ["/v1/chat/completions"],
+            },
+        )
+
+        assert response.status_code == 200, response.text
+        payload: Final = JSON_OBJECT.validate_json(response.content)
+        assert payload["status"] == "error", response.text
+        checks: Final = _check_statuses(object_value(list_value(payload["endpoints"])[0]))
+        assert checks["conversation"][0] == "pass", response.text
+        assert checks["prompt_caching"] == (
+            "fail",
+            "turn 2 reported 0 cached tokens on 5000 input tokens in 2 attempts, the provider did not reuse the "
+            "repeated system prompt",
+        ), response.text
+        assert checks["cost_tracking"][0] == "fail", response.text
+        assert "no price resolved for this model" in checks["cost_tracking"][1], response.text
+        assert len(wire.drain()) >= 2, response.text
