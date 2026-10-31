@@ -48,10 +48,10 @@ def test_tool_result_matches_tool_call_with_text_assistant_in_between():
 
     # The function response must be present and carry the correct tool name.
     function_responses = [
-        part["function_response"]
+        part["functionResponse"]
         for content in contents
         for part in content["parts"]
-        if isinstance(part, dict) and part.get("function_response")
+        if isinstance(part, dict) and part.get("functionResponse")
     ]
     assert function_responses, f"expected a functionResponse part, got: {contents}"
     assert function_responses[0]["name"] == "shell"
