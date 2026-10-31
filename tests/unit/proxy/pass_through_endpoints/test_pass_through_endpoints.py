@@ -11901,6 +11901,28 @@ class TestInheritAuthGuardrails:
         assert "guardrails" not in pre_call[0]
 
     @pytest.mark.asyncio
+    async def test_guardrails_the_client_names_in_metadata_still_run_for_a_guarded_key(self):
+        auth: Final = UserAPIKeyAuth(api_key="sk-test", metadata={"guardrails": ["key-guard"]})
+
+        pre_call, post_call = await self._run(
+            self._chat_body(metadata={"guardrails": ["client-pre", "client-post"]}),
+            inherit=True,
+            user_api_key_dict=auth,
+            guardrails=(
+                self._guardrail("key-guard", GuardrailEventHooks.pre_call),
+                self._guardrail("client-post", GuardrailEventHooks.post_call),
+            ),
+        )
+
+        assert pre_call[0]["metadata"] == {"guardrails": ["key-guard", "client-pre", "client-post"]}
+        post_call.assert_awaited_once()
+        assert post_call.call_args.kwargs["data"]["metadata"]["guardrails"] == [
+            "key-guard",
+            "client-pre",
+            "client-post",
+        ]
+
+    @pytest.mark.asyncio
     async def test_empty_request_body_guardrails_keep_the_key_guardrails(self):
         auth: Final = UserAPIKeyAuth(api_key="sk-test", metadata={"guardrails": ["key-guard"]})
 

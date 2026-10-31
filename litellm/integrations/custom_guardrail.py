@@ -5,7 +5,7 @@ import os
 import secrets
 from collections.abc import Iterable, Mapping, Sequence
 from datetime import datetime
-from itertools import chain
+from itertools import chain, repeat
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, Optional, cast, get_args
 
@@ -219,11 +219,16 @@ def merged_guardrail_entries(*entry_lists: Iterable[object]) -> list[object]:
     any plain name in either order, else its first plain name stays"""
     entries: Final = tuple(chain.from_iterable(entry_lists))
     settings_names: Final = tuple(_settings_entry_names(entry) for entry in entries)
-    named_with_settings: Final = frozenset[str]().union(*settings_names)
+    first_plain_index: Final = _first_indexes(
+        (entry, index) for index, entry in enumerate(entries) if isinstance(entry, str)
+    )
+    first_settings_index: Final = _first_indexes(
+        chain.from_iterable(zip(names, repeat(index)) for index, names in enumerate(settings_names))
+    )
     return [
         entry
         for index, entry in enumerate(entries)
-        if not _superseded_guardrail_entry(entries, settings_names, named_with_settings, index)
+        if not _superseded_guardrail_entry(entry, index, settings_names[index], first_plain_index, first_settings_index)
     ]
 
 
@@ -239,16 +244,20 @@ def _settings_entry_names(entry: object) -> frozenset[str]:
     return frozenset(guardrail_entry_names(entry)) if isinstance(entry, dict) else frozenset()
 
 
+def _first_indexes(pairs: Iterable[tuple[str, int]]) -> Mapping[str, int]:
+    return MappingProxyType(dict(reversed(tuple(pairs))))
+
+
 def _superseded_guardrail_entry(
-    entries: tuple[object, ...],
-    settings_names: tuple[frozenset[str], ...],
-    named_with_settings: frozenset[str],
+    entry: object,
     index: int,
+    settings_names: frozenset[str],
+    first_plain_index: Mapping[str, int],
+    first_settings_index: Mapping[str, int],
 ) -> bool:
-    entry: Final = entries[index]
     if isinstance(entry, str):
-        return entry in named_with_settings or entry in entries[:index]
-    return bool(settings_names[index]) and settings_names[index] <= frozenset[str]().union(*settings_names[:index])
+        return entry in first_settings_index or first_plain_index[entry] < index
+    return bool(settings_names) and all(first_settings_index[name] < index for name in settings_names)
 
 
 def _request_is_streaming(data: object, event_type: GuardrailEventHooks | None = None) -> bool:
