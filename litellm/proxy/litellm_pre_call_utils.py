@@ -740,7 +740,7 @@ def _key_or_team_allows_client_mock_response(
     )
 
 
-def _key_or_team_allows_client_message_redaction_opt_out(
+def key_or_team_allows_client_message_redaction_opt_out(
     user_api_key_dict: UserAPIKeyAuth,
 ) -> bool:
     return _key_or_team_metadata_flag_is_true(
@@ -2612,7 +2612,7 @@ async def add_litellm_data_to_request(
     # These keys are injected by the proxy itself below — user-supplied values
     # must not be trusted.
     _allow_client_mock_response: Final = _key_or_team_allows_client_mock_response(user_api_key_dict)
-    _allow_client_message_redaction_opt_out = _key_or_team_allows_client_message_redaction_opt_out(user_api_key_dict)
+    _allow_client_message_redaction_opt_out = key_or_team_allows_client_message_redaction_opt_out(user_api_key_dict)
     for _internal_key in _UNTRUSTED_ROOT_CONTROL_FIELDS:
         if _allow_client_mock_response and _internal_key in _CLIENT_MOCK_CONTROL_FIELDS:
             continue
