@@ -14,7 +14,6 @@ Pattern Overview:
 This pattern can be replicated for other message formats (e.g., Anthropic).
 """
 
-import copy
 import json
 import time
 import uuid
@@ -789,26 +788,43 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         return all(OpenAIChatCompletionsHandler._parses_as_json(arguments) for arguments in joined.values())
 
     @staticmethod
+    def _streamed_call_ids(responses_so_far: Sequence["ModelResponseStream"]) -> Mapping[tuple[int, int], str]:
+        """The id each (choice index, tool call index) announced itself with."""
+        choices: Final = chain.from_iterable(chunk.choices for chunk in responses_so_far)
+        calls: Final = chain.from_iterable(
+            ((choice.index, call) for call in choice.delta.tool_calls or ()) for choice in choices
+        )
+        return MappingProxyType({(index, call.index or 0): call.id for index, call in calls if call.id})
+
+    @staticmethod
+    def _choice_without(choice: "Choices", unfinished: frozenset[str]) -> "Choices":
+        kept: Final = [call for call in choice.message.tool_calls or () if call.id not in unfinished]
+        message: Final = choice.message.model_copy(update=MappingProxyType({"tool_calls": kept or None}))
+        return choice.model_copy(update=MappingProxyType({"message": message}))
+
+    @staticmethod
     def _without_unfinished_tool_calls(
         assembled: "ModelResponse", responses_so_far: Sequence["ModelResponseStream"]
     ) -> "ModelResponse":
         """Copy of the rebuilt response without the calls still in flight when the stream ended.
 
-        Rebuilding gives a call that never streamed any argument text an empty JSON object, which
-        reads to a guardrail as a real call taking no arguments rather than an unfinished one.
+        Rebuilding gives a call that never streamed complete arguments an empty JSON object, which
+        reads to a guardrail as a real call taking no arguments rather than an unfinished one. The
+        calls are matched by the id they announced, since the rebuilt order need not follow the
+        order the stream gave them.
         """
         joined: Final = OpenAIChatCompletionsHandler._joined_streamed_arguments(responses_so_far)
-        pruned: Final = copy.deepcopy(assembled)
-        for choice in pruned.choices:
-            streamed = choice.message.tool_calls or ()
-            kept = [
-                call
-                for position, call in enumerate(streamed)
-                if OpenAIChatCompletionsHandler._parses_as_json(joined.get((choice.index, position), ""))
-            ]
-            if len(kept) != len(streamed):
-                choice.message.tool_calls = kept or None
-        return pruned
+        unfinished: Final = frozenset(
+            call_id
+            for key, call_id in OpenAIChatCompletionsHandler._streamed_call_ids(responses_so_far).items()
+            if not OpenAIChatCompletionsHandler._parses_as_json(joined.get(key, ""))
+        )
+        if not unfinished:
+            return assembled
+        pruned: Final = [
+            OpenAIChatCompletionsHandler._choice_without(choice, unfinished) for choice in assembled.choices
+        ]
+        return assembled.model_copy(update=MappingProxyType({"choices": pruned}))
 
     @staticmethod
     def _rebuild_ended_stream_per_choice(
