@@ -27607,6 +27607,11 @@ export interface components {
             /** Entities */
             entities: components["schemas"]["BedrockChecksSensitiveInformationEntityItem"][];
         };
+        /**
+         * BedrockGuardrailOutputScope
+         * @enum {string}
+         */
+        BedrockGuardrailOutputScope: "INTERVENTIONS" | "FULL";
         /** BillingPeriod */
         BillingPeriod: {
             /**
@@ -37417,6 +37422,8 @@ export interface components {
             only_scan_new_messages: boolean | null;
             /** @description Optional parameters for the guardrail */
             optional_params?: components["schemas"]["CiscoAIDefenseGuardrailConfigModelOptionalParams"] | null;
+            /** @description ApplyGuardrail response scope. FULL includes detected and non-detected findings. Omit to retain Bedrock's default of returning detected findings only. */
+            outputScope?: components["schemas"]["BedrockGuardrailOutputScope"] | null;
             /**
              * Output Parse Pii
              * @description When True, LiteLLM will replace the masked text with the original text in the response

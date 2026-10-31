@@ -604,6 +604,11 @@ class BedrockChecksConfigModel(LiteLLMBaseModel):
         return self
 
 
+class BedrockGuardrailOutputScope(Enum):
+    INTERVENTIONS = "INTERVENTIONS"
+    FULL = "FULL"
+
+
 class BedrockGuardrailConfigModel(LiteLLMBaseModel):
     """Configuration parameters for the AWS Bedrock guardrail"""
 
@@ -611,6 +616,11 @@ class BedrockGuardrailConfigModel(LiteLLMBaseModel):
     guardrailVersion: str | None = Field(
         default=None,
         description="The version of your Bedrock guardrail (e.g., DRAFT or version number)",
+    )
+    outputScope: BedrockGuardrailOutputScope | None = Field(
+        default=None,
+        description="ApplyGuardrail response scope. FULL includes detected and non-detected findings. "
+        "Omit to retain Bedrock's default of returning detected findings only.",
     )
     disable_exception_on_block: bool | None = Field(
         default=False,

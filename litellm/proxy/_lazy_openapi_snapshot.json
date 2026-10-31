@@ -16484,6 +16484,14 @@
           "title": "BedrockChecksSensitiveInformationModel",
           "type": "object"
         },
+        "BedrockGuardrailOutputScope": {
+          "enum": [
+            "INTERVENTIONS",
+            "FULL"
+          ],
+          "title": "BedrockGuardrailOutputScope",
+          "type": "string"
+        },
         "BlockedWord": {
           "description": "Represents a blocked word with its action and optional description",
           "properties": {
@@ -18715,6 +18723,17 @@
                 }
               ],
               "description": "Optional parameters for the guardrail"
+            },
+            "outputScope": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/BedrockGuardrailOutputScope"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "ApplyGuardrail response scope. FULL includes detected and non-detected findings. Omit to retain Bedrock's default of returning detected findings only."
             },
             "output_parse_pii": {
               "anyOf": [
