@@ -1,7 +1,6 @@
 import json
 from collections.abc import Mapping
 from datetime import datetime, timezone
-
 from types import SimpleNamespace
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
