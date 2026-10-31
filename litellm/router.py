@@ -3178,6 +3178,7 @@ class Router(DeprecatedRouterMembers):
             is_priority_group=self._is_priority_routing_group,
             session_affinity_repin_on_failover=self.session_affinity_repin_on_failover,
             deployment_ids_at_limit=self._async_deployment_ids_at_rate_limit,
+            model_group_deployments=self._model_group_deployments,
         )
         self.optional_callbacks.append(affinity_callback)
         litellm.logging_callback_manager.add_litellm_callback(affinity_callback)
@@ -3226,6 +3227,7 @@ class Router(DeprecatedRouterMembers):
                     is_priority_group=self._is_priority_routing_group,
                     session_affinity_repin_on_failover=self.session_affinity_repin_on_failover,
                     deployment_ids_at_limit=self._async_deployment_ids_at_rate_limit,
+                    model_group_deployments=self._model_group_deployments,
                 )
                 self.optional_callbacks.append(affinity_callback)
                 litellm.logging_callback_manager.add_litellm_callback(affinity_callback)
@@ -10504,6 +10506,9 @@ class Router(DeprecatedRouterMembers):
 
     def _model_rate_limit_checks(self) -> tuple[ModelRateLimitingCheck, ...]:
         return tuple(callback for callback in self._routing_callbacks() if isinstance(callback, ModelRateLimitingCheck))
+
+    def _model_group_deployments(self, model_group: str) -> Sequence[Mapping[str, object]]:
+        return self._core_get_model_list(model_name=model_group) or ()
 
     async def _async_deployment_ids_at_rate_limit(
         self, deployments: Sequence[dict[str, object]], parent_otel_span: Span | None

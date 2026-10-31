@@ -718,7 +718,7 @@ async def test_web_search_request_prefers_the_capable_deployment_inside_its_orde
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("metadata_field", ["metadata", "litellm_metadata"])
-async def test_web_search_preference_gives_way_once_the_capable_deployment_failed_this_request(
+async def test_web_search_retry_goes_to_an_untried_deployment_once_the_capable_deployment_failed_this_request(
     metadata_field: str,
 ) -> None:
     router: Final = _router_with_a_mixed_web_search_group(False)
@@ -735,8 +735,44 @@ async def test_web_search_preference_gives_way_once_the_capable_deployment_faile
         )["model_info"]["id"]
         for _ in range(40)
     }
-    assert picks == {"search", "no-search"}
+    assert picks == {"no-search"}
 
+
+
+@pytest.mark.parametrize(
+    ("deployments", "failed", "expected"),
+    [
+        (
+            (
+                {"id": "search"},
+                {"id": "flag-a", "supports_web_search": False},
+                {"id": "flag-b", "supports_web_search": False},
+            ),
+            ("search", "flag-a"),
+            ("flag-b",),
+        ),
+        (
+            ({"id": "search"}, {"id": "flag-a", "supports_web_search": False}),
+            ("search", "flag-a"),
+            ("search", "flag-a"),
+        ),
+        (
+            ({"id": "flag-a", "supports_web_search": False}, {"id": "flag-b", "supports_web_search": False}),
+            ("flag-a",),
+            ("flag-a", "flag-b"),
+        ),
+    ],
+    ids=["skips-every-tried-one", "keeps-all-once-all-were-tried", "no-deployment-can-search"],
+)
+def test_web_search_retry_prefers_untried_deployments_only_after_one_that_can_search_was_tried(
+    deployments: tuple[dict[str, object], ...], failed: tuple[str, ...], expected: tuple[str, ...]
+) -> None:
+    request_kwargs: Final = {
+        **_ANTHROPIC_WEB_SEARCH_REQUEST,
+        "metadata": {"previous_models": tuple({"deployment_id": d, "exception_type": "Timeout"} for d in failed)},
+    }
+    kept: Final = prefer_web_search_deployments([{"model_info": info} for info in deployments], request_kwargs)
+    assert tuple(d["model_info"]["id"] for d in kept) == expected
 
 @pytest.mark.asyncio
 @_WEB_SEARCH_REQUESTS

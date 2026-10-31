@@ -34,6 +34,7 @@ from litellm.litellm_core_utils.routing_common_utils import (
     deployment_ids_failed_in_request,
     web_search_alternatives_to_pin,
     web_search_capable_deployments,
+    web_search_preference_can_narrow,
 )
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.llms.openai import AllMessageValues
@@ -118,6 +119,7 @@ class DeploymentAffinityCheck(CustomLogger):
         session_affinity_repin_on_failover: bool = False,
         deployment_ids_at_limit: Callable[[Sequence[dict[str, object]], Span | None], Awaitable[frozenset[str]]]
         | None = None,
+        model_group_deployments: Callable[[str], Sequence[Mapping[str, object]]] | None = None,
     ):
         super().__init__()
         self.cache = cache
@@ -129,6 +131,7 @@ class DeploymentAffinityCheck(CustomLogger):
         self.is_priority_group = is_priority_group
         self.session_affinity_repin_on_failover = session_affinity_repin_on_failover
         self.deployment_ids_at_limit = deployment_ids_at_limit
+        self.model_group_deployments = model_group_deployments
 
     def _get_effective_flags(self, model_group: str) -> tuple[bool, bool, bool]:
         """
@@ -667,6 +670,14 @@ class DeploymentAffinityCheck(CustomLogger):
         )
 
         if not ((enable_user_key and user_key is not None) or session_id is not None):
+            return None
+
+        if self.model_group_deployments is not None and web_search_preference_can_narrow(
+            self.model_group_deployments(deployment_model_name), kwargs
+        ):
+            verbose_router_logger.debug(
+                "DeploymentAffinityCheck: web search request in a group with deployments that cannot search sets no pin"
+            )
             return None
 
         model_info = kwargs.get("model_info")

@@ -36,7 +36,7 @@ from litellm.types.utils import (
 
 _V = TypeVar("_V")
 _Picked: Final = TypeVar("_Picked")
-_DeploymentT: Final = TypeVar("_DeploymentT", bound=dict[str, object])
+_DeploymentT: Final = TypeVar("_DeploymentT", bound=Mapping[str, object])
 
 MID_STREAM_CONTINUATION_KWARG: Final = "_mid_stream_continuation"
 ROUTER_ONLY_CALL_KWARGS: Final = frozenset({"silent_model", "include_fallback_errors", MID_STREAM_CONTINUATION_KWARG})
@@ -428,7 +428,7 @@ def deployments_the_caller_may_use(
         return ()
 
 
-def _deployment_supports_web_search(deployment: dict) -> bool:
+def _deployment_supports_web_search(deployment: Mapping[str, object]) -> bool:
     """
     Check if a deployment supports web search.
 
@@ -440,12 +440,8 @@ def _deployment_supports_web_search(deployment: dict) -> bool:
     model_prices_and_context_window.json doesn't have supports_web_search
     tags on all models yet. TODO: backfill and add fallback.
     """
-    model_info: Final = deployment.get("model_info", {})
-
-    if "supports_web_search" in model_info:
-        return model_info["supports_web_search"]
-
-    return True
+    model_info: Final = as_str_mapping(deployment.get("model_info")) or {}
+    return bool(model_info.get("supports_web_search", True))
 
 
 def _is_web_search_tool(tool: object) -> bool:
@@ -502,7 +498,7 @@ def filter_web_search_deployments(
 
     # Filter out deployments that don't support web search
     final_deployments: Final = [d for d in healthy_deployments if _deployment_supports_web_search(d)]
-    if len(healthy_deployments) > 0 and len(final_deployments) == 0:
+    if healthy_deployments and not final_deployments:
         verbose_logger.warning("No deployments support web search for request")
     return final_deployments
 
@@ -575,19 +571,26 @@ def prefer_web_search_deployments(
     tried: Final = _web_search_tried_deployment_ids(request_kwargs, at_rate_limit)
     if tried is None:
         return deployments
-    untried: Final = (d for d in deployments if _deployment_id(d) not in tried)
+    untried: Final = [d for d in deployments if _deployment_id(d) not in tried]
     orders_with_an_untried_capable_deployment: Final = tuple(
         litellm.utils.get_deployment_order(d) for d in untried if _deployment_supports_web_search(d)
     )
     if not orders_with_an_untried_capable_deployment:
-        verbose_router_logger.debug("No deployment left for this web search request supports web search, so all stay")
-        return deployments
+        if not untried or not any(_deployment_supports_web_search(d) for d in deployments):
+            verbose_router_logger.debug("No untried deployment for this web search request can search, so all stay")
+            return deployments
+        verbose_router_logger.debug("Every deployment that can search was tried, so the untried ones stay")
+        return untried
     return [
         d
         for d in deployments
         if litellm.utils.get_deployment_order(d) not in orders_with_an_untried_capable_deployment
         or (_deployment_supports_web_search(d) and _deployment_id(d) not in tried)
     ]
+
+
+def web_search_preference_can_narrow(deployments: Sequence[_DeploymentT], request_kwargs: Mapping[str, object]) -> bool:
+    return 0 < len(web_search_capable_deployments(deployments, request_kwargs)) < len(deployments)
 
 
 def web_search_alternatives_to_pin(

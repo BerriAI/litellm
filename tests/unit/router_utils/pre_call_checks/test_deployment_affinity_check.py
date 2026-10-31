@@ -1696,3 +1696,73 @@ async def test_key_pin_holds_for_a_web_search_request_when_tag_filtering_removes
     }
 
     assert served_by == {"flagged-a"}
+
+
+
+def _web_search_group_router(
+    optional_pre_call_checks: list[str],  # mutable-ok: Router signature
+    heavy_can_search: bool,
+    heavy_weight: int,
+) -> litellm.Router:
+    return litellm.Router(
+        model_list=[
+            {
+                "model_name": "group",
+                "litellm_params": {
+                    "model": "openai/gpt-x",
+                    "api_key": "fake-key",
+                    "mock_response": "hi",
+                    "weight": heavy_weight,
+                },
+                "model_info": {"id": "heavy", **({} if heavy_can_search else {"supports_web_search": False})},
+            },
+            {
+                "model_name": "group",
+                "litellm_params": {"model": "openai/gpt-y", "api_key": "fake-key", "mock_response": "hi", "weight": 1},
+                "model_info": {"id": "light"},
+            },
+        ],
+        optional_pre_call_checks=optional_pre_call_checks,
+        num_retries=0,
+    )
+
+
+_AFFINITY_KINDS: Final = pytest.mark.parametrize(
+    "optional_pre_call_checks", [["deployment_affinity"], ["session_affinity"]], ids=["user-key-pin", "session-pin"]
+)
+
+
+async def _served_by(router: litellm.Router, caller: int, **web_search_request: object) -> object:
+    response: Final = await router.acompletion(
+        model="group",
+        messages=[{"role": "user", "content": "hi"}],
+        metadata={"user_api_key_hash": f"caller-{caller}", "session_id": f"session-{caller}"},
+        **web_search_request,
+    )
+    return response._hidden_params["model_id"]
+
+
+@pytest.mark.asyncio
+@_AFFINITY_KINDS
+async def test_a_first_web_search_request_does_not_pin_plain_traffic_to_the_deployment_that_can_search(
+    optional_pre_call_checks: list[str],  # mutable-ok: Router signature
+):
+    router: Final = _web_search_group_router(optional_pre_call_checks, heavy_can_search=False, heavy_weight=10**6)
+
+    searched_on: Final = await _served_by(router, 1, web_search_options={})
+    plain_on: Final = {await _served_by(router, 1) for _ in range(5)}
+
+    assert searched_on == "light"
+    assert plain_on == {"heavy"}
+
+
+@pytest.mark.asyncio
+@_AFFINITY_KINDS
+async def test_a_first_web_search_request_still_pins_a_group_where_every_deployment_can_search(
+    optional_pre_call_checks: list[str],  # mutable-ok: Router signature
+):
+    router: Final = _web_search_group_router(optional_pre_call_checks, heavy_can_search=True, heavy_weight=1)
+
+    for caller in range(10):
+        searched_on = await _served_by(router, caller, web_search_options={})
+        assert {await _served_by(router, caller) for _ in range(3)} == {searched_on}
