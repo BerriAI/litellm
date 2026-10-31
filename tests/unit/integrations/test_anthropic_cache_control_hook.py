@@ -11,7 +11,9 @@ from collections.abc import Mapping
 from typing import Final, List, Optional, Tuple, cast
 from unittest.mock import MagicMock, patch
 
+import httpx
 import pytest
+from openai import OpenAI
 from openai.types.chat import ChatCompletionMessage
 from pydantic import BaseModel, ConfigDict
 
@@ -29,7 +31,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     convert_to_anthropic_tool_invoke,
 )
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionAssistantToolCall
 from litellm.types.utils import ChatCompletionMessageToolCall, LlmProviders, Message
 from litellm.utils import ProviderConfigManager
@@ -5033,4 +5035,145 @@ def test_cache_control_hook_injects_next_to_a_malformed_message_instead_of_raisi
     assert [message.get("cache_control") for message in processed if message.get("role") == "system"] == [
         {"type": "ephemeral"},
         {"type": "ephemeral"},
+    ]
+
+
+_DEVELOPER_PREFIX: Final = "Policy handbook rule 8.3: record every backup decision in the tracker within 4 business days."
+_CLAUDE_ON_CONVERSE: Final = "bedrock/converse/us.anthropic.claude-haiku-5-5"
+_OFFLINE_AWS_CREDENTIALS: Final[Mapping[str, str]] = {
+    "aws_access_key_id": "AKIADEVELOPERPREFIX",
+    "aws_secret_access_key": "developer-prefix-secret",
+    "aws_region_name": "us-east-1",
+}
+
+
+def _converse_client(sent_bodies: list[_ConverseBody]) -> HTTPHandler:
+    def respond(request: httpx.Request) -> httpx.Response:
+        sent_bodies.append(_ConverseBody.model_validate_json(request.content))
+        return httpx.Response(
+            200,
+            json={
+                "output": {"message": {"role": "assistant", "content": [{"text": "Rule 8.3."}]}},
+                "stopReason": "end_turn",
+                "usage": {"inputTokens": 30, "outputTokens": 4, "totalTokens": 34},
+            },
+            request=request,
+        )
+
+    return HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(respond)))
+
+
+@pytest.mark.parametrize(
+    "developer_content",
+    [
+        pytest.param(_DEVELOPER_PREFIX, id="string_content"),
+        pytest.param([{"type": "text", "text": _DEVELOPER_PREFIX}], id="text_parts"),
+    ],
+)
+def test_system_injection_point_caches_a_developer_prompt_on_bedrock_converse(
+    developer_content: str | list[dict[str, str]],
+) -> None:
+    sent_bodies: Final[list[_ConverseBody]] = []
+
+    litellm.completion(
+        model=_CLAUDE_ON_CONVERSE,
+        messages=[
+            {"role": "developer", "content": developer_content},
+            {"role": "user", "content": "Which rule covers backups?"},
+        ],
+        cache_control_injection_points=[{"location": "message", "role": "system"}],
+        client=_converse_client(sent_bodies),
+        **_OFFLINE_AWS_CREDENTIALS,
+    )
+
+    assert sent_bodies[-1].system == ({"text": _DEVELOPER_PREFIX}, {"cachePoint": {"type": "default"}})
+    assert _count_converse_cache_points(sent_bodies[-1]) == 1
+
+
+@pytest.mark.parametrize(
+    "developer_content",
+    [
+        pytest.param(_DEVELOPER_PREFIX, id="string_content"),
+        pytest.param([{"type": "input_text", "text": _DEVELOPER_PREFIX}], id="input_text_parts"),
+    ],
+)
+def test_system_injection_point_caches_a_developer_input_item_on_the_responses_route(
+    developer_content: str | list[dict[str, str]],
+) -> None:
+    sent_bodies: Final[list[_ConverseBody]] = []
+
+    litellm.responses(
+        model=_CLAUDE_ON_CONVERSE,
+        input=[
+            {"role": "developer", "content": developer_content},
+            {"role": "user", "content": "Which rule covers backups?"},
+        ],
+        store=False,
+        cache_control_injection_points=[{"location": "message", "role": "system"}],
+        client=_converse_client(sent_bodies),
+        **_OFFLINE_AWS_CREDENTIALS,
+    )
+
+    assert sent_bodies[-1].system == ({"text": _DEVELOPER_PREFIX}, {"cachePoint": {"type": "default"}})
+    assert _count_converse_cache_points(sent_bodies[-1]) == 1
+
+
+def test_system_injection_point_caches_both_a_system_and_a_developer_prompt() -> None:
+    sent_bodies: Final[list[_ConverseBody]] = []
+
+    litellm.completion(
+        model=_CLAUDE_ON_CONVERSE,
+        messages=[
+            {"role": "system", "content": "You answer policy questions."},
+            {"role": "developer", "content": _DEVELOPER_PREFIX},
+            {"role": "user", "content": "Which rule covers backups?"},
+        ],
+        cache_control_injection_points=[{"location": "message", "role": "system"}],
+        client=_converse_client(sent_bodies),
+        **_OFFLINE_AWS_CREDENTIALS,
+    )
+
+    assert sent_bodies[-1].system == (
+        {"text": "You answer policy questions."},
+        {"cachePoint": {"type": "default"}},
+        {"text": _DEVELOPER_PREFIX},
+        {"cachePoint": {"type": "default"}},
+    )
+
+
+def test_system_injection_point_marks_a_developer_prompt_for_openai_prompt_cache_breakpoints() -> None:
+    sent_bodies: Final[list[Mapping[str, object]]] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        sent_bodies.append(json.loads(request.content))
+        return httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-developer-prefix",
+                "object": "chat.completion",
+                "created": 0,
+                "model": "gpt-5.6",
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": "Rule 8.3."}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 30, "completion_tokens": 4, "total_tokens": 34},
+            },
+            request=request,
+        )
+
+    litellm.completion(
+        model="gpt-5.6",
+        messages=[
+            {"role": "developer", "content": _DEVELOPER_PREFIX},
+            {"role": "user", "content": "Which rule covers backups?"},
+        ],
+        cache_control_injection_points=[{"location": "message", "role": "system"}],
+        client=OpenAI(api_key="sk-offline", http_client=httpx.Client(transport=httpx.MockTransport(respond))),
+        api_key="sk-offline",
+    )
+
+    assert sent_bodies[-1]["messages"] == [
+        {
+            "role": "system",
+            "content": [{"type": "text", "text": _DEVELOPER_PREFIX, "prompt_cache_breakpoint": {"mode": "explicit"}}],
+        },
+        {"role": "user", "content": "Which rule covers backups?"},
     ]
