@@ -19,6 +19,13 @@ from litellm.integrations.anthropic_cache_control_hook import AnthropicCacheCont
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.exception_mapping_utils import exception_type
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.reasoning_effort_capability import (
+    RequestedReasoningEffort,
+    deployment_reasoning_effort_levels,
+    keeps_effort,
+    model_group_from_metadata,
+    resolve_deployment_reasoning_effort,
+)
 from litellm.llms.anthropic.common_utils import (
     AnthropicModelInfo,
     strip_provider_specific_fields_from_anthropic_messages,
@@ -31,13 +38,6 @@ from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.responses.mcp.tool_precheck import may_name_litellm_mcp_gateway
-from litellm.router_utils.reasoning_effort_capability import (
-    RequestedReasoningEffort,
-    deployment_reasoning_effort_levels,
-    keeps_effort,
-    model_group_from_metadata,
-    resolve_deployment_reasoning_effort,
-)
 from litellm.types.llms.anthropic import AllAnthropicToolsValues
 from litellm.types.llms.anthropic_messages.anthropic_request import AnthropicMetadata
 from litellm.types.llms.anthropic_messages.anthropic_response import (

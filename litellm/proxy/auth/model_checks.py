@@ -14,13 +14,13 @@ from typing import Final, TypeVar
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
+from litellm.litellm_core_utils.pattern_match_deployments import PatternMatchRouter
 from litellm.llms.azure.ptu_capacity import is_str_keyed_mapping
 from litellm.proxy._types import SpecialModelNames, UserAPIKeyAuth
 from litellm.repositories.object_permission_repository import ObjectPermissionRepository
 from litellm.responses.main import strip_responses_routing_prefix
 from litellm.router import Router
-from litellm.router_utils.fallback_event_handlers import get_fallback_model_group
-from litellm.router_utils.pattern_match_deployments import PatternMatchRouter
+from litellm.router_api import fallback_chain
 from litellm.types.router import CredentialLiteLLMParams, LiteLLM_Params
 from litellm.types.utils import LlmProviders
 from litellm.utils import ProviderConfigManager, get_valid_models, potential_model_names_in_lookup_order
@@ -708,7 +708,7 @@ def get_all_fallbacks(
 
     try:
         # Use existing function to get fallback model group
-        fallback_model_group, _ = get_fallback_model_group(fallbacks=fallbacks_config, model_group=model)
+        fallback_model_group, _ = fallback_chain(fallbacks=fallbacks_config, model_group=model)
 
         if fallback_model_group is None:
             return []
