@@ -14,7 +14,9 @@ GEMINI_3_5_FLASH_TOP_LOGPROBS_TEST_CASE: Final = replace(
     scenario="top_logprobs",
     litellm_request={**GEMINI_3_5_FLASH_TEST_CASE.litellm_request, "top_logprobs": 3},
     expected_provider_request=with_field(
-        GEMINI_3_5_FLASH_TEST_CASE.expected_provider_request, ("generationConfig", "logprobs"), 3
+        with_field(GEMINI_3_5_FLASH_TEST_CASE.expected_provider_request, ("generationConfig", "logprobs"), 3),
+        ("generationConfig", "responseLogprobs"),
+        True,
     ),
 )
 
@@ -22,5 +24,7 @@ CASES: Final = (GEMINI_3_5_FLASH_TOP_LOGPROBS_TEST_CASE,)
 
 
 @pytest.mark.parametrize("case", CASES, ids=lambda case: case.id)
-def test_responses_params_gemini_logprobs(case: TranslationTestCase, gateway: Gateway, provider: SharedProvider) -> None:
+def test_responses_params_gemini_logprobs(
+    case: TranslationTestCase, gateway: Gateway, provider: SharedProvider
+) -> None:
     assert_translation(case, gateway, provider)
