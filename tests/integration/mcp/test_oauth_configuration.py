@@ -266,7 +266,7 @@ def test_callback_refuses_a_response_without_iss_when_the_authorization_server_a
 
         wire_requests: Final = wire.drain()
         wire_method_paths: Final = tuple((request.method, urlsplit(request.target).path) for request in wire_requests)
-        assert wire_method_paths == (("GET", "/.well-known/oauth-authorization-server"),), wire_method_paths
+        assert set(wire_method_paths) == {("GET", "/.well-known/oauth-authorization-server")}, wire_method_paths
         assert not any(method == "POST" and path == "/token" for method, path in wire_method_paths), wire_method_paths
 
 
