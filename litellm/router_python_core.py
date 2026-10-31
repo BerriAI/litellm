@@ -13269,6 +13269,8 @@ class PythonCore(DeprecatedRouterMembers):
                     and model_info["supports_url_context"] is True
                 ):
                     model_group_info.supports_url_context = True
+                if model_info.get("supports_continuation") is True:
+                    model_group_info.supports_continuation = True
 
                 if model_info.get("supports_reasoning", None) is not None and model_info["supports_reasoning"] is True:
                     model_group_info.supports_reasoning = True
