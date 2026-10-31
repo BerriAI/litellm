@@ -10022,6 +10022,18 @@ def _orphan_answer_with(tool_call_id: object) -> list[dict[str, object]]:
             "dict",
             id="object_assistant_tool_call_id_after_stray_tool_calls_on_a_user_message",
         ),
+        pytest.param(
+            [_ASK, {"role": [], "content": "ok"}, {"role": "system", "content": "Be terse."}],
+            "messages[1].role",
+            "list",
+            id="empty_list_role_before_a_system_message",
+        ),
+        pytest.param(
+            [_ASK, {"role": {}, "content": "ok"}, {"role": "user", "content": "again"}],
+            "messages[1].role",
+            "dict",
+            id="empty_object_role",
+        ),
     ],
 )
 @pytest.mark.parametrize("modify_params", [False, True])
@@ -10169,7 +10181,7 @@ def test_chat_transform_request_never_blames_a_numeric_assistant_tool_call_id_fo
     assert raised.value.message.startswith("'str' object has no attribute 'get'")
 
 
-@pytest.mark.parametrize("empty_role", [[], 0, False])
+@pytest.mark.parametrize("empty_role", [0, False])
 def test_chat_transform_request_never_blames_an_empty_role_for_another_failure(local_model_cost_map, empty_role):
     list_part_type_after_an_empty_role: Final = [
         _ASK,

@@ -193,9 +193,13 @@ def _tool_call_ids_failing(
     )
 
 
-def _non_string_roles(messages: Sequence[object]) -> Iterator[tuple[str, object]]:
+def _roles_failing(messages: Sequence[object], fails: Callable[[object], bool]) -> Iterator[tuple[str, object]]:
     roles: Final = ((index, message_field(message, "role")) for index, message in enumerate(messages))
-    return ((f"messages[{index}].role", role) for index, role in roles if role and is_present_non_string(role))
+    return ((f"messages[{index}].role", role) for index, role in roles if fails(role))
+
+
+def _is_non_empty_non_string(value: object) -> bool:
+    return bool(value) and is_present_non_string(value)
 
 
 def _assistant_tool_call_ids_failing(
@@ -224,13 +228,14 @@ def _is_non_string_value_behind(error: AttributeError, value: object) -> bool:
     return is_present_non_string(value) and value is error.obj
 
 
-def _tool_call_ids_behind(messages: Sequence[object], error: Exception) -> Iterable[tuple[str, object]]:
+def _fields_behind(messages: Sequence[object], error: Exception) -> Iterable[tuple[str, object]]:
     match error:
         case TypeError():
             caused_error: Final = partial(is_unhashable_value_behind, error)
             return chain(
                 _assistant_tool_call_ids_failing(messages, caused_error),
                 _tool_answer_ids_failing(messages, caused_error),
+                _roles_failing(messages, caused_error),
             )
         case AttributeError():
             return _assistant_tool_call_ids_failing(messages, partial(_is_non_string_value_behind, error))
@@ -239,7 +244,9 @@ def _tool_call_ids_behind(messages: Sequence[object], error: Exception) -> Itera
 
 
 def non_string_message_field_error(messages: Sequence[object], error: Exception) -> AnthropicError | None:
-    malformed_field: Final = next(chain(_non_string_roles(messages), _tool_call_ids_behind(messages, error)), None)
+    malformed_field: Final = next(
+        chain(_roles_failing(messages, _is_non_empty_non_string), _fields_behind(messages, error)), None
+    )
     if malformed_field is None:
         return None
     return AnthropicError(status_code=400, message=invalid_type_message(*malformed_field))
