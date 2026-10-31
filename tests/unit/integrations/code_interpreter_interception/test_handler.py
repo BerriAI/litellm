@@ -5,6 +5,7 @@ All sandbox dependencies are injected: a FakeSandbox stands in for the real e2b
 config and records how it is called.
 """
 
+import asyncio
 import time
 from typing import Final
 
@@ -1521,41 +1522,85 @@ _SESSION_PLAN_SURFACES: Final = (
 )
 
 
+async def _build_session_plan(logger, request_id, surface_kwargs=None, response=None):
+    return await logger.async_build_agentic_loop_plan(
+        tools={
+            "tool_calls": [
+                {
+                    "id": "call_1",
+                    "call_id": "c1",
+                    "name": LITELLM_CODE_EXECUTION_TOOL_NAME,
+                    "arguments": '{"code":"print(1)"}',
+                }
+            ]
+        },
+        model="gpt-5",
+        messages=[{"role": "user", "content": "x"}],
+        response=response or FakeResponse(output=[_function_call_item()]),
+        anthropic_messages_provider_config=None,
+        anthropic_messages_optional_request_params={"tools": []},
+        logging_obj=FakeLogging(litellm_call_id=request_id),
+        stream=False,
+        kwargs={
+            "litellm_call_id": request_id,
+            _SANDBOX_KEY: "conv-1",
+            _SESSION_SCOPED_KEY: True,
+            **(surface_kwargs or {}),
+        },
+    )
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(("surface_kwargs", "response"), _SESSION_PLAN_SURFACES)
 async def test_a_session_sandbox_whose_code_run_fails_is_not_reused_by_the_next_request(surface_kwargs, response):
     sandbox: Final = _SandboxThatCannotRunCode()
     logger: Final = CodeInterpreterInterceptionLogger(sandbox_config=sandbox)
 
-    for request_id in ("req1", "req2"):
-        await logger.async_build_agentic_loop_plan(
-            tools={
-                "tool_calls": [
-                    {
-                        "id": "call_1",
-                        "call_id": "c1",
-                        "name": LITELLM_CODE_EXECUTION_TOOL_NAME,
-                        "arguments": '{"code":"print(1)"}',
-                    }
-                ]
-            },
-            model="gpt-5",
-            messages=[{"role": "user", "content": "x"}],
-            response=response,
-            anthropic_messages_provider_config=None,
-            anthropic_messages_optional_request_params={"tools": []},
-            logging_obj=FakeLogging(litellm_call_id=request_id),
-            stream=False,
-            kwargs={
-                "litellm_call_id": request_id,
-                _SANDBOX_KEY: "conv-1",
-                _SESSION_SCOPED_KEY: True,
-                **surface_kwargs,
-            },
-        )
+    await _build_session_plan(logger, "req1", surface_kwargs, response)
+    await _build_session_plan(logger, "req2", surface_kwargs, response)
 
     assert len(sandbox.create_calls) == 2
     assert len(sandbox.delete_calls) == 2
+
+
+class _SandboxWhoseFirstContainerDies(FakeSandbox):
+    def __init__(self):
+        super().__init__()
+        self.handles = []
+        self.first_run_started = asyncio.Event()
+        self.first_run_may_finish = asyncio.Event()
+
+    async def acreate_sandbox(self, **kwargs):
+        self.create_calls.append(kwargs)
+        handle = FakeHandle(sandbox_id=f"sbx_{len(self.handles)}")
+        self.handles.append(handle)
+        return handle
+
+    async def arun_code(self, *, container, code, **kwargs):
+        self.run_calls.append({"container": container, "code": code})
+        if len(self.run_calls) == 1:
+            self.first_run_started.set()
+            await self.first_run_may_finish.wait()
+        if container is self.handles[0]:
+            raise TimeoutError("sandbox expired")
+        return CodeExecutionResult(stdout=self.stdout)
+
+
+@pytest.mark.asyncio
+async def test_a_late_failure_on_a_dead_session_sandbox_keeps_its_healthy_replacement():
+    sandbox: Final = _SandboxWhoseFirstContainerDies()
+    logger: Final = CodeInterpreterInterceptionLogger(sandbox_config=sandbox)
+
+    slow_request: Final = asyncio.create_task(_build_session_plan(logger, "req-slow"))
+    await sandbox.first_run_started.wait()
+    await _build_session_plan(logger, "req-fails-fast")
+    await _build_session_plan(logger, "req-gets-replacement")
+    sandbox.first_run_may_finish.set()
+    await slow_request
+    await _build_session_plan(logger, "req-after")
+
+    assert [call["container"] for call in sandbox.delete_calls] == [sandbox.handles[0]]
+    assert [call["container"] for call in sandbox.run_calls[-2:]] == [sandbox.handles[1], sandbox.handles[1]]
 
 
 def _anthropic_message(content: list[dict[str, object]], stop_reason: str) -> dict[str, object]:
