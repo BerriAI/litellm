@@ -35,6 +35,7 @@ from litellm.proxy.health_endpoints._health_endpoints import (
 from litellm.proxy.health_endpoints._health_endpoints import (
     test_model_connection as health_test_model_connection,
 )
+from litellm.proxy.utils import PrismaClient
 from litellm.router import Router
 from litellm.types.router import RouterModelGroupAliasItem
 from litellm.types.utils import oauth_token_exchange_litellm_params
@@ -47,6 +48,7 @@ from tests._master_key import MASTER_KEY
 
 # Import shared proxy test helpers from conftest
 from tests.unit.proxy.conftest import create_proxy_test_client
+from tests.unit.proxy.db.fake_prisma_engine import engine_call
 
 
 @pytest.mark.asyncio
@@ -6252,3 +6254,130 @@ async def test_unsaved_chatgpt_account_probe_requires_proxy_admin(
                 await call
             assert error.value.code == "403"
             assert len(upstream.calls) == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("deployment_statuses", "expected_status", "healthy_count", "unhealthy_count"),
+    [
+        (("healthy", "healthy"), "healthy", 2, 0),
+        (("healthy", "unhealthy"), "healthy", 1, 1),
+        (("unhealthy", "unhealthy"), "unhealthy", 0, 2),
+        (("unhealthy", None), "unknown", 0, 1),
+        ((None, None), "unknown", 0, 0),
+    ],
+)
+@pytest.mark.parametrize("alias_layer", ["router", "key", "team", "hierarchical-router"])
+@pytest.mark.parametrize("check_granularity", ["deployment", "group"])
+async def test_latest_health_resolves_aliases_and_aggregates_their_deployments(
+    monkeypatch, deployment_statuses, expected_status, healthy_count, unhealthy_count, alias_layer, check_granularity
+):
+    from litellm.proxy import proxy_server
+
+    checked_at: Final = "2026-10-31T12:00:00+00:00"
+    model_list: Final = [
+        {
+            "model_name": "chat",
+            "litellm_params": {"model": "openai/gpt-5.6"},
+            "model_info": {"id": f"chat-{index}"},
+        }
+        for index in range(2)
+    ]
+    llm_router: Final = Router(
+        model_list=model_list,
+        model_group_alias={"default": {"model": "chat", "hidden": False}} if alias_layer == "router" else {},
+    )
+    deployment_rows: Final = [
+        {
+            "health_check_id": f"check-{index}",
+            "model_name": "chat",
+            "model_id": f"chat-{index}",
+            "status": health_status,
+            "healthy_count": int(health_status == "healthy"),
+            "unhealthy_count": int(health_status == "unhealthy"),
+            "checked_at": checked_at,
+            "created_at": checked_at,
+            "updated_at": checked_at,
+        }
+        for index, health_status in enumerate(deployment_statuses)
+        if health_status is not None
+    ]
+    rows: Final = (
+        [{**deployment_rows[0], "model_id": None, "healthy_count": healthy_count, "unhealthy_count": unhealthy_count}]
+        if check_granularity == "group" and deployment_rows
+        else deployment_rows
+    )
+    prisma: Final = PrismaClient(
+        database_url="postgresql://localhost/test", proxy_logging_obj=proxy_server.proxy_logging_obj
+    )
+    monkeypatch.setattr(prisma, "db", SimpleNamespace(query_raw=engine_call(rows)))
+    caller: Final = UserAPIKeyAuth(
+        models=["chat"],
+        aliases={"default": "chat"} if alias_layer == "key" else {},
+        team_model_aliases={"default": "chat"} if alias_layer == "team" else {},
+        router_settings={"model_group_alias": {"default": "chat"}} if alias_layer == "hierarchical-router" else {},
+    )
+
+    with _proxy_health_globals(model_list, llm_router, prisma_client=prisma):
+        result: Final = await _health_endpoints_module.latest_health_checks_endpoint(user_api_key_dict=caller)
+
+    expected_health: Final = {
+        "status": expected_status,
+        "healthy_count": healthy_count,
+        "unhealthy_count": unhealthy_count,
+        "checked_at": checked_at if rows else None,
+    }
+    assert result["model_health"] == {"chat": expected_health, "default": expected_health}
+    assert result["total_models"] == len(rows)
+    assert result["latest_health_checks"] == {
+        row["model_id"] or row["model_name"]: {
+            **{key: value for key, value in row.items() if key != "updated_at"},
+            "error_message": None,
+            "response_time_ms": None,
+            "details": None,
+            "checked_by": None,
+        }
+        for row in rows
+    }
+
+
+@pytest.mark.asyncio
+async def test_latest_health_alias_uses_current_target_and_omits_inaccessible_aliases(monkeypatch):
+    from litellm.proxy import proxy_server
+
+    checked_at: Final = "2026-10-31T12:00:00+00:00"
+    llm_router: Final = Router(
+        model_list=[
+            {"model_name": name, "litellm_params": {"model": "openai/gpt-5.6"}, "model_info": {"id": name}}
+            for name in ("old", "current", "private")
+        ],
+        model_group_alias={"default": "current", "restricted": "private"},
+    )
+    rows: Final = [
+        {
+            "health_check_id": name,
+            "model_name": "current" if name == "deleted" else name,
+            "model_id": name,
+            "status": "healthy" if name in ("old", "deleted") else "unhealthy",
+            "healthy_count": int(name in ("old", "deleted")),
+            "unhealthy_count": int(name not in ("old", "deleted")),
+            "checked_at": checked_at,
+            "created_at": checked_at,
+            "updated_at": checked_at,
+        }
+        for name in ("old", "current", "private", "deleted")
+    ]
+    prisma: Final = PrismaClient(
+        database_url="postgresql://localhost/test", proxy_logging_obj=proxy_server.proxy_logging_obj
+    )
+    monkeypatch.setattr(prisma, "db", SimpleNamespace(query_raw=engine_call(rows)))
+
+    with _proxy_health_globals([], llm_router, prisma_client=prisma):
+        result: Final = await _health_endpoints_module.latest_health_checks_endpoint(
+            user_api_key_dict=UserAPIKeyAuth(models=["current"])
+        )
+
+    assert result["model_health"] == {
+        name: {"status": "unhealthy", "healthy_count": 0, "unhealthy_count": 1, "checked_at": checked_at}
+        for name in ("current", "default")
+    }
