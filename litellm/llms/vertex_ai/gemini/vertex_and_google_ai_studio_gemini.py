@@ -527,10 +527,20 @@ def _namespace_members_or_tool(tool: JsonValue) -> tuple[JsonValue, ...]:
     return tuple(map(_as_chat_tool, members)) if isinstance(members, list) else ()
 
 
+def _declared_function_name(tool: JsonValue) -> str | None:
+    if not isinstance(tool, dict):
+        return None
+    function: Final = tool.get("function")
+    name: Final = function.get("name") if isinstance(function, dict) else tool.get("name")
+    return name if isinstance(name, str) else None
+
+
 def _with_namespace_members_inlined(tools: JsonValue) -> JsonValue:
     if not isinstance(tools, list):
         return tools
-    return list(chain.from_iterable(map(_namespace_members_or_tool, tools)))
+    inlined: Final = tuple(chain.from_iterable(map(_namespace_members_or_tool, tools)))
+    names: Final = tuple(name for name in map(_declared_function_name, inlined) if name is not None)
+    return list(inlined) if len(names) == len(frozenset(names)) else tools
 
 
 class VertexAIBaseConfig:

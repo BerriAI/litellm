@@ -1818,6 +1818,30 @@ def test_vertex_ai_map_tools_declares_a_namespace_member_like_the_same_chat_tool
     assert from_namespace == from_chat_tool
 
 
+_GET_WEATHER = {"type": "function", "name": "get_weather", "parameters": {"type": "object", "properties": {}}}
+
+
+@pytest.mark.parametrize(
+    "tools",
+    [
+        [
+            {"type": "namespace", "name": "forecast", "tools": [_GET_WEATHER]},
+            {"type": "namespace", "name": "weather", "tools": [_GET_WEATHER]},
+        ],
+        [
+            {"type": "function", "function": {k: v for k, v in _GET_WEATHER.items() if k != "type"}},
+            {"type": "namespace", "name": "weather", "tools": [_GET_WEATHER]},
+        ],
+    ],
+    ids=["namespaces_share_a_member", "member_repeats_a_top_level_tool"],
+)
+def test_vertex_ai_map_tools_never_declares_a_function_name_twice_for_namespaces(tools: list[dict]) -> None:
+    mapped = VertexGeminiConfig().map_function(value=tools, optional_params={})
+
+    names = [declaration["name"] for declaration in mapped[0]["function_declarations"]]
+    assert len(names) == len(set(names)) == 2
+
+
 def test_vertex_ai_map_tool_with_anyof():
     """
     Related issue: https://github.com/BerriAI/litellm/issues/11164
