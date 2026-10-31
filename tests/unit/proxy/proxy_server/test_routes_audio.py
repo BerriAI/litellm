@@ -10,17 +10,23 @@ Pins (PR2):
 from __future__ import annotations
 
 import io
+from collections.abc import Callable
+from contextlib import AbstractContextManager
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import pytest
 from fastapi import HTTPException
+from fastapi.testclient import TestClient
 
 from litellm import Router
 from litellm.proxy import proxy_server
 from litellm.proxy._types import ProxyErrorTypes, ProxyException
+from litellm.proxy.common_utils.http_parsing_utils import get_form_data
 from litellm.types.llms.openai import HttpxBinaryResponseContent
 from litellm.types.router import RouterErrors
+from litellm.types.utils import TranscriptionResponse
 
 _TAG_ROUTING_DENIAL = f"{RouterErrors.no_deployments_with_tag_routing.value}. Passed model=tts-1 and tags=['x']"
 
@@ -125,9 +131,7 @@ def patched_transcription(monkeypatch):
         return data
 
     monkeypatch.setattr(proxy_server, "add_litellm_data_to_request", _add_data)
-    monkeypatch.setattr(
-        proxy_server, "check_file_size_under_limit", lambda **kwargs: True
-    )
+    monkeypatch.setattr(proxy_server, "check_file_size_under_limit", lambda **kwargs: True)
 
     async def _form_data(request):
         from starlette.datastructures import FormData, UploadFile
@@ -151,12 +155,65 @@ def patched_transcription(monkeypatch):
 
 
 @pytest.fixture
-def patched_transcription_error(monkeypatch, patched_transcription):
+def patched_transcription_error(monkeypatch: pytest.MonkeyPatch, patched_transcription: None) -> AsyncMock:
+    monkeypatch.setattr(proxy_server, "get_form_data", get_form_data)
+
     async def _raise(*args, **kwargs):
         raise ValueError("transcription boom")
 
-    monkeypatch.setattr(proxy_server, "route_request", _raise)
-    yield
+    route_request: Final[AsyncMock] = AsyncMock(side_effect=_raise)
+    monkeypatch.setattr(proxy_server, "route_request", route_request)
+    return route_request
+
+
+@pytest.fixture
+def patched_transcription_http(monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest):
+    transcript: Final = getattr(request, "param", "hello world")
+    router: Final = MagicMock()
+    router.model_names = ["whisper-1"]
+    router.get_deployment_by_model_group_name.return_value = None
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+
+    async def _response_headers(data: dict[str, object], **kwargs: object) -> dict[str, str]:
+        return {
+            "x-callback-trace": "callback-value",
+            **(
+                {"Content-Type": "application/json", "Content-Length": "999"}
+                if data.get("response_format") == "text"
+                else {}
+            ),
+        }
+
+    monkeypatch.setattr(
+        proxy_server,
+        "proxy_logging_obj",
+        MagicMock(
+            pre_call_hook=AsyncMock(side_effect=lambda **kw: kw["data"]),
+            post_call_failure_hook=AsyncMock(),
+            post_call_response_headers_hook=AsyncMock(side_effect=_response_headers),
+            update_request_status=AsyncMock(),
+        ),
+    )
+
+    async def _add_data(data: dict[str, object], **kwargs: object) -> dict[str, object]:
+        return data
+
+    monkeypatch.setattr(proxy_server, "add_litellm_data_to_request", _add_data)
+
+    async def _llm_call() -> TranscriptionResponse | dict[str, str]:
+        if not isinstance(transcript, str):
+            return {"text": "not a TranscriptionResponse"}
+        response: Final = TranscriptionResponse(text=transcript)
+        response.hidden_params = {
+            "litellm_call_id": "transcription-call-id",
+            "model_id": "transcription-model-id",
+            "cache_key": "transcription-cache-key",
+        }
+        return response
+
+    route_request: Final[AsyncMock] = AsyncMock(return_value=_llm_call())
+    monkeypatch.setattr(proxy_server, "route_request", route_request)
+    return transcript, route_request
 
 
 @pytest.mark.parametrize("path", ["/v1/audio/speech", "/audio/speech"])
@@ -351,11 +408,121 @@ def test_audio_transcription_keeps_the_status_of_a_proxy_rejection(
 
 
 @pytest.mark.parametrize("path", ["/v1/audio/transcriptions", "/audio/transcriptions"])
-def test_audio_transcription_error(client, auth_as, patched_transcription_error, path):
+@pytest.mark.parametrize("response_format", [None, "text"], ids=["default", "text"])
+def test_audio_transcription_error(
+    client: TestClient,
+    auth_as: Callable[..., AbstractContextManager[None]],
+    patched_transcription_error: AsyncMock,
+    path: str,
+    response_format: str | None,
+) -> None:
     """Pins ``POST /v1/audio/transcriptions`` / ``POST /audio/transcriptions`` (error)."""
-    files = {"file": ("audio.mp3", b"\x00\x01\x02", "audio/mpeg")}
-    data = {"model": "whisper-1"}
+    files: Final = {"file": ("audio.mp3", b"\x00\x01\x02", "audio/mpeg")}
+    data: Final[dict[str, str]] = {"model": "whisper-1"} | (
+        {"response_format": response_format} if response_format is not None else {}
+    )
     with auth_as():
-        response = client.post(path, files=files, data=data)
+        response: Final = client.post(
+            path,
+            files=files,
+            data=data,
+            headers={"x-litellm-call-id": "transcription-request-id"},
+        )
     assert response.status_code == 500
-    assert len(response.content) > 0
+    assert response.headers["content-type"] == "application/json"
+    assert response.headers["x-litellm-call-id"] == "transcription-request-id"
+    assert response.json() == {
+        "error": {
+            "message": "transcription boom",
+            "type": "internal_server_error",
+            "param": None,
+            "code": "500",
+        }
+    }
+    route_request_call: Final = patched_transcription_error.await_args
+    assert route_request_call is not None
+    assert route_request_call.kwargs["data"].get("response_format") == response_format
+
+
+@pytest.mark.parametrize("path", ["/v1/audio/transcriptions", "/audio/transcriptions"], ids=["v1", "alias"])
+@pytest.mark.parametrize(
+    "patched_transcription_http",
+    ["hello world", "Grüße, 世界\nline two\n", ""],
+    indirect=True,
+    ids=["plain", "unicode-multiline", "empty"],
+)
+def test_audio_transcription_text_format_returns_plain_text(client, auth_as, patched_transcription_http, path):
+    transcript, route_request = patched_transcription_http
+    files: Final = {"file": ("audio.mp3", b"\x00\x01\x02", "audio/mpeg")}
+    data: Final = {"model": "whisper-1", "response_format": "text"}
+    with auth_as():
+        response: Final = client.post(
+            path,
+            files=files,
+            data=data,
+            headers={"x-litellm-call-id": "request-call-id"},
+        )
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "text/plain; charset=utf-8"
+    assert response.content == transcript.encode("utf-8")
+    assert response.headers["content-length"] == str(len(transcript.encode("utf-8")))
+    assert response.headers["x-litellm-call-id"] == "transcription-call-id"
+    assert response.headers["x-litellm-model-id"] == "transcription-model-id"
+    assert response.headers["x-litellm-cache-key"] == "transcription-cache-key"
+    assert response.headers["x-callback-trace"] == "callback-value"
+    assert route_request.await_args.kwargs["data"]["response_format"] == "text"
+
+
+@pytest.mark.parametrize("path", ["/v1/audio/transcriptions", "/audio/transcriptions"], ids=["v1", "alias"])
+@pytest.mark.parametrize("response_format", [None, "json"], ids=["default", "json"])
+def test_audio_transcription_json_formats_keep_body_and_headers(
+    client, auth_as, patched_transcription_http, path, response_format
+):
+    transcript, route_request = patched_transcription_http
+    files: Final = {"file": ("audio.mp3", b"\x00\x01\x02", "audio/mpeg")}
+    data: Final = {"model": "whisper-1"} | ({"response_format": response_format} if response_format is not None else {})
+    with auth_as():
+        response: Final = client.post(
+            path,
+            files=files,
+            data=data,
+            headers={"x-litellm-call-id": "request-call-id"},
+        )
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "application/json"
+    assert response.json() == {"text": transcript, "usage": None}
+    assert response.headers["x-litellm-call-id"] == "transcription-call-id"
+    assert response.headers["x-litellm-model-id"] == "transcription-model-id"
+    assert response.headers["x-litellm-cache-key"] == "transcription-cache-key"
+    assert response.headers["x-callback-trace"] == "callback-value"
+    assert route_request.await_args.kwargs["data"].get("response_format") == response_format
+
+
+@pytest.mark.parametrize("path", ["/v1/audio/transcriptions", "/audio/transcriptions"], ids=["v1", "alias"])
+@pytest.mark.parametrize("patched_transcription_http", [None], indirect=True, ids=["malformed-response"])
+def test_audio_transcription_text_format_rejects_malformed_response(
+    client: TestClient,
+    auth_as: Callable[..., AbstractContextManager[None]],
+    patched_transcription_http: tuple[object, AsyncMock],
+    path: str,
+):
+    files: Final = {"file": ("audio.mp3", b"\x00\x01\x02", "audio/mpeg")}
+    data: Final = {"model": "whisper-1", "response_format": "text"}
+    with auth_as():
+        response: Final = client.post(path, files=files, data=data)
+
+    assert response.status_code == 500
+    assert response.headers["content-type"] == "application/json"
+    assert response.json() == {
+        "error": {
+            "message": "Audio transcription response must be a TranscriptionResponse",
+            "type": "internal_server_error",
+            "param": None,
+            "code": "500",
+        }
+    }
+    logging_obj: Final = proxy_server.proxy_logging_obj
+    assert isinstance(logging_obj, MagicMock)
+    failure_hook: Final = logging_obj.post_call_failure_hook
+    assert isinstance(failure_hook, AsyncMock)
+    assert failure_hook.await_count == 1

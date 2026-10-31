@@ -207,6 +207,7 @@ from litellm.types.utils import (
     TextCompletionResponse,
     TokenCountMessagesFormat,
     TokenCountResponse,
+    TranscriptionResponse,
     echoed_cost_map_pricing_fields,
     is_server_derived_pricing_key,
     pricing_override_fields,
@@ -1109,6 +1110,7 @@ from fastapi.responses import (
     HTMLResponse,
     JSONResponse,
     ORJSONResponse,
+    PlainTextResponse,
     RedirectResponse,
     StreamingResponse,
 )
@@ -13580,6 +13582,7 @@ async def audio_transcriptions(
     try:
         # Use orjson to parse JSON data, orjson speeds up requests significantly
         form_data: Final = await get_form_data(request)
+        requested_response_format: Final = form_data.get("response_format")
         data = {**_form_fields_without_file(form_data), **data}
 
         # Include original request and headers in the data
@@ -13677,6 +13680,16 @@ async def audio_transcriptions(
         )
         if callback_headers:
             fastapi_response.headers.update(callback_headers)
+
+        if requested_response_format == "text":
+            response_headers: Final = {
+                key: value
+                for key, value in fastapi_response.headers.items()
+                if key.lower() not in {"content-type", "content-length"}
+            }
+            if not isinstance(response, TranscriptionResponse):
+                raise TypeError("Audio transcription response must be a TranscriptionResponse")
+            return PlainTextResponse(content=response.text or "", headers=response_headers)
 
         return response
     except Exception as e:
