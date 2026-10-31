@@ -57,9 +57,9 @@ def test_build_responses_kwargs_never_asks_the_nested_call_to_replay_a_stream():
     [
         ("openai/gpt-5.6-luna", "openai", False),
         ("azure/gpt-5.6-luna", "azure", False),
-        # Perplexity's Responses API declares no parallel_tool_calls: the flag stays behind instead of a 400
         ("perplexity/sonar", "perplexity", None),
     ],
+    ids=["openai-declares", "azure-declares", "perplexity-declares-no-parallel-tool-calls-stays-behind"],
 )
 def test_build_responses_kwargs_maps_disable_parallel_tool_use_only_where_the_provider_declares_it(
     model: str, custom_llm_provider: str, expected_parallel_tool_calls: bool | None

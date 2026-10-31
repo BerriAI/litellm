@@ -5537,10 +5537,17 @@ async def test_chat_bridge_tool_result_text_block_without_text_reaches_the_model
         ({"type": "auto", "disable_parallel_tool_use": True}, "openai/gpt-oss-120b", "groq", False),
         ({"type": "auto", "disable_parallel_tool_use": False}, "gpt-5.4", "openai", None),
         ({"type": "auto"}, "gpt-5.4", "openai", None),
-        # cohere_chat declares no parallel_tool_calls: the flag stays behind instead of raising UnsupportedParamsError
         ({"type": "auto", "disable_parallel_tool_use": True}, "command-a-03-2025", "cohere_chat", None),
-        # no resolved provider (logging and guardrail callers): the flag stays behind as before
         ({"type": "auto", "disable_parallel_tool_use": True}, "gpt-5.4", None, None),
+    ],
+    ids=[
+        "openai-auto-disabled",
+        "openai-any-disabled",
+        "groq-auto-disabled",
+        "openai-auto-enabled",
+        "openai-auto-omitted",
+        "cohere-declares-no-parallel-tool-calls-stays-behind",
+        "no-provider-stays-behind",
     ],
 )
 def test_translate_anthropic_to_openai_disable_parallel_tool_use_sets_parallel_tool_calls(
