@@ -268,3 +268,54 @@ def test_mlflow_end_span_or_trace_works_with_mlflow_2x_client():
             span=child_span, outputs="out", end_time_ns=1, status="OK"
         )
         assert client.ended_spans == [("req-2", "span-2")]
+
+
+class _ExceptionSpanEvent:
+    def __init__(self, name, attributes):
+        self.name = name
+        self.attributes = attributes
+
+    @classmethod
+    def from_exception(cls, exception):
+        return cls(
+            "exception",
+            {
+                "exception.message": str(exception),
+                "exception.type": type(exception).__name__,
+                "exception.stacktrace": "raw",
+            },
+        )
+
+
+@pytest.mark.parametrize("scrubbed", [True, False], ids=["scrubbed", "not_scrubbed"])
+def test_mlflow_failure_event_records_the_error_text_the_payload_logged(scrubbed):
+    secret = "my ssn is 123-45-6789"
+    modules = _mock_mlflow_modules()
+    modules["mlflow.entities"].SpanEvent = _ExceptionSpanEvent
+    with patch.dict("sys.modules", modules):
+        from litellm.integrations.mlflow import MlflowLogger
+
+        mlflow_logger = MlflowLogger()
+        span = MagicMock()
+        mlflow_logger._start_span_or_trace = MagicMock(return_value=span)
+        mlflow_logger._end_span_or_trace = MagicMock()
+        mlflow_logger._extract_and_set_chat_attributes = MagicMock()
+        error_message = "bad input: redacted-by-litellm" if scrubbed else f"bad input: {secret}"
+
+        mlflow_logger._handle_failure(
+            kwargs={
+                "litellm_call_id": "x",
+                "exception": ValueError(f"bad input: {secret}"),
+                "standard_logging_object": {
+                    "error_information": {"error_message": error_message, "traceback": "frames"}
+                },
+            },
+            response_obj=None,
+            start_time=datetime(2025, 1, 1),
+            end_time=datetime(2025, 1, 1),
+        )
+
+        event = span.add_event.call_args.args[0]
+        assert event.attributes["exception.type"] == "ValueError"
+        assert event.attributes["exception.message"] == error_message
+        assert event.attributes["exception.stacktrace"] == ("frames" if scrubbed else "raw")
