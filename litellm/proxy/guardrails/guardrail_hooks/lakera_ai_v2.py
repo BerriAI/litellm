@@ -15,6 +15,7 @@ from litellm.integrations.custom_guardrail import (
     DEFAULT_ADVISORY_MESSAGE,
     CustomGuardrail,
 )
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.llms.base_llm.guardrail_translation.utils import (
     effective_skip_system_message_for_guardrail,
     effective_skip_tool_message_for_guardrail,
@@ -39,10 +40,22 @@ from litellm.types.proxy.guardrails.guardrail_hooks.lakera_ai_v2 import (
     LakeraAIRequest,
     LakeraAIResponse,
 )
-from litellm.types.utils import CallTypesLiteral, GuardrailStatus, ModelResponse
+from litellm.types.utils import CallTypes, CallTypesLiteral, GuardrailStatus, ModelResponse
 
 _DECODED_JSON: Final = TypeAdapter(object)
 _RESPONSE_FIELDS: Final = TypeAdapter(Mapping[str, object])
+_OBJECT_LIST: Final = TypeAdapter(list[object])
+
+_GEMINI_ROLES: Final[Mapping[str, str]] = MappingProxyType({"user": "user", "model": "assistant", "function": "tool"})
+_GEMINI_BODY_CALL_TYPES: Final = frozenset(
+    {
+        CallTypes.pass_through.value,
+        CallTypes.generate_content.value,
+        CallTypes.agenerate_content.value,
+        CallTypes.generate_content_stream.value,
+        CallTypes.agenerate_content_stream.value,
+    }
+)
 
 _DETECTOR_CATEGORY_PHRASES: Final[Mapping[str, str]] = MappingProxyType(
     {
@@ -199,6 +212,7 @@ def _unmaskable_reason(
     guardrail: "LakeraAIGuardrail",
     data: dict[str, object],
     lakera_response: LakeraAIResponse | None,
+    call_type: str,
 ) -> str | None:
     """Why a PII-only violation on ``data`` can't be masked in place, or None when it can."""
     if has_non_string_content(data):
@@ -207,6 +221,8 @@ def _unmaskable_reason(
         return "messages and input are both present, so the write-back is positionally ambiguous"
     if "messages" in data and not isinstance(data.get("messages"), list):
         return "a messages key that isn't a list, so there's nothing to merge the redacted content into"
+    if _has_gemini_contents(data, call_type):
+        return "Gemini contents, which have no write-back path for the redacted content"
     if not _has_responses_instructions(guardrail, data):
         return "no write-back path for the redacted content"
     if not (lakera_response or {}).get("payload"):
@@ -214,25 +230,78 @@ def _unmaskable_reason(
     return None
 
 
-def _build_lakera_inspection_messages(data: Mapping[str, object]) -> Sequence[Mapping[str, str]]:
+def _gemini_items(value: object) -> Sequence[object]:
+    """A repeated Gemini field as a sequence: a JSON array, or the single object Google also accepts in its place."""
+    single: Final = as_str_mapping(value)
+    if single is not None:
+        return (single,)
+    return _OBJECT_LIST.validate_python(value) if isinstance(value, list) else ()
+
+
+def _gemini_text(content: object) -> str:
+    """Join the text parts of one Gemini ``Content`` object, skipping inline data, files and function calls."""
+    parts: Final = _gemini_items((as_str_mapping(content) or {}).get("parts"))
+    texts: Final = ((as_str_mapping(part) or {}).get("text") for part in parts)
+    return "\n".join(text for text in texts if isinstance(text, str) and text)
+
+
+def _has_gemini_contents(data: object, call_type: str | None) -> bool:
+    """True if ``data`` is a Gemini ``generateContent`` body on a pass-through or Google ``generateContent`` call,
+    which carries its prompt in ``contents`` and ``systemInstruction``. A pass-through body with chat ``messages`` or
+    Responses ``input`` is read as chat, as before."""
+    fields: Final = as_str_mapping(data) or {}
+    return (
+        call_type in _GEMINI_BODY_CALL_TYPES
+        and not (call_type == CallTypes.pass_through.value and ("messages" in fields or "input" in fields))
+        and (
+            isinstance(fields.get("contents"), list | dict)
+            or isinstance(fields.get("systemInstruction") or fields.get("system_instruction"), dict)
+        )
+    )
+
+
+def _gemini_inspection_messages(data: Mapping[str, object], call_type: str | None) -> Sequence[Mapping[str, str]]:
+    """Chat-style messages for a Gemini ``generateContent`` body on a pass-through or Google ``generateContent``
+    call: ``systemInstruction`` first as a system message, then each ``contents`` turn with its text parts joined and
+    ``model`` read as ``assistant``. Turns with no text are dropped."""
+    if not _has_gemini_contents(data, call_type):
+        return []
+    system_text: Final = _gemini_text(data.get("systemInstruction") or data.get("system_instruction"))
+    turns: Final = (
+        {"role": _GEMINI_ROLES.get(str(content.get("role") or "user"), "user"), "content": _gemini_text(content)}
+        for content in map(as_str_mapping, _gemini_items(data.get("contents")))
+        if content is not None
+    )
+    return [
+        *([{"role": "system", "content": system_text}] if system_text else []),
+        *(turn for turn in turns if turn["content"]),
+    ]
+
+
+def _build_lakera_inspection_messages(
+    data: Mapping[str, object], *, call_type: str | None = None
+) -> Sequence[Mapping[str, str]]:
     """Like build_inspection_messages, but also covers the Responses-API
     ``instructions`` field, placed first since litellm later converts it
     into the model's leading system message and a prompt-injection detector
-    should see the same conversation order the model actually receives.
+    should see the same conversation order the model actually receives, and
+    a Gemini ``generateContent`` body's ``systemInstruction`` and ``contents``.
 
     Kept local to Lakera rather than folded into the shared
     _content_utils.build_inspection_messages helper: doing that once made
     ``instructions`` visible to every guardrail sharing that helper (AIM,
     presidio, bedrock, ...), but only Lakera has a masking-safety-guard
-    (_has_responses_instructions) accounting for apply_redacted_messages_back
-    having no write-back path for data["instructions"] -- other guardrails
-    would have silently mishandled a PII/redaction hit found there."""
+    (_has_responses_instructions, _has_gemini_contents) accounting for
+    apply_redacted_messages_back having no write-back path for
+    data["instructions"] or data["contents"] -- other guardrails would have
+    silently mishandled a PII/redaction hit found there."""
     instructions: Final = data.get("instructions")
     leading: Final[Sequence[Mapping[str, str]]] = (
         [{"role": "system", "content": instructions}] if isinstance(instructions, str) and instructions else []
     )
     return [
         *leading,
+        *_gemini_inspection_messages(data, call_type),
         *build_inspection_messages(dict(data)),
     ]
 
@@ -508,6 +577,7 @@ class LakeraAIGuardrail(CustomGuardrail):
         inspected_messages: Sequence[AllMessageValues],
         lakera_response: LakeraAIResponse | None,
         masked_entity_count: dict[str, int],
+        call_type: str,
     ) -> bool:
         """Mask a body whose only obstacle to mask-in-place is the Responses-API
         ``instructions`` field, writing the redacted instructions straight into
@@ -515,7 +585,7 @@ class LakeraAIGuardrail(CustomGuardrail):
         that field and would fold the instructions text into ``data["input"]``.
         Returns False without masking anything when _unmaskable_reason names an
         obstacle this can't get around."""
-        if _unmaskable_reason(self, data, lakera_response) is not None:
+        if _unmaskable_reason(self, data, lakera_response, call_type) is not None:
             return False
         redacted: Final = self._mask_pii_in_messages(
             messages=inspected_messages,
@@ -547,7 +617,7 @@ class LakeraAIGuardrail(CustomGuardrail):
             return data
 
         # Covers multimodal list content + Responses-API input/instructions.
-        inspection_messages: Final = _build_lakera_inspection_messages(data)
+        inspection_messages: Final = _build_lakera_inspection_messages(data, call_type=call_type)
         if not inspection_messages:
             verbose_proxy_logger.warning("Lakera AI: not running guardrail. No inspectable text in data")
             return data
@@ -567,16 +637,19 @@ class LakeraAIGuardrail(CustomGuardrail):
         # redacted result back into data["messages"] by position when
         # messages and input aren't both present at once (build_inspection_messages
         # flattens both into one list, so a position could mean either).
-        # Degrade to block-on-detect in either case. Skip-flag-excluded and
+        # Degrade to block-on-detect in either case, and for a Gemini contents
+        # body, which has no write-back path at all. Skip-flag-excluded and
         # no-text messages, and messages carrying fields beyond role/content
         # (tool_call_id, name, tool_calls, cache_control), are otherwise
         # handled safely by _apply_redacted_messages_back_preserving_fields's
         # scope-index merge, which never touches a message outside the scope
         # it actually redacted instead of reconstructing the list from scratch.
+        is_gemini_body: Final = _has_gemini_contents(data, call_type)  # pyright: ignore[reportUnknownArgumentType]  # hook data is an untyped dict
         is_multimodal_input: Final = (
             has_non_string_content(data)
             or _has_combined_messages_and_input(data)
             or _has_responses_instructions(self, data)
+            or is_gemini_body
         )
 
         #########################################################
@@ -621,7 +694,7 @@ class LakeraAIGuardrail(CustomGuardrail):
                         masked_entity_count=masked_entity_count,
                     )
                     _apply_redacted_messages_back_preserving_fields(self, data, mixed_redacted_messages)
-                advisory_delivered: Final = self.inject_advisory_message(
+                advisory_delivered: Final = not is_gemini_body and self.inject_advisory_message(
                     data, self._build_advisory_message(lakera_guardrail_response)
                 )
                 if advisory_delivered:
@@ -631,9 +704,10 @@ class LakeraAIGuardrail(CustomGuardrail):
                     )
                 else:
                     # Structured Responses-API input (a list, not a plain string)
-                    # has no field this can safely append into -- degrade to
-                    # blocking rather than silently letting the flagged request
-                    # through with no advisory ever reaching the model.
+                    # and a Gemini contents body have no field this can safely
+                    # append into -- degrade to blocking rather than silently
+                    # letting the flagged request through with no advisory ever
+                    # reaching the model.
                     raise self._get_http_exception_for_blocked_guardrail(lakera_guardrail_response)
             elif self.on_flagged == "monitor":
                 # Monitor means "don't block", not "don't redact": a PII-only
@@ -644,6 +718,7 @@ class LakeraAIGuardrail(CustomGuardrail):
                     inspected_messages=new_messages,
                     lakera_response=lakera_guardrail_response,
                     masked_entity_count=masked_entity_count,
+                    call_type=call_type,
                 )
                 if masked_in_place:
                     verbose_proxy_logger.warning(
@@ -653,7 +728,7 @@ class LakeraAIGuardrail(CustomGuardrail):
                     verbose_proxy_logger.error(
                         "Lakera Guardrail: Monitoring mode - PII detected but NOT masked, forwarding unredacted "
                         "content to the model (reason: %s)",
-                        _unmaskable_reason(self, data, lakera_guardrail_response),
+                        _unmaskable_reason(self, data, lakera_guardrail_response, call_type),
                     )
                 else:
                     verbose_proxy_logger.warning(
@@ -684,7 +759,7 @@ class LakeraAIGuardrail(CustomGuardrail):
             return
 
         # Covers multimodal list content + Responses-API input/instructions.
-        inspection_messages: Final = _build_lakera_inspection_messages(data)
+        inspection_messages: Final = _build_lakera_inspection_messages(data, call_type=call_type)
         if not inspection_messages:
             verbose_proxy_logger.warning("Lakera AI: not running guardrail. No inspectable text in data")
             return
