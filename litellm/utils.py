@@ -363,6 +363,10 @@ if TYPE_CHECKING:
         get_llm_provider,
         is_non_openai_azure_model,
     )
+    from litellm.litellm_core_utils.get_retry_from_policy import (
+        get_num_retries_from_retry_policy,
+        reset_retry_policy,
+    )
     from litellm.litellm_core_utils.get_supported_openai_params import (
         get_supported_openai_params,
     )
@@ -455,10 +459,6 @@ if TYPE_CHECKING:
     )
     from litellm.llms.cohere.common_utils import CohereModelInfo
     from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
-    from litellm.router_utils.get_retry_from_policy import (
-        get_num_retries_from_retry_policy,
-        reset_retry_policy,
-    )
     from litellm.types.llms.anthropic import (
         ANTHROPIC_API_ONLY_HEADERS,
         AnthropicThinkingParam,
@@ -5258,7 +5258,7 @@ def pre_process_optional_params(passed_params: dict, non_default_params: dict, c
 
 
 def _declared_reasoning_efforts(model_info: Mapping[str, object] | None) -> tuple[str, ...]:
-    from litellm.router_utils.reasoning_effort_capability import deployment_reasoning_effort_levels
+    from litellm.litellm_core_utils.reasoning_effort_capability import deployment_reasoning_effort_levels
 
     return deployment_reasoning_effort_levels(model_info) or ()
 
@@ -6889,6 +6889,8 @@ def cached_get_model_info_helper(
     model: str,
     custom_llm_provider: str | None,
     api_base: str | None = None,
+    *,
+    preserve_unset_costs: bool = False,
 ) -> ModelInfoBase:
     """
     _get_model_info_helper wrapped with lru_cache
@@ -6899,6 +6901,7 @@ def cached_get_model_info_helper(
         model=model,
         custom_llm_provider=custom_llm_provider,
         api_base=api_base,
+        preserve_unset_costs=preserve_unset_costs,
     )
 
 
@@ -6962,6 +6965,7 @@ def get_model_info_helper(
     api_key: str | None = None,
     *,
     catalog_only: bool = False,
+    preserve_unset_costs: bool = False,
 ) -> ModelInfoBase:
     """
     Helper for 'get_model_info'. Separated out to avoid infinite loop caused by returning 'supported_openai_param's
@@ -7079,7 +7083,7 @@ def get_model_info_helper(
                 verbose_logger.debug("model not found in litellm.model_cost, tried: %s", potential_model_names)
                 raise ModelNotMappedError(_model_not_mapped_message(model, custom_llm_provider))
             _input_cost_per_token: float | None = _model_info.get("input_cost_per_token")
-            if _input_cost_per_token is None:
+            if _input_cost_per_token is None and not preserve_unset_costs:
                 # default value to 0, be noisy about this
                 verbose_logger.debug(
                     "model=%s, custom_llm_provider=%s has no input_cost_per_token in model_cost_map. Defaulting to 0.",
@@ -7089,7 +7093,7 @@ def get_model_info_helper(
                 _input_cost_per_token = 0
 
             _output_cost_per_token: float | None = _model_info.get("output_cost_per_token")
-            if _output_cost_per_token is None:
+            if _output_cost_per_token is None and not preserve_unset_costs:
                 # default value to 0, be noisy about this
                 verbose_logger.debug(
                     "model=%s, custom_llm_provider=%s has no output_cost_per_token in model_cost_map. Defaulting to 0.",
@@ -7372,6 +7376,7 @@ def get_model_info_helper(
                 supports_regex_lookaround=_model_info.get("supports_regex_lookaround", None),
                 supports_computer_use=_model_info.get("supports_computer_use", None),
                 search_context_cost_per_query=_model_info.get("search_context_cost_per_query", None),
+                search_queries_cost_per_query=_model_info.get("search_queries_cost_per_query"),
                 web_search_billing_unit=_model_info.get("web_search_billing_unit", None),
                 search_free_requests=_model_info.get("search_free_requests", None),
                 google_maps_grounding_cost_per_query=_model_info.get("google_maps_grounding_cost_per_query", None),
@@ -10155,7 +10160,7 @@ class ProviderConfigManager:
         from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 
         json_provider: Final = JSONProviderRegistry.get(provider.value)
-        if json_provider is not None and "/v1/messages" in json_provider.supported_endpoints:
+        if json_provider is not None and JSONProviderRegistry.serves_endpoint(provider.value, model, "/v1/messages"):
             from litellm.llms.openai_like.messages.transformation import (
                 JSONProviderAnthropicMessagesConfig,
             )
@@ -10294,7 +10299,7 @@ class ProviderConfigManager:
             return result
 
         # Fall back to JSON providers (generic OpenAI-compatible)
-        if JSONProviderRegistry.exists(provider_str) and JSONProviderRegistry.supports_responses_api(provider_str):
+        if JSONProviderRegistry.serves_endpoint(provider_str, model, "/v1/responses"):
             provider_config: Final = JSONProviderRegistry.get(provider_str)
             if provider_config is not None:
                 return create_responses_config_class(provider_config)()

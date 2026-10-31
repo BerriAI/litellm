@@ -1,11 +1,13 @@
 import asyncio
 import contextlib
+import copy
 import json
 import uuid
 from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from enum import Enum
 from functools import partial
+from itertools import chain
 from types import MappingProxyType
 from typing import (
     TYPE_CHECKING,
@@ -35,7 +37,7 @@ from litellm.anthropic_interface.exceptions.exception_mapping_utils import Anthr
 from litellm.caching.dual_cache import DualCache
 from litellm.constants import EMPTY_MAPPING, MANAGED_BACKGROUND_RESPONSE_METADATA_KEY, TERMINAL_RESPONSE_STATUSES
 from litellm.exceptions import EndpointNotSupportedByModelError
-from litellm.integrations.custom_guardrail import ModifyResponseException
+from litellm.integrations.custom_guardrail import ModifyResponseException, guardrail_request_data_with_streaming
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, get_metadata_variable_name_from_kwargs
 from litellm.litellm_core_utils.internal_call_metadata import is_background_response, requests_background
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -47,6 +49,11 @@ from litellm.llms.openai.responses.guardrail_translation.handler import (
     build_blocked_response,
 )
 from litellm.proxy._types import *
+from litellm.proxy.auth.auth_checks import (
+    get_team_object,
+    requests_guardrail_modification,
+    require_guardrail_modification_permission,
+)
 from litellm.proxy.auth.auth_utils import carries_client_side_overrides
 from litellm.proxy.auth.user_api_key_auth import (
     UserAPIKeyAuth,
@@ -57,6 +64,7 @@ from litellm.proxy.common_request_processing import (
     ProxyBaseLLMRequestProcessing,
     cost_headers,
     create_response,
+    proxy_exception_from_route_error,
     resolve_counted_tool_fields,
     resolve_litellm_call_id,
 )
@@ -79,6 +87,7 @@ from litellm.proxy.hooks.responses_id_security import ResponsesIDSecurity, decry
 from litellm.proxy.litellm_pre_call_utils import (
     _CLIENT_PRICING_METADATA_FIELDS,  # pyright: ignore[reportPrivateUsage]  # the HTTP path's own strip list
     _UNTRUSTED_METADATA_CONTROL_FIELDS,  # pyright: ignore[reportPrivateUsage]  # the HTTP path's own strip list
+    add_guardrails_from_policy_engine,
     is_chat_completions_body,
 )
 from litellm.proxy.pass_through_endpoints.llm_provider_handlers.batch_attribution import (
@@ -89,7 +98,12 @@ from litellm.proxy.utils import count_request_input_tokens, handle_exception_on_
 from litellm.responses.litellm_completion_transformation.compaction_items import messages_since_newest_compaction
 from litellm.responses.litellm_completion_transformation.count_request import MODEL_FILE_ID_MAPPING_FIELD
 from litellm.responses.retrieve_stream_query import RETRIEVE_INCLUDE_QUERY_KEYS, RETRIEVE_STREAM_QUERY_KEYS
-from litellm.responses.streaming_iterator import GuardedResponsesWsFrame, ResponsesWsFrameGuard, spawn_logging_task
+from litellm.responses.streaming_iterator import (
+    GuardedResponsesWsFrame,
+    ResponsesWsFrameGuard,
+    ResponsesWsFrameRejection,
+    spawn_logging_task,
+)
 from litellm.router import Router
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.openai import (
@@ -2149,11 +2163,15 @@ _PII_TOKENS: Final = TypeAdapter(dict[str, str])
 _GUARDRAIL_INFORMATION_KEY: Final = "standard_logging_guardrail_information"
 _GUARDED_FRAME_FIELDS: Final = ("input", "instructions", "tools")
 _CLIENT_METADATA_KEYS: Final = ("metadata", "litellm_metadata")
-# the guardrail list is merged from key, team and the admission frame; a later frame cannot shrink it
 _CLIENT_GUARDRAIL_SELECTORS: Final = ("guardrails", "guardrail_config", "policies")
+_METADATA_GUARDRAIL_SELECTORS: Final = ("guardrails", "guardrail_config")
+_PROXY_ONLY_FRAME_FIELDS: Final = (*_CLIENT_GUARDRAIL_SELECTORS, "include_guardrail_response")
+_UNFORWARDED_FRAME_FIELDS: Final = (*_GUARDED_FRAME_FIELDS, *_PROXY_ONLY_FRAME_FIELDS, "litellm_metadata")
+_OBJECTS: Final = TypeAdapter(list[object])
+_TURN_COPIED_CONTAINERS: Final = (list, dict)
 
 
-class _PreCallGuardrailWalk(Protocol):
+class _GuardrailWalk(Protocol):
     async def pre_call_hook(
         self,
         *,
@@ -2163,15 +2181,49 @@ class _PreCallGuardrailWalk(Protocol):
         guardrails_only: bool,
     ) -> dict[str, object]: ...  # mutable-ok: ProxyLogging.pre_call_hook returns the guardrails' own dict
 
+    async def during_call_hook(
+        self,
+        *,
+        data: dict[str, object],  # mutable-ok: ProxyLogging.during_call_hook hands the guardrails a dict they edit
+        user_api_key_dict: UserAPIKeyAuth | None,
+        call_type: Literal["aresponses"],
+        guardrails_only: bool,
+    ) -> object: ...
+
+
+async def _key_team_object(user_api_key_dict: UserAPIKeyAuth) -> LiteLLM_TeamTable | None:
+    from litellm.proxy.proxy_server import prisma_client, proxy_logging_obj, user_api_key_cache
+
+    team_id: Final = user_api_key_dict.team_id
+    if team_id is None or team_id == UI_TEAM_ID:
+        return None
+    team_from_key: Final = LiteLLM_TeamTable(team_id=team_id, metadata=user_api_key_dict.team_metadata)
+    if prisma_client is None:
+        return team_from_key
+    try:
+        return await get_team_object(
+            team_id=team_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            parent_otel_span=user_api_key_dict.parent_otel_span,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+    except HTTPException:
+        return team_from_key
+
 
 def _responses_ws_frame_guard(
     admitted: Mapping[str, object],
     user_api_key_dict: UserAPIKeyAuth,
-    proxy_logging_obj: _PreCallGuardrailWalk,
+    proxy_logging_obj: _GuardrailWalk,
     record_refused_turn: Callable[[tuple[Mapping[str, object], ...], Exception], None],
+    *,
+    team_object: Callable[[UserAPIKeyAuth], Awaitable[LiteLLM_TeamTable | None]] = _key_team_object,
 ) -> ResponsesWsFrameGuard:
     """Socket admission skips guardrails (the first frame's ``input`` is not part of the admitted request), so every
-    ``response.create`` frame gets the pre_call guardrail walk the HTTP ``/v1/responses`` path runs on its body."""
+    ``response.create`` frame gets the pre_call and during_call guardrail walks the HTTP ``/v1/responses`` path runs on
+    its body. during_call runs before the frame is forwarded, since a forwarded frame cannot be recalled, and like HTTP,
+    which sends the model call beside during_call, the frame carries the pre_call output and not during_call rewrites."""
     metadata_key: Final = get_metadata_variable_name_from_kwargs(admitted)
     admitted_bucket: Final = admitted.get(metadata_key)
     bucket: Final = {
@@ -2186,32 +2238,57 @@ def _responses_ws_frame_guard(
     # a blocked frame is billed as its own failed request; only the first turn settles the admission reservation
     rejected_frame_auth: Final = user_api_key_dict.model_copy(update={"budget_reservation": None})
 
+    async def rejection(
+        exception: Exception,
+        data: dict[str, object],  # mutable-ok: billed
+    ) -> ResponsesWsFrameRejection:
+        await _bill_rejected_frame(rejected_frame_auth, exception, data)
+        proxy_exception: Final = proxy_exception_from_route_error(exception)
+        return ResponsesWsFrameRejection(proxy_exception.message, proxy_exception.provider_specific_fields)
+
     async def guard(frame: str) -> GuardedResponsesWsFrame:
         frame_obj: Final = _WS_FRAME.validate_json(frame)
         nested: Final = frame_obj.get("response")
-        if isinstance(nested, dict) and any(key in frame_obj for key in _GUARDED_FRAME_FIELDS):
-            raise ValueError(
-                "response.create carries input, instructions or tools both at the top level and under response"
-            )
         body: Final = _WS_FRAME.validate_python(nested) if isinstance(nested, dict) else frame_obj
-        frame_data: Final = {
-            **{
-                key: _without_untrusted_metadata(key, value)
-                for key, value in body.items()
-                if key != "type" and key not in _CLIENT_GUARDRAIL_SELECTORS
+        selection_sources: Final = (frame_obj, body) if isinstance(nested, dict) else (body,)
+        turn_data: Final = guardrail_request_data_with_streaming(
+            {
+                **{
+                    key: _without_untrusted_metadata(key, value)
+                    for key, value in body.items()
+                    if key != "type" and key not in _PROXY_ONLY_FRAME_FIELDS
+                },
+                "model": model,
+                "litellm_call_id": str(uuid.uuid4()),
+                metadata_key: {**bucket},
             },
-            "model": model,
-            "litellm_call_id": str(uuid.uuid4()),
-            # shallow: the bucket carries proxy-owned objects (the OTEL parent span) that cannot be deep-copied
-            metadata_key: {**bucket},
-        }
+            is_streaming=True,
+        )
+        try:
+            _reject_guarded_field_beside_nested_response(frame_obj, nested)
+            await _check_frame_may_modify_guardrails(selection_sources, user_api_key_dict, team_object)
+            frame_data: Final = {
+                **turn_data,
+                metadata_key: await _metadata_with_frame_guardrails(
+                    bucket, selection_sources, model, metadata_key, user_api_key_dict
+                ),
+            }
+        except Exception as e:
+            raise await rejection(e, turn_data) from e
         try:
             guarded_data: Final = await proxy_logging_obj.pre_call_hook(
                 user_api_key_dict=user_api_key_dict, data=frame_data, call_type="aresponses", guardrails_only=True
             )
+            # a guardrail may delete a field (the Responses translation pops ``instructions``), so start without them
+            guarded_fields: Final = {
+                key: copy.deepcopy(guarded_data[key]) for key in _GUARDED_FRAME_FIELDS if key in guarded_data
+            }
+            pii_tokens: Final = _recorded_pii_tokens(guarded_data.get("metadata"))
+            await proxy_logging_obj.during_call_hook(
+                data=guarded_data, user_api_key_dict=user_api_key_dict, call_type="aresponses", guardrails_only=True
+            )
         except Exception as e:
-            await _bill_rejected_frame(rejected_frame_auth, e, frame_data)
-            raise
+            raise await rejection(e, frame_data) from e
         if guarded_data.get("model") != model:
             rerouted: Final = ValueError(
                 f"a guardrail rerouted this turn to {guarded_data.get('model')!r}; an open Responses WebSocket"
@@ -2219,23 +2296,184 @@ def _responses_ws_frame_guard(
             )
             await _bill_rejected_frame(rejected_frame_auth, rerouted, frame_data)
             raise rerouted
-        # a guardrail may delete a field (the Responses translation pops ``instructions``), so start without them
-        guarded_fields: Final = {key: guarded_data[key] for key in _GUARDED_FRAME_FIELDS if key in guarded_data}
-        kept: Final = {key: value for key, value in body.items() if key not in _GUARDED_FRAME_FIELDS}
         rewritten: Final = (
-            {**frame_obj, "response": {**kept, **guarded_fields}}
+            {**_forwarded_frame_fields(frame_obj), "response": {**_forwarded_frame_fields(body), **guarded_fields}}
             if isinstance(nested, dict)
-            else {**kept, **guarded_fields}
+            else {**_forwarded_frame_fields(body), **guarded_fields}
         )
         guardrail_information: Final = _recorded_guardrail_information(guarded_data.get(metadata_key))
         return GuardedResponsesWsFrame(
             frame=json.dumps(rewritten),
             guardrail_information=guardrail_information,
-            pii_tokens=_recorded_pii_tokens(guarded_data.get("metadata")),
+            pii_tokens=pii_tokens,
             bill_refusal=partial(record_refused_turn, guardrail_information),
         )
 
     return guard
+
+
+def _reject_guarded_field_beside_nested_response(frame: Mapping[str, object], nested: object) -> None:
+    """Only the nested ``response`` body runs through the guardrails, so a guarded field beside it would go upstream
+    unguarded"""
+    stray: Final = (
+        next((key for key in _GUARDED_FRAME_FIELDS if key in frame), None) if isinstance(nested, dict) else None
+    )
+    if stray is not None:
+        raise ValueError(f"response.create sends {stray} at the top level next to response; send it inside response")
+
+
+async def _check_frame_may_modify_guardrails(
+    sources: tuple[Mapping[str, object], ...],
+    user_api_key_dict: UserAPIKeyAuth,
+    team_object: Callable[[UserAPIKeyAuth], Awaitable[LiteLLM_TeamTable | None]],
+) -> None:
+    """A frame that picks guardrails or policies needs the team's permission to modify guardrails"""
+    if any(
+        "policies" in source or requests_guardrail_modification(_without_client_metadata(source)) for source in sources
+    ):
+        require_guardrail_modification_permission(await team_object(user_api_key_dict))
+
+
+def _without_client_metadata(source: Mapping[str, object]) -> Mapping[str, object]:
+    metadata: Final = source.get("metadata")
+    return {**source, "metadata": _metadata_picks("metadata", metadata)} if isinstance(metadata, dict) else source
+
+
+def _forwarded_frame_fields(source: Mapping[str, object]) -> dict[str, object]:
+    return {
+        key: _without_guardrail_selection(value) if key == "metadata" else value
+        for key, value in source.items()
+        if key not in _UNFORWARDED_FRAME_FIELDS
+    }
+
+
+class _FrameGuardrailSelection(TypedDict, total=False):
+    guardrails: ReadOnly[Sequence[str | Mapping[str, Mapping[str, object]]]]
+    guardrail_config: ReadOnly[Mapping[str, object]]
+    policies: ReadOnly[Sequence[str]]
+
+
+_FRAME_GUARDRAIL_SELECTION: Final = TypeAdapter(_FrameGuardrailSelection)
+
+
+async def _metadata_with_frame_guardrails(
+    bucket: Mapping[str, object],
+    sources: tuple[Mapping[str, object], ...],
+    model: object,
+    metadata_key: str,
+    user_api_key_dict: UserAPIKeyAuth,
+) -> Mapping[str, object]:
+    """A frame selects guardrails the way an HTTP ``/v1/responses`` body does, adding to the key, team and policy
+    guardrails the socket was admitted with, so a frame can never shrink that list. A nested frame selects at its top
+    level and in its ``response`` body, the body last so its ``guardrail_config`` wins"""
+    selections: Final = tuple(chain.from_iterable(_frame_guardrail_selections(source) for source in sources))
+    picked_policies: Final = tuple(selection["policies"] for selection in selections if "policies" in selection)
+    metadata: Final = (
+        await _metadata_with_frame_policies(
+            bucket, tuple(chain.from_iterable(picked_policies)), model, metadata_key, user_api_key_dict
+        )
+        if picked_policies
+        else bucket
+    )
+    selected_guardrails: Final = tuple(chain.from_iterable(selection.get("guardrails", ()) for selection in selections))
+    selected_config: Final = dict(
+        chain.from_iterable(
+            selection["guardrail_config"].items() for selection in selections if "guardrail_config" in selection
+        )
+    )
+    existing_guardrails: Final = metadata.get("guardrails")
+    existing_config: Final = metadata.get("guardrail_config")
+    return {
+        **metadata,
+        **(
+            {
+                "guardrails": [
+                    *(_OBJECTS.validate_python(existing_guardrails) if isinstance(existing_guardrails, list) else ()),
+                    *selected_guardrails,
+                ]
+            }
+            if selected_guardrails
+            else {}
+        ),
+        **(
+            {
+                "guardrail_config": {
+                    **(_WS_FRAME.validate_python(existing_config) if isinstance(existing_config, dict) else {}),
+                    **selected_config,
+                }
+            }
+            if selected_config
+            else {}
+        ),
+    }
+
+
+def _frame_guardrail_selections(body: Mapping[str, object]) -> tuple[_FrameGuardrailSelection, ...]:
+    """Like HTTP ``/v1/responses``, a frame selects guardrails at its top level and in its ``metadata`` and
+    ``litellm_metadata``, the top level last so its ``guardrail_config`` wins"""
+    return (
+        *(
+            _frame_guardrail_selection((key,), _metadata_picks(key, value), _METADATA_GUARDRAIL_SELECTORS)
+            for key, value in body.items()
+            if key in _CLIENT_METADATA_KEYS and isinstance(value, dict)
+        ),
+        _frame_guardrail_selection((), body, _CLIENT_GUARDRAIL_SELECTORS),
+    )
+
+
+def _metadata_picks(key: str, metadata: object) -> Mapping[str, object]:
+    """OpenAI ``metadata`` values are strings, so a string there is the client's own metadata and never a pick"""
+    validated: Final = _WS_FRAME.validate_python(metadata)
+    if key != "metadata":
+        return validated
+    return {
+        name: item
+        for name, item in validated.items()
+        if name not in _METADATA_GUARDRAIL_SELECTORS or not isinstance(item, str)
+    }
+
+
+def _frame_guardrail_selection(
+    location: tuple[str, ...], source: Mapping[str, object], selectors: tuple[str, ...]
+) -> _FrameGuardrailSelection:
+    try:
+        return _FRAME_GUARDRAIL_SELECTION.validate_python({key: source[key] for key in selectors if key in source})
+    except ValidationError as e:
+        raise ValueError(f"response.create {first_validation_error(e, prefix=location)}") from e
+
+
+def _without_guardrail_selection(metadata: object) -> object:
+    if not isinstance(metadata, dict):
+        return metadata
+    return {
+        name: item
+        for name, item in _WS_FRAME.validate_python(metadata).items()
+        if name not in _METADATA_GUARDRAIL_SELECTORS or isinstance(item, str)
+    }
+
+
+async def _metadata_with_frame_policies(
+    bucket: Mapping[str, object],
+    policies: Sequence[str],
+    model: object,
+    metadata_key: str,
+    user_api_key_dict: UserAPIKeyAuth,
+) -> Mapping[str, object]:
+    selection: Final = {
+        "model": model,
+        "policies": list(policies),
+        metadata_key: {key: _turn_copy(value) for key, value in bucket.items()},
+    }
+    await add_guardrails_from_policy_engine(
+        data=selection, metadata_variable_name=metadata_key, user_api_key_dict=user_api_key_dict
+    )
+    return _WS_FRAME.validate_python(selection[metadata_key])
+
+
+def _turn_copy(value: object) -> object:
+    """Shallow, since the bucket carries proxy-owned objects (the OTEL parent span) that cannot be copied, and the
+    policy engine writes its lists in place"""
+    return copy.copy(value) if type(value) in _TURN_COPIED_CONTAINERS else value
 
 
 def _without_untrusted_metadata(key: str, value: object) -> object:
