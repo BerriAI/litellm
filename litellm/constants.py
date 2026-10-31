@@ -675,7 +675,7 @@ request_timeout: float = (
     DEFAULT_REQUEST_TIMEOUT_SECONDS if _request_timeout_from_env is None else _request_timeout_from_env
 )
 request_timeout_explicitly_set: bool = _request_timeout_from_env is not None
-DEFAULT_A2A_AGENT_TIMEOUT: Final[float] = get_env_float("DEFAULT_A2A_AGENT_TIMEOUT", 6000.0)  # 10 minutes
+DEFAULT_A2A_AGENT_TIMEOUT: Final[float] = get_env_float("DEFAULT_A2A_AGENT_TIMEOUT", 600.0)  # 10 minutes
 AGENT_KILL_SWITCH_TIMEOUT_SECONDS: Final = 10.0
 AGENT_KILL_SWITCH_RESPONSE_BODY_MAX_CHARS: Final = 2000
 # Patterns that indicate a localhost/internal URL in A2A agent cards that should be

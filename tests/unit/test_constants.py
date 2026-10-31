@@ -218,6 +218,35 @@ def test_request_timeout_counts_as_explicit_only_when_it_parses(
         importlib.reload(litellm.constants)
 
 
+@pytest.mark.parametrize(
+    ("env_value", "expected_timeout"),
+    [
+        (None, 600.0),
+        ("", 600.0),
+        ("fast", 600.0),
+        ("120", 120.0),
+        ("300.5", 300.5),
+    ],
+)
+def test_default_a2a_agent_timeout(
+    monkeypatch: pytest.MonkeyPatch, env_value: str | None, expected_timeout: float
+) -> None:
+    """
+    Regression test for issue #49434: DEFAULT_A2A_AGENT_TIMEOUT must default to 600.0 (10 minutes)
+    and respect environment variable overrides.
+    """
+    if env_value is None:
+        monkeypatch.delenv("DEFAULT_A2A_AGENT_TIMEOUT", raising=False)
+    else:
+        monkeypatch.setenv("DEFAULT_A2A_AGENT_TIMEOUT", env_value)
+    try:
+        importlib.reload(litellm.constants)
+        assert litellm.constants.DEFAULT_A2A_AGENT_TIMEOUT == expected_timeout
+    finally:
+        monkeypatch.undo()
+        importlib.reload(litellm.constants)
+
+
 @pytest.fixture()
 def _vcr_outcome_gate(request, vcr):
     install_live_call_probe(request, vcr)
