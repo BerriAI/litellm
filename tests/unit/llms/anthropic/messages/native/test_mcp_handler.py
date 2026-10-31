@@ -61,7 +61,9 @@ def test_anthropic_messages_handler_routes_litellm_proxy_mcp_to_the_gateway():
 
 
 @pytest.mark.asyncio
-async def test_anthropic_messages_with_mcp_reaches_an_env_only_deployment_with_its_env_credentials(monkeypatch):
+async def test_anthropic_messages_with_mcp_reaches_an_env_only_deployment_with_its_env_credentials(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     monkeypatch.setenv("AZURE_AI_API_BASE", "https://example-resource.cognitiveservices.azure.com")
     monkeypatch.setenv("AZURE_AI_API_KEY", "azure-env-key")

@@ -3,6 +3,8 @@ import copy
 import json
 import os
 import uuid
+from collections.abc import Mapping
+from pathlib import Path
 from typing import Any, Dict, Final, List
 
 import httpx
@@ -1150,8 +1152,11 @@ _GET_WEATHER_TOOL: Final = {
 )
 @pytest.mark.parametrize("credentials_from_env", [False, True], ids=["credentials_in_params", "credentials_from_env"])
 async def test_azure_ai_on_azure_openai_host_streams_natively_with_the_bare_deployment(
-    tools, expected_path, credentials_from_env, monkeypatch
-):
+    tools: list[dict[str, object]] | None,
+    expected_path: str,
+    credentials_from_env: bool,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     litellm.in_memory_llm_clients_cache.flush_cache()
     monkeypatch.delenv("AZURE_API_BASE", raising=False)
@@ -1186,7 +1191,9 @@ async def test_azure_ai_on_azure_openai_host_streams_natively_with_the_bare_depl
 
 
 @pytest.mark.asyncio
-async def test_bridged_messages_keep_the_region_of_a_regional_bedrock_mantle_model(monkeypatch):
+async def test_bridged_messages_keep_the_region_of_a_regional_bedrock_mantle_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     litellm.in_memory_llm_clients_cache.flush_cache()
 
@@ -1205,7 +1212,9 @@ async def test_bridged_messages_keep_the_region_of_a_regional_bedrock_mantle_mod
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("model", ["anthropic/claude-sonnet-5-5", "ragflow/gpt-4o"])
-async def test_bridged_messages_keep_the_callers_explicit_provider_over_the_model_prefix(model, monkeypatch):
+async def test_bridged_messages_keep_the_callers_explicit_provider_over_the_model_prefix(
+    model: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     litellm.in_memory_llm_clients_cache.flush_cache()
 
@@ -1227,8 +1236,8 @@ async def test_bridged_messages_keep_the_callers_explicit_provider_over_the_mode
 
 @pytest.mark.parametrize("model", ["chatgpt/gpt-5", "github_copilot/gpt-5"])
 def test_bridged_messages_reach_the_callers_provider_without_signing_in_to_the_prefix_provider(
-    model, monkeypatch, tmp_path
-):
+    model: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     monkeypatch.setenv("OPENAI_API_KEY", "server-openai-key")
     monkeypatch.setenv("CHATGPT_TOKEN_DIR", str(tmp_path))
@@ -1250,7 +1259,9 @@ def test_bridged_messages_reach_the_callers_provider_without_signing_in_to_the_p
 
 
 @pytest.mark.asyncio
-async def test_bridged_messages_send_the_deployments_key_for_azure_models_served_as_openai(monkeypatch):
+async def test_bridged_messages_send_the_deployments_key_for_azure_models_served_as_openai(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     monkeypatch.setenv("OPENAI_API_KEY", "server-openai-key")
     litellm.in_memory_llm_clients_cache.flush_cache()
@@ -1281,8 +1292,8 @@ async def test_bridged_messages_send_the_deployments_key_for_azure_models_served
 )
 @pytest.mark.parametrize("api_base_from_env", [False, True], ids=["api_base_in_params", "api_base_from_env"])
 async def test_bridged_messages_keep_the_deployments_entra_credential_over_the_env_key(
-    monkeypatch, entra_credential, api_base_from_env
-):
+    monkeypatch: pytest.MonkeyPatch, entra_credential: Mapping[str, object], api_base_from_env: bool
+) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     monkeypatch.setenv("AZURE_AI_API_BASE", "https://example-resource.cognitiveservices.azure.com")
     monkeypatch.setenv("AZURE_AI_API_KEY", "azure-env-key")
@@ -1326,8 +1337,8 @@ async def test_bridged_messages_keep_the_deployments_entra_credential_over_the_e
     ids=["azure_env_key", "azure_env_entra"],
 )
 async def test_bridged_messages_keep_the_azure_env_credential_when_the_deployment_sets_its_own_api_base(
-    azure_env_credential, expected_header, expected_value, monkeypatch
-):
+    azure_env_credential: Mapping[str, str], expected_header: str, expected_value: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     for name in ("AZURE_API_KEY", "AZURE_OPENAI_API_KEY", "AZURE_AD_TOKEN", "AZURE_TENANT_ID", "AZURE_CLIENT_ID"):
         monkeypatch.delenv(name, raising=False)
@@ -1354,7 +1365,9 @@ async def test_bridged_messages_keep_the_azure_env_credential_when_the_deploymen
 
 
 @pytest.mark.asyncio
-async def test_bridged_messages_still_route_through_the_litellm_proxy_when_asked(monkeypatch):
+async def test_bridged_messages_still_route_through_the_litellm_proxy_when_asked(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     monkeypatch.setenv("LITELLM_PROXY_API_BASE", "https://proxy.example.com")
     monkeypatch.setenv("LITELLM_PROXY_API_KEY", "proxy-key")
