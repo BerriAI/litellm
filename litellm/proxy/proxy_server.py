@@ -15362,18 +15362,13 @@ async def _bridged_request_view(
     edits: CountContextManagement | None,
     deployment: _TokenCountDeployment,
     fallback_model: str,
-) -> InferenceRequestView:
-    view: Final = await inference_request_view(
+) -> InferenceRequestView | InferenceRequestViewError:
+    return await inference_request_view(
         messages,
         system,
         messages_format,
         count_context_edits(edits, tools, deployment.get("litellm_params", {}), fallback_model),
     )
-    match view:
-        case InferenceRequestViewError(error_message=message, status_code=status_code):
-            raise _rejected_view(status_code, message)
-        case InferenceRequestView():
-            return view
 
 
 async def _responses_request_view(
@@ -15383,7 +15378,7 @@ async def _responses_request_view(
     edits: CountContextManagement,
     deployment: _TokenCountDeployment,
     fallback_model: str,
-) -> InferenceRequestView:
+) -> InferenceRequestView | InferenceRequestViewError:
     from litellm.llms.anthropic.messages.context_management import AnthropicContextManagementError
     from litellm.llms.anthropic.messages.responses_adapters.handler import count_view_messages
 
@@ -15396,7 +15391,7 @@ async def _responses_request_view(
             context_management=edits,
         )
     except AnthropicContextManagementError as error:
-        raise _rejected_view(error.status_code, error.message) from error
+        return InferenceRequestViewError(error_message=error.message, status_code=error.status_code)
     return InferenceRequestView(messages=edited, system=system)
 
 
@@ -15409,7 +15404,7 @@ async def _gateway_request_view(
     edits: CountContextManagement | None,
     deployment: _TokenCountDeployment,
     fallback_model: str,
-) -> InferenceRequestView | None:
+) -> InferenceRequestView | InferenceRequestViewError | None:
     match route:
         case Target.CHAT_COMPLETIONS:
             return await _bridged_request_view(
@@ -15642,6 +15637,8 @@ async def _count_request_tokens(
             model_to_use,
         )
     )
+    if isinstance(edited_request, InferenceRequestViewError):
+        raise _rejected_view(edited_request.status_code, edited_request.error_message)
     inference_messages: Final = (
         request_messages if edited_request is None else [dict(message) for message in edited_request.messages]
     )
