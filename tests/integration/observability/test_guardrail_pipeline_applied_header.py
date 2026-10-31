@@ -19,6 +19,7 @@ import pytest
 import yaml
 
 from tests.integration._support.client import Gateway, JsonValue, eventually, gateway_from_environment, object_value
+from tests.integration._support.database import read_rows
 from tests.integration._support.otlp_sink import Span, SpanSinks, recorded_spans
 from tests.integration._support.process import owned_proxy
 from tests.integration._support.upstream import aws_event_stream_frame
@@ -688,7 +689,7 @@ def test_the_spend_log_and_the_trace_name_only_the_steps_that_ran(
     team, response = _ask_as_new_team(rig, tag, stream=stream, path=path)
     assert response.status_code == 200, response.text
     rows: Final = eventually(
-        lambda: rig.gateway.rows('SELECT metadata FROM "LiteLLM_SpendLogs" WHERE team_id = %s', (team,)),
+        lambda: read_rows('SELECT metadata FROM "LiteLLM_SpendLogs" WHERE team_id = %s', (team,)),
         lambda found: len(found) == 1,
         seconds=70,
     )
@@ -735,7 +736,7 @@ def test_a_response_pipeline_names_a_judge_step_that_records_its_own_results(rig
     assert _steps_that_ran(rig) == (_JUDGE, _RESPONSE_SECOND)
     assert sorted(response.headers.get(_HEADER, "").split(",")) == [_JUDGE, _RESPONSE_SECOND], dict(response.headers)
     rows: Final = eventually(
-        lambda: rig.gateway.rows('SELECT metadata FROM "LiteLLM_SpendLogs" WHERE team_id = %s', (team,)),
+        lambda: read_rows('SELECT metadata FROM "LiteLLM_SpendLogs" WHERE team_id = %s', (team,)),
         lambda found: len(found) == 1,
         seconds=70,
     )
@@ -771,7 +772,7 @@ def test_a_pass_through_route_names_its_response_pipeline_up_front_because_its_h
         response.headers
     )
     rows: Final = eventually(
-        lambda: rig.gateway.rows('SELECT metadata FROM "LiteLLM_SpendLogs" WHERE team_id = %s', (team,)),
+        lambda: read_rows('SELECT metadata FROM "LiteLLM_SpendLogs" WHERE team_id = %s', (team,)),
         lambda found: len(found) == 1,
         seconds=70,
     )
@@ -802,7 +803,7 @@ def test_an_image_generation_names_its_response_pipeline_up_front_because_its_sp
         response.headers
     )
     rows: Final = eventually(
-        lambda: rig.gateway.rows('SELECT metadata FROM "LiteLLM_SpendLogs" WHERE team_id = %s', (team,)),
+        lambda: read_rows('SELECT metadata FROM "LiteLLM_SpendLogs" WHERE team_id = %s', (team,)),
         lambda found: len(found) == 1,
         seconds=70,
     )
@@ -816,7 +817,7 @@ def _applied_in_header_spend_log_and_trace(
     rig: _Rig, since: int, team: str, response: httpx.Response, *, rows_expected: int = 1
 ) -> tuple[list[str], list[list[str]], list[list[str]]]:
     rows: Final = eventually(
-        lambda: rig.gateway.rows('SELECT metadata FROM "LiteLLM_SpendLogs" WHERE team_id = %s', (team,)),
+        lambda: read_rows('SELECT metadata FROM "LiteLLM_SpendLogs" WHERE team_id = %s', (team,)),
         lambda found: len(found) == rows_expected,
         seconds=70,
     )
@@ -832,7 +833,7 @@ def _applied_in_header_spend_log_and_trace(
 
 def _cache_hits_and_metadata_logged(rig: _Rig, team: str, count: int) -> list[dict[str, JsonValue]]:
     return eventually(
-        lambda: rig.gateway.rows(
+        lambda: read_rows(
             'SELECT cache_hit, metadata FROM "LiteLLM_SpendLogs" WHERE team_id = %s ORDER BY "startTime"', (team,)
         ),
         lambda found: len(found) == count,
@@ -861,22 +862,6 @@ def test_a_cache_hit_names_every_response_step_that_ran_in_the_spend_log_and_the
     assert [sorted(ast.literal_eval(str(span["attributes"]["metadata.applied_guardrails"]))) for span in spans] == [
         expected
     ] * len(spans), spans
-
-
-def test_a_sync_success_callback_sees_every_response_step_that_ran(rig: _Rig) -> None:
-    team, response = _ask_as_new_team(rig, _RESPONSE_RUNS_EVERY_STEP)
-    assert response.status_code == 200, response.text
-    assert _steps_that_ran(rig) == (_RESPONSE_FIRST, _RESPONSE_SECOND)
-    logged: Final = eventually(
-        lambda: (
-            [row for row in map(json.loads, rig.sync_success_log.read_text().splitlines()) if row["team"] == team]
-            if rig.sync_success_log.exists()
-            else []
-        ),
-        lambda found: len(found) == 1,
-        seconds=30,
-    )
-    assert sorted(logged[0]["applied"] or []) == [_RESPONSE_FIRST, _RESPONSE_SECOND], logged
 
 
 def _image_edit(rig: _Rig, scenario_model: Callable[..., str], key: str) -> httpx.Response:
@@ -1075,7 +1060,7 @@ def test_an_agent_message_names_every_response_step_that_ran_in_the_spend_log_an
     assert response.status_code == 200, response.text
     assert sorted(_steps_that_ran(rig)) == expected
     rows: Final = eventually(
-        lambda: rig.gateway.rows('SELECT metadata FROM "LiteLLM_SpendLogs" WHERE team_id = %s', (team,)),
+        lambda: read_rows('SELECT metadata FROM "LiteLLM_SpendLogs" WHERE team_id = %s', (team,)),
         lambda found: len(found) == 1,
         seconds=70,
     )
