@@ -10,6 +10,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import { LogEntry } from "../types";
+import { getResponseCacheStatus } from "../responseCache";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { PROMPT_CACHE_CREATION_TOOLTIP, PROMPT_CACHE_READ_TOOLTIP } from "@/utils/promptCacheUsage";
 import GuardrailViewer from "./sections/GuardrailViewer/GuardrailViewer";
@@ -481,10 +482,10 @@ function MetricsSection({ logEntry, metadata }: { logEntry: LogEntry; metadata: 
       ? new Date(completionStartTime).getTime() - new Date(logEntry.startTime).getTime()
       : null;
 
-  const responseCacheValue = String(logEntry.cache_hit ?? "").toLowerCase();
+  const responseCacheStatus = getResponseCacheStatus(logEntry);
   const responseCacheKey = logEntry.cache_key && logEntry.cache_key !== "Cache OFF" ? logEntry.cache_key : undefined;
-  const isResponseCacheHit = responseCacheValue === "true";
-  const showResponseCache = isResponseCacheHit || responseCacheValue === "false" || responseCacheKey != null;
+  const isResponseCacheHit = responseCacheStatus === "hit";
+  const showResponseCache = responseCacheStatus !== undefined;
   const promptCacheReadTokens = Number(metadata?.additional_usage_values?.cache_read_input_tokens) || 0;
   const promptCacheCreationTokens = Number(metadata?.additional_usage_values?.cache_creation_input_tokens) || 0;
 
