@@ -67,25 +67,19 @@ async def test_anthropic_messages_with_mcp_reaches_an_env_only_deployment_with_i
     monkeypatch.setenv("AZURE_AI_API_KEY", "azure-env-key")
     litellm.in_memory_llm_clients_cache.flush_cache()
 
-    with (
-        patch.object(
-            import_module("litellm.responses.mcp.litellm_proxy_mcp_handler").LiteLLM_Proxy_MCP_Handler,
-            "process_mcp_tools_without_openai_transform",
-            new=AsyncMock(return_value=([], {})),
-        ),
-        respx.mock(assert_all_called=True) as respx_mock,
-    ):
+    with respx.mock(assert_all_called=True) as respx_mock:
         upstream: Final = respx_mock.route().mock(side_effect=httpx.ConnectError("cut at the wire"))
         with pytest.raises(openai.APIError):
             await litellm.anthropic.messages.acreate(
                 max_tokens=100,
                 messages=[{"role": "user", "content": "ping"}],
                 model="azure_ai/gpt-6-luna",
-                tools=[MCP_REFERENCE],
+                tools=[{**MCP_REFERENCE, "server_url": "litellm_proxy"}],
             )
 
     assert {call.request.url.host for call in upstream.calls} == {"example-resource.cognitiveservices.azure.com"}
     assert {call.request.headers.get("api-key") for call in upstream.calls} == {"azure-env-key"}
+    assert not any(b"litellm_proxy" in call.request.content for call in upstream.calls)
 
 
 def test_anthropic_messages_handler_skips_the_gateway_on_recursion():

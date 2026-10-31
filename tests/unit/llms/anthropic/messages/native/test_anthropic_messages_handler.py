@@ -1225,6 +1225,30 @@ async def test_bridged_messages_keep_the_callers_explicit_provider_over_the_mode
     assert {json.loads(call.request.content)["model"] for call in upstream.calls} == {model}
 
 
+@pytest.mark.parametrize("model", ["chatgpt/gpt-5", "github_copilot/gpt-5"])
+def test_bridged_messages_reach_the_callers_provider_without_signing_in_to_the_prefix_provider(
+    model, monkeypatch, tmp_path
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setenv("OPENAI_API_KEY", "server-openai-key")
+    monkeypatch.setenv("CHATGPT_TOKEN_DIR", str(tmp_path))
+    monkeypatch.setenv("GITHUB_COPILOT_TOKEN_DIR", str(tmp_path))
+    litellm.in_memory_llm_clients_cache.flush_cache()
+
+    with respx.mock(assert_all_called=True) as respx_mock:
+        upstream: Final = respx_mock.route().mock(side_effect=httpx.ConnectError("cut at the wire"))
+        with pytest.raises(openai.APIError):
+            litellm.anthropic.messages.create(
+                max_tokens=100,
+                messages=[{"role": "user", "content": "ping"}],
+                model=model,
+                custom_llm_provider="openai",
+            )
+
+    assert {call.request.url.host for call in upstream.calls} == {"api.openai.com"}
+    assert {call.request.headers["authorization"] for call in upstream.calls} == {"Bearer server-openai-key"}
+
+
 @pytest.mark.asyncio
 async def test_bridged_messages_send_the_deployments_key_for_azure_models_served_as_openai(monkeypatch):
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)

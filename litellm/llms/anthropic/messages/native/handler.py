@@ -16,6 +16,7 @@ from pydantic import TypeAdapter
 
 import litellm
 from litellm.anthropic_beta_headers_manager import aload_beta_headers_config
+from litellm.constants import PROVIDERS_THAT_AUTHENTICATE_ON_PROVIDER_INFO
 from litellm.integrations.anthropic_cache_control_hook import AnthropicCacheControlHook
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.exception_mapping_utils import exception_type
@@ -113,7 +114,11 @@ def _resolve_requested_provider(
         litellm_params=litellm_params,
     )
     requested_provider: Final = model.partition("/")[0]
-    if custom_llm_provider in (None, requested_provider) or requested_provider not in LlmProvidersSet:
+    if (
+        custom_llm_provider in (None, requested_provider)
+        or requested_provider not in LlmProvidersSet
+        or requested_provider in PROVIDERS_THAT_AUTHENTICATE_ON_PROVIDER_INFO
+    ):
         return resolved
     own: Final = _resolve_by_model_prefix(model, litellm_params)
     return own if own is not None and own[1] == custom_llm_provider else resolved
