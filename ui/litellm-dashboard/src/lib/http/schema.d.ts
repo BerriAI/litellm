@@ -7987,6 +7987,47 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/health/test_model": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Test Model
+         * @description Run the live checks on a model, the way a client would use it, and report what works.
+         *
+         *     Each selected endpoint gets one three-turn conversation with a long system prompt and a tool. Turn 1 asks
+         *     a question the tool answers, turn 2 sends the tool result back, turn 3 asks a follow-up that needs the
+         *     answer from turn 2. Three checks come out of it:
+         *
+         *     - `conversation`: every turn parses, turn 1 calls the tool, turn 2 uses the tool result, turn 3 carries it on
+         *     - `prompt_caching`: turns 2 and 3 report cached input tokens, with no cache markers in the request
+         *     - `cost_tracking`: every turn carries a non-zero response cost, and the spend log row lands when a
+         *       database is connected
+         *
+         *     Example:
+         *     ```bash
+         *     curl -X POST 'http://localhost:4000/health/test_model' \
+         *       -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
+         *       -H 'Content-Type: application/json' \
+         *       -d '{"model_id": "a1b2c3", "endpoints": ["/v1/chat/completions", "/v1/responses"]}'
+         *     ```
+         *
+         *     Returns `status` (`success`, `warning` or `error`), the tested `model`, and one entry per endpoint
+         *     with its `status`, the three `checks` (`name`, `status`, `detail`), `cache_read_tokens`,
+         *     `cache_read_percent`, `spend_usd` and `duration_ms`.
+         */
+        post: operations["test_model_health_test_model_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/images/edits": {
         parameters: {
             query?: never;
@@ -27824,6 +27865,33 @@ export interface components {
                 [key: string]: unknown;
             };
         };
+        /** Body_test_model_health_test_model_post */
+        Body_test_model_health_test_model_post: {
+            /**
+             * Endpoints
+             * @description Which endpoints to test: /v1/chat/completions, /v1/responses, /v1/messages. Defaults to the model's native endpoint.
+             */
+            endpoints?: ("/v1/chat/completions" | "/v1/responses" | "/v1/messages")[] | null;
+            /**
+             * Litellm Params
+             * @description Parameters of a model that is not saved yet (model, api_key, api_base, api_version), as sent to /model/new. When model_id is also given these override the saved deployment's values.
+             */
+            litellm_params?: {
+                [key: string]: unknown;
+            } | null;
+            /**
+             * Model Id
+             * @description The deployment to test, by its model_info.id. The saved credentials and pricing are used.
+             */
+            model_id?: string | null;
+            /**
+             * Model Info
+             * @description Model info of an unsaved model, for example mode or custom pricing.
+             */
+            model_info?: {
+                [key: string]: unknown;
+            } | null;
+        };
         /** Body_token_endpoint__mcp_server_name__token_post */
         Body_token_endpoint__mcp_server_name__token_post: {
             /** Assertion */
@@ -47486,6 +47554,58 @@ export interface components {
             /** Success */
             success: boolean;
         };
+        /** TestModelCheck */
+        TestModelCheck: {
+            /** Detail */
+            detail: string;
+            /**
+             * Name
+             * @enum {string}
+             */
+            name: "conversation" | "prompt_caching" | "cost_tracking";
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "pass" | "warn" | "fail";
+        };
+        /** TestModelEndpointResult */
+        TestModelEndpointResult: {
+            /** Cache Read Percent */
+            cache_read_percent: number | null;
+            /** Cache Read Tokens */
+            cache_read_tokens: number;
+            /** Checks */
+            checks: components["schemas"]["TestModelCheck"][];
+            /** Duration Ms */
+            duration_ms: number;
+            /**
+             * Endpoint
+             * @enum {string}
+             */
+            endpoint: "/v1/chat/completions" | "/v1/responses" | "/v1/messages";
+            /** Spend Usd */
+            spend_usd: number;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "success" | "warning" | "error";
+        };
+        /** TestModelResponse */
+        TestModelResponse: {
+            /** Endpoints */
+            endpoints: components["schemas"]["TestModelEndpointResult"][];
+            /** Model */
+            model: string | null;
+            /** Model Id */
+            model_id: string | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "success" | "warning" | "error";
+        };
         /**
          * TestPoliciesAndGuardrailsRequest
          * @description Request body for POST /utils/test_policies_and_guardrails.
@@ -63158,6 +63278,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    test_model_health_test_model_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["Body_test_model_health_test_model_post"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TestModelResponse"];
                 };
             };
             /** @description Validation Error */

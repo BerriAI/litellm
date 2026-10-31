@@ -6,12 +6,13 @@ import os
 import secrets
 import time
 import traceback
-from collections.abc import Iterable, Mapping, Sequence
+import uuid
+from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from itertools import chain, groupby
 from types import MappingProxyType
-from typing import Final, Literal, TypedDict
+from typing import Annotated, Final, Literal, TypeAlias, TypedDict
 
 import fastapi
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
@@ -20,7 +21,12 @@ from typing_extensions import ReadOnly
 
 import litellm
 from litellm._logging import verbose_logger, verbose_proxy_logger
-from litellm.constants import HEALTH_CHECK_TIMEOUT_SECONDS, PROXY_DB_LOOKUP_STALL_WINDOW_SECONDS
+from litellm.constants import (
+    HEALTH_CHECK_TIMEOUT_SECONDS,
+    PROXY_DB_LOOKUP_STALL_WINDOW_SECONDS,
+    TEST_MODEL_COST_WAIT_SECONDS,
+    TEST_MODEL_SPEND_LOG_WAIT_SECONDS,
+)
 from litellm.integrations.SlackAlerting.ms_teams import (
     MS_TEAMS_ALERT_HEADERS,
     build_ms_teams_payload,
@@ -31,6 +37,7 @@ from litellm.litellm_core_utils.clientside_credential_handler import (
     clientside_credential_keys,
 )
 from litellm.litellm_core_utils.custom_logger_registry import CustomLoggerRegistry
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.routing_common_utils import resolve_model_group_alias
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.proxy._types import (
@@ -90,6 +97,19 @@ from litellm.proxy.health_check import (  # noqa: F401  # legacy module exports
     run_with_timeout,
     update_litellm_params_for_health_check,
 )
+from litellm.proxy.health_endpoints.model_checks import (
+    ENDPOINT_FOR_MODE,
+    SCRIPTS,
+    CalledTurn,
+    EndpointResult,
+    EndpointScript,
+    TestModelEndpoint,
+    TestModelResponse,
+    endpoint_result_payload,
+    overall_status,
+    response_cost,
+    run_endpoint_check,
+)
 from litellm.proxy.middleware.admission_control_middleware import (
     get_admission_control_stats,
 )
@@ -101,7 +121,7 @@ from litellm.router import Router
 from litellm.router_api import deployment_usable_by_team
 from litellm.secret_managers.main import get_secret_bool
 from litellm.types.proxy.litellm_pre_call_utils import RedactedDict, SecretFields
-from litellm.types.router import reject_server_owned_wif_fields
+from litellm.types.router import Deployment, reject_server_owned_wif_fields
 from litellm.types.utils import AdminApiKeySecretReference, admin_api_key_secret_reference
 
 #### Health ENDPOINTS ####
@@ -2487,6 +2507,411 @@ async def health_liveliness_options():
     return Response(headers=response_headers, status_code=200)
 
 
+@dataclass(frozen=True, slots=True)
+class _ResolvedConnection:
+    """A connection test's probe parameters, resolved the way ``/health/test_connection`` always has."""
+
+    request_litellm_params: Mapping[str, object]
+    config_litellm_params: Mapping[str, object]
+    litellm_params: dict[str, object]  # mutable-ok: the health check helpers mutate the probe params in place
+    resolved_model_info: dict[str, object] | None  # mutable-ok: handed to Deployment, which takes a plain dict
+    probe_model_info: Mapping[str, object]
+    deployment_by_id: Deployment | None
+    stored_model: str | None
+
+
+def _resolve_connection_params(
+    request_litellm_params: Mapping[str, object],
+    model_info: Mapping[str, object] | None,
+    llm_router: Router | None,
+    general_settings: Mapping[str, object],
+) -> _ResolvedConnection:
+    # Reject request-supplied os.environ/ references. Config values are
+    # already resolved before reaching this endpoint; any remaining
+    # reference must have come from the request body.
+    _reject_os_environ_references(dict(request_litellm_params))
+    if model_info:
+        _reject_os_environ_references(dict(model_info))
+    requested_model: Final = request_litellm_params.get("model")
+    model_name: Final = requested_model if isinstance(requested_model, str) else None
+
+    # Look up model configuration from router if model name is provided
+    # This gets the litellm_params from proxy config (with resolved env vars)
+    config_litellm_params: dict = {}
+    loaded_model_info: dict | None = None
+    deployment_by_id: Deployment | None = None
+    if llm_router is not None:
+        # Prefer disambiguation by deployment id (`model_info.id`) when
+        # the caller supplies it. This is required when multiple
+        # deployments share a `model_name` (e.g. wildcard `openai/*`
+        # with multiple `api_base` values for failover): the UI's
+        # "Test Connection" button targets a specific row, and that
+        # row's id is the only thing that uniquely identifies which
+        # deployment to probe. Without this, all duplicates collapse
+        # onto `deployments[0]`.
+        requested_id: Final = (model_info or {}).get("id")
+        request_model_id: Final = requested_id if isinstance(requested_id, str) else None
+        try:
+            if request_model_id:
+                deployment_by_id = llm_router.registry().deployment(request_model_id)
+
+            if deployment_by_id is not None:
+                config_litellm_params = deployment_by_id.litellm_params.model_dump(exclude_none=True)
+                loaded_model_info = deployment_by_id.model_info.model_dump(exclude_none=True)
+            elif model_name:
+                # Fall back to model_name lookup for callers (e.g. the
+                # "Add Model" wizard, or curl) that don't supply an id.
+                # First try to find by proxy model_name (e.g., "gpt-4o")
+                deployments = llm_router.registry().deployments(model_name)
+
+                # If not found, try to find by litellm model name
+                # (e.g., "azure/gpt-4o")
+                if not deployments or len(deployments) == 0:
+                    all_deployments: Final = llm_router.registry().deployments(None)
+                    if all_deployments:
+                        for deployment in all_deployments:
+                            if deployment.get("litellm_params", {}).get("model") == model_name:
+                                deployments = [deployment]
+                                break
+
+                if deployments and len(deployments) > 0:
+                    # Use the first deployment's litellm_params as base
+                    # config. These already have resolved environment
+                    # variables from proxy config.
+                    config_litellm_params = dict(deployments[0].get("litellm_params", {}))
+                    loaded_model_info = dict(deployments[0].get("model_info") or {})
+        except Exception as e:
+            verbose_proxy_logger.debug(
+                "Could not find model %s in router: %s. Proceeding with request params only.", model_name, e
+            )
+
+    selected_by_id: Final = deployment_by_id is not None
+    reject_server_owned_wif_fields(
+        MappingProxyType(
+            {
+                key: value
+                for key, value in _OBJECT_MAPPING.validate_python(request_litellm_params).items()
+                if key != "chatgpt_auth_file"
+            }
+        )
+    )
+    # Merge: config params (from proxy config) as base, request params override
+    merged_litellm_params: Final = {
+        **_config_base_for_health_check(
+            config_litellm_params,
+            request_litellm_params,
+            allow_client_side_credentials=general_settings.get("allow_client_side_credentials") is True,
+            selected_by_id=selected_by_id,
+        ),
+        **request_litellm_params,
+    }
+
+    resolved_model_info: Final = (
+        loaded_model_info if loaded_model_info is not None else (dict(model_info) if model_info is not None else None)
+    )
+    probe_model_info: Final = _model_info_for_mode_resolution(
+        _OBJECT_MAPPING.validate_python(resolved_model_info or {}),
+        stored_params=_OBJECT_MAPPING.validate_python(config_litellm_params),
+        request_params=_OBJECT_MAPPING.validate_python(request_litellm_params),
+    )
+    stored_model: Final = _OBJECT_MAPPING.validate_python(config_litellm_params).get("model")
+    return _ResolvedConnection(
+        request_litellm_params=_OBJECT_MAPPING.validate_python(request_litellm_params),
+        config_litellm_params=_OBJECT_MAPPING.validate_python(config_litellm_params),
+        litellm_params=merged_litellm_params,
+        resolved_model_info=resolved_model_info,
+        probe_model_info=probe_model_info,
+        deployment_by_id=deployment_by_id,
+        stored_model=stored_model if isinstance(stored_model, str) else None,
+    )
+
+
+_RawQuery: TypeAlias = Callable[..., Awaitable[Sequence[object]]]
+
+
+class _SpendLogRow(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="ignore")
+
+    tag: str
+    spend: float
+
+
+_SPEND_LOG_ROWS: Final = TypeAdapter(list[_SpendLogRow])
+_TEST_MODEL_TAG_PREFIX: Final = "litellm_test_model:"
+_SPEND_LOG_BY_TAG_SQL: Final = """
+    SELECT tag, "spend"
+    FROM "LiteLLM_SpendLogs" sl, jsonb_array_elements_text(sl."request_tags"::jsonb) AS tag
+    WHERE tag IN (SELECT jsonb_array_elements_text($1::jsonb))
+"""
+
+
+def _test_model_tag(call_id: str) -> str:
+    return f"{_TEST_MODEL_TAG_PREFIX}{call_id}"
+
+
+async def _spend_rows_once(run_query: _RawQuery, request_ids: frozenset[str]) -> Mapping[str, float]:
+    """Spend per request id. The row's request_id is the provider's response id, so each turn is found by the
+    tag the check put on it, which the proxy writes to request_tags like any client tag."""
+    rows: Final = _SPEND_LOG_ROWS.validate_python(
+        await run_query(_SPEND_LOG_BY_TAG_SQL, json.dumps(sorted(_test_model_tag(call_id) for call_id in request_ids)))
+    )
+    return MappingProxyType({row.tag.removeprefix(_TEST_MODEL_TAG_PREFIX): row.spend for row in rows})
+
+
+async def _spend_log_rows(
+    run_query: _RawQuery,
+    request_ids: Sequence[str],
+    *,
+    wait_seconds: float = TEST_MODEL_SPEND_LOG_WAIT_SECONDS,
+    poll_seconds: float = 1.0,
+) -> Mapping[str, float]:
+    """Spend rows for ``request_ids``, polled until every row landed or ``wait_seconds`` passed.
+
+    The proxy flushes spend logs in batches every ``PROXY_BATCH_WRITE_AT`` seconds, so a row for a request
+    that just finished is expected to take that long to appear.
+    """
+    deadline: Final = time.monotonic() + wait_seconds
+    wanted: Final = frozenset(request_ids)
+    while not wanted <= (found := await _spend_rows_once(run_query, wanted)).keys() and time.monotonic() < deadline:
+        await asyncio.sleep(poll_seconds)
+    return found
+
+
+def _test_model_endpoints(
+    requested: Sequence[TestModelEndpoint] | None, mode: str | None
+) -> tuple[TestModelEndpoint, ...]:
+    if requested:
+        return tuple(dict.fromkeys(requested))
+    native: Final = ENDPOINT_FOR_MODE.get(mode or "chat")
+    if native is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "error": f"/health/test_model covers chat models only and this model's mode is {mode!r}. "
+                "Use /health/test_connection for it."
+            },
+        )
+    return (native,)
+
+
+async def _logged_cost(logging_obj: LiteLLMLoggingObj, fallback: float | None) -> float | None:
+    """The cost the success handler logged for the call, which lands a moment after the call returns."""
+    deadline: Final = time.monotonic() + TEST_MODEL_COST_WAIT_SECONDS
+    while (logged := _OBJECT_MAPPING.validate_python(logging_obj.model_call_details).get("response_cost")) is None and (
+        time.monotonic() < deadline
+    ):
+        await asyncio.sleep(0.05)
+    return float(logged) if isinstance(logged, int | float) else fallback
+
+
+def _turn_caller(
+    llm_router: Router | None,
+    *,
+    pinned_model_id: str | None,
+    call_params: Mapping[str, object],
+    proxy_metadata: Mapping[str, object],
+) -> Callable[[EndpointScript, Mapping[str, object], str], Awaitable[CalledTurn]]:
+    """The two ways a turn reaches the provider: pinned to a saved deployment through the router, so the
+    deployment's own credentials and pricing apply, or straight through litellm with the submitted params.
+    Either way the call carries the proxy's own logging object, the way every proxied request does, so the
+    cost read back is the one the spend log row gets."""
+
+    async def call(script: EndpointScript, body: Mapping[str, object], call_id: str) -> CalledTurn:
+        target_params: Final = {"model": pinned_model_id} if pinned_model_id is not None else call_params
+        logging_obj, prepared = litellm.utils.function_setup(
+            original_function=script.route_type,
+            rules_obj=litellm.utils.Rules(),
+            start_time=datetime.now(),  # noqa: DTZ005  # Logging pairs it with the naive end_time it records
+            **{  # pyright: ignore[reportArgumentType]  # takes the untyped request dict, like the proxy
+                **target_params,
+                **body,
+                script.metadata_key: {**proxy_metadata, "tags": [_test_model_tag(call_id)]},
+                "litellm_call_id": call_id,
+                "drop_params": True,
+            },
+        )
+        prepared["litellm_logging_obj"] = logging_obj
+        target: Final = llm_router if pinned_model_id is not None and llm_router is not None else litellm
+        response: Final[object] = await asyncio.wait_for(
+            getattr(target, script.route_type)(**prepared), HEALTH_CHECK_TIMEOUT_SECONDS
+        )
+        return CalledTurn(response=response, cost=await _logged_cost(logging_obj, response_cost(response)))
+
+    return call
+
+
+@router.post(
+    "/health/test_model",
+    tags=["health"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def test_model(
+    request: Request,
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+    model_id: Annotated[
+        str | None,
+        fastapi.Body(
+            description="The deployment to test, by its model_info.id. The saved credentials and pricing are used."
+        ),
+    ] = None,
+    litellm_params: Annotated[
+        Mapping[str, object] | None,
+        fastapi.Body(
+            description=(
+                "Parameters of a model that is not saved yet (model, api_key, api_base, api_version), as sent to "
+                "/model/new. When model_id is also given these override the saved deployment's values."
+            )
+        ),
+    ] = None,
+    model_info: Annotated[
+        Mapping[str, object] | None,
+        fastapi.Body(description="Model info of an unsaved model, for example mode or custom pricing."),
+    ] = None,
+    endpoints: Annotated[
+        Sequence[TestModelEndpoint] | None,
+        fastapi.Body(
+            description=(
+                "Which endpoints to test: /v1/chat/completions, /v1/responses, /v1/messages. "
+                "Defaults to the model's native endpoint."
+            )
+        ),
+    ] = None,
+) -> TestModelResponse:
+    """
+    Run the live checks on a model, the way a client would use it, and report what works.
+
+    Each selected endpoint gets one three-turn conversation with a long system prompt and a tool. Turn 1 asks
+    a question the tool answers, turn 2 sends the tool result back, turn 3 asks a follow-up that needs the
+    answer from turn 2. Three checks come out of it:
+
+    - `conversation`: every turn parses, turn 1 calls the tool, turn 2 uses the tool result, turn 3 carries it on
+    - `prompt_caching`: turns 2 and 3 report cached input tokens, with no cache markers in the request
+    - `cost_tracking`: every turn carries a non-zero response cost, and the spend log row lands when a
+      database is connected
+
+    Example:
+    ```bash
+    curl -X POST 'http://localhost:4000/health/test_model' \\
+      -H "Authorization: Bearer $LITELLM_MASTER_KEY" \\
+      -H 'Content-Type: application/json' \\
+      -d '{"model_id": "a1b2c3", "endpoints": ["/v1/chat/completions", "/v1/responses"]}'
+    ```
+
+    Returns `status` (`success`, `warning` or `error`), the tested `model`, and one entry per endpoint
+    with its `status`, the three `checks` (`name`, `status`, `detail`), `cache_read_tokens`,
+    `cache_read_percent`, `spend_usd` and `duration_ms`.
+    """
+    from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+    from litellm.proxy.management_endpoints.model_management_endpoints import (
+        ModelManagementAuthChecks,
+    )
+    from litellm.proxy.proxy_server import (
+        general_settings,
+        llm_router,
+        premium_user,
+        prisma_client,
+    )
+    from litellm.types.router import Deployment, LiteLLM_Params
+
+    try:
+        request_litellm_params: Final = _OBJECT_MAPPING.validate_python(litellm_params or {})
+        request_model_info: Final[Mapping[str, object]] = {
+            **(model_info or {}),
+            **({"id": model_id} if model_id else {}),
+        }
+        if not model_id and not request_litellm_params.get("model"):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={"error": "Send model_id for a saved deployment or litellm_params.model for a new one."},
+            )
+        resolved: Final = _resolve_connection_params(
+            request_litellm_params=request_litellm_params,
+            model_info=request_model_info,
+            llm_router=llm_router,
+            general_settings=_OBJECT_MAPPING.validate_python(general_settings),
+        )
+        if model_id and resolved.deployment_by_id is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={"error": f"No deployment with model_info.id {model_id!r} is loaded on this proxy."},
+            )
+        if prisma_client is not None:
+            await ModelManagementAuthChecks.can_user_make_model_call(
+                model_params=Deployment(
+                    model_name="test_model",
+                    litellm_params=LiteLLM_Params.model_validate(resolved.litellm_params),
+                    model_info=resolved.resolved_model_info,
+                ),
+                user_api_key_dict=user_api_key_dict,
+                prisma_client=prisma_client,
+                premium_user=premium_user,
+                incoming_params=resolved.request_litellm_params,
+            )
+        elif not _is_proxy_admin(user_api_key_dict):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN, detail={"error": "Only proxy admins can test models."}
+            )
+
+        call_params: Final = {key: value for key, value in resolved.litellm_params.items() if key != "mode"}
+        mode: Final = _string_mode_or_bad_request(resolved.litellm_params.get("mode")) or resolve_health_check_mode(
+            resolved.probe_model_info, _OBJECT_MAPPING.validate_python(call_params)
+        )
+        selected: Final = _test_model_endpoints(endpoints, mode)
+        overrides_saved_deployment: Final = any(key != "model" for key in resolved.request_litellm_params)
+        pinned_model_id: Final = (
+            resolved.deployment_by_id.model_info.id
+            if resolved.deployment_by_id is not None and not overrides_saved_deployment
+            else None
+        )
+        proxy_metadata: Final = {
+            **LiteLLMProxyRequestSetup.get_sanitized_user_information_from_key(user_api_key_dict=user_api_key_dict),
+            "user_api_key": LiteLLMProxyRequestSetup.get_logged_api_key(user_api_key_dict),
+            "endpoint": "/health/test_model",
+        }
+        call: Final = _turn_caller(
+            llm_router,
+            pinned_model_id=pinned_model_id,
+            call_params={
+                **_OBJECT_MAPPING.validate_python(call_params),
+                **_admin_api_key_from_request(
+                    resolved.request_litellm_params, _OBJECT_MAPPING.validate_python(call_params)
+                ),
+            },
+            proxy_metadata=proxy_metadata,
+        )
+        run_query: Final[_RawQuery | None] = prisma_client.db.query_raw if prisma_client is not None else None
+
+        async def spend_lookup(request_ids: Sequence[str]) -> Mapping[str, float]:
+            return await _spend_log_rows(run_query, request_ids) if run_query is not None else {}
+
+        results: Final[Sequence[EndpointResult]] = await asyncio.gather(
+            *(
+                run_endpoint_check(
+                    SCRIPTS[endpoint],
+                    call,
+                    new_call_id=lambda: str(uuid.uuid4()),
+                    spend_lookup=spend_lookup if prisma_client is not None else None,
+                )
+                for endpoint in selected
+            )
+        )
+        tested_model: Final = resolved.litellm_params.get("model")
+        return TestModelResponse(
+            status=overall_status(results),
+            model=tested_model if isinstance(tested_model, str) else None,
+            model_id=pinned_model_id,
+            endpoints=[endpoint_result_payload(result) for result in results],
+        )
+    except (HTTPException, ProxyException):
+        raise
+    except Exception as e:  # noqa: BLE001  # any other failure becomes the endpoint's 500, like test_connection
+        verbose_proxy_logger.debug("litellm.proxy.health_endpoints.test_model(): Exception occurred - %s", e)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={"error": f"Failed to test model: {e}"},
+        )
+
+
 @router.post(
     "/health/test_connection",
     tags=["health"],
@@ -2599,94 +3024,17 @@ async def test_model_connection(
                 detail={"error": CommonProxyErrors.db_not_connected_error.value},
             )
 
-        # Get model name from litellm_params
-        request_litellm_params: Final = litellm_params or {}
-        # Reject request-supplied os.environ/ references. Config values are
-        # already resolved before reaching this endpoint; any remaining
-        # reference must have come from the request body.
-        _reject_os_environ_references(request_litellm_params)
-        if model_info:
-            _reject_os_environ_references(model_info)
-        model_name: Final = request_litellm_params.get("model")
-
-        # Look up model configuration from router if model name is provided
-        # This gets the litellm_params from proxy config (with resolved env vars)
-        config_litellm_params: dict = {}
-        loaded_model_info: dict | None = None
-        deployment_by_id: Deployment | None = None
-        if llm_router is not None:
-            # Prefer disambiguation by deployment id (`model_info.id`) when
-            # the caller supplies it. This is required when multiple
-            # deployments share a `model_name` (e.g. wildcard `openai/*`
-            # with multiple `api_base` values for failover): the UI's
-            # "Test Connection" button targets a specific row, and that
-            # row's id is the only thing that uniquely identifies which
-            # deployment to probe. Without this, all duplicates collapse
-            # onto `deployments[0]`.
-            request_model_info: Final = model_info or {}
-            request_model_id: Final = request_model_info.get("id")
-            try:
-                if request_model_id:
-                    deployment_by_id = llm_router.registry().deployment(request_model_id)
-
-                if deployment_by_id is not None:
-                    config_litellm_params = deployment_by_id.litellm_params.model_dump(exclude_none=True)
-                    loaded_model_info = deployment_by_id.model_info.model_dump(exclude_none=True)
-                elif model_name:
-                    # Fall back to model_name lookup for callers (e.g. the
-                    # "Add Model" wizard, or curl) that don't supply an id.
-                    # First try to find by proxy model_name (e.g., "gpt-4o")
-                    deployments = llm_router.registry().deployments(model_name)
-
-                    # If not found, try to find by litellm model name
-                    # (e.g., "azure/gpt-4o")
-                    if not deployments or len(deployments) == 0:
-                        all_deployments: Final = llm_router.registry().deployments(None)
-                        if all_deployments:
-                            for deployment in all_deployments:
-                                if deployment.get("litellm_params", {}).get("model") == model_name:
-                                    deployments = [deployment]
-                                    break
-
-                    if deployments and len(deployments) > 0:
-                        # Use the first deployment's litellm_params as base
-                        # config. These already have resolved environment
-                        # variables from proxy config.
-                        config_litellm_params = dict(deployments[0].get("litellm_params", {}))
-                        loaded_model_info = dict(deployments[0].get("model_info") or {})
-            except Exception as e:
-                verbose_proxy_logger.debug(
-                    "Could not find model %s in router: %s. Proceeding with request params only.", model_name, e
-                )
-
-        selected_by_id: Final = deployment_by_id is not None
-        reject_server_owned_wif_fields(
-            MappingProxyType(
-                {
-                    key: value
-                    for key, value in _OBJECT_MAPPING.validate_python(request_litellm_params).items()
-                    if key != "chatgpt_auth_file"
-                }
-            )
+        resolved: Final = _resolve_connection_params(
+            request_litellm_params=_OBJECT_MAPPING.validate_python(litellm_params or {}),
+            model_info=_OBJECT_MAPPING.validate_python(model_info) if model_info else None,
+            llm_router=llm_router,
+            general_settings=_OBJECT_MAPPING.validate_python(general_settings),
         )
-        # Merge: config params (from proxy config) as base, request params override
-        litellm_params = {
-            **_config_base_for_health_check(
-                config_litellm_params,
-                request_litellm_params,
-                allow_client_side_credentials=general_settings.get("allow_client_side_credentials") is True,
-                selected_by_id=selected_by_id,
-            ),
-            **request_litellm_params,
-        }
-
-        resolved_model_info: Final = loaded_model_info if loaded_model_info is not None else model_info
-        probe_model_info: Final = _model_info_for_mode_resolution(
-            _OBJECT_MAPPING.validate_python(resolved_model_info or {}),
-            stored_params=_OBJECT_MAPPING.validate_python(config_litellm_params),
-            request_params=_OBJECT_MAPPING.validate_python(request_litellm_params),
-        )
-        stored_model: Final = _OBJECT_MAPPING.validate_python(config_litellm_params).get("model")
+        request_litellm_params: Final = resolved.request_litellm_params
+        resolved_model_info: Final = resolved.resolved_model_info
+        probe_model_info: Final = resolved.probe_model_info
+        stored_model: Final = resolved.stored_model
+        litellm_params = resolved.litellm_params
         litellm_params = update_litellm_params_for_health_check(
             model_info=dict(probe_model_info),
             litellm_params=litellm_params,
