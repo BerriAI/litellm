@@ -5003,8 +5003,21 @@ class Logging(LiteLLMLoggingBaseClass):
         if call_type != CallTypes.anthropic_messages.value:
             return served
         if not reports_native_messages_cost(self.model_call_details.get("custom_llm_provider")):
-            return served
+            return self._served_with_requested_speed(result=served)
         return self._anthropic_messages_logged_response(result=served)
+
+    def _served_with_requested_speed(self, result: object) -> object:
+        """A native /v1/messages body priced as served bills the speed the client asked for when its
+        usage block reports none, the same speed its spend row is priced at."""
+        body: Final = _SERVED_ANTHROPIC_BODY.validate_python(result)
+        usage: Final = body.get("usage")
+        requested: Final = _LITELLM_PARAMS.validate_python(getattr(self, "optional_params", None) or {}).get("speed")
+        if not isinstance(requested, str) or not isinstance(usage, dict):
+            return result
+        reported: Final = _SERVED_ANTHROPIC_BODY.validate_python(usage)
+        if isinstance(reported.get("speed"), str):
+            return result
+        return {**body, "usage": {**reported, "speed": requested}}
 
     def _anthropic_messages_logged_response(self, result: object) -> ModelResponse:
         """

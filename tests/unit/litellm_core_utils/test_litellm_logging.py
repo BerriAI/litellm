@@ -14273,6 +14273,29 @@ def test_a_native_messages_body_without_content_is_priced_from_its_usage(served_
     assert without_content == with_content
 
 
+def _fast_mode_native_logging_obj(requested_speed: str | None) -> LitellmLogging:
+    logging_obj: Final = _native_anthropic_messages_logging_obj()
+    logging_obj.model = "claude-opus-5"
+    logging_obj.model_call_details["model"] = "claude-opus-5"
+    logging_obj.optional_params = {"speed": requested_speed} if requested_speed else {}
+    return logging_obj
+
+
+def test_a_native_messages_body_without_a_reported_speed_bills_the_requested_speed() -> None:
+    """A fast-mode request whose upstream usage block omits ``speed`` is still billed at the fast rate,
+    the same rate the spend row applies from the request's ``speed``."""
+    body: Final = {**_NATIVE_PRICED_MESSAGE, "model": "claude-opus-5"}
+    standard: Final = _fast_mode_native_logging_obj(None).response_cost_calculator(result=body)
+    reported_fast: Final = _fast_mode_native_logging_obj(None).response_cost_calculator(
+        result={**body, "usage": {**_NATIVE_PRICED_MESSAGE["usage"], "speed": "fast"}}
+    )
+    assert standard is not None and reported_fast is not None and reported_fast > standard
+
+    requested_fast: Final = _fast_mode_native_logging_obj("fast").response_cost_calculator(result=body)
+
+    assert requested_fast == reported_fast
+
+
 def test_record_native_bedrock_guardrail_bills_when_the_metadata_is_none() -> None:
     import datetime
 
