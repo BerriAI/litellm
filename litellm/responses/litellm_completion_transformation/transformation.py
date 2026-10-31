@@ -54,7 +54,7 @@ from litellm.integrations.anthropic_cache_control_hook import (
     whole_messages_within_cache_control_limit,
     with_cache_control,
 )
-from litellm.litellm_core_utils.core_helpers import drops_unsupported_params, normalize_drop_params
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, drops_unsupported_params, normalize_drop_params
 from litellm.litellm_core_utils.get_supported_openai_params import (
     get_supported_openai_params,
 )
@@ -64,6 +64,7 @@ from litellm.litellm_core_utils.hidden_params import (
     set_hidden_params,
 )
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.model_param_helper import embeds_thought_signature_in_tool_call_id
 from litellm.llms.anthropic.common_utils import supports_anthropic_cache_control
 from litellm.llms.anthropic.messages.native.utils import anthropic_stop_reason, openai_chat_refusal_text
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
@@ -374,8 +375,9 @@ class _ResponsesToolCallItem(Protocol):
     def get(self, key: str, /) -> object: ...
 
 
-class _MarkedToolCallChunk(ChatCompletionToolCallChunk):
+class _ReplayedToolCallChunk(ChatCompletionToolCallChunk, total=False):
     cache_control: ReadOnly[ChatCompletionCachedContent]
+    provider_specific_fields: ReadOnly[Mapping[str, object]]
 
 
 class _MarkedToolMessage(ChatCompletionToolMessage):
@@ -638,17 +640,28 @@ def _validated_cache_control(value: object) -> ChatCompletionCachedContent | Non
         return None
 
 
-def _without_cache_control_key(item: object) -> object:
+def _without_keys(item: object, keys: frozenset[str]) -> object:
     if not isinstance(item, dict):
         return item
-    return {key: value for key, value in _STR_KEY_DICT_ADAPTER.validate_python(item).items() if key != "cache_control"}
+    return {key: value for key, value in _STR_KEY_DICT_ADAPTER.validate_python(item).items() if key not in keys}
 
 
-def without_item_cache_control(input: str | ResponseInputParam) -> str | ResponseInputParam:
-    if not isinstance(input, list):
+def _without_item_keys(input: str | ResponseInputParam, keys: frozenset[str]) -> str | ResponseInputParam:
+    if not keys or not isinstance(input, list):
         return input
-    return cast(  # cast-ok: the same input items, each minus its own cache_control key
-        ResponseInputParam, [_without_cache_control_key(item) for item in input]
+    return cast(  # cast-ok: the same input items, each minus the given keys
+        ResponseInputParam, [_without_keys(item, keys) for item in input]
+    )
+
+
+def _dropped_item_keys(item_cache_control: bool, tool_call_provider_fields: bool) -> frozenset[str]:
+    return frozenset(
+        key
+        for key, kept in (
+            ("cache_control", item_cache_control),
+            ("provider_specific_fields", tool_call_provider_fields),
+        )
+        if not kept
     )
 
 
@@ -1141,6 +1154,7 @@ class LiteLLMCompletionResponsesConfig:
             responses_api_request=responses_api_request,
             replay_reasoning=True,
             item_cache_control=keeps_item_marks,
+            tool_call_provider_fields=not embeds_thought_signature_in_tool_call_id(request_kwargs),
             native_compaction=native_compaction,
             only_since_compaction=not native_compaction,
         )
@@ -1204,6 +1218,7 @@ class LiteLLMCompletionResponsesConfig:
         responses_api_request: ResponsesAPIOptionalRequestParams | dict,
         replay_reasoning: bool = False,
         item_cache_control: bool = False,
+        tool_call_provider_fields: bool = False,
         native_compaction: bool = False,
         only_since_compaction: bool = False,
     ) -> list[
@@ -1221,7 +1236,9 @@ class LiteLLMCompletionResponsesConfig:
         assistant ``reasoning_content`` and signed ``thinking_blocks`` so the
         provider gets its own chain-of-thought back instead of reading it as
         visible text. ``item_cache_control`` belongs to the same callers, when
-        the target keeps an input item's ``cache_control`` on the message.
+        the target keeps an input item's ``cache_control`` on the message, and
+        ``tool_call_provider_fields`` when the target reads a function call's
+        thought signature from ``provider_specific_fields`` instead of its id.
 
         Callers that only inspect the messages (token counting, rate limiting,
         guardrail scanning) leave both off, because they need every piece of text
@@ -1259,7 +1276,7 @@ class LiteLLMCompletionResponsesConfig:
         read_input: Final = _input_to_read(dumped_input, only_since_compaction, native_compaction)
         messages.extend(
             LiteLLMCompletionResponsesConfig._transform_response_input_param_to_chat_completion_message(
-                input=read_input if item_cache_control else without_item_cache_control(read_input),
+                input=_without_item_keys(read_input, _dropped_item_keys(item_cache_control, tool_call_provider_fields)),
                 replay_reasoning=replay_reasoning,
                 native_compaction=native_compaction,
             )
@@ -1317,6 +1334,7 @@ class LiteLLMCompletionResponsesConfig:
             ResponsesSessionHandler.get_chat_completion_message_history_for_previous_response_id,
             item_cache_control=keeps_item_marks,
             client_response_ids=previous_response_client_ids,
+            tool_call_provider_fields=not embeds_thought_signature_in_tool_call_id(request_kwargs),
             stored_turns=stored_turns,
         )
         chat_completion_session: Final = (
@@ -2500,7 +2518,7 @@ class LiteLLMCompletionResponsesConfig:
         tool_call: Final = (
             ChatCompletionToolCallChunk(id=tool_call_id, type="function", function=tool_call_function, index=0)
             if function_call_cache_control is None
-            else _MarkedToolCallChunk(
+            else _ReplayedToolCallChunk(
                 id=tool_call_id,
                 type="function",
                 function=tool_call_function,
@@ -2508,9 +2526,17 @@ class LiteLLMCompletionResponsesConfig:
                 cache_control=function_call_cache_control,
             )
         )
+        provider_specific_fields: Final = as_str_mapping(function_call.get("provider_specific_fields"))
+        replayed_tool_call: Final = (
+            tool_call
+            if provider_specific_fields is None
+            else cast(  # cast-ok: the same tool call plus the provider_specific_fields the client sent back
+                _ReplayedToolCallChunk, {**tool_call, "provider_specific_fields": provider_specific_fields}
+            )
+        )
 
         # Create an assistant message with the tool call
-        return [ChatCompletionResponseMessage(tool_calls=[tool_call], role="assistant", content=None)]
+        return [ChatCompletionResponseMessage(tool_calls=[replayed_tool_call], role="assistant", content=None)]
 
     @staticmethod
     def _transform_input_file_item_to_file_item(item: Mapping[str, object]) -> _ResponsesFilePart:
