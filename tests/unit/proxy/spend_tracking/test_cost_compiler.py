@@ -347,25 +347,40 @@ async def test_real_agent_capture_prices_retained_per_query_fee() -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("reported_cost", (0.0, 0.123))
-async def test_real_capture_prices_upstream_cost_without_a_model_map(reported_cost: float) -> None:
+@pytest.mark.parametrize("stamped", (False, True))
+@pytest.mark.parametrize("adjusted", (False, True))
+async def test_real_capture_prices_upstream_cost_without_a_model_map(
+    monkeypatch: pytest.MonkeyPatch, reported_cost: float, stamped: bool, adjusted: bool
+) -> None:
     from litellm.proxy.spend_tracking.usage_capture import capture_logging_usage
     from litellm.proxy.spend_tracking.usage_meter import DurableUsageMeter, UsageCaptureSettings
     from litellm.types.utils import ModelResponse, Usage
     from tests.unit.proxy.spend_tracking.test_usage_capture import StoredUsage, _logger
     from tests.unit.proxy.spend_tracking.test_usage_meter import _manual_flush
 
+    import litellm
+    from litellm.litellm_core_utils.core_helpers import stamp_litellm_bill_on_usage
+
+    monkeypatch.setattr(litellm, "cost_discount_config", {"openai": 0.05} if adjusted else {})
+    monkeypatch.setattr(
+        litellm, "cost_margin_config", {"global": {"percentage": 0.1, "fixed_amount": 0.001}} if adjusted else {}
+    )
+    expected: Final = reported_cost * 0.95 * 1.1 + 0.001 if adjusted else reported_cost
     logger: Final = _logger()
-    logger.record_provider_reported_cost(reported_cost)
+
+    response: Final = ModelResponse(
+        id="upstream", model="capture-model", usage=Usage(prompt_tokens=10, cost=reported_cost)
+    )
+    if stamped:
+        stamp_litellm_bill_on_usage(response, response.usage, reported_cost + 0.9)
     database: Final = StoredUsage()
     meter: Final = DurableUsageMeter(database.insert, UsageCaptureSettings(), wait_for_batch=_manual_flush)
     try:
-        capture_logging_usage(
-            meter, logger, ModelResponse(id="upstream", model="capture-model", usage=Usage(prompt_tokens=10)), _AT, _AT
-        )
+        capture_logging_usage(meter, logger, response, _AT, _AT)
         await meter.close()
         result: Final = price_usage(database.rows[-1].envelope)
         assert isinstance(result, PricingSnapshot)
-        assert float(result.total_cost) == pytest.approx(reported_cost)
+        assert float(result.total_cost) == pytest.approx(expected)
         assert result.upstream_reported_cost == Decimal(str(reported_cost))
     finally:
         await meter.stop(1)
@@ -881,13 +896,13 @@ async def test_stream_replay_applies_adjustments_once_to_legacy_stamped_usage(
     )
     expected: Final = _logger(stream=True).response_cost_calculator(response, ignore_stamped_cost=True)
     assert expected is not None
-    stamped: Final = response.model_copy(
-        update={"usage": Usage(prompt_tokens=10, completion_tokens=completion_tokens, cost=expected)}
-    )
+    from litellm.litellm_core_utils.core_helpers import stamp_litellm_bill_on_usage
+
+    stamp_litellm_bill_on_usage(response, response.usage, expected)
     database: Final = StoredUsage()
     meter: Final = DurableUsageMeter(database.insert, UsageCaptureSettings(), wait_for_batch=_manual_flush)
     try:
-        capture_logging_usage(meter, logger, stamped, _AT, _AT)
+        capture_logging_usage(meter, logger, response, _AT, _AT)
         await meter.close()
         priced: Final = price_usage(database.rows[-1].envelope)
         assert isinstance(priced, PricingSnapshot)

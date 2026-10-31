@@ -85,6 +85,7 @@ from litellm.litellm_core_utils.classifier_logging import (
     is_classifier_call,
 )
 from litellm.litellm_core_utils.core_helpers import (
+    billed_usage_cost,
     finite_cost,
     get_provider_response_headers_from_hidden_params,
     is_expected_client_error,
@@ -3076,6 +3077,7 @@ class Logging(LiteLLMLoggingBaseClass):
             {
                 "response_ms": getattr(result, "_response_ms", None),
                 "provider_reported_cost": self._provider_reported_cost,
+                "provider_usage_cost": billed_usage_cost(result, self.custom_llm_provider),
                 "current_billing_time": self.billing_time_for_cost().isoformat(),
                 "custom_pricing": self.custom_pricing_for(result),
                 "custom_cost_per_token": self.custom_cost_per_token,
