@@ -127,7 +127,6 @@ vi.mock("@/components/new_usage", () => ({ default: stub("new-usage") }));
 vi.mock("@/components/api_ref", () => ({ default: stub("api-ref") }));
 vi.mock("@/components/chat_ui/ChatUI", () => ({ default: stub("chat-ui") }));
 vi.mock("@/components/leftnav", () => ({ default: stub("sidebar") }));
-vi.mock("@/app/(dashboard)/old-usage/_components/usage", () => ({ default: stub("usage") }));
 vi.mock("@/components/cache_dashboard", () => ({ default: stub("cache-dashboard") }));
 vi.mock("@/app/(dashboard)/guardrails/_components", () => ({ default: stub("guardrails") }));
 vi.mock("@/components/prompts", () => ({ default: stub("prompts") }));
