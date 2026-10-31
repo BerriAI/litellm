@@ -27,6 +27,7 @@ from litellm.constants import INTERNAL_CALL_ORIGIN_METADATA_KEY, RESPONSES_WEBSO
 from litellm.integrations.custom_secret_manager import CustomSecretManager
 from litellm.litellm_core_utils import ptu_pricing
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.ptu_shares import PTUTeamCeiling
 from litellm.litellm_core_utils.realtime_streaming import RealTimeStreaming
 from litellm.llms.azure.ptu_capacity import AZURE_PTU_CAPACITY
 from litellm.proxy._types import UserAPIKeyAuth
@@ -53,7 +54,6 @@ from litellm.proxy.spend_tracking.ptu_feature_flag import PTU_COST_ATTRIBUTION_E
 from litellm.proxy.utils import InternalUsageCache, ProxyLogging, hash_token
 from litellm.responses.streaming_iterator import _record_usage_for_failure
 from litellm.responses.utils import ResponseAPILoggingUtils
-from litellm.router_utils.ptu_shares import PTUTeamCeiling
 from litellm.types.caching import RedisPipelineIncrementOperation
 from litellm.types.extraction import ExtractionResponse
 from litellm.types.llms.openai import ResponseAPIUsage, ResponsesAPIResponse
