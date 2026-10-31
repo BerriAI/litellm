@@ -61,6 +61,8 @@ import websockets
 import websockets.exceptions
 from pydantic import BaseModel, ConfigDict, Json, JsonValue, TypeAdapter, ValidationError, with_config
 from pydantic.fields import FieldInfo, PydanticUndefined
+from pydantic.main import IncEx
+from pydantic_core import PydanticSerializationError, to_json
 from typing_extensions import NotRequired, ReadOnly, TypedDict, assert_never
 
 from litellm._uuid import uuid
@@ -10070,13 +10072,39 @@ def _restamp_nested_response_model_in_sse_line(line: bytes, target_model: str) -
     return _SSE_DATA_FIELD + b" " + serialized_event.encode() + line_ending
 
 
-def _null_for_unencodable(_value: object) -> None:
-    return None
+def _json_encodes(value: object) -> bool:
+    try:
+        to_json(value)
+    except PydanticSerializationError:
+        return False
+    return True
+
+
+def _unencodable_fields(model: BaseModel, nested_field: str | None) -> dict[str, bool]:
+    return {key: True for key, value in model if key != nested_field and not _json_encodes(value)}
+
+
+def _unencodable_choice_fields(choice: StreamingChoices) -> Mapping[str, IncEx | bool]:
+    return {**_unencodable_fields(choice, "delta"), "delta": _unencodable_fields(choice.delta, None)}
+
+
+def _serialize_chat_chunk_without_unencodable_fields(chunk: ModelResponseStream) -> bytes:
+    choices: Final = {index: _unencodable_choice_fields(choice) for index, choice in enumerate(chunk.choices)}
+    exclude: Final = {**_unencodable_fields(chunk, "choices"), "choices": choices}
+    verbose_proxy_logger.warning("Dropping streamed chunk fields that JSON cannot encode: %s", exclude)
+    return chunk.model_dump_json(exclude_none=True, exclude_unset=True, exclude=exclude).encode()
+
+
+def _serialize_chat_chunk(chunk: ModelResponseStream) -> bytes:
+    try:
+        return chunk.model_dump_json(exclude_none=True, exclude_unset=True).encode()
+    except PydanticSerializationError:
+        return _serialize_chat_chunk_without_unencodable_fields(chunk)
 
 
 def _serialize_streaming_chunk(chunk: BaseModel) -> bytes:
     if isinstance(chunk, ModelResponseStream):
-        return chunk.model_dump_json(exclude_none=True, exclude_unset=True, fallback=_null_for_unencodable).encode()
+        return _serialize_chat_chunk(chunk)
     return chunk.model_dump_json(exclude_none=True, exclude_unset=True).encode()
 
 

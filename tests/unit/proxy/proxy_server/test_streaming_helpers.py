@@ -15,7 +15,9 @@ Pins covered:
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
+import logging
 from collections.abc import AsyncIterator, Callable
 from typing import Final, Literal
 from unittest.mock import AsyncMock, MagicMock
@@ -768,25 +770,48 @@ async def test_async_data_generator_sse_frame_keeps_provider_fields_on_a_text_ch
     assert read_field(json.loads(_sse_text(out[0]).removeprefix("data: ").removesuffix("\n\n"))) == sent
 
 
-@pytest.mark.asyncio
-async def test_async_data_generator_streams_a_text_chunk_a_hook_tagged_with_a_value_json_cannot_encode(monkeypatch):
-    _patch_logging_flags(monkeypatch)
-    chunk: Final = _azure_chunk({}, {"obfuscation": "Ab3"})
-    setattr(chunk, "trace_handle", object())
+def _circular_dict() -> dict[str, object]:
+    looped: Final[dict[str, object]] = {}  # mutable-ok: a circular dict has to be inserted into itself
+    looped["self"] = looped
+    return looped
 
-    out: Final = [
-        line
-        async for line in async_data_generator(
-            response=_async_iter([chunk]),
-            user_api_key_dict=_user_auth(),
-            request_data={"model": "gpt-4"},
-        )
-    ]
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "unencodable",
+    [
+        pytest.param(object(), id="unknown-type"),
+        pytest.param(hashlib.sha256(b"trace").digest(), id="invalid-utf8-bytes"),
+        pytest.param("\ud800", id="lone-surrogate"),
+        pytest.param(_circular_dict(), id="circular-dict"),
+    ],
+)
+async def test_async_data_generator_streams_a_text_chunk_a_hook_tagged_with_a_value_json_cannot_encode(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, unencodable: object
+) -> None:
+    _patch_logging_flags(monkeypatch)
+    chunk: Final = _azure_chunk({"content_filter_results": _AZURE_CONTENT_FILTER_RESULTS}, {"obfuscation": "Ab3"})
+    setattr(chunk, "trace_chunk", unencodable)
+    setattr(chunk.choices[0], "trace_choice", unencodable)
+    setattr(chunk.choices[0].delta, "trace_delta", unencodable)
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        out: Final = [
+            line
+            async for line in async_data_generator(
+                response=_async_iter([chunk]),
+                user_api_key_dict=_user_auth(),
+                request_data={"model": "gpt-4"},
+            )
+        ]
 
     payload: Final = json.loads(_sse_text(out[0]).removeprefix("data: ").removesuffix("\n\n"))
-    assert payload["choices"][0]["delta"]["content"] == "Red"
     assert payload["obfuscation"] == "Ab3"
-    assert payload["trace_handle"] is None
+    assert payload["choices"][0]["content_filter_results"] == _AZURE_CONTENT_FILTER_RESULTS
+    assert payload["choices"][0]["delta"] == {"content": "Red"}
+    assert "trace_chunk" not in payload
+    assert "trace_choice" not in payload["choices"][0]
+    assert all(name in caplog.text for name in ("trace_chunk", "trace_choice", "trace_delta"))
 
 
 @pytest.mark.asyncio
