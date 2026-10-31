@@ -40,22 +40,25 @@ from collections.abc import Iterator, Mapping, Sequence
 from functools import cache
 from typing import TYPE_CHECKING, Final, Optional, cast
 
-from pydantic import TypeAdapter
+from pydantic import BaseModel, TypeAdapter
 
 from litellm._logging import verbose_router_logger
+from litellm.exceptions import AuthenticationError, BadRequestError
 from litellm.integrations.custom_logger import CustomLogger, Span
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
+from litellm.litellm_core_utils.get_llm_provider_logic import resolve_model_and_provider_for_metadata
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     anthropic_content_lists,
     encrypted_content_of_block,
     strip_encrypted_reasoning_from_messages,
 )
 from litellm.litellm_core_utils.routing_common_utils import as_excluded_deployment_ids, as_retry_skipped_deployment_ids
+from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.router_deprecated import RenamedRouterAttribute, renamed_router_param
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.router import Deployment
-from litellm.utils import get_order_filtered_deployments
+from litellm.utils import ProviderConfigManager, get_order_filtered_deployments
 
 if TYPE_CHECKING:
     from litellm.router_api import RoutingContext
@@ -213,40 +216,66 @@ class EncryptedContentAffinityCheck(CustomLogger):
         """
         ``(api_base, api_key)`` identifies an upstream encryption boundary.
         The values are resolved from the deployment and its named credential
-        without modifying the deployment.
+        without modifying the deployment, and a deployment with no ``api_base``
+        takes the endpoint its provider's Responses URL builder resolves for it.
 
-        Accepts any object exposing dict-style ``.get(key, default)``: plain
-        dicts (the common case in ``healthy_deployments``) as well as
-        ``LiteLLM_Params``-style Pydantic instances, which define a custom
-        ``.get()``. A stricter ``isinstance(dict)`` guard would silently drop
-        the latter from boundary matching and fall back to the full pool —
-        i.e. trigger the exact ``invalid_encrypted_content`` failure this
-        check exists to prevent.
+        Accepts plain dicts (the common case in ``healthy_deployments``) as
+        well as ``LiteLLM_Params`` Pydantic instances. A stricter
+        ``isinstance(dict)`` guard would silently drop the latter from
+        boundary matching and fall back to the full pool — i.e. trigger the
+        exact ``invalid_encrypted_content`` failure this check exists to prevent.
         """
-        getter: Final = getattr(litellm_params, "get", None)
-        if not callable(getter):
+        params: Final = EncryptedContentAffinityCheck._params_mapping(litellm_params)
+        if params is None:
             return None
-        api_base: Final = getter("api_base")
-        api_key: Final = getter("api_key")
-        credential_name: Final = getter("litellm_credential_name")
-        credential_values: Final[Mapping[str, object] | None] = (
+        credential_name: Final = params.get("litellm_credential_name")
+        credential_values: Final[Mapping[str, object]] = (
             CredentialAccessor.get_credential_values(credential_name)
             if isinstance(credential_name, str) and credential_name
-            else None
+            else {}
         )
-        effective_api_base: Final = (
-            credential_values.get("api_base")
-            if credential_values is not None and "api_base" in credential_values
-            else api_base
-        )
-        effective_api_key: Final = (
-            credential_values.get("api_key")
-            if credential_values is not None and "api_key" in credential_values
-            else api_key
-        )
-        if not effective_api_base or not effective_api_key:
+        effective_params: Final = {**params, **credential_values}
+        effective_api_key: Final = effective_params.get("api_key")
+        if not effective_api_key:
             return None
-        return (effective_api_base, effective_api_key)
+        api_base: Final = effective_params.get("api_base") or EncryptedContentAffinityCheck._default_responses_endpoint(
+            effective_params
+        )
+        if not api_base:
+            return None
+        return (api_base, effective_api_key)
+
+    @staticmethod
+    def _params_mapping(litellm_params: object) -> Mapping[str, object] | None:
+        if isinstance(litellm_params, BaseModel):
+            return litellm_params.model_dump(exclude_none=True)
+        if isinstance(litellm_params, Mapping):
+            return _REQUEST_KWARGS_ADAPTER.validate_python(litellm_params)
+        return None
+
+    @staticmethod
+    def _default_responses_endpoint(litellm_params: Mapping[str, object]) -> str | None:
+        model: Final = litellm_params.get("model")
+        custom_llm_provider: Final = litellm_params.get("custom_llm_provider")
+        if not isinstance(model, str):
+            return None
+        try:
+            provider_model, provider = resolve_model_and_provider_for_metadata(
+                model, custom_llm_provider if isinstance(custom_llm_provider, str) else None
+            )
+        except BadRequestError:
+            return None
+        responses_config: Final = ProviderConfigManager.get_provider_responses_api_config(
+            provider=provider, model=provider_model
+        )
+        if responses_config is None:
+            return None
+        try:
+            return responses_config.get_complete_url(  # pyright: ignore[reportUnknownMemberType]  # the base types litellm_params as a bare dict
+                api_base=None, litellm_params=dict(litellm_params)
+            )
+        except (ValueError, BaseLLMException, AuthenticationError):
+            return None
 
     def _find_deployments_on_same_encryption_boundary(
         self,
