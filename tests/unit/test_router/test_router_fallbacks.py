@@ -1006,3 +1006,204 @@ async def test_unknown_default_fallback_raises_after_primary_failure(
 
     assert route.call_count == 1
     assert "missing" in str(exc_info.value)
+
+
+def _context_error_response_stream(
+    *, event_type: str = "error", preceding_event: dict[str, object] | None = None, completed: bool = False
+) -> httpx.Response:
+    response: Final = {
+        "id": "resp_backup" if completed else "resp_primary",
+        "object": "response",
+        "created_at": 1700000000,
+        "model": "backup" if completed else "primary",
+        "status": "completed" if completed else "in_progress",
+        "output": [],
+        "parallel_tool_calls": True,
+        "tool_choice": "auto",
+        "tools": [],
+        "temperature": 1.0,
+        "top_p": 1.0,
+    }
+    error: Final = {
+        "type": "invalid_request_error",
+        "code": "context_length_exceeded",
+        "message": "Your input exceeds the context window of this model. Please adjust your input and try again.",
+    }
+    terminal: Final = (
+        {"type": "response.completed", "response": response, "sequence_number": 2}
+        if completed
+        else {"type": event_type, "error": error, "sequence_number": 2}
+        if event_type == "error"
+        else {"type": event_type, "response": {**response, "status": "failed", "error": error}, "sequence_number": 2}
+    )
+    events: Final = (
+        {"type": "response.created", "response": response, "sequence_number": 0},
+        *((preceding_event,) if preceding_event is not None else ()),
+        terminal,
+    )
+    return httpx.Response(
+        200,
+        headers={"content-type": "text/event-stream"},
+        content="".join(f"data: {json.dumps(event)}\n\n" for event in events).encode(),
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("event_type", ("error", "response.failed"))
+@pytest.mark.parametrize("context_fallback", (False, True))
+async def test_responses_context_error_uses_the_configured_fallback_before_output(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, event_type: str, context_fallback: bool
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router: Final = _fallback_router(fallbacks=[{"primary": ["missing"]}] if context_fallback else None)
+    route: Final = respx_mock.post("https://fallback-migration.local/v1/responses").mock(
+        side_effect=(
+            _context_error_response_stream(event_type=event_type),
+            _context_error_response_stream(completed=True),
+        )
+    )
+    stream: Final = await router.aresponses(
+        model="primary",
+        input="oversized prompt",
+        stream=True,
+        context_window_fallbacks=[{"primary": ["backup"]}] if context_fallback else None,
+    )
+    events: Final = [event async for event in stream]
+    assert tuple(json.loads(call.request.content)["model"] for call in route.calls) == ("primary", "backup")
+    assert tuple(event.type for event in events) == ("response.created", "response.completed")
+    assert events[0].response.id == events[-1].response.id
+    assert events[-1].response.model == "backup"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("barrier", ("text", "tool", "disabled", "unconfigured"))
+async def test_responses_context_error_does_not_restart_committed_or_disabled_streams(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, barrier: str
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router: Final = _fallback_router(fallbacks=[] if barrier == "unconfigured" else None)
+    preceding: Final = {
+        "text": {
+            "type": "response.output_text.delta",
+            "delta": "already visible",
+            "item_id": "msg_primary",
+            "output_index": 0,
+            "content_index": 0,
+            "sequence_number": 1,
+        },
+        "tool": {
+            "type": "response.output_item.added",
+            "item": {
+                "type": "function_call", "id": "fc_primary", "call_id": "call_primary",
+                "name": "lookup", "arguments": "",
+            },
+            "output_index": 0,
+            "sequence_number": 1,
+        },
+    }.get(barrier)
+    route: Final = respx_mock.post("https://fallback-migration.local/v1/responses").mock(
+        return_value=_context_error_response_stream(preceding_event=preceding)
+    )
+    stream: Final = await router.aresponses(
+        model="primary", input="oversized prompt", stream=True, disable_fallbacks=barrier == "disabled"
+    )
+    with pytest.raises(litellm.ContextWindowExceededError):
+        async for _ in stream:
+            pass
+    assert route.call_count == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sync_mode", (False, True))
+@pytest.mark.parametrize("emission", ("role", "text", "tool"))
+async def test_chat_context_error_falls_back_after_role_only_but_not_after_output(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, sync_mode: bool, emission: str
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router: Final = _fallback_router(fallbacks=[{"primary": ["missing"]}])
+    delta: Final = (
+        {"role": "assistant", "tool_calls": [{
+            "index": 0, "id": "call_primary", "type": "function", "function": {"name": "lookup", "arguments": ""}
+        }]}
+        if emission == "tool"
+        else {"role": "assistant", "content": "visible" if emission == "text" else ""}
+    )
+    first_chunk: Final = {
+        "id": "chatcmpl-primary", "object": "chat.completion.chunk", "created": 1700000000, "model": "primary",
+        "choices": [{"index": 0, "delta": delta}],
+    }
+    error: Final = {"error": {
+        "type": "invalid_request_error", "code": "context_length_exceeded",
+        "message": "This model's maximum context length is 128000 tokens. Your messages resulted in 130000 tokens.",
+    }}
+    backup: Final = {
+        "id": "chatcmpl-backup", "object": "chat.completion.chunk", "created": 1700000000, "model": "backup",
+        "choices": [{"index": 0, "delta": {"role": "assistant", "content": "backup answer"}, "finish_reason": "stop"}],
+    }
+    route: Final = respx_mock.post("https://fallback-migration.local/v1/chat/completions").mock(
+        side_effect=(
+            httpx.Response(200, content=f"data: {json.dumps(first_chunk)}\n\ndata: {json.dumps(error)}\n\n".encode()),
+            httpx.Response(200, content=f"data: {json.dumps(backup)}\n\ndata: [DONE]\n\n".encode()),
+        )
+    )
+    request: Final = {
+        "model": "primary", "messages": [{"role": "user", "content": "oversized prompt"}], "stream": True,
+        "context_window_fallbacks": [{"primary": ["backup"]}],
+    }
+    stream: Final = router.completion(**request) if sync_mode else await router.acompletion(**request)
+    if emission != "role":
+        with pytest.raises(litellm.ContextWindowExceededError):
+            tuple(stream) if sync_mode else tuple([chunk async for chunk in stream])
+        assert route.call_count == 1
+        return
+    chunks: Final = tuple(stream) if sync_mode else tuple([chunk async for chunk in stream])
+    assert tuple(json.loads(call.request.content)["model"] for call in route.calls) == ("primary", "backup")
+    assert "".join(chunk.choices[0].delta.content or "" for chunk in chunks if chunk.choices) == "backup answer"
+
+
+@pytest.mark.parametrize(
+    "wrapped,has_output,generated_content,disqualifying,recoverable",
+    (
+        (False, False, "", False, True),
+        (False, True, "", False, False),
+        (True, False, "", False, True),
+        (True, True, "", False, False),
+        (True, False, "already visible", False, False),
+        (True, False, "", True, False),
+    ),
+)
+def test_context_stream_fallback_obeys_all_output_receipts(
+    wrapped: bool, has_output: bool, generated_content: str, disqualifying: bool, recoverable: bool
+) -> None:
+    from litellm.exceptions import MidStreamFallbackError
+    from litellm.router import _context_window_stream_fallback_error
+
+    original: Final = litellm.ContextWindowExceededError(message="too long", model="primary", llm_provider="openai")
+    error: Final = (
+        MidStreamFallbackError(
+            message="too long", model="primary", llm_provider="openai", original_exception=original,
+            is_pre_first_chunk=True, generated_content=generated_content, emitted_disqualifying_content=disqualifying,
+        )
+        if wrapped
+        else original
+    )
+    if not recoverable:
+        with pytest.raises(litellm.ContextWindowExceededError) as raised:
+            _context_window_stream_fallback_error(error, "primary", "openai", has_output)
+        assert raised.value is original
+        return
+    recovered: Final = _context_window_stream_fallback_error(error, "primary", "openai", has_output)
+    assert recovered.original_exception is original
+    assert recovered.is_pre_first_chunk is True
+    if wrapped:
+        assert recovered is error
+
+
+def test_context_stream_fallback_preserves_other_errors_for_existing_continuation_policy() -> None:
+    from litellm.exceptions import MidStreamFallbackError
+    from litellm.router import _context_window_stream_fallback_error
+
+    error: Final = MidStreamFallbackError(
+        message="provider unavailable", model="primary", llm_provider="openai", generated_content="already visible"
+    )
+    assert _context_window_stream_fallback_error(error, "primary", "openai", True) is error
