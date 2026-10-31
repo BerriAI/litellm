@@ -327,15 +327,18 @@ def _assert_reused_jsonrpc_id_has_distinct_spend_identity(
             )
             for key in keys
         )
-        for response in responses:
-            assert response.status_code == 200, response.text
-            if "stream" in method.lower():
-                frames: Final = sse_frames(response.text)
-                assert frames and all(frame["id"] == "1" for frame in frames), response.text
-                assert all("error" not in frame for frame in frames), response.text
-            else:
-                response_body: Final = response.json()
-                assert response_body["id"] == "1" and "error" not in response_body, response.text
+        assert all(response.status_code == 200 for response in responses), responses
+        if "stream" in method.lower():
+            frames_by_response: Final = tuple(sse_frames(response.text) for response in responses)
+            assert all(
+                frames and all(frame["id"] == "1" for frame in frames) and all("error" not in frame for frame in frames)
+                for frames in frames_by_response
+            ), responses
+        else:
+            response_bodies: Final = tuple(response.json() for response in responses)
+            assert all(
+                response_body["id"] == "1" and "error" not in response_body for response_body in response_bodies
+            ), responses
 
         assert agent.wire is not None
         upstream_requests: Final = tuple(item for item in agent.wire.drain() if item.method == "POST")

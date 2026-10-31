@@ -16,6 +16,7 @@ from typing_extensions import ReadOnly, TypedDict
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import (
+    A2A_CALL_TYPES,
     BILLED_RETRY_ATTEMPT_METADATA_KEY,
     CALLER_SESSION_ID_METADATA_KEY,
     CLI_SESSION_KEY_PREFIX,
@@ -368,7 +369,7 @@ def get_spend_logs_id(
 ) -> str | None:
     standard_logging_payload = kwargs.get("standard_logging_object")
     candidate_ids: Final = (
-        response_obj.get("id"),
+        None if call_type in A2A_CALL_TYPES else response_obj.get("id"),
         standard_logging_payload.get("id") if isinstance(standard_logging_payload, dict) else None,
         kwargs.get("litellm_call_id"),
     )
