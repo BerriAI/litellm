@@ -1,3 +1,4 @@
+import asyncio
 import math
 from collections.abc import Awaitable, Callable, Generator, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -11,7 +12,6 @@ InfoValue: TypeAlias = InfoScalar | Mapping[str, InfoScalar]
 Popped: TypeAlias = bytes | tuple[bytes, ...] | None
 
 _T: Final = TypeVar("_T")
-_T_co: Final = TypeVar("_T_co", covariant=True)
 
 
 class Admit(Protocol):
@@ -42,14 +42,20 @@ def ttl_ms(ttl: timedelta) -> int:
     return max(1, math.ceil(ttl / timedelta(milliseconds=1)))
 
 
-class BatchReply(Protocol[_T_co]):
-    def __await__(self) -> Generator[object, None, _T_co]: ...
+class BatchReply(Protocol[_T]):
+    def __await__(self) -> Generator[object, None, _T]: ...
 
     @property
     def done(self) -> bool: ...
 
+    def on_settled(self, hook: Callable[[asyncio.Future[_T]], Awaitable[None] | None]) -> None: ...
+
 
 class RedisCommandBatch(Protocol):
+    def add_flush_hook(self, hook: Callable[[], None]) -> None: ...
+
+    def read_as_missing(self, key: str) -> bool: ...
+
     def get(self, key: str) -> BatchReply[bytes | None | RedisFailure]: ...
 
     def mget(self, keys: Sequence[str]) -> BatchReply[tuple[bytes | None, ...] | RedisFailure]: ...

@@ -215,6 +215,12 @@ class RedisPyCommandBatch:
     transport: RedisPyTransport
     engine: PipelineBatch
 
+    def add_flush_hook(self, hook: Callable[[], None]) -> None:
+        self.engine.add_flush_hook(hook)
+
+    def read_as_missing(self, key: str) -> bool:
+        return self.engine.read_as_missing(key)
+
     def get(self, key: str) -> BatchResult[bytes | None | RedisFailure]:
         name: Final = self.transport._key(key)  # pyright: ignore[reportPrivateUsage]  # the batch is the transport's own
         reply: Final = self._declare(

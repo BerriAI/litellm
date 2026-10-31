@@ -16,13 +16,91 @@ from redis.exceptions import ResponseError
 import litellm
 from litellm._internal_context import current_service_target, service_target
 from litellm._service_logger import ServiceLogging
-from litellm.caching.redis_batch import active_request_redis_batch, request_redis_batch_scope
+from litellm.caching.redis_batch import (
+    active_request_redis_batch,
+    flush_post_call_redis_batches,
+    request_redis_batch_scope,
+)
 from litellm.caching.redis_cluster_cache import ClusterConnectionGate, RedisClusterCache
 from litellm.redis.transport.batch import PipelineBatch
-from litellm.redis.transport.contract import PubSubMessage, RedisFailure, raise_redis_failure
+from litellm.redis.transport.contract import (
+    BatchReply,
+    PubSubMessage,
+    RedisFailure,
+    RedisTransport,
+    raise_redis_failure,
+)
 from litellm.redis.transport.redis_py import RedisPyCommandBatch, RedisPyTransport
 from litellm.types.services import ServiceTypes
 from tests._support.fake_redis import fake_redis_cache, fake_redis_transport
+
+
+@dataclass
+class _LazyRead:
+    transport: RedisTransport
+    reply: BatchReply[tuple[bytes | None, ...] | RedisFailure] | None = None
+
+    def declare(self) -> None:
+        batch: Final = self.transport.request_batch()
+        if batch is not None and self.reply is None:
+            self.reply = batch.mget(("present", "absent"))
+
+
+@pytest.mark.asyncio
+async def test_transport_flush_hook_joins_a_legacy_request_read(
+    server: fakeredis.FakeServer, raw: fakeredis.FakeAsyncRedis
+) -> None:
+    cache: Final = fake_redis_cache(server, namespace="ns")
+    transport: Final[RedisTransport] = cache.transport()
+    await raw.set("ns:present", "3")
+    with request_redis_batch_scope():
+        batch: Final = transport.request_batch()
+        legacy: Final = active_request_redis_batch(cache)
+        assert batch is not None and legacy is not None
+        reader: Final = _LazyRead(transport)
+        batch.add_flush_hook(reader.declare)
+        assert await legacy.mget(("present",)) == {"present": 3}
+        assert reader.reply is not None
+        assert await reader.reply == (b"3", None)
+        assert legacy.flushes == 1
+        assert batch.read_as_missing("absent") is True
+        assert batch.read_as_missing("present") is False
+        assert await transport.set("absent", "new", ttl=None) is True
+        assert await batch.set("absent", "new", ttl=None) is True
+        assert batch.read_as_missing("absent") is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("outage", (False, True))
+async def test_post_call_settled_hook_can_read_every_reply_and_rollback(
+    server: fakeredis.FakeServer, raw: fakeredis.FakeAsyncRedis, outage: bool
+) -> None:
+    transport: Final[RedisTransport] = fake_redis_cache(server, namespace="ns").transport()
+    with request_redis_batch_scope():
+        batch: Final = transport.post_call_batch()
+        assert batch is not None
+        increment: Final = batch.incrbyfloat("counter", 2.5)
+        expired: Final = batch.expire("counter", timedelta(seconds=30))
+        observed: Final[asyncio.Future[tuple[float | RedisFailure, bool | RedisFailure]]] = (
+            asyncio.get_running_loop().create_future()
+        )
+
+        async def settle(future: asyncio.Future[float | RedisFailure]) -> None:
+            assert expired.done
+            observed.set_result((future.result(), await expired))
+            server.connected = True
+            await transport.delete("counter")
+
+        increment.on_settled(settle)
+        server.connected = not outage
+        await flush_post_call_redis_batches()
+        first, second = await observed
+        if outage:
+            assert isinstance(first, RedisFailure) and first.kind == "transport"
+            assert isinstance(second, RedisFailure) and second.kind == "transport"
+        else:
+            assert (first, second) == (2.5, True)
+        assert await raw.get("ns:counter") is None
 
 
 @pytest.mark.asyncio
