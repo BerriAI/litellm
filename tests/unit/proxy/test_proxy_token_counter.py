@@ -3541,6 +3541,28 @@ async def test_gemini_messages_count_tokens_counts_the_unedited_body_when_drop_p
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("router_defaults", "request_options", "expected_status"),
+    (({}, {"drop_params": True}, None), ({"drop_params": True}, {}, None), ({}, {}, 400)),
+    ids=("request-drop-params", "router-default-drop-params", "no-drop-params"),
+)
+async def test_messages_count_tokens_for_a_model_with_no_deployment_drops_an_invalid_edit_only_under_drop_params(
+    monkeypatch: pytest.MonkeyPatch,
+    router_defaults: dict[str, JsonValue],
+    request_options: dict[str, JsonValue],
+    expected_status: int | None,
+) -> None:
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    with patch.object(litellm, "drop_params", False):
+        response, _ = await _count_through_the_messages_endpoint(
+            Router(model_list=[_gemini_deployment("gemini-agent", {})], default_litellm_params=router_defaults),
+            {**request_options, "model": "gemini/gemini-3.8-pro", "context_management": _INVALID_COMPACT_EDIT},
+        )
+
+    assert (response.status_code if isinstance(response, JSONResponse) else None) == expected_status
+
+
+@pytest.mark.asyncio
 async def test_gemini_messages_count_tokens_rejects_an_invalid_edit_without_drop_params() -> None:
     with patch.object(litellm, "drop_params", False):
         response, sent_bodies = await _count_through_the_messages_endpoint(
@@ -3898,6 +3920,18 @@ async def test_messages_count_tokens_sends_the_edited_messages_to_a_bridged_prov
     assert response == {"input_tokens": 57, "litellm_count_source": "provider"}
     assert len(sent_bodies) == 1
     assert _bedrock_counted_request(sent_bodies[0].content).count(_GEMINI_TOOL_OUTPUT) == 1
+
+
+@pytest.mark.asyncio
+async def test_messages_count_tokens_sends_a_body_with_only_empty_text_to_the_bridged_provider_count_api(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    empty_turn: Final[dict[str, JsonValue]] = {"role": "user", "content": [{"type": "text", "text": ""}]}
+
+    response, sent_bodies = await _count_on_a_bridged_provider_count_api({"messages": [empty_turn]}, monkeypatch)
+
+    assert response == {"input_tokens": 57, "litellm_count_source": "provider"}
+    assert len(sent_bodies) == 1
 
 
 _BEDROCK_CLAUDE_MODEL: Final = "bedrock/us.anthropic.claude-sonnet-5-5"

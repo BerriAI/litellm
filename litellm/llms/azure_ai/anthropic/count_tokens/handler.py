@@ -12,6 +12,7 @@ from pydantic import JsonValue
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.anthropic_beta_headers_manager import aload_beta_headers_config
 from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
 from litellm.llms.anthropic.common_utils import AnthropicError
@@ -82,6 +83,8 @@ class AzureAIAnthropicCountTokensHandler(AzureAIAnthropicCountTokensConfig):
 
             verbose_logger.debug("Making request to: %s", endpoint_url)
 
+            if context_management is not None:
+                await aload_beta_headers_config()
             # Get required headers with Azure authentication
             headers: Final = self.get_required_headers(
                 api_key=api_key,

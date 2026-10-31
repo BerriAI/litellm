@@ -1,4 +1,5 @@
 import copy
+import threading
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -8,9 +9,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
+import respx
 from pydantic import JsonValue, TypeAdapter
 
 import litellm
+from litellm import anthropic_beta_headers_manager
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.gemini.count_tokens import handler as gemini_count_tokens_handler
@@ -1870,6 +1873,54 @@ async def test_vertex_claude_count_forwards_the_context_edits_and_beta_vertex_in
     ((headers, body),) = fake_http_client.posted
     assert body["context_management"] == spec
     assert headers["anthropic-beta"] == expected_beta
+
+
+@pytest.mark.asyncio
+async def test_vertex_claude_count_with_an_edit_fetches_the_remote_beta_config_off_the_event_loop(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.llms.vertex_ai.vertex_ai_partner_models.count_tokens import handler
+
+    class FakeResponse:
+        status_code = 200
+
+        def json(self) -> dict[str, int]:
+            return {"input_tokens": 21}
+
+    class FakeHttpClient:
+        async def post(
+            self, url: str, headers: dict[str, str], json: dict[str, object], timeout: float
+        ) -> FakeResponse:
+            return FakeResponse()
+
+    class FetchThreads:
+        seen: tuple[int, ...] = ()
+
+        def __call__(self, request: httpx.Request) -> httpx.Response:
+            self.seen = (*self.seen, threading.get_ident())
+            return httpx.Response(200, json={})
+
+    monkeypatch.delenv("LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS", raising=False)
+    monkeypatch.setattr(anthropic_beta_headers_manager, "_BETA_HEADERS_CONFIG", None)
+    fetch_threads: Final = FetchThreads()
+    application_default_credentials: Final = MagicMock(token="fake-token", valid=True, expiry=None)
+    monkeypatch.setattr("google.auth.default", lambda *args, **kwargs: (application_default_credentials, "test-project"))
+    with patch.object(handler, "get_async_httpx_client", return_value=FakeHttpClient()), respx.mock:
+        respx.get(litellm.anthropic_beta_headers_url).mock(side_effect=fetch_threads)
+        result: Final = await VertexAITokenCounter().count_tokens(
+            model_to_use="claude-opus-4-8",
+            messages=[{"role": "user", "content": "Hello"}],
+            contents=None,
+            deployment={"litellm_params": {"vertex_project": "test-project", "vertex_location": "us-east5"}},
+            messages_format="anthropic",
+            context_management=CountContextManagement(
+                spec={"edits": [{"type": "clear_tool_uses_20250919"}]}, drop_invalid_edits=False
+            ),
+        )
+
+    assert result is not None
+    assert len(fetch_threads.seen) == 1
+    assert threading.get_ident() not in fetch_threads.seen
 
 
 _PARTNER_CHAT_TOOL_TURNS: Final[list[dict[str, object]]] = [

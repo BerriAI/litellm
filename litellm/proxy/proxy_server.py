@@ -15321,11 +15321,14 @@ def _count_context_management(
         model, general_settings_view(), user_model if isinstance(user_model, str) else None
     )
     router_defaults: Final = _router_default_litellm_params(llm_router)
-    sent_params: Final = tuple(
-        {**deployment["litellm_params"], **router_defaults, **request_litellm_params}
+    deployment_params: Final = tuple(
+        deployment["litellm_params"]
         for deployment in llm_router.registry().deployments(
             inference_model if isinstance(inference_model, str) else model, source="routable"
         )
+    )
+    sent_params: Final = tuple(
+        {**params, **router_defaults, **request_litellm_params} for params in deployment_params or ({},)
     )
     if any(context_management_explicitly_dropped(params.get("additional_drop_params")) for params in sent_params):
         return None
@@ -15363,13 +15366,14 @@ async def _bridged_request_view(
     edits: CountContextManagement | None,
     deployment: _TokenCountDeployment,
     fallback_model: str,
-) -> InferenceRequestView | InferenceRequestViewError:
-    return await inference_request_view(
+) -> InferenceRequestView | InferenceRequestViewError | None:
+    view: Final = await inference_request_view(
         messages,
         system,
         messages_format,
         count_context_edits(edits, tools, deployment.get("litellm_params", {}), fallback_model),
     )
+    return None if isinstance(view, InferenceRequestView) and not view.messages else view
 
 
 async def _responses_request_view(

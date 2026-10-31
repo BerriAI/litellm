@@ -11,7 +11,7 @@ from typing import Any, Final
 
 from pydantic import JsonValue, TypeAdapter
 
-from litellm.anthropic_beta_headers_manager import filter_and_transform_beta_headers
+from litellm.anthropic_beta_headers_manager import aload_beta_headers_config, filter_and_transform_beta_headers
 from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.anthropic.common_utils import (
@@ -202,6 +202,8 @@ class VertexAIPartnerModelsTokenCounter(VertexBase):
             api_base=litellm_params.get("api_base"),
         )
 
+        if request_data.get("context_management") is not None:
+            await aload_beta_headers_config()
         headers: Final = dict(count_tokens_headers(access_token, request_data))
 
         # Get async HTTP client

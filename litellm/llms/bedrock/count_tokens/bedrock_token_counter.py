@@ -100,6 +100,11 @@ def _request_data(
     }
 
 
+def _invoke_model_message(message: Mapping[str, object]) -> Mapping[str, object]:
+    content: Final = message.get("content")
+    return {**message, "content": [{"type": "text", "text": content}]} if isinstance(content, str) else message
+
+
 def _invoke_supports_edit(edit: JsonValue) -> bool:
     edit_type: Final = edit.get("type") if isinstance(edit, dict) else None
     return isinstance(edit_type, str) and edit_type in BEDROCK_INVOKE_CONTEXT_MANAGEMENT_EDIT_BETAS
@@ -205,11 +210,13 @@ class BedrockTokenCounter(BaseTokenCounter):
         native_context_management: Final = _invoke_context_management(
             context_management if is_mantle_claude_model(resolved_model) else None
         )
+        counted_messages: Final = messages if translated is None else translated.messages
         runtime_request: Final = {
-            **(
-                _request_data(model_to_use, messages, tools, system)
-                if translated is None
-                else _request_data(model_to_use, translated.messages, translated.tools, translated.system)
+            **_request_data(
+                model_to_use,
+                tuple(map(_invoke_model_message, counted_messages)) if native_context_management else counted_messages,
+                tools if translated is None else translated.tools,
+                system if translated is None else translated.system,
             ),
             **native_context_management,
         }
