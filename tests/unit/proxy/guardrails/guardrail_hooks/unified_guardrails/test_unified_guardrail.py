@@ -50,6 +50,7 @@ from litellm.proxy.mcp_server.guardrail_translation.handler import (
 )
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.llms.openai import ResponsesAPIResponse
+from litellm.types.responses.main import build_web_search_call
 from litellm.types.utils import (
     CallTypes,
     CallTypesLiteral,
@@ -1287,6 +1288,36 @@ class TestStreamingTransform:
         # The tool call is delivered raw but still inspected by the guardrail at
         # end of stream (it can block), matching block_only.
         assert guardrail.received_tool_calls
+
+    @pytest.mark.asyncio
+    async def test_claude_server_tool_call_chunks_keep_their_provider_fields(self):
+        server_fields = {
+            "server_tool_calls": [
+                {
+                    "id": "srvtoolu_01",
+                    "type": "function",
+                    "function": {"name": "web_fetch", "arguments": '{"url": "https://example.com/"}'},
+                }
+            ],
+            "web_search_calls": {
+                "srvtoolu_01": build_web_search_call(
+                    "srvtoolu_01", {"url": "https://example.com/"}, None, tool_name="web_fetch"
+                ).model_dump()
+            },
+        }
+        server_chunk = ModelResponseStream(
+            choices=[StreamingChoices(index=0, delta=Delta(content=None, provider_specific_fields=server_fields))],
+        )
+
+        out = await _drive_stream(
+            UnifiedLLMGuardrails(),
+            _StreamingTextGuardrail(),
+            [server_chunk, _stream_chunk("done", finish_reason="stop")],
+        )
+
+        delivered = [getattr(item.choices[0].delta, "provider_specific_fields", None) for item in out if item.choices]
+        assert server_fields in delivered
+        assert "".join(_delta_text(item) for item in out) == "DONE"
 
     @pytest.mark.asyncio
     async def test_per_choice_finish_reason_when_choices_finish_in_different_chunks(self):

@@ -13,6 +13,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     convert_content_list_to_str,
 )
 from litellm.litellm_core_utils.url_utils import encode_url_path_segment
+from litellm.llms.anthropic.common_utils import tool_calls_with_server_tool_calls
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
@@ -434,9 +435,7 @@ class PurviewGuardrailBase:
         args: Final[list[str]] = []
 
         # tool_calls: [{"function": {"arguments": "..."}}]
-        tool_calls: Final[Sequence[object] | None] = (
-            message.get("tool_calls") if isinstance(message, dict) else getattr(message, "tool_calls", None)
-        )
+        tool_calls: Final = tool_calls_with_server_tool_calls(message)
         if tool_calls:
             for tc in tool_calls:
                 fn = tc.get("function") if isinstance(tc, dict) else getattr(tc, "function", None)

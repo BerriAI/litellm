@@ -356,6 +356,197 @@ async def test_web_search_stream_preserves_hosted_and_client_calls(sync_mode, to
         )
 
 
+_STREAMED_WEB_FETCH_CALL: Final[tuple[dict[str, object], ...]] = (
+    {
+        "type": "message_start",
+        "message": {
+            "id": "msg_01Fetch",
+            "type": "message",
+            "role": "assistant",
+            "content": [],
+            "usage": {"input_tokens": 10, "output_tokens": 1},
+        },
+    },
+    {
+        "type": "content_block_start",
+        "index": 0,
+        "content_block": {"type": "server_tool_use", "id": "srvtoolu_01Fetch", "name": "web_fetch"},
+    },
+    {
+        "type": "content_block_delta",
+        "index": 0,
+        "delta": {"type": "input_json_delta", "partial_json": '{"url": "https://example.com/"}'},
+    },
+    {"type": "content_block_stop", "index": 0},
+)
+_STREAMED_WEB_FETCH_RESULT: Final[tuple[dict[str, object], ...]] = (
+    {
+        "type": "content_block_start",
+        "index": 1,
+        "content_block": {
+            "type": "web_fetch_tool_result",
+            "tool_use_id": "srvtoolu_01Fetch",
+            "content": {"type": "web_fetch_result", "url": "https://example.com/"},
+        },
+    },
+    {"type": "content_block_stop", "index": 1},
+)
+
+
+def _streamed_text_then_weather_call(first_index: int) -> tuple[dict[str, object], ...]:
+    return (
+        {"type": "content_block_start", "index": first_index, "content_block": {"type": "text", "text": ""}},
+        {"type": "content_block_delta", "index": first_index, "delta": {"type": "text_delta", "text": "Fetched."}},
+        {"type": "content_block_stop", "index": first_index},
+        {
+            "type": "content_block_start",
+            "index": first_index + 1,
+            "content_block": {"type": "tool_use", "id": "toolu_01Weather", "name": "get_weather", "input": {}},
+        },
+        {
+            "type": "content_block_delta",
+            "index": first_index + 1,
+            "delta": {"type": "input_json_delta", "partial_json": '{"city": "Paris"}'},
+        },
+        {"type": "content_block_stop", "index": first_index + 1},
+        {
+            "type": "message_delta",
+            "delta": {"stop_reason": "tool_use", "stop_sequence": None},
+            "usage": {"output_tokens": 20},
+        },
+    )
+
+
+def _anthropic_web_fetch_stream_events(fetch_finished: bool) -> tuple[dict[str, object], ...]:
+    if fetch_finished:
+        return (*_STREAMED_WEB_FETCH_CALL, *_STREAMED_WEB_FETCH_RESULT, *_streamed_text_then_weather_call(2))
+    return (*_STREAMED_WEB_FETCH_CALL, *_streamed_text_then_weather_call(1))
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.parametrize(
+    ("fetch_finished", "expected_status", "expected_search_events"),
+    [
+        pytest.param(
+            True,
+            "completed",
+            [
+                ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED,
+                ResponsesAPIStreamEvents.WEB_SEARCH_CALL_IN_PROGRESS,
+                ResponsesAPIStreamEvents.WEB_SEARCH_CALL_SEARCHING,
+                ResponsesAPIStreamEvents.WEB_SEARCH_CALL_COMPLETED,
+                ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE,
+            ],
+            id="fetch_finished_in_this_turn",
+        ),
+        pytest.param(
+            False,
+            "in_progress",
+            [
+                ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED,
+                ResponsesAPIStreamEvents.WEB_SEARCH_CALL_IN_PROGRESS,
+                ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE,
+            ],
+            id="fetch_still_waiting_on_its_result",
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_streamed_anthropic_web_fetch_is_a_hosted_open_page_call(
+    sync_mode: bool,
+    fetch_finished: bool,
+    expected_status: str,
+    expected_search_events: list[ResponsesAPIStreamEvents],
+) -> None:
+    from litellm.llms.anthropic.chat.handler import ModelResponseIterator
+
+    parser: Final = ModelResponseIterator(streaming_response=MagicMock(), sync_stream=sync_mode, json_mode=False)
+    chunks: Final = [parser.chunk_parser(event) for event in _anthropic_web_fetch_stream_events(fetch_finished)]
+    iterator: Final = LiteLLMCompletionStreamingIterator(
+        model="claude-sonnet-5-5",
+        litellm_custom_stream_wrapper=_FakeStreamWrapper(chunks),
+        request_input="Fetch example.com and check the weather in Paris.",
+        responses_api_request={
+            "tools": [
+                {"type": "web_fetch_20250910", "name": "web_fetch"},
+                {"type": "function", "name": "get_weather", "parameters": {"type": "object"}},
+            ]
+        },
+        custom_llm_provider="anthropic",
+    )
+
+    events: Final = await _collect_events(iterator, sync_mode)
+
+    completed: Final = next(
+        event for event in events if getattr(event, "type", None) == ResponsesAPIStreamEvents.RESPONSE_COMPLETED
+    )
+    assert [
+        (item.id, item.status, item.action.model_dump())
+        for item in completed.response.output
+        if item.type == "web_search_call"
+    ] == [("ws_srvtoolu_01Fetch", expected_status, {"type": "open_page", "url": "https://example.com/"})]
+    assert [
+        event.type
+        for event in events
+        if getattr(event, "item_id", getattr(getattr(event, "item", None), "id", None)) == "ws_srvtoolu_01Fetch"
+    ] == expected_search_events
+    assert [item.name for item in completed.response.output if item.type == "function_call"] == ["get_weather"]
+    assert not any(
+        event.item.name == "web_fetch"
+        for event in events
+        if getattr(event, "type", None) == ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED
+        and event.item.type == "function_call"
+    )
+
+
+_STREAMED_PENDING_CODE_EXECUTION: Final[tuple[dict[str, object], ...]] = (
+    _STREAMED_WEB_FETCH_CALL[0],
+    {
+        "type": "content_block_start",
+        "index": 0,
+        "content_block": {"type": "server_tool_use", "id": "srvtoolu_01Bash", "name": "bash_code_execution"},
+    },
+    {
+        "type": "content_block_delta",
+        "index": 0,
+        "delta": {"type": "input_json_delta", "partial_json": '{"command": "ls"}'},
+    },
+    {"type": "content_block_stop", "index": 0},
+    *_streamed_text_then_weather_call(1),
+)
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_streamed_anthropic_code_execution_is_never_a_client_function_call(sync_mode: bool) -> None:
+    from litellm.llms.anthropic.chat.handler import ModelResponseIterator
+
+    parser: Final = ModelResponseIterator(streaming_response=MagicMock(), sync_stream=sync_mode, json_mode=False)
+    iterator: Final = LiteLLMCompletionStreamingIterator(
+        model="claude-sonnet-5-5",
+        litellm_custom_stream_wrapper=_FakeStreamWrapper(
+            [parser.chunk_parser(event) for event in _STREAMED_PENDING_CODE_EXECUTION]
+        ),
+        request_input="List the files, then check the weather in Paris.",
+        responses_api_request={
+            "tools": [
+                {"type": "code_execution_20250825", "name": "code_execution"},
+                {"type": "function", "name": "get_weather", "parameters": {"type": "object"}},
+            ]
+        },
+        custom_llm_provider="anthropic",
+    )
+
+    events: Final = await _collect_events(iterator, sync_mode)
+
+    item_events: Final = [event for event in events if getattr(event, "item", None) is not None]
+    assert {event.item.call_id for event in item_events if event.item.type == "function_call"} == {"toolu_01Weather"}
+    completed: Final = next(
+        event for event in events if getattr(event, "type", None) == ResponsesAPIStreamEvents.RESPONSE_COMPLETED
+    )
+    assert [item.call_id for item in completed.response.output if item.type == "function_call"] == ["toolu_01Weather"]
+
+
 def test_tool_calls_present_only_in_final_response_are_emitted_before_completed():
     iterator = LiteLLMCompletionStreamingIterator(
         model="test-model",

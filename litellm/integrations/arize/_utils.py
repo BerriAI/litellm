@@ -14,6 +14,7 @@ from litellm.litellm_core_utils.redact_messages import (
     should_redact_message_logging,
 )
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+from litellm.llms.anthropic.common_utils import tool_calls_with_server_tool_calls
 from litellm.types.utils import CallTypes, StandardLoggingMCPToolCall, StandardLoggingPayload
 
 if TYPE_CHECKING:
@@ -663,12 +664,11 @@ def _to_plain_dict(value):
 
 
 def _get_tool_calls(message) -> list | None:
-    """Return ``message.tool_calls`` only when it's a non-empty list.
-
-    Works for dicts and Pydantic message objects via ``_safe_get``.
+    """Return the message's tool calls, Claude's server tool calls first, or
+    ``None`` when there are none. Works for dicts and Pydantic message objects.
     """
-    tool_calls: Final = _safe_get(message, "tool_calls")
-    return tool_calls if isinstance(tool_calls, list) and tool_calls else None
+    tool_calls: Final = tool_calls_with_server_tool_calls(message)
+    return list(tool_calls) if tool_calls else None
 
 
 class _NormalizedToolCallFunction(TypedDict):

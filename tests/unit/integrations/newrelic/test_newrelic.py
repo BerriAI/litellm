@@ -1,3 +1,4 @@
+import json
 import os
 import sys
 from datetime import datetime, timezone
@@ -43,6 +44,12 @@ nr_module._newrelic_agent = _mock_newrelic_agent
 NR_ENV = {
     "NEW_RELIC_LICENSE_KEY": "test-license-key",
     "NEW_RELIC_APP_NAME": "test-app",
+}
+
+_SERVER_CALL: Final = {
+    "id": "srvtoolu_01",
+    "type": "function",
+    "function": {"name": "web_search", "arguments": '{"query": "persimmon"}'},
 }
 
 
@@ -360,6 +367,19 @@ class TestExtractMessageContent:
         result = self.logger._extract_message_content(msg)
         assert "get_weather" in result
         assert "call_1" in result
+
+    @pytest.mark.parametrize(
+        "message",
+        [
+            {"role": "assistant", "content": None, "provider_specific_fields": {"server_tool_calls": [_SERVER_CALL]}},
+            litellm.Message(
+                role="assistant", content=None, provider_specific_fields={"server_tool_calls": [_SERVER_CALL]}
+            ),
+        ],
+        ids=["dict", "message"],
+    )
+    def test_server_tool_call_only_message_serializes_the_server_call(self, message):
+        assert json.loads(self.logger._extract_message_content(message)) == [_SERVER_CALL]
 
     def test_multimodal_list_serialized_as_json(self):
         msg = {

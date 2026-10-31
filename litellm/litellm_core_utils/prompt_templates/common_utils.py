@@ -620,6 +620,8 @@ def get_content_from_model_response(response: ModelResponse | dict) -> str:
     else:
         new_response = response
 
+    from litellm.llms.anthropic.common_utils import tool_calls_with_server_tool_calls
+
     content = ""
 
     for choice in new_response.choices:
@@ -627,9 +629,8 @@ def get_content_from_model_response(response: ModelResponse | dict) -> str:
             content += choice.message.content if choice.message.content else ""
             if choice.message.function_call:
                 content += choice.message.function_call.model_dump_json()
-            if choice.message.tool_calls:
-                for tc in choice.message.tool_calls:
-                    content += tc.model_dump_json()
+            for tc in tool_calls_with_server_tool_calls(choice.message):
+                content += tc.model_dump_json()
         elif isinstance(choice, StreamingChoices):
             content += getattr(choice, "delta", {}).get("content", "") or ""
     return content

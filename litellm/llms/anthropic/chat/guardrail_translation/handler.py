@@ -16,7 +16,7 @@ import json
 from collections.abc import Iterable, Mapping, MutableSequence, Sequence
 from copy import deepcopy
 from dataclasses import dataclass
-from itertools import chain, repeat
+from itertools import chain, filterfalse, repeat
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Protocol, TypeVar, cast, overload, runtime_checkable
 
@@ -26,6 +26,7 @@ from typing_extensions import ReadOnly, TypedDict, assert_never
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, iter_items
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+from litellm.llms.anthropic.common_utils import anthropic_server_tool_calls
 from litellm.llms.anthropic.messages.adapters.transformation import (
     OPENAI_MAX_TOOL_NAME_LENGTH,
     LiteLLMAnthropicMessagesAdapter,
@@ -205,17 +206,15 @@ class _WebSearchString:
     value: str
 
 
-def _streamed_web_search_result_blocks(response: ModelResponse) -> tuple[Mapping[str, object], ...]:
-    choice: Final = response.choices[0] if response.choices else None
-    fields: Final = as_str_mapping(choice.message.provider_specific_fields) if isinstance(choice, Choices) else None
-    blocks: Final = (
-        (as_str_mapping(item) for item in iter_items(fields.get("web_search_results")))
-        if fields is not None and isinstance(fields.get("web_search_results"), list)
-        else ()
-    )
-    return tuple(
-        deepcopy(block) for block in blocks if block is not None and block.get("type") == "web_search_tool_result"
-    )
+def _legacy_hook_block(block: object) -> object:
+    if not isinstance(block, Mapping):
+        return block
+    fields: Final = _as_str_mapping(block)
+    return {**fields, "type": "tool_use"} if fields.get("type") == "server_tool_use" else fields
+
+
+def _is_web_search_result_block(block: object) -> bool:
+    return isinstance(block, Mapping) and _as_str_mapping(block).get("type") == "web_search_tool_result"
 
 
 def _web_search_results(block: Mapping[str, object]) -> Iterable[object]:
@@ -585,11 +584,14 @@ class AnthropicMessagesHandler(BaseTranslation):
         if not isinstance(response, ModelResponse):
             return response
         translated: Final = self.adapter.translate_openai_response_to_anthropic(response)
-        result_blocks: Final = _streamed_web_search_result_blocks(response)
-        if not result_blocks:
-            return translated
-        content: Final = translated.get("content") or ()
-        return {**translated, "content": [*result_blocks, *content]}
+        blocks: Final = tuple(map(_legacy_hook_block, translated.get("content") or ()))
+        return {
+            **translated,
+            "content": [
+                *filter(_is_web_search_result_block, blocks),
+                *filterfalse(_is_web_search_result_block, blocks),
+            ],
+        }
 
     @staticmethod
     def _build_streaming_usage_response(
@@ -1543,9 +1545,9 @@ class AnthropicMessagesHandler(BaseTranslation):
             if built_response is not None and hasattr(built_response, "choices") and built_response.choices:
                 model_response: Final = cast(ModelResponse, built_response)
                 first_choice: Final = cast(Choices, model_response.choices[0])
-                tool_calls_list: Final = cast(
-                    list[ChatCompletionMessageToolCall] | None,
-                    first_choice.message.tool_calls,
+                tool_calls_list: Final = (
+                    *anthropic_server_tool_calls(first_choice.message),
+                    *cast(list[ChatCompletionMessageToolCall], first_choice.message.tool_calls or []),
                 )
                 string_so_far = first_choice.message.content
                 pre_guardrail_tool_calls: Final = _tool_call_shapes(tool_calls_list or ())
@@ -1559,7 +1561,7 @@ class AnthropicMessagesHandler(BaseTranslation):
                 if texts_to_check:
                     guardrail_inputs["texts"] = texts_to_check
                 if tool_calls_list:
-                    guardrail_inputs["tool_calls"] = tool_calls_list
+                    guardrail_inputs["tool_calls"] = list(tool_calls_list)
 
                 try:
                     prepared_request_data = self._prepare_request_data(

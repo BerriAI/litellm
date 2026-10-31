@@ -1,11 +1,18 @@
 import builtins
+import json
 from collections.abc import Mapping, Sequence
 from typing import Final, Literal, Optional, Union
 
 from openai.types.responses.response_function_tool_call import ResponseFunctionToolCall
-from openai.types.responses.response_function_web_search import ActionSearchSource, ResponseFunctionWebSearch
+from openai.types.responses.response_function_web_search import (
+    Action,
+    ActionOpenPage,
+    ActionSearch,
+    ActionSearchSource,
+    ResponseFunctionWebSearch,
+)
 from openai.types.responses.response_output_refusal import ResponseOutputRefusal
-from pydantic import ConfigDict, PrivateAttr
+from pydantic import ConfigDict, PrivateAttr, TypeAdapter, ValidationError
 from typing_extensions import TypedDict
 
 from litellm.types.llms.base import BaseLiteLLMOpenAIResponseObject
@@ -43,14 +50,11 @@ class OutputFunctionToolCall(BaseLiteLLMOpenAIResponseObject):
     phase: Phase = None
 
 
-def build_web_search_call(
-    tool_id: str,
-    tool_input: object,
-    result: object,
-    status: Literal["in_progress", "searching", "completed", "failed"] | None = None,
-) -> ResponseFunctionWebSearch:
+HOSTED_WEB_TOOL_NAMES: Final = frozenset({"web_search", "web_fetch"})
+
+
+def _web_search_action(tool_input: object, content: object) -> ActionSearch:
     query: Final = tool_input.get("query", "") if isinstance(tool_input, Mapping) else ""
-    content: Final = result.get("content") if isinstance(result, Mapping) else None
     result_items: Final = content if isinstance(content, Sequence) and not isinstance(content, (str, bytes)) else ()
     sources: Final = [
         ActionSearchSource(type="url", url=url)
@@ -59,18 +63,94 @@ def build_web_search_call(
         and item.get("type") == "web_search_result"
         and isinstance((url := item.get("url")), str)
     ]
-    failed: Final = isinstance(content, Mapping) and content.get("type") == "web_search_tool_result_error"
-    return ResponseFunctionWebSearch(
-        id=f"ws_{tool_id}",
-        type="web_search_call",
-        status=status or ("failed" if failed else "completed"),
-        action={
-            "type": "search",
-            "query": query if isinstance(query, str) else "",
-            "queries": [query] if isinstance(query, str) and query else [],
-            "sources": sources,
-        },
+    return ActionSearch(
+        type="search",
+        query=query if isinstance(query, str) else "",
+        queries=[query] if isinstance(query, str) and query else [],
+        sources=sources,
     )
+
+
+def _web_fetch_action(tool_input: object) -> ActionOpenPage:
+    match tool_input:
+        case {"url": str() as url}:
+            return ActionOpenPage(type="open_page", url=url)
+        case _:
+            return ActionOpenPage(type="open_page", url=None)
+
+
+def _result_content(result: object) -> object:
+    match result:
+        case {"content": object() as content}:
+            return content
+        case _:
+            return None
+
+
+def _is_tool_result_error(content: object, tool_name: str) -> bool:
+    match content:
+        case {"type": str() as content_type}:
+            return content_type == f"{tool_name}_tool_result_error"
+        case _:
+            return False
+
+
+WEB_SEARCH_CALL_ID_PREFIX: Final = "ws_"
+
+
+def build_web_search_call(
+    tool_id: str,
+    tool_input: object,
+    result: object,
+    status: Literal["in_progress", "searching", "completed", "failed"] | None = None,
+    tool_name: str = "web_search",
+) -> ResponseFunctionWebSearch:
+    content: Final = _result_content(result)
+    return ResponseFunctionWebSearch(
+        id=f"{WEB_SEARCH_CALL_ID_PREFIX}{tool_id}",
+        type="web_search_call",
+        status=status or ("failed" if _is_tool_result_error(content, tool_name) else "completed"),
+        action=_web_fetch_action(tool_input) if tool_name == "web_fetch" else _web_search_action(tool_input, content),
+    )
+
+
+def web_search_call_tool_id(call_id: str) -> str | None:
+    tool_id: Final = call_id.removeprefix(WEB_SEARCH_CALL_ID_PREFIX)
+    return None if tool_id == call_id else tool_id
+
+
+_HOSTED_WEB_TOOL_ARGUMENTS: Final = TypeAdapter(dict[str, object])
+
+
+def hosted_web_tool_call(action: object) -> tuple[str, str] | None:
+    match action:
+        case ActionSearch(query=str() as query):
+            return "web_search", json.dumps({"query": query})
+        case ActionOpenPage(url=str() as url):
+            return "web_fetch", json.dumps({"url": url})
+        case _:
+            return None
+
+
+def _decoded_hosted_web_tool_arguments(arguments: str) -> Mapping[str, object]:
+    try:
+        return _HOSTED_WEB_TOOL_ARGUMENTS.validate_json(arguments)
+    except ValidationError:
+        return {}
+
+
+def with_hosted_web_tool_arguments(action: Action, arguments: str) -> Action:
+    match action, _decoded_hosted_web_tool_arguments(arguments):
+        case ActionSearch(), {"query": str() as query}:
+            return action.model_copy(update={"query": query, "queries": [query] if query else []})
+        case ActionSearch(), _:
+            return action.model_copy(update={"query": "", "queries": []})
+        case ActionOpenPage(), {"url": str() as url}:
+            return action.model_copy(update={"url": url})
+        case ActionOpenPage(), _:
+            return action.model_copy(update={"url": None})
+        case _:
+            return action
 
 
 class OutputImageGenerationCall(BaseLiteLLMOpenAIResponseObject):

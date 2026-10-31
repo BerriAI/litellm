@@ -1783,6 +1783,48 @@ async def test_pii_tokens_in_metadata_used_for_unmasking():
     assert response.choices[0].message.content == "Hello John, how can I help you?"
 
 
+@pytest.mark.asyncio
+async def test_output_unmasking_restores_server_tool_call_arguments(mock_user_api_key):
+    guardrail: Final = OPTIONAL_PresidioPIIMasking(mock_testing=True, output_parse_pii=True)
+    response: Final = ModelResponse(
+        choices=[
+            Choices(
+                index=0,
+                finish_reason="tool_calls",
+                message=Message(
+                    role="assistant",
+                    content=None,
+                    provider_specific_fields={
+                        "server_tool_calls": [
+                            {
+                                "id": "srvtoolu_01",
+                                "type": "function",
+                                "function": {"name": "web_search", "arguments": '{"query": "<PERSON_1> persimmon"}'},
+                            }
+                        ]
+                    },
+                ),
+            )
+        ]
+    )
+
+    result: Final = await guardrail.async_post_call_success_hook(
+        data={"metadata": {"pii_tokens": {"<PERSON_1>": "John Smith"}}},
+        user_api_key_dict=mock_user_api_key,
+        response=response,
+    )
+
+    assert result.choices[0].message.provider_specific_fields == {
+        "server_tool_calls": [
+            {
+                "id": "srvtoolu_01",
+                "type": "function",
+                "function": {"name": "web_search", "arguments": '{"query": "John Smith persimmon"}'},
+            }
+        ]
+    }
+
+
 @pytest.mark.parametrize(
     "initial_hook",
     ["pre_call", "during_call", "pre_mcp_call"],

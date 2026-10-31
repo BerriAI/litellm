@@ -20,6 +20,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     converse_redacted_content,
     encrypted_content_from_signature,
     encrypted_reasoning_signature,
+    get_content_from_model_response,
     get_file_ids_from_messages,
     get_format_from_file_id,
     get_semantic_cache_prompt_from_messages,
@@ -47,6 +48,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     with_prompt_cache_breakpoint,
 )
 from litellm.types.llms.openai import ChatCompletionAudioObject, ChatCompletionFileObject, ChatCompletionImageObject
+from litellm.types.utils import ChatCompletionMessageToolCall, Choices, Function, Message, ModelResponse
 
 _ARTIFACT_FIELD_PATTERN: Final = r'^(?!__.*__$)[^\p{Cc}\p{Cf}\p{Zl}\p{Zp}"\\./[\]]{1,200}$'
 _ARTIFACT_DATA_ID_PATTERN: Final = r"^(?!\.\.?(?:\/|$))[A-Za-z0-9_\-.~:@+]{1,200}$"
@@ -2682,6 +2684,33 @@ def test_tpm_projection_preserves_non_media_identity_and_opaque_values() -> None
     projected, media = split_media_for_tpm(request)
     assert projected is request
     assert media == ()
+
+
+def test_get_content_from_model_response_includes_server_tool_calls_before_client_calls() -> None:
+    server_call: Final = ChatCompletionMessageToolCall(
+        id="srvtoolu_01", type="function", function=Function(name="web_search", arguments='{"query": "persimmon"}')
+    )
+    client_call: Final = ChatCompletionMessageToolCall(
+        id="call_1", type="function", function=Function(name="get_weather", arguments='{"city": "SF"}')
+    )
+    response: Final = ModelResponse(
+        choices=[
+            Choices(
+                index=0,
+                finish_reason="tool_calls",
+                message=Message(
+                    role="assistant",
+                    content="Looking it up.",
+                    tool_calls=[client_call.model_dump()],
+                    provider_specific_fields={"server_tool_calls": [server_call.model_dump()]},
+                ),
+            )
+        ],
+    )
+
+    assert get_content_from_model_response(response) == (
+        "Looking it up." + server_call.model_dump_json() + client_call.model_dump_json()
+    )
 
 
 def test_content_list_flattening_returns_new_messages_and_leaves_the_callers_untouched() -> None:

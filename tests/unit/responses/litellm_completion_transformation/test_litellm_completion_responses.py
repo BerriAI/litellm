@@ -33,7 +33,7 @@ from litellm.responses.litellm_completion_transformation.transformation import (
     LiteLLMCompletionResponsesConfig,
 )
 from litellm.types.llms.base import HiddenParams
-from litellm.types.llms.openai import ResponsesAPIOptionalRequestParams
+from litellm.types.llms.openai import ResponsesAPIOptionalRequestParams, ResponsesAPIResponse
 from litellm.types.responses.main import OutputToolSearchCall, build_web_search_call
 from litellm.types.utils import (
     ChatCompletionMessageToolCall,
@@ -5025,6 +5025,159 @@ def test_function_call_tool_id_falls_back_to_unique_id_for_degenerate_call_id():
     assert convert(openai)["id"] == "call_tokyo"
 
 
+_WEATHER_TOOL_USE: Final = {
+    "type": "tool_use",
+    "id": "toolu_01Weather",
+    "name": "get_weather",
+    "input": {"city": "Paris"},
+}
+_FETCHED_URL: Final = "https://example.com/"
+_BLOCKED_URL: Final = "https://blocked.invalid/"
+_ANTHROPIC_WEB_FETCH_TURN: Final[tuple[dict[str, object], ...]] = (
+    {"type": "server_tool_use", "id": "srvtoolu_01Fetch", "name": "web_fetch", "input": {"url": _FETCHED_URL}},
+    {
+        "type": "web_fetch_tool_result",
+        "tool_use_id": "srvtoolu_01Fetch",
+        "content": {
+            "type": "web_fetch_result",
+            "url": _FETCHED_URL,
+            "content": {"type": "document", "source": {"type": "text", "media_type": "text/plain", "data": "Example"}},
+        },
+    },
+    {"type": "server_tool_use", "id": "srvtoolu_02Fetch", "name": "web_fetch", "input": {"url": _BLOCKED_URL}},
+    {
+        "type": "web_fetch_tool_result",
+        "tool_use_id": "srvtoolu_02Fetch",
+        "content": {"type": "web_fetch_tool_result_error", "error_code": "url_not_allowed"},
+    },
+    {"type": "text", "text": "The page is titled Example."},
+    _WEATHER_TOOL_USE,
+)
+
+
+def _anthropic_turn_on_responses(content: Sequence[Mapping[str, object]]) -> ResponsesAPIResponse:
+    from unittest.mock import MagicMock
+
+    import httpx
+
+    from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+
+    anthropic_response: Final = {
+        "id": "msg_01Fetch",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-sonnet-5-5",
+        "content": list(content),
+        "stop_reason": "tool_use",
+        "stop_sequence": None,
+        "usage": {"input_tokens": 100, "output_tokens": 50},
+    }
+    raw_response: Final = MagicMock(spec=httpx.Response)
+    raw_response.json.return_value = anthropic_response
+    raw_response.status_code = 200
+    raw_response.headers = {}
+    chat_response: Final = AnthropicConfig().transform_parsed_response(
+        completion_response=anthropic_response,
+        raw_response=raw_response,
+        model_response=ModelResponse(),
+        json_mode=False,
+        prefix_prompt=None,
+    )
+    return LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+        request_input="Use the web and check the weather in Paris.",
+        responses_api_request={
+            "tools": [
+                {"type": "web_search_20250305", "name": "web_search"},
+                {"type": "web_fetch_20250910", "name": "web_fetch"},
+                {"type": "function", "name": "get_weather", "parameters": {"type": "object"}},
+            ]
+        },
+        chat_completion_response=chat_response,
+    )
+
+
+def test_anthropic_web_fetch_is_a_hosted_open_page_call_on_responses() -> None:
+    response: Final = _anthropic_turn_on_responses(_ANTHROPIC_WEB_FETCH_TURN)
+
+    assert [
+        (item.id, item.status, item.action.model_dump()) for item in response.output if item.type == "web_search_call"
+    ] == [
+        ("ws_srvtoolu_01Fetch", "completed", {"type": "open_page", "url": _FETCHED_URL}),
+        ("ws_srvtoolu_02Fetch", "failed", {"type": "open_page", "url": _BLOCKED_URL}),
+    ]
+    assert [item.name for item in response.output if item.type == "function_call"] == ["get_weather"]
+
+
+@pytest.mark.parametrize(
+    ("server_tool_use", "expected_action"),
+    [
+        (
+            {
+                "type": "server_tool_use",
+                "id": "srvtoolu_01Pending",
+                "name": "web_fetch",
+                "input": {"url": _FETCHED_URL},
+            },
+            {"type": "open_page", "url": _FETCHED_URL},
+        ),
+        (
+            {"type": "server_tool_use", "id": "srvtoolu_01Pending", "name": "web_search", "input": {"query": "python"}},
+            {"type": "search", "query": "python"},
+        ),
+    ],
+)
+def test_anthropic_server_web_call_without_a_result_is_an_in_progress_hosted_call_on_responses(
+    server_tool_use: Mapping[str, object], expected_action: Mapping[str, object]
+) -> None:
+    response: Final = _anthropic_turn_on_responses((server_tool_use, _WEATHER_TOOL_USE))
+
+    web_calls: Final = [item for item in response.output if item.type == "web_search_call"]
+    assert [(item.id, item.status) for item in web_calls] == [("ws_srvtoolu_01Pending", "in_progress")]
+    assert expected_action.items() <= web_calls[0].action.model_dump().items()
+    assert [item.name for item in response.output if item.type == "function_call"] == ["get_weather"]
+
+
+def test_anthropic_code_execution_is_never_a_client_function_call_on_responses() -> None:
+    response: Final = _anthropic_turn_on_responses(
+        (
+            {
+                "type": "server_tool_use",
+                "id": "srvtoolu_01Bash",
+                "name": "bash_code_execution",
+                "input": {"command": "ls"},
+            },
+            {
+                "type": "bash_code_execution_tool_result",
+                "tool_use_id": "srvtoolu_01Bash",
+                "content": {
+                    "type": "bash_code_execution_result",
+                    "stdout": "notes.txt\n",
+                    "stderr": "",
+                    "return_code": 0,
+                },
+            },
+            {
+                "type": "server_tool_use",
+                "id": "srvtoolu_02Edit",
+                "name": "text_editor_code_execution",
+                "input": {"command": "view", "path": "notes.txt"},
+            },
+            {
+                "type": "server_tool_use",
+                "id": "srvtoolu_03Bash",
+                "name": "bash_code_execution",
+                "input": {"command": "pwd"},
+            },
+            _WEATHER_TOOL_USE,
+        )
+    )
+
+    assert [(item.type, getattr(item, "call_id", item.id)) for item in response.output if item.type != "message"] == [
+        ("code_interpreter_call", "srvtoolu_01Bash"),
+        ("function_call", "toolu_01Weather"),
+    ]
+
+
 class TestHostedWebSearchReplay:
     def test_emitted_hosted_search_output_round_trips_with_client_tool_result(self) -> None:
         search_result: Final = {
@@ -5094,6 +5247,75 @@ class TestHostedWebSearchReplay:
         assert messages[2]["tool_call_id"] == "call_round_trip_weather"
         assert messages[2]["content"] == "Paris is sunny."
         assert history == original
+
+    @pytest.mark.parametrize(
+        "leading_text", ((), ({"type": "text", "text": "Let me look that up."},)), ids=("alone", "after_text")
+    )
+    @pytest.mark.parametrize(
+        ("server_tool_use", "expected_input"),
+        (
+            (
+                {"type": "server_tool_use", "id": "srvtoolu_01Pending", "name": "web_fetch", "input": {"url": _FETCHED_URL}},
+                {"url": _FETCHED_URL},
+            ),
+            (
+                {"type": "server_tool_use", "id": "srvtoolu_01Pending", "name": "web_search", "input": {"query": "python"}},
+                {"query": "python"},
+            ),
+        ),
+        ids=("web_fetch", "web_search"),
+    )
+    def test_pending_claude_web_call_replays_to_anthropic_as_its_own_server_tool_use(
+        self,
+        leading_text: tuple[Mapping[str, object], ...],
+        server_tool_use: Mapping[str, object],
+        expected_input: Mapping[str, object],
+    ) -> None:
+        response: Final = _anthropic_turn_on_responses((*leading_text, server_tool_use, _WEATHER_TOOL_USE))
+        history: Final = [
+            {"role": "user", "content": "Use the web and check the weather in Paris."},
+            *(item.model_dump(exclude_none=True) for item in response.output),
+            {"type": "function_call_output", "call_id": "toolu_01Weather", "output": "Paris is sunny."},
+        ]
+
+        anthropic_turns: Final = anthropic_messages_pt(
+            messages=LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+                input=history, responses_api_request={}
+            ),
+            model="claude-sonnet-5-5",
+            llm_provider="anthropic",
+        )
+
+        assert [turn["role"] for turn in anthropic_turns] == ["user", "assistant", "user"]
+        assert [block for block in anthropic_turns[1]["content"] if block["type"] != "text"] == [
+            {"type": "server_tool_use", "id": "srvtoolu_01Pending", "name": server_tool_use["name"], "input": expected_input},
+            {"type": "tool_use", "id": "toolu_01Weather", "name": "get_weather", "input": {"city": "Paris"}},
+        ]
+        assert [(block["type"], block["tool_use_id"]) for block in anthropic_turns[2]["content"]] == [
+            ("tool_result", "toolu_01Weather")
+        ]
+
+    @pytest.mark.parametrize(
+        ("call_id", "status"),
+        (("ws_srvtoolu_01Fetch", "completed"), ("ws_68a1b2c3d4", "in_progress"), ("srvtoolu_01Fetch", "in_progress")),
+        ids=("completed-claude-call", "pending-non-claude-call", "pending-unprefixed-id"),
+    )
+    def test_web_call_that_is_not_a_pending_claude_call_replays_as_text_only(
+        self, call_id: str, status: Literal["completed", "in_progress"]
+    ) -> None:
+        search: Final = ResponseFunctionWebSearch(
+            id=call_id, type="web_search_call", status=status, action=ActionOpenPage(type="open_page", url=_FETCHED_URL)
+        )
+
+        messages: Final = (
+            LiteLLMCompletionResponsesConfig._transform_responses_api_input_item_to_chat_completion_message(
+                input_item=search.model_dump(exclude_none=True)
+            )
+        )
+
+        assert messages == [
+            {"role": "assistant", "content": "Hosted web search: " + search.model_dump_json(exclude_none=True)}
+        ]
 
     @pytest.mark.parametrize(
         "action",

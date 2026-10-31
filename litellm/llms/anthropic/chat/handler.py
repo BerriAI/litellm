@@ -54,6 +54,7 @@ from litellm.types.llms.openai import (
     ChatCompletionToolCallFunctionChunk,
 )
 from litellm.types.responses.main import (
+    HOSTED_WEB_TOOL_NAMES,
     OutputCodeInterpreterCall,
     build_code_interpreter_log_outputs,
     build_web_search_call,
@@ -759,6 +760,8 @@ class ModelResponseIterator:
         self._server_tool_inputs: dict[str, object] = {}
         self.tool_results: list[dict[str, Any]] = []
         self._current_server_tool_id: str | None = None
+        self._current_server_tool_name: str = ""
+        self._server_tool_calls: tuple[ChatCompletionToolCallChunk, ...] = ()
         self._container_id: str | None = None
 
     @property
@@ -829,10 +832,9 @@ class ModelResponseIterator:
             return text, tool_use, thinking_blocks, provider_specific_fields, reasoning_content
         self.content_blocks.append(content_block)
         if "partial_json" in content_block["delta"]:
-            # Only emit tool calls if we're in a tool_use or server_tool_use block
             # web_search_tool_result blocks also have input_json_delta but should not be treated as tool calls
             # See: https://github.com/BerriAI/litellm/issues/17254
-            if self.current_content_block_type in ("tool_use", "server_tool_use"):
+            if self.current_content_block_type == "tool_use":
                 tool_use = cast(
                     ChatCompletionToolCallChunk,
                     {
@@ -931,7 +933,7 @@ class ModelResponseIterator:
     def _web_search_call_snapshot(self) -> dict[str, object]:
         return dict(self._web_search_calls)
 
-    def _refresh_pending_web_search_call(self, tool_use_id: str) -> bool:
+    def _refresh_pending_web_search_call(self, tool_use_id: str, tool_name: str) -> bool:
         if tool_use_id not in self._web_search_calls:
             return False
         self._web_search_calls[tool_use_id] = build_web_search_call(
@@ -939,10 +941,11 @@ class ModelResponseIterator:
             self._server_tool_inputs.get(tool_use_id, {}),
             {"content": []},
             status="in_progress",
+            tool_name=tool_name,
         )
         return True
 
-    def _complete_web_search_call(self, result: dict[str, object]) -> None:
+    def _complete_web_search_call(self, result: dict[str, object], tool_name: str) -> None:
         tool_use_id: Final = result.get("tool_use_id")
         if not isinstance(tool_use_id, str) or tool_use_id not in self._web_search_calls:
             return
@@ -950,6 +953,7 @@ class ModelResponseIterator:
             tool_id=tool_use_id,
             tool_input=self._server_tool_inputs.get(tool_use_id, {}),
             result=result,
+            tool_name=tool_name,
         )
 
     def _build_code_interpreter_results(self) -> list:
@@ -1029,7 +1033,6 @@ class ModelResponseIterator:
                     content_block_start["content_block"]["type"] == "tool_use"
                     or content_block_start["content_block"]["type"] == "server_tool_use"
                 ):
-                    self.tool_index += 1
                     # Reverse-map the (sanitized) tool name back to the
                     # caller's original. No-op when the map is empty.
                     _stream_tool_name = content_block_start["content_block"]["name"]
@@ -1038,35 +1041,39 @@ class ModelResponseIterator:
                     # Use empty string for arguments in content_block_start - actual arguments
                     # come in subsequent content_block_delta chunks and get accumulated.
                     # Using str(input) here would prepend '{}' causing invalid JSON accumulation.
-                    tool_use = ChatCompletionToolCallChunk(
-                        id=content_block_start["content_block"]["id"],
-                        type="function",
-                        function=ChatCompletionToolCallFunctionChunk(
-                            name=_stream_tool_name,
-                            arguments="",
-                        ),
-                        index=self.tool_index,
-                    )
+                    if content_block_start["content_block"]["type"] == "tool_use":
+                        self.tool_index += 1
+                        tool_use = ChatCompletionToolCallChunk(
+                            id=content_block_start["content_block"]["id"],
+                            type="function",
+                            function=ChatCompletionToolCallFunctionChunk(
+                                name=_stream_tool_name,
+                                arguments="",
+                            ),
+                            index=self.tool_index,
+                        )
                     # Track server tool use inputs for code_interpreter_results.
                     # The initial input in content_block_start is typically {}
                     # for streaming; the full input arrives via input_json_delta
                     # and is assembled at content_block_stop.
                     if content_block_start["content_block"]["type"] == "server_tool_use":
                         self._current_server_tool_id = content_block_start["content_block"]["id"]
+                        self._current_server_tool_name = _stream_tool_name
                         tool_input: Final = content_block_start["content_block"].get("input", {})
                         self._server_tool_inputs[self._current_server_tool_id] = tool_input
-                        if _stream_tool_name == "web_search":
+                        if _stream_tool_name in HOSTED_WEB_TOOL_NAMES:
                             self._web_search_calls[self._current_server_tool_id] = build_web_search_call(
                                 self._current_server_tool_id,
                                 tool_input,
                                 {"content": []},
                                 status="in_progress",
+                                tool_name=_stream_tool_name,
                             )
                             provider_specific_fields["web_search_calls"] = self._web_search_call_snapshot()
                     # Include caller information if present (for programmatic tool calling)
                     if "caller" in content_block_start["content_block"]:
                         caller_data: Final = content_block_start["content_block"]["caller"]
-                        if caller_data:
+                        if caller_data and tool_use is not None:
                             tool_use["caller"] = cast(dict[str, Any], caller_data)
                 elif content_block_start["content_block"]["type"] == "redacted_thinking":
                     (
@@ -1097,7 +1104,7 @@ class ModelResponseIterator:
                         # The full content comes in content_block_start, not in deltas
                         # See: https://github.com/BerriAI/litellm/issues/17737
                         self.web_search_results.append(content_block_start["content_block"])
-                        self._complete_web_search_call(content_block_start["content_block"])
+                        self._complete_web_search_call(content_block_start["content_block"], "web_search")
                         provider_specific_fields["web_search_results"] = self.web_search_results
                         provider_specific_fields["web_search_calls"] = self._web_search_call_snapshot()
                     elif content_type == "web_fetch_tool_result":
@@ -1105,7 +1112,9 @@ class ModelResponseIterator:
                         # The full content comes in content_block_start, not in deltas
                         # Fixes: https://github.com/BerriAI/litellm/issues/18137
                         self.web_search_results.append(content_block_start["content_block"])
+                        self._complete_web_search_call(content_block_start["content_block"], "web_fetch")
                         provider_specific_fields["web_search_results"] = self.web_search_results
+                        provider_specific_fields["web_search_calls"] = self._web_search_call_snapshot()
                     else:
                         self.tool_results.append(content_block_start["content_block"])
                         provider_specific_fields["tool_results"] = self.tool_results
@@ -1120,7 +1129,7 @@ class ModelResponseIterator:
                 # check if tool call content block - only for tool_use and server_tool_use blocks
                 if self.current_content_block_type in ("tool_use", "server_tool_use"):
                     is_empty: Final = self.check_empty_tool_call_args()
-                    if is_empty:
+                    if is_empty and self.current_content_block_type == "tool_use":
                         tool_use = ChatCompletionToolCallChunk(
                             id=None,
                             type="function",
@@ -1144,8 +1153,24 @@ class ModelResponseIterator:
                                 self._server_tool_inputs[self._current_server_tool_id] = json.loads(args)
                             except (json.JSONDecodeError, TypeError):
                                 pass
-                        if self._refresh_pending_web_search_call(self._current_server_tool_id):
+                        server_tool_input: Final = self._server_tool_inputs.get(self._current_server_tool_id, {})
+                        if self._refresh_pending_web_search_call(
+                            self._current_server_tool_id, self._current_server_tool_name
+                        ):
                             provider_specific_fields["web_search_calls"] = self._web_search_call_snapshot()
+                        self._server_tool_calls = (
+                            *self._server_tool_calls,
+                            ChatCompletionToolCallChunk(
+                                id=self._current_server_tool_id,
+                                type="function",
+                                function=ChatCompletionToolCallFunctionChunk(
+                                    name=self._current_server_tool_name,
+                                    arguments=json.dumps(server_tool_input),
+                                ),
+                                index=len(self._server_tool_calls),
+                            ),
+                        )
+                        provider_specific_fields["server_tool_calls"] = list(self._server_tool_calls)
                         self._current_server_tool_id = None
                 if self.is_response_format_tool:
                     text = self._flush_response_format_buffer()

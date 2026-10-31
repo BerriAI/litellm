@@ -2010,9 +2010,36 @@ def _tool_call_ids_with_a_kept_server_result(message: object) -> frozenset[str]:
         return frozenset()
     return frozenset(
         tool_call_id
-        for tool_call in parts_of(message_field(message, "tool_calls"))
+        for tool_call in (
+            *parts_of(message_field(message, "tool_calls")),
+            *parts_of(message_field(provider_specific_fields, "server_tool_calls")),
+        )
         if isinstance(tool_call_id := message_field(tool_call, "id"), str)
         and tool_call_is_rebuilt_as_server_tool_use(tool_call_id, provider_specific_fields)
+    )
+
+
+def _assistant_tool_calls_with_server_tool_calls(
+    message: ChatCompletionAssistantMessage,
+) -> Sequence[ChatCompletionAssistantToolCall] | None:
+    from litellm.llms.anthropic.common_utils import anthropic_server_tool_call_params
+
+    tool_calls: Final = message.get("tool_calls")
+    server_tool_calls: Final = anthropic_server_tool_call_params(message)
+    if not server_tool_calls:
+        return tool_calls
+    client_tool_call_ids: Final = frozenset(tool_call["id"] for tool_call in tool_calls or ())
+    return (
+        *(tool_call for tool_call in server_tool_calls if tool_call["id"] not in client_tool_call_ids),
+        *(tool_calls or ()),
+    )
+
+
+def _server_tool_call_ids(message: object) -> frozenset[str]:
+    from litellm.llms.anthropic.common_utils import anthropic_server_tool_call_params
+
+    return frozenset(
+        tool_call["id"] for tool_call in anthropic_server_tool_call_params(message) if tool_call["id"] is not None
     )
 
 
@@ -2100,6 +2127,12 @@ def _unrun_server_tool_use_ids(blocks: Sequence[Mapping[str, object]]) -> frozen
     )
 
 
+def _paused_server_tool_use_ids(blocks: Sequence[Mapping[str, object]]) -> frozenset[object]:
+    if any(block.get("type") == "tool_use" for block in blocks):
+        return frozenset()
+    return _unrun_server_tool_use_ids(blocks)
+
+
 def _last_block_id_among(blocks: Sequence[Mapping[str, object]], ids: frozenset[object]) -> object:
     return next(block_id for block in reversed(blocks) if (block_id := _block_id(block)) in ids)
 
@@ -2113,7 +2146,7 @@ def _paused_turn_replay(
     tuple[_AnthropicToolInvokeItem, ...],
     tuple[ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock, ...],
 ]:
-    unrun_ids: Final = _unrun_server_tool_use_ids(tool_invokes)
+    unrun_ids: Final = _paused_server_tool_use_ids(tool_invokes)
     if not unrun_ids:
         return tuple(tool_invokes), tuple(thinking_blocks)
     dropped_ids: Final = (
@@ -2123,10 +2156,11 @@ def _paused_turn_replay(
 
 
 def convert_to_anthropic_tool_invoke(
-    tool_calls: list[ChatCompletionAssistantToolCall],
+    tool_calls: Sequence[ChatCompletionAssistantToolCall],
     web_search_results: Sequence[object] | None = None,
     tool_results: Sequence[object] | None = None,
     answered_tool_ids: Container[str] = frozenset(),
+    server_tool_call_ids: Container[str] = frozenset(),
 ) -> list[_AnthropicToolInvokeItem]:
     """
     OpenAI tool invokes:
@@ -2204,14 +2238,11 @@ def convert_to_anthropic_tool_invoke(
             anthropic_tool_invoke.append(server_tool_result)
         elif is_anthropic_tool_search_use(tool_id, tool_name) and tool_id not in answered_tool_ids:
             continue
-        elif is_anthropic_server_tool_use(tool_id) and tool_id not in answered_tool_ids:
+        elif (
+            tool_id in server_tool_call_ids or is_anthropic_server_tool_use(tool_id)
+        ) and tool_id not in answered_tool_ids:
             anthropic_tool_invoke.append(
-                {
-                    "type": "server_tool_use",
-                    "id": tool_id,
-                    "name": tool_name,
-                    "input": tool_input,
-                }
+                {"type": "server_tool_use", "id": tool_id, "name": tool_name, "input": tool_input}
             )
         else:
             sanitized_tool_id = sanitize_anthropic_tool_use_id(tool_id)
@@ -3172,7 +3203,7 @@ def anthropic_messages_pt(
             # If so, we need to interleave thinking blocks with tool call groups
             # to preserve the original content block ordering.
             # Fixes: https://github.com/BerriAI/litellm/issues/23047
-            assistant_tool_calls = assistant_content_block.get("tool_calls")
+            assistant_tool_calls = _assistant_tool_calls_with_server_tool_calls(assistant_content_block)
             _has_server_tool_calls = False
             if assistant_tool_calls is not None:
                 for _tc in assistant_tool_calls:
@@ -3196,11 +3227,12 @@ def anthropic_messages_pt(
                     web_search_results=_provider_specific_fields.get("web_search_results"),
                     tool_results=_provider_specific_fields.get("tool_results"),
                     answered_tool_ids=client_answered_tool_ids,
+                    server_tool_call_ids=_server_tool_call_ids(assistant_content_block),
                 )
                 if assistant_tool_calls is not None
                 else ()
             )
-            turn_paused = bool(_unrun_server_tool_use_ids(tool_invoke_results))
+            turn_paused = bool(_paused_server_tool_use_ids(tool_invoke_results))
             replayed_tool_invokes, replayed_thinking_blocks = _paused_turn_replay(
                 tool_invoke_results, thinking_blocks or (), is_final_message=msg_i == len(messages) - 1
             )

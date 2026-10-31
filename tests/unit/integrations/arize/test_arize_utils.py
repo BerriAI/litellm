@@ -725,6 +725,73 @@ def test_arize_output_value_falls_back_to_tool_calls_summary():
     assert "SF" in out
 
 
+def test_arize_server_tool_calls_lead_the_output_summary_and_tool_call_attributes() -> None:
+    span: Final = TracerProvider().get_tracer(__name__).start_span("litellm_request")
+    kwargs: Final = {
+        "model": "claude-opus-5-5",
+        "messages": [{"role": "user", "content": "persimmon facts?"}],
+        "standard_logging_object": {"model_parameters": {}, "metadata": {}, "call_type": "completion"},
+        "optional_params": {},
+        "litellm_params": {"custom_llm_provider": "anthropic"},
+    }
+    response_obj: Final = ModelResponse(
+        usage={"total_tokens": 10, "completion_tokens": 4, "prompt_tokens": 6},
+        choices=[
+            Choices(
+                index=0,
+                finish_reason="tool_calls",
+                message=litellm.Message(
+                    role="assistant",
+                    content=None,
+                    tool_calls=[
+                        {
+                            "id": "call_1",
+                            "type": "function",
+                            "function": {"name": "get_weather", "arguments": '{"city": "SF"}'},
+                        }
+                    ],
+                    provider_specific_fields={
+                        "server_tool_calls": [
+                            {
+                                "id": "srvtoolu_01",
+                                "type": "function",
+                                "function": {"name": "web_search", "arguments": '{"query": "persimmon"}'},
+                            }
+                        ]
+                    },
+                ),
+            )
+        ],
+        model="claude-opus-5-5",
+        id="r-server-tools",
+    )
+
+    ArizeLogger.set_arize_attributes(span, kwargs, response_obj)
+
+    tool_calls_prefix: Final = f"{SpanAttributes.LLM_OUTPUT_MESSAGES}.0.{MessageAttributes.MESSAGE_TOOL_CALLS}."
+    tool_call_attributes: Final = {
+        key: value for key, value in span.attributes.items() if key.startswith(tool_calls_prefix)
+    }
+    assert json.loads(span.attributes[SpanAttributes.OUTPUT_VALUE]) == {
+        "tool_calls": [
+            {
+                "id": "srvtoolu_01",
+                "type": "function",
+                "function": {"name": "web_search", "arguments": '{"query": "persimmon"}'},
+            },
+            {"id": "call_1", "type": "function", "function": {"name": "get_weather", "arguments": '{"city": "SF"}'}},
+        ]
+    }
+    assert tool_call_attributes == {
+        f"{tool_calls_prefix}0.{ToolCallAttributes.TOOL_CALL_ID}": "srvtoolu_01",
+        f"{tool_calls_prefix}0.{ToolCallAttributes.TOOL_CALL_FUNCTION_NAME}": "web_search",
+        f"{tool_calls_prefix}0.{ToolCallAttributes.TOOL_CALL_FUNCTION_ARGUMENTS_JSON}": '{"query": "persimmon"}',
+        f"{tool_calls_prefix}1.{ToolCallAttributes.TOOL_CALL_ID}": "call_1",
+        f"{tool_calls_prefix}1.{ToolCallAttributes.TOOL_CALL_FUNCTION_NAME}": "get_weather",
+        f"{tool_calls_prefix}1.{ToolCallAttributes.TOOL_CALL_FUNCTION_ARGUMENTS_JSON}": '{"city": "SF"}',
+    }
+
+
 def test_arize_output_value_unchanged_when_content_present():
     """Regression guard: when content is non-empty, OUTPUT_VALUE must be
     exactly that content (no summary written)."""

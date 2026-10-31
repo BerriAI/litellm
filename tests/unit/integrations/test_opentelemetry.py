@@ -372,6 +372,60 @@ def test_v1_routing_diagnostics_add_scalar_attributes_and_preserve_legacy_metada
     assert finished.attributes["metadata.routing_decision"] == str(decision)
 
 
+def test_v1_server_tool_calls_lead_the_completion_function_call_attributes() -> None:
+    exporter: Final = InMemorySpanExporter()
+    provider: Final = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    otel: Final = OpenTelemetry(tracer_provider=provider)
+    response_obj: Final = litellm.ModelResponse(
+        choices=[
+            litellm.Choices(
+                index=0,
+                finish_reason="tool_calls",
+                message=litellm.Message(
+                    role="assistant",
+                    content=None,
+                    tool_calls=[
+                        {
+                            "id": "call_1",
+                            "type": "function",
+                            "function": {"name": "get_weather", "arguments": '{"city": "SF"}'},
+                        }
+                    ],
+                    provider_specific_fields={
+                        "server_tool_calls": [
+                            {
+                                "id": "srvtoolu_01",
+                                "type": "function",
+                                "function": {"name": "web_search", "arguments": '{"query": "persimmon"}'},
+                            }
+                        ]
+                    },
+                ),
+            )
+        ],
+    )
+    with provider.get_tracer(__name__).start_as_current_span("inference") as span:
+        otel.set_attributes(
+            span,
+            {
+                "model": "claude-opus-5-5",
+                "standard_logging_object": {"id": "server-tools-call", "call_type": "acompletion", "metadata": {}},
+            },
+            response_obj,
+        )
+    (finished,) = exporter.get_finished_spans()
+    function_call_attributes: Final = {
+        key: value for key, value in finished.attributes.items() if ".function_call." in key
+    }
+    assert function_call_attributes == {
+        f"{SpanAttributes.LLM_COMPLETIONS.value}.0.function_call.name": "web_search",
+        f"{SpanAttributes.LLM_COMPLETIONS.value}.0.function_call.arguments": '{"query": "persimmon"}',
+        f"{SpanAttributes.LLM_COMPLETIONS.value}.1.function_call.name": "get_weather",
+        f"{SpanAttributes.LLM_COMPLETIONS.value}.1.function_call.arguments": '{"city": "SF"}',
+    }
+
+
 def test_v1_pod_routing_none_matches_other_none_metadata_attributes() -> None:
     exporter: Final = InMemorySpanExporter()
     provider: Final = TracerProvider()

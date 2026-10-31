@@ -4,10 +4,11 @@ import re
 import time
 from collections.abc import Callable, Mapping, Sequence
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, ClassVar, Final, NoReturn, cast
+from typing import TYPE_CHECKING, Annotated, Any, ClassVar, Final, NoReturn, cast
 
 import httpx
-from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
+from openai.types.responses.response_function_web_search import ResponseFunctionWebSearch
+from pydantic import BaseModel, BeforeValidator, ConfigDict, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, TypedDict
 
 import litellm
@@ -90,11 +91,11 @@ from litellm.types.llms.openai import (
     ChatCompletionToolCallChunk,
     ChatCompletionToolCallFunctionChunk,
     ChatCompletionToolParam,
-    OpenAIChatCompletionFinishReason,
     OpenAIMcpServerTool,
     OpenAIWebSearchOptions,
 )
 from litellm.types.responses.main import (
+    HOSTED_WEB_TOOL_NAMES,
     OutputCodeInterpreterCall,
     build_code_interpreter_log_outputs,
     build_web_search_call,
@@ -130,6 +131,7 @@ from ..common_utils import (
     stop_reason_provider_specific_fields,
     strip_advisor_blocks_from_messages,
     tools_marked_for_a_tool_config_point,
+    validated_object_mapping,
 )
 
 if TYPE_CHECKING:
@@ -167,9 +169,9 @@ _ANTHROPIC_TOOL_NAME_MAX_LEN: Final = 128
 _DEFER_LOADING_ADAPTER: Final = TypeAdapter(bool)
 _TOOL_FIELDS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _TOOLS_ADAPTER: Final = TypeAdapter(list[object])
-_LITELLM_PARAMS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+_CONTENT_BLOCKS_ADAPTER: Final = TypeAdapter(tuple[object, ...])
 _RESPONSE_BLOCKS: Final = TypeAdapter(tuple[Mapping[str, object], ...])
-_PENDING_WEB_SEARCH_RESULT: Final = MappingProxyType({"content": ()})
+_LITELLM_PARAMS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _REQUEST_PARAMS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _NATIVE_OUTPUT_STRING_FORMATS: Final = frozenset(
     ("date-time", "time", "date", "duration", "email", "hostname", "uri", "ipv4", "ipv6", "uuid")
@@ -254,6 +256,51 @@ def _validated_defer_loading(value: object) -> bool:
         return _DEFER_LOADING_ADAPTER.validate_python(value, strict=True)
     except ValidationError as exc:
         raise ValueError("defer_loading must be a boolean") from exc
+
+
+def _hosted_web_tool_use(block: object) -> tuple[str, str, object] | None:
+    match block:
+        case {
+            "type": "server_tool_use",
+            "name": str() as name,
+            "id": str() as call_id,
+            "input": object() as tool_input,
+        } if name in HOSTED_WEB_TOOL_NAMES:
+            return call_id, name, tool_input
+        case _:
+            return None
+
+
+def _server_tool_use_id(block: object) -> str | None:
+    match block:
+        case {"type": "server_tool_use", "id": str() as call_id}:
+            return call_id
+        case _:
+            return None
+
+
+def _dict_or_empty(value: object) -> object:
+    return validated_object_mapping(value) or {}
+
+
+_RESPONSE_BODY_ADAPTER: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(
+    Annotated[Mapping[str, object], BeforeValidator(_dict_or_empty)]
+)
+
+
+def _server_tool_use_ids(completion_response: Mapping[str, object]) -> frozenset[str]:
+    blocks: Final = _CONTENT_BLOCKS_ADAPTER.validate_python(completion_response.get("content") or ())
+    return frozenset(filter(None, map(_server_tool_use_id, blocks)))
+
+
+def _hosted_web_call(call_id: str, tool_name: str, tool_input: object, result: object) -> ResponseFunctionWebSearch:
+    return build_web_search_call(
+        tool_id=call_id,
+        tool_input=tool_input,
+        result=result,
+        status=None if result is not None else "in_progress",
+        tool_name=tool_name,
+    )
 
 
 class _AnthropicUsageIteration(TypedDict, total=False):
@@ -2921,25 +2968,16 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         self,
         web_search_results: Sequence[object],
         completion_response: Mapping[str, object],
-    ) -> list[object]:
-        blocks: Final = _RESPONSE_BLOCKS.validate_python(completion_response.get("content") or ())
-        results_by_id: Final = {
-            tool_use_id: result
+    ) -> list[ResponseFunctionWebSearch]:
+        blocks: Final = _CONTENT_BLOCKS_ADAPTER.validate_python(completion_response.get("content") or ())
+        results_by_call: Final = {
+            (tool_use_id, result.get("type")): result
             for result in _RESPONSE_BLOCKS.validate_python(web_search_results)
-            if result.get("type") == "web_search_tool_result"
-            and isinstance((tool_use_id := result.get("tool_use_id")), str)
+            if isinstance((tool_use_id := result.get("tool_use_id")), str)
         }
         return [
-            build_web_search_call(
-                tool_id=call_id,
-                tool_input=block.get("input"),
-                result=results_by_id.get(call_id, _PENDING_WEB_SEARCH_RESULT),
-                status=None if call_id in results_by_id else "in_progress",
-            )
-            for block in blocks
-            if block.get("type") == "server_tool_use"
-            and block.get("name") == "web_search"
-            and isinstance((call_id := block.get("id")), str)
+            _hosted_web_call(call_id, tool_name, tool_input, results_by_call.get((call_id, f"{tool_name}_tool_result")))
+            for call_id, tool_name, tool_input in filter(None, map(_hosted_web_tool_use, blocks))
         ]
 
     def _build_provider_specific_fields(
@@ -2951,6 +2989,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         tool_results: Sequence[_AnthropicToolResultBlock] | None,
         compaction_blocks: Sequence[object] | None,
         tool_calls: list[ChatCompletionToolCallChunk],
+        server_tool_use_ids: frozenset[str],
     ) -> dict[str, object]:
         provider_specific_fields: Final[dict[str, object]] = {
             "citations": citations,
@@ -2987,6 +3026,10 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
         if compaction_blocks is not None:
             provider_specific_fields["compaction_blocks"] = compaction_blocks
+
+        server_tool_calls: Final = [tc for tc in tool_calls if tc["id"] in server_tool_use_ids]
+        if server_tool_calls:
+            provider_specific_fields["server_tool_calls"] = server_tool_calls
 
         stop_reason_fields: Final = stop_reason_provider_specific_fields(
             STOP_REASON_FIELDS.validate_python(completion_response)
@@ -3047,6 +3090,8 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         ):
             text_content = prefix_prompt + text_content
 
+        server_tool_use_ids: Final = _server_tool_use_ids(_RESPONSE_BODY_ADAPTER.validate_python(completion_response))
+        client_tool_calls: Final = [tc for tc in tool_calls if tc["id"] not in server_tool_use_ids]
         provider_specific_fields: Final = self._build_provider_specific_fields(
             completion_response,
             citations,
@@ -3055,11 +3100,12 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             tool_results,
             compaction_blocks,
             tool_calls,
+            server_tool_use_ids,
         )
 
         json_mode_message, tool_calls_for_message, json_extra_content = self._resolve_json_mode_non_streaming(
             json_mode=json_mode,
-            tool_calls=tool_calls,
+            tool_calls=client_tool_calls,
             response_format_schema=response_format_schema,
         )
         merged_text = text_content or ""
@@ -3093,10 +3139,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
         model_response.choices[0].message = _message
         model_response.hidden_params["original_response"] = completion_response["content"]
-        model_response.choices[0].finish_reason = cast(
-            OpenAIChatCompletionFinishReason,
-            map_finish_reason(completion_response["stop_reason"]),
-        )
+        model_response.choices[0].finish_reason = map_finish_reason(completion_response["stop_reason"])
 
         usage: Final = self.calculate_usage(
             usage_object=completion_response["usage"],

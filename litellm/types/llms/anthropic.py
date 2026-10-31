@@ -2,10 +2,12 @@ from collections.abc import Iterable, Mapping, Sequence
 from enum import Enum
 from typing import Final, Literal, TypeAlias
 
+from openai.types.responses.response_function_web_search import ResponseFunctionWebSearch
 from pydantic import ConfigDict
 from typing_extensions import NotRequired, ReadOnly, Required, TypedDict
 
 from litellm.types.llms.base import LiteLLMBaseModel
+from litellm.types.responses.main import hosted_web_tool_call, web_search_call_tool_id
 
 from .openai import (
     ChatCompletionCachedContent,
@@ -859,6 +861,15 @@ ANTHROPIC_TOOL_SEARCH_TOOL_TYPES: Final = frozenset(
 )
 ANTHROPIC_TOOL_SEARCH_TOOL_NAMES: Final = frozenset({"tool_search_tool_regex", "tool_search_tool_bm25"})
 ANTHROPIC_SERVER_TOOL_USE_ID_PREFIX: Final = "srvtoolu_"
+
+
+def claude_hosted_web_tool_call(search: ResponseFunctionWebSearch) -> tuple[str, str, str] | None:
+    tool_id: Final = web_search_call_tool_id(search.id)
+    if tool_id is None or not tool_id.startswith(ANTHROPIC_SERVER_TOOL_USE_ID_PREFIX):
+        return None
+    hosted_call: Final = hosted_web_tool_call(search.action)
+    return None if hosted_call is None else (tool_id, *hosted_call)
+
 
 # Effort beta header constant
 ANTHROPIC_EFFORT_BETA_HEADER: Final = "effort-2025-11-24"

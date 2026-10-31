@@ -2237,6 +2237,83 @@ async def test_post_call_success_hook_redacts_both_content_and_tool_arguments():
     assert message.tool_calls[0].function.arguments == '{"to": "[NAME_1]"}'
 
 
+@pytest.mark.asyncio
+async def test_post_call_success_hook_inspects_and_redacts_server_tool_call_arguments():
+    guard = _make_guardrail()
+    request_data = {"messages": [{"role": "user", "content": "look up persimmon"}]}
+
+    def side_effect(url, *args, **kwargs):
+        last = kwargs["json"]["messages"][-1]["content"]
+        return _make_response(
+            {
+                "analysis_result": {"policy_drill_down": {"PII": {}}},
+                "required_action": {"action_type": "anonymize_action", "policy_name": "PII"},
+                "redacted_chat": {
+                    "all_redacted_messages": [
+                        {"role": "user", "content": "look up persimmon"},
+                        {"role": "assistant", "content": last.replace("persimmon", "[FRUIT_1]")},
+                    ]
+                },
+            }
+        )
+
+    llm_response = ModelResponse(
+        choices=[
+            {
+                "finish_reason": "tool_calls",
+                "index": 0,
+                "message": {
+                    "content": None,
+                    "role": "assistant",
+                    "tool_calls": [
+                        {
+                            "id": "call_1",
+                            "type": "function",
+                            "function": {"name": "get_weather", "arguments": '{"city": "Paris"}'},
+                        }
+                    ],
+                    "provider_specific_fields": {
+                        "server_tool_calls": [
+                            {
+                                "id": "srvtoolu_01",
+                                "type": "function",
+                                "function": {"name": "web_search", "arguments": '{"query": "persimmon"}'},
+                            }
+                        ]
+                    },
+                },
+            }
+        ]
+    )
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        side_effect=side_effect,
+    ) as mock_post:
+        result = await guard.async_post_call_success_hook(
+            data=request_data,
+            response=llm_response,
+            user_api_key_dict=UserAPIKeyAuth(),
+        )
+
+    inspected = [call.kwargs["json"]["messages"][-1] for call in mock_post.call_args_list]
+    assert inspected == [
+        {"role": "assistant", "content": '{"query": "persimmon"}'},
+        {"role": "assistant", "content": '{"city": "Paris"}'},
+    ]
+    message = result.choices[0].message
+    assert message.provider_specific_fields == {
+        "server_tool_calls": [
+            {
+                "id": "srvtoolu_01",
+                "type": "function",
+                "function": {"name": "web_search", "arguments": '{"query": "[FRUIT_1]"}'},
+            }
+        ]
+    }
+    assert message.content is None
+    assert message.tool_calls[0].function.arguments == '{"city": "Paris"}'
+
+
 def _make_responses_api_response(output: list) -> ResponsesAPIResponse:
     return ResponsesAPIResponse(id="resp-1", created_at=0, output=output)
 
@@ -2330,6 +2407,53 @@ async def test_post_call_success_hook_redacts_responses_api_function_call_argume
     posted = mock_post.call_args.kwargs["json"]["messages"]
     assert posted[-1] == {"role": "assistant", "content": '{"recipient": "Brian"}'}
     assert result.output[0].arguments == '{"recipient": "[NAME_1]"}'
+
+
+@pytest.mark.asyncio
+async def test_post_call_success_hook_redacts_claude_hosted_web_fetch_url():
+    from openai.types.responses import ResponseFunctionWebSearch
+    from openai.types.responses.response_function_web_search import ActionOpenPage
+
+    guard = _make_guardrail()
+    request_data = {"messages": [{"role": "user", "content": "read the page"}]}
+    anonymize_response = _make_response(
+        {
+            "analysis_result": {"policy_drill_down": {"PII": {}}},
+            "required_action": {"action_type": "anonymize_action", "policy_name": "PII"},
+            "redacted_chat": {
+                "all_redacted_messages": [
+                    {"role": "user", "content": "read the page"},
+                    {"role": "assistant", "content": '{"url": "https://example.com/?ssn=[SSN_1]"}'},
+                ]
+            },
+        }
+    )
+    response = _make_responses_api_response(
+        [
+            ResponseFunctionWebSearch(
+                id="ws_srvtoolu_01",
+                type="web_search_call",
+                status="completed",
+                action=ActionOpenPage(type="open_page", url="https://example.com/?ssn=123-45-6789"),
+            )
+        ]
+    )
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        new_callable=AsyncMock,
+    ) as mock_post:
+        mock_post.return_value = anonymize_response
+        result = await guard.async_post_call_success_hook(
+            data=request_data,
+            response=response,
+            user_api_key_dict=UserAPIKeyAuth(),
+        )
+    posted = mock_post.call_args.kwargs["json"]["messages"]
+    assert posted[-1] == {"role": "assistant", "content": '{"url": "https://example.com/?ssn=123-45-6789"}'}
+    assert (result.output[0].id, result.output[0].action.url) == (
+        "ws_srvtoolu_01",
+        "https://example.com/?ssn=[SSN_1]",
+    )
 
 
 @pytest.mark.asyncio

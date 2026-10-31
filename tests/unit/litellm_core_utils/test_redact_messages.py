@@ -20,10 +20,11 @@ from unittest.mock import patch
 import httpx
 import pytest
 import pytest_asyncio
-from pydantic import JsonValue
+from openai.types.responses.response_function_web_search import ResponseFunctionWebSearch
+from pydantic import JsonValue, TypeAdapter
 
 import litellm
-from litellm.constants import LOGGING_WORKER_MAX_TIME_PER_COROUTINE
+from litellm.constants import LOGGING_WORKER_MAX_TIME_PER_COROUTINE, REDACTED_BY_LITELLM
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.litellm_core_utils.redact_messages import (
@@ -37,6 +38,7 @@ from litellm.litellm_core_utils.redact_messages import (
 )
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.responses.main import mock_responses_api_response
+from litellm.types.responses.main import build_web_search_call
 from litellm.types.router import BaselineRouteStamp
 from litellm.types.utils import (
     ModelResponse,
@@ -167,6 +169,114 @@ def test_streaming_redaction_redacts_delta_provider_fields_without_touching_the_
     assert SECRET not in str(response.choices[0].delta), response
     assert response.choices[0].delta.provider_specific_fields["thought_signatures"] == [SIGNATURE]
     assert fields == _provider_fields()
+
+
+_SECRET_URL: Final = f"https://example.com/?q={SECRET}"
+_WEB_SEARCH_CALL: Final = TypeAdapter(ResponseFunctionWebSearch)
+
+
+def _claude_fetch_call() -> ResponseFunctionWebSearch:
+    return build_web_search_call(
+        "srvtoolu_01Fetch", {"url": _SECRET_URL}, {"content": []}, status="in_progress", tool_name="web_fetch"
+    )
+
+
+def _web_call_summaries(calls: object) -> list[tuple[str, str | None, dict[str, object]]]:
+    items: Final = calls.values() if isinstance(calls, dict) else calls
+    return [
+        (call.id, call.status, call.action.model_dump(exclude_none=True))
+        for call in (_WEB_SEARCH_CALL.validate_python(item) for item in items)
+    ]
+
+
+@pytest.mark.parametrize("shape", ["object", "dict"])
+def test_redaction_hides_claude_server_call_inputs_but_keeps_the_calls(shape: str) -> None:
+    response: Final = ModelResponse(
+        model="claude-opus-5-5",
+        choices=[
+            {
+                "message": {
+                    "role": "assistant",
+                    "content": None,
+                    "provider_specific_fields": {
+                        "server_tool_calls": [
+                            {
+                                "id": "srvtoolu_01Fetch",
+                                "type": "function",
+                                "function": {"name": "web_fetch", "arguments": json.dumps({"url": _SECRET_URL})},
+                            }
+                        ],
+                        "web_search_calls": [
+                            _claude_fetch_call(),
+                            build_web_search_call(
+                                "srvtoolu_01Search", {"query": SECRET}, {"content": []}, status="in_progress"
+                            ),
+                        ],
+                    },
+                }
+            }
+        ],
+    )
+    result: Final = response if shape == "object" else response.model_dump()
+
+    redacted: Final = perform_redaction({}, result)
+
+    message: Final = (
+        redacted.choices[0].message if shape == "object" else SimpleNamespace(**redacted["choices"][0]["message"])
+    )
+    fields: Final = message.provider_specific_fields
+    assert fields["server_tool_calls"][0]["id"] == "srvtoolu_01Fetch"
+    assert fields["server_tool_calls"][0]["function"] == {"name": "web_fetch", "arguments": REDACTED_BY_LITELLM}
+    assert _web_call_summaries(fields["web_search_calls"]) == [
+        ("ws_srvtoolu_01Fetch", "in_progress", {"type": "open_page", "url": REDACTED_BY_LITELLM}),
+        ("ws_srvtoolu_01Search", "in_progress", {"type": "search", "query": REDACTED_BY_LITELLM}),
+    ]
+    assert SECRET not in str(redacted), redacted
+    assert SECRET in str(result)
+
+
+@pytest.mark.parametrize("key", ["complete_streaming_response", "async_complete_streaming_response"])
+def test_streaming_redaction_hides_the_hosted_copy_of_a_claude_web_fetch(key: str) -> None:
+    response: Final = ModelResponseStream(
+        choices=[
+            litellm.utils.StreamingChoices(
+                delta=litellm.utils.Delta(
+                    provider_specific_fields={"web_search_calls": {"srvtoolu_01Fetch": _claude_fetch_call()}}
+                )
+            )
+        ]
+    )
+
+    perform_redaction({"stream": True, key: response}, None)
+
+    assert _web_call_summaries(response.choices[0].delta.provider_specific_fields["web_search_calls"]) == [
+        ("ws_srvtoolu_01Fetch", "in_progress", {"type": "open_page", "url": REDACTED_BY_LITELLM})
+    ]
+
+
+@pytest.mark.parametrize("shape", ["object", "dict"])
+def test_redaction_hides_web_search_call_actions_in_responses_api_output(shape: str) -> None:
+    response: Final = ResponsesAPIResponse(
+        id="resp_1",
+        created_at=1,
+        model="claude-opus-5-5",
+        object="response",
+        status="completed",
+        output=[
+            build_web_search_call("srvtoolu_01Fetch", {"url": _SECRET_URL}, {"content": []}, tool_name="web_fetch"),
+            build_web_search_call("srvtoolu_01Search", {"query": SECRET}, {"content": []}),
+        ],
+    )
+    result: Final = response if shape == "object" else response.model_dump()
+
+    redacted: Final = perform_redaction({}, result)
+
+    output: Final = redacted.output if shape == "object" else redacted["output"]
+    assert _web_call_summaries(output) == [
+        ("ws_srvtoolu_01Fetch", "completed", {"type": "open_page", "url": REDACTED_BY_LITELLM}),
+        ("ws_srvtoolu_01Search", "completed", {"type": "search", "query": REDACTED_BY_LITELLM}),
+    ]
+    assert SECRET in str(result)
 
 
 @pytest.mark.parametrize("shape", ["object", "dict"])
