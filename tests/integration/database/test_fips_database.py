@@ -68,7 +68,7 @@ async def test_fips_database_check(
             with pytest.raises(FipsModeError, match=refusal) if refusal else nullcontext():
                 await enforce_fips_database(FipsRepository(client), database_is_configured=True)
         finally:
-            await client.disconnect()
+            await client.aclose()
         if marked_after is not None:
             assert _marker_rows(database_url) == marked_after
 
@@ -89,5 +89,5 @@ async def test_pods_starting_together_in_fips_mode_on_a_new_database_both_start(
                 *(enforce_fips_database(FipsRepository(pod), database_is_configured=True) for pod in pods)
             )
         finally:
-            await asyncio.gather(*(pod.disconnect() for pod in pods))
+            await asyncio.gather(*(pod.aclose() for pod in pods))
         assert _marker_rows(database_url) == 1
