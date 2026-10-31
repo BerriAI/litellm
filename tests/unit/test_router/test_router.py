@@ -19394,6 +19394,50 @@ async def test_anthropic_messages_stream_context_window_only_group_forwards_othe
     assert len(provider.calls) == 1
 
 
+def _anthropic_messages_refusal_chunk() -> bytes:
+    return (
+        b'event: message_delta\ndata: {"type": "message_delta", "delta": {"stop_reason": "refusal", '
+        b'"stop_details": {"type": "refusal", "category": "cyber"}}, "usage": {"output_tokens": 0}}\n\n'
+    )
+
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_stream_context_window_only_group_passes_a_refusal_through() -> None:
+    router: Final = _anthropic_messages_retry_router(
+        num_retries=0, fallbacks=[{"*": ["fb"]}], context_window_fallbacks=[{"glm": ["cw"]}]
+    )
+    refusal_stream: Final = (_anthropic_messages_message_start_chunk(), _anthropic_messages_refusal_chunk())
+    provider: Final = _AnthropicMessagesScriptedProvider(lambda: _AnthropicMessagesFakeByteStream(list(refusal_stream)))
+
+    stream: Final = await _anthropic_messages_stream_through_router(router, provider, fallbacks=[])
+    body: Final = [chunk async for chunk in stream]
+
+    assert body == list(refusal_stream)
+    assert len(provider.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_policy_retry_stops_at_a_context_window_error() -> None:
+    router: Final = _anthropic_messages_retry_router(
+        num_retries=0, retry_policy=RetryPolicy(InternalServerErrorRetries=3)
+    )
+    provider: Final = _AnthropicMessagesScriptedProvider(
+        lambda: _AnthropicMessagesRaisingByteStream(
+            [_anthropic_messages_message_start_chunk()],
+            litellm.InternalServerError(message="upstream reset", llm_provider="bedrock_mantle", model="glm"),
+        ),
+        _anthropic_messages_raise_context_window_error,
+        _anthropic_messages_raise_context_window_error,
+        _anthropic_messages_raise_context_window_error,
+    )
+
+    stream: Final = await _anthropic_messages_stream_through_router(router, provider)
+    with pytest.raises(litellm.ContextWindowExceededError):
+        [chunk async for chunk in stream]
+
+    assert len(provider.calls) == 2
+
+
 @pytest.mark.parametrize(
     ("context_window_fallbacks", "request_kwargs", "expected"),
     [

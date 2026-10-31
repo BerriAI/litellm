@@ -976,9 +976,10 @@ def _get_bedrock_mantle_context_window_message(error_str: str) -> str | None:
     code, or in a wording the other providers share, either in a 400 body or in a streamed error
     event with no error type. Clients such as Claude Code only treat "prompt is too long" as overflow
     (litellm/litellm#36546). qwen's wording caps its input count at the window minus the requested
-    output, so only the output budget says whether a shorter prompt could fit at all; when it cannot,
-    or when the wording blames `max_tokens` (Anthropic's and vLLM's), the overflow keeps Mantle's own
-    message so the client lowers `max_tokens` instead of shortening the prompt.
+    output, so only the output budget says whether shortening the prompt can help; once the output
+    takes more than half the window, or when the wording blames `max_tokens` (Anthropic's and vLLM's),
+    the overflow keeps Mantle's own message so the client lowers `max_tokens` instead of shortening the
+    prompt. A wording only the shared overflow list knows keeps Mantle's message too, as OpenAI's does.
     """
     matches: Final = (pattern.search(error_str) for pattern in _BEDROCK_MANTLE_CONTEXT_WINDOW_PATTERNS)
     match: Final = next((found for found in matches if found is not None), None)
@@ -988,13 +989,18 @@ def _get_bedrock_mantle_context_window_message(error_str: str) -> str | None:
     output_budget: Final = _BEDROCK_MANTLE_OUTPUT_BUDGET_PATTERN.search(error_str)
     if output_budget is not None:
         context_window, requested_output_tokens = (int(group) for group in output_budget.groups())
-        return _BEDROCK_MANTLE_CONTEXT_WINDOW_GENERIC_MESSAGE if requested_output_tokens < context_window else error_str
+        if requested_output_tokens * 2 > context_window:
+            return error_str
+        return (
+            f"prompt is too long: the prompt and {requested_output_tokens} requested output tokens exceed the "
+            f"{context_window} token context window"
+        )
     if any(pattern.search(error_str) is not None for pattern in _BEDROCK_MANTLE_MAX_TOKENS_OVERFLOW_PATTERNS):
         return error_str
-    if _BEDROCK_MANTLE_CONTEXT_LENGTH_EXCEEDED_CODE_PATTERN.search(
-        error_str
-    ) is not None or ExceptionCheckers.is_error_str_context_window_exceeded(error_str):
+    if _BEDROCK_MANTLE_CONTEXT_LENGTH_EXCEEDED_CODE_PATTERN.search(error_str) is not None:
         return _BEDROCK_MANTLE_CONTEXT_WINDOW_GENERIC_MESSAGE
+    if ExceptionCheckers.is_error_str_context_window_exceeded(error_str):
+        return error_str
     return None
 
 

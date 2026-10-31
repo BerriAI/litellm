@@ -6986,7 +6986,7 @@ class Router(DeprecatedRouterMembers):
                     )
                     refusal_stop_details = (
                         parse_anthropic_refusal_stop_details(parse_window)
-                        if not has_generated_content and error_event is None
+                        if not has_generated_content and error_event is None and not holds_for_overflow_only
                         else None
                     )
                     if (
@@ -7250,8 +7250,9 @@ class Router(DeprecatedRouterMembers):
         last_error = e  # rebind-ok: the newest failure is what the fallback chain and the caller see
         for attempt in range(attempted_retries_for_request(initial_kwargs), budget):
             trigger = _mid_stream_retry_trigger(last_error)
-            if not policy_applies and not self._stream_should_retry(
-                trigger, healthy_deployments, all_deployments, initial_kwargs
+            if isinstance(trigger, litellm.ContextWindowExceededError) or (
+                not policy_applies
+                and not self._stream_should_retry(trigger, healthy_deployments, all_deployments, initial_kwargs)
             ):
                 return _StreamRetriesExhausted(last_error)
             if get_metadata_variable_name_from_kwargs(retry_kwargs) in retry_kwargs:
