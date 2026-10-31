@@ -27,6 +27,7 @@ from litellm.caching.caching import DualCache
 from litellm.constants import EMPTY_MAPPING
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
+from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
 from litellm.proxy.proxy_server import app
 from litellm.proxy.utils import ProxyLogging
 from litellm.responses.streaming_iterator import ResponsesAPIStreamingIterator
@@ -2324,6 +2325,74 @@ class TestResponsesWSFirstFrameModelAuth:
             )
 
         assert authenticated_models == ["gpt-4o-mini"]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "open_failure, refusal, close_reason, logged_traceback",
+        [
+            (
+                ProxyRateLimitError(detail="Rate limit exceeded for api_key: tokens"),
+                (429, "rate_limit_exceeded"),
+                "Rate limit exceeded",
+                False,
+            ),
+            (ValueError("bad metadata"), (None, "invalid_request_error"), "Pre-call error", True),
+        ],
+        ids=["rate-limited", "other-failure"],
+    )
+    async def test_endpoint_refuses_a_rate_limited_open_with_the_turn_refusal_frame(
+        self,
+        open_failure: Exception,
+        refusal: tuple[int | None, str],
+        close_reason: str,
+        logged_traceback: bool,
+    ):
+        import logging
+
+        from litellm._logging import verbose_proxy_logger
+        from litellm.proxy.response_api_endpoints.endpoints import responses_websocket_endpoint
+
+        class _Recorder(logging.Handler):
+            records: tuple[logging.LogRecord, ...] = ()
+
+            def emit(self, record: logging.LogRecord) -> None:
+                self.records = (*self.records, record)
+
+        ws = MagicMock()
+        ws.headers = {}
+        ws.query_params = {}
+        ws.scope = {"headers": []}
+        ws.url = "ws://testserver/v1/responses"
+        ws.accept = AsyncMock()
+        ws.receive_text = AsyncMock(return_value=json.dumps({"type": "response.create", "model": "gpt-5.4"}))
+        ws.send_text = AsyncMock()
+        ws.close = AsyncMock()
+        processor = MagicMock()
+        processor.common_processing_pre_call_logic = AsyncMock(side_effect=open_failure)
+        recorder: Final = _Recorder(level=logging.INFO)
+        previous_level: Final = verbose_proxy_logger.level
+        verbose_proxy_logger.addHandler(recorder)
+        verbose_proxy_logger.setLevel(logging.INFO)
+        try:
+            with (
+                patch(  # test-quality-ok: first-frame model auth needs a live router and has its own tests
+                    "litellm.proxy.response_api_endpoints.endpoints._enforce_responses_ws_first_frame_model_auth",
+                    new_callable=AsyncMock,
+                ),
+                patch(  # test-quality-ok: the pre-call processor's failure is the input under test
+                    "litellm.proxy.response_api_endpoints.endpoints.ProxyBaseLLMRequestProcessing",
+                    return_value=processor,
+                ),
+            ):
+                await responses_websocket_endpoint(websocket=ws, model="gpt-5.4", user_api_key_dict=MagicMock())
+        finally:
+            verbose_proxy_logger.removeHandler(recorder)
+            verbose_proxy_logger.setLevel(previous_level)
+
+        sent: Final = json.loads(ws.send_text.await_args.args[0])
+        assert (sent.get("status"), sent["error"]["type"]) == refusal
+        ws.close.assert_awaited_once_with(code=1008, reason=close_reason)
+        assert [record.exc_info is not None for record in recorder.records] == [logged_traceback]
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("nested", [False, True])
