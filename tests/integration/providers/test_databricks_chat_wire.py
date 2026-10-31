@@ -445,6 +445,26 @@ def _shape_reply(identity: str, stream: bool) -> Reply:
             id="A8c-chat-json-object-drop-params-drops-cache-control",
         ),
         pytest.param(
+            "json-object-trailing-thinking-turn",
+            "/v1/chat/completions",
+            "databricks-meta-llama-3-3-70b-instruct",
+            {
+                "messages": [
+                    {"role": "user", "content": [{"type": "text", "text": "Reply"}, {"type": "text", "text": " in JSON"}]},
+                    {
+                        "role": "assistant",
+                        "content": "",
+                        "thinking_blocks": [{"type": "thinking", "thinking": "Plan.", "signature": "sig"}],
+                    },
+                ],
+                "response_format": {"type": "json_object"},
+            },
+            [{"role": "user", "content": "Reply in JSON"}],
+            False,
+            "/chat/completions",
+            id="A8d-chat-json-object-trailing-thinking-turn-dropped",
+        ),
+        pytest.param(
             "json-object-responses-two-parts",
             "/v1/responses",
             "databricks-qwen35-122b-a10b",
@@ -461,6 +481,25 @@ def _shape_reply(identity: str, stream: bool) -> Reply:
             False,
             "/chat/completions",
             id="A9-responses-json-object-two-parts-joined",
+        ),
+        pytest.param(
+            "json-object-responses-trailing-reasoning",
+            "/v1/responses",
+            "databricks-qwen35-122b-a10b",
+            {
+                "input": [
+                    {
+                        "role": "user",
+                        "content": [{"type": "input_text", "text": "Reply"}, {"type": "input_text", "text": " in JSON"}],
+                    },
+                    {"type": "reasoning", "id": "rs_1", "summary": [{"type": "summary_text", "text": "Plan."}]},
+                ],
+                "text": {"format": {"type": "json_object"}},
+            },
+            [{"role": "user", "content": "Reply in JSON"}],
+            False,
+            "/chat/completions",
+            id="A9b-responses-json-object-trailing-reasoning-dropped",
         ),
     ],
 )

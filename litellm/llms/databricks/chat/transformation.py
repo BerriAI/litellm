@@ -144,16 +144,28 @@ def _is_system(message: Mapping[str, object]) -> bool:
 
 def _json_mode_message(message: AllMessageValues, drop_params: bool) -> AllMessageValues:
     candidate: Final = _without_cache_control(message) if drop_params else message
-    match _plain_texts(candidate):
-        case ():
-            return candidate if _has_string_content(candidate) else message
-        case texts:
-            return cast(AllMessageValues, {**candidate, "content": "".join(texts)})  # cast-ok: spread keeps the shape
+    texts: Final = _plain_texts(candidate)
+    if "cache_control" in candidate or not (texts or _has_string_content(candidate)):
+        return message
+    if sum(1 for text in texts if text.strip()) < 2:
+        return candidate
+    return cast(AllMessageValues, {**candidate, "content": "".join(texts)})  # cast-ok: spread keeps the shape
+
+
+def _is_dropped_on_send(message: Mapping[str, object]) -> bool:
+    sanitized: Final = {**message}
+    _sanitize_empty_content(sanitized)
+    return _is_bare_assistant_message(sanitized)
+
+
+def _is_system_or_dropped(message: Mapping[str, object]) -> bool:
+    return _is_system(message) or _is_dropped_on_send(message)
 
 
 def _json_checked_start(messages: Sequence[AllMessageValues]) -> int:
-    trailing_system: Final = sum(1 for _ in takewhile(_is_system, reversed(messages)))
-    return max(len(messages) - max(trailing_system, 1), 0)
+    trailing: Final = tuple(takewhile(_is_system_or_dropped, reversed(messages)))
+    last_sent_offset: Final = 0 if any(_is_system(message) for message in trailing) else 1
+    return max(len(messages) - len(trailing) - last_sent_offset, 0)
 
 
 def _json_object_ready_messages(

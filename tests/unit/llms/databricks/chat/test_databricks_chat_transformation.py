@@ -745,6 +745,80 @@ def test_transform_request_json_object_drops_last_message_cache_control_under_dr
     ]
 
 
+_THINKING_BLOCK: Final = {"type": "thinking", "thinking": "Plan the reply.", "signature": "sig"}
+
+
+@pytest.mark.parametrize(
+    "dropped_turn",
+    [
+        pytest.param({"role": "assistant", "content": "", "thinking_blocks": [_THINKING_BLOCK]}, id="thinking-only"),
+        pytest.param({"role": "assistant", "content": None, "reasoning_content": "Plan."}, id="reasoning-only"),
+        pytest.param({"role": "assistant", "content": [{"type": "text", "text": " "}]}, id="blank-text-part"),
+    ],
+)
+def test_transform_request_json_object_joins_the_message_before_a_dropped_assistant_turn(
+    dropped_turn: AllMessageValues,
+) -> None:
+    assert _outgoing_messages(
+        "databricks-meta-llama-3-3-70b-instruct",
+        [{"role": "user", "content": _TWO_TEXT_BLOCKS}, dropped_turn],
+        _JSON_OBJECT,
+    ) == [{"role": "user", "content": "Reply in JSON"}]
+
+
+def test_transform_request_json_object_joins_a_system_run_split_by_a_dropped_assistant_turn() -> None:
+    earlier_turn: Final[AllMessageValues] = {
+        "role": "user",
+        "content": [{"type": "text", "text": "Say"}, {"type": "text", "text": " hi"}],
+    }
+    messages: Final[list[AllMessageValues]] = [
+        earlier_turn,
+        {"role": "system", "content": [{"type": "text", "text": "Alpha"}, {"type": "text", "text": " rule."}]},
+        {"role": "assistant", "content": "", "thinking_blocks": [_THINKING_BLOCK]},
+        {"role": "system", "content": _TWO_TEXT_BLOCKS},
+    ]
+
+    assert _outgoing_messages("databricks-meta-llama-3-3-70b-instruct", messages, _JSON_OBJECT) == [
+        earlier_turn,
+        {"role": "system", "content": "Alpha rule.\n\nReply in JSON"},
+    ]
+
+
+@pytest.mark.parametrize(
+    "content,expected_content",
+    [
+        pytest.param(
+            [{"type": "text", "text": "Reply in JSON"}, {"type": "text", "text": "\n\n"}],
+            "Reply in JSON",
+            id="one-non-blank-part-goes-out-as-before",
+        ),
+        pytest.param(
+            [{"type": "text", "text": "Reply"}, {"type": "text", "text": " "}, {"type": "text", "text": "in JSON"}],
+            "Reply in JSON",
+            id="blank-separator-between-parts-kept",
+        ),
+    ],
+)
+def test_transform_request_json_object_joins_only_two_or_more_non_blank_parts(
+    content: list[object], expected_content: str
+) -> None:
+    assert _outgoing_messages(
+        "databricks-meta-llama-3-3-70b-instruct", [{"role": "user", "content": content}], _JSON_OBJECT
+    ) == [{"role": "user", "content": expected_content}]
+
+
+def test_transform_request_json_object_keeps_message_cache_control_parts_as_sent_without_drop_params() -> None:
+    message: Final[AllMessageValues] = {
+        "role": "user",
+        "content": _TWO_TEXT_BLOCKS,
+        "cache_control": {"type": "ephemeral"},
+    }
+
+    assert _outgoing_messages("databricks-meta-llama-3-3-70b-instruct", [message], {}) == _outgoing_messages(
+        "databricks-meta-llama-3-3-70b-instruct", [message], _JSON_OBJECT
+    )
+
+
 def test_transform_request_json_object_reads_the_global_drop_params(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(litellm, "drop_params", True)
 
