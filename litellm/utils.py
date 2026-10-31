@@ -3093,8 +3093,67 @@ def token_counter(
 def supports_httpx_timeout(custom_llm_provider: str) -> bool:
     """
     Helper function to know if a provider implementation supports httpx timeout
+
+    A provider supports ``httpx.Timeout`` when its completion is dispatched to
+    LiteLLM's own httpx clients (``AsyncHTTPHandler``/``HTTPHandler`` accept
+    ``float | httpx.Timeout``): the shared ``BaseLLMHTTPHandler.completion``
+    path in ``main.py``, or the ``CodestralTextCompletion`` handler which uses
+    ``AsyncHTTPHandler`` directly. Providers routed through third-party SDKs
+    that expect a plain float (for example ``vertex_ai``, ``anthropic``,
+    ``azure_ai``, ``gemini``) are intentionally not listed, and neither are
+    OpenAI-SDK-based OpenAI-compatible providers (handled conservatively for
+    now, matching the pre-existing ``openai``/``azure`` coverage).
     """
-    supported_providers: Final = ["openai", "azure", "bedrock"]
+    supported_providers: Final = [
+        # SDK clients that accept httpx.Timeout natively
+        "openai",
+        "azure",
+        "bedrock",
+        # Providers dispatched to BaseLLMHTTPHandler.completion (shared httpx handler)
+        "a2a",
+        "anthropic_text",
+        "bedrock_mantle",
+        "bytez",
+        "cloudflare",
+        "cohere",
+        "cohere_chat",
+        "cometapi",
+        "compactifai",
+        "databricks",
+        "databricks_agent",
+        "datarobot",
+        "deepseek",
+        "edenai",
+        "fal_ai",
+        "fireworks_ai",
+        "gdc",
+        "gigachat",
+        "gradient_ai",
+        "groq",
+        "heroku",
+        "hosted_vllm",
+        "huggingface",
+        "langflow",
+        "langgraph",
+        "lemonade",
+        "minimax",
+        "mistral",
+        "nadir",
+        "oci",
+        "ollama",
+        "ollama_chat",
+        "openrouter",
+        "ovhcloud",
+        "ragflow",
+        "scaledown",
+        "snowflake",
+        "text-completion-codestral",
+        "together_ai",
+        "triton",
+        "vercel_ai_gateway",
+        "watsonx_text",
+        "xai",
+    ]
 
     if custom_llm_provider in supported_providers:
         return True
