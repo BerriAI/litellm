@@ -187,9 +187,7 @@ def _assert_not_configured(response_body: JsonValue, expected_error: str, reason
 
 def _assert_no_embedding_requests(candidate: _SearchProxy) -> None:
     embedding_requests: Final = tuple(
-        request
-        for request in candidate.wire.drain()
-        if request.method == "POST" and request.target == "/v1/embeddings"
+        request for request in candidate.wire.drain() if request.method == "POST" and request.target == "/v1/embeddings"
     )
     assert embedding_requests == ()
 

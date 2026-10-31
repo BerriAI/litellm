@@ -268,10 +268,7 @@ class TestSearchAgents:
         router.aembedding = AsyncMock(
             side_effect=lambda model, input, metadata: litellm.EmbeddingResponse(
                 model=model,
-                data=[
-                    {"object": "embedding", "index": i, "embedding": list(VECTORS[t])}
-                    for i, t in enumerate(input)
-                ],
+                data=[{"object": "embedding", "index": i, "embedding": list(VECTORS[t])} for i, t in enumerate(input)],
             )
         )
         not_configured = await search_agents(
