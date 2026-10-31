@@ -2941,3 +2941,24 @@ async def test_failed_upstream_stream_relays_its_body_only_when_that_is_a_json_o
         "id": "req-1",
         "method": "tasks/resubscribe",
     }
+
+
+def test_a2a_message_stream_routes_registered():
+    """Verify that both /a2a/{agent_id}/message/stream and /v1/a2a/{agent_id}/message/stream
+    are registered on the A2A router and present in LiteLLMRoutes.agent_inference_routes (#49433).
+    """
+    from litellm.proxy._types import LiteLLMRoutes
+    from litellm.proxy.agent_endpoints.a2a_endpoints import invoke_agent_a2a, router
+
+    paths_to_endpoints = {
+        getattr(route, "path", None): getattr(route, "endpoint", None)
+        for route in router.routes
+    }
+
+    assert "/a2a/{agent_id}/message/stream" in paths_to_endpoints
+    assert "/v1/a2a/{agent_id}/message/stream" in paths_to_endpoints
+    assert paths_to_endpoints["/a2a/{agent_id}/message/stream"] == invoke_agent_a2a
+    assert paths_to_endpoints["/v1/a2a/{agent_id}/message/stream"] == invoke_agent_a2a
+
+    assert "/a2a/{agent_id}/message/stream" in LiteLLMRoutes.agent_inference_routes.value
+    assert "/v1/a2a/{agent_id}/message/stream" in LiteLLMRoutes.agent_inference_routes.value
