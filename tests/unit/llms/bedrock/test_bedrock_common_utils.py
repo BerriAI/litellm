@@ -7,7 +7,6 @@ from unittest.mock import Mock, patch
 import pytest
 
 import litellm
-import litellm.litellm_core_utils.get_model_cost_map as bedrock_govcloud_model_cost_map
 from litellm import completion
 from litellm.llms.bedrock.common_utils import (
     AmazonBedrockGlobalConfig,
@@ -1518,7 +1517,6 @@ def _pr4_bedrock_env(monkeypatch: pytest.MonkeyPatch) -> None:
 def _use_local_model_cost_map() -> Iterator[None]:
     with pytest.MonkeyPatch.context() as monkeypatch:
         monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
-        importlib.reload(bedrock_govcloud_model_cost_map)
         importlib.reload(litellm)
         yield
 

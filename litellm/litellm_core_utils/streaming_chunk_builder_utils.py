@@ -14,12 +14,18 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.core_helpers import (
     PROVIDERS_BILLED_FROM_THEIR_OWN_USAGE_FIELDS,
+    UPSTREAM_USAGE_COST,
     chunk_usage,
     finite_cost,
     provider_reported_usage_cost,
     stamp_litellm_bill_on_usage,
 )
-from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR, set_hidden_params
+from litellm.litellm_core_utils.hidden_params import (
+    HIDDEN_PARAMS_ATTR,
+    get_hidden_params,
+    set_hidden_param,
+    set_hidden_params,
+)
 from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import BEDROCK_TRACE_FIELDS, object_items, object_mapping
 from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import partition_annotations
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
@@ -324,6 +330,20 @@ class ChunkProcessor:
         )
 
     @staticmethod
+    def _get_upstream_provider(chunks: Sequence[object]) -> str | None:
+        def _provider_from_chunk(chunk: object) -> str | None:
+            hidden_params: Final = get_hidden_params(chunk)
+            if hidden_params is None:
+                return None
+            provider: Final[object] = hidden_params.get("upstream_provider")
+            return provider if isinstance(provider, str) and provider else None
+
+        return next(
+            (provider for chunk in chunks if (provider := _provider_from_chunk(chunk)) is not None),
+            None,
+        )
+
+    @staticmethod
     def apply_provider_assembled_streaming_metadata(
         response: ModelResponse,
         chunks: list[object],
@@ -500,10 +520,22 @@ class ChunkProcessor:
             chunks,
             first_chunk_model,
         )
-        if provider_response_model is not None:
-            response._hidden_params = dict(  # pyright: ignore[reportPrivateUsage]  # ModelResponse exposes no public hidden-params setter
-                response._hidden_params,  # pyright: ignore[reportPrivateUsage]  # ModelResponse exposes no public hidden-params getter
-                provider_response_model=provider_response_model,
+        upstream_provider: Final = self._get_upstream_provider(chunks)
+        provider_hidden_params: Final[Mapping[str, str]] = MappingProxyType(
+            {
+                key: value
+                for key, value in (
+                    ("provider_response_model", provider_response_model),
+                    ("upstream_provider", upstream_provider),
+                )
+                if value is not None
+            }
+        )
+        if provider_hidden_params:
+            response_hidden_params: Final[Mapping[str, builtins.object]] = get_hidden_params(response) or {}
+            set_hidden_params(
+                response,
+                dict(response_hidden_params, **provider_hidden_params),
             )
         return response
 
@@ -1444,6 +1476,14 @@ def _set_stream_builder_response_cost(
     _set_hidden_response_cost(response, response_cost)
 
 
+def _carry_upstream_usage_cost(response: ModelResponse, chunks: Sequence[object]) -> None:
+    chunk_hidden_params: Final = (get_hidden_params(chunk) for chunk in reversed(chunks))
+    stamped: Final = (hidden for hidden in chunk_hidden_params if hidden is not None and UPSTREAM_USAGE_COST in hidden)
+    for hidden in stamped:
+        set_hidden_param(response, UPSTREAM_USAGE_COST, hidden[UPSTREAM_USAGE_COST])
+        return
+
+
 def _stamp_streaming_usage_cost(usage: Usage, response: ModelResponse, logging_obj: Optional["Logging"]) -> None:
     if logging_obj is None:
         return
@@ -1794,6 +1834,7 @@ def stream_chunk_builder(
                 response,
                 logging_obj,
             )
+            _carry_upstream_usage_cost(response, chunks)  # pyright: ignore[reportUnknownArgumentType]  # chunks is an untyped list param
             _stamp_streaming_usage_cost(usage, response, logging_obj)
             _set_stream_builder_response_cost(
                 response,
@@ -1836,6 +1877,7 @@ def stream_chunk_builder(
                 )
                 break
 
+        _carry_upstream_usage_cost(response, chunks)  # pyright: ignore[reportUnknownArgumentType]  # chunks is an untyped list param
         _stamp_streaming_usage_cost(usage, response, logging_obj)
         _set_stream_builder_response_cost(
             response,

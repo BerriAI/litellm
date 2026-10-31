@@ -102,10 +102,6 @@ vi.mock("@/components/activity_metrics", () => ({
   processActivityData: vi.fn(),
 }));
 
-vi.mock("@/components/view_user_spend", () => ({
-  default: () => <div>View User Spend</div>,
-}));
-
 vi.mock("@/components/UsagePage/components/EntityUsage/TopKeyView", () => ({
   default: () => <div>Top Keys</div>,
 }));
