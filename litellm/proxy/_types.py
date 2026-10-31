@@ -2731,7 +2731,8 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
             "deployments only within the listed groups; every other group, including newly "
             "added deployments, is skipped and keeps its configured routing strategy. "
             "When unset, all deployments participate (opt out per deployment via "
-            "model_info.disable_background_health_check)."
+            "model_info.disable_background_health_check). Set or unset, deployments whose check would "
+            "generate billed media take part only with model_info.disable_background_health_check: false."
         ),
     )
     model_list_healthy_only: bool | None = Field(

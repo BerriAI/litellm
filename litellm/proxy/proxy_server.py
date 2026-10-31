@@ -652,6 +652,9 @@ from litellm.proxy.guardrails.init_guardrails import (
     initialize_guardrails,
 )
 from litellm.proxy.health_check import (
+    DEPLOYMENTS_ADAPTER,
+    background_check_deployments,
+    billed_media_model_ids,
     filter_deployments_to_model_groups,
     health_check_filter_kwargs_from_general_settings,
     parse_background_health_check_model_groups,
@@ -4833,6 +4836,7 @@ async def _run_background_health_check():
         )
         verbose_proxy_logger.info("Initialized shared health check manager")
 
+    logged_skipped_media_ids: tuple[str, ...] = ()  # rebind-ok: the last set logged, compared each cycle
     while True:
         background_health_check_cycle_seq += 1
         cycle_id = f"bg-{background_health_check_cycle_seq}"
@@ -4842,17 +4846,25 @@ async def _run_background_health_check():
         _llm_model_list = copy.deepcopy(llm_model_list) or []
         model_count_total = len(_llm_model_list)
 
-        # filter out models that have disabled background health checks
-        _llm_model_list = [
-            m for m in _llm_model_list if not m.get("model_info", {}).get("disable_background_health_check", False)
-        ]
         scoped_model_groups = (
             llm_router.settings().background_health_check_model_groups if llm_router is not None else None
         )
-        _llm_model_list = list(filter_deployments_to_model_groups(_llm_model_list, scoped_model_groups))
+        group_deployments = DEPLOYMENTS_ADAPTER.validate_python(
+            filter_deployments_to_model_groups(_llm_model_list, scoped_model_groups)
+        )
+        _llm_model_list = list(await asyncio.to_thread(background_check_deployments, group_deployments))
+        skipped_media_ids = await asyncio.to_thread(billed_media_model_ids, group_deployments)
+        if skipped_media_ids and skipped_media_ids != logged_skipped_media_ids:
+            verbose_proxy_logger.warning(
+                "background health checks skip deployments whose check would generate billed media; "
+                "set model_info.disable_background_health_check: false to check them; model_ids=%s",
+                skipped_media_ids,
+            )
+            logged_skipped_media_ids = skipped_media_ids
         if scoped_model_groups is not None and not _llm_model_list:
             verbose_proxy_logger.warning(
-                "background_health_check_model_groups matched no deployments; groups=%s",
+                "background_health_check_model_groups %s; groups=%s",
+                "matched only deployments the background loop skips" if group_deployments else "matched no deployments",
                 sorted(scoped_model_groups),
             )
         model_count_enabled = len(_llm_model_list)

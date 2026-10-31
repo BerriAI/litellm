@@ -17,6 +17,22 @@ import { individualModelHealthCheckCall, latestHealthChecksCall } from "../netwo
 import { HealthChecksTable } from "./HealthChecksTable";
 import type { HealthCheckData, HealthStatus } from "./HealthChecksTableColumns";
 
+const isSkippedResponse = (response: {
+  healthy_count: number;
+  unhealthy_count: number;
+  warnings?: string[];
+}): response is { healthy_count: 0; unhealthy_count: 0; warnings: string[] } =>
+  response.healthy_count === 0 && response.unhealthy_count === 0 && Boolean(response.warnings?.length);
+
+const skippedStatus = (warning: string, lastCheck: string, previous?: HealthStatus): HealthStatus => ({
+  status: "skipped",
+  lastCheck,
+  lastSuccess: previous?.lastSuccess || "None",
+  loading: false,
+  error: warning,
+  fullError: warning,
+});
+
 interface LatestHealthCheck {
   status?: string;
   checked_at?: string | null;
@@ -223,6 +239,11 @@ const HealthCheckComponent: React.FC<HealthCheckComponentProps> = ({
 
             const fullError = checkData.error_message || undefined;
 
+            if (checkData.status === "skipped" && fullError) {
+              healthStatusMap[modelId] = skippedStatus(fullError, toCheckedAtLabel(checkData.checked_at, "None"));
+              return;
+            }
+
             healthStatusMap[modelId] = {
               status: checkData.status || "unknown",
               lastCheck: toCheckedAtLabel(checkData.checked_at, "None"),
@@ -260,6 +281,14 @@ const HealthCheckComponent: React.FC<HealthCheckComponentProps> = ({
       try {
         const response = await individualModelHealthCheckCall(accessToken, modelId);
         const currentTime = new Date().toLocaleString();
+
+        if (isSkippedResponse(response)) {
+          setModelHealthStatuses((prev) => ({
+            ...prev,
+            [modelId]: skippedStatus(response.warnings[0], currentTime, prev[modelId]),
+          }));
+          return;
+        }
 
         if (response.unhealthy_count > 0 && response.unhealthy_endpoints && response.unhealthy_endpoints.length > 0) {
           const rawError = response.unhealthy_endpoints[0]?.error || "Health check failed";
@@ -357,6 +386,14 @@ const HealthCheckComponent: React.FC<HealthCheckComponentProps> = ({
         const response = await individualModelHealthCheckCall(accessToken, modelId);
 
         const currentTime = new Date().toLocaleString();
+        if (isSkippedResponse(response)) {
+          setModelHealthStatuses((prev) => ({
+            ...prev,
+            [modelId]: skippedStatus(response.warnings[0], currentTime, prev[modelId]),
+          }));
+          return;
+        }
+
         if (response.unhealthy_count > 0 && response.unhealthy_endpoints && response.unhealthy_endpoints.length > 0) {
           const rawError = response.unhealthy_endpoints[0]?.error || "Health check failed";
           const errorMessage = extractMeaningfulError(rawError);
@@ -416,6 +453,9 @@ const HealthCheckComponent: React.FC<HealthCheckComponentProps> = ({
 
           setModelHealthStatuses((prev) => {
             const currentStatus = prev[modelId];
+            if (currentStatus?.status === "skipped") {
+              return prev;
+            }
             return {
               ...prev,
               [modelId]: {

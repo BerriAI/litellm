@@ -8,6 +8,7 @@ import pytest
 
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.db.health_check_latest import LatestHealthCheckRow
+from litellm.proxy.health_check import BILLED_MEDIA_NOT_CHECKED_WARNING
 from litellm.proxy.health_endpoints._health_endpoints import (
     _aggregate_health_check_results,
     _build_model_param_to_info_mapping,
@@ -664,6 +665,66 @@ async def test_save_background_health_checks_compares_raw_checked_at_against_utc
     await asyncio.sleep(0)
 
     assert [call.kwargs["model_id"] for call in mock_prisma.save_health_check_result.await_args_list] == ["stale-id"]
+
+
+def _saved_row(model_id: str, status: str, error_message: str | None) -> LatestHealthCheckRow:
+    return LatestHealthCheckRow(
+        health_check_id=f"hc-{model_id}",
+        model_name=model_id,
+        model_id=model_id,
+        status=status,
+        healthy_count=1 if status == "healthy" else 0,
+        unhealthy_count=0 if status == "healthy" else 1,
+        error_message=error_message,
+        response_time_ms=12.5,
+        details=None,
+        checked_by="pod-1",
+        checked_at=datetime(2026, 8, 25),
+        created_at=datetime(2026, 8, 25, tzinfo=timezone.utc),
+        updated_at=datetime(2026, 8, 25, tzinfo=timezone.utc),
+    )
+
+
+@pytest.mark.asyncio
+async def test_latest_health_checks_stops_repeating_an_old_verdict_for_a_skipped_media_model(monkeypatch):
+    prisma = MagicMock()
+    prisma.get_all_latest_health_checks = AsyncMock(
+        return_value=(
+            _saved_row("image-was-healthy", "healthy", None),
+            _saved_row("image-was-dead", "unhealthy", "401 from the provider"),
+            _saved_row("image-opted-in", "unhealthy", "401 from the provider"),
+            _saved_row("chat", "unhealthy", "401 from the provider"),
+        )
+    )
+    image = {"litellm_params": {"model": "gemini/gemini-3-pro-image"}}
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", prisma)
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.llm_model_list",
+        [
+            {**image, "model_info": {"id": "image-was-healthy", "mode": "image_generation"}},
+            {**image, "model_info": {"id": "image-was-dead", "mode": "image_generation"}},
+            {
+                **image,
+                "model_info": {
+                    "id": "image-opted-in",
+                    "mode": "image_generation",
+                    "disable_background_health_check": False,
+                },
+            },
+            {"litellm_params": {"model": "openai/gpt-4o-mini"}, "model_info": {"id": "chat"}},
+        ],
+    )
+
+    response = await latest_health_checks_endpoint(user_api_key_dict=UserAPIKeyAuth())
+
+    rows = response["latest_health_checks"]
+    assert {model_id: (row["status"], row["error_message"]) for model_id, row in rows.items()} == {
+        "image-was-healthy": ("skipped", BILLED_MEDIA_NOT_CHECKED_WARNING),
+        "image-was-dead": ("skipped", BILLED_MEDIA_NOT_CHECKED_WARNING),
+        "image-opted-in": ("unhealthy", "401 from the provider"),
+        "chat": ("unhealthy", "401 from the provider"),
+    }
+    assert rows["image-was-healthy"]["checked_at"] == "2026-08-25T00:00:00+00:00"
 
 
 @pytest.mark.asyncio

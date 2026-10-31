@@ -40,10 +40,11 @@ const HEALTH_STATUS_TONES: Record<string, StatusTone> = {
   unhealthy: "error",
   checking: "info",
   none: "neutral",
+  skipped: "neutral",
 };
 
 // healthy > checking > unknown > unhealthy, matching the legacy health table ordering.
-const HEALTH_STATUS_ORDER: Record<string, number> = { healthy: 0, checking: 1, unknown: 2, unhealthy: 3 };
+const HEALTH_STATUS_ORDER: Record<string, number> = { healthy: 0, checking: 1, unknown: 2, skipped: 2, unhealthy: 3 };
 
 const NEVER_CHECKED = "Never checked";
 const CHECK_IN_PROGRESS = "Check in progress...";
@@ -339,6 +340,15 @@ export const getHealthChecksTableColumns = ({
       }
 
       const cleanedError = healthStatus.error;
+
+      if (healthStatus.status === "skipped") {
+        return (
+          <span className="block max-w-50 truncate text-sm text-muted-foreground" title={cleanedError}>
+            {cleanedError}
+          </span>
+        );
+      }
+
       const fullError = healthStatus.fullError || healthStatus.error;
       const displayName = getDisplayModelName(model) || model.model_name;
 
