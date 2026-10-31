@@ -14,10 +14,13 @@ class FipsModeError(Exception):
 
 
 def _fips_mode_setting(general_settings: Mapping[str, object]) -> bool | None:
-    """general_settings.fips_mode as a boolean: False when unset, None when it is not a boolean."""
-    value: Final = general_settings.get(FIPS_MODE_SETTING)
-    if value is None or isinstance(value, bool):
-        return value is True
+    """general_settings.fips_mode as a boolean: False when the key is absent, None when it is not a boolean, including
+    a key with no value."""
+    if FIPS_MODE_SETTING not in general_settings:
+        return False
+    value: Final = general_settings[FIPS_MODE_SETTING]
+    if isinstance(value, bool):
+        return value
     return str_to_bool(value) if isinstance(value, str) else None
 
 
@@ -63,10 +66,13 @@ def fips_mode_refusal(general_settings: Mapping[str, object]) -> str | None:
     cryptography library's OpenSSL does not enforce FIPS. None when it may start."""
     setting: Final = _fips_mode_setting(general_settings)
     if setting is None:
-        return (
-            f"{_SETTING}={general_settings.get(FIPS_MODE_SETTING)!r} is not a boolean. Set it to true or false, "
-            "or remove it."
-        )
+        value: Final = general_settings.get(FIPS_MODE_SETTING)
+        if value is None:
+            return (
+                f"{_SETTING} has no value: it is empty, or an os.environ/ reference to a variable that is not set. "
+                "Set it to true or false, or remove it."
+            )
+        return f"{_SETTING}={value!r} is not a boolean. Set it to true or false, or remove it."
     if not setting:
         return None
     if not openssl_enforces_fips():

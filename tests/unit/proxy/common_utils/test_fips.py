@@ -107,6 +107,7 @@ def test_this_runners_cryptography_openssl_does_not_enforce_fips() -> None:
         ({"fips_mode": True}, True, False, "cryptography library's OpenSSL has no working FIPS provider"),
         ({"fips_mode": "enforced"}, True, True, "general_settings.fips_mode='enforced' is not a boolean"),
         ({"fips_mode": 1}, True, True, "general_settings.fips_mode=1 is not a boolean"),
+        ({"fips_mode": None}, True, True, "general_settings.fips_mode has no value"),
     ],
     ids=[
         "unset",
@@ -117,6 +118,7 @@ def test_this_runners_cryptography_openssl_does_not_enforce_fips() -> None:
         "cryptography-not-fips",
         "not-a-boolean",
         "a-number",
+        "no-value",
     ],
 )
 def test_enforce_fips_mode(

@@ -1836,6 +1836,23 @@ async def test_proxy_startup_reads_fips_mode_from_the_config_file(
             pass
 
 
+@pytest.mark.asyncio
+async def test_proxy_startup_refuses_a_fips_mode_reference_to_an_unset_variable(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from litellm.proxy.common_utils.fips import FipsModeError
+    from litellm.proxy.proxy_server import proxy_startup_event
+
+    _boot_with_general_settings(
+        monkeypatch, tmp_path, {"master_key": "sk-a-safe-master-key", "fips_mode": "os.environ/FIPS_MODE_NOT_SET"}
+    )
+    monkeypatch.delenv("FIPS_MODE_NOT_SET", raising=False)
+
+    with pytest.raises(FipsModeError, match=r"general_settings\.fips_mode has no value"):
+        async with proxy_startup_event(FastAPI()):
+            pass
+
+
 class _DatabaseWithOneStoredCredential:
     def __init__(self, ciphertext):
         self._ciphertext = ciphertext
