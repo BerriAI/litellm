@@ -61,6 +61,10 @@ from litellm.llms.vertex_ai.common_utils import (
     convert_vertex_datetime_to_openai_datetime,
     get_vertex_ai_fine_tuned_endpoint_id,
 )
+from litellm.llms.vertex_ai.files.bigquery_loadable import (
+    bigquery_loadable_row,
+    with_batch_loadable_response_json_schema,
+)
 from litellm.llms.vertex_ai.gemini.transformation import transform_request_body
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
     VertexGeminiConfig,
@@ -877,7 +881,7 @@ def _openai_batch_jsonl_entry_to_vertex_rows(
     vertex_request_body: Final = transform_request_body(
         messages=chat_messages,
         model=chat_request_body.get("model", ""),
-        optional_params=map_openai_to_vertex_params(chat_request_body),
+        optional_params=dict(with_batch_loadable_response_json_schema(map_openai_to_vertex_params(chat_request_body))),
         custom_llm_provider="vertex_ai",
         litellm_params={},
         cached_content=None,
@@ -889,7 +893,7 @@ def _openai_batch_jsonl_entry_to_vertex_rows(
             vertex_request_body["labels"] = {}
         _set_litellm_batch_custom_id_labels(vertex_request_body["labels"], custom_id)
 
-    return ({"request": vertex_request_body},)
+    return (bigquery_loadable_row({"request": vertex_request_body}),)
 
 
 def _decode_batch_input_line(lineno: int, raw: str | bytes | bytearray) -> str:

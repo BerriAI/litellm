@@ -12,10 +12,11 @@ from urllib.parse import parse_qs, urlparse
 
 import httpx
 import pytest
-from pydantic import TypeAdapter
+from pydantic import JsonValue, TypeAdapter
 from unittest.mock import MagicMock
 
 import litellm
+from litellm.litellm_core_utils.prompt_templates.common_utils import DEFS_MAX_INLINED_BYTES
 from litellm.llms.base_llm.files.transformation import BaseFileUploadStream
 from litellm.llms.vertex_ai.files.transformation import (
     VertexAIFilesConfig,
@@ -23,6 +24,7 @@ from litellm.llms.vertex_ai.files.transformation import (
     _openai_batch_jsonl_entry_to_vertex_rows,
     _sanitize_gcp_label_value,
 )
+from litellm.llms.vertex_ai.common_utils import VertexAIError
 from litellm.types.llms.openai import OpenAIFileObject, HttpxBinaryResponseContent
 from openai.types.file_deleted import FileDeleted
 
@@ -2474,3 +2476,284 @@ def test_batch_row_for_an_unflagged_gemini_model_keeps_the_knobs(monkeypatch: py
     monkeypatch.setattr(litellm, "drop_params", False)
     (row,) = _wrap_entries([_chat_entry("gemini-2.5-flash", _SAMPLING_KNOBS)])
     assert _generation_config(row) == {"max_output_tokens": 5, **_SAMPLING_KNOBS}
+
+
+_GEMINI_DEPLOYMENT: Final = MappingProxyType({"gcs_bucket_name": "my-bucket", "model": "vertex_ai/gemini-3.8-flash"})
+_ADDRESS: Final = MappingProxyType(
+    {
+        "properties": {"city": {"title": "City", "type": "string"}, "country": {"title": "Country", "type": "string"}},
+        "required": ["city", "country"],
+        "title": "Address",
+        "type": "object",
+    }
+)
+_FLAT_SCHEMA: Final = MappingProxyType(
+    {
+        "type": "object",
+        "properties": {
+            "answer": {"type": "string", "enum": ["yes", "no"], "examples": [{"definitions": "kept as data"}]},
+            "definitions": {"type": "string"},
+        },
+        "required": ["answer", "definitions"],
+        "additionalProperties": False,
+    }
+)
+
+
+def _json_schema_entry(schema: Mapping[str, object]) -> Mapping[str, object]:
+    return dict(
+        _chat_entry(
+            "gemini-3.8-flash",
+            {"response_format": {"type": "json_schema", "json_schema": {"name": "answer", "schema": dict(schema)}}},
+        )
+    )
+
+
+def _uploaded_response_schema(config: VertexAIFilesConfig, schema: Mapping[str, object]) -> JsonValue:
+    (row,) = _uploaded_rows(config, _GEMINI_DEPLOYMENT, [_json_schema_entry(schema)])
+    return TypeAdapter(dict[str, JsonValue]).validate_python(_generation_config(row))["response_json_schema"]
+
+
+def test_batch_row_inlines_a_nested_pydantic_schema(config):
+    person: Final = {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$defs": {"Address": dict(_ADDRESS)},
+        "properties": {
+            "name": {"title": "Name", "type": "string"},
+            "home": {"$ref": "#/$defs/Address"},
+            "work": {"$ref": "#/$defs/Address"},
+        },
+        "required": ["name", "home", "work"],
+        "title": "Person",
+        "type": "object",
+    }
+
+    assert _uploaded_response_schema(config, person) == {
+        "properties": {"name": {"title": "Name", "type": "string"}, "home": dict(_ADDRESS), "work": dict(_ADDRESS)},
+        "required": ["name", "home", "work"],
+        "title": "Person",
+        "type": "object",
+    }
+
+
+@pytest.mark.parametrize(
+    ("defs", "ref"),
+    [
+        ({"$defs": {"Address": dict(_ADDRESS)}}, "#/%24defs/Address"),
+        ({"definitions": {"Address": dict(_ADDRESS)}}, "#/definitions/Address"),
+        ({"$defs": {"a/b~c": dict(_ADDRESS)}}, "#/$defs/a~1b~0c"),
+        ({"$defs": {"Either": {"anyOf": [{"type": "string"}, dict(_ADDRESS)]}}}, "#/$defs/Either/anyOf/1"),
+        ({"$defs": {"Home": {"$ref": "#/$defs/Address"}, "Address": dict(_ADDRESS)}}, "#/$defs/Home"),
+    ],
+)
+def test_batch_row_resolves_every_spelling_of_a_local_ref(config, defs, ref):
+    schema: Final = {**defs, "type": "object", "properties": {"home": {"$ref": ref}}}
+
+    assert _uploaded_response_schema(config, schema) == {"type": "object", "properties": {"home": dict(_ADDRESS)}}
+
+
+def test_batch_row_keeps_keys_beside_a_ref_over_the_targets_own(config):
+    schema: Final = {
+        "$defs": {"Address": {**_ADDRESS, "description": "Any postal address"}},
+        "type": "object",
+        "properties": {"home": {"$ref": "#/$defs/Address", "description": "Where the person lives"}},
+    }
+
+    assert _uploaded_response_schema(config, schema) == {
+        "type": "object",
+        "properties": {"home": {**_ADDRESS, "description": "Where the person lives"}},
+    }
+
+
+def test_batch_row_passes_a_schema_without_dollar_keys_through_unchanged(config):
+    assert _uploaded_response_schema(config, _FLAT_SCHEMA) == dict(_FLAT_SCHEMA)
+
+
+def _object_with(home: Mapping[str, object], **keywords: object) -> Mapping[str, object]:
+    return {"type": "object", "properties": {"home": dict(home)}, "required": ["home"], **keywords}
+
+
+@pytest.mark.parametrize(
+    ("schema", "reason"),
+    [
+        pytest.param(
+            {
+                "$defs": {
+                    "TreeNode": {
+                        "type": "object",
+                        "properties": {"children": {"type": "array", "items": {"$ref": "#/$defs/TreeNode"}}},
+                    }
+                },
+                "$ref": "#/$defs/TreeNode",
+            },
+            "is recursive through $ref '#/$defs/TreeNode', and a Vertex AI batch row must inline every $ref, "
+            "so send this row as a regular request instead",
+            id="recursive",
+        ),
+        pytest.param(
+            {
+                "$defs": {"TreeNode": {"type": "object", "properties": {"children": {"items": {"$ref": "#"}}}}},
+                "$ref": "#/$defs/TreeNode",
+            },
+            "is recursive through $ref '#/$defs/TreeNode'",
+            id="recursive-through-root",
+        ),
+        pytest.param(
+            _object_with({"$ref": "https://example.com/address.json"}),
+            "$ref 'https://example.com/address.json', which is not a JSON pointer into the schema itself",
+            id="remote",
+        ),
+        pytest.param(
+            _object_with({"$ref": "address.json#/Address"}),
+            "$ref 'address.json#/Address', which is not a JSON pointer into the schema itself",
+            id="other-file",
+        ),
+        pytest.param(
+            _object_with({"$ref": "#Address"}, **{"$defs": {"Address": {"$anchor": "Address"}}}),
+            "$ref '#Address', which is not a JSON pointer into the schema itself",
+            id="anchor",
+        ),
+        pytest.param(
+            _object_with({"$ref": "#/$defs/Missing"}, **{"$defs": {"Address": dict(_ADDRESS)}}),
+            "$ref '#/$defs/Missing', which points at nothing in the schema",
+            id="missing-def",
+        ),
+        pytest.param(
+            _object_with({"$ref": "#/$defs/Either/anyOf/2"}, **{"$defs": {"Either": {"anyOf": [{}, {}]}}}),
+            "$ref '#/$defs/Either/anyOf/2', which points at nothing in the schema",
+            id="index-past-end",
+        ),
+        pytest.param(
+            _object_with({"$ref": "#/$defs/Either/anyOf/first"}, **{"$defs": {"Either": {"anyOf": [{}, {}]}}}),
+            "$ref '#/$defs/Either/anyOf/first', which points at nothing in the schema",
+            id="index-not-a-number",
+        ),
+        pytest.param(
+            _object_with({"$ref": "#/required"}),
+            "$ref '#/required', which points at something other than a schema",
+            id="not-a-schema",
+        ),
+    ],
+)
+def test_batch_upload_refuses_a_schema_vertex_cannot_load_naming_its_line(config, schema, reason):
+    with pytest.raises(VertexAIError) as exc_info:
+        _uploaded_rows(config, _GEMINI_DEPLOYMENT, [_json_schema_entry(_FLAT_SCHEMA), _json_schema_entry(schema)])
+
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.message.startswith("Batch input file line 2 could not be converted to a Vertex AI request: ")
+    assert reason in exc_info.value.message
+
+
+def test_batch_upload_refuses_a_schema_that_inlines_past_the_byte_budget(config):
+    doublings: Final = 6
+    leaf: Final = {"type": "string", "description": "x" * (DEFS_MAX_INLINED_BYTES * 2 >> doublings)}
+    levels: Final = {
+        f"L{level}": {
+            "type": "object",
+            "properties": {"a": {"$ref": f"#/$defs/L{level - 1}"}, "b": {"$ref": f"#/$defs/L{level - 1}"}},
+        }
+        for level in range(1, doublings + 1)
+    }
+    bomb: Final = {"$defs": {"L0": leaf, **levels}, "$ref": f"#/$defs/L{doublings}"}
+
+    with pytest.raises(VertexAIError, match=f"grows past {DEFS_MAX_INLINED_BYTES:,} bytes") as exc_info:
+        _uploaded_rows(config, _GEMINI_DEPLOYMENT, [_json_schema_entry(bomb)])
+
+    assert exc_info.value.status_code == 400
+
+
+def _chat_entry_with(model: str, body: Mapping[str, object]) -> Mapping[str, object]:
+    return {**_chat_entry(model, {}), "body": {"model": model, "max_tokens": 5, **body}}
+
+
+_FIND_TOOL: Final = MappingProxyType(
+    {"type": "function", "function": {"name": "find", "parameters": {"type": "object", "properties": {}}}}
+)
+_GREATER_THAN_FIVE_CALL: Final = MappingProxyType(
+    {
+        "tools": [dict(_FIND_TOOL)],
+        "messages": [
+            {"role": "user", "content": "find the cheap ones"},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {"id": "call-1", "type": "function", "function": {"name": "find", "arguments": '{"$gt": 5}'}}
+                ],
+            },
+            {"role": "tool", "tool_call_id": "call-1", "content": "[]"},
+        ],
+    }
+)
+
+
+@pytest.mark.parametrize(
+    ("deployment", "body", "path"),
+    [
+        pytest.param(
+            _GEMINI_DEPLOYMENT,
+            {
+                "messages": [{"role": "user", "content": "quote it"}],
+                "tools": [
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "quote",
+                            "parameters": {"type": "object", "properties": {"$price": {"type": "number"}}},
+                        },
+                    }
+                ],
+            },
+            "request.tools[0].function_declarations[0].parameters.properties.$price",
+            id="tool-parameter-name",
+        ),
+        pytest.param(
+            _GEMINI_DEPLOYMENT,
+            _GREATER_THAN_FIVE_CALL,
+            "request.contents[1].parts[0].function_call.args.$gt",
+            id="tool-call-arguments",
+        ),
+        pytest.param(
+            _GEMINI_DEPLOYMENT,
+            {
+                "messages": [{"role": "user", "content": "hi"}],
+                "response_format": {
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": "answer",
+                        "schema": _object_with({"type": "object", "enum": [{"kind": {"$tag": "home"}}]}),
+                    },
+                },
+            },
+            "request.generationConfig.response_json_schema.properties.home.enum[0].kind.$tag",
+            id="schema-enum-value",
+        ),
+    ],
+)
+def test_batch_upload_refuses_a_row_with_a_dollar_key_naming_its_line_and_path(config, deployment, body, path):
+    model: Final = str(deployment["model"]).removeprefix("vertex_ai/")
+    with pytest.raises(VertexAIError) as exc_info:
+        _uploaded_rows(config, deployment, [dict(_chat_entry(model, {})), _chat_entry_with(model, body)])
+
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.message == (
+        "Batch input file line 2 could not be converted to a Vertex AI request: "
+        f"the row has the key {path}, but Vertex AI batch input cannot carry an object key starting with '$', "
+        "so send this row as a regular request instead"
+    )
+
+
+def test_batch_upload_keeps_a_claude_tool_schema_with_defs_unchanged(config):
+    parameters: Final = {
+        "$defs": {"Address": dict(_ADDRESS)},
+        "type": "object",
+        "properties": {"home": {"$ref": "#/$defs/Address"}},
+    }
+    body: Final = {
+        "messages": [{"role": "user", "content": "where do they live"}],
+        "tools": [{"type": "function", "function": {"name": "locate", "parameters": parameters}}],
+    }
+
+    (row,) = _uploaded_rows(config, CLAUDE_DEPLOYMENT, [_chat_entry_with("claude-sonnet-4-6", body)])
+
+    assert row["request"]["tools"][0]["input_schema"] == parameters
