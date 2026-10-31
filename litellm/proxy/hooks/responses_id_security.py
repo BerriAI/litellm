@@ -178,6 +178,8 @@ class ResponsesIDSecurity(CustomLogger):
         if not isinstance(addressed_id, str) or not self._is_encrypted_response_id(addressed_id):
             return {}
         original_response_id, user_id, team_id = self._decrypt_response_id(addressed_id)
+        if addressed_id != requested_id and original_response_id != requested_id:
+            return {}
         self.check_user_access_to_response_id(user_id, team_id, user_api_key_dict)
         authorized_options: Final = {**options, "comparison_response_id": original_response_id}
         authorized_field: Final[Mapping[str, object]] = (

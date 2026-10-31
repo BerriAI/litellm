@@ -910,6 +910,47 @@ async def test_regression_comparison_id_reentry_keeps_ownership_after_owner_retr
     assert _comparison_options(retried, nested) == {"comparison_response_id": _FABRICATED_PROVIDER_RESPONSE_ID}
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("nested", (False, True))
+@pytest.mark.parametrize("replacement", ("resp_vendor_raw", "resp_!!!not-base64", ""))
+async def test_guard_comparison_id_replaced_after_owner_hook_reaches_provider_unchanged(
+    salt_key_env: str, nested: bool, replacement: str
+) -> None:
+    hook: Final = ResponsesIDSecurity(general_settings_reader=lambda: {}, signing_key_reader=lambda: salt_key_env)
+    owner: Final = UserAPIKeyAuth(user_id="owner-user", team_id="owner-team")
+    cache: Final = DualCache()
+    issued: Final = ResponsesAPIResponse.model_validate(
+        await hook.async_post_call_success_hook(  # pyright: ignore[reportUnknownMemberType]  # Legacy dict boundary
+            data={},
+            user_api_key_dict=owner,
+            response=ResponsesAPIResponse(
+                id=_FABRICATED_PROVIDER_RESPONSE_ID, created_at=1234567890, output=[], status="completed"
+            ),
+        )
+    )
+    first_options: Final = {"comparison_response_id": issued.id}
+    first_request: Final = (
+        {"extra_body": {"prompt_cache_options": first_options}} if nested else {"prompt_cache_options": first_options}
+    )
+    first: Final = TypeAdapter(dict[str, object]).validate_python(
+        await hook.async_pre_call_hook(  # pyright: ignore[reportUnknownMemberType]  # Legacy dict boundary
+            user_api_key_dict=owner, cache=cache, data=first_request, call_type="aresponses"
+        )
+    )
+    replaced_options: Final = {"comparison_response_id": replacement, "mode": "implicit"}
+    replaced: Final = (
+        {**first, "extra_body": {"prompt_cache_options": replaced_options}}
+        if nested
+        else {**first, "prompt_cache_options": replaced_options}
+    )
+    rerun: Final = TypeAdapter(dict[str, object]).validate_python(
+        await hook.async_pre_call_hook(  # pyright: ignore[reportUnknownMemberType]  # Legacy dict boundary
+            user_api_key_dict=owner, cache=cache, data=replaced, call_type="aresponses"
+        )
+    )
+    assert _comparison_options(rerun, nested) == replaced_options, rerun
+
+
 class TestUnrecognizedResponseIdIsRejected:
     """An id this proxy never issued carries no owner, so it must not reach the provider."""
 

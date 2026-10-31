@@ -650,10 +650,16 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         ):
             return {}
         decoded_id: Final = ResponsesAPIRequestUtils.decode_responses_api_response_id(comparison_response_id)
-        if decoded_id["custom_llm_provider"] != LlmProviders.OPENAI:
-            return {}
-        original_response_id: Final = decoded_id["response_id"]
-        if original_response_id == comparison_response_id:
+        decoded_provider: Final = decoded_id.get("custom_llm_provider")
+        original_response_id: Final = decoded_id.get("response_id", comparison_response_id)
+        rebuilt_envelope: Final = ResponsesAPIRequestUtils.update_responses_api_response_id_with_model_id(
+            {"id": original_response_id}, decoded_provider, {"model_info": {"id": decoded_id.get("model_id")}}
+        )
+        if (
+            decoded_provider != LlmProviders.OPENAI
+            or original_response_id == comparison_response_id
+            or rebuilt_envelope.get("id") != comparison_response_id
+        ):
             return {}
         return {"prompt_cache_options": {**options, "comparison_response_id": original_response_id}}
 
