@@ -9960,8 +9960,15 @@
               "type": "string"
             },
             "confidence": {
-              "title": "Confidence",
-              "type": "number"
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Confidence"
             },
             "probabilities": {
               "additionalProperties": {
@@ -9979,7 +9986,6 @@
           "required": [
             "type",
             "choice",
-            "confidence",
             "probabilities"
           ],
           "title": "ChoiceAnswer",
@@ -10410,8 +10416,15 @@
               "title": "Choice"
             },
             "confidence": {
-              "title": "Confidence",
-              "type": "number"
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Confidence"
             },
             "name": {
               "anyOf": [
@@ -10441,8 +10454,7 @@
           "required": [
             "name",
             "choice",
-            "probabilities",
-            "confidence"
+            "probabilities"
           ],
           "title": "OpenAIChoiceAnswer",
           "type": "object"
@@ -10647,8 +10659,15 @@
         "OpenAIScoreAnswer": {
           "properties": {
             "confidence": {
-              "title": "Confidence",
-              "type": "number"
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Confidence"
             },
             "name": {
               "anyOf": [
@@ -10682,8 +10701,7 @@
           "required": [
             "name",
             "score",
-            "probabilities",
-            "confidence"
+            "probabilities"
           ],
           "title": "OpenAIScoreAnswer",
           "type": "object"
@@ -10715,8 +10733,15 @@
           "additionalProperties": true,
           "properties": {
             "confidence": {
-              "title": "Confidence",
-              "type": "number"
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Confidence"
             },
             "legend": {
               "additionalProperties": {
@@ -10757,7 +10782,6 @@
           "required": [
             "type",
             "score",
-            "confidence",
             "legend",
             "probabilities"
           ],
@@ -23187,8 +23211,15 @@
               "type": "string"
             },
             "confidence": {
-              "title": "Confidence",
-              "type": "number"
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Confidence"
             },
             "probabilities": {
               "additionalProperties": {
@@ -23206,7 +23237,6 @@
           "required": [
             "type",
             "choice",
-            "confidence",
             "probabilities"
           ],
           "title": "ChoiceAnswer",
@@ -29045,8 +29075,15 @@
           "additionalProperties": true,
           "properties": {
             "confidence": {
-              "title": "Confidence",
-              "type": "number"
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Confidence"
             },
             "legend": {
               "additionalProperties": {
@@ -29087,7 +29124,6 @@
           "required": [
             "type",
             "score",
-            "confidence",
             "legend",
             "probabilities"
           ],

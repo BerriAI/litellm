@@ -209,7 +209,7 @@ class JevChoiceAnswer(LiteLLMBaseModel):
     type: Literal["choice"]
     choice: str
     probabilities: Mapping[str, JevProbability]
-    confidence: JevProbability
+    confidence: JevProbability | None = None
 
 
 class JevUsage(LiteLLMBaseModel):
@@ -424,7 +424,7 @@ class HttpJevClassifierClient:
 class JevVerdict(NamedTuple):
     label: str
     probabilities: Mapping[str, float]
-    confidence: float
+    confidence: float | None
     model: str
     cost: float | None
     provider: str = "typesafe"

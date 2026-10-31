@@ -46385,6 +46385,19 @@
         "supports_response_schema": true,
         "supports_tool_choice": false
     },
+    "parallel_ai/decision": {
+        "input_cost_per_query": 0.001,
+        "input_cost_per_token": 0.0,
+        "output_cost_per_token": 0.0,
+        "litellm_provider": "parallel_ai",
+        "max_input_tokens": 32000,
+        "mode": "evaluation",
+        "source": "https://docs.parallel.ai/getting-started/pricing#decisions-api",
+        "supported_endpoints": [
+            "/v1/decisions",
+            "/v1/systemone"
+        ]
+    },
     "parallel_ai/search": {
         "input_cost_per_query": 0.005,
         "litellm_provider": "parallel_ai",

@@ -62,6 +62,21 @@ def test_apply_decisions_pricing_leaves_rows_without_decisions_fields_unchanged(
     assert apply_decisions_pricing(plain_row) == plain_row
 
 
+@pytest.mark.parametrize("rate", [0.0, 0.002])
+def test_flat_decisions_rate_overrides_catalog_without_changing_chat(
+    monkeypatch: pytest.MonkeyPatch, rate: float
+) -> None:
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "gpt-6-luna",
+        {**litellm.model_cost["gpt-6-luna"], **_ROW, "input_cost_per_query_decisions": rate},
+    )
+    assert cost_calculator.cost_per_token(model="gpt-6-luna", prompt_tokens=100, call_type="decisions") == (rate, 0.0)
+    assert cost_calculator.cost_per_token(
+        model="gpt-6-luna", prompt_tokens=100, call_type="completion"
+    ) == pytest.approx((100 * 1e-07, 0.0))
+
+
 _LUNA_USAGE: Final = Usage(
     prompt_tokens=100,
     completion_tokens=10,

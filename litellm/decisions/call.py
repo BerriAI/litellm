@@ -555,7 +555,7 @@ def prepare_call(
         resolved_api_base, static_api_key = provider_config.resolve_connection(
             dynamic_api_base or call_api_base, dynamic_api_key or api_key
         )
-    except ValueError as error:
+    except (ValueError, httpx.InvalidURL) as error:
         raise litellm.BadRequestError(message=str(error), model=model, llm_provider=provider) from error
     if resolved_api_base is None:
         raise litellm.BadRequestError(
@@ -787,7 +787,9 @@ def _formatted_response(
         case DecisionsRequestBody():
             return ir_to_systemone_response(caller_response, caller_request)
         case OpenAIDecisionRequestBody():
-            return ir_to_openai_response(caller_response, caller_request, call.requested_model)
+            return ir_to_openai_response(
+                caller_response, caller_request, call.requested_model, call.provider_config.openai_evidence_fields
+            )
         case _:
             assert_never(call.request)
 

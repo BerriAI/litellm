@@ -62,14 +62,14 @@ const choiceAnswerFields = {
   ...answerFields,
   type: z.literal("choice"),
   choice: choiceValue,
-  confidence: probability,
+  confidence: probability.nullish(),
   probabilities: z.array(z.looseObject({ value: choiceValue, probability })),
 };
 const scoreAnswerFields = {
   ...answerFields,
   type: z.literal("score"),
   score: z.number().finite(),
-  confidence: probability,
+  confidence: probability.nullish(),
   probabilities: z.array(z.looseObject({ value: z.number().int(), label: z.string(), probability })),
 };
 const usageFields = {
