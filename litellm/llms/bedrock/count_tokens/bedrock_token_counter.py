@@ -79,6 +79,14 @@ def _runtime_rejected_claude_model(outcome: CountTokensOutcome, resolved_model: 
     )
 
 
+def _mantle_retry_outcome(runtime: CountTokensOutcome, mantle: CountTokensOutcome) -> CountTokensOutcome:
+    match runtime, mantle:
+        case CountTokensFailure(status_code=400), CountTokensFailure(status_code=404):
+            return runtime
+        case _:
+            return mantle
+
+
 def _request_data(
     model: str, messages: Sequence[Mapping[str, object]], tools: Sequence[Mapping[str, object]] | None, system: object
 ) -> Mapping[str, object]:
@@ -215,8 +223,11 @@ class BedrockTokenCounter(BaseTokenCounter):
             )
         )
         outcome: Final = (
-            await self._count_with(
-                self._mantle_handler, MANTLE_TOKENIZER_TYPE, mantle_request, litellm_params, resolved_model
+            _mantle_retry_outcome(
+                primary,
+                await self._count_with(
+                    self._mantle_handler, MANTLE_TOKENIZER_TYPE, mantle_request, litellm_params, resolved_model
+                ),
             )
             if not use_mantle and _runtime_rejected_claude_model(primary, resolved_model)
             else primary

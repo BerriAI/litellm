@@ -9,6 +9,7 @@ from pydantic import JsonValue, TypeAdapter
 import litellm
 from litellm.llms.bedrock.count_tokens.bedrock_token_counter import BedrockTokenCounter
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+from litellm.types.utils import CountContextManagement
 
 RUNTIME_HOST: Final = "bedrock-runtime.us-east-1.amazonaws.com"
 MANTLE_HOST: Final = "bedrock-mantle.us-east-1.api.aws"
@@ -141,6 +142,33 @@ async def test_mantle_failure_is_reported_with_its_status() -> None:
     assert result.status_code == 404
     assert result.tokenizer_type == "bedrock_mantle_api"
     assert "does not exist" in (result.error_message or "")
+    assert bedrock.posted_hosts() == (RUNTIME_HOST, MANTLE_HOST)
+
+
+@pytest.mark.asyncio
+async def test_runtime_rejection_of_an_edit_stands_when_mantle_does_not_serve_the_model() -> None:
+    rejection: Final = "'claude-haiku-4-5-20251001' does not support the 'compact_20260112' context management strategy"
+    bedrock: Final = _Bedrock(
+        runtime=(400, {"message": rejection}),
+        mantle=(404, {"type": "error", "error": {"type": "not_found_error", "message": "does not exist"}}),
+    )
+
+    result: Final = await _counter(bedrock).count_tokens(
+        model_to_use="us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        messages=MESSAGES,
+        contents=None,
+        deployment=DEPLOYMENT,
+        request_model="claude-haiku-4-5",
+        context_management=CountContextManagement(
+            spec={"edits": [{"type": "compact_20260112"}]}, drop_invalid_edits=False
+        ),
+    )
+
+    assert result is not None
+    assert result.error is True
+    assert result.status_code == 400
+    assert result.tokenizer_type == "bedrock_api"
+    assert rejection in (result.error_message or "")
     assert bedrock.posted_hosts() == (RUNTIME_HOST, MANTLE_HOST)
 
 
