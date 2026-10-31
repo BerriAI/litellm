@@ -42,7 +42,7 @@ from litellm.types.proxy.guardrails.guardrail_hooks.lakera_ai_v2 import (
     LakeraAIRequest,
     LakeraAIResponse,
 )
-from litellm.types.utils import CallTypesLiteral, GuardrailStatus, ModelResponse
+from litellm.types.utils import CallTypes, CallTypesLiteral, GuardrailStatus, ModelResponse
 
 _DECODED_JSON: Final = TypeAdapter(object)
 _RESPONSE_FIELDS: Final = TypeAdapter(Mapping[str, object])
@@ -203,6 +203,7 @@ def _unmaskable_reason(
     guardrail: "LakeraAIGuardrail",
     data: dict[str, object],
     lakera_response: LakeraAIResponse | None,
+    call_type: str,
 ) -> str | None:
     """Why a PII-only violation on ``data`` can't be masked in place, or None when it can."""
     if has_non_string_content(data):
@@ -211,7 +212,7 @@ def _unmaskable_reason(
         return "messages and input are both present, so the write-back is positionally ambiguous"
     if "messages" in data and not isinstance(data.get("messages"), list):
         return "a messages key that isn't a list, so there's nothing to merge the redacted content into"
-    if _bedrock_passthrough_body(data) is not None:
+    if _bedrock_passthrough_body(data, call_type) is not None:
         return "a /bedrock pass-through body, which has no write-back path for the redacted content"
     if not _has_responses_instructions(guardrail, data):
         return "no write-back path for the redacted content"
@@ -220,9 +221,14 @@ def _unmaskable_reason(
     return None
 
 
-def _bedrock_passthrough_body(data: Mapping[str, object]) -> Mapping[str, object] | None:
-    """The client's request body on a /bedrock pass-through call, which the route nests under ``data``."""
-    if data.get("custom_llm_provider") != "bedrock" or not isinstance(data.get("endpoint"), str):
+def _bedrock_passthrough_body(data: Mapping[str, object], call_type: str | None) -> Mapping[str, object] | None:
+    """The client's request body on a /bedrock pass-through call (call type ``allm_passthrough_route``), which the
+    route nests under ``data``."""
+    if (
+        call_type != CallTypes.allm_passthrough_route.value
+        or data.get("custom_llm_provider") != "bedrock"
+        or not isinstance(data.get("endpoint"), str)
+    ):
         return None
     return as_str_mapping(data.get("data"))
 
@@ -268,11 +274,11 @@ def _bedrock_turns(message: object) -> Sequence[Mapping[str, object]]:
     ]
 
 
-def _bedrock_inspection_messages(data: Mapping[str, object]) -> Sequence[Mapping[str, str]]:
+def _bedrock_inspection_messages(data: Mapping[str, object], call_type: str | None) -> Sequence[Mapping[str, str]]:
     """Chat-style messages for a /bedrock invoke or Converse body: ``system`` first as a system message, then each
     ``messages`` turn with its text parts joined and its tool results as tool messages. Turns with no text are dropped.
     """
-    body: Final = _bedrock_passthrough_body(data)
+    body: Final = _bedrock_passthrough_body(data, call_type)
     if body is None:
         return []
     system: Final = body.get("system")
@@ -283,7 +289,9 @@ def _bedrock_inspection_messages(data: Mapping[str, object]) -> Sequence[Mapping
     )
 
 
-def _build_lakera_inspection_messages(data: Mapping[str, object]) -> Sequence[Mapping[str, str]]:
+def _build_lakera_inspection_messages(
+    data: Mapping[str, object], *, call_type: str | None = None
+) -> Sequence[Mapping[str, str]]:
     """Like build_inspection_messages, but also covers the Responses-API
     ``instructions`` field, placed first since litellm later converts it
     into the model's leading system message and a prompt-injection detector
@@ -304,7 +312,7 @@ def _build_lakera_inspection_messages(data: Mapping[str, object]) -> Sequence[Ma
     )
     return [
         *leading,
-        *_bedrock_inspection_messages(data),
+        *_bedrock_inspection_messages(data, call_type),
         *build_inspection_messages(dict(data)),
     ]
 
@@ -580,6 +588,7 @@ class LakeraAIGuardrail(CustomGuardrail):
         inspected_messages: Sequence[AllMessageValues],
         lakera_response: LakeraAIResponse | None,
         masked_entity_count: dict[str, int],
+        call_type: str,
     ) -> bool:
         """Mask a body whose only obstacle to mask-in-place is the Responses-API
         ``instructions`` field, writing the redacted instructions straight into
@@ -587,7 +596,7 @@ class LakeraAIGuardrail(CustomGuardrail):
         that field and would fold the instructions text into ``data["input"]``.
         Returns False without masking anything when _unmaskable_reason names an
         obstacle this can't get around."""
-        if _unmaskable_reason(self, data, lakera_response) is not None:
+        if _unmaskable_reason(self, data, lakera_response, call_type) is not None:
             return False
         redacted: Final = self._mask_pii_in_messages(
             messages=inspected_messages,
@@ -619,7 +628,7 @@ class LakeraAIGuardrail(CustomGuardrail):
             return data
 
         # Covers multimodal list content + Responses-API input/instructions.
-        inspection_messages: Final = _build_lakera_inspection_messages(data)
+        inspection_messages: Final = _build_lakera_inspection_messages(data, call_type=call_type)
         if not inspection_messages:
             verbose_proxy_logger.warning("Lakera AI: not running guardrail. No inspectable text in data")
             return data
@@ -646,7 +655,7 @@ class LakeraAIGuardrail(CustomGuardrail):
         # handled safely by _apply_redacted_messages_back_preserving_fields's
         # scope-index merge, which never touches a message outside the scope
         # it actually redacted instead of reconstructing the list from scratch.
-        is_bedrock_body: Final = _bedrock_passthrough_body(data) is not None  # pyright: ignore[reportUnknownArgumentType]  # hook data is an untyped dict
+        is_bedrock_body: Final = _bedrock_passthrough_body(data, call_type) is not None  # pyright: ignore[reportUnknownArgumentType]  # hook data is an untyped dict
         is_multimodal_input: Final = (
             has_non_string_content(data)
             or _has_combined_messages_and_input(data)
@@ -720,6 +729,7 @@ class LakeraAIGuardrail(CustomGuardrail):
                     inspected_messages=new_messages,
                     lakera_response=lakera_guardrail_response,
                     masked_entity_count=masked_entity_count,
+                    call_type=call_type,
                 )
                 if masked_in_place:
                     verbose_proxy_logger.warning(
@@ -729,7 +739,7 @@ class LakeraAIGuardrail(CustomGuardrail):
                     verbose_proxy_logger.error(
                         "Lakera Guardrail: Monitoring mode - PII detected but NOT masked, forwarding unredacted "
                         "content to the model (reason: %s)",
-                        _unmaskable_reason(self, data, lakera_guardrail_response),
+                        _unmaskable_reason(self, data, lakera_guardrail_response, call_type),
                     )
                 else:
                     verbose_proxy_logger.warning(
@@ -760,7 +770,7 @@ class LakeraAIGuardrail(CustomGuardrail):
             return
 
         # Covers multimodal list content + Responses-API input/instructions.
-        inspection_messages: Final = _build_lakera_inspection_messages(data)
+        inspection_messages: Final = _build_lakera_inspection_messages(data, call_type=call_type)
         if not inspection_messages:
             verbose_proxy_logger.warning("Lakera AI: not running guardrail. No inspectable text in data")
             return

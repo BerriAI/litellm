@@ -27,7 +27,7 @@ from litellm.proxy.guardrails.guardrail_hooks.lakera_ai_v2 import (
     humanize_lakera_block_reasons,
 )
 from litellm.types.guardrails import LitellmParams, Mode
-from litellm.types.utils import ModelResponse
+from litellm.types.utils import CallTypesLiteral, ModelResponse
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 
 
@@ -2483,7 +2483,10 @@ def _converse_body() -> dict[str, object]:
                 "role": "user",
                 "content": [{"text": "hello world"}, {"image": {"format": "png", "source": {"bytes": "AA"}}}],
             },
-            {"role": "assistant", "content": [{"text": "hi"}, {"toolUse": {"toolUseId": "t1", "name": "f", "input": {}}}]},
+            {
+                "role": "assistant",
+                "content": [{"text": "hi"}, {"toolUse": {"toolUseId": "t1", "name": "f", "input": {}}}],
+            },
             {"role": "user", "content": [{"toolResult": {"toolUseId": "t1", "content": [{"text": "card on file"}]}}]},
         ],
     }
@@ -2513,6 +2516,11 @@ BEDROCK_PII_LAKERA_RESPONSE: Final = {
     "breakdown": [{"detector_type": "pii/credit_card", "detected": True, "message_id": 1}],
     "payload": [{"detector_type": "pii/credit_card", "start": 0, "end": 5, "message_id": 1}],
 }
+EMAIL_AT_START_LAKERA_RESPONSE: Final = {
+    "flagged": True,
+    "breakdown": [{"detector_type": "pii/email", "detected": True, "message_id": 0}],
+    "payload": [{"detector_type": "pii/email", "start": 0, "end": 7, "message_id": 0}],
+}
 BEDROCK_PROMPT_ATTACK_LAKERA_RESPONSE: Final = {
     "flagged": True,
     "breakdown": [{"detector_type": "prompt_attack", "detected": True, "message_id": 1}],
@@ -2520,7 +2528,10 @@ BEDROCK_PROMPT_ATTACK_LAKERA_RESPONSE: Final = {
 
 
 async def _run_bedrock_pre_call(
-    guardrail: LakeraAIGuardrail, lakera_response: Mapping[str, object], data: dict[str, object]
+    guardrail: LakeraAIGuardrail,
+    lakera_response: Mapping[str, object],
+    data: dict[str, object],
+    call_type: CallTypesLiteral = "allm_passthrough_route",
 ) -> Sequence[object]:
     """Run the pre-call hook against a Lakera double and return the messages each guard request carried."""
     sent: Final = list[object]()  # mutable-ok: the Lakera double records each guard request it receives
@@ -2534,14 +2545,16 @@ async def _run_bedrock_pre_call(
         user_api_key_dict=UserAPIKeyAuth(api_key="test_key"),
         cache=MagicMock(),
         data=data,
-        call_type="allm_passthrough_route",
+        call_type=call_type,
     )
     return sent
 
 
 class TestBedrockPassthroughBody:
     def test_reads_converse_system_text_and_tool_results(self):
-        assert _build_lakera_inspection_messages(_bedrock_data(_converse_body())) == [
+        assert _build_lakera_inspection_messages(
+            _bedrock_data(_converse_body()), call_type="allm_passthrough_route"
+        ) == [
             {"role": "system", "content": "be nice"},
             {"role": "user", "content": "hello world"},
             {"role": "assistant", "content": "hi"},
@@ -2549,7 +2562,7 @@ class TestBedrockPassthroughBody:
         ]
 
     def test_reads_anthropic_invoke_system_text_and_tool_results(self):
-        assert _build_lakera_inspection_messages(_bedrock_data(_invoke_body())) == [
+        assert _build_lakera_inspection_messages(_bedrock_data(_invoke_body()), call_type="allm_passthrough_route") == [
             {"role": "system", "content": "be nice"},
             {"role": "user", "content": "hello world"},
             {"role": "assistant", "content": "hi"},
@@ -2568,7 +2581,7 @@ class TestBedrockPassthroughBody:
                 },
             ],
         }
-        assert _build_lakera_inspection_messages(_bedrock_data(body)) == [
+        assert _build_lakera_inspection_messages(_bedrock_data(body), call_type="allm_passthrough_route") == [
             {"role": "system", "content": "system card"},
             {"role": "user", "content": "hello\nguarded card"},
             {"role": "tool", "content": '{"card": "on file"}'},
@@ -2576,13 +2589,44 @@ class TestBedrockPassthroughBody:
 
     def test_a_nested_body_for_another_provider_is_not_read(self):
         data: Final = {**_bedrock_data(_invoke_body()), "custom_llm_provider": "vertex_ai"}
-        assert _build_lakera_inspection_messages(data) == []
+        assert _build_lakera_inspection_messages(data, call_type="allm_passthrough_route") == []
+
+    @pytest.mark.parametrize("call_type", ["acompletion", "aresponses", "anthropic_messages", None])
+    def test_bedrock_keys_on_another_call_type_are_not_read(self, call_type: str | None):
+        data: Final = {**_bedrock_data(_invoke_body()), "messages": [USER_MSG]}
+        assert _build_lakera_inspection_messages(data, call_type=call_type) == [USER_MSG]
+
+    @pytest.mark.asyncio
+    async def test_a_chat_call_carrying_bedrock_keys_is_still_masked(self):
+        data: Final = {**_bedrock_data(_invoke_body()), "messages": [{"role": "user", "content": "a@b.com hi"}]}
+        sent: Final = await _run_bedrock_pre_call(
+            LakeraAIGuardrail(api_key="test_key", on_flagged="mask"),
+            EMAIL_AT_START_LAKERA_RESPONSE,
+            data,
+            "acompletion",
+        )
+        assert sent == [[{"role": "user", "content": "a@b.com hi"}]]
+        assert data["messages"] == [{"role": "user", "content": "[MASKED EMAIL] hi"}]
+        assert data["data"] == _invoke_body()
+
+    @pytest.mark.asyncio
+    async def test_monitor_still_masks_responses_instructions_next_to_bedrock_keys(self):
+        data: Final = {**_bedrock_data(_invoke_body()), "instructions": "a@b.com is the contact", "input": "hi"}
+        await _run_bedrock_pre_call(
+            LakeraAIGuardrail(api_key="test_key", on_flagged="monitor"),
+            EMAIL_AT_START_LAKERA_RESPONSE,
+            data,
+            "responses",
+        )
+        assert data["instructions"] == "[MASKED EMAIL] is the contact"
 
     @pytest.mark.asyncio
     async def test_clean_body_reaches_lakera_and_is_forwarded_unchanged(self):
         data: Final = _bedrock_data(_converse_body())
         sent: Final = await _run_bedrock_pre_call(LakeraAIGuardrail(api_key="test_key"), {"flagged": False}, data)
-        assert sent == [_build_lakera_inspection_messages(_bedrock_data(_converse_body()))]
+        assert sent == [
+            _build_lakera_inspection_messages(_bedrock_data(_converse_body()), call_type="allm_passthrough_route")
+        ]
         assert data["data"] == _converse_body()
 
     @pytest.mark.asyncio

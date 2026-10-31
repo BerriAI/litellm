@@ -83,6 +83,7 @@ def _bedrock_reply(request: Request) -> Reply:
 class BedrockLakeraRig:
     owned: OwnedProxy
     lakera: Wire
+    lakera_down: Wire
     upstream: Wire
 
 
@@ -91,6 +92,7 @@ def rig(session_gateway: Gateway, tmp_path_factory: pytest.TempPathFactory) -> I
     directory: Final = tmp_path_factory.mktemp("lakera-bedrock-passthrough")
     with ExitStack() as stack:
         lakera: Final = stack.enter_context(wire_server(_lakera_verdict))
+        lakera_down: Final = stack.enter_context(wire_server(lambda _: Reply(status=500, body=b'{"error":"down"}')))
         upstream: Final = stack.enter_context(wire_server(_bedrock_reply))
         config: Final = _JSON.validate_python(yaml.safe_load(_CONFIG.read_text()))
         aws: Final = {
@@ -127,12 +129,36 @@ def rig(session_gateway: Gateway, tmp_path_factory: pytest.TempPathFactory) -> I
                             },
                         }
                         for on_flagged in ON_FLAGGED
+                    ]
+                    + [
+                        {
+                            "guardrail_name": "lakera-during",
+                            "litellm_params": {
+                                "guardrail": "lakera_v2",
+                                "mode": "during_call",
+                                "default_on": False,
+                                "on_flagged": "block",
+                                "api_base": lakera.url,
+                                "api_key": "synthetic-lakera-key",
+                            },
+                        },
+                        {
+                            "guardrail_name": "lakera-down",
+                            "litellm_params": {
+                                "guardrail": "lakera_v2",
+                                "mode": "pre_call",
+                                "default_on": False,
+                                "on_flagged": "block",
+                                "api_base": lakera_down.url,
+                                "api_key": "synthetic-lakera-key",
+                            },
+                        },
                     ],
                 }
             )
         )
         owned: Final = stack.enter_context(owned_proxy_process(session_gateway, directory, {}, config=path))
-        yield BedrockLakeraRig(owned, lakera, upstream)
+        yield BedrockLakeraRig(owned, lakera, lakera_down, upstream)
 
 
 def _invoke_body(prompt: str, system: str = SYSTEM) -> dict[str, JsonValue]:
@@ -164,11 +190,12 @@ def _body(action: str, prompt: str, system: str = SYSTEM) -> dict[str, JsonValue
     return _converse_body(prompt, system) if action.startswith("converse") else _invoke_body(prompt, system)
 
 
-def _send(rig: BedrockLakeraRig, on_flagged: str, action: str, body: dict[str, JsonValue]) -> httpx.Response:
+def _send(rig: BedrockLakeraRig, guardrail: str, action: str, body: dict[str, JsonValue]) -> httpx.Response:
     gateway: Final = rig.owned.gateway
     with gateway.scenario() as scenario:
-        key: Final = scenario.key(metadata={"guardrails": [f"lakera-{on_flagged}"]})
+        key: Final = scenario.key(metadata={"guardrails": [f"lakera-{guardrail}"]})
         rig.lakera.drain()
+        rig.lakera_down.drain()
         rig.upstream.drain()
         return gateway.request("POST", f"/bedrock/model/{MODEL}/{action}", body, key=key)
 
@@ -225,7 +252,7 @@ def test_card_in_the_system_prompt_is_sent_to_lakera(rig: BedrockLakeraRig) -> N
     ids=["guard-content", "tool-result-json"],
 )
 def test_card_in_a_nested_converse_block_is_blocked(rig: BedrockLakeraRig, block: dict[str, JsonValue]) -> None:
-    body: Final = {
+    body: Final[dict[str, JsonValue]] = {
         **_converse_body("Hi again"),
         "messages": [{"role": "user", "content": [{"text": "Hi again"}, block]}],
     }
@@ -251,3 +278,68 @@ def test_monitor_mode_forwards_the_body_unchanged(rig: BedrockLakeraRig) -> None
     assert response.status_code == 200, response.text
     assert len(_lakera_messages(rig)) == 1
     assert [_JSON.validate_json(request.body) for request in rig.upstream.drain()] == [body]
+
+
+@pytest.mark.parametrize(
+    "content",
+    [PII_PROMPT, [{"type": "text", "text": PII_PROMPT}]],
+    ids=["string", "text-blocks"],
+)
+def test_card_in_an_anthropic_tool_result_is_blocked(rig: BedrockLakeraRig, content: JsonValue) -> None:
+    body: Final[dict[str, JsonValue]] = {
+        **_invoke_body("Hi"),
+        "messages": [
+            {"role": "user", "content": "Look up my billing details."},
+            {"role": "assistant", "content": [{"type": "tool_use", "id": "t1", "name": "billing", "input": {}}]},
+            {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t1", "content": content}]},
+        ],
+    }
+
+    response: Final = _send(rig, "block", "invoke", body)
+
+    assert response.status_code == 400, response.text
+    assert [role for role, text in _lakera_messages(rig)[0] if CARD in text] == ["tool"]
+    assert rig.upstream.drain() == ()
+
+
+@pytest.mark.parametrize("action", ["invoke", "converse"])
+def test_during_call_guardrail_reads_the_bedrock_body(rig: BedrockLakeraRig, action: str) -> None:
+    response: Final = _send(rig, "during", action, _body(action, PII_PROMPT))
+
+    assert response.status_code == 400, response.text
+    assert ("user", PII_PROMPT) in _lakera_messages(rig)[0]
+
+
+@pytest.mark.parametrize("action", ["invoke", "converse"])
+def test_lakera_outage_fails_the_bedrock_request_closed(rig: BedrockLakeraRig, action: str) -> None:
+    response: Final = _send(rig, "down", action, _body(action, "Hi again"))
+
+    assert response.status_code == 500, response.text
+    assert len(rig.lakera_down.drain()) >= 1
+    assert rig.upstream.drain() == ()
+
+
+def test_a_chat_call_carrying_bedrock_keys_is_masked_not_blocked(rig: BedrockLakeraRig) -> None:
+    gateway: Final = rig.owned.gateway
+    with gateway.scenario() as scenario:
+        key: Final = scenario.key(metadata={"guardrails": ["lakera-mask"]})
+        rig.lakera.drain()
+        rig.upstream.drain()
+        response: Final = gateway.request(
+            "POST",
+            "/v1/chat/completions",
+            {
+                "model": MODEL,
+                "messages": [{"role": "user", "content": PII_PROMPT}],
+                "custom_llm_provider": "bedrock",
+                "endpoint": f"/model/{MODEL}/converse",
+                "data": _converse_body("Hi"),
+            },
+            key=key,
+        )
+
+    assert response.status_code == 200, response.text
+    assert _lakera_messages(rig) == ((("user", PII_PROMPT),),)
+    sent: Final = b"".join(request.body for request in rig.upstream.drain()).decode()
+    assert "Please update the billing" in sent
+    assert CARD not in sent
