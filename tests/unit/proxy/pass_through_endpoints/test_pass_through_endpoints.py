@@ -486,6 +486,38 @@ async def test_pass_through_request_preserves_proxy_exception_status():
         assert exc.value.param == "limit"
 
 
+@pytest.mark.asyncio
+async def test_guardrail_proxy_exception_carries_the_guardrails_that_ran():
+    blocked: Final = ProxyException(message="blocked by guardrail", type="None", param="None", code=400)
+
+    async def record_then_block(
+        user_api_key_dict: UserAPIKeyAuth, data: dict[str, object], call_type: str, endpoint_type: object
+    ) -> None:
+        data["metadata"] = {"applied_guardrails": ["passed-guard"]}  # mutable-ok: a guardrail records on the live body
+        raise blocked
+
+    with patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_proxy_logging:
+        mock_proxy_logging.post_call_failure_hook = AsyncMock()
+        mock_proxy_logging.pre_call_hook = AsyncMock(side_effect=record_then_block)
+
+        mock_request = MagicMock(spec=Request)
+        mock_request.method = "POST"
+        mock_request.body = AsyncMock(return_value=b'{"model": "gpt-5.6", "messages": []}')
+        mock_request.headers = Headers({"content-type": "application/json"})
+        mock_request.query_params = QueryParams({})
+
+        with pytest.raises(ProxyException) as exc:
+            await pass_through_request(
+                request=mock_request,
+                target="http://test.com/v1/chat/completions",
+                custom_headers={},
+                user_api_key_dict=UserAPIKeyAuth(api_key="sk-test"),
+            )
+
+    assert exc.value is blocked
+    assert exc.value.headers["x-litellm-applied-guardrails"] == "passed-guard"
+
+
 def test_is_langfuse_route():
     """
     Test that the is_langfuse_route method correctly identifies Langfuse routes

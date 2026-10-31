@@ -2263,7 +2263,8 @@ async def pass_through_request(
             cache_key=None,
             api_base=str(url._uri_reference) if url else None,
         )
-        custom_headers.update(_guardrail_response_headers(_parsed_body, kwargs, post_call_guardrail_data))  # pyright: ignore[reportUnknownArgumentType, reportUnknownMemberType]  # untyped request and header dicts
+        guardrail_headers: Final = _guardrail_response_headers(_parsed_body, kwargs, post_call_guardrail_data)  # pyright: ignore[reportUnknownArgumentType]  # untyped request dicts
+        custom_headers.update(guardrail_headers)  # pyright: ignore[reportUnknownMemberType]  # untyped header dict
         if CustomGuardrail._is_guardrail_intervention(e):
             verbose_proxy_logger.warning(
                 "pass_through_endpoint: request blocked by guardrail - %s",
@@ -2300,6 +2301,7 @@ async def pass_through_request(
         #########################################################
 
         if isinstance(e, ProxyException):
+            e.headers = {**e.headers, **guardrail_headers}
             raise
         if isinstance(e, HTTPException):
             raise ProxyException(
