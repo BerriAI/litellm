@@ -1355,7 +1355,11 @@ def test_jwt_authentication_status_does_not_require_virtual_keys(
     monkeypatch.setattr(proxy_server, "general_settings", {"enable_jwt_auth": enabled})
     monkeypatch.setattr(proxy_server, "jwt_handler", handler)
     agent: Final = _sample_agent_response()
-    response: Final = agent_endpoints._redact_sensitive_agent_fields((agent,), is_admin=True)[0]
+    response: Final = agent_endpoints._redact_sensitive_agent_fields(
+        (agent,),
+        is_admin=True,
+        request_base_url="http://testserver",
+    )[0]
     assert response.jwt_auth_configured is expected
     assert agent.jwt_auth_configured is False
 
