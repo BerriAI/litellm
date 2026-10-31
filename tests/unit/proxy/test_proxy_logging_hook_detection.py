@@ -400,6 +400,80 @@ async def test_post_call_stream_keeps_token_ids_when_no_guardrail_runs_on_the_re
     assert served_token_ids == ([1, 2, 3], [4])
 
 
+class _ScansWholeStreamFirst(CustomGuardrail):
+    async def async_post_call_streaming_iterator_hook(self, user_api_key_dict, response, request_data):
+        for chunk in [chunk async for chunk in response]:
+            yield chunk
+
+
+async def _logged_stream_token_ids(monkeypatch, guardrail_default_on: bool) -> object:
+    import asyncio
+    import json
+    import time
+
+    from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+    from litellm.llms.hosted_vllm.chat.transformation import HostedVLLMChatConfig
+
+    guardrail = _ScansWholeStreamFirst(
+        guardrail_name="whole-stream-scan", event_hook="post_call", default_on=guardrail_default_on
+    )
+    monkeypatch.setattr(litellm, "callbacks", [guardrail])
+    logging_obj = Logging(
+        model="m",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        call_type="acompletion",
+        start_time=time.time(),
+        litellm_call_id="token-ids-call",
+        function_id="token-ids-call",
+    )
+    logged = asyncio.get_running_loop().create_future()
+
+    async def capture_logged_response(complete_streaming_response, cache_hit):
+        logged.set_result(complete_streaming_response)
+
+    logging_obj._on_deferred_stream_complete = capture_logged_response
+
+    async def sse_lines():
+        for choice in (
+            {"index": 0, "delta": {"role": "assistant", "content": ""}, "finish_reason": None},
+            {"index": 0, "delta": {"content": ""}, "finish_reason": None, "token_ids": [16]},
+            {"index": 0, "delta": {"content": "1,2"}, "finish_reason": None, "token_ids": [11, 17]},
+            {"index": 0, "delta": {"content": ""}, "finish_reason": "stop", "token_ids": [20]},
+        ):
+            yield "data: " + json.dumps(
+                {"id": "chatcmpl-1", "object": "chat.completion.chunk", "model": "m", "choices": [choice]}
+            )
+        yield "data: [DONE]"
+
+    stream = CustomStreamWrapper(
+        completion_stream=HostedVLLMChatConfig().get_model_response_iterator(
+            streaming_response=sse_lines(), sync_stream=False, json_mode=False
+        ),
+        model="m",
+        custom_llm_provider="hosted_vllm",
+        logging_obj=logging_obj,
+    )
+    async for _ in ProxyLogging(user_api_key_cache=DualCache()).async_post_call_streaming_iterator_hook(
+        response=stream,
+        user_api_key_dict=UserAPIKeyAuth(api_key="sk-9876", request_route="/chat/completions"),
+        request_data={"model": "m", "metadata": {}, "litellm_logging_obj": logging_obj},
+    ):
+        pass
+    return (await asyncio.wait_for(logged, timeout=5)).choices[0].token_ids
+
+
+@pytest.mark.asyncio
+async def test_post_call_stream_guardrail_drops_token_ids_from_the_response_it_logs_and_caches(monkeypatch):
+    assert await _logged_stream_token_ids(monkeypatch, guardrail_default_on=True) is None
+
+
+@pytest.mark.asyncio
+async def test_post_call_stream_logs_every_token_id_when_no_guardrail_runs_on_the_request(monkeypatch):
+    assert await _logged_stream_token_ids(monkeypatch, guardrail_default_on=False) == [16, 11, 17, 20]
+
+
 def _completion_chunk(text: str, token_ids: list[int], finish_reason: str | None = None) -> object:
     from litellm.types.utils import TextChoices, TextCompletionResponse
 

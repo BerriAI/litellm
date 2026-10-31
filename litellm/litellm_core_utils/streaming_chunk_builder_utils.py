@@ -32,6 +32,7 @@ from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response impo
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_content_from_model_response,  # pyright: ignore[reportUnknownVariableType]  # response param accepts an untyped dict
 )
+from litellm.litellm_core_utils.redact_messages import drop_token_ids
 from litellm.litellm_core_utils.token_counter import usage_tokenizer_model
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -1795,6 +1796,19 @@ def stream_chunk_builder(
     logging_obj: Optional["Logging"] = None,
     count_prompt_tokens: Callable[[], int] | None = None,
 ) -> ModelResponse | TextCompletionResponse | None:
+    response: Final = _assembled_stream_response(chunks, messages, logging_obj, count_prompt_tokens)
+    if response is not None and getattr(logging_obj, "drops_stream_token_ids", False) is True:
+        for choice in response.choices:
+            drop_token_ids(choice)
+    return response
+
+
+def _assembled_stream_response(
+    chunks: Sequence[object],
+    messages: Sequence[AllMessageValues | Message] | None,
+    logging_obj: Optional["Logging"],
+    count_prompt_tokens: Callable[[], int] | None,
+) -> ModelResponse | TextCompletionResponse | None:
     try:
         if chunks is None:
             raise litellm.APIError(
@@ -1806,7 +1820,7 @@ def stream_chunk_builder(
         if not chunks:
             return None
 
-        processor: Final = ChunkProcessor(chunks, messages)
+        processor: Final = ChunkProcessor(list(chunks), messages)
         chunks = processor.chunks
 
         ### BASE-CASE ###

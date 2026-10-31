@@ -710,6 +710,12 @@ def _drop_stream_chunk_token_ids(chunk: object) -> None:
         drop_token_ids(choice)
 
 
+def _drop_built_stream_token_ids(request_data: Mapping[str, object]) -> None:
+    logging_obj: Final = request_data.get("litellm_logging_obj")
+    if isinstance(logging_obj, Logging):
+        logging_obj.drops_stream_token_ids = True
+
+
 _PLAIN_STREAM_FIELDS: Final = TypeAdapter(dict[str, object])
 _EMPTY_STREAM_VALUES: Final[tuple[object, ...]] = (None, "", [], {})
 
@@ -4771,6 +4777,8 @@ class ProxyLogging:
         drops_token_ids: Final = bool(post_call_pipelines) or any(
             isinstance(callback, CustomGuardrail) for callback, _ in running_overrides
         )
+        if drops_token_ids:
+            _drop_built_stream_token_ids(request_data)
         current_response = _without_token_id_only_chunks(response) if drops_token_ids else response
         guarded_layers: Final[list[AsyncGenerator[object, None]]] = []  # mutable-ok: closed on disconnect
         for resolved_callback, kind in running_overrides:
