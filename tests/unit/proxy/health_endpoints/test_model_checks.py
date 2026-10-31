@@ -184,7 +184,7 @@ def test_every_endpoint_passes_all_three_checks_and_feeds_each_reply_back_in_its
         CalledTurn(reply(tool_call=True), 0.004),
         [
             CalledTurn(reply(tool_call=False, text=_TURN_TWO_ANSWER, cached_tokens=4800), 0.0005),
-            CalledTurn(reply(tool_call=False, text=_TURN_THREE_ANSWER, cached_tokens=4900), 0.0004),
+            CalledTurn(reply(tool_call=False, text=_TURN_THREE_ANSWER, cached_tokens=4800), 0.0004),
         ],
     )
 
@@ -200,7 +200,7 @@ def test_every_endpoint_passes_all_three_checks_and_feeds_each_reply_back_in_its
     assert checks["prompt_caching"] == (
         "pass",
         "turn 2 read 4800 of 5000 input tokens from cache (96.0%), "
-        "turn 3 read 4900 of 5000 input tokens from cache (98.0%)",
+        "turn 3 read 4800 of 5000 input tokens from cache (96.0%)",
     ), checks
     assert checks["cost_tracking"] == (
         "pass",
@@ -216,7 +216,9 @@ def test_every_endpoint_passes_all_three_checks_and_feeds_each_reply_back_in_its
     sent_json: Final = json.dumps(provider.sent[1:])
     assert _TOOL_CALL_ID in sent_json and WEATHER_TOOL_RESULT in sent_json, sent_json
     if script is MESSAGES_SCRIPT:
-        assert turn_two["system"][0]["cache_control"] == {"type": "ephemeral"}, turn_two["system"]
+        assert turn_two["messages"][-1]["content"][0]["cache_control"] == {"type": "ephemeral"}, turn_two["messages"][
+            -1
+        ]
     else:
         assert "cache_control" not in sent_json and "cachePoint" not in sent_json, sent_json
     assert "<turn " not in sent_json, sent_json
@@ -242,7 +244,12 @@ def test_every_endpoint_passes_all_three_checks_and_feeds_each_reply_back_in_its
         assert turn_three["input"][-3]["content"][0]["text"] == _TURN_TWO_ANSWER, turn_three
     else:
         assert turn_two["messages"][-1]["content"] == [
-            {"type": "tool_result", "tool_use_id": _TOOL_CALL_ID, "content": WEATHER_TOOL_RESULT}
+            {
+                "type": "tool_result",
+                "tool_use_id": _TOOL_CALL_ID,
+                "content": WEATHER_TOOL_RESULT,
+                "cache_control": {"type": "ephemeral"},
+            }
         ]
         assert turn_two["messages"][-2]["content"][0]["type"] == "thinking"
         assert [m["role"] for m in turn_three["messages"][-3:]] == ["assistant", "user", "system"], turn_three
@@ -282,7 +289,7 @@ def test_an_answer_that_ignores_the_tool_result_fails_the_conversation():
         CalledTurn(_chat_reply(tool_call=True), 0.004),
         [
             CalledTurn(_chat_reply(tool_call=False, text="I cannot tell.", cached_tokens=4800), 0.0005),
-            CalledTurn(_chat_reply(tool_call=False, text=_TURN_THREE_ANSWER, cached_tokens=4900), 0.0004),
+            CalledTurn(_chat_reply(tool_call=False, text=_TURN_THREE_ANSWER, cached_tokens=4800), 0.0004),
         ],
     )
 
@@ -297,7 +304,7 @@ def test_a_follow_up_answer_that_forgets_the_earlier_turn_fails_the_conversation
         CalledTurn(_chat_reply(tool_call=True), 0.004),
         [
             CalledTurn(_chat_reply(tool_call=False, text=_TURN_TWO_ANSWER, cached_tokens=4800), 0.0005),
-            CalledTurn(_chat_reply(tool_call=False, text="I do not know the temperature.", cached_tokens=4900), 0.0004),
+            CalledTurn(_chat_reply(tool_call=False, text="I do not know the temperature.", cached_tokens=4800), 0.0004),
         ],
     )
 
@@ -335,7 +342,7 @@ def test_zero_cached_tokens_is_retried_once_and_fails_when_the_retry_misses_too(
         [
             CalledTurn(_chat_reply(tool_call=False, text="72F", cached_tokens=0), 0.004),
             CalledTurn(_chat_reply(tool_call=False, text="72F", cached_tokens=0), 0.004),
-            CalledTurn(_chat_reply(tool_call=False, text="72F", cached_tokens=4900), 0.0004),
+            CalledTurn(_chat_reply(tool_call=False, text="72F", cached_tokens=4800), 0.0004),
         ],
     )
 
@@ -358,7 +365,7 @@ def test_a_cache_hit_on_the_retry_passes_and_says_so():
             CalledTurn(_chat_reply(tool_call=False, text="72F", cached_tokens=0), 0.004),
             CalledTurn(_chat_reply(tool_call=False, text="72F", cached_tokens=5000), 0.0005),
             CalledTurn(_chat_reply(tool_call=False, text="72F", cached_tokens=0), 0.004),
-            CalledTurn(_chat_reply(tool_call=False, text="72F", cached_tokens=4900), 0.0004),
+            CalledTurn(_chat_reply(tool_call=False, text="72F", cached_tokens=5000), 0.0004),
         ],
     )
 
@@ -368,9 +375,26 @@ def test_a_cache_hit_on_the_retry_passes_and_says_so():
     assert _checks(result)["prompt_caching"] == (
         "pass",
         "turn 2 read 5000 of 5000 input tokens from cache (100.0%) on the second attempt, "
-        "turn 3 read 4900 of 5000 input tokens from cache (98.0%) on the second attempt",
+        "turn 3 read 5000 of 5000 input tokens from cache (100.0%) on the second attempt",
     )
     assert result.spend_usd == pytest.approx(0.0049)
+
+
+def test_turn_three_reading_fewer_cached_tokens_than_turn_two_fails_prompt_caching():
+    provider: Final = _ScriptedProvider(
+        CalledTurn(_chat_reply(tool_call=True), 0.004),
+        [
+            CalledTurn(_chat_reply(tool_call=False, text="72F", cached_tokens=4800), 0.0005),
+            CalledTurn(_chat_reply(tool_call=False, text="72F", cached_tokens=4600), 0.0005),
+        ],
+    )
+
+    result: Final = _run(CHAT_COMPLETIONS_SCRIPT, provider)
+
+    assert len(provider.sent) == 3
+    status, detail = _checks(result)["prompt_caching"]
+    assert status == "fail", detail
+    assert "turn 3 read 4600 cached tokens, fewer than turn 2's 4800" in detail, detail
 
 
 def test_a_cache_miss_on_turn_three_fails_prompt_caching_after_its_own_retry():
@@ -428,7 +452,7 @@ def test_a_missing_spend_log_row_fails_cost_tracking_even_when_the_response_was_
         CalledTurn(_chat_reply(tool_call=True), 0.004),
         [
             CalledTurn(_chat_reply(tool_call=False, text="72F", cached_tokens=4800), 0.0005),
-            CalledTurn(_chat_reply(tool_call=False, text="72F", cached_tokens=4900), 0.0004),
+            CalledTurn(_chat_reply(tool_call=False, text="72F", cached_tokens=4800), 0.0004),
         ],
     )
 
@@ -483,8 +507,8 @@ def test_the_three_request_files_send_one_system_prompt_and_one_tool_so_endpoint
         third: Final = json.dumps(file["turn_3_appended_messages"])
         assert "<turn 2 response: assistant output>" in third, (name, third)
         assert "user" in {m["role"] for m in file["turn_3_appended_messages"][-2:]}, (name, third)
-    assert chat["messages"][0]["content"] == responses["instructions"] == messages["system"][0]["text"]
-    assert messages["system"][0]["cache_control"] == {"type": "ephemeral"}, messages["system"]
+    assert chat["messages"][0]["content"] == responses["instructions"] == messages["system"]
+    assert messages["messages"][-1]["content"][0]["cache_control"] == {"type": "ephemeral"}, messages["messages"][-1]
     assert chat["tools"][0]["function"]["parameters"] == responses["tools"][0]["parameters"]
     assert chat["tools"][0]["function"]["parameters"] == messages["tools"][0]["input_schema"]
     assert CHAT_COMPLETIONS_SCRIPT.turn_one() == chat

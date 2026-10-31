@@ -3,9 +3,9 @@
 One three-turn tool-call conversation per selected endpoint, read from that endpoint's file in
 ``test_model_requests/``. ``turn_1`` is the full first request body in the endpoint's native shape. Chat Completions
 and Responses carry no prompt-cache markers, so later turns can only report cached tokens when the provider caches
-the repeated prefix on its own. Messages mirrors Claude Code: ``cache_control`` on the system prompt and a
-mid-conversation ``role: system`` reminder, so a proxy that hoists that reminder into the system prompt shows up as a
-cache miss. ``turn_2_appended_messages`` lists what the second request adds after turn 1's messages (the model's tool
+the repeated prefix on its own. Messages mirrors Claude Code: ``cache_control`` on the latest user message and a
+mid-conversation ``role: system`` reminder, so a proxy that hoists that reminder into the system prompt changes the
+cached prefix and shows up as a cache miss. ``turn_2_appended_messages`` lists what the second request adds after turn 1's messages (the model's tool
 call echoed back plus the tool result), ``turn_3_appended_messages`` what the third adds after that (the model's
 answer echoed back, the reminder, a user follow-up), with ``<turn 1 response: assistant output>``,
 ``<turn 1 response: tool call id>`` and ``<turn 2 response: assistant output>`` filled in from the model's replies.
@@ -564,6 +564,19 @@ def _cache_miss(turn: RepeatedTurn, parsed: ParsedTurn) -> CheckResult:
     )
 
 
+def _cache_shrank(second: ParsedTurn | None, third: ParsedTurn | None) -> CheckResult | None:
+    if second is None or third is None or third.cache_read_tokens >= second.cache_read_tokens:
+        return None
+    return CheckResult(
+        "prompt_caching",
+        "fail",
+        f"turn 3 read {third.cache_read_tokens} cached tokens, fewer than turn 2's {second.cache_read_tokens}, so the "
+        "prompt the provider saw on turn 3 no longer starts with the one it cached on turn 2 (something between the "
+        "client and the provider rewrote the earlier messages, for example a mid-conversation system message moved "
+        "into the system prompt)",
+    )
+
+
 def _prompt_caching_check(second: RepeatedTurn, third: RepeatedTurn) -> CheckResult:
     reached: Final = tuple((turn, parsed) for turn in (second, third) if (parsed := _parsed(turn)) is not None)
     if not reached:
@@ -571,6 +584,9 @@ def _prompt_caching_check(second: RepeatedTurn, third: RepeatedTurn) -> CheckRes
     missed: Final = next((_cache_miss(turn, parsed) for turn, parsed in reached if parsed.cache_read_tokens == 0), None)
     if missed is not None:
         return missed
+    shrank: Final = _cache_shrank(_parsed(second), _parsed(third))
+    if shrank is not None:
+        return shrank
     return CheckResult("prompt_caching", "pass", ", ".join(_cache_read_note(turn, parsed) for turn, parsed in reached))
 
 
