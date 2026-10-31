@@ -34,13 +34,14 @@ if TYPE_CHECKING:
     from litellm.caching.dual_cache import DualCache
     from litellm.proxy.utils import PrismaClient
 
+_COMMITTED_KEY_PREFIX: Final = "committed_"
 _BASE_COUNTER_PREFIXES: Final = ("spend:key:", "spend:team:", "spend:user:", "spend:org:", END_USER_COUNTER_PREFIX)
 _FETCHED_VALUES: Final = TypeAdapter(dict[str, float | None])
 _STORED_VALUE: Final[TypeAdapter[float | None]] = TypeAdapter(float | None)
 
 
 def committed_spend_key(counter_key: str) -> str:
-    return f"committed_{counter_key}"
+    return f"{_COMMITTED_KEY_PREFIX}{counter_key}"
 
 
 def _has_committed_twin(counter_key: str) -> bool:
@@ -49,6 +50,10 @@ def _has_committed_twin(counter_key: str) -> bool:
 
 def committed_spend_keys(counter_keys: Iterable[str]) -> tuple[str, ...]:
     return tuple(committed_spend_key(counter_key) for counter_key in counter_keys if _has_committed_twin(counter_key))
+
+
+def is_committed_spend_key(counter_key: str) -> bool:
+    return counter_key.startswith(_COMMITTED_KEY_PREFIX)
 
 
 def committed_spend_tracked() -> bool:
@@ -142,13 +147,29 @@ async def drop_committed_spend(spend_counter_cache: DualCache, counter_keys: Seq
     """After a direct write to the stored spend the twin holds the old total, so the next charge seeds it again."""
     try:
         await spend_counter_cache.async_delete_cache_keys(committed_spend_keys(counter_keys))
-    except Exception as e:  # noqa: BLE001  # the write already committed; a kept twin only lasts until its TTL
+    except Exception as e:  # noqa: BLE001  # the write already committed; a kept twin lasts until charges stop for its TTL
         verbose_proxy_logger.warning("committed spend drop failed: %s", e)
 
 
 @with_service_target(SPEND_COUNTERS_TARGET)
 async def seed_committed_spend(
-    spend_counter_cache: DualCache, prisma_client: PrismaClient | None, counter_key: str
+    spend_counter_cache: DualCache, prisma_client: PrismaClient | None, counter_key: str, ttl: int | None = None
+) -> bool:
+    """One DB read per worker for a cold twin: charges waiting on the lock find the twin the first one wrote."""
+    twin_key: Final = committed_spend_key(counter_key)
+    async with await SpendCounterReseed.counter_lock(twin_key):
+        try:
+            stored: Final = await _read_committed_values(spend_counter_cache=spend_counter_cache, twin_keys=(twin_key,))
+        except Exception as e:  # noqa: BLE001  # an unseeded twin only skips this charge; the next one seeds it again
+            verbose_proxy_logger.debug("committed spend seed read failed for %s: %s", twin_key, e)
+            return False
+        return stored.get(twin_key) is not None or await _seed_committed_spend_from_db(
+            spend_counter_cache, prisma_client, counter_key, ttl
+        )
+
+
+async def _seed_committed_spend_from_db(
+    spend_counter_cache: DualCache, prisma_client: PrismaClient | None, counter_key: str, ttl: int | None
 ) -> bool:
     db_spend: Final = await (
         SpendCounterReseed.end_user_from_db(prisma_client=prisma_client, counter_key=counter_key)
@@ -164,7 +185,7 @@ async def seed_committed_spend(
             spend_counter_cache.in_memory_cache.set_cache(key=twin_key, value=db_spend)  # pyright: ignore[reportUnknownMemberType]  # untyped cache API
         return True
     try:
-        await redis_cache.async_set_max(key=twin_key, value=db_spend)
+        await redis_cache.async_set_max(key=twin_key, value=db_spend, ttl=ttl)
     except Exception as e:  # noqa: BLE001  # an unseeded twin only skips this charge; the next one seeds it again
         verbose_proxy_logger.debug("committed spend seed failed for %s: %s", twin_key, e)
         return False

@@ -927,6 +927,7 @@ from litellm.proxy.spend_tracking.budget_reservation import (
 from litellm.proxy.spend_tracking.committed_spend import (
     committed_spend_key,
     committed_spend_keys,
+    is_committed_spend_key,
     seed_committed_spend,
 )
 from litellm.proxy.spend_tracking.spend_capture_rate import (
@@ -3099,6 +3100,7 @@ proxy_budget_rescheduler_min_time = PROXY_BUDGET_RESCHEDULER_MIN_TIME
 proxy_budget_rescheduler_max_time = PROXY_BUDGET_RESCHEDULER_MAX_TIME
 proxy_batch_polling_interval = PROXY_BATCH_POLLING_INTERVAL
 proxy_batch_write_at = PROXY_BATCH_WRITE_AT
+_BATCH_WRITE_JITTER_MAX_SECONDS: Final = 5
 proxy_config_reload_interval_seconds = PROXY_CONFIG_RELOAD_INTERVAL_SECONDS
 litellm_master_key_hash = None
 disable_spend_logs = False
@@ -3874,9 +3876,25 @@ def _spend_counter_token(key_token: str) -> str:
     return hash_token(token=key_token) if isinstance(key_token, str) and key_token.startswith("sk-") else key_token
 
 
+def _committed_spend_ttl() -> int | None:
+    """A twin outlives two DB spend writes, or the next charge seeds it from a total still missing spend."""
+    redis_cache: Final = spend_counter_cache.redis_cache
+    redis_ttl: Final = redis_cache.default_ttl if redis_cache is not None else None
+    if redis_ttl is None:
+        return None
+    return max(redis_ttl, 2 * (proxy_batch_write_at + _BATCH_WRITE_JITTER_MAX_SECONDS))
+
+
+def _spend_counter_ttl(counter_key: str, redis_ttl: int | None) -> int | None:
+    return _committed_spend_ttl() if is_committed_spend_key(counter_key) else redis_ttl
+
+
 async def _committed_spend_seeded(counter_key: str) -> bool:
     return await _is_spend_counter_cache_warm(committed_spend_key(counter_key)) or await seed_committed_spend(
-        spend_counter_cache=spend_counter_cache, prisma_client=prisma_client, counter_key=counter_key
+        spend_counter_cache=spend_counter_cache,
+        prisma_client=prisma_client,
+        counter_key=counter_key,
+        ttl=_committed_spend_ttl(),
     )
 
 
@@ -4301,7 +4319,9 @@ def _defer_spend_counter_increments(pending: Sequence[PendingSpendIncrement]) ->
     ttl: Final = redis_cache.get_ttl()
     with service_target(SPEND_COUNTERS_TARGET):
         for item in pending:
-            batch.increment(item.counter_key, item.increment, ttl).on_settled(_settle_spend_counter_increment(item))
+            batch.increment(item.counter_key, item.increment, _spend_counter_ttl(item.counter_key, ttl)).on_settled(
+                _settle_spend_counter_increment(item)
+            )
     return True
 
 
@@ -4354,7 +4374,11 @@ async def run_spend_counter_pipeline(pending: Sequence[PendingSpendIncrement]) -
         )
     ttl: Final = redis_cache.get_ttl()
     increment_list: Final = [
-        RedisPipelineIncrementOperation(key=item.counter_key, increment_value=item.increment, ttl=ttl)
+        RedisPipelineIncrementOperation(
+            key=item.counter_key,
+            increment_value=item.increment,
+            ttl=_spend_counter_ttl(item.counter_key, ttl),
+        )
         for item in pending
     ]
     results: Final = await redis_cache.async_increment_pipeline(increment_list=increment_list)
@@ -11367,7 +11391,7 @@ class ProxyStartupEvent:
         )
 
         # Ensure minimum interval of 30 seconds for batch writing to prevent memory issues
-        batch_writing_interval: Final = proxy_batch_write_at + random.randint(0, 5)
+        batch_writing_interval: Final = proxy_batch_write_at + random.randint(0, _BATCH_WRITE_JITTER_MAX_SECONDS)
 
         ### PROXY WORKER HEARTBEAT ###
         worker_heartbeat: Final = ProxyWorkerHeartbeat(prisma_client=prisma_client)

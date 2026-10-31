@@ -97,6 +97,10 @@ class SpendCounterReseed:
     _registry_lock: ClassVar[asyncio.Lock | None] = None
 
     @staticmethod
+    async def counter_lock(counter_key: str) -> asyncio.Lock:
+        return await SpendCounterReseed._get_lock(counter_key)
+
+    @staticmethod
     async def _get_lock(counter_key: str) -> asyncio.Lock:
         if SpendCounterReseed._registry_lock is None:
             SpendCounterReseed._registry_lock = asyncio.Lock()

@@ -8284,8 +8284,9 @@ class _ResetDb:
         self.litellm_verificationtoken: Final = _ResetTableRows()
         self.litellm_teamtable: Final = _ResetTableRows()
 
-    async def query_raw(self, sql_query: str) -> list[dict[str, str]]:
-        return [{"token": "hashed"}] if "VerificationToken" in sql_query else [{"team_id": "t1"}]
+    async def query_raw(self, sql_query: str, after_id: str, limit: int) -> list[dict[str, str]]:
+        rows: Final = ["hashed"] if "VerificationToken" in sql_query else ["t1"]
+        return [{"id": row} for row in rows if row > after_id][:limit]
 
 
 @pytest.mark.asyncio
@@ -8311,6 +8312,38 @@ async def test_global_spend_reset_drops_the_committed_key_and_team_spend_the_gau
 
     assert response["status"] == "success"
     assert [spend_counter_cache.in_memory_cache.get_cache(key=twin) for twin in twins] == [twin_after, twin_after]
+
+
+class _PagedResetDb(_ResetDb):
+    def __init__(self, token_count: int) -> None:
+        super().__init__()
+        self._tokens: Final = sorted(f"token-{index}" for index in range(token_count))
+        self.largest_page = 0
+
+    async def query_raw(self, sql_query: str, after_id: str, limit: int) -> list[dict[str, str]]:
+        rows: Final = self._tokens if "VerificationToken" in sql_query else []
+        page: Final = [{"id": row} for row in rows if row > after_id][:limit]
+        self.largest_page = max(self.largest_page, len(page))
+        return page
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("token_count", [999, 1000, 1001, 2500])
+async def test_global_spend_reset_drops_every_key_twin_reading_the_keys_in_bounded_pages(monkeypatch, token_count):
+    db: Final = _PagedResetDb(token_count)
+    spend_counter_cache: Final = DualCache()
+    twins: Final = tuple(f"committed_spend:key:token-{index}" for index in range(token_count))
+    for twin in twins:
+        spend_counter_cache.in_memory_cache.set_cache(key=twin, value=7.0)
+    monkeypatch.setattr("litellm.proxy.proxy_server.spend_counter_cache", spend_counter_cache)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", SimpleNamespace(db=db))
+    monkeypatch.setattr(litellm, "callbacks", [MagicMock(spec=PrometheusLogger)])
+
+    response: Final = await global_spend_reset()
+
+    assert response["status"] == "success"
+    assert [twin for twin in twins if spend_counter_cache.in_memory_cache.get_cache(key=twin) is not None] == []
+    assert db.largest_page <= 1000
 
 
 @pytest.mark.asyncio

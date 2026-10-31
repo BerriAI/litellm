@@ -9,11 +9,18 @@ from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from fakeredis import FakeAsyncRedis, FakeServer
 from prometheus_client import REGISTRY
 
 from litellm.caching.dual_cache import DualCache
 from litellm.caching.in_memory_cache import InMemoryCache
-from litellm.caching.redis_cache import RedisCache
+from litellm.caching.redis_batch import (
+    active_post_call_redis_batch,
+    flush_post_call_redis_batches,
+    request_redis_batch_scope,
+)
+from litellm.caching.redis_cache import RedisCache, RedisCircuitBreaker
+from litellm._service_logger import ServiceLogging
 from litellm.integrations.prometheus import PrometheusLogger
 from litellm.proxy._types import (
     LiteLLM_BudgetTable,
@@ -374,6 +381,103 @@ async def test_slow_committed_read_on_a_failed_request_is_bounded_and_keeps_the_
     )
 
     prometheus_logger.litellm_remaining_org_budget_metric.labels().set.assert_called_once_with(pytest.approx(440.0))
+
+
+class _RedisCacheOnClient(RedisCache):
+    def __init__(self, client: FakeAsyncRedis) -> None:
+        self._injected_client = client
+        self.namespace = None
+        self._circuit_breaker = RedisCircuitBreaker(failure_threshold=5, recovery_timeout=30)
+        self.service_logger_obj = ServiceLogging()
+        self.default_ttl = None
+
+    def init_async_client(self) -> FakeAsyncRedis:
+        return self._injected_client
+
+
+_TWIN_KEYS = tuple(
+    committed_spend_key(counter_key)
+    for counter_key in ("spend:key:hashed", "spend:team:t1", "spend:user:u1", "spend:org:o1")
+)
+
+
+@pytest.fixture
+def redis_spend_counter_cache():
+    redis_cache = _RedisCacheOnClient(FakeAsyncRedis(server=FakeServer()))
+    cache = DualCache(in_memory_cache=InMemoryCache(), redis_cache=redis_cache)
+    with patch(  # test-quality-ok: prometheus reads the proxy_server spend counters at emit time, no injection seam
+        "litellm.proxy.proxy_server.spend_counter_cache", cache
+    ):
+        yield redis_cache
+
+
+async def _store_auth_time_spend_plus_a_two_dollar_charge(redis_cache: _RedisCacheOnClient) -> None:
+    for twin_key, spend in zip(_TWIN_KEYS, (5.0, 32.0, 10.0, 62.0)):
+        await redis_cache.init_async_client().set(twin_key, spend)
+
+
+@pytest.mark.asyncio
+async def test_gauges_add_the_own_charge_to_a_same_size_charge_of_another_request_while_the_own_waits_in_the_pipeline(
+    prometheus_logger, getters, redis_spend_counter_cache
+):
+    """Another request's 2.0 reached the counters and this request's 2.0 is queued, so both count."""
+    _stub_gauges(prometheus_logger)
+    await _store_auth_time_spend_plus_a_two_dollar_charge(redis_spend_counter_cache)
+
+    with request_redis_batch_scope():
+        batch = active_post_call_redis_batch(redis_spend_counter_cache)
+        for twin_key in _TWIN_KEYS:
+            batch.increment(twin_key, 2.0, None)
+        await _emit(prometheus_logger, _request_metadata(_token_committed_at_auth()))
+        await flush_post_call_redis_batches()
+
+    assert _remaining(prometheus_logger) == {
+        "key": pytest.approx(3.0),
+        "team": pytest.approx(266.0),
+        "user": pytest.approx(38.0),
+        "org": pytest.approx(436.0),
+    }
+
+
+@pytest.mark.asyncio
+async def test_gauges_do_not_add_the_own_charge_twice_once_the_pipeline_went_out(
+    prometheus_logger, getters, redis_spend_counter_cache
+):
+    """The 2.0 over the auth time spend is this request's own charge, sent before the gauges read it."""
+    _stub_gauges(prometheus_logger)
+    await _store_auth_time_spend_plus_a_two_dollar_charge(redis_spend_counter_cache)
+
+    with request_redis_batch_scope():
+        batch = active_post_call_redis_batch(redis_spend_counter_cache)
+        batch.increment("unrelated-write", 1.0, None)
+        await flush_post_call_redis_batches()
+        await _emit(prometheus_logger, _request_metadata(_token_committed_at_auth()))
+
+    assert _remaining(prometheus_logger) == {
+        "key": pytest.approx(5.0),
+        "team": pytest.approx(268.0),
+        "user": pytest.approx(40.0),
+        "org": pytest.approx(438.0),
+    }
+
+
+@pytest.mark.asyncio
+async def test_gauges_without_redis_treat_a_charge_equal_to_the_own_as_the_own(
+    prometheus_logger, getters, spend_counter_cache
+):
+    """Without Redis the charge increments in memory at once, so a request scope says nothing about it."""
+    _stub_gauges(prometheus_logger)
+    _store_committed(spend_counter_cache, key=5.0, team=32.0, user=10.0, org=62.0)
+
+    with request_redis_batch_scope():
+        await _emit(prometheus_logger, _request_metadata(_token_committed_at_auth()))
+
+    assert _remaining(prometheus_logger) == {
+        "key": pytest.approx(5.0),
+        "team": pytest.approx(268.0),
+        "user": pytest.approx(40.0),
+        "org": pytest.approx(438.0),
+    }
 
 
 @pytest.mark.asyncio

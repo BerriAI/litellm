@@ -21,6 +21,7 @@ from typing_extensions import ReadOnly, TypedDict, assert_never
 import litellm
 from litellm._internal_context import with_service_target
 from litellm._logging import print_verbose, verbose_logger
+from litellm.caching.redis_batch import post_call_writes_unsent
 from litellm.constants import (
     AUTH_OBJECTS_TARGET,
     LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL,
@@ -405,12 +406,20 @@ async def _committed_spend_now(counter_keys: EntitySpendCounterKeys) -> Committe
         return CommittedBudgetSpend()
 
 
+def _own_charge_waits_in_post_call_pipeline() -> bool:
+    from litellm.proxy.proxy_server import spend_counter_cache
+
+    return spend_counter_cache.redis_cache is not None and post_call_writes_unsent()
+
+
 def _committed_spend_before_request(
     at_auth: CommittedBudgetSpend, now: CommittedBudgetSpend, response_cost: float
 ) -> CommittedBudgetSpend:
     def before(at_auth_spend: float | None, now_spend: float | None) -> float | None:
         if now_spend is None:
             return at_auth_spend
+        if _own_charge_waits_in_post_call_pipeline():
+            return now_spend
         if at_auth_spend is None:
             return now_spend - response_cost
         own_charge_counted: Final = now_spend - at_auth_spend >= response_cost * _OWN_CHARGE_MATCH_RATIO

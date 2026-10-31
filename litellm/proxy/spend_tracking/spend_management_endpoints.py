@@ -3696,34 +3696,41 @@ async def view_spend_logs(
         )
 
 
-class _TokenRow(TypedDict):
-    token: ReadOnly[str]
+class _EntityIdRow(TypedDict):
+    id: ReadOnly[str]
 
 
-class _TeamIdRow(TypedDict):
-    team_id: ReadOnly[str]
+_COMMITTED_DROP_PAGE_SIZE: Final = 1000
+_TOKEN_PAGE_QUERY: Final = (
+    'SELECT token AS id FROM "LiteLLM_VerificationToken" WHERE token > $1 ORDER BY token LIMIT $2'
+)
+_TEAM_PAGE_QUERY: Final = 'SELECT team_id AS id FROM "LiteLLM_TeamTable" WHERE team_id > $1 ORDER BY team_id LIMIT $2'
+
+
+async def _drop_committed_spend_page(
+    prisma_client: PrismaClient, page_query: str, counter_prefix: str, after_id: str
+) -> str | None:
+    from litellm.proxy.proxy_server import spend_counter_cache
+
+    rows: Final[Sequence[_EntityIdRow]] = await _query_raw(
+        prisma_client, page_query, after_id, _COMMITTED_DROP_PAGE_SIZE
+    )
+    await drop_committed_spend(spend_counter_cache, tuple(f"{counter_prefix}{row['id']}" for row in rows))
+    return rows[-1]["id"] if len(rows) == _COMMITTED_DROP_PAGE_SIZE else None
+
+
+async def _drop_committed_spend_pages(prisma_client: PrismaClient, page_query: str, counter_prefix: str) -> None:
+    after_id: str | None = ""  # rebind-ok: the keyset cursor moves one page at a time
+    while after_id is not None:
+        after_id = await _drop_committed_spend_page(prisma_client, page_query, counter_prefix, after_id)
 
 
 async def _drop_all_key_and_team_committed_spend(prisma_client: PrismaClient) -> None:
-    from litellm.proxy.proxy_server import spend_counter_cache
-
     try:
-        token_rows: Final[Sequence[_TokenRow]] = await _query_raw(
-            prisma_client, 'SELECT token FROM "LiteLLM_VerificationToken"'
-        )
-        team_rows: Final[Sequence[_TeamIdRow]] = await _query_raw(
-            prisma_client, 'SELECT team_id FROM "LiteLLM_TeamTable"'
-        )
-    except Exception as e:  # noqa: BLE001  # the reset already committed; a kept twin only lasts until its TTL
+        await _drop_committed_spend_pages(prisma_client, _TOKEN_PAGE_QUERY, "spend:key:")
+        await _drop_committed_spend_pages(prisma_client, _TEAM_PAGE_QUERY, "spend:team:")
+    except Exception as e:  # noqa: BLE001  # the reset already committed; a kept twin lasts until charges stop for its TTL
         verbose_proxy_logger.warning("committed spend drop after a global reset failed: %s", e)
-        return
-    await drop_committed_spend(
-        spend_counter_cache,
-        (
-            *(f"spend:key:{row['token']}" for row in token_rows),
-            *(f"spend:team:{row['team_id']}" for row in team_rows),
-        ),
-    )
 
 
 @router.post(

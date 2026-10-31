@@ -461,6 +461,7 @@ class RequestRedisBatches:
         "_deadline",
         "_deadline_flush",
         "_post_call",
+        "_post_call_sent",
         "post_call_deadline",
         "prefetched",
     )
@@ -468,6 +469,7 @@ class RequestRedisBatches:
     def __init__(self, post_call_deadline: float = POST_CALL_FLUSH_DEADLINE_SECONDS) -> None:
         self._batches: Final[dict[object, RedisBatch]] = {}  # mutable-ok: lazily filled per backend
         self._post_call: Final[dict[object, RedisBatch]] = {}  # mutable-ok: lazily filled per backend
+        self._post_call_sent: bool = False
         self.post_call_deadline: Final = post_call_deadline
         self._deadline: asyncio.TimerHandle | None = None
         self._deadline_flush: asyncio.Task[None] | None = None
@@ -508,9 +510,14 @@ class RequestRedisBatches:
         if self._deadline is not None:
             self._deadline.cancel()
             self._deadline = None
+        self._post_call_sent = self._post_call_sent or any(batch.pending for batch in self._post_call.values())
         await asyncio.gather(*(batch.flush() for batch in self._post_call.values() if batch.pending))
         if not any(batch.pending for batch in self._post_call.values()):
             _open_post_call.discard(self)
+
+    @property
+    def post_call_sent(self) -> bool:
+        return self._post_call_sent
 
     @property
     def batches(self) -> tuple[RedisBatch, ...]:
@@ -540,6 +547,12 @@ def active_post_call_redis_batch(redis_cache: RedisCache) -> RedisBatch | None:
     if batches is None:
         return None
     return batches.post_call(redis_cache)
+
+
+def post_call_writes_unsent() -> bool:
+    """Inside a request scope that has sent no post-call pipeline yet, none of its post-call writes reached Redis."""
+    batches: Final = _active_request_batches.get()
+    return batches is not None and not batches.post_call_sent
 
 
 async def flush_post_call_redis_batches() -> None:

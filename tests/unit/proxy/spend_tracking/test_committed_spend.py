@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
 from types import SimpleNamespace
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock
+from uuid import uuid4
 
 import pytest
 from fakeredis import FakeAsyncRedis, FakeServer
@@ -13,6 +15,7 @@ import litellm
 from litellm._service_logger import ServiceLogging
 from litellm.caching.dual_cache import DualCache
 from litellm.caching.in_memory_cache import InMemoryCache
+from litellm.caching.redis_batch import flush_post_call_redis_batches, request_redis_batch_scope
 from litellm.caching.redis_cache import RedisCache, RedisCircuitBreaker
 from litellm.integrations.prometheus import PrometheusLogger
 from litellm.proxy.spend_tracking.committed_spend import (
@@ -23,7 +26,13 @@ from litellm.proxy.spend_tracking.committed_spend import (
     read_committed_budget_spend,
     seed_committed_spend,
 )
+from litellm.proxy.proxy_server import (
+    _defer_spend_counter_increments,
+    _prepare_committed_spend_increments,
+    run_spend_counter_pipeline,
+)
 from litellm.proxy.spend_tracking.spend_counter_batch import (
+    PendingSpendIncrement,
     active_spend_counter_batch,
     read_batched_spend_counter,
     spend_counter_batch_scope,
@@ -36,11 +45,11 @@ class _FakeRedisSettingMax(FakeAsyncRedis):
     """fakeredis runs no Lua without lupa, so this stands in for the GET/compare/SET script of ``async_set_max``."""
 
     async def eval(self, script: str, numkeys: int, *keys_and_args: str) -> bytes:
-        key, value, _ttl = keys_and_args
+        key, value, ttl = keys_and_args
         current: Final = await self.get(key)
         if current is not None and float(current) >= float(value):
             return current
-        await self.set(key, value)
+        await self.set(key, value, ex=int(ttl) if int(ttl) > 0 else None)
         return value.encode()
 
 
@@ -59,8 +68,11 @@ class _RedisCacheOnClient(RedisCache):
 class _FindUniqueTable:
     def __init__(self, row: SimpleNamespace | None) -> None:
         self._row: Final = row
+        self.reads = 0
 
     async def find_unique(self, where: dict[str, str]) -> SimpleNamespace | None:
+        self.reads += 1
+        await asyncio.sleep(0)
         return self._row
 
 
@@ -140,6 +152,71 @@ async def test_seed_writes_the_db_spend_when_the_twin_is_absent(
     assert await read_committed_budget_spend(spend_counter_cache, counter_keys) == CommittedBudgetSpend(
         counter_keys=counter_keys, **expected_spend
     )
+
+
+@pytest.mark.asyncio
+async def test_concurrent_charges_on_a_cold_twin_read_the_db_once(spend_counter_cache: DualCache):
+    prisma_client: Final = _prisma_with_spend(12.0)
+    counter_key: Final = f"spend:key:{uuid4()}"
+
+    seeded: Final = await asyncio.gather(
+        *(seed_committed_spend(spend_counter_cache, prisma_client, counter_key) for _ in range(5))
+    )
+
+    assert seeded == [True] * 5
+    assert prisma_client.db.litellm_verificationtoken.reads == 1
+
+
+@pytest.mark.asyncio
+async def test_seed_reports_no_twin_when_redis_cannot_be_read():
+    redis_cache: Final = AsyncMock(spec=RedisCache)
+    redis_cache.async_batch_get_cache.side_effect = ConnectionError("redis unreachable")
+    spend_counter_cache: Final = DualCache(in_memory_cache=InMemoryCache(), redis_cache=redis_cache)
+
+    assert await seed_committed_spend(spend_counter_cache, _prisma_with_spend(12.0), "spend:team:t1") is False
+
+
+@pytest.mark.parametrize(
+    ("batch_write_seconds", "expected_twin_ttl"),
+    [
+        (10, 60),
+        (120, 250),
+    ],
+)
+@pytest.mark.asyncio
+async def test_twin_outlives_two_db_spend_writes_on_every_write_path(
+    monkeypatch: pytest.MonkeyPatch, batch_write_seconds: int, expected_twin_ttl: int
+):
+    """A twin expiring before the DB write would be seeded from a total still missing its charges."""
+    client: Final = _FakeRedisSettingMax(server=FakeServer())
+    redis_cache: Final = _RedisCacheOnClient(client)
+    redis_cache.default_ttl = 60
+    spend_counter_cache: Final = DualCache(in_memory_cache=InMemoryCache(), redis_cache=redis_cache)
+    monkeypatch.setattr("litellm.proxy.proxy_server.spend_counter_cache", spend_counter_cache)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", _prisma_with_spend(12.0))
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_batch_write_at", batch_write_seconds)
+    seeded_twin: Final = committed_spend_key("spend:key:seeded")
+    piped_twin: Final = committed_spend_key("spend:key:piped")
+    batched_twin: Final = committed_spend_key("spend:key:batched")
+
+    await _prepare_committed_spend_increments(("spend:key:seeded",), 1.0)
+    await run_spend_counter_pipeline(
+        (
+            PendingSpendIncrement(counter_key=piped_twin, increment=1.0),
+            PendingSpendIncrement(counter_key="spend:key:piped", increment=1.0),
+        )
+    )
+    with request_redis_batch_scope():
+        assert _defer_spend_counter_increments(
+            (
+                PendingSpendIncrement(counter_key=batched_twin, increment=1.0),
+                PendingSpendIncrement(counter_key="spend:key:batched", increment=1.0),
+            )
+        )
+        await flush_post_call_redis_batches()
+
+    assert [await client.ttl(twin) for twin in (seeded_twin, piped_twin, batched_twin)] == [expected_twin_ttl] * 3
+    assert [await client.ttl(counter) for counter in ("spend:key:piped", "spend:key:batched")] == [60, 60]
 
 
 @pytest.mark.asyncio
