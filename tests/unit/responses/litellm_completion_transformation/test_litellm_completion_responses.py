@@ -6866,7 +6866,7 @@ def test_native_compaction_replay_moves_a_call_its_compaction_item_splits_from_i
         pytest.param(ResponsesAPIOptionalRequestParams(), id="summary_as_text"),
     ],
 )
-def test_compaction_replay_invents_no_call_for_an_output_whose_call_was_never_stored(
+def test_compaction_replay_rejects_missing_history_instead_of_inventing_tool_calls(
     responses_api_request: ResponsesAPIOptionalRequestParams,
 ) -> None:
     async def no_stored_turns(previous_response_id: str) -> ChatCompletionSession:
@@ -6887,16 +6887,16 @@ def test_compaction_replay_invents_no_call_for_an_output_whose_call_was_never_st
         ),
     )
 
-    request: Final = asyncio.run(
-        LiteLLMCompletionResponsesConfig.async_responses_api_session_handler(
-            previous_response_id="resp_unknown",
-            litellm_completion_request=chat_request,
-            instructions=None,
-            session_lookup=no_stored_turns,
+    with pytest.raises(litellm.BadRequestError, match="previous_response_id") as raised:
+        asyncio.run(
+            LiteLLMCompletionResponsesConfig.async_responses_api_session_handler(
+                previous_response_id="resp_unknown",
+                litellm_completion_request=chat_request,
+                instructions=None,
+                session_lookup=no_stored_turns,
+            )
         )
-    )
-
-    assert not any(message.get("tool_calls") for message in request["messages"])
+    assert raised.value.status_code == 400
 
 
 @pytest.mark.parametrize(

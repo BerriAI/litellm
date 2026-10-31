@@ -7,8 +7,10 @@ from dataclasses import dataclass
 from typing import Final
 
 from pydantic import TypeAdapter
+from typing_extensions import ReadOnly, TypedDict
 
 import litellm
+from litellm.litellm_core_utils.asyncify import run_async_function
 from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
 from litellm.responses.additional_tools import HoistedAdditionalTools, hoist_additional_tools
 from litellm.responses.litellm_completion_transformation.client_tool_search import bridge_client_tool_search
@@ -31,6 +33,14 @@ from litellm.types.llms.openai import (
 from litellm.types.utils import ModelResponse
 
 _REQUEST_KWARGS_ADAPTER: Final = TypeAdapter(dict[str, object])
+
+
+class _ContinuationFields(TypedDict, total=False):
+    previous_response_id: ReadOnly[str | None]
+    instructions: ReadOnly[str | None]
+
+
+_CONTINUATION_FIELDS_ADAPTER: Final = TypeAdapter(_ContinuationFields)
 
 
 @dataclass(frozen=True, slots=True)
@@ -68,7 +78,7 @@ class LiteLLMCompletionTransformationHandler:
         _is_async: bool = False,
         stream: bool | None = None,
         extra_headers: Mapping[str, object] | None = None,
-        **kwargs,
+        **kwargs: object,
     ) -> (
         ResponsesAPIResponse
         | BaseResponsesAPIStreamingIterator
@@ -79,7 +89,8 @@ class LiteLLMCompletionTransformationHandler:
             responses_api_request.get("tools"),
             drop_params=drops_unsupported_params(_REQUEST_KWARGS_ADAPTER.validate_python(kwargs).get("drop_params")),
         )
-        previous_response_id: Final = responses_api_request.get("previous_response_id")
+        continuation: Final = _CONTINUATION_FIELDS_ADAPTER.validate_python(responses_api_request)
+        previous_response_id: Final = continuation.get("previous_response_id")
         if _is_async and previous_response_id and has_client_tool_search(hoisted.tools):
             return self._async_response_api_handler_after_earlier_searches(
                 previous_response_client_ids,
@@ -95,7 +106,7 @@ class LiteLLMCompletionTransformationHandler:
         bridged: Final = _bridged_request(hoisted, responses_api_request, ())
         bridged_input: Final = bridged.input
         bridged_request: Final = bridged.responses_api_request
-        litellm_completion_request: Final[dict] = (
+        litellm_completion_request: Final = _REQUEST_KWARGS_ADAPTER.validate_python(
             LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
                 model=model,
                 input=bridged_input,
@@ -116,8 +127,25 @@ class LiteLLMCompletionTransformationHandler:
                 **kwargs,
             )
 
+        sync_request: Final = (
+            _REQUEST_KWARGS_ADAPTER.validate_python(
+                run_async_function(
+                    LiteLLMCompletionResponsesConfig.async_responses_api_session_handler,
+                    previous_response_id=previous_response_id,
+                    litellm_completion_request=litellm_completion_request,
+                    instructions=continuation.get("instructions"),
+                    request_kwargs=kwargs,
+                    previous_response_client_ids=previous_response_client_ids,
+                    input_replaces_history=holds_compaction_summary(with_compaction_items_as_params(bridged_input)),
+                )
+            )
+            if previous_response_id
+            else litellm_completion_request
+        )
+        completion_args: Final = {**kwargs, **sync_request, "_skip_responses_api_bridge": True}
+
         litellm_completion_response: Final[ModelResponse | litellm.CustomStreamWrapper] = litellm.completion(
-            **{**kwargs, **litellm_completion_request, "_skip_responses_api_bridge": True},
+            **completion_args,
         )
 
         if isinstance(litellm_completion_response, ModelResponse):
@@ -138,7 +166,7 @@ class LiteLLMCompletionTransformationHandler:
                 request_input=bridged_input,
                 responses_api_request=bridged_request,
                 custom_llm_provider=custom_llm_provider,
-                litellm_metadata=kwargs.get("litellm_metadata", {}),
+                litellm_metadata=_REQUEST_KWARGS_ADAPTER.validate_python(kwargs.get("litellm_metadata") or {}),
             )
         raise ValueError(f"Unexpected response type: {type(litellm_completion_response)}")
 
@@ -194,7 +222,7 @@ class LiteLLMCompletionTransformationHandler:
         litellm_completion_request: dict,
         request_input: str | ResponseInputParam,
         responses_api_request: ResponsesAPIOptionalRequestParams,
-        **kwargs,
+        **kwargs: object,
     ) -> ResponsesAPIResponse | BaseResponsesAPIStreamingIterator:
         previous_response_id: Final[str | None] = responses_api_request.get("previous_response_id")
         if previous_response_id:
@@ -208,8 +236,14 @@ class LiteLLMCompletionTransformationHandler:
                 input_replaces_history=holds_compaction_summary(with_compaction_items_as_params(request_input)),
             )
 
+        acompletion_args: Final = {
+            **kwargs,
+            **_REQUEST_KWARGS_ADAPTER.validate_python(litellm_completion_request),
+            "_skip_responses_api_bridge": True,
+        }
+
         litellm_completion_response: Final[ModelResponse | litellm.CustomStreamWrapper] = await litellm.acompletion(
-            **{**kwargs, **litellm_completion_request, "_skip_responses_api_bridge": True},
+            **acompletion_args,
         )
         if isinstance(litellm_completion_response, ModelResponse):
             responses_api_response: Final[ResponsesAPIResponse] = (
@@ -229,6 +263,6 @@ class LiteLLMCompletionTransformationHandler:
                 request_input=request_input,
                 responses_api_request=responses_api_request,
                 custom_llm_provider=litellm_completion_request.get("custom_llm_provider"),
-                litellm_metadata=kwargs.get("litellm_metadata", {}),
+                litellm_metadata=_REQUEST_KWARGS_ADAPTER.validate_python(kwargs.get("litellm_metadata") or {}),
             )
         raise ValueError(f"Unexpected response type: {type(litellm_completion_response)}")
