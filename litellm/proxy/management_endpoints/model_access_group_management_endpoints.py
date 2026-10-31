@@ -853,7 +853,12 @@ async def create_model_group(
             detail={"error": "Either model_names or model_ids must be provided and non-empty"},
         )
 
-    # If model_ids is provided, use it (more precise targeting)
+    if has_model_names and has_model_ids:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "Send either model_names or model_ids, not both"},
+        )
+
     use_model_ids: Final = has_model_ids
 
     # Validate model_names exist in router (only if using model_names path)
@@ -1104,6 +1109,12 @@ async def update_access_group(
         raise HTTPException(
             status_code=400,
             detail={"error": "Either model_names or model_ids must be provided and non-empty"},
+        )
+
+    if has_model_names and has_model_ids:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "Send either model_names or model_ids, not both"},
         )
 
     try:
