@@ -522,8 +522,9 @@ class BedrockRealtime(BaseAWSLLM):
         if logged_events:
             if provider_failure is not None:
                 _record_failure_on_spend_log(logging_obj, _as_bedrock_error(provider_failure))
+            usage_logging_obj: Final = logging_obj if provider_failure is None else logging_obj.attempt_scoped_copy()
             GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(
-                logging_obj.dispatch_success_handlers(
+                usage_logging_obj.dispatch_success_handlers(
                     list(logged_events),
                     prefer_async_handlers=True,
                 )

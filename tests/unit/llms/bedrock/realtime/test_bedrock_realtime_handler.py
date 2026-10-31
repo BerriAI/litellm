@@ -1,4 +1,5 @@
 import asyncio
+import copy
 import json
 import sys
 import types
@@ -24,7 +25,8 @@ from litellm.llms.bedrock.realtime.handler import BedrockRealtime, SessionEndSig
 from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
 from litellm.llms.bedrock.realtime.transformation import BedrockRealtimeConfig
 from litellm.realtime_api import main as realtime_main
-from litellm.types.utils import StandardLoggingPayloadErrorInformation
+from litellm.integrations.custom_logger import CustomLogger
+from litellm.types.utils import StandardLoggingPayload, StandardLoggingPayloadErrorInformation
 from tests.unit.llms.bedrock.event_loop_probe import host_in_loop_probing_vault
 
 
@@ -52,17 +54,49 @@ def _closing_input() -> SessionEndSignals:
 _SPEND_ROW_METADATA_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _ERROR_INFORMATION_ADAPTER: Final = TypeAdapter(StandardLoggingPayloadErrorInformation | None)
 _BEDROCK_INPUT_CHUNK_ADAPTER: Final = TypeAdapter(Mapping[str, Mapping[str, object]])
+_STANDARD_LOGGING_PAYLOAD_ADAPTER: Final = TypeAdapter(StandardLoggingPayload)
 
 
 def _spend_row(
     logging_obj: "FakeLogging | LiteLLMLogging",
 ) -> tuple[Literal["success", "failure"], StandardLoggingPayloadErrorInformation | None]:
+    return _spend_row_of(logging_obj.model_call_details)
+
+
+def _spend_row_of(
+    model_call_details: dict[str, object],
+) -> tuple[Literal["success", "failure"], StandardLoggingPayloadErrorInformation | None]:
     now: Final = datetime.now(timezone.utc)
-    row: Final = get_logging_payload(
-        kwargs=logging_obj.model_call_details, response_obj=None, start_time=now, end_time=now
-    )
+    row: Final = get_logging_payload(kwargs=model_call_details, response_obj=None, start_time=now, end_time=now)
     metadata: Final = _SPEND_ROW_METADATA_ADAPTER.validate_json(row["metadata"])
     return row["status"], _ERROR_INFORMATION_ADAPTER.validate_python(metadata.get("error_information"))
+
+
+class LoggedEventRecorder(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.events: Final[list[tuple[Literal["success", "failure"], dict[str, object]]]] = []
+
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+        self.events.append(("success", dict(kwargs)))
+
+    async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+        self.events.append(("failure", dict(kwargs)))
+
+    def payload(self, event: Literal["success", "failure"]) -> StandardLoggingPayload:
+        (logged,) = (kwargs for logged_event, kwargs in self.events if logged_event == event)
+        return _STANDARD_LOGGING_PAYLOAD_ADAPTER.validate_python(logged["standard_logging_object"])
+
+
+class HeldSuccessLogger(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.entered: Final = asyncio.Event()
+        self.release: Final = asyncio.Event()
+
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+        self.entered.set()
+        await self.release.wait()
 
 
 class FakePayloadPart:
@@ -165,6 +199,11 @@ class FakeLogging:
     def __init__(self, trace_id="trace-nova-sonic"):
         self.litellm_trace_id = trace_id
         self.model_call_details = {}
+
+    def attempt_scoped_copy(self):
+        attempt = copy.copy(self)
+        attempt.model_call_details = dict(self.model_call_details)
+        return attempt
 
 
 class DisconnectingClientWS:
@@ -1183,6 +1222,7 @@ class TestBedrockRealtimeProviderFailurePropagation:
         self, stub_aws_sdk_client, spend_dispatch
     ):
         stub_aws_sdk_client["streams"] = [ScriptedBedrockStream(self.TEXT_TURN)]
+        recorder: Final = LoggedEventRecorder()
         logging_obj: Final = LiteLLMLogging(
             model="amazon.nova-sonic-v1:0",
             messages=[],
@@ -1191,6 +1231,7 @@ class TestBedrockRealtimeProviderFailurePropagation:
             start_time=datetime.now(),
             litellm_call_id="nova-sonic-drop",
             function_id="nova-sonic-drop",
+            dynamic_async_success_callbacks=[recorder],
         )
         logging_obj.update_from_kwargs(
             kwargs={"litellm_metadata": {"user_api_key": "hashed-key"}},
@@ -1210,14 +1251,68 @@ class TestBedrockRealtimeProviderFailurePropagation:
         await spend_dispatch["coro"]
 
         assert failure.value.status_code == 503
-        usage_record: Final = logging_obj.model_call_details["standard_logging_object"]
+        ((logged_event, usage_kwargs),) = recorder.events
+        assert logged_event == "success"
+        usage_record: Final = recorder.payload("success")
         assert usage_record["status"] == "success", "the router's failure event is each logger's one error record"
         assert [event["type"] for event in usage_record["response"]["results"]] == ["response.done"]
         assert logging_obj.model_call_details.get(REALTIME_SESSION_SUCCESS_LOGGED_KEY) is True
-        status, error_information = _spend_row(logging_obj)
+        status, error_information = _spend_row_of(usage_kwargs)
         assert status == "failure"
         assert error_information is not None
         assert error_information.get("error_code") == "503"
+
+    @pytest.mark.asyncio
+    async def test_a_dropped_session_bills_its_usage_to_loggers_while_the_failure_event_runs(
+        self, stub_aws_sdk_client, spend_dispatch
+    ):
+        usage_event: Final = json.dumps(
+            {"event": {"usageEvent": {"totalInputTokens": 1000, "totalOutputTokens": 50, "totalTokens": 1050}}}
+        )
+        stub_aws_sdk_client["streams"] = [ScriptedBedrockStream((*self.TEXT_TURN, usage_event))]
+        held: Final = HeldSuccessLogger()
+        recorder: Final = LoggedEventRecorder()
+        logging_obj: Final = LiteLLMLogging(
+            model="amazon.nova-2-5-sonic",
+            messages=[],
+            stream=False,
+            call_type="_arealtime",
+            start_time=datetime.now(),
+            litellm_call_id="nova-sonic-drop-order",
+            function_id="nova-sonic-drop-order",
+            dynamic_async_success_callbacks=[held, recorder],
+            dynamic_async_failure_callbacks=[recorder],
+        )
+        logging_obj.update_from_kwargs(
+            kwargs={"litellm_metadata": {"user_api_key": "hashed-key"}},
+            model="amazon.nova-2-5-sonic",
+            optional_params={},
+            litellm_params={"_arealtime": True},
+            custom_llm_provider="bedrock",
+        )
+
+        with pytest.raises(BedrockError) as failure:
+            await BedrockRealtime().async_realtime(
+                model="amazon.nova-2-5-sonic",
+                websocket=ConnectedClientWS([self.SESSION_UPDATE]),
+                logging_obj=logging_obj,
+                **self.AWS_PARAMS,
+            )
+        success_dispatch: Final = asyncio.create_task(spend_dispatch["coro"])
+        await asyncio.wait_for(held.entered.wait(), timeout=5)
+        logging_obj.failure_handler(failure.value, "", logging_obj.start_time, datetime.now(), for_async_request=True)
+        await logging_obj.async_failure_handler(failure.value, "", logging_obj.start_time, datetime.now())
+        held.release.set()
+        await success_dispatch
+
+        usage_record: Final = recorder.payload("success")
+        assert recorder.payload("failure")["status"] == "failure"
+        assert usage_record["status"] == "success"
+        assert usage_record["total_tokens"] == 1050
+        assert usage_record["response_cost"] > 0
+        ((_, usage_kwargs),) = (logged for logged in recorder.events if logged[0] == "success")
+        status, _ = _spend_row_of(usage_kwargs)
+        assert status == "failure"
 
     @pytest.mark.asyncio
     async def test_a_dropped_session_without_request_metadata_still_fails_and_bills_its_turn(
