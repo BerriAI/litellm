@@ -359,6 +359,15 @@ class TestSnowflakeCortexClaudeFixes:
         )
         assert body["system"] == [{"type": "text", "text": "You are helpful", "cache_control": {"type": "ephemeral"}}]
 
+    def test_string_system_prompt_keeps_its_message_cache_control_without_ttl(self):
+        body = self._transform(
+            [
+                {"role": "system", "content": "You are helpful", "cache_control": {"type": "ephemeral", "ttl": "1h"}},
+                {"role": "user", "content": "hi"},
+            ]
+        )
+        assert body["system"] == [{"type": "text", "text": "You are helpful", "cache_control": {"type": "ephemeral"}}]
+
     def test_direct_system_param_is_normalized(self):
         body = self._transform(
             [{"role": "user", "content": "hi"}],
