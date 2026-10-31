@@ -4746,22 +4746,29 @@ class TestEnsureOutputItemContentPartAdded:
         assert done.item.name == "spawn_agent"
         assert done.item.namespace == "collaboration"
 
-    def test_streaming_final_only_dict_tool_call_keeps_its_provider_specific_fields(self):
-        from unittest.mock import MagicMock
+    def test_streaming_final_only_tool_call_keeps_its_provider_specific_fields(self):
+        from litellm.types.utils import Choices, Message, ModelResponse
 
         iterator = self._make_iterator()
         iterator.tool_call_provider_fields = True
         provider_specific_fields = {"thought_signature": "sig-" + "x" * 512}
-        message = MagicMock()
-        message.tool_calls = [
-            {
-                "id": "call_1",
-                "function": {"name": "get_weather", "arguments": '{"city":"Paris"}'},
-                "provider_specific_fields": provider_specific_fields,
-            }
-        ]
-        complete_response = MagicMock()
-        complete_response.choices = [MagicMock(message=message)]
+        complete_response = ModelResponse(
+            choices=[
+                Choices(
+                    message=Message(
+                        content=None,
+                        tool_calls=[
+                            {
+                                "id": "call_1",
+                                "type": "function",
+                                "function": {"name": "get_weather", "arguments": '{"city":"Paris"}'},
+                                "provider_specific_fields": provider_specific_fields,
+                            }
+                        ],
+                    )
+                )
+            ]
+        )
 
         iterator._queue_final_tool_call_done_events(complete_response)
 

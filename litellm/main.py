@@ -406,7 +406,15 @@ class _SupplementalProviderParams:
     dropped_keys: frozenset[str] = frozenset()
 
 
-def _supplemental_provider_params(kwargs: Mapping[str, object], model: str) -> _SupplementalProviderParams:
+@dataclass(frozen=True, slots=True)
+class _InvalidSupplementalParams:
+    message: str
+    param: str
+
+
+def _parse_supplemental_provider_params(
+    kwargs: Mapping[str, object],
+) -> _SupplementalProviderParams | _InvalidSupplementalParams:
     supplemental: Final = {key: kwargs[key] for key in SUPPLEMENTAL_KWARGS_KEYS if key in kwargs}
     try:
         return _SupplementalProviderParams(params=validate_litellm_params_strictly(GenericLiteLLMParams, supplemental))
@@ -420,12 +428,19 @@ def _supplemental_provider_params(kwargs: Mapping[str, object], model: str) -> _
                 ),
                 dropped_keys=invalid_keys,
             )
-        raise litellm.BadRequestError(
+        return _InvalidSupplementalParams(
             message="; ".join(f"{detail['loc'][0]}: {detail['msg']}" for detail in invalid),
-            model=model,
-            llm_provider=None,
-            body={"param": ", ".join(sorted(invalid_keys))},
-        ) from error
+            param=", ".join(sorted(invalid_keys)),
+        )
+
+
+def _supplemental_provider_params(kwargs: Mapping[str, object], model: str) -> _SupplementalProviderParams:
+    parsed: Final = _parse_supplemental_provider_params(kwargs)
+    if isinstance(parsed, _InvalidSupplementalParams):
+        raise litellm.BadRequestError(
+            message=parsed.message, model=model, llm_provider=None, body={"param": parsed.param}
+        )
+    return parsed
 
 
 PROVIDERS_WITHOUT_DOCUMENT_INPUT: Final = frozenset({"ollama", "ollama_chat"})
