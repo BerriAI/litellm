@@ -11097,6 +11097,71 @@ def test_a_deployment_with_a_batch_control_plane_endpoint_keeps_it_out_of_chat_r
     assert "aws_bedrock_control_plane_endpoint" not in route.calls[0].request.content.decode()
 
 
+# Bedrock tier support is per model. Checked live on 2026-10-27 (LIT-9793): Claude Sonnet 4.5 and
+# Haiku 4.5 answer priority and flex with `The provided service tier is not supported for this model.`,
+# Nova 2 Lite serves both. The price map mirrors that, Claude rows have null tier prices, Nova 2 has real ones.
+def test_converse_service_tier_dropped_on_models_without_that_tier_under_drop_params() -> None:
+    config: Final = AmazonConverseConfig()
+
+    result: Final = config.map_openai_params(
+        non_default_params={"service_tier": "priority"},
+        optional_params={},
+        model="us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+        drop_params=True,
+    )
+
+    assert "serviceTier" not in result
+
+
+def test_converse_service_tier_raises_on_models_without_that_tier_without_drop_params(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    config: Final = AmazonConverseConfig()
+
+    with pytest.raises(litellm.utils.UnsupportedParamsError, match="service_tier='flex'"):
+        config.map_openai_params(
+            non_default_params={"service_tier": "flex"},
+            optional_params={},
+            model="us.anthropic.claude-haiku-4-5-20251001-v1:0",
+            drop_params=False,
+        )
+
+
+@pytest.mark.parametrize("service_tier", ["priority", "flex"])
+def test_converse_service_tier_forwarded_on_models_that_sell_it(
+    monkeypatch: pytest.MonkeyPatch, service_tier: str
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    config: Final = AmazonConverseConfig()
+
+    result: Final = config.map_openai_params(
+        non_default_params={"service_tier": service_tier},
+        optional_params={},
+        model="us.amazon.nova-2-lite-v1:0",
+        drop_params=False,
+    )
+
+    assert result["serviceTier"] == {"type": service_tier}
+
+
+@pytest.mark.parametrize("service_tier", ["default", "auto"])
+def test_converse_default_and_auto_service_tier_always_forwarded(
+    monkeypatch: pytest.MonkeyPatch, service_tier: str
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    config: Final = AmazonConverseConfig()
+
+    result: Final = config.map_openai_params(
+        non_default_params={"service_tier": service_tier},
+        optional_params={},
+        model="us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+        drop_params=False,
+    )
+
+    assert result["serviceTier"] == {"type": "default"}
+
+
 def _warnings_naming(caplog: pytest.LogCaptureFixture, param: str) -> tuple[str, ...]:
     return tuple(
         r.getMessage() for r in caplog.records if r.levelno == logging.WARNING and f"Dropping {param}=" in r.getMessage()
