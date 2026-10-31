@@ -8938,6 +8938,57 @@ async def test_failure_log_still_goes_out_masked_when_the_caller_is_cancelled_mi
     assert recorder.logged == [(_MASKED_LOG, _MASKED_LOG)]
 
 
+def _async_failure_logging(call_id: str, guardrail: CustomGuardrail) -> LitellmLogging:
+    logging_obj: Final = LitellmLogging(
+        model="gpt-4o-mini",
+        messages=copy.deepcopy(_RAW_LOG),
+        stream=False,
+        call_type="acompletion",
+        start_time=datetime.datetime(2026, 1, 1),
+        litellm_call_id=call_id,
+        function_id=call_id,
+        dynamic_async_failure_callbacks=[guardrail],
+    )
+    logging_obj.update_environment_variables(litellm_params={"acompletion": True, "metadata": {}}, optional_params={})
+    return logging_obj
+
+
+async def _cancel_failure_dispatch_mid_mask(
+    logging_obj: LitellmLogging, guardrail: _BlockingNameMaskingGuardrail
+) -> None:
+    dispatch: Final = asyncio.create_task(logging_obj.dispatch_failure_handlers(_bad_key_error(), "tb"))
+    await asyncio.wait_for(guardrail.scanning.wait(), timeout=10)
+    dispatch.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await dispatch
+
+
+@pytest.mark.asyncio
+async def test_sync_failure_callbacks_get_the_masked_prompt_when_the_failure_dispatch_is_cancelled_mid_mask(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    guardrail: Final = _BlockingNameMaskingGuardrail()
+    _, sync_logged = _register_failure_logging(monkeypatch, guardrail)
+
+    await _cancel_failure_dispatch_mid_mask(_async_failure_logging("cancelled-dispatch", guardrail), guardrail)
+    guardrail.release.set()
+    await asyncio.wait_for(_until(lambda: bool(sync_logged)), timeout=10)
+
+    assert sync_logged == [_MASKED_LOG]
+
+
+def test_sync_failure_callbacks_get_a_redacted_prompt_when_the_loop_shuts_down_mid_mask(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    guardrail: Final = _BlockingNameMaskingGuardrail()
+    _, sync_logged = _register_failure_logging(monkeypatch, guardrail)
+
+    asyncio.run(_cancel_failure_dispatch_mid_mask(_async_failure_logging("shut-down-dispatch", guardrail), guardrail))
+    asyncio.run(asyncio.wait_for(_until(lambda: bool(sync_logged)), timeout=10))
+
+    assert sync_logged == [_REDACTED_LOG]
+
+
 def _sync_failure_logging(call_id: str, guardrail: CustomGuardrail, recorder: _FailureLogRecorder) -> LitellmLogging:
     logging_obj: Final = LitellmLogging(
         model="gpt-4o-mini",

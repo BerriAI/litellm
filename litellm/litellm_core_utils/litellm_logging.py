@@ -726,6 +726,7 @@ class Logging(LiteLLMLoggingBaseClass):
     _failure_log_masked: bool = False
     _unmasked_messages: object = None
     _failure_logged_messages: object = None
+    _failure_log_mask: "asyncio.Task[None] | None" = None
 
     @property
     def _defer_async_logging(self) -> bool:
@@ -2767,8 +2768,8 @@ class Logging(LiteLLMLoggingBaseClass):
         bypasses the sync-SDK-only shortcut (e.g. ``async for`` on a stream from
         ``completion()``); legacy string callbacks still run via
         ``executor.submit(failure_handler)`` when configured, and still get submitted
-        when the awaiting task is cancelled (e.g. the event loop shuts down right after
-        the request failed).
+        once the failure log mask finishes when the awaiting task is cancelled (e.g. the
+        event loop shuts down right after the request failed).
         """
         litellm_params: Final = self.model_call_details.get("litellm_params", {}) or {}
         sync_sdk: Final = self.is_sync_litellm_request(litellm_params)
@@ -2783,7 +2784,11 @@ class Logging(LiteLLMLoggingBaseClass):
             await self.async_failure_handler(exception, traceback_exception)
         finally:
             if self._should_run_sync_failure_callbacks_for_async_calls():
-                executor.submit(self.failure_handler, exception, traceback_exception, for_async_request=True)
+                self._once_failure_log_is_masked(
+                    lambda: executor.submit(
+                        self.failure_handler, exception, traceback_exception, for_async_request=True
+                    )
+                )
 
     def should_run_logging(
         self,
@@ -4478,15 +4483,30 @@ class Logging(LiteLLMLoggingBaseClass):
         if not maskers:
             return
         mask: Final = asyncio.create_task(self._mask_failure_log_request_with(maskers))
+        self._failure_log_mask = mask
         try:
             await asyncio.shield(mask)
         except asyncio.CancelledError:
             _keep_alive_until_done(mask)
             if on_cancelled is not None:
-                mask.add_done_callback(lambda _: on_cancelled())
+                self._once_failure_log_is_masked(on_cancelled)
             if on_cancelled_async is not None:
-                mask.add_done_callback(lambda _: _keep_alive_until_done(asyncio.ensure_future(on_cancelled_async())))
+                self._once_failure_log_is_masked(
+                    lambda: _keep_alive_until_done(asyncio.ensure_future(on_cancelled_async()))
+                )
             raise
+
+    def _once_failure_log_is_masked(self, run: Callable[[], object]) -> None:
+        mask: Final = self._failure_log_mask
+        if mask is not None and not mask.done():
+            mask.add_done_callback(lambda finished: self._run_after_failure_log_mask(finished, run))
+            return
+        self._run_after_failure_log_mask(mask, run)
+
+    def _run_after_failure_log_mask(self, mask: "asyncio.Future[None] | None", run: Callable[[], object]) -> None:
+        if mask is not None and mask.cancelled():
+            self._redact_failure_log_request()
+        _ = run()
 
     def mask_failure_log_request(self, mask_executor: concurrent.futures.Executor = failure_log_mask_executor) -> None:
         if is_event_loop_running() or not self._claim_failure_log_mask():
