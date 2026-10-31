@@ -130,7 +130,8 @@ _CALL_STACK_END_MODULES: Final = ("asyncio", "concurrent", "threading")
 _INCREMENT_WITH_FLOOR_LUA: Final = (
     "local count = redis.call('INCRBY', KEYS[1], ARGV[1]) "
     "if count < 0 then count = redis.call('INCRBY', KEYS[1], -count) end "
-    "if redis.call('TTL', KEYS[1]) < 0 then redis.call('EXPIRE', KEYS[1], ARGV[2]) end "
+    "if count == 0 then redis.call('DEL', KEYS[1]) return 0 end "
+    "redis.call('EXPIRE', KEYS[1], ARGV[2]) "
     "return count"
 )
 
@@ -962,10 +963,11 @@ class RedisCache(BaseCache):
         keeps it safe: a separate corrective write could land after another pod's increment and
         erase it.
 
-        The TTL is set only on a key that has none, so a counter expires ``ttl`` after it was
-        created rather than ``ttl`` after it was last touched. Refreshing it on every touch
-        would keep a count a dead worker never decremented alive for as long as the group
-        takes traffic. Returns the resulting count.
+        The TTL is refreshed on every touch while the count is positive, and the key is
+        deleted when the count hits zero. That keeps a busy deployment's counter from
+        expiring mid-flight (which used to let later decrements undercount it for
+        least-busy routing). A counter a dead worker never decremented still ages out
+        once the deployment goes idle for ``ttl`` seconds. Returns the resulting count.
         """
         namespaced_key: Final = self.check_and_fix_namespace(key=key)
         count: Final[object] = self.redis_client.eval(  # pyright: ignore[reportAttributeAccessIssue]  # stubs omit eval
