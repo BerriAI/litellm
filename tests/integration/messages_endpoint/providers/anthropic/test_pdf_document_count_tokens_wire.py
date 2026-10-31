@@ -204,7 +204,7 @@ def test_utils_token_counter_prices_unreadable_pdf_bytes_like_one_image(
 ) -> None:
     data: Final = _UNREADABLE[label]
     as_pdf: Final = _local(gateway, provider, [document(base64_source(data))])
-    as_png: Final = _local(gateway, provider, [document(base64_source(data, media_type="image/png"))])
+    as_png: Final = _local(gateway, provider, [document(base64_source("", media_type="image/png"))])
     without: Final = _local(gateway, provider, [])
     assert as_pdf == as_png, (as_pdf, as_png)
     assert 0 <= as_pdf - without < rendered_tokens((LETTER,)), (as_pdf, without)
