@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, Final, List
 
 import httpx
+import openai
 import responses
 import respx
 import pytest
@@ -1134,6 +1135,249 @@ async def test_messages_strips_provider_prefix_exactly_once(requested_model, exp
 
     assert captured["body"]["model"] == expected_wire_model
     assert captured["url"] == expected_url
+
+
+_GET_WEATHER_TOOL: Final = {
+    "name": "get_weather",
+    "description": "Get the current weather for a city",
+    "input_schema": {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]},
+}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "tools, expected_path",
+    [
+        ([_GET_WEATHER_TOOL], "/openai/v1/responses"),
+        (None, "/openai/deployments/gpt-6-luna/chat/completions"),
+    ],
+    ids=["function_tool_bridged_to_responses", "no_tools_on_chat"],
+)
+@pytest.mark.parametrize("credentials_from_env", [False, True], ids=["credentials_in_params", "credentials_from_env"])
+async def test_azure_ai_on_azure_openai_host_streams_natively_with_the_bare_deployment(
+    tools, expected_path, credentials_from_env, monkeypatch
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    monkeypatch.delenv("AZURE_API_BASE", raising=False)
+    monkeypatch.delenv("AZURE_API_KEY", raising=False)
+    monkeypatch.setenv("AZURE_AI_API_BASE", "https://qa-resource.cognitiveservices.azure.com")
+    monkeypatch.setenv("AZURE_AI_API_KEY", "env-api-key")
+    credentials: Final = (
+        {}
+        if credentials_from_env
+        else {"api_base": "https://qa-resource.cognitiveservices.azure.com", "api_key": "params-api-key"}
+    )
+
+    with respx.mock(assert_all_called=True) as respx_mock:
+        upstream: Final = respx_mock.route(host="qa-resource.cognitiveservices.azure.com").mock(
+            side_effect=httpx.ConnectError("cut at the wire")
+        )
+        with pytest.raises(openai.APIError):
+            await litellm.anthropic.messages.acreate(
+                max_tokens=100,
+                messages=[{"role": "user", "content": "What is the weather in Berlin?"}],
+                model="azure_ai/gpt-6-luna",
+                stream=True,
+                tools=tools,
+                **credentials,
+            )
+
+    bodies: Final = [json.loads(call.request.content) for call in upstream.calls]
+    assert {call.request.url.path for call in upstream.calls} == {expected_path}
+    assert {call.request.headers["api-key"] for call in upstream.calls} == {credentials.get("api_key", "env-api-key")}
+    assert {body["model"] for body in bodies} == {"gpt-6-luna"}
+    assert all(body["stream"] is True for body in bodies)
+
+
+@pytest.mark.asyncio
+async def test_bridged_messages_keep_the_region_of_a_regional_bedrock_mantle_model(monkeypatch):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+
+    with respx.mock(assert_all_called=True) as respx_mock:
+        upstream: Final = respx_mock.route().mock(side_effect=httpx.ConnectError("cut at the wire"))
+        with pytest.raises(litellm.exceptions.ServiceUnavailableError):
+            await litellm.anthropic.messages.acreate(
+                max_tokens=100,
+                messages=[{"role": "user", "content": "ping"}],
+                model="bedrock_mantle/eu-west-1/openai.gpt-oss-120b",
+                api_key="test-api-key",
+            )
+
+    assert {call.request.url.host for call in upstream.calls} == {"bedrock-mantle.eu-west-1.api.aws"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("model", ["anthropic/claude-sonnet-5-5", "ragflow/gpt-4o"])
+async def test_bridged_messages_keep_the_callers_explicit_provider_over_the_model_prefix(model, monkeypatch):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+
+    with respx.mock(assert_all_called=True) as respx_mock:
+        upstream: Final = respx_mock.route().mock(side_effect=httpx.ConnectError("cut at the wire"))
+        with pytest.raises(openai.APIError):
+            await litellm.anthropic.messages.acreate(
+                max_tokens=100,
+                messages=[{"role": "user", "content": "ping"}],
+                model=model,
+                custom_llm_provider="openai",
+                api_base="https://gateway.example.com/v1",
+                api_key="test-api-key",
+            )
+
+    assert {call.request.url.host for call in upstream.calls} == {"gateway.example.com"}
+    assert {json.loads(call.request.content)["model"] for call in upstream.calls} == {model}
+
+
+@pytest.mark.parametrize("model", ["chatgpt/gpt-5", "github_copilot/gpt-5"])
+def test_bridged_messages_reach_the_callers_provider_without_signing_in_to_the_prefix_provider(
+    model, monkeypatch, tmp_path
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setenv("OPENAI_API_KEY", "server-openai-key")
+    monkeypatch.setenv("CHATGPT_TOKEN_DIR", str(tmp_path))
+    monkeypatch.setenv("GITHUB_COPILOT_TOKEN_DIR", str(tmp_path))
+    litellm.in_memory_llm_clients_cache.flush_cache()
+
+    with respx.mock(assert_all_called=True) as respx_mock:
+        upstream: Final = respx_mock.route().mock(side_effect=httpx.ConnectError("cut at the wire"))
+        with pytest.raises(openai.APIError):
+            litellm.anthropic.messages.create(
+                max_tokens=100,
+                messages=[{"role": "user", "content": "ping"}],
+                model=model,
+                custom_llm_provider="openai",
+            )
+
+    assert {call.request.url.host for call in upstream.calls} == {"api.openai.com"}
+    assert {call.request.headers["authorization"] for call in upstream.calls} == {"Bearer server-openai-key"}
+
+
+@pytest.mark.asyncio
+async def test_bridged_messages_send_the_deployments_key_for_azure_models_served_as_openai(monkeypatch):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setenv("OPENAI_API_KEY", "server-openai-key")
+    litellm.in_memory_llm_clients_cache.flush_cache()
+
+    with respx.mock(assert_all_called=True) as respx_mock:
+        upstream: Final = respx_mock.route().mock(side_effect=httpx.ConnectError("cut at the wire"))
+        with pytest.raises(openai.APIError):
+            await litellm.anthropic.messages.acreate(
+                max_tokens=100,
+                messages=[{"role": "user", "content": "ping"}],
+                model="azure/mistral-large-latest",
+                api_base="https://example-resource.services.ai.azure.com/models",
+                api_key="deployment-key",
+            )
+
+    assert {call.request.headers["authorization"] for call in upstream.calls} == {"Bearer deployment-key"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "entra_credential",
+    [
+        {"azure_ad_token": "entra-token"},
+        {"azure_ad_token_provider": lambda: "entra-token"},
+        {"tenant_id": "tenant", "client_id": "client", "client_secret": "secret"},
+        {"azure_username": "user", "azure_password": "password", "client_id": "client"},
+    ],
+)
+@pytest.mark.parametrize("api_base_from_env", [False, True], ids=["api_base_in_params", "api_base_from_env"])
+async def test_bridged_messages_keep_the_deployments_entra_credential_over_the_env_key(
+    monkeypatch, entra_credential, api_base_from_env
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setenv("AZURE_AI_API_BASE", "https://example-resource.cognitiveservices.azure.com")
+    monkeypatch.setenv("AZURE_AI_API_KEY", "azure-env-key")
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    api_base: Final = {} if api_base_from_env else {"api_base": "https://example-resource.cognitiveservices.azure.com"}
+
+    with (
+        patch("litellm.llms.azure.common_utils.get_azure_ad_token_from_entra_id", return_value=lambda: "entra-token"),  # test-quality-ok: stands in for the Entra token fetch so the test can see which credential reaches Azure
+        patch(
+            "litellm.llms.azure.common_utils.get_azure_ad_token_from_username_password",
+            return_value=lambda: "entra-token",
+        ),  # test-quality-ok: stands in for the Entra token fetch so the test can see which credential reaches Azure
+        respx.mock(assert_all_called=True) as respx_mock,
+    ):
+        upstream: Final = respx_mock.route().mock(side_effect=httpx.ConnectError("cut at the wire"))
+        with pytest.raises(openai.APIError):
+            await litellm.anthropic.messages.acreate(
+                max_tokens=100,
+                messages=[{"role": "user", "content": "ping"}],
+                model="azure_ai/gpt-6-luna",
+                tools=[{"name": "get_weather", "input_schema": {"type": "object", "properties": {}}}],
+                **api_base,
+                **entra_credential,
+            )
+
+    assert {call.request.headers.get("authorization") for call in upstream.calls} == {"Bearer entra-token"}
+    assert {call.request.headers.get("api-key") for call in upstream.calls} == {None}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "azure_env_credential, expected_header, expected_value",
+    [
+        ({"AZURE_API_KEY": "azure-env-key"}, "api-key", "azure-env-key"),
+        (
+            {"AZURE_TENANT_ID": "tenant", "AZURE_CLIENT_ID": "client", "AZURE_CLIENT_SECRET": "secret"},
+            "authorization",
+            "Bearer entra-token",
+        ),
+    ],
+    ids=["azure_env_key", "azure_env_entra"],
+)
+async def test_bridged_messages_keep_the_azure_env_credential_when_the_deployment_sets_its_own_api_base(
+    azure_env_credential, expected_header, expected_value, monkeypatch
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    for name in ("AZURE_API_KEY", "AZURE_OPENAI_API_KEY", "AZURE_AD_TOKEN", "AZURE_TENANT_ID", "AZURE_CLIENT_ID"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("AZURE_AI_API_KEY", "key-for-another-resource")
+    for name, value in azure_env_credential.items():
+        monkeypatch.setenv(name, value)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+
+    with (
+        patch("litellm.llms.azure.common_utils.get_azure_ad_token_from_entra_id", return_value=lambda: "entra-token"),  # test-quality-ok: stands in for the Entra token fetch so the test can see which credential reaches Azure
+        respx.mock(assert_all_called=True) as respx_mock,
+    ):
+        upstream: Final = respx_mock.route().mock(side_effect=httpx.ConnectError("cut at the wire"))
+        with pytest.raises(openai.APIError):
+            await litellm.anthropic.messages.acreate(
+                max_tokens=100,
+                messages=[{"role": "user", "content": "ping"}],
+                model="azure_ai/gpt-6-luna",
+                api_base="https://example-resource.cognitiveservices.azure.com",
+                tools=[{"name": "get_weather", "input_schema": {"type": "object", "properties": {}}}],
+            )
+
+    assert {call.request.headers.get(expected_header) for call in upstream.calls} == {expected_value}
+
+
+@pytest.mark.asyncio
+async def test_bridged_messages_still_route_through_the_litellm_proxy_when_asked(monkeypatch):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setenv("LITELLM_PROXY_API_BASE", "https://proxy.example.com")
+    monkeypatch.setenv("LITELLM_PROXY_API_KEY", "proxy-key")
+    monkeypatch.setenv("AZURE_AI_API_BASE", "https://example-resource.cognitiveservices.azure.com")
+    monkeypatch.setenv("AZURE_AI_API_KEY", "azure-env-key")
+    litellm.in_memory_llm_clients_cache.flush_cache()
+
+    with respx.mock(assert_all_called=True) as respx_mock:
+        upstream: Final = respx_mock.route().mock(side_effect=httpx.ConnectError("cut at the wire"))
+        with pytest.raises(openai.APIError):
+            await litellm.anthropic.messages.acreate(
+                max_tokens=100,
+                messages=[{"role": "user", "content": "ping"}],
+                model="azure_ai/gpt-6-luna",
+                use_litellm_proxy=True,
+            )
+
+    assert {call.request.url.host for call in upstream.calls} == {"proxy.example.com"}
 
 
 @pytest.mark.asyncio
