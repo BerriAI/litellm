@@ -52,6 +52,30 @@ def test_build_responses_kwargs_never_asks_the_nested_call_to_replay_a_stream():
     assert responses_kwargs["custom_llm_provider"] == "azure"
 
 
+@pytest.mark.parametrize(
+    ("model", "custom_llm_provider", "expected_parallel_tool_calls"),
+    [
+        ("openai/gpt-5.6-luna", "openai", False),
+        ("azure/gpt-5.6-luna", "azure", False),
+        # Perplexity's Responses API declares no parallel_tool_calls: the flag stays behind instead of a 400
+        ("perplexity/sonar", "perplexity", None),
+    ],
+)
+def test_build_responses_kwargs_maps_disable_parallel_tool_use_only_where_the_provider_declares_it(
+    model: str, custom_llm_provider: str, expected_parallel_tool_calls: bool | None
+):
+    responses_kwargs = _build_responses_kwargs(
+        max_tokens=1024,
+        messages=MESSAGES,
+        model=model,
+        tools=[{"name": "do_thing", "input_schema": {"type": "object", "properties": {}}}],
+        tool_choice={"type": "auto", "disable_parallel_tool_use": True},
+        extra_kwargs={"custom_llm_provider": custom_llm_provider},
+    )
+    assert responses_kwargs.get("parallel_tool_calls") == expected_parallel_tool_calls
+    assert responses_kwargs["tool_choice"] == "auto"
+
+
 def test_build_responses_kwargs_derives_prompt_cache_key_from_claude_code_session_id():
     responses_kwargs = _build_responses_kwargs(
         max_tokens=1024,

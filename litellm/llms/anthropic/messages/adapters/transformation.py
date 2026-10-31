@@ -1060,12 +1060,7 @@ class LiteLLMAnthropicMessagesAdapter:
         unknown backend, because that provider declares this param and forwards it to a proxy
         that resolves the real target itself, where a derived cache key has no such guarantee.
         """
-        if not model or not custom_llm_provider:
-            return False
-        supported_params: Final = litellm.get_supported_openai_params(
-            model=model, custom_llm_provider=custom_llm_provider
-        )
-        return "reasoning_effort" in (supported_params or ())
+        return LiteLLMAnthropicMessagesAdapter._target_declares("reasoning_effort", model, custom_llm_provider)
 
     def _translate_metadata_to_openai(
         self,
@@ -1094,8 +1089,14 @@ class LiteLLMAnthropicMessagesAdapter:
         self,
         anthropic_message_request: AnthropicMessagesRequest,
         new_kwargs: ChatCompletionRequest,
+        custom_llm_provider: str | None = None,
     ) -> None:
-        """Translate Anthropic tool_choice to OpenAI format."""
+        """Translate Anthropic tool_choice to OpenAI format.
+
+        ``disable_parallel_tool_use`` becomes ``parallel_tool_calls=False`` only for a target that
+        declares the param, so a provider without it keeps answering instead of rejecting the
+        request the way it already does an OpenAI-shaped ``parallel_tool_calls``.
+        """
         if "tool_choice" not in anthropic_message_request:
             return
         tool_choice: Final = anthropic_message_request["tool_choice"]
@@ -1103,8 +1104,28 @@ class LiteLLMAnthropicMessagesAdapter:
             return
         anthropic_tool_choice: Final = cast(AnthropicMessagesToolChoice, tool_choice)
         new_kwargs["tool_choice"] = self.translate_anthropic_tool_choice_to_openai(tool_choice=anthropic_tool_choice)
-        if anthropic_tool_choice.get("disable_parallel_tool_use") is True:
+        if anthropic_tool_choice.get("disable_parallel_tool_use") is True and self._target_declares_parallel_tool_calls(
+            anthropic_message_request["model"], custom_llm_provider
+        ):
             new_kwargs["parallel_tool_calls"] = False  # rebind-ok: out-param store like tool_choice above
+
+    @staticmethod
+    def _target_declares_parallel_tool_calls(model: str | None, custom_llm_provider: str | None) -> bool:
+        """Whether the target declares ``parallel_tool_calls`` among its supported params.
+
+        Without a resolved provider the flag stays behind, which is what this bridge sent before
+        it carried one at all, for the same reasons as ``_target_declares_reasoning_effort``.
+        """
+        return LiteLLMAnthropicMessagesAdapter._target_declares("parallel_tool_calls", model, custom_llm_provider)
+
+    @staticmethod
+    def _target_declares(param: str, model: str | None, custom_llm_provider: str | None) -> bool:
+        if not model or not custom_llm_provider:
+            return False
+        supported_params: Final = litellm.get_supported_openai_params(
+            model=model, custom_llm_provider=custom_llm_provider
+        )
+        return param in (supported_params or ())
 
     def _translate_stop_sequences_to_openai(
         self,
@@ -1327,6 +1348,7 @@ class LiteLLMAnthropicMessagesAdapter:
         self._translate_tool_choice_to_openai(
             anthropic_message_request=anthropic_message_request,
             new_kwargs=new_kwargs,
+            custom_llm_provider=custom_llm_provider,
         )
         ## CONVERT TOOLS
         tool_name_mapping = self._translate_tools_to_openai(

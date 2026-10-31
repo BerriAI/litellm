@@ -1194,6 +1194,14 @@ class TestTranslateRequestBroaderCoverage:
         kwargs = _ADAPTER.translate_request(req)
         assert kwargs.get("parallel_tool_calls") == expected_parallel_tool_calls
 
+    def test_disable_parallel_tool_use_stays_behind_when_provider_lacks_parallel_tool_calls(self):
+        req = _make_request(
+            tools=[{"name": "do_thing"}], tool_choice={"type": "auto", "disable_parallel_tool_use": True}
+        )
+        kwargs = _ADAPTER.translate_request(req, declares_parallel_tool_calls=False)
+        assert "parallel_tool_calls" not in kwargs
+        assert kwargs["tool_choice"] == "auto"
+
     def test_thinking_translated_to_reasoning(self):
         req = _make_request(thinking={"type": "enabled", "budget_tokens": 12000})
         kwargs = _ADAPTER.translate_request(req)

@@ -171,12 +171,20 @@ def _forwarded_kwargs(extra_kwargs: Mapping[str, object] | None) -> Mapping[str,
 
 
 def _provider_returns_encrypted_reasoning(model: str, custom_llm_provider: object) -> bool:
+    return _responses_config_declares("include", model, custom_llm_provider)
+
+
+def _provider_declares_parallel_tool_calls(model: str, custom_llm_provider: object) -> bool:
+    return _responses_config_declares("parallel_tool_calls", model, custom_llm_provider)
+
+
+def _responses_config_declares(param: str, model: str, custom_llm_provider: object) -> bool:
     provider: Final = (
         custom_llm_provider if isinstance(custom_llm_provider, str) else litellm.get_llm_provider(model=model)[1]
     )
     provider_model: Final = local_model_name(model, provider)
     responses_config: Final = ProviderConfigManager.get_provider_responses_api_config(provider, provider_model)
-    return responses_config is not None and "include" in responses_config.get_supported_openai_params(provider_model)
+    return responses_config is not None and param in responses_config.get_supported_openai_params(provider_model)
 
 
 def _reads_prompt_cache_breakpoint(model: str, forwarded_kwargs: Mapping[str, object]) -> bool:
@@ -321,6 +329,9 @@ def _build_responses_kwargs(
         ),
         auto_summary_level=auto_reasoning_summary(model, forwarded_kwargs.get("custom_llm_provider")),
         drop_params=drops_unsupported_params(forwarded_kwargs.get("drop_params")),
+        declares_parallel_tool_calls=_provider_declares_parallel_tool_calls(
+            model, forwarded_kwargs.get("custom_llm_provider")
+        ),
     )
 
     # Normalize reasoning effort based on model capabilities
