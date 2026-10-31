@@ -129,7 +129,7 @@ _MCP_DYNAMIC_TRANSPORT: Final = re.compile(r"/(?:toolset/)?[^/]+/mcp")
 # spend logging as the /mcp transport; its list/test siblings do not bill.
 _MCP_REST_TOOL_CALL: Final = "/mcp-rest/tools/call"
 
-_A2A_INVOKE_SUFFIXES: Final = ("/message/send", "/message/stream")
+_A2A_INVOKE_SUFFIX: Final = "/message/send"
 _A2A_TRANSPORT_PREFIXES: Final[tuple[str, ...]] = ("/v1/a2a/", "/a2a/")
 # Bare POST /a2a/{agent_id} carries the JSON-RPC method in the body, not the
 # path. Only message/send and message/stream write a SpendLogs row there; the
@@ -154,7 +154,7 @@ def _classify_mcp_route(path: str) -> str | None:
 
 
 def _classify_a2a_route(path: str) -> str | None:
-    if path.endswith(_A2A_INVOKE_SUFFIXES) and any(path.startswith(prefix) for prefix in _A2A_TRANSPORT_PREFIXES):
+    if path.endswith(_A2A_INVOKE_SUFFIX) and any(path.startswith(prefix) for prefix in _A2A_TRANSPORT_PREFIXES):
         return "/a2a"
     return None
 

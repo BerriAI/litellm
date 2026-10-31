@@ -108,6 +108,11 @@ class TestExistingRouteResolutionUnchanged:
         assert call_types is not None
         assert list(call_types) == [CallTypes.asend_message, CallTypes.send_message]
 
+    def test_v1_single_segment_placeholder_message_stream_resolves(self):
+        call_types = get_call_types_for_route("/v1/a2a/my-agent/message/stream")
+        assert call_types is not None
+        assert list(call_types) == [CallTypes.asend_message, CallTypes.send_message]
+
     def test_longer_route_does_not_collapse_into_bare_placeholder_pattern(self):
         call_types = get_call_types_for_route("/responses/resp_123/input_items")
         assert call_types is not None

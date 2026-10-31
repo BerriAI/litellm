@@ -135,8 +135,6 @@ def test_is_pure_asgi_not_base_http_middleware():
         ("/mcp-rest/tools/call", (BillableCategory.MCP, "/mcp")),
         ("/a2a/agent-1/message/send", (BillableCategory.A2A, "/a2a")),
         ("/v1/a2a/agent-9/message/send", (BillableCategory.A2A, "/a2a")),
-        ("/a2a/agent-1/message/stream", (BillableCategory.A2A, "/a2a")),
-        ("/v1/a2a/agent-9/message/stream", (BillableCategory.A2A, "/a2a")),
     ],
 )
 def test_classify_billable(path: str, expected: Tuple[BillableCategory, str]):

@@ -1152,6 +1152,7 @@ API_ROUTE_TO_CALL_TYPES: Final[Mapping[str, Sequence[CallTypes]]] = {
     "/a2a/{agent_id}": [CallTypes.asend_message, CallTypes.send_message],
     "/a2a/{agent_id}/message/send": [CallTypes.asend_message, CallTypes.send_message],
     "/a2a/{agent_id}/message/stream": [CallTypes.asend_message, CallTypes.send_message],
+    "/v1/a2a/{agent_id}/message/stream": [CallTypes.asend_message, CallTypes.send_message],
     # Passthrough endpoints
     "/llm_passthrough": [
         CallTypes.allm_passthrough_route,
