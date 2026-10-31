@@ -15,8 +15,23 @@ from litellm.constants import LOCALHOST_URL_PATTERNS
 if TYPE_CHECKING:
     from a2a.types import AgentCard
 
+
 # Runtime imports with availability check
-_A2ACardResolver: Any = None
+class _FallbackA2ACardResolver:
+    """Fallback base class when a2a-sdk is not installed."""
+
+    def __init__(self, *args: Any, base_url: str = "", **kwargs: Any) -> None:
+        self.base_url = base_url
+
+    async def get_agent_card(
+        self,
+        relative_card_path: str | None = None,
+        http_kwargs: Mapping[str, object] | None = None,
+    ) -> Any:
+        raise ImportError("The 'a2a' package is required for A2A card resolution. Install it with: pip install a2a-sdk")
+
+
+_A2ACardResolver: Any = _FallbackA2ACardResolver
 AGENT_CARD_WELL_KNOWN_PATH: str = "/.well-known/agent-card.json"
 PREV_AGENT_CARD_WELL_KNOWN_PATH: str = "/.well-known/agent.json"
 FOUNDRY_AGENT_CARD_PATH: Final = "/agentCard/v1.0"
