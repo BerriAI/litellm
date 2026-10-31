@@ -7787,8 +7787,8 @@ GPT_5_6_UPSTREAM_COST_HEADER_BILLS_HEADER_VALUE: Final = CostTrackingTestCase(
     ),
     expected=ExactExpected(
         spend=0.000413,
-        input_cost=0.0,
-        output_cost=0.000413,
+        input_cost=0.000413 * (10 * 1.75e-06) / (10 * 1.75e-06 + 253 * 1.4e-05),
+        output_cost=0.000413 * (253 * 1.4e-05) / (10 * 1.75e-06 + 253 * 1.4e-05),
         prompt_tokens=10,
         completion_tokens=253,
         breakdown_persisted=False,
@@ -11885,7 +11885,7 @@ GPT_5_6_TERRA_MESSAGES_BRIDGED_STREAM: Final = GPT_5_6_TERRA_MESSAGES_BRIDGED_JS
 # replies alike. A deployment the operator priced keeps the operator's rates on both.
 _GATEWAY_REPORTED_USAGE: Final = {"prompt_tokens": 100, "completion_tokens": 20, "total_tokens": 120, "cost": 0.037}
 _GATEWAY_REPORTED_EXPECTED: Final = ExactExpected(
-    spend=0.037, input_cost=0.0, output_cost=0.037, prompt_tokens=100, completion_tokens=20
+    spend=0.037, input_cost=0.023125, output_cost=0.013875, prompt_tokens=100, completion_tokens=20
 )
 _GATEWAY_OPERATOR_PRICED: Final = Deployment(input_cost_per_token=2e-06, output_cost_per_token=6e-06)
 _GATEWAY_OPERATOR_PRICED_EXPECTED: Final = ExactExpected(

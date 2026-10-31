@@ -172,13 +172,16 @@ def _caller_identity_headers(user_api_key_dict: UserAPIKeyAuth) -> Mapping[str, 
 async def _resolve_backend_auth(
     litellm_params: dict[str, object],
     custom_llm_provider: object,
+    agent_extra_headers: Mapping[str, str] | None = None,
 ) -> AgentBackendAuth:
     databricks_auth: Final = await resolve_databricks_backend_auth(litellm_params)
     if has_databricks_oauth(litellm_params):
         return databricks_auth
     return AgentBackendAuth(
         litellm_params=databricks_auth.litellm_params,
-        header=await resolve_a2a_hop_auth_header(litellm_params, custom_llm_provider),
+        header=await resolve_a2a_hop_auth_header(
+            litellm_params, custom_llm_provider, agent_extra_headers=agent_extra_headers
+        ),
     )
 
 
@@ -431,6 +434,7 @@ async def _handle_stream_message(
     proxy_server_request: dict[str, object] | None = None,
     *,
     agent_extra_headers: dict[str, str] | None = None,
+    agent_name: str | None = None,
     user_api_key_dict: UserAPIKeyAuth | None = None,
     request_data: dict[str, object] | None = None,
     proxy_logging_obj: ProxyLogging | None = None,
@@ -504,6 +508,7 @@ async def _handle_stream_message(
                 metadata=metadata,
                 proxy_server_request=proxy_server_request,
                 agent_extra_headers=agent_extra_headers,
+                agent_name=agent_name,
             )
 
             if (
@@ -832,14 +837,15 @@ async def invoke_agent_a2a(
                     if header_name:
                         dynamic_headers[header_name] = val
 
-        backend_auth: Final = await _resolve_backend_auth(litellm_params, custom_llm_provider)
+        merged_agent_headers: Final = merge_agent_headers(
+            dynamic_headers=dynamic_headers or None,
+            static_headers=static_headers or None,
+        )
+        backend_auth: Final = await _resolve_backend_auth(litellm_params, custom_llm_provider, merged_agent_headers)
         agent_extra_headers: Final = _forwarding_headers(
             caller_identity=caller_identity,
             request_data=data,
-            agent_extra_headers=merge_agent_headers(
-                dynamic_headers=dynamic_headers or None,
-                static_headers=static_headers or None,
-            ),
+            agent_extra_headers=merged_agent_headers,
             backend_auth_header=backend_auth.header,
         )
         forwarded_litellm_params: Final = backend_auth.litellm_params
@@ -932,6 +938,7 @@ async def invoke_agent_a2a(
                 metadata=data.get("metadata", {}),
                 proxy_server_request=data.get("proxy_server_request"),
                 agent_extra_headers=agent_extra_headers,
+                agent_name=str(agent_name),
                 user_api_key_dict=user_api_key_auth_for_call,
                 request_data=data,
                 proxy_logging_obj=proxy_logging_obj,

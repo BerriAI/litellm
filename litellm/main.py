@@ -23,6 +23,7 @@ from collections.abc import AsyncIterator, Callable, Coroutine, Iterable, Mappin
 from concurrent import futures
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from copy import deepcopy
+from dataclasses import dataclass
 from functools import partial
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Protocol, Union, cast, get_args
@@ -82,8 +83,8 @@ from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.litellm_core_utils.get_litellm_params import (
     AWS_CREDENTIAL_KWARGS_KEYS,
     OAUTH_TOKEN_EXCHANGE_KWARGS_KEYS,
-    OPTIONAL_KWARGS_KEYS,
     PROVIDER_AFFINITY_HEADER_KWARG_KEY,
+    SUPPLEMENTAL_KWARGS_KEYS,
     InvalidControlOption,
     parse_control_options,
     with_control_options,
@@ -113,6 +114,11 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     messages_without_pdf_file_parts,
 )
 from litellm.litellm_core_utils.provider_affinity import add_provider_affinity_header
+from litellm.litellm_core_utils.reasoning_effort_capability import (
+    model_group_from_metadata,
+    reasoning_effort_needs_allowing,
+    resolve_chat_reasoning,
+)
 from litellm.litellm_core_utils.request_timeout_resolver import (
     get_configured_request_timeout,
 )
@@ -144,11 +150,6 @@ from litellm.llms.vertex_ai.common_utils import (
 )
 from litellm.realtime_api.main import realtime_health_check
 from litellm.responses.mcp.tool_precheck import may_name_litellm_mcp_gateway
-from litellm.router_utils.reasoning_effort_capability import (
-    model_group_from_metadata,
-    reasoning_effort_needs_allowing,
-    resolve_chat_reasoning,
-)
 from litellm.secret_managers.main import get_secret_bool, get_secret_str
 from litellm.text_completions.streaming_iterator import TextCompletionStreamWrapper
 from litellm.types.completion import (
@@ -157,7 +158,7 @@ from litellm.types.completion import (
 )
 from litellm.types.litellm_params import ControlOptions, RetryStrategy
 from litellm.types.llms.openai import AllMessageValues
-from litellm.types.router import GenericLiteLLMParams
+from litellm.types.router import GenericLiteLLMParams, validate_litellm_params_strictly
 from litellm.types.utils import (
     AgenticLoopParams,
     BaseUrlRoutingHint,
@@ -397,6 +398,49 @@ def _resolve_control_options(kwargs: Mapping[str, object], model: str) -> Contro
             raise litellm.BadRequestError(message=message, model=model, llm_provider=None, body={"param": param})
         case _:
             return assert_never(control)
+
+
+@dataclass(frozen=True, slots=True)
+class _SupplementalProviderParams:
+    params: GenericLiteLLMParams
+    dropped_keys: frozenset[str] = frozenset()
+
+
+@dataclass(frozen=True, slots=True)
+class _InvalidSupplementalParams:
+    message: str
+    param: str
+
+
+def _parse_supplemental_provider_params(
+    kwargs: Mapping[str, object],
+) -> _SupplementalProviderParams | _InvalidSupplementalParams:
+    supplemental: Final = {key: kwargs[key] for key in SUPPLEMENTAL_KWARGS_KEYS if key in kwargs}
+    try:
+        return _SupplementalProviderParams(params=validate_litellm_params_strictly(GenericLiteLLMParams, supplemental))
+    except ValidationError as error:
+        invalid: Final = tuple(detail for detail in error.errors() if detail["loc"])
+        invalid_keys: Final = frozenset(str(detail["loc"][0]) for detail in invalid)
+        if litellm.drop_params is True or normalize_drop_params(kwargs.get("drop_params")) is True:
+            return _SupplementalProviderParams(
+                params=GenericLiteLLMParams.model_validate(
+                    {key: value for key, value in supplemental.items() if key not in invalid_keys}
+                ),
+                dropped_keys=invalid_keys,
+            )
+        return _InvalidSupplementalParams(
+            message="; ".join(f"{detail['loc'][0]}: {detail['msg']}" for detail in invalid),
+            param=", ".join(sorted(invalid_keys)),
+        )
+
+
+def _supplemental_provider_params(kwargs: Mapping[str, object], model: str) -> _SupplementalProviderParams:
+    parsed: Final = _parse_supplemental_provider_params(kwargs)
+    if isinstance(parsed, _InvalidSupplementalParams):
+        raise litellm.BadRequestError(
+            message=parsed.message, model=model, llm_provider=None, body={"param": parsed.param}
+        )
+    return parsed
 
 
 PROVIDERS_WITHOUT_DOCUMENT_INPUT: Final = frozenset({"ollama", "ollama_chat"})
@@ -830,21 +874,17 @@ async def acompletion(
         "enable_json_schema_validation": enable_json_schema_validation,
     }
     if custom_llm_provider is None:
-        _supplemental: Final = cast(  # cast-ok: kwargs values are request-scoped objects
-            "dict[str, object]",
-            {
-                **{k: kwargs[k] for k in OPTIONAL_KWARGS_KEYS | {"provider_specific_header"} if k in kwargs},
-                "extra_headers": extra_headers,
-            },
-        )
+        request_kwargs: Final = cast("Mapping[str, object]", kwargs)  # cast-ok: untyped request kwargs
         _, custom_llm_provider, _, _ = get_llm_provider(
             model=model,
             custom_llm_provider=custom_llm_provider,
             api_base=cast(  # cast-ok: api_base arrives as a str in the request kwargs
-                "str | None", kwargs.get("api_base")
+                "str | None", request_kwargs.get("api_base")
             )
             or base_url,
-            litellm_params=(GenericLiteLLMParams.model_validate(_supplemental) if _supplemental else None),
+            litellm_params=_supplemental_provider_params(
+                _REQUEST_KWARGS_ADAPTER.validate_python({**kwargs, "extra_headers": extra_headers}), model
+            ).params,
         )
 
     if fallbacks is not None:
@@ -1197,6 +1237,7 @@ def mock_completion(
                     custom_llm_provider="openai",
                     logging_obj=logging,
                     count_prompt_tokens=count_prompt_tokens,
+                    is_mock=True,
                 )
             return CustomStreamWrapper(
                 completion_stream=mock_completion_streaming_obj(
@@ -1206,6 +1247,7 @@ def mock_completion(
                 custom_llm_provider="openai",
                 logging_obj=logging,
                 count_prompt_tokens=count_prompt_tokens,
+                is_mock=True,
             )
         if isinstance(mock_response, litellm.MockException):
             raise mock_response
@@ -4382,6 +4424,7 @@ _ADDITIONAL_DROP_PARAMS_ADAPTER: Final = TypeAdapter(list[str])
 _OPTIONAL_PARAMS_ADAPTER: Final = TypeAdapter(dict[str, object])
 _OLLAMA_EMBEDDING_HEADERS_ADAPTER: Final = TypeAdapter(dict[str, str])
 _MODEL_INFO_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+_REQUEST_KWARGS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _PROVIDER_ROUTING_HINTS: Final = TypeAdapter(ProviderRoutingHints)
 _BASE_URL_HINT: Final = TypeAdapter(BaseUrlRoutingHint)
 _OPAQUE_VALUE_ADAPTER: Final = TypeAdapter(object)
@@ -5625,6 +5668,11 @@ def completion(
 
     ######### unpacking kwargs #####################
     args: Final = _locals_snapshot(locals())
+    supplemental_params: Final = _supplemental_provider_params(
+        _REQUEST_KWARGS_ADAPTER.validate_python({**kwargs, "extra_headers": extra_headers}), model
+    )
+    for dropped_key in supplemental_params.dropped_keys:
+        kwargs.pop(dropped_key)
 
     # Set by the responses->completion fallback so completion() does not bridge
     # back to the Responses API: that round-trip mutually recurses forever for a
@@ -5850,21 +5898,14 @@ def completion(
         if deployment_id is not None:  # azure llms
             model = deployment_id
             custom_llm_provider = "azure"
-        _supplemental_provider_params: Final = {
-            **{k: kwargs[k] for k in OPTIONAL_KWARGS_KEYS | {"provider_specific_header"} if k in kwargs},
-            "extra_headers": extra_headers,
-        }
+        routing_kwargs: Final = cast("Mapping[str, object]", kwargs)  # cast-ok: kwargs is the untyped request dict
         requested_model: Final = model
         model, custom_llm_provider, dynamic_api_key, api_base = get_llm_provider(
             model=model,
             custom_llm_provider=custom_llm_provider,
             api_base=api_base,
             api_key=api_key,
-            litellm_params=(
-                GenericLiteLLMParams.model_validate(_supplemental_provider_params)
-                if _supplemental_provider_params
-                else None
-            ),
+            litellm_params=supplemental_params.params,
         )
         _record_agentic_loop_params(
             logging_obj=logging,
@@ -5884,7 +5925,6 @@ def completion(
             api_base=api_base,
             deployment_model_info=deployment_model_info,
         )
-        routing_kwargs: Final = cast("Mapping[str, object]", kwargs)  # cast-ok: kwargs is the untyped request dict
         drop_unsupported_reasoning: Final = (
             litellm.drop_params is True or normalize_drop_params(routing_kwargs.get("drop_params")) is True
         )
@@ -6220,6 +6260,7 @@ def completion(
                     "github_copilot_user_session",
                     PROVIDER_AFFINITY_HEADER_KWARG_KEY,
                     "fireworks_forward_user_id",
+                    "thought_signature_in_tool_call_id",
                     "responses_api_version",
                     "allowed_openai_params",
                 )
@@ -6809,6 +6850,23 @@ async def aembedding(*args, **kwargs) -> EmbeddingResponse:
         )
 
 
+def _embedding_headers(param: str, configured: object, model: str, drop_params: bool) -> Mapping[str, object]:
+    if not configured:
+        return {}
+    if isinstance(configured, Mapping):
+        return dict(cast(Mapping[str, object], configured))  # cast-ok: header names from untyped request JSON
+    try:
+        return dict(cast(Iterable[tuple[str, object]], configured))  # cast-ok: name and value pairs from request JSON
+    except (TypeError, ValueError):
+        if drop_params:
+            return {}
+        raise litellm.UnsupportedParamsError(
+            message=f"{param} must be a JSON object of header names to values. "
+            "To drop it from the call, set `litellm.drop_params = True`.",
+            model=model,
+        )
+
+
 # fmt: off
 
 # Overload for when aembedding=True (returns coroutine)
@@ -6923,11 +6981,10 @@ def embedding(
     azure_ad_token_provider: Final = kwargs.get("azure_ad_token_provider", None)
     aembedding: Final[bool | None] = kwargs.get("aembedding", None)
     extra_headers: Final = kwargs.get("extra_headers", None)
-    headers = kwargs.get("headers", None) or extra_headers
-    if headers is None:
-        headers = {}
-    if extra_headers is not None:
-        headers.update(extra_headers)
+    headers = {
+        **_embedding_headers("headers", kwargs.get("headers"), model, drop_unsupported_params),
+        **_embedding_headers("extra_headers", extra_headers, model, drop_unsupported_params),
+    }
     # Inject proxy auth headers if configured
     if litellm.proxy_auth is not None:
         try:
@@ -7091,7 +7148,7 @@ def embedding(
             # set API KEY
             api_key = api_key or litellm.api_key or litellm.openai_key or get_secret_str("OPENAI_API_KEY")
 
-            if headers is not None and headers != {}:
+            if headers:
                 optional_params["extra_headers"] = headers
 
             requested_encoding_format: Final = (
@@ -7183,14 +7240,15 @@ def embedding(
             custom_llm_provider == "openai_like"
             or custom_llm_provider == "llamafile"
             or custom_llm_provider == "lm_studio"
+            or JSONProviderRegistry.supports_embeddings(custom_llm_provider)
         ):
             api_base = api_base or litellm.api_base or get_secret_str("OPENAI_LIKE_API_BASE")
 
             # set API KEY
-            if api_key is None:
-                api_key = api_key or litellm.api_key or litellm.openai_like_key or get_secret_str("OPENAI_LIKE_API_KEY")
+            if api_key is None and not JSONProviderRegistry.supports_embeddings(custom_llm_provider):
+                api_key = litellm.api_key or litellm.openai_like_key or get_secret_str("OPENAI_LIKE_API_KEY")
 
-            if headers is not None and headers != {}:
+            if headers:
                 optional_params["extra_headers"] = headers
 
             ## EMBEDDING CALL
@@ -7205,10 +7263,9 @@ def embedding(
                 optional_params=optional_params,
                 client=client,
                 aembedding=aembedding,
+                drop_params=drop_unsupported_params,
             )
         elif custom_llm_provider == "oci":
-            if headers is None:
-                headers = {}
             response = base_llm_http_handler.embedding(
                 model=model,
                 input=input,
@@ -7232,11 +7289,6 @@ def embedding(
                 or get_secret_str("CO_API_KEY")
                 or litellm.api_key
             )
-
-            # Use the merged headers variable (already merged at the top of the function)
-            # Don't overwrite it with just extra_headers
-            if headers is None:
-                headers = {}
 
             response = base_llm_http_handler.embedding(
                 model=model,
