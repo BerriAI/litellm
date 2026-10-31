@@ -983,5 +983,1656 @@
       "message_one": "{{value}} unit with no known price is left out of the cost. <githubLink>Request pricing on GitHub</githubLink>",
       "message_other": "{{value}} units with no known price are left out of the cost. <githubLink>Request pricing on GitHub</githubLink>"
     }
+  },
+  "organizations": {
+    "view": {
+      "loading": "Loading...",
+      "notFound": "Organization not found",
+      "backToList": "Back to Organizations",
+      "copyId": "Copy organization ID",
+      "tabs": {
+        "overview": "Overview",
+        "members": "Members",
+        "settings": "Settings"
+      },
+      "toasts": {
+        "memberAdded": "Organization member added successfully",
+        "memberAddFailed": "Failed to add organization member",
+        "memberUpdated": "Organization member updated successfully",
+        "memberUpdateFailed": "Failed to update organization member",
+        "memberDeleted": "Organization member deleted successfully",
+        "memberDeleteFailed": "Failed to delete organization member"
+      },
+      "overview": {
+        "detailsTitle": "Organization Details",
+        "createdLabel": "Created: ",
+        "updatedLabel": "Updated: ",
+        "createdByLabel": "Created By: ",
+        "budgetTitle": "Budget Status",
+        "budgetOf": "of",
+        "unlimited": "Unlimited",
+        "resetLabel": "Reset: ",
+        "rateLimitsTitle": "Rate Limits",
+        "tpmLabel": "TPM: ",
+        "rpmLabel": "RPM: ",
+        "maxParallelLabel": "Max Parallel Requests: ",
+        "modelsTitle": "Models",
+        "allProxyModels": "All proxy models",
+        "teamsTitle": "Teams"
+      },
+      "members": {
+        "spendColumn": "Spend (USD)",
+        "createdAtColumn": "Created At",
+        "roleColumn": "Organization Role",
+        "empty": "No members found"
+      },
+      "settings": {
+        "title": "Organization Settings",
+        "editButton": "Edit Settings",
+        "nameLabel": "Organization Name",
+        "idLabel": "Organization ID",
+        "createdAtLabel": "Created At",
+        "modelsLabel": "Models",
+        "rateLimitsLabel": "Rate Limits",
+        "tpmLabel": "TPM: ",
+        "rpmLabel": "RPM: ",
+        "unlimited": "Unlimited",
+        "budgetLabel": "Budget",
+        "maxBudgetLabel": "Max:",
+        "noLimit": "No Limit",
+        "resetLabel": "Reset: ",
+        "never": "Never"
+      },
+      "addMember": {
+        "title": "Add Organization Member",
+        "roles": {
+          "orgAdmin": "Can add and remove members, and change their roles.",
+          "internalUser": "Can view/create keys for themselves within organization.",
+          "internalUserViewer": "Can only view their keys within organization."
+        }
+      },
+      "editMember": {
+        "title": "Edit Member",
+        "roles": {
+          "orgAdmin": "Org Admin",
+          "internalUser": "Internal User",
+          "internalUserViewer": "Internal User Viewer"
+        }
+      }
+    },
+    "panel": {
+      "toasts": {
+        "deleted": "Organization deleted successfully"
+      },
+      "enterpriseNotice": "This is a LiteLLM Enterprise feature, and requires a valid key to use. Get a trial key <pricing>here</pricing>.",
+      "createButton": "+ Create New Organization",
+      "listHint": "Click on an organization ID to view its details.",
+      "deleteModal": {
+        "title": "Delete Organization?",
+        "message": "Are you sure you want to delete this organization? This action cannot be undone.",
+        "infoTitle": "Organization Information",
+        "idLabel": "Organization ID"
+      }
+    },
+    "table": {
+      "loading": "Loading organizations…",
+      "empty": {
+        "noMatchesTitle": "No matching organizations",
+        "noneTitle": "No organizations yet",
+        "noMatchesDescription": "No organizations match your search. Try a different name or ID.",
+        "noneDescription": "Create an organization to group teams, models, and budgets."
+      },
+      "columns": {
+        "id": "Organization ID",
+        "name": "Organization Name",
+        "created": "Created",
+        "spend": "Spend (USD)",
+        "budget": "Budget (USD)",
+        "models": "Models",
+        "limits": "TPM / RPM Limits",
+        "tpmSort": "TPM",
+        "rpmSort": "RPM",
+        "members": "Members",
+        "actions": "Actions"
+      },
+      "limits": {
+        "tpmLabel": "TPM: ",
+        "rpmLabel": "RPM: ",
+        "unlimited": "Unlimited"
+      },
+      "budgetUnlimited": "Unlimited",
+      "memberCount_one": "{{count}} Members",
+      "memberCount_other": "{{count}} Members",
+      "actions": {
+        "open": "Open organization actions",
+        "edit": "Edit",
+        "delete": "Delete"
+      }
+    },
+    "filters": {
+      "searchByName": "Search by Organization Name",
+      "searchById": "Search by Organization ID"
+    },
+    "createDialog": {
+      "title": "Create Organization",
+      "toasts": {
+        "created": "Organization created successfully",
+        "createFailed": "Failed to create organization"
+      },
+      "fields": {
+        "name": "Organization Name",
+        "models": "Models",
+        "maxBudget": "Max Budget (USD)",
+        "budgetDuration": "Reset Budget",
+        "tpmLimit": "Tokens per minute Limit (TPM)",
+        "rpmLimit": "Requests per minute Limit (RPM)",
+        "vectorStores": "Allowed Vector Stores",
+        "vectorStoresDescription": "Select vector stores this organization can access. Leave empty for access to all vector stores",
+        "vectorStoresPlaceholder": "Select vector stores (optional)",
+        "mcp": "Allowed MCP Servers",
+        "mcpDescription": "Select MCP servers, access groups, and toolsets this organization can access. Leave empty for access to all",
+        "mcpPlaceholder": "Select MCP servers and access groups (optional)",
+        "metadata": "Metadata"
+      },
+      "cancel": "Cancel",
+      "creating": "Creating...",
+      "submit": "Create Organization"
+    },
+    "settingsForm": {
+      "budgetDuration": {
+        "noReset": "No reset",
+        "daily": "daily",
+        "weekly": "weekly",
+        "monthly": "monthly"
+      },
+      "errors": {
+        "wholeNumber": "Must be a non-negative whole number",
+        "nonNegativeNumber": "Must be a non-negative number",
+        "nameRequired": "Please input an organization name",
+        "invalidMetadata": "Metadata must be a valid JSON object"
+      },
+      "toasts": {
+        "updated": "Organization settings updated successfully",
+        "updateFailed": "Failed to update organization settings"
+      },
+      "fields": {
+        "name": "Organization Name",
+        "models": "Models",
+        "maxBudget": "Max Budget (USD)",
+        "budgetDuration": "Reset Budget",
+        "tpmLimit": "Tokens per minute Limit (TPM)",
+        "rpmLimit": "Requests per minute Limit (RPM)",
+        "vectorStores": "Vector Stores",
+        "vectorStoresPlaceholder": "Select vector stores",
+        "mcp": "MCP Servers & Access Groups",
+        "mcpPlaceholder": "Select MCP servers and access groups",
+        "metadata": "Metadata"
+      },
+      "cancel": "Cancel",
+      "saving": "Saving...",
+      "save": "Save Changes"
+    }
+  },
+  "filters": {
+    "button": {
+      "label": "Filters"
+    },
+    "reset": {
+      "label": "Reset Filters"
+    }
+  },
+  "teams": {
+    "teamInfo": {
+      "toasts": {
+        "mcpUnresolvable": "Cannot save MCP tool permissions because {{reason}}. Retry once the page has finished loading",
+        "loadFailed": "Failed to load team information",
+        "memberAdded": "Team member added successfully",
+        "memberAddFailed": "Failed to add team member",
+        "adminsEnterpriseOnly": "Assigning admins is an enterprise-only feature. Please upgrade your LiteLLM plan to enable this.",
+        "memberUpdated": "Team member updated successfully",
+        "memberUpdateFailed": "Failed to update team member",
+        "memberRemoved": "Team member removed successfully",
+        "memberRemoveFailed": "Failed to remove team member",
+        "settingsUpdated": "Team settings updated successfully",
+        "invalidSecretManagerJson": "Invalid JSON in secret manager settings",
+        "invalidPerModelEstimatesJson": "Invalid JSON in estimated output tokens per model",
+        "adminEditingDisabledTitle": "Team admins cannot edit team settings on this proxy",
+        "adminEditingDisabledDescription": "Ask a proxy admin to enable fields under Settings > UI > Team admin editable fields."
+      },
+      "validation": {
+        "teamNameRequired": "Please input a team name",
+        "thresholdRange": "Enter a whole number from 1 to 100",
+        "duplicateThreshold": "Duplicate threshold",
+        "missingModel": "Missing model",
+        "duplicateModel": "Duplicate model",
+        "tpmOrRpmRequired": "Set at least one of TPM or RPM"
+      },
+      "mcpLookup": {
+        "serversFailed": "the MCP server list could not be loaded",
+        "toolsetsFailed": "the MCP toolset list could not be loaded",
+        "accessGroupsFailed": "the access group list could not be loaded",
+        "inventoryLoading": "the MCP server inventory is still loading"
+      },
+      "loading": "Loading...",
+      "notFound": "Team not found",
+      "rateLimits": {
+        "unlimited": "Unlimited",
+        "tpm": "TPM: ",
+        "rpm": "RPM: ",
+        "tpd": "TPD (batch): ",
+        "perModelTitle": "Per-model limits:",
+        "default": "Default",
+        "estimatedOutputTokens": "Estimated Output Tokens: ",
+        "estimatedOutputTokensPerModel": "Estimated Output Tokens Per Model:",
+        "perModelLine": "{{model}}: TPM {{tpm}}, RPM {{rpm}}"
+      },
+      "overview": {
+        "budgetStatus": "Budget Status",
+        "budgetOf": "of {{budget}}",
+        "unlimitedBudget": "Unlimited",
+        "reset": "Reset: ",
+        "teamMemberBudget": "Team Member Budget: ${{amount}}",
+        "rateLimitsTitle": "Rate Limits",
+        "maxParallelRequests": "Max Parallel Requests: ",
+        "requestSettingsTitle": "Request Settings",
+        "requireTraceId": "Require Trace ID: ",
+        "enabled": "Enabled",
+        "disabled": "Disabled",
+        "modelsTitle": "Models",
+        "virtualKeysTitle": "Virtual Keys",
+        "userKeys": "User Keys: ",
+        "serviceAccountKeys": "Service Account Keys: ",
+        "totalKeys": "Total: ",
+        "policiesTitle": "Policies",
+        "loadingGuardrails": "Loading guardrails...",
+        "resolvedGuardrails": "Resolved Guardrails:",
+        "noPolicies": "No policies configured"
+      },
+      "settings": {
+        "title": "Team Settings",
+        "edit": "Edit Settings"
+      },
+      "editForm": {
+        "teamName": "Team Name",
+        "models": "Models",
+        "modelsDescription": "Leave empty to grant no models directly. The team keeps any models granted through its access groups",
+        "modelAliases": "Model Aliases",
+        "modelAliasesHint": "Map a custom alias to an underlying model. Team members can call the alias in API requests instead of the real model name.",
+        "maxBudget": "Max Budget (USD)",
+        "softBudget": "Soft Budget (USD)",
+        "softBudgetAlertingEmails": "Soft Budget Alerting Emails",
+        "softBudgetAlertingEmailsHint": "Comma-separated email addresses to receive alerts when the soft budget is reached",
+        "teamMemberSettings": {
+          "title": "Team Member Settings",
+          "description": "Optional defaults applied when members join this team. All fields can be overridden per member.",
+          "defaultModelAccess": "Default Model Access",
+          "defaultModelAccessHint": "Optional. If set, new members can only access these models by default. Must be a subset of the team's models above. Leave empty to give all members access to all team models.",
+          "defaultModelAccessPlaceholder": "Leave empty — all team models accessible to every member",
+          "defaultBudget": "Default Budget (USD)",
+          "defaultBudgetHint": "Default spend budget for each member in this team.",
+          "defaultBudgetDuration": "Default Budget Duration",
+          "inheritResetPeriod": "Inherit team reset period",
+          "defaultPerModelBudget": "Default Per-Model Budget",
+          "defaultPerModelBudgetHint": "Set a default per-model spend cap for each team member, with an independent reset window.",
+          "defaultKeyDuration": "Default Key Duration (eg: 1d, 1mo)",
+          "defaultKeyDurationHint": "Set a limit to the duration of a team member's key. Format: 30s (seconds), 30m (minutes), 30h (hours), 30d (days), 1mo (month)",
+          "defaultKeyDurationPlaceholder": "e.g., 30d",
+          "defaultTpmLimit": "Default TPM Limit",
+          "defaultTpmLimitHint": "Default tokens per minute limit for each member. Can be overridden per member.",
+          "defaultTpmLimitPlaceholder": "e.g., 1000",
+          "defaultRpmLimit": "Default RPM Limit",
+          "defaultRpmLimitHint": "Default requests per minute limit for each member. Can be overridden per member.",
+          "defaultRpmLimitPlaceholder": "e.g., 100",
+          "budgetAlertThresholds": "Budget Alert Thresholds",
+          "budgetAlertThresholdsHint": "Email each member when their spend reaches a percentage of their team member budget. The member is always notified; add comma-separated addresses to notify others as well. Requires email alerting to be configured on the proxy.",
+          "thresholdPlaceholder": "% of budget",
+          "recipientsPlaceholder": "Additional recipients, e.g. finance@example.com",
+          "removeThreshold": "Remove budget alert threshold",
+          "addThreshold": "Add Budget Alert Threshold"
+        },
+        "resetBudget": "Reset Budget",
+        "resetBudgetPlaceholder": "Never resets",
+        "perModelBudgetHint": "Cap this team's spend on individual models, each with its own reset window. Every key on the team shares the cap unless the key sets its own budget for that model.",
+        "tpmLimit": "Tokens per minute Limit (TPM)",
+        "rpmLimit": "Requests per minute Limit (RPM)",
+        "tpdLimit": "Tokens per day Limit (TPD)",
+        "tpdLimitHint": "Daily token budget for batch submissions (/v1/batches). When set, batch input files are charged against this 24h window instead of the team's TPM/RPM limits. Online requests keep using TPM/RPM.",
+        "metadata": "Metadata",
+        "metadataDescription": "Values are saved as text. Enter JSON for typed values, e.g. 3, true, or ",
+        "modelLimits": "Model-Specific Rate Limits",
+        "modelLimitsHint": "Set per-model TPM/RPM limits that apply across the whole team.",
+        "modelLimitsModelPlaceholder": "Select model",
+        "modelLimitsTpmPlaceholder": "TPM Limit",
+        "modelLimitsRpmPlaceholder": "RPM Limit",
+        "removeModelLimit": "Remove model limit",
+        "addModelLimit": "Add Model Limit",
+        "estimatedOutputTokens": "Estimated Output Tokens",
+        "estimatedOutputTokensPerModel": "Estimated Output Tokens Per Model",
+        "routerSettings": "Router Settings",
+        "guardrails": "Guardrails",
+        "guardrailsHint": "Select which guardrails apply to this team. Global guardrails are enabled by default, uncheck to opt out. Other guardrails are opt-in.",
+        "disableGlobalGuardrails": "Disable all global guardrails",
+        "disableGlobalGuardrailsHint": "Kill switch: bypass every global guardrail for this team, including any added in the future. For per-guardrail opt-out instead, use the Guardrails dropdown above.",
+        "requireTraceId": "Require Trace ID",
+        "requireTraceIdHint": "Reject LLM, MCP and agent requests from this team that do not send a trace ID (x-litellm-trace-id header, LLM requests can also use traceparent or metadata.trace_id)",
+        "policies": "Policies",
+        "policiesHint": "Apply policies to this team to control guardrails and other settings",
+        "policiesPlaceholder": "Select or enter policies",
+        "accessGroups": "Access Groups",
+        "accessGroupsHint": "Assign access groups to this team. Access groups control which models, MCP servers, and agents this team can use",
+        "accessGroupsPlaceholder": "Select access groups (optional)",
+        "vectorStores": "Vector Stores",
+        "vectorStoresPlaceholder": "Select vector stores",
+        "passThroughRoutes": "Allowed Pass Through Routes",
+        "passThroughRoutesPremiumHint": "Premium feature - Upgrade to set allowed pass through routes",
+        "passThroughRoutesAdminOnlyHint": "Only proxy admins can set allowed pass through routes",
+        "passThroughRoutesPlaceholder": "Select pass through routes",
+        "mcpServers": "MCP Servers / Access Groups",
+        "mcpServersPlaceholder": "Select MCP servers or access groups (optional)",
+        "agents": "Agents / Access Groups",
+        "agentsPlaceholder": "Select agents or access groups (optional)",
+        "searchToolSettings": {
+          "title": "Search Tool Settings",
+          "allowedSearchTools": "Allowed Search Tools",
+          "allowedSearchToolsHint": "Select which search tools this team can access. Leave empty to allow all search tools.",
+          "allowedSearchToolsPlaceholder": "Select search tools (optional, empty = all allowed)"
+        },
+        "skills": "Skills",
+        "skillsHint": "Enabled skills are visible to every team. Grant disabled (private) Claude Code plugins to this team here.",
+        "skillsPlaceholder": "Select skills (optional)",
+        "organization": "Organization",
+        "organizationPlaceholder": "Select an organization",
+        "organizationEmpty": "No matching organizations",
+        "loggingSettings": "Logging Settings",
+        "secretManagerSettings": "Secret Manager Settings",
+        "secretManagerSettingsDescription": "Enter secret manager configuration as a JSON object.",
+        "secretManagerSettingsPremiumHint": "Premium feature - Upgrade to manage secret manager settings.",
+        "cancel": "Cancel",
+        "save": "Save Changes"
+      },
+      "settingsView": {
+        "teamName": "Team Name",
+        "teamId": "Team ID",
+        "createdAt": "Created At",
+        "models": "Models",
+        "defaultMemberModels": "Default Member Models",
+        "modelAliases": "Model Aliases",
+        "noModelAliases": "No model aliases configured",
+        "rateLimits": "Rate Limits",
+        "teamBudget": "Team Budget",
+        "noLimit": "No Limit",
+        "maxBudget": "Max Budget: ",
+        "softBudget": "Soft Budget:",
+        "budgetReset": "Budget Reset: ",
+        "never": "Never",
+        "perModelBudget": {
+          "line": "Per-Model Budget ({{model}}): ${{limit}} per {{period}}",
+          "lineWithSpent": "Per-Model Budget ({{model}}): ${{limit}} per {{period}}, spent ${{spent}}"
+        },
+        "softBudgetAlertingEmails": "Soft Budget Alerting Emails: ",
+        "teamMemberSettings": {
+          "title": "Team Member Settings",
+          "tooltip": "These are limits on individual team members",
+          "budgetDuration": "Budget Duration: ",
+          "keyDuration": "Key Duration: ",
+          "tpmLimit": "TPM Limit: ",
+          "rpmLimit": "RPM Limit: ",
+          "budgetAlertThresholds": "Budget Alert Thresholds: ",
+          "none": "None",
+          "defaultPerModelBudget": "Default Per-Model Budget ({{model}}): {{limit}} per {{period}}"
+        },
+        "routerSettings": "Router Settings",
+        "router": {
+          "routingStrategy": "Routing Strategy: ",
+          "numRetries": "Number of Retries: ",
+          "allowedFails": "Allowed Failures: ",
+          "cooldownTime": "Cooldown Time: {{value}}s",
+          "timeout": "Timeout: {{value}}s",
+          "retryAfter": "Retry After: {{value}}s",
+          "tagFilteringEnabled": "Tag Filtering: Enabled",
+          "none": "No router settings configured",
+          "fallbacks_one": "Fallbacks: {{count}} configured",
+          "fallbacks_other": "Fallbacks: {{count}} configured"
+        },
+        "organizationId": "Organization ID",
+        "status": "Status",
+        "blocked": "Blocked",
+        "active": "Active",
+        "secretManagerSettings": "Secret Manager Settings"
+      },
+      "backToTeams": "Back to Teams",
+      "editMember": {
+        "title": "Edit Member",
+        "roleAdmin": "Admin",
+        "roleUser": "User",
+        "maxBudgetInTeam": "Team Member Budget (USD)",
+        "maxBudgetInTeamTooltip": "Maximum amount in USD this member can spend within this team. This is separate from any global user budget limits",
+        "maxBudgetInTeamPlaceholder": "Budget limit for this member within this team",
+        "budgetDuration": "Budget Reset Period",
+        "budgetDurationTooltip": "How often this member's budget resets within the team. Leave unset and the budget never resets.",
+        "tempBudgetIncrease": "Temporary Budget Increase (USD)",
+        "tempBudgetIncreaseTooltip": "Extra USD added on top of the team member budget until the expiry below. The permanent budget is left unchanged and the increase stops applying at expiry.",
+        "tempBudgetIncreasePlaceholder": "Extra budget for this member until the expiry",
+        "tempBudgetExpiry": "Temporary Budget Expiry (UTC)",
+        "tempBudgetExpiryTooltip": "When the temporary budget increase stops applying. Required whenever a temporary budget increase is set.",
+        "modelMaxBudget": "Per-Model Budgets",
+        "modelMaxBudgetTooltip": "Spend cap per model for this member, each with its own reset period. Starts from the team's default per-model budget; saving a change stores a per-model budget for this member only.",
+        "tpmLimit": "Team Member TPM Limit",
+        "tpmLimitTooltip": "Maximum tokens per minute this member can use within this team. This is separate from any global user TPM limit",
+        "tpmLimitPlaceholder": "Tokens per minute limit for this member in this team",
+        "rpmLimit": "Team Member RPM Limit",
+        "rpmLimitTooltip": "Maximum requests per minute this member can make within this team. This is separate from any global user RPM limit",
+        "rpmLimitPlaceholder": "Requests per minute limit for this member in this team",
+        "allowedModels": "Allowed Models",
+        "allowedModelsTooltip": "Models this member can access within this team. Leave empty to inherit all team models.",
+        "allowedModelsPlaceholder": "Leave empty to inherit all team models"
+      },
+      "deleteMember": {
+        "title": "Delete Team Member",
+        "alert": "Removing team members will also delete any keys created by or created for this member.",
+        "message": "Are you sure you want to remove this member from the team? This action cannot be undone.",
+        "informationTitle": "Team Member Information",
+        "userId": "User ID",
+        "email": "Email",
+        "role": "Role"
+      }
+    },
+    "virtualKeysTable": {
+      "columns": {
+        "keyId": "Key ID",
+        "keyAlias": "Key Alias",
+        "secretKey": "Secret Key",
+        "organizationId": "Organization ID",
+        "userEmail": "User Email",
+        "userId": "User ID",
+        "createdAt": "Created At",
+        "createdBy": "Created By",
+        "updatedAt": "Updated At",
+        "lastActive": "Last Active",
+        "expires": "Expires",
+        "spend": "Spend (USD)",
+        "lifetimeSpend": "Lifetime Spend",
+        "budget": "Budget (USD)",
+        "budgetReset": "Budget Reset",
+        "models": "Models",
+        "rateLimits": "Rate Limits"
+      },
+      "dates": {
+        "never": "Never",
+        "unknown": "Unknown"
+      },
+      "budget": {
+        "teamMember": "(team member)",
+        "unlimited": "Unlimited"
+      },
+      "models": {
+        "noModelAccessTooltip": "Scoped to {{scope}} routes; this key cannot call any models",
+        "noModelAccess": "No model access",
+        "allProxyModels": "All Proxy Models",
+        "collapse": "Collapse models",
+        "expand": "Expand models",
+        "more_one": "+{{count}} more model",
+        "more_other": "+{{count}} more models"
+      },
+      "rateLimits": {
+        "unlimited": "Unlimited",
+        "tpm": "TPM: ",
+        "rpm": "RPM: "
+      },
+      "loading": "Loading keys...",
+      "searchPlaceholder": "Search by key alias or ID…",
+      "filters": {
+        "userId": "User ID",
+        "keyId": "Key ID",
+        "title": "Filters",
+        "thisTeam": "this team",
+        "description": "Narrow down keys for {{team}}",
+        "userIdPlaceholder": "Filter by user ID…",
+        "keyIdPlaceholder": "Enter Key ID…"
+      }
+    },
+    "adminSettingsForm": {
+      "intro": "A proxy admin chose which settings team admins can change. Ask a proxy admin to change anything else.",
+      "maxBudgetKeepOrLowerHint": "You can keep or lower this budget. Ask a proxy admin to raise it.",
+      "maxBudgetRaiseHint": "You can raise this budget. Raises are capped by your organization's budget when the team belongs to one.",
+      "inheritDurationPlaceholder": "Inherit team reset period",
+      "metadataDescription": "A value that is valid JSON, like 3, true or {\"region\": \"us\"}, is saved as that type, anything else as text. Keys the proxy reads as settings stay with proxy admins and are kept as they are.",
+      "cancel": "Cancel",
+      "save": "Save Changes"
+    },
+    "memberFormValues": {
+      "tempBudgetPairRequired": "Set both a temporary budget increase and its expiry, or neither"
+    },
+    "editMembership": {
+      "addTitle": "Add Member",
+      "editTitle": "Edit Member",
+      "errors": {
+        "invalidEmail": "Please enter a valid email!",
+        "roleRequired": "Please select a role!"
+      },
+      "numericalPlaceholder": "Enter a numerical value",
+      "multiSelectPlaceholder": "Select options",
+      "fields": {
+        "email": "Email",
+        "or": "OR",
+        "userId": "User ID",
+        "role": "Role",
+        "currentRole": "(Current: {{role}})"
+      },
+      "cancel": "Cancel",
+      "submit": {
+        "add": "Add Member",
+        "adding": "Adding...",
+        "save": "Save Changes",
+        "saving": "Saving..."
+      }
+    },
+    "memberPermissions": {
+      "toasts": {
+        "loadFailed": "Failed to load permissions",
+        "updated": "Permissions updated successfully",
+        "updateFailed": "Failed to update permissions"
+      },
+      "loading": "Loading permissions...",
+      "title": "Member Permissions",
+      "reset": "Reset",
+      "save": "Save Changes",
+      "description": "Control what team members can do when they are not team admins.",
+      "columns": {
+        "method": "Method",
+        "endpoint": "Endpoint",
+        "description": "Description",
+        "allowAccess": "Allow Access"
+      },
+      "empty": "No permissions available"
+    },
+    "memberTab": {
+      "budgetSource": {
+        "teamDefault": "Team default",
+        "custom": "Custom"
+      },
+      "unlimited": "Unlimited",
+      "rateLimits": {
+        "none": "No Limits",
+        "rpm": "{{value}} RPM",
+        "tpm": "{{value}} TPM"
+      },
+      "columns": {
+        "modelScope": {
+          "title": "Model Scope",
+          "tooltip": "Models this member can access. Empty means they inherit all team models.",
+          "ariaLabel": "Model scope information",
+          "allTeamModels": "(all team models)",
+          "moreModels_one": "+{{count}} more",
+          "moreModels_other": "+{{count}} more"
+        },
+        "currentPeriodSpend": {
+          "title": "Current Period Spend (USD)",
+          "tooltip": "Spend in this member's current budget period, the value checked against their budget. The Budget Period column shows the dates that period covers, or Never resets. Spend above a rollover cap at reset carries into the next period.",
+          "ariaLabel": "Current period spend information"
+        },
+        "totalSpend": {
+          "title": "Total Spend (USD)",
+          "tooltip": "Cumulative spend by this member within this team, across budget periods. This is a lower bound: lifetime tracking began 2026-04-21, so periods that reset before then are not included. It is never less than Current Period Spend.",
+          "ariaLabel": "Total spend information"
+        },
+        "memberBudget": {
+          "title": "Team Member Budget (USD)",
+          "tooltip": "Team default follows the team's member budget, so changing it in team settings updates this member too. Custom is set on this member only and ignores later team changes.",
+          "ariaLabel": "Team member budget information",
+          "useTeamDefault": "Use team default"
+        },
+        "budgetPeriod": {
+          "title": "Budget Period"
+        },
+        "rateLimits": {
+          "title": "Team Member Rate Limits",
+          "tooltip": "Rate limits for this member's usage within this team.",
+          "ariaLabel": "Team member rate limits information"
+        }
+      },
+      "toasts": {
+        "spendReset": "Team member spend reset to $0",
+        "budgetReset": "Team member budget reset to the team default"
+      },
+      "resetSpendDisabled": {
+        "ownSpend": "Ask a proxy admin to reset your own spend",
+        "noSpend": "No current period spend to reset"
+      },
+      "roleColumn": {
+        "title": "Team Role",
+        "tooltip": "This role applies only to this team and is independent from the user's proxy-level role."
+      },
+      "resetSpendDialog": {
+        "title": "Reset Team Member Spend",
+        "prompt": "Reset current period spend for <strong>{{member}}</strong> in this team to <strong>$0</strong>?",
+        "summary": "Current period spend: <strong>${{amount}}</strong>. This is the value checked against the member's budget. Total spend and logs are preserved.",
+        "summaryWithPeriod": "Current period spend ({{period}}): <strong>${{amount}}</strong>. This is the value checked against the member's budget. Total spend and logs are preserved.",
+        "cancel": "Cancel",
+        "confirm": "Reset"
+      },
+      "resetBudgetDialog": {
+        "title": "Reset Team Member Budget",
+        "prompt": "Remove the custom budget for <strong>{{member}}</strong> and put them back on the team default of <strong>{{budget}}</strong>?",
+        "summary": "Custom budget: <strong>{{budget}}</strong>. Their spend is kept. Future changes to the team's member budget will apply to them again.",
+        "cancel": "Cancel",
+        "confirm": "Use team default"
+      }
+    },
+    "myUserTab": {
+      "infoAriaLabel": "{{label}} information",
+      "unlimited": "Unlimited",
+      "periodWithReset": "{{period}} (resets {{reset}})",
+      "resetsOn": "Resets {{reset}}",
+      "loading": "Loading your membership info…",
+      "loadFailed": "Failed to load your membership info for this team.",
+      "empty": "No membership info available for the current user in this team.",
+      "user": "User",
+      "teamRole": "Team Role",
+      "currentPeriodSpend": {
+        "title": "Current Period Spend (USD)",
+        "ofBudget": "of {{budget}}"
+      },
+      "rateLimits": {
+        "title": "Rate Limits",
+        "tooltip": "Your per-member rate limits within this team.",
+        "tpm": "TPM: {{value}}",
+        "rpm": "RPM: {{value}}"
+      },
+      "totalSpend": {
+        "title": "Total Spend (USD)",
+        "tooltip": "Cumulative spend within this team across budget periods. This is a lower bound: lifetime tracking began 2026-04-21, so periods that reset before then are not included. It is never less than Current Period Spend."
+      },
+      "modelScope": {
+        "title": "Model Scope",
+        "tooltip": "Models you can access within this team.",
+        "allTeamModels": "All Team Models"
+      }
+    },
+    "resetMemberBudgets": {
+      "title": "Reset member budgets?",
+      "description_one": "{{count}} member has a custom budget, so the new team default of ${{budget}} will not apply to that member. Reset it to the default, or keep the custom budget?",
+      "description_other": "{{count}} members have a custom budget, so the new team default of ${{budget}} will not apply to them. Reset them to the default, or keep the custom budgets?",
+      "cancel": "Cancel",
+      "retry": "Retry reset",
+      "keepCustom_one": "Keep custom budget",
+      "keepCustom_other": "Keep custom budgets",
+      "resetTo_one": "Reset to ${{budget}}",
+      "resetTo_other": "Reset all to ${{budget}}",
+      "toasts": {
+        "partiallyReset_one": "Reset {{attempted}} of {{count}} member budget; the rest could not be reset",
+        "partiallyReset_other": "Reset {{attempted}} of {{count}} member budgets; the rest could not be reset",
+        "resetFailed": "Team updated, but member budgets could not be reset",
+        "someFailed_one": "Team updated, but {{count}} member budget could not be reset",
+        "someFailed_other": "Team updated, but {{count}} member budgets could not be reset",
+        "reset_one": "Reset {{count}} member budget to the team default",
+        "reset_other": "Reset {{count}} member budgets to the team default",
+        "teamUpdated": "Team settings updated successfully"
+      }
+    },
+    "page": {
+      "header": {
+        "title": "Teams",
+        "description": "Manage teams, members, and their access to models and budgets",
+        "createTeam": "Create Team"
+      },
+      "tabs": {
+        "yourTeams": "Your Teams",
+        "availableTeams": "Available Teams",
+        "defaultSettings": "Default Team Settings"
+      },
+      "toasts": {
+        "deleted": "Team deleted successfully",
+        "deleteFailed": "Error deleting the team: {{error}}",
+        "creating": "Creating Team",
+        "created": "Team created",
+        "createFailed": "Error creating the team: {{error}}"
+      },
+      "deleteModal": {
+        "title": "Delete Team?",
+        "keysWarning_one": "Warning: This team has {{count}} keys associated with it. Deleting the team will also delete all associated keys, along with any models created for this team. This action is irreversible.",
+        "keysWarning_other": "Warning: This team has {{count}} keys associated with it. Deleting the team will also delete all associated keys, along with any models created for this team. This action is irreversible.",
+        "message": "Are you sure you want to delete this team, all its keys, and any models created for it? This action cannot be undone.",
+        "informationTitle": "Team Information",
+        "teamId": "Team ID",
+        "teamName": "Team Name",
+        "keys": "Keys",
+        "members": "Members"
+      },
+      "create": {
+        "title": "Create Team",
+        "submit": "Create Team",
+        "errors": {
+          "teamNameRequired": "Please input a team name",
+          "organizationNotPickable": "You can no longer create teams in this organization"
+        },
+        "sections": {
+          "additional": "Additional Settings",
+          "mcp": "MCP Settings",
+          "agent": "Agent Settings",
+          "searchTool": "Search Tool Settings",
+          "skill": "Skill Settings",
+          "logging": "Logging Settings",
+          "router": "Router Settings",
+          "modelAliases": "Model Aliases"
+        },
+        "fields": {
+          "teamName": "Team Name",
+          "organization": {
+            "label": "Organization",
+            "hint": "Organizations can have multiple teams. Learn more about the user management hierarchy",
+            "singleOrgDescription": "You can only create teams within this organization",
+            "requiredDescription": "required",
+            "noOrganizations": "No organizations available",
+            "placeholder": "Search or select an Organization",
+            "selectPrompt": "Please select an organization to create a team for. You can only create teams within organizations where you are an admin."
+          },
+          "models": {
+            "label": "Models",
+            "hint": "These are the models that your selected team has access to. Leave empty to grant no models directly, e.g. when the team gets its models from access groups"
+          },
+          "maxBudget": "Max Budget (USD)",
+          "budgetDuration": {
+            "label": "Reset Budget",
+            "defaultPlaceholder": "Default: {{label}} ({{duration}})"
+          },
+          "modelMaxBudgetHint": "Cap this team's spend on individual models, each with its own reset window. Every key on the team shares the cap unless the key sets its own budget for that model.",
+          "tpmLimit": "Tokens per minute Limit (TPM)",
+          "rpmLimit": "Requests per minute Limit (RPM)",
+          "tpdLimit": {
+            "label": "Tokens per day Limit (TPD)",
+            "hint": "Daily token budget for batch submissions (/v1/batches). When set, batch input files are charged against this 24h window instead of the team's TPM/RPM limits. Online requests keep using TPM/RPM."
+          },
+          "metadata": {
+            "label": "Metadata",
+            "description": "Values are saved as text. Enter JSON for typed values, e.g. 3, true, or {{example}}."
+          },
+          "teamId": {
+            "label": "Team ID",
+            "description": "ID of the team you want to create. If not provided, it will be generated automatically."
+          },
+          "teamMemberBudget": {
+            "label": "Team Member Budget (USD)",
+            "hint": "This is the individual budget for a user in the team."
+          },
+          "teamMemberModelMaxBudget": {
+            "label": "Default Per-Model Budget",
+            "hint": "Set a default per-model spend cap for each team member, with an independent reset window."
+          },
+          "teamMemberKeyDuration": {
+            "label": "Team Member Key Duration (eg: 1d, 1mo)",
+            "hint": "Set a limit to the duration of a team member's key. Format: 30s (seconds), 30m (minutes), 30h (hours), 30d (days), 1mo (month)",
+            "placeholder": "e.g., 30d"
+          },
+          "teamMemberRpmLimit": {
+            "label": "Team Member RPM Limit",
+            "hint": "The RPM (Requests Per Minute) limit for individual team members"
+          },
+          "teamMemberTpmLimit": {
+            "label": "Team Member TPM Limit",
+            "hint": "The TPM (Tokens Per Minute) limit for individual team members"
+          },
+          "secretManagerSettings": {
+            "label": "Secret Manager Settings",
+            "premiumDescription": "Enter secret manager configuration as a JSON object.",
+            "upgradeDescription": "Premium feature - Upgrade to manage secret manager settings."
+          },
+          "guardrails": {
+            "label": "Guardrails",
+            "hint": "Setup your first guardrail",
+            "description": "Select existing guardrails or enter new ones",
+            "placeholder": "Select or enter guardrails"
+          },
+          "disableGlobalGuardrails": {
+            "label": "Disable Global Guardrails",
+            "hint": "When enabled, this team will bypass any guardrails configured to run on every request (global guardrails)",
+            "premiumDescription": "Bypass global guardrails for this team",
+            "upgradeDescription": "Premium feature - Upgrade to disable global guardrails by team"
+          },
+          "requireTraceId": {
+            "label": "Require Trace ID",
+            "hint": "Reject LLM, MCP and agent requests from this team that do not send a trace ID (x-litellm-trace-id header, LLM requests can also use traceparent or metadata.trace_id)"
+          },
+          "policies": {
+            "label": "Policies",
+            "hint": "Apply policies to this team to control guardrails and other settings",
+            "description": "Select existing policies or enter new ones",
+            "placeholder": "Select or enter policies"
+          },
+          "accessGroups": {
+            "label": "Access Groups",
+            "hint": "Assign access groups to this team. Access groups control which models, MCP servers, and agents this team can use",
+            "description": "Select access groups to assign to this team",
+            "placeholder": "Select access groups (optional)"
+          },
+          "vectorStores": {
+            "label": "Allowed Vector Stores",
+            "hint": "Select which vector stores this team can access by default. Leave empty for access to all vector stores",
+            "description": "Select vector stores this team can access. Leave empty for access to all vector stores",
+            "placeholder": "Select vector stores (optional)"
+          },
+          "passThroughRoutes": {
+            "label": "Allowed Pass Through Routes",
+            "upgradeHint": "Premium feature - Upgrade to set allowed pass through routes",
+            "proxyAdminOnlyHint": "Only proxy admins can set allowed pass through routes",
+            "placeholder": "Select pass through routes (optional)"
+          },
+          "mcpServers": {
+            "label": "Allowed MCP Servers",
+            "hint": "Select which MCP servers or access groups this team can access",
+            "description": "Select MCP servers or access groups this team can access",
+            "placeholder": "Select MCP servers or access groups (optional)"
+          },
+          "agents": {
+            "label": "Allowed Agents",
+            "hint": "Select which agents or access groups this team can access",
+            "description": "Select agents or access groups this team can access",
+            "placeholder": "Select agents or access groups (optional)"
+          },
+          "searchTools": {
+            "label": "Allowed Search Tools",
+            "hint": "Select which search tools this team can access. Leave empty to allow all search tools.",
+            "description": "Restrict which configured search tools keys on this team may call.",
+            "placeholder": "Select search tools (optional, empty = all allowed)"
+          },
+          "skills": {
+            "label": "Allowed Skills",
+            "hint": "Enabled skills are visible to every team. Grant disabled (private) Claude Code plugins to this team here.",
+            "description": "Private skills keys on this team may see in the Claude Code marketplace.",
+            "placeholder": "Select skills (optional)"
+          },
+          "modelAliasesDescription": "Create custom aliases for models that can be used by team members in API calls. This allows you to create shortcuts for specific models."
+        }
+      }
+    },
+    "ssoSettings": {
+      "notSet": "Not set",
+      "toasts": {
+        "fetchFailed": "Failed to fetch team settings",
+        "updated": "Default team settings updated successfully",
+        "updateFailed": "Failed to update team settings"
+      },
+      "loading": "Loading default team settings",
+      "noAccess": "No team settings available or you do not have permission to view them.",
+      "title": "Default Team Settings",
+      "description": "These settings will be applied by default when creating new teams.",
+      "actions": {
+        "cancel": "Cancel",
+        "save": "Save Changes",
+        "edit": "Edit Settings"
+      },
+      "sections": {
+        "budget": "Budget & Rate Limits",
+        "access": "Access & Permissions"
+      },
+      "fields": {
+        "maxBudget": {
+          "label": "Max Budget",
+          "description": "Maximum budget (in USD) for new automatically created teams."
+        },
+        "budgetDuration": {
+          "label": "Budget Duration",
+          "description": "How frequently the team's budget resets."
+        },
+        "tpmLimit": {
+          "label": "TPM Limit",
+          "description": "Maximum tokens per minute allowed across all models."
+        },
+        "rpmLimit": {
+          "label": "RPM Limit",
+          "description": "Maximum requests per minute allowed across all models."
+        },
+        "organization": {
+          "label": "Default Organization",
+          "description": "Teams created without an explicit organization are assigned to this organization.",
+          "placeholder": "Select an organization"
+        },
+        "models": {
+          "label": "Models",
+          "description": "Default list of models that new teams can access."
+        },
+        "permissions": {
+          "label": "Team Member Permissions",
+          "description": "Default permissions granted to members of newly created teams. /key/info and /key/health are always included.",
+          "placeholder": "Select permissions"
+        }
+      }
+    },
+    "table": {
+      "loading": "Loading teams...",
+      "empty": "No teams found",
+      "searchPlaceholder": "Search teams by name or ID…",
+      "exporting": "Exporting...",
+      "exportCsv": "Export CSV",
+      "filters": {
+        "title": "Filters",
+        "description": "Narrow down your teams",
+        "organization": "Organization",
+        "organizationPlaceholder": "Select an organization…",
+        "organizationEmpty": "No organizations found",
+        "teamAlias": "Team alias",
+        "teamAliasPlaceholder": "Enter team alias…",
+        "teamId": "Team ID",
+        "teamIdPlaceholder": "Enter team ID…"
+      },
+      "columns": {
+        "team": "Team",
+        "organization": "Organization",
+        "resources": "Resources",
+        "members": "Members",
+        "models": "Models",
+        "keys": "Keys",
+        "spendBudget": "Spend / Budget",
+        "spend": "Spend",
+        "budget": "Budget",
+        "created": "Created",
+        "rateLimits": "Rate Limits",
+        "tpm": "TPM",
+        "rpm": "RPM",
+        "updated": "Updated",
+        "actions": "Actions"
+      },
+      "resourceCounts": {
+        "members_one": "{{count}} members",
+        "members_other": "{{count}} members",
+        "models_one": "{{count}} models",
+        "models_other": "{{count}} models",
+        "keys_one": "{{count}} keys",
+        "keys_other": "{{count}} keys"
+      },
+      "unlimited": "Unlimited",
+      "never": "Never",
+      "actions": {
+        "open": "Open team actions",
+        "edit": "Edit team",
+        "copyId": "Copy team ID",
+        "copied": "Team ID copied",
+        "delete": "Delete team"
+      }
+    },
+    "memberSpendBudgetCell": {
+      "team": "Team",
+      "mySpend": "My Spend",
+      "unlimited": "Unlimited",
+      "meterValueText": "{{label}} {{spend}} of {{budget}}",
+      "resets": "Resets {{date}} UTC"
+    },
+    "availableTeams": {
+      "panel": {
+        "toasts": {
+          "joined": "Successfully joined team",
+          "joinFailed": "Failed to join team"
+        }
+      },
+      "table": {
+        "loading": "Loading available teams…",
+        "emptyTitle": "No available teams to join",
+        "emptyDocs": "See how to set available teams <docs>here</docs>"
+      },
+      "columns": {
+        "teamName": "Team Name",
+        "description": "Description",
+        "noDescription": "No description available",
+        "members": "Members",
+        "membersCount_one": "{{count}} members",
+        "membersCount_other": "{{count}} members",
+        "models": "Models",
+        "actions": "Actions",
+        "openActions": "Open team actions",
+        "join": "Join team"
+      }
+    },
+    "loggingSettings": {
+      "callbackTypes": {
+        "success": "Success Only",
+        "failure": "Failure Only",
+        "successAndFailure": "Success & Failure"
+      },
+      "password": {
+        "hide": "Hide password",
+        "show": "Show password"
+      },
+      "selectParam": "Select {{label}}",
+      "integrationParameters": "Integration Parameters",
+      "badges": {
+        "sensitive": "Sensitive",
+        "number": "Number"
+      },
+      "numberHint": "Value must be between 0 and 1",
+      "disabledCallbacks": {
+        "title": "Disabled Callbacks",
+        "tooltip": "Select callbacks to disable for this key. Disabled callbacks will not receive any logging data.",
+        "label": "Disabled Callbacks",
+        "placeholder": "Select callbacks to disable",
+        "help": "Select callbacks that should be disabled for this key. These callbacks will not receive any logging data."
+      },
+      "integrations": {
+        "title": "Logging Integrations",
+        "tooltip": "Configure callback logging integrations for this team.",
+        "add": "Add Integration"
+      },
+      "card": {
+        "title": "{{name}} Configuration",
+        "newIntegration": "New Integration",
+        "remove": "Remove",
+        "integrationType": "Integration Type",
+        "integrationTypePlaceholder": "Select integration",
+        "eventType": "Event Type"
+      },
+      "empty": {
+        "title": "No logging integrations configured",
+        "description": "Click \"Add Integration\" to configure logging for this team"
+      }
+    },
+    "guardrailsSelect": {
+      "placeholder": "Select guardrails",
+      "empty": "No guardrails found",
+      "groups": {
+        "global": "Global",
+        "other": "Other"
+      },
+      "globalChip": "Global guardrail"
+    },
+    "modelAccess": {
+      "groups_one": "access group {{names}}",
+      "groups_other": "access groups {{names}}",
+      "anAccessGroup": "an access group",
+      "allProxy": {
+        "label": "All proxy models",
+        "sentinelTooltip": "Granted by the All Proxy Models entry in the team's model list",
+        "emptyListTooltip": "The team's model list is empty, so it can access every model on the proxy"
+      },
+      "noDefault": {
+        "label": "No default models",
+        "tooltip": "No models are granted directly. Access comes only from access groups"
+      },
+      "direct": {
+        "tooltip": "Granted directly in the team's model list",
+        "alsoViaGroupsTooltip": "Granted directly in the team's model list, and also via {{groups}}"
+      },
+      "viaGroupsTooltip": "Granted via {{groups}}"
+    },
+    "adminEditAccess": {
+      "fieldLabels": {
+        "tpmLimit": "Tokens per minute Limit (TPM)",
+        "rpmLimit": "Requests per minute Limit (RPM)",
+        "maxBudget": "Max Budget (USD)",
+        "metadata": "Team Metadata",
+        "softBudget": "Soft Budget (USD)",
+        "teamMemberBudget": "Member Default Budget (USD)",
+        "teamMemberBudgetDuration": "Member Default Budget Duration",
+        "teamMemberTpmLimit": "Member Default TPM Limit",
+        "teamMemberRpmLimit": "Member Default RPM Limit",
+        "raiseMaxBudget": "Raise the team's max budget",
+        "projects": "Create and update projects",
+        "memberKeyBudgets": "Update budgets on team members' keys",
+        "createMemberKeys": "Create keys for team members"
+      },
+      "metadataIssues": {
+        "proxyControlledKey": "Only proxy admins can set this key",
+        "cannotBeEmpty": "This field cannot be left empty"
+      }
+    }
+  },
+  "memberTable": {
+    "memberCount_one": "{{count}} Member",
+    "memberCount_other": "{{count}} Members",
+    "columns": {
+      "name": "Name",
+      "userEmail": "User Email",
+      "userId": "User ID",
+      "role": "Role",
+      "actions": "Actions"
+    },
+    "defaultProxyAdmin": "Default Proxy Admin",
+    "actions": {
+      "edit": "Edit member",
+      "delete": "Delete member",
+      "resetSpend": "Reset spend"
+    },
+    "filters": {
+      "title": "Filters",
+      "description": "Narrow down members",
+      "allRoles": "All Roles"
+    },
+    "searchPlaceholder": "Search by name, email, or user ID",
+    "noMatches": "No members match your search or filters",
+    "noData": "No data",
+    "addMember": "Add Member"
+  },
+  "userSearchModal": {
+    "defaultTitle": "Add Team Member",
+    "defaultRoles": {
+      "adminDescription": "Admin role. Can create team keys, add members, and manage settings.",
+      "userDescription": "User role. Can view team info, but not manage it."
+    },
+    "search": {
+      "noResults": "No results",
+      "loading": "Loading..."
+    },
+    "existingUsersNotice": "Search selects from users that already exist. To add someone new, ask a proxy admin to create their account first.",
+    "fields": {
+      "email": "Email",
+      "emailPlaceholder": "Search by email",
+      "or": "OR",
+      "userId": "User ID",
+      "userIdPlaceholder": "Search by user ID",
+      "role": "Member Role"
+    },
+    "submit": {
+      "adding": "Adding...",
+      "add": "Add Member"
+    }
+  },
+  "modelSelect": {
+    "specialOptions": {
+      "allProxyModels": "All Proxy Models",
+      "noDefaultModels": "No Default Models"
+    },
+    "groups": {
+      "unavailable": "Unavailable",
+      "special": "Special Options",
+      "wildcard": "Wildcard Options",
+      "models": "Models"
+    },
+    "wildcardOption": "All {{provider}} models",
+    "moreSelected_one": "+{{count}} more",
+    "moreSelected_other": "+{{count}} more",
+    "placeholder": "Select Models",
+    "empty": "No models found"
+  },
+  "budgetSchedule": {
+    "coverageWithPeriod": "Current Period Spend covers {{period}} and resets every {{duration}}.",
+    "coverageWithoutPeriod": "Current Period Spend resets on a schedule.",
+    "scheduledTooltip": "{{coverage}} Next reset {{label}} ({{timeZone}}). {{rolloverNote}}",
+    "rolloverNote": "Spend above a rollover cap at reset carries into the next period.",
+    "neverResets": {
+      "label": "Never resets",
+      "tooltip": "This budget has no reset window, so this is lifetime spend for as long as the membership exists."
+    },
+    "unscheduled": {
+      "label": "Unknown",
+      "tooltip": "Resets every {{duration}}, but the next reset time has not been scheduled yet. {{rolloverNote}}"
+    }
+  },
+  "users": {
+    "bulkCreate": {
+      "openButton": "+ Bulk Invite Users",
+      "title": "Bulk Invite Users",
+      "steps": {
+        "download": "Download and fill the template",
+        "upload": "Upload your completed CSV",
+        "results": "User Creation Results",
+        "review": "Review and create users"
+      },
+      "instructions": {
+        "intro": "Add multiple users at once by following these steps:",
+        "downloadTemplate": "Download our CSV template",
+        "addUsers": "Add your users' information to the spreadsheet",
+        "saveAndUpload": "Save the file and upload it here",
+        "downloadResults": "After creation, download the results file containing the Virtual Keys for each user"
+      },
+      "templateColumns": {
+        "title": "Template Column Names",
+        "email": "User's email address (required)",
+        "role": "User's role (one of: \"proxy_admin\", \"proxy_admin_viewer\", \"internal_user\", \"internal_user_viewer\")",
+        "teams": "Comma-separated team IDs (e.g., \"team-1,team-2\")",
+        "maxBudget": "Maximum budget as a number (e.g., \"100\")",
+        "budgetDuration": "Budget reset period (e.g., \"30d\", \"1mo\")",
+        "models": "Comma-separated allowed models (e.g., \"gpt-3.5-turbo,gpt-4\")"
+      },
+      "downloadTemplate": "Download CSV Template",
+      "upload": {
+        "fileMeta": "{{size}} KB • {{date}}",
+        "remove": "Remove",
+        "processing": "Processing...",
+        "dropHere": "Drag and drop your CSV file here",
+        "or": "or",
+        "browse": "Browse files",
+        "csvOnly": "Only CSV files (.csv) are supported",
+        "structureErrorTitle": "CSV Structure Error",
+        "structureErrorHint": "Please download our template and ensure your CSV follows the required format."
+      },
+      "errors": {
+        "invalidFileType": "Invalid file type: {{name}}. Please upload a CSV file (.csv extension).",
+        "invalidFileTypeToast": "Invalid file type. Please upload a CSV file.",
+        "fileTooLarge": "File is too large ({{size}} MB). Please upload a CSV file smaller than 5MB.",
+        "emptyFile": "The CSV file appears to be empty. Please upload a file with data.",
+        "headersOnly": "The CSV file only contains headers but no user data. Please add user data to your CSV.",
+        "noHeaders": "The CSV file doesn't contain any column headers. Please make sure your CSV has headers.",
+        "missingColumns": "Your CSV is missing these required columns: {{columns}}. Please add these columns to your CSV file.",
+        "fewerColumns": "Row {{row}} has fewer columns than the header row. Please ensure all data is properly formatted.",
+        "noDataRows": "No valid data rows found in the CSV file. Please check your file format.",
+        "noValidUsers": "No valid users found in the CSV. Please check the errors below and fix your CSV file.",
+        "rowsWithErrors_one": "Found {{count}} row(s) with errors out of {{total}} total rows. Please correct them before proceeding.",
+        "rowsWithErrors_other": "Found {{count}} row(s) with errors out of {{total}} total rows. Please correct them before proceeding.",
+        "unknown": "Unknown error",
+        "parseFailed": "Error parsing CSV: {{message}}",
+        "readFailed": "Failed to parse CSV file: {{message}}",
+        "inviteLinkFailed": "User created but failed to generate invitation link",
+        "createFailed": "Failed to create user"
+      },
+      "validation": {
+        "emailRequired": "Email is required",
+        "emailInvalid": "Invalid email format (must contain @ and domain)",
+        "roleRequired": "Role is required",
+        "roleInvalid": "Invalid role \"{{role}}\". Must be one of: {{roles}}",
+        "budgetNotNumber": "Max budget \"{{budget}}\" must be a number",
+        "budgetNotPositive": "Max budget must be greater than 0",
+        "durationInvalid": "Invalid budget duration format \"{{duration}}\". Use format like \"30d\", \"1mo\", \"2w\", \"6h\"",
+        "unknownTeams": "Unknown team(s): {{teams}}"
+      },
+      "toasts": {
+        "parsed_one": "Successfully parsed {{count}} users",
+        "parsed_other": "Successfully parsed {{count}} users",
+        "linkCopied": "Invitation link copied!"
+      },
+      "status": {
+        "invalid": "Invalid",
+        "pending": "Pending",
+        "success": "Success",
+        "failed": "Failed",
+        "copy": "Copy"
+      },
+      "preview": {
+        "errorTips": {
+          "checkTable": "Check the table below for specific errors in each row",
+          "commonIssues": "Common issues include invalid email formats, missing required fields, or incorrect role values",
+          "fixAndReupload": "Fix these issues in your CSV file and upload again"
+        },
+        "creationSummary": "Creation Summary",
+        "successful_one": "{{count}} Successful",
+        "successful_other": "{{count}} Successful",
+        "failed_one": "{{count}} Failed",
+        "failed_other": "{{count}} Failed",
+        "userPreview": "User Preview",
+        "validCount_one": "{{valid}} of {{count}} users valid",
+        "validCount_other": "{{valid}} of {{count}} users valid",
+        "back": "Back",
+        "creating": "Creating...",
+        "create_one": "Create {{count}} Users",
+        "create_other": "Create {{count}} Users",
+        "completeTitle": "User creation complete",
+        "nextStep": "<emphasis>Next step:</emphasis> Download the credentials file containing Virtual Keys and invitation links. Users will need these Virtual Keys to make LLM requests through LiteLLM.",
+        "table": {
+          "row": "Row",
+          "email": "Email",
+          "role": "Role",
+          "teams": "Teams",
+          "budget": "Budget",
+          "status": "Status"
+        },
+        "page": "Page {{page}} of {{pageCount}}",
+        "previous": "Previous",
+        "next": "Next",
+        "startNew": "Start New Bulk Import",
+        "downloadCredentials": "Download User Credentials"
+      }
+    },
+    "createUser": {
+      "openButton": "+ Invite User",
+      "title": "Invite User",
+      "subtitle": "Create a User who can own keys",
+      "emailNotice": {
+        "title": "Email invitations",
+        "body": "New users receive an email invite only when an email integration (SMTP, Resend, or SendGrid) is configured.",
+        "docsLink": "Learn how to set up email notifications"
+      },
+      "fields": {
+        "userEmail": "User Email",
+        "userRole": "User Role",
+        "globalRole": "Global Proxy Role",
+        "globalRoleHint": "This role is independent of any team/org specific roles. Configure Team / Organization Admins in the Settings",
+        "team": "Team",
+        "teamDescription": "If selected, user will be added as a 'user' role to the team.",
+        "organization": "Organization",
+        "organizationDescription": "The user will be added to the selected organization(s).",
+        "organizationPlaceholder": "Select Organization",
+        "metadata": "Metadata",
+        "metadataPlaceholder": "Enter metadata as JSON",
+        "sendInviteEmail": "Send invitation email",
+        "personalKeyCreation": "Personal Key Creation",
+        "models": "Models",
+        "modelsHint": "Models user has access to, outside of team scope.",
+        "modelsDescription": "Models user has access to, outside of team scope.",
+        "modelsPlaceholder": "Select models",
+        "allProxyModels": "All Proxy Models",
+        "noDefaultModels": "No Default Models"
+      },
+      "createButton": "Create User",
+      "submitButton": "Invite User",
+      "toasts": {
+        "makingApiCall": "Making API Call",
+        "created": "API user Created",
+        "createFailed": "Error creating the user"
+      }
+    },
+    "bulkEdit": {
+      "title_one": "Bulk Edit {{count}} User(s)",
+      "title_other": "Bulk Edit {{count}} User(s)",
+      "titleAll": "Bulk Edit All Users",
+      "updateAll": "Update ALL users in the system",
+      "updateAllWarning": "⚠️ This will apply changes to ALL users in the system, not just the selected ones.",
+      "selectedUsers": "Selected Users ({{count}}):",
+      "table": {
+        "userId": "User ID",
+        "email": "Email",
+        "currentRole": "Current Role",
+        "budget": "Budget",
+        "noEmail": "No email",
+        "unlimited": "Unlimited"
+      },
+      "instructions": "<strong>Instructions:</strong> Fill in the fields below with the values you want to apply to all selected users. You can bulk edit: role, budget, models, and metadata. You can also add users to teams.",
+      "teamManagement": {
+        "title": "Team Management",
+        "addToTeams": "Add selected users to teams",
+        "selectTeams": "Select Teams:",
+        "selectTeamsPlaceholder": "Select teams to add users to",
+        "teamBudget": "Team Budget (Optional):",
+        "teamBudgetPlaceholder": "Max budget per user in team",
+        "teamBudgetHint": "Leave empty for unlimited budget within team limits",
+        "defaultRoleNote": "Users will be added with \"user\" role by default. All users will be added to each selected team."
+      },
+      "updating_one": "Updating {{count}} user(s)...",
+      "updating_other": "Updating {{count}} user(s)...",
+      "updatingAll": "Updating all users user(s)...",
+      "toasts": {
+        "noAccessToken": "Access token not found",
+        "nothingToUpdate": "Please modify at least one field or select teams to add users to",
+        "updatedAll": "Updated all users ({{total}} total)",
+        "updated_one": "Updated {{count}} user(s)",
+        "updated_other": "Updated {{count}} user(s)",
+        "addedToTeams_one": "Added users to {{count}} team(s) ({{additions}} total additions)",
+        "addedToTeams_other": "Added users to {{count}} team(s) ({{additions}} total additions)",
+        "teamAddFailed_one": "Failed to add users to {{count}} team(s)",
+        "teamAddFailed_other": "Failed to add users to {{count}} team(s)",
+        "bulkFailed": "Failed to perform bulk operations"
+      }
+    },
+    "defaultSettings": {
+      "card": {
+        "title": "Default User Settings",
+        "description": "Applied to every new internal user created through SSO or the user management APIs."
+      },
+      "loadError": "Could not load the default user settings.",
+      "editSettings": "Edit Settings",
+      "budgetDurations": {
+        "noReset": "No reset",
+        "hourly": "hourly",
+        "daily": "daily",
+        "weekly": "weekly",
+        "monthly": "monthly"
+      },
+      "teamRoles": {
+        "user": "User",
+        "admin": "Admin"
+      },
+      "fields": {
+        "role": "Default Role",
+        "roleDescription": "Role assigned to new users",
+        "rolePlaceholder": "Not set",
+        "maxBudget": "Max Budget (USD)",
+        "maxBudgetDescription": "Default maximum budget for new users",
+        "resetBudget": "Reset Budget",
+        "resetBudgetDescription": "How often the default budget resets",
+        "models": "Default Models",
+        "modelsDescription": "Models new users can access",
+        "teams": "Default Teams"
+      },
+      "teams": {
+        "description": "New users are added to these teams. Only teams that already exist can be selected.",
+        "rowTitle": "Team {{number}}",
+        "remove": "Remove",
+        "team": "Team",
+        "teamPlaceholder": "Search a team",
+        "teamEmpty": "No teams found",
+        "maxBudget": "Max Budget in Team (USD)",
+        "maxBudgetPlaceholder": "Optional",
+        "role": "Team Role",
+        "add": "Add Team"
+      },
+      "view": {
+        "notSet": "Not set",
+        "none": "None",
+        "teamMaxBudget": "${{budget}} max budget"
+      },
+      "cancel": "Cancel",
+      "saving": "Saving...",
+      "save": "Save Changes",
+      "toasts": {
+        "updated": "Default user settings updated successfully",
+        "updateFailed": "Failed to update default user settings"
+      },
+      "errors": {
+        "nonNegative": "Must be a non-negative number",
+        "selectTeam": "Select a team",
+        "duplicateTeam": "This team is already listed"
+      }
+    },
+    "page": {
+      "toasts": {
+        "accessTokenMissing": "Access token not found",
+        "generatingResetLink": "Generating password reset link...",
+        "resetLinkFailed": "Failed to generate password reset link",
+        "deleted": "User deleted successfully",
+        "deleteFailed": "Failed to delete user"
+      },
+      "selection": {
+        "cancel": "Cancel Selection",
+        "start": "Select Users",
+        "bulkEdit_one": "Bulk Edit ({{count}} selected)",
+        "bulkEdit_other": "Bulk Edit ({{count}} selected)"
+      },
+      "tabs": {
+        "users": "Users",
+        "defaultSettings": "Default User Settings"
+      },
+      "defaultSettingsLoading": "Loading default user settings",
+      "deleteModal": {
+        "title": "Delete User?",
+        "message": "Are you sure you want to delete this user? This action cannot be undone.",
+        "informationTitle": "User Information",
+        "email": "Email",
+        "userId": "User ID",
+        "globalProxyRole": "Global Proxy Role",
+        "totalSpend": "Total Spend (USD)"
+      }
+    },
+    "table": {
+      "emptyState": {
+        "title": "No users found",
+        "description": "Try adjusting your search or filters."
+      },
+      "loading": "Loading users…",
+      "searchPlaceholder": "Search by email or ID…",
+      "filters": {
+        "title": "Filters",
+        "description": "Narrow down your users",
+        "userId": "User ID",
+        "ssoId": "SSO ID",
+        "role": "Role",
+        "team": "Team",
+        "userIdPlaceholder": "Enter user ID…",
+        "ssoIdPlaceholder": "Enter SSO ID…",
+        "rolePlaceholder": "Select a role…",
+        "roleEmpty": "No roles found",
+        "teamPlaceholder": "Select a team…",
+        "teamEmpty": "No teams found"
+      },
+      "columns": {
+        "userId": "User ID",
+        "email": "Email",
+        "status": "Status",
+        "globalProxyRole": "Global Proxy Role",
+        "userAlias": "User Alias",
+        "spend": "Spend (USD)",
+        "budget": "Budget (USD)",
+        "ssoId": "SSO ID",
+        "virtualKeys": "Virtual Keys",
+        "createdAt": "Created At",
+        "updatedAt": "Updated At",
+        "actions": "Actions"
+      },
+      "status": {
+        "active": "Active",
+        "inactive": "Inactive",
+        "scimInactiveHint": "Deactivated via SCIM (external identity provider). The user's virtual keys are blocked."
+      },
+      "ssoIdHint": "SSO ID is the ID of the user in the SSO provider. If the user is not using SSO, this will be null.",
+      "ssoIdHintLabel": "About SSO ID",
+      "unlimitedBudget": "Unlimited",
+      "keyCount_one": "Key",
+      "keyCount_other": "Keys",
+      "noKeys": "No Keys",
+      "selectRow": "Select {{user}}",
+      "rowActions": {
+        "open": "Open user actions",
+        "edit": "Edit user",
+        "resetPassword": "Reset password",
+        "copyId": "Copy user ID",
+        "copied": "User ID copied",
+        "viewUsage": "View usage",
+        "delete": "Delete user"
+      }
+    },
+    "userInfo": {
+      "memberRoles": {
+        "userHint": "Can view team info, but not manage it",
+        "adminHint": "Can create team keys, add members, and manage settings"
+      },
+      "toasts": {
+        "fetchFailed": "Failed to fetch user data",
+        "addedToTeam": "User added to team successfully",
+        "addToTeamFailed": "Failed to add user to team",
+        "removedFromTeam": "User removed from team successfully",
+        "removeFromTeamFailed": "Failed to remove user from team",
+        "accessTokenMissing": "Access token not found",
+        "generatingResetLink": "Generating password reset link...",
+        "resetLinkFailed": "Failed to generate password reset link",
+        "deleted": "User deleted successfully",
+        "deleteFailed": "Failed to delete user",
+        "updated": "User updated successfully",
+        "updateFailed": "Failed to update user"
+      },
+      "backToUsers": "Back to Users",
+      "loading": "Loading user data...",
+      "notFound": "User not found",
+      "fallbackTitle": "User",
+      "personalModels": "Personal Models",
+      "allProxyModels": "All proxy models",
+      "unlimited": "Unlimited",
+      "actions": {
+        "resetPassword": "Reset Password",
+        "deleteUser": "Delete User"
+      },
+      "deleteModal": {
+        "title": "Delete User?",
+        "message": "Are you sure you want to delete this user? This action cannot be undone.",
+        "informationTitle": "User Information",
+        "email": "Email",
+        "userId": "User ID",
+        "globalProxyRole": "Global Proxy Role",
+        "totalSpend": "Total Spend (USD)"
+      },
+      "tabs": {
+        "overview": "Overview",
+        "details": "Details",
+        "savings": "Savings",
+        "autoRouterUsage": "Auto-router usage"
+      },
+      "overview": {
+        "spend": "Spend",
+        "budgetOf": "of {{budget}}",
+        "teams": "Teams",
+        "addTeam": "Add Team",
+        "teamName": "Team Name",
+        "actions": "Actions",
+        "removeFromTeam": "Remove from {{team}}",
+        "noTeams": "No teams",
+        "moreTeams_one": "+{{count}} more",
+        "moreTeams_other": "+{{count}} more",
+        "showLess": "Show Less"
+      },
+      "details": {
+        "title": "User Settings",
+        "editSettings": "Edit Settings",
+        "userId": "User ID",
+        "email": "Email",
+        "userAlias": "User Alias",
+        "globalProxyRole": "Global Proxy Role",
+        "created": "Created",
+        "lastUpdated": "Last Updated",
+        "maxBudget": "Max Budget",
+        "budgetReset": "Budget Reset",
+        "metadata": "Metadata",
+        "mcpPermissions": "MCP Permissions",
+        "notSet": "Not Set",
+        "unknown": "Unknown"
+      },
+      "savings": {
+        "scopeNote": "Savings for this user across API keys and JWT-authenticated requests.",
+        "unavailable": "Savings are unavailable because this user has no ID."
+      },
+      "autoRouter": {
+        "unavailable": "Auto-router usage is unavailable because this user has no ID."
+      },
+      "removeTeamModal": {
+        "title": "Remove from Team",
+        "alert": "Removing this user from the team will also delete any keys the user created for this team.",
+        "message": "Are you sure you want to remove this user from the team? This action cannot be undone.",
+        "informationTitle": "Team Membership",
+        "team": "Team",
+        "userId": "User ID",
+        "email": "Email"
+      },
+      "addTeamDialog": {
+        "title": "Add User to Team",
+        "team": "Team",
+        "teamPlaceholder": "Select a team",
+        "noTeams": "No teams found",
+        "memberRole": "Member Role",
+        "submit": "Add to Team",
+        "submitting": "Adding..."
+      }
+    },
+    "editView": {
+      "errors": {
+        "rateLimit": "Enter a non-negative whole number, or leave empty for unlimited",
+        "budgetRequired": "Please enter a budget or select Unlimited Budget"
+      },
+      "modelOptions": {
+        "allProxyModels": "All Proxy Models",
+        "noDefaultModels": "No Default Models"
+      },
+      "fields": {
+        "userId": "User ID",
+        "email": "Email",
+        "userAlias": "User Alias",
+        "globalProxyRole": "Global Proxy Role",
+        "globalProxyRoleHint": "This is the role that the user will globally on the proxy. This role is independent of any team/org specific roles.",
+        "personalModels": "Personal Models",
+        "personalModelsHint": "Select which models this user can access outside of team-scope. Choose 'All Proxy Models' to grant access to all models available on the proxy.",
+        "modelsPlaceholder": "Select models",
+        "maxBudget": "Max Budget (USD)",
+        "unlimitedBudget": "Unlimited Budget",
+        "maxBudgetPlaceholder": "Enter a numerical value",
+        "resetBudget": "Reset Budget",
+        "noChange": "No change",
+        "tpmLimit": "TPM Limit",
+        "rpmLimit": "RPM Limit",
+        "rateLimitHint": "Applies across all keys owned by this user. Team and key limits still apply as ceilings.",
+        "rateLimitPlaceholder": "Unlimited",
+        "modelMaxBudgetHint": "Cap this user's spend on individual models, each with its own reset window. Applies across every key the user holds.",
+        "metadata": "Metadata",
+        "metadataPlaceholder": "Enter metadata as JSON",
+        "mcpServers": "MCP Servers / Access Groups",
+        "mcpServersHint": "Caps which MCP servers, access groups, and tools this user may reach. Every key the user holds is limited to this set.",
+        "mcpServersPlaceholder": "Select MCP servers or access groups (optional)"
+      },
+      "actions": {
+        "cancel": "Cancel",
+        "save": "Save Changes"
+      }
+    }
   }
 }
