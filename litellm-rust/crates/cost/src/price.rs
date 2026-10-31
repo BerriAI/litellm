@@ -34,8 +34,8 @@ pub struct When {
     pub band: Band,
 }
 
-/// Billing route. `Batch` and `Decisions` come from the `_batches` and `_decisions` suffixes and follow their own
-/// Python billing rules, so they are never service tiers
+/// The route whose price list a call reads, from the `_batches` and `_decisions` suffixes. Not part of `When`,
+/// since a missing batch price is half the online rate and a missing decisions price is the full online rate
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Channel {
     #[default]

@@ -18,13 +18,18 @@ Every price in a row lowers to one `Price { meter, channel, when }` and its `Uni
 
 - Meter is what gets counted, such as text input tokens, reasoning tokens, an image of a given size or a web search
   - A variation only one meter has stays inside it (cache TTL, image size, resolution, `_above_Ns_interval`, `max_results_range`)
-- Band is a range of prompt sizes
-  - `_above_200k_tokens` prices a call whose prompt is over 200k tokens, and `Band::Base` is everything under the lowest edge
-  - `Prices::band` puts the whole call in one band from its prompt token count
-  - `Billing::band_edge` says whether a prompt of exactly 200k is in that band
+- `UnitPrice` is USD for one unit of the meter, such as one token, image, page or second
+- Band is a range of prompt sizes, starting where `_above_<N>_tokens` or `_above_<N>k_tokens` says
+  - `Prices::band` picks one band from prompt tokens alone, the highest edge passed wins, and `Band::Base` is below every edge
+  - The whole call moves, so every token meter, output included, bills all its tokens at that band's rate
+  - `Billing::band_edge` says whether a prompt exactly at the edge is in the band (exclusive by default, inclusive for xAI)
+  - A band only another tier or the batch channel prices never moves the call
 - `When` is the request's condition, its service tier and band
-- `Channel` is the billing route
-  - Batch and decisions are channels and not tiers because Python bills them with their own rules
+  - A missing price falls back from `(tier, band)` to `(standard, band)`, `(tier, base)`, then `(standard, base)`
+- `Channel` is the route whose price list the call reads, and each falls back differently
+  - `Online` falls back across `When` as above
+  - `Batch` (`_batches`) uses bands but no service tier, and a missing price is half the online rate
+  - `Decisions` (`_decisions`, OpenAI `/v1/decisions`) overrides single online fields, and a missing price is the full online rate
 - Off-peak and `Adjustments` are never prices
   - Off-peak swaps in other token rates while a UTC window is open
   - `Adjustments` multiplies a priced call for region, residency, geo or `speed: fast`
