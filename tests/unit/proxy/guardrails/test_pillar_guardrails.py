@@ -7,7 +7,7 @@ and following LiteLLM testing patterns and best practices.
 
 # Standard library imports
 import importlib
-from typing import Any, Dict
+from typing import Any, Dict, Final
 from unittest.mock import Mock, patch
 
 # Add parent directory to path for imports
@@ -18,7 +18,7 @@ from urllib.parse import unquote
 
 import pytest
 from fastapi.exceptions import HTTPException
-from httpx import Request, Response
+from httpx import Request, Response, Timeout
 
 # LiteLLM imports
 import litellm
@@ -696,8 +696,17 @@ async def test_post_call_hook_blocks_a_flagged_claude_server_tool_call(
     )
 
     class _PillarFlagsTheServerCall:
-        async def post(self, *, json, **_request):
-            scanned_tool_calls = json["messages"][-1].get("tool_calls") or []
+        async def post(
+            self,
+            *,
+            url: str,
+            headers: dict[str, str],
+            json: dict[str, object],
+            timeout: float | Timeout | None,
+        ) -> Response:
+            messages: Final = json["messages"]
+            assert isinstance(messages, list)
+            scanned_tool_calls: Final = messages[-1].get("tool_calls") or []
             return pillar_flagged_response if server_call in scanned_tool_calls else pillar_clean_response
 
     guardrail = PillarGuardrail(
