@@ -194,6 +194,62 @@ def test_native_function_call_preserves_arguments_and_matching_response(args: ob
     ]
 
 
+@pytest.mark.parametrize(
+    ("system_texts", "expected_content"),
+    [
+        (("Answer tersely",), "Answer tersely"),
+        (("Answer tersely", "Use British spelling"), "Answer tersely\nUse British spelling"),
+    ],
+)
+def test_every_system_instruction_text_part_reaches_the_system_message(
+    system_texts: tuple[str, ...], expected_content: str
+) -> None:
+    request: Final = GoogleGenAIAdapter().translate_generate_content_to_completion(
+        model="gemini/gemini-3.8-flash",
+        contents=[{"role": "user", "parts": [{"text": "hi"}]}],
+        systemInstruction={"parts": [{"text": text} for text in system_texts]},
+    )
+    assert request["messages"][0] == {"role": "system", "content": expected_content}
+
+
+@pytest.mark.parametrize(
+    ("system_parts", "expected_messages"),
+    [
+        pytest.param(
+            [
+                {"text": "Answer tersely"},
+                {"text": None},
+                {"text": 3},
+                {"text": ["x"]},
+                {"text": "Use British spelling"},
+            ],
+            [{"role": "system", "content": "Answer tersely\nUse British spelling"}, {"role": "user", "content": "hi"}],
+            id="malformed_parts_skipped_like_contents",
+        ),
+        pytest.param(
+            {"text": "Answer tersely"},
+            [{"role": "system", "content": "Answer tersely"}, {"role": "user", "content": "hi"}],
+            id="single_object_parts",
+        ),
+        pytest.param(
+            ["Answer tersely", {"text": "Use British spelling"}],
+            [{"role": "system", "content": "Answer tersely\nUse British spelling"}, {"role": "user", "content": "hi"}],
+            id="bare_string_part_read_like_contents",
+        ),
+        pytest.param(None, [{"role": "user", "content": "hi"}], id="no_parts"),
+    ],
+)
+def test_system_instruction_parts_follow_the_contents_part_rules(
+    system_parts: object, expected_messages: list[dict[str, str]]
+) -> None:
+    request: Final = GoogleGenAIAdapter().translate_generate_content_to_completion(
+        model="gemini/gemini-3.8-flash",
+        contents=[{"role": "user", "parts": [{"text": "hi"}]}],
+        systemInstruction={"parts": system_parts},
+    )
+    assert request["messages"] == expected_messages
+
+
 def test_adapter_import():
     """Test that the adapter can be imported successfully"""
     from litellm.google_genai.adapters.handler import GenerateContentToCompletionHandler

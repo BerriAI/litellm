@@ -23,7 +23,7 @@ from typing import TYPE_CHECKING, Annotated, Final, Literal, Protocol, cast
 
 import httpx
 import openai
-from fastapi import APIRouter, Depends, HTTPException, Request, Response, WebSocket
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, Security, WebSocket
 from fastapi.responses import StreamingResponse
 from pydantic import ConfigDict, TypeAdapter, ValidationError
 from starlette.websockets import WebSocketState
@@ -90,6 +90,8 @@ from litellm.proxy.auth.handle_jwt import JWTHandler
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.auth.user_api_key_auth import (  # noqa: F401  # legacy module exports
     _get_bearer_token,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    api_key_header,
+    custom_litellm_key_header,
     get_bearer_token,
     is_no_auth_dev_mode,
     user_api_key_auth,
@@ -124,7 +126,6 @@ from litellm.proxy.common_utils.token_count_log import (
     logged_provider_token_count,
     rejected_token_count,
 )
-from litellm.proxy.pass_through_endpoints.common_utils import get_litellm_virtual_key
 from litellm.proxy.pass_through_endpoints.injected_stream_usage import (
     stream_usage_relay,
     without_injected_usage_frames,
@@ -3066,7 +3067,7 @@ async def _base_vertex_proxy_route(
     fastapi_response: Response,
     get_vertex_pass_through_handler: BaseVertexAIPassThroughHandler,
     general_settings: Mapping[str, object],
-    user_api_key_dict: UserAPIKeyAuth | None = None,
+    user_api_key_dict: UserAPIKeyAuth,
     router_credentials: LiteLLM_ManagedVectorStore | None = None,
 ):
     """
@@ -3082,7 +3083,7 @@ async def _base_vertex_proxy_route(
         fastapi_response: FastAPI response object
         get_vertex_pass_through_handler: Handler for the specific Vertex AI service
         general_settings: Proxy general settings, read per request for the anthropic-beta values to drop
-        user_api_key_dict: User API key authentication dict
+        user_api_key_dict: The caller the route authenticated
         router_credentials: Optional vector store credentials from registry (LiteLLM_ManagedVectorStore)
     """
     from litellm.llms.vertex_ai.common_utils import (
@@ -3096,18 +3097,6 @@ async def _base_vertex_proxy_route(
     encoded_endpoint = httpx.URL(endpoint).path
     verbose_proxy_logger.debug("requested endpoint %s", endpoint)
     headers: Mapping[str, str] = {}
-    api_key_to_use = get_litellm_virtual_key(request=request)
-    user_api_key_dict = await user_api_key_auth(
-        request=request,
-        api_key=api_key_to_use,
-    )
-
-    if user_api_key_dict is None:
-        api_key_to_use = get_litellm_virtual_key(request=request)
-        user_api_key_dict = await user_api_key_auth(
-            request=request,
-            api_key=api_key_to_use,
-        )
     if router_credentials is not None:
         await assert_user_can_access_vector_store(
             vector_store=router_credentials,
@@ -3219,6 +3208,16 @@ async def _base_vertex_proxy_route(
     return received_value
 
 
+async def _authenticate_vertex_caller(
+    request: Request,
+    authorization: Annotated[str | None, Security(api_key_header)],
+    litellm_api_key: Annotated[str | None, Security(custom_litellm_key_header)],
+) -> UserAPIKeyAuth:
+    return await user_api_key_auth(
+        request=request, api_key=authorization or "", custom_litellm_key_header=litellm_api_key
+    )
+
+
 @router.api_route(
     "/vertex_ai/discovery/{endpoint:path}",
     methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
@@ -3228,6 +3227,7 @@ async def vertex_discovery_proxy_route(
     endpoint: str,
     request: Request,
     fastapi_response: Response,
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(_authenticate_vertex_caller)],
 ):
     """
     Call any vertex discovery endpoint using the proxy.
@@ -3266,6 +3266,7 @@ async def vertex_discovery_proxy_route(
         fastapi_response=fastapi_response,
         get_vertex_pass_through_handler=discovery_handler,
         general_settings=_proxy_general_settings(),
+        user_api_key_dict=user_api_key_dict,
         router_credentials=vector_store_credentials,
     )
 
@@ -3285,7 +3286,7 @@ async def vertex_proxy_route(
     endpoint: str,
     request: Request,
     fastapi_response: Response,
-    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(_authenticate_vertex_caller)],
 ):
     """
     Call LiteLLM proxy via Vertex AI SDK.
