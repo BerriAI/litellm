@@ -8,6 +8,7 @@ from openai.types.responses import ResponseFunctionWebSearch
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 
 from litellm.llms.custom_httpx.sse_lines import split_sse_lines
+from litellm.types.llms.anthropic import claude_hosted_web_tool_call
 from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicUsage
 from litellm.types.llms.openai import AllMessageValues, ResponseAPIUsage
 from litellm.types.responses.main import with_hosted_web_tool_arguments
@@ -146,6 +147,12 @@ def web_search_call(item: object) -> ResponseFunctionWebSearch | None:
         return ResponseFunctionWebSearch.model_validate(item.model_dump() if isinstance(item, BaseModel) else item)
     except ValidationError:
         return None
+
+
+def claude_hosted_web_tool_arguments(item: object) -> str | None:
+    search: Final = web_search_call(item)
+    hosted_call: Final = None if search is None else claude_hosted_web_tool_call(search)
+    return None if hosted_call is None else hosted_call[2]
 
 
 def with_web_search_call_arguments(item: object, arguments: str) -> object:

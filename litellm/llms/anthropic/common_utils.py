@@ -2360,6 +2360,16 @@ def write_anthropic_server_tool_calls(
     write_anthropic_hosted_web_call_arguments(holder, changed_server_tool_call_arguments(original, rewritten))
 
 
+def write_request_server_tool_calls(message: object, rewritten: tuple[ChatCompletionAssistantToolCall, ...]) -> None:
+    fields: Final = validated_object_mapping(message_field(message, "provider_specific_fields")) or {}
+    if rewritten == anthropic_server_tool_call_params(message) or not isinstance(message, dict):
+        return
+    message["provider_specific_fields"] = {  # rebind-ok: a guardrail rewrite must land on the request it scanned
+        **fields,
+        "server_tool_calls": list(rewritten),
+    }
+
+
 def _server_tool_call_id(call: ChatCompletionAssistantToolCall) -> str:
     return call["id"] or ""
 
@@ -2435,7 +2445,12 @@ def _client_message_tool_call(
             return tool_call
         case _:
             try:
-                return chat_completion_tool_call_from_dict(_TOOL_CALL_FIELDS_ADAPTER.validate_python(tool_call))
+                fields: Final = _TOOL_CALL_FIELDS_ADAPTER.validate_python(tool_call)
+                return chat_completion_tool_call_from_dict(
+                    MappingProxyType({key: value for key, value in fields.items() if key != "custom"})
+                    if fields.get("type") == "function"
+                    else fields
+                )
             except (TypeError, ValidationError):
                 return None
 

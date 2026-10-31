@@ -1728,6 +1728,38 @@ class TestCiscoAIDefenseToolCallBypass:
             f"included in the scanned text. Sent: {sent!r}"
         )
 
+    @pytest.mark.asyncio
+    async def test_pre_call_scans_function_tool_call_that_also_carries_a_custom_key(self):
+        g = _make_guardrail(event_hook="pre_call")
+        post_mock = AsyncMock(return_value=_safe_response())
+        data: Final = {
+            "messages": [
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": "call_1",
+                            "type": "function",
+                            "custom": {},
+                            "function": {"name": "send_data", "arguments": '{"data":"SSN 123-45-6789"}'},
+                        }
+                    ],
+                }
+            ]
+        }
+
+        with _patch_inspection_post(g, post_mock):
+            await g.async_pre_call_hook(
+                user_api_key_dict=UserAPIKeyAuth(),
+                cache=DualCache(),
+                data=data,
+                call_type="completion",
+            )
+
+        sent = post_mock.call_args.kwargs["json"]
+        assert "123-45-6789" in " ".join(m.get("content", "") for m in (sent.get("messages") or []))
+
     @pytest.mark.parametrize(
         "data",
         [

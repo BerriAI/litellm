@@ -35,6 +35,7 @@ from litellm.llms.anthropic.common_utils import (
     changed_server_tool_call_arguments,
     write_anthropic_hosted_web_call_arguments,
     write_anthropic_server_tool_calls,
+    write_request_server_tool_calls,
 )
 from litellm.llms.base_llm.guardrail_translation.base_translation import (
     BaseTranslation,
@@ -151,14 +152,27 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                 scan_only_tool_results=scan_only_tool_results,
             )
 
+        structured_messages: Final = self.get_structured_messages(data)
+        server_tool_call_tasks: Final = tuple(
+            _input_server_tool_call_tasks(
+                structured_messages or [],
+                skip_system_message=skip_system,
+                skip_tool_message=skip_tool,
+                scan_only_tool_results=scan_only_tool_results,
+            )
+        )
+        tool_calls_with_server_calls: Final = [
+            *tool_calls_to_check,
+            *(_server_tool_call_input(call) for _, call in server_tool_call_tasks),
+        ]
+
         # Step 2: Apply guardrail to all texts and tool calls in batch
-        if texts_to_check or tool_calls_to_check:
+        if texts_to_check or tool_calls_with_server_calls:
             inputs: Final = GenericGuardrailAPIInputs(texts=texts_to_check)
             if images_to_check:
                 inputs["images"] = images_to_check
-            if tool_calls_to_check:
-                inputs["tool_calls"] = tool_calls_to_check
-            structured_messages: Final = self.get_structured_messages(data)
+            if tool_calls_with_server_calls:
+                inputs["tool_calls"] = tool_calls_with_server_calls
             scoped_message_indices: Final = scoped_structured_message_indices(
                 structured_messages or [],
                 scan_only_tool_results=scan_only_tool_results,
@@ -229,6 +243,12 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                         messages=messages,
                         tool_calls=guardrailed_tool_calls,
                         task_mappings=tool_call_task_mappings,
+                    )
+                if len(guardrailed_tool_calls) == len(tool_calls_with_server_calls):
+                    self._apply_guardrail_responses_to_input_server_tool_calls(
+                        messages=structured_messages or [],
+                        guardrailed_tool_calls=guardrailed_tool_calls[len(tool_calls_to_check) :],
+                        task_mappings=tuple(mapping for mapping, _ in server_tool_call_tasks),
                     )
 
         elif (
@@ -397,6 +417,22 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                     if tool_call_idx < len(message_tool_calls):
                         # Replace the tool call with the guardrailed version
                         message_tool_calls[tool_call_idx] = guardrailed_tool_call
+
+    @staticmethod
+    def _apply_guardrail_responses_to_input_server_tool_calls(
+        messages: Sequence[object],
+        guardrailed_tool_calls: Sequence[object],
+        task_mappings: Sequence[tuple[int, int]],
+    ) -> None:
+        guardrailed_by_task: Final = MappingProxyType(dict(zip(task_mappings, guardrailed_tool_calls)))
+        for msg_idx in sorted(frozenset(msg_idx for msg_idx, _ in task_mappings)):
+            write_request_server_tool_calls(
+                messages[msg_idx],
+                tuple(
+                    _rewritten_server_tool_call(server_tool_call, guardrailed_by_task.get((msg_idx, server_idx)))
+                    for server_idx, server_tool_call in enumerate(anthropic_server_tool_call_params(messages[msg_idx]))
+                ),
+            )
 
     async def process_output_response(
         self,
@@ -1479,6 +1515,25 @@ def _streamed_delta_tool_calls(delta: object) -> tuple[object, ...]:
     function_call: Final = stream_item_field(delta, "function_call")
     legacy: Final = () if function_call is None else (function_call,)
     return anthropic_server_tool_call_params(delta) + stream_item_items(delta, "tool_calls") + legacy
+
+
+def _input_server_tool_call_tasks(
+    messages: Sequence[Mapping[str, object]],
+    *,
+    skip_system_message: bool,
+    skip_tool_message: bool,
+    scan_only_tool_results: bool,
+) -> Iterator[tuple[tuple[int, int], ChatCompletionAssistantToolCall]]:
+    for msg_idx, message in enumerate(messages):
+        if role_out_of_guardrail_scope(
+            str(message.get("role") or "").lower(),
+            skip_system_message=skip_system_message,
+            skip_tool_message=skip_tool_message,
+            scan_only_tool_results=scan_only_tool_results,
+        ):
+            continue
+        for server_idx, server_tool_call in enumerate(anthropic_server_tool_call_params(message)):
+            yield (msg_idx, server_idx), server_tool_call
 
 
 def _server_tool_call_tasks(

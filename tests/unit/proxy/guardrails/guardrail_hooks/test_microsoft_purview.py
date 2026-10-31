@@ -2180,6 +2180,29 @@ class TestCompletionResponseTextPartsToolCalls:
         parts = guardrail._completion_response_text_parts(response)
         assert any('{"secret": "hunter2"}' in p for p in parts)
 
+    def test_responses_api_claude_hosted_web_fetch_url_included(self):
+        from openai.types.responses import ResponseFunctionWebSearch
+        from openai.types.responses.response_function_web_search import ActionOpenPage
+
+        from litellm.types.llms.openai import ResponsesAPIResponse
+
+        guardrail = _make_guardrail()
+        response = ResponsesAPIResponse(
+            id="resp-ws-1",
+            created_at=0,
+            output=[
+                ResponseFunctionWebSearch(
+                    id="ws_srvtoolu_01",
+                    type="web_search_call",
+                    status="completed",
+                    action=ActionOpenPage(type="open_page", url="https://example.com/?ssn=123-45-6789"),
+                )
+            ],
+        )
+        assert guardrail._completion_response_text_parts(response) == [
+            '{"url": "https://example.com/?ssn=123-45-6789"}'
+        ]
+
 
 # ---------------------------------------------------------------
 # Graph user id path encoding

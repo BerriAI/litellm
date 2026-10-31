@@ -9,7 +9,7 @@ import contextlib
 import json
 import os
 import ssl
-from collections.abc import AsyncGenerator, AsyncIterable, Mapping, Sequence
+from collections.abc import AsyncGenerator, AsyncIterable, Iterator, Mapping, Sequence
 from ssl import SSLContext
 from typing import TYPE_CHECKING, Any, Final
 
@@ -23,10 +23,15 @@ from litellm import DualCache
 from litellm._logging import verbose_proxy_logger
 from litellm._version import version as litellm_version
 from litellm.integrations.custom_guardrail import CustomGuardrail
-from litellm.litellm_core_utils.core_helpers import iter_items
+from litellm.litellm_core_utils.core_helpers import attribute_items, iter_items
+from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import message_field
 from litellm.llms.anthropic.common_utils import (
     anthropic_server_tool_calls,
     write_anthropic_server_tool_call_arguments,
+)
+from litellm.llms.base_llm.guardrail_translation.utils import (
+    claude_hosted_web_tool_arguments,
+    with_web_search_call_arguments,
 )
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
@@ -579,11 +584,18 @@ class CatoNetworksGuardrail(CustomGuardrail):
         return fragments
 
     @staticmethod
-    def _apply_responses_output_fragment(container: object, key: str, redacted: str) -> None:
+    def _apply_responses_output_fragment(container: object, key: str, redacted: object) -> None:
         if isinstance(container, dict):
             container[key] = redacted
         else:
             setattr(container, key, redacted)
+
+    @staticmethod
+    def _responses_hosted_web_calls(response: ResponsesAPIResponse) -> Iterator[tuple[object, str]]:
+        for item in attribute_items(response, "output"):
+            hosted_arguments = claude_hosted_web_tool_arguments(item)
+            if hosted_arguments:
+                yield item, hosted_arguments
 
     async def _inspect_output_text(
         self,
@@ -626,6 +638,12 @@ class CatoNetworksGuardrail(CustomGuardrail):
                 redacted_output = await self._inspect_output_text(data, text, user_api_key_dict, user_email)
                 if redacted_output is not None:
                     self._apply_responses_output_fragment(container, key, redacted_output)
+            for item, hosted_arguments in self._responses_hosted_web_calls(response):
+                redacted_output = await self._inspect_output_text(data, hosted_arguments, user_api_key_dict, user_email)
+                if redacted_output is not None:
+                    self._apply_responses_output_fragment(
+                        item, "action", message_field(with_web_search_call_arguments(item, redacted_output), "action")
+                    )
         return response
 
     async def async_post_call_streaming_iterator_hook(

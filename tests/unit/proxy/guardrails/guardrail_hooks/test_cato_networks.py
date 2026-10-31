@@ -2410,6 +2410,53 @@ async def test_post_call_success_hook_redacts_responses_api_function_call_argume
 
 
 @pytest.mark.asyncio
+async def test_post_call_success_hook_redacts_claude_hosted_web_fetch_url():
+    from openai.types.responses import ResponseFunctionWebSearch
+    from openai.types.responses.response_function_web_search import ActionOpenPage
+
+    guard = _make_guardrail()
+    request_data = {"messages": [{"role": "user", "content": "read the page"}]}
+    anonymize_response = _make_response(
+        {
+            "analysis_result": {"policy_drill_down": {"PII": {}}},
+            "required_action": {"action_type": "anonymize_action", "policy_name": "PII"},
+            "redacted_chat": {
+                "all_redacted_messages": [
+                    {"role": "user", "content": "read the page"},
+                    {"role": "assistant", "content": '{"url": "https://example.com/?ssn=[SSN_1]"}'},
+                ]
+            },
+        }
+    )
+    response = _make_responses_api_response(
+        [
+            ResponseFunctionWebSearch(
+                id="ws_srvtoolu_01",
+                type="web_search_call",
+                status="completed",
+                action=ActionOpenPage(type="open_page", url="https://example.com/?ssn=123-45-6789"),
+            )
+        ]
+    )
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        new_callable=AsyncMock,
+    ) as mock_post:
+        mock_post.return_value = anonymize_response
+        result = await guard.async_post_call_success_hook(
+            data=request_data,
+            response=response,
+            user_api_key_dict=UserAPIKeyAuth(),
+        )
+    posted = mock_post.call_args.kwargs["json"]["messages"]
+    assert posted[-1] == {"role": "assistant", "content": '{"url": "https://example.com/?ssn=123-45-6789"}'}
+    assert (result.output[0].id, result.output[0].action.url) == (
+        "ws_srvtoolu_01",
+        "https://example.com/?ssn=[SSN_1]",
+    )
+
+
+@pytest.mark.asyncio
 async def test_post_call_success_hook_blocks_responses_api_output():
     """A ``block_action`` on Responses API output must raise so the blocked text never
     reaches the caller."""

@@ -955,6 +955,33 @@ class TestOpenAIChatCompletionsHandlerToolCallsOutput:
         assert tool_calls[1].function.arguments == second_args
 
     @pytest.mark.asyncio
+    async def test_input_guardrail_rewrite_of_a_replayed_server_tool_call_lands_on_the_request(self):
+        handler = OpenAIChatCompletionsHandler()
+        data: Final = {
+            "messages": [
+                {"role": "user", "content": "look up jane and the weather"},
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [_server_tool_call("toolu_01Weather", "get_weather", {"city": "Paris"})],
+                    "provider_specific_fields": {
+                        "server_tool_calls": [_server_tool_call("srvtoolu_01Search", "web_search", _SEARCH_INPUT)]
+                    },
+                },
+            ]
+        }
+
+        await handler.process_input_messages(data, QueryRedactingGuardrail(guardrail_name="redact"))
+
+        assistant: Final = data["messages"][1]
+        assert _tool_call_ids_names_and_arguments(assistant["provider_specific_fields"]["server_tool_calls"]) == [
+            ("srvtoolu_01Search", "web_search", '{"query": "[REDACTED]"}')
+        ]
+        assert _tool_call_ids_names_and_arguments(assistant["tool_calls"]) == [
+            ("toolu_01Weather", "get_weather", '{"city": "Paris"}')
+        ]
+
+    @pytest.mark.asyncio
     async def test_output_guardrail_sees_a_response_that_only_carries_server_tool_calls(self):
         handler = OpenAIChatCompletionsHandler()
         guardrail = TestOpenAIChatCompletionsHandlerStreamingOutput._recording_guardrail()
