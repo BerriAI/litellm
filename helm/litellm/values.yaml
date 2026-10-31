@@ -2,7 +2,7 @@
 
 nameOverride: ""
 fullnameOverride: ""
-
+commonLabels: {}
 imagePullSecrets: []
 
 # Optional Ingress wiring the three component Services behind a single L7
@@ -150,6 +150,10 @@ migrationJob:
   # pod. Same shape as gateway.podSecurityContext / gateway.securityContext.
   podSecurityContext: {}
   securityContext: {}
+  # Extra labels on the Job itself.
+  jobLabels: {}
+  # Extra annotations on the Job itself.
+  jobAnnotations: {}
   # Extra pod labels on the Job pod, merged into the chart's common labels.
   podLabels: {}
   # Additional volumes on the Job pod and volumeMounts on its container, e.g.
@@ -465,6 +469,10 @@ gateway:
     enabled: false
     minAvailable: ""
     maxUnavailable: ""
+  # Extra annotations on the gateway Deployment itself.
+  deploymentAnnotations: {}
+  # Extra labels on the gateway Deployment itself.
+  deploymentLabels: {}
   podAnnotations: {}
   # Extra pod labels, merged into the chart's selector labels. Do not
   # re-declare `app.kubernetes.io/name` / `instance` / `component` here: they
@@ -565,6 +573,10 @@ backend:
     enabled: false
     minAvailable: ""
     maxUnavailable: ""
+  # Extra labels on the backend Deployment itself.
+  deploymentLabels: {}
+  # Extra annotations on the backend Deployment itself.
+  deploymentAnnotations: {}
   podAnnotations: {}
   # Same shape as the gateway blocks of the same name.
   podLabels: {}
@@ -634,6 +646,10 @@ ui:
     enabled: false
     minAvailable: ""
     maxUnavailable: ""
+  # Extra labels on the ui Deployment itself.
+  deploymentLabels: {}
+  # Extra annotations on the ui Deployment itself.
+  deploymentAnnotations: {}
   podAnnotations: {}
   # Same shape as the gateway blocks of the same name. The nginx runtime
   # writes its pid, cache, and proxy temp files under /tmp, so it boots as

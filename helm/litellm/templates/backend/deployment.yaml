@@ -7,7 +7,14 @@ metadata:
   name: {{ include "litellm.backend.fullname" . }}
   labels:
     {{- include "litellm.commonLabels" . | nindent 4 }}
+    {{- with .Values.backend.deploymentLabels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
     app.kubernetes.io/component: backend
+  {{- with .Values.backend.deploymentAnnotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
 spec:
   {{- if and (not .Values.backend.hpa.enabled) (not (kindIs "invalid" .Values.backend.replicaCount)) }}
   replicas: {{ .Values.backend.replicaCount }}
