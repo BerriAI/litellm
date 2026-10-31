@@ -1938,6 +1938,32 @@ async def test_size_pass_deletes_every_guardrail_row_under_the_step_cutoff_not_o
 
 
 @pytest.mark.asyncio
+async def test_size_pass_guardrail_backlog_does_not_spend_the_batches_spend_logs_need(caplog):
+    db = MagicMock()
+    _wire_tx(db)
+
+    async def execute_raw(sql, *args):
+        return 0 if "LiteLLM_SpendLogToolIndex" in sql else 1000
+
+    db.execute_raw = execute_raw
+    _wire_size_probes(
+        db, [_storage(100 * 1024**3, live=100_000, dead=0)], cutoff=datetime(2026, 9, 1, tzinfo=timezone.utc)
+    )
+    client = MagicMock()
+    client.db = db
+    cleaner = _size_cleaner(
+        {"maximum_spend_logs_cleanup_batch_size": 1000, "maximum_spend_logs_cleanup_max_batches": 20}
+    )
+
+    with caplog.at_level(logging.INFO, logger="LiteLLM Proxy"):
+        await cleaner.cleanup_spend_logs_by_size(client)
+
+    summary = next(r.getMessage() for r in caplog.records if "Spend log cleanup run finished" in r.getMessage())
+    assert "LiteLLM_SpendLogs (size rule): deleted=20000" in summary, summary
+    assert "LiteLLM_SpendLogGuardrailIndex (size rule): deleted=20000" in summary, summary
+
+
+@pytest.mark.asyncio
 async def test_size_pass_stops_at_the_run_batch_cap_and_reports_how_far_above_the_target_it_is(caplog):
     db = MagicMock()
     _wire_tx(db)
@@ -2004,7 +2030,7 @@ async def test_size_pass_analyzes_and_measures_again_when_the_row_statistics_wer
         await _size_cleaner({}).cleanup_spend_logs_by_size(client)
 
     issued = [call.args[0] for call in statements.await_args_list]
-    assert issued == ['ANALYZE "LiteLLM_SpendLogs", "LiteLLM_SpendLogToolIndex"'], (
+    assert issued == ['ANALYZE "LiteLLM_SpendLogs", "LiteLLM_SpendLogToolIndex", "LiteLLM_SpendLogGuardrailIndex"'], (
         "the only statement is the ANALYZE: no DELETE, the carried count puts the table under 1GB"
     )
     assert any("row statistics are stale" in record.getMessage() for record in caplog.records)

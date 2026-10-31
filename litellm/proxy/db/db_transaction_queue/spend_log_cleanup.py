@@ -4,7 +4,7 @@ import re
 import time
 from collections.abc import Awaitable, Callable
 from contextvars import ContextVar
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from typing import Final, Literal, TypeAlias
 
@@ -255,6 +255,7 @@ class _SizeStepState:
     index_deleted: int
     guardrail_index_deleted: int
     batches_left: int
+    guardrail_batches_left: int
     stop_reason: StopReason | None
 
     @property
@@ -262,13 +263,7 @@ class _SizeStepState:
         return self.logs_deleted + self.index_deleted + self.guardrail_index_deleted
 
     def stopped(self, reason: StopReason) -> "_SizeStepState":
-        return _SizeStepState(
-            logs_deleted=self.logs_deleted,
-            index_deleted=self.index_deleted,
-            guardrail_index_deleted=self.guardrail_index_deleted,
-            batches_left=self.batches_left,
-            stop_reason=reason,
-        )
+        return replace(self, stop_reason=reason)
 
 
 @dataclass(frozen=True, slots=True)
@@ -381,7 +376,7 @@ _STORAGE_SQL: Final = """
 # The age job and the size job are scheduled on separate SpendLogCleanup instances, so the lock is per process.
 _PASS_LOCK: Final = asyncio.Lock()
 
-_ANALYZE_SQL: Final = 'ANALYZE "LiteLLM_SpendLogs", "LiteLLM_SpendLogToolIndex"'
+_ANALYZE_SQL: Final = "ANALYZE " + ", ".join(f'"{table}"' for table in _SPEND_LOG_TABLES)
 # pg_stat_user_tables publishes what ANALYZE counted up to a second later (the stats collector on Postgres 14).
 _STATS_SETTLE_SECONDS: Final = 1.0
 _STATS_SETTLE_ATTEMPTS: Final = 5
@@ -1259,6 +1254,7 @@ class SpendLogCleanup:
             index_deleted=0,
             guardrail_index_deleted=0,
             batches_left=self.max_batches,
+            guardrail_batches_left=self.max_batches,
             stop_reason=None,
         )
         for _ in range(self.max_batches // SPEND_LOG_SIZE_CLEANUP_RECHECK_BATCHES + 2):
@@ -1328,14 +1324,15 @@ class SpendLogCleanup:
             key_columns=("request_id", "guardrail_id"),
             time_column="start_time",
             deadline=deadline,
-            batch_cap=state.batches_left,
+            batch_cap=state.guardrail_batches_left,
         )
-        guardrail_batches: Final = math.ceil(guardrail_index_result.rows_deleted / self.batch_size)
         advanced: Final = _SizeStepState(
             logs_deleted=state.logs_deleted + logs_result.rows_deleted,
             index_deleted=state.index_deleted + index_result.rows_deleted,
             guardrail_index_deleted=state.guardrail_index_deleted + guardrail_index_result.rows_deleted,
-            batches_left=state.batches_left - max(step_cap, guardrail_batches),
+            batches_left=state.batches_left - step_cap,
+            guardrail_batches_left=state.guardrail_batches_left
+            - math.ceil(guardrail_index_result.rows_deleted / self.batch_size),
             stop_reason=None,
         )
         if rows_still_needed(advanced.rows_deleted) <= 0:
