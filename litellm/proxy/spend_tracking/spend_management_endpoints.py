@@ -2737,11 +2737,34 @@ async def ui_view_spend_logs(
         if status_condition:
             where_conditions.update(status_condition)
 
-        if api_key is not None:
-            where_conditions["api_key"] = api_key
-
-        if user_id is not None:
-            where_conditions["user"] = user_id
+        caller_key_hash: Final = _extract_caller_key_hash(
+            user_api_key_dict=user_api_key_dict, prisma_client=prisma_client
+        )
+        if not is_admin_view and is_v2 and caller_key_hash is not None:
+            if api_key is not None:
+                requested_key_hash: Final = (
+                    _hash_token_safe(prisma_client, api_key) if api_key.startswith("sk-") else api_key
+                )
+                if requested_key_hash != caller_key_hash:
+                    raise HTTPException(
+                        status_code=status.HTTP_403_FORBIDDEN,
+                        detail={"error": f"Not authorized to view spend logs for api_key={api_key}"},
+                    )
+            where_conditions["api_key"] = caller_key_hash
+            if user_id is not None:
+                if user_api_key_dict.user_id is None or user_id != user_api_key_dict.user_id:
+                    raise HTTPException(
+                        status_code=status.HTTP_403_FORBIDDEN,
+                        detail={"error": f"Not authorized to view spend logs for user_id={user_id}"},
+                    )
+                where_conditions["user"] = user_id
+        else:
+            if api_key is not None:
+                where_conditions["api_key"] = (
+                    _hash_token_safe(prisma_client, api_key) if api_key.startswith("sk-") and is_v2 else api_key
+                )
+            if user_id is not None:
+                where_conditions["user"] = user_id
 
         if request_id is not None:
             where_conditions["request_id"] = request_id
@@ -2807,6 +2830,7 @@ async def ui_view_spend_logs(
             )
         user_scope_applies: Final = (
             not is_admin_view
+            and (not is_v2 or caller_key_hash is None)
             and team_id is None
             and (is_request_id_lookup or _can_user_view_spend_log(user_api_key_dict=user_api_key_dict))
         )
@@ -3565,11 +3589,16 @@ async def view_spend_logs(
     """
     from litellm.proxy.proxy_server import prisma_client
 
-    if (
-        user_api_key_dict.user_role == LitellmUserRoles.INTERNAL_USER
-        or user_api_key_dict.user_role == LitellmUserRoles.INTERNAL_USER_VIEW_ONLY
-    ):
-        user_id = user_api_key_dict.user_id
+    is_admin: Final = is_admin_view_safe(user_api_key_dict=user_api_key_dict)
+    caller_key_hash: Final = _extract_caller_key_hash(user_api_key_dict=user_api_key_dict, prisma_client=prisma_client)
+    effective_api_key, effective_user_id = _resolve_effective_filters(
+        api_key=api_key,
+        user_id=user_id,
+        user_api_key_dict=user_api_key_dict,
+        is_admin=is_admin,
+        caller_key_hash=caller_key_hash,
+        prisma_client=prisma_client,
+    )
 
     try:
         verbose_proxy_logger.debug("inside view_spend_logs")
@@ -3599,16 +3628,16 @@ async def view_spend_logs(
             }
 
             summary_api_key: Final[str | None] = (
-                prisma_client.hash_token(token=api_key)
-                if api_key is not None and api_key.startswith("sk-")
-                else api_key
+                _hash_token_safe(prisma_client, effective_api_key)
+                if effective_api_key is not None and effective_api_key.startswith("sk-")
+                else effective_api_key
             )
-            if api_key is not None and isinstance(api_key, str):
+            if effective_api_key is not None:
                 filter_query["api_key"] = summary_api_key
             if request_id is not None and isinstance(request_id, str):
                 filter_query["OR"] = _request_id_or_call_id_clause(request_id)
-            if user_id is not None and isinstance(user_id, str):
-                filter_query["user"] = user_id
+            if effective_user_id is not None:
+                filter_query["user"] = effective_user_id
 
             # Check if user wants unsummarized data
             if not summarize:
@@ -3628,7 +3657,7 @@ async def view_spend_logs(
                 end_date_iso=end_date_iso,
                 api_key=summary_api_key,
                 request_id=request_id,
-                user_id=user_id,
+                user_id=effective_user_id,
             )
             sql_query, params = summary_sql_and_params
             rows: Final[Sequence[_SpendDailySummaryRow]] = await _query_raw(prisma_client, sql_query, *params)
@@ -3655,16 +3684,17 @@ async def view_spend_logs(
 
         else:
             scoped_filter: Final[dict[str, object]] = {}
-            if api_key is not None and isinstance(api_key, str):
-                if api_key.startswith("sk-"):
-                    hashed_token = prisma_client.hash_token(token=api_key)
-                else:
-                    hashed_token = api_key
+            if effective_api_key is not None:
+                hashed_token: Final = (
+                    _hash_token_safe(prisma_client, effective_api_key)
+                    if effective_api_key.startswith("sk-")
+                    else effective_api_key
+                )
                 scoped_filter["api_key"] = hashed_token
             if request_id is not None and isinstance(request_id, str):
                 scoped_filter["OR"] = _request_id_or_call_id_clause(request_id)
-            if user_id is not None and isinstance(user_id, str):
-                scoped_filter["user"] = user_id
+            if effective_user_id is not None:
+                scoped_filter["user"] = effective_user_id
 
             data = await _find_spend_logs(
                 prisma_client,
@@ -4865,6 +4895,56 @@ def is_admin_view_safe(user_api_key_dict: UserAPIKeyAuth) -> bool:
 
 
 _is_admin_view_safe: Final = is_admin_view_safe
+
+
+def _hash_token_safe(prisma_client: PrismaClient | None, token: str) -> str:
+    if prisma_client is not None and hasattr(prisma_client, "hash_token"):
+        return prisma_client.hash_token(token=token)
+    return hash_token(token)
+
+
+def _extract_caller_key_hash(
+    user_api_key_dict: UserAPIKeyAuth,
+    prisma_client: PrismaClient | None = None,
+) -> str | None:
+    raw_or_hash: Final = user_api_key_dict.token or user_api_key_dict.api_key
+    if raw_or_hash is None:
+        return None
+    if raw_or_hash.startswith("sk-"):
+        return _hash_token_safe(prisma_client, raw_or_hash)
+    return raw_or_hash
+
+
+def _resolve_effective_filters(
+    api_key: str | None,
+    user_id: str | None,
+    user_api_key_dict: UserAPIKeyAuth,
+    is_admin: bool,
+    caller_key_hash: str | None,
+    prisma_client: PrismaClient | None,
+) -> tuple[str | None, str | None]:
+    if not is_admin and caller_key_hash is not None:
+        if api_key is not None:
+            requested_key_hash: Final = (
+                _hash_token_safe(prisma_client, api_key) if api_key.startswith("sk-") else api_key
+            )
+            if requested_key_hash != caller_key_hash:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail=f"Key not allowed to view spend logs for another key. api_key={api_key}",
+                )
+        if user_id is not None and (user_api_key_dict.user_id is None or user_id != user_api_key_dict.user_id):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Key not allowed to view spend logs for another user. user_id={user_id}",
+            )
+        return (caller_key_hash, user_api_key_dict.user_id if user_id is None else user_id)
+    if (
+        user_api_key_dict.user_role == LitellmUserRoles.INTERNAL_USER
+        or user_api_key_dict.user_role == LitellmUserRoles.INTERNAL_USER_VIEW_ONLY
+    ):
+        return (api_key, user_api_key_dict.user_id)
+    return (api_key, user_id)
 
 
 async def _can_team_member_view_log(

@@ -369,7 +369,7 @@ class RouteChecks:
             route in LiteLLMRoutes.global_spend_tracking_routes.value
             and getattr(valid_token, "permissions", None) is not None
             and "get_spend_routes" in getattr(valid_token, "permissions", [])
-        ):
+        ) or route in ("/spend/logs", "/spend/logs/v2"):
             pass
         elif route == "/lens" or route.startswith("/lens/"):
             pass  # Lens authorizes the delegated role, including its POST-based read endpoints.
