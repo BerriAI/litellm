@@ -4124,6 +4124,7 @@ async def team_member_update(
         litellm_proxy_admin_name,
         premium_user,
         prisma_client,
+        proxy_logging_obj,
         user_api_key_cache,
     )
 
@@ -4238,6 +4239,14 @@ async def team_member_update(
             user_id=received_user_id,
             team_id=data.team_id,
             user_api_key_cache=user_api_key_cache,
+        )
+        member_keys: Final = await _tokens_db(prisma_client).find_many(
+            where={"user_id": received_user_id, "team_id": data.team_id}
+        )
+        await delete_cache_key_objects(
+            hashed_tokens=tuple(key.token for key in member_keys),
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
         )
 
     if role_change is not None:
