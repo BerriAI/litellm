@@ -5,6 +5,8 @@ import userEvent from "@testing-library/user-event";
 import UISettings from "./UISettings";
 import { toast } from "@/lib/toast";
 
+vi.mock("./BackgroundChatSettings", () => ({ default: () => null }));
+
 const mockUseAuthorized = vi.hoisted(() => vi.fn());
 const mockUseUISettings = vi.hoisted(() => vi.fn());
 const mockUseUpdateUISettings = vi.hoisted(() => vi.fn());

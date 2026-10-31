@@ -4599,3 +4599,50 @@ def test_model_groups_advertise_cache_backed_background_chat(
     monkeypatch.setattr(proxy_server, "native_background_mode", ["research-chat"] if native else [])
     groups: Final = proxy_server.get_model_group_info(router, ["research-chat"], None)
     assert groups[0].supports_background_chat is expected
+
+
+@pytest.mark.parametrize("config_owned", [False, True])
+def test_background_response_settings_refresh_and_respect_config(
+    monkeypatch: pytest.MonkeyPatch,
+    config_owned: bool,
+) -> None:
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "polling_via_cache_enabled", False)
+    monkeypatch.setattr(proxy_server, "native_background_mode", [])
+    monkeypatch.setattr(proxy_server, "polling_cache_ttl", 3600)
+    config: Final = proxy_server.ProxyConfig()
+    if config_owned:
+        config.litellm_settings.load_yaml(
+            {
+                "responses": {
+                    "background_mode": {
+                        "polling_via_cache": ["openai"],
+                        "native_background_mode": ["config-native"],
+                        "ttl": 900,
+                    }
+                },
+            }
+        )
+    config._apply_litellm_settings_db_values(
+        {
+            "responses": {
+                "background_mode": {
+                    "polling_via_cache": "all",
+                    "native_background_mode": ["db-native"],
+                    "ttl": 7200,
+                }
+            },
+        }
+    )
+    assert proxy_server.polling_via_cache_enabled == (["openai"] if config_owned else "all")
+    assert proxy_server.native_background_mode == (["config-native"] if config_owned else ["db-native"])
+    assert proxy_server.polling_cache_ttl == (900 if config_owned else 7200)
+    config._apply_litellm_settings_db_values(
+        {
+            "responses": {"background_mode": {"polling_via_cache": False}},
+        }
+    )
+    assert proxy_server.polling_via_cache_enabled == (["openai"] if config_owned else False)
+    assert proxy_server.native_background_mode == (["config-native"] if config_owned else [])
+    assert proxy_server.polling_cache_ttl == (900 if config_owned else 3600)

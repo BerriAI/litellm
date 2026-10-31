@@ -4488,3 +4488,114 @@ def test_usage_default_range_reports_config_precedence(mock_auth, monkeypatch: p
     assert response.status_code == 200, response.text
     assert response.json()["values"]["usage_default_time_range"] == "month_to_date"
     assert response.json()["source"]["usage_default_time_range"] == "config"
+
+
+@pytest.fixture
+def background_chat_config(monkeypatch: pytest.MonkeyPatch):
+    from copy import deepcopy
+    from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.caching.redis_cache import RedisCache
+    from litellm.proxy import proxy_server
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+    from litellm.proxy.config_resolvers import SettingsStore
+
+    config = {
+        "litellm_settings": {
+            "callbacks": ["prometheus"],
+            "responses": {
+                "background_mode": {
+                    "polling_via_cache": False,
+                    "ttl": 7200,
+                    "native_background_mode": ["native-model"],
+                },
+            },
+        }
+    }
+    store = SettingsStore("litellm_settings")
+    monkeypatch.setattr(proxy_server.proxy_config, "litellm_settings", store)
+    monkeypatch.setattr(proxy_server.proxy_config, "_settings_stores", {"litellm_settings": store})
+    monkeypatch.setattr(proxy_server, "prisma_client", MagicMock())
+    monkeypatch.setattr(proxy_server, "store_model_in_db", True)
+    monkeypatch.setattr(proxy_server, "redis_usage_cache", RedisCache(host="localhost", port=6379))
+    monkeypatch.setattr(proxy_server, "polling_via_cache_enabled", False)
+    monkeypatch.setattr(proxy_server, "native_background_mode", [])
+    monkeypatch.setattr(proxy_server, "polling_cache_ttl", 3600)
+    monkeypatch.setattr(proxy_server.proxy_config, "get_config", AsyncMock(side_effect=lambda: deepcopy(config)))
+
+    async def save_config(*, new_config):
+        config.clear()
+        config.update(deepcopy(new_config))
+
+    save = AsyncMock(side_effect=save_config)
+    audit = AsyncMock()
+    monkeypatch.setattr(proxy_server.proxy_config, "save_config", save)
+    monkeypatch.setattr(proxy_server, "create_config_audit_log", audit)
+    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN
+    )
+    yield config, save, audit
+    app.dependency_overrides.pop(user_api_key_auth, None)
+
+
+def test_background_chat_settings_persist_preserving_existing_options(background_chat_config, monkeypatch):
+    from litellm.proxy import proxy_server
+
+    config, _, _ = background_chat_config
+    response = client.patch("/update/background_chat_settings", json={"enabled": True})
+    assert response.status_code == 200
+    assert response.json()["enabled"] is True
+    assert proxy_server.polling_via_cache_enabled is False
+    assert config["litellm_settings"]["responses"]["background_mode"] == {
+        "polling_via_cache": "all",
+        "ttl": 7200,
+        "native_background_mode": ["native-model"],
+    }
+    assert config["litellm_settings"]["callbacks"] == ["prometheus"]
+    assert client.get("/get/background_chat_settings").json()["enabled"] is True
+    proxy_server.proxy_config._apply_litellm_settings_db_values(config["litellm_settings"])
+    assert proxy_server.polling_via_cache_enabled == "all"
+    disabled = client.patch("/update/background_chat_settings", json={"enabled": False})
+    assert disabled.status_code == 200
+    assert disabled.json()["enabled"] is False
+    proxy_server.proxy_config._apply_litellm_settings_db_values(config["litellm_settings"])
+    assert proxy_server.polling_via_cache_enabled is False
+
+
+@pytest.mark.parametrize("blocker", ["role", "redis", "config", "persistence"])
+def test_background_chat_settings_reject_unavailable_updates(background_chat_config, monkeypatch, blocker):
+    from litellm.proxy import proxy_server
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+    config, save, _ = background_chat_config
+    if blocker == "role":
+        app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
+            user_id="viewer", user_role=LitellmUserRoles.INTERNAL_USER
+        )
+    elif blocker == "redis":
+        monkeypatch.setattr(proxy_server, "redis_usage_cache", None)
+        assert client.get("/get/background_chat_settings").json()["redis_configured"] is False
+    elif blocker == "config":
+        proxy_server.proxy_config.litellm_settings.load_yaml(config["litellm_settings"])
+        assert client.get("/get/background_chat_settings").json()["managed_by_config"] is True
+    else:
+        monkeypatch.setattr(proxy_server, "store_model_in_db", False)
+        assert client.get("/get/background_chat_settings").json()["can_save"] is False
+    response = client.patch("/update/background_chat_settings", json={"enabled": True})
+    assert response.status_code == (403 if blocker == "role" else 400)
+    save.assert_not_awaited()
+    assert config["litellm_settings"]["responses"]["background_mode"]["polling_via_cache"] is False
+
+
+def test_background_chat_settings_failed_save_does_not_enable_runtime(background_chat_config):
+    from litellm.proxy import proxy_server
+
+    _, save, audit = background_chat_config
+    save.side_effect = RuntimeError("Database write failed")
+    with pytest.raises(RuntimeError, match="Database write failed"):
+        client.patch("/update/background_chat_settings", json={"enabled": True})
+    assert client.get("/get/background_chat_settings").json()["enabled"] is False
+    assert proxy_server.polling_via_cache_enabled is False
+    audit.assert_not_awaited()
