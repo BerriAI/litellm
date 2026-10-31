@@ -52,6 +52,7 @@ from litellm.constants import (
 from litellm.cost_calculator import (
     RealtimeAPITokenUsageProcessor,
     ResponsesWebSocketTokenUsageProcessor,
+    _base_model_pricing_provider,
     get_usage_object,
     pricing_entry_for_cost_calc,
     select_model_name_for_cost_calc,
@@ -6872,6 +6873,13 @@ class StandardLoggingPayloadSetup:
         return _empty
 
     @staticmethod
+    def _get_model_info_or_none(model: str, custom_llm_provider: str | None, api_base: str | None) -> ModelInfo | None:
+        try:
+            return litellm.get_model_info(model=model, custom_llm_provider=custom_llm_provider, api_base=api_base)
+        except Exception:
+            return None
+
+    @staticmethod
     def get_model_cost_information(
         base_model: str | None,
         custom_pricing: bool | None,
@@ -6898,27 +6906,29 @@ class StandardLoggingPayloadSetup:
             else model_cost_name
         )
         if model_cost_name is None:
-            model_cost_information = StandardLoggingModelInformation(model_map_key="", model_map_value=None)
-        else:
-            try:
-                _model_cost_information: Final = litellm.get_model_info(
-                    model=pricing_model_name or model_cost_name,
-                    custom_llm_provider=custom_llm_provider,
-                    api_base=api_base,
-                )
-                model_cost_information = StandardLoggingModelInformation(
-                    model_map_key=model_cost_name,
-                    model_map_value=_model_cost_information,
-                )
-            except Exception:
-                verbose_logger.debug(  # keep in debug otherwise it will trigger on every call
-                    "Model=%s is not mapped in model cost map. Defaulting to None model_cost_information for standard_logging_payload",
-                    model_cost_name,
-                )
-                model_cost_information = StandardLoggingModelInformation(
-                    model_map_key=model_cost_name, model_map_value=None
-                )
-        return model_cost_information
+            return StandardLoggingModelInformation(model_map_key="", model_map_value=None)
+        provider_for_lookup: Final[str | None] = (
+            _base_model_pricing_provider(base_model, custom_llm_provider)
+            if base_model is not None and not custom_pricing
+            else custom_llm_provider
+        )
+        lookup_model: Final = pricing_model_name or model_cost_name
+        provider_info: Final = StandardLoggingPayloadSetup._get_model_info_or_none(
+            model=lookup_model, custom_llm_provider=provider_for_lookup, api_base=api_base
+        )
+        model_info: Final = (
+            StandardLoggingPayloadSetup._get_model_info_or_none(
+                model=lookup_model, custom_llm_provider=None, api_base=api_base
+            )
+            if provider_info is None and provider_for_lookup is not None and base_model is not None
+            else provider_info
+        )
+        if model_info is None:
+            verbose_logger.debug(  # keep in debug otherwise it will trigger on every call
+                "Model=%s is not mapped in model cost map. Defaulting to None model_cost_information for standard_logging_payload",
+                model_cost_name,
+            )
+        return StandardLoggingModelInformation(model_map_key=model_cost_name, model_map_value=model_info)
 
     @staticmethod
     def get_final_response_obj(response_obj: dict, init_response_obj: object, kwargs: dict) -> dict | str | list | None:
