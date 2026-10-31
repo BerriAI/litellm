@@ -18,6 +18,7 @@ from pydantic import JsonValue, TypeAdapter
 
 import litellm
 from litellm.types.llms.openai import ResponsesAPIResponse
+from litellm.types.llms.openai import ResponseCompletedEvent as LiteLLMResponseCompletedEvent
 
 _MODEL: Final = "gpt-5"
 _API_KEY: Final = "synthetic-responses-key"
@@ -139,12 +140,14 @@ async def test_regression_sdk_comparison_response_id_is_raw_on_the_wire(
             if asynchronous:
                 assert isinstance(result, _AsyncResponseEvents), result
                 async_events: Final = tuple([event async for event in result])
-                async_completed: Final = ResponseCompletedEvent.model_validate(async_events[-1], from_attributes=True)
+                async_completed: Final = async_events[-1]
+                assert isinstance(async_completed, LiteLLMResponseCompletedEvent), async_events
                 assert async_completed.response.status == "completed", async_events
             else:
                 assert isinstance(result, _ResponseEvents), result
                 sync_events: Final = tuple(result)
-                sync_completed: Final = ResponseCompletedEvent.model_validate(sync_events[-1], from_attributes=True)
+                sync_completed: Final = sync_events[-1]
+                assert isinstance(sync_completed, LiteLLMResponseCompletedEvent), sync_events
                 assert sync_completed.response.status == "completed", sync_events
         else:
             assert isinstance(result, ResponsesAPIResponse), result
