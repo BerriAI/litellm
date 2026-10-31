@@ -7151,28 +7151,6 @@ def test_scoped_spend_report_range_at_max_allowed(client, monkeypatch):
         app.dependency_overrides.pop(ps.user_api_key_auth, None)
 
 
-def test_parse_session_cursor():
-    from litellm.proxy.spend_tracking.spend_management_endpoints import (
-        _parse_session_cursor,
-    )
-
-    assert _parse_session_cursor(None) is None
-    assert _parse_session_cursor("no-delimiter") is None
-    assert _parse_session_cursor("2026-08-29 10:00:00|sess-1") is None
-    assert _parse_session_cursor("|hashed-key|sess-1") is None
-    assert _parse_session_cursor("2026-08-29 10:00:00|hashed-key|") is None
-    assert _parse_session_cursor("2026-08-29 10:00:00|hashed-key|sess-1") == (
-        "2026-08-29 10:00:00",
-        "sess-1",
-        "hashed-key",
-    )
-    assert _parse_session_cursor("2026-08-29 10:00:00.123|hashed-key|sess|with|pipes") == (
-        "2026-08-29 10:00:00.123",
-        "sess|with|pipes",
-        "hashed-key",
-    )
-
-
 SESSION_GROUP_KEY_SQL = "COALESCE(NULLIF(session_id, ''), request_id), api_key"
 
 
@@ -7180,8 +7158,8 @@ def _session_grouped_mock_prisma(session_page_rows, session_total, representativ
     """Mock prisma dispatching the raw queries the keyset grouped path emits."""
 
     async def mock_query_raw(sql_query, *params):
-        if "COUNT(*) AS total_count" in sql_query:
-            return [{"total_count": session_total}]
+        if "rows_read" in sql_query:
+            return _session_read_rows(session_page_rows, session_total)
         if "DISTINCT ON" in sql_query:
             return representative_rows
         if "COALESCE(SUM(spend)" in sql_query:
@@ -7199,7 +7177,7 @@ def _session_grouped_mock_prisma(session_page_rows, session_total, representativ
                     "session_models": ["gpt-4o"],
                 }
             ]
-        return session_page_rows
+        raise AssertionError(f"unexpected query:\n{sql_query}")
 
     mock_prisma = MagicMock()
     mock_prisma.db = MagicMock()
@@ -7228,23 +7206,31 @@ def _session_page_row(session_key, last_activity):
     return {"session_key": session_key, "api_key": "hashed-key", "last_activity": last_activity}
 
 
-def _session_grouped_paginating_prisma(sessions, counted_total=None):
-    """Mock prisma serving the grouped page query out of ``sessions``, honoring the LIMIT and OFFSET it asks for."""
+def _session_read_rows(page_rows, session_count):
+    """The read query's rows for ``page_rows``, as if the read held every matching row."""
+    summary = {"rows_read": 0, "session_count": session_count}
+    if not page_rows:
+        return [{"session_key": None, "api_key": None, "last_activity": None, "settled": None, **summary}]
+    return [{**row, "settled": True, **summary} for row in page_rows]
+
+
+def _session_grouped_paginating_prisma(sessions):
+    """Mock prisma serving the grouped page read out of ``sessions``, honoring the LIMIT and OFFSET it asks for."""
 
     async def mock_query_raw(sql_query, *params):
-        if "COUNT(*) AS total_count" in sql_query:
-            return [{"total_count": min(len(sessions) if counted_total is None else counted_total, params[-1])}]
         if "DISTINCT ON" in sql_query:
             return [_session_representative_row(f"req-{session_key}", session_key) for session_key in params[-2]]
         if "COALESCE(SUM(spend)" in sql_query:
             return []
-        bounds = re.search(r"LIMIT \$(\d+)(?: OFFSET \$(\d+))?", sql_query)
-        limit = params[int(bounds.group(1)) - 1]
-        offset = params[int(bounds.group(2)) - 1] if bounds.group(2) else 0
-        return [
-            _session_page_row(session_key, last_activity)
-            for session_key, last_activity in sessions[offset : offset + limit]
-        ]
+        bounds = re.search(r"LIMIT (\d+)(?: OFFSET (\d+))?\s+\) AS page", sql_query)
+        limit, offset = int(bounds.group(1)), int(bounds.group(2) or 0)
+        return _session_read_rows(
+            [
+                _session_page_row(session_key, last_activity)
+                for session_key, last_activity in sessions[offset : offset + limit]
+            ],
+            len(sessions),
+        )
 
     mock_prisma = MagicMock()
     mock_prisma.db = MagicMock()
@@ -7296,20 +7282,15 @@ async def test_ui_view_spend_logs_group_by_session_first_page(client, monkeypatc
         assert data["data"][1]["session_total_count"] == 1
 
         emitted = [call.args for call in mock_prisma.db.query_raw.await_args_list]
+        assert len(emitted) == 3, "one read picks the page and counts it, then the representatives and their totals"
         page_query_sql = emitted[0][0]
-        assert f"GROUP BY {SESSION_GROUP_KEY_SQL}" in page_query_sql
         assert "OFFSET" not in page_query_sql
-        assert "HAVING" not in page_query_sql
-        assert emitted[0][-1] == 3, "page query fetches page_size + 1 sessions to detect has_more"
+        assert "LIMIT 3 " in page_query_sql, "the read fetches page_size + 1 sessions to detect has_more"
 
-        count_sql = emitted[1][0]
-        assert f"GROUP BY {SESSION_GROUP_KEY_SQL}" in count_sql
-        assert "LIMIT" in count_sql and "FROM (" in count_sql, "the grouped count must stay bounded"
-
-        rep_call = emitted[2]
+        rep_call = emitted[1]
         assert f"DISTINCT ON ({SESSION_GROUP_KEY_SQL})" in rep_call[0]
         assert (
-            f"ORDER BY {SESSION_GROUP_KEY_SQL}, " + spend_management_endpoints._SESSION_REPRESENTATIVE_ORDER_SQL
+            f"ORDER BY {SESSION_GROUP_KEY_SQL}, " + spend_management_endpoints.SESSION_REPRESENTATIVE_ORDER_SQL
         ) in rep_call[0]
         assert rep_call[-2] == ["sess-1", "req-solo"]
         assert rep_call[-1] == ["hashed-key", "hashed-key"]
@@ -7319,7 +7300,7 @@ async def test_ui_view_spend_logs_group_by_session_first_page(client, monkeypatc
 
 @pytest.mark.asyncio
 async def test_ui_view_spend_logs_group_by_session_cursor_page(client, monkeypatch):
-    """A session_cursor becomes a HAVING keyset predicate instead of an OFFSET."""
+    """A session_cursor becomes a keyset predicate on the read's sessions instead of an OFFSET."""
     page_rows = [_session_page_row("sess-2", "2026-08-29 07:00:00")]
     reps = [_session_representative_row("req-2", "sess-2")]
     mock_prisma = _session_grouped_mock_prisma(page_rows, 3, reps)
@@ -7352,7 +7333,7 @@ async def test_ui_view_spend_logs_group_by_session_cursor_page(client, monkeypat
 
         page_query_call = mock_prisma.db.query_raw.await_args_list[0]
         page_query_sql = page_query_call.args[0]
-        assert f'HAVING (MAX("startTime"), {SESSION_GROUP_KEY_SQL}) <' in page_query_sql
+        assert "WHERE (last_activity, session_key, api_key) <" in page_query_sql
         assert "OFFSET" not in page_query_sql
         cursor_index = page_query_call.args.index("2026-08-29 09:00:00")
         assert page_query_call.args[cursor_index : cursor_index + 3] == (
@@ -7403,9 +7384,9 @@ async def test_ui_view_spend_logs_group_by_session_jumps_to_page_without_cursor(
 
 @pytest.mark.asyncio
 async def test_ui_view_spend_logs_group_by_session_short_page_totals_itself(client, monkeypatch):
-    """A page that runs out of sessions is the end of the list, so the total comes from it and nothing is counted."""
+    """A page that runs out of sessions has read every matching row, so that one read gives the total."""
     sessions = tuple((f"sess-{index:02d}", f"2026-08-29 10:{59 - index:02d}:00") for index in range(10))
-    mock_prisma = _session_grouped_paginating_prisma(sessions, counted_total=999)
+    mock_prisma = _session_grouped_paginating_prisma(sessions)
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
     monkeypatch.setattr(
         "litellm.proxy.spend_tracking.spend_management_endpoints._is_admin_view_safe",
@@ -7429,10 +7410,12 @@ async def test_ui_view_spend_logs_group_by_session_short_page_totals_itself(clie
         )
         assert response.status_code == 200, response.text
         data = response.json()
-        assert data["total"] == 10, "the count query's 999 would have won if it had been asked"
+        assert data["total"] == 10
         assert data["total_is_capped"] is False
         assert data["total_pages"] == 1
         assert len(data["data"]) == 10
+        reads = [call for call in mock_prisma.db.query_raw.await_args_list if "rows_read" in call.args[0]]
+        assert len(reads) == 1, "a page that ends the list is not read again for its total"
     finally:
         app.dependency_overrides.pop(ps.user_api_key_auth, None)
 
@@ -7517,7 +7500,7 @@ async def test_ui_view_spend_logs_group_by_session_page_past_count_cap_is_empty(
         assert past_cap_data["data"] == []
         assert past_cap_data["has_more"] is False
         assert past_cap_data["total"] == cap
-        assert mock_prisma.db.query_raw.await_count == 1, "only the bounded count query runs past the capped window"
+        assert mock_prisma.db.query_raw.await_count == 1, "only the bounded read runs past the capped window"
     finally:
         app.dependency_overrides.pop(ps.user_api_key_auth, None)
 
@@ -7820,14 +7803,14 @@ def test_session_representative_uses_completed_agent_outcome(parent_status, chil
         )
         result = connection.execute(
             "SELECT request_id, status FROM logs ORDER BY "
-            + spend_management_endpoints._SESSION_REPRESENTATIVE_ORDER_SQL
+            + spend_management_endpoints.SESSION_REPRESENTATIVE_ORDER_SQL
             + " LIMIT 1"
         ).fetchone()
         assert result == ("parent", expected)
         connection.execute("DELETE FROM logs WHERE call_type = 'asend_message'")
         fallback = connection.execute(
             "SELECT request_id, status FROM logs ORDER BY "
-            + spend_management_endpoints._SESSION_REPRESENTATIVE_ORDER_SQL
+            + spend_management_endpoints.SESSION_REPRESENTATIVE_ORDER_SQL
             + " LIMIT 1"
         ).fetchone()
         assert fallback == ("llm", "success")
