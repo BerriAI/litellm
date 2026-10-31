@@ -4559,6 +4559,22 @@ class TestNativeWebSocketEncryptedContentAffinity:
         backend_ws = MagicMock()
         backend_ws.recv = AsyncMock(
             side_effect=[
+                json.dumps(
+                    {
+                        "type": "response.output_item.added",
+                        "output_index": 0,
+                        "item": {"type": "reasoning", "id": "rs_1", "summary": []},
+                    }
+                ),
+                json.dumps(
+                    {
+                        "type": "response.reasoning_summary_text.delta",
+                        "output_index": 0,
+                        "summary_index": 0,
+                        "item_id": "rs_1",
+                        "delta": "Thinking",
+                    }
+                ),
                 json.dumps({"type": "response.output_item.done", "output_index": 0, "item": dict(reasoning_item)}),
                 json.dumps(
                     {
@@ -4583,9 +4599,11 @@ class TestNativeWebSocketEncryptedContentAffinity:
         await handler.backend_to_client()
 
         wrapped_content = ResponsesAPIRequestUtils.wrap_encrypted_content_with_model_id("gAAAA-blob", "dep-1")
-        item_done = json.loads(websocket.send_text.await_args_list[0][0][0])
+        item_added = json.loads(websocket.send_text.await_args_list[0][0][0])
+        delta = json.loads(websocket.send_text.await_args_list[1][0][0])
+        item_done = json.loads(websocket.send_text.await_args_list[2][0][0])
         assert item_done["item"]["encrypted_content"] == wrapped_content
-        completed = json.loads(websocket.send_text.await_args_list[1][0][0])
+        completed = json.loads(websocket.send_text.await_args_list[3][0][0])
         assert completed["response"]["id"] == ResponsesAPIRequestUtils._build_responses_api_response_id(
             custom_llm_provider="openai", model_id="dep-1", response_id="resp_1"
         )
@@ -4593,6 +4611,12 @@ class TestNativeWebSocketEncryptedContentAffinity:
             "dep-1", "rs_1"
         )
         assert completed["response"]["output"][0]["encrypted_content"] == wrapped_content
+        assert (
+            item_added["item"]["id"]
+            == delta["item_id"]
+            == item_done["item"]["id"]
+            == completed["response"]["output"][0]["id"]
+        )
         await asyncio.sleep(0)
         logged = logging_obj.dispatch_success_handlers.await_args[0][0]
         assert logged[0]["response"]["id"] == completed["response"]["id"]

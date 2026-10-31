@@ -1304,6 +1304,13 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
     async def __anext__(
         self,
     ) -> ResponsesAPIStreamingResponse | ResponseCompletedEvent | BaseLiteLLMOpenAIResponseObject:
+        return ResponsesAPIRequestUtils.update_response_stream_event_with_affinity(
+            await self._anext(), self.litellm_metadata
+        )
+
+    async def _anext(
+        self,
+    ) -> ResponsesAPIStreamingResponse | ResponseCompletedEvent | BaseLiteLLMOpenAIResponseObject:
         try:
             while True:
                 if self.finished is True:
@@ -1362,6 +1369,11 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         return self
 
     def __next__(
+        self,
+    ) -> ResponsesAPIStreamingResponse | ResponseCompletedEvent | BaseLiteLLMOpenAIResponseObject:
+        return ResponsesAPIRequestUtils.update_response_stream_event_with_affinity(self._next(), self.litellm_metadata)
+
+    def _next(
         self,
     ) -> ResponsesAPIStreamingResponse | ResponseCompletedEvent | BaseLiteLLMOpenAIResponseObject:
         try:

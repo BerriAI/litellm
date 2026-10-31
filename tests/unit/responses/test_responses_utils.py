@@ -1009,3 +1009,57 @@ def test_responses_object_bills_an_explicit_cache_hit_at_the_explicit_rate():
         else:
             litellm.model_cost[model] = previous_row
         _invalidate_model_cost_lowercase_map()
+
+
+@pytest.mark.parametrize(
+    "event_type,part_type,encoded",
+    [
+        ("response.reasoning_text.delta", None, True),
+        ("response.reasoning_summary_part.added", None, True),
+        ("response.compaction.delta", None, True),
+        ("response.content_part.added", "reasoning_text", True),
+        ("response.content_part.done", "reasoning_text", True),
+        ("response.content_part.done", "output_text", False),
+        ("response.output_text.delta", None, False),
+        ("response.function_call_arguments.delta", None, False),
+    ],
+)
+def test_resumed_affinity_events_preserve_item_reference_routing(
+    event_type: str,
+    part_type: str | None,
+    encoded: bool,
+) -> None:
+    from litellm.router_utils.pre_call_checks.encrypted_content_affinity_check import EncryptedContentAffinityCheck
+
+    event: Final = {"type": event_type, "item_id": "provider-item", "part": {"type": part_type}}
+    metadata: Final = {"encrypted_content_affinity_enabled": True, "model_info": {"id": "deployment"}}
+    result: Final = ResponsesAPIRequestUtils.update_response_stream_event_with_affinity(event, metadata)
+    item_reference: Final = {"type": "item_reference", "id": result["item_id"]}
+    assert EncryptedContentAffinityCheck._extract_model_id_from_input([item_reference]) == (
+        "deployment" if encoded else None
+    )
+    assert ResponsesAPIRequestUtils.restore_encrypted_content_item_ids_in_input([item_reference]) == [
+        {"type": "item_reference", "id": event["item_id"]}
+    ]
+    assert ResponsesAPIRequestUtils.update_response_stream_event_with_affinity(result, metadata) == result
+    assert {**result, "item_id": event["item_id"]} == event
+
+
+@pytest.mark.parametrize("item_type", ["reasoning", "compaction", "message", "function_call"])
+@pytest.mark.parametrize("content", [None, "", "ciphertext"])
+def test_affinity_output_normalization_is_repeatable(item_type: str, content: str | None) -> None:
+    from litellm.router_utils.pre_call_checks.encrypted_content_affinity_check import EncryptedContentAffinityCheck
+
+    original: Final = {"type": item_type, "id": "provider-item", "encrypted_content": content}
+    response: Final = {"output": [dict(original)]}
+    first: Final = ResponsesAPIRequestUtils._update_encrypted_content_item_ids_in_response(response, "deployment")
+    snapshot: Final = {"output": [dict(item) for item in first["output"]]}
+    assert ResponsesAPIRequestUtils._update_encrypted_content_item_ids_in_response(first, "deployment") == snapshot
+    expected_deployment: Final = "deployment" if item_type in ("reasoning", "compaction") or content else None
+    assert (
+        EncryptedContentAffinityCheck._extract_model_id_from_input(
+            [{"type": "item_reference", "id": first["output"][0]["id"]}]
+        )
+        == expected_deployment
+    )
+    assert ResponsesAPIRequestUtils.restore_encrypted_content_item_ids_in_input(first["output"]) == [original]
