@@ -101,8 +101,6 @@ general_settings:
 
 Alternatively, start the proxy with `STORE_PROMPTS_IN_SPEND_LOGS=true litellm --config <your-e2e-config>.yml --port 4000`. Setting the variable only on the pytest process does not configure the proxy. With prompt storage disabled, the proxy correctly redacts `guardrail_response`, so that configuration cannot exercise this test's entity-detail assertions. Enable this only on a test stack using synthetic prompts
 
-A couple of logging destinations are configured on the proxy rather than by the test. The Weave tests scope their callback to the key they create, but litellm builds the `weave_otel` logger from `WANDB_API_KEY` and `WANDB_PROJECT_ID` before it applies the per-key vars, so the proxy needs both in its own environment or the key-scoped callback never initializes and nothing ships
-
 ### Secret manager lanes
 
 `key_management_system` is global to the proxy, so the `secret_manager/` tests run once per backend, each against its own proxy. The backends are `hashicorp_vault` and `cyberark` (CyberArk Conjur). `E2E_SECRET_MANAGER` opts in and names the backend (a key of `secret_backends.BACKENDS`). The proxy boots from `gateway/secret_manager_<system>_ci_config.yml`, and the tests reach the same manager through that backend's `SecretStore`. The managers are enterprise features, so the proxy needs a license. `secret_manager/backend.sh` runs any backend in Docker and writes its env, so every lane runs the same way locally:
