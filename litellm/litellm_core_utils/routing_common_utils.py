@@ -1,10 +1,11 @@
 import hashlib
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
+from itertools import chain
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, TypeVar
 
-from pydantic import TypeAdapter, ValidationError
+from pydantic import BaseModel, TypeAdapter, ValidationError
 
 if TYPE_CHECKING:
     from litellm.types.llms.openai import OpenAIFileObject
@@ -13,10 +14,12 @@ import litellm
 from litellm._logging import verbose_logger, verbose_router_logger
 from litellm.constants import ROUTER_FALLBACK_ERROR_DETAIL_MAX_CHARS
 from litellm.exceptions import BadRequestError
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 from litellm.litellm_core_utils.sensitive_data_masker import mask_sensitive_structure
 from litellm.llms.sagemaker.common_utils import deployment_inference_component
+from litellm.rust_bridge.public_call import optional_sequence
 from litellm.types.router import (
     CredentialLiteLLMParams,
     Deployment,
@@ -32,14 +35,31 @@ from litellm.types.utils import (
 )
 
 _V = TypeVar("_V")
+_Picked: Final = TypeVar("_Picked")
+_DeploymentT: Final = TypeVar("_DeploymentT", bound=Mapping[str, object])
 
 MID_STREAM_CONTINUATION_KWARG: Final = "_mid_stream_continuation"
 ROUTER_ONLY_CALL_KWARGS: Final = frozenset({"silent_model", "include_fallback_errors", MID_STREAM_CONTINUATION_KWARG})
 _OBJECT_MAPPING_ADAPTER: Final[TypeAdapter[Mapping[object, object]]] = TypeAdapter(Mapping[object, object])
+_GEMINI_SEARCH_TOOL_KEYS: Final = frozenset(
+    {
+        "googleSearch",
+        "google_search",
+        "googleSearchRetrieval",
+        "google_search_retrieval",
+        "enterpriseWebSearch",
+        "enterprise_web_search",
+    }
+)
+_WEB_SEARCH_TOOL_TYPES: Final = frozenset({"web_search", "google_search"})
+_OPENAI_WEB_SEARCH_TOOL_TYPES: Final = frozenset({"web_search", "web_search_preview"})
 _DEPLOYMENT_ROWS_ADAPTER: Final[TypeAdapter[tuple[Mapping[str, object], ...]]] = TypeAdapter(
     tuple[Mapping[str, object], ...]
 )
 _DEPLOYMENT_IDS_ADAPTER: Final = TypeAdapter(tuple[str, ...])
+_RETRY_BREADCRUMBS_ADAPTER: Final[TypeAdapter[tuple[Mapping[str, object], ...]]] = TypeAdapter(
+    tuple[Mapping[str, object], ...]
+)
 _FALLBACK_ENTRIES_ADAPTER: Final[TypeAdapter[tuple[Mapping[str, object], ...]]] = TypeAdapter(
     tuple[Mapping[str, object], ...]
 )
@@ -408,10 +428,7 @@ def deployments_the_caller_may_use(
         return ()
 
 
-_WEB_SEARCH_TOOL_TYPES: Final = frozenset({"web_search", "web_search_preview"})
-
-
-def _deployment_supports_web_search(deployment: dict) -> bool:
+def _deployment_supports_web_search(deployment: Mapping[str, object]) -> bool:
     """
     Check if a deployment supports web search.
 
@@ -423,12 +440,37 @@ def _deployment_supports_web_search(deployment: dict) -> bool:
     model_prices_and_context_window.json doesn't have supports_web_search
     tags on all models yet. TODO: backfill and add fallback.
     """
-    model_info: Final = deployment.get("model_info", {})
+    model_info: Final = deployment.get("model_info")
+    fields: Final = as_str_mapping(model_info.model_dump() if isinstance(model_info, BaseModel) else model_info) or {}
+    return bool(fields.get("supports_web_search", True))
 
-    if "supports_web_search" in model_info:
-        return model_info["supports_web_search"]
 
-    return True
+def _is_web_search_tool(tool: object) -> bool:
+    tool_fields: Final = as_str_mapping(tool)
+    if tool_fields is None:
+        return False
+    tool_type: Final = tool_fields.get("type")
+    if isinstance(tool_type, str) and (tool_type in _WEB_SEARCH_TOOL_TYPES or tool_type.startswith("web_search_")):
+        return True
+    return not _GEMINI_SEARCH_TOOL_KEYS.isdisjoint(tool_fields) and any(
+        tool_fields[key] is not None for key in _GEMINI_SEARCH_TOOL_KEYS.intersection(tool_fields)
+    )
+
+
+def _is_web_search_request(tools: object, web_search_options: object) -> bool:
+    return as_str_mapping(web_search_options) is not None or any(
+        _is_web_search_tool(tool) for tool in optional_sequence(tools) or ()
+    )
+
+
+def web_search_capable_deployments(
+    deployments: Sequence[_DeploymentT], request_kwargs: Mapping[str, object] | None
+) -> tuple[_DeploymentT, ...]:
+    if request_kwargs is None or not _is_web_search_request(
+        request_kwargs.get("tools"), request_kwargs.get("web_search_options")
+    ):
+        return ()
+    return tuple(d for d in deployments if _deployment_supports_web_search(d))
 
 
 def filter_web_search_deployments(
@@ -449,7 +491,7 @@ def filter_web_search_deployments(
     is_web_search_request: Final = isinstance(tools, (list, tuple)) and any(
         isinstance(tool, dict)
         and isinstance(tool_type := tool.get("type"), str)
-        and tool_type in _WEB_SEARCH_TOOL_TYPES
+        and tool_type in _OPENAI_WEB_SEARCH_TOOL_TYPES
         for tool in tools
     )
     if not is_web_search_request:
@@ -457,9 +499,146 @@ def filter_web_search_deployments(
 
     # Filter out deployments that don't support web search
     final_deployments: Final = [d for d in healthy_deployments if _deployment_supports_web_search(d)]
-    if len(healthy_deployments) > 0 and len(final_deployments) == 0:
+    if healthy_deployments and not final_deployments:
         verbose_logger.warning("No deployments support web search for request")
     return final_deployments
+
+
+def _deployment_id(deployment: Mapping[str, object]) -> object:
+    model_info: Final = as_str_mapping(deployment.get("model_info"))
+    return None if model_info is None else model_info.get("id")
+
+
+def _retry_breadcrumbs(metadata: object) -> tuple[Mapping[str, object], ...]:
+    fields: Final = as_str_mapping(metadata)
+    breadcrumbs: Final = None if fields is None else fields.get("previous_models")
+    if breadcrumbs is None:
+        return ()
+    try:
+        return _RETRY_BREADCRUMBS_ADAPTER.validate_python(breadcrumbs)
+    except ValidationError:
+        return ()
+
+
+def _retry_history_was_trimmed(metadata: object) -> bool:
+    fields: Final = as_str_mapping(metadata)
+    retry_count: Final = None if fields is None else fields.get("request_retry_count")
+    return type(retry_count) is int and retry_count > len(_retry_breadcrumbs(metadata))
+
+
+def _breadcrumb_deployment_ids(breadcrumb: Mapping[str, object]) -> tuple[str, ...]:
+    return tuple(
+        deployment_id
+        for deployment_id in (breadcrumb.get("deployment_id"), breadcrumb.get("configured_deployment_id"))
+        if isinstance(deployment_id, str)
+    )
+
+
+def _deployment_ids_retried_in_request(request_kwargs: Mapping[str, object]) -> tuple[str, ...]:
+    breadcrumbs: Final = (
+        *_retry_breadcrumbs(request_kwargs.get("metadata")),
+        *_retry_breadcrumbs(request_kwargs.get("litellm_metadata")),
+    )
+    return tuple(chain.from_iterable(map(_breadcrumb_deployment_ids, breadcrumbs)))
+
+
+def _web_search_tried_deployment_ids(
+    request_kwargs: Mapping[str, object] | None, at_rate_limit: frozenset[str]
+) -> frozenset[str] | None:
+    if request_kwargs is None or not _is_web_search_request(
+        request_kwargs.get("tools"), request_kwargs.get("web_search_options")
+    ):
+        return None
+    if _retry_history_was_trimmed(request_kwargs.get("metadata")) or _retry_history_was_trimmed(
+        request_kwargs.get("litellm_metadata")
+    ):
+        verbose_router_logger.debug("This request's retry history was trimmed, so every deployment stays")
+        return None
+    return frozenset(
+        (
+            *as_excluded_deployment_ids(request_kwargs.get("_excluded_deployment_ids")),
+            *as_retry_skipped_deployment_ids(request_kwargs.get("_retry_skipped_deployment_ids")),
+            *_deployment_ids_retried_in_request(request_kwargs),
+            *at_rate_limit,
+        )
+    )
+
+
+def prefer_web_search_deployments(
+    deployments: list[_DeploymentT],  # mutable-ok: router deployment-list contract
+    request_kwargs: Mapping[str, object] | None,
+    at_rate_limit: frozenset[str] = frozenset(),
+) -> list[_DeploymentT]:  # mutable-ok: returns a mutable deployment list
+    tried: Final = _web_search_tried_deployment_ids(request_kwargs, at_rate_limit)
+    if tried is None:
+        return deployments
+    untried: Final = [d for d in deployments if _deployment_id(d) not in tried]
+    orders_with_an_untried_capable_deployment: Final = tuple(
+        litellm.utils.get_deployment_order(d) for d in untried if _deployment_supports_web_search(d)
+    )
+    if not orders_with_an_untried_capable_deployment:
+        if not untried or not any(_deployment_supports_web_search(d) for d in deployments):
+            verbose_router_logger.debug("No untried deployment for this web search request can search, so all stay")
+            return deployments
+        if any(_deployment_supports_web_search(d) and _deployment_id(d) in at_rate_limit for d in deployments):
+            verbose_router_logger.debug("A deployment that can search is only at its limit, so all stay")
+            return deployments
+        verbose_router_logger.debug("Every deployment that can search was tried, so the untried ones stay")
+        return untried
+    return [
+        d
+        for d in deployments
+        if litellm.utils.get_deployment_order(d) not in orders_with_an_untried_capable_deployment
+        or (_deployment_supports_web_search(d) and _deployment_id(d) not in tried)
+    ]
+
+
+def web_search_preference_can_narrow(deployments: Sequence[_DeploymentT], request_kwargs: Mapping[str, object]) -> bool:
+    return 0 < len(web_search_capable_deployments(deployments, request_kwargs)) < len(deployments)
+
+
+def web_search_alternatives_to_pin(
+    pinned: _DeploymentT,
+    deployments: Sequence[_DeploymentT],
+    request_kwargs: Mapping[str, object],
+    at_rate_limit: frozenset[str] = frozenset(),
+) -> tuple[_DeploymentT, ...]:
+    tried: Final = _web_search_tried_deployment_ids(request_kwargs, at_rate_limit)
+    if tried is None or (_deployment_supports_web_search(pinned) and _deployment_id(pinned) not in tried):
+        return ()
+    return tuple(d for d in deployments if _deployment_supports_web_search(d) and _deployment_id(d) not in tried)
+
+
+def pick_preferring_web_search(
+    pick: Callable[[list[_DeploymentT]], _Picked | None],  # mutable-ok: router deployment-list contract
+    deployments: list[_DeploymentT],  # mutable-ok: router deployment-list contract
+    request_kwargs: Mapping[str, object] | None,
+    at_rate_limit: frozenset[str] = frozenset(),
+) -> _Picked | None:
+    preferred: Final = prefer_web_search_deployments(deployments, request_kwargs, at_rate_limit)
+    if len(preferred) == len(deployments):
+        return pick(deployments)
+    try:
+        from_preferred: Final = pick(preferred)
+    except (litellm.RateLimitError, ValueError):
+        return pick(deployments)
+    return from_preferred if from_preferred is not None else pick(deployments)
+
+
+async def apick_preferring_web_search(
+    pick: Callable[[list[_DeploymentT]], Awaitable[_Picked | None]],  # mutable-ok: router deployment-list contract
+    deployments: list[_DeploymentT],  # mutable-ok: router deployment-list contract
+    request_kwargs: Mapping[str, object] | None,
+    at_rate_limit: frozenset[str] = frozenset(),
+) -> _Picked | None:
+    preferred: Final = prefer_web_search_deployments(deployments, request_kwargs, at_rate_limit)
+    if len(preferred) == len(deployments):
+        return await pick(deployments)
+    try:
+        from_preferred: Final = await pick(preferred)
+    except (litellm.RateLimitError, ValueError):
+        return await pick(deployments)
+    return from_preferred if from_preferred is not None else await pick(deployments)
 
 
 # Credential params that only one provider family reads, paired with the providers

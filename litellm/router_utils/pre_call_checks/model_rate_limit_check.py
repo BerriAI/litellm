@@ -11,13 +11,16 @@ When a deployment sets both itpm/otpm and tpm/rpm, both are enforced. A warning
 is logged the first time such a deployment is seen.
 """
 
+import asyncio
 import contextlib
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
 from datetime import datetime, timedelta
+from itertools import chain
 from typing import TYPE_CHECKING, Any, Final, Literal
 
 import httpx
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, ValidationError
 
 import litellm
 from litellm._internal_context import with_service_target
@@ -31,6 +34,7 @@ from litellm.router_utils.pre_call_checks.io_token_rate_limit_check import (
     async_io_token_refund_failure,
     deployment_has_io_token_limits,
     get_io_token_rate_limit_request_kwargs,
+    io_token_limits_by_cache_key,
     io_token_pre_call_check,
     io_token_reconcile_success,
     io_token_refund_failure,
@@ -114,6 +118,32 @@ class _DailyLimitDeployment(BaseModel):
                 request=httpx.Request(method="model_rate_limit_check", url="https://github.com/BerriAI/litellm"),
             ),
         )
+
+
+def _deployment_model_id(deployment: Mapping[str, object]) -> object:
+    model_info: Final = deployment.get("model_info")
+    return model_info.get("id") if isinstance(model_info, Mapping) else None
+
+
+@dataclass(frozen=True, slots=True)
+class _LimitCounter:
+    model_id: str
+    key: str
+    limit: float
+    increments_first: bool
+
+    def reached(self, usage: object) -> bool:
+        if self.increments_first:
+            return (usage if isinstance(usage, (int, float)) else 0) + 1 > self.limit
+        return isinstance(usage, (int, float)) and usage >= self.limit
+
+
+def _counters_with_limits(model_id: str, counters: Sequence[tuple[str, object, bool]]) -> tuple[_LimitCounter, ...]:
+    return tuple(
+        _LimitCounter(model_id, key, limit, increments_first)
+        for key, limit, increments_first in counters
+        if isinstance(limit, (int, float))
+    )
 
 
 def _reset_offset_from_kwargs(kwargs: Mapping[str, object]) -> timedelta:
@@ -277,7 +307,7 @@ class ModelRateLimitingCheck(CustomLogger):
         return tpm_key, rpm_key
 
     @with_service_target(ROUTER_USAGE_TARGET)
-    def _get_current_tpm(self, tpm_key: str, tpm_limit: int) -> int | None:
+    def _get_current_tpm(self, tpm_key: str, tpm_limit: float) -> int | None:
         local_tpm: Final = self.dual_cache.get_cache(key=tpm_key, local_only=True)
         redis_cache: Final = self.dual_cache.redis_cache
         if redis_cache is None or (local_tpm is not None and local_tpm >= tpm_limit):
@@ -288,7 +318,7 @@ class ModelRateLimitingCheck(CustomLogger):
             return local_tpm
 
     @with_service_target(ROUTER_USAGE_TARGET)
-    async def _async_get_current_tpm(self, tpm_key: str, tpm_limit: int, parent_otel_span: Span | None) -> int | None:
+    async def _async_get_current_tpm(self, tpm_key: str, tpm_limit: float, parent_otel_span: Span | None) -> int | None:
         local_tpm: Final = await self.dual_cache.async_get_cache(key=tpm_key, local_only=True)
         redis_cache: Final = self.dual_cache.redis_cache
         if redis_cache is None or (local_tpm is not None and local_tpm >= tpm_limit):
@@ -297,6 +327,87 @@ class ModelRateLimitingCheck(CustomLogger):
             return await redis_cache.async_get_cache(key=tpm_key, parent_otel_span=parent_otel_span)
         except RedisCircuitBreakerOpenError:
             return local_tpm
+
+    def _limit_counters(
+        self,
+        deployment: dict[str, object],  # mutable-ok: the limit and key readers take router deployment dicts
+        now: datetime,
+    ) -> tuple[_LimitCounter, ...]:
+        model_id: Final = _deployment_model_id(deployment)
+        if not isinstance(model_id, str):
+            return ()
+        tpm_limit, rpm_limit = self._get_deployment_limits(deployment)
+        current_minute: Final = now.strftime("%H-%M")
+        tpm_key, rpm_key = self._get_cache_keys(deployment, current_minute)
+        minute_counters: Final = (
+            (tpm_key, tpm_limit, False),
+            (rpm_key, rpm_limit, True),
+            *((key, limit, True) for key, limit in io_token_limits_by_cache_key(deployment, current_minute)),
+        )
+        try:
+            daily: Final = _DailyLimitDeployment.model_validate(deployment)
+        except ValidationError:
+            return _counters_with_limits(model_id, minute_counters)
+        tpd_limit, rpd_limit = daily.limits()
+        tpd_key, rpd_key = daily.cache_keys(now)
+        return _counters_with_limits(
+            model_id, (*minute_counters, (tpd_key, tpd_limit, False), (rpd_key, rpd_limit, True))
+        )
+
+    def _counters_of(
+        self,
+        deployments: Sequence[dict[str, object]],  # mutable-ok: _limit_counters reads router deployment dicts
+    ) -> tuple[_LimitCounter, ...]:
+        now: Final = self.clock()
+        return tuple(chain.from_iterable(self._limit_counters(deployment, now) for deployment in deployments))
+
+    def _local_usage(self, key: str) -> object:
+        return self.dual_cache.get_cache(key=key, local_only=True)
+
+    def _redis_usages(self, keys: list[str]) -> Mapping[str, object] | None:
+        redis_cache: Final = self.dual_cache.redis_cache
+        if redis_cache is None or not keys:
+            return None
+        try:
+            return redis_cache.batch_get_cache(key_list=keys)
+        except RedisCircuitBreakerOpenError:
+            return None
+
+    @with_service_target(ROUTER_USAGE_TARGET)
+    def _current_usages(self, counters: Sequence[_LimitCounter]) -> tuple[object, ...]:
+        local_usages: Final = tuple(self._local_usage(counter.key) for counter in counters)
+        redis_usages: Final = self._redis_usages(
+            [counter.key for counter, usage in zip(counters, local_usages, strict=True) if not counter.reached(usage)]
+        )
+        if redis_usages is None:
+            return local_usages
+        return tuple(
+            usage if counter.reached(usage) else redis_usages.get(counter.key)
+            for counter, usage in zip(counters, local_usages, strict=True)
+        )
+
+    def deployment_ids_at_limit(
+        self,
+        deployments: Sequence[dict[str, object]],  # mutable-ok: _limit_counters reads router deployment dicts
+    ) -> frozenset[str]:
+        counters: Final = self._counters_of(deployments)
+        usages: Final = self._current_usages(counters)
+        return frozenset(
+            counter.model_id for counter, usage in zip(counters, usages, strict=True) if counter.reached(usage)
+        )
+
+    async def async_deployment_ids_at_limit(
+        self,
+        deployments: Sequence[dict[str, object]],  # mutable-ok: _limit_counters reads router deployment dicts
+        parent_otel_span: Span | None,
+    ) -> frozenset[str]:
+        counters: Final = self._counters_of(deployments)
+        usages: Final = await asyncio.gather(
+            *(self._async_get_current_tpm(counter.key, counter.limit, parent_otel_span) for counter in counters)
+        )
+        return frozenset(
+            counter.model_id for counter, usage in zip(counters, usages, strict=True) if counter.reached(usage)
+        )
 
     @with_service_target(ROUTER_USAGE_TARGET)
     def pre_call_check(self, deployment: dict) -> dict | None:

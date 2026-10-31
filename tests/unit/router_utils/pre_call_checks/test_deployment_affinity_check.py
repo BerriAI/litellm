@@ -2,6 +2,7 @@ import asyncio
 import itertools
 import json
 from collections.abc import Sequence
+from datetime import datetime, timezone
 from typing import Final
 from unittest.mock import AsyncMock, patch
 
@@ -1299,3 +1300,556 @@ async def test_previous_response_id_pin_holds_even_after_its_deployment_failed()
         },
         parent_otel_span=None,
     ) == [healthy_deployments[0]]
+
+
+def _mixed_web_search_router(
+    optional_pre_call_checks: list[str],  # mutable-ok: Router signature
+    orders: tuple[int | None, int | None] = (None, None),
+    search_rpm: int | None = None,
+    model_group_affinity_config: dict[str, list[str]] | None = None,  # mutable-ok: Router signature
+) -> litellm.Router:
+    no_search_order, search_order = orders
+    return litellm.Router(
+        model_list=[
+            {
+                "model_name": "mixed",
+                "litellm_params": {
+                    "model": "openai/gpt-x",
+                    "api_key": "fake-key",
+                    "mock_response": "hi",
+                    **({} if no_search_order is None else {"order": no_search_order}),
+                },
+                "model_info": {"id": "no-search", "supports_web_search": False},
+            },
+            {
+                "model_name": "mixed",
+                "litellm_params": {
+                    "model": "openai/gpt-y",
+                    "api_key": "fake-key",
+                    "mock_response": "hi",
+                    **({} if search_order is None else {"order": search_order}),
+                    **({} if search_rpm is None else {"rpm": search_rpm}),
+                },
+                "model_info": {"id": "search"},
+            },
+        ],
+        optional_pre_call_checks=optional_pre_call_checks,
+        model_group_affinity_config=model_group_affinity_config,
+        num_retries=0,
+    )
+
+
+_CALLER_METADATA: Final = {"user_api_key_hash": "caller-1", "session_id": "session-1"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "web_search_request",
+    [{"web_search_options": {}}, {"tools": [{"type": "web_search_20250305", "name": "web_search"}]}],
+    ids=["web-search-options", "web-search-tool"],
+)
+@pytest.mark.parametrize(
+    ("optional_pre_call_checks", "pin_key"),
+    [
+        (
+            ["deployment_affinity"],
+            DeploymentAffinityCheck.get_affinity_cache_key(model_group="mixed", user_key="caller-1"),
+        ),
+        (
+            ["session_affinity"],
+            DeploymentAffinityCheck.get_session_affinity_cache_key(
+                model_group="mixed", session_id="session-1", user_key="caller-1"
+            ),
+        ),
+    ],
+    ids=["user-key-pin", "session-pin"],
+)
+async def test_pin_on_a_deployment_without_web_search_yields_to_a_web_search_request(
+    optional_pre_call_checks: list[str],  # mutable-ok: Router signature
+    pin_key: str,
+    web_search_request: dict[str, object],  # mutable-ok: request kwargs
+):
+    router: Final = _mixed_web_search_router(optional_pre_call_checks)
+    await router.cache.async_set_cache(pin_key, {"model_id": "no-search"}, ttl=3600)
+    messages: Final = [{"role": "user", "content": "hi"}]
+
+    plain: Final = await router.acompletion(model="mixed", messages=messages, metadata=dict(_CALLER_METADATA))
+    searching: Final = await router.acompletion(
+        model="mixed", messages=messages, metadata=dict(_CALLER_METADATA), **web_search_request
+    )
+
+    assert plain._hidden_params["model_id"] == "no-search"
+    assert searching._hidden_params["model_id"] == "search"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("orders", "searched_on"),
+    [((2, 1), "search"), ((None, 1), "search"), ((1, 2), "no-search"), ((1, None), "no-search")],
+    ids=["search-tier-first", "only-search-tier-ordered", "pinned-tier-first", "only-pinned-tier-ordered"],
+)
+@pytest.mark.parametrize(
+    ("optional_pre_call_checks", "pin_key"),
+    [
+        (
+            ["deployment_affinity"],
+            DeploymentAffinityCheck.get_affinity_cache_key(model_group="mixed", user_key="caller-1"),
+        ),
+        (
+            ["session_affinity"],
+            DeploymentAffinityCheck.get_session_affinity_cache_key(
+                model_group="mixed", session_id="session-1", user_key="caller-1"
+            ),
+        ),
+    ],
+    ids=["user-key-pin", "session-pin"],
+)
+async def test_pin_without_web_search_yields_to_a_web_search_request_only_when_search_sits_in_an_earlier_order_tier(
+    optional_pre_call_checks: list[str],  # mutable-ok: Router signature
+    pin_key: str,
+    orders: tuple[int | None, int | None],
+    searched_on: str,
+):
+    router: Final = _mixed_web_search_router(optional_pre_call_checks, orders)
+    await router.cache.async_set_cache(pin_key, {"model_id": "no-search"}, ttl=3600)
+    messages: Final = [{"role": "user", "content": "hi"}]
+
+    plain: Final = await router.acompletion(model="mixed", messages=messages, metadata=dict(_CALLER_METADATA))
+    searching: Final = await router.acompletion(
+        model="mixed", messages=messages, metadata=dict(_CALLER_METADATA), web_search_options={}
+    )
+
+    assert plain._hidden_params["model_id"] == "no-search"
+    assert searching._hidden_params["model_id"] == searched_on
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "orders", [(None, 1), (2, 1), (None, None)], ids=["pin-unordered", "pin-in-later-tier", "same-tier"]
+)
+@pytest.mark.parametrize(
+    ("affinity_check", "per_group", "pin_key"),
+    [
+        (
+            "deployment_affinity",
+            False,
+            DeploymentAffinityCheck.get_affinity_cache_key(model_group="mixed", user_key="caller-1"),
+        ),
+        (
+            "session_affinity",
+            False,
+            DeploymentAffinityCheck.get_session_affinity_cache_key(
+                model_group="mixed", session_id="session-1", user_key="caller-1"
+            ),
+        ),
+        (
+            "deployment_affinity",
+            True,
+            DeploymentAffinityCheck.get_affinity_cache_key(model_group="mixed", user_key="caller-1"),
+        ),
+    ],
+    ids=["user-key-pin", "session-pin", "per-group-user-key-pin"],
+)
+async def test_pin_without_web_search_holds_for_a_web_search_request_once_the_earlier_search_tier_hits_its_rpm(
+    affinity_check: str,
+    per_group: bool,
+    pin_key: str,
+    orders: tuple[int | None, int | None],
+):
+    router: Final = _mixed_web_search_router(
+        ["enforce_model_rate_limits"] if per_group else [affinity_check, "enforce_model_rate_limits"],
+        orders,
+        search_rpm=1,
+        model_group_affinity_config={"mixed": [affinity_check]} if per_group else None,
+    )
+    await router.cache.async_set_cache(pin_key, {"model_id": "no-search"}, ttl=3600)
+    messages: Final = [{"role": "user", "content": "hi"}]
+
+    with patch(
+        "litellm.router_utils.pre_call_checks.model_rate_limit_check.get_utc_datetime",
+        return_value=datetime(2026, 1, 1, 12, 30, 15, tzinfo=timezone.utc),
+    ):
+        served: Final = [
+            await router.acompletion(
+                model="mixed", messages=messages, metadata=dict(_CALLER_METADATA), web_search_options={}
+            )
+            for _ in range(4)
+        ]
+
+    assert [response._hidden_params["model_id"] for response in served] == ["search", *["no-search"] * 3]
+
+
+def _tiered_web_search_router(
+    optional_pre_call_checks: list[str],  # mutable-ok: Router signature
+    deployments: tuple[tuple[str, bool, int | None, int | None], ...],
+) -> litellm.Router:
+    return litellm.Router(
+        model_list=[
+            {
+                "model_name": "mixed",
+                "litellm_params": {
+                    "model": "openai/gpt-x",
+                    "api_key": "fake-key",
+                    "mock_response": "hi",
+                    **({} if order is None else {"order": order}),
+                    **({} if rpm is None else {"rpm": rpm}),
+                },
+                "model_info": {"id": model_id, **({} if supports_web_search else {"supports_web_search": False})},
+            }
+            for model_id, supports_web_search, order, rpm in deployments
+        ],
+        optional_pre_call_checks=optional_pre_call_checks,
+        num_retries=0,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("deployments", "pinned_id", "served_ids"),
+    [
+        (
+            (("search-early", True, 1, 1), ("no-search", False, None, None), ("search", True, None, None)),
+            "no-search",
+            ["search-early", *["search"] * 3],
+        ),
+        (
+            (("search-early", True, 1, 1), ("no-search", False, 2, None), ("search", True, 2, None)),
+            "no-search",
+            ["search-early", *["search"] * 3],
+        ),
+        (
+            (("no-search-early", False, 1, None), ("no-search", False, 2, None), ("search", True, 2, None)),
+            "no-search",
+            ["search"] * 4,
+        ),
+        (
+            (("search-pinned", True, None, 1), ("search", True, None, None)),
+            "search-pinned",
+            ["search-pinned", *["search"] * 3],
+        ),
+    ],
+    ids=[
+        "rate-limited-search-before-unordered-pin",
+        "rate-limited-search-before-pin-tier",
+        "flagged-before-pin-tier",
+        "pinned-search-at-its-rpm",
+    ],
+)
+@pytest.mark.parametrize(
+    ("affinity_check", "pin_key"),
+    [
+        ("deployment_affinity", DeploymentAffinityCheck.get_affinity_cache_key(model_group="mixed", user_key="caller-1")),
+        (
+            "session_affinity",
+            DeploymentAffinityCheck.get_session_affinity_cache_key(
+                model_group="mixed", session_id="session-1", user_key="caller-1"
+            ),
+        ),
+    ],
+    ids=["user-key-pin", "session-pin"],
+)
+async def test_web_search_request_leaves_a_pin_only_for_an_untried_search_deployment_under_its_limit(
+    affinity_check: str,
+    pin_key: str,
+    deployments: tuple[tuple[str, bool, int | None, int | None], ...],
+    pinned_id: str,
+    served_ids: list[str],  # mutable-ok: expected id sequence
+):
+    router: Final = _tiered_web_search_router([affinity_check, "enforce_model_rate_limits"], deployments)
+    await router.cache.async_set_cache(pin_key, {"model_id": pinned_id}, ttl=3600)
+    messages: Final = [{"role": "user", "content": "hi"}]
+
+    with patch(
+        "litellm.router_utils.pre_call_checks.model_rate_limit_check.get_utc_datetime",
+        return_value=datetime(2026, 1, 1, 12, 30, 15, tzinfo=timezone.utc),
+    ):
+        served: Final = [
+            await router.acompletion(
+                model="mixed", messages=messages, metadata=dict(_CALLER_METADATA), web_search_options={}
+            )
+            for _ in range(4)
+        ]
+
+    assert [response._hidden_params["model_id"] for response in served] == served_ids
+
+
+@pytest.mark.asyncio
+async def test_session_pin_on_a_later_order_tier_holds_for_a_web_search_request_when_it_can_search():
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "tiered",
+                "litellm_params": {
+                    "model": "openai/gpt-x",
+                    "api_key": "fake-key",
+                    "mock_response": "hi",
+                    "order": order,
+                },
+                "model_info": {"id": model_id},
+            }
+            for model_id, order in (("search-first-tier", 1), ("search-second-tier", 2))
+        ],
+        optional_pre_call_checks=["session_affinity"],
+    )
+    await router.cache.async_set_cache(
+        DeploymentAffinityCheck.get_session_affinity_cache_key(
+            model_group="tiered", session_id="session-1", user_key="caller-1"
+        ),
+        {"model_id": "search-second-tier"},
+        ttl=3600,
+    )
+
+    searching: Final = await router.acompletion(
+        model="tiered",
+        messages=[{"role": "user", "content": "hi"}],
+        metadata=dict(_CALLER_METADATA),
+        web_search_options={},
+    )
+
+    assert searching._hidden_params["model_id"] == "search-second-tier"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("search_supported", "tried"),
+    [((False, False), ()), ((False, True), ("search",))],
+    ids=["no-deployment-can-search", "capable-deployment-already-tried"],
+)
+async def test_pin_holds_for_a_web_search_request_when_no_untried_deployment_can_search(
+    search_supported: tuple[bool, bool], tried: tuple[str, ...]
+):
+    cache: Final = AsyncMock()
+    cache.async_get_cache = AsyncMock(return_value={"model_id": "no-search"})
+    callback: Final = DeploymentAffinityCheck(
+        cache=cache, ttl_seconds=60, enable_user_key_affinity=True, enable_responses_api_affinity=False
+    )
+    healthy_deployments: Final = [
+        {
+            "model_name": "mixed",
+            "litellm_params": {"model": "openai/gpt-x"},
+            "model_info": {"id": model_id, "supports_web_search": supported},
+        }
+        for model_id, supported in zip(("no-search", "search"), search_supported)
+    ]
+
+    filtered: Final = await callback.async_filter_deployments(
+        model="mixed",
+        healthy_deployments=healthy_deployments,
+        messages=None,
+        request_kwargs={
+            "metadata": {"user_api_key_hash": "caller-1"},
+            "web_search_options": {},
+            "_excluded_deployment_ids": list(tried),
+        },
+    )
+
+    assert [d["model_info"]["id"] for d in filtered] == ["no-search"]
+
+
+@pytest.mark.asyncio
+async def test_key_pin_holds_for_a_web_search_request_when_tag_filtering_removes_every_deployment_that_can_search():
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "mixed",
+                "litellm_params": {
+                    "model": "openai/gpt-x",
+                    "api_key": "fake-key",
+                    "mock_response": "hi",
+                    "tags": ["cheap"],
+                },
+                "model_info": {"id": model_id, "supports_web_search": False},
+            }
+            for model_id in ("flagged-a", "flagged-b")
+        ]
+        + [
+            {
+                "model_name": "mixed",
+                "litellm_params": {
+                    "model": "openai/gpt-y",
+                    "api_key": "fake-key",
+                    "mock_response": "hi",
+                    "tags": ["premium"],
+                },
+                "model_info": {"id": "search"},
+            }
+        ],
+        optional_pre_call_checks=["deployment_affinity"],
+        enable_tag_filtering=True,
+    )
+    await router.cache.async_set_cache(
+        DeploymentAffinityCheck.get_affinity_cache_key(model_group="mixed", user_key="caller-1"),
+        {"model_id": "flagged-a"},
+        ttl=3600,
+    )
+
+    served_by: Final = {
+        (
+            await router.acompletion(
+                model="mixed",
+                messages=[{"role": "user", "content": "hi"}],
+                metadata={"user_api_key_hash": "caller-1", "tags": ["cheap"]},
+                web_search_options={},
+            )
+        )._hidden_params["model_id"]
+        for _ in range(20)
+    }
+
+    assert served_by == {"flagged-a"}
+
+
+
+def _web_search_group_router(
+    optional_pre_call_checks: list[str],  # mutable-ok: Router signature
+    heavy_can_search: bool,
+    heavy_weight: int,
+    session_affinity_repin_on_failover: bool = False,
+) -> litellm.Router:
+    return litellm.Router(
+        model_list=[
+            {
+                "model_name": "group",
+                "litellm_params": {
+                    "model": "openai/gpt-x",
+                    "api_key": "fake-key",
+                    "mock_response": "hi",
+                    "weight": heavy_weight,
+                },
+                "model_info": {"id": "heavy", **({} if heavy_can_search else {"supports_web_search": False})},
+            },
+            {
+                "model_name": "group",
+                "litellm_params": {"model": "openai/gpt-y", "api_key": "fake-key", "mock_response": "hi", "weight": 1},
+                "model_info": {"id": "light"},
+            },
+        ],
+        optional_pre_call_checks=optional_pre_call_checks,
+        session_affinity_repin_on_failover=session_affinity_repin_on_failover,
+        num_retries=0,
+    )
+
+
+_AFFINITY_KINDS: Final = pytest.mark.parametrize(
+    "optional_pre_call_checks", [["deployment_affinity"], ["session_affinity"]], ids=["user-key-pin", "session-pin"]
+)
+
+
+async def _served_by(router: litellm.Router, caller: int, **web_search_request: object) -> object:
+    response: Final = await router.acompletion(
+        model="group",
+        messages=[{"role": "user", "content": "hi"}],
+        metadata={"user_api_key_hash": f"caller-{caller}", "session_id": f"session-{caller}"},
+        **web_search_request,
+    )
+    return response._hidden_params["model_id"]
+
+
+@pytest.mark.asyncio
+@_AFFINITY_KINDS
+async def test_a_first_web_search_request_does_not_pin_plain_traffic_to_the_deployment_that_can_search(
+    optional_pre_call_checks: list[str],  # mutable-ok: Router signature
+):
+    router: Final = _web_search_group_router(optional_pre_call_checks, heavy_can_search=False, heavy_weight=10**6)
+
+    searched_on: Final = await _served_by(router, 1, web_search_options={})
+    plain_on: Final = {await _served_by(router, 1) for _ in range(5)}
+
+    assert searched_on == "light"
+    assert plain_on == {"heavy"}
+
+
+@pytest.mark.asyncio
+@_AFFINITY_KINDS
+async def test_a_first_web_search_request_still_pins_a_group_where_every_deployment_can_search(
+    optional_pre_call_checks: list[str],  # mutable-ok: Router signature
+):
+    router: Final = _web_search_group_router(optional_pre_call_checks, heavy_can_search=True, heavy_weight=1)
+
+    for caller in range(10):
+        searched_on = await _served_by(router, caller, web_search_options={})
+        assert {await _served_by(router, caller) for _ in range(3)} == {searched_on}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("optional_params", "session_pin"),
+    [
+        ({"web_search_options": {}}, None),
+        ({"tools": [{"type": "web_search_20250305", "name": "web_search"}]}, None),
+        ({}, {"model_id": "light"}),
+    ],
+    ids=["web-search-options", "web-search-tool", "plain"],
+)
+async def test_a_successful_web_search_request_does_not_repin_a_session_in_a_mixed_group(
+    optional_params: dict[str, object],  # mutable-ok: logging kwargs shape
+    session_pin: dict[str, str] | None,  # mutable-ok: cache value shape
+):
+    router: Final = _web_search_group_router(
+        ["session_affinity"], heavy_can_search=False, heavy_weight=1, session_affinity_repin_on_failover=True
+    )
+    timestamp: Final = datetime(2026, 1, 1, tzinfo=timezone.utc)
+
+    await router.deployment_callback_on_success(
+        {
+            "litellm_params": {
+                "model_info": {"id": "light"},
+                "metadata": {
+                    "model_group": "group",
+                    "deployment_model_name": "group",
+                    "session_id": "session-1",
+                    "user_api_key_hash": "caller-1",
+                },
+            },
+            "optional_params": optional_params,
+            "standard_logging_object": {"total_tokens": 0},
+        },
+        {"choices": [{"message": {"content": "ok"}}]},
+        timestamp,
+        timestamp,
+    )
+
+    assert (
+        await router.cache.async_get_cache(
+            DeploymentAffinityCheck.get_session_affinity_cache_key("group", "session-1", "caller-1")
+        )
+        == session_pin
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("pinned_model_id", "session_pin"),
+    [("removed", {"model_id": "light"}), ("heavy", {"model_id": "heavy"})],
+    ids=["ineligible-pin-moves", "eligible-pin-stays"],
+)
+async def test_a_successful_web_search_request_moves_a_session_only_off_an_ineligible_pin_in_a_mixed_group(
+    pinned_model_id: str,
+    session_pin: dict[str, str],  # mutable-ok: cache value shape
+):
+    router: Final = _web_search_group_router(
+        ["session_affinity"], heavy_can_search=False, heavy_weight=1, session_affinity_repin_on_failover=True
+    )
+    cache_key: Final = DeploymentAffinityCheck.get_session_affinity_cache_key("group", "session-1", "caller-1")
+    await router.cache.async_set_cache(cache_key, {"model_id": pinned_model_id})
+    timestamp: Final = datetime(2026, 1, 1, tzinfo=timezone.utc)
+
+    await router.deployment_callback_on_success(
+        {
+            "litellm_params": {
+                "model_info": {"id": "light"},
+                "metadata": {
+                    "model_group": "group",
+                    "deployment_model_name": "group",
+                    "session_id": "session-1",
+                    "user_api_key_hash": "caller-1",
+                },
+            },
+            "optional_params": {"web_search_options": {}},
+            "standard_logging_object": {"total_tokens": 0},
+        },
+        {"choices": [{"message": {"content": "ok"}}]},
+        timestamp,
+        timestamp,
+    )
+
+    assert await router.cache.async_get_cache(cache_key) == session_pin

@@ -178,6 +178,8 @@ ignored_function_names = [
     "_responses_continuation",  # Tested through the Responses mid-stream fallback tests in tests/unit/llms/base_llm/responses/test_transformation.py
     "_responses_continuation_ceilings",  # Tested through the Responses mid-stream fallback tests in tests/unit/llms/base_llm/responses/test_transformation.py
     "_team_deployments_named",  # Tested through the team lookups in the concurrent delete tests in test_router.py
+    "_model_rate_limit_checks",  # Tested through the web search pin rpm tests in test_deployment_affinity_check.py
+    "_async_deployment_ids_at_rate_limit",  # Tested through the web search pin rpm tests in test_deployment_affinity_check.py
     "_served_openai_models",  # Cached as served_openai_models, tested through the pre-call check token count tests in test_router.py
     "priority_header_update",  # Tested through the priority header tests in test_common_request_processing.py
     "_drops_params",  # Read by split_request_priority and priority_header_update, tested through both

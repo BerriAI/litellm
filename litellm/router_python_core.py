@@ -124,6 +124,7 @@ from litellm.litellm_core_utils.clientside_credential_handler import (
 )
 from litellm.litellm_core_utils.completion_timeout import CompletionTimeout
 from litellm.litellm_core_utils.core_helpers import (
+    as_str_mapping,
     coerce_token_limit,
     get_litellm_metadata_from_kwargs,
     get_metadata_variable_name_from_kwargs,
@@ -184,6 +185,7 @@ from litellm.litellm_core_utils.request_timeout_resolver import (
 )
 from litellm.litellm_core_utils.routing_common_utils import (
     MID_STREAM_CONTINUATION_KWARG,
+    apick_preferring_web_search,
     as_retry_skipped_deployment_ids,
     deployment_model_id_pin,
     deployments_the_caller_may_use,
@@ -195,6 +197,8 @@ from litellm.litellm_core_utils.routing_common_utils import (
     format_no_fallback_group_message,
     get_request_team_id,
     is_proxy_admin_request,
+    pick_preferring_web_search,
+    prefer_web_search_deployments,
     provider_for_generic_call,
     request_user_api_key_auth,
     resolve_model_group_alias,
@@ -202,6 +206,7 @@ from litellm.litellm_core_utils.routing_common_utils import (
     truncate_fallback_error_detail,
     warn_on_ignored_model_capability_flags,
     warn_on_provider_credential_mismatch,
+    web_search_capable_deployments,
     with_admin_api_key_secret_reference,
     without_model_capability_flags,
     without_router_only_kwargs,
@@ -3246,6 +3251,8 @@ class PythonCore(DeprecatedRouterMembers):
             model_group_affinity_config=self.model_group_affinity_config,
             is_priority_group=self._is_priority_routing_group,
             session_affinity_repin_on_failover=self.session_affinity_repin_on_failover,
+            deployment_ids_at_limit=self._async_deployment_ids_at_rate_limit,
+            model_group_deployments=self._model_group_deployments,
         )
         self.optional_callbacks.append(affinity_callback)
         self._host.callbacks.add_litellm_callback(affinity_callback)
@@ -3293,6 +3300,8 @@ class PythonCore(DeprecatedRouterMembers):
                     model_group_affinity_config=self.model_group_affinity_config,
                     is_priority_group=self._is_priority_routing_group,
                     session_affinity_repin_on_failover=self.session_affinity_repin_on_failover,
+                    deployment_ids_at_limit=self._async_deployment_ids_at_rate_limit,
+                    model_group_deployments=self._model_group_deployments,
                 )
                 self.optional_callbacks.append(affinity_callback)
                 self._host.callbacks.add_litellm_callback(affinity_callback)
@@ -9947,6 +9956,7 @@ class PythonCore(DeprecatedRouterMembers):
                 await self._repin_session_after_success(
                     _LITELLM_PARAMS_ADAPTER.validate_python(litellm_params),
                     _OPAQUE_VALUE_ADAPTER.validate_python(completion_response),
+                    _OPAQUE_VALUE_ADAPTER.validate_python(kwargs.get("optional_params")),
                 )
 
             # Always track deployment successes for cooldown logic, regardless of TPM/RPM limits
@@ -9972,7 +9982,9 @@ class PythonCore(DeprecatedRouterMembers):
                 "litellm.router.Router::deployment_callback_on_success(): Exception occured - %s", e
             )
 
-    async def _repin_session_after_success(self, litellm_params: Mapping[str, object], response: object) -> None:
+    async def _repin_session_after_success(
+        self, litellm_params: Mapping[str, object], response: object, optional_params: object = None
+    ) -> None:
         if not self.session_affinity_repin_on_failover:
             return
         try:
@@ -9998,7 +10010,12 @@ class PythonCore(DeprecatedRouterMembers):
                     model_ids=list(registered_ids), parent_otel_span=None
                 )
             )
-            await callback.async_repin_session_after_success(litellm_params, model_group, registered_ids - cooldown_ids)
+            await callback.async_repin_session_after_success(
+                litellm_params,
+                model_group,
+                registered_ids - cooldown_ids,
+                _LITELLM_PARAMS_ADAPTER.validate_python(optional_params or {}),
+            )
         except Exception as error:  # noqa: BLE001  # Optional pin updates must not interrupt success accounting
             verbose_router_logger.debug("Session re-pinning failed: %s", error)
 
@@ -10326,14 +10343,15 @@ class PythonCore(DeprecatedRouterMembers):
         _metadata_var: Final = "litellm_metadata" if "litellm_metadata" in kwargs else "metadata"
         request_metadata: Final = cast("Mapping[str, object]", kwargs[_metadata_var])  # cast-ok: untyped kwargs
         model_group: Final = kwargs.get("model")
-        model_info: Final = request_metadata.get("model_info")
-        deployment_id: Final = model_info.get("id") if isinstance(model_info, Mapping) else None
+        model_info: Final = as_str_mapping(request_metadata.get("model_info")) or {}
+        deployment_id: Final = model_info.get("id")
+        configured_deployment_id: Final = model_info.get("original_model_id")
         base_model: Final = get_base_model_from_litellm_call_metadata(
             metadata=request_metadata
         ) or self._deployment_params_base_model(deployment_id if isinstance(deployment_id, str) else None)
         deployment_model: Final = request_metadata.get("deployment")
         attempted_retries: Final = request_metadata.get("attempted_retries")
-        attempt_record: Final[RetryAttemptRecord] = {
+        attempt_fields: Final[RetryAttemptRecord] = {
             "model_group": model_group if isinstance(model_group, str) else None,
             "deployment_id": deployment_id if isinstance(deployment_id, str) else None,
             "model": deployment_model if isinstance(deployment_model, str) else None,
@@ -10342,6 +10360,11 @@ class PythonCore(DeprecatedRouterMembers):
             "exception_string": str(e),
             "attempted_retries": attempted_retries if type(attempted_retries) is int else None,
         }
+        attempt_record: Final[RetryAttemptRecord] = (
+            {**attempt_fields, "configured_deployment_id": configured_deployment_id}
+            if isinstance(configured_deployment_id, str)
+            else attempt_fields
+        )
         earlier_breadcrumbs: Final = request_metadata.get("previous_models")
         kept_breadcrumbs: Final[tuple[object, ...]] = (
             tuple(earlier_breadcrumbs)[-(RETRY_BREADCRUMB_LIMIT - 1) :]
@@ -10587,6 +10610,24 @@ class PythonCore(DeprecatedRouterMembers):
         ]
         healthy_deployments = self._filter_blocked_deployments(healthy_deployments)
         return healthy_deployments, _all_deployments
+
+    def _model_rate_limit_checks(self) -> tuple[ModelRateLimitingCheck, ...]:
+        return tuple(callback for callback in self._routing_callbacks() if isinstance(callback, ModelRateLimitingCheck))
+
+    def _model_group_deployments(self, model_group: str) -> Sequence[Mapping[str, object]]:
+        return self._core_get_model_list(model_name=model_group) or ()
+
+    async def _async_deployment_ids_at_rate_limit(
+        self, deployments: Sequence[dict[str, object]], parent_otel_span: Span | None
+    ) -> frozenset[str]:
+        return frozenset(
+            chain.from_iterable(
+                [
+                    await check.async_deployment_ids_at_limit(deployments, parent_otel_span)
+                    for check in self._model_rate_limit_checks()
+                ]
+            )
+        )
 
     def routing_strategy_pre_call_checks(self, deployment: dict):
         """
@@ -16083,26 +16124,39 @@ class PythonCore(DeprecatedRouterMembers):
                 return healthy_deployments[0]
 
             start_time: Final = time.time()
+            routing_kwargs: Final = cast(Mapping[str, object], request_kwargs)  # cast-ok: str-keyed request kwargs
+            web_search_capable: Final = web_search_capable_deployments(
+                request_kwargs=routing_kwargs,
+                deployments=cast(list[dict[str, object]], healthy_deployments),  # cast-ok: str-keyed dicts
+            )
+            at_rate_limit: Final = await self._async_deployment_ids_at_rate_limit(web_search_capable, parent_otel_span)
             if strategy == "simple-shuffle":
                 shuffled: Final = simple_shuffle(
                     resolve_model_alias=self._core_get_model_from_alias,
-                    healthy_deployments=healthy_deployments,
+                    healthy_deployments=prefer_web_search_deployments(
+                        healthy_deployments, routing_kwargs, at_rate_limit
+                    ),
                     model=model,
-                    request_kwargs=request_kwargs,
+                    request_kwargs=routing_kwargs,
                 )
                 phase_event(_DEPLOYMENT_SELECTED_EVENT, pick_attributes)
                 return shuffled
             with PrefetchedUsage.scoped(
                 routing_read_batch.prefetched_usage if routing_read_batch is not None else None
             ):
-                deployment: Final = await self._select_deployment_async(
-                    strategy=strategy,
-                    selector=strategy_selector,
-                    model=model,
-                    healthy_deployments=healthy_deployments,
-                    messages=messages,
-                    input=input,
-                    request_kwargs=request_kwargs,
+                deployment: Final = await apick_preferring_web_search(
+                    lambda candidates: self._select_deployment_async(
+                        strategy=strategy,
+                        selector=strategy_selector,
+                        model=model,
+                        healthy_deployments=candidates,
+                        messages=messages,
+                        input=input,
+                        request_kwargs=request_kwargs,
+                    ),
+                    cast(list[dict[str, object]], healthy_deployments),  # cast-ok: router deployments are plain dicts
+                    routing_kwargs,
+                    at_rate_limit,
                 )
             if deployment is None:
                 exception: Final = await async_raise_no_deployment_exception(
@@ -17130,25 +17184,39 @@ class PythonCore(DeprecatedRouterMembers):
                 ),
             )
 
+        web_search_capable: Final = web_search_capable_deployments(
+            request_kwargs=routing_kwargs,
+            deployments=cast(list[dict[str, object]], healthy_deployments),  # cast-ok: str-keyed dicts
+        )
+        at_rate_limit: Final = frozenset(
+            chain.from_iterable(
+                check.deployment_ids_at_limit(web_search_capable) for check in self._model_rate_limit_checks()
+            )
+        )
         if strategy == "simple-shuffle":
             # if users pass rpm or tpm, we do a random weighted pick - based on rpm/tpm
             ############## Check 'weight' param set for weighted pick #################
             shuffled: Final = simple_shuffle(
                 resolve_model_alias=self._core_get_model_from_alias,
-                healthy_deployments=healthy_deployments,
+                healthy_deployments=prefer_web_search_deployments(healthy_deployments, routing_kwargs, at_rate_limit),
                 model=model,
-                request_kwargs=request_kwargs,
+                request_kwargs=routing_kwargs,
             )
             phase_event(_DEPLOYMENT_SELECTED_EVENT, pick_attributes)
             return shuffled
-        deployment: Final = self._select_deployment_sync(
-            strategy=strategy,
-            selector=strategy_selector,
-            model=model,
-            healthy_deployments=healthy_deployments,
-            messages=messages,
-            input=input,
-            request_kwargs=request_kwargs,
+        deployment: Final = pick_preferring_web_search(
+            lambda candidates: self._select_deployment_sync(
+                strategy=strategy,
+                selector=strategy_selector,
+                model=model,
+                healthy_deployments=candidates,
+                messages=messages,
+                input=input,
+                request_kwargs=request_kwargs,
+            ),
+            cast(list[dict[str, object]], healthy_deployments),  # cast-ok: router deployments are plain dicts
+            routing_kwargs,
+            at_rate_limit,
         )
 
         if deployment is None:
