@@ -1750,6 +1750,12 @@ def _model_mapping_keys(deployments: Iterable[Deployment]) -> frozenset[str]:
     return frozenset(itertools.chain.from_iterable(map(_deployment_model_mapping_keys, deployments)))
 
 
+def _team_public_model_names(deployments: Iterable[Deployment]) -> frozenset[str]:
+    return frozenset(
+        name for deployment in deployments if (name := deployment.model_info.team_public_model_name) is not None
+    )
+
+
 def _deployments_serving_model(llm_router: Router, model: str, team_id: str | None) -> tuple[Deployment, ...]:
     deployment: Final = llm_router.registry().deployment(model) if llm_router.registry().has_deployment(model) else None
     if deployment is not None:
@@ -1831,7 +1837,8 @@ def _files_serving_model(llm_router: Router, model: str, team_id: str | None) ->
     deployments: Final = _deployments_serving_model(llm_router, model, team_id)
     providers: Final = frozenset(map(_resolved_deployment_provider, deployments))
     return _ListedFiles(
-        FileListModelScope(_model_mapping_keys(deployments)), next(iter(providers)) if len(providers) == 1 else None
+        FileListModelScope(_model_mapping_keys(deployments) | _team_public_model_names(deployments)),
+        next(iter(providers)) if len(providers) == 1 else None,
     )
 
 

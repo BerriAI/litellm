@@ -6432,6 +6432,12 @@ def test_require_managed_files_lists_the_callers_files_on_its_team_model_by_publ
         _router_with_two_teams_sharing_a_public_model_name(),
         [
             _managed_file_row("unified-team-a", team_id="team-a", model_mappings={"team-a-gpt-id": "f-1"}),
+            _managed_file_row(
+                "unified-team-a-stored",
+                team_id="team-a",
+                model_mappings={"team-gpt": "storage-f-4"},
+                storage_backend="azure_storage",
+            ),
             _managed_file_row("unified-global", team_id="team-a", model_mappings={"gpt-3.5-turbo-id": "f-2"}),
             _managed_file_row("unified-team-b", team_id="team-b", model_mappings={"team-b-gpt-id": "f-3"}),
         ],
@@ -6444,7 +6450,7 @@ def test_require_managed_files_lists_the_callers_files_on_its_team_model_by_publ
     response: Final = _list_files_as_test_user("/v1/files", params, headers)
 
     assert response.status_code == 200, response.text
-    assert [file["id"] for file in response.json()["data"]] == ["unified-team-a"]
+    assert [file["id"] for file in response.json()["data"]] == ["unified-team-a", "unified-team-a-stored"]
 
 
 
