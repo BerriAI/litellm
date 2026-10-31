@@ -10,8 +10,10 @@ import ast
 import asyncio
 import contextlib
 import contextvars
+import gc
 import os
 import re
+import weakref
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -1546,6 +1548,101 @@ def test_record_error_attributes_on_span_decorates_without_ending():
     assert span.attributes["litellm.provider.error.code"] == "422"
     assert span.status.status_code is StatusCode.ERROR
     assert [e.name for e in span.events] == ["exception"]
+
+
+@pytest.mark.parametrize("redact", [True, False], ids=["redaction_on", "redaction_off"])
+def test_failure_hook_scrubs_the_prompt_out_of_the_server_span_and_the_restamp_keeps_it(monkeypatch, redact):
+    import json
+
+    import litellm
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    secret = "my ssn is 123-45-6789"
+    monkeypatch.setattr(litellm, "turn_off_message_logging", redact)
+    logger, exporter = _logger()
+    server = logger._emitter.start_span(SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME)
+    set_request_root_span(server)
+    exc = _proxy_exc(f"blocked: {secret}", 400)
+    asyncio.run(
+        logger.async_post_call_failure_hook(
+            request_data={"messages": [{"role": "user", "content": secret}]},
+            original_exception=exc,
+            user_api_key_dict=UserAPIKeyAuth(),
+        )
+    )
+    logger.record_error_attributes_on_span(server, exc, 400)
+    server.end()
+    (span,) = exporter.get_finished_spans()
+    logged = json.dumps(
+        [dict(span.attributes), [dict(event.attributes or {}) for event in span.events], span.status.description]
+    )
+    assert (secret in logged) is not redact
+    assert span.attributes["error.message"].startswith("blocked: ")
+    assert span.attributes["error.type"] == "ProxyException"
+
+
+def _raised(exc):
+    try:
+        raise exc
+    except Exception as raised:
+        return raised
+
+
+@pytest.mark.parametrize("redact", [True, False], ids=["redaction_on", "redaction_off"])
+def test_restamp_shows_the_handlers_own_error_with_the_prompt_scrubbed(monkeypatch, redact):
+    """The proxy's failure hook and its exception handler stamp the same SERVER span from different
+    exceptions. The handler's restamp keeps its own wording and stack trace, scrubbed like the hook's."""
+    from fastapi import HTTPException
+
+    import litellm
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    secret = "my ssn is 123-45-6789"
+    monkeypatch.setattr(litellm, "turn_off_message_logging", redact)
+    logger, exporter = _logger()
+    server = logger._emitter.start_span(SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME)
+    set_request_root_span(server)
+    asyncio.run(
+        logger.async_post_call_failure_hook(
+            request_data={"messages": [{"role": "user", "content": secret}]},
+            original_exception=HTTPException(status_code=400, detail={"error": f"blocked: {secret}", "mode": "pre"}),
+            user_api_key_dict=UserAPIKeyAuth(),
+            traceback_str=f'  File "/srv/litellm/router.py", line 7, in route\nHTTPException: blocked: {secret}\n',
+        )
+    )
+    logger.record_error_attributes_on_span(server, _raised(_proxy_exc(f"blocked: {secret}", 500)), 500)
+    server.end()
+    (span,) = exporter.get_finished_spans()
+
+    assert span.attributes["error.message"] == f"blocked: {'redacted-by-litellm' if redact else secret}"
+    assert "_raised" in span.attributes["litellm.provider.error.stack_trace"]
+    assert "router.py" not in span.attributes["litellm.provider.error.stack_trace"]
+
+
+def test_failure_hook_lets_the_failed_requests_span_be_freed(monkeypatch):
+    """The proxy keeps the request's root span in the request's own metadata. What the failure hook
+    keeps for the handler's restamp must not hold that span alive once the request is done."""
+    import litellm
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    monkeypatch.setattr(litellm, "turn_off_message_logging", True)
+    logger, _ = _logger()
+    server = logger._emitter.start_span(SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME)
+    server_ref: Final = weakref.ref(server)
+    asyncio.run(
+        logger.async_post_call_failure_hook(
+            request_data={
+                "messages": [{"role": "user", "content": "my ssn is 123-45-6789"}],
+                "metadata": {"litellm_parent_otel_span": server},
+            },
+            original_exception=_proxy_exc("blocked", 400),
+            user_api_key_dict=UserAPIKeyAuth(parent_otel_span=server),
+        )
+    )
+    del server
+    gc.collect()
+
+    assert server_ref() is None
 
 
 def test_record_error_attributes_on_span_does_not_duplicate_an_already_stamped_error():
