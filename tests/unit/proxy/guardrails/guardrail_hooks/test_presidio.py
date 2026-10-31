@@ -67,6 +67,8 @@ def _make_mock_session_iterator(json_response, status=200, content_type="applica
                 pass
 
         class MockSession:
+            closed = False
+
             def post(self, *args, **kwargs):
                 self.last_kwargs = kwargs
                 return MockResponse()
@@ -2617,7 +2619,8 @@ async def test_apply_to_output_streaming_anthropic_sse_bytes_led_by_a_non_object
         user_api_key_dict=UserAPIKeyAuth(api_key="test-key"), response=mock_stream(), request_data={}
     )
 
-    with patch.object(guardrail, "_get_session_iterator", _make_mock_session_iterator(analyzer_hit)):
+    async with _make_mock_session_iterator(analyzer_hit)() as aiohttp_session:
+        guardrail._http_session = aiohttp_session
         with pytest.raises(BlockedPiiEntityError):
             await anext(stream)
 

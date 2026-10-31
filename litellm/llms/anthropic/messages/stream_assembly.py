@@ -706,6 +706,23 @@ def assemble_anthropic_sse_stream(
     return assembled
 
 
+def _sse_frame_data(frame: str) -> str:
+    """The frame's data as a client reads it, every ``data:`` line joined."""
+    data_lines: Final = (line.strip() for line in split_sse_lines(frame))
+    return "\n".join(line[len("data:") :].strip() for line in data_lines if line.startswith("data:")).strip()
+
+
+def _is_error_payload(payload: str) -> bool:
+    try:
+        value: Final[object] = json.loads(payload)
+    except ValueError:
+        return False
+    event: Final = as_str_mapping(value)
+    if event is None:
+        return False
+    return event.get("type") == "error" or ("type" not in event and isinstance(event.get("error"), Mapping))
+
+
 def is_sse_error_stream(all_chunks: Sequence[object]) -> bool:
     """Whether the buffered stream carries nothing but error frames.
 
@@ -721,9 +738,7 @@ def is_sse_error_stream(all_chunks: Sequence[object]) -> bool:
     sse_stream: Final = _joined_sse_stream(all_chunks)
     if sse_stream is None:
         return False
-    events: Final = tuple(
-        event_data for frame in _sse_frames(sse_stream) if (event_data := _sse_event_data(frame)) is not None
+    payloads: Final = tuple(
+        payload for frame in _sse_frames(sse_stream) if (payload := _sse_frame_data(frame)) not in ("", "[DONE]")
     )
-    return len(events) > 0 and all(
-        event.get("type") == "error" or isinstance(event.get("error"), Mapping) for event in events
-    )
+    return len(payloads) > 0 and all(_is_error_payload(payload) for payload in payloads)

@@ -1571,6 +1571,16 @@ class TestToolPermissionGuardrailAnthropicMessages:
             await self._drain(self.blocking, chunks)
 
     @pytest.mark.asyncio
+    async def test_denied_tool_use_split_over_data_lines_beside_an_upstream_error_is_blocked(self):
+        def over_two_data_lines(frame: bytes) -> bytes:
+            return frame.replace(b", ", b",\ndata: ", 1)
+
+        chunks: Final = self._ended_by_upstream_error([over_two_data_lines(frame) for frame in self._sse_chunks("Read")])
+
+        with pytest.raises(GuardrailRaisedException, match="could not be verified"):
+            await self._drain(self.blocking, chunks)
+
+    @pytest.mark.asyncio
     async def test_denied_tool_use_delivered_before_an_upstream_error_is_still_blocked(self):
         chunks: Final = self._ended_by_upstream_error(self._sse_chunks("Read")[:7])
 

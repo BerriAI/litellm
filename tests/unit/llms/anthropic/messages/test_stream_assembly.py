@@ -89,6 +89,10 @@ GOOGLE_STREAM: Final = (b'data: {"candidates": [{"content": {"parts": [{"text": 
 ANTHROPIC_ERROR: Final = _frame("error", {"type": "error", "error": {"type": "overloaded_error", "message": "busy"}})
 CHAT_ERROR: Final = b'data: {"error": {"message": "blocked by guardrail"}}\n\n'
 INVALID_UTF8: Final = (b"\xff\xfe data",)
+TOOL_CALL_OVER_TWO_DATA_LINES: Final = (
+    b'event: content_block_start\ndata: {"type": "content_block_start", "index": 0,\n'
+    b'data: "content_block": {"type": "tool_use", "id": "t1", "name": "Bash", "input": {}}}\n\n'
+)
 
 
 @pytest.mark.parametrize(
@@ -221,6 +225,13 @@ def test_assemble_anthropic_sse_stream_returns_none_without_a_message_to_build(c
         (ANTHROPIC_STREAM, False),
         (INVALID_UTF8, False),
         ((b"\n\n",), False),
+        ((TOOL_CALL_OVER_TWO_DATA_LINES, ANTHROPIC_ERROR), False),
+        ((b'data:\ndata: {"type": "message_start"}\n\n', ANTHROPIC_ERROR), False),
+        ((b"data: some words\n\n", ANTHROPIC_ERROR), False),
+        ((b"data: 5\n\n", CHAT_ERROR), False),
+        ((b'data: {"type": "message_start", "error": {}}\n\n', ANTHROPIC_ERROR), False),
+        ((b'event: error\ndata: {"type": "error",\ndata: "error": {"type": "overloaded_error"}}\n\n',), True),
+        ((b": keepalive\n\n", CHAT_ERROR, b"data: [DONE]\n\n"), True),
     ],
     ids=[
         "anthropic-error",
@@ -231,6 +242,13 @@ def test_assemble_anthropic_sse_stream_returns_none_without_a_message_to_build(c
         "normal-stream",
         "undecodable",
         "no-events",
+        "tool-call-over-two-data-lines",
+        "message-start-behind-an-empty-data-line",
+        "words-beside-an-error",
+        "non-object-beside-an-error",
+        "message-start-with-an-error-field",
+        "error-over-two-data-lines",
+        "keepalive-and-done-marker",
     ],
 )
 def test_is_sse_error_stream_is_true_only_for_frames_that_are_all_errors(chunks: tuple[object, ...], expected: bool):
