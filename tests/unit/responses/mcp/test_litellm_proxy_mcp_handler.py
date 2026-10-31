@@ -21,6 +21,7 @@ from litellm.caching.caching import DualCache
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.proxy.mcp_server import operations as mcp_operations
+from litellm.proxy.common_utils.user_api_key_cache import object_permission_cache_key
 from litellm.proxy.mcp_server.faults.list_outcomes import AggregateToolListing
 from litellm.proxy.mcp_server.mcp_server_manager import ListedToolsCaller, MCPServerManager
 from litellm.proxy._types import UI_TEAM_ID, LitellmUserRoles, UserAPIKeyAuth
@@ -1557,6 +1558,7 @@ async def _tools_listed_through_the_gateway(
     server_urls: tuple[str, ...],
     granted_toolsets: GrantedToolsetIds,
     toolset_table: types.SimpleNamespace | None = None,
+    agent_permission: LiteLLM_ObjectPermissionTable | None = None,
 ) -> list[str]:
     async def upstream_listing(_client: object, server_name: str) -> list[MCPTool]:
         return list(UPSTREAM_TOOLS[server_name])
@@ -1572,6 +1574,14 @@ async def _tools_listed_through_the_gateway(
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", types.SimpleNamespace(db=tables, writer_db=tables))
     cache: Final = DualCache()
     await cache.async_set_cache(key="team_id:team-1", value=LiteLLM_TeamTableCachedObj(team_id="team-1"))
+    if agent_permission is not None:
+        await cache.async_set_cache(
+            key=f"agent_object_permission_id:{user_api_key_auth.agent_id}",
+            value=agent_permission.object_permission_id,
+        )
+        await cache.async_set_cache(
+            key=object_permission_cache_key(agent_permission.object_permission_id), value=agent_permission
+        )
     monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", cache)
     monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {"supported_db_objects": []})
     try:
@@ -1755,6 +1765,45 @@ async def test_an_access_group_the_key_holds_outranks_an_ungranted_toolset_of_th
         _no_toolset_grants,
     )
     assert listed == ["docs-lookup"]
+
+
+@pytest.mark.asyncio
+async def test_an_access_group_the_keys_agent_does_not_grant_leaves_the_same_named_toolset_denied(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    key_holding_the_group: Final = UserAPIKeyAuth(
+        api_key="sk-team",
+        team_id="team-1",
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        agent_id="agent-1",
+        object_permission=LiteLLM_ObjectPermissionTable(
+            object_permission_id="op-key", mcp_servers=["srv-1"], mcp_access_groups=["reference"]
+        ),
+    )
+    with pytest.raises(HTTPException) as denial:
+        await _tools_listed_through_the_gateway(
+            monkeypatch,
+            key_holding_the_group,
+            ("litellm_proxy/mcp/reference",),
+            _no_toolset_grants,
+            agent_permission=LiteLLM_ObjectPermissionTable(object_permission_id="op-agent", mcp_servers=["srv-1"]),
+        )
+    assert denial.value.status_code == 403
+    assert denial.value.detail == {"error": "The key is not allowed to access the requested MCP servers: reference"}
+
+
+@pytest.mark.asyncio
+async def test_a_granted_toolset_outranks_an_access_group_of_the_same_name(monkeypatch: pytest.MonkeyPatch):
+    async def granted_reference_toolset(context: UserAPIKeyAuth) -> frozenset[str]:
+        return frozenset({"ts-group"})
+
+    listed: Final = await _tools_listed_through_the_gateway(
+        monkeypatch,
+        _key_holding("srv-1", "srv-2"),
+        ("litellm_proxy/mcp/reference",),
+        granted_reference_toolset,
+    )
+    assert listed == ["calc-add"]
 
 
 @pytest.mark.asyncio
