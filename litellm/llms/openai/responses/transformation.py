@@ -711,7 +711,8 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         self, litellm_params: GenericLiteLLMParams, reads_breakpoints: bool, known_support: bool | None
     ) -> Callable[[object], object]:
         opted_in_openai_host: Final = reads_breakpoints and self.custom_llm_provider == LlmProviders.OPENAI
-        if opted_in_openai_host or self._targets_openai_api(litellm_params):
+        known_openai_reader: Final = known_support is True and self._targets_openai_api(litellm_params)
+        if opted_in_openai_host or known_openai_reader:
             return partial(prompt_cache_breakpoint_for_wire, drop_params=True)
         return whole_prompt_cache_breakpoint_or_none
 

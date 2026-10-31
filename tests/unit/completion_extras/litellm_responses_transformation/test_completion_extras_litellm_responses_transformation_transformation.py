@@ -5937,6 +5937,41 @@ def test_transform_request_drop_params_in_litellm_params_gates_the_prompt_cache_
     assert "prompt_cache_breakpoint" not in result["input"][0]["content"][0]
 
 
+_TTL_MARKED_CONTENT: Final = (
+    {"type": "text", "text": "unsupported ttl", "prompt_cache_breakpoint": {"mode": "explicit", "ttl": "1h"}},
+    {"type": "text", "text": "well formed", "prompt_cache_breakpoint": {"mode": "explicit"}},
+)
+
+
+@pytest.mark.parametrize(
+    "global_drop_params,deployment_drop_params,expected",
+    [
+        ("true", None, [None, {"mode": "explicit"}]),
+        (False, True, [{"mode": "explicit", "ttl": "1h"}, {"mode": "explicit"}]),
+        (True, None, [{"mode": "explicit", "ttl": "1h"}, {"mode": "explicit"}]),
+    ],
+    ids=("string-global-target-keeps-raw-markers", "deployment-drop-params", "global-drop-params"),
+)
+def test_transform_request_hands_a_marker_to_the_target_whole_only_when_the_target_trims_it(
+    monkeypatch: pytest.MonkeyPatch,
+    global_drop_params: object,
+    deployment_drop_params: bool | None,
+    expected: list[object],
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", global_drop_params)
+    request: Final = LiteLLMResponsesTransformationHandler().transform_request(
+        model="gpt-6.1-sol",
+        messages=[{"role": "user", "content": list(_TTL_MARKED_CONTENT)}],
+        optional_params={},
+        litellm_params={"custom_llm_provider": "openai", "drop_params": deployment_drop_params},
+        headers={},
+        litellm_logging_obj=Mock(),
+    )
+    (item,) = cast(list[dict[str, object]], request["input"])  # cast-ok: the bridge emits message item mappings
+    parts: Final = cast(list[dict[str, object]], item["content"])  # cast-ok: message items carry content parts
+    assert [part.get("prompt_cache_breakpoint") for part in parts] == expected
+
+
 def test_convert_response_output_folds_two_messages_and_function_call_into_one_choice() -> None:
     first: Final = ResponseOutputMessage.model_validate(
         {

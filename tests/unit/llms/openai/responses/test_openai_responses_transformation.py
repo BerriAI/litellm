@@ -4603,9 +4603,11 @@ def test_a_valid_marker_survives_drop_params_on_a_deployment_name_with_unknown_b
 
 @pytest.mark.parametrize("ttl", ("30m", "12h"))
 @pytest.mark.parametrize(
-    "config", (AzureOpenAIResponsesAPIConfig(), AzureAIResponsesAPIConfig()), ids=("azure", "azure_ai")
+    "config",
+    (OpenAIResponsesAPIConfig(), AzureOpenAIResponsesAPIConfig(), AzureAIResponsesAPIConfig()),
+    ids=("openai", "azure", "azure_ai"),
 )
-def test_an_azure_deployment_with_unknown_breakpoint_support_gets_a_marker_whole_or_not_at_all(
+def test_a_deployment_with_unknown_breakpoint_support_gets_a_marker_whole_or_not_at_all(
     monkeypatch: pytest.MonkeyPatch, config: BaseResponsesAPIConfig, ttl: str
 ) -> None:
     monkeypatch.setattr(litellm, "drop_params", False)
