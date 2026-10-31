@@ -1,8 +1,13 @@
 import asyncio
+import itertools
 import json
 import time
 from typing import Final, NoReturn, Optional
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
+
+import httpx
+from openai import AsyncOpenAI, AsyncStream, OpenAI, Stream
+from openai.types.chat import ChatCompletionChunk
 
 import pytest
 
@@ -16,6 +21,7 @@ from litellm.litellm_core_utils.streaming_handler import (
     _ProviderChunkParsed,
 )
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
+from litellm.llms.openai.chat.gpt_transformation import OpenAIChatCompletionStreamingHandler
 from litellm.types.utils import (
     CompletionTokensDetailsWrapper,
     Delta,
@@ -145,31 +151,6 @@ def test_is_chunk_non_empty(initialized_custom_stream_wrapper: CustomStreamWrapp
             {
                 "index": 0,
                 "delta": {"content": None, "reasoning_content": "."},
-                "logprobs": None,
-                "finish_reason": None,
-            }
-        ],
-    }
-    assert initialized_custom_stream_wrapper.is_chunk_non_empty(
-        completion_obj=MagicMock(),
-        model_response=ModelResponseStream(**chunk),
-        response_obj=MagicMock(),
-    )
-
-
-def test_is_chunk_non_empty_with_refusal(
-    initialized_custom_stream_wrapper: CustomStreamWrapper,
-):
-    """Unit test if non-empty when the delta carries only a refusal"""
-    chunk: Final = {
-        "id": "chatcmpl-abc",
-        "object": "chat.completion.chunk",
-        "created": 1700000000,
-        "model": "m",
-        "choices": [
-            {
-                "index": 0,
-                "delta": {"refusal": "I can't help"},
                 "logprobs": None,
                 "finish_reason": None,
             }
@@ -1048,6 +1029,90 @@ async def test_bedrock_validation_error_raises_directly(logging_obj: Logging):
         await response.__anext__()
     assert not isinstance(excinfo.value, MidStreamFallbackError)
     assert getattr(excinfo.value, "status_code", None) == 400
+
+
+_REFUSAL_PARTS: Final = ("I'm sorry", ", but I", " can't assist", " with that request.")
+
+
+@pytest.mark.parametrize("async_stream", [False, True])
+@pytest.mark.parametrize("transport", ["sdk", "http_handler"])
+@pytest.mark.parametrize("finish_on_last_refusal", [False, True])
+async def test_stream_forwards_refusal_only_deltas(
+    async_stream: bool, transport: str, finish_on_last_refusal: bool, logging_obj: Logging
+) -> None:
+    last_index: Final = len(_REFUSAL_PARTS) - 1
+    refusal_choices: Final = tuple(
+        [
+            {
+                "index": 0,
+                "delta": {"refusal": part},
+                "finish_reason": "stop" if finish_on_last_refusal and index == last_index else None,
+            }
+        ]
+        for index, part in enumerate(_REFUSAL_PARTS)
+    )
+    finish_choices: Final = () if finish_on_last_refusal else ([{"index": 0, "delta": {}, "finish_reason": "stop"}],)
+    body: Final = (
+        "".join(
+            "data: "
+            + json.dumps(
+                {
+                    "id": "chatcmpl-refusal",
+                    "object": "chat.completion.chunk",
+                    "created": 1,
+                    "model": "test-model",
+                    "choices": choices,
+                }
+            )
+            + "\n\n"
+            for choices in (
+                [{"index": 0, "delta": {"role": "assistant", "content": None, "refusal": ""}, "finish_reason": None}],
+                *refusal_choices,
+                *finish_choices,
+            )
+        )
+        + "data: [DONE]\n\n"
+    )
+    raw_response: Final = httpx.Response(
+        200,
+        content=body,
+        headers={"content-type": "text/event-stream"},
+        request=httpx.Request("POST", "https://provider.example/v1/chat/completions"),
+    )
+    client: Final = AsyncOpenAI(api_key="unused") if async_stream else OpenAI(api_key="unused")
+    stream: Final = (
+        (
+            AsyncStream(cast_to=ChatCompletionChunk, response=raw_response, client=client)
+            if isinstance(client, AsyncOpenAI)
+            else Stream(cast_to=ChatCompletionChunk, response=raw_response, client=client)
+        )
+        if transport == "sdk"
+        else OpenAIChatCompletionStreamingHandler(
+            streaming_response=raw_response.aiter_lines() if async_stream else raw_response.iter_lines(),
+            sync_stream=not async_stream,
+        )
+    )
+    response: Final = CustomStreamWrapper(
+        completion_stream=stream,
+        model="test-model",
+        logging_obj=logging_obj,
+        custom_llm_provider="openai" if transport == "sdk" else "hosted_vllm",
+    )
+
+    try:
+        chunks: Final = [chunk async for chunk in response] if async_stream else list(response)
+    finally:
+        if isinstance(client, AsyncOpenAI):
+            await client.close()
+        else:
+            client.close()
+
+    streamed_choices: Final = tuple(itertools.chain.from_iterable(chunk.choices for chunk in chunks))
+    assert "".join(getattr(choice.delta, "refusal", None) or "" for choice in streamed_choices) == "".join(
+        _REFUSAL_PARTS
+    )
+    assert "".join(choice.delta.content or "" for choice in streamed_choices) == ""
+    assert [choice.finish_reason for choice in streamed_choices if choice.finish_reason] == ["stop"]
 
 
 def _hosted_vllm_stream_wrapper(logging_obj: Logging, error_payload: dict) -> CustomStreamWrapper:
