@@ -10,6 +10,7 @@ import copy
 import importlib
 import json
 import os
+import random
 import threading
 import tracemalloc
 from collections.abc import AsyncIterator, Callable, Mapping
@@ -2137,6 +2138,42 @@ def test_scrub_request_text_replaces_both_sides_of_a_pydantic_cut_input_value(va
     assert "redacted-by-litellm...redacted-by-litellm" in scrubbed
 
 
+SINGLE_QUOTED_PROMPT: Final = "account 'secret' " + "x" * 1_000 + " end 'private'"
+BOTH_QUOTED_PROMPT: Final = 'said "secret" it\'s ' + "x" * 1_000 + ' it\'s "private"'
+DOTTED_PROMPT: Final = "account secret is there." + "x" * 1_000 + ".private secret is here"
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        SINGLE_QUOTED_PROMPT,
+        [SINGLE_QUOTED_PROMPT],
+        {"content": SINGLE_QUOTED_PROMPT},
+        BOTH_QUOTED_PROMPT,
+        [BOTH_QUOTED_PROMPT],
+        {"content": BOTH_QUOTED_PROMPT},
+        DOTTED_PROMPT,
+    ],
+    ids=[
+        "single_quotes_str",
+        "single_quotes_list",
+        "single_quotes_dict",
+        "both_quotes_str",
+        "both_quotes_list",
+        "both_quotes_dict",
+        "dots_beside_both_cuts",
+    ],
+)
+def test_scrub_request_text_replaces_pydantic_cut_sides_that_hold_the_prompts_own_quotes(value: object) -> None:
+    with pytest.raises(ValidationError, match="input_value=") as raised:
+        TypeAdapter(int).validate_python(value)
+
+    scrubbed: Final = scrub_request_text(str(raised.value), request_texts(value))
+
+    assert not any(word in scrubbed for word in ("account", "said", "secret", "private"))
+    assert "redacted-by-litellm...redacted-by-litellm" in scrubbed
+
+
 def test_scrub_request_text_leaves_an_error_that_does_not_quote_the_prompt() -> None:
     assert scrub_request_text("Incorrect API key provided", request_texts(PROMPT, "hi")) == "Incorrect API key provided"
 
@@ -2151,6 +2188,14 @@ def test_scrub_request_text_replaces_the_whole_text_when_the_search_is_too_large
     texts: Final = request_texts([f"message number {index}" for index in range(5_000)])
 
     assert scrub_request_text("x" * 5_000, texts) == "redacted-by-litellm"
+
+
+def test_scrub_request_text_replaces_the_whole_text_when_the_cut_side_search_is_too_large() -> None:
+    rng: Final = random.Random(0)
+    error: Final = "".join(rng.choice("'ab") if index % 10 else "..." for index in range(10_000))
+    texts: Final = request_texts([f'say "hi" {index}' for index in range(800)])
+
+    assert scrub_request_text(error, texts) == "redacted-by-litellm"
 
 
 def test_scrub_request_text_never_copies_a_request_text_longer_than_the_error() -> None:

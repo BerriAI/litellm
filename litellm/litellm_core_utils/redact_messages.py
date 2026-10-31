@@ -379,8 +379,9 @@ _ESCAPED_CHARACTERS: Final = ('"', "\\")
 # pydantic shows a long input value as its repr's first 25 and last 24 characters around "...", quotes and
 # container keys included, so each side of the cut shows at most 24 characters of a quoted text
 _CUT_SIDE_LENGTH: Final = 24
-_CUT_ECHO_HEAD: Final = re.compile(rf"(?<=['\"])[^'\"]{{1,{_CUT_SIDE_LENGTH}}}(?=\.\.\.)")
-_CUT_ECHO_TAIL: Final = re.compile(rf"(?<=\.\.\.)[^'\"]{{1,{_CUT_SIDE_LENGTH}}}(?=['\"])")
+_CUT: Final = "..."
+_CUT_STARTS: Final = re.compile(f"(?={re.escape(_CUT)})")
+_QUOTES: Final = "'\""
 _MAX_SCRUB_COMPARISONS: Final = 10_000_000
 
 
@@ -437,13 +438,18 @@ def _cut_sides(text: str) -> str:
     return f"{text[:_CUT_SIDE_LENGTH]}{quotes}{text[-_CUT_SIDE_LENGTH:]}"
 
 
-def _cut_echoes(text: str, forms: Collection[str]) -> tuple[tuple[str, str], ...]:
+def _cut_echoes(text: str, forms: Collection[str]) -> tuple[tuple[str, str], ...] | None:
     """
     Each side of a quoted value ``text`` cuts short with ``...`` that starts or ends one of ``forms``, as
-    pydantic shows a long input value, with its pattern anchored to the quote and the cut.
+    pydantic shows a long input value, with its pattern anchored to the quote and the cut. A side can hold
+    the request's own quotes, so every quote within a side's length of the cut is tried as its opening or
+    closing one. ``None`` when checking every side against ``forms`` is too large a search for a failure path.
     """
-    heads: Final = frozenset(match.group() for match in _CUT_ECHO_HEAD.finditer(text))
-    tails: Final = frozenset(match.group() for match in _CUT_ECHO_TAIL.finditer(text))
+    cuts: Final = tuple(match.start() for match in _CUT_STARTS.finditer(text))
+    heads: Final = frozenset(itertools.chain.from_iterable(_cut_heads(text, cut) for cut in cuts))
+    tails: Final = frozenset(itertools.chain.from_iterable(_cut_tails(text, cut) for cut in cuts))
+    if (len(heads) + len(tails)) * len(forms) > _MAX_SCRUB_COMPARISONS:
+        return None
     return (
         *(
             (head, f"(?<=['\"]){re.escape(head)}(?=\\.\\.\\.)")
@@ -455,6 +461,23 @@ def _cut_echoes(text: str, forms: Collection[str]) -> tuple[tuple[str, str], ...
             for tail in tails
             if any(form.endswith(tail) for form in forms)
         ),
+    )
+
+
+def _cut_heads(text: str, cut: int) -> tuple[str, ...]:
+    """Each run of ``text`` from just after a quote up to the ``...`` at ``cut``, no longer than a cut side."""
+    return tuple(
+        text[quote + 1 : cut] for quote in range(max(0, cut - _CUT_SIDE_LENGTH - 1), cut - 1) if text[quote] in _QUOTES
+    )
+
+
+def _cut_tails(text: str, cut: int) -> tuple[str, ...]:
+    """Each run of ``text`` from the end of the ``...`` at ``cut`` up to just before a quote, no longer than a cut side."""
+    start: Final = cut + len(_CUT)
+    return tuple(
+        text[start:quote]
+        for quote in range(start + 1, min(len(text), start + _CUT_SIDE_LENGTH + 1))
+        if text[quote] in _QUOTES
     )
 
 
@@ -474,8 +497,11 @@ def scrub_request_text(text: str, texts: Collection[str]) -> str:
     cut_forms: Final = frozenset(
         itertools.chain.from_iterable(_echo_forms(_cut_sides(each)) for each in texts if len(each) > len(text))
     )
+    cut_echoes: Final = _cut_echoes(text, forms | cut_forms)
+    if cut_echoes is None:
+        return REDACTED_BY_LITELLM
     echoes: Final = sorted(
-        (*((form, _echo_pattern(form)) for form in forms if form in text), *_cut_echoes(text, forms | cut_forms)),
+        (*((form, _echo_pattern(form)) for form in forms if form in text), *cut_echoes),
         key=lambda echo: len(echo[0]),
         reverse=True,
     )
