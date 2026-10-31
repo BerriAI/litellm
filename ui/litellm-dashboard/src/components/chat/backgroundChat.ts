@@ -8,7 +8,14 @@ import type { AssistantMessageUpdate, ChatBackgroundRun, MCPEvent } from "./type
 export const isBackgroundRunPending = (run?: ChatBackgroundRun): boolean =>
   run?.status === "queued" || run?.status === "in_progress";
 
-export function backgroundResponseUpdate(response: Response): AssistantMessageUpdate {
+type TimedResponse = Response & {
+  litellm_response_timing?: {
+    time_to_first_token_ms?: number;
+    total_latency_ms?: number;
+  };
+};
+
+export function backgroundResponseUpdate(response: TimedResponse): AssistantMessageUpdate {
   const output = response.output ?? [];
   const content = output
     .filter((item) => item.type === "message")
@@ -48,12 +55,15 @@ export function backgroundResponseUpdate(response: Response): AssistantMessageUp
   };
   const backgroundError = errors[status];
   const cost = response.usage && "cost" in response.usage ? parseUsageCost(response.usage.cost) : undefined;
+  const timing = response.litellm_response_timing;
   return {
     content,
     reasoningContent,
     mcpEvents,
     backgroundRun: { id: response.id, status },
     backgroundError,
+    ...(timing?.time_to_first_token_ms !== undefined && { timeToFirstToken: timing.time_to_first_token_ms }),
+    ...(timing?.total_latency_ms !== undefined && { totalLatency: timing.total_latency_ms }),
     ...(response.usage && {
       usage: {
         promptTokens: response.usage.input_tokens,

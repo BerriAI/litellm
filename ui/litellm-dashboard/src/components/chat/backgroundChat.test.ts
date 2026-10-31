@@ -143,3 +143,35 @@ it("should keep polling through unfinished output items until the answer and too
     mcpEvents: [{ item: { tools: [{ name: "lookup" }] } }],
   });
 });
+
+it("should restore server timings from polling without counting time away from the chat", async () => {
+  const response = {
+    id: "litellm_poll_timing",
+    status: "completed",
+    created_at: 1000,
+    output: [],
+    litellm_response_timing: { time_to_first_token_ms: 250, total_latency_ms: 12500 },
+  };
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async () => Response.json(response)),
+  );
+  const onUpdate = vi.fn();
+  const polling = {
+    accessToken: "test-token",
+    responseId: "litellm_poll_timing",
+    signal: new AbortController().signal,
+    onUpdate,
+  };
+  await watchBackgroundChat(polling);
+  expect(onUpdate).toHaveBeenCalledWith(expect.objectContaining({ timeToFirstToken: 250, totalLatency: 12500 }));
+});
+
+it.each(["queued", "completed"] as const)(
+  "should not invent timings for a %s response without measurements",
+  (status) => {
+    const update = backgroundResponseUpdate({ id: "litellm_poll_legacy", status, output: [] } as ModelResponse);
+    expect(update).not.toHaveProperty("timeToFirstToken");
+    expect(update).not.toHaveProperty("totalLatency");
+  },
+);

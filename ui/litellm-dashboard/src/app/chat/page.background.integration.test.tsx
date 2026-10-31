@@ -20,6 +20,8 @@ const result = () => ({
   id: "litellm_poll_research",
   status,
   usage: status === "completed" ? { input_tokens: 4, output_tokens: 9, total_tokens: 13, cost: "0.125" } : undefined,
+  litellm_response_timing:
+    status === "completed" ? { time_to_first_token_ms: 250, total_latency_ms: 12500 } : undefined,
   output:
     status === "completed"
       ? [
@@ -127,6 +129,11 @@ it("should retrieve the completed tool run after closing and reopening without s
   expect(await screen.findByText("There are 12 widgets in stock.")).toBeVisible();
   expect(screen.getByRole("button", { name: "lookup_inventory" })).toBeVisible();
   expect(screen.getByLabelText(/^Cost:/)).toHaveTextContent("$0.125");
+  expect(screen.getByLabelText(/^TTFT:/)).toHaveTextContent("0.25s");
+  expect(screen.getByLabelText(/^Total Latency:/)).toHaveTextContent("12.50s");
+  await waitFor(() =>
+    expect(saved()[0]?.messages.at(-1)).toMatchObject({ timeToFirstToken: 250, totalLatency: 12500 }),
+  );
   expect(requests).toHaveLength(1);
   expect(requests[0]).toMatchObject({
     background: true,
@@ -158,6 +165,11 @@ it("should continue an ordinary chat without MCP tools after closing and reopeni
   status = "completed";
   renderChat(id);
   expect(await screen.findByText("There are 12 widgets in stock.")).toBeVisible();
+  expect(screen.getByLabelText(/^TTFT:/)).toHaveTextContent("0.25s");
+  expect(screen.getByLabelText(/^Total Latency:/)).toHaveTextContent("12.50s");
+  await waitFor(() =>
+    expect(saved()[0]?.messages.at(-1)).toMatchObject({ timeToFirstToken: 250, totalLatency: 12500 }),
+  );
   expect(requests).toHaveLength(1);
   expect(cancellations).toBe(0);
 });

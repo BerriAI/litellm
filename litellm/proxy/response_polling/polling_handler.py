@@ -119,6 +119,7 @@ class ResponsePollingHandler:
         parallel_tool_calls: bool | None = None,
         user: str | None = None,
         store: bool | None = None,
+        timing: Mapping[str, float] | None = None,
     ) -> None:
         """
         Update the polling state in Redis
@@ -147,6 +148,7 @@ class ResponsePollingHandler:
             parallel_tool_calls: Whether parallel tool calls are enabled
             user: User identifier
             store: Whether to store the response
+            timing: Server execution timings in milliseconds
         """
         if not self.redis_cache:
             return
@@ -169,6 +171,9 @@ class ResponsePollingHandler:
         # Replace full output list if provided
         if output is not None:
             state["output"] = output
+
+        if timing is not None:
+            state["litellm_response_timing"] = timing
 
         # Update usage
         if usage:
