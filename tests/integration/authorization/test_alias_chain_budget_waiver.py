@@ -44,6 +44,7 @@ from integration.authorization._hidden_alias_budget import (
     async_anthropic_client,
     async_openai_client,
     base_url,
+    budget_refusal_error_type,
     error_type,
     fresh_chat,
     fresh_message,
@@ -191,17 +192,18 @@ def _assert_refused(
     key: str,
     model: str,
     prefix: str,
+    route: str = "chat",
     send: Callable[[Gateway, str, str, str], httpx.Response] = fresh_chat,
 ) -> None:
     marker: Final = f"{prefix}-" + uuid.uuid4().hex
     refused: Final = send(candidate, model, key, marker)
-    assert _refusal(refused) == (BUDGET_EXCEEDED, "budget_exceeded"), refused.text
+    assert _refusal(refused) == (BUDGET_EXCEEDED, budget_refusal_error_type(route)), refused.text
     assert upstream_hits(upstream_requests(rig.gateway.upstream_url), marker) == 0
 
 
 def _assert_refused_on_every_route(rig: ChainRig, candidate: Gateway, key: str, model: str) -> None:
     for route, send in ROUTES:
-        _assert_refused(rig, candidate, key, model, f"refused-{route}", send)
+        _assert_refused(rig, candidate, key, model, f"refused-{route}", route, send)
 
 
 def _assert_provider_failure(response: httpx.Response) -> None:

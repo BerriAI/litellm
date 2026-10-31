@@ -319,6 +319,22 @@ class TestProxyExceptionAnthropicEnvelope:
         assert fallback.status_code == 500
         assert json.loads(fallback.body)["error"]["type"] == "api_error"
 
+    @pytest.mark.parametrize("status_code", [402, 409, 422, 504])
+    def test_a_failure_inside_the_handler_keeps_the_api_error_type_for_a_status_outside_the_table(
+        self, status_code: int
+    ):
+        import litellm.proxy.anthropic_endpoints.endpoints as ep
+        from litellm.proxy._types import ProxyException
+
+        request: Final = MagicMock(headers={})
+
+        response: Final = ep._anthropic_error_json_response(
+            ProxyException(message="scripted", type="budget_exceeded", param=None, code=status_code), request
+        )
+
+        assert response.status_code == status_code
+        assert json.loads(response.body)["error"] == {"type": "api_error", "message": "scripted"}
+
     @staticmethod
     def _call_id_error_response(general_settings, provider_specific_fields=None):
         import litellm.proxy.anthropic_endpoints.endpoints as ep

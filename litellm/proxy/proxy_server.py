@@ -472,11 +472,17 @@ from litellm.proxy.common_request_processing import (  # noqa: F401, RUF100  # l
     is_azure_model_router_request,
     log_llm_api_exception,
     open_sse_before_first_byte,
+    proxy_exception_from_http_exception,
     proxy_exception_from_route_error,
     resolve_litellm_call_id,
     should_return_raw_model_name,
     sse_error_payload,
     ttft_keepalive_interval,
+)
+from litellm.proxy.common_utils.anthropic_error_payload import (
+    anthropic_error_json_response,
+    anthropic_internal_server_error_response,
+    uses_anthropic_error_envelope,
 )
 from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
     AuthCacheInvalidationSubscriber,
@@ -2251,6 +2257,8 @@ async def openai_exception_handler(request: Request, exc: ProxyException):
     # NOTE: DO NOT MODIFY THIS, its crucial to map to Openai exceptions
     log_model_access_denial(exc)
     headers: Final = exc.headers
+    if uses_anthropic_error_envelope(request):
+        return anthropic_error_json_response(exc, request)
     error_dict: Final = with_call_id(
         JSON_OBJECT.validate_python(exc.to_dict()),
         error_body_call_id(general_settings_view(), headers.get(LITELLM_CALL_ID_HEADER)),
@@ -2286,6 +2294,10 @@ async def otlp_http_exception_handler(connection: Request | WebSocket, exc: Star
     if response is not None:
         _close_dangling_otel_server_span(connection, exc.status_code, exc=exc)
         return response
+    if uses_anthropic_error_envelope(connection):
+        return anthropic_error_json_response(
+            proxy_exception_from_http_exception(exc, dict(exc.headers or {})), connection
+        )
     return await http_exception_handler(connection, exc)
 
 
@@ -2493,6 +2505,8 @@ async def _unhandled_exception_response(request: Request, exc: Exception) -> Res
     otlp_response: Final = tracing_endpoints.otlp_error_response(request, 500)
     if otlp_response is not None:
         return otlp_response
+    if uses_anthropic_error_envelope(request):
+        return anthropic_internal_server_error_response(request)
     return JSONResponse(
         status_code=500,
         content={

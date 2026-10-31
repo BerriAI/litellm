@@ -108,6 +108,93 @@ describe("toast", () => {
       });
     });
 
+    it.each([
+      {
+        status: 403,
+        type: "permission_error",
+        litellmType: "team_model_access_denied",
+        fn: sonner.error,
+        title: "Access Denied",
+      },
+      {
+        status: 401,
+        type: "authentication_error",
+        litellmType: "auth_error",
+        fn: sonner.error,
+        title: "Authentication Error",
+      },
+      {
+        status: 422,
+        type: "invalid_request_error",
+        litellmType: "budget_exceeded",
+        fn: sonner.warning,
+        title: "Budget Exceeded",
+      },
+      {
+        status: 503,
+        type: "api_error",
+        litellmType: "no_db_connection",
+        fn: sonner.error,
+        title: "Service Unavailable",
+      },
+      {
+        status: 429,
+        type: "rate_limit_error",
+        litellmType: undefined,
+        fn: sonner.warning,
+        title: "Rate Limit Exceeded",
+      },
+      {
+        status: 422,
+        type: "invalid_request_error",
+        litellmType: undefined,
+        fn: sonner.error,
+        title: "Validation Error",
+      },
+    ])(
+      "titles an Anthropic SDK $status $type error from the Messages playground by its proxy type $litellmType, else its status",
+      ({ status, type, litellmType, fn, title }) => {
+        const body = JSON.stringify({
+          type: "error",
+          error: { type, message: "Team not allowed to access model", litellm_error_type: litellmType },
+        });
+        toast.fromError(
+          `Error occurred while generating model response. Please try again. Error: Error: ${status} ${body}`,
+        );
+        expect(fn).toHaveBeenCalledWith(title, {
+          description: `Error occurred while generating model response. Please try again. Error: Error: ${status} Team not allowed to access model`,
+          duration: 6000,
+        });
+      },
+    );
+
+    it("titles an Anthropic error body with no status by its Anthropic type", () => {
+      toast.fromError(JSON.stringify({ type: "error", error: { type: "permission_error", message: "denied" } }));
+      expect(sonner.error).toHaveBeenCalledWith("Access Denied", { description: "denied", duration: 6000 });
+    });
+
+    it.each([
+      ["billing_error", "Request Error"],
+      ["conflict_error", "Already Exists"],
+      ["timeout_error", "Server Error"],
+    ])("titles an Anthropic %s body with no status as %s", (type, title) => {
+      toast.fromError(JSON.stringify({ type: "error", error: { type, message: "boom" } }));
+      expect(sonner.error).toHaveBeenCalledWith(title, { description: "boom", duration: 6000 });
+    });
+
+    it.each([
+      ["an OpenAI envelope", { error: { type: "invalid_request_error", message: "boom" } }],
+      ["a body with no Anthropic type", { detail: { error: "boom" } }],
+    ])("keeps the plain Error title for %s after a status in the message", (_, payload) => {
+      toast.fromError(`Request failed: 404 ${JSON.stringify(payload)}`);
+      expect(sonner.error).toHaveBeenCalledWith("Error", { description: "Request failed: 404 boom", duration: 6000 });
+    });
+
+    it("reads no status from a number longer than three digits before the envelope", () => {
+      toast.fromError(`request 98765 ${JSON.stringify({ error: { message: "boom" } })}`);
+      expect(sonner.error).toHaveBeenCalledWith("Error", { description: "request 98765 boom", duration: 6000 });
+    });
+
     it("leaves a string alone when its braces are not a JSON envelope", () => {
       toast.fromError("Template {name} is invalid");
       expect(sonner.error).toHaveBeenCalledWith("Error", {
