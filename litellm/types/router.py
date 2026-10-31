@@ -827,7 +827,7 @@ class LiteLLMParamsTypedDict(TypedDict, total=False):
     timeout_by_service_tier: ReadOnly[Mapping[str, float] | None]
     stream_timeout_by_service_tier: ReadOnly[Mapping[str, float] | None]
     max_retries: int | None
-    organization: list | str | None  # for openai orgs
+    organization: list[str] | str | None  # for openai orgs
     provider_affinity_header: ReadOnly[str | None]
     configurable_clientside_auth_params: (
         CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS  # for allowing api base switching on finetuned models

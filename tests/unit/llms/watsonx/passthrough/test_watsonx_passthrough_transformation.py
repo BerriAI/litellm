@@ -5,11 +5,9 @@ Tests the Watsonx-specific passthrough configuration including URL construction,
 streaming detection, and authentication handling.
 """
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import httpx
-import pytest
-
 
 import litellm
 from litellm.llms.watsonx.passthrough.transformation import WatsonxPassthroughConfig
@@ -277,3 +275,370 @@ class TestWatsonxPassthroughConfig:
 
         # Test with empty dict (defaults to False)
         assert config.is_streaming_request("endpoint", {}) is False
+
+
+# ---------------------------------------------------------------------------
+# Helpers shared by credential-resolution tests
+# ---------------------------------------------------------------------------
+
+def _wx_deployment(model: str, **litellm_params) -> dict:
+    """Build a minimal router deployment dict for watsonx."""
+    return {
+        "model_name": model.split("/", 1)[-1],
+        "litellm_params": {"model": model, "use_in_pass_through": True, **litellm_params},
+    }
+
+
+def _wx_unflagged_deployment(model: str, **litellm_params) -> dict:
+    """Build a deployment that does NOT set use_in_pass_through."""
+    return {
+        "model_name": model.split("/", 1)[-1],
+        "litellm_params": {"model": model, **litellm_params},
+    }
+
+
+# ---------------------------------------------------------------------------
+# deployment_model_matches
+# ---------------------------------------------------------------------------
+
+class TestDeploymentModelMatches:
+    """Tests for WatsonxPassthroughConfig.deployment_model_matches."""
+
+    def test_exact_match(self):
+        creds = {"model": "ibm/granite-13b-chat-v2"}
+        assert WatsonxPassthroughConfig.deployment_model_matches(creds, "ibm/granite-13b-chat-v2") is True
+
+    def test_suffix_match(self):
+        """watsonx/ prefix stripped — model_id from body is the bare id."""
+        creds = {"model": "watsonx/ibm/granite-13b-chat-v2"}
+        assert WatsonxPassthroughConfig.deployment_model_matches(creds, "ibm/granite-13b-chat-v2") is True
+
+    def test_no_match_different_model(self):
+        creds = {"model": "watsonx/ibm/granite-8b-code"}
+        assert WatsonxPassthroughConfig.deployment_model_matches(creds, "ibm/granite-13b-chat-v2") is False
+
+    def test_no_match_when_model_none(self):
+        creds = {"model": None}
+        assert WatsonxPassthroughConfig.deployment_model_matches(creds, "ibm/granite-13b-chat-v2") is False
+
+    def test_no_match_when_model_key_absent(self):
+        creds = {}
+        assert WatsonxPassthroughConfig.deployment_model_matches(creds, "ibm/granite-13b-chat-v2") is False
+
+    def test_partial_suffix_does_not_match(self):
+        """'granite-13b' must not match 'ibm/granite-13b-chat-v2'."""
+        creds = {"model": "watsonx/ibm/granite-13b-chat-v2"}
+        assert WatsonxPassthroughConfig.deployment_model_matches(creds, "granite-13b-chat-v2") is True
+
+    def test_wrong_suffix_does_not_match(self):
+        creds = {"model": "watsonx/ibm/granite-13b-chat-v2"}
+        assert WatsonxPassthroughConfig.deployment_model_matches(creds, "ibm/granite-8b") is False
+
+
+# ---------------------------------------------------------------------------
+# resolve_credentials_from_deployment
+# ---------------------------------------------------------------------------
+
+class TestResolveCredentialsFromDeployment:
+    """Tests for WatsonxPassthroughConfig.resolve_credentials_from_deployment."""
+
+    def test_returns_none_when_not_flagged(self):
+        deployment = _wx_unflagged_deployment(
+            "watsonx/ibm/granite-13b-chat-v2",
+            api_key="sk-test",
+            api_base="https://us-south.ml.cloud.ibm.com",
+        )
+        result = WatsonxPassthroughConfig.resolve_credentials_from_deployment(
+            deployment["litellm_params"]
+        )
+        assert result is None
+
+    def test_returns_none_for_non_watsonx_provider(self):
+        deployment = _wx_deployment("openai/gpt-4o", api_key="sk-openai")
+        result = WatsonxPassthroughConfig.resolve_credentials_from_deployment(
+            deployment["litellm_params"]
+        )
+        assert result is None
+
+    def test_returns_none_when_model_missing(self):
+        params = {"use_in_pass_through": True}
+        result = WatsonxPassthroughConfig.resolve_credentials_from_deployment(params)
+        assert result is None
+
+    def test_returns_none_when_get_llm_provider_raises_bad_request(self):
+        """get_llm_provider raises BadRequestError for unrecognisable model strings — must return None."""
+        from litellm.exceptions import BadRequestError
+
+        params = {"use_in_pass_through": True, "model": "completely-unknown/some-model"}
+        with patch(
+            "litellm.llms.watsonx.passthrough.transformation.get_llm_provider",
+            side_effect=BadRequestError(
+                message="LLM Provider NOT provided.", model="completely-unknown/some-model", llm_provider=""
+            ),
+        ):
+            result = WatsonxPassthroughConfig.resolve_credentials_from_deployment(params)
+        assert result is None
+
+    def test_inline_api_key_and_api_base(self):
+        deployment = _wx_deployment(
+            "watsonx/ibm/granite-13b-chat-v2",
+            api_key="ibmkey-123",
+            api_base="https://us-south.ml.cloud.ibm.com",
+            project_id="proj-abc",
+        )
+        result = WatsonxPassthroughConfig.resolve_credentials_from_deployment(
+            deployment["litellm_params"]
+        )
+        assert result is not None
+        assert result.get("api_key") == "ibmkey-123"
+        assert result.get("api_base") == "https://us-south.ml.cloud.ibm.com"
+        assert result.get("project_id") == "proj-abc"
+        assert result.get("space_id") is None
+        assert result.get("model") == "watsonx/ibm/granite-13b-chat-v2"
+
+    def test_space_id_is_read(self):
+        deployment = _wx_deployment(
+            "watsonx/ibm/granite-13b-chat-v2",
+            api_key="ibmkey-123",
+            api_base="https://us-south.ml.cloud.ibm.com",
+            space_id="space-xyz",
+        )
+        result = WatsonxPassthroughConfig.resolve_credentials_from_deployment(
+            deployment["litellm_params"]
+        )
+        assert result is not None
+        assert result.get("space_id") == "space-xyz"
+        assert result.get("project_id") is None
+
+    def test_api_key_none_when_omitted(self):
+        """api_key is optional — deployment with only api_base is still eligible."""
+        deployment = _wx_deployment(
+            "watsonx/ibm/granite-13b-chat-v2",
+            api_base="https://us-south.ml.cloud.ibm.com",
+        )
+        result = WatsonxPassthroughConfig.resolve_credentials_from_deployment(
+            deployment["litellm_params"]
+        )
+        assert result is not None
+        assert result.get("api_key") is None
+        assert result.get("api_base") == "https://us-south.ml.cloud.ibm.com"
+
+    def test_api_base_none_when_omitted(self):
+        """api_base is optional — deployment with only api_key is still eligible."""
+        deployment = _wx_deployment(
+            "watsonx/ibm/granite-13b-chat-v2",
+            api_key="ibmkey-123",
+        )
+        result = WatsonxPassthroughConfig.resolve_credentials_from_deployment(
+            deployment["litellm_params"]
+        )
+        assert result is not None
+        assert result.get("api_key") == "ibmkey-123"
+        assert result.get("api_base") is None
+
+    def test_named_credential_overrides_inline(self, monkeypatch):
+        """litellm_credential_name values take precedence over inline litellm_params."""
+        monkeypatch.setattr(litellm, "credential_list", [])
+        from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
+        from litellm.types.utils import CredentialItem
+
+        CredentialAccessor.upsert_credentials([
+            CredentialItem(
+                credential_name="wx-cred",
+                credential_values={
+                    "api_key": "cred-key-999",
+                    "api_base": "https://eu-de.ml.cloud.ibm.com",
+                },
+                credential_info={},
+            )
+        ])
+        deployment = _wx_deployment(
+            "watsonx/ibm/granite-13b-chat-v2",
+            litellm_credential_name="wx-cred",
+            api_key="inline-key-should-not-win",
+            api_base="https://us-south.ml.cloud.ibm.com",
+        )
+        result = WatsonxPassthroughConfig.resolve_credentials_from_deployment(
+            deployment["litellm_params"]
+        )
+        assert result is not None
+        assert result.get("api_key") == "cred-key-999"
+        assert result.get("api_base") == "https://eu-de.ml.cloud.ibm.com"
+
+    def test_named_credential_loaded_after_deployment_still_resolves(self, monkeypatch):
+        """Credential added after router starts is found on next call."""
+        monkeypatch.setattr(litellm, "credential_list", [])
+        from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
+        from litellm.types.utils import CredentialItem
+
+        deployment = _wx_deployment(
+            "watsonx/ibm/granite-13b-chat-v2",
+            litellm_credential_name="wx-late",
+        )
+        # First call — credential not registered yet
+        result = WatsonxPassthroughConfig.resolve_credentials_from_deployment(
+            deployment["litellm_params"]
+        )
+        assert result is not None
+        assert result.get("api_key") is None
+
+        # Register credential after the fact
+        CredentialAccessor.upsert_credentials([
+            CredentialItem(
+                credential_name="wx-late",
+                credential_values={"api_key": "late-key", "api_base": "https://us-south.ml.cloud.ibm.com"},
+                credential_info={},
+            )
+        ])
+
+        result2 = WatsonxPassthroughConfig.resolve_credentials_from_deployment(
+            deployment["litellm_params"]
+        )
+        assert result2 is not None
+        assert result2.get("api_key") == "late-key"
+
+
+# ---------------------------------------------------------------------------
+# resolve_credentials_from_router_deployments
+# ---------------------------------------------------------------------------
+
+class TestResolveCredentialsFromRouterDeployments:
+    """Tests for WatsonxPassthroughConfig.resolve_credentials_from_router_deployments."""
+
+    def _deployments(self, *models_and_params):
+        """Build a list of deployments from (model, **kwargs) tuples."""
+        return [_wx_deployment(m, **p) for m, p in models_and_params]
+
+    def test_returns_none_with_no_deployments(self):
+        result = WatsonxPassthroughConfig.resolve_credentials_from_router_deployments(
+            deployments=[]
+        )
+        assert result is None
+
+    def test_returns_none_with_no_eligible_deployments(self):
+        deployments = [_wx_unflagged_deployment("watsonx/ibm/granite-13b-chat-v2", api_key="k")]
+        result = WatsonxPassthroughConfig.resolve_credentials_from_router_deployments(
+            deployments=deployments
+        )
+        assert result is None
+
+    def test_single_deployment_returned_as_fallback(self):
+        deployments = self._deployments(
+            ("watsonx/ibm/granite-13b-chat-v2", {"api_key": "k1", "api_base": "https://us-south.ml.cloud.ibm.com"}),
+        )
+        result = WatsonxPassthroughConfig.resolve_credentials_from_router_deployments(
+            deployments=deployments
+        )
+        assert result is not None
+        assert result.get("api_key") == "k1"
+
+    def test_exact_match_model_and_project_id(self):
+        deployments = self._deployments(
+            ("watsonx/ibm/granite-13b-chat-v2", {"api_key": "k-us", "api_base": "https://us-south.ml.cloud.ibm.com", "project_id": "proj-us"}),
+            ("watsonx/ibm/granite-13b-chat-v2", {"api_key": "k-eu", "api_base": "https://eu-de.ml.cloud.ibm.com", "project_id": "proj-eu"}),
+        )
+        result = WatsonxPassthroughConfig.resolve_credentials_from_router_deployments(
+            model_id="ibm/granite-13b-chat-v2",
+            project_id="proj-eu",
+            deployments=deployments,
+        )
+        assert result is not None
+        assert result.get("api_key") == "k-eu"
+        assert result.get("api_base") == "https://eu-de.ml.cloud.ibm.com"
+
+    def test_exact_match_model_and_space_id(self):
+        deployments = self._deployments(
+            ("watsonx/ibm/granite-13b-chat-v2", {"api_key": "k-studio", "api_base": "https://us-south.ml.cloud.ibm.com", "project_id": "proj-studio"}),
+            ("watsonx/ibm/granite-13b-chat-v2", {"api_key": "k-deploy", "api_base": "https://us-south.ml.cloud.ibm.com", "space_id": "space-prod"}),
+        )
+        result = WatsonxPassthroughConfig.resolve_credentials_from_router_deployments(
+            model_id="ibm/granite-13b-chat-v2",
+            space_id="space-prod",
+            deployments=deployments,
+        )
+        assert result is not None
+        assert result.get("api_key") == "k-deploy"
+
+    def test_partial_match_model_only(self):
+        deployments = self._deployments(
+            ("watsonx/ibm/granite-8b-code", {"api_key": "k-code", "api_base": "https://us-south.ml.cloud.ibm.com"}),
+            ("watsonx/ibm/granite-13b-chat-v2", {"api_key": "k-chat", "api_base": "https://us-south.ml.cloud.ibm.com"}),
+        )
+        result = WatsonxPassthroughConfig.resolve_credentials_from_router_deployments(
+            model_id="ibm/granite-13b-chat-v2",
+            deployments=deployments,
+        )
+        assert result is not None
+        assert result.get("api_key") == "k-chat"
+
+    def test_fallback_first_when_no_hints(self, recwarn):
+        """With multiple deployments and no hints, returns first and emits a warning."""
+        deployments = self._deployments(
+            ("watsonx/ibm/granite-8b-code", {"api_key": "k-first", "api_base": "https://us-south.ml.cloud.ibm.com"}),
+            ("watsonx/ibm/granite-13b-chat-v2", {"api_key": "k-second", "api_base": "https://us-south.ml.cloud.ibm.com"}),
+        )
+        result = WatsonxPassthroughConfig.resolve_credentials_from_router_deployments(
+            deployments=deployments,
+        )
+        assert result is not None
+        assert result.get("api_key") == "k-first"
+
+    def test_non_watsonx_deployments_ignored(self):
+        deployments = [
+            _wx_deployment("openai/gpt-4o", api_key="openai-key"),
+            _wx_deployment("watsonx/ibm/granite-13b-chat-v2", api_key="wx-key", api_base="https://us-south.ml.cloud.ibm.com"),
+        ]
+        result = WatsonxPassthroughConfig.resolve_credentials_from_router_deployments(
+            deployments=deployments,
+        )
+        assert result is not None
+        assert result.get("api_key") == "wx-key"
+
+    def test_unflagged_deployments_ignored(self):
+        deployments = [
+            _wx_unflagged_deployment("watsonx/ibm/granite-13b-chat-v2", api_key="should-be-ignored"),
+            _wx_deployment("watsonx/ibm/granite-8b-code", api_key="eligible", api_base="https://us-south.ml.cloud.ibm.com"),
+        ]
+        result = WatsonxPassthroughConfig.resolve_credentials_from_router_deployments(
+            deployments=deployments,
+        )
+        assert result is not None
+        assert result.get("api_key") == "eligible"
+
+    def test_project_id_mismatch_falls_through_to_model_match(self):
+        """No project_id match → falls through to model-only partial match."""
+        deployments = self._deployments(
+            ("watsonx/ibm/granite-13b-chat-v2", {"api_key": "k1", "api_base": "https://us-south.ml.cloud.ibm.com", "project_id": "proj-a"}),
+        )
+        result = WatsonxPassthroughConfig.resolve_credentials_from_router_deployments(
+            model_id="ibm/granite-13b-chat-v2",
+            project_id="proj-unknown",
+            deployments=deployments,
+        )
+        # Falls through to partial match on model_id
+        assert result is not None
+        assert result.get("api_key") == "k1"
+
+    def test_match_project_id_only_without_model_id(self):
+        deployments = self._deployments(
+            ("watsonx/ibm/granite-13b-chat-v2", {"api_key": "k-proj-a", "api_base": "https://us-south.ml.cloud.ibm.com", "project_id": "proj-a"}),
+            ("watsonx/ibm/granite-8b-code", {"api_key": "k-proj-b", "api_base": "https://us-south.ml.cloud.ibm.com", "project_id": "proj-b"}),
+        )
+        result = WatsonxPassthroughConfig.resolve_credentials_from_router_deployments(
+            project_id="proj-b",
+            deployments=deployments,
+        )
+        assert result is not None
+        assert result.get("api_key") == "k-proj-b"
+
+    def test_match_space_id_only_without_model_id(self):
+        deployments = self._deployments(
+            ("watsonx/ibm/granite-13b-chat-v2", {"api_key": "k-space-a", "api_base": "https://us-south.ml.cloud.ibm.com", "space_id": "space-a"}),
+            ("watsonx/ibm/granite-8b-code", {"api_key": "k-space-b", "api_base": "https://us-south.ml.cloud.ibm.com", "space_id": "space-b"}),
+        )
+        result = WatsonxPassthroughConfig.resolve_credentials_from_router_deployments(
+            space_id="space-b",
+            deployments=deployments,
+        )
+        assert result is not None
+        assert result.get("api_key") == "k-space-b"

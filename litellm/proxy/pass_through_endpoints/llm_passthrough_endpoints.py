@@ -163,6 +163,8 @@ from .passthrough_endpoint_router import PassthroughEndpointRouter
 if TYPE_CHECKING:
     from litellm.proxy.proxy_server import ProxyConfig as _ProxyConfig
     from litellm.router import Router
+    from litellm.types.passthrough_endpoints.watsonx import WatsonxPassThroughCredentials
+    from litellm.types.router import DeploymentTypedDict
 
     ProxyConfig = _ProxyConfig  # rebind-ok: conditional type alias
 else:
@@ -4443,6 +4445,84 @@ async def handle_gigachat_passthrough_router_model(
         return result
 
 
+async def _watsonx_request_body(request: Request) -> Mapping[str, object]:
+    if request.method != "POST":
+        return {}
+    if "multipart/form-data" in request.headers.get("content-type", ""):
+        return await get_form_data(request)
+    return await _json_request_body(request)
+
+
+def _str_or_none(value: object) -> str | None:
+    return value if isinstance(value, str) else None
+
+
+async def _watsonx_allowed_deployments(
+    user_api_key_dict: UserAPIKeyAuth, requested_model: str | None
+) -> Sequence[DeploymentTypedDict]:
+    from fastapi import status
+
+    from litellm.llms.watsonx.passthrough.transformation import WatsonxPassthroughConfig
+    from litellm.proxy._types import ModelAccessDeniedProxyException, ProxyErrorTypes
+    from litellm.proxy.auth.auth_checks import model_access_denied_client_message
+    from litellm.proxy.proxy_server import (
+        general_settings,  # pyright: ignore[reportUnknownVariableType]  # untyped proxy global
+        llm_router,
+        prisma_client,
+        proxy_logging_obj,
+        user_api_key_cache,
+        user_model,  # pyright: ignore[reportUnknownVariableType]  # untyped proxy global
+    )
+    from litellm.proxy.utils import (
+        get_available_models_for_user,  # pyright: ignore[reportUnknownVariableType]  # untyped settings parameter
+    )
+
+    if llm_router is None:
+        return ()
+    available_models: Final = frozenset(
+        await get_available_models_for_user(
+            user_api_key_dict=user_api_key_dict,
+            llm_router=llm_router,
+            general_settings=cast(dict[str, object], general_settings),  # cast-ok: proxy server settings
+            user_model=cast(str | None, user_model),  # cast-ok: proxy server untyped global
+            prisma_client=prisma_client,
+            proxy_logging_obj=proxy_logging_obj,
+            user_api_key_cache=user_api_key_cache,
+        )
+    )
+    allowed_deployments: Final = tuple(
+        d
+        for d in llm_router.get_model_list() or ()
+        if d["model_name"] in available_models
+        or (isinstance(m := d["litellm_params"].get("model"), str) and m in available_models)
+    )
+    if requested_model is None:
+        return allowed_deployments
+    model_is_accessible: Final = (
+        requested_model in available_models
+        or f"watsonx/{requested_model}" in available_models
+        or any(
+            WatsonxPassthroughConfig.deployment_model_matches(creds, requested_model)
+            for d in allowed_deployments
+            if (creds := WatsonxPassthroughConfig.resolve_credentials_from_deployment(d["litellm_params"])) is not None
+        )
+    )
+    has_model_restrictions: Final = (
+        bool(user_api_key_dict.models)
+        or bool(user_api_key_dict.team_models)
+        or bool(user_api_key_dict.access_group_ids)
+    )
+    if has_model_restrictions and not model_is_accessible:
+        raise ModelAccessDeniedProxyException(
+            message=model_access_denied_client_message(model=requested_model),
+            internal_message=f"Key not allowed to access model {requested_model}",
+            type=ProxyErrorTypes.key_model_access_denied,
+            param="model",
+            code=status.HTTP_403_FORBIDDEN,
+        )
+    return allowed_deployments
+
+
 @router.api_route(
     "/watsonx/{endpoint:path}",
     methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
@@ -4474,10 +4554,45 @@ async def watsonx_proxy_route(
     if provider_config is None:
         raise HTTPException(status_code=404, detail="Watsonx passthrough config not found")
 
+    request_body: Final = await _watsonx_request_body(request)
+    is_streaming_request: Final = bool(request_body.get("stream"))
+
+    from litellm.llms.watsonx.passthrough.transformation import WatsonxPassthroughConfig
+
+    requested_model: Final = (
+        _str_or_none(request_body.get("model_id"))
+        or _str_or_none(request_body.get("model"))
+        or _str_or_none(request.query_params.get("model_id"))
+        or _str_or_none(request.query_params.get("model"))
+    )
+    requested_project_id: Final = _str_or_none(request_body.get("project_id")) or _str_or_none(
+        request.query_params.get("project_id")
+    )
+    requested_space_id: Final = _str_or_none(request_body.get("space_id")) or _str_or_none(
+        request.query_params.get("space_id")
+    )
+    allowed_deployments: Final = await _watsonx_allowed_deployments(
+        user_api_key_dict=user_api_key_dict, requested_model=requested_model
+    )
+    watsonx_router_creds: Final[WatsonxPassThroughCredentials | None] = (
+        WatsonxPassthroughConfig.resolve_credentials_from_router_deployments(
+            model_id=requested_model,
+            project_id=requested_project_id,
+            space_id=requested_space_id,
+            deployments=allowed_deployments,
+        )
+    )
+    _resolved_api_key: Final[str | None] = (
+        watsonx_router_creds.get("api_key") if watsonx_router_creds is not None else None
+    )
+    _resolved_api_base: Final[str | None] = (
+        watsonx_router_creds.get("api_base") if watsonx_router_creds is not None else None
+    )
+
     # Get complete URL with version parameter
     complete_url, _ = provider_config.get_complete_url(
-        api_base=None,
-        api_key=None,
+        api_base=_resolved_api_base,
+        api_key=_resolved_api_key,
         model="",
         endpoint=endpoint,
         request_query_params=None,
@@ -4491,20 +4606,9 @@ async def watsonx_proxy_route(
         messages=[],
         optional_params={},
         litellm_params={},
-        api_key=None,
-        api_base=None,
+        api_key=_resolved_api_key,
+        api_base=_resolved_api_base,
     )
-
-    # Check for streaming
-    is_streaming_request = False
-    if request.method == "POST":
-        if "multipart/form-data" not in request.headers.get("content-type", ""):
-            _request_body = await _json_request_body(request)
-        else:
-            _request_body = await get_form_data(request)
-
-        if _request_body.get("stream"):
-            is_streaming_request = True
 
     request_query_params: Final = dict(request.query_params)
     if request_query_params.get("version") is None:
