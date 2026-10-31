@@ -1381,6 +1381,7 @@ def convert_to_gemini_tool_call_invoke(
         )
 
         needs_dummy_signature: Final = model is not None and VertexGeminiConfig.is_gemini_3_or_newer(model)
+        has_emitted_function_call: bool = False
 
         if tool_calls is not None:
             for tool in tool_calls:
@@ -1395,12 +1396,12 @@ def convert_to_gemini_tool_call_invoke(
                         # Gemini signs only the first functionCall part of a parallel batch, so scope the
                         # placeholder fallback to that part instead of fabricating one per sibling call:
                         # https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/thinking/thought-signatures#parallel_function_calling_example
-                        is_first_function_call = len(_parts_list) == 0
-                        if not thought_signature and is_first_function_call and needs_dummy_signature:
+                        if not thought_signature and not has_emitted_function_call and needs_dummy_signature:
                             thought_signature = _get_dummy_thought_signature()
                         if thought_signature:
                             part_dict["thoughtSignature"] = thought_signature
 
+                        has_emitted_function_call = True
                         _parts_list.append(part_dict)
                     else:  # don't silently drop params. Make it clear to user what's happening.
                         raise Exception(
