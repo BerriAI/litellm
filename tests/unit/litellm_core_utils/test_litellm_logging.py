@@ -11734,6 +11734,136 @@ def test_uncached_price_keeps_an_earlier_price_failure(pr44187_priced_model: str
     assert logging_obj.model_call_details["response_cost_failure_debug_information"] == earlier_failure
 
 
+SCRUB_PROMPT: Final = "my ssn is 123-45-6789"
+
+
+class _FailureCapture(CustomLogger):
+    def __init__(self, **kwargs: bool) -> None:
+        super().__init__(**kwargs)
+        self.sync_kwargs: dict | None = None
+        self.async_kwargs: dict | None = None
+
+    def log_failure_event(self, kwargs, response_obj, start_time, end_time):
+        self.sync_kwargs = kwargs
+
+    async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+        self.async_kwargs = kwargs
+
+
+def _prompt_failure_logging_obj(litellm_params: Mapping[str, object] | None = None) -> LitellmLogging:
+    logging_obj: Final = LitellmLogging(
+        model="gpt-4o",
+        messages=[{"role": "user", "content": SCRUB_PROMPT}],
+        stream=False,
+        call_type="completion",
+        start_time=datetime.datetime(2025, 1, 1),
+        litellm_call_id="failure-scrub",
+        function_id="failure-scrub",
+    )
+    logging_obj.model_call_details["messages"] = logging_obj.messages  # as update_environment_variables sets it
+    if litellm_params is not None:
+        logging_obj.model_call_details["litellm_params"] = dict(litellm_params)
+    return logging_obj
+
+
+def _prompt_echo_error() -> litellm.BadRequestError:
+    return litellm.BadRequestError(
+        message=f"Invalid message passed in {{'role': 'user', 'content': '{SCRUB_PROMPT}'}}",
+        model="gpt-4o",
+        llm_provider="openai",
+    )
+
+
+async def _async_failure_payload(
+    monkeypatch: pytest.MonkeyPatch, *, redact: bool, error: Exception, capture: _FailureCapture | None = None
+) -> dict:
+    logger: Final = capture or _FailureCapture()
+    monkeypatch.setattr(litellm, "turn_off_message_logging", redact)
+    monkeypatch.setattr(litellm, "_async_failure_callback", [logger])
+    await _prompt_failure_logging_obj().async_failure_handler(error, f"Traceback: {error}")
+    assert logger.async_kwargs is not None
+    return logger.async_kwargs
+
+
+@pytest.mark.asyncio
+async def test_failure_with_redaction_on_scrubs_the_prompt_out_of_the_error_and_keeps_the_rest(monkeypatch):
+    kwargs: Final = await _async_failure_payload(monkeypatch, redact=True, error=_prompt_echo_error())
+
+    payload: Final = kwargs["standard_logging_object"]
+    assert SCRUB_PROMPT not in json.dumps(payload, default=str)
+    assert SCRUB_PROMPT not in kwargs["traceback_exception"]
+    assert "Invalid message passed in" in payload["error_str"]
+    assert "'content': 'redacted-by-litellm'" in payload["error_information"]["error_message"]
+    assert payload["error_information"]["error_class"] == "BadRequestError"
+    assert payload["error_information"]["error_code"] == "400"
+
+
+@pytest.mark.asyncio
+async def test_failure_with_redaction_on_keeps_error_text_that_does_not_quote_the_prompt(monkeypatch):
+    error: Final = litellm.AuthenticationError(
+        message="Incorrect API key provided", model="gpt-4o", llm_provider="openai"
+    )
+
+    redacted: Final = (await _async_failure_payload(monkeypatch, redact=True, error=error))["standard_logging_object"]
+    raw: Final = (await _async_failure_payload(monkeypatch, redact=False, error=error))["standard_logging_object"]
+
+    assert redacted["error_str"] == raw["error_str"]
+    assert redacted["error_information"] == raw["error_information"]
+
+
+@pytest.mark.asyncio
+async def test_failure_with_redaction_off_logs_the_error_as_raised(monkeypatch):
+    kwargs: Final = await _async_failure_payload(monkeypatch, redact=False, error=_prompt_echo_error())
+
+    assert SCRUB_PROMPT in kwargs["standard_logging_object"]["error_information"]["error_message"]
+    assert SCRUB_PROMPT in kwargs["traceback_exception"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("headers", [None, "x", ["a"]], ids=["none", "str", "list"])
+@pytest.mark.parametrize("redact", [True, False], ids=["redaction_on", "redaction_off"])
+async def test_failure_with_non_mapping_headers_is_still_logged(monkeypatch, headers, redact):
+    capture: Final = _FailureCapture()
+    monkeypatch.setattr(litellm, "turn_off_message_logging", redact)
+    monkeypatch.setattr(litellm, "_async_failure_callback", [capture])
+    logging_obj: Final = _prompt_failure_logging_obj({"metadata": {"headers": headers}})
+
+    await logging_obj.async_failure_handler(_prompt_echo_error(), f"Traceback: {SCRUB_PROMPT}")
+
+    assert capture.async_kwargs is not None
+    assert (SCRUB_PROMPT in capture.async_kwargs["traceback_exception"]) is not redact
+
+
+def test_sync_failure_hands_callbacks_and_langfuse_the_scrubbed_error(monkeypatch):
+    capture: Final = _FailureCapture()
+    langfuse: Final = MagicMock()
+    monkeypatch.setattr(litellm, "turn_off_message_logging", True)
+    monkeypatch.setattr(litellm, "failure_callback", [capture, "langfuse"])
+    monkeypatch.setattr(litellm_logging, "langFuseLogger", langfuse)
+
+    _prompt_failure_logging_obj().failure_handler(_prompt_echo_error(), f"Traceback: {SCRUB_PROMPT}")
+
+    assert capture.sync_kwargs is not None
+    assert SCRUB_PROMPT not in json.dumps(capture.sync_kwargs["standard_logging_object"], default=str)
+    status_message: Final = langfuse.log_event_on_langfuse.call_args.kwargs["status_message"]
+    assert "Invalid message passed in" in status_message
+    assert SCRUB_PROMPT not in status_message
+
+
+def test_sync_failure_hands_lunary_the_scrubbed_traceback_when_only_the_traceback_quotes_the_prompt(monkeypatch):
+    lunary: Final = MagicMock()
+    monkeypatch.setattr(litellm, "turn_off_message_logging", True)
+    monkeypatch.setattr(litellm, "failure_callback", ["lunary"])
+    monkeypatch.setattr(litellm_logging, "lunaryLogger", lunary)
+    error: Final = litellm.APIConnectionError(message="Connection failed", model="gpt-4o", llm_provider="openai")
+
+    _prompt_failure_logging_obj().failure_handler(error, f"ValueError: bad input {SCRUB_PROMPT}\n\n{error}")
+
+    logged_error: Final = lunary.log_event.call_args.kwargs["error"]
+    assert "ValueError: bad input redacted-by-litellm" in logged_error
+    assert SCRUB_PROMPT not in logged_error
+
+
 def test_enterprise_alerting_loggers_resolves_real_classes():
     from litellm_enterprise.enterprise_callbacks.pagerduty.pagerduty import PagerDutyAlerting
     from litellm_enterprise.enterprise_callbacks.send_emails.resend_email import ResendEmailLogger
