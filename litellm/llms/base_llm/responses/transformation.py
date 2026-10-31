@@ -83,6 +83,9 @@ class BaseResponsesAPIConfig(ABC):
     def supports_encrypted_agent_messages(self) -> bool:
         return False
 
+    def supports_native_tool_search(self) -> bool:
+        return False
+
     def supports_streamed_retrieval(self) -> bool:
         return self.custom_llm_provider in (LlmProviders.OPENAI, LlmProviders.AZURE, LlmProviders.AZURE_AI)
 

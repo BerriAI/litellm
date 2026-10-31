@@ -17,8 +17,11 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.llms.azure.responses.transformation import AzureOpenAIResponsesAPIConfig
 from litellm.llms.azure_ai.responses.transformation import AzureAIResponsesAPIConfig
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
+from litellm.llms.chatgpt.responses.transformation import ChatGPTResponsesAPIConfig
 from litellm.llms.hosted_vllm.responses.transformation import HostedVLLMResponsesAPIConfig
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
+from litellm.llms.openai_like.responses.transformation import OpenAILikeResponsesConfig
+from litellm.llms.openrouter.responses.transformation import OpenRouterResponsesAPIConfig
 from litellm.llms.xai.responses.transformation import XAIResponsesAPIConfig
 from litellm.responses.litellm_completion_transformation.transformation import LiteLLMCompletionResponsesConfig
 from litellm.responses.utils import ResponsesAPIRequestUtils
@@ -3346,6 +3349,22 @@ class TestReasoningFollowsModelSupport:
             drop_params=True,
         )
         assert mapped["reasoning"] == {"effort": "medium"}
+
+
+@pytest.mark.parametrize(
+    ("config", "expected"),
+    [
+        (OpenAIResponsesAPIConfig(), True),
+        (AzureOpenAIResponsesAPIConfig(), True),
+        (ChatGPTResponsesAPIConfig(), True),
+        (HostedVLLMResponsesAPIConfig(), False),
+        (OpenRouterResponsesAPIConfig(), False),
+        (XAIResponsesAPIConfig(), False),
+        (OpenAILikeResponsesConfig(), False),
+    ],
+)
+def test_only_openai_backends_run_tool_search_natively(config: BaseResponsesAPIConfig, expected: bool):
+    assert config.supports_native_tool_search() is expected
 
 
 @pytest.mark.asyncio

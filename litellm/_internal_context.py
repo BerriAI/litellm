@@ -40,6 +40,23 @@ _service_caller: Final[ContextVar[str | None]] = ContextVar("service_caller", de
 _mirrored_call: Final[ContextVar[bool]] = ContextVar("mirrored_call", default=False)
 
 
+_emulated_file_search: Final[ContextVar[bool]] = ContextVar("emulated_file_search", default=False)
+
+
+@contextmanager
+def emulated_file_search_phase() -> Generator[None]:
+    """Nested calls of emulated file_search, whose answer keeps only its own tool calls."""
+    token: Final = _emulated_file_search.set(True)
+    try:
+        yield
+    finally:
+        _emulated_file_search.reset(token)
+
+
+def in_emulated_file_search() -> bool:
+    return _emulated_file_search.get()
+
+
 @contextmanager
 def internal_sub_call(parent_request_id: str | None = None) -> Generator[None]:
     """A nested call the parent call logs and bills, so the parent must fold this call's cost into its own."""
