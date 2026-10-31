@@ -25,7 +25,7 @@ vi.mock("../networking", async () => {
   const actual = await vi.importActual("../networking");
   return {
     ...actual,
-    getUiSettings: vi.fn().mockResolvedValue({ values: { enable_projects_ui: false } }),
+    getUiSettings: vi.fn().mockResolvedValue({ values: {} }),
     getPromptsList: vi.fn().mockResolvedValue({
       prompts: [{ prompt_id: "prompt-1" }, { prompt_id: "prompt-2" }],
     }),
@@ -396,7 +396,7 @@ describe("KeyEditView", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     can.mockReturnValue(true);
-    vi.mocked(getUiSettings).mockResolvedValue({ values: { enable_projects_ui: false } });
+    vi.mocked(getUiSettings).mockResolvedValue({ values: {} });
     testQueryClient.removeQueries({ queryKey: ["uiSettings"] });
   });
 
@@ -2006,7 +2006,6 @@ describe("KeyEditView", () => {
     });
 
     it("should save an explicit project detach while keeping parents locked until reopening the editor", async () => {
-      vi.mocked(getUiSettings).mockResolvedValue({ values: { enable_projects_ui: true } });
       const onSubmit = vi.fn().mockResolvedValue(undefined);
       const onCancel = vi.fn();
       const key = { ...MOCK_KEY_DATA, organization_id: "org-1", team_id: "group-maple", project_id: "project-orbit" };
@@ -2067,7 +2066,7 @@ describe("KeyEditView", () => {
       expect(await screen.findByRole("button", { name: "Detach from project" })).toBeInTheDocument();
     });
 
-    it("keeps project key relationships locked and omits project updates when the project UI is disabled", async () => {
+    it("keeps project key relationships locked and omits project_id when the project is not detached", async () => {
       const onSubmit = vi.fn().mockResolvedValue(undefined);
       renderWithProviders(
         <KeyEditView

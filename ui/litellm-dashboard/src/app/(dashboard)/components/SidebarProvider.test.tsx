@@ -6,13 +6,13 @@ import Sidebar from "@/components/leftnav";
 import SidebarProvider from "./SidebarProvider";
 
 const { getSettings } = vi.hoisted(() => ({
-  getSettings: vi.fn().mockResolvedValue({ values: { enable_projects_ui: true } }),
+  getSettings: vi.fn().mockResolvedValue({ values: { allow_agents_for_team_admins: true } }),
 }));
 
 vi.mock("@/components/networking", () => ({ getUiSettings: getSettings, getUISettings: getSettings }));
 vi.mock("@/components/leftnav", () => ({
-  default: ({ enableProjectsUI }: ComponentProps<typeof Sidebar>) => (
-    <nav>{enableProjectsUI && <a href="/projects">Projects</a>}</nav>
+  default: ({ allowAgentsForTeamAdmins }: ComponentProps<typeof Sidebar>) => (
+    <nav>{allowAgentsForTeamAdmins && <a href="/agents">Agents</a>}</nav>
   ),
 }));
 
@@ -31,13 +31,13 @@ it("reuses loaded navigation settings immediately when the mobile sidebar mounts
     </QueryClientProvider>
   );
   const { rerender } = render(shell(false));
-  expect(await screen.findByRole("link", { name: "Projects" })).toBeVisible();
+  expect(await screen.findByRole("link", { name: "Agents" })).toBeVisible();
 
   for (const open of [true, false, true]) {
     rerender(shell(open));
     if (open) {
       expect(
-        within(screen.getByRole("region", { name: "Mobile navigation" })).getByRole("link", { name: "Projects" }),
+        within(screen.getByRole("region", { name: "Mobile navigation" })).getByRole("link", { name: "Agents" }),
       ).toBeVisible();
     }
   }

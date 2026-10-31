@@ -19,20 +19,6 @@ async function globalSetup() {
   // keeps the default "." a no-op.
   fs.mkdirSync(ARTIFACT_DIR, { recursive: true });
 
-  // The Projects sidebar item is hidden unless the enterprise-gated
-  // enable_projects_ui setting is on, and the seeded DB starts with it off.
-  // The proxy runs with LITELLM_LICENSE in CI, so enable it the same way
-  // the admin UI toggle does; the projects migration smoke needs the link.
-  const masterKey = getMasterKey();
-  const api = await request.newContext();
-  const settingsRes = await api.patch(`${UI_BASE_URL}${rootPath}/update/ui_settings`, {
-    headers: { Authorization: `Bearer ${masterKey}` },
-    data: { enable_projects_ui: true },
-  });
-  if (!settingsRes.ok()) {
-    throw new Error(`Enabling enable_projects_ui failed (${settingsRes.status()}): ${await settingsRes.text()}`);
-  }
-
   const roles = [Role.ProxyAdmin, ...Object.values(Role).filter((role) => role !== Role.ProxyAdmin)];
   for (const role of roles) {
     const { email, password, seedApiRole } = users[role];

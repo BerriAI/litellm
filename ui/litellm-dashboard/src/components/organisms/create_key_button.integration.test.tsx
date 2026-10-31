@@ -131,6 +131,7 @@ const SECTIONS = {
 
 const ALL_CLOSED_PAYLOAD = {
   organization_id: undefined,
+  project_id: undefined,
   team_id: null,
   key_alias: "contract-key",
   models: [],
@@ -538,15 +539,6 @@ describe("CreateKey", () => {
       expect(payload).toHaveProperty("guardrails");
     });
 
-    it("adds project_id only when the projects UI is enabled", async () => {
-      state.uiSettings = { enable_projects_ui: true };
-      await openModal();
-      await nameTheKey();
-      await submit();
-
-      expect(await createdPayload()).toStrictEqual({ ...ALL_CLOSED_PAYLOAD, project_id: undefined });
-    });
-
     it("keeps disable_global_guardrails out of the payload while the switch is off", async () => {
       await openModal();
       await nameTheKey();
@@ -923,7 +915,6 @@ describe("CreateKey", () => {
     });
 
     it("discards the old project and team when the organization changes", async () => {
-      state.uiSettings = { enable_projects_ui: true };
       state.organizations = [
         { organization_id: "scope-silver", organization_alias: "Silver" },
         { organization_id: "scope-copper", organization_alias: "Copper" },

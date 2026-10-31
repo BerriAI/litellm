@@ -1,7 +1,6 @@
 import { canDetachKeyProject, KeyProjectField } from "./KeyProjectField";
 import GuardrailSelector from "@/components/guardrails/GuardrailSelector";
 import { useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
-import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings";
 import PolicySelector from "@/components/policies/PolicySelector";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -143,8 +142,6 @@ function KeyEditSession({
   const keyTypeFieldId = React.useId();
   const endUserBudgetFieldId = React.useId();
   const { data: organizations, isLoading: isOrganizationsLoading } = useOrganizations();
-  const { data: uiSettingsData } = useUISettings();
-  const enableProjectsUI = Boolean(uiSettingsData?.values?.enable_projects_ui);
   const hasProject = Boolean(keyData.project_id);
   const canChangeOrganization = userRole === "Admin" && !hasProject;
   const detachProject = hasProject && form.watch("project_id") === null;
@@ -317,7 +314,7 @@ function KeyEditSession({
       await onSubmit(
         withNormalizedEstimates({
           ...values,
-          ...(detachProject && enableProjectsUI && canDetachProject ? { project_id: null } : {}),
+          ...(detachProject && canDetachProject ? { project_id: null } : {}),
         }),
         [...Object.keys(form.formState.dirtyFields), ...(budgetLimitsUnchanged ? [] : ["budget_limits"])],
       );
@@ -822,7 +819,7 @@ function KeyEditSession({
             )}
           </FormField>
 
-          {enableProjectsUI && hasProject && (
+          {hasProject && (
             <KeyProjectField
               projectId={keyData.project_id}
               canDetach={canDetachProject}
