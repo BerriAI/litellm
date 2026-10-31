@@ -1,3 +1,4 @@
+import type { ParseKeys } from "i18next";
 import { parseIdentityForForm } from "./agent_identity";
 /**
  * Shared configuration for agent form fields
@@ -23,12 +24,12 @@ export interface FieldConfig {
   rows?: number;
   validation?: any[];
   options?: string[];
-  helpText?: string;
+  helpTextKey?: ParseKeys;
 }
 
 export interface SectionConfig {
   key: string;
-  title: string;
+  titleKey: ParseKeys;
   fields: FieldConfig[];
   defaultExpanded?: boolean;
 }
@@ -44,7 +45,7 @@ export const AGENT_FORM_CONFIG: {
 } = {
   basic: {
     key: "basic",
-    title: "Basic Information",
+    titleKey: "agents.formConfig.basic.title",
     defaultExpanded: true,
     fields: [
       {
@@ -85,14 +86,13 @@ export const AGENT_FORM_CONFIG: {
         defaultValue: "1.0",
         tooltip:
           "The A2A protocol version LiteLLM serves to clients for this agent. LiteLLM converts the upstream agent's responses to this version, so clients always see the version you pick here regardless of the original agent's version.",
-        helpText:
-          "LiteLLM serves this version to clients and converts the upstream agent's responses to match it, regardless of the original agent's version.",
+        helpTextKey: "agents.formConfig.basic.protocolVersionHelp",
       },
     ],
   },
   skills: {
     key: "skills",
-    title: "Skills",
+    titleKey: "agents.formConfig.skills.title",
     fields: [
       {
         name: "skills",
@@ -104,7 +104,7 @@ export const AGENT_FORM_CONFIG: {
   },
   capabilities: {
     key: "capabilities",
-    title: "Capabilities",
+    titleKey: "agents.formConfig.capabilities.title",
     fields: [
       {
         name: "streaming",
@@ -126,7 +126,7 @@ export const AGENT_FORM_CONFIG: {
   },
   optional: {
     key: "optional",
-    title: "Optional Settings",
+    titleKey: "agents.formConfig.optional.title",
     fields: [
       {
         name: "iconUrl",
@@ -149,7 +149,7 @@ export const AGENT_FORM_CONFIG: {
   },
   litellm: {
     key: "litellm",
-    title: "LiteLLM Parameters",
+    titleKey: "agents.formConfig.litellm.title",
     fields: [
       {
         name: "model",
@@ -165,7 +165,7 @@ export const AGENT_FORM_CONFIG: {
   },
   cost: {
     key: "cost",
-    title: "Cost Configuration",
+    titleKey: "agents.formConfig.cost.title",
     fields: [
       {
         name: "cost_per_query",
@@ -192,7 +192,7 @@ export const AGENT_FORM_CONFIG: {
   },
   tracing: {
     key: "tracing",
-    title: "Tracing",
+    titleKey: "agents.formConfig.tracing.title",
     fields: [
       {
         name: "enable_tracing",
@@ -208,33 +208,33 @@ export const AGENT_FORM_CONFIG: {
 export const SKILL_FIELD_CONFIG = {
   id: {
     name: "id",
-    label: "Skill ID",
+    labelKey: "agents.formConfig.skillFields.id" as ParseKeys,
     required: true,
-    placeholder: "e.g., hello_world",
+    placeholderKey: "agents.formConfig.skillFields.idPlaceholder" as ParseKeys,
   },
   name: {
     name: "name",
-    label: "Skill Name",
+    labelKey: "agents.formConfig.skillFields.name" as ParseKeys,
     required: true,
-    placeholder: "e.g., Returns hello world",
+    placeholderKey: "agents.formConfig.skillFields.namePlaceholder" as ParseKeys,
   },
   description: {
     name: "description",
-    label: "Description",
+    labelKey: "agents.formConfig.skillFields.description" as ParseKeys,
     required: true,
-    placeholder: "What this skill does",
+    placeholderKey: "agents.formConfig.skillFields.descriptionPlaceholder" as ParseKeys,
     rows: 2,
   },
   tags: {
     name: "tags",
-    label: "Tags",
+    labelKey: "agents.formConfig.skillFields.tags" as ParseKeys,
     required: true,
-    placeholder: "Type a tag and press Enter",
+    placeholderKey: "agents.formConfig.skillFields.tagsPlaceholder" as ParseKeys,
   },
   examples: {
     name: "examples",
-    label: "Examples",
-    placeholder: "Type an example and press Enter",
+    labelKey: "agents.formConfig.skillFields.examples" as ParseKeys,
+    placeholderKey: "agents.formConfig.skillFields.examplesPlaceholder" as ParseKeys,
   },
 };
 
