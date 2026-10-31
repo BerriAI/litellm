@@ -600,6 +600,34 @@ async def test_responses_websocket_turn_is_refused_once_its_deployment_crosses_b
 
 
 @pytest.mark.asyncio
+async def test_responses_websocket_turns_do_not_make_their_deployment_look_busy_to_least_busy():
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "ws-least-busy",
+                "litellm_params": {"model": "openai/gpt-5-mini", "api_key": "sk-fake"},
+                "model_info": {"id": deployment_id},
+            }
+            for deployment_id in ("ws-least-busy-a", "ws-least-busy-b")
+        ],
+        routing_strategy="least-busy",
+    )
+    admit_turn: Final = (await _kwargs_routed_to(router, "ws-least-busy", "_aresponses_websocket"))["turn_admission"]
+    assert callable(admit_turn)
+    for _ in range(3):
+        await admit_turn()
+
+    picks: Final = [
+        (await router._core_async_get_available_deployment(model="ws-least-busy", request_kwargs={"input": "hi"}))[
+            "model_info"
+        ]["id"]
+        for _ in range(2)
+    ]
+
+    assert sorted(picks) == ["ws-least-busy-a", "ws-least-busy-b"]
+
+
+@pytest.mark.asyncio
 async def test_responses_websocket_turn_after_the_first_counts_toward_deployment_rpm():
     router = Router(
         model_list=[

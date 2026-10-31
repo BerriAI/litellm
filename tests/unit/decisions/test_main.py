@@ -6,8 +6,10 @@ import copy
 import json
 import re
 import threading
+import uuid
 from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
 from concurrent.futures import wait
+from datetime import datetime
 from functools import partial
 from types import MappingProxyType
 from typing import Final, TypeAlias
@@ -297,6 +299,43 @@ async def test_router_dispatches_typesafe_decisions_without_api_base(
     assert respx_mock.calls[0].request.headers["authorization"] == "Bearer k"
     assert isinstance(response.answers["sentiment"], ChoiceAnswer)
     assert response.answers["sentiment"].choice == "positive"
+
+
+@pytest.mark.asyncio
+async def test_least_busy_frees_a_decisions_deployment_once_a_proxy_logged_call_finishes(
+    respx_mock: respx.MockRouter,
+) -> None:
+    respx_mock.post("https://api.typesafe.ai/v1/systemone").respond(json=_RESPONSE)
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "jev",
+                "litellm_params": {"model": "typesafe/jev-latest", "api_key": "k"},
+                "model_info": {"id": deployment_id},
+            }
+            for deployment_id in ("jev-a", "jev-b")
+        ],
+        routing_strategy="least-busy",
+    )
+
+    async def call_through_proxy_logging() -> object:
+        logging_obj, _ = litellm.utils.function_setup(
+            original_function="adecisions",
+            rules_obj=litellm.utils.Rules(),
+            start_time=datetime(2026, 1, 1),
+            model="jev",
+            litellm_call_id=str(uuid.uuid4()),
+        )
+        response: Final = await router.adecisions(
+            model="jev",
+            input="Is this a defect?",
+            questions=[{"type": "predicate", "name": "is_defect", "instructions": "Is this a defect?"}],
+            litellm_logging_obj=logging_obj,
+        )
+        await _drain_logging_worker()
+        return response._hidden_params["model_id"]
+
+    assert (await call_through_proxy_logging(), await call_through_proxy_logging()) == ("jev-a", "jev-a")
 
 
 def test_decisions_uses_the_same_wire_contract_for_sync_calls(respx_mock: respx.MockRouter) -> None:

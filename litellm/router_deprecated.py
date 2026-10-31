@@ -27,11 +27,12 @@ import inspect
 import sys
 import warnings
 from collections import Counter
-from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Coroutine, Iterator, Mapping, Sequence
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final, Generic, TypeVar, overload
+from typing import TYPE_CHECKING, Final, Generic, ParamSpec, TypeVar, overload
 
 from litellm.router_api import SETTING_FIELDS, ChangeSet
+from litellm.router_strategy.least_busy import picks_reserve
 
 if TYPE_CHECKING:
     from typing import Any  # noqa: TID251  # only to repeat two old signatures that had Any, unchanged
@@ -58,6 +59,7 @@ if TYPE_CHECKING:
     from litellm.types.utils import ModelInfo as ModelMapInfo
 
 _T: Final = TypeVar("_T")
+_P: Final = ParamSpec("_P")
 
 DEPRECATED_ROUTER_MEMBER_USES: Final[Counter[str]] = Counter()  # mutable-ok: the live tally _note increments
 
@@ -161,6 +163,18 @@ def _setting(name: str, read: Callable[["Router"], _T]) -> _DeprecatedAttribute[
 
 def _attr(replacement: str, read: Callable[["Router"], _T]) -> _DeprecatedAttribute[_T]:
     return _DeprecatedAttribute(replacement, read)
+
+
+def _without_reserving(lookup: Callable[_P, Awaitable[_T]]) -> Callable[_P, Coroutine[object, object, _T]]:
+    @functools.wraps(lookup)
+    async def looked_up(
+        *args: _P.args,
+        **kwargs: _P.kwargs,  # kwargs-ok: forwards the wrapped lookup's ParamSpec unchanged
+    ) -> _T:
+        with picks_reserve(False):
+            return await lookup(*args, **kwargs)
+
+    return looked_up
 
 
 # (id(router), member name) pairs whose subclass override is running in this context.
@@ -325,7 +339,7 @@ class DeprecatedRouterMembers:
     deployment_latency_map = _attr("health().latency", lambda r: r._core_deployment_latency_map)
     async_get_available_deployment = _attr(
         "select(model, request_kwargs)",
-        lambda r: r._core_async_get_available_deployment,
+        lambda r: _without_reserving(r._core_async_get_available_deployment),
     )
 
     # -- observers ------------------------------------------------------------------------------
