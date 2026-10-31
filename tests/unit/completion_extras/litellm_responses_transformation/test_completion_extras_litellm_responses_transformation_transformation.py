@@ -3064,6 +3064,38 @@ def test_map_optional_params_tool_choice_chat_nested_to_responses_api():
             {"type": "custom", "name": "ApplyPatch"},
         ),
         ({"type": "custom"}, {"type": "custom"}),
+        (
+            {
+                "type": "allowed_tools",
+                "allowed_tools": {
+                    "mode": "required",
+                    "tools": [
+                        {"type": "function", "function": {"name": "get_time"}},
+                        {"type": "custom", "custom": {"name": "apply_patch"}},
+                        {"type": "mcp", "server_label": "docs"},
+                        {"type": "function", "name": "already_flat"},
+                    ],
+                },
+            },
+            {
+                "type": "allowed_tools",
+                "mode": "required",
+                "tools": [
+                    {"type": "function", "name": "get_time"},
+                    {"type": "custom", "name": "apply_patch"},
+                    {"type": "mcp", "server_label": "docs"},
+                    {"type": "function", "name": "already_flat"},
+                ],
+            },
+        ),
+        (
+            {"type": "allowed_tools", "allowed_tools": {"mode": "auto", "tools": [{"type": "function"}]}},
+            {"type": "allowed_tools", "allowed_tools": {"mode": "auto", "tools": [{"type": "function"}]}},
+        ),
+        (
+            {"type": "allowed_tools", "mode": "auto", "tools": [{"type": "function", "name": "get_time"}]},
+            {"type": "allowed_tools", "mode": "auto", "tools": [{"type": "function", "name": "get_time"}]},
+        ),
     ],
 )
 def test_normalize_tool_choice_for_responses_api(tool_choice, expected):
@@ -4105,6 +4137,16 @@ def test_output_item_done_with_stream_map_keeps_empty_delta():
         ({"type": "required"}, "required"),
         ("auto", "auto"),
         ({"type": "function", "function": {"name": "get_weather"}}, {"type": "function", "name": "get_weather"}),
+        (
+            {
+                "type": "allowed_tools",
+                "allowed_tools": {
+                    "mode": "required",
+                    "tools": [{"type": "function", "function": {"name": "get_weather"}}],
+                },
+            },
+            {"type": "allowed_tools", "mode": "required", "tools": [{"type": "function", "name": "get_weather"}]},
+        ),
     ],
 )
 async def test_acompletion_bridge_normalizes_tool_choice_on_the_wire(
@@ -4177,6 +4219,7 @@ async def test_acompletion_bridge_normalizes_tool_choice_on_the_wire(
     post_kwargs = mock_post.call_args.kwargs
     request_body = post_kwargs["json"] if "json" in post_kwargs else json.loads(post_kwargs["data"])
     assert request_body["tool_choice"] == expected_wire_tool_choice
+    assert [tool["name"] for tool in request_body["tools"]] == ["get_weather"]
 
 
 def _make_incomplete_responses_api_response(
