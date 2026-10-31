@@ -204,7 +204,7 @@ def _team_public_names_by_group(router: "Router", team_id: str | None) -> Mappin
     groups_by_name: Final = MappingProxyType(
         {
             name: model_access_groups_of(router=router, model=name, team_id=team_id)
-            for name in router.team_public_model_names_of(team_id)
+            for name in router.registry().names(kind="team_public", team_id=team_id)
         }
     )
     return MappingProxyType(

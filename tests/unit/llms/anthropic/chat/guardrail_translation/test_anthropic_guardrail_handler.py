@@ -6,6 +6,8 @@ with guardrail transformations, specifically testing edge cases with empty choic
 """
 
 import json
+import logging
+import re
 from typing import Any, Literal, Optional, Final
 from unittest.mock import MagicMock, patch
 
@@ -302,6 +304,57 @@ class TestAnthropicMessagesHandlerStreamingOutputProcessing:
                     texts.append(data["delta"]["text"])
         return texts
 
+    @pytest.mark.parametrize(
+        "off_schema_delta",
+        [None, "stray", {"type": "text_delta", "text": 5}, {"type": "thinking_delta", "text": None}],
+    )
+    def test_off_schema_delta_is_skipped_without_ending_the_text_scan(self, off_schema_delta):
+        events = [
+            {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "abc"}},
+            {"type": "content_block_delta", "index": 1, "delta": off_schema_delta},
+            {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "def"}},
+        ]
+        chunk = "".join(f"event: content_block_delta\ndata: {json.dumps(event)}\n\n" for event in events).encode()
+
+        assert AnthropicMessagesHandler().get_streaming_string_so_far([chunk]) == "abcdef"
+
+    def test_malformed_delta_data_is_skipped_without_ending_the_text_scan(self):
+        text_delta = {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "abc"}}
+        chunk = (
+            f"event: content_block_delta\ndata: {json.dumps(text_delta)}\n\n"
+            "event: content_block_delta\ndata: {not json\n\n"
+            f"event: content_block_delta\ndata: {json.dumps(text_delta)}\n\n"
+        ).encode()
+
+        assert AnthropicMessagesHandler().get_streaming_string_so_far([chunk]) == "abcabc"
+
+    def test_text_delta_with_a_lone_surrogate_escape_is_scanned(self):
+        event = {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "pineapple \ud83d"}}
+        chunk = f"event: content_block_delta\ndata: {json.dumps(event)}\n\n".encode()
+
+        assert AnthropicMessagesHandler().get_streaming_string_so_far([chunk]) == "pineapple \ud83d"
+
+    def test_message_delta_with_a_lone_surrogate_escape_still_ends_the_stream(self):
+        event = {"type": "message_delta", "delta": {"stop_reason": "stop_sequence", "stop_sequence": "\ud83d"}}
+        chunk = f"event: message_delta\ndata: {json.dumps(event)}\n\n".encode()
+
+        scan_key = AnthropicMessagesHandler().get_streaming_scan_key([chunk])
+
+        assert scan_key is not None
+        assert scan_key.stream_ended is True
+
+    def test_off_schema_message_delta_does_not_hide_a_later_stop_reason(self):
+        events = [
+            {"type": "message_delta", "delta": None},
+            {"type": "message_delta", "delta": {"stop_reason": "end_turn", "stop_sequence": None}},
+        ]
+        chunk = "".join(f"event: message_delta\ndata: {json.dumps(event)}\n\n" for event in events).encode()
+
+        scan_key = AnthropicMessagesHandler().get_streaming_scan_key([chunk])
+
+        assert scan_key is not None
+        assert scan_key.stream_ended is True
+
     @pytest.mark.asyncio
     async def test_deliver_ended_stream_rewrites_writes_text_back_into_sse_chunks(self):
         handler = AnthropicMessagesHandler()
@@ -501,13 +554,25 @@ class TestAnthropicMessagesHandlerStreamingOutputProcessing:
         assert chunks == original
 
     @pytest.mark.asyncio
-    async def test_deliver_ended_stream_tool_use_rewrite_with_server_tool_use_block_fails_closed(self):
-        from litellm.proxy.policy_engine.pipeline_executor import UndeliverableStreamRewrite
-
+    async def test_deliver_ended_stream_tool_use_rewrite_lands_on_server_tool_use_and_tool_use_blocks(self):
         handler = AnthropicMessagesHandler()
         server_tool_use = [
-            ("content_block_start", {"type": "content_block_start", "index": 0, "content_block": {"type": "server_tool_use", "id": "srvtoolu_1", "name": "web_search", "input": {}}}),
-            ("content_block_delta", {"type": "content_block_delta", "index": 0, "delta": {"type": "input_json_delta", "partial_json": '{"query": "fruit"}'}}),
+            (
+                "content_block_start",
+                {
+                    "type": "content_block_start",
+                    "index": 0,
+                    "content_block": {"type": "server_tool_use", "id": "srvtoolu_1", "name": "web_search", "input": {}},
+                },
+            ),
+            (
+                "content_block_delta",
+                {
+                    "type": "content_block_delta",
+                    "index": 0,
+                    "delta": {"type": "input_json_delta", "partial_json": '{"query": "fruit"}'},
+                },
+            ),
             ("content_block_stop", {"type": "content_block_stop", "index": 0}),
         ]
         tool_use = self._ended_tool_use_sse_chunks()
@@ -517,6 +582,26 @@ class TestAnthropicMessagesHandlerStreamingOutputProcessing:
             + [chunk.replace(b'"index": 0', b'"index": 1') for chunk in tool_use[1:]]
         )
 
+        await handler.process_output_streaming_response(
+            responses_so_far=chunks,
+            guardrail_to_apply=self._argument_masking_guardrail(),
+            litellm_logging_obj=MagicMock(),
+            deliver_ended_stream_rewrites=True,
+        )
+
+        assert self._partial_jsons(chunks) == ['{"fruit": "[MASKED]"}', '{"fruit": "[MASKED]"}', "", ""]
+        raw = b"".join(chunks).decode()
+        assert '"id": "srvtoolu_1"' in raw and '"id": "toolu_1"' in raw
+        assert "persim" not in raw and '"query"' not in raw
+
+    @pytest.mark.asyncio
+    async def test_deliver_ended_stream_tool_use_rewrite_on_an_unindexed_tool_block_fails_closed(self):
+        from litellm.proxy.policy_engine.pipeline_executor import UndeliverableStreamRewrite
+
+        handler = AnthropicMessagesHandler()
+        tool_use = self._ended_tool_use_sse_chunks()
+        chunks = tool_use[:1] + [tool_use[1].replace(b'"index": 0', b'"index": "0"')] + tool_use[2:]
+
         with pytest.raises(UndeliverableStreamRewrite):
             await handler.process_output_streaming_response(
                 responses_so_far=chunks,
@@ -524,6 +609,270 @@ class TestAnthropicMessagesHandlerStreamingOutputProcessing:
                 litellm_logging_obj=MagicMock(),
                 deliver_ended_stream_rewrites=True,
             )
+
+    @staticmethod
+    def _python_masking_guardrail() -> CustomGuardrail:
+        class MaskPython(CustomGuardrail):
+            async def apply_guardrail(
+                self,
+                inputs: GenericGuardrailAPIInputs,
+                request_data: dict[str, object],
+                input_type: Literal["request", "response"],
+                logging_obj: Optional[LiteLLMLoggingObj] = None,
+            ) -> GenericGuardrailAPIInputs:
+                for tool_call in inputs.get("tool_calls", []):
+                    if isinstance(tool_call, ChatCompletionMessageToolCall):
+                        tool_call.function.arguments = re.sub(
+                            "python", "[MASKED]", tool_call.function.arguments, flags=re.I
+                        )
+                return {
+                    **inputs,
+                    "texts": [re.sub("python", "[MASKED]", text, flags=re.I) for text in inputs.get("texts", [])],
+                }
+
+        return MaskPython(guardrail_name="test")
+
+    @staticmethod
+    def _python_texts_masking_guardrail() -> CustomGuardrail:
+        class MaskPythonTexts(CustomGuardrail):
+            async def apply_guardrail(
+                self,
+                inputs: GenericGuardrailAPIInputs,
+                request_data: dict[str, object],
+                input_type: Literal["request", "response"],
+                logging_obj: Optional[LiteLLMLoggingObj] = None,
+            ) -> GenericGuardrailAPIInputs:
+                return {
+                    **inputs,
+                    "texts": [re.sub("python", "[MASKED]", text, flags=re.I) for text in inputs.get("texts", [])],
+                }
+
+        return MaskPythonTexts(guardrail_name="test")
+
+    @staticmethod
+    def _web_search_result_block() -> dict[str, object]:
+        return {
+            "type": "web_search_tool_result",
+            "tool_use_id": "srvtoolu_1",
+            "content": [
+                {
+                    "type": "web_search_result",
+                    "url": "https://docs.python.org/3.14/",
+                    "title": "Python 3.14 docs",
+                    "encrypted_content": "",
+                    "page_age": None,
+                },
+                {
+                    "type": "web_search_result",
+                    "url": "https://peps.example/745",
+                    "title": "PEP 745",
+                    "encrypted_content": "",
+                    "page_age": None,
+                },
+            ],
+        }
+
+    @classmethod
+    def _web_search_stream_chunks(cls, server_tool_block_type: str = "server_tool_use") -> list[bytes]:
+        events = [
+            (
+                "message_start",
+                {
+                    "type": "message_start",
+                    "message": {
+                        "id": "msg_1",
+                        "type": "message",
+                        "role": "assistant",
+                        "model": "claude-sonnet-5-5",
+                        "content": [],
+                        "stop_reason": None,
+                        "usage": {"input_tokens": 1, "output_tokens": 0},
+                    },
+                },
+            ),
+            (
+                "content_block_start",
+                {
+                    "type": "content_block_start",
+                    "index": 0,
+                    "content_block": {
+                        "type": server_tool_block_type,
+                        "id": "srvtoolu_1",
+                        "name": "web_search",
+                        "input": {},
+                    },
+                },
+            ),
+            (
+                "content_block_delta",
+                {
+                    "type": "content_block_delta",
+                    "index": 0,
+                    "delta": {"type": "input_json_delta", "partial_json": '{"query": "python 3.14 release date"}'},
+                },
+            ),
+            ("content_block_stop", {"type": "content_block_stop", "index": 0}),
+            (
+                "content_block_start",
+                {"type": "content_block_start", "index": 1, "content_block": cls._web_search_result_block()},
+            ),
+            ("content_block_stop", {"type": "content_block_stop", "index": 1}),
+            (
+                "content_block_start",
+                {"type": "content_block_start", "index": 2, "content_block": {"type": "text", "text": ""}},
+            ),
+            (
+                "content_block_delta",
+                {
+                    "type": "content_block_delta",
+                    "index": 2,
+                    "delta": {"type": "text_delta", "text": "Python 3.14 shipped"},
+                },
+            ),
+            ("content_block_stop", {"type": "content_block_stop", "index": 2}),
+            (
+                "message_delta",
+                {
+                    "type": "message_delta",
+                    "delta": {"stop_reason": "end_turn", "stop_sequence": None},
+                    "usage": {"output_tokens": 2},
+                },
+            ),
+            ("message_stop", {"type": "message_stop"}),
+        ]
+        return [f"event: {name}\ndata: {json.dumps(payload)}\n\n".encode() for name, payload in events]
+
+    @pytest.mark.parametrize("server_tool_block_type", ["server_tool_use", "tool_use"])
+    @pytest.mark.parametrize(
+        "guardrail_factory",
+        [_python_masking_guardrail, _python_texts_masking_guardrail],
+        ids=["texts_and_tool_calls", "texts_only"],
+    )
+    @pytest.mark.asyncio
+    async def test_deliver_ended_stream_rewrites_mask_the_web_search_query_results_and_text(
+        self, guardrail_factory, server_tool_block_type
+    ):
+        chunks = self._web_search_stream_chunks(server_tool_block_type)
+
+        await AnthropicMessagesHandler().process_output_streaming_response(
+            responses_so_far=chunks,
+            guardrail_to_apply=guardrail_factory(),
+            litellm_logging_obj=MagicMock(),
+            deliver_ended_stream_rewrites=True,
+        )
+
+        raw = b"".join(chunks).decode()
+        assert "python" not in raw.lower()
+        result_block = next(
+            json.loads(line[len("data:") :])["content_block"]
+            for line in raw.split("\n")
+            if line.startswith("data:") and '"web_search_tool_result"' in line
+        )
+        assert [(result["title"], result["url"]) for result in result_block["content"]] == [
+            ("[MASKED] 3.14 docs", "https://docs.[MASKED].org/3.14/"),
+            ("PEP 745", "https://peps.example/745"),
+        ]
+        assert '"id": "srvtoolu_1"' in raw and '"tool_use_id": "srvtoolu_1"' in raw
+
+    @staticmethod
+    def _last_text_redacting_guardrail() -> CustomGuardrail:
+        class RedactLastText(CustomGuardrail):
+            async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
+                return {**inputs, "texts": ["[REDACTED] " + inputs["texts"][-1]]}
+
+        return RedactLastText(guardrail_name="test")
+
+    @pytest.mark.asyncio
+    async def test_output_response_keeps_the_reply_as_the_last_text_a_guardrail_scans(self):
+        response = {
+            "id": "msg_1",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-sonnet-5-5",
+            "content": [
+                {
+                    "type": "server_tool_use",
+                    "id": "srvtoolu_1",
+                    "name": "web_search",
+                    "input": {"query": "python 3.14 release date"},
+                },
+                self._web_search_result_block(),
+                {"type": "text", "text": "Python 3.14 shipped"},
+            ],
+            "stop_reason": "end_turn",
+        }
+
+        await AnthropicMessagesHandler().process_output_response(
+            response=response,
+            guardrail_to_apply=self._last_text_redacting_guardrail(),
+            litellm_logging_obj=MagicMock(),
+        )
+
+        assert response["content"][0]["input"] == {"query": "python 3.14 release date"}
+        assert response["content"][1] == self._web_search_result_block()
+        assert response["content"][2] == {"type": "text", "text": "[REDACTED] Python 3.14 shipped"}
+
+    @pytest.mark.asyncio
+    async def test_deliver_ended_stream_keeps_the_reply_as_the_last_text_a_guardrail_scans(self):
+        chunks = self._web_search_stream_chunks()
+
+        await AnthropicMessagesHandler().process_output_streaming_response(
+            responses_so_far=chunks,
+            guardrail_to_apply=self._last_text_redacting_guardrail(),
+            litellm_logging_obj=MagicMock(),
+            deliver_ended_stream_rewrites=True,
+        )
+
+        raw = b"".join(chunks).decode()
+        assert "[REDACTED] Python 3.14 shipped" in raw
+        assert raw.count("[REDACTED]") == 1
+        assert json.dumps(self._web_search_result_block()) in raw
+
+    def test_ended_stream_scan_key_differs_from_a_mid_stream_key_by_the_web_search_results(self):
+        handler = AnthropicMessagesHandler()
+        chunks = self._web_search_stream_chunks()
+
+        mid_stream_key = handler.get_streaming_scan_key(chunks[:-2])
+        ended_key = handler.get_streaming_scan_key(chunks)
+
+        assert mid_stream_key.texts == ("Python 3.14 shipped",)
+        assert ended_key != mid_stream_key
+        assert ended_key.texts[-1] == "Python 3.14 shipped"
+        assert {"Python 3.14 docs", "https://docs.python.org/3.14/"} <= set(ended_key.texts)
+
+    @pytest.mark.asyncio
+    async def test_output_response_masks_the_web_search_query_results_and_text(self):
+        response = {
+            "id": "msg_1",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-sonnet-5-5",
+            "content": [
+                {
+                    "type": "server_tool_use",
+                    "id": "srvtoolu_1",
+                    "name": "web_search",
+                    "input": {"query": "python 3.14 release date"},
+                },
+                self._web_search_result_block(),
+                {"type": "text", "text": "Python 3.14 shipped"},
+            ],
+            "stop_reason": "end_turn",
+        }
+
+        await AnthropicMessagesHandler().process_output_response(
+            response=response,
+            guardrail_to_apply=self._python_masking_guardrail(),
+            litellm_logging_obj=MagicMock(),
+        )
+
+        assert "python" not in json.dumps(response).lower()
+        assert response["content"][0]["input"] == {"query": "[MASKED] 3.14 release date"}
+        assert [(result["title"], result["url"]) for result in response["content"][1]["content"]] == [
+            ("[MASKED] 3.14 docs", "https://docs.[MASKED].org/3.14/"),
+            ("PEP 745", "https://peps.example/745"),
+        ]
+        assert response["content"][2] == {"type": "text", "text": "[MASKED] 3.14 shipped"}
 
     @pytest.mark.asyncio
     async def test_ended_stream_rewrite_leaves_chunks_untouched_by_default(self):
@@ -3043,3 +3392,18 @@ class TestAnthropicMessagesHandlerPostCallHookResponse:
         native = {"type": "message", "role": "assistant", "content": [{"type": "text", "text": "hi"}]}
 
         assert AnthropicMessagesHandler().post_call_hook_response(native) is native
+
+
+def test_reading_a_dropped_budget_for_a_guardrail_logs_no_drop_warning(caplog: pytest.LogCaptureFixture) -> None:
+    data: Final = {
+        "model": "gemini-2.5-flash",
+        "max_tokens": 64,
+        "thinking": {"type": "enabled", "budget_tokens": "high"},
+        "messages": [{"role": "user", "content": "hi"}],
+    }
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        messages: Final = AnthropicMessagesHandler().get_structured_messages(data)
+
+    assert messages == [{"role": "user", "content": "hi"}]
+    assert not [record for record in caplog.records if "Dropping" in record.getMessage()]

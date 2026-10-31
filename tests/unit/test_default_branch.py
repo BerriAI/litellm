@@ -119,6 +119,17 @@ def test_explicit_base_works_without_remote_access(
     assert "No changed litellm Python files" in checked.stdout
 
 
+def test_format_check_reads_staged_renames(remote_and_clone: tuple[Path, Path]) -> None:
+    _, repo = remote_and_clone
+    (repo / "litellm" / "before_move.py").write_text("value = 2\n")
+    _commit(repo, "add module")
+    _git(repo, "mv", "litellm/before_move.py", "litellm/after_move.py")
+    checked: Final = _make(repo, "lint-format-check-changed", "BASE_REF=origin/release_branch", "UV_RUN=echo")
+    assert checked.returncode == 0, checked.stdout + checked.stderr
+    assert "litellm/after_move.py" in checked.stdout
+    assert "before_move.py" not in checked.stdout
+
+
 def _freshness(repo: Path, *args: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         [

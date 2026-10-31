@@ -1,6 +1,7 @@
 import base64
 import io
 import json
+import logging
 import sys
 from typing import Final
 from unittest.mock import MagicMock, patch
@@ -10,6 +11,7 @@ import pytest
 import respx
 
 import litellm
+from litellm._logging import verbose_logger
 from litellm._uuid import uuid
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.ollama.completion.transformation import (
@@ -1060,3 +1062,41 @@ def test_ollama_drop_params_keeps_a_hosted_mcp_tool_out_of_the_prompt(
     assert ("get_weather" in prompt) is prompt_names_weather
     assert prompt.startswith("### User:\nweather in Paris?")
     assert prompt_names_weather or prompt == "### User:\nweather in Paris?\n\n"
+
+
+def _reasoning_effort_warnings(caplog: pytest.LogCaptureFixture) -> tuple[str, ...]:
+    return tuple(
+        r.getMessage()
+        for r in caplog.records
+        if r.levelno == logging.WARNING and "Dropping reasoning_effort=" in r.getMessage()
+    )
+
+
+@pytest.mark.parametrize("effort", ("minimal", "xhigh"))
+def test_reasoning_effort_mapped_to_think_off_warns_once(effort: str, caplog: pytest.LogCaptureFixture) -> None:
+    with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
+        result: Final = OllamaConfig().map_openai_params(
+            non_default_params={"reasoning_effort": effort}, optional_params={}, model="qwen3:0.6b", drop_params=False
+        )
+
+    warnings: Final = _reasoning_effort_warnings(caplog)
+    assert result["think"] is False
+    assert len(warnings) == 1
+    assert f"reasoning_effort={effort!r}" in warnings[0]
+    assert "qwen3:0.6b" in warnings[0]
+
+
+@pytest.mark.parametrize(
+    "model, effort, think",
+    (("qwen3:0.6b", "none", False), ("qwen3:0.6b", "high", True), ("gpt-oss:20b", "xhigh", "xhigh")),
+)
+def test_reasoning_effort_ollama_honors_does_not_warn(
+    model: str, effort: str, think: object, caplog: pytest.LogCaptureFixture
+) -> None:
+    with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
+        result: Final = OllamaConfig().map_openai_params(
+            non_default_params={"reasoning_effort": effort}, optional_params={}, model=model, drop_params=False
+        )
+
+    assert result["think"] == think
+    assert _reasoning_effort_warnings(caplog) == ()

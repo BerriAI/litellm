@@ -1,5 +1,6 @@
 import asyncio
 import inspect
+import logging
 import os
 import sys
 from typing import Final, cast
@@ -24,6 +25,7 @@ import json
 from unittest.mock import ANY, MagicMock, patch
 
 import litellm
+from litellm._logging import verbose_logger
 from litellm.types.utils import Choices, EmbeddingResponse, Message, ModelResponse, ModelResponseStream
 from unittest import mock
 
@@ -855,6 +857,99 @@ class TestOllamaReasoningContentStreaming:
 
 
 class TestOllamaToolCallTransformation:
+    @pytest.mark.parametrize("stream", [False, True])
+    def test_transform_request_keeps_parallel_call_ids_paired_with_results(self, stream: bool):
+        config: Final = OllamaChatConfig()
+        messages: Final = cast(
+            list[AllMessageValues],
+            [
+                {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "id": "call_first",
+                            "type": "function",
+                            "function": {
+                                "name": "read_fixture",
+                                "arguments": '{"path": "first.txt"}',
+                            },
+                        },
+                        {
+                            "id": "call_second",
+                            "type": "function",
+                            "function": {
+                                "name": "read_fixture",
+                                "arguments": '{"path": "second.txt"}',
+                            },
+                        },
+                    ],
+                },
+                {
+                    "role": "tool",
+                    "tool_call_id": "call_second",
+                    "content": "second result",
+                },
+                {
+                    "role": "tool",
+                    "tool_call_id": "call_first",
+                    "content": "first result",
+                },
+            ],
+        )
+
+        result: Final = config.transform_request(
+            model="ollama_chat/test-model",
+            messages=messages,
+            optional_params={"stream": stream},
+            litellm_params={},
+            headers={},
+        )
+
+        assert result["messages"][0]["tool_calls"] == [
+            {
+                "id": "call_first",
+                "function": {"name": "read_fixture", "arguments": {"path": "first.txt"}},
+            },
+            {
+                "id": "call_second",
+                "function": {"name": "read_fixture", "arguments": {"path": "second.txt"}},
+            },
+        ]
+        assert [message.get("tool_call_id") for message in result["messages"][1:]] == [
+            "call_second",
+            "call_first",
+        ]
+
+    def test_transform_request_does_not_invent_an_id_for_an_unidentified_call(self):
+        config: Final = OllamaChatConfig()
+        messages: Final = cast(
+            list[AllMessageValues],
+            [
+                {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "id": None,
+                            "type": "function",
+                            "function": {"name": "read_fixture", "arguments": "{}"},
+                        }
+                    ],
+                }
+            ],
+        )
+
+        result: Final = config.transform_request(
+            model="ollama_chat/test-model",
+            messages=messages,
+            optional_params={},
+            litellm_params={},
+            headers={},
+        )
+
+        assert result["messages"][0]["tool_calls"] == [{"function": {"name": "read_fixture", "arguments": {}}}]
+
     def test_transform_request_preserves_tool_calls(self):
         """
         tool_calls on assistant messages must survive transform_request.
@@ -1181,3 +1276,36 @@ def test_ollama_chat_drop_params_sends_only_the_tools_ollama_can_call(
 
     assert json.loads(route.calls.last.request.content).get("tools") == sent_tools
     assert response.choices[0].message.content == "Sunny"
+
+
+def _warnings_naming(caplog: pytest.LogCaptureFixture, param: str) -> tuple[str, ...]:
+    return tuple(
+        r.getMessage() for r in caplog.records if r.levelno == logging.WARNING and f"Dropping {param}=" in r.getMessage()
+    )
+
+
+@pytest.mark.parametrize("effort", ("minimal", "xhigh"))
+def test_reasoning_effort_mapped_to_think_off_warns_once(effort: str, caplog: pytest.LogCaptureFixture) -> None:
+    with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
+        result: Final = OllamaChatConfig().map_openai_params(
+            non_default_params={"reasoning_effort": effort}, optional_params={}, model="qwen3", drop_params=False
+        )
+
+    warnings: Final = _warnings_naming(caplog, "reasoning_effort")
+    assert result["think"] is False
+    assert len(warnings) == 1
+    assert f"reasoning_effort={effort!r}" in warnings[0]
+    assert "qwen3" in warnings[0]
+
+
+@pytest.mark.parametrize("effort, think", (("none", False), ("low", True), ("high", True)))
+def test_reasoning_effort_with_a_matching_think_value_does_not_warn(
+    effort: str, think: bool, caplog: pytest.LogCaptureFixture
+) -> None:
+    with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
+        result: Final = OllamaChatConfig().map_openai_params(
+            non_default_params={"reasoning_effort": effort}, optional_params={}, model="qwen3", drop_params=False
+        )
+
+    assert result["think"] is think
+    assert _warnings_naming(caplog, "reasoning_effort") == ()

@@ -1,7 +1,7 @@
 import asyncio
 import contextvars
 import json
-from collections.abc import Awaitable, Callable, Coroutine, Generator, Iterable, Mapping, Sequence
+from collections.abc import Coroutine, Generator, Iterable, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from functools import partial
@@ -31,7 +31,10 @@ from litellm.integrations.anthropic_cache_control_hook import (
 from litellm.litellm_core_utils.asyncify import run_async_function
 from litellm.litellm_core_utils.completion_timeout import CompletionTimeout, StreamKind
 from litellm.litellm_core_utils.core_helpers import drops_unsupported_params, normalize_drop_params
-from litellm.litellm_core_utils.get_llm_provider_logic import get_provider_affinity_header
+from litellm.litellm_core_utils.get_llm_provider_logic import (
+    declared_authenticating_provider,
+    get_provider_affinity_header,
+)
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
@@ -39,6 +42,11 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     update_responses_tools_with_model_file_ids,
 )
 from litellm.litellm_core_utils.provider_affinity import add_provider_affinity_header
+from litellm.litellm_core_utils.reasoning_effort_capability import (
+    deployment_reasoning_effort_levels,
+    model_group_from_metadata,
+    resolve_deployment_reasoning_effort,
+)
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.llms.openai.common_utils import get_openai_credentials
@@ -60,11 +68,6 @@ from litellm.responses.mcp.round_billing import (
 )
 from litellm.responses.mcp.tool_precheck import may_name_litellm_mcp_gateway
 from litellm.responses.utils import ResponsesAPIRequestUtils
-from litellm.router_utils.reasoning_effort_capability import (
-    deployment_reasoning_effort_levels,
-    model_group_from_metadata,
-    resolve_deployment_reasoning_effort,
-)
 from litellm.types.llms.openai import (
     PromptObject,
     Reasoning,
@@ -78,7 +81,7 @@ from litellm.types.llms.openai import (
 
 # Handle ResponseText import with fallback
 if TYPE_CHECKING:
-    from litellm.responses.streaming_iterator import ResponsesWsFrameGuard
+    from litellm.responses.streaming_iterator import ResponsesWsFrameGuard, ResponsesWsTurnAdmission
     from litellm.types.llms.openai import ResponseText
 else:
     ResponseText = str  # Fallback for ResponseText import
@@ -434,7 +437,7 @@ async def aresponses_api_with_mcp(
     #########################################################
     if isinstance(logging_obj, LiteLLMLoggingObj):
         logging_obj.carry_failed_attempt_usage()
-    with internal_sub_call():
+    with internal_sub_call(logging_obj.litellm_call_id if isinstance(logging_obj, LiteLLMLoggingObj) else None):
         response: Final = await aresponses(
             input=input,
             model=model,
@@ -511,7 +514,9 @@ async def aresponses_api_with_mcp(
                             tool_calls=tool_calls, tool_results=tool_results
                         )
 
-                    with internal_sub_call():
+                    with internal_sub_call(
+                        logging_obj.litellm_call_id if isinstance(logging_obj, LiteLLMLoggingObj) else None
+                    ):
                         final_response = await LiteLLM_Proxy_MCP_Handler.make_follow_up_call(
                             follow_up_input=follow_up_input,
                             model=model,
@@ -759,7 +764,7 @@ def _dispatched_model_name(
     from litellm.litellm_core_utils.get_llm_provider_logic import resolve_model_and_provider_for_metadata
 
     provider_model, _ = resolve_model_and_provider_for_metadata(model=model, custom_llm_provider=custom_llm_provider)
-    return _strip_responses_routing_prefix(provider_model)
+    return strip_responses_routing_prefix(provider_model)
 
 
 def _will_bridge_to_chat_completions(
@@ -805,6 +810,7 @@ def provider_stores_the_conversation(model: str, custom_llm_provider: str | None
     return not _will_bridge_to_chat_completions(
         model,
         custom_llm_provider
+        or declared_authenticating_provider(model)
         or litellm.get_llm_provider(model=model, api_base=api_base, litellm_params=litellm_params)[1],
         bool(kwargs.get("use_chat_completions_api")),
         kwargs.get("model_info"),
@@ -1245,7 +1251,7 @@ def _pop_use_chat_completions_api_kw(kwargs: dict[str, object]) -> bool:
 _RESPONSES_ROUTING_PREFIX: Final = "responses/"
 
 
-def _strip_responses_routing_prefix(model: str) -> str:
+def strip_responses_routing_prefix(model: str) -> str:
     if not model.startswith(_RESPONSES_ROUTING_PREFIX):
         return model
     return model[len(_RESPONSES_ROUTING_PREFIX) :]
@@ -1273,7 +1279,7 @@ def _resolve_model_provider_for_responses(
         litellm_params.api_key = dynamic_api_key
     if dynamic_api_base is not None:
         litellm_params.api_base = dynamic_api_base
-    return _strip_responses_routing_prefix(provider_model), resolved_provider
+    return strip_responses_routing_prefix(provider_model), resolved_provider
 
 
 def _apply_managed_file_id_mapping(
@@ -2863,7 +2869,7 @@ async def _aresponses_websocket(
     api_base: str | None = None,
     api_key: str | None = None,
     timeout: float | None = None,
-    turn_admission: Callable[[], Awaitable[None]] | None = None,
+    turn_admission: "ResponsesWsTurnAdmission | None" = None,
     responses_ws_frame_guard: "ResponsesWsFrameGuard | None" = None,
     **kwargs,
 ) -> Exception | None:
@@ -2893,7 +2899,7 @@ async def _aresponses_websocket(
         api_key=api_key,
         litellm_params=litellm_params,
     )
-    resolved_model: Final = _strip_responses_routing_prefix(provider_model)
+    resolved_model: Final = strip_responses_routing_prefix(provider_model)
 
     litellm_params_dict["data_residency"] = infer_openai_data_residency(
         _custom_llm_provider,

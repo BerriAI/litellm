@@ -2841,3 +2841,66 @@ def test_databricks_claude_still_sends_max_completion_tokens_as_max_tokens_when_
     assert mapped["max_tokens"] == 64
     assert "max_completion_tokens" not in mapped
     assert [tool["function"]["name"] for tool in mapped["tools"]] == ["get_weather"]
+
+
+@pytest.mark.parametrize(
+    ("model", "base_model"),
+    [("databricks-claude-haiku-5-5", None), ("support-bot-endpoint", "databricks/databricks-claude-haiku-5-5")],
+    ids=["claude_in_the_endpoint_name", "claude_named_only_by_base_model"],
+)
+def test_databricks_claude_request_over_the_cache_control_cap_keeps_the_newest_four_hints_under_drop_params(
+    model: str, base_model: str | None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    hint: Final = {"type": "ephemeral"}
+    messages: Final = [
+        {"role": "system", "content": "system prompt", "cache_control": hint},
+        {"role": "user", "content": "turn 1", "cache_control": hint},
+        {"role": "assistant", "content": "answer 1", "cache_control": hint},
+        {"role": "user", "content": "turn 2", "cache_control": hint},
+        {"role": "assistant", "content": "answer 2"},
+        {"role": "user", "content": "turn 3", "cache_control": hint},
+    ]
+    messages_before: Final = copy.deepcopy(messages)
+
+    body: Final = DatabricksConfig().transform_request(
+        model=model,
+        messages=messages,
+        optional_params={},
+        litellm_params={"drop_params": True, "custom_llm_provider": "databricks", "base_model": base_model},
+        headers={},
+    )
+
+    assert "cache_control" not in json.dumps(body["messages"][0])
+    assert json.dumps(body["messages"]).count('"cache_control"') == 4
+    assert messages == messages_before
+
+
+@pytest.mark.parametrize(
+    "optional_params",
+    [{"cache_control": {"type": "ephemeral"}}, {"extra_body": {"cache_control": {"type": "ephemeral"}}}],
+    ids=["top_level_cache_control", "extra_body_cache_control"],
+)
+def test_databricks_claude_cache_control_cap_keeps_room_for_a_top_level_cache_control_under_drop_params(
+    optional_params: dict[str, object], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    hint: Final = {"type": "ephemeral"}
+    messages: Final = [
+        {"role": "user", "content": "turn 1", "cache_control": hint},
+        {"role": "assistant", "content": "answer 1", "cache_control": hint},
+        {"role": "user", "content": "turn 2", "cache_control": hint},
+        {"role": "assistant", "content": "answer 2", "cache_control": hint},
+        {"role": "user", "content": "turn 3"},
+    ]
+
+    body: Final = DatabricksConfig().transform_request(
+        model="databricks-claude-haiku-5-5",
+        messages=messages,
+        optional_params=copy.deepcopy(optional_params),
+        litellm_params={"drop_params": True, "custom_llm_provider": "databricks"},
+        headers={},
+    )
+
+    assert "cache_control" not in json.dumps(body["messages"][0])
+    assert json.dumps(body["messages"]).count('"cache_control"') == 3

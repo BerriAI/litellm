@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use google_cloud_kms_v1::client::KeyManagementService;
 use litellm_core_utils::settings::Lookup;
-use litellm_secrets_types::SecretValue;
+use litellm_secret_value::SecretValue;
 
 use crate::{Error, auth};
 

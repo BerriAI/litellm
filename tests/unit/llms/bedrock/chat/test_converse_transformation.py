@@ -13,6 +13,7 @@ import pytest
 import respx
 
 import litellm
+from litellm._logging import verbose_logger
 from litellm import ModelResponse, Router, completion
 from litellm.litellm_core_utils.prompt_templates.factory import (
     _bedrock_converse_messages_pt,
@@ -1219,6 +1220,97 @@ def test_transform_request_drops_lookaround_regex_when_the_deployment_model_info
     )
 
     assert properties == _LOOKAROUND_FREE_PROPERTIES
+
+
+@pytest.mark.parametrize(
+    ("model", "litellm_params"),
+    [
+        ("us.newvendor.model-1", None),
+        ("converse/us.newvendor.model-1", None),
+        ("us-east-1/us.newvendor.model-1", None),
+        ("us.newvendor.model-1", {"base_model": "bedrock/converse/us.newvendor.model-1"}),
+    ],
+)
+def test_transform_request_drops_lookaround_regex_for_a_model_the_cost_map_does_not_list(model, litellm_params):
+    assert "us.newvendor.model-1" not in litellm.model_cost
+
+    properties: Final = _tool_schema_properties(model, _ARTIFACT_DATA_ANTHROPIC_TOOL, litellm_params)
+
+    assert properties == _LOOKAROUND_FREE_PROPERTIES
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "arn:aws:bedrock:us-east-1:123456789012:custom-model-deployment/abc123",
+        "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/abc123",
+        "us.anthropic.claude-unreleased-v1:0",
+        "eu.openai.gpt-unreleased",
+        "apac.newvendor.listed-1",
+    ],
+)
+def test_transform_request_keeps_lookaround_regex_for_an_unlisted_model_litellm_still_recognizes(model, monkeypatch):
+    monkeypatch.setitem(litellm.model_cost, "us.newvendor.listed-1", {"litellm_provider": "bedrock_converse"})
+
+    properties = _tool_schema_properties(model, _ARTIFACT_DATA_ANTHROPIC_TOOL)
+
+    assert properties == _ARTIFACT_DATA_INPUT_SCHEMA["properties"]
+
+
+def test_transform_request_keeps_lookaround_regex_for_an_unlisted_model_whose_deployment_opts_out():
+    properties = _tool_schema_properties(
+        "us.newvendor.model-1", _ARTIFACT_DATA_ANTHROPIC_TOOL, {"model_info": {"supports_regex_lookaround": True}}
+    )
+
+    assert properties == _ARTIFACT_DATA_INPUT_SCHEMA["properties"]
+
+
+@pytest.mark.parametrize(
+    "deployment_params",
+    [
+        {"model": "bedrock/us.newvendor.model-1"},
+        {"model": "bedrock/converse/us.newvendor.model-1", "allowed_openai_params": ["tools"]},
+    ],
+)
+def test_a_router_deployment_of_a_model_the_cost_map_does_not_list_drops_lookaround_regex(
+    respx_mock, deployment_params
+):
+    route: Final = respx_mock.post(
+        "https://bedrock-runtime.us-east-1.amazonaws.com/model/us.newvendor.model-1/converse"
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "output": {"message": {"role": "assistant", "content": [{"text": "ok"}]}},
+                "stopReason": "end_turn",
+                "usage": {"inputTokens": 1, "outputTokens": 1, "totalTokens": 2},
+            },
+        )
+    )
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "unlisted",
+                "litellm_params": {
+                    **deployment_params,
+                    "aws_access_key_id": "fake-access-key",
+                    "aws_secret_access_key": "fake-secret-key",
+                    "aws_region_name": "us-east-1",
+                },
+                "model_info": {"input_cost_per_token": 1e-6, "output_cost_per_token": 2e-6},
+            }
+        ]
+    )
+
+    router.completion(
+        model="unlisted",
+        messages=[{"role": "user", "content": "hi"}],
+        tools=[_ARTIFACT_DATA_OPENAI_TOOL],
+        client=HTTPHandler(),
+    )
+
+    tool: Final = json.loads(route.calls[0].request.content)["toolConfig"]["tools"][0]
+    assert tool["toolSpec"]["inputSchema"]["json"]["properties"] == _LOOKAROUND_FREE_PROPERTIES
 
 
 def test_transform_request_keeps_lookaround_regex_when_the_deployment_model_info_opts_out():
@@ -9189,17 +9281,222 @@ def test_bedrock_tools_transformation_valid_params():
     assert "test" in result[0]["toolSpec"]["inputSchema"]["json"]["required"]
 
 
-def test_not_found_error():
+def _invalid_model_identifier_reply(sent: list[httpx.Request]):
+    def respond(request: httpx.Request) -> httpx.Response:
+        sent.append(request)
+        return httpx.Response(
+            400,
+            json={"message": "The provided model identifier is invalid."},
+            headers={"x-amzn-ErrorType": "ValidationException", "x-amzn-RequestId": "req-123"},
+        )
+
+    return respond
+
+
+@pytest.mark.parametrize(
+    "model, path",
+    [
+        ("bedrock/bad_model", b"/model/bad_model/converse"),
+        ("bedrock/us-east-1/bad_model", b"/model/bad_model/converse"),
+        ("bedrock/newvendor.listed-v1:0", b"/model/newvendor.listed-v1%3A0/converse"),
+        ("bedrock/us-east-1/newvendor.listed-v1:0", b"/model/newvendor.listed-v1%3A0/converse"),
+    ],
+)
+def test_not_found_error(model, path, monkeypatch):
+    monkeypatch.setitem(litellm.model_cost, "newvendor.listed-v1:0", {"litellm_provider": "bedrock", "mode": "chat"})
+    sent: Final[list[httpx.Request]] = []
+
+    with pytest.raises(litellm.NotFoundError) as exc_info:
+        completion(
+            model=model,
+            messages=[{"role": "user", "content": "What is the meaning of life"}],
+            client=HTTPHandler(
+                client=httpx.Client(transport=httpx.MockTransport(_invalid_model_identifier_reply(sent)))
+            ),
+            aws_access_key_id="testing",
+            aws_secret_access_key="testing",
+            aws_region_name="us-west-2",
+        )
+
+    assert exc_info.value.status_code == 404
+    assert exc_info.value.response.status_code == 404
+    assert exc_info.value.response.headers["x-amzn-requestid"] == "req-123"
+    assert [request.url.raw_path for request in sent] == [path]
+
+
+@pytest.mark.parametrize(
+    "model", ["bedrock/", "bedrock/us-east-1/", "bedrock/../../converse", "bedrock/xx-fake-1/us.xai.grok-4.7"]
+)
+def test_a_model_id_that_is_empty_or_a_path_fails_locally_without_calling_aws(model):
+    sent: Final[list[httpx.Request]] = []
+
     with pytest.raises(litellm.NotFoundError):
         completion(
-            model="bedrock/bad_model",
-            messages=[
-                {
-                    "role": "user",
-                    "content": "What is the meaning of life",
-                }
-            ],
+            model=model,
+            messages=[{"role": "user", "content": "What is the meaning of life"}],
+            client=HTTPHandler(
+                client=httpx.Client(transport=httpx.MockTransport(_invalid_model_identifier_reply(sent)))
+            ),
+            aws_access_key_id="testing",
+            aws_secret_access_key="testing",
+            aws_region_name="us-west-2",
         )
+
+    assert sent == []
+
+
+@pytest.mark.parametrize(
+    "model, path",
+    [
+        ("bedrock/converse/bad_model", b"/model/bad_model/converse"),
+        ("bedrock/anthropic.claude-typo-v1:0", b"/model/anthropic.claude-typo-v1:0/invoke"),
+    ],
+)
+def test_invalid_model_identifier_stays_a_bad_request_for_a_model_litellm_recognizes(model, path):
+    sent: Final[list[httpx.Request]] = []
+
+    with pytest.raises(litellm.BadRequestError) as exc_info:
+        completion(
+            model=model,
+            messages=[{"role": "user", "content": "What is the meaning of life"}],
+            client=HTTPHandler(
+                client=httpx.Client(transport=httpx.MockTransport(_invalid_model_identifier_reply(sent)))
+            ),
+            aws_access_key_id="testing",
+            aws_secret_access_key="testing",
+            aws_region_name="us-west-2",
+        )
+
+    assert exc_info.value.status_code == 400
+    assert [request.url.raw_path for request in sent] == [path]
+
+
+_WEATHER_TOOL: Final = {
+    "type": "function",
+    "function": {
+        "name": "get_weather",
+        "description": "Get the weather for a city",
+        "parameters": {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]},
+    },
+}
+
+
+def _converse_tool_call_reply(sent: list[httpx.Request]):
+    def respond(request: httpx.Request) -> httpx.Response:
+        sent.append(request)
+        return httpx.Response(
+            200,
+            json={
+                "output": {
+                    "message": {
+                        "role": "assistant",
+                        "content": [
+                            {"toolUse": {"toolUseId": "t1", "name": "get_weather", "input": {"city": "Paris"}}}
+                        ],
+                    }
+                },
+                "stopReason": "tool_use",
+                "usage": {"inputTokens": 1, "outputTokens": 1, "totalTokens": 2},
+            },
+        )
+
+    return respond
+
+
+@pytest.mark.parametrize("model", ["bedrock/us.newvendor.model-1", "bedrock/us-east-1/us.newvendor.model-1"])
+def test_model_missing_from_cost_map_sends_tools_to_converse(model):
+    assert "us.newvendor.model-1" not in litellm.model_cost
+    sent: Final[list[httpx.Request]] = []
+
+    response: Final = completion(
+        model=model,
+        messages=[{"role": "user", "content": "What is the weather in Paris?"}],
+        tools=[_WEATHER_TOOL],
+        tool_choice="auto",
+        client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(_converse_tool_call_reply(sent)))),
+        aws_access_key_id="testing",
+        aws_secret_access_key="testing",
+        aws_region_name="us-west-2",
+    )
+
+    assert response.choices[0].message.tool_calls[0].function.name == "get_weather"
+    assert [request.url.raw_path for request in sent] == [b"/model/us.newvendor.model-1/converse"]
+    tool_config: Final = json.loads(sent[0].content)["toolConfig"]
+    assert [tool["toolSpec"]["name"] for tool in tool_config["tools"]] == ["get_weather"]
+    assert tool_config["toolChoice"] == {"auto": {}}
+
+
+def test_a_price_only_row_for_an_unlisted_model_still_sends_tools_to_converse(monkeypatch):
+    monkeypatch.setitem(
+        litellm.model_cost, "us.newvendor.priced-1", {"input_cost_per_token": 1e-6, "output_cost_per_token": 2e-6}
+    )
+    sent: Final[list[httpx.Request]] = []
+
+    completion(
+        model="bedrock/us.newvendor.priced-1",
+        messages=[{"role": "user", "content": "What is the weather in Paris?"}],
+        tools=[_WEATHER_TOOL],
+        client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(_converse_tool_call_reply(sent)))),
+        aws_access_key_id="testing",
+        aws_secret_access_key="testing",
+        aws_region_name="us-west-2",
+    )
+
+    tool_config: Final = json.loads(sent[0].content)["toolConfig"]
+    assert [tool["toolSpec"]["name"] for tool in tool_config["tools"]] == ["get_weather"]
+
+
+def test_explicit_converse_route_to_an_unlisted_model_still_drops_tools_under_drop_params():
+    sent: Final[list[httpx.Request]] = []
+
+    completion(
+        model="bedrock/converse/us.newvendor.model-1",
+        messages=[{"role": "user", "content": "What is the weather in Paris?"}],
+        tools=[_WEATHER_TOOL],
+        drop_params=True,
+        client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(_converse_tool_call_reply(sent)))),
+        aws_access_key_id="testing",
+        aws_secret_access_key="testing",
+        aws_region_name="us-west-2",
+    )
+
+    assert "toolConfig" not in json.loads(sent[0].content)
+
+
+def test_unknown_model_gets_reasoning_effort_as_sent():
+    sent: Final[list[httpx.Request]] = []
+
+    completion(
+        model="bedrock/us.newvendor.model-1",
+        messages=[{"role": "user", "content": "What is the weather in Paris?"}],
+        reasoning_effort="high",
+        client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(_converse_tool_call_reply(sent)))),
+        aws_access_key_id="testing",
+        aws_secret_access_key="testing",
+        aws_region_name="us-west-2",
+    )
+
+    assert json.loads(sent[0].content)["additionalModelRequestFields"] == {"reasoning_effort": "high"}
+
+
+def test_mapped_model_without_function_calling_still_rejects_tools():
+    model: Final = "bedrock/converse/meta.llama3-8b-instruct-v1:0"
+    assert "meta.llama3-8b-instruct-v1:0" in litellm.model_cost
+    assert not litellm.supports_function_calling(model=model)
+    sent: Final[list[httpx.Request]] = []
+
+    with pytest.raises(litellm.UnsupportedParamsError):
+        completion(
+            model=model,
+            messages=[{"role": "user", "content": "What is the weather in Paris?"}],
+            tools=[_WEATHER_TOOL],
+            client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(_converse_tool_call_reply(sent)))),
+            aws_access_key_id="testing",
+            aws_secret_access_key="testing",
+            aws_region_name="us-west-2",
+        )
+
+    assert sent == []
 
 
 @pytest.mark.parametrize(
@@ -10864,6 +11161,52 @@ def test_converse_sends_no_tools_when_drop_params_drops_every_hosted_mcp_tool(mo
     assert "tool_choice" not in json.dumps(request)
 
 
+def _warnings_naming(caplog: pytest.LogCaptureFixture, param: str) -> tuple[str, ...]:
+    return tuple(
+        r.getMessage() for r in caplog.records if r.levelno == logging.WARNING and f"Dropping {param}=" in r.getMessage()
+    )
+
+
+_DEEPSEEK_R1_PROFILE_ARN: Final = "arn:aws:bedrock:us-east-1:123456789012:inference-profile/us.deepseek.r1-v1:0"
+
+
+@pytest.mark.parametrize(
+    "param, value", (("thinking", {"type": "enabled", "budget_tokens": 1024}), ("reasoning_effort", "high"))
+)
+def test_bedrock_deepseek_arn_reasoning_drop_warns_once(
+    param: str, value: object, caplog: pytest.LogCaptureFixture
+) -> None:
+    with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
+        optional_params: Final = AmazonConverseConfig().map_openai_params(
+            non_default_params={param: value, "max_tokens": 100},
+            optional_params={},
+            model=_DEEPSEEK_R1_PROFILE_ARN,
+            drop_params=False,
+        )
+
+    warnings: Final = _warnings_naming(caplog, param)
+    assert param not in optional_params
+    assert len(warnings) == 1
+    assert _DEEPSEEK_R1_PROFILE_ARN in warnings[0]
+
+
+@pytest.mark.parametrize(
+    "param, value", (("thinking", {"type": "enabled", "budget_tokens": 1024}), ("reasoning_effort", "high"))
+)
+def test_bedrock_deepseek_r1_drop_of_an_unadvertised_param_does_not_warn(
+    param: str, value: object, caplog: pytest.LogCaptureFixture
+) -> None:
+    with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
+        AmazonConverseConfig().map_openai_params(
+            non_default_params={param: value, "max_tokens": 100},
+            optional_params={},
+            model="us.deepseek.r1-v1:0",
+            drop_params=False,
+        )
+
+    assert _warnings_naming(caplog, param) == ()
+
+
 def _converse_bound_thinking_request(
     headers: dict[str, str] | None, body_betas: tuple[str, ...] = (), drop_params: bool = True
 ) -> dict[str, object]:
@@ -10980,3 +11323,86 @@ def test_converse_sends_only_the_header_betas_when_header_and_body_both_carry_be
         "thinking-binding-controls-2026-08-01",
         "thinking-display-updates-2026-08-18",
     ]
+
+
+def _five_cache_hint_conversation() -> list[dict[str, object]]:
+    return [
+        {"role": "system", "content": [{"type": "text", "text": "system prompt", "cache_control": {"type": "ephemeral"}}]},
+        {"role": "user", "content": [{"type": "text", "text": "turn 1", "cache_control": {"type": "ephemeral"}}]},
+        {"role": "assistant", "content": [{"type": "text", "text": "answer 1", "cache_control": {"type": "ephemeral"}}]},
+        {"role": "user", "content": [{"type": "text", "text": "turn 2", "cache_control": {"type": "ephemeral"}}]},
+        {"role": "assistant", "content": "answer 2"},
+        {"role": "user", "content": [{"type": "text", "text": "turn 3", "cache_control": {"type": "ephemeral"}}]},
+    ]
+
+
+@pytest.mark.parametrize(
+    ("drop_params", "expected_system_cache_points"),
+    [(True, 0), ("true", 0), (False, 1)],
+    ids=[
+        "drop_params_drops_the_oldest_hint",
+        "string_drop_params_drops_the_oldest_hint",
+        "without_drop_params_all_five_pass_through",
+    ],
+)
+def test_converse_claude_request_over_the_cache_control_cap_drops_the_oldest_hints_only_under_drop_params(
+    drop_params: bool | str, expected_system_cache_points: int, monkeypatch: pytest.MonkeyPatch, local_model_cost_map: None
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    messages: Final = _five_cache_hint_conversation()
+    messages_before: Final = copy.deepcopy(messages)
+
+    request: Final = AmazonConverseConfig().transform_request(
+        model="anthropic.claude-haiku-5-5",
+        messages=messages,
+        optional_params={},
+        litellm_params={"drop_params": drop_params},
+        headers={},
+    )
+
+    assert len(list(_cache_points(request["system"]))) == expected_system_cache_points
+    assert [len(list(_cache_points(message))) for message in request["messages"]] == [1, 1, 1, 0, 1]
+    assert messages == messages_before
+
+
+def test_converse_claude_tool_message_with_several_marked_blocks_counts_as_one_cache_point_against_the_cap(
+    monkeypatch: pytest.MonkeyPatch, local_model_cost_map: None
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    messages: Final = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "policy", "cache_control": {"type": "ephemeral"}},
+                {"type": "text", "text": "question", "cache_control": {"type": "ephemeral"}},
+            ],
+        },
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [{"id": "call_1", "type": "function", "function": {"name": "lookup", "arguments": "{}"}}],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "call_1",
+            "content": [
+                {"type": "text", "text": "part 1", "cache_control": {"type": "ephemeral"}},
+                {"type": "text", "text": "part 2", "cache_control": {"type": "ephemeral"}},
+                {"type": "text", "text": "part 3", "cache_control": {"type": "ephemeral"}},
+            ],
+        },
+    ]
+    messages_before: Final = copy.deepcopy(messages)
+
+    request: Final = AmazonConverseConfig().transform_request(
+        model="anthropic.claude-haiku-5-5",
+        messages=messages,
+        optional_params={
+            "tools": [{"type": "function", "function": {"name": "lookup", "parameters": {"type": "object"}}}]
+        },
+        litellm_params={"drop_params": True},
+        headers={},
+    )
+
+    assert len(list(_cache_points(request["messages"]))) == 3
+    assert messages == messages_before

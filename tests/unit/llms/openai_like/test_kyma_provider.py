@@ -254,7 +254,7 @@ def test_interaction_on_kyma_is_billed_at_the_cost_kyma_reports():
 
 
 @pytest.mark.parametrize("model", ("openrouter/openai/gpt-4o-mini", "deepseek/deepseek-chat"))
-def test_interaction_on_another_provider_keeps_its_upstream_cost_out_of_the_body(model: str):
+def test_interaction_on_another_openai_compatible_provider_is_billed_at_its_reported_cost(model: str):
     chat_usage: Final = {"prompt_tokens": 4, "completion_tokens": 3, "total_tokens": 7, "cost": 0.00721}
     responses_body: Final = {
         "id": "resp_upstream",
@@ -278,7 +278,7 @@ def test_interaction_on_another_provider_keeps_its_upstream_cost_out_of_the_body
         upstream.route(path__regex=r".*/responses$").respond(200, json=responses_body)
         interaction: Final = litellm.interactions.create(model=model, input="ping", api_key="k")
 
-    assert "cost" not in interaction.model_dump(exclude_none=True)["usage"]
+    assert interaction.model_dump(exclude_none=True)["usage"]["cost"] == pytest.approx(0.00721)
 
 
 def test_sdk_completion_cost_prices_kyma_at_the_cost_kyma_reports():
@@ -410,8 +410,12 @@ def test_cost_headers_show_the_discount_and_margin_taken_from_the_cost_kyma_repo
     assert float(headers["x-litellm-response-cost-discount-amount"] or "nan") == pytest.approx(0.004)
     assert float(headers["x-litellm-response-cost-margin-amount"] or "nan") == pytest.approx(0.0004)
     assert float(headers["x-litellm-response-cost"] or "nan") == pytest.approx(0.0044)
-    assert headers["x-litellm-response-cost-input"] is None
-    assert headers["x-litellm-response-cost-output"] is None
+    row: Final = litellm.get_model_info("sonar", custom_llm_provider="kyma")
+    priced_input: Final = 4 * row["input_cost_per_token"]
+    priced_output: Final = 3 * row["output_cost_per_token"]
+    input_share: Final = priced_input / (priced_input + priced_output)
+    assert float(headers["x-litellm-response-cost-input"] or "nan") == pytest.approx(0.0044 * input_share)
+    assert float(headers["x-litellm-response-cost-output"] or "nan") == pytest.approx(0.0044 * (1 - input_share))
 
 
 @pytest.mark.parametrize("thinking", ({"type": "enabled", "budget_tokens": 1024}, {"type": "adaptive"}))

@@ -6,10 +6,11 @@ import copy
 import json
 import re
 import threading
-from collections.abc import Mapping, Sequence
+from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
 from concurrent.futures import wait
+from functools import partial
 from types import MappingProxyType
-from typing import Final
+from typing import Final, TypeAlias
 
 import httpx
 import pytest
@@ -23,6 +24,7 @@ import litellm
 from litellm.constants import AWS_SIGNING_MAX_THREADS
 from litellm.cost_calculator import get_response_cost_from_hidden_params
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.get_model_cost_map import ModelCostMapReloaded, refetch_model_cost_map
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.llms.azure_ai.common_utils import get_azure_ai_auth_headers
 from litellm.llms.bedrock.base_aws_llm import AWS_SIGNING_EXECUTOR
@@ -123,6 +125,7 @@ _PROVIDERS: Final[tuple[tuple[str, str, str, str], ...]] = (
     ),
     ("typesafe", "typesafe/jev-1.13", "https://api.typesafe.ai/v1/systemone", "jev-1.13"),
     ("nace", "nace/drex-v2.0", "https://console.nace.ai/v1/systemone", "drex-v2.0"),
+    ("eu_jev", "eu_jev/eu-jeff-latest", "https://eu-jev.com/v1/systemone", "eu-jeff-latest"),
     (
         "openrouter",
         "openrouter/typesafe/jev-1.13",
@@ -3699,6 +3702,387 @@ async def test_a_model_info_object_instead_of_a_dict_still_reaches_the_provider(
 
     assert route.called
     assert response.answers[0].model_dump(mode="json")["name"] == "is_defect"
+
+
+_AUDIO_CLIPS: Final = ("data:audio/wav;base64,YQ==",)
+_VIDEO_CLIPS: Final = ("data:video/mp4;base64,YQ==",)
+
+
+@pytest.mark.asyncio
+async def test_a_deployment_that_advertises_media_sends_it_for_a_model_the_cost_map_does_not_list(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, local_model_cost_map: None
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    backend: Final = "openrouter/example/omni-preview"
+    route: Final = respx_mock.post("https://openrouter.ai/api/alpha/decisions").respond(json=_RESPONSE)
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "hears",
+                "litellm_params": {"model": backend, "api_key": "k"},
+                "model_info": {"id": "media-hears", "supports_audio_input": True},
+            },
+            {
+                "model_name": "hears-and-sees",
+                "litellm_params": {"model": backend, "api_key": "k"},
+                "model_info": {"id": "media-both", "supports_audio_input": True, "supports_video_input": True},
+            },
+        ]
+    )
+    send: Final = partial(
+        router.adecisions, input="review", questions=_PREDICATE_QUESTIONS, audio=_AUDIO_CLIPS, videos=_VIDEO_CLIPS
+    )
+
+    with pytest.raises(litellm.UnsupportedParamsError, match=re.escape("['videos']")):
+        await send(model="hears")
+    assert not route.called
+
+    await send(model="hears-and-sees")
+
+    sent: Final = json.loads(route.calls.last.request.content)
+    assert (sent["audio"], sent["videos"]) == (list(_AUDIO_CLIPS), list(_VIDEO_CLIPS))
+
+
+@pytest.mark.asyncio
+async def test_media_flags_on_a_deployment_whose_own_mode_is_not_decisions_never_send_clips(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, local_model_cost_map: None
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    route: Final = respx_mock.post("https://openrouter.ai/api/alpha/decisions").respond(json=_RESPONSE)
+    advertised: Final = {"supports_audio_input": True, "supports_video_input": True}
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": mode,
+                "litellm_params": {"model": f"openrouter/example/omni-{mode}-preview", "api_key": "k"},
+                "model_info": {"id": f"media-{mode}", "mode": mode, **advertised},
+            }
+            for mode in ("chat", "decisions")
+        ]
+    )
+    send: Final = partial(
+        router.adecisions, input="review", questions=_PREDICATE_QUESTIONS, audio=_AUDIO_CLIPS, videos=_VIDEO_CLIPS
+    )
+
+    with pytest.raises(litellm.UnsupportedParamsError, match=re.escape("['audio', 'videos']")):
+        await send(model="chat")
+    assert not route.called
+
+    await send(model="decisions")
+
+    sent: Final = json.loads(route.calls.last.request.content)
+    assert (sent["audio"], sent["videos"]) == (list(_AUDIO_CLIPS), list(_VIDEO_CLIPS))
+
+
+CatalogLoader: TypeAlias = Callable[[Mapping[str, Mapping[str, object]]], Awaitable[None]]
+
+
+@pytest.fixture
+def load_catalog_with(monkeypatch: pytest.MonkeyPatch, local_model_cost_map: None) -> Iterator[CatalogLoader]:
+    async def load(rows: Mapping[str, Mapping[str, object]]) -> None:
+        catalog: Final = {**litellm.get_model_cost_map(url=""), **rows}
+        transport: Final = httpx.MockTransport(lambda _: httpx.Response(200, json=catalog))
+        monkeypatch.delenv("LITELLM_LOCAL_MODEL_COST_MAP")
+        async with httpx.AsyncClient(transport=transport) as client:
+            loaded: Final = await refetch_model_cost_map(url="https://catalog.example/prices.json", client=client)
+        monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+        assert isinstance(loaded, ModelCostMapReloaded)
+        monkeypatch.setattr(litellm, "model_cost", loaded.model_cost_map)
+        litellm.get_model_info.cache_clear()
+
+    yield load
+    litellm.get_model_cost_map(url="")
+
+
+@pytest.mark.asyncio
+async def test_media_flags_on_a_deployment_without_its_own_mode_follow_the_mode_the_catalog_lists(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, load_catalog_with: CatalogLoader
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    await load_catalog_with(
+        {
+            f"openrouter/example/omni-{mode}": {"litellm_provider": "openrouter", "mode": mode}
+            for mode in ("chat", "decisions")
+        }
+    )
+    route: Final = respx_mock.post("https://openrouter.ai/api/alpha/decisions").respond(json=_RESPONSE)
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": mode,
+                "litellm_params": {"model": f"openrouter/example/omni-{mode}", "api_key": "k"},
+                "model_info": {"id": f"listed-{mode}", "supports_audio_input": True, "supports_video_input": True},
+            }
+            for mode in ("chat", "decisions")
+        ]
+    )
+    send: Final = partial(
+        router.adecisions, input="review", questions=_PREDICATE_QUESTIONS, audio=_AUDIO_CLIPS, videos=_VIDEO_CLIPS
+    )
+
+    with pytest.raises(litellm.UnsupportedParamsError, match=re.escape("['audio', 'videos']")):
+        await send(model="chat")
+    assert not route.called
+
+    monkeypatch.setattr(litellm, "drop_params", True)
+    await send(model="chat")
+    dropped: Final = json.loads(route.calls.last.request.content)
+    assert ("audio" in dropped, "videos" in dropped) == (False, False)
+
+    await send(model="decisions")
+    sent: Final = json.loads(route.calls.last.request.content)
+    assert (sent["audio"], sent["videos"]) == (list(_AUDIO_CLIPS), list(_VIDEO_CLIPS))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sibling_mode", ("responses", "embedding"))
+async def test_another_deployments_mode_never_switches_off_a_deployments_own_media_flags(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, local_model_cost_map: None, sibling_mode: str
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    route: Final = respx_mock.post("https://openrouter.ai/api/alpha/decisions").respond(json=_RESPONSE)
+    shared_params: Final = {"model": "openrouter/example/omni-shared", "api_key": "k"}
+    router: Final = litellm.Router(
+        model_list=[
+            {"model_name": "sibling", "litellm_params": shared_params, "model_info": {"id": "s", "mode": sibling_mode}},
+            {
+                "model_name": "flagged",
+                "litellm_params": shared_params,
+                "model_info": {"id": "f", "supports_audio_input": True, "supports_video_input": True},
+            },
+        ]
+    )
+
+    await router.adecisions(
+        model="flagged", input="review", questions=_PREDICATE_QUESTIONS, audio=_AUDIO_CLIPS, videos=_VIDEO_CLIPS
+    )
+
+    sent: Final = json.loads(route.calls.last.request.content)
+    assert (sent["audio"], sent["videos"]) == (list(_AUDIO_CLIPS), list(_VIDEO_CLIPS))
+
+
+_MEDIA_SURFACES: Final[Mapping[str, Mapping[str, object]]] = MappingProxyType(
+    {
+        "adecisions": {"input": "review", "questions": _PREDICATE_QUESTIONS},
+        "asystemone": {"state": "review", "questions": _QUESTIONS},
+        "systemone": {"state": "review", "questions": _QUESTIONS},
+    }
+)
+
+
+def _group_member(
+    group: str, model: str, key: str, weight: int, model_info: Mapping[str, object], **params: object
+) -> dict[str, object]:
+    return {
+        "model_name": group,
+        "litellm_params": {"model": model, "api_key": key, "weight": weight, **params},
+        "model_info": {"id": f"{group}-{key}", **model_info},
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("surface", tuple(_MEDIA_SURFACES))
+async def test_a_group_sends_clips_to_a_deployment_that_takes_them_and_refuses_only_when_none_does(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, local_model_cost_map: None, surface: str
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    monkeypatch.setenv("CLOUDFLARE_ACCOUNT_ID", "acct")
+    monkeypatch.delenv("CLOUDFLARE_API_BASE", raising=False)
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "cloudflare/@cf/cloudflare/clef-omni",
+        {"litellm_provider": "cloudflare", "mode": "evaluation", "supports_audio_input": True},
+    )
+    respx_mock.post("https://openrouter.ai/api/alpha/decisions").respond(json=_RESPONSE)
+    respx_mock.post("https://api.cloudflare.com/client/v4/accounts/acct/ai/run/@cf/cloudflare/clef-omni").respond(
+        json=_RESPONSE
+    )
+    unlisted: Final = "openrouter/example/omni-preview"
+    listed: Final = "cloudflare/clef-omni"
+    router: Final = litellm.Router(
+        model_list=[
+            _group_member("unlisted", unlisted, "refuses", 1, {}),
+            _group_member("unlisted", unlisted, "takes", 0, {"supports_audio_input": True}),
+            _group_member("listed", listed, "refuses", 1, {"supports_audio_input": False}),
+            _group_member("listed", listed, "takes", 0, {}),
+            _group_member("none", unlisted, "refuses", 1, {}),
+            _group_member("none", listed, "refuses", 1, {"supports_audio_input": False}),
+            _group_member("drops", unlisted, "drops", 1, {}, drop_params=True),
+            _group_member("drops", listed, "takes", 0, {}),
+            _group_member("unresolvable", "databricks/not a serving endpoint", "unresolvable", 0, {}),
+            _group_member("unresolvable", listed, "takes", 1, {}),
+        ]
+    )
+    call: Final = getattr(router, surface)
+
+    async def send(group: str, **media: object) -> object:
+        response: Final = call(model=group, **_MEDIA_SURFACES[surface], **media)
+        return await response if asyncio.iscoroutine(response) else response
+
+    for group in ("unlisted", "listed", "unresolvable"):
+        await send(group, audio=_AUDIO_CLIPS)
+        assert respx_mock.calls.last.request.headers["authorization"] == "Bearer takes"
+        assert json.loads(respx_mock.calls.last.request.content)["audio"] == list(_AUDIO_CLIPS)
+
+    await send("drops", audio=_AUDIO_CLIPS)
+    assert respx_mock.calls.last.request.headers["authorization"] == "Bearer drops"
+    assert "audio" not in json.loads(respx_mock.calls.last.request.content)
+
+    await send("unlisted")
+    assert respx_mock.calls.last.request.headers["authorization"] == "Bearer refuses"
+
+    sent_before_refusal: Final = len(respx_mock.calls)
+    with pytest.raises(litellm.UnsupportedParamsError, match=re.escape("['audio']")):
+        await send("none", audio=_AUDIO_CLIPS)
+    assert len(respx_mock.calls) == sent_before_refusal
+
+
+def _answer_unless_key_is(rejected_key: str) -> Callable[[httpx.Request], httpx.Response]:
+    def answer(request: httpx.Request) -> httpx.Response:
+        if request.headers["authorization"] == f"Bearer {rejected_key}":
+            return httpx.Response(401, json={"error": {"message": "invalid key"}})
+        return httpx.Response(200, json=_RESPONSE)
+
+    return answer
+
+
+@pytest.mark.asyncio
+async def test_clips_to_a_group_whose_only_taker_is_cooling_down_are_refused_rather_than_rate_limited(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, local_model_cost_map: None
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    route: Final = respx_mock.post("https://openrouter.ai/api/alpha/decisions").mock(
+        side_effect=_answer_unless_key_is("takes")
+    )
+    unlisted: Final = "openrouter/example/omni-preview"
+    router: Final = litellm.Router(
+        model_list=[
+            _group_member("g", unlisted, "refuses", 1, {}),
+            _group_member("g", unlisted, "takes", 1, {"supports_audio_input": True}),
+        ],
+        num_retries=0,
+        cooldown_time=120,
+    )
+    with pytest.raises(litellm.AuthenticationError):
+        await router.adecisions(model="g-takes", input="review", questions=_PREDICATE_QUESTIONS)
+    sent_before_clips: Final = len(route.calls)
+
+    with pytest.raises(litellm.UnsupportedParamsError, match=re.escape("['audio']")):
+        await router.adecisions(model="g", input="review", questions=_PREDICATE_QUESTIONS, audio=_AUDIO_CLIPS)
+
+    assert len(route.calls) == sent_before_clips
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("surface", tuple(_MEDIA_SURFACES))
+async def test_a_router_default_drop_params_overrides_a_deployment_when_choosing_who_takes_clips(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, local_model_cost_map: None, surface: str
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    respx_mock.post("https://openrouter.ai/api/alpha/decisions").respond(json=_RESPONSE)
+    unlisted: Final = "openrouter/example/omni-preview"
+    router: Final = litellm.Router(
+        model_list=[
+            _group_member("g", unlisted, "drops", 1, {}, drop_params=True),
+            _group_member("g", unlisted, "takes", 0, {"supports_audio_input": True}),
+        ],
+        default_litellm_params={"drop_params": False},
+    )
+    call: Final = getattr(router, surface)
+
+    async def send(**params: object) -> object:
+        response: Final = call(model="g", **_MEDIA_SURFACES[surface], audio=_AUDIO_CLIPS, **params)
+        return await response if asyncio.iscoroutine(response) else response
+
+    await send()
+    assert respx_mock.calls.last.request.headers["authorization"] == "Bearer takes"
+    assert json.loads(respx_mock.calls.last.request.content)["audio"] == list(_AUDIO_CLIPS)
+
+    await send(drop_params=True)
+    assert respx_mock.calls.last.request.headers["authorization"] == "Bearer drops"
+    assert "audio" not in json.loads(respx_mock.calls.last.request.content)
+
+
+@pytest.mark.asyncio
+async def test_a_deployment_that_turns_audio_off_is_refused_or_dropped_even_when_the_cost_map_allows_it(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, local_model_cost_map: None
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "typesafe/jev-omni",
+        {
+            "litellm_provider": "typesafe",
+            "mode": "decisions",
+            "supports_audio_input": True,
+            "supports_video_input": True,
+        },
+    )
+    route: Final = respx_mock.post("https://example.com/v1/systemone").respond(json=_RESPONSE)
+    send: Final = partial(
+        litellm.asystemone,
+        model="typesafe/jev-omni",
+        state="test",
+        questions=_QUESTIONS,
+        api_base="https://example.com",
+        api_key="test",
+        audio=_AUDIO_CLIPS,
+        videos=_VIDEO_CLIPS,
+        model_info={"supports_audio_input": False},
+    )
+
+    with pytest.raises(litellm.UnsupportedParamsError, match=re.escape("does not support parameters: ['audio']")):
+        await send()
+    assert not route.called
+
+    await send(drop_params=True)
+
+    sent: Final = json.loads(route.calls.last.request.content)
+    assert "audio" not in sent
+    assert sent["videos"] == list(_VIDEO_CLIPS)
+
+
+@pytest.mark.asyncio
+async def test_a_media_flag_that_is_not_a_boolean_leaves_the_cost_map_in_charge_of_that_kind_only(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    route: Final = respx_mock.post("https://example.com/v1/systemone").respond(json=_RESPONSE)
+
+    with pytest.raises(litellm.UnsupportedParamsError, match=re.escape("does not support parameters: ['audio']")):
+        await litellm.asystemone(
+            model="typesafe/jev-unlisted",
+            state="test",
+            questions=_QUESTIONS,
+            api_base="https://example.com",
+            api_key="test",
+            audio=_AUDIO_CLIPS,
+            videos=_VIDEO_CLIPS,
+            model_info={"supports_audio_input": "true", "supports_video_input": True},
+        )
+
+    assert not route.called
+
+
+@pytest.mark.asyncio
+async def test_an_openai_format_deployment_that_advertises_media_is_still_refused_it(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    route: Final = respx_mock.post("https://api.openai.com/v1/decisions").respond(json=_OPENAI_RESPONSE)
+
+    with pytest.raises(litellm.UnsupportedParamsError, match=re.escape("['audio', 'videos']")):
+        await litellm.adecisions(
+            model="openai/gpt-6-luna",
+            input="review",
+            questions=_PREDICATE_QUESTIONS,
+            api_key="deployment-key",
+            audio=_AUDIO_CLIPS,
+            videos=_VIDEO_CLIPS,
+            model_info={"supports_audio_input": True, "supports_video_input": True},
+        )
+
+    assert not route.called
 
 
 def test_dropping_every_question_answers_400_before_http(respx_mock: respx.MockRouter) -> None:

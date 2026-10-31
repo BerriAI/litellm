@@ -1,12 +1,17 @@
+import asyncio
 import json
+from contextlib import suppress
 from datetime import datetime
 from types import MappingProxyType
 from typing import Any, Final
 from urllib.parse import urlparse
 
+import anyio
 import httpx
 
+from litellm._logging import verbose_proxy_logger
 from litellm.constants import AZURE_SPEECH_CUSTOM_LLM_PROVIDER
+from litellm.litellm_core_utils.core_helpers import bind_budget_reservation_to_callbacks
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.proxy._types import PassThroughEndpointLoggingResultValues
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
@@ -123,14 +128,13 @@ class PassThroughEndpointLogging:
     async def handle_logging(
         self,
         logging_obj: LiteLLMLoggingObj,
-        standard_logging_response_object: StandardPassThroughResponseObject
-        | PassThroughEndpointLoggingResultValues
-        | dict,
+        standard_logging_response_object: object,
         result: str,
         start_time: datetime,
         end_time: datetime,
         cache_hit: bool,
-        **kwargs,
+        finalize_before_dispatch: bool = False,
+        **kwargs: object,  # kwargs-ok: forwards the existing pass-through logging contract
     ) -> None:
         """Log pass-through success via the shared async dispatch path."""
         # Always reached from pass_through_async_success_handler, which runs in
@@ -140,6 +144,38 @@ class PassThroughEndpointLogging:
         # the streaming sibling (_route_streaming_logging_to_handler) and keep
         # async-only loggers (e.g. the proxy spend logger) firing regardless of
         # how the call-type classification evolves.
+        if finalize_before_dispatch:
+            from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+            from litellm.proxy.spend_tracking.cost_finalization import finalize_proxy_response_cost
+
+            async def finalize_and_enqueue() -> None:
+                await finalize_proxy_response_cost(logging_obj, standard_logging_response_object)
+                GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(
+                    async_coroutine=self.handle_logging(
+                        logging_obj=logging_obj,
+                        standard_logging_response_object=standard_logging_response_object,
+                        result=result,
+                        start_time=start_time,
+                        end_time=end_time,
+                        cache_hit=cache_hit,
+                        finalize_before_dispatch=False,
+                        **kwargs,
+                    )
+                )
+                bind_budget_reservation_to_callbacks(logging_obj.litellm_params)
+
+            pending: Final = asyncio.create_task(finalize_and_enqueue())
+            try:
+                await asyncio.shield(pending)
+            except asyncio.CancelledError:
+                with anyio.CancelScope(shield=True):
+                    while not pending.done():
+                        with suppress(asyncio.CancelledError):
+                            await asyncio.shield(pending)
+                    pending.result()
+                raise
+            return
+
         await logging_obj.dispatch_success_handlers(
             result=(json.dumps(result) if isinstance(result, dict) else standard_logging_response_object),
             start_time=start_time,
@@ -339,7 +375,7 @@ class PassThroughEndpointLogging:
             kwargs = transcribe_handler_result["kwargs"]  # rebind-ok: elif-chain contract
         elif (
             self.is_typesafe_route(custom_llm_provider)
-            or custom_llm_provider in ("laya", "bespoke")
+            or custom_llm_provider in ("eu_jev", "laya", "bespoke")
             or self.is_openrouter_decisions_route(url_route, custom_llm_provider)
         ):
             from .llm_provider_handlers.typesafe_passthrough_logging_handler import (
@@ -429,6 +465,7 @@ class PassThroughEndpointLogging:
         request_body: dict,
         passthrough_logging_payload: PassthroughStandardLoggingPayload,
         custom_llm_provider: str | None = None,
+        finalize_before_dispatch: bool = False,
         **kwargs,
     ):
         standard_logging_response_object: PassThroughEndpointLoggingResultValues | None = None
@@ -484,23 +521,31 @@ class PassThroughEndpointLogging:
             )
             return
         else:
-            normalized_llm_passthrough_logging_payload: Final = self.normalize_llm_passthrough_logging_payload(
-                httpx_response=httpx_response,
-                response_body=response_body,
-                request_body=request_body,
-                logging_obj=logging_obj,
-                url_route=url_route,
-                result=result,
-                start_time=start_time,
-                end_time=end_time,
-                cache_hit=cache_hit,
-                custom_llm_provider=custom_llm_provider,
-                **kwargs,
-            )
-            standard_logging_response_object = normalized_llm_passthrough_logging_payload[
-                "standard_logging_response_object"
-            ]
-            kwargs = normalized_llm_passthrough_logging_payload["kwargs"]
+            try:
+                normalized_llm_passthrough_logging_payload: Final = self.normalize_llm_passthrough_logging_payload(
+                    httpx_response=httpx_response,
+                    response_body=response_body,
+                    request_body=request_body,
+                    logging_obj=logging_obj,
+                    url_route=url_route,
+                    result=result,
+                    start_time=start_time,
+                    end_time=end_time,
+                    cache_hit=cache_hit,
+                    custom_llm_provider=custom_llm_provider,
+                    **kwargs,
+                )
+                standard_logging_response_object = normalized_llm_passthrough_logging_payload[
+                    "standard_logging_response_object"
+                ]
+                kwargs = (  # rebind-ok: provider normalization replaces the forwarded logging kwargs
+                    normalized_llm_passthrough_logging_payload["kwargs"] or {}
+                )
+            except Exception:
+                if not finalize_before_dispatch:
+                    raise
+                verbose_proxy_logger.exception("Unable to prepare pass-through success logging")
+                return
         if standard_logging_response_object is None:
             standard_logging_response_object = StandardPassThroughResponseObject(
                 response=_safe_response_text(httpx_response)
@@ -514,6 +559,7 @@ class PassThroughEndpointLogging:
 
         await self._log_dispatch(
             logging_obj=logging_obj,
+            finalize_before_dispatch=finalize_before_dispatch,
             standard_logging_response_object=standard_logging_response_object,
             result=result,
             start_time=start_time,
@@ -620,28 +666,11 @@ class PassThroughEndpointLogging:
         return False
 
     def _is_supported_openai_endpoint(self, url_route: str) -> bool:
-        """Check if the OpenAI endpoint is supported by the passthrough logging handler.
-
-        The Responses API route is included because
-        `openai_passthrough_handler` has a dedicated `elif is_responses:`
-        branch that knows how to extract usage + cost from the
-        Responses-API on-the-wire shape. Without including it here, the
-        outer dispatch filters Responses calls out before reaching the
-        handler — the inner branch is then unreachable and Responses
-        calls land in `LiteLLM_SpendLogs` with zero tokens / zero spend.
-        """
         from .llm_provider_handlers.openai_passthrough_logging_handler import (
             OpenAIPassthroughLoggingHandler,
         )
 
-        return (
-            OpenAIPassthroughLoggingHandler.is_openai_chat_completions_route(url_route)
-            or OpenAIPassthroughLoggingHandler.is_openai_embeddings_route(url_route)
-            or OpenAIPassthroughLoggingHandler.is_openai_image_generation_route(url_route)
-            or OpenAIPassthroughLoggingHandler.is_openai_image_editing_route(url_route)
-            or OpenAIPassthroughLoggingHandler.is_openai_responses_route(url_route)
-            or OpenAIPassthroughLoggingHandler.is_openai_agents_route(url_route)
-        )
+        return OpenAIPassthroughLoggingHandler.handles_route(url_route)
 
     def _set_cost_per_request(
         self,

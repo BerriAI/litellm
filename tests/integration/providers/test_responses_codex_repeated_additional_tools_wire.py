@@ -70,7 +70,9 @@ def bedrock_converse_peer(request: Request) -> Reply:
     )
 
 
-def send_to_bedrock_converse(gateway: Gateway, history: list[JsonValue]) -> tuple[httpx.Response, tuple[Request, ...]]:
+def send_to_bedrock_converse(
+    gateway: Gateway, history: list[JsonValue], drop_params: bool = True
+) -> tuple[httpx.Response, tuple[Request, ...]]:
     with wire_server(bedrock_converse_peer) as wire, gateway.scenario() as scenario:
         model: Final = scenario.model(
             model=f"bedrock/converse/{BEDROCK_GPT}",
@@ -79,7 +81,15 @@ def send_to_bedrock_converse(gateway: Gateway, history: list[JsonValue]) -> tupl
             aws_bedrock_runtime_endpoint=wire.url,
         )
         response: Final = gateway.request(
-            "POST", "/v1/responses", {"model": model, "input": history, "store": False, "cache": {"no-cache": True}}
+            "POST",
+            "/v1/responses",
+            {
+                "model": model,
+                "input": history,
+                "store": False,
+                "cache": {"no-cache": True},
+                "drop_params": drop_params,
+            },
         )
         return response, wire.drain()
 
@@ -111,6 +121,20 @@ def test_codex_tool_list_repeated_on_every_turn_reaches_bedrock_converse_once(ga
     assert response.json()["output"][0]["content"][0]["text"] == "converse wire control", response.text
     names: Final = [str(spec["name"]) for spec in converse_tool_specs(forwarded[0])]
     assert sorted(names) == ["collaboration__followup_task", "exec_command"], names
+
+
+def test_codex_tool_list_repeated_on_every_turn_reaches_bedrock_converse_as_sent_without_drop_params(
+    gateway: Gateway,
+) -> None:
+    marker: Final = uuid.uuid4().hex
+    tools: Final = tool_list_item(function_tool("exec_command"))
+    history: Final[list[JsonValue]] = [tools, user_turn(f"first {marker}"), assistant_turn("ok"), tools]
+
+    response, forwarded = send_to_bedrock_converse(gateway, history, drop_params=False)
+
+    assert response.status_code == 400, response.text
+    assert "already defined" in response.text, response.text
+    assert [str(spec["name"]) for spec in converse_tool_specs(forwarded[0])] == ["exec_command", "exec_command"]
 
 
 def test_newest_copy_of_a_repeated_codex_tool_is_what_bedrock_converse_receives(gateway: Gateway) -> None:
@@ -195,6 +219,7 @@ def test_codex_tool_list_repeated_on_every_turn_reaches_bedrock_mantle_once(gate
                     user_turn(f"second {marker}"),
                 ],
                 "store": False,
+                "drop_params": True,
             },
         )
         forwarded: Final = wire.drain()

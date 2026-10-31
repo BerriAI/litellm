@@ -23,7 +23,7 @@ import yaml
 from integration._support.client import Gateway, eventually, object_value
 from integration._support.database import read_rows
 from integration._support.mcp import mcp_peer, register_mcp, tool_names
-from integration._support.process import OwnedProxy, owned_proxy, owned_proxy_process
+from integration._support.process import OwnedProxy, OwnedState, owned_proxy, owned_proxy_process
 from integration._support.wire import Reply, Request, Wire, wire_server
 from integration._support.ports import allocate_port
 from openai import APIError, AsyncOpenAI, OpenAI
@@ -1085,7 +1085,8 @@ def test_request_selected_mcp_guardrail_blocks_direct_and_virtual_calls(gateway:
         mcp_peer() as peer,
         candidate.scenario() as scenario,
     ):
-        identity = register_mcp(scenario, peer, "guardrail" + uuid.uuid4().hex)
+        server = "guardrail" + uuid.uuid4().hex
+        identity = register_mcp(scenario, peer, server)
         permission = {"mcp_servers": [identity], "mcp_tool_search_enabled": True}
         key = scenario.key(object_permission=permission)
         key_selected = scenario.key(object_permission=permission, guardrails=[guardrail])
@@ -1116,8 +1117,10 @@ def test_request_selected_mcp_guardrail_blocks_direct_and_virtual_calls(gateway:
                 )
                 calls = tuple(item for item in peer.drain() if item["body"].get("method") == "tools/call")
                 if expected is None:
-                    assert response.status_code == 400, response.text
-                    assert "integration resolved add denied" in response.text, response.text
+                    assert response.status_code == 403, response.text
+                    assert response.json() == {
+                        "detail": {"error": f"Tool add is unavailable after MCP guardrail checks for server {server}."}
+                    }, response.text
                     assert calls == (), "pre-call denial must prevent upstream execution"
                 else:
                     assert response.status_code == 200, response.text
@@ -3260,7 +3263,10 @@ def test_client_disconnect_during_the_body_upload_runs_no_endpoint_and_writes_no
     with (
         wire_server(_openai_upstream) as upstream,
         owned_proxy_process(
-            gateway, tmp_path, {"OPENAI_BASE_URL": upstream.url + "/v1", "OPENAI_API_KEY": "synthetic-openai-key"}
+            gateway,
+            tmp_path,
+            {"OPENAI_BASE_URL": upstream.url + "/v1", "OPENAI_API_KEY": "synthetic-openai-key"},
+            state=OwnedState.PRIVATE,
         ) as owned,
         owned.gateway.scenario() as scenario,
     ):

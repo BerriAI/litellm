@@ -1298,3 +1298,17 @@ def test_as_proxy_exception_keeps_jwt_scope_denial_message_shape():
 
     assert converted.to_dict() == plain.to_dict()
     assert converted.internal_message == denial.internal_message
+
+
+@pytest.mark.parametrize(
+    "auth_failure",
+    [
+        pytest.param(HTTPException(status_code=401, detail="Authentication Error, invalid key"), id="http_exception"),
+        pytest.param(Exception("Invalid proxy server token passed"), id="bare_exception"),
+    ],
+)
+def test_auth_failure_error_body_carries_a_json_null_param(auth_failure: Exception) -> None:
+    body = json.loads(json.dumps({"error": _as_proxy_exception(auth_failure).to_dict()}))
+
+    assert body["error"]["type"] == ProxyErrorTypes.auth_error.value
+    assert body["error"]["param"] is None

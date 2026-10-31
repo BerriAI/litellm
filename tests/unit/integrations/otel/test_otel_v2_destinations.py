@@ -17,7 +17,7 @@ import pytest
 from opentelemetry import trace as trace_api
 from opentelemetry.context import Context
 from opentelemetry.sdk.resources import Resource
-from opentelemetry.sdk.trace import ReadableSpan, TracerProvider
+from opentelemetry.sdk.trace import ReadableSpan, SpanLimits, TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from opentelemetry.sdk.trace.id_generator import RandomIdGenerator
@@ -27,6 +27,7 @@ import litellm
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.otel import GenAIOperation
 from litellm.integrations.otel import logger as otel_logger
+from litellm.integrations.otel.emitter import SpanEmitter
 from litellm.integrations.otel.logger import (
     OpenTelemetryV2,
     build_otel_v2_logger,
@@ -34,6 +35,7 @@ from litellm.integrations.otel.logger import (
     publish_global_otel_v2_provider,
 )
 from litellm.integrations.otel.mappers import resolve_mappers
+from litellm.integrations.otel.mappers.langfuse import LANGFUSE_REQUEST_METADATA_ATTRIBUTES, LangfuseMapper
 from litellm.integrations.otel.model.config import (
     CaptureMessageContent,
     ExporterOwner,
@@ -52,6 +54,8 @@ from litellm.integrations.otel.model.payloads import (
     ServerInfo,
     ToolDefinition,
 )
+from litellm.integrations.otel.model.spans import SpanRole
+from litellm.integrations.otel.model.trace_controls import TraceControls
 from litellm.integrations.otel.plumbing import providers as otel_providers
 from litellm.integrations.otel.plumbing.context import (
     destination_backends,
@@ -3348,8 +3352,7 @@ class TestArizeTenantOnly:
 
         assert capture.received() == {
             "space_id=space-operator,api_key=key-operator": ("chat gpt-4",),
-            None: ("chat gpt-4",),
-        }, "the operator's space, plus the stdout placeholder every credentialed preset keeps today"
+        }, "the operator's space, with no stdout copy the operator never asked for"
 
     def test_the_standard_otlp_headers_still_reach_the_operators_space(self, monkeypatch):
         credential_less_arize(monkeypatch)
@@ -3362,8 +3365,7 @@ class TestArizeTenantOnly:
 
         assert capture.received() == {
             "space_id=space-operator,api_key=key-operator": ("chat gpt-4",),
-            None: ("chat gpt-4",),
-        }, "the operator's space, plus the stdout placeholder every credentialed preset keeps today"
+        }, "the operator's space, with no stdout copy the operator never asked for"
 
     def test_a_credential_less_arize_still_delivers_a_team_destination(self, monkeypatch):
         from litellm.integrations.otel.plumbing.providers import attach_tenant_fan_out
@@ -3433,6 +3435,271 @@ class TestArizeTenantOnly:
 
         assert later is at_startup
         assert loggers == [at_startup]
+
+
+class TestLangfuseDestinationFields:
+    """A key's or team's Langfuse destination gets the Langfuse fields from whichever logger the proxy published."""
+
+    def test_a_key_destination_gets_the_langfuse_fields_from_the_generic_startup_logger(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """With ``langfuse_otel`` only in a key's or team's logging, the startup logger is the
+        generic one; the key's project still gets the user, session and tags, and the
+        operator's stdout placeholder still gets no Langfuse request metadata."""
+        credential_less_proxy(monkeypatch)
+        capture: Final = _ExporterCapture()
+        for kind in ("otlp_grpc", "otlp_http", "console"):
+            monkeypatch.setitem(otel_providers._EXPORTER_FACTORIES, kind, capture.build)  # pyright: ignore[reportPrivateUsage]  # the factory table is the seam for capturing each exporter
+        config: Final = OpenTelemetryV2Config()
+        provider: Final = build_tracer_provider(config, tenant_overrides=True, console_default=True)
+        attach_tenant_fan_out(provider, config)
+        emitter: Final = SpanEmitter(get_tracer(provider, "litellm"), config)
+        call: Final = replace(
+            _MODEL_CALL_WITHOUT_CONTENT,
+            trace=TraceControls(user_id="user-42", session_id="sess-1", tags=("agent:orders",)),
+            request_metadata=MappingProxyType({"user_api_key_alias": "prod-key"}),
+        )
+
+        def with_destination() -> None:
+            set_request_destinations(deliverable_destinations((LANGFUSE_DEST,), provider))
+            emitter.emit(SpanRole.LLM_CALL, call)
+
+        in_fresh_context(with_destination)
+        provider.force_flush()
+
+        received: Final = {
+            headers: exporter.get_finished_spans()[0].attributes or {} for headers, exporter in capture.built
+        }
+        to_langfuse: Final = received[LANGFUSE_DEST.header_string()]
+        assert {key: to_langfuse.get(key) for key in ("user.id", "session.id", "langfuse.trace.tags")} == {
+            "user.id": "user-42",
+            "session.id": "sess-1",
+            "langfuse.trace.tags": ("agent:orders",),
+        }
+        assert "langfuse.observation.metadata" in to_langfuse
+        assert "langfuse.observation.metadata" not in received[None]
+
+    @staticmethod
+    def _received_by_account(
+        monkeypatch: pytest.MonkeyPatch,
+        config: OpenTelemetryV2Config,
+        destinations: tuple[OtelDestination, ...],
+        with_content: bool = False,
+    ) -> Mapping[str | None, Mapping[str, object]]:
+        """The attributes of the model call each account received, keyed by the headers it was sent with."""
+        credential_less_proxy(monkeypatch)
+        capture: Final = _ExporterCapture()
+        for kind in ("otlp_grpc", "otlp_http", "console"):
+            monkeypatch.setitem(otel_providers._EXPORTER_FACTORIES, kind, capture.build)  # pyright: ignore[reportPrivateUsage]  # the factory table is the seam for capturing each exporter
+        provider: Final = build_tracer_provider(config, tenant_overrides=True, console_default=True)
+        attach_tenant_fan_out(provider, config)
+        emitter: Final = SpanEmitter(get_tracer(provider, "litellm"), config)
+        call: Final = replace(
+            _MODEL_CALL_WITH_CONTENT if with_content else _MODEL_CALL_WITHOUT_CONTENT,
+            trace=TraceControls(user_id="user-42", session_id="sess-1", tags=("agent:orders",)),
+            request_metadata=MappingProxyType({"user_api_key_alias": "prod-key"}),
+        )
+
+        def with_destinations() -> None:
+            set_request_destinations(deliverable_destinations(destinations, provider))
+            emitter.emit(SpanRole.LLM_CALL, call)
+
+        in_fresh_context(with_destinations)
+        provider.force_flush()
+        return MappingProxyType(
+            {headers: dict(exporter.get_finished_spans()[0].attributes or {}) for headers, exporter in capture.built}
+        )
+
+    def test_only_the_langfuse_destination_gets_the_langfuse_fields_written_for_it(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The operator's own exporter and the key's Arize destination get the model call as they would with no
+        Langfuse destination on the request."""
+        received: Final = self._received_by_account(monkeypatch, OpenTelemetryV2Config(), (LANGFUSE_DEST, ARIZE_DEST))
+
+        assert received[LANGFUSE_DEST.header_string()]["user.id"] == "user-42"
+        assert {
+            headers: sorted(LangfuseMapper.LLM_CALL_ATTRIBUTES & attributes.keys())
+            for headers, attributes in received.items()
+            if headers != LANGFUSE_DEST.header_string()
+        } == {None: [], ARIZE_DEST.header_string(): []}
+
+    def test_an_exporter_whose_config_maps_langfuse_keeps_the_langfuse_fields_but_the_request_metadata(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        received: Final = self._received_by_account(
+            monkeypatch, OpenTelemetryV2Config(mapper_names=["genai", "langfuse"]), (LANGFUSE_DEST,)
+        )
+
+        assert {key: received[None].get(key) for key in ("user.id", "session.id", "langfuse.trace.tags")} == {
+            "user.id": "user-42",
+            "session.id": "sess-1",
+            "langfuse.trace.tags": ("agent:orders",),
+        }
+        assert not LANGFUSE_REQUEST_METADATA_ATTRIBUTES & received[None].keys()
+
+    @pytest.mark.parametrize(
+        ("key_environment", "tracing_environment", "expected"),
+        [
+            ("prod", None, {"langfuse.environment": "prod"}),
+            ("prod", "staging", {"langfuse.environment": "prod"}),
+            (None, "staging", {"langfuse.environment": "staging"}),
+            (None, None, {}),
+        ],
+        ids=["key", "key-over-env", "env", "neither"],
+    )
+    def test_a_langfuse_destination_names_the_environment_the_legacy_logger_wrote(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        key_environment: str | None,
+        tracing_environment: str | None,
+        expected: Mapping[str, str],
+    ) -> None:
+        credential_less_proxy(monkeypatch)
+        if tracing_environment is None:
+            monkeypatch.delenv("LANGFUSE_TRACING_ENVIRONMENT", raising=False)
+        else:
+            monkeypatch.setenv("LANGFUSE_TRACING_ENVIRONMENT", tracing_environment)
+
+        destination: Final = destination_for(
+            "langfuse_otel",
+            StandardCallbackDynamicParams(
+                langfuse_public_key="pk", langfuse_secret_key="sk", langfuse_environment=key_environment
+            ),
+        )
+
+        assert destination is not None
+        assert dict(destination.resource_attributes) == expected
+
+    def test_a_langfuse_destination_on_a_proxy_with_langfuse_keys_names_no_environment(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """With operator keys the older Langfuse logger never runs, so there is no environment of its to keep."""
+        monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk-operator")
+        monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk-operator")
+
+        destination: Final = destination_for(
+            "langfuse_otel",
+            StandardCallbackDynamicParams(
+                langfuse_public_key="pk", langfuse_secret_key="sk", langfuse_environment="prod"
+            ),
+        )
+
+        assert destination is not None
+        assert dict(destination.resource_attributes) == {}
+
+    @pytest.mark.parametrize("operator_keys", [False, True], ids=["no-operator-keys", "operator-keys"])
+    @pytest.mark.parametrize("configured", [None, "no_content", "span_only"])
+    def test_a_langfuse_destination_keeps_its_own_capture_setting_whatever_the_operator_keys(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        configured: str | None,
+        operator_keys: bool,
+    ) -> None:
+        """An unset setting stays unset, so the destination follows the global capture mode either way."""
+        credential_less_proxy(monkeypatch)
+        if operator_keys:
+            monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk-operator")
+            monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk-operator")
+
+        destination: Final = destination_for(
+            "langfuse_otel",
+            StandardCallbackDynamicParams(langfuse_public_key="pk", langfuse_secret_key="sk"),
+            capture_message_content=configured,
+        )
+
+        assert destination is not None
+        assert destination.capture_message_content == configured
+
+    @pytest.mark.parametrize(("configured", "captured"), [(None, False), ("span_only", True)])
+    def test_a_langfuse_destination_gets_the_prompt_only_when_its_setting_asks_without_operator_keys(
+        self, monkeypatch: pytest.MonkeyPatch, configured: str | None, captured: bool
+    ) -> None:
+        credential_less_proxy(monkeypatch)
+        destination: Final = destination_for(
+            "langfuse_otel",
+            StandardCallbackDynamicParams(langfuse_public_key="pk", langfuse_secret_key="sk"),
+            capture_message_content=configured,
+        )
+        arize: Final = destination_for("arize", StandardCallbackDynamicParams(arize_space_id="s", arize_api_key="k"))
+        assert destination is not None
+        assert arize is not None
+
+        received: Final = self._received_by_account(
+            monkeypatch, OpenTelemetryV2Config(), (destination, arize), with_content=True
+        )
+
+        assert {headers: "langfuse.observation.input" in attributes for headers, attributes in received.items()} == {
+            destination.header_string(): captured,
+            arize.header_string(): False,
+            None: False,
+        }
+        assert not [key for key in received[None] if key.startswith("gen_ai.input")]
+
+    def test_only_the_langfuse_destination_gets_the_keys_environment(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        credential_less_proxy(monkeypatch)
+        capture: Final = _ExporterCapture()
+        for kind in ("otlp_grpc", "otlp_http", "console"):
+            monkeypatch.setitem(otel_providers._EXPORTER_FACTORIES, kind, capture.build)  # pyright: ignore[reportPrivateUsage]  # the factory table is the seam for capturing each exporter
+        config: Final = OpenTelemetryV2Config()
+        provider: Final = build_tracer_provider(config, tenant_overrides=True, console_default=True)
+        attach_tenant_fan_out(provider, config)
+        emitter: Final = SpanEmitter(get_tracer(provider, "litellm"), config)
+        destination: Final = destination_for(
+            "langfuse_otel", {"langfuse_public_key": "pk", "langfuse_secret_key": "sk", "langfuse_environment": "prod"}
+        )
+        assert destination is not None
+
+        def with_destination() -> None:
+            set_request_destinations(deliverable_destinations((destination,), provider))
+            emitter.emit(SpanRole.LLM_CALL, _MODEL_CALL_WITHOUT_CONTENT)
+
+        in_fresh_context(with_destination)
+        provider.force_flush()
+
+        environments: Final = {
+            headers: exporter.get_finished_spans()[0].resource.attributes.get("langfuse.environment")
+            for headers, exporter in capture.built
+        }
+        assert environments == {destination.header_string(): "prod", None: None}
+
+    @staticmethod
+    def _attributes(
+        destinations: tuple[OtelDestination, ...], limit: int | None, call: LLMCallSpanData
+    ) -> dict[str, object]:
+        exporter: Final = InMemorySpanExporter()
+        provider: Final = TracerProvider(span_limits=SpanLimits(max_span_attributes=limit))
+        provider.add_span_processor(SimpleSpanProcessor(exporter))
+        emitter: Final = SpanEmitter(get_tracer(provider, "litellm"), OpenTelemetryV2Config())
+
+        def run() -> None:
+            set_request_destinations(destinations)
+            emitter.emit(SpanRole.LLM_CALL, call)
+
+        in_fresh_context(run)
+        return dict(exporter.get_finished_spans()[0].attributes or {})
+
+    def test_a_span_at_its_attribute_limit_sheds_the_destinations_langfuse_fields_first(self) -> None:
+        generic: Final = self._attributes((), None, _MODEL_CALL_WITH_CONTENT)
+
+        assert "user.id" not in generic
+        assert self._attributes((LANGFUSE_DEST,), len(generic), _MODEL_CALL_WITH_CONTENT) == generic, (
+            "the generic attributes all survive"
+        )
+
+    def test_a_span_at_its_attribute_limit_sheds_the_destinations_request_metadata_before_its_other_fields(
+        self,
+    ) -> None:
+        call: Final = replace(
+            _MODEL_CALL_WITH_CONTENT, request_metadata=MappingProxyType({"user_api_key_alias": "prod-key"})
+        )
+        whole: Final = self._attributes((LANGFUSE_DEST,), None, call)
+
+        squeezed: Final = self._attributes((LANGFUSE_DEST,), len(whole) - 1, call)
+
+        assert len(squeezed) == len(whole) - 1
+        assert whole.keys() - squeezed.keys() <= LANGFUSE_REQUEST_METADATA_ATTRIBUTES
+        assert squeezed["langfuse.observation.type"] == "generation"
 
 
 class TestContextIsolation:
@@ -4554,6 +4821,115 @@ class TestCredentialGatedExporters:
         kept = credential_gated_exporters((operator_console,), ExporterOwner.LANGFUSE_OTEL)
 
         assert kept[0] is operator_console
+
+
+class TestConsolePlaceholder:
+    """The console spec ``_normalize`` folds in for an empty exporter list prints spans
+    only for the ``otel`` callback; no other logger was asked to print."""
+
+    @pytest.fixture
+    def capture(self, monkeypatch: pytest.MonkeyPatch) -> "_ExporterCapture":
+        return TestArizeTenantOnly._capture_exporters(monkeypatch)
+
+    @staticmethod
+    def _received(capture: "_ExporterCapture", provider: TracerProvider) -> Mapping[str | None, tuple[str, ...]]:
+        emit(provider)
+        provider.force_flush()
+        return capture.received()
+
+    @staticmethod
+    def _no_otel_env(monkeypatch: pytest.MonkeyPatch) -> None:
+        for name in _OTEL_SHORTHAND_ENV:
+            monkeypatch.delenv(name, raising=False)
+
+    @staticmethod
+    def _operator_langfuse(monkeypatch: pytest.MonkeyPatch) -> None:
+        TestConsolePlaceholder._no_otel_env(monkeypatch)
+        monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk-lf-operator")
+        monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk-lf-operator")
+
+    @staticmethod
+    def _isolated_proxy_registration(monkeypatch: pytest.MonkeyPatch) -> None:
+        for name in ("service_callback", "input_callback", "_async_success_callback", "_async_failure_callback"):
+            monkeypatch.setattr(litellm, name, [])
+        monkeypatch.setattr("litellm.proxy.proxy_server.open_telemetry_logger", None)
+
+    def test_a_credentialed_langfuse_exports_to_langfuse_alone(
+        self, monkeypatch: pytest.MonkeyPatch, capture: "_ExporterCapture"
+    ) -> None:
+        self._operator_langfuse(monkeypatch)
+        config: Final = langfuse_preset()
+        langfuse_headers: Final = next(
+            spec.headers for spec in config.exporters if spec.owner is ExporterOwner.LANGFUSE_OTEL
+        )
+
+        assert self._received(capture, build_tracer_provider(config)) == {langfuse_headers: ("chat gpt-4",)}
+
+    def test_a_console_exporter_the_operator_named_still_prints(
+        self, monkeypatch: pytest.MonkeyPatch, capture: "_ExporterCapture"
+    ) -> None:
+        self._operator_langfuse(monkeypatch)
+        monkeypatch.setenv("OTEL_EXPORTER", "console")
+
+        assert self._received(capture, build_tracer_provider(langfuse_preset()))[None] == ("chat gpt-4",)
+
+    @pytest.fixture
+    def otel_callback(self, monkeypatch: pytest.MonkeyPatch, capture: "_ExporterCapture") -> OpenTelemetryV2:
+        """The plain ``otel`` callback with nothing else configured, built the way the proxy builds it."""
+        from litellm.litellm_core_utils import litellm_logging as logging_module
+
+        self._no_otel_env(monkeypatch)
+        self._isolated_proxy_registration(monkeypatch)
+        monkeypatch.setenv("LITELLM_OTEL_V2", "true")
+        monkeypatch.setattr(logging_module, "_in_memory_loggers", [])
+        is_otel_v2_enabled.cache_clear()
+        built: Final = logging_module.build_custom_logger_compatible_class(
+            "otel", internal_usage_cache=None, llm_router=None
+        )
+        assert isinstance(built, OpenTelemetryV2)
+        return built
+
+    def test_the_otel_callback_prints_when_nothing_else_is_configured(
+        self, otel_callback: OpenTelemetryV2, capture: "_ExporterCapture"
+    ) -> None:
+        assert self._received(capture, otel_callback.tracer_provider) == {None: ("chat gpt-4",)}
+
+    def test_the_otel_callback_prints_a_call_for_a_key_with_its_own_service_name(
+        self, otel_callback: OpenTelemetryV2, capture: "_ExporterCapture"
+    ) -> None:
+        """A key or team ``otel_service_name`` moves the call onto a second provider built for that name."""
+        kwargs: Final = {
+            **_closed_chat_call_kwargs(),
+            "litellm_params": {"metadata": {"user_api_key_auth_metadata": {"otel_service_name": "payments-gateway"}}},
+        }
+
+        otel_callback.log_pre_api_call(model="gpt-4o", messages=[], kwargs=kwargs)
+        asyncio.run(otel_callback.async_log_success_event(kwargs, None, None, None))
+
+        assert capture.received() == {None: ("chat gpt-4o",)}
+
+    @pytest.mark.parametrize(
+        ("env", "expected"),
+        [({}, {}), ({"OTEL_EXPORTER": "console"}, {None: ("chat gpt-4",)})],
+        ids=["nothing-configured", "operator-asked-for-console"],
+    )
+    def test_the_background_global_logger_prints_only_when_asked(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        capture: "_ExporterCapture",
+        env: Mapping[str, str],
+        expected: Mapping[str | None, tuple[str, ...]],
+    ) -> None:
+        """The proxy publishes a generic logger even when no callback built one, which is
+        what key-only and team-only destinations run under."""
+        from litellm.integrations.otel.logger import select_global_otel_v2_logger
+
+        self._no_otel_env(monkeypatch)
+        self._isolated_proxy_registration(monkeypatch)
+        for name, value in env.items():
+            monkeypatch.setenv(name, value)
+
+        assert self._received(capture, select_global_otel_v2_logger([]).tracer_provider) == expected
 
 
 class TestTenantHostSsrfGuard:
