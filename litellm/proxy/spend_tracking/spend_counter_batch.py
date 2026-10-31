@@ -1,6 +1,7 @@
 """One Redis MGET per phase (admission, reservation, post-call) for the spend counters it reads, not one GET each."""
 
 import asyncio
+import itertools
 from collections.abc import Iterator, Mapping, Sequence
 from contextvars import ContextVar, Token
 from dataclasses import dataclass
@@ -22,6 +23,12 @@ from litellm.proxy.common_utils.user_api_key_cache import (
 _CounterValues: Final = TypeAdapter(dict[str, float | None])
 _NO_VALUES: Final[Mapping[str, float | None]] = MappingProxyType({})
 SPEND_COUNTERS_TARGET: Final = "spend_counters"
+_ticks: Final = itertools.count(1)
+
+
+def spend_counter_tick() -> int:
+    """The next number in a per-process sequence that orders spend counter reads and cold seeds."""
+    return next(_ticks)
 
 
 @dataclass(frozen=True, slots=True)
@@ -39,10 +46,21 @@ class SpendCounterBatch:
     hook declares whatever is bound but unread, so whoever flushes first (the auth object prefetch, usually)
     carries the spend counters in the same round trip."""
 
-    __slots__ = ("_fetched", "_inflight", "_keys", "_loaded", "_lock", "_open", "_redis_cache", "_request_batch")
+    __slots__ = (
+        "_fetched",
+        "_inflight",
+        "_keys",
+        "_loaded",
+        "_lock",
+        "_open",
+        "_redis_cache",
+        "_request_batch",
+        "opened_at",
+    )
 
     def __init__(self, redis_cache: RedisCache) -> None:
         self._redis_cache: Final = redis_cache
+        self.opened_at: Final = spend_counter_tick()
         self._lock: Final = asyncio.Lock()
         self._open = True
         self._keys: frozenset[str] = frozenset()
@@ -143,6 +161,12 @@ _active_batch: Final[ContextVar[SpendCounterBatch | None]] = ContextVar("spend_c
 
 def active_spend_counter_batch() -> SpendCounterBatch | None:
     return _active_batch.get()
+
+
+def spend_counter_read_tick() -> int:
+    """A tick no later than this context's next spend counter read: the open batch's opening tick, else a new one."""
+    batch: Final = _active_batch.get()
+    return batch.opened_at if batch is not None and batch.is_open else spend_counter_tick()
 
 
 class spend_counter_batch_scope:

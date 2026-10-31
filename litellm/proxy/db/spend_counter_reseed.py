@@ -13,8 +13,10 @@ memory in long-lived deployments.
 """
 
 import asyncio
+import functools
 from collections import OrderedDict
-from collections.abc import Mapping
+from collections.abc import Awaitable, Callable, Mapping
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from types import MappingProxyType
 from typing import TYPE_CHECKING, ClassVar, Final, Optional
@@ -27,8 +29,10 @@ from litellm.proxy._types import Litellm_EntityType
 from litellm.proxy.db.db_lookup_gate import bounded_db_lookup, db_lookup_gate
 from litellm.proxy.spend_tracking.spend_counter_batch import (
     SPEND_COUNTERS_TARGET,
+    forget_spend_counter,
     read_batched_spend_counter,
     record_spend_counter_value,
+    spend_counter_tick,
 )
 from litellm.repositories.organization_repository import OrganizationRepository
 from litellm.repositories.project_repository import ProjectRepository
@@ -66,6 +70,30 @@ _WINDOW_SPEND_LOG_FIELDS: Final[Mapping[str, str]] = MappingProxyType(
         "Team": "team_id",
     }
 )
+
+
+@dataclass(slots=True)
+class _CachedSpendSeed:
+    """This process adding its cached spend to one cold counter: the add in flight, and the tick the last one landed."""
+
+    landed_at: int = 0
+    in_flight: asyncio.Task[float | None] | None = None
+
+    def start(self, add: Callable[[], Awaitable[float | None]]) -> asyncio.Task[float | None]:
+        in_flight: Final = asyncio.ensure_future(add())
+        in_flight.add_done_callback(self._settle)
+        self.in_flight = in_flight
+        return in_flight
+
+    def _settle(self, done: asyncio.Future[float | None]) -> None:
+        self.in_flight = None
+        if not done.cancelled() and done.exception() is None:
+            self.landed_at = spend_counter_tick()
+
+
+@functools.lru_cache(maxsize=SPEND_COUNTER_RESEED_LOCKS_MAX_SIZE)
+def _cached_spend_seed(spend_counter_cache: "DualCache", counter_key: str) -> _CachedSpendSeed:
+    return _CachedSpendSeed()
 
 
 def _as_utc(value: datetime) -> datetime:
@@ -111,6 +139,27 @@ class SpendCounterReseed:
             if len(SpendCounterReseed._locks) > SPEND_COUNTER_RESEED_LOCKS_MAX_SIZE:
                 SpendCounterReseed._locks.popitem(last=False)
             return lock
+
+    @staticmethod
+    async def add_cached_spend_once(
+        spend_counter_cache: "DualCache",
+        counter_key: str,
+        read_at: int,
+        add: Callable[[], Awaitable[float | None]],
+        is_warm: Callable[[], Awaitable[bool]],
+    ) -> None:
+        """Run ``add``, this process adding its cached spend to a cold counter, once for all of this process's
+        requests that read the counter cold (at or after tick ``read_at``) before that add landed. A request joins the
+        add in flight and gets its result or error. When the add already landed, the request re-reads the counter and
+        adds again only if the counter is gone. Each other process still adds its own cached spend."""
+        seed: Final = _cached_spend_seed(spend_counter_cache, counter_key)
+        if seed.in_flight is None and seed.landed_at > read_at:
+            forget_spend_counter(counter_key)
+            if await is_warm():
+                return
+        added: Final = await asyncio.shield(seed.in_flight or seed.start(add))
+        if added is not None:
+            record_spend_counter_value(counter_key, added)
 
     @staticmethod
     @with_service_target(SPEND_COUNTERS_TARGET)
