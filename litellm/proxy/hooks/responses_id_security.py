@@ -14,6 +14,7 @@ from pydantic import TypeAdapter, ValidationError
 
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.proxy._types import LitellmUserRoles
 from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     decrypt_value_helper,
@@ -135,6 +136,9 @@ class ResponsesIDSecurity(CustomLogger):
         addressed_id_field: Final = _ADDRESSED_RESPONSE_ID_FIELD_BY_CALL_TYPE.get(call_type)
         if addressed_id_field is None:
             return None
+        if call_type == "aresponses":
+            request_data: Final = cast("dict[str, object]", data)  # cast-ok: the hook signature leaves the body untyped
+            request_data.update(self._authorized_comparison_response_id_fields(request_data, user_api_key_dict))
         retained_id: Final = data.get(ADDRESSED_RESPONSE_ID_FIELD)
         addressed_id: Final = (
             retained_id if isinstance(retained_id, str) and retained_id else data.get(addressed_id_field)
@@ -145,6 +149,43 @@ class ResponsesIDSecurity(CustomLogger):
         data[addressed_id_field] = authorized_id
         data[ADDRESSED_RESPONSE_ID_FIELD] = addressed_id
         return data
+
+    def _authorized_comparison_response_id_fields(
+        self,
+        data: Mapping[str, object],
+        user_api_key_dict: "UserAPIKeyAuth",
+    ) -> Mapping[str, object]:
+        options: Final = self._authorized_prompt_cache_options(data.get("prompt_cache_options"), user_api_key_dict)
+        extra_body: Final = as_str_mapping(data.get("extra_body"))
+        extra_body_options: Final = (
+            None
+            if extra_body is None
+            else self._authorized_prompt_cache_options(extra_body.get("prompt_cache_options"), user_api_key_dict)
+        )
+        options_field: Final[Mapping[str, object]] = {} if options is None else {"prompt_cache_options": options}
+        extra_body_field: Final[Mapping[str, object]] = (
+            {}
+            if extra_body is None or extra_body_options is None
+            else {"extra_body": {**extra_body, "prompt_cache_options": extra_body_options}}
+        )
+        return {**options_field, **extra_body_field}
+
+    def _authorized_prompt_cache_options(
+        self,
+        prompt_cache_options: object,
+        user_api_key_dict: "UserAPIKeyAuth",
+    ) -> Mapping[str, object] | None:
+        options: Final = as_str_mapping(prompt_cache_options)
+        comparison_response_id: Final = None if options is None else options.get("comparison_response_id")
+        if (
+            options is None
+            or not isinstance(comparison_response_id, str)
+            or not self._is_encrypted_response_id(comparison_response_id)
+        ):
+            return None
+        original_response_id, user_id, team_id = self._decrypt_response_id(comparison_response_id)
+        self.check_user_access_to_response_id(user_id, team_id, user_api_key_dict)
+        return {**options, "comparison_response_id": original_response_id}
 
     def authorize_response_id(
         self,
