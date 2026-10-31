@@ -221,6 +221,8 @@ def _search_rows(keys: Sequence[str], response: SpendAnalyticsPaginatedResponse)
 
 
 def _csv_cell(value: object) -> object:
+    if isinstance(value, Mapping):
+        return json.dumps(value, separators=(",", ":"))
     if isinstance(value, str) and value.startswith(("=", "+", "-", "@", "\t", "\r")):
         return f"'{value}"
     return value

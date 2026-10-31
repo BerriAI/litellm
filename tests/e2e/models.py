@@ -1677,6 +1677,7 @@ class UserNewBody(BaseModel):
     user_id: str | None = None
     auto_create_key: bool | None = None
     max_budget: float | None = None
+    metadata: dict[str, str] | None = None
 
 
 class UserNewResponse(BaseModel):
