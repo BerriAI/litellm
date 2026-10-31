@@ -88,17 +88,22 @@ def handle_any_messages_to_chat_completion_str_messages_conversion(
         return [{"input": str(messages)}]
 
 
+def _message_with_str_content(message: AllMessageValues) -> AllMessageValues:
+    texts: Final = convert_content_list_to_str(message=message)
+    if not texts:
+        return message
+    return cast(  # cast-ok: the same message with its content flattened to one string
+        AllMessageValues, {**message, "content": texts}
+    )
+
+
 def handle_messages_with_content_list_to_str_conversion(
     messages: list[AllMessageValues],
 ) -> list[AllMessageValues]:
     """
-    Handles messages with content list conversion
+    Returns new messages with each content list flattened to a string, leaving the caller's messages untouched
     """
-    for message in messages:
-        texts = convert_content_list_to_str(message=message)
-        if texts:
-            message["content"] = texts
-    return messages
+    return [_message_with_str_content(message) for message in messages]
 
 
 def strip_name_from_message(message: AllMessageValues, allowed_name_roles: list[str] = ["user"]) -> AllMessageValues:

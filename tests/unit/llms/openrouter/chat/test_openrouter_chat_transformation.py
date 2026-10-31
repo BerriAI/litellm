@@ -1,5 +1,8 @@
 
+import copy
 import json
+from collections.abc import Iterator
+from itertools import chain
 from typing import Final
 from unittest.mock import MagicMock
 
@@ -872,6 +875,58 @@ def test_openrouter_streaming_reasoning_is_preserved() -> None:
     assembled: Final = litellm.stream_chunk_builder(chunks=list(stream_chunks), messages=messages)
     assert assembled is not None
     assert assembled.choices[0].message.reasoning_content == "Consider the evidence. Apply the rule."
+
+
+def _five_message_level_cache_hints() -> list[dict[str, object]]:
+    return [
+        {"role": "system", "content": "system prompt", "cache_control": {"type": "ephemeral"}},
+        {"role": "user", "content": "turn 1", "cache_control": {"type": "ephemeral"}},
+        {"role": "assistant", "content": "answer 1", "cache_control": {"type": "ephemeral"}},
+        {"role": "user", "content": "turn 2", "cache_control": {"type": "ephemeral"}},
+        {"role": "assistant", "content": "answer 2"},
+        {"role": "user", "content": "turn 3", "cache_control": {"type": "ephemeral"}},
+    ]
+
+
+def _cached_texts(node: object) -> Iterator[str]:
+    if isinstance(node, dict):
+        yield from ((node["text"],) if "cache_control" in node and "text" in node else ())
+        yield from chain.from_iterable(map(_cached_texts, node.values()))
+    elif isinstance(node, list):
+        yield from chain.from_iterable(map(_cached_texts, node))
+
+
+@pytest.mark.parametrize(
+    ("drop_params", "expected_cached_texts"),
+    [
+        (True, ["answer 1", "turn 1", "turn 2", "turn 3"]),
+        ("true", ["answer 1", "turn 1", "turn 2", "turn 3"]),
+        (False, ["answer 1", "system prompt", "turn 1", "turn 2", "turn 3"]),
+    ],
+    ids=[
+        "drop_params_keeps_the_newest_four",
+        "string_drop_params_keeps_the_newest_four",
+        "without_drop_params_all_five_pass_through",
+    ],
+)
+def test_openrouter_claude_request_over_the_cache_control_cap_drops_the_oldest_hints_only_under_drop_params(
+    drop_params: bool | str, expected_cached_texts: list[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    messages: Final = _five_message_level_cache_hints()
+    messages_before: Final = copy.deepcopy(messages)
+
+    body: Final = OpenrouterConfig().transform_request(
+        model="anthropic/claude-haiku-5.5",
+        messages=messages,
+        optional_params={},
+        litellm_params={"drop_params": drop_params, "custom_llm_provider": "openrouter"},
+        headers={},
+    )
+
+    assert sorted(_cached_texts(body["messages"])) == expected_cached_texts
+    assert json.dumps(body).count('"cache_control"') == len(expected_cached_texts)
+    assert messages == messages_before
 
 
 def _transform_openrouter_response(body: dict[str, object]) -> litellm.ModelResponse:
