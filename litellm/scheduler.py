@@ -3,9 +3,7 @@ import enum
 import heapq
 import logging as _logging
 import time
-from collections.abc import Awaitable, Callable, Mapping, Sequence
-from dataclasses import dataclass
-from types import MappingProxyType
+from collections.abc import Awaitable, Callable, Sequence
 from typing import Final, TypeAlias
 from typing import Protocol as _Protocol
 
@@ -26,18 +24,6 @@ QueueEntry: TypeAlias = tuple[int, str]
 _QUEUE_ENTRIES: Final = TypeAdapter(list[QueueEntry])
 
 
-@dataclass(frozen=True, slots=True)
-class _QueueRead:
-    value: object
-    from_redis: bool
-
-
-@dataclass(frozen=True, slots=True)
-class _QueueSnapshot:
-    read_at: float
-    entries: tuple[QueueEntry, ...]
-
-
 class SchedulerCacheKeys(enum.Enum):
     queue = "scheduler:queue"
     default_in_memory_ttl = DEFAULT_IN_MEMORY_TTL  # cache queue in-memory for 5s when redis cache available
@@ -55,37 +41,27 @@ class _QueueCache(_Protocol):
     async def async_set_cache(self, key: str, value: object, *, local_only: bool = False) -> object: ...
 
 
-def _validated_queue(response: object) -> tuple[QueueEntry, ...]:
-    if not isinstance(response, list):
-        return ()
-    return tuple(_QUEUE_ENTRIES.validate_python(response))
-
-
-async def _read_queue(cache: _QueueCache, redis_cache: _QueueCache | None, key: str) -> _QueueRead:
+async def _read_queue(cache: _QueueCache, redis_cache: _QueueCache | None, key: str) -> object:
     if redis_cache is None:
-        return _QueueRead(value=await cache.async_get_cache(key=key, local_only=True), from_redis=False)
+        return await cache.async_get_cache(key=key, local_only=True)
     from redis.exceptions import RedisError as _RedisError
 
     try:
         response: Final = await redis_cache.async_get_cache(key=key, raise_on_error=True)
     except (_RedisError, _RedisCircuitBreakerOpenError) as error:
         _log_redis_failure(_verbose_logger, _logging.ERROR, "Scheduler queue using local snapshot", error)
-        return _QueueRead(value=await cache.async_get_cache(key=key, local_only=True), from_redis=False)
+        return await cache.async_get_cache(key=key, local_only=True)
     await cache.async_set_cache(key=key, value=[] if response is None else response, local_only=True)
-    return _QueueRead(value=response, from_redis=True)
+    return response
 
 
 class Scheduler:
     cache: DualCache
-    clock: Callable[[], float]
-    _queue_snapshots: Mapping[str, _QueueSnapshot]
-    _queue_read_tasks: Mapping[str, asyncio.Task[_QueueRead]]
 
     def __init__(
         self,
         polling_interval: float | None = None,
         redis_cache: RedisCache | None = None,
-        clock: Callable[[], float] = time.monotonic,
     ):
         """
         polling_interval: float or null - frequency of polling queue. Default is 3ms.
@@ -97,49 +73,6 @@ class Scheduler:
             default_in_memory_ttl = SchedulerCacheKeys.default_in_memory_ttl.value
         self.cache = DualCache(redis_cache=redis_cache, default_in_memory_ttl=default_in_memory_ttl)
         self.polling_interval = polling_interval or DEFAULT_POLLING_INTERVAL  # default to 3ms
-        self.clock = clock
-        self._queue_snapshots = MappingProxyType({})
-        self._queue_read_tasks = MappingProxyType({})
-
-    async def _read_queue_with_snapshot(self, key: str, read_at: float) -> _QueueRead:
-        result: Final = await _read_queue(self.cache, self.cache.redis_cache, key)
-        if not result.from_redis:
-            return result
-        entries: Final = _validated_queue(result.value)
-        snapshot: Final = self._queue_snapshots.get(key)
-        if snapshot is None or read_at > snapshot.read_at:
-            self._queue_snapshots = MappingProxyType(
-                {**self._queue_snapshots, key: _QueueSnapshot(read_at=read_at, entries=entries)}
-            )
-        return _QueueRead(value=list(entries), from_redis=True)
-
-    def _clear_in_flight_read(self, task: asyncio.Task[_QueueRead]) -> None:
-        self._queue_read_tasks = MappingProxyType(
-            {key: current for key, current in self._queue_read_tasks.items() if current is not task}
-        )
-
-    async def _await_queue_read(self, task: asyncio.Task[_QueueRead]) -> _QueueRead:
-        try:
-            return await asyncio.shield(task)
-        finally:
-            if task.done():
-                self._clear_in_flight_read(task)
-
-    async def _get_redis_queue(self, key: str) -> tuple[QueueEntry, ...]:
-        now: Final = self.clock()
-        snapshot: Final = self._queue_snapshots.get(key)
-        if snapshot is not None and now - snapshot.read_at < self.polling_interval:
-            return snapshot.entries
-        task: Final = self._queue_read_tasks.get(key)
-        if task is None:
-            read_at: Final = now
-            new_task: Final = asyncio.create_task(self._read_queue_with_snapshot(key, read_at))
-            self._queue_read_tasks = MappingProxyType({**self._queue_read_tasks, key: new_task})
-            new_task.add_done_callback(self._clear_in_flight_read)
-            new_result: Final = await self._await_queue_read(new_task)
-            return _validated_queue(new_result.value)
-        shared_result: Final = await self._await_queue_read(task)
-        return _validated_queue(shared_result.value)
 
     async def add_request(self, request: FlowItem):
         # We use the priority directly, as lower values indicate higher priority
@@ -245,10 +178,10 @@ class Scheduler:
         """
         if self.cache is not None:
             _cache_key: Final = f"{SchedulerCacheKeys.queue.value}:{model_name}"
-            if self.cache.redis_cache is not None:
-                return list(await self._get_redis_queue(_cache_key))
             response: Final = await _read_queue(self.cache, self.cache.redis_cache, _cache_key)
-            return list(_validated_queue(response.value))
+            if not isinstance(response, list):
+                return []
+            return _QUEUE_ENTRIES.validate_python(response)
         return self.queue
 
     @with_service_target(SCHEDULER_QUEUE_TARGET)
@@ -259,10 +192,3 @@ class Scheduler:
         if self.cache is not None:
             _cache_key: Final = f"{SchedulerCacheKeys.queue.value}:{model_name}"
             await self.cache.async_set_cache(key=_cache_key, value=queue)
-            if self.cache.redis_cache is not None:
-                self._queue_snapshots = MappingProxyType(
-                    {
-                        **self._queue_snapshots,
-                        _cache_key: _QueueSnapshot(read_at=self.clock(), entries=tuple(queue)),
-                    }
-                )

@@ -235,7 +235,7 @@ async def test_waiter_observes_shared_expiry_after_reading_just_before_it(monkey
     monkeypatch.setattr(redis, "Redis", FakeRedis)
     monkeypatch.setattr(redis.asyncio, "BlockingConnectionPool", Pool)
     cache: Final = RedisCache(host="scheduler-expiry")
-    scheduler: Final = Scheduler(redis_cache=cache, clock=clock)
+    scheduler: Final = Scheduler(redis_cache=cache)
     scheduler.cache.in_memory_cache = InMemoryCache(clock=clock)
     waiter: Final = FlowItem(priority=2, request_id="waiter", model_name="expiry")
     key: Final = f"{SchedulerCacheKeys.queue.value}:{waiter.model_name}"
@@ -284,130 +284,15 @@ async def test_wait_for_turn_during_cooldown_survives_the_queue_key_expiring():
 
 
 class _JsonRoundTripRedisCache:
-    def __init__(
-        self,
-        read_started: asyncio.Event | None = None,
-        read_release: asyncio.Event | None = None,
-    ) -> None:
+    def __init__(self) -> None:
         self.store: dict[str, str] = {}
-        self.read_count = 0
-        self.fail_reads = False
-        self.read_started = read_started
-        self.read_release = read_release
 
     async def async_get_cache(self, key: str, **kwargs: object) -> object:
-        self.read_count += 1
         raw: Final = self.store.get(key)
-        if self.read_started is not None:
-            self.read_started.set()
-        if self.read_release is not None:
-            await self.read_release.wait()
-        if self.fail_reads:
-            raise redis.exceptions.RedisError("Redis unavailable")
         return None if raw is None else json.loads(raw)
 
     async def async_set_cache(self, key: str, value: object, **kwargs: object) -> None:
         self.store[key] = json.dumps(value)
-
-
-@pytest.mark.asyncio
-async def test_concurrent_get_queue_calls_share_redis_read_and_return_independent_lists() -> None:
-    redis_cache: Final = _JsonRoundTripRedisCache()
-    redis_cache.store[f"{SchedulerCacheKeys.queue.value}:shared"] = json.dumps([(1, "queued")])
-    scheduler: Final = Scheduler(redis_cache=redis_cache)
-
-    queues: Final = await asyncio.gather(*(scheduler.get_queue("shared") for _ in range(20)))
-
-    assert redis_cache.read_count == 1
-    assert all(queue == [(1, "queued")] for queue in queues)
-    queues[0].append((2, "local"))
-    assert all(queue == [(1, "queued")] for queue in queues[1:])
-
-
-@pytest.mark.asyncio
-async def test_get_queue_snapshot_expires_at_polling_interval() -> None:
-    redis_cache: Final = _JsonRoundTripRedisCache()
-    key: Final = f"{SchedulerCacheKeys.queue.value}:clocked"
-    redis_cache.store[key] = json.dumps([(1, "before")])
-    clock: Final = _SchedulerClock()
-    scheduler: Final = Scheduler(polling_interval=1.0, redis_cache=redis_cache, clock=clock)
-
-    assert await scheduler.get_queue("clocked") == [(1, "before")]
-    redis_cache.store[key] = json.dumps([(1, "after")])
-    clock.now = 1000.5
-    assert await scheduler.get_queue("clocked") == [(1, "before")]
-    assert redis_cache.read_count == 1
-    clock.now = 1001.0
-    assert await scheduler.get_queue("clocked") == [(1, "after")]
-    assert redis_cache.read_count == 2
-
-
-@pytest.mark.asyncio
-async def test_save_queue_refreshes_local_snapshot_and_other_scheduler_reads_redis() -> None:
-    redis_cache: Final = _JsonRoundTripRedisCache()
-    scheduler: Final = Scheduler(redis_cache=redis_cache)
-    other_scheduler: Final = Scheduler(redis_cache=redis_cache)
-    queue: Final = [(1, "saved")]
-
-    await scheduler.save_queue(queue, "saved")
-    assert await scheduler.get_queue("saved") == queue
-    assert redis_cache.read_count == 0
-    assert await other_scheduler.get_queue("saved") == queue
-    assert redis_cache.read_count == 1
-
-
-@pytest.mark.asyncio
-async def test_failed_redis_read_is_not_shared_after_redis_recovers() -> None:
-    redis_cache: Final = _JsonRoundTripRedisCache()
-    scheduler: Final = Scheduler(redis_cache=redis_cache)
-    redis_cache.fail_reads = True
-
-    assert await scheduler.get_queue("recovering") == []
-    assert redis_cache.read_count == 1
-    redis_cache.fail_reads = False
-    redis_cache.store[f"{SchedulerCacheKeys.queue.value}:recovering"] = json.dumps([(1, "recovered")])
-
-    assert await scheduler.get_queue("recovering") == [(1, "recovered")]
-    assert redis_cache.read_count == 2
-
-
-@pytest.mark.asyncio
-async def test_cancelling_one_get_queue_waiter_does_not_cancel_shared_redis_read() -> None:
-    read_started: Final = asyncio.Event()
-    read_release: Final = asyncio.Event()
-    redis_cache: Final = _JsonRoundTripRedisCache(read_started=read_started, read_release=read_release)
-    redis_cache.store[f"{SchedulerCacheKeys.queue.value}:blocked"] = json.dumps([(1, "queued")])
-    scheduler: Final = Scheduler(redis_cache=redis_cache)
-    cancelled_waiter: Final = asyncio.create_task(scheduler.get_queue("blocked"))
-    remaining_waiter: Final = asyncio.create_task(scheduler.get_queue("blocked"))
-    await read_started.wait()
-
-    cancelled_waiter.cancel()
-    with pytest.raises(asyncio.CancelledError):
-        await cancelled_waiter
-    read_release.set()
-
-    assert await remaining_waiter == [(1, "queued")]
-    assert redis_cache.read_count == 1
-
-
-@pytest.mark.asyncio
-async def test_older_in_flight_read_does_not_replace_saved_queue_snapshot() -> None:
-    read_started: Final = asyncio.Event()
-    read_release: Final = asyncio.Event()
-    redis_cache: Final = _JsonRoundTripRedisCache(read_started=read_started, read_release=read_release)
-    redis_cache.store[f"{SchedulerCacheKeys.queue.value}:write-race"] = json.dumps([(1, "before-save")])
-    clock: Final = _SchedulerClock()
-    scheduler: Final = Scheduler(redis_cache=redis_cache, clock=clock)
-    pending_read: Final = asyncio.create_task(scheduler.get_queue("write-race"))
-    await read_started.wait()
-
-    await scheduler.save_queue([(2, "saved")], "write-race")
-    read_release.set()
-
-    assert await pending_read == [(1, "before-save")]
-    assert await scheduler.get_queue("write-race") == [(2, "saved")]
-    assert redis_cache.read_count == 1
 
 
 @pytest.mark.asyncio
