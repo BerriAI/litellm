@@ -10,6 +10,7 @@ export interface ModelGroup {
   supports_reasoning?: boolean;
   supports_fast_mode?: boolean;
   supports_background_chat?: boolean;
+  supports_web_search?: boolean;
   supported_reasoning_efforts?: string[] | null;
 }
 
@@ -22,6 +23,7 @@ interface AvailableModel {
   supports_reasoning?: boolean | null;
   supports_fast_mode?: boolean | null;
   supports_background_chat?: boolean | null;
+  supports_web_search?: boolean | null;
   supported_reasoning_efforts?: string[] | null;
 }
 
@@ -32,6 +34,7 @@ const toModelGroup = (item: AvailableModel): ModelGroup => {
     ...(item.providers && { providers: item.providers }),
     ...(item.mode && { mode: item.mode }),
     ...(item.supports_reasoning === true && { supports_reasoning: true }),
+    ...(item.supports_web_search === true && { supports_web_search: true }),
     ...(item.supports_background_chat === true && { supports_background_chat: true }),
     ...(item.supports_fast_mode === true && { supports_fast_mode: true }),
     ...(item.supported_reasoning_efforts !== undefined && {

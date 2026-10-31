@@ -30,6 +30,11 @@ export interface ChatBackgroundRun {
   status: "queued" | "in_progress" | "completed" | "failed" | "cancelled" | "incomplete" | "expired";
 }
 
+export interface ChatCitation {
+  url: string;
+  title: string;
+}
+
 export interface ChatMessage {
   id: string;
   role: "user" | "assistant" | "tool";
@@ -37,6 +42,9 @@ export interface ChatMessage {
   attachments?: ChatAttachment[];
   generatedImages?: ChatImageAttachment[];
   imageGeneration?: ChatImageGeneration;
+  research?: boolean;
+  citations?: ChatCitation[];
+  webSearchCount?: number;
   reasoningContent?: string;
   backgroundRun?: ChatBackgroundRun;
   backgroundError?: string;
@@ -64,6 +72,8 @@ export type AssistantMessageUpdate = Partial<
     | "imageGeneration"
     | "backgroundRun"
     | "backgroundError"
+    | "citations"
+    | "webSearchCount"
   >
 >;
 
