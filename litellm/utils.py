@@ -10159,7 +10159,7 @@ class ProviderConfigManager:
         from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 
         json_provider: Final = JSONProviderRegistry.get(provider.value)
-        if json_provider is not None and "/v1/messages" in json_provider.supported_endpoints:
+        if json_provider is not None and JSONProviderRegistry.serves_endpoint(provider.value, model, "/v1/messages"):
             from litellm.llms.openai_like.messages.transformation import (
                 JSONProviderAnthropicMessagesConfig,
             )
@@ -10298,7 +10298,7 @@ class ProviderConfigManager:
             return result
 
         # Fall back to JSON providers (generic OpenAI-compatible)
-        if JSONProviderRegistry.exists(provider_str) and JSONProviderRegistry.supports_responses_api(provider_str):
+        if JSONProviderRegistry.serves_endpoint(provider_str, model, "/v1/responses"):
             provider_config: Final = JSONProviderRegistry.get(provider_str)
             if provider_config is not None:
                 return create_responses_config_class(provider_config)()

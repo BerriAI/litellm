@@ -183,6 +183,9 @@ ignored_function_names = [
     "_aresponses_background_stream_can_release",  # Tested through the background Responses stream tests in test_router.py
     "_raise_released_stream_error",  # Tested through the background Responses stream content-policy tests in test_router.py
     "_mid_stream_error_before_output",  # Tested through the Responses mid-stream fallback and background stream tests
+    "_without_decisions_deployments_refusing_media",  # Tested through the mixed media-flag group tests in tests/unit/decisions/test_main.py
+    "_decisions_deployment_refuses_media",  # Read by _without_decisions_deployments_refusing_media, tested through the same group tests
+    "_active_default_litellm_params",  # Tested through the router default drop_params test in tests/unit/decisions/test_main.py
 ]
 
 
