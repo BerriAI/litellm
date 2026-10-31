@@ -11,8 +11,9 @@ from litellm.proxy.mcp_server.outbound_credentials.redis_refresh_coordinator imp
     LockAcquisition,
     RedisRefreshCoordinator,
 )
+from litellm.redis.stores.mcp_credential_refresh import RefreshLockTarget
 
-_KEY = "mcp:refresh_lock:u:s"
+_TARGET = RefreshLockTarget(user_id="u", server_id="s")
 
 
 class _FakeLock:
@@ -71,9 +72,9 @@ async def test_winner_acquires_and_releases_with_the_same_token_and_never_reread
     coord = RedisRefreshCoordinator(lock, new_token=lambda: "tok")
     result = await coord.run("u", "s", refresh, reread)
     assert result is refreshed
-    assert lock.acquire_calls == [(_KEY, "tok", 10.0)]
+    assert lock.acquire_calls == [(_TARGET, "tok", 10.0)]
     # released with the SAME token it acquired with, so it can only delete its own lock
-    assert lock.released == [(_KEY, "tok")]
+    assert lock.released == [(_TARGET, "tok")]
     assert reread_calls == []
 
 
@@ -90,7 +91,7 @@ async def test_winner_releases_even_when_refresh_raises():
     coord = RedisRefreshCoordinator(lock, new_token=lambda: "tok")
     with pytest.raises(RuntimeError):
         await coord.run("u", "s", refresh, reread)
-    assert lock.released == [(_KEY, "tok")]  # the lock is freed even on failure
+    assert lock.released == [(_TARGET, "tok")]  # the lock is freed even on failure
 
 
 @pytest.mark.asyncio
@@ -127,8 +128,8 @@ async def test_winner_renews_the_lock_while_refresh_runs():
 
     result = await task
     assert result is not None and result.access_token == "new"
-    assert lock.extend_calls == [(_KEY, "tok", 10.0)]
-    assert lock.released == [(_KEY, "tok")]
+    assert lock.extend_calls == [(_TARGET, "tok", 10.0)]
+    assert lock.released == [(_TARGET, "tok")]
 
 
 @pytest.mark.asyncio
