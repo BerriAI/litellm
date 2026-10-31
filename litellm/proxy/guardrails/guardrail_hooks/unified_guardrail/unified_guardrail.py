@@ -102,6 +102,14 @@ def _as_endpoint_translation(translation: _EndpointTranslation) -> _EndpointTran
     return translation
 
 
+def _translated_call_type(call_type: object, mappings: Mapping[CallTypes, object]) -> CallTypes | None:
+    try:
+        known_call_type: Final = CallTypes(call_type)
+    except ValueError:
+        return None
+    return known_call_type if known_call_type in mappings else None
+
+
 def resolve_endpoint_translation(
     user_api_key_dict: UserAPIKeyAuth, first_response_item: object | None
 ) -> "tuple[str, BaseTranslation] | None":
@@ -277,14 +285,11 @@ class UnifiedLLMGuardrails(CustomLogger):
             return data
 
         mappings: Final = load_guardrail_translation_mappings()
+        input_call_type: Final = _translated_call_type(call_type, mappings)
+        if input_call_type is None:
+            return data
 
-        try:
-            if CallTypes(call_type) not in mappings:
-                return data
-        except ValueError:
-            return data  # handle unmapped call types
-
-        endpoint_translation: Final = _as_endpoint_translation(mappings[CallTypes(call_type)]())
+        endpoint_translation: Final = _as_endpoint_translation(mappings[input_call_type]())
 
         _ensure_litellm_metadata(data, user_api_key_dict)
 
@@ -329,10 +334,11 @@ class UnifiedLLMGuardrails(CustomLogger):
             return data
 
         mappings: Final = load_guardrail_translation_mappings()
-        if call_type is not None and CallTypes(call_type) not in mappings:
+        input_call_type: Final = _translated_call_type(call_type, mappings)
+        if input_call_type is None:
             return data
 
-        endpoint_translation: Final = _as_endpoint_translation(mappings[CallTypes(call_type)]())
+        endpoint_translation: Final = _as_endpoint_translation(mappings[input_call_type]())
 
         _ensure_litellm_metadata(data, user_api_key_dict)
 
