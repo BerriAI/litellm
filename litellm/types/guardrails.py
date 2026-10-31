@@ -1,10 +1,10 @@
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from datetime import datetime
 from enum import Enum
 from types import MappingProxyType
 from typing import Annotated, Final, Literal, TypeAlias, cast
 
-from pydantic import ConfigDict, Field, field_validator, model_validator
+from pydantic import ConfigDict, Field, JsonValue, field_validator, model_validator
 from pydantic.fields import FieldInfo
 from typing_extensions import ReadOnly, Required, TypedDict
 
@@ -1540,6 +1540,14 @@ class PresidioPerRequestConfig(LiteLLMBaseModel):
     entities: list[PiiEntityType] | None = None
 
 
+NativeGuardrailResponse: TypeAlias = Mapping[str, JsonValue] | Sequence[JsonValue]
+
+
+class GuardrailResponseFormat(Enum):
+    STANDARD = "standard"
+    NATIVE = "native"
+
+
 class ApplyGuardrailRequest(LiteLLMBaseModel):
     guardrail_name: str
     text: str
@@ -1548,6 +1556,7 @@ class ApplyGuardrailRequest(LiteLLMBaseModel):
     input_type: str = "request"
     messages: list[dict[str, object]] | None = None
     metadata: dict[str, object] | None = None
+    response_format: GuardrailResponseFormat = GuardrailResponseFormat.STANDARD
 
 
 class ApplyGuardrailResponse(LiteLLMBaseModel):
