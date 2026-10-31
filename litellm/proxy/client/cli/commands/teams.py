@@ -10,8 +10,10 @@ from rich.table import Table
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm.proxy.client import Client
+from litellm.proxy.client.exceptions import UnauthorizedError
 
 from ._cli_context import cli_context_values
+from .auto_sign_in import SignInOnUnauthorizedGroup
 
 
 class _TeamRow(TypedDict):
@@ -29,7 +31,7 @@ class _ErrorBodyView(TypedDict):
     body: ReadOnly[Mapping[str, object]]
 
 
-@click.group()
+@click.group(cls=SignInOnUnauthorizedGroup)
 def teams():
     """Manage teams and team assignments"""
 
@@ -94,6 +96,8 @@ def list(ctx: click.Context):
         # Use list() for simpler response structure (returns array directly)
         teams: Final = client.teams.list()
         display_teams_table(teams)
+    except UnauthorizedError:
+        raise
     except requests.exceptions.HTTPError as e:
         click.echo(f"Error: HTTP {e.response.status_code}", err=True)
         error_body: Final[_ErrorBodyView] = {"body": e.response.json()}
@@ -119,6 +123,8 @@ def available(ctx: click.Context):
             display_teams_table(teams)
         else:
             click.echo("No available teams to join.")
+    except UnauthorizedError:
+        raise
     except requests.exceptions.HTTPError as e:
         click.echo(f"Error: HTTP {e.response.status_code}", err=True)
         error_body: Final[_ErrorBodyView] = {"body": e.response.json()}
@@ -128,7 +134,7 @@ def available(ctx: click.Context):
         raise click.Abort()
 
 
-@teams.command()
+@teams.command(cls=click.Command)
 @click.option("--team-id", type=str, help="Team ID to assign the key to")
 @click.pass_context
 def assign_key(ctx: click.Context, team_id: str | None):

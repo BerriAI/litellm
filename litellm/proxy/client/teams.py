@@ -65,7 +65,9 @@ class TeamsManagementClient:
         response: Final = requests.get(url, headers=self._get_headers(), params=params, timeout=self._timeout)
 
         if response.status_code == 401:
-            raise UnauthorizedError("Authentication failed. Check your API key.")
+            raise UnauthorizedError(
+                requests.exceptions.HTTPError("Authentication failed. Check your API key.", response=response)
+            )
 
         response.raise_for_status()
         return response.json()
@@ -122,7 +124,9 @@ class TeamsManagementClient:
         response: Final = requests.get(url, headers=self._get_headers(), params=params, timeout=self._timeout)
 
         if response.status_code == 401:
-            raise UnauthorizedError("Authentication failed. Check your API key.")
+            raise UnauthorizedError(
+                requests.exceptions.HTTPError("Authentication failed. Check your API key.", response=response)
+            )
 
         response.raise_for_status()
         return response.json()
@@ -143,7 +147,9 @@ class TeamsManagementClient:
         response: Final = requests.get(url, headers=self._get_headers(), timeout=self._timeout)
 
         if response.status_code == 401:
-            raise UnauthorizedError("Authentication failed. Check your API key.")
+            raise UnauthorizedError(
+                requests.exceptions.HTTPError("Authentication failed. Check your API key.", response=response)
+            )
 
         response.raise_for_status()
         return response.json()
