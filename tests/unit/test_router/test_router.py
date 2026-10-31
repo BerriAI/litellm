@@ -31812,3 +31812,22 @@ def test_router_warns_when_a_deployment_enforces_endpoints_without_a_list(caplog
 
     assert "Deployment 'embed-from-config' sets enforce_supported_endpoints without" in caplog.text
     assert "Deployment 'embed-from-api' sets enforce_supported_endpoints without" in caplog.text
+
+
+def test_registry_finds_a_team_deployment_by_public_and_internal_name_for_its_team_only():
+    internal_name = "model_name_team-a_row"
+    router = Router(
+        model_list=[
+            {
+                "model_name": internal_name,
+                "litellm_params": {"model": "openai/gpt-5.5", "api_key": "x"},
+                "model_info": {"id": "team-row", "team_id": "team-a", "team_public_model_name": "public-chat"},
+            }
+        ]
+    )
+    registry = router.registry()
+
+    assert [row["model_info"]["id"] for row in registry.deployments("public-chat", team_id="team-a")] == ["team-row"]
+    assert [row["model_info"]["id"] for row in registry.deployments(internal_name, team_id="team-a")] == ["team-row"]
+    assert list(registry.deployments("public-chat", team_id="team-b")) == []
+    assert list(registry.deployments("public-chat")) == []

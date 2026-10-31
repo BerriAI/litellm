@@ -7,6 +7,7 @@ import functools
 import itertools
 import re
 from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Set as AbstractSet
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, replace
 from types import MappingProxyType
@@ -15,6 +16,7 @@ from typing import Final, TypeVar
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
+from litellm.litellm_core_utils.litellm_logging import use_custom_pricing_for_model
 from litellm.litellm_core_utils.pattern_match_deployments import PatternMatchRouter
 from litellm.llms.azure.ptu_capacity import is_str_keyed_mapping
 from litellm.proxy._types import SpecialModelNames, UserAPIKeyAuth
@@ -683,16 +685,34 @@ class WildcardDeployment:
 
 def wildcard_deployment_priced_model(
     llm_router: Router, deployment: WildcardDeployment, listed_name: str, caller_aliases: CallerAliases
-) -> str | RoutedElsewhere:
+) -> str | RoutedElsewhere | None:
     served_name: Final = _served_name(llm_router, listed_name, caller_aliases)
-    candidates: Final = llm_router.registry().names(
-        served_name, kind="route_candidates", team_id=deployment.team_id or caller_aliases.team_id
-    )
-    if deployment.model_id not in candidates:
+    registry: Final = llm_router.registry()
+    team_id: Final = deployment.team_id or caller_aliases.team_id
+    routed_name: Final = routed_model_name(llm_router, served_name)
+    candidates: Final = registry.names(served_name, kind="route_candidates", team_id=team_id)
+    if deployment.model_id in candidates:
+        return _routed_deployment_model(deployment.model_name_pattern, routed_name, deployment.litellm_model)
+    if not candidates:
+        return None
+    return _model_other_deployments_bill(registry, routed_name, candidates, team_id)
+
+
+def _model_other_deployments_bill(
+    registry: RouterRegistry, routed_name: str, candidates: AbstractSet[str], team_id: str | None
+) -> str | RoutedElsewhere:
+    billed: Final = frozenset(registry.names(routed_name, kind="litellm_base_models", team_id=team_id))
+    if len(billed) != 1 or any(_declares_its_own_rate(registry, model_id) for model_id in candidates):
         return ROUTED_ELSEWHERE
-    return _routed_deployment_model(
-        deployment.model_name_pattern, routed_model_name(llm_router, served_name), deployment.litellm_model
-    )
+    return next(iter(billed))
+
+
+def _declares_its_own_rate(registry: RouterRegistry, model_id: str) -> bool:
+    deployment: Final = _router_deployment(registry, model_id)
+    if deployment is None:
+        return False
+    sections: Final = (deployment.get("litellm_params"), deployment.get("model_info"))
+    return any(is_str_keyed_mapping(section) and use_custom_pricing_for_model(dict(section)) for section in sections)
 
 
 def wildcard_row_filled_model(

@@ -63,7 +63,9 @@ from litellm.proxy._types import (
 from litellm.proxy.auth.litellm_license import AUTO_ROUTER_LICENSE_REMEDY
 from litellm.proxy.auth.model_checks import (
     GLOBAL_ALIASES_ONLY,
+    WildcardDeployment,
     model_info_cost_map_entry,
+    wildcard_deployment_priced_model,
     wildcard_row_filled_model,
 )
 from litellm.proxy.auth.team_grants import team_model_aliases
@@ -1320,6 +1322,21 @@ def _cost_map_entry(
     return MappingProxyType({}) if lookup is None else model_info_cost_map_entry(lookup)
 
 
+def _routed_cost_map_entry(db_model: Deployment, listed_row: _ListedRow) -> Mapping[str, object]:
+    stored_model: Final = _decrypted_model(db_model.litellm_params.model)
+    if stored_model is None or "*" not in stored_model or listed_row.name is None or listed_row.llm_router is None:
+        return MappingProxyType({})
+    priced_as: Final = wildcard_deployment_priced_model(
+        listed_row.llm_router,
+        WildcardDeployment(
+            db_model.model_info.id or "", db_model.model_name, stored_model, db_model.model_info.team_id
+        ),
+        listed_row.name,
+        listed_row.caller_aliases,
+    )
+    return model_info_cost_map_entry(priced_as) if isinstance(priced_as, str) else MappingProxyType({})
+
+
 LoadedCatalog: TypeAlias = Callable[[], Mapping[str, Mapping[str, object]]]
 
 
@@ -1376,6 +1393,7 @@ def legacy_update_model_info_changes(
         echoed_cost_map_fields(
             requested,
             _cost_map_entry(db_model, {**stored, **sent}, listed_row),
+            _routed_cost_map_entry(db_model, listed_row),
             _loaded_catalog_entry(requested, loaded_catalog),
             discovered_model_info,
         )
@@ -1478,13 +1496,11 @@ def update_db_model(
     # update model info
     if updated_patch.model_info:
         incoming_model_info: Final = updated_patch.model_info.model_dump(exclude_none=True)
+        listed_row: Final = _ListedRow(listed_name or updated_patch.model_name, llm_router, caller_aliases)
         echoed_fields: Final = echoed_cost_map_fields(
             incoming_model_info,
-            _cost_map_entry(
-                db_model,
-                incoming_model_info,
-                _ListedRow(listed_name or updated_patch.model_name, llm_router, caller_aliases),
-            ),
+            _cost_map_entry(db_model, incoming_model_info, listed_row),
+            _routed_cost_map_entry(db_model, listed_row),
             _loaded_catalog_entry(incoming_model_info, loaded_catalog),
         )
         stored_model_info_fields: Final[Mapping[str, object]] = without_server_derived_pricing(incoming_model_info)
