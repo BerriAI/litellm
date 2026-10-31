@@ -1497,6 +1497,36 @@ def test_set_model_group_info(model_list, user_facing_model_group_name):
     assert resp.model_group == user_facing_model_group_name
 
 
+def test_set_model_group_info_reports_supports_continuation_when_any_deployment_has_it():
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "long-decode",
+                "litellm_params": {"model": "openai/gpt-4.1", "api_key": "fake"},
+            },
+            {
+                "model_name": "long-decode",
+                "litellm_params": {"model": "openai/gpt-4.1-mini", "api_key": "fake"},
+                "model_info": {"supports_continuation": True},
+            },
+            {
+                "model_name": "long-decode",
+                "litellm_params": {"model": "openai/gpt-4.1-nano", "api_key": "fake"},
+            },
+            {
+                "model_name": "plain",
+                "litellm_params": {"model": "openai/gpt-4.1", "api_key": "fake"},
+            },
+        ]
+    )
+    long_decode: Final = router._set_model_group_info(
+        model_group="long-decode", user_facing_model_group_name="long-decode"
+    )
+    plain: Final = router._set_model_group_info(model_group="plain", user_facing_model_group_name="plain")
+    assert long_decode is not None and long_decode.supports_continuation is True
+    assert plain is not None and plain.supports_continuation is False
+
+
 @pytest.mark.asyncio
 async def test_set_response_headers(model_list):
     """Test if the 'set_response_headers' function is working correctly"""

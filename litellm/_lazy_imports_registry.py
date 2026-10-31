@@ -33,6 +33,7 @@ UTILS_NAMES: Final = (
     "supports_web_search",
     "supports_tool_search",
     "supports_url_context",
+    "supports_continuation",
     "supports_response_schema",
     "supports_parallel_function_calling",
     "supports_vision",
@@ -488,6 +489,7 @@ _UTILS_IMPORT_MAP: Final = {
     "supports_web_search": (".utils", "supports_web_search"),
     "supports_tool_search": (".utils", "supports_tool_search"),
     "supports_url_context": (".utils", "supports_url_context"),
+    "supports_continuation": (".utils", "supports_continuation"),
     "supports_response_schema": (".utils", "supports_response_schema"),
     "supports_parallel_function_calling": (
         ".utils",

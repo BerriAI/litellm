@@ -476,6 +476,34 @@ def test_supports_video_input_reads_its_own_cost_map_flag(
     assert litellm.get_model_info(model)["supports_video_input"] is video_input
 
 
+@pytest.mark.parametrize("continuation", [True, False])
+def test_supports_continuation_reads_its_own_cost_map_flag(
+    local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch, continuation: bool
+) -> None:
+    model: Final = "gemini/continuation-flag-model"
+    monkeypatch.setitem(
+        litellm.model_cost,
+        model,
+        {
+            "litellm_provider": "gemini",
+            "mode": "chat",
+            "supports_continuation": continuation,
+            "supports_url_context": not continuation,
+        },
+    )
+    assert litellm.supports_continuation(model) is continuation
+    assert litellm.get_model_info(model).get("supports_continuation") is continuation
+
+
+def test_supports_continuation_is_unset_when_the_cost_map_omits_it(
+    local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    model: Final = "gemini/no-continuation-flag-model"
+    monkeypatch.setitem(litellm.model_cost, model, {"litellm_provider": "gemini", "mode": "chat"})
+    assert litellm.supports_continuation(model) is False
+    assert litellm.get_model_info(model).get("supports_continuation") is None
+
+
 def test_get_optional_params_image_gen():
     from litellm.llms.azure.image_generation import AzureGPTImageGenerationConfig
 
@@ -1189,6 +1217,7 @@ _COST_MAP_ROW_SCHEMA: Final = {
             "supports_bedrock_runtime_chat_completions_inline_reasoning": {"type": "boolean"},
             "supports_bedrock_converse_tool_result_images": {"type": "boolean"},
             "supports_url_context": {"type": "boolean"},
+            "supports_continuation": {"type": "boolean"},
             "supports_multimodal": {"type": "boolean"},
             "uses_embed_content": {"type": "boolean"},
             "supports_reasoning": {"type": "boolean"},
