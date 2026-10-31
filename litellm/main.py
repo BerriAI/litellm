@@ -1315,6 +1315,7 @@ from litellm.responses.bridge_check import (  # noqa: E402  # re-export at the o
     _resolve_openai_api_base as _resolve_openai_api_base,  # pyright: ignore[reportPrivateUsage]  # noqa: PLC0414  # re-export of moved helper
 )
 from litellm.responses.bridge_check import (
+    bridge_check_request_params,
     bridge_reasoning_effort,
     keep_registered_mode,
     str_keyed_mapping,
@@ -6044,19 +6045,39 @@ def completion(
 
         if dynamic_api_key is not None:
             api_key = dynamic_api_key
+        if responses_api_model_info.get("mode") != "responses":
+            route_request_params: Final = bridge_check_request_params(routing_kwargs)
+            responses_api_model_info, model = responses_api_bridge_check(
+                model=model,
+                custom_llm_provider=custom_llm_provider,
+                web_search_options=web_search_options,
+                tools=tools,
+                reasoning_effort=bridge_reasoning_effort(
+                    resolved_reasoning_effort, route_request_params.get("extra_body")
+                ),
+                reasoning_summary=peek_reasoning_summary_aliases(route_request_params),
+                api_base=api_base,
+                deployment_model_info=deployment_model_info,
+            )
         # check if user passed in any of the OpenAI optional params
         bridges_to_responses_api: Final = (
             responses_api_model_info.get("mode") == "responses" and not skip_responses_api_bridge
         )
-        allowed_openai_params: Final[list[str] | None] = (
-            [*(kwargs.get("allowed_openai_params") or []), "reasoning_effort"]
+        bridge_allowed_params: Final[tuple[str, ...]] = (
+            ("reasoning_effort", "web_search_options")
             if bridges_to_responses_api
-            or reasoning_effort_needs_allowing(
+            else ("reasoning_effort",)
+            if reasoning_effort_needs_allowing(
                 chat_reasoning.effort,
                 model=model,
                 custom_llm_provider=custom_llm_provider,
                 base_model=base_model if isinstance(base_model, str) else None,
             )
+            else ()
+        )
+        allowed_openai_params: Final[list[str] | None] = (
+            [*(kwargs.get("allowed_openai_params") or []), *bridge_allowed_params]
+            if bridge_allowed_params
             else kwargs.get("allowed_openai_params")
         )
         optional_param_args: Final = {
@@ -6323,27 +6344,11 @@ def completion(
                 ),
             )
 
-        ## RESPONSES API BRIDGE LOGIC ## - check if model has 'mode: responses' in litellm.model_cost map
-        # Only run the second bridge check if the first one didn't already
-        # detect responses mode (e.g. via the "responses/" prefix).  The second
-        # check handles cases like gpt-5.4+ with tools+reasoning_effort or
-        # reasoningSummary/reasoning_summary without tools (AI SDK) that the first
-        # (early) check doesn't cover.
+        ## RESPONSES API BRIDGE LOGIC ## - route the request over the Responses API when selected above
         _reasoning_summary_for_bridge: Final = peek_reasoning_summary_aliases(optional_params)
         typed_deployment_model_info: Final = str_keyed_mapping(
             cast(object, model_info)  # cast-ok: model_info is the untyped dict kwarg
         )
-        if responses_api_model_info.get("mode") != "responses":
-            responses_api_model_info, model = responses_api_bridge_check(
-                model=model,
-                custom_llm_provider=custom_llm_provider,
-                web_search_options=web_search_options,
-                tools=tools,
-                reasoning_effort=bridge_reasoning_effort(resolved_reasoning_effort, optional_params.get("extra_body")),
-                reasoning_summary=_reasoning_summary_for_bridge,
-                api_base=api_base,
-                deployment_model_info=typed_deployment_model_info,
-            )
 
         # Use base_model (the true underlying model) for Azure model-type
         # detection when the deployment name differs from the model name.
