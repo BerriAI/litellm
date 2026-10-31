@@ -1,4 +1,5 @@
 import asyncio
+import json
 from unittest.mock import AsyncMock, Mock, patch
 
 import httpx
@@ -6,6 +7,7 @@ import pytest
 from httpx import Request, Response
 from pydantic import BaseModel, computed_field
 
+import litellm
 from litellm.integrations.datadog.datadog import DataDogLogger
 from litellm.llms.custom_httpx.http_handler import MaskedHTTPStatusError
 from litellm.types.integrations.datadog import (
@@ -558,3 +560,26 @@ async def test_raised_intake_error_preserves_datadog_requeue_behavior(datadog_en
     await logger.async_send_batch()
 
     assert [event["message"] for event in logger.log_queue] == ['{"event": 0}', '{"event": 1}']
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("redact", [True, False], ids=["redaction_on", "redaction_off"])
+async def test_failure_hook_scrubs_the_prompt_out_of_the_logged_exception(datadog_env, monkeypatch, redact):
+    secret = "my ssn is 123-45-6789"
+    monkeypatch.setattr(litellm, "turn_off_message_logging", redact)
+    with patch("asyncio.create_task"):
+        logger = DataDogLogger()
+
+    await logger.async_post_call_failure_hook(
+        request_data={"messages": [{"role": "user", "content": secret}], "metadata": {}},
+        original_exception=litellm.BadRequestError(
+            message=f"Unsupported content: {secret}", model="gpt-4o", llm_provider="openai"
+        ),
+        user_api_key_dict=type("UserKey", (), {})(),
+        traceback_str=f"Traceback: {secret}",
+    )
+
+    message = json.loads(logger.log_queue[0]["message"])
+    assert (secret in json.dumps(message)) is not redact
+    assert "Unsupported content: " in message["exception"]
+    assert message["error_class"] == "BadRequestError"
