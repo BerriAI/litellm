@@ -222,7 +222,7 @@ class BasePassthroughConfig(BaseLLMModelInfo):
         request_data: dict,
         logging_obj: LiteLLMLoggingObj,
         endpoint: str,
-    ) -> LoggedRelayResponse | OCRResponse | StandardPassThroughResponseObject | None:
+    ) -> LoggedRelayResponse | OCRResponse | StandardPassThroughResponseObject | Mapping[str, object] | None:
         pass
 
     def handle_logging_collected_chunks(
