@@ -27,7 +27,7 @@ pytestmark: Final = pytest.mark.shares_worker_state
 
 API_KEY: Final = "synthetic-ovalix-key"
 APP_ID: Final = "synthetic-ovalix-app"
-APP_NAME: Final = "Synthetic Guarded App"
+OTHER_APP: Final = "Synthetic Other App"
 PRE_CHECKPOINT: Final = "synthetic-pre-checkpoint"
 POST_CHECKPOINT: Final = "synthetic-post-checkpoint"
 KEYWORD: Final = "Project Falcon"
@@ -35,7 +35,6 @@ NAME: Final = "David"
 DENIAL: Final = "synthetic ovalix denial"
 REPLY: Final = "synthetic provider reply"
 PINNED: Final = "ovalix-pinned"
-DISCOVERY: Final = "ovalix-discovery"
 ENDPOINTS: Final = ("/v1/chat/completions", "/v1/messages", "/v1/responses")
 CHECKPOINT: Final = "/tracking/beta/checkpoint"
 OUTAGE_AFTER: Final = 6
@@ -88,19 +87,9 @@ def _tracker(request: Request) -> Reply:
     path: Final = urlsplit(request.target).path
     if not OUTAGE.admits(path):
         return Reply(status=503, body=b'{"detail": "tracker unavailable"}')
-    if path == "/tracking/beta/app_name_regex":
-        return Reply(body=json.dumps({"regex": r"^\s*\[([^\]]+)\]"}).encode())
-    body: Final = json.loads(request.body)
-    if path == "/tracking/beta/resolve_application":
-        if body["application_name"] != APP_NAME:
-            return Reply(status=404, body=b'{"detail": "application not found"}')
-        routing: Final = {
-            "application_id": APP_ID,
-            "checkpoint_id_pre": PRE_CHECKPOINT,
-            "checkpoint_id_post": POST_CHECKPOINT,
-        }
-        return Reply(body=json.dumps(routing).encode())
-    return Reply(body=json.dumps(_checkpoint_verdict(body)).encode())
+    if path != CHECKPOINT:
+        return Reply(status=404, body=b'{"detail": "not found"}')
+    return Reply(body=json.dumps(_checkpoint_verdict(json.loads(request.body))).encode())
 
 
 def _responses_reply(marker: str) -> dict[str, object]:
@@ -141,7 +130,7 @@ def _provider(request: Request) -> Reply:
 
 
 def _alias() -> str:
-    return f"[{APP_NAME}] integration key {uuid.uuid4().hex}"
+    return f"[{OTHER_APP}] integration key {uuid.uuid4().hex}"
 
 
 def _ovalix(name: str, tracker: str, **routing: str) -> dict[str, object]:
@@ -194,7 +183,6 @@ def rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Rig]:
                 pre_checkpoint_id=PRE_CHECKPOINT,
                 post_checkpoint_id=POST_CHECKPOINT,
             ),
-            _ovalix(DISCOVERY, tracker.url),
         ]
         path: Final = root / "ovalix.yaml"
         path.write_text(yaml.safe_dump(config))
@@ -217,9 +205,7 @@ def rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Rig]:
             yield Rig(owned.gateway, tracker, provider, model, keys)
 
 
-def _post(
-    rig: Rig, endpoint: str, guardrail: str, key: str, text: str, extra: dict[str, JsonValue] | None = None
-) -> httpx.Response:
+def _post(rig: Rig, endpoint: str, key: str, text: str, extra: dict[str, JsonValue] | None = None) -> httpx.Response:
     prompt: Final[dict[str, JsonValue]] = (
         {"input": text}
         if endpoint == "/v1/responses"
@@ -228,16 +214,14 @@ def _post(
         else {"messages": [{"role": "user", "content": text}]}
     )
     return rig.proxy.request(
-        "POST", endpoint, {"model": rig.model, "guardrails": [guardrail], **prompt, **(extra or {})}, key=key
+        "POST", endpoint, {"model": rig.model, "guardrails": [PINNED], **prompt, **(extra or {})}, key=key
     )
 
 
-def _send(
-    rig: Rig, endpoint: str, guardrail: str, key: str, text: str, extra: dict[str, JsonValue] | None = None
-) -> httpx.Response:
+def _send(rig: Rig, endpoint: str, key: str, text: str, extra: dict[str, JsonValue] | None = None) -> httpx.Response:
     rig.tracker.drain()
     rig.provider.drain()
-    return _post(rig, endpoint, guardrail, key, text, extra)
+    return _post(rig, endpoint, key, text, extra)
 
 
 def _checkpoint_actors(rig: Rig) -> list[object]:
@@ -249,11 +233,10 @@ def _checkpoint_actors(rig: Rig) -> list[object]:
 
 
 @pytest.mark.parametrize("stream", (False, True))
-@pytest.mark.parametrize("guardrail", (PINNED, DISCOVERY))
 @pytest.mark.parametrize("endpoint", ENDPOINTS)
-def test_a_prompt_from_a_key_with_no_user_is_inspected(rig: Rig, endpoint: str, guardrail: str, stream: bool) -> None:
+def test_a_prompt_from_a_key_with_no_user_is_inspected(rig: Rig, endpoint: str, stream: bool) -> None:
     response: Final = _send(
-        rig, endpoint, guardrail, rig.keys.no_user, f"Tell me about {KEYWORD} {uuid.uuid4()}", {"stream": stream}
+        rig, endpoint, rig.keys.no_user, f"Tell me about {KEYWORD} {uuid.uuid4()}", {"stream": stream}
     )
 
     assert response.status_code == 400 and DENIAL in response.text, response.text
@@ -261,18 +244,16 @@ def test_a_prompt_from_a_key_with_no_user_is_inspected(rig: Rig, endpoint: str, 
     assert _checkpoint_actors(rig) == ["unknown"]
 
 
-@pytest.mark.parametrize("guardrail", (PINNED, DISCOVERY))
 @pytest.mark.parametrize(
     ("endpoint", "client_metadata"),
     (("/v1/messages", {"user_id": "client-chosen"}), ("/v1/responses", {"client": "chosen"})),
 )
 def test_a_client_metadata_object_does_not_switch_inspection_off(
-    rig: Rig, endpoint: str, client_metadata: dict[str, JsonValue], guardrail: str
+    rig: Rig, endpoint: str, client_metadata: dict[str, JsonValue]
 ) -> None:
     response: Final = _send(
         rig,
         endpoint,
-        guardrail,
         rig.keys.with_user_id,
         f"Tell me about {KEYWORD} {uuid.uuid4()}",
         {"metadata": client_metadata},
@@ -283,39 +264,48 @@ def test_a_client_metadata_object_does_not_switch_inspection_off(
     assert _checkpoint_actors(rig) == ["unknown"]
 
 
-@pytest.mark.parametrize("guardrail", (PINNED, DISCOVERY))
-def test_a_name_from_a_key_with_no_user_reaches_the_provider_anonymized(rig: Rig, guardrail: str) -> None:
+def test_a_name_from_a_key_with_no_user_reaches_the_provider_anonymized(rig: Rig) -> None:
     marker: Final = uuid.uuid4().hex
-    response: Final = _send(rig, "/v1/chat/completions", guardrail, rig.keys.no_user, f"My name is {NAME} {marker}")
+    response: Final = _send(rig, "/v1/chat/completions", rig.keys.no_user, f"My name is {NAME} {marker}")
 
     assert response.status_code == 200, response.text
     sent: Final = [json.loads(request.body)["messages"][-1]["content"] for request in rig.provider.drain()]
     assert sent == [f"My name is {{Name}} {marker}"]
 
 
-@pytest.mark.parametrize("guardrail", (PINNED, DISCOVERY))
-def test_the_actor_is_the_key_users_email_then_their_id(rig: Rig, guardrail: str) -> None:
-    by_id: Final = _send(rig, "/v1/chat/completions", guardrail, rig.keys.with_user_id, f"hello {uuid.uuid4()}")
+def test_the_actor_is_the_key_users_email_then_their_id(rig: Rig) -> None:
+    by_id: Final = _send(rig, "/v1/chat/completions", rig.keys.with_user_id, f"hello {uuid.uuid4()}")
     assert by_id.status_code == 200, by_id.text
     assert _checkpoint_actors(rig) == [rig.keys.user_id]
 
-    by_email: Final = _send(rig, "/v1/chat/completions", guardrail, rig.keys.with_email, f"hello {uuid.uuid4()}")
+    by_email: Final = _send(rig, "/v1/chat/completions", rig.keys.with_email, f"hello {uuid.uuid4()}")
     assert by_email.status_code == 200, by_email.text
     assert _checkpoint_actors(rig) == [rig.keys.email]
 
 
+@pytest.mark.parametrize("endpoint", ENDPOINTS)
+def test_a_key_alias_naming_another_app_does_not_change_the_application_checked(rig: Rig, endpoint: str) -> None:
+    response: Final = _send(rig, endpoint, rig.keys.with_email, f"Tell me about {KEYWORD} {uuid.uuid4()}")
+
+    assert response.status_code == 400 and DENIAL in response.text, response.text
+    assert rig.provider.drain() == ()
+    calls: Final = [(urlsplit(request.target).path, json.loads(request.body)) for request in rig.tracker.drain()]
+    assert [
+        (path, body["application_id"], body["checkpoint_id"], "application_name" in body) for path, body in calls
+    ] == [(CHECKPOINT, APP_ID, PRE_CHECKPOINT, False)]
+
+
 def _burst(rig: Rig) -> tuple[httpx.Response, ...]:
-    plan: Final = tuple(product(ENDPOINTS, (PINNED, DISCOVERY), (False, True), range(2)))
+    plan: Final = tuple(product(ENDPOINTS, (False, True), range(4)))
     with ThreadPoolExecutor(max_workers=12) as pool:
         return tuple(
             pool.map(
                 lambda cell: _post(
                     rig,
                     cell[0],
-                    cell[1],
                     rig.keys.no_user,
                     f"Tell me about {KEYWORD} {uuid.uuid4()}",
-                    {"stream": cell[2]},
+                    {"stream": cell[1]},
                 ),
                 plan,
             )

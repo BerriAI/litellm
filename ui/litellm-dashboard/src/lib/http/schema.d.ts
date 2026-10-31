@@ -37034,11 +37034,6 @@ export interface components {
              */
             disable_exception_on_block: boolean | null;
             /**
-             * Enable Routing Cache
-             * @description Cache discovery-mode routing resolution per api-key alias for 1 hour. Default on.
-             */
-            enable_routing_cache?: boolean | null;
-            /**
              * End Session After N Fails
              * @description For /v1/realtime sessions: automatically close the session after this many guardrail violations.
              */
@@ -37059,11 +37054,6 @@ export interface components {
              * @description Header names to forward from the client request to the guardrail (e.g. x-request-id). Only these headers' values are sent; others may be omitted or sent as [present]. Used by generic_guardrail_api (similar to MCP extra_headers).
              */
             extra_headers?: string[] | null;
-            /**
-             * Fail If No Application
-             * @description Fail the call when no application is configured and none is discovered. Default on; set false to let such calls through unguarded instead.
-             */
-            fail_if_no_application?: boolean | null;
             /**
              * Fail On Error
              * @description Whether to fail the request if the guardrail encounters an error. Implemented by guardrail='model_armor', 'generic_guardrail_api' and 'crowdstrike_aidr'. True (default) raises the error. False logs a critical error and lets the request proceed, so only a valid guardrail response can block or modify it.
