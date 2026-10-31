@@ -452,25 +452,36 @@ def python_core(host: ScriptedHost, **arguments: object) -> PythonCore:  # kwarg
     return PythonCore(**config.arguments, _host=host)  # pyright: ignore[reportArgumentType]  # the same arguments Router binds
 
 
-CoreBuilder = Callable[..., RouterCore]
-"""``builder(host, **router_arguments)``: a router core on ``host``."""
-
-CORE_BUILDERS: Final[dict[str, CoreBuilder]] = {"python": python_core}
-"""Every core the suite runs on. Another core adds its builder here; a builder that cannot take a
-configuration raises ``CoreDeclined``, and the test is skipped for that core."""
-
-
 class CoreDeclined(Exception):
     """The core does not serve this configuration (the router would stay on the Python core)."""
 
 
+CoreBuilder = Callable[..., RouterCore]
+"""``builder(host, **router_arguments)``: a router core on ``host``."""
+
+
+def rust_core(host: ScriptedHost, **arguments: object) -> RouterCore:  # kwargs-ok: the router's constructor arguments
+    """A ``RustCore`` on ``host``, built the way ``make_core`` builds one when the Rust router is on."""
+    from litellm.router_rust_core import RustCore
+
+    try:
+        return RustCore.build(build_router_config(arguments), host)
+    except Exception as declined:  # noqa: BLE001  # make_core keeps such a router on the Python core
+        raise CoreDeclined(str(declined)) from declined
+
+
+CORE_BUILDERS: Final[dict[str, CoreBuilder]] = {"python": python_core, "rust": rust_core}
+"""Every core the suite runs on. Another core adds its builder here; a builder that cannot take a
+configuration raises ``CoreDeclined``, and the test is skipped for that core."""
+
+
 __all__ = [
-    "Call",
-    "HostCallbacks",
-    "INFERENCE_OPS",
     "CORE_BUILDERS",
+    "INFERENCE_OPS",
+    "Call",
     "CoreBuilder",
     "CoreDeclined",
+    "HostCallbacks",
     "ScriptedHost",
     "auth_error",
     "bad_request",
@@ -482,6 +493,7 @@ __all__ = [
     "embedding_response",
     "python_core",
     "rate_limit",
+    "rust_core",
     "server_error",
     "timeout",
 ]

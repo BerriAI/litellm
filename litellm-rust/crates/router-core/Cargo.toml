@@ -7,3 +7,20 @@ repository.workspace = true
 description = "The router core behind litellm.Router: registry, settings, health, selection and the call loop"
 
 [dependencies]
+arc-swap.workspace = true
+async-trait.workspace = true
+litellm-cache.workspace = true
+litellm-router-types.workspace = true
+parking_lot.workspace = true
+rand.workspace = true
+serde.workspace = true
+serde_with.workspace = true
+serde_json = { workspace = true, features = ["preserve_order"] }
+sha2.workspace = true
+strum.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+rstest.workspace = true
+tokio.workspace = true
