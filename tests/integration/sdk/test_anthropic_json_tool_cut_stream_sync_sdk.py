@@ -145,8 +145,7 @@ def test_sync_stream_cut_before_the_json_tool_block_closes_still_yields_the_whol
         fragments: Final[list[str]] = []
         if cut:
             with pytest.raises(MidStreamFallbackError, match="Stream ended before a finish_reason was received"):
-                for chunk in response:
-                    fragments.append(str(chunk.choices[0].delta.content or ""))
+                fragments.extend(str(chunk.choices[0].delta.content or "") for chunk in response)
         else:
             fragments.extend(str(chunk.choices[0].delta.content or "") for chunk in response)
         text: Final = "".join(fragments)
