@@ -6764,6 +6764,12 @@ class Router(DeprecatedRouterMembers):
                 opens_responses_socket=handler_name == "_aresponses_websocket",
             )
 
+            # Count the picked deployment against its per-minute rpm budget at
+            # selection time, the same way _acompletion does, so
+            # _pre_call_checks enforces rpm limits on passthrough routes
+            # (/v1/messages and friends) that go through this helper.
+            self._track_deployment_metrics(deployment=deployment, parent_otel_span=parent_otel_span)
+
             data: Final = deployment["litellm_params"].copy()
             model_name: Final = data["model"]
             self.total_calls[model_name] += 1
@@ -15930,7 +15936,7 @@ class Router(DeprecatedRouterMembers):
         messages: list[dict[str, str]] | None = None,
         input: str | list | None = None,
         specific_deployment: bool | None = False,
-    ):
+    ) -> dict[str, Any]:  # mutable-ok: returns pass-through deployment map
         """
         Async implementation of 'get_available_deployments'.
 
@@ -17449,7 +17455,9 @@ class Router(DeprecatedRouterMembers):
 
         return pass_through_deployments
 
-    def _track_deployment_metrics(self, deployment, parent_otel_span: Span | None, response=None):
+    def _track_deployment_metrics(
+        self, deployment: Mapping[str, Any], parent_otel_span: Span | None, response: object | None = None
+    ):
         """
         Tracks successful requests rpm usage.
         """
