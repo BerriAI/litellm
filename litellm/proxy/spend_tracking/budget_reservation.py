@@ -7,7 +7,7 @@ import time
 from collections.abc import AsyncIterator, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from itertools import chain, product
+from itertools import chain
 from types import MappingProxyType
 from typing import Final, NoReturn, SupportsFloat, SupportsIndex, SupportsInt, cast
 
@@ -18,7 +18,6 @@ import litellm
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.api_route_to_call_types import get_call_types_for_route
-from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.litellm_core_utils.llm_cost_calc.tiered_pricing import select_tier_for_input, tier_rate
 from litellm.proxy._types import (
@@ -184,7 +183,7 @@ async def _apply_over_budget_reservation_policy(
     entry: dict[str, float | str],
     applied_entries: list[dict[str, float | str]],
     reservation_cost: float,
-    spend_before_reservation: float,
+    current_spend: float,
     fail_closed_budget_enforcement: bool = False,
 ) -> float:
     """
@@ -200,13 +199,13 @@ async def _apply_over_budget_reservation_policy(
         applied_entries.remove(entry)
         return reservation_cost
 
-    remaining_before_reservation: Final = counter.max_budget - spend_before_reservation
+    remaining_before_reservation: Final = counter.max_budget - (current_spend - reservation_cost)
     if remaining_before_reservation <= 1e-12:
-        _raise_counter_budget_exceeded(counter=counter, current_cost=spend_before_reservation + reservation_cost)
-    if fail_closed_budget_enforcement and reservation_cost - remaining_before_reservation > 1e-12:
+        _raise_counter_budget_exceeded(counter=counter, current_cost=current_spend)
+    if fail_closed_budget_enforcement and current_spend - counter.max_budget > 1e-12:
         _raise_counter_budget_exceeded(
             counter=counter,
-            current_cost=spend_before_reservation,
+            current_cost=current_spend - reservation_cost,
             estimated_cost=reservation_cost,
         )
     await _resize_applied_reservation(
@@ -997,7 +996,7 @@ async def _reserve_reservable_counters(
         current_spend_by_counter_key=current_spend_by_counter_key,
         reservation_cost=reservation_cost,
     ):
-        charged_cost = min(reservation_cost, max(counter.max_budget for counter in group))
+        charged_cost = reservation_cost
         entries = tuple(_counter_to_reservation_entry(counter=counter, reserved_cost=charged_cost) for counter in group)
         applied_entries.extend(entries)
         reserved_values = await _reserve_counters(counters=group, entries=entries, reservation_cost=charged_cost)
@@ -1010,19 +1009,18 @@ async def _reserve_reservable_counters(
         for counter, entry, reserved_value in zip(group, entries, reserved_values):
             if entry not in applied_entries:
                 continue
-            spend_before_reservation = (
-                current_spend_by_counter_key[counter.counter_key]
-                if reserved_value is None
-                else reserved_value - charged_cost
-            )
-            if spend_before_reservation + reservation_cost > counter.max_budget:
+            if reserved_value is not None:
+                current_spend = reserved_value - (charged_cost - reservation_cost)
+            else:
+                current_spend = current_spend_by_counter_key[counter.counter_key] + reservation_cost
+            if current_spend > counter.max_budget:
                 reservation_cost = await _apply_over_budget_reservation_policy(
                     counter=counter,
                     valid_token=valid_token,
                     entry=entry,
                     applied_entries=applied_entries,
                     reservation_cost=reservation_cost,
-                    spend_before_reservation=spend_before_reservation,
+                    current_spend=current_spend,
                     fail_closed_budget_enforcement=fail_closed_budget_enforcement,
                 )
     return reservation_cost
@@ -1403,14 +1401,12 @@ def _estimate_request_max_cost_for_model(
     llm_router: Router | None,
     input_tokens: int | None = None,
 ) -> float | None:
-    output_multiplier: Final = _get_output_multiplier(_requested_output_counts(request_body=request_body, route=route))
     estimates: Final = [
         _max_cost_for_cost_info(
             request_body=request_body,
             route=route,
             model=model,
             model_info=model_info,
-            output_multiplier=output_multiplier,
             input_tokens=input_tokens,
         )
         for model_info in _get_model_cost_infos(model=model, llm_router=llm_router)
@@ -1424,7 +1420,6 @@ def _max_cost_for_cost_info(
     route: str,
     model: str,
     model_info: Mapping[str, object],
-    output_multiplier: int,
     input_tokens: int | None = None,
 ) -> float | None:
     image_cost: Final = _estimate_image_generation_cost(
@@ -1441,87 +1436,46 @@ def _max_cost_for_cost_info(
         model_info=model_info,
         input_tokens=input_tokens,
     )
-    if estimated_input_tokens is None:
-        return None
-    if RouteChecks.is_generate_content_route(route):
-        return _generate_content_hold(
-            request_body=request_body,
-            model_info=model_info,
-            input_tokens=estimated_input_tokens,
-            output_multiplier=output_multiplier,
-        )
     output_tokens: Final = _estimate_output_tokens(
         request_body=request_body,
         route=route,
         model_info=model_info,
     )
-    if output_tokens is None:
+    if estimated_input_tokens is None or output_tokens is None:
         return None
-    return _priced_hold(
-        model_info=model_info,
-        input_tokens=estimated_input_tokens,
-        held_output_tokens=output_tokens * output_multiplier,
-        output_tokens=output_tokens,
-    )
 
-
-def _generate_content_hold(
-    request_body: Mapping[str, object], model_info: Mapping[str, object], input_tokens: int, output_multiplier: int
-) -> float | None:
-    main_hold: Final = _main_generate_content_hold(model_info)
-    requested_output_tokens: Final = _gemini_requested_output_tokens(request_body)
-    if main_hold is None or requested_output_tokens is None:
-        return main_hold
-    capped_hold: Final = _priced_hold(
-        model_info=model_info,
-        input_tokens=input_tokens,
-        held_output_tokens=requested_output_tokens * output_multiplier,
-        output_tokens=requested_output_tokens,
-    )
-    return main_hold if capped_hold is None else min(capped_hold, main_hold)
-
-
-def _main_generate_content_hold(model_info: Mapping[str, object]) -> float | None:
-    context_window: Final = _to_int(model_info.get("max_input_tokens"))
-    if context_window is None:
-        return None
-    default_output_tokens: Final = min(DEFAULT_MAX_OUTPUT_TOKENS_FALLBACK, _model_output_ceiling(model_info))
-    return _priced_hold(
-        model_info=model_info,
-        input_tokens=context_window,
-        held_output_tokens=default_output_tokens,
-        output_tokens=default_output_tokens,
-    )
-
-
-def _priced_hold(
-    model_info: Mapping[str, object], input_tokens: int, held_output_tokens: int, output_tokens: int
-) -> float | None:
+    output_multiplier: Final = _get_output_multiplier(request_body=request_body)
     tiered_pricing: Final = model_info.get("tiered_pricing")
     if isinstance(tiered_pricing, list) and tiered_pricing:
-        tier: Final = select_tier_for_input(tiered_pricing=tiered_pricing, input_tokens=input_tokens)
+        tier: Final = select_tier_for_input(tiered_pricing=tiered_pricing, input_tokens=estimated_input_tokens)
         if tier is not None:
-            tier_output_rate: Final = max(
+            output_rate = max(
                 tier_rate(tier, "output_cost_per_token"),
                 tier_rate(tier, "output_cost_per_reasoning_token"),
             )
-            return (input_tokens * tier_rate(tier, "input_cost_per_token")) + _output_cost(
-                held_output_tokens, output_tokens, tier_output_rate
+            return (estimated_input_tokens * tier_rate(tier, "input_cost_per_token")) + (
+                output_tokens * output_multiplier * output_rate
             )
 
     input_cost_per_token: Final = _to_float(model_info.get("input_cost_per_token"))
     output_cost_per_token: Final = _to_float(model_info.get("output_cost_per_token"))
     output_cost_per_reasoning_token: Final = _to_float(model_info.get("output_cost_per_reasoning_token"))
-    if input_cost_per_token is None and input_tokens > 0:
-        return None
-    if output_cost_per_token is None and output_cost_per_reasoning_token is None and output_tokens > 0:
+    cost = 0.0
+    if input_cost_per_token is not None:
+        cost += estimated_input_tokens * input_cost_per_token
+    elif estimated_input_tokens > 0:
         return None
 
     # The reasoning-token share is unknown before the request runs, so reserve every
     # output token at the higher of the standard and reasoning rates to avoid
     # under-reserving reasoning-heavy requests.
-    output_rate: Final = max(output_cost_per_token or 0.0, output_cost_per_reasoning_token or 0.0)
-    return input_tokens * (input_cost_per_token or 0.0) + _output_cost(held_output_tokens, output_tokens, output_rate)
+    output_rate = max(output_cost_per_token or 0.0, output_cost_per_reasoning_token or 0.0)
+    if output_cost_per_token is not None or output_cost_per_reasoning_token is not None:
+        cost += output_tokens * output_multiplier * output_rate
+    elif output_tokens > 0:
+        return None
+
+    return cost
 
 
 def _estimate_image_generation_cost(
@@ -1663,7 +1617,6 @@ async def count_request_input_tokens(
         request_body=request_body,
         raw_body=raw_body,
         models=tuple(dict.fromkeys(chain.from_iterable(counted_models.values()))),
-        gemini_route=RouteChecks.is_generate_content_route(route),
     )
     chat_pdf_files: Final = (
         inline_pdf_file_count(request_body.get("messages"))
@@ -1696,9 +1649,7 @@ def _estimate_input_tokens(
     counted: Final = (
         input_tokens
         if input_tokens is not None
-        else count_input_tokens_for_model(
-            request_body=request_body, model=model, gemini_route=RouteChecks.is_generate_content_route(route)
-        )
+        else count_input_tokens_for_model(request_body=request_body, model=model)
     )
     if counted is not None:
         return counted
@@ -1731,76 +1682,29 @@ def _estimate_output_tokens(
     #     the reservation up to remaining team headroom and pin the counter
     #     at the cap — the model can only physically emit max_output_tokens
     #     anyway, so reserving more is both wasteful and a DoS surface.
-    model_ceiling: Final = _model_output_ceiling(model_info)
+    model_ceiling: Final = _to_int(model_info.get("max_output_tokens")) or DEFAULT_MAX_OUTPUT_TOKENS_FALLBACK
     return min(DEFAULT_MAX_OUTPUT_TOKENS_FALLBACK if requested is None else requested, model_ceiling)
 
 
 _OUTPUT_TOKEN_FIELDS: Final = ("max_completion_tokens", "max_tokens", "max_output_tokens")
-_GEMINI_CONFIG_FIELDS: Final = ("generationConfig", "generation_config")
-
-
-def _nested_field(request_body: Mapping[str, object], config_field: str, field: str) -> object:
-    config: Final = as_str_mapping(request_body.get(config_field))
-    return config.get(field) if config is not None else None
-
-
-def _gemini_candidate_counts(request_body: Mapping[str, object]) -> tuple[object, ...]:
-    return tuple(
-        _nested_field(request_body, config_field, field)
-        for config_field, field in product(_GEMINI_CONFIG_FIELDS, ("candidateCount", "candidate_count"))
-    )
 
 
 def _requested_output_tokens(request_body: Mapping[str, object]) -> int | None:
+    inference_config: Final = request_body.get("inferenceConfig")
     candidates: Final = (
         *(request_body.get(field) for field in _OUTPUT_TOKEN_FIELDS),
-        _nested_field(request_body, "inferenceConfig", "maxTokens"),
+        inference_config.get("maxTokens") if isinstance(inference_config, Mapping) else None,
     )
-    return next((tokens for tokens in map(_to_int, candidates) if tokens is not None and tokens >= 0), None)
+    return next((tokens for tokens in map(_to_int, candidates) if tokens is not None), None)
 
 
-_OTHER_GEMINI_CAP_SPELLINGS: Final = (
-    ("generationConfig", "max_output_tokens"),
-    ("generation_config", "maxOutputTokens"),
-    ("generation_config", "max_output_tokens"),
-)
-
-
-def _gemini_requested_output_tokens(request_body: Mapping[str, object]) -> int | None:
-    gemini_cap: Final = _positive_int(_nested_field(request_body, "generationConfig", "maxOutputTokens"))
-    if gemini_cap is None:
-        return None
-    other_caps: Final = (
-        _positive_int(_nested_field(request_body, config_field, field))
-        for config_field, field in _OTHER_GEMINI_CAP_SPELLINGS
-    )
-    return max((gemini_cap, *(cap for cap in other_caps if cap is not None)))
-
-
-def _positive_int(value: object) -> int | None:
-    number: Final = _to_int(value)
-    return number if number is not None and number > 0 else None
-
-
-def _requested_output_counts(request_body: Mapping[str, object], route: str) -> tuple[object, ...]:
-    if RouteChecks.is_generate_content_route(route):
-        return _gemini_candidate_counts(request_body)
-    return (request_body.get("n"), request_body.get("best_of"))
-
-
-def _get_output_multiplier(requested_counts: tuple[object, ...]) -> int:
-    return max((1, *(count for count in map(_to_int, requested_counts) if count is not None)))
-
-
-def _output_cost(held_output_tokens: int, output_tokens: int, output_rate: float) -> float:
-    try:
-        return held_output_tokens * output_rate
-    except OverflowError:
-        return output_tokens * output_rate
-
-
-def _model_output_ceiling(model_info: Mapping[str, object]) -> int:
-    return _to_int(model_info.get("max_output_tokens")) or DEFAULT_MAX_OUTPUT_TOKENS_FALLBACK
+def _get_output_multiplier(request_body: dict) -> int:
+    output_multiplier = 1
+    for key in ("n", "best_of"):
+        value = _to_int(request_body.get(key))
+        if value is not None:
+            output_multiplier = max(output_multiplier, value)
+    return output_multiplier
 
 
 def _is_input_only_route(route: str) -> bool:
@@ -1828,7 +1732,7 @@ def _to_int(value: object) -> int | None:
         return None
     try:
         return int(value)
-    except (TypeError, ValueError, OverflowError):
+    except (TypeError, ValueError):
         return None
 
 

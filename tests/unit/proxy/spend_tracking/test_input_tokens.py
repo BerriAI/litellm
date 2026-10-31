@@ -280,32 +280,3 @@ def test_a_compaction_item_counts_only_its_summary(model: str) -> None:
     assert count_input_tokens_for_model(request_body=padded_body, model=model) == count_input_tokens_for_model(
         request_body=plain_body, model=model
     )
-
-
-@pytest.mark.parametrize("input_field", ("prompt", "input", "query"))
-def test_a_stray_contents_field_never_replaces_the_request_input_count(input_field: str) -> None:
-    body: Final = {"model": CL100K_MODEL, input_field: "count every one of these words " * 200}
-    count: Final = count_input_tokens_for_model(request_body=body, model=CL100K_MODEL)
-    assert count is not None and count > 1000
-    assert count_input_tokens_for_model(request_body={**body, "contents": []}, model=CL100K_MODEL) == count
-
-
-GEMINI_TEXT: Final = "count every one of these words " * 200
-GEMINI_GREETING: Final = {"role": "user", "parts": [{"text": "hi"}]}
-
-
-def _gemini_count(body: dict[str, object], model: str) -> int | None:
-    return count_input_tokens_for_model(request_body=body, model=model, gemini_route=True)
-
-
-@pytest.mark.parametrize("parts", ([GEMINI_TEXT], {"text": GEMINI_TEXT}), ids=("bare_string", "single_object"))
-@pytest.mark.parametrize("model", (CL100K_MODEL, "claude-sonnet-5-5"))
-def test_gemini_parts_count_the_same_in_every_shape_the_adapter_reads(model: str, parts: object) -> None:
-    listed_contents: Final = _gemini_count({"contents": [{"role": "user", "parts": [{"text": GEMINI_TEXT}]}]}, model)
-    listed_system: Final = _gemini_count(
-        {"systemInstruction": {"parts": [{"text": GEMINI_TEXT}]}, "contents": [GEMINI_GREETING]}, model
-    )
-    assert listed_contents is not None and listed_contents > 1000
-    assert listed_system is not None and listed_system > 1000
-    assert _gemini_count({"contents": [{"role": "user", "parts": parts}]}, model) == listed_contents
-    assert _gemini_count({"systemInstruction": {"parts": parts}, "contents": [GEMINI_GREETING]}, model) == listed_system
