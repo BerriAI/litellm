@@ -357,13 +357,23 @@ class _OnceMaskedReprString(str):
         return "'***'" if next(self.reprs) == 0 else super().__repr__()
 
 
-def test_responses_sse_chunk_prints_a_nested_string_once_the_way_base_printed_it() -> None:
+@pytest.mark.parametrize(
+    "wrap,printed",
+    [
+        (lambda value: value, "'***'"),
+        (lambda value: MappingProxyType({"v": value}), "mappingproxy({'v': '***'})"),
+    ],
+    ids=["dict_value", "nested_mapping_proxy"],
+)
+def test_responses_sse_chunk_prints_a_nested_string_once_the_way_base_printed_it(
+    wrap: Callable[[str], object], printed: str
+) -> None:
     frame: Final = _format_responses_sse_chunk(
-        chunk={"type": "response.output_text.delta", "v": _OnceMaskedReprString("hook-canary")}
+        chunk={"type": "response.output_text.delta", "v": wrap(_OnceMaskedReprString("hook-canary"))}
     )
 
     assert isinstance(frame, str)
-    assert json.loads(frame.removeprefix("data: "))["v"] == "'***'"
+    assert json.loads(frame.removeprefix("data: "))["v"] == printed
 
 
 @pytest.mark.parametrize(
@@ -2183,6 +2193,8 @@ async def test_responses_stream_keeps_tool_deltas_and_only_emits_a_valid_termina
         ("error", {"error": {"message": "denied", "code": "529"}}, True),
         ("response.completed", {"sequence_number": 4, "note": "typeless"}, False),
         ("error", {"sequence_number": 4, "note": "no error object"}, False),
+        ("error", {"sequence_number": 4, "error": "denied"}, False),
+        ("error", {"sequence_number": 4, "error": ["denied"]}, False),
     ],
 )
 async def test_a_responses_stream_failing_after_a_pre_framed_event_adds_a_failure_only_without_a_terminal(
@@ -2212,7 +2224,11 @@ async def test_a_responses_stream_failing_after_a_pre_framed_event_adds_a_failur
         assert failure.sequence_number == 5
 
 
-@pytest.mark.parametrize("sequence_number", ["9" * 4300, "-7", str(2**63)], ids=["4300_digits", "negative", "past_int64"])
+@pytest.mark.parametrize(
+    "sequence_number",
+    ["9" * 4300, "-7", str(2**63), str(2**63 - 1)],
+    ids=["4300_digits", "negative", "past_int64", "int64_max"],
+)
 def test_responses_error_event_after_an_out_of_range_pre_framed_sequence_number_stays_parseable(
     sequence_number: str,
 ) -> None:
@@ -2230,6 +2246,53 @@ def test_responses_error_event_after_an_out_of_range_pre_framed_sequence_number_
     assert error_event["message"] == "scan failed"
     assert error_event["sequence_number"] == 5
     assert json.loads(failure_frame.split("data: ", 1)[1])["sequence_number"] == 5
+
+
+class _UnreadableErrorModel(BaseModel, frozen=True):
+    type: str = "response.output_text.delta"
+    sequence_number: int = 4
+
+    @property
+    def error(self) -> object:
+        raise RuntimeError("error is not readable")
+
+
+class _UnreadableErrorMapping(Mapping[str, object]):
+    def __init__(self, data: Mapping[str, object]) -> None:
+        self.data: Final = data
+
+    def __getitem__(self, key: str) -> object:
+        if key == "error":
+            raise RuntimeError("error is not readable")
+        return self.data[key]
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(self.data)
+
+    def __len__(self) -> int:
+        return len(self.data)
+
+
+@pytest.mark.parametrize(
+    "chunk,next_sequence_number",
+    [
+        (_UnreadableErrorModel(), 5),
+        (_UnreadableErrorMapping({"type": "response.output_text.delta", "sequence_number": 4}), 5),
+        ({"type": "response.output_text.delta", "sequence_number": 2**63}, 2**63 + 1),
+    ],
+    ids=["unreadable_error_property", "unreadable_error_item", "past_int64"],
+)
+def test_responses_failure_after_a_hook_chunk_continues_its_sequence_number_like_base(
+    chunk: object, next_sequence_number: int
+) -> None:
+    state: Final = ResponsesStreamErrorState()
+    state.observe_chunk(chunk)
+    state.mark_emitted("data: {}\n\n")
+
+    failure_frame: Final = state.format_failure(RuntimeError("stream closed"))
+
+    assert failure_frame is not None
+    assert json.loads(failure_frame.split("data: ", 1)[1])["sequence_number"] == next_sequence_number
 
 
 # ---------------------------------------------------------------------------

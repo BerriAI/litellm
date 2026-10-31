@@ -33,6 +33,9 @@ class _StreamEvent(LiteLLMBaseModel):
     type: str | None = None
     sequence_number: int | None = None
     response: _ResponseIdentity | None = None
+
+
+class _FramedEvent(_StreamEvent):
     error: object = None
 
 
@@ -129,12 +132,6 @@ def _is_proxy(value: object) -> TypeIs[Mapping[object, object]]:  # guard-ok: ma
     return isinstance(value, MappingProxyType)
 
 
-def _printed_proxy_snapshot(proxy: Mapping[object, object], printed: str) -> Mapping[object, object] | None:
-    snapshot: Final = dict(proxy)
-    shown: Final = repr(snapshot)
-    return snapshot if printed in (shown, f"mappingproxy({shown})") else None
-
-
 def _repr_prints_its_fields(model: BaseModel) -> bool:
     kind: Final = type(model)
     return kind.__repr__ is BaseModel.__repr__ and kind.__repr_str__ is BaseModel.__repr_str__
@@ -222,9 +219,6 @@ def _expansion(value: object, form: _BaseForm) -> tuple[Iterable[tuple[object, o
     shown_items: Final = _shown_items(value, form)
     if shown_items is not None:
         return shown_items, form
-    if _is_proxy(value):
-        snapshot: Final = _printed_proxy_snapshot(value, repr(value) if form is _BaseForm.PRINTED else str(value))
-        return None if snapshot is None else (snapshot.items(), _BaseForm.PRINTED)
     if form is _BaseForm.PRINTED and isinstance(value, BaseModel) and _repr_prints_its_fields(value):
         return value.__repr_args__(), _BaseForm.PRINTED
     return None
@@ -236,6 +230,8 @@ def _json_safe(value: object, form: _BaseForm, path: frozenset[int]) -> object:
     if id(value) in path:
         return _text(value, form)
     inner_path: Final = path | frozenset((id(value),))
+    if _is_proxy(value):
+        return _proxy_value(value, form, inner_path)
     try:
         sequence: Final = _shown_sequence(value, form)
         if sequence is not None:
@@ -251,12 +247,32 @@ def _json_safe(value: object, form: _BaseForm, path: frozenset[int]) -> object:
         return _text(value, form)
 
 
+def _printed_proxy_value(proxy: Mapping[object, object], printed: str, path: frozenset[int]) -> object:
+    snapshot: Final = dict(proxy)
+    expanded: Final = _json_safe(snapshot, _BaseForm.PRINTED, path)
+    shown: Final = repr(snapshot)
+    return expanded if printed in (shown, f"mappingproxy({shown})") else printed
+
+
+def _proxy_value(proxy: Mapping[object, object], form: _BaseForm, path: frozenset[int]) -> object:
+    printed: Final = _text(proxy, form)
+    if not isinstance(printed, str):
+        return printed
+    try:
+        return _printed_proxy_value(proxy, printed, path)
+    except Exception:  # noqa: BLE001  # hook values run their own printers, so the text base printed stands
+        return printed
+
+
+def _proxy_chunk_json(proxy: Mapping[object, object], printed: str) -> str:
+    shown: Final = _printed_proxy_value(proxy, printed, frozenset((id(proxy),)))
+    return json.dumps(shown) if isinstance(shown, dict) else printed
+
+
 def _proxy_chunk_data(proxy: Mapping[object, object]) -> str:
     printed: Final = format(proxy, "")
     try:
-        snapshot: Final = _printed_proxy_snapshot(proxy, printed)
-        shown: Final = None if snapshot is None else _json_safe(snapshot, _BaseForm.PRINTED, frozenset((id(proxy),)))
-        return json.dumps(shown) if isinstance(shown, dict) else printed
+        return _proxy_chunk_json(proxy, printed)
     except Exception:  # noqa: BLE001  # hook values run their own printers, so the text base printed stands
         return printed
 
@@ -385,16 +401,27 @@ def _field_values(lines: Sequence[str], name: str) -> tuple[str, ...]:
     return tuple(line.removeprefix(prefix).removeprefix(" ") for line in lines if line.startswith(prefix))
 
 
-def _parsed_event(data: str) -> _StreamEvent:
+def _parsed_event(data: str) -> _FramedEvent:
     try:
-        return _StreamEvent.model_validate_json(data)
+        return _FramedEvent.model_validate_json(data)
     except ValidationError:
-        return _StreamEvent()
+        return _FramedEvent()
+
+
+def _in_range_sequence(event: _FramedEvent) -> _FramedEvent:
+    sequence_number: Final = event.sequence_number
+    if sequence_number is None or 0 <= sequence_number < _MAX_SEQUENCE_NUMBER:
+        return event
+    return event.model_copy(update={"sequence_number": None})
+
+
+def _names_an_error_object(event: _FramedEvent, lines: Sequence[str]) -> bool:
+    return _is_dict(event.error) and bool(event.error) and _field_values(lines, "event")[-1:] == ("error",)
 
 
 def _block_event(lines: Sequence[str]) -> _StreamEvent:
-    parsed: Final = _parsed_event("\n".join(_field_values(lines, "data")))
-    if parsed.type in _TERMINAL_EVENT_TYPES or not parsed.error or _field_values(lines, "event")[-1:] != ("error",):
+    parsed: Final = _in_range_sequence(_parsed_event("\n".join(_field_values(lines, "data"))))
+    if parsed.type in _TERMINAL_EVENT_TYPES or not _names_an_error_object(parsed, lines):
         return parsed
     return parsed.model_copy(update={"type": "error"})
 
@@ -417,7 +444,7 @@ class ResponsesStreamErrorState:
         self._pending_event = _StreamEvent.model_validate(chunk) if isinstance(chunk, (BaseModel, Mapping)) else None
 
     def _record(self, event: _StreamEvent) -> None:
-        if event.sequence_number is not None and 0 <= event.sequence_number <= _MAX_SEQUENCE_NUMBER:
+        if event.sequence_number is not None:
             self.sequence_number = max(self.sequence_number, event.sequence_number)
         if event.response is not None:
             self.response_id = event.response.id or self.response_id
