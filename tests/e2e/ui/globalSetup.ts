@@ -19,6 +19,8 @@ async function globalSetup() {
   // keeps the default "." a no-op.
   fs.mkdirSync(ARTIFACT_DIR, { recursive: true });
 
+  const masterKey = getMasterKey();
+  const api = await request.newContext();
   const roles = [Role.ProxyAdmin, ...Object.values(Role).filter((role) => role !== Role.ProxyAdmin)];
   for (const role of roles) {
     const { email, password, seedApiRole } = users[role];
