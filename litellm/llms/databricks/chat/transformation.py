@@ -4,7 +4,7 @@ Translates from OpenAI's `/v1/chat/completions` to Databricks' `/chat/completion
 
 import os
 from collections.abc import AsyncIterator, Coroutine, Iterator, Mapping, Sequence
-from itertools import takewhile
+from itertools import chain, takewhile
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, cast, overload
 
@@ -86,6 +86,14 @@ def _is_bare_assistant_message(message_dict: Mapping[str, object]) -> bool:
 _CONTENT_BLOCKS: Final = TypeAdapter(tuple[object, ...])
 
 
+def _content_blocks(message: Mapping[str, object]) -> tuple[object, ...]:
+    match content := message.get("content"):
+        case list():
+            return _CONTENT_BLOCKS.validate_python(content)
+        case _:
+            return ()
+
+
 def _plain_text(block: object) -> str | None:
     match block:
         case {"type": "text", "text": str() as text} if block == {"type": "text", "text": text}:
@@ -95,13 +103,9 @@ def _plain_text(block: object) -> str | None:
 
 
 def _plain_texts(message: Mapping[str, object]) -> tuple[str, ...]:
-    match content := message.get("content"):
-        case list():
-            blocks: Final = _CONTENT_BLOCKS.validate_python(content)
-            texts: Final = tuple(text for block in blocks if (text := _plain_text(block)) is not None)
-            return texts if len(texts) == len(blocks) else ()
-        case _:
-            return ()
+    blocks: Final = _content_blocks(message)
+    texts: Final = tuple(text for block in blocks if (text := _plain_text(block)) is not None)
+    return texts if len(texts) == len(blocks) else ()
 
 
 def _collapse_single_text_block(message: Mapping[str, object]) -> Mapping[str, object]:
@@ -189,15 +193,27 @@ def _is_empty_text_block(block: object) -> bool:
     match block:
         case {"type": "text", "text": str() as text}:
             return not text.strip()
-        case {"type": "text", "text": object() as text} if text:
-            raise DatabricksException(
-                status_code=400,
-                message=f"A text content block needs a string 'text', got {type(text).__name__}",
-            )
+        case {"type": "text", "text": object() as text}:
+            return not text
         case {"type": "text"}:
             return True
         case _:
             return False
+
+
+def _non_string_text_type(block: object) -> str | None:
+    match block:
+        case {"type": "text", "text": str()}:
+            return None
+        case {"type": "text", "text": object() as text} if text:
+            return type(text).__name__
+        case _:
+            return None
+
+
+def _first_non_string_text_type(messages: Sequence[AllMessageValues]) -> str | None:
+    blocks: Final = chain.from_iterable(map(_content_blocks, messages))
+    return next((type_name for block in blocks if (type_name := _non_string_text_type(block))), None)
 
 
 def _sanitize_empty_content(message_dict: dict[str, object]) -> None:
@@ -651,6 +667,14 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
         litellm_params: dict[str, object],  # mutable-ok: inherited contract
         headers: dict[str, object],  # mutable-ok: inherited contract
     ) -> dict[str, object]:  # mutable-ok: inherited contract
+        match _first_non_string_text_type(messages):
+            case str() as type_name:
+                raise DatabricksException(
+                    status_code=400,
+                    message=f"A text content block needs a string 'text', got {type_name}",
+                )
+            case None:
+                pass
         return super().transform_request(
             model=model,
             messages=_json_object_ready_messages(
