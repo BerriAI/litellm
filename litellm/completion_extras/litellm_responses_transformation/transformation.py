@@ -1858,9 +1858,29 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         web_search_tool: Final[dict[str, object]] = {"type": "web_search"}
         if isinstance(web_search_options, dict):
             web_search_tool.update(web_search_options)
+            typed_options: Final = cast(Mapping[str, object], web_search_options)  # cast-ok: caller-supplied dict
+            user_location: Final = self._responses_web_search_user_location(typed_options.get("user_location"))
+            if user_location is not None:
+                web_search_tool["user_location"] = user_location
 
         # Cast to Any to match the expected union type for tools list items
         tools.append(cast(Any, web_search_tool))
+
+    @staticmethod
+    def _responses_web_search_user_location(user_location: object) -> Mapping[str, object] | None:
+        """Chat Completions nests the location under ``approximate``; the Responses web_search tool
+        takes ``{"type": "approximate", "city": ..., "country": ...}`` flat and rejects the nested key."""
+        if not isinstance(user_location, dict):
+            return None
+        typed_location: Final = cast(Mapping[object, object], user_location)  # cast-ok: caller-supplied dict
+        approximate: Final = typed_location.get("approximate")
+        if not isinstance(approximate, dict):
+            return None
+        typed_approximate: Final = cast(Mapping[object, object], approximate)  # cast-ok: caller-supplied dict
+        return {
+            "type": "approximate",
+            **{str(key): value for key, value in typed_approximate.items() if value is not None},
+        }
 
     def transform_response_format_to_text_format(self, response_format: object) -> "ResponseText | None":
         return self._transform_response_format_to_text_format(response_format)

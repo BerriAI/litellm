@@ -6044,6 +6044,17 @@ def completion(
 
         if dynamic_api_key is not None:
             api_key = dynamic_api_key
+        if responses_api_model_info.get("mode") != "responses":
+            responses_api_model_info, model = responses_api_bridge_check(
+                model=model,
+                custom_llm_provider=custom_llm_provider,
+                web_search_options=web_search_options,
+                tools=tools,
+                reasoning_effort=bridge_reasoning_effort(resolved_reasoning_effort, routing_kwargs.get("extra_body")),
+                reasoning_summary=peek_reasoning_summary_aliases(routing_kwargs),
+                api_base=api_base,
+                deployment_model_info=deployment_model_info,
+            )
         # check if user passed in any of the OpenAI optional params
         bridges_to_responses_api: Final = (
             responses_api_model_info.get("mode") == "responses" and not skip_responses_api_bridge
@@ -6329,27 +6340,11 @@ def completion(
                 ),
             )
 
-        ## RESPONSES API BRIDGE LOGIC ## - check if model has 'mode: responses' in litellm.model_cost map
-        # Only run the second bridge check if the first one didn't already
-        # detect responses mode (e.g. via the "responses/" prefix).  The second
-        # check handles cases like gpt-5.4+ with tools+reasoning_effort or
-        # reasoningSummary/reasoning_summary without tools (AI SDK) that the first
-        # (early) check doesn't cover.
+        ## RESPONSES API BRIDGE LOGIC ## - route the request over the Responses API when selected above
         _reasoning_summary_for_bridge: Final = peek_reasoning_summary_aliases(optional_params)
         typed_deployment_model_info: Final = str_keyed_mapping(
             cast(object, model_info)  # cast-ok: model_info is the untyped dict kwarg
         )
-        if responses_api_model_info.get("mode") != "responses":
-            responses_api_model_info, model = responses_api_bridge_check(
-                model=model,
-                custom_llm_provider=custom_llm_provider,
-                web_search_options=web_search_options,
-                tools=tools,
-                reasoning_effort=bridge_reasoning_effort(resolved_reasoning_effort, optional_params.get("extra_body")),
-                reasoning_summary=_reasoning_summary_for_bridge,
-                api_base=api_base,
-                deployment_model_info=typed_deployment_model_info,
-            )
 
         # Use base_model (the true underlying model) for Azure model-type
         # detection when the deployment name differs from the model name.
