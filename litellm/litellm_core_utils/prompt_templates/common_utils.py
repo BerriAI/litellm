@@ -238,7 +238,7 @@ def is_non_content_values_set(message: AllMessageValues) -> bool:
     return any(message.get(key, None) is not None for key in message if key not in ignore_keys)
 
 
-_IMAGE_CONTENT_PART_TYPES: Final = ("image_url", "input_image", "image")
+_IMAGE_CONTENT_PART_TYPES: Final = ("image_url", "input_image", "image", "computer_screenshot")
 _IMAGE_SCAN_MAX_DEPTH: Final = 4
 
 
@@ -564,8 +564,8 @@ def _message_contains_image_content(message: object) -> bool:
         case {"type": "function_call_output" | "custom_tool_call_output" | "tool_result", "output": list()}:
             output: Final = _CONTENT_PART.validate_python(message)["output"]
             return _content_parts_contain_image(_CONTENT_PARTS.validate_python(output))
-        case {"type": "computer_call_output", "output": {"type": "computer_screenshot", "image_url": str()}}:
-            return True
+        case {"type": "computer_call_output", "output": dict()}:
+            return _content_parts_contain_image((_CONTENT_PART.validate_python(message)["output"],))
         case _:
             return False
 

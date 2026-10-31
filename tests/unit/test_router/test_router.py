@@ -31826,8 +31826,10 @@ def test_router_warns_when_a_deployment_enforces_endpoints_without_a_list(caplog
         ("/v1/messages", "malformed", {}),
         ("/v1/messages", 5, {}),
         ("/v1/messages", None, {"messages": ["malformed"]}),
+        ("/v1/responses", None, {"input": [{"type": "computer_call_output", "output": {"type": "text", "text": "no image"}}]}),
+        ("/v1/responses", None, {"input": [{"type": "computer_call_output", "output": "malformed"}]}),
     ],
-    ids=["moderation-list", "embedding-empty-messages", "message-entry", "message-string", "message-number", "kwargs-messages"],
+    ids=["moderation-list", "embedding-empty-messages", "message-entry", "message-string", "message-number", "kwargs-messages", "computer-output-text", "computer-output-string"],
 )
 async def test_image_routing_leaves_non_image_and_malformed_requests_to_the_endpoint(
     mode: str, metadata_key: str | None, route: str, messages: object, request_kwargs: dict[str, object]
@@ -31860,8 +31862,12 @@ async def test_image_routing_leaves_non_image_and_malformed_requests_to_the_endp
         {"input": [{"type": "function_call_output", "call_id": "call_image", "output": [{"type": "input_image", "image_url": "https://example.invalid/image.png"}]}]},
         {"input": [{"type": "custom_tool_call_output", "call_id": "call_image", "output": [{"type": "input_image", "image_url": "https://example.invalid/image.png"}]}]},
         {"input": [{"type": "computer_call_output", "call_id": "call_image", "output": {"type": "computer_screenshot", "image_url": "https://example.invalid/image.png"}}]},
+        {"input": [{"role": "user", "content": [{"type": "computer_screenshot", "image_url": "https://example.invalid/image.png"}]}]},
+        {"input": [{"type": "function_call_output", "call_id": "call_image", "output": [{"type": "computer_screenshot", "image_url": "https://example.invalid/image.png"}]}]},
+        {"input": [{"type": "custom_tool_call_output", "call_id": "call_image", "output": [{"type": "computer_screenshot", "image_url": "https://example.invalid/image.png"}]}]},
+        {"input": [{"type": "computer_call_output", "call_id": "call_image", "output": {"type": "computer_screenshot", "url": "https://example.invalid/image.png"}}]},
     ],
-    ids=["chat", "responses", "anthropic", "tool-result", "function-output", "custom-output", "computer-output"],
+    ids=["chat", "responses", "anthropic", "tool-result", "function-output", "custom-output", "computer-output", "screenshot-content", "screenshot-function-output", "screenshot-custom-output", "screenshot-url"],
 )
 def test_image_routing_inspects_native_request_content_without_translation(request_kwargs: dict[str, object]) -> None:
     router: Final = _mixed_router(_VISION_LEG, _DECLARED_TEXT_LEG)
