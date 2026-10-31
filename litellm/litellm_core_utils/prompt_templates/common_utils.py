@@ -8,7 +8,7 @@ import io
 import json
 import mimetypes
 import re
-from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Hashable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from graphlib import CycleError, TopologicalSorter
 from itertools import chain, groupby, islice
@@ -3235,3 +3235,15 @@ def text_completion_prompt_to_messages(prompt: object) -> tuple[AllMessageValues
     if string_entries and len(string_entries) == len(entries):
         return tuple(ChatCompletionUserMessage(role="user", content=entry) for entry in string_entries)
     raise ValueError(f"`prompt` must be a non-empty string or a non-empty list of strings. Got: {prompt_type_name}.")
+
+
+def is_present_non_string(value: object) -> bool:
+    return value is not None and not isinstance(value, str)
+
+
+def invalid_type_message(field_path: str, value: object) -> str:
+    return f"Invalid type for '{field_path}': expected a string, got {type(value).__name__}"
+
+
+def is_unhashable_value_behind(error: TypeError, value: object) -> bool:
+    return not isinstance(value, Hashable) and f"unhashable type: '{type(value).__name__}'" in str(error)
