@@ -347,18 +347,14 @@ async def test_disabling_fallback_preserves_selected_provider_failure() -> None:
 
 
 @pytest.mark.asyncio
-async def test_escalation_context_overflow_executes_capable_without_judge() -> None:
-    answer: Final = response("strong", "fits")
-    provider: Final = ScriptedProvider(
-        {
-            "fast": ContextWindowExceededError("too large", "fast", "fake"),
-            "strong": answer,
-        }
-    )
+async def test_escalation_preserves_context_overflow_without_calling_another_provider() -> None:
+    error: Final = ContextWindowExceededError("too large", "fast", "fake")
+    provider: Final = ScriptedProvider({"fast": error})
     router: Final = SwitchyardAutoRouter(classifier_config("escalation", escalation={"confirmations": 1}))
-    actual: Final = await router.execute({"messages": [{"role": "user", "content": "hello"}]}, provider)
-    assert actual is answer
-    assert tuple(model for model, _ in provider.calls) == ("fast", "strong")
+    with pytest.raises(ContextWindowExceededError) as raised:
+        await router.execute({"messages": [{"role": "user", "content": "hello"}]}, provider)
+    assert raised.value is error
+    assert tuple(model for model, _ in provider.calls) == ("fast",)
 
 
 @pytest.mark.asyncio
