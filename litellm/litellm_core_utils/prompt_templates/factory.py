@@ -1933,12 +1933,13 @@ def convert_to_anthropic_tool_result(
             | ToolReference
         ]
     ) = ""
-    if isinstance(message["content"], str):
-        anthropic_content = message["content"]
-    elif isinstance(message["content"], (Mapping, int, float)):
-        anthropic_content = json.dumps(message["content"])
-    elif isinstance(message["content"], list):
-        content_list: Final = message["content"]
+    tool_content: Final = message.get("content")
+    if isinstance(tool_content, str):
+        anthropic_content = tool_content
+    elif isinstance(tool_content, (Mapping, int, float)):
+        anthropic_content = json.dumps(tool_content)
+    elif isinstance(tool_content, list):
+        content_list: Final = tool_content
         anthropic_content_list: list[
             AnthropicMessagesToolResultContent
             | AnthropicMessagesImageParam

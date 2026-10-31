@@ -3203,6 +3203,23 @@ def test_convert_to_anthropic_tool_result_serializes_non_string_content(tool_out
     assert json.loads(result["content"]) == tool_output
 
 
+@pytest.mark.parametrize(
+    "tool_message",
+    [
+        {"role": "tool", "tool_call_id": "call_value", "content": None},
+        {"role": "tool", "tool_call_id": "call_value"},
+    ],
+)
+def test_convert_to_anthropic_tool_result_sends_an_empty_result_for_null_or_missing_content(tool_message):
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        convert_to_anthropic_tool_result,
+    )
+
+    result = convert_to_anthropic_tool_result(tool_message)
+
+    assert result == {"type": "tool_result", "tool_use_id": "call_value", "content": ""}
+
+
 def test_convert_to_anthropic_tool_result_image_without_cache_control():
     """
     Test that images without cache_control in tool results work correctly.
