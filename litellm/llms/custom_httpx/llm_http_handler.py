@@ -2560,7 +2560,12 @@ class BaseLLMHTTPHandler:
 
         # Prepare headers
         kwargs = kwargs or {}
-        kwargs_for_agentic: Final = self._agentic_hook_kwargs(kwargs=kwargs, api_key=api_key, api_base=api_base)
+        kwargs_for_agentic: Final = self._agentic_hook_kwargs(
+            kwargs=kwargs,
+            api_key=api_key,
+            api_base=api_base,
+            max_tokens=_OPTIONAL_PARAMS.validate_python(anthropic_messages_optional_request_params).get("max_tokens"),
+        )
         provider_specific_header: Final = cast(
             litellm.types.utils.ProviderSpecificHeader | Sequence[litellm.types.utils.ProviderSpecificHeader] | None,
             kwargs.get("provider_specific_header", None),
@@ -5924,12 +5929,12 @@ class BaseLLMHTTPHandler:
 
     @staticmethod
     def _agentic_hook_kwargs(
-        kwargs: Mapping[str, object], api_key: str | None, api_base: str | None
+        kwargs: Mapping[str, object], api_key: str | None, api_base: str | None, max_tokens: object
     ) -> dict[str, object]:
-        """``api_key`` and ``api_base`` are named parameters of ``anthropic_messages`` rather than kwargs, so the
-        follow-up call an agentic hook makes only reaches the same deployment if they are re-added here."""
-        deployment_params: Final = {"api_key": api_key, "api_base": api_base}
-        return {**kwargs, **{key: value for key, value in deployment_params.items() if value}}
+        """The follow-up call an agentic hook makes needs ``api_key``, ``api_base`` and the client's ``max_tokens``.
+        None of them are in ``kwargs``, and the request transform pops ``max_tokens`` from the hooks' params dict."""
+        named_params: Final = {"api_key": api_key, "api_base": api_base, "max_tokens": max_tokens}
+        return {**kwargs, **{key: value for key, value in named_params.items() if value}}
 
     @staticmethod
     def _has_agentic_completion_hook(logging_obj: LiteLLMLoggingObj) -> bool:
@@ -6153,12 +6158,12 @@ class BaseLLMHTTPHandler:
 
         response: AnthropicMessagesResponse | AsyncIterator[object] = await anthropic_messages.acreate(
             **{
-                "max_tokens": max_tokens,
                 "messages": patch.messages,
                 "model": patch.model or full_model_name,
                 "stream": stream,
                 **optional_params,
                 **kwargs_for_followup,
+                "max_tokens": max_tokens,
             }
         )
 

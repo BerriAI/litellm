@@ -126,6 +126,35 @@ class TestThinkingBudgetTokensConstraint:
         assert captured_kwargs["max_tokens"] == 5000 + 1024
 
     @pytest.mark.asyncio
+    async def test_client_max_tokens_passed_in_kwargs_reaches_the_follow_up(self) -> None:
+        logger = WebSearchInterceptionLogger(enabled_providers=["bedrock"])
+        captured_kwargs: Dict[str, Any] = {}
+
+        async def _fake_acreate(**kw):
+            captured_kwargs.update(kw)
+            return MagicMock()
+
+        with (
+            patch(
+                "litellm.integrations.websearch_interception.handler.anthropic_messages.acreate",
+                side_effect=_fake_acreate,
+            ),
+            patch.object(logger, "_execute_search", return_value=("search result", None)),
+        ):
+            await logger._execute_agentic_loop(
+                model="us.anthropic.claude-opus-4-6-v1",
+                messages=[{"role": "user", "content": "hi"}],
+                tool_calls=_make_tool_calls(),
+                thinking_blocks=[],
+                anthropic_messages_optional_request_params={},
+                logging_obj=_make_logging_obj(),
+                stream=False,
+                kwargs={"max_tokens": 4000},
+            )
+
+        assert captured_kwargs["max_tokens"] == 4000
+
+    @pytest.mark.asyncio
     async def test_max_tokens_unchanged_when_greater_than_budget(self):
         """max_tokens > thinking.budget_tokens → no adjustment needed."""
         logger = WebSearchInterceptionLogger(enabled_providers=["bedrock"])

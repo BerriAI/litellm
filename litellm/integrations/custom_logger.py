@@ -703,7 +703,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
             anthropic_messages_optional_request_params: Request parameters (tools, etc.)
             logging_obj: LiteLLM logging object
             stream: Whether response is streaming
-            kwargs: Additional request parameters
+            kwargs: Additional request parameters, including the client's ``max_tokens``
 
         Returns:
             Final response after executing agentic loop
@@ -727,8 +727,8 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
             final_response = await messages.acreate(
                 model=model,
                 messages=messages + [assistant_msg, user_msg],
-                max_tokens=anthropic_messages_optional_request_params.get("max_tokens"),
-                **anthropic_messages_optional_request_params
+                max_tokens=kwargs["max_tokens"],
+                **{k: v for k, v in anthropic_messages_optional_request_params.items() if k != "max_tokens"}
             )
 
             return final_response

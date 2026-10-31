@@ -68,6 +68,7 @@ from litellm.responses.streaming_iterator import (
     BaseResponsesAPIStreamingIterator,
     MockResponsesAPIStreamingIterator,
 )
+from litellm.types.integrations.custom_logger import AgenticLoopPlan, AgenticLoopRequestPatch
 from litellm.types.llms.openai import HttpxBinaryResponseContent, ResponsesAPIResponse
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import (
@@ -2668,6 +2669,137 @@ class _FakeWebsocketsModule:
         if isinstance(outcome, Exception):
             raise outcome
         return outcome
+
+
+_LOOKUP_CALL: Final = {"type": "tool_use", "id": "toolu_lookup", "name": "lookup", "input": {"q": "answer"}}
+_LOOKUP_TOOL: Final = {
+    "name": "lookup",
+    "description": "look a fact up",
+    "input_schema": {"type": "object", "properties": {"q": {"type": "string"}}},
+}
+
+
+def _answer_after_the_lookup(request: httpx.Request) -> httpx.Response:
+    looked_up: Final = b'"tool_result"' in request.content
+    return httpx.Response(
+        200,
+        json={
+            "id": "msg_lookup",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-haiku-5-5",
+            "content": [{"type": "text", "text": "the answer"}] if looked_up else [_LOOKUP_CALL],
+            "stop_reason": "end_turn" if looked_up else "tool_use",
+            "stop_sequence": None,
+            "usage": {"input_tokens": 5, "output_tokens": 3},
+        },
+    )
+
+
+def _messages_with_the_lookup_result(messages: list[dict]) -> list[dict]:
+    return [
+        *messages,
+        {"role": "assistant", "content": [_LOOKUP_CALL]},
+        {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_lookup", "content": "42"}]},
+    ]
+
+
+class _LookupLoop(CustomLogger):
+    async def async_should_run_agentic_loop(
+        self,
+        response: object,
+        model: str,
+        messages: list[dict],
+        tools: list[dict] | None,
+        stream: bool,
+        custom_llm_provider: str,
+        kwargs: dict,
+    ) -> tuple[bool, dict]:
+        return isinstance(response, dict) and response.get("stop_reason") == "tool_use", {}
+
+
+class _OwnMaxTokensLoop(_LookupLoop):
+    async def async_run_agentic_loop(
+        self,
+        tools: dict,
+        model: str,
+        messages: list[dict],
+        response: object,
+        anthropic_messages_provider_config: object,
+        anthropic_messages_optional_request_params: dict,
+        logging_obj: object,
+        stream: bool,
+        kwargs: dict,
+    ) -> object:
+        return await litellm.anthropic.messages.acreate(
+            model="anthropic/claude-haiku-5-5",
+            messages=_messages_with_the_lookup_result(messages),
+            max_tokens=300,
+            api_key="sk-ant-test",
+            **anthropic_messages_optional_request_params,
+        )
+
+
+class _PlannedLoop(_LookupLoop):
+    def __init__(self, max_tokens: int | None) -> None:
+        super().__init__()
+        self.max_tokens: Final = max_tokens
+
+    async def async_build_agentic_loop_plan(
+        self,
+        tools: dict,
+        model: str,
+        messages: list[dict],
+        response: object,
+        anthropic_messages_provider_config: object,
+        anthropic_messages_optional_request_params: dict,
+        logging_obj: object,
+        stream: bool,
+        kwargs: dict,
+    ) -> AgenticLoopPlan:
+        return AgenticLoopPlan(
+            run_agentic_loop=True,
+            request_patch=AgenticLoopRequestPatch(
+                model="anthropic/claude-haiku-5-5",
+                messages=_messages_with_the_lookup_result(messages),
+                max_tokens=self.max_tokens,
+                kwargs={key: value for key, value in kwargs.items() if key != "litellm_logging_obj"},
+            ),
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("hook", "follow_up_max_tokens"),
+    [
+        pytest.param(_OwnMaxTokensLoop(), 300, id="hook-passes-its-own-max-tokens"),
+        pytest.param(_PlannedLoop(max_tokens=None), 4000, id="plan-leaves-max-tokens-to-the-client"),
+        pytest.param(_PlannedLoop(max_tokens=300), 300, id="plan-sets-its-own-max-tokens"),
+    ],
+)
+async def test_agentic_follow_up_uses_the_client_max_tokens_unless_the_hook_sets_its_own(
+    hook: CustomLogger,
+    follow_up_max_tokens: int,
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "callbacks", [hook])
+    upstream: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(
+        side_effect=_answer_after_the_lookup
+    )
+
+    result: Final = await litellm.anthropic.messages.acreate(
+        model="anthropic/claude-haiku-5-5",
+        messages=[{"role": "user", "content": "look the answer up"}],
+        max_tokens=4000,
+        api_key="sk-ant-test",
+        tools=[_LOOKUP_TOOL],
+    )
+
+    assert isinstance(result, dict)
+    assert result["content"] == [{"type": "text", "text": "the answer"}]
+    assert [json.loads(call.request.content)["max_tokens"] for call in upstream.calls] == [4000, follow_up_max_tokens]
 
 
 @pytest.mark.asyncio
