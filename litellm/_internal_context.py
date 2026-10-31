@@ -21,6 +21,7 @@ _T = TypeVar("_T")
 # When True, suppresses async logging and billing for internal sub-calls
 # (e.g., emulated file-search steps that make nested LLM calls).
 is_internal_call: Final[ContextVar[bool]] = ContextVar("is_internal_call", default=False)
+internal_parent_request_id: Final[ContextVar[str | None]] = ContextVar("internal_parent_request_id", default=None)
 
 # One request prices its totals, its per-token-type lines and the rates it reports on
 # separate code paths. Each reads the clock for off-peak pricing, so without a pinned
@@ -40,13 +41,15 @@ _mirrored_call: Final[ContextVar[bool]] = ContextVar("mirrored_call", default=Fa
 
 
 @contextmanager
-def internal_sub_call() -> Generator[None]:
+def internal_sub_call(parent_request_id: str | None = None) -> Generator[None]:
     """A nested call the parent call logs and bills, so the parent must fold this call's cost into its own."""
     token: Final = is_internal_call.set(True)
+    parent_token: Final = internal_parent_request_id.set(parent_request_id or internal_parent_request_id.get())
     try:
         yield
     finally:
         is_internal_call.reset(token)
+        internal_parent_request_id.reset(parent_token)
 
 
 @contextmanager

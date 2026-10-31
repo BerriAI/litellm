@@ -3767,6 +3767,11 @@ class Router(DeprecatedRouterMembers):
         priced_partial._hidden_params = {  # pyright: ignore[reportPrivateUsage]  # no public accessor
             key: value for key, value in get_hidden_params_dict(partial_response).items() if key != "response_cost"
         }
+        if LiteLLMLogging.usage_capture_callback is not None:
+            from litellm._internal_context import internal_sub_call
+
+            with internal_sub_call(cut_logging.litellm_call_id):
+                cut_logging.capture_usage_before_logging(priced_partial)
         return ContinuedPartial(
             usage=BaseTokenUsageProcessor.combine_usage_objects(
                 usage_objects=[partial_usage, inherited_usage]
@@ -15035,17 +15040,12 @@ class Router(DeprecatedRouterMembers):
 
     @staticmethod
     def _request_carries_image(
-        messages: list[dict[str, str]] | None,  # mutable-ok: handed to resolve_structured_messages as-is
+        messages: object,
         request_kwargs: Mapping[str, object],
     ) -> bool:
         from litellm.litellm_core_utils.prompt_templates.common_utils import request_contains_image_content
-        from litellm.litellm_core_utils.prompt_templates.factory import resolve_structured_messages
 
-        structured: Final = resolve_structured_messages(
-            messages=cast(list[dict[str, object]] | None, messages),  # cast-ok: chat messages are plain dicts
-            request_kwargs=cast(dict[str, object], request_kwargs),  # cast-ok: the resolver only reads the mapping
-        )
-        return bool(structured) and request_contains_image_content(structured)
+        return request_contains_image_content(messages or request_kwargs.get("messages") or request_kwargs.get("input"))
 
     @staticmethod
     def _pre_call_check_requested_chat_params(request_kwargs: Mapping[str, object]) -> frozenset[str]:

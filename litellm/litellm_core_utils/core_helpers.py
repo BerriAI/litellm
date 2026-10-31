@@ -1074,9 +1074,14 @@ def billed_usage_cost(response: object, custom_llm_provider: str | None) -> floa
 _MESSAGES_REPORTED_COST_PROVIDERS: Final = frozenset({"opencode_go"})
 
 
+def reports_native_messages_cost(custom_llm_provider: object) -> bool:
+    """Whether a Messages upstream is one whose own reported cost litellm bills from instead of the price map."""
+    return isinstance(custom_llm_provider, str) and custom_llm_provider in _MESSAGES_REPORTED_COST_PROVIDERS
+
+
 def native_messages_reported_cost(usage: object, custom_llm_provider: object) -> float | None:
     """Only a Messages upstream known to price its own responses is trusted, every other one keeps the price map."""
-    if not isinstance(custom_llm_provider, str) or custom_llm_provider not in _MESSAGES_REPORTED_COST_PROVIDERS:
+    if not isinstance(custom_llm_provider, str) or not reports_native_messages_cost(custom_llm_provider):
         return None
     return provider_reported_usage_cost(usage, custom_llm_provider)
 

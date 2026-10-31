@@ -276,8 +276,8 @@ class NamedCost(BaseModel):
 class PricingSnapshot(BaseModel):
     """Retained inputs and result of authoritative compilation, reproducible after cost-map rates change.
 
-    Request-scoped inputs and overrides come from the usage row's versioned payload. Cost-map rates are
-    resolved at compilation, not frozen at capture. Retries reuse the committed charge and snapshot.
+    Request-scoped inputs, overrides and effective rates come from the usage row's versioned payload.
+    Retries reuse the committed charge and snapshot.
     Component names match ``CostBreakdown``: reasoning_cost is part of output_cost, not an additional charge.
     Component sums and float tolerances belong to reconciliation, not this structural contract.
     """

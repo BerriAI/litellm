@@ -540,7 +540,12 @@ async def test_usage_batch_is_atomic_and_replay_preserves_receipts(
     writer: _Writer, ledger_database: str, failure: str
 ) -> None:
     client, store = writer
-    events: Final = (_usage("caller", inbound=True), _usage("attempt"))
+    events: Final = (
+        _usage("caller", inbound=True),
+        _usage("attempt").model_copy(
+            update={"metrics": (Metric(name=MetricName.PROMPT_TOKENS, value=Decimal("120000")),)}
+        ),
+    )
     writes: Final = tuple(UsageWrite(event, _envelope(event), _TARGETS) for event in events)
 
     @asynccontextmanager
