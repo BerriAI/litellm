@@ -4,6 +4,7 @@ import configparser
 import json
 import re
 import shlex
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Final
 
@@ -27,7 +28,7 @@ ROUND_TRIP: Final = "\n".join(
 )
 
 
-def _line(event: dict[str, object]) -> str:
+def _line(event: Mapping[str, object]) -> str:
     return json.dumps(event)
 
 
