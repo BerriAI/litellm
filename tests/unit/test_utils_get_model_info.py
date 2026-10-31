@@ -576,3 +576,67 @@ def test_get_model_info_huggingface_models(monkeypatch):
         providers=["huggingface"],
         **info,
     )
+
+
+_SELECTOR_PROBE_INPUT_COST: Final = 0.001
+_SELECTOR_PROBE_OUTPUT_COST: Final = 0.002
+
+
+def _registry_fields(info: Mapping[str, object]) -> dict[str, object]:
+    return {name: value for name, value in info.items() if name != "supported_openai_params"}
+
+
+def _register_selector_probe(provider: str) -> str:
+    litellm.register_model(
+        {
+            f"{provider}/selector-probe-model": {
+                "litellm_provider": provider,
+                "mode": "chat",
+                "max_input_tokens": 4096,
+                "input_cost_per_token": _SELECTOR_PROBE_INPUT_COST,
+                "output_cost_per_token": _SELECTOR_PROBE_OUTPUT_COST,
+            }
+        }
+    )
+    return "selector-probe-model"
+
+
+@pytest.mark.parametrize("selector", ["responses", "chat_completions"])
+@pytest.mark.parametrize("provider", ["openai", "azure"])
+def test_get_model_info_resolves_api_selector_segment_like_the_plain_model(provider: str, selector: str) -> None:
+    model: Final = _register_selector_probe(provider)
+
+    with_selector: Final = litellm.get_model_info(f"{provider}/{selector}/{model}")
+
+    assert _registry_fields(with_selector) == _registry_fields(litellm.get_model_info(f"{provider}/{model}"))
+    assert with_selector["input_cost_per_token"] == _SELECTOR_PROBE_INPUT_COST, with_selector
+
+
+@pytest.mark.parametrize("selector", ["responses", "chat_completions"])
+def test_get_model_info_resolves_leading_api_selector_segment_with_explicit_provider(selector: str) -> None:
+    model: Final = _register_selector_probe("openai")
+
+    with_selector: Final = litellm.get_model_info(f"{selector}/{model}", custom_llm_provider="openai")
+
+    plain: Final = litellm.get_model_info(model, custom_llm_provider="openai")
+
+    assert _registry_fields(with_selector) == _registry_fields(plain)
+
+
+@pytest.mark.parametrize("model", ["gpt-4o", "gpt-6.1-sol"])
+def test_get_model_info_api_selector_segment_does_not_change_a_cost_map_model(model: str) -> None:
+    with_selector: Final = litellm.get_model_info(f"openai/responses/{model}")
+
+    assert _registry_fields(with_selector) == _registry_fields(litellm.get_model_info(f"openai/{model}"))
+    assert "responses" not in with_selector["key"], with_selector
+
+
+def test_cost_per_token_prices_a_model_declared_with_the_responses_selector() -> None:
+    model: Final = _register_selector_probe("openai")
+
+    prompt_cost, completion_cost = litellm.cost_per_token(
+        model=f"openai/responses/{model}", prompt_tokens=1000, completion_tokens=1000
+    )
+
+    assert prompt_cost == pytest.approx(1000 * _SELECTOR_PROBE_INPUT_COST)
+    assert completion_cost == pytest.approx(1000 * _SELECTOR_PROBE_OUTPUT_COST)
