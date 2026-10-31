@@ -9,7 +9,7 @@ from base64 import b64encode
 from collections.abc import AsyncGenerator, AsyncIterator, Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
-from itertools import chain, count, groupby
+from itertools import chain, count, groupby, product
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, TypedDict, cast
 from urllib.parse import urlencode, urlparse
@@ -218,26 +218,39 @@ def _strip_client_guardrail_header_metadata(
 
 def _merged_metadata_entry(prior: object, value: object) -> object:
     """``value``, or both lists combined without repeats when ``prior`` and ``value`` are lists."""
-    if not isinstance(prior, list) or not isinstance(value, list):
+    if not isinstance(prior, list | tuple) or not isinstance(value, list):
         return value
-    prior_entries: Final = _GUARDRAIL_ENTRIES.validate_python(prior)
-    return [*prior_entries, *(e for e in _GUARDRAIL_ENTRIES.validate_python(value) if e not in prior_entries)]
+    entries: Final = (*_GUARDRAIL_ENTRIES.validate_python(prior), *_GUARDRAIL_ENTRIES.validate_python(value))
+    return tuple(
+        MappingProxyType({json.dumps(entry, sort_keys=True, default=str): entry for entry in entries}).values()
+    )
 
 
-def _guardrail_response_headers(*request_data: object) -> Mapping[str, str]:
-    """The ``x-litellm-applied-guardrails`` family of response headers for what guardrails recorded in these dicts.
+def _encodes_as_latin1(value: str) -> bool:
+    return all(ord(character) < 256 for character in value)
 
-    Reads the metadata of each dict and of its ``litellm_params``. The pre-call and post-call hooks record on
-    different dicts, so list entries such as the applied guardrail names are combined.
+
+def _guardrail_response_headers(
+    parsed_body: object = None, kwargs: object = None, post_call_data: object = None
+) -> Mapping[str, str]:
+    """The ``x-litellm-applied-guardrails`` family of response headers for what guardrails recorded on this request.
+
+    Pre-call guardrails record on the request body's metadata, which ``init_kwargs_for_pass_through_endpoint`` moves to
+    ``kwargs["litellm_params"]``, and post-call guardrails record on ``post_call_data``, so list entries such as the
+    applied guardrail names are combined. A ``litellm_params`` object sent in the request body is never read.
     """
+    scopes: Final = (
+        as_str_mapping(parsed_body) or {},
+        as_str_mapping((as_str_mapping(kwargs) or {}).get("litellm_params")) or {},
+        as_str_mapping(post_call_data) or {},
+    )
     merged: Final = dict[str, object]()
-    for data in request_data:
-        fields = as_str_mapping(data) or {}
-        for scope in (fields, as_str_mapping(fields.get("litellm_params")) or {}):
-            for metadata_key in sorted(_METADATA_KEYS):
-                for key, value in (as_str_mapping(scope.get(metadata_key)) or {}).items():
-                    merged[key] = _merged_metadata_entry(merged.get(key), value)
-    return _RESPONSE_HEADERS.validate_python(get_logging_caching_headers({"metadata": merged}) or {})
+    for scope, metadata_key in product(scopes, sorted(_METADATA_KEYS)):
+        metadata = as_str_mapping(scope.get(metadata_key)) or {}
+        for field in _GUARDRAIL_HEADER_METADATA_FIELDS & metadata.keys():
+            merged[field] = _merged_metadata_entry(merged.get(field), metadata[field])
+    headers: Final = _RESPONSE_HEADERS.validate_python(get_logging_caching_headers({"metadata": merged}) or {})
+    return MappingProxyType({name: value for name, value in headers.items() if _encodes_as_latin1(value)})
 
 
 class _RegisteredPassThroughRoute(TypedDict):

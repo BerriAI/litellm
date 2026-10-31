@@ -18,6 +18,7 @@ from pydantic import JsonValue, TypeAdapter
 
 PRE_CALL: Final = "passthrough-header-pre"
 POST_CALL: Final = "passthrough-header-post"
+NON_LATIN1: Final = "passthrough-header-pre\u2014em"
 HEADER: Final = "x-litellm-applied-guardrails"
 OPENAI_ROUTE: Final = "/openai/v1/chat/completions"
 ANTHROPIC_ROUTE: Final = "/anthropic/v1/messages"
@@ -95,7 +96,7 @@ def rig(session_gateway: Gateway, tmp_path_factory: pytest.TempPathFactory) -> I
                                 "api_key": "synthetic-guardrail-key",
                             },
                         }
-                        for name, mode in ((PRE_CALL, "pre_call"), (POST_CALL, "post_call"))
+                        for name, mode in ((PRE_CALL, "pre_call"), (POST_CALL, "post_call"), (NON_LATIN1, "pre_call"))
                     ],
                 }
             )
@@ -150,15 +151,26 @@ def test_response_names_pre_and_post_call_guardrails(rig: HeaderRig) -> None:
     assert response.headers.get(HEADER) == f"{PRE_CALL},{POST_CALL}"
 
 
-def test_client_cannot_claim_a_guardrail_ran(rig: HeaderRig) -> None:
+@pytest.mark.parametrize("field", ["metadata", "litellm_params"])
+def test_client_cannot_claim_a_guardrail_ran(rig: HeaderRig, field: str) -> None:
     gateway: Final = rig.owned.gateway
-    forged: Final = {
-        **_route_body(OPENAI_ROUTE),
-        "metadata": {"applied_guardrails": ["forged-guardrail"], "guardrail_scan_ids": ["forged-scan"]},
+    claim: Final[dict[str, JsonValue]] = {
+        "applied_guardrails": ["forged-guardrail"],
+        "guardrail_scan_ids": ["forged-scan"],
     }
+    forged: Final = {**_route_body(OPENAI_ROUTE), field: claim if field == "metadata" else {"metadata": claim}}
     with gateway.scenario() as scenario:
         response: Final = _send(gateway, scenario, OPENAI_ROUTE, forged)
 
     assert response.status_code == 200, response.text
     assert HEADER not in response.headers
     assert "x-litellm-guardrail-scan-id" not in response.headers
+
+
+def test_guardrail_name_a_header_cannot_carry_is_left_out(rig: HeaderRig) -> None:
+    gateway: Final = rig.owned.gateway
+    with gateway.scenario() as scenario:
+        response: Final = _send(gateway, scenario, OPENAI_ROUTE, _route_body(OPENAI_ROUTE), NON_LATIN1)
+
+    assert response.status_code == 200, response.text
+    assert HEADER not in response.headers

@@ -11335,13 +11335,23 @@ async def test_passthrough_header_and_callback_share_finalized_cost(
 
     client, cleanup = _inject_fake_passthrough_client(httpx.MockTransport(upstream), timeout=None)
     try:
-        request: Final = Request({
-            "type": "http", "method": "GET", "path": "/passthrough-relay/results",
-            "headers": [], "query_string": b"", "scheme": "http", "server": ("test", 80),
-        })
+        request: Final = Request(
+            {
+                "type": "http",
+                "method": "GET",
+                "path": "/passthrough-relay/results",
+                "headers": [],
+                "query_string": b"",
+                "scheme": "http",
+                "server": ("test", 80),
+            }
+        )
         result: Final = await pass_through_request(
-            request=request, target="http://cost-upstream.invalid/results", custom_headers={},
-            user_api_key_dict=UserAPIKeyAuth(api_key="hashed"), cost_per_request=flat_cost,
+            request=request,
+            target="http://cost-upstream.invalid/results",
+            custom_headers={},
+            user_api_key_dict=UserAPIKeyAuth(api_key="hashed"),
+            cost_per_request=flat_cost,
         )
         payload: Final = await asyncio.wait_for(observed, timeout=10)
         await GLOBAL_LOGGING_WORKER.flush()
@@ -11489,9 +11499,7 @@ class TestInheritAuthGuardrails:
     async def test_request_body_guardrails_are_added_to_the_key_guardrails(self):
         auth: Final = UserAPIKeyAuth(api_key="sk-test", metadata={"guardrails": ["key-guard"]})
 
-        pre_call, _ = await self._run(
-            self._chat_body(guardrails=["body-guard"]), inherit=True, user_api_key_dict=auth
-        )
+        pre_call, _ = await self._run(self._chat_body(guardrails=["body-guard"]), inherit=True, user_api_key_dict=auth)
 
         assert pre_call[0]["metadata"]["guardrails"] == ["key-guard", "body-guard"]
         assert "guardrails" not in pre_call[0]
@@ -11531,12 +11539,58 @@ class TestGuardrailResponseHeaders:
                 {"model": "gpt-5.6"},
                 {"litellm_params": {"metadata": {"applied_guardrails": ["pre"], "guardrail_scan_ids": ["scan-1"]}}},
                 {"metadata": {"applied_guardrails": ["pre", "post"]}},
-                None,
             ),
         )
 
         assert headers["x-litellm-applied-guardrails"] == "pre,post"
         assert headers["x-litellm-guardrail-scan-id"] == "scan-1"
+
+    def test_a_litellm_params_object_in_the_request_body_is_never_read(self):
+        forged: Final = {"metadata": {"applied_guardrails": ["forged"], "guardrail_scan_ids": ["fake"]}}
+
+        headers: Final = HttpPassThroughEndpointHelpers.get_response_headers(
+            headers=httpx.Headers({"content-type": "application/json"}),
+            guardrail_request_data=(
+                {"model": "gpt-5.6", "litellm_params": forged},
+                {"litellm_params": {"metadata": {}}},
+                {"model": "gpt-5.6", "litellm_params": forged, "metadata": {"guardrails": ["post"]}},
+            ),
+        )
+
+        assert headers == {"content-type": "application/json"}
+
+    def test_guardrail_name_outside_latin1_is_left_out_of_the_headers(self):
+        headers: Final = HttpPassThroughEndpointHelpers.get_response_headers(
+            headers=httpx.Headers({"content-type": "application/json"}),
+            guardrail_request_data=(
+                {},
+                {
+                    "litellm_params": {
+                        "metadata": {"applied_guardrails": ["pii\u2014guard"], "guardrail_scan_ids": ["s1"]}
+                    }
+                },
+            ),
+        )
+
+        assert headers == {"content-type": "application/json", "x-litellm-guardrail-scan-id": "s1"}
+        assert Response(content=b"{}", headers=headers).status_code == 200
+
+    def test_metadata_outside_the_header_fields_is_never_read(self):
+        class _Unreadable:
+            __hash__ = object.__hash__
+
+            def __eq__(self, other: object) -> bool:
+                raise AssertionError("non-header metadata was read")
+
+        headers: Final = HttpPassThroughEndpointHelpers.get_response_headers(
+            headers=httpx.Headers({"content-type": "application/json"}),
+            guardrail_request_data=(
+                {"metadata": {"unused": [_Unreadable()]}},
+                {"litellm_params": {"metadata": {"unused": [_Unreadable()]}}},
+            ),
+        )
+
+        assert headers == {"content-type": "application/json"}
 
     def test_no_guardrail_data_adds_no_headers(self):
         headers: Final = HttpPassThroughEndpointHelpers.get_response_headers(
