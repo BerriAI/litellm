@@ -1,3 +1,24 @@
+## Concepts
+
+Every price in a row lowers to one `Price { meter, channel, when }` and its `UnitPrice`. These keys come from the `FlatKey::parse` tests
+
+| JSON key | Meter | Channel | When (tier, band) |
+|---|---|---|---|
+| `input_cost_per_token` | `Input(Token(Text))` | `Online` | `Standard`, `Base` |
+| `output_cost_per_token_above_272k_tokens_priority` | `Output(Token(Text))` | `Online` | `Priority`, `OverPromptTokens(272000)` |
+| `cache_creation_input_token_cost_above_1hr_above_200k_tokens` | `CacheWrite { Text, OneHour }` | `Online` | `Standard`, `OverPromptTokens(200000)` |
+| `ocr_cost_per_page_batches` | `Feature(OcrPage)` | `Batch` | `Standard`, `Base` |
+
+A meter is what gets counted, such as text input tokens, reasoning tokens, an image of a given size or a web search. A variation only one meter has stays inside it (cache TTL, image size, resolution, `_above_Ns_interval`, `max_results_range`), which is why `_above_1hr` is a cache TTL and not a band
+
+A band is a range of prompt sizes. `_above_200k_tokens` prices a call whose prompt is over 200k tokens, and `Band::Base` is everything under the lowest edge. `Prices::band` puts the whole call in one band from its prompt token count, and `Billing::band_edge` says whether a prompt of exactly 200k is in it
+
+`When` is the request's condition, its service tier and band. `Channel` is the billing route. Batch and decisions are channels and not tiers because Python bills them with their own rules
+
+Off-peak and `Adjustments` are never prices. Off-peak swaps in other token rates while a UTC window is open, and `Adjustments` multiplies a priced call for region, residency, geo or `speed: fast`
+
+`Billing` on `Prices` holds the row attributes that change how its prices apply without being prices (text unit, band edge, cache-read fallback, wall clock, web search unit, tier scope). `lower.rs` derives it from the row and its `litellm_provider`, so `litellm-cost` holds no provider list
+
 ## Layout
 
 `wire/` reads one entry as written. `EntryWire::read` makes one pass over the entry's keys and puts every non-null key in exactly one place, which is an attribute, a flat price parsed by `FlatKey::parse`, a price block, a `supports_*` capability or `unknown`. A known key with a bad value becomes an `Error` that names the key, and the rest of the entry is still read
@@ -5,8 +26,6 @@
 `lower.rs` is the only code that knows both the wire types and `litellm-cost`. It lowers an `EntryWire` into `Prices`, `Adjustments` and `Model` and checks the rules that span keys, such as one price per meter and condition, contiguous tiers, no suffix inside a block, and off-peak needing hours and prices. Lowering only goes one way. Nothing turns `Prices` back into JSON, since the raw fields are kept
 
 `catalog.rs` reads the document, indexes aliases and runs the checks across entries. A bad entry keeps its raw fields and its errors are listed in `Loaded.errors`. Deciding what to do with them is the caller's job. `Catalog::written` gives back every top-level key and value as the document wrote them, in document order. `Catalog::served` gives back every model and alias as Python serves it, without `sample_spec` and `fallback_generalizations`
-
-`Billing` on `Prices` holds the row attributes pricing reads (text unit, band edge, cache-read fallback, wall clock, web search unit, tier scope). `lower.rs` derives it from the row and its `litellm_provider`, so `litellm-cost` holds no provider list
 
 `store/` is the catalog's in-memory store and the only place that indexes model names. Its rules are in [src/store/AGENTS.md](src/store/AGENTS.md)
 
@@ -16,7 +35,7 @@ Catalog errors use one opaque `Error` with typed causes and JSON Pointer accesso
 
 ## Prices
 
-The price vocabulary lives in `litellm-cost`, and only this crate knows JSON key names. Every price is keyed by `Meter`, `Channel` and `When`. A variation only one meter has stays in the meter (cache TTL, image size, resolution, `_above_Ns_interval`, `max_results_range`). Service tier and prompt band make up `When`. Batch and decisions are a `Channel` because Python bills them with their own rules. Off-peak is an overlay on `Prices`, and regional uplifts are `Adjustments`, never prices
+The price vocabulary lives in `litellm-cost`, and only this crate knows JSON key names
 
 A new `N`, image size or resolution in an existing key shape parses with no Rust change. A new unit, token kind, feature or tier needs a variant in `litellm-cost` plus its spelling in `wire/flat_key.rs` and `FLAT_KEY_PATTERN` in `schema.rs`
 
