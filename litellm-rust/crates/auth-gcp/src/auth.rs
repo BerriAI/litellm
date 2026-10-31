@@ -258,7 +258,7 @@ fn auth_acquisition_error(error: gcp_auth::Error) -> Error {
 
 #[cfg(test)]
 mod tests {
-    use litellm_auth_types::SecretValue;
+    use litellm_secret_value::SecretValue;
 
     use super::*;
 

@@ -317,7 +317,6 @@ def test_credentialless_proxy_forwards_the_caller_anthropic_credential_and_never
 
 
 def test_anthropic_sdk_metadata_user_id_reaches_upstream(api_key_proxy: Gateway, wire: Wire) -> None:
-    pytest.skip("BUG: /anthropic/v1/messages drops the native metadata.user_id field before forwarding upstream")
     with api_key_proxy.scenario() as scenario:
         key: Final = scenario.key()
         sent: Final[list[httpx.Request]] = []

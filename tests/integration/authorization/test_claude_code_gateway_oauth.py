@@ -636,3 +636,55 @@ def test_device_flow_mints_the_session_for_the_team_the_developer_picks_in_the_b
             served_models: Final = {model.id for model in sdk.models.list()}
         assert served_models == {team_models[chosen_team]}
         assert len(identity_provider.drain()) == 3
+
+
+@pytest.mark.timeout(300)
+def test_gateway_login_lists_and_defaults_to_the_first_team_on_the_user_record_after_a_write_to_its_row(
+    enabled_gateway: Gateway, identity_provider: Wire
+) -> None:
+    run_id: Final = uuid.uuid4().hex
+    with enabled_gateway.scenario() as scenario:
+        user_id: Final = scenario.user(user_id=_USER_ID, user_email=_USER_EMAIL, user_role="internal_user")
+        first_team: Final = scenario.team(team_id=f"zeta-{run_id}")
+        second_team: Final = scenario.team(team_id=f"alpha-{run_id}")
+        for team_id in (first_team, second_team):
+            enabled_gateway.post(
+                "/team/member_add", {"team_id": team_id, "member": {"role": "user", "user_id": user_id}}
+            )
+        enabled_gateway.post("/team/update", {"team_id": first_team, "metadata": {"updated_by_run": run_id}})
+        assert enabled_gateway.rows('SELECT teams FROM "LiteLLM_UserTable" WHERE user_id = %s', (user_id,)) == [
+            {"teams": [first_team, second_team]}
+        ]
+
+        authorization_response: Final = enabled_gateway.client.post(
+            "/claude_code_gateway/oauth/device_authorization", data={"client_id": _CLIENT_ID}
+        )
+        assert authorization_response.status_code == 200, authorization_response.text
+        authorization: Final = _DeviceAuthorization.model_validate_json(authorization_response.content)
+        verification: Final = enabled_gateway.client.get(authorization.verification_uri, follow_redirects=False)
+        assert verification.status_code == 303, verification.text
+        identity_provider_redirect: Final = enabled_gateway.client.get(
+            verification.headers["location"], follow_redirects=False
+        )
+        assert identity_provider_redirect.status_code == 302, identity_provider_redirect.text
+        callback: Final = enabled_gateway.client.get(
+            identity_provider_redirect.headers["location"], follow_redirects=False
+        )
+        assert callback.status_code == 200, callback.text
+        assert tuple(_TEAM_OPTION.findall(callback.text)) == (first_team, second_team), callback.text
+        browser_token: Final = _BROWSER_TOKEN.search(callback.text)
+        assert browser_token is not None, callback.text
+        completion_without_a_pick: Final = enabled_gateway.client.post(
+            f"/sso/cli/complete/{authorization.device_code.partition('.')[0]}",
+            data={
+                "user_code": authorization.user_code,
+                "browser_complete_token": html.unescape(browser_token.group(1)),
+            },
+        )
+        assert completion_without_a_pick.status_code == 200, completion_without_a_pick.text
+        token_response: Final = _device_code_grant(enabled_gateway, authorization.device_code)
+        assert token_response.status_code == 200, token_response.text
+        token: Final = _AccessToken.model_validate_json(token_response.content)
+        identity_provider.drain()
+
+        assert (token.user_id, token.team_id) == (user_id, first_team)

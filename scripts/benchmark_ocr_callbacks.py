@@ -103,7 +103,7 @@ def percentile(values: Sequence[float], quantile: float) -> float:
 
 
 def verify(response: object, expected_transport: str) -> None:
-    from litellm.router_utils.add_retry_fallback_headers import get_hidden_params_dict
+    from litellm.litellm_core_utils.add_retry_fallback_headers import get_hidden_params_dict
 
     pages: Final = getattr(response, "pages", ())
     if len(pages) != 1 or getattr(pages[0], "markdown", None) != EXPECTED_MARKDOWN:
