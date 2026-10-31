@@ -68,7 +68,7 @@ from litellm.proxy.pass_through_endpoints.success_handler import (
 )
 from litellm.proxy.route_llm_request import ProxyModelNotFoundError
 from litellm.proxy.spend_tracking.spend_tracking_utils import get_spend_logs_id
-from litellm.proxy.utils import ProxyLogging
+from litellm.proxy.utils import ProxyLogging, _merge_guardrails_with_existing
 from litellm.types import utils as types_utils
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import CallTypes
@@ -11716,3 +11716,198 @@ async def test_passthrough_header_and_callback_share_finalized_cost(
     finally:
         cleanup()
         await client.aclose()
+
+
+class TestInheritAuthGuardrails:
+    """Built-in provider routes run the caller's key, team and project guardrails on pass-through."""
+
+    @staticmethod
+    async def _run(
+        body: dict[str, object],
+        *,
+        inherit: bool,
+        user_api_key_dict: UserAPIKeyAuth,
+        guardrails: tuple[CustomGuardrail, ...] = (),
+    ) -> tuple[list[dict[str, object]], AsyncMock]:
+        _, pre_call_data, post_call = await TestInheritAuthGuardrails._run_with_response(
+            body, inherit=inherit, user_api_key_dict=user_api_key_dict, guardrails=guardrails
+        )
+        return pre_call_data, post_call
+
+    @staticmethod
+    async def _run_with_response(
+        body: dict[str, object],
+        *,
+        inherit: bool,
+        user_api_key_dict: UserAPIKeyAuth,
+        guardrails: tuple[CustomGuardrail, ...] = (),
+    ) -> tuple[Response, list[dict[str, object]], AsyncMock]:
+        pre_call_data: Final[list[dict[str, object]]] = []
+
+        async def _record_pre_call(**kwargs: object) -> object:
+            pre_call_data.append(json.loads(json.dumps(kwargs["data"], default=str)))
+            return kwargs["data"]
+
+        proxy_logging: Final = MagicMock()
+        proxy_logging.pre_call_hook = AsyncMock(side_effect=_record_pre_call)
+        proxy_logging.post_call_success_hook = AsyncMock(return_value={"id": "chatcmpl-1"})
+        proxy_logging.post_call_response_headers_hook = AsyncMock(return_value={})
+        upstream: Final = httpx.Response(
+            status_code=200,
+            headers={"content-type": "application/json"},
+            content=b'{\n  "id":"chatcmpl-1"\n}',
+            request=httpx.Request("POST", "https://api.openai.com/v1/chat/completions"),
+        )
+        request: Final = MagicMock()
+        request.method = "POST"
+        request.query_params = {}
+        request.headers = MagicMock()
+        request.headers.copy.return_value = {}
+        module: Final = "litellm.proxy.pass_through_endpoints.pass_through_endpoints"
+        with ExitStack() as stack:
+            stack.enter_context(
+                patch(
+                    f"{module}.HttpPassThroughEndpointHelpers.non_streaming_http_request_handler",
+                    new_callable=AsyncMock,
+                    return_value=upstream,
+                )
+            )
+            stack.enter_context(patch(f"{module}._is_streaming_response", return_value=False))
+            stack.enter_context(patch("litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging))
+            stack.enter_context(patch("litellm.proxy.proxy_server.premium_user", True))
+            stack.enter_context(
+                patch(
+                    f"{module}.pass_through_endpoint_logging",
+                    MagicMock(pass_through_async_success_handler=AsyncMock()),
+                )
+            )
+            stack.enter_context(patch(f"{module}.read_request_body", new_callable=AsyncMock, return_value=body))
+            stack.enter_context(patch(f"{module}.safe_get_request_headers", return_value={}))
+            stack.enter_context(patch.object(litellm, "callbacks", list(guardrails)))
+            response: Final = await pass_through_request(
+                request=request,
+                target="https://api.openai.com/v1/chat/completions",
+                custom_headers={},
+                user_api_key_dict=user_api_key_dict,
+                stream=False,
+                inherit_auth_guardrails=inherit,
+            )
+        return response, pre_call_data, proxy_logging.post_call_success_hook
+
+    @staticmethod
+    def _guardrail(name: str, event_hook: GuardrailEventHooks, *, default_on: bool = False) -> CustomGuardrail:
+        return CustomGuardrail(guardrail_name=name, event_hook=event_hook, default_on=default_on)
+
+    @staticmethod
+    def _chat_body(**extra: object) -> dict[str, object]:
+        return {"model": "gpt-4o", "messages": [{"role": "user", "content": "hi"}], **extra}
+
+    @pytest.mark.asyncio
+    async def test_key_team_and_project_guardrails_reach_pre_and_post_call(self):
+        auth: Final = UserAPIKeyAuth(
+            api_key="sk-test",
+            metadata={"guardrails": ["key-guard"]},
+            team_metadata={"guardrails": ["team-guard"]},
+            project_metadata={"guardrails": ["project-guard"]},
+        )
+
+        pre_call, post_call = await self._run(
+            self._chat_body(),
+            inherit=True,
+            user_api_key_dict=auth,
+            guardrails=(
+                self._guardrail("key-guard", GuardrailEventHooks.pre_call),
+                self._guardrail("team-guard", GuardrailEventHooks.post_call),
+            ),
+        )
+
+        assert sorted(pre_call[0]["metadata"]["guardrails"]) == ["key-guard", "project-guard", "team-guard"]
+        post_call.assert_awaited_once()
+        assert sorted(post_call.call_args.kwargs["data"]["metadata"]["guardrails"]) == [
+            "key-guard",
+            "project-guard",
+            "team-guard",
+        ]
+
+    @pytest.mark.asyncio
+    async def test_post_call_guardrails_stay_named_after_a_model_guardrail_merge(self):
+        auth: Final = UserAPIKeyAuth(api_key="sk-test", metadata={"guardrails": ["key-guard"]})
+
+        _, post_call = await self._run(
+            self._chat_body(),
+            inherit=True,
+            user_api_key_dict=auth,
+            guardrails=(self._guardrail("key-guard", GuardrailEventHooks.post_call),),
+        )
+
+        merged: Final = _merge_guardrails_with_existing(post_call.call_args.kwargs["data"], ["model-guard"])
+        assert merged["metadata"]["guardrails"] == ["key-guard", "model-guard"]
+
+    @pytest.mark.asyncio
+    async def test_pre_call_only_guardrails_relay_the_response_untouched(self):
+        auth: Final = UserAPIKeyAuth(api_key="sk-test", metadata={"guardrails": ["key-guard"]})
+
+        response, pre_call, post_call = await self._run_with_response(
+            self._chat_body(),
+            inherit=True,
+            user_api_key_dict=auth,
+            guardrails=(
+                self._guardrail("key-guard", GuardrailEventHooks.pre_call),
+                self._guardrail("global-post", GuardrailEventHooks.post_call, default_on=True),
+            ),
+        )
+
+        assert pre_call[0]["metadata"]["guardrails"] == ["key-guard"]
+        post_call.assert_not_awaited()
+        assert response.body == b'{\n  "id":"chatcmpl-1"\n}'
+
+    @pytest.mark.asyncio
+    async def test_a_named_default_on_post_call_guardrail_still_checks_the_response(self):
+        auth: Final = UserAPIKeyAuth(api_key="sk-test", metadata={"guardrails": ["global-post"]})
+
+        _, post_call = await self._run(
+            self._chat_body(),
+            inherit=True,
+            user_api_key_dict=auth,
+            guardrails=(self._guardrail("global-post", GuardrailEventHooks.post_call, default_on=True),),
+        )
+
+        post_call.assert_awaited_once()
+        assert post_call.call_args.kwargs["data"]["metadata"]["guardrails"] == ["global-post"]
+
+    @pytest.mark.asyncio
+    async def test_request_body_guardrails_are_added_to_the_key_guardrails(self):
+        auth: Final = UserAPIKeyAuth(api_key="sk-test", metadata={"guardrails": ["key-guard"]})
+
+        pre_call, _ = await self._run(
+            self._chat_body(guardrails=["body-guard"]), inherit=True, user_api_key_dict=auth
+        )
+
+        assert pre_call[0]["metadata"]["guardrails"] == ["key-guard", "body-guard"]
+        assert "guardrails" not in pre_call[0]
+
+    @pytest.mark.asyncio
+    async def test_empty_request_body_guardrails_keep_the_key_guardrails(self):
+        auth: Final = UserAPIKeyAuth(api_key="sk-test", metadata={"guardrails": ["key-guard"]})
+
+        pre_call, _ = await self._run(self._chat_body(guardrails=[]), inherit=True, user_api_key_dict=auth)
+
+        assert pre_call[0]["metadata"]["guardrails"] == ["key-guard"]
+
+    @pytest.mark.asyncio
+    async def test_routes_without_inheritance_keep_key_guardrails_off(self):
+        auth: Final = UserAPIKeyAuth(api_key="sk-test", metadata={"guardrails": ["key-guard"]})
+
+        pre_call, post_call = await self._run(self._chat_body(), inherit=False, user_api_key_dict=auth)
+
+        assert "guardrails" not in pre_call[0].get("metadata", {})
+        post_call.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_request_without_a_body_gets_no_guardrails(self):
+        auth: Final = UserAPIKeyAuth(api_key="sk-test", metadata={"guardrails": ["key-guard"]})
+
+        pre_call, post_call = await self._run({}, inherit=True, user_api_key_dict=auth)
+
+        assert "guardrails" not in pre_call[0].get("metadata", {})
+        post_call.assert_not_awaited()

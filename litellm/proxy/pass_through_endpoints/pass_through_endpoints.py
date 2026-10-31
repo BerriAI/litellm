@@ -54,12 +54,14 @@ from litellm.constants import (
 )
 from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
+    guardrail_entry_names,
     guardrail_request_data_with_streaming,
     without_server_streaming_classification,
 )
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.otel.model.semconv import PASSTHROUGH_OPERATION_KEY, GenAIOperation
 from litellm.litellm_core_utils.core_helpers import (
+    as_str_mapping,
     bind_budget_reservation_to_callbacks,
     get_metadata_variable_name_from_kwargs,
     get_or_create_metadata_bucket,
@@ -130,6 +132,7 @@ from litellm.proxy.litellm_pre_call_utils import (  # noqa: F401  # legacy modul
     _key_or_team_allows_client_pricing_override,  # pyright: ignore[reportPrivateUsage]  # reuse the proxy's pricing trust policy
     _strip_client_pricing_overrides,  # pyright: ignore[reportPrivateUsage]  # sanitize before trusted hooks add guardrail costs
     get_dynamic_logging_metadata,  # pyright: ignore[reportPrivateUsage]  # shared proxy helper, same import style as _read_request_body above
+    move_guardrails_to_metadata,  # pyright: ignore[reportUnknownVariableType]  # untyped data param; the same merge the native routes run
     redact_credential_headers,
     strip_client_guardrail_information,
 )
@@ -143,6 +146,7 @@ from litellm.proxy.utils import normalize_route_for_root_path
 from litellm.repositories.team_repository import TeamRepository
 from litellm.secret_managers.main import get_secret_str
 from litellm.types import utils as types_utils
+from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.litellm_params import ProxyRequestState, wire_names
 from litellm.types.llms.custom_http import httpxSpecialProvider
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
@@ -179,6 +183,7 @@ pass_through_endpoint_logging: Final = PassThroughEndpointLogging()
 
 _METADATA_KEYS: Final = frozenset(("litellm_metadata", "metadata"))
 _DECODED_JSON: Final = TypeAdapter(object)
+_GUARDRAIL_ENTRIES: Final = TypeAdapter(list[object])
 _KEPT_OUT_OF_LITELLM_PARAMS: Final = _METADATA_KEYS | frozenset(wire_names(ProxyRequestState))
 _PRICING_MODEL_OVERRIDE_PARAMS: Final = frozenset(("base_model",))
 
@@ -860,6 +865,44 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
     _update_stream_param_based_on_request_body = update_stream_param_based_on_request_body
 
 
+async def _inherit_auth_guardrails(
+    parsed_body: dict[str, object] | None,  # mutable-ok: merges the guardrails into the live request body
+    user_api_key_dict: UserAPIKeyAuth,
+    configured_guardrails: Sequence[object] | None,
+    inherit: bool,
+) -> Sequence[object] | None:
+    """Return the guardrails a pass-through request runs after the provider responds.
+
+    The endpoint's configured guardrails win. Without any, and with ``inherit`` and a JSON body, the key, team,
+    project, policy and request-body guardrails are merged into ``parsed_body["metadata"]`` for the pre-call hook,
+    and returned only when at least one of them runs post_call, so the response is relayed untouched otherwise.
+    """
+    if configured_guardrails or not inherit or not parsed_body:
+        return configured_guardrails
+    if not isinstance(parsed_body.get("metadata"), dict):
+        parsed_body["metadata"] = {}  # rebind-ok: the merge below writes into the live request body's metadata
+    await move_guardrails_to_metadata(
+        data=parsed_body,
+        _metadata_variable_name="metadata",
+        user_api_key_dict=user_api_key_dict,
+    )
+    merged: Final = (as_str_mapping(parsed_body["metadata"]) or {}).get("guardrails")
+    entries: Final = _GUARDRAIL_ENTRIES.validate_python(merged) if isinstance(merged, list) else []
+    return entries if entries and _named_guardrail_runs_post_call(parsed_body, entries) else None
+
+
+def _named_guardrail_runs_post_call(data: Mapping[str, object], entries: Sequence[object]) -> bool:
+    names: Final = frozenset(chain.from_iterable(map(guardrail_entry_names, entries)))
+    return any(
+        guardrail.guardrail_name in names
+        and guardrail.should_run_guardrail(  # pyright: ignore[reportUnknownMemberType]  # takes the untyped request dict
+            data=data, event_type=GuardrailEventHooks.post_call
+        )
+        for guardrail in litellm.logging_callback_manager.get_custom_loggers_for_type(callback_type=CustomGuardrail)
+        if isinstance(guardrail, CustomGuardrail)
+    )
+
+
 def _carry_guardrail_logging_info(request_data: dict, guardrail_data: dict | None) -> None:
     """Copy guardrail logging entries from ``guardrail_data`` onto ``request_data``.
 
@@ -1248,6 +1291,7 @@ async def pass_through_request(
     timeout: float | None = None,
     upstream_headers_filter: Callable[[Mapping[str, str]], Mapping[str, str]] = _unfiltered_headers,
     operation: GenAIOperation | None = None,
+    inherit_auth_guardrails: bool = False,
 ):
     """
     Pass through endpoint handler, makes the httpx request for pass-through endpoints and ensures logging hooks are called
@@ -1270,6 +1314,8 @@ async def pass_through_request(
             general_settings.pass_through_request_timeout, then 600s.
         upstream_headers_filter: Optional last rewrite of the headers sent upstream, after x-pass- expansion
         operation: Optional GenAI operation the route reports, unless the upstream names its own
+        inherit_auth_guardrails: Run the key, team, project and policy guardrails on a JSON body, as the
+            native routes do, when the pass-through guardrails config resolves to none
     """
     from litellm.exceptions import ModifyResponseException
     from litellm.litellm_core_utils.litellm_logging import Logging
@@ -1377,6 +1423,13 @@ async def pass_through_request(
                 _parsed_body["metadata"] = {}
             _parsed_body["metadata"]["guardrails"] = guardrails_to_run
             verbose_proxy_logger.debug("Added guardrails to passthrough request metadata: %s", guardrails_to_run)
+
+        post_call_guardrails: Final = await _inherit_auth_guardrails(
+            parsed_body=cast(dict[str, object] | None, _parsed_body),  # cast-ok: json
+            user_api_key_dict=user_api_key_dict,
+            configured_guardrails=guardrails_to_run,
+            inherit=inherit_auth_guardrails,
+        )
 
         ## LOGGING OBJECT ## - initialize before pre_call_hook so guardrails can access it
         # Surface the requested model (when the body carries one) so logging/spans
@@ -1918,7 +1971,7 @@ async def pass_through_request(
             logging_obj=logging_obj,
         )
 
-        if response.status_code < 400 and response_body is not None and guardrails_to_run:
+        if response.status_code < 400 and response_body is not None and post_call_guardrails:
             # Build an enriched data dict: _parsed_body has been stripped of
             # `metadata` by both pre_call_hook and _init_kwargs_for_pass_through_endpoint,
             # so we re-attach the configured guardrails here so should_run_guardrail
@@ -1929,7 +1982,7 @@ async def pass_through_request(
                 existing_metadata = {}
             hook_data["metadata"] = {
                 **existing_metadata,
-                "guardrails": guardrails_to_run,
+                "guardrails": post_call_guardrails,
             }
             post_call_guardrail_data = hook_data
             response_body = await proxy_logging_obj.post_call_success_hook(
@@ -2313,6 +2366,7 @@ def create_pass_through_route(
     timeout: float | None = None,
     upstream_headers_filter: Callable[[Mapping[str, str]], Mapping[str, str]] = _unfiltered_headers,
     operation: GenAIOperation | None = None,
+    inherit_auth_guardrails: bool = False,
 ):
     # check if target is an adapter.py or a url
     from litellm._uuid import uuid
@@ -2462,6 +2516,7 @@ def create_pass_through_route(
                         timeout=cast(float | None, param_timeout),
                         upstream_headers_filter=upstream_headers_filter,
                         operation=operation,
+                        inherit_auth_guardrails=inherit_auth_guardrails,
                     )
                 finally:
                     if hasattr(request.state, LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY):
