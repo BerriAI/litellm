@@ -1,6 +1,7 @@
 import json
 import asyncio
 import os
+from pathlib import Path
 from typing import Final
 from unittest.mock import Mock, patch
 from unittest.mock import AsyncMock, MagicMock
@@ -300,6 +301,25 @@ def test_bedrock_embedding_plain_model_id_calls_the_env_region_like_chat(
     )
 
     assert route.call_count == 1
+
+
+def test_bedrock_embedding_calls_the_boto3_session_region_like_chat(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    for name in ("AWS_REGION_NAME", "AWS_REGION", "AWS_PROFILE"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("AWS_CONFIG_FILE", str(tmp_path / "no-aws-config"))
+    monkeypatch.setenv("AWS_DEFAULT_REGION", "ap-south-1")
+    route: Final = respx_mock.post(url__regex=r"^https://bedrock-runtime\.[a-z0-9-]+\.amazonaws\.com/").mock(
+        return_value=httpx.Response(200, json=titan_embedding_response)
+    )
+
+    litellm.embedding(model="bedrock/amazon.titan-embed-text-v2:0", input=[test_input], api_key="test-bearer-token")
+
+    sent_to: Final = route.calls.last.request.url
+    assert sent_to.host == "bedrock-runtime.ap-south-1.amazonaws.com", str(sent_to)
 
 
 def test_bedrock_embedding_rejects_an_empty_aws_region_name_instead_of_using_the_path_region(
