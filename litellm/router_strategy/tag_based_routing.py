@@ -12,7 +12,15 @@ import re
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import replace
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final, Literal, Protocol, TypedDict, overload
+from typing import (
+    TYPE_CHECKING,
+    Final,
+    Literal,
+    Protocol,
+    TypedDict,
+    cast,  # noqa: TID251  # Router pool narrowing
+    overload,
+)
 
 from typing_extensions import ReadOnly
 
@@ -780,6 +788,71 @@ def get_tags_from_request_kwargs(
         typed_litellm_params: Final[Mapping[str, object]] = litellm_params
         return _tags_in_metadata(typed_litellm_params.get(resolved_variable_name))
     return []
+
+
+def can_satisfy_confirmed_routing_tags(
+    ctx: "RoutingContext",
+    model: str,
+    request_kwargs: Mapping[str, object] | None = None,
+    metadata_variable_name: Literal["metadata", "litellm_metadata"] | None = None,
+) -> bool:
+    """
+    Whether attempting ``model`` can possibly succeed under the request's
+    ``tag_routing_prefix``-confirmed tags.
+
+    Returns False only when confirmed routing tags make success structurally
+    impossible for every deployment in the model group — so
+    ``run_async_fallback`` can skip that leg without raising, logging ERROR, or
+    counting a deployment failure. Returns True when the check does not apply
+    (no prefix, no confirmed tags, tag filtering off) or the group might still
+    serve the request.
+    """
+    settings: Final = ctx.settings()
+    routing_prefix: Final = settings.tag_routing_prefix or ""
+    if not routing_prefix or request_kwargs is None:
+        return True
+
+    request_tags: Final = get_tags_from_request_kwargs(request_kwargs, metadata_variable_name)
+    rewritten_tags, routing_confirmed = _strip_routing_prefix(request_tags, routing_prefix)
+    if not routing_confirmed:
+        return True
+
+    deployments: Final = cast(  # cast-ok: [LIT006] router deployment dicts are read through _DeploymentLike
+        _DeploymentPool, _all_deployments_or_fallback(ctx, model, ())
+    )
+    if not deployments:
+        return True
+
+    request_enable_tag_filtering: Final = request_kwargs.get("enable_tag_filtering")
+    chain_enable_tag_filtering: Final = _chain_tag_filtering_override(ctx, model, deployments)
+    chain_default: Final = (
+        chain_enable_tag_filtering if chain_enable_tag_filtering is not None else settings.enable_tag_filtering
+    )
+    if request_enable_tag_filtering is not True and chain_default is not True:
+        return True
+
+    required_tags, positive_tags, excluded_patterns = _split_tags(rewritten_tags)
+    excluded_set: Final = frozenset(excluded_patterns)
+    required_set: Final = frozenset(required_tags)
+    candidates: Final = _require_all_tags(_exclude_deployments(deployments, excluded_set), required_set)
+
+    confirmed_required: Final = required_set & routing_confirmed
+    confirmed_excluded: Final = excluded_set & routing_confirmed
+    if not candidates and (confirmed_required or confirmed_excluded):
+        return False
+
+    confirmed_positive: Final = tuple(tag for tag in positive_tags if tag in routing_confirmed)
+    if not confirmed_positive:
+        return True
+
+    if any(d.get("litellm_params", {}).get("tag_regex") for d in candidates):
+        return True
+
+    match_any: Final = settings.tag_filtering_match_any
+    return any(
+        is_valid_deployment_tag(d.get("litellm_params", {}).get("tags") or (), positive_tags, match_any)
+        for d in candidates
+    )
 
 
 _get_tags_from_request_kwargs = get_tags_from_request_kwargs

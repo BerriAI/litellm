@@ -812,6 +812,291 @@ async def test_run_async_fallback_does_not_consult_access_check_for_same_model_g
     assert router.access_checks == []
 
 
+class TagRoutingFallbackRouter(RouterDouble):
+    """Records fallback attempts while exposing tag-routing deployment lookups."""
+
+    enable_tag_filtering = True
+    tag_routing_prefix = "route:"
+    tag_filtering_match_any = True
+
+    def __init__(self, deployments_by_group: dict[str, list[dict]]):
+        self.deployments_by_group = deployments_by_group
+        self.attempted_model_groups = []
+
+    def settings(self) -> RouterSettings:
+        return RouterSettings(
+            fallback_access_check=self.fallback_access_check,
+            fallback_budget_check=self.fallback_budget_check,
+            enable_tag_filtering=self.enable_tag_filtering,
+            tag_routing_prefix=self.tag_routing_prefix,
+            tag_filtering_match_any=self.tag_filtering_match_any,
+        )
+
+    def registry(self):
+        return self
+
+    def deployments(self, model_name, *, source):
+        return list(self.deployments_by_group.get(model_name, []))
+
+    async def async_function_with_fallbacks(self, *args, **kwargs):
+        self.attempted_model_groups.append(kwargs.get("model"))
+        return StreamingWrapper()
+
+
+@pytest.mark.asyncio
+async def test_run_async_fallback_skips_legs_unsatisfiable_under_confirmed_tags(caplog):
+    """Confirmed tag_routing_prefix tags must skip structurally impossible legs at INFO,
+    not attempt them (which would raise/log ERROR and inflate failure metrics)."""
+    import logging
+
+    router = TagRoutingFallbackRouter(
+        {
+            "chain/2-vertex": [
+                {
+                    "model_name": "chain/2-vertex",
+                    "litellm_params": {"tags": ["inference:vertex", "default"]},
+                }
+            ],
+            "chain/3-bedrock": [
+                {
+                    "model_name": "chain/3-bedrock",
+                    "litellm_params": {"tags": ["inference:bedrock", "default"]},
+                }
+            ],
+        }
+    )
+
+    with caplog.at_level(logging.INFO, logger="LiteLLM Router"):
+        response = await run_async_fallback(
+            litellm_routing_ctx=RoutingContext(router),
+            fallback_model_group=["chain/2-vertex", "chain/3-bedrock"],
+            original_model_group="chain/1-openai",
+            original_exception=RuntimeError("primary failed"),
+            max_fallbacks=5,
+            fallback_depth=0,
+            model="chain/1-openai",
+            metadata={"tags": ["route:inference:bedrock"]},
+        )
+
+    assert router.attempted_model_groups == ["chain/3-bedrock"]
+    assert response._hidden_params["additional_headers"]["x-litellm-attempted-fallbacks"] == 1
+    skip_logs = [r for r in caplog.records if "no deployment can satisfy confirmed tag routing tags" in r.getMessage()]
+    assert len(skip_logs) == 1
+    assert skip_logs[0].levelno == logging.INFO
+    assert "chain/2-vertex" in skip_logs[0].getMessage()
+
+
+@pytest.mark.asyncio
+async def test_run_async_fallback_raises_original_when_all_legs_tag_unsatisfiable():
+    router = TagRoutingFallbackRouter(
+        {
+            "chain/2-vertex": [
+                {
+                    "model_name": "chain/2-vertex",
+                    "litellm_params": {"tags": ["inference:vertex", "default"]},
+                }
+            ],
+            "chain/3-anthropic": [
+                {
+                    "model_name": "chain/3-anthropic",
+                    "litellm_params": {"tags": ["inference:anthropic", "default"]},
+                }
+            ],
+        }
+    )
+
+    with pytest.raises(RuntimeError, match="primary failed"):
+        await run_async_fallback(
+            litellm_routing_ctx=RoutingContext(router),
+            fallback_model_group=["chain/2-vertex", "chain/3-anthropic"],
+            original_model_group="chain/1-openai",
+            original_exception=RuntimeError("primary failed"),
+            max_fallbacks=5,
+            fallback_depth=0,
+            model="chain/1-openai",
+            metadata={"tags": ["route:inference:bedrock"]},
+        )
+
+    assert router.attempted_model_groups == []
+
+
+@pytest.mark.asyncio
+async def test_run_async_fallback_does_not_skip_when_tag_routing_prefix_unset():
+    router = TagRoutingFallbackRouter(
+        {
+            "chain/2-vertex": [
+                {
+                    "model_name": "chain/2-vertex",
+                    "litellm_params": {"tags": ["inference:vertex", "default"]},
+                }
+            ],
+        }
+    )
+    router.tag_routing_prefix = ""
+
+    await run_async_fallback(
+        litellm_routing_ctx=RoutingContext(router),
+        fallback_model_group=["chain/2-vertex"],
+        original_model_group="chain/1-openai",
+        original_exception=RuntimeError("primary failed"),
+        max_fallbacks=3,
+        fallback_depth=0,
+        model="chain/1-openai",
+        metadata={"tags": ["route:inference:bedrock"]},
+    )
+
+    assert router.attempted_model_groups == ["chain/2-vertex"]
+
+
+def test_can_satisfy_confirmed_routing_tags_false_for_mismatched_single_deployment():
+    from litellm.router_strategy.tag_based_routing import can_satisfy_confirmed_routing_tags
+
+    router = TagRoutingFallbackRouter(
+        {
+            "chain/2-vertex": [
+                {
+                    "model_name": "chain/2-vertex",
+                    "litellm_params": {"tags": ["inference:vertex", "default"]},
+                }
+            ],
+        }
+    )
+    assert (
+        can_satisfy_confirmed_routing_tags(
+            RoutingContext(router),
+            "chain/2-vertex",
+            {"metadata": {"tags": ["route:inference:bedrock"]}},
+        )
+        is False
+    )
+
+
+def test_can_satisfy_confirmed_routing_tags_true_when_deployment_matches():
+    from litellm.router_strategy.tag_based_routing import can_satisfy_confirmed_routing_tags
+
+    router = TagRoutingFallbackRouter(
+        {
+            "chain/3-bedrock": [
+                {
+                    "model_name": "chain/3-bedrock",
+                    "litellm_params": {"tags": ["inference:bedrock", "default"]},
+                }
+            ],
+        }
+    )
+    assert (
+        can_satisfy_confirmed_routing_tags(
+            RoutingContext(router),
+            "chain/3-bedrock",
+            {"metadata": {"tags": ["route:inference:bedrock"]}},
+        )
+        is True
+    )
+
+
+_VERTEX_ONLY = {
+    "chain/2-vertex": [
+        {
+            "model_name": "chain/2-vertex",
+            "litellm_params": {"tags": ["inference:vertex", "default"]},
+        }
+    ],
+}
+_VERTEX_REGEX = {
+    "chain/2-vertex": [
+        {
+            "model_name": "chain/2-vertex",
+            "litellm_params": {"tags": ["inference:vertex"], "tag_regex": ["^inference:"]},
+        }
+    ],
+}
+
+
+@pytest.mark.parametrize(
+    ("deployments", "router_filtering", "model", "request_kwargs", "expected"),
+    [
+        pytest.param(_VERTEX_ONLY, True, "chain/2-vertex", None, True, id="no-request-kwargs"),
+        pytest.param(
+            _VERTEX_ONLY, True, "chain/2-vertex", {"metadata": {"tags": ["inference:bedrock"]}}, True, id="unconfirmed"
+        ),
+        pytest.param(
+            _VERTEX_ONLY,
+            True,
+            "chain/unknown",
+            {"metadata": {"tags": ["route:inference:bedrock"]}},
+            True,
+            id="no-group",
+        ),
+        pytest.param(
+            _VERTEX_ONLY,
+            False,
+            "chain/2-vertex",
+            {"metadata": {"tags": ["route:inference:bedrock"]}},
+            True,
+            id="filtering-off",
+        ),
+        pytest.param(
+            _VERTEX_ONLY,
+            False,
+            "chain/2-vertex",
+            {"metadata": {"tags": ["route:inference:bedrock"]}, "enable_tag_filtering": True},
+            False,
+            id="request-enables-filtering",
+        ),
+        pytest.param(
+            _VERTEX_ONLY,
+            True,
+            "chain/2-vertex",
+            {"metadata": {"tags": ["route:&inference:bedrock"]}},
+            False,
+            id="confirmed-required-missing",
+        ),
+        pytest.param(
+            _VERTEX_ONLY,
+            True,
+            "chain/2-vertex",
+            {"metadata": {"tags": ["route:!inference:vertex"]}},
+            False,
+            id="confirmed-excluded-all",
+        ),
+        pytest.param(
+            _VERTEX_ONLY,
+            True,
+            "chain/2-vertex",
+            {"metadata": {"tags": ["route:&inference:vertex"]}},
+            True,
+            id="confirmed-required-present",
+        ),
+        pytest.param(
+            _VERTEX_REGEX,
+            True,
+            "chain/2-vertex",
+            {"metadata": {"tags": ["route:inference:bedrock"]}},
+            True,
+            id="tag-regex-deployment",
+        ),
+    ],
+)
+def test_can_satisfy_confirmed_routing_tags_branches(deployments, router_filtering, model, request_kwargs, expected):
+    from litellm.router_strategy.tag_based_routing import can_satisfy_confirmed_routing_tags
+
+    router = TagRoutingFallbackRouter(deployments)
+    router.enable_tag_filtering = router_filtering
+    assert can_satisfy_confirmed_routing_tags(RoutingContext(router), model, request_kwargs) is expected
+
+
+def test_is_fallback_target_tag_satisfiable_allows_entry_without_model():
+    from litellm.router_utils.fallback_event_handlers import _is_fallback_target_tag_satisfiable
+
+    router = TagRoutingFallbackRouter(_VERTEX_ONLY)
+    assert (
+        _is_fallback_target_tag_satisfiable(
+            RoutingContext(router), {"messages": []}, {"metadata": {"tags": ["route:x"]}}
+        )
+        is True
+    )
+
+
 class RecordingFailRouter(RouterDouble):
     def __init__(self):
         self.attempted_models = []
