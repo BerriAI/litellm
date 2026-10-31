@@ -15,6 +15,7 @@ from typing import Any, Dict, Final, List, Optional
 from unittest.mock import patch
 
 import httpx
+import fakeredis
 import pytest
 from fastapi import HTTPException
 from pydantic import TypeAdapter
@@ -7575,6 +7576,11 @@ async def test_post_call_success_hook_leaves_raw_provider_dict_untouched():
 
 
 class _OpenBreakerRedis:
+    def transport(self):
+        from tests._support.fake_redis import fake_redis_transport
+
+        return fake_redis_transport(fakeredis.FakeAsyncRedis(), failure_threshold=1)
+
     def async_register_script(self, script: str):
         async def refused(keys, args):
             from litellm.caching.redis_cache import RedisCircuitBreakerOpenError
@@ -7623,6 +7629,11 @@ async def test_an_open_circuit_breaker_reads_the_sliding_window_locally_without_
 
 
 class _UnreachableRedis:
+    def transport(self):
+        from tests._support.fake_redis import fake_redis_transport
+
+        return fake_redis_transport(fakeredis.FakeAsyncRedis(), failure_threshold=1)
+
     def async_register_script(self, script: str):
         async def refused(keys, args):
             raise ConnectionError("Error 61 connecting to 127.0.0.1:6379. Connection refused.")
@@ -7631,6 +7642,11 @@ class _UnreachableRedis:
 
 
 class _ScriptedRedis:
+    def transport(self):
+        from tests._support.fake_redis import fake_redis_transport
+
+        return fake_redis_transport(fakeredis.FakeAsyncRedis(), failure_threshold=1)
+
     def __init__(
         self,
         failing_script: str | None = None,
