@@ -235,7 +235,6 @@ async def _jsonrpc_request_id(request: Request) -> str | int | None:
 
 async def _jsonrpc_refusal(request: Request, refusal: ProxyException | HTTPException) -> JSONResponse:
     error: Final = refusal if isinstance(refusal, ProxyException) else status_typed_proxy_exception(refusal)
-    details: Final = error.to_dict()
     return JSONResponse(
         content={
             "jsonrpc": "2.0",
@@ -243,7 +242,7 @@ async def _jsonrpc_refusal(request: Request, refusal: ProxyException | HTTPExcep
             "error": {
                 "code": -32000,
                 "message": error.message,
-                "data": {name: value for name, value in details.items() if name != "message"},
+                "data": {"type": error.type, "param": error.param, "code": error.code},
             },
         },
         status_code=int(error.code),
