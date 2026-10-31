@@ -38805,6 +38805,12 @@ export interface components {
             /** Supported Reasoning Efforts */
             supported_reasoning_efforts?: string[] | null;
             /**
+             * Supports Background Chat
+             * @description Whether cache-backed background Responses runs are enabled for this model group
+             * @default false
+             */
+            supports_background_chat: boolean;
+            /**
              * Supports Fast Mode
              * @default false
              */

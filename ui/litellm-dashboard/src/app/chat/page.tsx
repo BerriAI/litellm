@@ -15,6 +15,7 @@ import type { AssistantMessageUpdate, ChatAttachment, ChatMessage } from "@/comp
 import ChatModelPicker, { isChatModel, modelChatMode, type ChatMode } from "@/components/chat/ChatModelPicker";
 import MoyaiChatComposer from "@/components/chat/moyai/MoyaiChatComposer";
 import MoyaiChatHome from "@/components/chat/moyai/MoyaiChatHome";
+import { useBackgroundChat } from "@/components/chat/useBackgroundChat";
 import { runChatRequest } from "@/components/chat/runChatRequest";
 import { readChatAttachment, MAX_CHAT_ATTACHMENTS, CHAT_ATTACHMENT_ACCEPT } from "@/components/chat/attachmentHelpers";
 import ChatFileChip from "@/components/chat/ChatFileChip";
@@ -102,7 +103,19 @@ export default function ChatConversationPage() {
   const responsesSessionGenerationRef = useRef(0);
   const previousResponsesConversationRef = useRef(activeConversationId);
   const [prevConversationIdForSessionReset, setPrevConversationIdForSessionReset] = useState(activeConversationId);
-  const [isStreaming, setIsStreaming] = useState(false);
+  const [isRequestInFlight, setIsStreaming] = useState(false);
+  const lastMessage = activeConversation?.messages.at(-1);
+  const background = useBackgroundChat(
+    activeConversationId,
+    lastMessage?.backgroundRun,
+    accessToken,
+    updateLastAssistantMessage,
+  );
+  const isStreaming = isRequestInFlight || background.pending;
+  const supportsBackground = models.some(
+    (model) => model.model_group === selectedModel && model.supports_background_chat,
+  );
+  const useBackground = mode === "chat" && supportsBackground && !storageUnavailable;
   const [inputText, setInputText] = useState("");
   const [mcpPopoverOpen, setMcpPopoverOpen] = useState(false);
   const [storageBannerDismissed, setStorageBannerDismissed] = useState(false);
@@ -297,6 +310,7 @@ export default function ChatConversationPage() {
         signal: requestController.signal,
         messages: history,
         previousResponseId,
+        background: requestMode === "chat" && useBackground,
         mcpServers: selectedMCPServers,
         onResponseId: (id: string | null) => {
           if (responsesSessionGenerationRef.current === sessionGeneration) setResponsesSessionId(id);
@@ -326,13 +340,18 @@ export default function ChatConversationPage() {
       updateLastAssistantMessage,
       isStreaming,
       responsesSessionId,
+      useBackground,
       setConversationIdInUrl,
     ],
   );
 
-  const handleStop = useCallback(() => {
+  const handleStop = () => {
+    if (background.pending) {
+      void background.cancel();
+      return;
+    }
     abortControllerRef.current?.abort();
-  }, []);
+  };
 
   const handleEditAndResend = useCallback(
     (messageId: string, newContent: string) => {
@@ -403,7 +422,19 @@ export default function ChatConversationPage() {
 
   const showBlankState = !activeConversation || activeConversation.messages.length === 0;
 
+  const backgroundHint = () => {
+    if (background.cancelling) return "Requesting cancellation…";
+    if (background.pending && storageUnavailable)
+      return "Keep this tab open. This run could not be saved in this browser.";
+    if (background.pending) return "Running in the background. You can close this tab and return to this chat.";
+    if (useBackground) return "Replies continue after you close this tab once the server accepts the request.";
+    return "Keep this tab open. Background runs are not available for this chat.";
+  };
+
   const inputBar = (inConversation: boolean) => {
+    const chatPlaceholder = inConversation
+      ? "Send a message..."
+      : "Describe a change, paste an error, or ask a question…";
     const preparing = isLoadingModels || isReadingAttachments;
     const submitDisabled = !hasMessageContent(inputText, attachments, mode) || !selectedModel || preparing;
     return (
@@ -424,13 +455,7 @@ export default function ChatConversationPage() {
           onChange={setInputText}
           onSubmit={() => void handleSend(inputText)}
           onCancel={handleStop}
-          placeholder={
-            mode === "image"
-              ? "Describe the image you want to create…"
-              : inConversation
-                ? "Send a message..."
-                : "Describe a change, paste an error, or ask a question…"
-          }
+          placeholder={mode === "image" ? "Describe the image you want to create…" : chatPlaceholder}
           isLoading={isStreaming}
           submitLabel={mode === "image" ? "Generate image" : "Send"}
           submitDisabled={submitDisabled}
@@ -534,6 +559,29 @@ export default function ChatConversationPage() {
             {mode === "image"
               ? "No image-generation models are available. Ask your admin to add one to Model Hub."
               : "No chat models are available for your account."}
+          </p>
+        )}
+        {background.connectionError && (
+          <div role="alert" className="mt-2 flex items-center gap-2 text-sm text-destructive">
+            <span>{background.connectionError}</span>
+            <Button variant="ghost" size="sm" onClick={background.reconnect}>
+              Reconnect
+            </Button>
+          </div>
+        )}
+        {lastMessage?.backgroundError && (
+          <p role="alert" className="mt-2 text-sm text-destructive">
+            {lastMessage.backgroundError}
+          </p>
+        )}
+        {lastMessage?.backgroundRun?.status === "cancelled" && (
+          <p role="status" className="mt-2 text-xs text-muted-foreground">
+            Cancellation requested
+          </p>
+        )}
+        {(background.pending || mode === "chat") && (
+          <p role="status" className="mt-2 text-xs text-muted-foreground">
+            {backgroundHint()}
           </p>
         )}
         <p className="moyai-chat-home-composer-hint">

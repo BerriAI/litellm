@@ -18100,6 +18100,8 @@ async def model_deprecations(
 def get_model_group_info(
     llm_router: Router, all_models_str: Sequence[str], model_group: str | None, team_id: str | None = None
 ) -> list[ModelGroupInfoProxy]:
+    from litellm.proxy.response_polling.polling_handler import should_use_polling_for_request
+
     model_groups: Final[list[ModelGroupInfoProxy]] = []
 
     unique_models: Final = tuple(dict.fromkeys(all_models_str))
@@ -18109,6 +18111,14 @@ def get_model_group_info(
         if model_group is not None and model_group != model:
             continue
 
+        supports_background_chat = should_use_polling_for_request(
+            background_mode=True,
+            polling_via_cache_enabled=polling_via_cache_enabled,
+            redis_cache=redis_usage_cache,
+            model=model,
+            llm_router=llm_router,
+            native_background_mode=native_background_mode,
+        )
         _model_group_info = registry.group(model, team_id=team_id)
 
         if _model_group_info is not None:
@@ -18116,6 +18126,7 @@ def get_model_group_info(
                 ModelGroupInfoProxy.model_validate(
                     {
                         **_model_group_info.model_dump(),
+                        "supports_background_chat": supports_background_chat,
                         **model_group_custom_fields(
                             registry.deployments(
                                 resolve_model_group_alias(registry.aliases(), model) or model,
@@ -18130,6 +18141,7 @@ def get_model_group_info(
             model_group_info = ModelGroupInfoProxy(
                 model_group=model,
                 providers=[],
+                supports_background_chat=supports_background_chat,
             )
             model_groups.append(model_group_info)
 
