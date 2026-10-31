@@ -17,6 +17,7 @@ import anyio
 from fastapi import HTTPException
 from mcp import MCPError, ReadResourceResult, Resource
 from mcp.types import (
+    METHOD_NOT_FOUND,
     CallToolRequest,
     CallToolRequestParams,
     CallToolResult,
@@ -2817,7 +2818,7 @@ async def log_mcp_sdk_rejection(
     from litellm.proxy.proxy_server import proxy_logging_obj
     from litellm.utils import Rules, function_setup
 
-    message: Final = "Method not found" if error_code == -32601 else "Invalid request parameters"
+    message: Final = "Method not found" if error_code == METHOD_NOT_FOUND else "Invalid request parameters"
     rejection: Final = {
         "method": "".join(char for char in method[:256] if char.isprintable()),
         "request_id": (

@@ -549,6 +549,7 @@ if MCP_AVAILABLE:
         ListToolsRequest,
         ReadResourceRequest,
     )
+    from mcp_types.methods import CLIENT_REQUESTS, SPEC_CLIENT_METHODS
 
     from litellm.proxy.mcp_server import operations
     from litellm.proxy.mcp_server.contracts import OperationContext
@@ -660,7 +661,10 @@ if MCP_AVAILABLE:
                 return METHOD_NOT_FOUND
             return None
         if not isinstance(error, ValidationError):
-            return None
+            unavailable_for_version: Final = (
+                ctx.method in SPEC_CLIENT_METHODS and (ctx.method, ctx.protocol_version) not in CLIENT_REQUESTS
+            )
+            return METHOD_NOT_FOUND if error.code == METHOD_NOT_FOUND and unavailable_for_version else None
         try:
             entry.params_type.model_validate({} if ctx.params is None else ctx.params, by_name=False)
         except ValidationError:

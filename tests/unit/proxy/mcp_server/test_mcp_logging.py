@@ -102,6 +102,8 @@ def sdk_rejection_logger() -> Generator[SDKRejectionLogger, None, None]:
         ("logging/setLevel", {"level": 123}, -32602, "Invalid request parameters"),
         ("logging/setLevel", {"level": "info"}, -32601, "Method not found"),
         ("completion/complete", {}, -32602, "Invalid request parameters"),
+        ("server/discover", {}, -32601, "Method not found"),
+        ("subscriptions/listen", {}, -32601, "Method not found"),
     ],
 )
 async def test_sdk_rejection_emits_one_redacted_zero_cost_failure(
@@ -199,6 +201,26 @@ async def test_sdk_rejection_sync_logging_allows_concurrent_ping(
     assert len(sdk_rejection_logger.failures) == 1
     assert sdk_rejection_logger.post_failures == 1
     assert sdk_rejection_logger.pre_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_handler_method_not_found_does_not_emit_sdk_rejection(
+    sdk_rejection_logger: SDKRejectionLogger,
+) -> None:
+    context: Final = ServerRequestContext(
+        session=MagicMock(spec=ServerSession),
+        lifespan_context=None,
+        protocol_version="2025-11-25",
+        method="tools/list",
+        params={},
+        request_id="handler-error",
+    )
+    handler_error: Final = MCPError(code=-32601, message="Handler rejected the request")
+    with pytest.raises(MCPError) as rejected:
+        await _log_sdk_rejection(context, AsyncMock(side_effect=handler_error))
+    assert rejected.value is handler_error
+    assert sdk_rejection_logger.failures == []
+    assert sdk_rejection_logger.post_failures == 0
 
 
 @pytest.mark.asyncio
