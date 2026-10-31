@@ -8,9 +8,9 @@ use axum::{
     routing::get,
 };
 use futures_util::future::BoxFuture;
-use litellm_auth_types::SecretValue;
 use litellm_config::Config;
 use litellm_gateway_auth::{Auth, RequireMasterKey, hash_token};
+use litellm_secret_value::SecretValue;
 use litellm_secrets::source::SecretSource;
 use rstest::{fixture, rstest};
 use tower::ServiceExt;

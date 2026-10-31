@@ -2,6 +2,7 @@ use std::time::Duration;
 
 use litellm_circuit_breaker::Breaker;
 use litellm_redis_testing::{RedisCluster, RedisServer};
+use litellm_secret_value::SecretValue;
 use redis::cluster_routing::{Route, RoutingInfo, SingleNodeRoutingInfo, SlotAddr};
 
 use crate::{
@@ -30,7 +31,7 @@ impl Server {
 
     pub(crate) fn endpoint(&self) -> Endpoint {
         match self {
-            Self::Standalone(server) => Endpoint::Url(server.url().to_owned()),
+            Self::Standalone(server) => Endpoint::Url(SecretValue::new(server.url().to_owned())),
             Self::Cluster(cluster) => Endpoint::Cluster(ClusterEndpoint {
                 nodes: cluster
                     .nodes()

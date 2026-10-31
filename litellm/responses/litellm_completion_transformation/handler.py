@@ -9,6 +9,8 @@ from typing import Final
 from pydantic import TypeAdapter
 
 import litellm
+from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
+from litellm.litellm_core_utils.model_param_helper import embeds_thought_signature_in_tool_call_id
 from litellm.responses.additional_tools import HoistedAdditionalTools, hoist_additional_tools
 from litellm.responses.litellm_completion_transformation.client_tool_search import bridge_client_tool_search
 from litellm.responses.litellm_completion_transformation.compaction_items import holds_compaction_summary
@@ -30,6 +32,14 @@ from litellm.types.llms.openai import (
 from litellm.types.utils import ModelResponse
 
 _REQUEST_KWARGS_ADAPTER: Final = TypeAdapter(dict[str, object])
+
+
+def _chat_verbosity(responses_api_request: Mapping[str, object]) -> Mapping[str, object]:
+    match responses_api_request.get("text"):
+        case {"verbosity": str() as verbosity}:
+            return {"verbosity": verbosity}
+        case _:
+            return {}
 
 
 @dataclass(frozen=True, slots=True)
@@ -73,7 +83,11 @@ class LiteLLMCompletionTransformationHandler:
         | BaseResponsesAPIStreamingIterator
         | Coroutine[object, object, ResponsesAPIResponse | BaseResponsesAPIStreamingIterator]
     ):
-        hoisted: Final = hoist_additional_tools(input, responses_api_request.get("tools"))
+        hoisted: Final = hoist_additional_tools(
+            input,
+            responses_api_request.get("tools"),
+            drop_params=drops_unsupported_params(_REQUEST_KWARGS_ADAPTER.validate_python(kwargs).get("drop_params")),
+        )
         previous_response_id: Final = responses_api_request.get("previous_response_id")
         if _is_async and previous_response_id and has_client_tool_search(hoisted.tools):
             return self._async_response_api_handler_after_earlier_searches(
@@ -90,8 +104,8 @@ class LiteLLMCompletionTransformationHandler:
         bridged: Final = _bridged_request(hoisted, responses_api_request, ())
         bridged_input: Final = bridged.input
         bridged_request: Final = bridged.responses_api_request
-        litellm_completion_request: Final[dict] = (
-            LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+        litellm_completion_request: Final[dict] = {
+            **LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
                 model=model,
                 input=bridged_input,
                 responses_api_request=bridged_request,
@@ -99,8 +113,9 @@ class LiteLLMCompletionTransformationHandler:
                 stream=stream,
                 extra_headers=extra_headers,
                 **kwargs,
-            )
-        )
+            ),
+            **_chat_verbosity(bridged_request),
+        }
 
         if _is_async:
             return self.async_response_api_handler(
@@ -134,6 +149,9 @@ class LiteLLMCompletionTransformationHandler:
                 responses_api_request=bridged_request,
                 custom_llm_provider=custom_llm_provider,
                 litellm_metadata=kwargs.get("litellm_metadata", {}),
+                tool_call_provider_fields=not embeds_thought_signature_in_tool_call_id(
+                    _REQUEST_KWARGS_ADAPTER.validate_python(kwargs)
+                ),
             )
         raise ValueError(f"Unexpected response type: {type(litellm_completion_response)}")
 
@@ -164,8 +182,8 @@ class LiteLLMCompletionTransformationHandler:
         return await self.async_response_api_handler(
             previous_response_client_ids,
             stored_turns,
-            litellm_completion_request=(
-                LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+            litellm_completion_request={
+                **LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
                     model=model,
                     input=bridged.input,
                     responses_api_request=bridged.responses_api_request,
@@ -173,8 +191,9 @@ class LiteLLMCompletionTransformationHandler:
                     stream=stream,
                     extra_headers=extra_headers,
                     **request_kwargs,
-                )
-            ),
+                ),
+                **_chat_verbosity(bridged.responses_api_request),
+            },
             request_input=bridged.input,
             responses_api_request=bridged.responses_api_request,
             **request_kwargs,
@@ -225,5 +244,8 @@ class LiteLLMCompletionTransformationHandler:
                 responses_api_request=responses_api_request,
                 custom_llm_provider=litellm_completion_request.get("custom_llm_provider"),
                 litellm_metadata=kwargs.get("litellm_metadata", {}),
+                tool_call_provider_fields=not embeds_thought_signature_in_tool_call_id(
+                    _REQUEST_KWARGS_ADAPTER.validate_python(kwargs)
+                ),
             )
         raise ValueError(f"Unexpected response type: {type(litellm_completion_response)}")

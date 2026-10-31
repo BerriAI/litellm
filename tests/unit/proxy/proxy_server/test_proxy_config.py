@@ -32,6 +32,7 @@ import litellm
 from litellm._logging import turn_on_json
 from litellm.proxy._types import CommonProxyErrors, ConfigGeneralSettings
 from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
+from litellm.router_api import ApplyResult, RouterSettings
 from litellm.types.router import Deployment, LiteLLM_Params
 from litellm.proxy.proxy_server import (
     ProxyConfig,
@@ -1658,7 +1659,7 @@ def test_ProxyConfig__init_cache_sets_litellm_cache(monkeypatch):
 
 def test_ProxyConfig__init_cache_invalid_params_raises():
     pc = ProxyConfig()
-    with pytest.raises(AttributeError):
+    with pytest.raises(ValueError, match="Unsupported cache type 'this-cache-type-does-not-exist'"):
         pc._init_cache(cache_params={"type": "this-cache-type-does-not-exist"})
 
 
@@ -1670,13 +1671,13 @@ def test_ProxyConfig__init_cache_invalid_params_raises():
 def test_ProxyConfig_switch_on_llm_response_caching_sets_flag(monkeypatch):
     pc = ProxyConfig()
     fake_router = MagicMock()
-    fake_router.cache_responses = False
+    fake_router.settings.return_value = RouterSettings(cache_responses=False)
     fake_cache = MagicMock()
     monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", fake_router)
     monkeypatch.setattr(litellm, "cache", fake_cache, raising=False)
     pc.switch_on_llm_response_caching()
     snapshot = {
-        "cache_responses": fake_router.cache_responses,
+        "cache_responses": fake_router.apply.call_args.args[0].assign.get("cache_responses"),
         "router_set": True,
         "cache_set": True,
     }
@@ -2262,7 +2263,6 @@ def test_ProxyConfig_merge_config_and_db_search_tools_prefers_db_duplicate():
 @pytest.mark.asyncio
 async def test_ProxyConfig__init_search_tools_in_db_loads_merged_tools(monkeypatch):
     from litellm.proxy import proxy_server
-    from litellm.router_utils.search_api_router import SearchAPIRouter
 
     pc = ProxyConfig()
     pc.update_config_state(
@@ -2288,28 +2288,24 @@ async def test_ProxyConfig__init_search_tools_in_db_loads_merged_tools(monkeypat
             },
         }
     ]
-    fake_router = MagicMock()
+    router = litellm.Router()
     mock_get_db_tools = AsyncMock(return_value=db_tools)
-    mock_update_router = AsyncMock()
 
-    monkeypatch.setattr(proxy_server, "llm_router", fake_router)
+    monkeypatch.setattr(proxy_server, "llm_router", router)
     monkeypatch.setattr(
         "litellm.proxy.search_endpoints.search_tool_registry.SearchToolRegistry.get_all_search_tools_from_db",
         mock_get_db_tools,
     )
-    monkeypatch.setattr(SearchAPIRouter, "update_router_search_tools", mock_update_router)
 
     await pc._init_search_tools_in_db(prisma_client=MagicMock())
 
     mock_get_db_tools.assert_awaited_once()
-    mock_update_router.assert_awaited_once()
-    update_kwargs = mock_update_router.await_args.kwargs
-    assert update_kwargs["router_instance"] is fake_router
-    assert [tool["search_tool_name"] for tool in update_kwargs["search_tools"]] == [
+    loaded_tools = router.settings().search_tools
+    assert [tool["search_tool_name"] for tool in loaded_tools] == [
         "config-only",
         "shared-search",
     ]
-    assert update_kwargs["search_tools"][1]["litellm_params"]["api_key"] == "fake-db-key"
+    assert loaded_tools[1]["litellm_params"]["api_key"] == "fake-db-key"
 
 
 @pytest.mark.asyncio
@@ -2319,11 +2315,10 @@ async def test_ProxyConfig__init_search_tools_in_db_clears_router_when_last_tool
 
     pc = ProxyConfig()
     pc.update_config_state({})
-    fake_router = MagicMock()
-    fake_router.search_tools = [{"search_tool_name": "deleted-search", "litellm_params": {}}]
+    router = litellm.Router(search_tools=[{"search_tool_name": "deleted-search", "litellm_params": {}}])
     mock_get_db_tools = AsyncMock(return_value=[])
 
-    monkeypatch.setattr(proxy_server, "llm_router", fake_router)
+    monkeypatch.setattr(proxy_server, "llm_router", router)
     monkeypatch.setattr(
         "litellm.proxy.search_endpoints.search_tool_registry.SearchToolRegistry.get_all_search_tools_from_db",
         mock_get_db_tools,
@@ -2332,7 +2327,7 @@ async def test_ProxyConfig__init_search_tools_in_db_clears_router_when_last_tool
     await pc._init_search_tools_in_db(prisma_client=MagicMock())
 
     mock_get_db_tools.assert_awaited_once()
-    assert fake_router.search_tools == []
+    assert router.settings().search_tools == []
 
 
 @pytest.mark.asyncio
@@ -2346,15 +2341,16 @@ async def test_ProxyConfig__init_search_tools_in_db_keeps_loaded_tools_whose_par
         "search_tool_name": "rotated-search",
         "litellm_params": {"search_provider": "perplexity", "api_key": "pplx-loaded"},
     }
-    fake_router = MagicMock()
-    fake_router.search_tools = [
-        loaded_tool,
-        {
-            "search_tool_id": "typo-id",
-            "search_tool_name": "typo-search",
-            "litellm_params": {"search_provider": "tavily"},
-        },
-    ]
+    router = litellm.Router(
+        search_tools=[
+            loaded_tool,
+            {
+                "search_tool_id": "typo-id",
+                "search_tool_name": "typo-search",
+                "litellm_params": {"search_provider": "tavily"},
+            },
+        ]
+    )
     db_tools = [
         {
             "search_tool_id": "rotated-id",
@@ -2375,7 +2371,7 @@ async def test_ProxyConfig__init_search_tools_in_db_keeps_loaded_tools_whose_par
             "litellm_params": {"search_provider": "Tavily", "api_key": "tvly-edited"},
         },
     ]
-    monkeypatch.setattr(proxy_server, "llm_router", fake_router)
+    monkeypatch.setattr(proxy_server, "llm_router", router)
     monkeypatch.setattr(
         "litellm.proxy.search_endpoints.search_tool_registry.SearchToolRegistry.get_all_search_tools_from_db",
         AsyncMock(return_value=db_tools),
@@ -2383,7 +2379,7 @@ async def test_ProxyConfig__init_search_tools_in_db_keeps_loaded_tools_whose_par
 
     await pc._init_search_tools_in_db(prisma_client=MagicMock())
 
-    assert [tool["litellm_params"] for tool in fake_router.search_tools] == [
+    assert [tool["litellm_params"] for tool in router.settings().search_tools] == [
         {"search_provider": "perplexity", "api_key": "pplx-loaded"},
         {"search_provider": "tavily", "api_key": "tvly-fresh"},
         {"search_provider": "Tavily", "api_key": "tvly-edited"},
@@ -3418,7 +3414,7 @@ def test_ProxyConfig__add_deployment_no_router_returns_zero(monkeypatch):
 
 def test_ProxyConfig__add_deployment_invalid_litellm_params_skips(monkeypatch):
     fake_router = MagicMock()
-    fake_router.upsert_deployment = MagicMock(return_value=None)
+    fake_router.apply = MagicMock(return_value=ApplyResult(version=1, upserted=[None]))
     monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", fake_router)
     pc = ProxyConfig()
     bad = SimpleNamespace(litellm_params="not-a-dict", model_name="x", model_id="x")
@@ -3439,7 +3435,7 @@ def test_ProxyConfig__add_deployment_resolves_env_refs_after_db_decrypt(monkeypa
         lambda value, key, return_original_value: value,
     )
     fake_router = MagicMock()
-    fake_router.upsert_deployment = MagicMock(return_value=True)
+    fake_router.apply = MagicMock(return_value=ApplyResult(version=1, upserted=[True]))
     monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", fake_router)
     pc = ProxyConfig()
     db_model = SimpleNamespace(
@@ -3455,7 +3451,7 @@ def test_ProxyConfig__add_deployment_resolves_env_refs_after_db_decrypt(monkeypa
     )
 
     added = pc._add_deployment(db_models=[db_model])
-    deployment = fake_router.upsert_deployment.call_args.kwargs["deployment"]
+    (deployment,) = fake_router.apply.call_args.args[0].upsert
 
     assert added == 1
     assert deployment.litellm_params.api_key == "resolved-secret"
@@ -3475,7 +3471,7 @@ def test_ProxyConfig__add_deployment_resolves_team_env_refs(monkeypatch):
         lambda value, key, return_original_value: value,
     )
     fake_router = MagicMock()
-    fake_router.upsert_deployment = MagicMock(return_value=True)
+    fake_router.apply = MagicMock(return_value=ApplyResult(version=1, upserted=[True]))
     monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", fake_router)
     pc = ProxyConfig()
     db_model = SimpleNamespace(
@@ -3491,7 +3487,7 @@ def test_ProxyConfig__add_deployment_resolves_team_env_refs(monkeypatch):
     )
 
     added = pc._add_deployment(db_models=[db_model])
-    deployment = fake_router.upsert_deployment.call_args.kwargs["deployment"]
+    (deployment,) = fake_router.apply.call_args.args[0].upsert
 
     assert added == 1
     assert deployment.litellm_params.api_key == "master-secret"
@@ -3552,7 +3548,7 @@ def test_ProxyConfig__add_deployment_resolves_env_refs_for_aws_bedrock_auth_para
         lambda value, key, return_original_value: value,
     )
     fake_router = MagicMock()
-    fake_router.upsert_deployment = MagicMock(return_value=True)
+    fake_router.apply = MagicMock(return_value=ApplyResult(version=1, upserted=[True]))
     monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", fake_router)
     pc = ProxyConfig()
     litellm_params: Dict[str, Any] = {"model": "bedrock/anthropic.claude-v2"}
@@ -3567,7 +3563,7 @@ def test_ProxyConfig__add_deployment_resolves_env_refs_for_aws_bedrock_auth_para
     )
 
     added = pc._add_deployment(db_models=[db_model])
-    deployment = fake_router.upsert_deployment.call_args.kwargs["deployment"]
+    (deployment,) = fake_router.apply.call_args.args[0].upsert
 
     assert added == 1
     for key, (_, expected) in aws_env.items():
@@ -3584,7 +3580,7 @@ def test_ProxyConfig__add_deployment_resolves_env_refs_on_arbitrary_field(monkey
         lambda value, key, return_original_value: value,
     )
     fake_router = MagicMock()
-    fake_router.upsert_deployment = MagicMock(return_value=True)
+    fake_router.apply = MagicMock(return_value=ApplyResult(version=1, upserted=[True]))
     monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", fake_router)
     pc = ProxyConfig()
     db_model = SimpleNamespace(
@@ -3599,7 +3595,7 @@ def test_ProxyConfig__add_deployment_resolves_env_refs_on_arbitrary_field(monkey
     )
 
     added = pc._add_deployment(db_models=[db_model])
-    deployment = fake_router.upsert_deployment.call_args.kwargs["deployment"]
+    (deployment,) = fake_router.apply.call_args.args[0].upsert
 
     assert added == 1
     assert deployment.litellm_params.some_future_field == "resolved-custom-value"
@@ -3613,7 +3609,7 @@ def test_ProxyConfig__add_deployment_turns_stored_drop_params_string_into_bool(m
     monkeypatch.setenv("LITELLM_SALT_KEY", MASTER_KEY)
     monkeypatch.setenv("DROP_PARAMS_FLAG", "true")
     fake_router = MagicMock()
-    fake_router.upsert_deployment = MagicMock(return_value=True)
+    fake_router.apply = MagicMock(return_value=ApplyResult(version=1, upserted=[True]))
     monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", fake_router)
     pc = ProxyConfig()
     db_model = SimpleNamespace(
@@ -3628,7 +3624,7 @@ def test_ProxyConfig__add_deployment_turns_stored_drop_params_string_into_bool(m
     )
 
     added = pc._add_deployment(db_models=[db_model])
-    deployment = fake_router.upsert_deployment.call_args.kwargs["deployment"]
+    (deployment,) = fake_router.apply.call_args.args[0].upsert
 
     assert added == 1
     assert deployment.litellm_params.drop_params is True
@@ -3637,7 +3633,7 @@ def test_ProxyConfig__add_deployment_turns_stored_drop_params_string_into_bool(m
 def test_ProxyConfig__add_deployment_keeps_loading_rows_after_a_non_flag_drop_params(monkeypatch):
     monkeypatch.setenv("LITELLM_SALT_KEY", MASTER_KEY)
     fake_router = MagicMock()
-    fake_router.upsert_deployment = MagicMock(return_value=True)
+    fake_router.apply = MagicMock(return_value=ApplyResult(version=1, upserted=[True]))
     monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", fake_router)
     pc = ProxyConfig()
 
@@ -3654,7 +3650,7 @@ def test_ProxyConfig__add_deployment_keeps_loading_rows_after_a_non_flag_drop_pa
         )
 
     added = pc._add_deployment(db_models=[db_model("bad-row", 2), db_model("good-after", "true")])
-    deployments = [call.kwargs["deployment"] for call in fake_router.upsert_deployment.call_args_list]
+    deployments = [d for call in fake_router.apply.call_args_list for d in call.args[0].upsert]
 
     assert added == 2
     assert [d.litellm_params.drop_params for d in deployments] == [None, True]
@@ -4189,7 +4185,7 @@ async def test_ProxyConfig__get_hierarchical_router_settings_key_shadows_team_en
 async def test_ProxyConfig__add_router_settings_from_db_config_updates_router():
     pc = ProxyConfig()
     fake_router = MagicMock()
-    fake_router.update_settings = MagicMock()
+    fake_router.apply = MagicMock()
     fake_prisma = MagicMock()
     fake_prisma.db.litellm_config.find_first = AsyncMock(
         return_value=SimpleNamespace(param_value={"timeout": 30, "retries": 2, "fallbacks": []})
@@ -4200,9 +4196,9 @@ async def test_ProxyConfig__add_router_settings_from_db_config_updates_router():
         prisma_client=fake_prisma,
     )
     snapshot = {
-        "called": fake_router.update_settings.called,
-        "call_count": fake_router.update_settings.call_count,
-        "kwargs_keys": sorted(list(fake_router.update_settings.call_args.kwargs.keys())),
+        "called": fake_router.apply.called,
+        "call_count": fake_router.apply.call_count,
+        "kwargs_keys": sorted(list(fake_router.apply.call_args.args[0].settings.keys())),
     }
     assert snapshot == {
         "called": True,
@@ -4232,7 +4228,7 @@ async def test_ProxyConfig_add_deployment_applies_db_router_settings(monkeypatch
 
     pc = ProxyConfig()
     fake_router = MagicMock()
-    fake_router.get_model_list = MagicMock(return_value=[])
+    fake_router.registry.return_value.deployments.return_value = []
     fake_prisma = MagicMock()
     fake_prisma.db.litellm_config.find_first = AsyncMock(
         return_value=SimpleNamespace(param_value={"routing_strategy": "latency-based-routing"})
@@ -4254,7 +4250,8 @@ async def test_ProxyConfig_add_deployment_applies_db_router_settings(monkeypatch
 
     await pc.add_deployment(prisma_client=fake_prisma, proxy_logging_obj=MagicMock())
 
-    fake_router.update_settings.assert_called_once_with(routing_strategy="latency-based-routing")
+    fake_router.apply.assert_called_once()
+    assert dict(fake_router.apply.call_args.args[0].settings) == {"routing_strategy": "latency-based-routing"}
 
 
 def _stub_add_deployment_collaborators(
@@ -4263,7 +4260,7 @@ def _stub_add_deployment_collaborators(
     from litellm.proxy import proxy_server
 
     fake_router = MagicMock()
-    fake_router.get_model_list = MagicMock(return_value=[])
+    fake_router.registry.return_value.deployments.return_value = []
 
     async def fake_get_config(*args: object, **kwargs: object) -> dict[str, object]:
         return {}
