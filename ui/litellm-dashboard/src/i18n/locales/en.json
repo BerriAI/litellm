@@ -983,5 +983,1773 @@
       "message_one": "{{value}} unit with no known price is left out of the cost. <githubLink>Request pricing on GitHub</githubLink>",
       "message_other": "{{value}} units with no known price are left out of the cost. <githubLink>Request pricing on GitHub</githubLink>"
     }
+  },
+  "mcpServers": {
+    "duplicateServerCheck": {
+      "duplicateIdentifier": "An MCP server with this name/alias already exists."
+    },
+    "editServerPayload": {
+      "errors": {
+        "invalidToolDisplayName": "Tool display name \"{{displayName}}\" is invalid. Only letters, digits, underscores, and hyphens are allowed (no spaces).",
+        "stdioConfigMissingCommand": "Stdio configuration must include a command",
+        "invalidStdioJson": "Invalid JSON in stdio configuration",
+        "invalidStdioEnvJson": "Invalid JSON in stdio env configuration",
+        "stdioCommandRequired": "Stdio transport requires a command",
+        "invalidTokenValidationJson": "Invalid JSON in Token Validation Rules"
+      }
+    },
+    "editToolPreview": {
+      "originChanged": "The server origin changed. Enter credentials and replace or remove saved static headers to preview tools."
+    },
+    "fieldRules": {
+      "tagsControl": {
+        "emptyText": "Type to add"
+      }
+    },
+    "stdioConfiguration": {
+      "label": "Stdio Configuration (JSON)",
+      "tooltip": "Paste your stdio MCP server configuration in JSON format. You can use the full mcpServers structure from config.yaml or just the inner server configuration.",
+      "errors": {
+        "required": "Please enter stdio configuration",
+        "invalidJson": "Please enter valid JSON"
+      }
+    },
+    "stdioAvailability": {
+      "disabledMessage": "stdio MCP servers are disabled on this proxy. Set LITELLM_ENABLE_MCP_STDIO=true on the proxy and restart to enable them",
+      "banner": {
+        "title": "stdio is disabled on this proxy",
+        "description": "{{disabledMessage}}. Until then this server cannot start or be saved as stdio."
+      }
+    },
+    "openApiFormSection": {
+      "specUrl": {
+        "label": "OpenAPI Spec URL",
+        "tooltip": "URL to an OpenAPI specification (JSON or YAML). MCP tools will be automatically generated from the API endpoints defined in the spec.",
+        "required": "Please enter an OpenAPI spec URL"
+      }
+    },
+    "openApiQuickPicker": {
+      "title": "Popular APIs",
+      "hint": "Select an API to pre-fill the spec URL and OAuth 2.0 settings, or enter your own spec URL below."
+    },
+    "useTestMcpConnection": {
+      "errors": {
+        "toolsListFailed": "Failed to retrieve tools list"
+      }
+    },
+    "serverCostConfig": {
+      "title": "Cost Configuration",
+      "titleTooltipLabel": "About cost configuration",
+      "titleTooltip": "Configure costs for this MCP server's tool calls. Set a default rate and per-tool overrides.",
+      "defaultCost": {
+        "label": "Default Cost per Query ($)",
+        "tooltipLabel": "About the default cost",
+        "tooltip": "Default cost charged for each tool call to this server.",
+        "help": "Set a default cost for all tool calls to this server"
+      },
+      "toolCosts": {
+        "label": "Tool-Specific Costs ($)",
+        "tooltipLabel": "About per-tool costs",
+        "tooltip": "Override the default cost for specific tools. Leave blank to use the default rate.",
+        "availableTools": "Available Tools",
+        "useDefaultPlaceholder": "Use default"
+      },
+      "summary": {
+        "title": "Cost Summary:",
+        "defaultCost": "• Default cost: ${{cost}} per query",
+        "toolCost": "• {{toolName}}: ${{cost}} per query"
+      }
+    },
+    "connectionStatus": {
+      "title": "Connection Status",
+      "incomplete": {
+        "title": "Complete required fields to test connection",
+        "description": "Fill in URL, Transport, and Authentication to test MCP server connection"
+      },
+      "state": {
+        "testing": "Testing connection to MCP server...",
+        "successful": "Connection successful",
+        "readyToSubmit": "Ready to submit",
+        "failed": "Connection failed",
+        "readyToTest": "Ready to test connection"
+      },
+      "server": "Server: {{server}}",
+      "badge": {
+        "connecting": "Connecting...",
+        "connected": "Connected",
+        "failed": "Failed"
+      },
+      "loadingTools": "Testing connection and loading tools...",
+      "previewUnavailable": "Tool preview unavailable",
+      "error": {
+        "title": "Connection Failed",
+        "stackTrace": "Stack Trace",
+        "retry": "Retry"
+      },
+      "noTools": {
+        "title": "Connection successful!",
+        "description": "No tools found for this MCP server"
+      }
+    },
+    "logoSelector": {
+      "label": "Logo",
+      "tooltipLabel": "About the logo",
+      "tooltip": "Select a well-known logo or paste a URL to any image. The logo is shown on the admin and chat pages.",
+      "selectedLabel": "Selected",
+      "customUrlPlaceholder": "Or paste a custom logo URL..."
+    },
+    "permissionManagement": {
+      "title": "Permission Management / Access Control",
+      "subtitle": "Configure access permissions and security settings (Optional)",
+      "allowAllKeys": {
+        "label": "Allow All LiteLLM Keys",
+        "tooltip": "When enabled, every API key can access this MCP server.",
+        "description": "Enable if this server should be \"public\" to all keys."
+      },
+      "internalNetworkOnly": {
+        "label": "Internal network only",
+        "tooltip": "When on, requests must come from your internal network unless the server ID is explicitly published in public_mcp_servers. Turn off to allow public IPs. Authentication and access permissions still apply.",
+        "description": "Turn on to restrict public IPs. Explicitly published server IDs remain accessible from public IPs."
+      },
+      "delegateAuth": {
+        "label": "Delegate auth to upstream (PKCE passthrough)",
+        "tooltip": "When on, LiteLLM skips its own API key/SSO check for this server and lets the client complete PKCE directly with the upstream MCP server. Only honored when Auth Type is oauth2. No spend tracking or per-key rate limiting will run on this route.",
+        "description": "Bypass LiteLLM auth so clients authenticate directly with the upstream OAuth MCP server."
+      },
+      "oauthPassthrough": {
+        "label": "OAuth pass-through",
+        "tooltip": "When on, this server is treated as an OAuth pass-through: the gateway proxies the upstream /.well-known/oauth-protected-resource metadata, emits spec-compliant 401 challenges when no bearer is supplied, and propagates upstream 401/403 responses. Only honored when Auth Type is None and 'Authorization' is in Extra Headers.",
+        "description": "Forward upstream OAuth discovery and 401 challenges so clients negotiate OAuth directly with the upstream MCP server."
+      },
+      "internalDelegateWarning": {
+        "title": "Internal server with upstream OAuth delegation",
+        "description": "This MCP server is configured as internal-only but delegates auth to upstream. Anonymous users will be able to reach the upstream OAuth2 /authorize flow without a LiteLLM session. Ensure your upstream provider and network enforce access controls."
+      },
+      "accessGroups": {
+        "label": "MCP Access Groups",
+        "tooltip": "Specify access groups for this MCP server. Users must be in at least one of these groups to access the server.",
+        "placeholder": "Select existing groups or type to create new ones"
+      },
+      "extraHeaders": {
+        "label": "Extra Headers",
+        "tooltip": "Forward custom headers from incoming requests to this MCP server (e.g., Authorization, X-Custom-Header, User-Agent)",
+        "configuredCount": "{{count}} configured",
+        "currentlyPlaceholder": "Currently: {{headers}}",
+        "placeholder": "Enter header names (e.g., Authorization, X-Custom-Header)"
+      },
+      "staticHeaders": {
+        "label": "Static Headers",
+        "tooltip": "Send these key-value headers with every request to this MCP server.",
+        "headerNameRequired": "Header name is required",
+        "headerNamePlaceholder": "Header name (e.g., X-API-Key)",
+        "clearHeaderName": "Clear header name",
+        "headerValueRequired": "Header value is required",
+        "headerValuePlaceholder": "Header value",
+        "clearHeaderValue": "Clear header value",
+        "add": "Add Static Header"
+      }
+    },
+    "createMcpServer": {
+      "payloadErrors": {
+        "invalidToolDisplayName": "Tool display name \"{{displayName}}\" is invalid. Only letters, digits, underscores, and hyphens are allowed (no spaces).",
+        "invalidStdioJson": "Invalid JSON in stdio configuration",
+        "invalidTokenValidationJson": "Invalid JSON in Token Validation Rules"
+      },
+      "toasts": {
+        "browserTokenHeld": "Token held for this browser session. Tools can now be previewed and configured; the token is not saved to LiteLLM.",
+        "oauthAuthorized": "OAuth authorization successful! Please click 'Create MCP Server' to save the configuration.",
+        "created": "MCP Server created successfully",
+        "submittedForReview": "MCP Server submitted for admin review",
+        "submittedForReviewDescription": "Once an admin approves it, the server will appear in your MCP Servers list.",
+        "createFailed": "Error creating MCP Server: {{reason}}",
+        "submitFailed": "Error submitting MCP Server: {{reason}}"
+      },
+      "logoAlt": "MCP Logo",
+      "title": {
+        "admin": "Add New MCP Server",
+        "submitForReview": "Submit MCP Server for Review"
+      },
+      "reviewNotice": "Your submission will be sent for admin review. Once approved, the server will appear in your MCP Servers list. The request must be made with a team-scoped API key.",
+      "serverName": {
+        "label": "MCP Server Name",
+        "tooltip": "Best practice: Use a descriptive name that indicates the server's purpose (e.g., 'GitHub_MCP', 'Email_Service'). Cannot contain spaces or hyphens; use underscores instead. Names must comply with SEP-986 and will be rejected if invalid (https://modelcontextprotocol.io/specification/2025-11-25/server/tools#tool-names).",
+        "placeholder": "e.g., GitHub_MCP, Zapier_MCP, etc."
+      },
+      "alias": {
+        "label": "Alias",
+        "tooltip": "A short, unique identifier for this server. Defaults to the server name if not provided. Cannot contain spaces or hyphens; use underscores instead.",
+        "placeholder": "e.g., GitHub_MCP, Zapier_MCP, etc."
+      },
+      "description": {
+        "label": "Description",
+        "placeholder": "Brief description of what this server does"
+      },
+      "sourceUrl": {
+        "label": "GitHub / Source URL"
+      },
+      "transport": {
+        "label": "Transport Type",
+        "required": "Please select a transport type",
+        "placeholder": "Select transport"
+      },
+      "url": {
+        "label": "MCP Server URL",
+        "required": "Please enter a server URL"
+      },
+      "maxConcurrentRequests": {
+        "label": "Max Concurrent Requests (optional)",
+        "tooltip": "Maximum number of tool calls LiteLLM will run against this server at the same time. Additional calls wait for a free slot. Leave blank for no limit.",
+        "placeholder": "e.g. 10"
+      },
+      "rpm": {
+        "label": "RPM limit (all callers)",
+        "tooltip": "Max requests per minute to this server across all keys and teams. Leave empty for no limit",
+        "placeholder": "e.g. 60"
+      },
+      "auth": {
+        "sectionTitle": "Authentication settings",
+        "typeLabel": "Authentication",
+        "typeRequired": "Please select an auth type",
+        "typePlaceholder": "Select auth type",
+        "valueLabel": "Authentication Value",
+        "valueTooltip": "Token, password, or header value to send with each request for the selected auth type.",
+        "valueWhitespace": "Authentication value cannot be empty whitespace",
+        "valuePlaceholder": "Enter token or secret"
+      },
+      "actions": {
+        "cancel": "Cancel",
+        "creating": "Creating...",
+        "submit": "Add MCP Server"
+      }
+    },
+    "serverEdit": {
+      "toasts": {
+        "browserTokenHeld": "Token held for this browser session. Tools can now be loaded and configured; the token is not saved to LiteLLM.",
+        "oauthAuthorized": "OAuth authorization successful! Please click 'Update MCP Server' to save the credentials.",
+        "persistTokenFailed": "MCP Server updated, but failed to persist OAuth token",
+        "persistTokenFailedWithReason": "MCP Server updated, but failed to persist OAuth token: {{reason}}",
+        "updated": "MCP Server updated successfully",
+        "updateFailed": "Failed to update MCP Server",
+        "updateFailedWithReason": "Failed to update MCP Server: {{reason}}"
+      },
+      "tools": {
+        "incompleteSettings": "Complete the URL, authentication, and header settings to load tools.",
+        "loadFailed": "Failed to load tools",
+        "authorizeUpstream": "Authorize with the upstream (browser-only, in the Authentication section) to load and configure this server's tools.",
+        "authenticateInToolsTab": "Authenticate with this server in the Tools tab to load and configure its tools."
+      },
+      "tabs": {
+        "server": "Server Configuration",
+        "cost": "Cost Configuration"
+      },
+      "formLabel": "Edit MCP server",
+      "fields": {
+        "serverName": "MCP Server Name",
+        "alias": "Alias",
+        "description": "Description",
+        "transport": "Transport Type",
+        "transportRequired": "Transport Type is required",
+        "url": "MCP Server URL",
+        "urlRequired": "Please enter a server URL",
+        "specUrl": "OpenAPI Spec URL",
+        "specUrlTooltip": "URL to an OpenAPI specification (JSON or YAML). MCP tools will be automatically generated from the API endpoints defined in the spec.",
+        "specUrlRequired": "Please enter an OpenAPI spec URL",
+        "maxConcurrentRequests": "Max Concurrent Requests (optional)",
+        "maxConcurrentRequestsTooltip": "Maximum number of tool calls LiteLLM will run against this server at the same time. Additional calls wait for a free slot. Leave blank for no limit.",
+        "maxConcurrentRequestsPlaceholder": "e.g. 10",
+        "rpm": "RPM limit (all callers)",
+        "rpmTooltip": "Max requests per minute to this server across all keys and teams. Leave empty for no limit",
+        "rpmPlaceholder": "e.g. 60",
+        "authType": "Authentication",
+        "authTypeRequired": "Authentication is required",
+        "authValue": "Authentication Value",
+        "authValueTooltip": "Token, password, or header value to send with each request for the selected auth type.",
+        "authValueWhitespace": "Authentication value cannot be empty",
+        "authValuePlaceholder": "Enter token or secret (leave blank to keep existing)"
+      },
+      "stdio": {
+        "description": "Configure the stdio transport used to launch the MCP server process. You can either fill in the fields below or paste a JSON configuration.",
+        "command": "Command",
+        "commandRequired": "Please enter a command for stdio transport",
+        "commandPlaceholder": "e.g., npx",
+        "args": "Args",
+        "argsPlaceholder": "Add args (press enter or comma)",
+        "env": "Environment (JSON object)",
+        "envInvalidJson": "Please enter valid JSON",
+        "envNotObject": "Env must be a JSON object"
+      },
+      "missingOAuthFlow": {
+        "title": "This server has no OAuth flow set",
+        "description": "Choose Machine-to-Machine (M2M) or Interactive (PKCE) so LiteLLM authenticates it the way you intend, then save. Until it is set, LiteLLM falls back to interactive per-user auth and treats a machine-to-machine credential shape conservatively."
+      },
+      "aws": {
+        "intro": "For MCP servers hosted on AWS Bedrock AgentCore.",
+        "viewDocs": "View docs →",
+        "region": {
+          "label": "AWS Region",
+          "tooltip": "AWS region for SigV4 signing (e.g., us-east-1)",
+          "placeholder": "us-east-1 (leave blank to keep existing)"
+        },
+        "serviceName": {
+          "label": "AWS Service Name",
+          "tooltip": "AWS service name for SigV4 signing. Defaults to 'bedrock-agentcore'.",
+          "placeholder": "bedrock-agentcore (leave blank to keep existing)"
+        },
+        "accessKeyId": {
+          "label": "AWS Access Key ID",
+          "tooltip": "Optional. If not provided, falls back to the boto3 credential chain (IAM role, env vars, etc.)."
+        },
+        "secretAccessKey": {
+          "label": "AWS Secret Access Key",
+          "tooltip": "Optional. Required if AWS Access Key ID is provided."
+        },
+        "sessionToken": {
+          "label": "AWS Session Token",
+          "tooltip": "Optional. Only needed for temporary STS credentials."
+        },
+        "roleArn": {
+          "label": "AWS Role ARN",
+          "tooltip": "Optional. IAM role ARN to assume via STS before signing. If set, LiteLLM calls sts:AssumeRole to get temporary credentials."
+        },
+        "sessionName": {
+          "label": "AWS Session Name",
+          "tooltip": "Optional. Session name for the AssumeRole call — appears in CloudTrail logs. Auto-generated if omitted."
+        },
+        "keepExistingPlaceholder": "Leave blank to keep existing"
+      },
+      "actions": {
+        "cancel": "Cancel",
+        "save": "Save Changes"
+      }
+    },
+    "oauthFormFields": {
+      "flowType": {
+        "label": "OAuth Flow Type",
+        "tooltip": "Choose how the proxy authenticates with this MCP server. M2M is for server-to-server communication using client credentials. Interactive (PKCE) is for user-facing flows that require browser-based authorization.",
+        "placeholder": "Select OAuth flow",
+        "m2m": {
+          "label": "Machine-to-Machine (M2M)",
+          "description": "server-to-server, no user interaction"
+        },
+        "interactive": {
+          "label": "Interactive (PKCE)",
+          "description": "browser-based user authorization"
+        }
+      },
+      "upstreamResource": {
+        "label": "Resource Indicator (optional)",
+        "tooltip": "RFC 8707 resource indicator sent to the authorization server so it mints a token audienced for this MCP server. Leave blank to send nothing, which is the default and what most providers expect. Use 'auto' to send this server's own URL. Set an exact identifier when the authorization server expects a specific one. Some providers reject this parameter and take the audience from scopes instead; if you see AADSTS901002, leave it blank. If you see invalid_target, the authorization server needs it set.",
+        "placeholder": "auto, or https://mcp.example.com/mcp"
+      },
+      "m2m": {
+        "clientId": {
+          "label": "Client ID",
+          "tooltip": "OAuth2 client ID for the client_credentials grant.",
+          "required": "Client ID is required for M2M OAuth",
+          "placeholder": "Enter OAuth client ID",
+          "placeholderEditing": "Enter OAuth client ID (leave blank to keep existing)"
+        },
+        "clientSecret": {
+          "label": "Client Secret",
+          "tooltip": "OAuth2 client secret for the client_credentials grant.",
+          "required": "Client Secret is required for M2M OAuth",
+          "placeholder": "Enter OAuth client secret",
+          "placeholderEditing": "Enter OAuth client secret (leave blank to keep existing)"
+        },
+        "tokenUrl": {
+          "label": "Token URL",
+          "tooltip": "Token endpoint URL for the client_credentials grant.",
+          "required": "Token URL is required for M2M OAuth"
+        },
+        "scopes": {
+          "label": "Scopes (optional)",
+          "tooltip": "Optional scopes to request with the client_credentials grant.",
+          "placeholder": "Add scopes"
+        }
+      },
+      "interactive": {
+        "clientId": {
+          "label": "Client ID (optional)",
+          "tooltip": "Provide only if your MCP server cannot handle dynamic client registration.",
+          "createOAuthApp": "Create OAuth App →",
+          "placeholder": "Enter client ID",
+          "placeholderEditing": "Enter client ID (leave blank to keep existing)"
+        },
+        "clientSecret": {
+          "label": "Client Secret (optional)",
+          "tooltip": "Provide only if your MCP server cannot handle dynamic client registration.",
+          "placeholder": "Enter client secret",
+          "placeholderEditing": "Enter client secret (leave blank to keep existing)"
+        },
+        "scopes": {
+          "label": "Scopes (optional)",
+          "tooltip": "Optional scopes requested during token exchange. Separate multiple scopes with enter or commas.",
+          "placeholder": "Add scopes"
+        },
+        "issuer": {
+          "label": "Issuer (optional)",
+          "tooltip": "OAuth 2.0 authorization server issuer (RFC 8414). Leave empty to discover endpoints from the upstream resource; set it to pin the trust anchor, which makes this issuer's document the only endpoint source (RFC 8414 §3.3), overriding the Authorization/Token/Registration URLs above and failing closed if its metadata cannot be fetched."
+        },
+        "authorizationUrl": {
+          "label": "Authorization URL (optional)",
+          "tooltip": "Optional override for the authorization endpoint."
+        },
+        "tokenUrl": {
+          "label": "Token URL (optional)",
+          "tooltip": "Optional override for the token endpoint."
+        },
+        "registrationUrl": {
+          "label": "Registration URL (optional)",
+          "tooltip": "Optional override for the dynamic client registration endpoint."
+        },
+        "tokenValidation": {
+          "label": "Token Validation Rules (optional)",
+          "tooltip": "JSON object of key-value rules checked against the OAuth token response before storing. Supports dot-notation for nested fields (e.g. {\"organization\": \"my-org\", \"team.id\": \"123\"}). Tokens that fail validation are rejected with HTTP 403.",
+          "invalidJson": "Must be valid JSON"
+        },
+        "tokenStorageTtl": {
+          "label": "Token Storage TTL (seconds, optional)",
+          "tooltip": "How long to cache each user's OAuth access token in Redis before evicting it (never longer than the token's own expires_in). Leave blank to derive the TTL from the token's expires_in, or fall back to the 12-hour default.",
+          "placeholder": "e.g. 3600"
+        },
+        "authorize": {
+          "description": "Use OAuth to fetch a fresh access token and temporarily save it in the session as the authentication value.",
+          "authorizing": "Waiting for authorization...",
+          "exchanging": "Exchanging authorization code...",
+          "start": "Authorize & Fetch Token",
+          "success": "Token fetched. Expires in {{expiresIn}} seconds."
+        }
+      }
+    },
+    "idJagFormFields": {
+      "orgTokenEndpoint": {
+        "label": "Org Token Endpoint (leg 1)",
+        "tooltip": "Your IdP org authorization server's token endpoint. LiteLLM exchanges the user's identity assertion here for an ID-JAG assertion (RFC 8693 with requested_token_type=urn:ietf:params:oauth:token-type:id-jag).",
+        "required": "The org token endpoint is required for ID-JAG"
+      },
+      "resourceTokenEndpoint": {
+        "label": "Resource Token Endpoint (leg 2)",
+        "tooltip": "The upstream resource authorization server's token endpoint. LiteLLM posts the ID-JAG assertion here as an RFC 7523 jwt-bearer grant to get the access token the MCP server accepts.",
+        "required": "The resource token endpoint is required for ID-JAG"
+      },
+      "clientId": {
+        "label": "Client ID",
+        "tooltip": "OAuth2 client ID LiteLLM authenticates as on both legs.",
+        "required": "Client ID is required for ID-JAG",
+        "placeholder": "Enter OAuth client ID",
+        "placeholderEditing": "Enter OAuth client ID (leave blank to keep existing)"
+      },
+      "clientSecret": {
+        "label": "Client Secret",
+        "tooltip": "Authenticates LiteLLM as the OAuth client via client_secret_post. Leave blank when using a private key instead; a private key takes precedence over this secret.",
+        "secretOrPrivateKey": "Provide either a client secret or a client private key",
+        "placeholder": "Enter OAuth client secret",
+        "placeholderEditing": "Enter OAuth client secret (leave blank to keep existing)"
+      },
+      "privateKey": {
+        "label": "Client Private Key (PEM)",
+        "tooltip": "PEM private key signing the RFC 7523 private_key_jwt client assertion. Okta Cross App Access normally requires this. When set it takes precedence over the client secret.",
+        "placeholderEditing": "{{pemHeader}} (leave blank to keep existing)"
+      },
+      "privateKeyId": {
+        "label": "Private Key ID (optional)",
+        "tooltip": "The kid advertised in the client assertion JWT header, so the IdP can select the right registered key."
+      },
+      "signingAlg": {
+        "label": "Client Assertion Signing Algorithm (optional)",
+        "tooltip": "Algorithm signing the client assertion JWT. Defaults to RS256."
+      },
+      "audience": {
+        "label": "Audience (optional)",
+        "tooltip": "RFC 8693 audience sent on leg 1, identifying the upstream the ID-JAG assertion is minted for."
+      },
+      "resource": {
+        "label": "Resource Indicator (optional)",
+        "tooltip": "RFC 8707 resource indicator sent on leg 1. Separate from Audience, which is the RFC 8693 parameter."
+      },
+      "subjectTokenType": {
+        "label": "Subject Token Type (optional)",
+        "tooltip": "Type of the identity assertion exchanged on leg 1. Defaults to urn:ietf:params:oauth:token-type:id_token."
+      },
+      "scopes": {
+        "label": "Scopes (optional)",
+        "tooltip": "Scopes requested on leg 1 of the exchange.",
+        "placeholder": "Add scopes"
+      }
+    },
+    "tokenExchangeFormFields": {
+      "profile": {
+        "label": "Profile",
+        "tooltip": "Token-exchange wire dialect. RFC 8693 is the standard token-exchange grant. Microsoft Entra OBO uses Entra's On-Behalf-Of dialect (the RFC 7523 jwt-bearer grant with requested_token_use=on_behalf_of) and carries the target resource in a scope like api://<app-id>/.default.",
+        "rfc8693": "RFC 8693 (standard)"
+      },
+      "endpoint": {
+        "label": "Token Exchange Endpoint (optional)",
+        "tooltip": "RFC 8693 token endpoint. The proxy exchanges the user's incoming token here for a scoped token used to call the upstream MCP server. Leave blank to auto-discover it from the upstream's protected-resource metadata (RFC 9728 then RFC 8414)."
+      },
+      "clientId": {
+        "label": "Client ID",
+        "tooltip": "OAuth2 client ID used to authenticate to the token exchange endpoint.",
+        "required": "Client ID is required for token exchange",
+        "placeholder": "Enter OAuth client ID",
+        "placeholderEditing": "Enter OAuth client ID (leave blank to keep existing)"
+      },
+      "clientSecret": {
+        "label": "Client Secret",
+        "tooltip": "OAuth2 client secret used to authenticate to the token exchange endpoint.",
+        "required": "Client Secret is required for token exchange",
+        "placeholder": "Enter OAuth client secret",
+        "placeholderEditing": "Enter OAuth client secret (leave blank to keep existing)"
+      },
+      "audience": {
+        "label": "Audience (optional)",
+        "tooltip": "Target audience for the exchanged token (RFC 8693 audience). Identifies the upstream MCP server the token is for."
+      },
+      "subjectTokenType": {
+        "label": "Subject Token Type (optional)",
+        "tooltip": "Type of the user's incoming token (RFC 8693 subject_token_type). Defaults to urn:ietf:params:oauth:token-type:access_token."
+      },
+      "scopes": {
+        "label": "Scopes (optional)",
+        "labelEntraObo": "Scopes",
+        "tooltip": "Optional scopes to request during the token exchange.",
+        "tooltipEntraObo": "Microsoft Entra OBO carries the target resource in the scope, so at least one is required (e.g. api://<app-id>/.default).",
+        "requiredEntraObo": "Microsoft Entra OBO requires a scope, e.g. api://<app-id>/.default",
+        "placeholder": "Add scopes"
+      }
+    },
+    "awsSigV4Fields": {
+      "intro": "For MCP servers hosted on AWS Bedrock AgentCore.",
+      "viewDocs": "View docs →",
+      "region": {
+        "label": "AWS Region",
+        "tooltip": "AWS region for SigV4 signing (e.g., us-east-1)",
+        "required": "AWS region is required for SigV4 auth"
+      },
+      "serviceName": {
+        "label": "AWS Service Name",
+        "tooltip": "AWS service name for SigV4 signing. Defaults to 'bedrock-agentcore'."
+      },
+      "accessKeyId": {
+        "label": "AWS Access Key ID",
+        "tooltip": "Optional. If not provided, falls back to the boto3 credential chain (IAM role, env vars, etc.).",
+        "requiredWithSecret": "Access Key ID is required when Secret Access Key is provided",
+        "placeholder": "AKIA... (optional — uses IAM role if blank)"
+      },
+      "secretAccessKey": {
+        "label": "AWS Secret Access Key",
+        "tooltip": "Optional. Required if AWS Access Key ID is provided.",
+        "requiredWithAccessKey": "Secret Access Key is required when Access Key ID is provided",
+        "placeholder": "Enter secret key (optional — uses IAM role if blank)"
+      },
+      "sessionToken": {
+        "label": "AWS Session Token",
+        "tooltip": "Optional. Only needed for temporary STS credentials.",
+        "placeholder": "Enter session token (optional)"
+      },
+      "roleArn": {
+        "label": "AWS Role ARN",
+        "tooltip": "Optional. IAM role ARN to assume via STS before signing. If set, LiteLLM calls sts:AssumeRole to get temporary credentials. Uses ambient credentials (IAM role, env vars) as the source identity unless explicit keys are also provided.",
+        "placeholder": "arn:aws:iam::123456789012:role/MyRole (optional)"
+      },
+      "sessionName": {
+        "label": "AWS Session Name",
+        "tooltip": "Optional. Session name for the AssumeRole call — appears in CloudTrail logs. Auto-generated if omitted.",
+        "placeholder": "litellm-prod (optional, auto-generated if blank)"
+      }
+    },
+    "passthroughAuthorizeSection": {
+      "description": "Callers bring their own upstream token for this auth type, so LiteLLM never stores tokens. To preview tools and configure the tool allowlist, authorize against the upstream here: the token stays in this browser session only and is never saved to LiteLLM. An OAuth app configured below IS saved with the server, so internal users who authorize from the Tools page go through it.",
+      "appMayNotMatchUpstream": "You changed the upstream URL or endpoints; the OAuth app entered here was registered for the previous upstream and may not be valid. Update the client ID, or clear it to use dynamic client registration.",
+      "clientId": {
+        "label": "OAuth Client ID (optional)",
+        "placeholderKeepSaved": "Leave blank to keep the currently saved app (if any)",
+        "placeholderDcr": "Leave blank to use dynamic client registration",
+        "helpKeepSaved": "Set this to make everyone authorize through a specific app; required for upstreams without dynamic client registration (e.g. a pre-registered Slack app).",
+        "helpClassChanged": "Switching the auth type discards the previously saved app; enter a client ID here or leave blank to use dynamic client registration."
+      },
+      "clientSecret": {
+        "label": "OAuth Client Secret (optional)",
+        "placeholderKeepSaved": "Leave blank to keep the currently saved secret (if any)",
+        "placeholderPublicClient": "Leave blank for public clients / PKCE"
+      },
+      "authorizationUrl": {
+        "label": "Authorization URL (optional)",
+        "help": "Set this when the upstream publishes no OAuth metadata, for example an internal server behind Microsoft Entra. Leave blank to discover it from the upstream."
+      },
+      "tokenUrl": {
+        "label": "Token URL (optional)",
+        "help": "Token endpoint of the same authorization server. Leave blank to discover it from the upstream."
+      },
+      "scopes": {
+        "label": "Scopes (optional)",
+        "help": "Scopes requested from the upstream when a user authorizes. Press enter or comma between scopes.",
+        "placeholder": "Add scopes"
+      },
+      "removeStoredApp": "Remove the saved OAuth app on save (the server goes back to dynamic client registration)",
+      "authorize": {
+        "authorizing": "Waiting for authorization...",
+        "exchanging": "Exchanging authorization code...",
+        "start": "Authorize & Fetch Tools (browser-only)",
+        "success": "Token held for this browser session. Tools can now be previewed and configured; the token was not saved to LiteLLM."
+      }
+    },
+    "envVarsSection": {
+      "title": "Variables",
+      "tooltip": "Define variables you can interpolate in Static Headers or Authentication using <code>{{variableSyntax}}</code>. <br/><b>Instance</b>: admin-defined value used for every user.<br/><b>Per-user</b>: each user supplies their own value (e.g. personal credentials) via the MCP Gateway dashboard.",
+      "reference": "Reference these in Static Headers or Authentication as <code>{{variableSyntax}}</code>. For example:",
+      "columns": {
+        "name": "Variable Name",
+        "value": "Value / Description",
+        "scope": "Scope"
+      },
+      "scopes": {
+        "instance": "Instance",
+        "perUser": "Per-user"
+      },
+      "name": {
+        "required": "Variable name is required",
+        "invalid": "Use letters, digits, underscores; cannot start with a digit.",
+        "placeholder": "e.g. DB_PROTOCOL"
+      },
+      "value": {
+        "placeholder": "e.g. postgresql"
+      },
+      "hint": {
+        "label": "Hint",
+        "tooltip": "Per-user variables have no shared value. This text is only a hint shown to each user when they fill in their own value.",
+        "placeholder": "e.g. Your DB username"
+      },
+      "addVariable": "Add Variable"
+    },
+    "openApiByokFields": {
+      "byok": {
+        "label": "BYOK (Bring Your Own Key)",
+        "tooltip": "When enabled, each user provides their own API key for this service. Keys are stored per-user and never shared."
+      },
+      "headerFormat": "User keys will be sent as:",
+      "authTypeMissing": "Set the <strong>Authentication Type</strong> below to specify how user keys are sent (e.g., Bearer Token, API Key header).",
+      "accessDescription": {
+        "label": "Access Description",
+        "tooltip": "List of permissions shown to users in the connection modal (e.g. 'Create and manage Jira issues')",
+        "placeholder": "Add access description items (press Enter after each)"
+      },
+      "apiKeyHelpUrl": {
+        "label": "API Key Help URL",
+        "tooltip": "Optional link shown to users to help them find their API key"
+      }
+    },
+    "tokenEndpointAuthMethodField": {
+      "label": "Token Endpoint Auth Method (optional)",
+      "tooltip": "How the proxy authenticates to the upstream OAuth token endpoint. Client Secret Basic sends the client credentials in an HTTP Basic Authorization header; leave blank to use the default, Client Secret Post, which sends them in the request body.",
+      "placeholder": "Default (Client Secret Post)",
+      "placeholderEditing": "Leave blank to keep existing (default Client Secret Post)",
+      "methods": {
+        "clientSecretBasic": "Client Secret Basic",
+        "clientSecretPost": "Client Secret Post"
+      }
+    },
+    "upstreamTokenHeaderField": {
+      "label": "Token Header (optional)",
+      "tooltip": "Which upstream header carries the token LiteLLM resolves for this server. Leave blank to send it as 'Authorization: Bearer <token>', which is the default and what most servers expect. Set a header name when the upstream expects it elsewhere, for example an API gateway that terminates its own credential on 'esb-oauth' while a separate Authorization from Static Headers passes through to the server behind it."
+    },
+    "dcrBridgeToggle": {
+      "label": "Gateway-hosted sign-in (DCR bridge)",
+      "tooltip": "Lets OAuth-only clients like Claude Desktop register and sign in through the gateway. Turn off to relay the upstream server's own OAuth metadata instead (for clients pre-registered with the upstream IdP)."
+    },
+    "truePassthroughWarning": {
+      "title": "True Passthrough disables LiteLLM authentication for this server",
+      "description": "Anyone who can reach the gateway can call this server without a LiteLLM key. The caller's Authorization header is forwarded to the upstream verbatim, per-key and per-team rate limits and spend tracking do not apply, and the upstream is fully responsible for authenticating callers. Choose OAuth Delegate instead if callers should still authenticate to LiteLLM."
+    },
+    "servers": {
+      "sort": {
+        "label": "Sort",
+        "options": {
+          "createdDesc": "Recently created",
+          "updatedDesc": "Recently updated",
+          "nameAsc": "Name (A→Z)",
+          "health": "Health (unhealthy first)"
+        }
+      },
+      "deleteDialog": {
+        "title": "Delete MCP Server?",
+        "body": "This action is permanent and cannot be undone. All associated configurations will be removed.",
+        "fields": {
+          "name": "Name",
+          "id": "ID",
+          "url": "URL"
+        },
+        "cancel": "Cancel",
+        "deleting": "Deleting...",
+        "delete": "Delete"
+      },
+      "filters": {
+        "team": {
+          "label": "Team",
+          "allServers": "All Servers",
+          "allAvailableServers": "All Available Servers",
+          "personal": "Personal"
+        },
+        "accessGroup": {
+          "label": "Access Group",
+          "all": "All Access Groups",
+          "helpLabel": "About access groups",
+          "help": "An MCP Access Group is a set of users or teams that have permission to access specific MCP servers. Use access groups to control and organize who can connect to which servers."
+        }
+      },
+      "toasts": {
+        "deleted": "Deleted MCP Server successfully"
+      },
+      "missingAuth": "Missing required authentication parameters.",
+      "header": {
+        "title": "MCP Servers",
+        "subtitle": "Configure and manage your MCP servers",
+        "myConnections": "My Connections",
+        "importFromJson": "Import from JSON",
+        "addServer": "+ Add New MCP Server",
+        "submitServer": "+ Submit MCP Server"
+      },
+      "tabs": {
+        "allServers": "All Servers",
+        "toolsets": "Toolsets",
+        "connect": "Connect",
+        "semanticFilter": "Semantic Filter",
+        "toolSearch": "Tool Search",
+        "networkSettings": "Network Settings",
+        "submitted": "Submitted MCPs",
+        "liveConnections": "Live Connections"
+      },
+      "searchPlaceholder": "Search by name, alias, URL, or ID",
+      "resultCount": "{{shown}} of {{total}} servers",
+      "loading": "Loading MCP servers...",
+      "empty": {
+        "noServers": "No MCP servers configured. Click '+ Add New MCP Server' to get started.",
+        "noMatches": "No servers match the current filters or search."
+      }
+    },
+    "submissionsTab": {
+      "status": {
+        "active": "Active",
+        "pendingReview": "Pending Review",
+        "rejected": "Rejected"
+      },
+      "confirmDialog": {
+        "approveTitle": "Approve MCP Server",
+        "rejectTitle": "Reject MCP Server",
+        "approvePrompt": "Are you sure you want to approve <name>\"<server/>\"</name>?",
+        "rejectPrompt": "Are you sure you want to reject <name>\"<server/>\"</name>?",
+        "approveBody": "This will activate the server. The submitting user will see it in their MCP Servers list once approved.",
+        "rejectBodyLive": "This server is currently live. Rejecting it will immediately remove it from the proxy runtime.",
+        "rejectBody": "This will mark the submission as rejected.",
+        "reasonPlaceholder": "Reason for rejection (optional)",
+        "cancel": "Cancel",
+        "approve": "Approve",
+        "reject": "Reject"
+      },
+      "rulesPanel": {
+        "title": "Submission Rules",
+        "requiredFieldCount_one": "({{count}} required field)",
+        "requiredFieldCount_other": "({{count}} required fields)",
+        "noRules": "no rules set",
+        "help": "Select which fields must be filled in before a submission is considered compliant. LiteLLM will show ✓ / ✗ for each rule on every submission card below.",
+        "saving": "Saving…",
+        "save": "Save Rules",
+        "cancel": "Cancel"
+      },
+      "reviewActions": {
+        "approve": "Approve",
+        "reapprove": "Re-approve",
+        "reject": "Reject"
+      },
+      "compliance": {
+        "allPassed": "All checks passed",
+        "failedCount_one": "{{count}} check failed",
+        "failedCount_other": "{{count}} checks failed",
+        "summary": "{{passCount}} passing, {{failCount}} failing",
+        "passes": "Passes",
+        "missing": "Missing"
+      },
+      "card": {
+        "transport": "Transport:",
+        "submittedBy": "Submitted by:",
+        "rejectionReason": "Rejection reason: {{reason}}"
+      },
+      "errors": {
+        "loadFailed": "Failed to load submissions"
+      },
+      "toasts": {
+        "rulesSaved": "Submission rules saved",
+        "rulesSaveFailed": "Failed to save submission rules",
+        "approved": "MCP server \"{{serverName}}\" approved",
+        "approveFailed": "Failed to approve MCP server",
+        "rejected": "MCP server \"{{serverName}}\" rejected",
+        "rejectFailed": "Failed to reject MCP server"
+      },
+      "stats": {
+        "total": "Total Submitted"
+      },
+      "filters": {
+        "searchPlaceholder": "Search MCP servers...",
+        "allStatuses": "All Status"
+      },
+      "loading": "Loading submissions…",
+      "empty": "No MCP server submissions match your filters."
+    },
+    "toolsetsTab": {
+      "form": {
+        "errors": {
+          "nameRequired": "Please enter a toolset name"
+        }
+      },
+      "toolIssues": {
+        "serverNotFound": "server not found",
+        "serverUnreachable": "server unreachable",
+        "toolNotFound": "tool not found"
+      },
+      "serverGroup": {
+        "loadError": "Couldn't load tools for this server.",
+        "noMatchingTools": "No matching tools on this server.",
+        "noTools": "No tools found for this server.",
+        "selectMatching": "Select matching tools on {{serverName}}",
+        "selectAll": "Select all tools on {{serverName}}",
+        "selectedCount": "{{count}} selected"
+      },
+      "modal": {
+        "editTitle": "Edit Toolset",
+        "createTitle": "New Toolset",
+        "nameLabel": "Toolset Name",
+        "namePlaceholder": "e.g. github-linear-tools",
+        "descriptionLabel": "Description",
+        "descriptionPlaceholder": "Optional description",
+        "availableTools": "Available Tools",
+        "searchPlaceholder": "Search tools or servers...",
+        "searchLabel": "Search tools or servers",
+        "clearSearch": "Clear search",
+        "matchingTools_one": "{{count}} matching tool",
+        "matchingTools_other": "{{count}} matching tools",
+        "loadingServers_one": "loading {{count}} server…",
+        "loadingServers_other": "loading {{count}} servers…",
+        "selectAllMatching": "Select all matching",
+        "deselectAllMatching": "Deselect all matching",
+        "noServers": "No MCP servers configured",
+        "noSearchMatches": "No tools or servers match your search",
+        "yourToolset": "Your Toolset",
+        "toolCount": "({{count}} tools)",
+        "clearAll": "Clear all",
+        "noToolsAdded": "No tools added yet",
+        "removeTool": "Remove {{toolName}}",
+        "cancel": "Cancel",
+        "saveChanges": "Save Changes",
+        "create": "Create Toolset"
+      },
+      "emptyState": {
+        "title": "No toolsets yet",
+        "body": "Create a toolset to give keys and teams a curated set of MCP tools."
+      },
+      "usageGuide": {
+        "title": "How toolsets work",
+        "body": "Create a toolset, assign it to a key via <menu>API Keys → Edit Key → MCP Servers</menu>, then point your MCP client at the toolset URL. The client only sees the tools you picked.",
+        "configLabel": "Claude Code / Cursor config",
+        "copy": "copy"
+      },
+      "toasts": {
+        "created": "Toolset created",
+        "updated": "Toolset updated",
+        "deleted": "Toolset deleted"
+      },
+      "header": {
+        "title": "MCP Toolsets",
+        "description": "Curated collections of tools from one or more MCP servers. Assign toolsets to keys and teams via the MCP permissions dropdown.",
+        "newToolset": "New Toolset"
+      },
+      "loading": "Loading toolsets…",
+      "deleteDialog": {
+        "title": "Delete Toolset",
+        "body": "Are you sure you want to delete this toolset? Keys and teams using it will lose access to the scoped tools.",
+        "cancel": "Cancel",
+        "delete": "Delete"
+      }
+    },
+    "toolsetTableColumns": {
+      "actions": {
+        "open": "Open toolset actions",
+        "copyUrl": "Copy endpoint URL",
+        "urlCopied": "Endpoint URL copied",
+        "copyId": "Copy toolset ID",
+        "idCopied": "Toolset ID copied",
+        "edit": "Edit",
+        "delete": "Delete"
+      },
+      "columns": {
+        "toolsetId": "Toolset ID",
+        "name": "Name",
+        "description": "Description",
+        "tools": "Tools",
+        "created": "Created",
+        "actions": "Actions"
+      },
+      "moreTools": "+{{count}} more"
+    },
+    "importMcpServers": {
+      "title": "Import MCP Connectors",
+      "description": "Paste an Anthropic connector configuration: the <code>mcpServers</code> mapping from a Claude Desktop / Claude Code config file, or the <code>mcp_servers</code> array from the Anthropic Messages API.",
+      "connectorJsonLabel": "Connector JSON",
+      "toasts": {
+        "imported_one": "Imported {{count}} MCP server",
+        "imported_other": "Imported {{count}} MCP servers"
+      },
+      "errors": {
+        "requestFailed": "Import request failed. Check the proxy logs for details."
+      },
+      "result": {
+        "imported": "Imported:",
+        "skipped": "Skipped:",
+        "failed": "Failed:"
+      },
+      "close": "Close",
+      "importing": "Importing...",
+      "import": "Import"
+    },
+    "importConnectorConfig": {
+      "errors": {
+        "emptyInput": "Paste your connector JSON before importing.",
+        "invalidJson": "Invalid JSON. Check for missing quotes, commas, or brackets.",
+        "unrecognizedShape": "Expected a JSON object with an mcpServers or mcp_servers key.",
+        "mappingNotObject": "mcpServers must be an object mapping connector names to definitions.",
+        "mappingEmpty": "mcpServers contains no connectors.",
+        "listNotArray": "mcp_servers must be an array of connector definitions.",
+        "listEmpty": "mcp_servers contains no connectors."
+      }
+    },
+    "discovery": {
+      "title": "Add MCP Server",
+      "logoAlt": "MCP Logo",
+      "customServer": "+ Custom Server",
+      "allCategories": "All",
+      "otherCategory": "Other",
+      "searchPlaceholder": "Search servers...",
+      "errors": {
+        "loadFailed": "Failed to load MCP servers"
+      },
+      "loadError": "Failed to load servers: {{error}}",
+      "noServers": "No servers found.",
+      "addCustomServer": "Add a custom server"
+    },
+    "gatewaySessionsTab": {
+      "unknown": "(unknown)",
+      "idle": {
+        "seconds": "{{seconds}}s",
+        "minutes": "{{minutes}}m",
+        "minutesSeconds": "{{minutes}}m {{seconds}}s"
+      },
+      "selector": {
+        "user": "every live session opened by user {{user}}",
+        "session": "session {{sessionId}}"
+      },
+      "terminateResult_one": "Disconnected {{count}} session on worker pid {{pid}}.",
+      "terminateResult_other": "Disconnected {{count}} sessions on worker pid {{pid}}.",
+      "disconnectUser": {
+        "ariaLabel": "Disconnect all sessions for user {{user}}",
+        "label": "Disconnect all"
+      },
+      "columns": {
+        "sessions": "Sessions",
+        "actions": "Actions",
+        "session": "Session",
+        "client": "Client",
+        "user": "User",
+        "keyAlias": "Key alias",
+        "team": "Team",
+        "clientIp": "Client IP",
+        "idle": "Idle",
+        "inFlight": "In flight"
+      },
+      "loading": "Loading live connections...",
+      "loadError": {
+        "title": "Could not load live connections"
+      },
+      "empty": {
+        "noConnections": "No live MCP connections on this worker (pid {{pid}}).",
+        "connectHint": "Connect an AI client to the gateway to see it here."
+      },
+      "stats": {
+        "liveSessions": "Live sessions",
+        "aiClients": "AI clients",
+        "users": "Users"
+      },
+      "groups": {
+        "byClient": "Sessions by AI client",
+        "byUser": "Sessions by user"
+      },
+      "liveSessions": {
+        "regionLabel": "Live sessions",
+        "heading": "Live sessions (worker pid {{pid}})"
+      },
+      "disconnectSession": {
+        "ariaLabel": "Disconnect session {{sessionId}}",
+        "label": "Disconnect"
+      },
+      "header": {
+        "title": "Live Connections",
+        "description": "Stateful Streamable HTTP sessions currently open on this proxy worker, grouped by the AI client that sent the MCP initialize request and by the authenticated LiteLLM user. Stateless requests and SSE connections are not counted."
+      },
+      "refresh": {
+        "ariaLabel": "Refresh live connections",
+        "label": "Refresh"
+      },
+      "terminateError": {
+        "title": "Could not disconnect"
+      },
+      "terminateSuccess": {
+        "title": "Disconnected",
+        "followUp": "Clients holding those sessions must send a new initialize request, which re-runs authentication. Sessions on other proxy workers are not affected."
+      },
+      "confirm": {
+        "title": "Disconnect MCP session",
+        "target": "This force-closes {{target}} on this proxy worker.",
+        "consequence": "In-flight requests fail and the client must initialize again before it can call tools.",
+        "cancel": "Cancel",
+        "confirm": "Disconnect"
+      }
+    },
+    "networkSettings": {
+      "clientDialog": {
+        "addTitle": "Add client",
+        "editTitle": "Edit client",
+        "description": "The alias is the name shown in the dashboard and gateway logs. The value is the exact JWT claim or header value that identifies the client, such as the OAuth client ID your identity provider issues.",
+        "aliasLabel": "Alias",
+        "aliasPlaceholder": "e.g. Coding CLI",
+        "valueLabel": "Value",
+        "valuePlaceholder": "e.g. 0oa1b2c3d4e5f6g7h8i9",
+        "remove": "Remove client",
+        "cancel": "Cancel",
+        "add": "Add",
+        "done": "Done"
+      },
+      "saved": "MCP network settings saved",
+      "privateRanges": {
+        "title": "Private IP Ranges",
+        "description": "Define which IP ranges are part of your private network. Callers from these IPs can see all MCP servers. Callers from any other IP can only see servers marked \"Available on Public Internet\".",
+        "currentIp": "Your current IP:",
+        "suggestedRange": "Suggested range:",
+        "listTitle": "Your Private Network Ranges",
+        "removeAriaLabel": "Remove {{range}}",
+        "placeholder": "Leave empty to use defaults: 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 127.0.0.0/8",
+        "hint": "Enter CIDR ranges (e.g., 10.0.0.0/8). When empty, standard private IP ranges are used."
+      },
+      "allowedClients": {
+        "title": "Allowed Clients",
+        "description": "Only the MCP client applications listed here can use the gateway. Leave empty to allow every client. A client that authenticates with a JWT is identified by the claim named in litellm_jwtauth.mcp_client_id_jwt_field in your proxy config (for example azp or client_id), which your identity provider asserts and the client cannot change. Any other client is identified by the request header configured below, if you enable one.",
+        "malformedWarning": "The stored allowlist is not a list of alias and value pairs, so every client is denied. Add the clients you want and save to replace it, or save with the list empty to remove it and allow every client again.",
+        "emptyWarning": "An empty allowlist is currently stored, so every client is denied. Save with the list empty to remove it and allow every client again.",
+        "add": "Add client",
+        "hint": "Click a client to edit or remove it. Leave the list empty to allow every client. Every MCP request from an unlisted client, or from one with no resolvable identity, gets a 403."
+      },
+      "clientIdHeader": {
+        "title": "Client Identity Header (less secure)",
+        "ariaLabel": "Client identity header",
+        "placeholder": "Leave empty to identify clients by JWT only, e.g. x-mcp-client",
+        "hint": "Optional header whose value names the client for callers without a JWT identity. Clients pick this value themselves, so it is a policy control rather than a security boundary. Without it, callers that do not carry the JWT claim are rejected while the allowlist is set."
+      },
+      "capabilities": {
+        "title": "Served Capabilities",
+        "description": "Turn off prompts or resources when none of your MCP servers offer them. A capability that is turned off is left out of the initialize response, its list calls return an empty list without contacting any upstream server, and its get or read calls are rejected.",
+        "prompts": {
+          "label": "Prompts",
+          "description": "Advertise prompts and answer prompts/list and prompts/get"
+        },
+        "resources": {
+          "label": "Resources",
+          "description": "Advertise resources and answer resources/list, resources/templates/list and resources/read"
+        }
+      },
+      "save": "Save"
+    },
+    "standardsSettings": {
+      "groups": {
+        "documentation": "Documentation",
+        "source": "Source",
+        "connection": "Connection",
+        "security": "Security"
+      },
+      "fields": {
+        "description": {
+          "label": "Description",
+          "description": "Must have a non-empty description"
+        },
+        "alias": {
+          "label": "Alias",
+          "description": "Must have a display alias"
+        },
+        "sourceUrl": {
+          "label": "GitHub / Source URL",
+          "description": "Must link to a source repository"
+        },
+        "url": {
+          "label": "Server URL",
+          "description": "Must have a URL configured"
+        },
+        "authType": {
+          "label": "Auth configured",
+          "description": "Must use authentication (not 'none')"
+        }
+      }
+    },
+    "semanticFilterTestUtils": {
+      "missingInput": "Please enter a query and select a model",
+      "notFiltered": "Semantic filter is not enabled or no tools were filtered",
+      "completed": "Semantic filter test completed successfully",
+      "failed": "Failed to test semantic filter"
+    },
+    "semanticFilterTestPanel": {
+      "title": "Test Configuration",
+      "tabs": {
+        "test": "Test",
+        "api": "API Usage"
+      },
+      "testQuery": {
+        "label": "Test Query",
+        "placeholder": "Enter a test query to see which tools would be selected..."
+      },
+      "modelLabel": "Select Model",
+      "runButton": "Test Filter",
+      "disabledAlert": {
+        "title": "Semantic filtering is disabled",
+        "description": "Enable semantic filtering and save settings to test the filter."
+      },
+      "errorAlert": {
+        "title": "Semantic filtering did not run"
+      },
+      "results": {
+        "title": "Results",
+        "summary": "{{selected}} of {{total}} tools selected",
+        "filteredOut": "{{filtered}} tools filtered out",
+        "selectedToolsLabel": "Selected Tools:",
+        "moreNotShown": "+{{more}} more selected tools not shown"
+      },
+      "api": {
+        "title": "API Usage",
+        "description": "Use this curl command to test the semantic filter with your current configuration.",
+        "headersTitle": "Response headers to check:",
+        "filterHeader": "{{header}}: shows total tools → selected tools",
+        "filterHeaderExample": "Example: 10→3",
+        "toolsHeader": "{{header}}: CSV of selected tool names",
+        "toolsHeaderExample": "Example: wikipedia-fetch,github-search,slack-post"
+      }
+    },
+    "semanticFilterSettings": {
+      "saveSuccess": {
+        "title": "Settings saved successfully",
+        "close": "Close"
+      },
+      "toasts": {
+        "updated": "Settings updated successfully. Changes will be applied across all pods within 10 seconds."
+      },
+      "loginRequired": "Please log in to configure semantic filter settings.",
+      "loadError": {
+        "title": "Could not load MCP Semantic Filter settings"
+      },
+      "intro": {
+        "title": "Semantic Tool Filtering",
+        "description": "Filter MCP tools semantically based on query relevance. This reduces context window size and improves tool selection accuracy. Click 'Save Settings' to apply changes across all pods (takes effect within 10 seconds)."
+      },
+      "updateError": {
+        "title": "Could not update settings"
+      },
+      "configuration": {
+        "title": "Configuration"
+      },
+      "fields": {
+        "enabled": {
+          "label": "Enable Semantic Filtering",
+          "hint": "When enabled, only the most relevant MCP tools will be included in requests based on semantic similarity"
+        },
+        "embeddingModel": {
+          "label": "Embedding Model",
+          "hint": "The model used to generate embeddings for semantic matching",
+          "loadingPlaceholder": "Loading models...",
+          "placeholder": "Select embedding model",
+          "loadingEmpty": "Loading...",
+          "empty": "No embedding models available"
+        },
+        "topK": {
+          "label": "Top K Results",
+          "hint": "Maximum number of tools to return after filtering"
+        },
+        "similarityThreshold": {
+          "label": "Similarity Threshold",
+          "hint": "Minimum similarity score (0-1) for a tool to be included"
+        }
+      },
+      "save": "Save Settings"
+    },
+    "toolSearchSettings": {
+      "toasts": {
+        "updated": "Settings updated successfully. Changes will be applied across all pods within 10 seconds."
+      },
+      "loginRequired": "Please log in to configure tool search.",
+      "loadError": {
+        "title": "Could not load MCP tool search settings"
+      },
+      "intro": {
+        "title": "Native MCP Tool Search",
+        "description": "Controls the <code>mcp_tool_search</code> virtual tool that native MCP clients call to discover tools. With an embedding model set, tools are ranked by the meaning of their name and description, so a query like \"FX\" finds a \"foreign exchange rates\" tool. Without one, keyword matching is used. Callers only ever see tools their key, team and server permissions already allow."
+      },
+      "ranking": {
+        "title": "Ranking"
+      },
+      "coreTools": {
+        "title": "Core Tools"
+      },
+      "fields": {
+        "embeddingModel": {
+          "label": "Embedding Model",
+          "hint": "Embedding model from your model list used to rank tools by meaning. Clear it to fall back to keyword matching.",
+          "loadingPlaceholder": "Loading models...",
+          "placeholder": "Keyword matching (no embedding model)",
+          "loadingEmpty": "Loading...",
+          "empty": "No embedding models available"
+        },
+        "topK": {
+          "label": "Top K Results",
+          "hint": "Most ranked tools a search returns. A smaller top_k in the tool call wins. Core tools do not count."
+        },
+        "similarityThreshold": {
+          "label": "Similarity Threshold",
+          "hint": "Lowest cosine similarity a tool needs to appear in semantic results. 0 means no cutoff."
+        },
+        "coreTools": {
+          "label": "Always Returned First",
+          "hint": "One tool name per line, e.g. my_server-get_rates. Listed before ranked results whenever the caller is allowed to use them."
+        }
+      },
+      "save": "Save Settings"
+    },
+    "connect": {
+      "title": "Connect to your MCP client",
+      "description": "Use tools directly from any MCP client with LiteLLM MCP. Enable your AI assistant to perform real-world tasks through a simple, secure connection.",
+      "featureCard": {
+        "serverHeaderToggle": "Limit tools to specific MCP servers or MCP groups by passing the <code>x-mcp-servers</code> header",
+        "optionsTitle": "Two Options",
+        "optionServer": "<strong>Option 1:</strong> Get a specific server: <code>\"<server/>\"</code>",
+        "optionGroup": "<strong>Option 2:</strong> Get a group of MCPs: <code>\"{{group}}\"</code>",
+        "optionMix": "You can also mix both: <code>\"{{example}}\"</code>"
+      },
+      "codeBlocks": {
+        "environmentVariable": "Environment Variable",
+        "serverUrl": "Server URL",
+        "headersConfiguration": "Headers Configuration"
+      },
+      "serverInfoCard": {
+        "title": "MCP Server Information",
+        "description": "Connection details for your LiteLLM MCP server"
+      },
+      "implementationExampleCard": {
+        "title": "Implementation Example"
+      },
+      "litellmTab": {
+        "title": "LiteLLM Proxy API Integration",
+        "description": "Connect to LiteLLM Proxy Responses API for seamless tool integration with multiple model providers",
+        "virtualKeyCard": {
+          "title": "Virtual Key Setup",
+          "description": "Configure your LiteLLM Proxy Virtual Key for authentication",
+          "instructions": "Get your Virtual Key from your LiteLLM Proxy dashboard or contact your administrator"
+        },
+        "exampleDescription": "Complete cURL example for using the LiteLLM Proxy Responses API"
+      },
+      "openaiTab": {
+        "title": "OpenAI Responses API Integration",
+        "description": "Connect OpenAI Responses API to your LiteLLM MCP server for seamless tool integration",
+        "apiKeyCard": {
+          "title": "API Key Setup",
+          "description": "Configure your OpenAI API key for authentication",
+          "instructions": "Get your API key from the <docs>OpenAI platform <icon/></docs>"
+        },
+        "exampleDescription": "Complete cURL example for using the Responses API"
+      },
+      "cursorTab": {
+        "title": "Cursor IDE Integration",
+        "description": "Use tools directly from Cursor IDE with LiteLLM MCP. Enable your AI assistant to perform real-world tasks without leaving your coding environment.",
+        "setupTitle": "Setup Instructions",
+        "steps": {
+          "openSettings": {
+            "title": "Open Cursor Settings",
+            "body": "Use the keyboard shortcut <kbd>⇧+⌘+J</kbd> (Mac) or <kbd>Ctrl+Shift+J</kbd> (Windows/Linux)"
+          },
+          "navigate": {
+            "title": "Navigate to MCP Tools",
+            "body": "Go to the \"MCP Tools\" tab and click \"New MCP Server\""
+          },
+          "addConfiguration": {
+            "title": "Add Configuration",
+            "body": "Copy the JSON configuration below and paste it into Cursor, then save with <kbd>Cmd+S</kbd> or <kbd>Ctrl+S</kbd>"
+          }
+        },
+        "configurationCard": {
+          "title": "Configuration",
+          "description": "Cursor MCP configuration"
+        }
+      },
+      "httpTab": {
+        "title": "Streamable HTTP Transport",
+        "description": "Connect to LiteLLM MCP using HTTP transport. Compatible with any MCP client that supports HTTP streaming.",
+        "connectionCard": {
+          "title": "Universal MCP Connection",
+          "description": "Use this URL with any MCP client that supports HTTP transport",
+          "instructions": "Each MCP client supports different transports. Refer to your client documentation to determine the appropriate transport method."
+        },
+        "learnMore": "Learn more about MCP transports"
+      }
+    },
+    "serverCard": {
+      "actionsMenu": {
+        "label": "Server actions",
+        "testConnection": "Test Connection",
+        "delete": "Delete"
+      },
+      "stdioDisabled": "stdio disabled",
+      "oauthFlowUnset": {
+        "badge": "OAuth flow not set",
+        "tooltip": "This OAuth server has no flow set (Machine-to-Machine vs Interactive). Open it and choose an OAuth Flow Type so LiteLLM authenticates it as you intend."
+      },
+      "missingFields": {
+        "summary_one": "{{count}} user field missing",
+        "summary_other": "{{count}} user fields missing",
+        "tooltipTitle": "Missing user fields:",
+        "set": "Set"
+      },
+      "healthChip": {
+        "checking": "Checking",
+        "health": "Health: {{status}}",
+        "lastCheck": "Last check: {{time}}",
+        "error": "Error",
+        "noData": "No health data",
+        "clickToRecheck": "Click to recheck"
+      },
+      "userFieldsRow": {
+        "label": "Per-user credentials",
+        "set": "Set",
+        "update": "Update"
+      },
+      "byokRow": {
+        "label": "BYOK credential",
+        "connected": "Connected",
+        "update": "Update",
+        "connect": "Connect"
+      }
+    },
+    "userEnvVarsModal": {
+      "title": "Set your credentials",
+      "perUserBadge": "Per-user",
+      "fallbackServerName": "MCP Server",
+      "loadFailed": "Failed to load env vars",
+      "noFields": "No per-user fields configured for this server.",
+      "intro": "These values are private to you. Your admin configured this MCP server to require these per-user credentials. Saved values are never shown back; leave an already-set field blank to keep it, or enter a value to set or change it.",
+      "form": {
+        "setBadge": "Set",
+        "required": "{{name}} is required",
+        "overwritePlaceholder": "Enter a new value to overwrite",
+        "placeholder": "Enter your {{name}}",
+        "clear": "Clear",
+        "cancel": "Cancel",
+        "save": "Save Credentials"
+      },
+      "toasts": {
+        "saved": "Credentials saved",
+        "saveFailed": "Failed to save env vars: {{error}}",
+        "cleared": "Credentials cleared",
+        "clearFailed": "Failed to clear env vars: {{error}}"
+      },
+      "clearDialog": {
+        "title": "Clear saved credentials",
+        "description": "This deletes every per-user value you saved for {{server}}. Your next MCP request to this server fails until you set them again.",
+        "cancel": "Cancel",
+        "confirm": "Clear credentials"
+      }
+    },
+    "serverUserCredentialsPanel": {
+      "title": "User Credentials",
+      "description": "Per-user OAuth2 tokens and BYOK API keys stored for this server. Revoking one deletes it from the database and clears the cached copy, so the user must connect again before the gateway will call this server for them.",
+      "refresh": "Refresh",
+      "refreshAriaLabel": "Refresh user credentials",
+      "credentialTypes": {
+        "byokApiKey": "BYOK API key"
+      },
+      "loading": "Loading user credentials...",
+      "loadError": "Could not load user credentials",
+      "empty": "No user has a stored credential for this server.",
+      "tableLabel": "Stored user credentials",
+      "columns": {
+        "user": "User",
+        "type": "Type",
+        "connected": "Connected",
+        "expires": "Expires",
+        "updated": "Updated",
+        "actions": "Actions"
+      },
+      "revoke": "Revoke",
+      "revokeAriaLabel": "Revoke credential for user {{user}}",
+      "revokeError": "Could not revoke credential",
+      "revokeSuccess": {
+        "title": "Credential revoked",
+        "description": "The stored {{type}} credential for user {{user}} was deleted."
+      },
+      "revokeDialog": {
+        "title": "Revoke stored credential",
+        "target": "This deletes the {{type}} credential stored for user {{user}}.",
+        "consequence": "Their next MCP request to this server fails until they connect again.",
+        "cancel": "Cancel",
+        "confirm": "Revoke"
+      }
+    },
+    "useMcpOAuthFlow": {
+      "errors": {
+        "missingAdminToken": "Missing admin token",
+        "accessTokenMissing": "Access token missing. Please re-authenticate and try again.",
+        "incompleteServer": "Please complete server URL and transport before starting OAuth.",
+        "resumeFailed": "Failed to resume OAuth flow. Please retry."
+      },
+      "toasts": {
+        "tokenRetrieved": "OAuth token retrieved successfully"
+      }
+    },
+    "useToolsOAuthFlow": {
+      "errors": {
+        "resumeFailed": "Failed to resume OAuth flow. Please retry."
+      },
+      "toasts": {
+        "connected": "Connected successfully"
+      }
+    },
+    "utils": {
+      "networkAccess": {
+        "allNetworks": {
+          "label": "All Networks",
+          "publicDescription": "Allows requests from public and internal IPs. Authentication and access permissions still apply",
+          "hubDescription": "Allows requests from public and internal IPs because this server is published in MCP Hub. Authentication and access permissions still apply"
+        },
+        "internalOnly": {
+          "label": "Internal Only",
+          "description": "Allows requests only from internal/private IP ranges. Authentication and access permissions still apply"
+        },
+        "unknown": {
+          "label": "Unknown",
+          "description": "The proxy did not report enough network and publication settings to determine allowed client IPs"
+        }
+      },
+      "validation": {
+        "invalidUrl": "Please enter a valid URL (e.g., http://service-name.domain:1234/path or https://example.com)",
+        "invalidServerName": "Cannot contain '-' (hyphen) or spaces. Please use '_' (underscore) instead.",
+        "invalidToolDisplayName": "Only letters, digits, underscores, and hyphens are allowed (no spaces)."
+      }
+    },
+    "serverCostDisplay": {
+      "noConfig": "No cost configuration set for this server. Tool calls will be charged at $0.00 per tool call.",
+      "defaultCostTitle": "Default Cost per Query",
+      "toolCostsTitle": "Tool-Specific Costs",
+      "costPerQuery": "${{cost}} per query",
+      "summaryTitle": "Cost Summary:",
+      "summaryDefaultCost": "• Default cost: ${{cost}} per query",
+      "summaryToolCount": "• {{toolCount}} tool(s) with custom pricing"
+    },
+    "toolCallArguments": {
+      "validation": {
+        "required": "Please enter {{field}}",
+        "invalidOption": "Please select a valid {{field}}",
+        "invalidJson": "Invalid JSON",
+        "expectedObject": "Please enter a JSON object",
+        "expectedArray": "Please enter a JSON array"
+      }
+    },
+    "serverView": {
+      "backToServers": "Back to All Servers",
+      "unnamedServer": "Unnamed Server",
+      "copyServerName": "Copy server name",
+      "copyServerId": "Copy server id",
+      "hideFullUrl": "Hide full URL",
+      "showFullUrl": "Show full URL",
+      "tabs": {
+        "overview": "Overview",
+        "tools": "MCP Tools",
+        "settings": "Settings",
+        "userCredentials": "User Credentials"
+      },
+      "overview": {
+        "transport": "Transport",
+        "authentication": "Authentication",
+        "hostUrl": "Host URL",
+        "costConfiguration": "Cost Configuration"
+      },
+      "settings": {
+        "title": "MCP Server Settings",
+        "edit": "Edit Settings",
+        "definedInConfig": "Defined in config. Edit your YAML configuration to make changes",
+        "fields": {
+          "serverName": "Server Name",
+          "alias": "Alias",
+          "description": "Description",
+          "url": "URL",
+          "transport": "Transport",
+          "authentication": "Authentication",
+          "extraHeaders": "Extra Headers",
+          "allowAllKeys": "Allow All Keys",
+          "networkAccess": "Network access",
+          "delegateAuth": "Delegate Auth to Upstream",
+          "oauthPassthrough": "OAuth Pass-through",
+          "accessGroups": "Access Groups",
+          "allowedTools": "Allowed Tools",
+          "cost": "Cost"
+        },
+        "status": {
+          "enabled": "Enabled",
+          "disabled": "Disabled",
+          "enabledPkcePassthrough": "Enabled (PKCE passthrough)",
+          "allToolsEnabled": "All tools enabled"
+        }
+      }
+    },
+    "toolConfiguration": {
+      "toolRow": {
+        "enabled": "Enabled",
+        "disabled": "Disabled",
+        "customName": "Custom name",
+        "callable": "✓ Users can call this tool",
+        "notCallable": "✗ Users cannot call this tool",
+        "editTitle": "Edit display name and description",
+        "displayNameLabel": "Display Name",
+        "displayNameInvalid": "Only letters, digits, underscores, and hyphens are allowed (no spaces).",
+        "displayNameHelp": "Override how this tool's name appears to users. Leave blank to use original.",
+        "descriptionLabel": "Description",
+        "noDescription": "No description",
+        "descriptionHelp": "Override the tool description shown to users. Leave blank to use original."
+      },
+      "title": "Tool Configuration",
+      "viewModes": {
+        "riskGroups": "Risk Groups",
+        "flatList": "Flat List"
+      },
+      "intro": "<strong>Select which tools users can call:</strong> Only checked tools will be available for users to invoke. Unchecked tools will be blocked from execution.",
+      "loading": "Loading tools...",
+      "loadError": "Unable to load tools",
+      "noToolsFromSpec": "No tools loaded from spec",
+      "expectedTools": "Expected tools: {{tools}}",
+      "noTools": {
+        "title": "No tools available for configuration",
+        "hint": "Connect to an MCP server with tools to configure them"
+      },
+      "incomplete": {
+        "title": "Complete required fields to configure tools",
+        "hint": "Fill in URL, Transport, and Authentication to load available tools"
+      },
+      "enabledSummary_one": "{{enabled}} of {{count}} tool enabled for user access",
+      "enabledSummary_other": "{{enabled}} of {{count}} tools enabled for user access",
+      "searchPlaceholder": "Search tools by name or description...",
+      "noMatches": "No tools found matching \"{{searchTerm}}\"",
+      "suggestedTools": "Suggested tools",
+      "allTools": "All tools",
+      "tools": "Tools",
+      "enableAll": "Enable all",
+      "disableAll": "Disable all"
+    },
+    "toolTestPanel": {
+      "defaultInputDescription": "Input for this tool",
+      "toasts": {
+        "resultCopied": "Result copied to clipboard",
+        "resultCopyFailed": "Failed to copy result",
+        "toolNameCopied": "Tool name copied to clipboard",
+        "toolNameCopyFailed": "Failed to copy tool name"
+      },
+      "logoAlt": "{{serverName}} logo",
+      "title": "Test Tool:",
+      "copyToolNameTitle": "Click to copy tool name",
+      "provider": "Provider: {{serverName}}",
+      "close": "Close",
+      "inputParameters": "Input Parameters",
+      "inputParametersTooltip": "Configure the input parameters for this tool call",
+      "toolResult": "Tool Result",
+      "empty": {
+        "title": "Ready to Call Tool",
+        "description": "Configure the input parameters and click \"Call Tool\" to see the results here."
+      },
+      "success": "Tool executed successfully",
+      "duration": "• {{seconds}}s",
+      "formatted": "Formatted",
+      "copyResponse": "Copy response",
+      "calling": {
+        "title": "Calling tool...",
+        "description": "Please wait while we process your request"
+      },
+      "failed": "Tool Call Failed",
+      "textResponse": "Text Response",
+      "imageResponse": "Image Response",
+      "imageAlt": "Tool result",
+      "embeddedResource": "Embedded Resource",
+      "resourceType": "Resource Type: {{resourceType}}",
+      "viewResource": "View Resource"
+    },
+    "tools": {
+      "title": "MCP Tools",
+      "additionalHeaders": "Additional Headers",
+      "hide": "Hide",
+      "configure": "Configure",
+      "headersRequired": "This server requires additional headers. Click \"Configure\" to provide values.",
+      "headerPlaceholder": "Enter {{headerName}}",
+      "loadTools": "Load Tools",
+      "headersConfigured": "{{headerCount}} header(s) configured",
+      "availableTools": "Available Tools",
+      "authRequired": "Authentication required",
+      "authenticateToView": "Authenticate to view available tools",
+      "authenticateUpstream": "Authenticate with the upstream provider to view available tools",
+      "authorize": "Authorize",
+      "searchPlaceholder": "Search tools...",
+      "loading": "Loading tools...",
+      "error": "Error: {{message}}",
+      "noTools": {
+        "title": "No tools available",
+        "description": "No tools found for this server"
+      },
+      "noMatches": {
+        "title": "No tools found",
+        "description": "No tools match \"{{searchTerm}}\""
+      },
+      "logoAlt": "{{serverName}} logo",
+      "selected": "Selected",
+      "playground": {
+        "title": "Tool Testing Playground",
+        "emptyTitle": "Select a Tool to Test",
+        "emptyDescription": "Choose a tool from the left sidebar to start testing its functionality with custom inputs."
+      }
+    },
+    "toolArgumentsForm": {
+      "boolean": {
+        "true": "True",
+        "false": "False"
+      },
+      "jsonObjectPlaceholder": "Enter JSON object for {{field}}",
+      "jsonArrayPlaceholder": "Enter JSON array for {{field}}",
+      "jsonObjectHint": "Provide a valid JSON object.",
+      "jsonArrayHint": "Provide a valid JSON array.",
+      "selectPlaceholder": "Select {{field}}",
+      "emptyString": "Empty string",
+      "enterPlaceholder": "Enter {{field}}",
+      "singleInput": {
+        "label": "Input",
+        "placeholder": "Enter input for this tool"
+      },
+      "noParameters": {
+        "title": "No Parameters Required",
+        "description": "This tool can be called without any input parameters."
+      },
+      "callButton": {
+        "calling": "Calling Tool...",
+        "callAgain": "Call Again",
+        "call": "Call Tool"
+      }
+    }
+  },
+  "mcpTools": {
+    "byokCredentialModal": {
+      "errors": {
+        "connectFailed": "Failed to connect"
+      },
+      "fallbackServiceName": "Service",
+      "toasts": {
+        "apiKeyRequired": "Please enter your API key",
+        "connected": "Connected to {{server}}"
+      },
+      "back": "Back",
+      "intro": {
+        "title": "Connect {{server}}",
+        "description": "LiteLLM needs access to {{server}} to complete your request.",
+        "howItWorksTitle": "How it works",
+        "howItWorks": "LiteLLM acts as a secure bridge. Your requests are routed through our MCP client directly to {{server}}'s API.",
+        "requestedAccess": "Requested Access",
+        "continue": "Continue to Authentication",
+        "cancel": "Cancel"
+      },
+      "apiKey": {
+        "title": "Provide API Key",
+        "description": "Enter your {{server}} API key to authorize this connection.",
+        "label": "{{server}} API Key",
+        "placeholder": "Enter your API key",
+        "helpLink": "Where do I find my API key?",
+        "saveForFuture": "Save key for future use",
+        "securityNote": "Your key is stored securely and transmitted over HTTPS. It is never shared with third parties.",
+        "authorize": "Connect & Authorize"
+      }
+    },
+    "crudPermissionPanel": {
+      "risk": {
+        "high": "High Risk",
+        "medium": "Medium Risk",
+        "low": "Safe",
+        "unknown": "Unclassified"
+      },
+      "allowedCount": "{{allowed}}/{{total}} allowed",
+      "groupState": {
+        "allOn": "All on",
+        "partial": "Partial",
+        "allOff": "All off"
+      },
+      "allowAllAria": "Allow all {{label}} tools",
+      "toolState": {
+        "on": "on",
+        "off": "off"
+      }
+    }
+  },
+  "mcpOAuthCallback": {
+    "authorizationComplete": "Authorization complete. You may close this window and return to the LiteLLM dashboard.",
+    "manualCloseHint": "If the window does not close automatically, everything is still saved—you can close it manually.",
+    "loading": "Loading..."
+  },
+  "mcpServerManagement": {
+    "toolPermissions": {
+      "inherited": {
+        "accessGroup": "Via access group: {{name}}",
+        "toolset": "Via toolset: {{name}}",
+        "toolPermission": "Via tool permissions"
+      },
+      "fetchFailed": "Failed to fetch tools",
+      "serversFailed": {
+        "title": "Unable to load MCP servers",
+        "description": "This list is incomplete; servers granted directly or through an access group may be missing. Reload before changing tool permissions"
+      },
+      "emptyAccessGroup": {
+        "title": "Access group \"{{group}}\" has 0 servers",
+        "description": "No MCP server lists this group, so it grants nothing. A server defined in config.yaml joins a group through its <code>access_groups</code> key; <code>mcp_access_groups</code> is ignored there"
+      },
+      "toolsetsFailed": {
+        "title": "Unable to load toolsets",
+        "description": "Servers reached through the selected toolsets are not listed below"
+      },
+      "loadingServers": "Loading MCP servers...",
+      "allToolsAllowed": "All tools allowed, including tools added to this server later",
+      "ambiguousKeys": "Also granted by {{keys}}, which names another server too. Those tools stay allowed here until the servers no longer share that name",
+      "lockedByToolset_one": "{{tools}} is granted by a selected toolset, so it stays allowed here; edit the toolset to revoke it",
+      "lockedByToolset_other": "{{tools}} are granted by a selected toolset, so they stay allowed here; edit the toolset to revoke them",
+      "viewModes": {
+        "riskGroups": "Risk Groups",
+        "flatList": "Flat List"
+      },
+      "selectAll": "Select All",
+      "deselectAll": "Deselect All",
+      "loadingTools": "Loading tools...",
+      "loadToolsFailed": "Unable to load tools",
+      "noDescription": "No description",
+      "noTools": "No tools available"
+    },
+    "serverSelector": {
+      "placeholder": "Select MCP servers",
+      "optionTypes": {
+        "accessGroup": "Access Group",
+        "mcpServer": "MCP Server",
+        "toolset": "Toolset"
+      },
+      "allProxyServers": "All Proxy MCP Servers",
+      "noServers": "No MCP Servers",
+      "blockAll": "Block all",
+      "empty": "No MCP servers found"
+    }
   }
 }
