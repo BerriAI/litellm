@@ -118,6 +118,17 @@ _BEDROCK_VERSION_SUFFIX_RE: Final = re.compile(r"-v\d+(?::\d+)?$")
 _INFERENCE_PROFILE_MINOR_RE: Final = re.compile(r":\d+$")
 _DATED_RELEASE_SUFFIX_RE: Final = re.compile(r"-\d{8}$")
 _DOTTED_VERSION_RE: Final = re.compile(r"(\d)\.(\d)")
+_CONTEXT_1M_SUFFIX: Final = re.compile(r"\[1m\]$", flags=re.IGNORECASE)
+
+
+def has_context_1m_suffix(model: str) -> bool:
+    return _CONTEXT_1M_SUFFIX.search(model) is not None
+
+
+def strip_context_1m_suffix(model: str) -> str:
+    return _CONTEXT_1M_SUFFIX.sub("", model)
+
+
 _CLAUDE_CODE_BILLING_HEADER_PREFIX: Final = "x-anthropic-billing-header:"
 OBJECT_MAPPING_ADAPTER: Final = TypeAdapter(dict[object, object])
 OBJECT_LIST_ADAPTER: Final = TypeAdapter(list[object])
@@ -1395,6 +1406,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         thinking: AnthropicThinkingParam | None = None,
         is_mid_conversation_tool_change_used: bool = False,
         wif_minted: bool = False,
+        context_1m_requested: bool = False,
     ) -> dict:
         betas: Final = set()
         # Anthropic no longer requires the prompt-caching beta header
@@ -1454,6 +1466,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
 
         all_betas: Final = betas.union(
             self.thinking_betas(thinking),
+            (ANTHROPIC_BETA_HEADER_VALUES.CONTEXT_1M_2025_08_07.value,) if context_1m_requested else (),
             (ANTHROPIC_MID_CONVERSATION_TOOL_CHANGES_BETA_HEADER,) if is_mid_conversation_tool_change_used else (),
         )
 
@@ -1532,6 +1545,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         )
         anthropic_headers: Final = self.get_anthropic_headers(
             computer_tool_used=computer_tool_used,
+            context_1m_requested=has_context_1m_suffix(model),
             prompt_caching_set=prompt_caching_set,
             pdf_used=pdf_used,
             api_key=resolved_api_key,
