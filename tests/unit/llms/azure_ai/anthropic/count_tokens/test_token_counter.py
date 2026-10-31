@@ -1,5 +1,6 @@
 import json
 import operator
+import threading
 from typing import Final
 
 import httpx
@@ -8,8 +9,9 @@ import respx
 from pydantic import ValidationError
 
 import litellm
+from litellm import anthropic_beta_headers_manager
 from litellm.llms.azure_ai.anthropic.count_tokens.token_counter import AzureAIAnthropicTokenCounter
-from litellm.types.utils import TokenCountResponse
+from litellm.types.utils import CountContextManagement, TokenCountResponse
 
 API_BASE: Final = "https://my-resource.services.ai.azure.com"
 COUNT_URL: Final = f"{API_BASE}/anthropic/v1/messages/count_tokens"
@@ -268,3 +270,66 @@ async def test_count_sends_the_tool_change_beta_when_the_history_adds_a_tool(mon
     assert result is not None
     assert result.total_tokens == 541
     assert route.calls.last.request.headers["anthropic-beta"] == "mid-conversation-tool-changes-2026-07-01,token-counting-2024-11-01"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("edit_type", "expected_beta"),
+    [
+        ("clear_tool_uses_20250919", "context-management-2025-06-27,token-counting-2024-11-01"),
+        ("compact_20260112", "token-counting-2024-11-01"),
+    ],
+)
+async def test_count_forwards_the_context_edits_with_the_betas_azure_inference_sends(
+    monkeypatch: pytest.MonkeyPatch, edit_type: str, expected_beta: str
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    spec: Final = {"edits": [{"type": edit_type}]}
+    with respx.mock:
+        route: Final = respx.post(COUNT_URL).mock(return_value=httpx.Response(200, json={"input_tokens": 88}))
+        result: Final = await AzureAIAnthropicTokenCounter().count_tokens(
+            model_to_use="claude-sonnet-5-5",
+            messages=[{"role": "user", "content": "Summarize the thread."}],
+            contents=None,
+            deployment={"litellm_params": {"api_key": "azure-key", "api_base": API_BASE}},
+            request_model="azure_ai/claude-sonnet-5-5",
+            context_management=CountContextManagement(spec=spec, drop_invalid_edits=False),
+        )
+    assert result is not None
+    assert result.total_tokens == 88
+    assert json.loads(route.calls.last.request.content)["context_management"] == spec
+    assert route.calls.last.request.headers["anthropic-beta"] == expected_beta
+
+
+class _FetchThreads:
+    seen: tuple[int, ...] = ()
+
+    def __call__(self, request: httpx.Request) -> httpx.Response:
+        self.seen = (*self.seen, threading.get_ident())
+        return httpx.Response(200, json={})
+
+
+@pytest.mark.asyncio
+async def test_count_with_an_edit_fetches_the_remote_beta_config_off_the_event_loop(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.delenv("LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS", raising=False)
+    monkeypatch.setattr(anthropic_beta_headers_manager, "_BETA_HEADERS_CONFIG", None)
+    fetch_threads: Final = _FetchThreads()
+    with respx.mock:
+        respx.get(litellm.anthropic_beta_headers_url).mock(side_effect=fetch_threads)
+        respx.post(COUNT_URL).mock(return_value=httpx.Response(200, json={"input_tokens": 88}))
+        result: Final = await AzureAIAnthropicTokenCounter().count_tokens(
+            model_to_use="claude-sonnet-5-5",
+            messages=[{"role": "user", "content": "Summarize the thread."}],
+            contents=None,
+            deployment={"litellm_params": {"api_key": "azure-key", "api_base": API_BASE}},
+            request_model="azure_ai/claude-sonnet-5-5",
+            context_management=CountContextManagement(
+                spec={"edits": [{"type": "clear_tool_uses_20250919"}]}, drop_invalid_edits=False
+            ),
+        )
+    assert result is not None
+    assert len(fetch_threads.seen) == 1
+    assert threading.get_ident() not in fetch_threads.seen
