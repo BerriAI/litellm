@@ -473,7 +473,7 @@ describe("CreateKey", () => {
       expect(payload.budget_duration).toBeNull();
     });
 
-    it("routes typed tags into the tags key", async () => {
+    it("routes typed tags into metadata, the same place key edit sends them", async () => {
       state.tags = { production: { name: "production" } };
       await openModal();
       await nameTheKey();
@@ -481,7 +481,9 @@ describe("CreateKey", () => {
       await userEvent.type(await screen.findByLabelText("Tags"), "production{Enter}");
       await submit();
 
-      expect((await createdPayload()).tags).toStrictEqual(["production"]);
+      const payload = await createdPayload();
+      expect(payload).not.toHaveProperty("tags");
+      expect(JSON.parse(String(payload.metadata))).toMatchObject({ tags: ["production"] });
     });
 
     it("routes a chosen access group into access_group_ids", async () => {
