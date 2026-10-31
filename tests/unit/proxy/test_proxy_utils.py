@@ -8,7 +8,7 @@ import pytest
 from fastapi import HTTPException, Request
 from starlette.datastructures import State
 
-from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.integrations.custom_guardrail import CustomGuardrail, ModifyResponseException
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy.utils import get_docs_url, get_openapi_url, get_redoc_url
 from litellm.types.guardrails import GuardrailEventHooks
@@ -3819,17 +3819,32 @@ async def test_pre_call_hook_without_a_probe_runs_the_shipped_guardrail_for_an_u
     assert result["messages"] == _SECRET_PROMPT
 
 
-@pytest.mark.parametrize("operator_in_parallel", [False, True], ids=["sequential", "parallel"])
+@pytest.mark.parametrize("before_in_parallel", [False, True], ids=["before-sequential", "before-parallel"])
+@pytest.mark.parametrize("operator_in_parallel", [False, True], ids=["operator-sequential", "operator-parallel"])
 async def test_pre_call_hook_runs_an_operator_guardrail_and_every_guardrail_before_it(
-    monkeypatch, operator_in_parallel
+    monkeypatch, before_in_parallel, operator_in_parallel
 ):
-    before: Final = _ShippedGuardrail(name="before")
+    before: Final = _ShippedGuardrail(name="before", run_in_parallel=before_in_parallel)
     operator: Final = _OperatorGuardrail(name="operator", run_in_parallel=operator_in_parallel)
     after: Final = _ShippedGuardrail(name="after")
 
     await _walk(monkeypatch, [before, operator, after], "no-such-model", _unroutable_model_probe())
 
-    assert (before.seen, len(operator.seen), after.seen) == ([_SECRET_PROMPT], 1, [])
+    assert (len(before.seen), len(operator.seen), after.seen) == (1, 1, [])
+
+
+async def test_pre_call_hook_runs_a_custom_code_guardrail_for_a_model_routing_refuses(monkeypatch):
+    from litellm.proxy.guardrails.guardrail_hooks.custom_code.custom_code_guardrail import CustomCodeGuardrail
+
+    operator_code: Final = CustomCodeGuardrail(
+        custom_code='def apply_guardrail(inputs, request_data, input_type):\n    return block("operator rule")\n',
+        guardrail_name="operator-code",
+        event_hook=GuardrailEventHooks.pre_call,
+        default_on=True,
+    )
+
+    with pytest.raises(ModifyResponseException, match="operator rule"):
+        await _walk(monkeypatch, [operator_code], "no-such-model", _unroutable_model_probe())
 
 
 async def test_pre_call_hook_runs_every_guardrail_when_one_routes_on_sensitive_data(monkeypatch):

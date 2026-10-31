@@ -230,6 +230,7 @@ from litellm.proxy.db.token_auth import (
     resolve_database_token_auth,
 )
 from litellm.proxy.guardrails.exception_utils import enrich_http_exception_with_guardrail_context
+from litellm.proxy.guardrails.guardrail_hooks.custom_code.custom_code_guardrail import CustomCodeGuardrail
 from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail import (
     UnifiedLLMGuardrails,
     resolve_endpoint_translation,
@@ -1677,8 +1678,9 @@ _LITELLM_PACKAGES: Final = frozenset({"litellm", "litellm_enterprise", "enterpri
 
 
 def _is_custom_pre_call_hook(callback: CustomLogger) -> bool:
-    return type(callback).__module__.partition(".")[0] not in _LITELLM_PACKAGES and (
-        isinstance(callback, CustomGuardrail) or "async_pre_call_hook" in type(callback).__dict__
+    return isinstance(callback, CustomCodeGuardrail) or (
+        type(callback).__module__.partition(".")[0] not in _LITELLM_PACKAGES
+        and (isinstance(callback, CustomGuardrail) or "async_pre_call_hook" in type(callback).__dict__)
     )
 
 
@@ -1686,10 +1688,11 @@ async def _skipped_for_unroutable_model(
     guardrail: CustomGuardrail,
     data: Mapping[str, object],
     probe: "UnroutableModelProbe | None",
+    caps: _CallbackCapabilities,
 ) -> bool:
     return (
         probe is not None
-        and not _is_custom_pre_call_hook(guardrail)
+        and caps.resolved_callbacks.index(guardrail) > caps.last_custom_pre_call_hook
         and guardrail.should_run_guardrail(data=data, event_type=GuardrailEventHooks.pre_call)  # pyright: ignore[reportUnknownMemberType]  # takes the untyped request dict
         and await probe.refuses(data)
     )
@@ -3109,7 +3112,7 @@ class ProxyLogging:
             )
 
             deferred_route_exc: SensitiveDataRouteException | None = None
-            for position, _callback in enumerate(caps.resolved_callbacks):
+            for _callback in caps.resolved_callbacks:
                 start_time = time.time()
                 try:
                     if isinstance(_callback, CustomGuardrail) and data is not None:
@@ -3123,10 +3126,11 @@ class ProxyLogging:
                         if getattr(_callback, "run_in_parallel", False):
                             continue
 
-                        if position > caps.last_custom_pre_call_hook and await _skipped_for_unroutable_model(
+                        if await _skipped_for_unroutable_model(
                             _callback,
                             data,  # pyright: ignore[reportUnknownArgumentType]  # data is the untyped request dict
                             probe,
+                            caps,
                         ):
                             data.update(without_unscanned_content(data))  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # data is the untyped request dict
                             continue
@@ -3205,6 +3209,7 @@ class ProxyLogging:
                                 guardrail,
                                 data,  # pyright: ignore[reportUnknownArgumentType]  # data is the untyped request dict
                                 probe,
+                                caps,
                             )
                         ]
                     ),
