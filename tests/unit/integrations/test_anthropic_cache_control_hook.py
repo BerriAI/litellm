@@ -1116,7 +1116,7 @@ def test_cache_control_hook_counts_tool_call_cache_controls():
     assert AnthropicCacheControlHook.count_request_cache_breakpoints([message]) == 3
 
 
-def test_cache_control_hook_counts_tool_call_marks_except_answered_server_tool_calls():
+def test_cache_control_hook_counts_tool_call_marks_except_server_tool_calls_the_client_did_not_answer():
     message: Final[AllMessageValues] = {
         "role": "assistant",
         "content": None,
@@ -1170,7 +1170,7 @@ def test_cache_control_hook_counts_tool_call_marks_except_answered_server_tool_c
         },
     }
 
-    assert AnthropicCacheControlHook.count_request_cache_breakpoints([message]) == 2
+    assert AnthropicCacheControlHook.count_request_cache_breakpoints([message]) == 1
 
 
 _SEARCH_ANSWER: Final = {"role": "tool", "tool_call_id": "srvtoolu_01Search", "content": "found get_weather"}
@@ -1180,6 +1180,12 @@ _SEARCH_CALL: Final = {
     "id": "srvtoolu_01Search",
     "type": "function",
     "function": {"name": "tool_search_tool_bm25", "arguments": "{}"},
+    "cache_control": {"type": "ephemeral"},
+}
+_UNRUN_WEB_SEARCH_CALL: Final = {
+    "id": "srvtoolu_01Web",
+    "type": "function",
+    "function": {"name": "web_search", "arguments": "{}"},
     "cache_control": {"type": "ephemeral"},
 }
 _WEATHER_CALL: Final = {
@@ -1238,6 +1244,8 @@ def _replayed_search_call(*tool_calls: dict[str, object]) -> AllMessageValues:
             (_SEARCH_CALL,), (_SEARCH_ANSWER, _GO_ON), False, 0, id="client_answer_replaced_by_the_kept_result"
         ),
         pytest.param((_SEARCH_CALL,), (_GO_ON,), True, 0, id="placeholder_replaced_by_the_kept_result"),
+        pytest.param((_UNRUN_WEB_SEARCH_CALL,), (), False, 0, id="trailing_unrun_search_replayed_without_its_mark"),
+        pytest.param((_UNRUN_WEB_SEARCH_CALL,), (_GO_ON,), False, 0, id="unrun_search_dropped_before_a_new_message"),
         pytest.param(
             (_SEARCH_CALL, _WEATHER_CALL),
             (_SEARCH_ANSWER,),
