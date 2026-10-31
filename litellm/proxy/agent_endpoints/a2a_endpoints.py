@@ -14,7 +14,7 @@ import json
 from collections.abc import AsyncGenerator, Callable, Coroutine, Mapping
 from copy import deepcopy
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Protocol
+from typing import TYPE_CHECKING, Any, Final, Literal, Protocol
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
@@ -43,6 +43,7 @@ from litellm.proxy.agent_endpoints.databricks_oauth import (
 )
 from litellm.proxy.agent_endpoints.utils import merge_agent_headers
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_utils.custom_openapi_spec import inline_request_body
 from litellm.proxy.common_utils.openai_error_payload import status_typed_proxy_exception
 from litellm.proxy.common_utils.sse_keepalive import (
     SSE_COMMENT_PING,
@@ -58,6 +59,42 @@ if TYPE_CHECKING:
     from litellm.types.agents import AgentResponse
 
 router: Final = APIRouter()
+
+
+class _A2AJsonRpcRequest(BaseModel):
+    model_config = ConfigDict(extra="allow", frozen=True)
+
+    jsonrpc: Literal["2.0"]
+    id: str | int | None = None
+    method: str
+    params: Mapping[str, object]
+
+
+class _A2AJsonRpcResponse(BaseModel):
+    model_config = ConfigDict(extra="allow", frozen=True)
+
+    jsonrpc: Literal["2.0"]
+    id: str | int | None
+    result: object | None = None
+    error: Mapping[str, object] | None = None
+
+
+_A2A_MESSAGE_STREAM_REQUEST_BODY: Final = inline_request_body(
+    _A2AJsonRpcRequest,
+    {
+        "jsonrpc": "2.0",
+        "id": "stream-1",
+        "method": "message/stream",
+        "params": {
+            "message": {
+                "messageId": "message-1",
+                "role": "user",
+                "parts": [{"kind": "text", "text": "Hello"}],
+                "kind": "message",
+            }
+        },
+    },
+)
 
 # Mirrors the native seam's own headers: a reverse proxy that batches the whole
 # stream would swallow the keepalives this route sends to defeat idle timeouts.
@@ -745,6 +782,20 @@ async def get_agent_card(
     "/v1/a2a/{agent_id}/message/send",
     tags=["[beta] A2A Agents"],
     dependencies=[Depends(user_api_key_auth)],
+)
+@router.post(
+    "/a2a/{agent_id}/message/stream",
+    tags=["[beta] A2A Agents"],
+    dependencies=[Depends(user_api_key_auth)],
+    openapi_extra={"requestBody": _A2A_MESSAGE_STREAM_REQUEST_BODY},
+    responses={200: {"model": _A2AJsonRpcResponse}},
+)
+@router.post(
+    "/v1/a2a/{agent_id}/message/stream",
+    tags=["[beta] A2A Agents"],
+    dependencies=[Depends(user_api_key_auth)],
+    openapi_extra={"requestBody": _A2A_MESSAGE_STREAM_REQUEST_BODY},
+    responses={200: {"model": _A2AJsonRpcResponse}},
 )
 async def invoke_agent_a2a(
     agent_id: str,
