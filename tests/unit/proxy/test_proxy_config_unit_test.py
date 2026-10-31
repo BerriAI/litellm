@@ -24,6 +24,24 @@ INVALID_FILES = ["config_with_missing_include.yaml"]
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("settings,valid", [
+    ("display_currency: EUR\n  exchange_rates:\n    EUR: 0.92", True),
+    ("display_currency: EUR", False),
+    ("display_currency: EUR\n  exchange_rates:\n    EUR: 0", False),
+])
+async def test_config_load_validates_currency(tmp_path: Path, settings: str, valid: bool) -> None:
+    config_path: Final = tmp_path / "config.yaml"
+    config_path.write_text(f"general_settings:\n  {settings}\n")
+    proxy_config_instance: Final = ProxyConfig()
+    if valid:
+        config: Final = await proxy_config_instance.get_config(config_file_path=str(config_path))
+        assert config["general_settings"]["display_currency"] == "EUR"
+    else:
+        with pytest.raises(ValueError, match="Invalid currency configuration"):
+            await proxy_config_instance.get_config(config_file_path=str(config_path))
+
+
+@pytest.mark.asyncio
 async def test_basic_reading_configs_from_files():
     """
     Test that the config is read correctly from the files in the example_config_yaml folder
@@ -342,6 +360,17 @@ class TestYamlStorePromptsDbOverride:
         proxy_config = ProxyConfig()
 
         assert proxy_config.settings.source("store_prompts_in_spend_logs") == "unset"
+
+
+@pytest.mark.asyncio
+async def test_invalid_db_currency_update_keeps_previous_settings() -> None:
+    config: Final = ProxyConfig()
+    with mock.patch("litellm.proxy.proxy_server.general_settings", config.settings):
+        await config._update_general_settings({"display_currency": "EUR", "exchange_rates": {"EUR": 0.92}})
+        with pytest.raises(ValueError, match="Invalid currency configuration"):
+            await config._update_general_settings({"display_currency": "EUR", "exchange_rates": {"EUR": 0}})
+        assert config.settings["display_currency"] == "EUR"
+        assert config.settings["exchange_rates"] == {"EUR": 0.92}
 
 
 @pytest.mark.asyncio

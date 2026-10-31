@@ -40,6 +40,7 @@ from litellm.proxy.management_endpoints.team_admin_field_permissions import (
     TEAM_ADMIN_RAISE_MAX_BUDGET_PERMISSION,
 )
 from litellm.proxy.mcp_server.tool_search import MCP_TOOL_SEARCH_SETTINGS_KEY
+from litellm.proxy.spend_tracking.currency import Currency, require_currency
 from litellm.proxy.spend_tracking.ptu_feature_flag import (
     PTU_COST_ATTRIBUTION_ENV_VAR,
     is_ptu_cost_attribution_enabled,
@@ -391,6 +392,7 @@ class UISettingsResponse(SettingsResponse):
     """Response model for UI settings"""
 
     source: dict[str, FieldSource]
+    currency: Currency
 
 
 # Allowlist of UI settings that can be stored
@@ -1891,6 +1893,7 @@ async def get_ui_settings():
         values=values,
         field_schema=resolved_settings.field_schema,
         source=source,
+        currency=require_currency(proxy_config.settings),
     )
 
 

@@ -834,6 +834,8 @@ from litellm.proxy.plugin_routes import (
 from litellm.proxy.plugin_routes import (
     router as plugin_router,
 )
+from litellm.proxy.spend_tracking.currency import require_currency
+from litellm.proxy.spend_tracking.currency_response import CurrencyResponseDecorator
 from litellm.proxy.spend_tracking.spend_event_producer import (
     CollectorSettings,
     SpendEventProducer,
@@ -2919,6 +2921,7 @@ app.add_middleware(RedisRequestBatchMiddleware)
 app.add_middleware(LensInternalMiddleware)
 app.add_middleware(InFlightRequestsMiddleware)
 app.add_middleware(SecurityHeadersMiddleware)
+app.add_middleware(CurrencyResponseDecorator, get_currency=lambda: require_currency(proxy_config.settings))
 app.add_middleware(GZipBufferedResponseMiddleware)
 
 
@@ -6443,6 +6446,7 @@ class ProxyConfig:
 
         config = self._check_for_os_environ_vars(config=config)
         self._apply_resolved_runtime_settings(config)
+        require_currency(self.settings)
 
         self.update_config_state(config=config)
 
@@ -8321,6 +8325,9 @@ class ProxyConfig:
             return
         if not isinstance(general_settings, SettingsStore):
             self.settings.load_yaml(_as_settings_mapping(general_settings))
+        candidate: Final = copy.copy(self.settings)
+        candidate.apply_db_row("general_settings", db_general_settings)
+        require_currency(candidate)
         cache_size_was_db: Final = self.settings.source("user_api_key_cache_max_size") == "db"
         previous_cleanup_schedule: Final = self._resolved_cleanup_schedule()
         self.settings.apply_db_row("general_settings", db_general_settings)

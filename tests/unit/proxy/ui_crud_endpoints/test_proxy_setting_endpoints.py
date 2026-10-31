@@ -1473,6 +1473,7 @@ class TestProxySettingEndpoints:
 
         assert response.status_code == 200
         data = response.json()
+        assert data["currency"] == {"code": "USD", "usd_rate": 1.0}
         assert data["values"]["disable_model_add_for_internal_users"] is True
         assert data["values"]["require_auth_for_public_ai_hub"] is True
         assert "unexpected_flag" not in data["values"]
@@ -1483,6 +1484,23 @@ class TestProxySettingEndpoints:
         mock_prisma.db.litellm_uisettings.find_unique.assert_called_once_with(
             where={"id": "ui_settings"}
         )
+
+    def test_get_ui_settings_reports_configured_currency(self, mock_auth, monkeypatch):
+        from unittest.mock import AsyncMock, MagicMock
+
+        from litellm.proxy.config_resolvers import SettingsStore
+
+        mock_prisma = MagicMock()
+        mock_prisma.db.litellm_uisettings.find_unique = AsyncMock(return_value=None)
+        monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+        settings = SettingsStore("general_settings")
+        settings.load_yaml({"display_currency": "EUR", "exchange_rates": {"EUR": 0.92}})
+        monkeypatch.setattr("litellm.proxy.proxy_server.proxy_config.settings", settings)
+
+        response = client.get("/get/ui_settings")
+
+        assert response.status_code == 200
+        assert response.json()["currency"] == {"code": "EUR", "usd_rate": 0.92}
 
     def test_get_ui_settings_reports_sources(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from unittest.mock import AsyncMock, MagicMock

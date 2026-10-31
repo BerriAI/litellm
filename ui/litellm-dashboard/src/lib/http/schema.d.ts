@@ -31412,6 +31412,13 @@ export interface components {
              */
             source: "db" | "config";
         };
+        /** Currency */
+        Currency: {
+            /** Code */
+            code: string;
+            /** Usd Rate */
+            usd_rate: number;
+        };
         /** CurrentUserResponse */
         CurrentUserResponse: {
             /** User Email */
@@ -48440,6 +48447,7 @@ export interface components {
          * @description Response model for UI settings
          */
         UISettingsResponse: {
+            currency: components["schemas"]["Currency"];
             /** Field Schema */
             field_schema: {
                 [key: string]: unknown;
