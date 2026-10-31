@@ -247,11 +247,16 @@ def _gemini_text(content: object) -> str:
 
 def _has_gemini_contents(data: object, call_type: str | None) -> bool:
     """True if ``data`` is a Gemini ``generateContent`` body on a pass-through or Google ``generateContent`` call,
-    which carries its prompt in ``contents`` and ``systemInstruction`` instead of ``messages``."""
+    which carries its prompt in ``contents`` and ``systemInstruction``. A pass-through body with chat ``messages`` or
+    Responses ``input`` is read as chat, as before."""
     fields: Final = as_str_mapping(data) or {}
-    return call_type in _GEMINI_BODY_CALL_TYPES and (
-        isinstance(fields.get("contents"), list | dict)
-        or isinstance(fields.get("systemInstruction") or fields.get("system_instruction"), dict)
+    return (
+        call_type in _GEMINI_BODY_CALL_TYPES
+        and not (call_type == CallTypes.pass_through.value and ("messages" in fields or "input" in fields))
+        and (
+            isinstance(fields.get("contents"), list | dict)
+            or isinstance(fields.get("systemInstruction") or fields.get("system_instruction"), dict)
+        )
     )
 
 
@@ -259,7 +264,7 @@ def _gemini_inspection_messages(data: Mapping[str, object], call_type: str | Non
     """Chat-style messages for a Gemini ``generateContent`` body on a pass-through or Google ``generateContent``
     call: ``systemInstruction`` first as a system message, then each ``contents`` turn with its text parts joined and
     ``model`` read as ``assistant``. Turns with no text are dropped."""
-    if call_type not in _GEMINI_BODY_CALL_TYPES:
+    if not _has_gemini_contents(data, call_type):
         return []
     system_text: Final = _gemini_text(data.get("systemInstruction") or data.get("system_instruction"))
     turns: Final = (
