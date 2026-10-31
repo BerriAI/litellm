@@ -180,6 +180,7 @@ from litellm.types.llms.anthropic import (
     ServerToolUsage,
     StreamingContentBlockDeltaType,
     UsageDelta,
+    UsageDeltaOutputTokensDetails,
     UsageIteration,
 )
 from litellm.types.llms.anthropic_messages.anthropic_response import (
@@ -1608,14 +1609,18 @@ class LiteLLMAnthropicMessagesAdapter:
         if cache_read_input_tokens > 0:
             usage_delta["cache_read_input_tokens"] = cache_read_input_tokens
         reasoning_tokens: Final = cls._get_reasoning_tokens(usage)
-        if reasoning_tokens > 0:
-            usage_delta["output_tokens_details"] = {"thinking_tokens": reasoning_tokens}
+        usage_with_thinking: Final = (
+            usage_delta
+            | UsageDelta(output_tokens_details=UsageDeltaOutputTokensDetails(thinking_tokens=reasoning_tokens))
+            if reasoning_tokens > 0
+            else usage_delta
+        )
         if web_search_requests > 0:
             return UsageDelta(
-                **usage_delta,
+                **usage_with_thinking,
                 server_tool_use=ServerToolUsage(web_search_requests=web_search_requests),
             )
-        return usage_delta
+        return usage_with_thinking
 
     _translate_openai_usage_to_anthropic_usage_delta = translate_openai_usage_to_anthropic_usage_delta
 

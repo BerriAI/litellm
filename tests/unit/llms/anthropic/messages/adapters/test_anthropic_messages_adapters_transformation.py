@@ -3403,23 +3403,23 @@ def test_translate_openai_usage_to_anthropic_cache_tokens_from_dict_details_with
 
 
 def test_translate_openai_usage_to_anthropic_maps_reasoning_tokens_to_thinking_tokens():
-    usage = Usage(
+    usage: Final = Usage(
         prompt_tokens=19,
         completion_tokens=30,
         total_tokens=49,
         completion_tokens_details=CompletionTokensDetailsWrapper(reasoning_tokens=25),
     )
 
-    anthropic_usage = LiteLLMAnthropicMessagesAdapter.translate_openai_usage_to_anthropic_usage_delta(usage)
+    anthropic_usage: Final = LiteLLMAnthropicMessagesAdapter.translate_openai_usage_to_anthropic_usage_delta(usage)
 
     assert anthropic_usage["output_tokens"] == 30
     assert anthropic_usage["output_tokens_details"] == {"thinking_tokens": 25}
 
 
 def test_translate_openai_usage_to_anthropic_omits_output_tokens_details_without_reasoning_tokens():
-    usage = Usage(prompt_tokens=19, completion_tokens=5, total_tokens=24)
+    usage: Final = Usage(prompt_tokens=19, completion_tokens=5, total_tokens=24)
 
-    anthropic_usage = LiteLLMAnthropicMessagesAdapter.translate_openai_usage_to_anthropic_usage_delta(usage)
+    anthropic_usage: Final = LiteLLMAnthropicMessagesAdapter.translate_openai_usage_to_anthropic_usage_delta(usage)
 
     assert "output_tokens_details" not in anthropic_usage
 
