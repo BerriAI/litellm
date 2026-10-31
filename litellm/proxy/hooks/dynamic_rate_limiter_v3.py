@@ -15,16 +15,21 @@ from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.add_retry_fallback_headers import (
+    ensure_response_additional_headers,
+    response_has_hidden_params,
+)
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.proxy_rate_limit_error import (
     ProxyRateLimitError,
     map_v3_rate_limit_type,
 )
-from litellm.proxy.hooks.parallel_request_limiter_v3 import (
+from litellm.proxy.hooks.parallel_request_limiter_v3 import (  # noqa: F401  # legacy module exports
+    PROXY_MaxParallelRequestsHandler_v3,
     RateLimitDescriptor,
     RateLimitDescriptorRateLimitObject,
     RateLimitResponse,
-    _PROXY_MaxParallelRequestsHandler_v3,
+    _PROXY_MaxParallelRequestsHandler_v3,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     claim_request_stash_for_data,
     get_or_create_request_stash,
 )
@@ -33,12 +38,8 @@ from litellm.proxy.hooks.rate_limiter_utils import (
     resolve_llm_provider_for_rate_limit,
 )
 from litellm.proxy.utils import InternalUsageCache
-from litellm.router_utils.add_retry_fallback_headers import (
-    ensure_response_additional_headers,
-    response_has_hidden_params,
-)
 from litellm.types.router import ModelGroupInfo
-from litellm.types.utils import CallTypesLiteral
+from litellm.types.utils import CallTypesLiteral, LLMResponseTypes
 
 if TYPE_CHECKING:
     from litellm.types.utils import PriorityReservationSettings
@@ -90,9 +91,9 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         time_provider: Callable[[], datetime] | None = None,
     ):
         self.internal_usage_cache = InternalUsageCache(dual_cache=internal_usage_cache)
-        self.v3_limiter = _PROXY_MaxParallelRequestsHandler_v3(self.internal_usage_cache, time_provider=time_provider)
+        self.v3_limiter = PROXY_MaxParallelRequestsHandler_v3(self.internal_usage_cache, time_provider=time_provider)
 
-    def update_variables(self, llm_router: Router):
+    def update_variables(self, llm_router: Router) -> None:
         self.llm_router = llm_router
 
     def _get_saturation_check_cache_ttl(self) -> int:
@@ -315,7 +316,7 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
             return descriptors
 
         # Get model group info
-        model_group_info: Final[ModelGroupInfo | None] = self.llm_router.get_model_group_info(model_group=model)
+        model_group_info: Final[ModelGroupInfo | None] = self.llm_router.registry().group(model)
         if model_group_info is None:
             return descriptors
 
@@ -620,7 +621,7 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         priority: Final = self._get_priority_from_user_api_key_dict(user_api_key_dict=user_api_key_dict)
 
         # Get model configuration
-        model_group_info: Final[ModelGroupInfo | None] = self.llm_router.get_model_group_info(model_group=model)
+        model_group_info: Final[ModelGroupInfo | None] = self.llm_router.registry().group(model)
         if model_group_info is None:
             verbose_proxy_logger.debug("No model group info for %s, allowing request", model)
             return None
@@ -659,7 +660,9 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         return None
 
     @with_service_target("rate_limits")
-    async def async_post_call_success_hook(self, data: dict, user_api_key_dict: UserAPIKeyAuth, response):
+    async def async_post_call_success_hook(
+        self, data: dict, user_api_key_dict: UserAPIKeyAuth, response
+    ) -> LLMResponseTypes:
         """
         Post-call hook to add rate limit headers to response.
         Leverages v3 limiter's post-call hook functionality.
@@ -689,7 +692,7 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
             return response
 
     @with_service_target("rate_limits")
-    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time) -> None:
         """
         Update token usage for priority-based rate limiting after successful API calls.
 
@@ -804,3 +807,6 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
 
         except Exception as e:
             verbose_proxy_logger.exception("Error in dynamic rate limiter success event: %s", e)
+
+
+PROXY_DynamicRateLimitHandlerV3: Final = _PROXY_DynamicRateLimitHandlerV3

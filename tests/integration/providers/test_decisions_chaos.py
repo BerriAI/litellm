@@ -1,7 +1,6 @@
 import asyncio
 import json
 import re
-import signal
 import threading
 import uuid
 from dataclasses import dataclass
@@ -19,7 +18,10 @@ from integration._support.client import Gateway, eventually
 from integration._support.database import read_rows
 from integration._support.process import owned_proxy_process
 from integration._support.wire import Reply, Request, Wire, wire_server
+from integration._support.ports import allocate_port
 from pydantic import JsonValue, TypeAdapter
+
+pytestmark: Final = pytest.mark.shares_worker_state
 
 _BACKEND: Final = "pplx-decider-v1-27b"
 _CONFIG_MODEL: Final = "decisions-chaos"
@@ -27,7 +29,7 @@ _API_KEY: Final = "synthetic-decisions-key"
 _JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
 _STARTED_WORKER: Final = re.compile(r"Started server process \[(\d+)\]")
 _QUESTIONS: Final[dict[str, JsonValue]] = {"fine": {"type": "noul", "instructions": "Is the state fine?"}}
-_ROUTES: Final = ("/v1/decisions", "/decisions")
+_ROUTES: Final = ("/v1/systemone", "/systemone")
 
 
 @dataclass(frozen=True, slots=True)
@@ -215,13 +217,13 @@ async def test_worker_sigkill_mid_burst_leaves_the_sibling_serving_the_default_m
             held_by: Final = MappingProxyType({pid: _open_upstream_connections(pid, wire.url) for pid in workers})
             assert sum(held_by.values()) == 20, held_by
             victim_pid, survivor_pid = sorted(workers, key=held_by.__getitem__)
-            victim: Final = psutil.Process(victim_pid)
-            victim.suspend()
-            victim.send_signal(signal.SIGKILL)
-            release.set()
-            served: Final = await burst
-            assert len(served) == held_by[survivor_pid], (held_by, len(served))
-            follow_up: Final = _Call(route="/decisions", marker=f"ok-{uuid.uuid4().hex}", fail=False)
+            with owned.replacing_worker(victim_pid) as kill:
+                kill.freeze()
+                await asyncio.to_thread(kill)
+                release.set()
+                served: Final = await burst
+                assert len(served) == held_by[survivor_pid], (held_by, len(served))
+            follow_up: Final = _Call(route="/systemone", marker=f"ok-{uuid.uuid4().hex}", fail=False)
             (answered,) = await _burst(base_url, candidate.key, None, (follow_up,))
             await asyncio.to_thread(
                 eventually,
@@ -240,10 +242,9 @@ async def test_worker_sigkill_mid_burst_leaves_the_sibling_serving_the_default_m
 @pytest.mark.timeout(180)
 async def test_upstream_outage_fails_its_calls_and_recovery_on_the_same_port_restores_them(gateway: Gateway) -> None:
     base_url: Final = str(gateway.client.base_url)
+    port: Final = allocate_port()
     with gateway.scenario() as scenario:
-        with wire_server(_reply) as wire:
-            port: Final = urlsplit(wire.url).port
-            assert port is not None
+        with wire_server(_reply, port=port) as wire:
             model: Final = scenario.model(model=f"perplexity/{_BACKEND}", api_base=wire.url, api_key=_API_KEY)
             before: Final = await _burst(base_url, gateway.key, model, _calls(5, fail=False))
             assert _health(gateway, model) == (1, 0)

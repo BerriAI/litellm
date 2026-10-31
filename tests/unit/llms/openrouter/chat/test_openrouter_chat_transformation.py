@@ -1,8 +1,17 @@
 
+import copy
+import json
+from collections.abc import Iterator
+from itertools import chain
+from typing import Final
+from unittest.mock import MagicMock
+
 import httpx
 import pytest
+import respx
 
-
+import litellm
+from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 from litellm.llms.openrouter.chat.transformation import (
     OpenRouterChatCompletionStreamingHandler,
@@ -94,6 +103,15 @@ def test_openrouter_extra_body_transformation():
     assert transformed_request["messages"] == [
         {"role": "user", "content": "Hello, world!"}
     ]
+
+
+def test_openrouter_supported_params_include_reasoning_for_unmapped_model():
+    supported_params = OpenrouterConfig().get_supported_openai_params(
+        "openrouter/unmapped-model"
+    )
+
+    assert "reasoning_effort" in supported_params
+    assert "thinking" in supported_params
 
 
 def test_openrouter_cache_control_flag_removal():
@@ -450,6 +468,34 @@ def test_openrouter_cost_tracking_non_streaming():
     )
 
 
+
+@pytest.mark.parametrize("cost", [float("nan"), float("inf")])
+def test_openrouter_chat_leaves_a_non_finite_provider_cost_out_of_the_response_headers(cost: float) -> None:
+    body: Final = {
+        "id": "gen-123",
+        "object": "chat.completion",
+        "created": 1234567890,
+        "model": "openai/gpt-5.6-luna",
+        "choices": [{"message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop", "index": 0}],
+        "usage": {"prompt_tokens": 10, "completion_tokens": 1, "total_tokens": 11, "cost": cost},
+    }
+
+    result: Final = OpenrouterConfig().transform_response(
+        model="openrouter/openai/gpt-5.6-luna",
+        raw_response=httpx.Response(
+            200, content=json.dumps(body).encode(), headers={"content-type": "application/json"}
+        ),
+        model_response=litellm.ModelResponse(),
+        logging_obj=MagicMock(),
+        request_data={},
+        messages=[{"role": "user", "content": "Reply with ok"}],
+        optional_params={},
+        litellm_params={},
+        encoding=None,
+    )
+
+    assert "llm_provider-x-litellm-response-cost" not in result._hidden_params.get("additional_headers", {})
+
 def test_openrouter_cost_tracking_streaming():
     """
     Test OpenRouter cost tracking for streaming completions.
@@ -537,17 +583,15 @@ def test_openrouter_reasoning_models_allow_reasoning_effort_param():
     assert supported_params.count("reasoning_effort") == 1
 
 
-def test_openrouter_non_reasoning_models_do_not_add_reasoning_effort():
-    """
-    Models without reasoning support should not gain reasoning-specific params.
-    """
+def test_openrouter_non_reasoning_models_support_reasoning_params():
     config = OpenrouterConfig()
 
     supported_params = config.get_supported_openai_params(
         model="openrouter/anthropic/claude-3-5-haiku"
     )
 
-    assert "reasoning_effort" not in supported_params
+    assert "reasoning_effort" in supported_params
+    assert "thinking" in supported_params
 
 
 def test_openrouter_reasoning_effort_max_maps_to_xhigh():
@@ -613,3 +657,390 @@ def test_openrouter_reasoning_effort_high_passes_through():
     )
 
     assert result["reasoning_effort"] == "high"
+
+
+OPENROUTER_COST_HEADER = "llm_provider-x-litellm-response-cost"
+
+
+def _complete_with_openrouter_usage(usage):
+    def respond(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "id": "gen-1",
+                "object": "chat.completion",
+                "created": 1700000000,
+                "model": "openai/gpt-4o",
+                "choices": [{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": "hi"}}],
+                "usage": usage,
+            },
+        )
+
+    return litellm.completion(
+        model="openrouter/openai/gpt-4o",
+        messages=[{"role": "user", "content": "hi"}],
+        api_key="sk-test",
+        client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(respond))),
+    )
+
+
+@pytest.mark.parametrize(
+    ("cost", "expected"),
+    [
+        pytest.param(0.00015, 0.00015, id="float"),
+        pytest.param(3, 3.0, id="int"),
+        pytest.param(0, 0.0, id="zero"),
+        pytest.param("0.5", 0.5, id="numeric-string"),
+        pytest.param(" 1.5 ", 1.5, id="padded-numeric-string"),
+        pytest.param(True, 1.0, id="bool"),
+    ],
+)
+def test_openrouter_completion_stores_usage_cost_as_float_cost_header(cost, expected):
+    response = _complete_with_openrouter_usage(
+        {"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30, "cost": cost, "is_byok": False}
+    )
+
+    stored = response._hidden_params["additional_headers"][OPENROUTER_COST_HEADER]
+    assert type(stored) is float
+    assert stored == expected
+    assert response._hidden_params["response_cost"] == expected
+
+
+@pytest.mark.parametrize(
+    "usage",
+    [
+        pytest.param({"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30}, id="cost-missing"),
+        pytest.param({"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30, "cost": None}, id="cost-null"),
+        pytest.param({"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30, "cost": "abc"}, id="cost-text"),
+        pytest.param({"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30, "cost": [1]}, id="cost-list"),
+        pytest.param(
+            {"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30, "cost": {"upstream": 1.0}},
+            id="cost-object",
+        ),
+        pytest.param({}, id="usage-empty"),
+        pytest.param(None, id="usage-null"),
+    ],
+)
+def test_openrouter_completion_without_usable_cost_returns_response_without_cost_header(usage):
+    response = _complete_with_openrouter_usage(usage)
+
+    assert response.choices[0].message.content == "hi"
+    assert OPENROUTER_COST_HEADER not in response._hidden_params["additional_headers"]
+
+
+@pytest.mark.parametrize(
+    "usage",
+    [
+        pytest.param([{"cost": 1.0}], id="usage-list"),
+        pytest.param("cost", id="usage-text"),
+        pytest.param(5, id="usage-number"),
+    ],
+)
+def test_openrouter_completion_with_non_object_usage_raises_api_connection_error(usage):
+    with pytest.raises(litellm.APIConnectionError):
+        _complete_with_openrouter_usage(usage)
+
+
+@respx.mock
+def test_openrouter_streaming_completion_assembles_text_and_finish_reason() -> None:
+    chunks: Final = (
+        {
+            "id": "gen-stream-model",
+            "object": "chat.completion.chunk",
+            "created": 1,
+            "model": "openai/gpt-4o-mini",
+            "choices": [{"index": 0, "delta": {"role": "assistant"}, "finish_reason": None}],
+        },
+        {
+            "id": "gen-stream-model",
+            "object": "chat.completion.chunk",
+            "created": 1,
+            "model": "openai/gpt-4o-mini",
+            "choices": [{"index": 0, "delta": {"content": "The Supreme Court"}, "finish_reason": None}],
+        },
+        {
+            "id": "gen-stream-model",
+            "object": "chat.completion.chunk",
+            "created": 1,
+            "model": "openai/gpt-4o-mini",
+            "choices": [{"index": 0, "delta": {"content": " hears federal cases."}, "finish_reason": None}],
+        },
+        {
+            "id": "gen-stream-model",
+            "object": "chat.completion.chunk",
+            "created": 1,
+            "model": "openai/gpt-4o-mini",
+            "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+        },
+    )
+    body: Final = "".join(f"data: {json.dumps(chunk)}\n\n" for chunk in chunks) + "data: [DONE]\n\n"
+    respx.post("https://openrouter.ai/api/v1/chat/completions").mock(
+        return_value=httpx.Response(
+            200,
+            text=body,
+            headers={"content-type": "text/event-stream"},
+        )
+    )
+    messages: Final = [
+        {"role": "system", "content": "You are a helpful assistant."},
+        {"role": "user", "content": "How does a case reach the Supreme Court?"},
+    ]
+    stream: Final = litellm.completion(
+        model="openrouter/openai/gpt-4o-mini",
+        messages=messages,
+        stream=True,
+        max_tokens=50,
+        api_key="test-openrouter-key",
+    )
+    stream_chunks: Final = tuple(stream)
+    assert stream_chunks[0].choices[0].delta.role == "assistant"
+    assert tuple(
+        chunk.choices[0].finish_reason for chunk in stream_chunks if chunk.choices[0].finish_reason is not None
+    ) == ("stop",)
+    assert "".join(
+        chunk.choices[0].delta.content or "" for chunk in stream_chunks if chunk.choices
+    ) == "The Supreme Court hears federal cases."
+    assembled: Final = litellm.stream_chunk_builder(chunks=list(stream_chunks), messages=messages)
+    assert assembled is not None
+    assert assembled.choices[0].message.content == "The Supreme Court hears federal cases."
+    assert assembled.choices[0].finish_reason == "stop"
+
+
+@respx.mock
+def test_openrouter_streaming_reasoning_is_preserved() -> None:
+    chunks: Final = (
+        {
+            "id": "gen-reasoning-stream",
+            "object": "chat.completion.chunk",
+            "created": 1,
+            "model": "anthropic/claude-sonnet-4.5",
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {"role": "assistant", "reasoning": "Consider the evidence. "},
+                    "finish_reason": None,
+                }
+            ],
+        },
+        {
+            "id": "gen-reasoning-stream",
+            "object": "chat.completion.chunk",
+            "created": 1,
+            "model": "anthropic/claude-sonnet-4.5",
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {"content": "The decision is reasoned.", "reasoning": "Apply the rule."},
+                    "finish_reason": None,
+                }
+            ],
+        },
+        {
+            "id": "gen-reasoning-stream",
+            "object": "chat.completion.chunk",
+            "created": 1,
+            "model": "anthropic/claude-sonnet-4.5",
+            "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+        },
+    )
+    body: Final = "".join(f"data: {json.dumps(chunk)}\n\n" for chunk in chunks) + "data: [DONE]\n\n"
+    route: Final = respx.post("https://openrouter.ai/api/v1/chat/completions").mock(
+        return_value=httpx.Response(
+            200,
+            text=body,
+            headers={"content-type": "text/event-stream"},
+        )
+    )
+    parsed_reasoning_chunk: Final = OpenRouterChatCompletionStreamingHandler(
+        streaming_response=None, sync_stream=True
+    ).chunk_parser(chunks[0])
+    assert parsed_reasoning_chunk.choices[0]["delta"]["reasoning_content"] == "Consider the evidence. "
+    messages: Final = [{"role": "user", "content": "Explain the decision briefly."}]
+    stream: Final = litellm.completion(
+        model="openrouter/anthropic/claude-sonnet-4.5",
+        messages=messages,
+        stream=True,
+        reasoning={"effort": "high"},
+        drop_params=True,
+        api_key="test-openrouter-key",
+    )
+    stream_chunks: Final = tuple(stream)
+    assert json.loads(route.calls.last.request.content)["reasoning"] == {"effort": "high"}
+    reasoning_deltas: Final = tuple(
+        getattr(chunk.choices[0].delta, "reasoning_content", None)
+        for chunk in stream_chunks
+        if chunk.choices
+    )
+    assert reasoning_deltas == ("Consider the evidence. ", "Apply the rule.", None)
+    assembled: Final = litellm.stream_chunk_builder(chunks=list(stream_chunks), messages=messages)
+    assert assembled is not None
+    assert assembled.choices[0].message.reasoning_content == "Consider the evidence. Apply the rule."
+
+
+def _five_message_level_cache_hints() -> list[dict[str, object]]:
+    return [
+        {"role": "system", "content": "system prompt", "cache_control": {"type": "ephemeral"}},
+        {"role": "user", "content": "turn 1", "cache_control": {"type": "ephemeral"}},
+        {"role": "assistant", "content": "answer 1", "cache_control": {"type": "ephemeral"}},
+        {"role": "user", "content": "turn 2", "cache_control": {"type": "ephemeral"}},
+        {"role": "assistant", "content": "answer 2"},
+        {"role": "user", "content": "turn 3", "cache_control": {"type": "ephemeral"}},
+    ]
+
+
+def _cached_texts(node: object) -> Iterator[str]:
+    if isinstance(node, dict):
+        yield from ((node["text"],) if "cache_control" in node and "text" in node else ())
+        yield from chain.from_iterable(map(_cached_texts, node.values()))
+    elif isinstance(node, list):
+        yield from chain.from_iterable(map(_cached_texts, node))
+
+
+@pytest.mark.parametrize(
+    ("drop_params", "expected_cached_texts"),
+    [
+        (True, ["answer 1", "turn 1", "turn 2", "turn 3"]),
+        ("true", ["answer 1", "turn 1", "turn 2", "turn 3"]),
+        (False, ["answer 1", "system prompt", "turn 1", "turn 2", "turn 3"]),
+    ],
+    ids=[
+        "drop_params_keeps_the_newest_four",
+        "string_drop_params_keeps_the_newest_four",
+        "without_drop_params_all_five_pass_through",
+    ],
+)
+def test_openrouter_claude_request_over_the_cache_control_cap_drops_the_oldest_hints_only_under_drop_params(
+    drop_params: bool | str, expected_cached_texts: list[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    messages: Final = _five_message_level_cache_hints()
+    messages_before: Final = copy.deepcopy(messages)
+
+    body: Final = OpenrouterConfig().transform_request(
+        model="anthropic/claude-haiku-5.5",
+        messages=messages,
+        optional_params={},
+        litellm_params={"drop_params": drop_params, "custom_llm_provider": "openrouter"},
+        headers={},
+    )
+
+    assert sorted(_cached_texts(body["messages"])) == expected_cached_texts
+    assert json.dumps(body).count('"cache_control"') == len(expected_cached_texts)
+    assert messages == messages_before
+
+
+def _transform_openrouter_response(body: dict[str, object]) -> litellm.ModelResponse:
+    return OpenrouterConfig().transform_response(
+        model="openrouter/openai/gpt-4o-mini",
+        raw_response=httpx.Response(200, json=body),
+        model_response=litellm.ModelResponse(),
+        logging_obj=MagicMock(),
+        request_data={},
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params={},
+        litellm_params={},
+        encoding=None,
+    )
+
+
+def test_openrouter_nonstream_provider_without_usage_is_preserved_regression() -> None:
+    response: Final = _transform_openrouter_response(
+        {
+            "id": "gen-provider-no-usage",
+            "object": "chat.completion",
+            "created": 1,
+            "model": "openai/gpt-4o-mini",
+            "provider": "serving-site-a",
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {"role": "assistant", "content": "hi"},
+                    "finish_reason": "stop",
+                }
+            ],
+        }
+    )
+
+    assert response._hidden_params.get("upstream_provider") == "serving-site-a"
+
+
+@pytest.mark.parametrize(
+    ("provider_fields", "case"),
+    [
+        pytest.param({}, "missing", id="missing"),
+        pytest.param({"provider": None}, "null", id="null"),
+        pytest.param({"provider": ""}, "empty", id="empty"),
+        pytest.param({"provider": 123}, "non-string", id="non-string"),
+    ],
+)
+def test_openrouter_invalid_provider_keeps_reported_cost_guard(
+    provider_fields: dict[str, object], case: str
+) -> None:
+    response: Final = _transform_openrouter_response(
+        {
+            "id": f"gen-invalid-provider-{case}",
+            "object": "chat.completion",
+            "created": 1,
+            "model": "openai/gpt-4o-mini",
+            **provider_fields,
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {"role": "assistant", "content": "hi"},
+                    "finish_reason": "stop",
+                }
+            ],
+            "usage": {
+                "prompt_tokens": 10,
+                "completion_tokens": 20,
+                "total_tokens": 30,
+                "cost": 0.00015,
+            },
+        }
+    )
+
+    assert response._hidden_params.get("upstream_provider") is None
+    assert response._hidden_params["additional_headers"][OPENROUTER_COST_HEADER] == 0.00015
+
+
+def test_openrouter_streaming_chunk_preserves_provider_regression() -> None:
+    chunk: Final = {
+        "id": "gen-provider-stream",
+        "object": "chat.completion.chunk",
+        "created": 1,
+        "model": "openai/gpt-4o-mini",
+        "provider": "serving-site-a",
+        "choices": [{"index": 0, "delta": {"content": "hi"}, "finish_reason": None}],
+    }
+
+    response: Final = OpenRouterChatCompletionStreamingHandler(
+        streaming_response=None, sync_stream=True
+    ).chunk_parser(chunk)
+
+    assert response._hidden_params.get("upstream_provider") == "serving-site-a"
+
+
+@pytest.mark.parametrize(
+    ("provider_fields", "case"),
+    [
+        pytest.param({}, "missing", id="missing"),
+        pytest.param({"provider": None}, "null", id="null"),
+        pytest.param({"provider": ""}, "empty", id="empty"),
+        pytest.param({"provider": 123}, "non-string", id="non-string"),
+    ],
+)
+def test_openrouter_streaming_chunk_ignores_invalid_provider_guard(provider_fields: dict[str, object], case: str) -> None:
+    chunk: Final = {
+        "id": f"gen-invalid-provider-{case}",
+        "object": "chat.completion.chunk",
+        "created": 1,
+        "model": "openai/gpt-4o-mini",
+        **provider_fields,
+        "choices": [{"index": 0, "delta": {"content": "hi"}, "finish_reason": None}],
+    }
+
+    response: Final = OpenRouterChatCompletionStreamingHandler(
+        streaming_response=None, sync_stream=True
+    ).chunk_parser(chunk)
+
+    assert response._hidden_params.get("upstream_provider") is None

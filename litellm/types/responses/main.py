@@ -4,8 +4,9 @@ from typing import Final, Literal, Optional, Union
 
 from openai.types.responses.response_function_tool_call import ResponseFunctionToolCall
 from openai.types.responses.response_function_web_search import ActionSearchSource, ResponseFunctionWebSearch
-from pydantic import PrivateAttr
-from typing_extensions import Any, TypedDict
+from openai.types.responses.response_output_refusal import ResponseOutputRefusal
+from pydantic import ConfigDict, PrivateAttr
+from typing_extensions import TypedDict
 
 from litellm.types.llms.base import BaseLiteLLMOpenAIResponseObject
 
@@ -100,7 +101,7 @@ class OutputCodeInterpreterCall(BaseLiteLLMOpenAIResponseObject):
 
 
 def build_code_interpreter_log_outputs(
-    content: Any,
+    content: object,
 ) -> list[OutputCodeInterpreterCallLog] | None:
     """Convert Anthropic bash_code_execution stdout/stderr to log outputs.
 
@@ -133,6 +134,17 @@ class CustomToolCallOutputItem(BaseLiteLLMOpenAIResponseObject):
     status: Literal["in_progress", "completed", "incomplete"] | None = None
 
 
+class OutputToolSearchCall(BaseLiteLLMOpenAIResponseObject):
+    model_config = ConfigDict(extra="allow", frozen=True, protected_namespaces=())
+
+    id: str
+    arguments: object
+    call_id: str | None = None
+    execution: Literal["server", "client"]
+    status: Literal["in_progress", "completed", "incomplete"]
+    type: Literal["tool_search_call"]
+
+
 class GenericResponseOutputItem(BaseLiteLLMOpenAIResponseObject):
     """
     Generic response API output item
@@ -143,7 +155,7 @@ class GenericResponseOutputItem(BaseLiteLLMOpenAIResponseObject):
     id: str
     status: str  # "completed", "in_progress", etc.
     role: str  # "assistant", "user", etc.
-    content: list[OutputText]
+    content: list[OutputText | ResponseOutputRefusal]
     phase: Phase = None
 
 

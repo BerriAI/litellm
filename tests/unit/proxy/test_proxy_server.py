@@ -1,9 +1,10 @@
 import os
 import sys
 import traceback
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Awaitable, Callable, Coroutine, Mapping
 from contextlib import asynccontextmanager
-from typing import Final, Literal
+from pathlib import Path
+from typing import Final, Literal, NoReturn, cast
 from unittest import mock
 
 from dotenv import load_dotenv
@@ -22,7 +23,9 @@ import json
 import asyncio
 import logging
 
+import httpx
 import pytest
+import respx
 
 import litellm
 from litellm import RateLimitError, Timeout, completion, completion_cost, embedding
@@ -35,7 +38,7 @@ logging.basicConfig(
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, WebSocket
 
 # test /chat/completion request to the proxy
 from fastapi.testclient import TestClient
@@ -113,7 +116,7 @@ async def test_admin_mcp_failure_still_closes_proxy_resources(
     message: Final = "LITELLM_LICENSE" if failure_phase == "license" else f"{failure_phase} failed"
     async def run_lifespan() -> None:
         async with admin_mcp_proxy.router.lifespan_context(admin_mcp_proxy) as state:
-            assert state == {"tracing_receiver": None}
+            assert state == {"tracing_receiver": None, "database": None}
             if failure_phase == "serving":
                 raise RuntimeError("serving failed")
             if failure_phase == "cancelled":
@@ -144,7 +147,10 @@ async def test_proxy_shutdown_drains_active_admin_tool_before_closing_connector(
 
     @admin_mcp_proxy.get("/user/info")
     async def user_info() -> dict[str, object]:
-        return {"user_id": "admin", "user_info": {"user_id": "admin", "user_role": "proxy_admin"}}
+        return {
+            "user_id": "admin", "user_info": {"user_id": "admin", "user_role": "proxy_admin"},
+            "admin_mcp_permissions": {"tools": ["list_teams"], "action_allowed": True},
+        }
 
     @admin_mcp_proxy.get("/team/list", operation_id="list_team_team_list_get")
     async def list_teams() -> dict[str, object]:
@@ -162,7 +168,7 @@ async def test_proxy_shutdown_drains_active_admin_tool_before_closing_connector(
         transport=httpx2.ASGITransport(app=admin_mcp_proxy), base_url="http://localhost:4000"
     ) as client:
         async with admin_mcp_proxy.router.lifespan_context(admin_mcp_proxy) as state:
-            assert state == {"tracing_receiver": None}
+            assert state == {"tracing_receiver": None, "database": None}
             request: Final = asyncio.create_task(client.post(
                 "/admin/mcp",
                 headers={"Authorization": "Bearer admin", "Accept": "application/json, text/event-stream"},
@@ -235,7 +241,226 @@ async def test_proxy_shutdown_closes_admin_connector_when_drain_is_cancelled(
 
 
 # Your bearer token
+@pytest.mark.asyncio
+async def test_shutdown_commits_spend_a_logging_task_queued_while_the_first_commit_was_writing():
+    from litellm.responses.streaming_iterator import spawn_logging_task
+
+    queued: list[str] = []
+    committed: list[str] = []
+
+    async def commit_spend() -> None:
+        committed.extend(queued)
+        queued.clear()
+        await asyncio.sleep(0.05)
+
+    async def failure_row() -> None:
+        await asyncio.sleep(0.01)
+        queued.append("failure row spend")
+
+    spawn_logging_task(asyncio.get_running_loop(), failure_row(), task_name="failure row")
+
+    await litellm.proxy.proxy_server._flush_spend_around_logging_drain_on_shutdown(flush_spend=commit_spend)
+
+    assert committed == ["failure row spend"]
+
+
 token = MASTER_KEY
+
+
+@pytest.mark.asyncio
+async def test_shutdown_persists_accounting_from_worker_callbacks_before_returning(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from datetime import datetime
+
+    from litellm.litellm_core_utils.logging_worker import LoggingWorker
+    from litellm.proxy.db.accounting_ledger import UsageWrite
+    from litellm.proxy.spend_tracking.usage_capture import UsageCaptureRuntime, capture_callback
+    from litellm.proxy.spend_tracking.usage_meter import UsageCaptureSettings
+    from litellm.responses.streaming_iterator import spawn_logging_task
+
+    worker: Final = LoggingWorker()
+    started: Final = asyncio.Event()
+    release: Final = asyncio.Event()
+    first_flush: Final = asyncio.Event()
+    pending: Final[asyncio.Queue[str]] = asyncio.Queue()
+    persisted: Final[asyncio.Queue[str]] = asyncio.Queue()
+
+    captured: Final[asyncio.Queue[str]] = asyncio.Queue()
+
+    async def persist_usage(writes: tuple[UsageWrite, ...]) -> None:
+        for write in writes:
+            captured.put_nowait(write.event.event_id)
+
+    capture: Final = UsageCaptureRuntime()
+    capture.start(persist_usage, UsageCaptureSettings(flush_interval_seconds=10))
+    monkeypatch.setattr(litellm.proxy.proxy_server, "usage_capture", capture)
+
+    async def enqueue_spend() -> None:
+        assert capture.meter is not None
+        capture_callback(
+            capture.meter,
+            {"call_type": "acompletion", "litellm_call_id": "shutdown-usage", "litellm_params": {}},
+            {"id": "shutdown-attempt", "usage": {"total_tokens": 3}},
+            datetime(2026, 1, 1),
+            datetime(2026, 1, 1),
+        )
+        pending.put_nowait("accounted request")
+
+    async def callback() -> None:
+        started.set()
+        await release.wait()
+        spawn_logging_task(asyncio.get_running_loop(), enqueue_spend(), task_name="accounting")
+
+    async def flush_spend() -> None:
+        while not pending.empty():
+            persisted.put_nowait(pending.get_nowait())
+        first_flush.set()
+
+    worker.ensure_initialized_and_enqueue(callback())
+    await started.wait()
+    shutdown: Final = asyncio.create_task(
+        litellm.proxy.proxy_server._flush_spend_around_logging_drain_on_shutdown(flush_spend, worker=worker)
+    )
+    try:
+        await first_flush.wait()
+        waited_for_callback: Final = not shutdown.done()
+        release.set()
+        await shutdown
+        assert waited_for_callback, "Shutdown returned while accounting callbacks were still running"
+        assert persisted.get_nowait() == "accounted request"
+        assert pending.empty()
+        assert (captured.get_nowait(), captured.get_nowait()) == ("shutdown-usage:inbound", "shutdown-attempt")
+        assert capture.meter is None
+    finally:
+        release.set()
+        await worker.flush()
+        await worker.stop()
+        await capture.stop(0)
+
+
+@pytest.mark.asyncio
+async def test_shutdown_reports_worker_timeout_and_flushes_completed_accounting(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    from litellm.litellm_core_utils.logging_worker import LoggingWorker
+    from litellm.proxy.shutdown.graceful_shutdown_manager import GracefulShutdownManager
+
+    monkeypatch.setenv("GRACEFUL_SHUTDOWN_TIMEOUT", "30")
+    worker: Final = LoggingWorker()
+    started: Final = asyncio.Event()
+    cancelled: Final = asyncio.Event()
+    flushed_after_cancellation: Final = asyncio.Event()
+    GracefulShutdownManager.start_shutdown(clock=lambda: 100.0)
+
+    async def callback() -> None:
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cancelled.set()
+
+    async def flush_spend() -> None:
+        if cancelled.is_set():
+            flushed_after_cancellation.set()
+
+    worker.ensure_initialized_and_enqueue(callback())
+    await started.wait()
+    try:
+        with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+            await litellm.proxy.proxy_server._flush_spend_around_logging_drain_on_shutdown(
+                flush_spend, worker=worker, clock=lambda: 120.0
+            )
+        assert cancelled.is_set()
+        assert flushed_after_cancellation.is_set()
+        assert "budget exhausted with 1 unfinished callbacks" in caplog.text
+    finally:
+        GracefulShutdownManager.reset()
+        await worker.stop()
+
+
+@pytest.mark.asyncio
+async def test_shutdown_bounds_callback_cancellation_and_flushes_accounting(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    from litellm.litellm_core_utils.logging_worker import LoggingWorker
+    from litellm.proxy.shutdown.graceful_shutdown_manager import GracefulShutdownManager
+
+    monkeypatch.setenv("GRACEFUL_SHUTDOWN_TIMEOUT", "30")
+    worker: Final = LoggingWorker()
+    started: Final = asyncio.Event()
+    cancelling: Final = asyncio.Event()
+    release: Final = asyncio.Event()
+    finished: Final = asyncio.Event()
+    flushed: Final = asyncio.Event()
+    GracefulShutdownManager.start_shutdown(clock=lambda: 100.0)
+
+    async def callback() -> None:
+        started.set()
+        try:
+            await release.wait()
+        except asyncio.CancelledError:
+            cancelling.set()
+            await release.wait()
+        finally:
+            finished.set()
+
+    async def drain_tasks(timeout: float) -> None:
+        assert timeout == 0.0
+        await cancelling.wait()
+
+    async def flush_spend() -> None:
+        if cancelling.is_set():
+            flushed.set()
+
+    worker.ensure_initialized_and_enqueue(callback())
+    await started.wait()
+    try:
+        with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+            await litellm.proxy.proxy_server._flush_spend_around_logging_drain_on_shutdown(
+                flush_spend, worker=worker, clock=lambda: 130.0, drain_tasks=drain_tasks
+            )
+        assert not finished.is_set(), "The cancellation-resistant callback must remain observable"
+        assert flushed.is_set()
+        assert "tasks still alive after cancellation" in caplog.text
+    finally:
+        release.set()
+        await worker.flush()
+        await worker.stop()
+        GracefulShutdownManager.reset()
+
+
+@pytest.mark.asyncio
+async def test_shutdown_preserves_persistence_reserve_after_partial_http_drain(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    from litellm.litellm_core_utils.logging_worker import LoggingWorker
+    from litellm.proxy.shutdown.graceful_shutdown_manager import GracefulShutdownManager
+
+    monkeypatch.setenv("GRACEFUL_SHUTDOWN_TIMEOUT", "30")
+    worker: Final = LoggingWorker()
+    persisted: Final = asyncio.Event()
+    drain_budgets: Final[asyncio.Queue[float]] = asyncio.Queue()
+    GracefulShutdownManager.start_shutdown(clock=lambda: 100.0)
+
+    async def flush_spend() -> None:
+        persisted.set()
+
+    async def drain_tasks(timeout: float) -> None:
+        drain_budgets.put_nowait(timeout)
+
+    try:
+        with caplog.at_level(logging.INFO, logger="LiteLLM Proxy"):
+            await litellm.proxy.proxy_server._flush_spend_around_logging_drain_on_shutdown(
+                flush_spend, worker=worker, clock=lambda: 106.0, drain_tasks=drain_tasks
+            )
+        assert "remaining_s=24.000 callback_timeout_s=14.000" in caplog.text
+        assert persisted.is_set()
+        assert tuple(drain_budgets.get_nowait() for _ in range(drain_budgets.qsize())) == (14.0, 5.0)
+    finally:
+        await worker.stop()
+        GracefulShutdownManager.reset()
+
 
 headers = {"Authorization": f"Bearer {token}"}
 
@@ -1238,7 +1463,7 @@ async def test_team_update_redis():
     """
     from litellm.caching.caching import DualCache, RedisCache
     from litellm.proxy._types import LiteLLM_TeamTableCachedObj
-    from litellm.proxy.auth.auth_checks import _cache_team_object
+    from litellm.proxy.auth.auth_checks import cache_team_object
 
     proxy_logging_obj: ProxyLogging = getattr(
         litellm.proxy.proxy_server, "proxy_logging_obj"
@@ -1251,7 +1476,7 @@ async def test_team_update_redis():
         "async_set_cache",
         new=AsyncMock(),
     ) as mock_client:
-        await _cache_team_object(
+        await cache_team_object(
             team_id="1234",
             team_table=LiteLLM_TeamTableCachedObj(team_id="1234"),
             user_api_key_cache=DualCache(redis_cache=redis_cache),
@@ -3205,6 +3430,7 @@ async def test_update_config_success_callback_normalization(monkeypatch):
             self.db.litellm_config = MagicMock()
             self.db.litellm_config.find_first = AsyncMock(side_effect=fake_find_first)
             self.db.litellm_config.upsert = AsyncMock(side_effect=fake_upsert)
+            self.writer_db = self.db
 
     monkeypatch.setattr(proxy_server, "prisma_client", MockPrisma())
 
@@ -3296,3 +3522,1042 @@ def test_get_litellm_model_info(data):
     ):
         get_litellm_model_info(model=model)
         get_info_mock.assert_called_once_with(data["expected"])
+
+
+def test_live_session_accept_failure_releases_reservations(
+    client_no_auth: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy import proxy_server
+
+    released: Final[list[str]] = []
+
+    async def release_budget(user_api_key_dict: object) -> None:
+        released.append("budget")
+
+    async def release_slot(user_api_key_dict: object) -> None:
+        released.append("slot")
+
+    async def receive() -> dict[str, object]:
+        return {"type": "websocket.connect"}
+
+    async def send_failing_accept(message: Mapping[str, object]) -> None:
+        if message["type"] == "websocket.accept":
+            raise RuntimeError("accept failed")
+
+    scope: Final = {
+        "type": "websocket",
+        "path": "/v1/live/sessions",
+        "raw_path": b"/v1/live/sessions",
+        "root_path": "",
+        "scheme": "ws",
+        "query_string": b"",
+        "headers": [(b"host", b"testserver"), (b"authorization", b"Bearer test-api-key")],
+        "client": ("testclient", 50000),
+        "server": ("testserver", 80),
+        "subprotocols": [],
+    }
+    route_call: Final = AsyncMock()
+    monkeypatch.setattr(proxy_server, "route_request", route_call)
+    monkeypatch.setattr(proxy_server, "_release_realtime_budget_reservation", release_budget)
+    monkeypatch.setattr(proxy_server, "_release_realtime_max_parallel_slot", release_slot)
+
+    with pytest.raises(RuntimeError, match="accept failed"):
+        asyncio.run(client_no_auth.app(scope, receive, send_failing_accept))
+
+    assert released == ["budget", "slot"]
+    route_call.assert_not_awaited()
+
+
+def _override_live_session_authorizer(
+    monkeypatch: pytest.MonkeyPatch,
+    authorizer: Callable[[WebSocket, str], Awaitable[UserAPIKeyAuth]],
+) -> None:
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setitem(
+        proxy_server.app.dependency_overrides,
+        proxy_server.live_session_model_authorizer,
+        lambda: authorizer,
+    )
+
+
+def _start_live_session_and_wait_for_reply(client: TestClient) -> None:
+    with client.websocket_connect("/v1/live/sessions", headers={"Authorization": "Bearer test-api-key"}) as websocket:
+        websocket.send_json({"type": "session.start", "session": {"model": "gpt-3.5-turbo"}})
+        websocket.receive_text()
+
+
+def test_live_session_model_check_error_releases_reservations(
+    client_no_auth: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy import proxy_server
+
+    released: Final[list[str]] = []
+
+    async def release_budget(user_api_key_dict: object) -> None:
+        released.append("budget")
+
+    async def release_slot(user_api_key_dict: object) -> None:
+        released.append("slot")
+
+    async def failing_authorizer(websocket: object, model: str) -> UserAPIKeyAuth:
+        raise RuntimeError("agent lookup failed")
+
+    route_call: Final = AsyncMock()
+    monkeypatch.setattr(proxy_server, "route_request", route_call)
+    _override_live_session_authorizer(monkeypatch, failing_authorizer)
+    monkeypatch.setattr(proxy_server, "_release_realtime_budget_reservation", release_budget)
+    monkeypatch.setattr(proxy_server, "_release_realtime_max_parallel_slot", release_slot)
+
+    with pytest.raises(RuntimeError, match="agent lookup failed"):
+        _start_live_session_and_wait_for_reply(client_no_auth)
+
+    assert released == ["budget", "slot"]
+    route_call.assert_not_awaited()
+
+
+class _PreCallAborted(BaseException):
+    pass
+
+
+def test_live_session_pre_call_abort_releases_reservations(
+    client_no_auth: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+
+    frame_auth: Final = UserAPIKeyAuth(token="frame-authorized")
+    released_for_frame: Final[list[str]] = []
+
+    async def release_budget(user_api_key_dict: UserAPIKeyAuth) -> None:
+        if user_api_key_dict is frame_auth:
+            released_for_frame.append("budget")
+
+    async def release_slot(user_api_key_dict: UserAPIKeyAuth) -> None:
+        if user_api_key_dict is frame_auth:
+            released_for_frame.append("slot")
+
+    async def authorize(websocket: object, model: str) -> UserAPIKeyAuth:
+        return frame_auth
+
+    class _AbortingPreCallProcessing(ProxyBaseLLMRequestProcessing):
+        async def common_processing_pre_call_logic(self, *args: object, **kwargs: object) -> NoReturn:
+            raise _PreCallAborted
+
+    route_call: Final = AsyncMock()
+    monkeypatch.setattr(proxy_server, "route_request", route_call)
+    _override_live_session_authorizer(monkeypatch, authorize)
+    monkeypatch.setattr(proxy_server, "ProxyBaseLLMRequestProcessing", _AbortingPreCallProcessing)
+    monkeypatch.setattr(proxy_server, "_release_realtime_budget_reservation", release_budget)
+    monkeypatch.setattr(proxy_server, "_release_realtime_max_parallel_slot", release_slot)
+
+    with pytest.raises(_PreCallAborted):
+        _start_live_session_and_wait_for_reply(client_no_auth)
+
+    assert released_for_frame == ["budget", "slot"]
+    route_call.assert_not_awaited()
+
+
+@pytest.mark.parametrize("path", ["/openai/v1/live/sessions", "/v1/live/sessions", "/live/sessions"])
+def test_live_session_invalid_start_is_rejected_without_routing(
+    path: str,
+    client_no_auth: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy import proxy_server
+    from starlette.websockets import WebSocketDisconnect
+
+    async def no_op(user_api_key_dict: object) -> None:
+        return None
+
+    route_call: Final = AsyncMock()
+    monkeypatch.setattr(proxy_server, "route_request", route_call)
+    monkeypatch.setattr(proxy_server, "_release_realtime_budget_reservation", no_op)
+    monkeypatch.setattr(proxy_server, "_release_realtime_max_parallel_slot", no_op)
+
+    with client_no_auth.websocket_connect(path, headers={"Authorization": "Bearer test-api-key"}) as websocket:
+        websocket.send_text('{"type":"session.start","session":{"model":""}}')
+        assert websocket.receive_json() == {
+            "type": "error",
+            "error": {
+                "type": "invalid_request_error",
+                "code": "invalid_session_start",
+                "message": "First message must be a session.start JSON object with a non-empty session.model.",
+            },
+        }
+        with pytest.raises(WebSocketDisconnect) as error:
+            websocket.receive_json()
+        assert error.value.code == 1008
+
+    route_call.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    ("denial_type", "expected_code"),
+    (("user_model_access_denied", "model_not_allowed"), ("budget_exceeded", "session_not_allowed")),
+)
+def test_live_session_frame_authorization_denial_closes_with_policy_code(
+    client_no_auth: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    denial_type: str,
+    expected_code: str,
+) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy._types import ProxyException
+    from starlette.websockets import WebSocketDisconnect
+
+    async def no_op(user_api_key_dict: object) -> None:
+        return None
+
+    authorized_models: Final[list[str]] = []
+
+    async def deny(websocket: object, model: str) -> UserAPIKeyAuth:
+        authorized_models.append(model)
+        raise ProxyException("model access denied for this user", denial_type, "model", 403)
+
+    route_call: Final = AsyncMock()
+    monkeypatch.setattr(proxy_server, "route_request", route_call)
+    monkeypatch.setattr(proxy_server, "_release_realtime_budget_reservation", no_op)
+    monkeypatch.setattr(proxy_server, "_release_realtime_max_parallel_slot", no_op)
+    _override_live_session_authorizer(monkeypatch, deny)
+
+    with client_no_auth.websocket_connect(
+        "/v1/live/sessions",
+        headers={"Authorization": "Bearer test-api-key"},
+    ) as websocket:
+        websocket.send_json({"type": "session.start", "session": {"model": "gpt-4o"}})
+        assert websocket.receive_json() == {
+            "type": "error",
+            "error": {
+                "type": "invalid_request_error",
+                "code": expected_code,
+                "message": "model access denied for this user",
+            },
+        }
+        with pytest.raises(WebSocketDisconnect) as error:
+            websocket.receive_json()
+        assert error.value.code == 1008
+
+    assert authorized_models == ["gpt-4o"]
+    route_call.assert_not_awaited()
+
+
+def test_live_session_valid_start_routes_with_model_and_frame(
+    client_no_auth: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from types import SimpleNamespace
+
+    from litellm.proxy import proxy_server
+    from starlette.websockets import WebSocket
+
+    async def no_op(user_api_key_dict: object) -> None:
+        return None
+
+    async def complete_call() -> None:
+        return None
+
+    captured: Final = SimpleNamespace(data=None, route_type=None)
+
+    async def route(
+        *,
+        data: dict[str, object],
+        route_type: str,
+        llm_router: object,
+        user_model: str | None,
+    ) -> Coroutine[object, object, None]:
+        captured.data = data
+        captured.route_type = route_type
+        await cast(WebSocket, data["websocket"]).send_text("routed")
+        return complete_call()
+
+    frame_auth: Final = UserAPIKeyAuth(token="frame-authorized")
+
+    async def authorize(websocket: object, model: str) -> UserAPIKeyAuth:
+        return frame_auth
+
+    monkeypatch.setattr(proxy_server, "route_request", route)
+    _override_live_session_authorizer(monkeypatch, authorize)
+    monkeypatch.setattr(proxy_server, "_release_realtime_budget_reservation", no_op)
+    monkeypatch.setattr(proxy_server, "_release_realtime_max_parallel_slot", no_op)
+    start_frame: Final[dict[str, object]] = {
+        "type": "session.start",
+        "session": {"model": "gpt-3.5-turbo", "instructions": "Stay brief"},
+    }
+
+    with client_no_auth.websocket_connect(
+        "/v1/live/sessions",
+        headers={"Authorization": "Bearer test-api-key"},
+    ) as websocket:
+        websocket.send_json(start_frame)
+        assert websocket.receive_text() == "routed"
+
+    routed_data: Final = cast(dict[str, object], captured.data)
+    assert captured.route_type == "_arealtime"
+    assert routed_data["model"] == "gpt-3.5-turbo"
+    assert routed_data["live_session_start"] == start_frame
+    assert routed_data["user_api_key_dict"] is frame_auth
+
+
+def test_live_session_ignores_query_model_and_authorizes_frame_model(
+    client_no_auth: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from fastapi import Request
+
+    from litellm.proxy import proxy_server
+    from starlette.websockets import WebSocket
+
+    async def no_op(user_api_key_dict: object) -> None:
+        return None
+
+    async def complete_call() -> None:
+        return None
+
+    async def route(
+        *,
+        data: dict[str, object],
+        route_type: str,
+        llm_router: object,
+        user_model: str | None,
+    ) -> Coroutine[object, object, None]:
+        await cast(WebSocket, data["websocket"]).send_text("routed")
+        return complete_call()
+
+    upgrade_auth: Final = UserAPIKeyAuth(token="upgrade", models=["gpt-live-1"])
+
+    async def authenticate(request: Request, api_key: str) -> UserAPIKeyAuth:
+        if await request.body() != b'{"model": ""}':
+            raise HTTPException(status_code=403, detail="Model is not allowed")
+        return upgrade_auth
+
+    auth_call: Final = AsyncMock(side_effect=authenticate)
+    monkeypatch.setattr("litellm.proxy.auth.user_api_key_auth.user_api_key_auth", auth_call)
+    frame_auth: Final = UserAPIKeyAuth(token="frame-authorized", models=["gpt-live-1"])
+    authorize: Final = AsyncMock(return_value=frame_auth)
+    monkeypatch.setattr(proxy_server, "route_request", route)
+    monkeypatch.setattr(proxy_server, "_release_realtime_budget_reservation", no_op)
+    monkeypatch.setattr(proxy_server, "_release_realtime_max_parallel_slot", no_op)
+    _override_live_session_authorizer(monkeypatch, authorize)
+
+    with client_no_auth.websocket_connect(
+        "/v1/live/sessions?model=gpt-realtime",
+        headers={"Authorization": "Bearer test-api-key"},
+    ) as websocket:
+        websocket.send_json({"type": "session.start", "session": {"model": "gpt-live-1"}})
+        assert websocket.receive_text() == "routed"
+
+    request_arg: Final = auth_call.await_args.kwargs["request"]
+    assert json.loads(asyncio.run(request_arg.body())) == {"model": ""}
+    assert authorize.await_args.args[1] == "gpt-live-1"
+
+
+def test_live_session_reauthorized_token_still_needs_the_model_on_the_key(
+    client_no_auth: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from starlette.websockets import WebSocketDisconnect
+
+    from litellm.proxy import proxy_server
+
+    released_tokens: Final[list[str | None]] = []
+
+    async def release_budget(user_api_key_dict: UserAPIKeyAuth) -> None:
+        released_tokens.append(user_api_key_dict.token)
+
+    async def no_op(user_api_key_dict: object) -> None:
+        return None
+
+    async def custom_auth_without_common_checks(websocket: object, model: str) -> UserAPIKeyAuth:
+        return UserAPIKeyAuth(token="custom-auth", models=["gpt-4o"])
+
+    route_call: Final = AsyncMock()
+    monkeypatch.setattr(proxy_server, "route_request", route_call)
+    monkeypatch.setattr(proxy_server, "_release_realtime_budget_reservation", release_budget)
+    monkeypatch.setattr(proxy_server, "_release_realtime_max_parallel_slot", no_op)
+    _override_live_session_authorizer(monkeypatch, custom_auth_without_common_checks)
+
+    with client_no_auth.websocket_connect(
+        "/v1/live/sessions",
+        headers={"Authorization": "Bearer test-api-key"},
+    ) as websocket:
+        websocket.send_json({"type": "session.start", "session": {"model": "gpt-3.5-turbo"}})
+        error_event: Final = websocket.receive_json()
+        with pytest.raises(WebSocketDisconnect) as error:
+            websocket.receive_json()
+
+    assert error_event["error"]["code"] == "model_not_allowed", error_event
+    assert error.value.code == 1008
+    assert "custom-auth" in released_tokens
+    route_call.assert_not_awaited()
+
+
+def test_live_session_releases_the_upgrade_reservation_before_the_frame_reserves(
+    client_no_auth: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from starlette.websockets import WebSocket
+
+    from litellm.proxy import proxy_server
+
+    released_reservations: Final[list[object]] = []
+
+    async def release_budget(user_api_key_dict: UserAPIKeyAuth) -> None:
+        released_reservations.append(user_api_key_dict.budget_reservation)
+
+    async def no_op(user_api_key_dict: object) -> None:
+        return None
+
+    async def complete_call() -> None:
+        return None
+
+    async def route(
+        *,
+        data: dict[str, object],
+        route_type: str,
+        llm_router: object,
+        user_model: str | None,
+    ) -> Coroutine[object, object, None]:
+        await cast(WebSocket, data["websocket"]).send_text("routed")
+        return complete_call()
+
+    frame_auth: Final = UserAPIKeyAuth(token="frame-authorized", budget_reservation={"reserved_for": "frame model"})
+
+    async def upgrade_auth() -> UserAPIKeyAuth:
+        return UserAPIKeyAuth(token="upgrade", budget_reservation={"reserved_for": "query model"})
+
+    released_before_frame_auth: Final[list[tuple[object, ...]]] = []
+
+    async def authorize(websocket: object, model: str) -> UserAPIKeyAuth:
+        released_before_frame_auth.append(tuple(released_reservations))
+        return frame_auth
+
+    monkeypatch.setattr(proxy_server, "route_request", route)
+    monkeypatch.setattr(proxy_server, "_release_realtime_budget_reservation", release_budget)
+    monkeypatch.setattr(proxy_server, "_release_realtime_max_parallel_slot", no_op)
+    monkeypatch.setitem(proxy_server.app.dependency_overrides, proxy_server.user_api_key_auth_live_websocket, upgrade_auth)
+    _override_live_session_authorizer(monkeypatch, authorize)
+
+    with client_no_auth.websocket_connect(
+        "/v1/live/sessions?model=gpt-4o",
+        headers={"Authorization": "Bearer test-api-key"},
+    ) as websocket:
+        websocket.send_json({"type": "session.start", "session": {"model": "gpt-3.5-turbo"}})
+        assert websocket.receive_text() == "routed"
+
+    assert released_before_frame_auth == [({"reserved_for": "query model"},)], released_reservations
+
+
+def test_live_session_preserves_pretty_printed_start_frame(
+    client_no_auth: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from types import SimpleNamespace
+
+    from starlette.websockets import WebSocket
+
+    from litellm.proxy import proxy_server
+
+    async def no_op(user_api_key_dict: object) -> None:
+        return None
+
+    async def complete_call() -> None:
+        return None
+
+    captured: Final = SimpleNamespace(data=None, route_type=None)
+
+    async def route(
+        *,
+        data: dict[str, object],
+        route_type: str,
+        llm_router: object,
+        user_model: str | None,
+    ) -> Coroutine[object, object, None]:
+        captured.data = data
+        captured.route_type = route_type
+        await cast(WebSocket, data["websocket"]).send_text("routed")
+        return complete_call()
+
+    frame_auth: Final = UserAPIKeyAuth(token="frame-authorized")
+
+    async def authorize(websocket: object, model: str) -> UserAPIKeyAuth:
+        return frame_auth
+
+    monkeypatch.setattr(proxy_server, "route_request", route)
+    _override_live_session_authorizer(monkeypatch, authorize)
+    monkeypatch.setattr(proxy_server, "_release_realtime_budget_reservation", no_op)
+    monkeypatch.setattr(proxy_server, "_release_realtime_max_parallel_slot", no_op)
+
+    start_frame: Final = "\r\n".join(
+        [
+            "{",
+            '  "type": "session.start",',
+            '  "session": {"model": "gpt-live-1", "instructions": "a\\nb"}',
+            "}",
+        ]
+    )
+    expected_start: Final[dict[str, object]] = {
+        "type": "session.start",
+        "session": {"model": "gpt-live-1", "instructions": "a\nb"},
+    }
+
+    with client_no_auth.websocket_connect(
+        "/v1/live/sessions",
+        headers={"Authorization": "Bearer test-api-key"},
+    ) as websocket:
+        websocket.send_text(start_frame)
+        assert websocket.receive_text() == "routed"
+
+    routed_data: Final = cast(dict[str, object], captured.data)
+    assert captured.route_type == "_arealtime"
+    assert routed_data["model"] == "gpt-live-1"
+    assert routed_data["live_session_start"] == expected_start
+
+
+@pytest.mark.asyncio
+async def test_update_config_reports_an_unsupported_router_setting_as_a_request_error_not_an_auth_error() -> None:
+    from fastapi import Request
+
+    from litellm.proxy._types import ConfigYAML, ProxyException
+    from litellm.proxy.proxy_server import update_config
+
+    body: Final = {"router_settings": {"not_a_router_setting": True}}
+    request: Final = MagicMock(spec=Request)
+    request.json = AsyncMock(return_value=body)
+
+    with pytest.raises(ProxyException) as exc_info:
+        await update_config(
+            config_info=ConfigYAML(**body),
+            request=request,
+            user_api_key_dict=UserAPIKeyAuth(user_id="admin-1", user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+
+    assert (exc_info.value.code, exc_info.value.type) == ("400", "invalid_request_error")
+    assert "Authentication Error" not in exc_info.value.message
+
+
+@pytest.mark.asyncio
+async def test_get_config_callbacks_reports_an_unreadable_config_as_a_server_error_not_an_auth_error(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy._types import ProxyException
+    from litellm.proxy.proxy_server import get_config
+
+    empty_config: Final = tmp_path / "config.yaml"
+    empty_config.write_text("")
+    monkeypatch.delenv("LITELLM_CONFIG_BUCKET_NAME", raising=False)
+    monkeypatch.setattr(proxy_server, "user_config_file_path", str(empty_config))
+
+    with pytest.raises(ProxyException) as exc_info:
+        await get_config(user_api_key_dict=UserAPIKeyAuth(user_id="admin-1", user_role=LitellmUserRoles.PROXY_ADMIN))
+
+    assert (exc_info.value.code, exc_info.value.type) == ("500", "internal_server_error")
+    assert exc_info.value.message == "Config cannot be None or Empty."
+
+
+@pytest.mark.parametrize("scope", [None, "expand"])
+@pytest.mark.parametrize(
+    "general_settings, wildcard_query, wildcard_listed",
+    [
+        ({}, None, False),
+        ({"return_wildcard_routes": False}, None, False),
+        ({"return_wildcard_routes": True}, None, True),
+        ({"return_wildcard_routes": "true"}, None, False),
+        ({"return_wildcard_routes": True}, False, False),
+        ({"return_wildcard_routes": False}, True, True),
+        ({}, True, True),
+    ],
+)
+@pytest.mark.asyncio
+async def test_model_list_return_wildcard_routes_defaults_to_general_setting(
+    monkeypatch: pytest.MonkeyPatch,
+    general_settings: dict[str, object],
+    wildcard_query: bool | None,
+    wildcard_listed: bool,
+    scope: str | None,
+) -> None:
+    router: Final = litellm.Router(
+        model_list=[
+            {"model_name": "gpt-6.1-sol", "litellm_params": {"model": "openai/gpt-6.1-sol", "api_key": "sk-fake"}},
+            {"model_name": "openai/*", "litellm_params": {"model": "openai/*", "api_key": "sk-fake"}},
+        ]
+    )
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", router)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_model_list", router.model_list)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "prisma_client", None)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "user_model", None)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "general_settings", general_settings)
+
+    response: Final = await litellm.proxy.proxy_server.model_list(
+        user_api_key_dict=UserAPIKeyAuth(api_key="sk-test", user_role=LitellmUserRoles.PROXY_ADMIN),
+        return_wildcard_routes=wildcard_query,
+        scope=scope,
+    )
+    listed: Final = [model["id"] for model in response["data"]]
+
+    assert "gpt-6.1-sol" in listed, listed
+    assert ("openai/*" in listed) is wildcard_listed, listed
+
+
+@pytest.mark.asyncio
+async def test_queue_request_labels_an_upstream_failure_a_server_error_not_an_auth_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from starlette.requests import Request
+    from starlette.responses import Response
+
+    from litellm.proxy import proxy_server
+    from litellm.proxy._types import ProxyException
+    from litellm.proxy.proxy_server import async_queue_request
+
+    body: Final = json.dumps(
+        {"model": "gpt-5.4-mini", "messages": [{"role": "user", "content": "hi"}], "priority": 0}
+    ).encode()
+
+    async def receive() -> dict[str, object]:
+        return {"type": "http.request", "body": body, "more_body": False}
+
+    request: Final = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/queue/chat/completions",
+            "headers": [(b"content-type", b"application/json")],
+            "query_string": b"",
+            "scheme": "http",
+            "server": ("testserver", 80),
+            "root_path": "",
+        },
+        receive,
+    )
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-5.4-mini",
+                "litellm_params": {
+                    "model": "openai/gpt-5.4-mini",
+                    "api_key": "sk-test",
+                    "mock_response": "litellm.InternalServerError",
+                },
+            }
+        ],
+        num_retries=0,
+    )
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+
+    with pytest.raises(ProxyException) as exc_info:
+        await async_queue_request(
+            request=request,
+            fastapi_response=Response(),
+            user_api_key_dict=UserAPIKeyAuth(user_id="admin-1", user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+
+    assert (exc_info.value.code, exc_info.value.type) == ("500", "internal_server_error")
+
+
+_DEBUG_LOG_SENTINEL: Final = "sentinel-request-body-7f3a"
+_LONG_PROMPT: Final = f"{_DEBUG_LOG_SENTINEL} " + "Keep edits minimal and explain them briefly. " * 20
+_TOOL_PARAMETERS: Final = {"type": "object", "properties": {"cmd": {"type": "string"}}}
+
+
+class _MessageCollector(logging.Handler):
+    def __init__(self) -> None:
+        super().__init__(level=logging.DEBUG)
+        self.messages: list[str] = []  # mutable-ok: a logging.Handler collects records as they are emitted
+
+    def emit(self, record: logging.LogRecord) -> None:
+        self.messages.append(record.getMessage())
+
+
+@pytest.mark.parametrize(
+    "route, path_suffix, body, upstream_json",
+    [
+        (
+            "/v1/chat/completions",
+            "/chat/completions",
+            {
+                "model": "test_openai_models",
+                "messages": [{"role": "user", "content": _LONG_PROMPT}],
+                "tools": [
+                    {
+                        "type": "function",
+                        "function": {"name": "shell", "description": _LONG_PROMPT, "parameters": _TOOL_PARAMETERS},
+                    }
+                ],
+            },
+            {
+                "id": "chatcmpl-1",
+                "object": "chat.completion",
+                "created": 1,
+                "model": "gpt-3.5-turbo",
+                "choices": [{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": "hi"}}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            },
+        ),
+        (
+            "/v1/responses",
+            "/responses",
+            {
+                "model": "test_openai_models",
+                "instructions": _LONG_PROMPT,
+                "input": "hi",
+                "tools": [
+                    {"type": "function", "name": "shell", "description": _LONG_PROMPT, "parameters": _TOOL_PARAMETERS}
+                ],
+            },
+            {
+                "id": "resp_1",
+                "object": "response",
+                "created_at": 1,
+                "status": "completed",
+                "model": "gpt-3.5-turbo",
+                "output": [
+                    {
+                        "type": "message",
+                        "id": "msg_1",
+                        "status": "completed",
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": "hi", "annotations": []}],
+                    }
+                ],
+                "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+            },
+        ),
+    ],
+)
+def test_detailed_debug_logs_request_body_only_as_received_and_as_sent(
+    client_no_auth: TestClient,
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    route: str,
+    path_suffix: str,
+    body: Mapping[str, object],
+    upstream_json: Mapping[str, object],
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    respx_mock.post(url__regex=rf".*{path_suffix}$").mock(return_value=httpx.Response(200, json=upstream_json))
+    collector: Final = _MessageCollector()
+    loggers: Final = tuple(logging.getLogger(name) for name in ("LiteLLM", "LiteLLM Router", "LiteLLM Proxy"))
+    original_levels: Final = tuple(lg.level for lg in loggers)
+    for lg in loggers:
+        lg.addHandler(collector)
+        lg.setLevel(logging.DEBUG)
+    try:
+        response: Final = client_no_auth.post(route, json=body)
+    finally:
+        for lg, level in zip(loggers, original_levels):
+            lg.removeHandler(collector)
+            lg.setLevel(level)
+
+    assert response.status_code == 200, response.text
+    body_dumps: Final = [message for message in collector.messages if _DEBUG_LOG_SENTINEL in message]
+    assert len(body_dumps) == 2, [message[:120] for message in body_dumps]
+    assert body_dumps[0].startswith("Request received by LiteLLM:")
+    assert "POST Request Sent from LiteLLM" in body_dumps[1]
+
+
+@pytest.mark.asyncio
+async def test_shutdown_waits_for_enqueue_producers_before_stopping_worker() -> None:
+    from litellm.litellm_core_utils.logging_worker import LoggingWorker
+    from litellm.responses.streaming_iterator import spawn_logging_task
+
+    worker: Final = LoggingWorker()
+    persisted: Final[asyncio.Queue[str]] = asyncio.Queue()
+    accounting: Final[asyncio.Queue[str]] = asyncio.Queue()
+
+    async def callback() -> None:
+        accounting.put_nowait("completed request")
+
+    async def producer() -> None:
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        worker.ensure_initialized_and_enqueue(callback())
+
+    async def flush_spend() -> None:
+        while not accounting.empty():
+            persisted.put_nowait(accounting.get_nowait())
+
+    spawn_logging_task(asyncio.get_running_loop(), producer(), task_name="success enqueue")
+    try:
+        await litellm.proxy.proxy_server._flush_spend_around_logging_drain_on_shutdown(flush_spend, worker=worker)
+        assert persisted.qsize() == 1, "An enqueue producer must finish before callback draining stops"
+        assert persisted.get_nowait() == "completed request"
+        assert worker.pending_count == 0
+    finally:
+        await worker.stop(discard_pending=True)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("unsupported", ["database", "collector", "remote", "free_tier"])
+async def test_capture_enablement_rejects_unrecoverable_writer_modes(
+    unsupported: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import litellm
+    from litellm.proxy import proxy_server
+    from litellm.proxy.spend_tracking.usage_capture import UsageCaptureRuntime
+
+    monkeypatch.setattr(proxy_server, "usage_capture", UsageCaptureRuntime())
+    monkeypatch.setattr(proxy_server, "general_settings", {"accounting_capture": {}})
+    monkeypatch.setattr(proxy_server, "prisma_client", None if unsupported == "database" else object())
+    monkeypatch.setattr(litellm, "apply_search_free_tier", unsupported == "free_tier")
+    monkeypatch.setenv("LITELLM_COLLECTOR_ENABLED", "true" if unsupported == "collector" else "false")
+    monkeypatch.delenv("SPEND_LOGS_URL", raising=False)
+    if unsupported == "remote":
+        monkeypatch.setenv("SPEND_LOGS_URL", "https://writer.invalid")
+    with pytest.raises(ValueError, match="requires local Prisma"):
+        proxy_server._configure_usage_capture()
+    assert proxy_server.usage_capture.meter is None
+
+
+@pytest.mark.asyncio
+async def test_capture_configuration_requires_restart_without_replacing_the_active_writer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy.spend_tracking.usage_capture import UsageCaptureRuntime
+    from litellm.proxy.utils import PrismaClient
+
+    runtime: Final = UsageCaptureRuntime()
+    monkeypatch.setattr(proxy_server, "usage_capture", runtime)
+    monkeypatch.setattr(proxy_server, "general_settings", {"accounting_sync_ack": True})
+    with pytest.raises(ValueError, match="requires accounting_capture"):
+        proxy_server._configure_usage_capture()
+    client: Final = PrismaClient("postgresql://localhost/unused", ProxyLogging(UserApiKeyCache()))
+    monkeypatch.setattr(proxy_server, "prisma_client", client)
+    monkeypatch.setattr(litellm, "apply_search_free_tier", False)
+    monkeypatch.setenv("LITELLM_COLLECTOR_ENABLED", "false")
+    monkeypatch.delenv("SPEND_LOGS_URL", raising=False)
+    monkeypatch.setattr(proxy_server, "general_settings", {"accounting_capture": {"batch_size": 4}})
+    try:
+        proxy_server._configure_usage_capture()
+        active: Final = runtime.meter
+        assert active is not None
+        assert active.settings.batch_size == 4
+        proxy_server._configure_usage_capture()
+        assert runtime.meter is active
+        monkeypatch.setattr(proxy_server, "general_settings", {"accounting_capture": {"batch_size": 6}})
+        with pytest.raises(ValueError, match="Changing accounting_capture requires a worker restart"):
+            proxy_server._configure_usage_capture()
+        monkeypatch.setattr(proxy_server, "general_settings", {})
+        with pytest.raises(ValueError, match="Disabling accounting_capture requires a worker restart"):
+            proxy_server._configure_usage_capture()
+        assert runtime.meter is active
+        assert active.settings.batch_size == 4
+    finally:
+        await runtime.stop(1)
+    assert runtime.meter is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sync_ack", [False, True])
+@pytest.mark.parametrize(
+    ("path", "payload"),
+    [
+        (
+            "/v1/chat/completions",
+            {"model": "openai/gpt-5-mini", "messages": [{"role": "user", "content": "hi"}], "stream": True},
+        ),
+        ("/v1/responses", {"model": "openai/gpt-5-mini", "input": "hi", "background": True}),
+        (
+            "/v1/messages",
+            {"model": "openai/gpt-5-mini", "messages": [{"role": "user", "content": "hi"}], "max_tokens": 1},
+        ),
+    ],
+)
+async def test_sync_ack_preserves_async_request_support(
+    sync_ack: bool,
+    path: str,
+    payload: dict[str, object],
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    from fastapi import Request
+
+    from litellm.proxy import proxy_server
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.db.accounting_ledger import UsageWrite
+    from litellm.proxy.hooks.proxy_track_cost_callback import ProxyDBLogger
+    from litellm.proxy.spend_tracking.usage_capture import UsageCaptureRuntime
+    from litellm.proxy.spend_tracking.usage_meter import UsageCaptureSettings
+
+    persisted: Final[asyncio.Queue[UsageWrite]] = asyncio.Queue()
+
+    async def persist(writes: tuple[UsageWrite, ...]) -> None:
+        for write in writes:
+            persisted.put_nowait(write)
+
+    async def authorize(request: Request) -> UserAPIKeyAuth:
+        return UserAPIKeyAuth(api_key="test-key", request_route=request.url.path)
+
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setenv("OPENAI_API_KEY", "test-provider-key")
+    upstream: Final = {
+        "id": "provider-result",
+        "object": "chat.completion",
+        "created": 1,
+        "model": "gpt-5-mini",
+        "choices": [{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": "hi"}}],
+        "usage": {"prompt_tokens": 3, "completion_tokens": 2, "total_tokens": 5},
+    }
+    if payload.get("stream"):
+        chunk: Final = {
+            **upstream,
+            "object": "chat.completion.chunk",
+            "choices": [{"index": 0, "finish_reason": "stop", "delta": {"role": "assistant", "content": "hi"}}],
+        }
+        respx_mock.post().respond(
+            200, text=f"data: {json.dumps(chunk)}\n\ndata: [DONE]\n\n", headers={"content-type": "text/event-stream"}
+        )
+    elif path == "/v1/responses":
+        respx_mock.post().respond(
+            200,
+            json={
+                "id": "resp_background",
+                "object": "response",
+                "created_at": 1,
+                "model": "gpt-5-mini",
+                "status": "in_progress",
+                "background": True,
+                "output": [],
+                "usage": None,
+            },
+        )
+    else:
+        respx_mock.post(url__regex=r".*/responses$").respond(
+            200,
+            json={
+                "id": "resp_message",
+                "object": "response",
+                "created_at": 1,
+                "model": "gpt-5-mini",
+                "status": "completed",
+                "output": [
+                    {
+                        "id": "msg_reply",
+                        "type": "message",
+                        "role": "assistant",
+                        "status": "completed",
+                        "content": [{"type": "output_text", "text": "hi", "annotations": []}],
+                    }
+                ],
+                "usage": {"input_tokens": 3, "output_tokens": 2, "total_tokens": 5},
+            },
+        )
+        respx_mock.post(url__regex=r".*/chat/completions$").respond(200, json=upstream)
+    runtime: Final = UsageCaptureRuntime()
+    monkeypatch.setattr(proxy_server, "usage_capture", runtime)
+    monkeypatch.setattr(
+        proxy_server, "general_settings", {"accounting_sync_ack": sync_ack, "accounting_sync_ack_timeout_seconds": 0}
+    )
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    monkeypatch.setattr(
+        proxy_server,
+        "llm_router",
+        litellm.Router(
+            model_list=[
+                {
+                    "model_name": payload["model"],
+                    "litellm_params": {"model": payload["model"], "api_key": "test-provider-key"},
+                }
+            ],
+            num_retries=0,
+        ),
+    )
+    monkeypatch.setattr(proxy_server, "proxy_logging_obj", ProxyLogging(UserApiKeyCache()))
+    monkeypatch.setattr(litellm, "callbacks", [ProxyDBLogger()])
+    monkeypatch.setitem(proxy_server.app.dependency_overrides, proxy_server.user_api_key_auth, authorize)
+    runtime.start(persist, UsageCaptureSettings())
+    try:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=proxy_server.app), base_url="http://test"
+        ) as client:
+            response: Final = await client.post(path, json=payload)
+    finally:
+        await runtime.stop(1)
+    assert response.status_code == 200, response.text
+    assert len(respx_mock.calls) == 1
+    if payload.get("background"):
+        assert response.json()["status"] == "in_progress"
+    else:
+        assert "hi" in response.text
+        assert not persisted.empty(), "Terminal usage must still be captured"
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sync_ack", [False, True])
+async def test_text_completion_provider_rejection_captures_unknown_usage(
+    sync_ack: bool, monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    from fastapi import Request
+
+    from litellm.accounting import Outcome
+    from litellm.proxy import proxy_server
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.db.accounting_ledger import UsageWrite
+    from litellm.proxy.hooks.proxy_track_cost_callback import ProxyDBLogger
+    from litellm.proxy.spend_tracking.usage_capture import UsageCaptureRuntime
+    from litellm.proxy.spend_tracking.usage_meter import UsageCaptureSettings
+
+    persisted: Final[asyncio.Queue[UsageWrite]] = asyncio.Queue()
+
+    async def persist(writes: tuple[UsageWrite, ...]) -> None:
+        for write in writes:
+            persisted.put_nowait(write)
+
+    async def authorize(request: Request) -> UserAPIKeyAuth:
+        return UserAPIKeyAuth(api_key="test-key", request_route=request.url.path)
+
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setenv("OPENAI_API_KEY", "test-provider-key")
+    respx_mock.post().respond(
+        404,
+        json={
+            "error": {"message": "The model is unavailable", "type": "invalid_request_error", "code": "model_not_found"}
+        },
+    )
+    runtime: Final = UsageCaptureRuntime()
+    monkeypatch.setattr(proxy_server, "usage_capture", runtime)
+    monkeypatch.setattr(proxy_server, "general_settings", {"accounting_sync_ack": sync_ack})
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    monkeypatch.setattr(
+        proxy_server,
+        "llm_router",
+        litellm.Router(
+            model_list=[
+                {
+                    "model_name": "instruct",
+                    "litellm_params": {"model": "openai/gpt-3.5-turbo-instruct", "api_key": "test-provider-key"},
+                }
+            ],
+            num_retries=0,
+        ),
+    )
+    monkeypatch.setattr(proxy_server, "proxy_logging_obj", ProxyLogging(UserApiKeyCache()))
+    monkeypatch.setattr(litellm, "callbacks", [ProxyDBLogger()])
+    monkeypatch.setitem(proxy_server.app.dependency_overrides, proxy_server.user_api_key_auth, authorize)
+    runtime.start(persist, UsageCaptureSettings())
+    try:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=proxy_server.app), base_url="http://test"
+        ) as client:
+            response: Final = await client.post(
+                "/v1/completions", json={"model": "instruct", "prompt": "hi", "max_tokens": 1}
+            )
+    finally:
+        await runtime.stop(1)
+    assert response.status_code == 404, response.text
+    assert len(respx_mock.calls) == 1
+    assert persisted.qsize() == 2
+    inbound: Final = persisted.get_nowait()
+    outbound: Final = persisted.get_nowait()
+    assert outbound.event.outcome is Outcome.FAILED
+    assert outbound.event.call_type.value == "atext_completion"
+    assert outbound.event.metrics is None
+    assert inbound.event.request_id == outbound.event.request_id
+    envelope: Final = json.loads(outbound.envelope)
+    assert envelope["usage"] is None
+    assert envelope["usage_source"] == "unknown"
+    assert envelope["pricing"]["reported_cost"] is None

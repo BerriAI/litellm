@@ -1,3 +1,4 @@
+import copy
 from collections.abc import AsyncIterator, Iterator, Mapping
 from types import MappingProxyType
 from typing import Any, Final
@@ -32,6 +33,7 @@ from ...openai.chat.gpt_transformation import (
 )
 
 _RESPONSE_BODY: Final = TypeAdapter(dict[object, object], config=ConfigDict(hide_input_in_errors=True))
+_FILTERED_TOOL: Final = TypeAdapter(object)
 
 
 def _usage_restated_from_xai_ticks(usage: Usage | None) -> Usage | None:
@@ -52,6 +54,13 @@ class XAIChatConfig(OpenAIGPTConfig):
         api_base = api_base or get_secret_str("XAI_API_BASE") or XAI_API_BASE
         dynamic_api_key: Final = XAIModelInfo.get_api_key(api_key)
         return api_base, dynamic_api_key
+
+    def get_openai_compatible_provider_info(
+        self,
+        api_base: str | None,
+        api_key: str | None,
+    ) -> tuple[str | None, str | None]:
+        return self._get_openai_compatible_provider_info(api_base, api_key)
 
     def validate_environment(
         self,
@@ -167,6 +176,12 @@ class XAIChatConfig(OpenAIGPTConfig):
             return False
         return True
 
+    def supports_stop_reason(
+        self,
+        model: str,
+    ) -> bool:
+        return self._supports_stop_reason(model)
+
     def _supports_frequency_penalty(self, model: str) -> bool:
         """
         From manual testing grok-4 does not support `frequency_penalty`
@@ -191,11 +206,14 @@ class XAIChatConfig(OpenAIGPTConfig):
             if param == "max_completion_tokens":
                 optional_params["max_tokens"] = value
             elif param == "tools" and value is not None:
-                tools = []
-                for tool in value:
-                    tool = filter_value_from_dict(tool, "strict")
-                    if tool is not None:
-                        tools.append(tool)
+                tools = [
+                    filtered_tool
+                    for filtered_tool in (
+                        _FILTERED_TOOL.validate_python(filter_value_from_dict(copy.deepcopy(tool), "strict"))  # pyright: ignore[reportUnknownArgumentType]  # tools arrive untyped through the bare-dict params
+                        for tool in value
+                    )
+                    if filtered_tool is not None
+                ]
                 if len(tools) > 0:
                     optional_params["tools"] = tools
             elif param in supported_openai_params:
@@ -406,6 +424,13 @@ class XAIChatConfig(OpenAIGPTConfig):
         if int(usage.total_tokens or 0) < expected_total:
             usage.total_tokens = expected_total
 
+    @classmethod
+    def normalize_openai_compatible_usage_totals(
+        cls,
+        usage: Usage | dict[str, object] | None,  # mutable-ok: mirrors override contract
+    ) -> None:
+        return cls._normalize_openai_compatible_usage_totals(usage)
+
 
 class XAIChatCompletionStreamingHandler(OpenAIChatCompletionStreamingHandler):
     def chunk_parser(self, chunk: dict) -> ModelResponseStream:
@@ -428,7 +453,7 @@ class XAIChatCompletionStreamingHandler(OpenAIChatCompletionStreamingHandler):
 
         if "usage" in chunk and chunk["usage"] is not None:
             XAIChatConfig.fold_reasoning_tokens_into_completion(chunk["usage"])
-            XAIChatConfig._normalize_openai_compatible_usage_totals(chunk["usage"])
+            XAIChatConfig.normalize_openai_compatible_usage_totals(chunk["usage"])
 
         parsed_chunk: Final = super().chunk_parser(chunk)
         restated_usage: Final = _usage_restated_from_xai_ticks(getattr(parsed_chunk, "usage", None))

@@ -6,6 +6,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from tests.unit.proxy.router_entry_point_stubs import route_entry_points_to_stubs
+
 
 @contextmanager
 def _fake_redisvl_modules(semantic_cache_mock: MagicMock, custom_vectorizer_mock: MagicMock) -> Iterator[None]:
@@ -568,6 +570,20 @@ def test_redis_semantic_cache_set_cache_flattens_structured_responses_input():
     )
 
 
+def test_redis_semantic_cache_prompt_extraction_reads_function_call_output_blocks():
+    from litellm.caching.redis_semantic_cache import RedisSemanticCache
+
+    prompt = RedisSemanticCache._get_prompt_from_kwargs(
+        input=[
+            {"role": "user", "content": "update the config"},
+            {"type": "function_call", "call_id": "c1", "name": "write_file", "arguments": '{"path": "a"}'},
+            {"type": "function_call_output", "call_id": "c1", "output": [{"type": "input_text", "text": "wrote a"}]},
+        ]
+    )
+
+    assert prompt == "update the config\nwrote a"
+
+
 def test_redis_semantic_cache_prompt_extraction_prefers_messages():
     from litellm.caching.redis_semantic_cache import RedisSemanticCache
 
@@ -828,7 +844,7 @@ def test_redis_get_embedding_routes_through_router(monkeypatch):
     cache = RedisSemanticCache.__new__(RedisSemanticCache)
     cache.embedding_model = "sem-embed"
 
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.get_configured_token_limits.return_value = (None, None)
     router.embedding = MagicMock(return_value={"data": [{"embedding": [0.5, 0.6]}]})
     fake_proxy = types.ModuleType("litellm.proxy.proxy_server")
@@ -1071,7 +1087,7 @@ async def test_redis_async_embedding_forwards_full_metadata(monkeypatch):
     cache = RedisSemanticCache.__new__(RedisSemanticCache)
     cache.embedding_model = "sem-embed"
 
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.get_configured_token_limits.return_value = (None, None)
     router.aembedding = AsyncMock(return_value={"data": [{"embedding": [0.1, 0.2]}]})
     fake_proxy = types.ModuleType("litellm.proxy.proxy_server")
@@ -1114,7 +1130,7 @@ def test_redis_get_embedding_truncates_to_deployment_max_input_tokens(monkeypatc
     cache = RedisSemanticCache.__new__(RedisSemanticCache)
     cache.embedding_model = "sem-embed"
 
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.get_configured_token_limits.return_value = (5, None)
     router.embedding = MagicMock(return_value={"data": [{"embedding": [0.5, 0.6]}]})
     _proxy_with_router(monkeypatch, router, "sem-embed")
@@ -1135,7 +1151,7 @@ async def test_redis_async_embedding_explicit_limit_beats_deployment_limit(monke
     cache.embedding_model = "sem-embed"
     cache.embedding_max_input_tokens = 3
 
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.get_configured_token_limits.return_value = (8191, None)
     router.aembedding = AsyncMock(return_value={"data": [{"embedding": [0.1, 0.2]}]})
     _proxy_with_router(monkeypatch, router, "sem-embed")
@@ -1256,7 +1272,7 @@ def test_redis_sync_embedding_call_is_bounded(monkeypatch):
     cache.embedding_model = "sem-embed"
     cache.embedding_timeout = 1.5
 
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.get_configured_token_limits.return_value = (None, None)
     router.embedding = MagicMock(return_value={"data": [{"embedding": [0.5, 0.6]}]})
     monkeypatch.setitem(
@@ -1279,7 +1295,7 @@ async def test_redis_async_embedding_call_is_bounded(monkeypatch):
     cache.embedding_model = "sem-embed"
     cache.embedding_timeout = 1.5
 
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.get_configured_token_limits.return_value = (None, None)
     router.aembedding = AsyncMock(return_value={"data": [{"embedding": [0.5, 0.6]}]})
     monkeypatch.setitem(
@@ -1308,7 +1324,7 @@ async def test_redis_async_embedding_gives_up_on_unresponsive_endpoint(monkeypat
         await asyncio.sleep(3)
         return {"data": [{"embedding": [0.1, 0.2]}]}
 
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.get_configured_token_limits.return_value = (None, None)
     router.aembedding = never_responds
     monkeypatch.setitem(
@@ -1341,7 +1357,7 @@ async def test_redis_async_get_cache_fails_open_when_embedding_hangs(monkeypatch
         await asyncio.sleep(3)
         return {"data": [{"embedding": [0.1, 0.2]}]}
 
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.get_configured_token_limits.return_value = (None, None)
     router.aembedding = never_responds
     monkeypatch.setitem(
@@ -1406,7 +1422,7 @@ async def test_redis_async_embedding_truncates_off_the_event_loop(monkeypatch):
     cache.embedding_max_input_tokens = 5
     cache.embedding_timeout = 5
 
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.get_configured_token_limits.return_value = (8191, None)
     router.aembedding = AsyncMock(return_value={"data": [{"embedding": [0.1, 0.2]}]})
     _proxy_with_router(monkeypatch, router, "sem-embed")
@@ -1416,3 +1432,23 @@ async def test_redis_async_embedding_truncates_off_the_event_loop(monkeypatch):
     assert embedding == [0.1, 0.2]
     assert _token_count("sem-embed", router.aembedding.call_args.kwargs["input"]) == 5
     assert_loop_stayed_free(took, lags)
+
+
+def test_redis_semantic_cache_prompt_extraction_keeps_tool_result_text():
+    from litellm.caching.redis_semantic_cache import RedisSemanticCache
+
+    prompt = RedisSemanticCache._get_prompt_from_kwargs(
+        messages=[
+            {"role": "user", "content": "list the files"},
+            {
+                "role": "assistant",
+                "content": [{"type": "tool_use", "id": "toolu_1", "name": "Bash", "input": {"command": "ls"}}],
+            },
+            {
+                "role": "user",
+                "content": [{"type": "tool_result", "tool_use_id": "toolu_1", "content": "calc.py test_calc.py"}],
+            },
+        ]
+    )
+
+    assert prompt == "list the filescalc.py test_calc.py"

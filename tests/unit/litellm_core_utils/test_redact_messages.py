@@ -5,34 +5,266 @@ Covers the proxy flow where headers arrive in litellm_params["metadata"]["header
 but litellm_params["litellm_metadata"] is None.
 """
 
-import asyncio, httpx, importlib, json, os, pytest_asyncio, threading
+import asyncio
+import copy
+import importlib
+import json
+import os
+import threading
+from collections.abc import AsyncIterator, Mapping
+from datetime import datetime
+from types import MappingProxyType, SimpleNamespace
 from typing import Final, Optional, Union
-from types import SimpleNamespace
+from unittest.mock import patch
 
+import httpx
 import pytest
+import pytest_asyncio
+from pydantic import JsonValue
 
 import litellm
+from litellm.constants import LOGGING_WORKER_MAX_TIME_PER_COROUTINE
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.litellm_core_utils.redact_messages import (
     _redact_responses_api_output,
+    _redacted_responses_api_response,
     perform_redaction,
-    redact_streaming_responses_for_custom_logger,
+    redacted_model_call_details_for_custom_logger,
+    redacted_response_obj_for_custom_logger,
     redacted_standard_logging_payload,
     should_redact_message_logging,
 )
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.responses.main import mock_responses_api_response
-from collections.abc import AsyncIterator
-from datetime import datetime
-from litellm.constants import LOGGING_WORKER_MAX_TIME_PER_COROUTINE
-from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
-from litellm.types.utils import(
+from litellm.types.router import BaselineRouteStamp
+from litellm.types.utils import (
     ModelResponse,
+    ModelResponseStream,
     ResponsesAPIResponse,
     StandardLoggingPayload,
     TextCompletionResponse,
 )
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
-from unittest.mock import patch
+
+SECRET: Final = "private-redaction-canary"
+SIGNATURE: Final = "opaque-thought-signature"
+
+
+def _provider_fields() -> dict[str, object]:
+    return {
+        "reasoning_content": SECRET,
+        "thinking_blocks": [{"type": "thinking", "thinking": SECRET}],
+        "reasoningContentBlocks": [{"reasoningText": {"text": SECRET}}],
+        "citations": [{"cited_text": SECRET}],
+        "compaction_blocks": [{"type": "compaction", "content": SECRET, "signature": "compaction-signature"}],
+        "compaction_start": {"type": "compaction", "content": SECRET},
+        "compaction_delta": {"type": "compaction_delta", "content": SECRET},
+        "thought_signatures": [SIGNATURE],
+    }
+
+
+def _request_params(metadata: dict[str, object]) -> dict[str, object]:
+    return {
+        "metadata": metadata,
+        "proxy_server_request": {
+            "url": "http://localhost/v1/chat/completions",
+            "body": {
+                "model": "redaction-model",
+                "system": "kept-system",
+                "messages": [{"role": "user", "content": SECRET}],
+                "metadata": metadata,
+            },
+        },
+    }
+
+
+@pytest.mark.parametrize("shape", ["object", "dict_message", "dict_delta"])
+def test_redaction_reuses_message_rules_for_request_body_and_provider_fields(shape: str) -> None:
+    response: Final = ModelResponse(
+        choices=[
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": SECRET, "provider_specific_fields": _provider_fields()},
+            }
+        ]
+    )
+    result: Final = (
+        response
+        if shape == "object"
+        else {"choices": [{"index": 0, "delta": {"content": SECRET, "provider_specific_fields": _provider_fields()}}]}
+        if shape == "dict_delta"
+        else response.model_dump()
+    )
+    original_result: Final = copy.deepcopy(result)
+    params: Final = _request_params({"session_id": "session"})
+    original_params: Final = copy.deepcopy(params)
+    details: Final[dict[str, object]] = {"litellm_params": params}
+
+    redacted: Final = perform_redaction(details, result)
+
+    assert SECRET not in str(redacted) and SECRET not in str(details), (redacted, details)
+    assert SIGNATURE in str(redacted)
+    body: Final = details["litellm_params"]["proxy_server_request"]["body"]
+    assert body["messages"] == [{"role": "user", "content": "redacted-by-litellm"}]
+    assert body["system"] == "kept-system" and body["model"] == "redaction-model"
+    assert body["metadata"] is params["metadata"]
+    assert result == original_result and params == original_params
+
+
+def test_redaction_redacts_reasoning_copied_into_hidden_params_in_place() -> None:
+    hidden_params: Final = {"model_id": "deployment", "provider_specific_fields": _provider_fields()}
+    original_hidden_params: Final = copy.deepcopy(hidden_params)
+    metadata: Final[dict[str, object]] = {"session_id": "session", "hidden_params": hidden_params}
+    params: Final = _request_params(metadata)
+    details: Final[dict[str, object]] = {"litellm_params": params}
+
+    perform_redaction(details, None)
+
+    assert details["litellm_params"]["metadata"] is metadata
+    assert SECRET not in str(details), details
+    assert metadata["hidden_params"]["model_id"] == "deployment"
+    assert metadata["hidden_params"]["provider_specific_fields"]["thought_signatures"] == [SIGNATURE]
+    assert hidden_params == original_hidden_params
+
+
+def test_per_callback_redaction_leaves_shared_request_body_and_hidden_params() -> None:
+    metadata: Final[dict[str, object]] = {"hidden_params": {"provider_specific_fields": _provider_fields()}}
+    params: Final = _request_params(metadata)
+    original_params: Final = copy.deepcopy(params)
+    details: Final[dict[str, object]] = {"litellm_params": params}
+
+    perform_redaction(details, None, redact_streaming_responses=False)
+
+    assert details["litellm_params"] == original_params
+
+
+def test_logger_level_redaction_redacts_its_copy_of_the_request_body() -> None:
+    params: Final = _request_params({"session_id": "session"})
+    original_params: Final = copy.deepcopy(params)
+    details: Final[dict[str, object]] = {"litellm_params": params}
+
+    redacted: Final = CustomLogger(
+        turn_off_message_logging=True
+    ).redact_standard_logging_payload_from_model_call_details(details)
+
+    assert SECRET not in str(redacted["litellm_params"]), redacted
+    assert details["litellm_params"] == original_params
+
+
+@pytest.mark.parametrize("key", ["complete_streaming_response", "async_complete_streaming_response"])
+def test_streaming_redaction_redacts_delta_provider_fields_without_touching_the_chunk_dict(key: str) -> None:
+    fields: Final = _provider_fields()
+    response: Final = ModelResponseStream(
+        choices=[
+            litellm.utils.StreamingChoices(delta=litellm.utils.Delta(content=SECRET, provider_specific_fields=fields))
+        ]
+    )
+    details: Final[dict[str, object]] = {"stream": True, key: response}
+
+    perform_redaction(details, None)
+
+    assert SECRET not in str(response.choices[0].delta), response
+    assert response.choices[0].delta.provider_specific_fields["thought_signatures"] == [SIGNATURE]
+    assert fields == _provider_fields()
+
+
+@pytest.mark.parametrize("shape", ["object", "dict"])
+def test_redaction_hides_a_compaction_summary_in_responses_api_output(shape: str) -> None:
+    response: Final = ResponsesAPIResponse(
+        id="resp_1",
+        created_at=1,
+        model="claude-sonnet-5-5",
+        object="response",
+        status="completed",
+        output=[
+            {
+                "type": "compaction",
+                "id": "cmp_1",
+                "encrypted_content": json.dumps({"type": "compaction", "content": SECRET}),
+            }
+        ],
+    )
+    result: Final = response if shape == "object" else response.model_dump()
+
+    redacted: Final = perform_redaction({}, result)
+
+    assert SECRET not in str(redacted), redacted
+    assert SECRET in str(result)
+
+
+@pytest.mark.parametrize("surface", ("typed", "dict", "standard", "callback", "helper"))
+def test_responses_redaction_removes_instructions_without_changing_the_response(surface: str) -> None:
+    response: Final = litellm.ResponsesAPIResponse.model_validate(
+        {
+            **mock_responses_api_response("private answer").model_dump(),
+            "instructions": "private system instructions",
+            "reasoning": {"effort": "low", "summary": "auto"},
+            "output": [
+                {
+                    "type": "reasoning",
+                    "id": "rs_test",
+                    "summary": [{"type": "summary_text", "text": "private reasoning"}],
+                },
+                {
+                    "type": "function_call",
+                    "id": "fc_test",
+                    "call_id": "call_test",
+                    "name": "lookup",
+                    "arguments": "private arguments",
+                },
+            ],
+        }
+    )
+    original: Final = response.model_dump()
+    payload: Final = {"response": copy.deepcopy(original), "model": "test-model"}
+    logger: Final = CustomLogger()
+    logger.turn_off_message_logging = True
+
+    surfaces: Final = {
+        "typed": lambda: perform_redaction({}, response).model_dump(),
+        "dict": lambda: perform_redaction({}, original),
+        "helper": lambda: _redacted_responses_api_response(original),
+        "standard": lambda: redacted_standard_logging_payload(payload)["response"],
+        "callback": lambda: logger.redact_standard_logging_payload_from_model_call_details(
+            {"standard_logging_object": payload}
+        )["standard_logging_object"]["response"],
+    }
+    redacted: Final = surfaces[surface]()
+
+    assert redacted == {
+        **original,
+        "instructions": "redacted-by-litellm",
+        **({"reasoning": None} if surface == "typed" else {}),
+        "output": [
+            {**original["output"][0], "summary": [{"type": "summary_text", "text": "redacted-by-litellm"}]},
+            {**original["output"][1], "arguments": "redacted-by-litellm"},
+        ],
+    }
+    assert "private" not in json.dumps(redacted)
+    assert response.model_dump() == original
+    assert payload["response"] == original
+
+
+@pytest.mark.parametrize("key", ("complete_streaming_response", "async_complete_streaming_response"))
+@pytest.mark.parametrize("redaction", ("global", "custom_logger"))
+def test_streaming_responses_redact_instructions_without_changing_the_client_response(key: str, redaction: str) -> None:
+    response: Final = mock_responses_api_response("private answer").model_copy(
+        update={"instructions": "private system instructions"}
+    )
+    original: Final = response.model_dump()
+    details: Final = {"stream": True, key: response}
+    if redaction == "global":
+        perform_redaction(details, result=None)
+    redacted_details: Final = (
+        redacted_model_call_details_for_custom_logger(details, CustomLogger(message_logging=False))
+        if redaction == "custom_logger"
+        else details
+    )
+
+    assert redacted_details[key].instructions == "redacted-by-litellm"
+    assert "private" not in json.dumps(redacted_details[key].model_dump())
+    assert response.model_dump() == original
 
 
 @pytest.fixture(autouse=True)
@@ -113,9 +345,7 @@ class TestShouldRedactMessageLogging:
     def test_enable_redaction_via_header_in_litellm_metadata(self):
         """Headers inside litellm_metadata (SDK direct call) should work."""
         details = _make_model_call_details(
-            litellm_metadata={
-                "headers": {"x-litellm-enable-message-redaction": "true"}
-            },
+            litellm_metadata={"headers": {"x-litellm-enable-message-redaction": "true"}},
         )
         assert should_redact_message_logging(details) is True
 
@@ -209,7 +439,7 @@ class TestPerformRedaction:
         result = {
             "output": [
                 {"text": "top-level result"},
-                {"content": [{"text": "nested result"}]},
+                {"content": [{"text": "nested result"}, "non-dict content item"]},
                 {"type": "reasoning", "summary": [{"text": "reasoning result"}]},
             ],
             "usage": {"total_tokens": 1},
@@ -217,25 +447,20 @@ class TestPerformRedaction:
 
         redacted = perform_redaction(details, result)
 
-        assert details["messages"] == [
-            {"role": "user", "content": "redacted-by-litellm"}
-        ]
+        assert details["messages"] == [{"role": "user", "content": "redacted-by-litellm"}]
         assert details["prompt"] == ""
         assert details["input"] == ""
 
         logged_response = details["standard_logging_object"]["response"]
         assert logged_response["usage"] == {"total_tokens": 1}
         assert logged_response["output"][0]["text"] == "redacted-by-litellm"
-        assert logged_response["output"][1]["content"][0]["text"] == (
-            "redacted-by-litellm"
-        )
-        assert logged_response["output"][2]["summary"][0]["text"] == (
-            "redacted-by-litellm"
-        )
+        assert logged_response["output"][1]["content"][0]["text"] == ("redacted-by-litellm")
+        assert logged_response["output"][2]["summary"][0]["text"] == ("redacted-by-litellm")
 
         assert redacted["usage"] == {"total_tokens": 1}
         assert redacted["output"][0]["text"] == "redacted-by-litellm"
         assert redacted["output"][1]["content"][0]["text"] == "redacted-by-litellm"
+        assert redacted["output"][1]["content"][1] == "non-dict content item"
         assert redacted["output"][2]["summary"][0]["text"] == "redacted-by-litellm"
         assert result["output"][0]["text"] == "top-level result"
 
@@ -444,9 +669,7 @@ class TestPerformRedaction:
         tool_call = redacted.choices[0].message.tool_calls[0]
         assert tool_call.function.arguments == "redacted-by-litellm"
         assert tool_call.function.name == "get_weather"
-        assert result.choices[0].message.tool_calls[0].function.arguments == (
-            '{"city": "sensitive-city"}'
-        )
+        assert result.choices[0].message.tool_calls[0].function.arguments == ('{"city": "sensitive-city"}')
 
     def test_redacts_tool_call_arguments_on_streaming_response_object(self):
         """Reproduces the Stream=True path where tool calls arrive as deltas."""
@@ -673,12 +896,14 @@ class TestPerformRedaction:
         none_dict = {"type": "output_text", "text": None, "content": [{"text": None}]}
         real_dict = {"type": "output_text", "text": "real answer", "content": [{"text": "real part"}]}
 
-        _redact_responses_api_output_dict([none_dict, real_dict], "redacted-by-litellm")
+        redacted: Final = _redact_responses_api_output_dict([none_dict, real_dict], "redacted-by-litellm")
 
-        assert none_dict["text"] is None
-        assert none_dict["content"][0]["text"] is None
-        assert real_dict["text"] == "redacted-by-litellm"
-        assert real_dict["content"][0]["text"] == "redacted-by-litellm"
+        assert redacted == [
+            {"type": "output_text", "text": None, "content": [{"text": None}]},
+            {"type": "output_text", "text": "redacted-by-litellm", "content": [{"text": "redacted-by-litellm"}]},
+        ]
+        assert none_dict == {"type": "output_text", "text": None, "content": [{"text": None}]}
+        assert real_dict == {"type": "output_text", "text": "real answer", "content": [{"text": "real part"}]}
 
     def test_skips_non_dict_response_output_items(self):
         result = {
@@ -714,12 +939,8 @@ class TestPerformRedaction:
                             }
                         }
                     ],
-                    "vertex_ai_grounding_metadata": [
-                        {"webSearchQueries": ["sensitive search term"]}
-                    ],
-                    "vertex_ai_url_context_metadata": [
-                        {"urlMetadata": [{"retrievedUrl": "https://example.com"}]}
-                    ],
+                    "vertex_ai_grounding_metadata": [{"webSearchQueries": ["sensitive search term"]}],
+                    "vertex_ai_url_context_metadata": [{"urlMetadata": [{"retrievedUrl": "https://example.com"}]}],
                 },
             }
         }
@@ -749,9 +970,7 @@ class TestPerformRedaction:
             "vertex_ai_grounding_metadata",
             [{"webSearchQueries": ["sensitive search term"]}],
         )
-        response._hidden_params["vertex_ai_grounding_metadata"] = [
-            {"webSearchQueries": ["sensitive search term"]}
-        ]
+        response._hidden_params["vertex_ai_grounding_metadata"] = [{"webSearchQueries": ["sensitive search term"]}]
 
         details = {
             "stream": True,
@@ -772,12 +991,8 @@ class TestPerformRedaction:
                 "metadata": {
                     "hidden_params": {
                         "response_cost": 0.01,
-                        "vertex_ai_grounding_metadata": [
-                            {"webSearchQueries": ["sensitive search term"]}
-                        ],
-                        "vertex_ai_url_context_metadata": [
-                            {"urlMetadata": [{"retrievedUrl": "https://example.com"}]}
-                        ],
+                        "vertex_ai_grounding_metadata": [{"webSearchQueries": ["sensitive search term"]}],
+                        "vertex_ai_url_context_metadata": [{"urlMetadata": [{"retrievedUrl": "https://example.com"}]}],
                         "vertex_ai_safety_ratings": [{"category": "HARM"}],
                         "vertex_ai_citation_metadata": [{"citations": ["source"]}],
                     }
@@ -797,11 +1012,7 @@ class TestPerformRedaction:
     def test_redact_async_complete_streaming_response(self):
         """Test that async_complete_streaming_response is properly redacted."""
         response_obj = litellm.ModelResponse(
-            choices=[
-                litellm.Choices(
-                    message=litellm.Message(content="secret content", role="assistant")
-                )
-            ]
+            choices=[litellm.Choices(message=litellm.Message(content="secret content", role="assistant"))]
         )
 
         model_call_details = {
@@ -820,11 +1031,7 @@ class TestPerformRedaction:
     def test_redact_complete_streaming_response(self):
         """Test that complete_streaming_response is properly redacted."""
         response_obj = litellm.ModelResponse(
-            choices=[
-                litellm.Choices(
-                    message=litellm.Message(content="secret content", role="assistant")
-                )
-            ]
+            choices=[litellm.Choices(message=litellm.Message(content="secret content", role="assistant"))]
         )
 
         model_call_details = {
@@ -842,11 +1049,7 @@ class TestPerformRedaction:
 
     def test_streaming_responses_untouched_when_disabled(self):
         response_obj = litellm.ModelResponse(
-            choices=[
-                litellm.Choices(
-                    message=litellm.Message(content="secret content", role="assistant")
-                )
-            ]
+            choices=[litellm.Choices(message=litellm.Message(content="secret content", role="assistant"))]
         )
 
         model_call_details = {
@@ -907,37 +1110,36 @@ class TestPerformRedaction:
 
 
 class TestRedactStreamingResponsesForCustomLogger:
-    def _model_call_details(self):
+    def _model_call_details(self, key: str = "async_complete_streaming_response"):
         response_obj = litellm.ModelResponse(
-            choices=[
-                litellm.Choices(
-                    message=litellm.Message(content="secret content", role="assistant")
-                )
-            ]
+            choices=[litellm.Choices(message=litellm.Message(content="secret content", role="assistant"))]
         )
         return {
             "stream": True,
-            "async_complete_streaming_response": response_obj,
+            key: response_obj,
         }, response_obj
 
-    def test_opted_out_logger_gets_redacted_copy(self):
-        model_call_details, response_obj = self._model_call_details()
+    @pytest.mark.parametrize(
+        "key", ["async_complete_streaming_response", "complete_streaming_response", "complete_response"]
+    )
+    def test_opted_out_logger_gets_redacted_copy(self, key: str):
+        model_call_details, response_obj = self._model_call_details(key)
         opted_out_logger = CustomLogger(message_logging=False)
 
-        redacted_details = redact_streaming_responses_for_custom_logger(
+        redacted_details = redacted_model_call_details_for_custom_logger(
             model_call_details=model_call_details, custom_logger=opted_out_logger
         )
 
-        redacted_response = redacted_details["async_complete_streaming_response"]
+        redacted_response = redacted_details[key]
         assert redacted_response.choices[0].message.content == "redacted-by-litellm"
         assert response_obj.choices[0].message.content == "secret content"
-        assert model_call_details["async_complete_streaming_response"] is response_obj
+        assert model_call_details[key] is response_obj
 
     def test_compliant_logger_gets_shared_response(self):
         model_call_details, response_obj = self._model_call_details()
         compliant_logger = CustomLogger()
 
-        result_details = redact_streaming_responses_for_custom_logger(
+        result_details = redacted_model_call_details_for_custom_logger(
             model_call_details=model_call_details, custom_logger=compliant_logger
         )
 
@@ -947,7 +1149,10 @@ class TestRedactStreamingResponsesForCustomLogger:
 
 @pytest.mark.parametrize("callback_only", [False, True])
 def test_classifier_audit_redaction_removes_both_fields_and_source_carrier(callback_only: bool) -> None:
-    audit: Final = {"classifier_input": {"system": "private rubric"}, "originating_request_masked": {"input": "private source"}}
+    audit: Final = {
+        "classifier_input": {"system": "private rubric"},
+        "originating_request_masked": {"input": "private source"},
+    }
     standard_payload: Final = {
         **audit,
         "messages": [{"role": "user", "content": "private prompt"}],
@@ -956,7 +1161,9 @@ def test_classifier_audit_redaction_removes_both_fields_and_source_carrier(callb
     }
     details: Final = {
         "standard_logging_object": standard_payload,
-        "litellm_params": {"proxy_server_request": {"body": {}, "originating_request_masked": audit["originating_request_masked"]}},
+        "litellm_params": {
+            "proxy_server_request": {"body": {}, "originating_request_masked": audit["originating_request_masked"]}
+        },
     }
     logger: Final = CustomLogger()
     logger.turn_off_message_logging = True
@@ -966,7 +1173,10 @@ def test_classifier_audit_redaction_removes_both_fields_and_source_carrier(callb
         assert "originating_request_masked" not in redacted["standard_logging_object"]
         assert "originating_request_masked" not in redacted["litellm_params"]["proxy_server_request"]
         assert details["standard_logging_object"]["classifier_input"] == audit["classifier_input"]
-        assert details["litellm_params"]["proxy_server_request"]["originating_request_masked"] == audit["originating_request_masked"]
+        assert (
+            details["litellm_params"]["proxy_server_request"]["originating_request_masked"]
+            == audit["originating_request_masked"]
+        )
     else:
         perform_redaction(details, result=None)
         assert "classifier_input" not in details["standard_logging_object"]
@@ -981,7 +1191,9 @@ def test_classifier_audit_redaction_removes_both_fields_and_source_carrier(callb
 
 @pytest.mark.parametrize("excluded", [False, True])
 def test_classifier_callback_redaction_preserves_exclusions(monkeypatch: pytest.MonkeyPatch, excluded: bool) -> None:
-    monkeypatch.setattr(litellm, "standard_logging_payload_excluded_fields", ["messages", "response"] if excluded else [])
+    monkeypatch.setattr(
+        litellm, "standard_logging_payload_excluded_fields", ["messages", "response"] if excluded else []
+    )
     payload: Final = {
         "classifier_input": {"system": "private rubric"},
         "originating_request_masked": {"input": "private source"},
@@ -991,7 +1203,9 @@ def test_classifier_callback_redaction_preserves_exclusions(monkeypatch: pytest.
     }
     logger: Final = CustomLogger()
     logger.turn_off_message_logging = True
-    redacted: Final = logger.redact_standard_logging_payload_from_model_call_details({"standard_logging_object": payload})
+    redacted: Final = logger.redact_standard_logging_payload_from_model_call_details(
+        {"standard_logging_object": payload}
+    )
     stored: Final = redacted["standard_logging_object"]
     assert "classifier_input" not in stored
     assert "originating_request_masked" not in stored
@@ -1017,16 +1231,18 @@ class _SelfRedactingLogger(CustomLogger):
 
 
 @pytest.mark.parametrize("logger", [CustomLogger(), _SelfRedactingLogger()], ids=["default", "redacts_itself"])
-def test_field_exclusion_alone_leaves_messages_and_responses_intact(monkeypatch: pytest.MonkeyPatch, logger: CustomLogger) -> None:
+def test_field_exclusion_alone_leaves_messages_and_responses_intact(
+    monkeypatch: pytest.MonkeyPatch, logger: CustomLogger
+) -> None:
     monkeypatch.setattr(litellm, "standard_logging_payload_excluded_fields", ["model"])
     payload: Final = {
         "messages": [{"role": "user", "content": "private prompt"}],
         "response": {"choices": [{"message": {"content": "private answer"}}]},
         "model": "classifier",
     }
-    stored: Final = logger.redact_standard_logging_payload_from_model_call_details({"standard_logging_object": payload})[
-        "standard_logging_object"
-    ]
+    stored: Final = logger.redact_standard_logging_payload_from_model_call_details(
+        {"standard_logging_object": payload}
+    )["standard_logging_object"]
     assert stored == {"messages": payload["messages"], "response": payload["response"]}
 
 
@@ -1038,9 +1254,9 @@ def test_a_callback_that_redacts_itself_keeps_its_messages_but_not_the_classifie
     }
     logger: Final = _SelfRedactingLogger()
     logger.turn_off_message_logging = True
-    stored: Final = logger.redact_standard_logging_payload_from_model_call_details({"standard_logging_object": payload})[
-        "standard_logging_object"
-    ]
+    stored: Final = logger.redact_standard_logging_payload_from_model_call_details(
+        {"standard_logging_object": payload}
+    )["standard_logging_object"]
     assert "classifier_input" not in stored
     assert stored["messages"] == payload["messages"]
     assert stored["response"] == payload["response"]
@@ -1054,18 +1270,53 @@ def test_perform_redaction_drops_the_served_output_texts_from_the_callback_kwarg
     assert SERVED_OUTPUT_TEXTS_KEY not in details
 
 
+@pytest.mark.parametrize("callback_only", (False, True))
+@pytest.mark.parametrize("with_standard_payload", (False, True))
+def test_baseline_snapshots_are_redacted_without_mutating_request_state(
+    callback_only: bool, with_standard_payload: bool
+) -> None:
+    snapshot: Final[Mapping[str, JsonValue]] = MappingProxyType({"system": "private system"})
+    route: Final = BaselineRouteStamp("router", "baseline", "deployment", snapshot)
+    metadata: Final = {"_autorouter_baseline_route": route, "session_id": "session"}
+    params: Final = {"metadata": metadata, "litellm_metadata": metadata}
+    details: Final = {
+        "litellm_params": params,
+        **({"standard_logging_object": {"model": "model"}} if with_standard_payload else {}),
+    }
+    logger: Final = CustomLogger()
+    logger.turn_off_message_logging = True
+    if not callback_only:
+        perform_redaction(details, None)
+    redacted: Final = (
+        logger.redact_standard_logging_payload_from_model_call_details(details) if callback_only else details
+    )
+    expected: Final = BaselineRouteStamp(route.router_name, route.baseline_model, route.baseline_deployment_id)
+    assert redacted["litellm_params"] == {
+        key: {"_autorouter_baseline_route": expected, "session_id": "session"}
+        for key in ("metadata", "litellm_metadata")
+    }
+    assert route.request_parameters is snapshot
+    assert params["metadata"]["_autorouter_baseline_route"] is route
+    assert params["litellm_metadata"]["_autorouter_baseline_route"] is route
+    if callback_only:
+        assert details["litellm_params"] is params
+
+
 @pytest.fixture()
 def _vcr_outcome_gate(request, vcr):
     install_live_call_probe(request, vcr)
     yield
     record_vcr_outcome(request, vcr)
 
+
 @pytest_asyncio.fixture(loop_scope="function")
 async def drain_logging_worker(isolate_litellm_state: None) -> AsyncIterator[None]:
     yield
     await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=LOGGING_WORKER_DRAIN_TIMEOUT_SECONDS)
 
+
 LOGGING_WORKER_DRAIN_TIMEOUT_SECONDS: Final = LOGGING_WORKER_MAX_TIME_PER_COROUTINE + 5.0
+
 
 @pytest.fixture(scope="function")
 def isolate_litellm_state():
@@ -1104,6 +1355,7 @@ def isolate_litellm_state():
         if attr in _DEFAULTS:
             setattr(litellm, attr, _DEFAULTS[attr])
 
+
 _LIST_ATTRS = (
     "callbacks",
     "success_callback",
@@ -1131,6 +1383,7 @@ _SCALAR_ATTRS = (
 
 _DEFAULTS: dict = {}
 
+
 @pytest.fixture(scope="module")
 def setup_and_teardown():
     """
@@ -1153,16 +1406,22 @@ def setup_and_teardown():
             litellm.in_memory_llm_clients_cache.flush_cache()
     yield
 
+
 class TestCustomLogger(CustomLogger):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.logged_standard_logging_payload: Optional[StandardLoggingPayload] = None
         self.response_obj: Optional[Union[ModelResponse, TextCompletionResponse, ResponsesAPIResponse]] = None
+        self.logged_kwargs: Optional[dict] = None
+        self.logged = asyncio.Event()
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         standard_logging_payload = kwargs.get("standard_logging_object", None)
         self.logged_standard_logging_payload = standard_logging_payload
         self.response_obj = response_obj
+        self.logged_kwargs = kwargs
+        self.logged.set()
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "drain_logging_worker", "isolate_litellm_state", "setup_and_teardown")
 @pytest.mark.asyncio
@@ -1186,6 +1445,7 @@ async def test_global_redaction_on():
         "logged standard logging payload",
         json.dumps(standard_logging_payload, indent=2),
     )
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "drain_logging_worker", "isolate_litellm_state", "setup_and_teardown")
 @pytest.mark.parametrize(
@@ -1213,6 +1473,7 @@ async def test_dynamic_turn_off_message_logging_overrides_global_on(dynamic_turn
     assert standard_logging_payload["response"]["choices"][0]["message"]["content"] == expected_response_content
     assert standard_logging_payload["messages"][0]["content"] == expected_message_content
 
+
 @pytest.mark.usefixtures("_vcr_outcome_gate", "drain_logging_worker", "isolate_litellm_state", "setup_and_teardown")
 @pytest.mark.parametrize(
     "dynamic_turn_off, expect_redacted",
@@ -1238,6 +1499,7 @@ async def test_dynamic_turn_off_message_logging_overrides_global_off(dynamic_tur
     expected_message_content = "redacted-by-litellm" if expect_redacted else "hi"
     assert standard_logging_payload["response"]["choices"][0]["message"]["content"] == expected_response_content
     assert standard_logging_payload["messages"][0]["content"] == expected_message_content
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "drain_logging_worker", "isolate_litellm_state", "setup_and_teardown")
 @pytest.mark.asyncio
@@ -1284,6 +1546,7 @@ async def test_redaction_with_custom_logger_streaming():
     finally:
         litellm.turn_off_message_logging = False
 
+
 @pytest.mark.usefixtures("_vcr_outcome_gate", "drain_logging_worker", "isolate_litellm_state", "setup_and_teardown")
 @pytest.mark.asyncio
 async def test_streaming_redaction_scoped_to_opted_out_logger():
@@ -1310,6 +1573,7 @@ async def test_streaming_redaction_scoped_to_opted_out_logger():
         assert compliant_logger.response_obj.choices[0].message.content == "hello"
     finally:
         litellm.callbacks = []
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "drain_logging_worker", "isolate_litellm_state", "setup_and_teardown")
 @pytest.mark.asyncio
@@ -1354,6 +1618,142 @@ async def test_redaction_responses_api():
         "logged standard logging payload for ResponsesAPIResponse",
         json.dumps(standard_logging_payload, indent=2),
     )
+
+
+@pytest.mark.usefixtures("drain_logging_worker", "isolate_litellm_state", "setup_and_teardown")
+@pytest.mark.parametrize(
+    "redaction, logged_keys",
+    [
+        ("global", ("instructions", "optional_params", "litellm_params", "standard_logging_object")),
+        ("custom_logger", ("litellm_params", "standard_logging_object")),
+    ],
+)
+@pytest.mark.asyncio
+async def test_responses_redaction_removes_request_instructions_from_logged_kwargs(
+    redaction: str, logged_keys: tuple[str, ...], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    test_custom_logger: Final = TestCustomLogger(turn_off_message_logging=redaction == "custom_logger")
+    monkeypatch.setattr(litellm, "turn_off_message_logging", redaction == "global")
+    monkeypatch.setattr(litellm, "callbacks", [test_custom_logger])
+    provider_reply: Final = {**mock_responses_api_response("private answer").model_dump(), "instructions": SECRET}
+
+    await litellm.aresponses(
+        model="openai/gpt-5-mini",
+        input="hi",
+        instructions=SECRET,
+        api_key="fake-key",
+        client=AsyncHTTPHandler(
+            transport=httpx.MockTransport(lambda request: httpx.Response(200, json=provider_reply, request=request))
+        ),
+    )
+
+    await asyncio.wait_for(test_custom_logger.logged.wait(), timeout=LOGGING_WORKER_DRAIN_TIMEOUT_SECONDS)
+    kwargs: Final = test_custom_logger.logged_kwargs
+    assert kwargs is not None
+    assert kwargs["standard_logging_object"]["model_parameters"]["instructions"] == "redacted-by-litellm"
+    assert SECRET not in json.dumps({key: kwargs.get(key) for key in logged_keys}, default=str)
+
+
+@pytest.mark.usefixtures("drain_logging_worker", "isolate_litellm_state", "setup_and_teardown")
+@pytest.mark.asyncio
+async def test_one_callback_opting_out_redacts_instructions_only_for_itself(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    opted_out: Final = TestCustomLogger(message_logging=False)
+    sibling: Final = TestCustomLogger()
+    monkeypatch.setattr(litellm, "callbacks", [opted_out, sibling])
+    provider_reply: Final = {**mock_responses_api_response("private answer").model_dump(), "instructions": SECRET}
+
+    await litellm.aresponses(
+        model="openai/gpt-5-mini",
+        input="hi",
+        instructions=SECRET,
+        api_key="fake-key",
+        client=AsyncHTTPHandler(
+            transport=httpx.MockTransport(lambda request: httpx.Response(200, json=provider_reply, request=request))
+        ),
+    )
+
+    await asyncio.wait_for(
+        asyncio.gather(sibling.logged.wait(), opted_out.logged.wait()), timeout=LOGGING_WORKER_DRAIN_TIMEOUT_SECONDS
+    )
+    assert _logged_instructions(sibling) == (SECRET,) * 6
+    assert _logged_instructions(opted_out) == ("redacted-by-litellm",) * 6
+
+
+class SyncTestCustomLogger(TestCustomLogger):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.logged_in_thread = threading.Event()
+
+    def log_success_event(self, kwargs, response_obj, start_time, end_time):
+        self.response_obj = response_obj
+        self.logged_kwargs = kwargs
+        self.logged_in_thread.set()
+
+
+@pytest.mark.usefixtures("drain_logging_worker", "isolate_litellm_state", "setup_and_teardown")
+def test_one_callback_opting_out_on_a_sync_call_gets_a_redacted_copy_only_for_itself(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    opted_out: Final = SyncTestCustomLogger(message_logging=False)
+    sibling: Final = SyncTestCustomLogger()
+    monkeypatch.setattr(litellm, "callbacks", [opted_out, sibling])
+    provider_reply: Final = {**mock_responses_api_response("private answer").model_dump(), "instructions": SECRET}
+
+    litellm.responses(
+        model="openai/gpt-5-mini",
+        input="private question",
+        instructions=SECRET,
+        api_key="fake-key",
+        client=HTTPHandler(
+            client=httpx.Client(
+                transport=httpx.MockTransport(lambda request: httpx.Response(200, json=provider_reply, request=request))
+            )
+        ),
+    )
+
+    assert sibling.logged_in_thread.wait(LOGGING_WORKER_DRAIN_TIMEOUT_SECONDS)
+    assert opted_out.logged_in_thread.wait(LOGGING_WORKER_DRAIN_TIMEOUT_SECONDS)
+    assert _logged_instructions(sibling) == (SECRET,) * 6
+    assert _logged_instructions(opted_out) == ("redacted-by-litellm",) * 6
+    assert _logged_question_and_answer(sibling) == (True, True)
+    assert _logged_question_and_answer(opted_out) == (False, False)
+
+
+def _logged_question_and_answer(logger: TestCustomLogger) -> tuple[bool, bool]:
+    kwargs: Final = logger.logged_kwargs
+    assert kwargs is not None
+    assert isinstance(logger.response_obj, ResponsesAPIResponse)
+    request_text: Final = json.dumps([kwargs.get(key) for key in ("messages", "input", "prompt")], default=str)
+    return "private question" in request_text, "private answer" in logger.response_obj.model_dump_json()
+
+
+def _logged_instructions(logger: TestCustomLogger) -> tuple[object, ...]:
+    kwargs: Final = logger.logged_kwargs
+    assert kwargs is not None
+    assert isinstance(logger.response_obj, ResponsesAPIResponse)
+    return (
+        kwargs["instructions"],
+        kwargs["optional_params"]["instructions"],
+        kwargs["litellm_params"]["instructions"],
+        kwargs["standard_logging_object"]["model_parameters"]["instructions"],
+        kwargs["standard_logging_object"]["response"]["instructions"],
+        logger.response_obj.instructions,
+    )
+
+
+def test_request_body_redaction_replaces_instructions_only_when_sent() -> None:
+    responses_body: Final = {"model": "gpt-5-mini", "input": SECRET, "instructions": SECRET}
+    chat_body: Final = {"model": "gpt-5-mini", "messages": [{"role": "user", "content": SECRET}]}
+
+    perform_redaction(responses_body, result=None)
+    perform_redaction(chat_body, result=None)
+
+    assert responses_body["instructions"] == "redacted-by-litellm"
+    assert SECRET not in json.dumps(responses_body)
+    assert "instructions" not in chat_body
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "drain_logging_worker", "isolate_litellm_state", "setup_and_teardown")
 @pytest.mark.asyncio
@@ -1430,6 +1830,7 @@ async def test_redaction_responses_api_stream():
         json.dumps(standard_logging_payload, indent=2),
     )
 
+
 @pytest.mark.usefixtures("_vcr_outcome_gate", "drain_logging_worker", "isolate_litellm_state", "setup_and_teardown")
 @pytest.mark.asyncio
 async def test_redaction_responses_api_with_reasoning_summary():
@@ -1490,6 +1891,7 @@ async def test_redaction_responses_api_with_reasoning_summary():
 
     assert model_call_details["messages"][0]["content"] == "redacted-by-litellm", "Input messages should be redacted"
 
+
 @pytest.mark.usefixtures("_vcr_outcome_gate", "drain_logging_worker", "isolate_litellm_state", "setup_and_teardown")
 @pytest.mark.asyncio
 async def test_redaction_with_coroutine_objects():
@@ -1535,6 +1937,7 @@ async def test_redaction_with_coroutine_objects():
     result = perform_redaction({}, mock_iter)
     assert result == {"text": "redacted-by-litellm"}
 
+
 @pytest.mark.usefixtures("_vcr_outcome_gate", "drain_logging_worker", "isolate_litellm_state", "setup_and_teardown")
 @pytest.mark.asyncio
 async def test_redaction_with_streaming_response():
@@ -1570,6 +1973,7 @@ async def test_redaction_with_streaming_response():
         json.dumps(standard_logging_payload, indent=2),
     )
 
+
 @pytest.mark.usefixtures("_vcr_outcome_gate", "drain_logging_worker", "isolate_litellm_state", "setup_and_teardown")
 @pytest.mark.asyncio
 async def test_disable_redaction_header_responses_api():
@@ -1604,6 +2008,7 @@ async def test_disable_redaction_header_responses_api():
     response = standard_logging_payload["response"]
     assert response["output"][0]["content"][0]["text"] == "This is a test response"
     assert standard_logging_payload["messages"][0]["content"] == "hi"
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "drain_logging_worker", "isolate_litellm_state", "setup_and_teardown")
 @pytest.mark.asyncio
@@ -1642,3 +2047,32 @@ async def test_redaction_with_metadata_completion_api():
     response = standard_logging_payload["response"]
     assert response["choices"][0]["message"]["content"] == "redacted-by-litellm"
     assert standard_logging_payload["messages"][0]["content"] == "redacted-by-litellm"
+
+
+def test_perform_redaction_strips_the_matched_text_from_the_bedrock_guardrail_traces() -> None:
+    finding = {
+        "guardrail": {
+            "inputAssessment": {
+                "gid": {
+                    "sensitiveInformationPolicy": {
+                        "piiEntities": [{"type": "US_SSN", "match": "123-45-6789", "action": "ANONYMIZED"}]
+                    }
+                }
+            }
+        }
+    }
+    response = litellm.ModelResponse(choices=[{"message": {"role": "assistant", "content": "hi"}}], model="x")
+    setattr(response, "trace", copy.deepcopy(finding))
+    setattr(response, "amazon-bedrock-trace", copy.deepcopy(finding))
+    opted_out: Final = CustomLogger(message_logging=False)
+
+    redacted: Final = redacted_response_obj_for_custom_logger(response, opted_out)
+    redacted_dict: Final = redacted_response_obj_for_custom_logger(
+        {"choices": [], "trace": copy.deepcopy(finding)}, opted_out
+    )
+
+    assert isinstance(redacted, litellm.ModelResponse)
+    assert "123-45-6789" not in redacted.model_dump_json()
+    assert "US_SSN" in redacted.model_dump_json(), "the finding stays, only its matched text goes"
+    assert "123-45-6789" not in str(redacted_dict)
+    assert "123-45-6789" in response.model_dump_json(), "the caller's own response is not redacted"

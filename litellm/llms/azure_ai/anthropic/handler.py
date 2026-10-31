@@ -4,13 +4,15 @@ Azure Anthropic handler - reuses AnthropicChatCompletion logic with Azure authen
 
 import copy
 import json
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import Final
 
 import httpx
 
+from litellm.anthropic_beta_gated_fields import strip_beta_gated_request_body
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.anthropic.chat.handler import AnthropicChatCompletion
+from litellm.llms.anthropic.chat.transformation import JsonModeRequest
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
@@ -74,12 +76,21 @@ class AzureAnthropicChatCompletion(AnthropicChatCompletion):
             litellm_params=litellm_params,
         )
 
-        data: Final = config.transform_request(
+        request_body: Final[Mapping[str, object]] = config.transform_request(
             model=model,
             messages=messages,
             optional_params=optional_params,
             litellm_params=litellm_params,
             headers=headers,
+        )
+        data: Final = dict(
+            strip_beta_gated_request_body(
+                request_body,
+                headers,  # pyright: ignore[reportUnknownArgumentType]  # validate_environment returns a bare dict
+                drop_params=litellm_params.get("drop_params"),  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # litellm_params is the handler's bare dict
+                model=model,
+                provider=custom_llm_provider,
+            )
         )
 
         ## LOGGING
@@ -162,6 +173,9 @@ class AzureAnthropicChatCompletion(AnthropicChatCompletion):
                     logging_obj=logging_obj,
                     timeout=timeout,
                     json_mode=json_mode,
+                    response_format_schema=(
+                        JsonModeRequest.model_validate(optional_params).tool_schema() if json_mode else None
+                    ),
                 )
                 from litellm.llms.anthropic.common_utils import (
                     process_anthropic_headers,
@@ -177,9 +191,9 @@ class AzureAnthropicChatCompletion(AnthropicChatCompletion):
 
             else:
                 if client is None or not isinstance(client, HTTPHandler):
-                    from litellm.llms.custom_httpx.http_handler import _get_httpx_client
+                    from litellm.llms.custom_httpx.http_handler import get_httpx_client
 
-                    client = _get_httpx_client(params={"timeout": timeout})
+                    client = get_httpx_client(params={"timeout": timeout})
                 else:
                     client = client
 

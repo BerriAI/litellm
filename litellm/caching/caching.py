@@ -18,20 +18,23 @@ from contextlib import contextmanager
 from enum import Enum
 from typing import Any, Final, Literal, cast
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, TypeAdapter
 
 import litellm
 from litellm._internal_context import current_service_target, service_target
 from litellm._logging import verbose_logger
 from litellm.constants import CACHED_STREAMING_CHUNK_DELAY
 from litellm.integrations.otel.runtime import phase_span
-from litellm.litellm_core_utils.model_param_helper import ModelParamHelper
+from litellm.litellm_core_utils.model_param_helper import (
+    ModelParamHelper,
+    embeds_thought_signature_in_tool_call_id,
+    peek_reasoning_summary_aliases,
+)
 from litellm.types.caching import *
 from litellm.types.utils import EmbeddingResponse, is_litellm_owned_kwarg
 
 from .azure_blob_cache import AzureBlobCache
 from .base_cache import BaseCache
-from .disk_cache import DiskCache
 from .dual_cache import DualCache  # noqa: F401  # re-exported, callers import DualCache from litellm.caching.caching
 from .gcs_cache import GCSCache
 from .in_memory_cache import InMemoryCache
@@ -42,6 +45,11 @@ from .redis_semantic_cache import RedisSemanticCache
 from .s3_cache import S3Cache
 
 RESPONSE_CACHE_TARGET: Final = "llm_response"
+_ALWAYS_KEYED_PROVIDER_PARAMS: Final = frozenset({"continuation_token"})
+_DECODED_LITERAL: Final = TypeAdapter(object)
+_REDIS_STARTUP_NODES_ADAPTER: Final = TypeAdapter(
+    list[dict[str, object]], config=ConfigDict(strict=True, hide_input_in_errors=True)
+)
 
 
 @contextmanager
@@ -71,6 +79,27 @@ class CacheMode(str, Enum):
 
 
 #### LiteLLM.Completion / Embedding Cache ####
+def _is_conversation_item(item: object) -> bool:
+    if isinstance(item, BaseModel):
+        return True
+    if not isinstance(item, Mapping):
+        return False
+    block: Final = cast(Mapping[str, object], item)  # cast-ok: isinstance leaves the key and value types unknown
+    return block.get("type") != "file"
+
+
+def _request_message_count(kwargs: Mapping[str, object]) -> int:
+    """Chat and Messages API `messages`, else Responses API `input` items; embedding strings and file blocks count as none"""
+    messages: Final = kwargs.get("messages")
+    if isinstance(messages, list):
+        return len(messages)
+    input_items: Final = kwargs.get("input")
+    if not isinstance(input_items, list):
+        return 0
+    items: Final = cast(list[object], input_items)  # cast-ok: isinstance leaves the element type unknown
+    return sum(1 for item in items if _is_conversation_item(item))
+
+
 class Cache:
     def __init__(
         self,
@@ -119,6 +148,7 @@ class Cache:
         semantic_cache_embedding_max_input_tokens: int | None = None,
         semantic_cache_embedding_timeout: float | None = None,
         semantic_cache_scope: str = SemanticCacheScope.KEY.value,
+        max_messages: int | None = 4,
         # GCP IAM authentication parameters
         gcp_service_account: str | None = None,
         gcp_ssl_ca_certs: str | None = None,
@@ -129,7 +159,7 @@ class Cache:
         Initializes the cache based on the given type.
 
         Args:
-            type (str, optional): The type of cache to initialize. Can be "local", "redis", "redis-semantic", "qdrant-semantic", "s3" or "disk". Defaults to "local".
+            type (str, optional): The type of cache to initialize. Can be "local", "redis", "redis-semantic", "qdrant-semantic" or "s3". Defaults to "local".
 
             # Redis Cache Args
             host (str, optional): The host address for the Redis cache. Required if type is "redis".
@@ -148,9 +178,7 @@ class Cache:
             semantic_cache_embedding_max_input_tokens (int, optional): Truncate prompts to this many tokens before embedding them for semantic caching. Defaults to the embedding deployment's configured max_input_tokens.
             semantic_cache_embedding_timeout (float, optional): Seconds a semantic-cache lookup may spend embedding the prompt before it gives up and lets the request continue to the LLM. Defaults to SEMANTIC_CACHE_EMBEDDING_TIMEOUT_SECONDS.
             semantic_cache_scope (str, optional): "key" isolates semantic-cache buckets per key/team/org. "end_user" additionally isolates per end user (falls back to the key scope when the request carries no end-user id). Defaults to "key".
-
-            # Disk Cache Args
-            disk_cache_dir (str, optional): The directory for the disk cache. Defaults to None.
+            max_messages (int, optional): Requests with more `messages` (or Responses API `input` items) than this are neither looked up nor stored, so long agent conversations never serve or create a cache entry. None disables the limit. Defaults to 4.
 
             # S3 Cache Args
             s3_bucket_name (str, optional): The bucket name for the s3 cache. Defaults to None.
@@ -186,7 +214,7 @@ class Cache:
             if not redis_startup_nodes:
                 _env_cluster_nodes: Final = litellm.get_secret("REDIS_CLUSTER_NODES")
                 if _env_cluster_nodes is not None and isinstance(_env_cluster_nodes, str):
-                    redis_startup_nodes = json.loads(_env_cluster_nodes)
+                    redis_startup_nodes = _REDIS_STARTUP_NODES_ADAPTER.validate_python(json.loads(_env_cluster_nodes))
 
             if redis_startup_nodes:
                 # Only pass GCP parameters if they are provided
@@ -281,8 +309,11 @@ class Cache:
                 account_url=azure_account_url,
                 container=azure_blob_container,
             )
-        elif type == LiteLLMCacheType.DISK:
-            self.cache = DiskCache(disk_cache_dir=disk_cache_dir)
+        else:
+            supported_types: Final = ", ".join(member.value for member in LiteLLMCacheType)
+            raise ValueError(f"Unsupported cache type {type!r}. Supported types: {supported_types}")
+        if disk_cache_dir is not None:
+            verbose_logger.warning("Ignoring disk_cache_dir, the disk cache backend was removed")
         if "cache" not in litellm.input_callback:
             litellm.input_callback.append("cache")
         if "cache" not in litellm.success_callback:
@@ -298,6 +329,7 @@ class Cache:
         self.ttl = ttl
         self.mode: CacheMode = mode or CacheMode.default_on
         self.semantic_cache_scope: str = SemanticCacheScope(semantic_cache_scope).value
+        self.max_messages: int | None = max_messages
 
         if self.type == LiteLLMCacheType.LOCAL and default_in_memory_ttl is not None:
             self.ttl = default_in_memory_ttl
@@ -350,7 +382,7 @@ class Cache:
         )
         return "".join(f"{field}: {value}" for field, value in scope_values if value is not None)
 
-    def get_cache_key(self, **kwargs) -> str:
+    def get_cache_key(self, **kwargs: object) -> str:
         """
         Get the cache key for the given arguments.
 
@@ -374,21 +406,31 @@ class Cache:
         for param in kwargs:
             if param in scope_excluded_params:
                 continue
-            if param in combined_kwargs:
+            if param in combined_kwargs or param in _ALWAYS_KEYED_PROVIDER_PARAMS:
                 param_value: str | None = self._get_param_value(param, kwargs)
+                if param in _ALWAYS_KEYED_PROVIDER_PARAMS and not param_value:
+                    continue
                 if param_value is not None:
                     cache_key += f"{param}: {param_value}"
             elif not is_litellm_owned_kwarg(param):
                 if litellm.enable_caching_on_provider_specific_optional_params is True:  # feature flagged for now
                     if kwargs[param] is None:
                         continue  # ignore None params
-                    param_value = kwargs[param]
-                    cache_key += f"{param}: {param_value}"
+                    cache_key += f"{param}: {kwargs[param]}"
 
         if is_semantic_cache:
             cache_key += self._get_semantic_cache_tenant_scope(kwargs)
 
-        hashed_cache_key = Cache._get_hashed_cache_key(cache_key)
+        reasoning_summary: Final = peek_reasoning_summary_aliases(kwargs)
+        reasoning_summary_material: Final = (
+            "" if reasoning_summary is None else f"reasoning_summary: {reasoning_summary}"
+        )
+        tool_call_id_shape_material: Final = (
+            "" if embeds_thought_signature_in_tool_call_id(kwargs) else "thought_signature_in_tool_call_id: False"
+        )
+        hashed_cache_key = Cache._get_hashed_cache_key(
+            cache_key + reasoning_summary_material + tool_call_id_shape_material
+        )
         hashed_cache_key = self._add_namespace_to_cache_key(hashed_cache_key, **kwargs)
         verbose_logger.debug(
             "\nCreated cache key: %s (source material length: %d)",
@@ -421,22 +463,41 @@ class Cache:
 
         1. If caching groups are set, then return the caching group as the model https://docs.litellm.ai/docs/routing#caching-across-model-groups
         2. Else if a model_group is set, then return the model_group as the model. This is used for all requests sent through the litellm.Router()
-        3. Else use the `model` passed in kwargs
+        3. Else use the `model` passed in kwargs, plus `model_id` when set (e.g. a SageMaker inference component)
         """
         litellm_params: Final[dict] = kwargs.get("litellm_params", {}) or {}
-        metadata_sources: Final[tuple[dict, ...]] = (
-            kwargs.get("metadata") or {},
-            kwargs.get("litellm_metadata") or {},
-            litellm_params.get("metadata") or {},
-            litellm_params.get("litellm_metadata") or {},
+        metadata_sources: Final = cast(  # cast-ok: each source is the untyped request's metadata dict or empty
+            "tuple[dict[str, object], dict[str, object], dict[str, object], dict[str, object]]",
+            (
+                kwargs.get("metadata") or {},
+                kwargs.get("litellm_metadata") or {},
+                litellm_params.get("metadata") or {},
+                litellm_params.get("litellm_metadata") or {},
+            ),
         )
-        model_group: Final[str | None] = next(
-            (source["model_group"] for source in metadata_sources if source.get("model_group")), None
+        metadata, litellm_metadata, params_metadata, params_litellm_metadata = metadata_sources
+        call_model_info: Final[object] = kwargs.get("model_info")
+        routed_source: Final = next(
+            (
+                source
+                for source in (litellm_metadata, metadata, params_litellm_metadata, params_metadata)
+                if call_model_info and source.get("model_group") and source.get("model_info") == call_model_info
+            ),
+            None,
         )
+        model_group: Final = (
+            str(routed_source["model_group"])
+            if routed_source is not None
+            else next((str(source["model_group"]) for source in metadata_sources if source.get("model_group")), None)
+        )
+        caching_group_sources: Final = (routed_source,) if routed_source is not None else metadata_sources
         caching_group: Final = next(
-            (group for source in metadata_sources if (group := self._get_caching_group(source, model_group))), None
+            (group for source in caching_group_sources if (group := self._get_caching_group(source, model_group))), None
         )
-        return caching_group or model_group or kwargs["model"]
+        model_id_suffix: Final = (
+            f" model_id: {kwargs['model_id']}" if "model_id" in kwargs and kwargs["model_id"] is not None else ""
+        )
+        return caching_group or model_group or f"{kwargs['model']}{model_id_suffix}"
 
     def _get_caching_group(self, metadata: dict, model_group: str | None) -> str | None:
         caching_groups: Final[list | None] = metadata.get("caching_groups", [])
@@ -572,9 +633,11 @@ class Cache:
                 if isinstance(cached_response, dict):
                     pass
                 else:
-                    cached_response = json.loads(cached_response)  # Convert string to dictionary
+                    cached_response = _DECODED_LITERAL.validate_python(
+                        json.loads(cached_response)
+                    )  # Convert string to dictionary
             except Exception:
-                cached_response = ast.literal_eval(cached_response)
+                cached_response = _DECODED_LITERAL.validate_python(ast.literal_eval(cached_response))
             return cached_response
         return cached_result
 
@@ -682,7 +745,7 @@ class Cache:
                 cache_key = self.get_cache_key(**kwargs)
             if cache_key is not None:
                 if isinstance(result, BaseModel):
-                    result = result.model_dump_json()
+                    result = result.model_dump_json(exclude_unset=True)
 
                 ## DEFAULT TTL ##
                 if self.ttl is not None:
@@ -933,7 +996,10 @@ class Cache:
 
         If cache is default_on then this is True
         If cache is default_off then this is only true when user has opted in to use cache
+        Always False once the request carries more than `max_messages` messages
         """
+        if self.max_messages is not None and _request_message_count(kwargs) > self.max_messages:
+            return False
         if self.mode == CacheMode.default_on:
             return True
 
@@ -989,7 +1055,7 @@ def enable_cache(
     Enable cache with the specified configuration.
 
     Args:
-        type (Optional[Literal["local", "redis", "s3", "disk"]]): The type of cache to enable. Defaults to "local".
+        type (Optional[Literal["local", "redis", "s3"]]): The type of cache to enable. Defaults to "local".
         host (Optional[str]): The host address of the cache server. Defaults to None.
         port (Optional[str]): The port number of the cache server. Defaults to None.
         password (Optional[str]): The password for the cache server. Defaults to None.
@@ -1001,7 +1067,7 @@ def enable_cache(
         None
 
     Raises:
-        None
+        ValueError: If no cache is set yet and the cache type is unsupported.
     """
     print_verbose("LiteLLM: Enabling Cache")
     if "cache" not in litellm.input_callback:
@@ -1036,7 +1102,7 @@ def update_cache(
     Update the cache for LiteLLM.
 
     Args:
-        type (Optional[Literal["local", "redis", "s3", "disk"]]): The type of cache. Defaults to "local".
+        type (Optional[Literal["local", "redis", "s3"]]): The type of cache. Defaults to "local".
         host (Optional[str]): The host of the cache. Defaults to None.
         port (Optional[str]): The port of the cache. Defaults to None.
         password (Optional[str]): The password for the cache. Defaults to None.

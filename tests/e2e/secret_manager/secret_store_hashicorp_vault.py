@@ -14,6 +14,7 @@ from e2e_http import (
     get_external,
     post_json_external,
 )
+from e2e_metadata import step
 from pydantic import BaseModel, Field
 
 from secret_store import SecretBackend
@@ -68,6 +69,7 @@ class Vault:
     def _metadata_url(self, name: str) -> str:
         return f"{self.base_url}/v1/{self.mount}/metadata/{name}"
 
+    @step("Write the secret {name} to HashiCorp Vault")
     def write(self, name: str, value: str) -> None:
         write: Final = post_json_external(
             self._data_url(name), headers=self._headers(), json=KvWriteBody(data=KvData(key=value))
@@ -77,6 +79,7 @@ class Vault:
         if not write.ok:
             pytest.fail(f"Vault refused to write {name}: HTTP {write.status_code} {write.body[:300]}")
 
+    @step("Read the secret {name} from HashiCorp Vault")
     def read(self, name: str) -> str | None:
         result: Final = get_external(self._data_url(name), headers=self._headers(), response_type=KvReadResponse)
         match result:
@@ -89,6 +92,7 @@ class Vault:
             case _:
                 return pytest.fail(f"Vault refused to read {name}: {result}")
 
+    @step("Delete the secret {name} from HashiCorp Vault")
     def destroy(self, name: str) -> None:
         write: Final = delete_external(self._metadata_url(name), headers=self._headers())
         if not write.ok and write.status_code != 404:
