@@ -1,3 +1,5 @@
+import { MemberBudgetWindows } from "./team/MemberBudgetWindows";
+import { memberBudgetWindowsSchema } from "./team/memberBudgetWindowSchema";
 import { Page, PageTabs, PageTabsList, PageTabsTrigger } from "@/components/shared/Page";
 import { useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
 import useCan from "@/app/(dashboard)/hooks/useCan";
@@ -86,6 +88,7 @@ const teamCreateFieldsSchema = z.object({
   metadata: metadataPairsSchema.optional(),
   team_id: z.string().optional(),
   team_member_budget: z.number().optional(),
+  team_member_budget_limits: memberBudgetWindowsSchema.optional(),
   team_member_key_duration: z.string().optional(),
   team_member_rpm_limit: numericInputSchema,
   team_member_tpm_limit: numericInputSchema,
@@ -124,6 +127,7 @@ const EMPTY_TEAM_CREATE_VALUES: TeamCreateFormValues = {
   metadata: [],
   team_id: undefined,
   team_member_budget: undefined,
+  team_member_budget_limits: [],
   team_member_key_duration: undefined,
   team_member_rpm_limit: undefined,
   team_member_tpm_limit: undefined,
@@ -553,10 +557,15 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, isViewOnly 
           }
         }
 
-        const { require_trace_id: requireTraceId, ...teamCreateValues } = formValues;
+        const {
+          require_trace_id: requireTraceId,
+          team_member_budget_limits: memberBudgetWindows,
+          ...teamCreateValues
+        } = formValues;
         const teamMemberModelBudgets = modelMaxBudgetUpdate(teamMemberModelMaxBudget, {});
         await teamCreateCall(accessToken, {
           ...teamCreateValues,
+          ...(memberBudgetWindows?.length ? { team_member_budget_limits: memberBudgetWindows } : {}),
           ...(requireTraceId === undefined ? {} : { require_trace_id: requireTraceId }),
           ...(teamMemberModelBudgets !== undefined ? { team_member_model_max_budget: teamMemberModelBudgets } : {}),
           models: normalizeTeamModelSelection(formValues.models),
@@ -894,6 +903,13 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, isViewOnly 
                           description="ID of the team you want to create. If not provided, it will be generated automatically."
                         >
                           {({ ref, value, ...field }) => <UIInput {...field} ref={ref} value={value ?? ""} />}
+                        </FormField>
+                        <FormField
+                          control={form.control}
+                          name="team_member_budget_limits"
+                          label="Default member budget windows"
+                        >
+                          {({ value, onChange }) => <MemberBudgetWindows value={value ?? []} onChange={onChange} />}
                         </FormField>
                         <FormField
                           control={form.control}

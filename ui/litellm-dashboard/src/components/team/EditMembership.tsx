@@ -26,6 +26,8 @@ import {
   type MemberFormValues,
 } from "./memberFormValues";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { MemberBudgetWindows } from "./MemberBudgetWindows";
+import { isMemberBudgetWindows, memberBudgetWindowsSchema } from "./memberBudgetWindowSchema";
 
 dayjs.extend(utc);
 
@@ -65,6 +67,7 @@ const buildMemberSchema = (config: ModalConfig): z.ZodType<MemberFormValues, Mem
     user_id: z.string().nullish(),
     role: z.string({ error: ROLE_REQUIRED_MESSAGE }).min(1, ROLE_REQUIRED_MESSAGE),
     ...Object.fromEntries((config.additionalFields ?? []).map((field) => [field.name, memberFieldSchema])),
+    budget_limits: config.showBudgetWindows ? memberBudgetWindowsSchema.optional() : z.undefined().optional(),
   };
 
   return z.object(shape).superRefine((values, ctx) => {
@@ -164,7 +167,7 @@ const MemberModal = <T extends BaseMember>({
             return (
               <MultiSelect
                 options={field.options ?? []}
-                value={Array.isArray(value) ? value : []}
+                value={Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : []}
                 onValueChange={onChange}
                 placeholder={field.placeholder || "Select options"}
               />
@@ -277,6 +280,17 @@ const MemberModal = <T extends BaseMember>({
             </FormField>
 
             {config.additionalFields?.map((field) => renderField(field, field.name))}
+            {config.showBudgetWindows && (
+              <FormField control={form.control} name="budget_limits" label="Budget windows">
+                {({ value, onChange }) => (
+                  <MemberBudgetWindows
+                    value={isMemberBudgetWindows(value) ? value : []}
+                    onChange={onChange}
+                    defaultWindows={config.defaultBudgetWindows ?? []}
+                  />
+                )}
+              </FormField>
+            )}
           </FieldGroup>
 
           <div className="mt-6 text-right">
