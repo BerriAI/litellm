@@ -5,9 +5,15 @@ from dataclasses import dataclass
 from itertools import chain
 from typing import TYPE_CHECKING, Any, Final, cast
 
+from pydantic import TypeAdapter, ValidationError
+
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.constants import REDACTED_BY_LITELLM, REDACTED_TOOL_CALL_ARGUMENTS_PLACEHOLDER
+from litellm.constants import (
+    PREVIOUS_RESPONSE_IDS_METADATA_KEY,
+    REDACTED_BY_LITELLM,
+    REDACTED_TOOL_CALL_ARGUMENTS_PLACEHOLDER,
+)
 from litellm.litellm_core_utils.cold_storage_handler import ColdStorageHandler
 from litellm.responses.litellm_completion_transformation.client_tool_search import (
     bridge_client_tool_search,
@@ -30,6 +36,7 @@ from litellm.types.utils import CallTypes, ChatCompletionMessageToolCall, Messag
 
 if TYPE_CHECKING:
     from litellm.proxy._types import SpendLogsMetadata, SpendLogsPayload
+    from litellm.proxy.utils import PrismaClient
     from litellm.responses.litellm_completion_transformation.transformation import (
         ChatCompletionSession,
         SessionMessage,
@@ -136,6 +143,40 @@ def _referenced_request_ids(previous_response_id: str, client_response_ids: tupl
     return tuple(dict.fromkeys((response_id, previous_response_id, *client_response_ids)))
 
 
+def _stored_previous_response_ids(spend_log: Mapping[str, object]) -> tuple[str, ...] | None:
+    """The path to the root a turn stored on its row, None for a row written before paths were stored."""
+    metadata: Final = spend_log.get("metadata")
+    try:
+        parsed: Final = (
+            _STORED_METADATA_ADAPTER.validate_json(metadata)
+            if isinstance(metadata, str)
+            else _STORED_METADATA_ADAPTER.validate_python(metadata)
+        )
+    except ValidationError:
+        return None
+    try:
+        return tuple(_REQUEST_IDS_ADAPTER.validate_python(parsed.get(PREVIOUS_RESPONSE_IDS_METADATA_KEY)))
+    except ValidationError:
+        return None
+
+
+def _path_through_referenced_rows(
+    referenced_rows: Sequence[Mapping[str, object]], request_ids: Sequence[str]
+) -> tuple[str, ...] | None:
+    """The request ids to replay, root first, ending at the referenced response, or None without a stored path."""
+    stored_path: Final = next(
+        (path for path in map(_stored_previous_response_ids, referenced_rows) if path is not None), None
+    )
+    if stored_path is None:
+        return None
+    return tuple(dict.fromkeys((*stored_path, *request_ids)))
+
+
+def _in_path_order(spend_logs: Sequence["SpendLogsPayload"], path: Sequence[str]) -> Sequence["SpendLogsPayload"]:
+    position: Final = {request_id: index for index, request_id in enumerate(path)}
+    return sorted(spend_logs, key=lambda spend_log: position.get(spend_log["request_id"], len(path)))
+
+
 def _turns_through_referenced_response(
     spend_logs: Sequence["SpendLogsPayload"], referenced_request_ids: tuple[str, ...]
 ) -> int:
@@ -192,6 +233,58 @@ def _latest_replayable_instructions(proxy_server_requests: Sequence[Mapping[str,
         None,
     )
     return None if latest == REDACTED_BY_LITELLM else latest
+
+
+_STORED_METADATA_ADAPTER: Final = TypeAdapter(dict[str, object])
+_REQUEST_IDS_ADAPTER: Final = TypeAdapter(list[str])
+
+_REFERENCED_ROWS_QUERY: Final = """
+    SELECT *
+    FROM "LiteLLM_SpendLogs"
+    WHERE request_id = ANY($1::text[]);
+"""
+
+_SAME_OWNER_AS_REFERENCED: Final = """
+    EXISTS (
+        SELECT 1
+        FROM matching_session
+        WHERE {same_conversation}
+          AND matching_session."user" IS NOT DISTINCT FROM logs."user"
+          AND matching_session.team_id IS NOT DISTINCT FROM logs.team_id
+          AND (
+              COALESCE(matching_session."user", '') <> ''
+              OR COALESCE(matching_session.team_id, '') <> ''
+              OR matching_session.api_key = logs.api_key
+          )
+    )
+"""
+
+_OWNER_SCOPED_QUERY: Final = """
+    WITH matching_session AS (
+        SELECT session_id, api_key, "user", team_id
+        FROM "LiteLLM_SpendLogs"
+        WHERE request_id = ANY($1::text[])
+    )
+    SELECT *
+    FROM "LiteLLM_SpendLogs" AS logs
+    WHERE {same_owner}
+    ORDER BY "endTime" ASC;
+"""
+
+_SESSION_QUERY: Final = _OWNER_SCOPED_QUERY.format(
+    same_owner=_SAME_OWNER_AS_REFERENCED.format(same_conversation="matching_session.session_id = logs.session_id")
+)
+
+_PATH_QUERY: Final = _OWNER_SCOPED_QUERY.format(
+    same_owner=_SAME_OWNER_AS_REFERENCED.format(same_conversation="logs.request_id = ANY($2::text[])")
+)
+
+
+async def _read_spend_logs(prisma_client: "PrismaClient", query: str, *params: object) -> Sequence["SpendLogsPayload"]:
+    return cast(  # cast-ok: query_raw is untyped; spend log rows are read as is
+        "Sequence[SpendLogsPayload]",
+        await prisma_client.db.query_raw(query, *params),
+    )
 
 
 class ResponsesSessionHandler:
@@ -264,6 +357,7 @@ class ResponsesSessionHandler:
             messages=chat_completion_message_history,
             litellm_session_id=litellm_session_id,
             instructions=_latest_replayable_instructions(proxy_server_requests),
+            previous_response_ids=tuple(spend_log["request_id"] for spend_log in all_spend_logs[:replayed_turns]),
         )
 
     @staticmethod
@@ -506,12 +600,15 @@ class ResponsesSessionHandler:
     async def get_all_spend_logs_for_previous_response_id(
         previous_response_id: str,
         client_response_ids: tuple[str, ...] = (),
-    ) -> "list[SpendLogsPayload]":
+    ) -> "Sequence[SpendLogsPayload]":
         """
         Get all spend logs for a previous response id
 
-
-        SQL query
+        The referenced response's row is read first. A row written with a path to the root
+        (``litellm_previous_response_ids`` in its metadata) names every earlier turn it continues, so
+        only those rows plus the referenced one are read, which keeps a fork from replaying its
+        siblings and the turns sent after the referenced response. A row written before paths were
+        stored falls back to its whole session:
 
         SELECT session_id, api_key, "user", team_id FROM spend_logs WHERE request_id = previous_response_id, then
         SELECT * FROM spend_logs with that session_id and the same owner
@@ -539,40 +636,25 @@ class ResponsesSessionHandler:
         if prisma_client is None:
             return []
 
-        query: Final = """
-            WITH matching_session AS (
-                SELECT session_id, api_key, "user", team_id
-                FROM "LiteLLM_SpendLogs"
-                WHERE request_id = ANY($1::text[])
-            )
-            SELECT *
-            FROM "LiteLLM_SpendLogs" AS logs
-            WHERE EXISTS (
-                SELECT 1
-                FROM matching_session
-                WHERE matching_session.session_id = logs.session_id
-                  AND matching_session."user" IS NOT DISTINCT FROM logs."user"
-                  AND matching_session.team_id IS NOT DISTINCT FROM logs.team_id
-                  AND (
-                      COALESCE(matching_session."user", '') <> ''
-                      OR COALESCE(matching_session.team_id, '') <> ''
-                      OR matching_session.api_key = logs.api_key
-                  )
-            )
-            ORDER BY "endTime" ASC;
-        """
-
         max_attempts: Final = 1 if disable_spend_logs else RESPONSES_SESSION_LOOKUP_MAX_ATTEMPTS
         for attempt in range(max_attempts):
             if attempt:
                 await asyncio.sleep(RESPONSES_SESSION_LOOKUP_RETRY_INTERVAL)
-            if spend_logs := await prisma_client.db.query_raw(query, request_ids):
-                verbose_proxy_logger.debug(
-                    "Found the following spend logs for previous response id %s: %s",
-                    response_id,
-                    json.dumps(spend_logs, indent=4, default=str),
-                )
-                return spend_logs
+            referenced_rows = await _read_spend_logs(prisma_client, _REFERENCED_ROWS_QUERY, request_ids)
+            if not referenced_rows:
+                continue
+            path = _path_through_referenced_rows(referenced_rows, request_ids)
+            spend_logs = (
+                _in_path_order(await _read_spend_logs(prisma_client, _PATH_QUERY, request_ids, list(path)), path)
+                if path is not None
+                else await _read_spend_logs(prisma_client, _SESSION_QUERY, request_ids)
+            )
+            verbose_proxy_logger.debug(
+                "Found the following spend logs for previous response id %s: %s",
+                response_id,
+                json.dumps(spend_logs, indent=4, default=str),
+            )
+            return spend_logs
 
         verbose_proxy_logger.debug("Found no spend logs for previous response id %s", response_id)
         return []

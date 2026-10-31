@@ -1,8 +1,8 @@
 import json
 import sqlite3
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from itertools import chain
-from types import SimpleNamespace
+from types import MappingProxyType, SimpleNamespace
 from typing import Final
 from unittest.mock import AsyncMock, patch
 
@@ -13,6 +13,7 @@ from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 import litellm
+from litellm.constants import PREVIOUS_RESPONSE_IDS_METADATA_KEY
 from litellm.proxy.spend_tracking.spend_tracking_utils import (
     _get_proxy_server_request_for_spend_logs_payload,
 )
@@ -445,15 +446,21 @@ def _chat_completion_response(request_id: str, content: str) -> dict:
 
 
 class _FakePrismaDB:
+    """Serves the next queued result per history read; the referenced-row read peeks at it, dropping a miss."""
+
     def __init__(self, results):
         self._results = list(results)
         self.calls = []
 
-    async def query_raw(self, query, request_ids):
+    async def query_raw(self, query, request_ids, *path):
         self.calls.append(tuple(request_ids))
-        if not self._results:
-            return []
-        return list(self._results.pop(0))
+        if "matching_session" in query:
+            return list(self._results.pop(0)) if self._results else []
+        queued = self._results[0] if self._results else []
+        referenced = [row for row in queued if row.get("request_id") in request_ids]
+        if not referenced and self._results:
+            self._results.pop(0)
+        return referenced
 
 
 class _FakePrismaClient:
@@ -539,7 +546,7 @@ async def test_message_history_retries_a_spend_log_the_batch_writer_has_not_flus
         ("assistant", "OK"),
     ]
     assert result["litellm_session_id"] == session_id
-    assert [call[0] for call in fake_prisma_client.db.calls] == [request_id, request_id]
+    assert [call[0] for call in fake_prisma_client.db.calls] == [request_id, request_id, request_id]
 
 
 @pytest.mark.asyncio
@@ -630,8 +637,8 @@ async def test_message_history_looks_up_the_decoded_chat_completion_id():
     with patch("litellm.proxy.proxy_server.prisma_client", fake_prisma_client):
         await ResponsesSessionHandler.get_all_spend_logs_for_previous_response_id(encoded_response_id)
 
-    assert len(fake_prisma_client.db.calls) == 1
-    assert request_id in fake_prisma_client.db.calls[0]
+    assert len(fake_prisma_client.db.calls) == 2
+    assert all(request_id in call for call in fake_prisma_client.db.calls)
 
 
 class _StoredSpendLogs:
@@ -1169,18 +1176,27 @@ async def test_a_compacted_session_replays_no_turn_sent_after_the_referenced_res
 
 
 class _SqliteBackedPrismaDB:
-    def __init__(self, rows: list[tuple[str, str, str, str, str | None, str | None]]) -> None:
+    def __init__(
+        self,
+        rows: list[tuple[str, str, str, str, str | None, str | None]],
+        metadata: Mapping[str, Mapping[str, object]] = MappingProxyType({}),
+    ) -> None:
         self._connection = sqlite3.connect(":memory:")
         self._connection.row_factory = sqlite3.Row
         self._connection.execute(
             'CREATE TABLE "LiteLLM_SpendLogs" '
-            '(request_id TEXT, api_key TEXT, session_id TEXT, "endTime" TEXT, "user" TEXT, team_id TEXT)'
+            '(request_id TEXT, api_key TEXT, session_id TEXT, "endTime" TEXT, "user" TEXT, team_id TEXT, metadata TEXT)'
         )
-        self._connection.executemany('INSERT INTO "LiteLLM_SpendLogs" VALUES (?, ?, ?, ?, ?, ?)', rows)
+        self._connection.executemany(
+            'INSERT INTO "LiteLLM_SpendLogs" VALUES (?, ?, ?, ?, ?, ?, ?)',
+            [(*row, json.dumps(metadata[row[0]]) if row[0] in metadata else None) for row in rows],
+        )
 
     async def query_raw(self, query: str, *args: object) -> list[dict[str, object]]:
-        sqlite_query: Final = query.replace("= ANY($1::text[])", "IN (SELECT value FROM json_each(?))").replace(
-            "$1", "?"
+        sqlite_query: Final = (
+            query.replace("= ANY($1::text[])", "IN (SELECT value FROM json_each(?1))")
+            .replace("= ANY($2::text[])", "IN (SELECT value FROM json_each(?2))")
+            .replace("IS NOT DISTINCT FROM", "IS")
         )
         sqlite_args: Final = tuple(json.dumps(arg) if isinstance(arg, list) else arg for arg in args)
         return [dict(row) for row in self._connection.execute(sqlite_query, sqlite_args)]
@@ -1214,6 +1230,121 @@ async def _history_request_ids(sqlite_db: _SqliteBackedPrismaDB, response_id: st
     with patch("litellm.proxy.proxy_server.prisma_client", fake_prisma_client):
         spend_logs: Final = await ResponsesSessionHandler.get_all_spend_logs_for_previous_response_id(response_id)
     return [row["request_id"] for row in spend_logs]
+
+
+def _stored_path(*previous_response_ids: str) -> Mapping[str, object]:
+    return {PREVIOUS_RESPONSE_IDS_METADATA_KEY: list(previous_response_ids)}
+
+
+def _forked_session_db() -> _SqliteBackedPrismaDB:
+    """One session: root -> a2 -> a3 on branch a, root -> b2 -> b3 on branch b, b2 sent between a2 and a3."""
+    return _SqliteBackedPrismaDB(
+        [
+            ("root", "key", "session", "2026-01-01T00:00:01", "", ""),
+            ("a2", "key", "session", "2026-01-01T00:00:02", "", ""),
+            ("b2", "key", "session", "2026-01-01T00:00:03", "", ""),
+            ("a3", "key", "session", "2026-01-01T00:00:04", "", ""),
+            ("b3", "key", "session", "2026-01-01T00:00:05", "", ""),
+        ],
+        metadata={
+            "root": _stored_path(),
+            "a2": _stored_path("root"),
+            "b2": _stored_path("root"),
+            "a3": _stored_path("root", "a2"),
+            "b3": _stored_path("root", "b2"),
+        },
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("previous_response_id", "replayed"),
+    [
+        ("root", ["root"]),
+        ("a2", ["root", "a2"]),
+        ("b2", ["root", "b2"]),
+        ("a3", ["root", "a2", "a3"]),
+        ("b3", ["root", "b2", "b3"]),
+    ],
+)
+async def test_a_turn_with_a_stored_path_replays_only_the_path_to_the_root(
+    previous_response_id: str, replayed: list[str]
+):
+    """A fork shares its session with the other branch, so the stored path, not the session, picks the turns."""
+    assert await _history_request_ids(_forked_session_db(), previous_response_id) == replayed
+
+
+@pytest.mark.asyncio
+async def test_a_stored_path_is_replayed_in_path_order_whatever_the_clock_says():
+    sqlite_db: Final = _SqliteBackedPrismaDB(
+        [
+            ("late-root", "key", "session", "2026-01-01T00:00:09", "", ""),
+            ("child", "key", "session", "2026-01-01T00:00:01", "", ""),
+        ],
+        metadata={"late-root": _stored_path(), "child": _stored_path("late-root")},
+    )
+
+    assert await _history_request_ids(sqlite_db, "child") == ["late-root", "child"]
+
+
+@pytest.mark.asyncio
+async def test_a_turn_stored_before_paths_existed_still_replays_its_whole_session():
+    sqlite_db: Final = _SqliteBackedPrismaDB(
+        [
+            ("old-1", "key", "session", "2026-01-01T00:00:01", "", ""),
+            ("old-2", "key", "session", "2026-01-01T00:00:02", "", ""),
+            ("old-3", "key", "session", "2026-01-01T00:00:03", "", ""),
+        ]
+    )
+
+    assert await _history_request_ids(sqlite_db, "old-2") == ["old-1", "old-2", "old-3"]
+
+
+@pytest.mark.asyncio
+async def test_a_stored_path_never_replays_another_owners_turns():
+    """A path naming another key's row (a forged or reused id) replays nothing of that key's history."""
+    sqlite_db: Final = _SqliteBackedPrismaDB(
+        [
+            ("victim-1", "victim-key", "session", "2026-01-01T00:00:01", "", ""),
+            ("attacker-1", "attacker-key", "session", "2026-01-01T00:00:02", "", ""),
+        ],
+        metadata={"victim-1": _stored_path(), "attacker-1": _stored_path("victim-1")},
+    )
+
+    assert await _history_request_ids(sqlite_db, "attacker-1") == ["attacker-1"]
+
+
+@pytest.mark.asyncio
+async def test_the_replayed_turns_become_the_next_turns_path_to_the_root():
+    fake_prisma_client: Final = _FakePrismaClient(results=[])
+    fake_prisma_client.db = _forked_session_db()
+
+    with patch("litellm.proxy.proxy_server.prisma_client", fake_prisma_client):
+        session: Final = await ResponsesSessionHandler.get_chat_completion_message_history_for_previous_response_id(
+            "b2"
+        )
+
+    assert session["previous_response_ids"] == ("root", "b2")
+
+
+@pytest.mark.asyncio
+async def test_a_turn_continuing_a_session_stored_before_paths_existed_records_every_turn_it_replayed():
+    """The legacy replay feeds the whole session to the model, so the new turn's path must name all of it."""
+    fake_prisma_client: Final = _FakePrismaClient(
+        results=[
+            [
+                _spend_log("old-1", "session", "My favorite number is 7.", "ok"),
+                _spend_log("old-2", "session", "My second number is 42.", "ok"),
+            ]
+        ]
+    )
+
+    with patch("litellm.proxy.proxy_server.prisma_client", fake_prisma_client):
+        session: Final = await ResponsesSessionHandler.get_chat_completion_message_history_for_previous_response_id(
+            "old-1"
+        )
+
+    assert session["previous_response_ids"] == ("old-1", "old-2")
 
 
 @pytest.mark.asyncio

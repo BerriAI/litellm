@@ -2366,7 +2366,7 @@ async def test_bridged_auto_execute_follow_up_continues_the_client_conversation_
     await _settle(lambda: len(recorder.logged) > 0)
 
     follow_up: Final = json.loads(provider.calls[1].request.content)["messages"]
-    assert spend_logs.asked == (frozenset({"chatcmpl-prior-turn"}),) * 2
+    assert spend_logs.asked and set(spend_logs.asked) == {frozenset({"chatcmpl-prior-turn"})}
     assert [message["role"] for message in follow_up] == ["user", "assistant", "user", "assistant", "user"]
     assert json.dumps(follow_up).count("My favorite color is teal.") == 1
     assert [block["type"] for block in follow_up[3]["content"]] == ["thinking", "tool_use"]
