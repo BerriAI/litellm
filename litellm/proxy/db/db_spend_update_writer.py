@@ -61,6 +61,7 @@ from litellm.proxy.db.daily_spend_bulk_upsert import (
     merge_by_conflict_key,
 )
 from litellm.proxy.db.db_span import db_span
+from litellm.repositories import database as database_runtime
 from litellm.proxy.db.db_transaction_queue.daily_spend_update_queue import (
     DailySpendUpdateQueue,
 )
@@ -2196,19 +2197,11 @@ class DBSpendUpdateWriter:
             for i in range(n_retry_times + 1):
                 start_time = time.time()
                 try:
-                    async with _spend_update_tx(prisma_client, "LiteLLM_VerificationToken") as transaction:
-                        async with transaction.batch_() as batcher:
-                            # Sort by token for consistent lock ordering across pods to prevent deadlocks.
-                            for token, response_cost in sorted(key_list_transactions.items()):
-                                spend_increment: _SpendIncrement = {"increment": response_cost}
-                                batcher.litellm_verificationtoken.update_many(  # 'update_many' prevents error from being raised if no row exists
-                                    where={"token": token},
-                                    data={
-                                        "spend": spend_increment,
-                                        "total_spend": spend_increment,
-                                        "last_active": datetime.now(timezone.utc),
-                                    },
-                                )
+                    native: Final = database_runtime.current_native
+                    if native is None:
+                        raise RuntimeError("native database is not open")
+                    ordered: Final = sorted(key_list_transactions.items())
+                    await native.add_key_spend([t for t, _ in ordered], [c for _, c in ordered])
                     break
                 except Exception as e:
                     await self.handle_spend_update_failure(

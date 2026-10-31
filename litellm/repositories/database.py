@@ -10,6 +10,9 @@ if TYPE_CHECKING:
     from litellm.proxy.utils import PrismaClient
 
 
+current_native: NativeDatabase | None = None
+
+
 @dataclass(frozen=True, slots=True)
 class Database:
     prisma: "PrismaClient"
@@ -22,6 +25,8 @@ class Database:
         except BaseException:
             await prisma.aclose()
             raise
+        global current_native  # noqa: PLW0603  # fuzz port experiment: spend writer has no handle yet
+        current_native = native  # rebind-ok: fuzz port experiment
         return cls(prisma=prisma, native=native)
 
     async def aclose(self) -> None:

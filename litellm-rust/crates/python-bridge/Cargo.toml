@@ -19,6 +19,8 @@ huggingface = ["litellm-token-counter/huggingface"]
 tiktoken = ["litellm-token-counter/tiktoken"]
 
 [dependencies]
+litellm-db.workspace = true
+sqlx.workspace = true
 litellm-secret-value.workspace = true
 fancy-regex.workspace = true
 litellm-tracing.workspace = true
