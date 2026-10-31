@@ -1,5 +1,5 @@
 
-import asyncio, importlib, litellm, litellm.litellm_core_utils.get_model_cost_map as bedrock_govcloud_model_cost_map, pytest
+import asyncio, importlib, litellm, pytest
 from typing import Final
 
 
@@ -1563,7 +1563,6 @@ def _pr4_bedrock_env(monkeypatch: pytest.MonkeyPatch) -> None:
 def _use_local_model_cost_map() -> Iterator[None]:
     with pytest.MonkeyPatch.context() as monkeypatch:
         monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
-        importlib.reload(bedrock_govcloud_model_cost_map)
         importlib.reload(litellm)
         yield
 

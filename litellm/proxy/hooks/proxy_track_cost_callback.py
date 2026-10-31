@@ -22,7 +22,11 @@ from litellm.litellm_core_utils.core_helpers import (
     get_metadata_variable_name_from_kwargs,
     get_parent_otel_span_from_kwargs,
 )
-from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+from litellm.litellm_core_utils.litellm_logging import (
+    StandardLoggingPayloadSetup,
+    UsageCaptureObservation,
+    UsageObservation,
+)
 from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import guardrail_information_cost
 from litellm.litellm_core_utils.redact_messages import MESSAGE_REDACTION_ENABLE_HEADERS
 from litellm.llms.azure.ptu_capacity import is_str_keyed_mapping
@@ -63,6 +67,7 @@ from litellm.proxy.spend_tracking.spend_tracking_utils import (  # noqa: F401  #
     sanitize_error_information_for_spend_logs,
     should_store_prompts_and_responses_in_spend_logs,
 )
+from litellm.proxy.spend_tracking.usage_capture import CapturedUsage, capture_callback, captured_callback_kwargs
 from litellm.proxy.utils import (
     REJECTED_BEFORE_REQUEST_SETUP,
     REJECTED_BEFORE_REQUEST_SETUP_KEY,
@@ -344,11 +349,27 @@ def _attempt_spend_row_kwargs(
         "litellm_params": litellm_params,
         "combined_usage_object": attempt.usage,
         "response_cost": attempt.response_cost,
+        "_accounting_usage_observed": UsageObservation.ESTIMATED,
+        "_accounting_usage_snapshot": UsageCaptureObservation.from_usage(
+            attempt.usage, UsageObservation.ESTIMATED, attempt.response_cost
+        ),
+        "_accounting_prior_captures": (),
     }
     row.pop("billed_failed_attempts", None)
+    row.pop("_accounting_capture", None)
     call_id: Final = request_data.get("litellm_call_id") or litellm_params.get("litellm_call_id")
     if isinstance(call_id, str):
         row["litellm_call_id"] = f"{call_id}{suffix}"
+        row["parent_request_id"] = call_id
+        metadata["parent_request_id"] = call_id
+        captured_attempts: Final = request_data.get("_accounting_billed_attempts")
+        if isinstance(captured_attempts, tuple):
+            for captured in TypeAdapter(tuple[object, ...]).validate_python(captured_attempts):
+                if (
+                    isinstance(captured, CapturedUsage)
+                    and captured.payload["litellm_call_id"] == row["litellm_call_id"]
+                ):
+                    row["_accounting_capture"] = captured
     standard_logging_object: Final = request_data.get("standard_logging_object")
     if isinstance(standard_logging_object, dict):
         payload: Final = cast("Mapping[str, object]", standard_logging_object)  # cast-ok: StandardLoggingPayload dict
@@ -385,7 +406,7 @@ class _ProxyDBLogger(CustomLogger):
         self, kwargs: ObjectMapping, response_obj: object, start_time: datetime, end_time: datetime
     ) -> None:
         if self.spend_event_producer is None or not is_offloadable_success(response_obj):
-            await self._PROXY_track_cost_callback(kwargs, response_obj, start_time, end_time)
+            await self._PROXY_track_cost_callback(dict(kwargs), response_obj, start_time, end_time)
             return
         event: Final = build_spend_event(
             kwargs,
@@ -396,7 +417,7 @@ class _ProxyDBLogger(CustomLogger):
         )
         if isinstance(event, SpendEventBuildError):
             verbose_proxy_logger.warning("collector: tracking cost in-process, event not buildable: %s", event.reason)
-            await self._PROXY_track_cost_callback(kwargs, response_obj, start_time, end_time)
+            await self._PROXY_track_cost_callback(dict(kwargs), response_obj, start_time, end_time)
             return
         await self.spend_event_producer.publish(event)
 
@@ -434,6 +455,9 @@ class _ProxyDBLogger(CustomLogger):
                     "Failed to invalidate budget reservation counters after failure release failed"
                 )
 
+        capture_metadata: Final = await self._try_capture_failure_usage(
+            request_data, original_exception, user_api_key_dict
+        )
         if completed_cost and tracking_disabled:
             return
 
@@ -477,8 +501,12 @@ class _ProxyDBLogger(CustomLogger):
         )
         _metadata["error_information"] = _error_information
 
-        _metadata = await ProxyDBLogger._enrich_failure_metadata_unless_db_stalled(  # rebind-ok: pre-existing rebinding on a rename-only line
-            metadata=_metadata, original_exception=original_exception
+        _metadata = (  # rebind-ok: enriched identity is shared with the earlier immutable capture
+            {**_metadata, **capture_metadata}
+            if capture_metadata is not None
+            else await ProxyDBLogger._enrich_failure_metadata_unless_db_stalled(
+                metadata=_metadata, original_exception=original_exception
+            )
         )
 
         request_fields: Final = _str_keyed_fields(request_data)
@@ -594,6 +622,106 @@ class _ProxyDBLogger(CustomLogger):
                 self._deployment_lookup,
             ),
         )
+
+    async def _failure_capture_metadata(
+        self, request_data: Mapping[str, object], exception: Exception, auth: UserAPIKeyAuth
+    ) -> Mapping[str, object] | None:
+        from litellm.proxy.proxy_server import usage_capture
+
+        if usage_capture.meter is None:
+            return None
+        captured_identity: Final = (
+            _batch_accounting_for(request_data.get("litellm_call_id")) is not None
+            and request_data.get(REJECTED_BEFORE_REQUEST_SETUP_KEY) is not REJECTED_BEFORE_REQUEST_SETUP
+        )
+        current_identity: Final = {
+            **LiteLLMProxyRequestSetup.get_sanitized_user_information_from_key(user_api_key_dict=auth),
+            "user_api_key": LiteLLMProxyRequestSetup.get_logged_api_key(auth),
+        }
+        metadata: Final = (
+            {
+                **dict.fromkeys(current_identity),
+                **{
+                    key: value
+                    for key, value in _REQUEST_DATA.validate_python(
+                        get_litellm_metadata_from_kwargs(dict(request_data))
+                    ).items()
+                    if key in current_identity or key == "tags"
+                },
+            }
+            if captured_identity
+            else current_identity
+        )
+        return await self._enrich_failure_metadata_unless_db_stalled(
+            metadata=metadata, original_exception=exception, resolve_missing_key_identity=not captured_identity
+        )
+
+    async def _try_capture_failure_usage(
+        self,
+        request_data: dict[str, object],  # mutable-ok: receipt handoff shared with the legacy writer
+        original_exception: Exception,
+        auth: UserAPIKeyAuth,
+    ) -> Mapping[str, object] | None:
+        try:
+            metadata: Final = await self._failure_capture_metadata(request_data, original_exception, auth)
+            self._capture_failure_usage(request_data, original_exception, auth, metadata)
+        except Exception:  # noqa: BLE001  # capture failure must not suppress legacy billing or reservation release
+            verbose_proxy_logger.exception("Usage capture failed on the request failure path")
+            return None
+        return metadata
+
+    def _capture_failure_usage(
+        self,
+        request_data: dict[str, object],  # mutable-ok: receipt handoff shared with the legacy writer
+        original_exception: Exception,
+        auth: UserAPIKeyAuth,
+        metadata: Mapping[str, object] | None = None,
+    ) -> None:
+        from litellm.litellm_core_utils.litellm_logging import Logging
+        from litellm.proxy.db.exception_handler import exception_chain
+        from litellm.proxy.proxy_server import usage_capture
+        from litellm.proxy.spend_tracking.usage_capture import UsageAcknowledgementError
+
+        if any(isinstance(error, UsageAcknowledgementError) for error in exception_chain(original_exception)):
+            return
+        usage_meter: Final = usage_capture.meter
+
+        if usage_meter is None:
+            return
+        logging_obj: Final = request_data.get("litellm_logging_obj")
+        details: Final[Mapping[str, object]] = (
+            _str_keyed_fields(logging_obj.model_call_details) if isinstance(logging_obj, Logging) else {}
+        )
+        params: Final = _str_keyed_fields(request_data.get("litellm_params") or details.get("litellm_params"))
+        failure_data: Final = {
+            **details,
+            **request_data,
+            "litellm_params": {
+                **params,
+                "metadata": {
+                    **_str_keyed_fields(params.get("metadata")),
+                    **(
+                        metadata
+                        if metadata is not None
+                        else {
+                            **LiteLLMProxyRequestSetup.get_sanitized_user_information_from_key(user_api_key_dict=auth),
+                            "user_api_key": LiteLLMProxyRequestSetup.get_logged_api_key(auth),
+                        }
+                    ),
+                    "status": "failure",
+                },
+            },
+        }
+        start: Final = logging_obj.start_time if isinstance(logging_obj, Logging) else request_data.get("start_time")
+        if not isinstance(start, datetime):
+            return
+        end: Final = datetime.now(timezone.utc)
+        captured: Final = tuple(
+            capture_callback(usage_meter, row, original_exception, start, end)
+            for _, row in _failure_spend_rows(failure_data, 0.0, None, self._deployment_lookup)
+        )
+        request_data["_accounting_capture"] = captured[0]  # rebind-ok: share one receipt with the legacy writer
+        request_data["_accounting_billed_attempts"] = captured[1:]  # rebind-ok: share attempt receipts
 
     async def _write_failure_spend_rows(
         self,
@@ -780,6 +908,7 @@ class _ProxyDBLogger(CustomLogger):
                     resolve_missing_key_identity=str(kwargs.get("call_type")) not in _CAPTURED_IDENTITY_CALL_TYPES,
                 )
                 _write_spend_metadata_to_kwargs(kwargs=kwargs, metadata=metadata)
+            kwargs.update(await captured_callback_kwargs(kwargs, completion_response, start_time, end_time))
             budget_reservation: Final = _get_budget_reservation_from_metadata(metadata=metadata)
             if accounting is not None and (budget_reservation is not None or litellm.apply_search_free_tier):
                 accounting.write_started = True
@@ -967,11 +1096,13 @@ class _ProxyDBLogger(CustomLogger):
 
     @staticmethod
     async def _enrich_failure_metadata_unless_db_stalled(
-        metadata: dict[str, object], original_exception: Exception
+        metadata: dict[str, object], original_exception: Exception, resolve_missing_key_identity: bool = True
     ) -> dict[str, object]:
         if isinstance(original_exception, DBLookupDeadlineExceeded):
             return metadata
-        return await ProxyDBLogger._enrich_failure_metadata_with_key_info(metadata=metadata)
+        return await ProxyDBLogger._enrich_failure_metadata_with_key_info(
+            metadata=metadata, resolve_missing_key_identity=resolve_missing_key_identity
+        )
 
     @staticmethod
     async def _enrich_failure_metadata_with_key_info(metadata: dict, resolve_missing_key_identity: bool = True) -> dict:

@@ -12,6 +12,7 @@ import asyncio
 import json
 from collections.abc import AsyncIterable, Callable, Mapping, Sequence
 from http import HTTPStatus
+from time import perf_counter
 from typing import TYPE_CHECKING, Final, Protocol, TypeAlias, runtime_checkable
 
 from fastapi import Request, Response
@@ -152,6 +153,16 @@ async def background_streaming_task(
     https://platform.openai.com/docs/api-reference/responses/object
     """
 
+    started_at: Final = perf_counter()
+    first_token_at: float | None = None  # rebind-ok: first content event closes the TTFT interval
+    finished_at: float | None = None  # rebind-ok: terminal event closes the execution interval
+
+    def timing_snapshot() -> Mapping[str, float]:
+        return {
+            **({"time_to_first_token_ms": (first_token_at - started_at) * 1000} if first_token_at is not None else {}),
+            **({"total_latency_ms": (finished_at - started_at) * 1000} if finished_at is not None else {}),
+        }
+
     try:
         verbose_proxy_logger.info("Starting background streaming for %s", polling_id)
 
@@ -216,7 +227,7 @@ async def background_streaming_task(
         incomplete_details_data = None
 
         state_dirty = False  # Track if state needs to be synced
-        last_update_time = asyncio.get_event_loop().time()
+        last_update_time = perf_counter()
         UPDATE_INTERVAL: Final = 0.150  # 150ms batching interval
 
         # Track the terminal event from the stream (may not be "completed")
@@ -236,13 +247,14 @@ async def background_streaming_task(
             """Flush accumulated state to Redis if interval elapsed or forced"""
             nonlocal state_dirty, last_update_time
 
-            current_time: Final = asyncio.get_event_loop().time()
+            current_time: Final = perf_counter()
             if state_dirty and (force or (current_time - last_update_time) >= UPDATE_INTERVAL):
                 # Convert output_items dict to list for update
                 output_list: Final = list(output_items.values())
                 await polling_handler.update_state(
                     polling_id=polling_id,
                     output=output_list,
+                    timing=timing_snapshot(),
                 )
                 state_dirty = False
                 last_update_time = current_time
@@ -274,6 +286,20 @@ async def background_streaming_task(
                     try:
                         event: _StreamEvent = _StreamEventParser.parse(chunk_data)
                         event_type = event.get("type", "")
+
+                        if (
+                            first_token_at is None
+                            and event_type
+                            in (
+                                "response.output_text.delta",
+                                "response.reasoning_text.delta",
+                                "response.reasoning_summary_text.delta",
+                                "response.reasoning.delta",
+                            )
+                            and event.get("delta")
+                        ):
+                            first_token_at = perf_counter()
+                            state_dirty = True
 
                         # Process different event types based on OpenAI streaming spec
                         if event_type == "response.output_item.added":
@@ -367,6 +393,7 @@ async def background_streaming_task(
                         ):
                             # Terminal event - extract all ResponsesAPIResponse fields
                             # https://platform.openai.com/docs/api-reference/responses-streaming
+                            finished_at = perf_counter()
                             response_data = event.get("response", {})
                             terminal_status = response_data.get(
                                 "status",
@@ -419,10 +446,13 @@ async def background_streaming_task(
         failure: Final = stream_failure if early_error is None else early_error
         final_error: Final = terminal_error if failure is None else failure
         final_status: Final = (terminal_status or "completed") if failure is None else "failed"
+        if finished_at is None:
+            finished_at = perf_counter()  # rebind-ok: close the interval when the stream has no terminal event
 
         await polling_handler.update_state(
             polling_id=polling_id,
             status=final_status,
+            timing=timing_snapshot(),
             usage=usage_data,
             error=final_error,
             reasoning=reasoning_data,
@@ -452,6 +482,7 @@ async def background_streaming_task(
         )
 
     except Exception as e:
+        finished_at = perf_counter()  # rebind-ok: capture execution time at failure
         verbose_proxy_logger.error("Error in background streaming task for %s: %s", polling_id, e)
         import traceback
 
@@ -460,6 +491,7 @@ async def background_streaming_task(
         await polling_handler.update_state(
             polling_id=polling_id,
             status="failed",
+            timing=timing_snapshot(),
             error={
                 "type": "internal_error",
                 "message": str(e),

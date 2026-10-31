@@ -12,18 +12,22 @@ import sys
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from contextlib import AbstractContextManager, ExitStack
 from dataclasses import dataclass
+from datetime import datetime
+from types import MappingProxyType
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
 import respx
+from fastapi import HTTPException
+from fastapi.testclient import TestClient
 from pydantic import BaseModel, ConfigDict
 
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.proxy._types import UserAPIKeyAuth
-from litellm.types.agents import AgentCaller
+from litellm.proxy._types import LiteLLM_ObjectPermissionTable, UserAPIKeyAuth
+from litellm.types.agents import AgentCaller, AgentResponse
 
 AddLiteLLMData = Callable[..., Awaitable[dict[str, object]]]
 
@@ -2781,7 +2785,9 @@ async def test_forward_jsonrpc_sse_is_untouched_while_keepalives_are_unconfigure
 
 
 @pytest.mark.asyncio
-async def test_forward_jsonrpc_sse_keeps_unicode_line_separators_inside_an_event(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_forward_jsonrpc_sse_keeps_unicode_line_separators_inside_an_event(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setattr(litellm, "sse_keepalive_ping_interval_seconds", None)
     separated_text: Final = "before\u2028between\u2029after"
     event: Final = {
@@ -2941,3 +2947,252 @@ async def test_failed_upstream_stream_relays_its_body_only_when_that_is_a_json_o
         "id": "req-1",
         "method": "tasks/resubscribe",
     }
+
+
+class _RejectionRecorder(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.failure_payloads: Final[list[Mapping[str, object]]] = []  # mutable-ok: collects callback events
+        self.hook_calls: Final[list[tuple[Mapping[str, object], Exception]]] = []  # mutable-ok: collects hook calls
+
+    async def async_log_failure_event(
+        self,
+        kwargs: dict[str, object],
+        response_obj: object,
+        start_time: datetime | None,
+        end_time: datetime | None,
+    ) -> None:
+        payload: Final = kwargs["standard_logging_object"]
+        assert isinstance(payload, Mapping)
+        self.failure_payloads.append(payload)
+
+    async def async_post_call_failure_hook(
+        self,
+        request_data: dict[str, object],
+        original_exception: Exception,
+        user_api_key_dict: UserAPIKeyAuth,
+        traceback_str: str | None = None,
+    ) -> HTTPException:
+        self.hook_calls.append((dict(request_data), original_exception))
+        return HTTPException(status_code=418, detail="transformed")
+
+
+_SPOOFED_BODY_FIELDS: Final = MappingProxyType(
+    {
+        "agent_id": "spoof",
+        "litellm_call_id": "spoofed-call-id",
+        "metadata": {"agent_id": "spoof", "user_api_key_alias": "spoof", "user_api_key_team_id": "spoof"},
+    }
+)
+
+
+def _rejection_request(path_agent_id: str, request_id: object) -> MagicMock:
+    req: Final = MagicMock()
+    req.headers = {}
+    req.json = AsyncMock(
+        return_value={
+            "jsonrpc": "2.0",
+            "id": request_id,
+            "method": "SendMessage",
+            "params": {**_HELLO_MESSAGE_PARAMS, "litellm_call_id": "spoofed-param-call-id"},
+            **_SPOOFED_BODY_FIELDS,
+        }
+    )
+    return req
+
+
+async def _invoke_rejected(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    registered: bool,
+    proxy_logging_obj: object,
+    request_id: object = "rej-1",
+) -> tuple[int, object]:
+    from litellm.proxy import proxy_server
+    from litellm.proxy.agent_endpoints import agent_registry
+    from litellm.proxy.agent_endpoints.a2a_endpoints import invoke_agent_a2a
+
+    path_agent_id: Final = "denied-agent" if registered else "no-such-agent"
+    registry: Final = agent_registry.AgentRegistry()
+    if registered:
+        registry.register_agent(
+            AgentResponse(
+                agent_id="registered-denied-id",
+                agent_name=path_agent_id,
+                agent_card_params={"name": "Test Agent", "url": "https://agent.example.com"},
+            )
+        )
+    monkeypatch.setattr(agent_registry, "global_agent_registry", registry)
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    monkeypatch.setattr(proxy_server, "proxy_logging_obj", proxy_logging_obj)
+    auth: Final = UserAPIKeyAuth(
+        api_key="hashed-caller",
+        key_alias="caller-alias",
+        user_id="caller-user",
+        team_id="caller-team",
+        object_permission=LiteLLM_ObjectPermissionTable(object_permission_id="caller-grants", agents=["other-agent"]),
+        request_route=f"/a2a/{path_agent_id}",
+    )
+    with respx.mock as upstream:
+        try:
+            response: Final = await invoke_agent_a2a(
+                agent_id=path_agent_id,
+                request=_rejection_request(path_agent_id, request_id),
+                fastapi_response=MagicMock(),
+                user_api_key_dict=auth,
+            )
+        except HTTPException as e:
+            assert not upstream.calls
+            return e.status_code, e.detail
+        assert not upstream.calls
+    return response.status_code, json.loads(response.body.decode())
+
+
+_EXPECTED_REJECTIONS: Final = (
+    pytest.param(
+        True,
+        403,
+        "Agent 'denied-agent' is not allowed for your key/team. Contact proxy admin for access.",
+        "registered-denied-id",
+        "a2a_agent/Test Agent",
+        id="not-granted",
+    ),
+    pytest.param(
+        False,
+        404,
+        {"jsonrpc": "2.0", "id": "rej-1", "error": {"code": -32000, "message": "Agent 'no-such-agent' not found"}},
+        "no-such-agent",
+        "a2a_agent/no-such-agent",
+        id="unknown",
+    ),
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("registered", "status", "body", "target", "model"), _EXPECTED_REJECTIONS)
+async def test_rejected_agent_call_is_logged_once_as_the_caller_without_dispatch(
+    monkeypatch: pytest.MonkeyPatch, registered: bool, status: int, body: object, target: str, model: str
+) -> None:
+    from litellm.caching.caching import DualCache
+    from litellm.proxy.utils import ProxyLogging
+
+    recorder: Final = _RejectionRecorder()
+    for name in ("callbacks", "failure_callback", "_async_failure_callback"):
+        monkeypatch.setattr(litellm, name, [recorder])
+
+    got_status, got_body = await _invoke_rejected(
+        monkeypatch, registered=registered, proxy_logging_obj=ProxyLogging(user_api_key_cache=DualCache())
+    )
+
+    assert (got_status, got_body) == (status, body)
+    assert len(recorder.failure_payloads) == 1
+    payload: Final = recorder.failure_payloads[0]
+    metadata: Final = payload["metadata"]
+    assert (payload["status"], payload["call_type"], payload["model"], payload["response_cost"]) == (
+        "failure",
+        "asend_message",
+        model,
+        0,
+    )
+    assert (
+        metadata["user_api_key_alias"],
+        metadata["user_api_key_user_id"],
+        metadata["user_api_key_team_id"],
+        metadata["user_api_key_hash"],
+    ) == ("caller-alias", "caller-user", "caller-team", "hashed-caller")
+    assert payload["id"] not in {"spoofed-call-id", "spoofed-param-call-id", "rej-1"}
+    assert len(recorder.hook_calls) == 1
+    hook_data, hook_exception = recorder.hook_calls[0]
+    assert (hook_data["agent_id"], hook_data["metadata"]["agent_id"]) == (target, target)
+    assert isinstance(hook_exception, HTTPException) and hook_exception.status_code == status
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("registered", "status", "body", "target", "model"), _EXPECTED_REJECTIONS)
+async def test_rejected_agent_call_response_survives_a_failing_failure_hook(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    registered: bool,
+    status: int,
+    body: object,
+    target: str,
+    model: str,
+) -> None:
+    proxy_logging_obj: Final = MagicMock()
+    proxy_logging_obj.post_call_failure_hook = AsyncMock(side_effect=RuntimeError("logging down"))
+
+    got_status, got_body = await _invoke_rejected(
+        monkeypatch, registered=registered, proxy_logging_obj=proxy_logging_obj
+    )
+
+    assert (got_status, got_body) == (status, body)
+    proxy_logging_obj.post_call_failure_hook.assert_awaited_once()
+    assert any(record.getMessage() == "Failed to log rejected A2A request" for record in caplog.records)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("request_id", [0, 7, "abc"])
+async def test_unknown_agent_rejection_echoes_the_jsonrpc_id(
+    monkeypatch: pytest.MonkeyPatch, request_id: object
+) -> None:
+    proxy_logging_obj: Final = MagicMock()
+    proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
+
+    _, got_body = await _invoke_rejected(
+        monkeypatch, registered=False, proxy_logging_obj=proxy_logging_obj, request_id=request_id
+    )
+
+    assert isinstance(got_body, dict) and got_body["id"] == request_id and type(got_body["id"]) is type(request_id)
+
+
+def _a2a_app_refusing_with(refusal: Exception) -> TestClient:
+    from fastapi import FastAPI
+
+    from litellm.proxy.agent_endpoints.a2a_endpoints import router
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+    def refuse() -> UserAPIKeyAuth:
+        raise refusal
+
+    app: Final = FastAPI()
+    app.include_router(router)
+    app.dependency_overrides[user_api_key_auth] = refuse
+    return TestClient(app)
+
+
+@pytest.mark.parametrize("path", ["/a2a/agent-1", "/a2a/agent-1/message/send", "/v1/a2a/agent-1/message/send"])
+def test_a2a_auth_refusals_answer_as_jsonrpc_errors_with_the_callers_id(path: str):
+    from litellm.proxy._types import ProxyException
+
+    client: Final = _a2a_app_refusing_with(
+        ProxyException(message="Budget has been exceeded!", type="budget_exceeded", param=None, code=422)
+    )
+
+    response: Final = client.post(path, json={"jsonrpc": "2.0", "id": "req-7", "method": "message/send"})
+
+    assert response.status_code == 422
+    assert response.json() == {
+        "jsonrpc": "2.0",
+        "id": "req-7",
+        "error": {
+            "code": -32000,
+            "message": "Budget has been exceeded!",
+            "data": {"type": "budget_exceeded", "param": None, "code": "422"},
+        },
+    }
+
+
+def test_a2a_http_refusals_answer_as_jsonrpc_errors_with_a_null_id_for_unparseable_bodies():
+    from fastapi import HTTPException
+
+    client: Final = _a2a_app_refusing_with(HTTPException(status_code=403, detail="Agent 'agent-1' is not allowed"))
+
+    response: Final = client.post("/a2a/agent-1", content=b"not json")
+
+    assert response.status_code == 403
+    body: Final = response.json()
+    assert body["jsonrpc"] == "2.0"
+    assert body["id"] is None
+    assert body["error"]["code"] == -32000
+    assert body["error"]["message"] == "Agent 'agent-1' is not allowed"
+    assert body["error"]["data"]["code"] == "403"
