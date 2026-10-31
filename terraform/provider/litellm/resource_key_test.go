@@ -1,6 +1,7 @@
 package litellm
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -963,6 +964,93 @@ func applyKeyUpdate(t *testing.T, client *Client, stateAttrs map[string]string, 
 		t.Fatalf("Apply returned error: %v", diags)
 	}
 	return newState
+}
+
+func TestKeyUpdateOmitsUnchangedPassthroughRoutes(t *testing.T) {
+	for _, field := range []string{"models", "allowed_routes"} {
+		t.Run(field, func(t *testing.T) {
+			const route = "/direct/openai/v1/batches"
+			proxy := &fakeKeyProxy{metadata: map[string]interface{}{
+				"allowed_passthrough_routes": []string{route},
+				"server_side":                "preserved",
+			}}
+			handler := proxy.handler()
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/key/update" {
+					body, err := io.ReadAll(r.Body)
+					if err != nil {
+						t.Error(err)
+						http.Error(w, "invalid test request", http.StatusBadRequest)
+						return
+					}
+					var payload map[string]interface{}
+					if err := json.Unmarshal(body, &payload); err != nil {
+						t.Error(err)
+						http.Error(w, "invalid test request", http.StatusBadRequest)
+						return
+					}
+					if _, present := payload["allowed_passthrough_routes"]; present {
+						w.WriteHeader(http.StatusForbidden)
+						w.Write([]byte(`{"error":"Enterprise required: allowed_passthrough_routes"}`))
+						return
+					}
+					r.Body = io.NopCloser(bytes.NewReader(body))
+				}
+				handler(w, r)
+			}))
+			defer srv.Close()
+
+			applyKeyUpdate(t, NewClient(srv.URL, "test-key", true),
+				map[string]string{
+					"key_alias":                    "alias-1",
+					"allowed_passthrough_routes.#": "1",
+					"allowed_passthrough_routes.0": route,
+					"blocked":                      "true",
+					field + ".#":                   "1",
+					field + ".0":                   "previous",
+				},
+				map[string]interface{}{
+					"key_alias":                  "alias-1",
+					"allowed_passthrough_routes": []interface{}{route},
+					"blocked":                    true,
+					field:                        []interface{}{"replacement"},
+				},
+			)
+			if len(proxy.updates) != 1 {
+				t.Fatalf("expected one update, got %d", len(proxy.updates))
+			}
+			if got := proxy.updates[0][field]; !reflect.DeepEqual(got, []interface{}{"replacement"}) {
+				t.Errorf("%s = %v, want [replacement]", field, got)
+			}
+			if proxy.updates[0]["blocked"] != true {
+				t.Error("update must preserve the operator's block")
+			}
+			if proxy.metadata["server_side"] != "preserved" ||
+				!reflect.DeepEqual(proxy.metadata["allowed_passthrough_routes"], []string{route}) {
+				t.Errorf("server metadata changed: %v", proxy.metadata)
+			}
+		})
+	}
+}
+
+func TestKeyUpdateSendsChangedPassthroughRoutes(t *testing.T) {
+	proxy := &fakeKeyProxy{metadata: map[string]interface{}{}}
+	srv := httptest.NewServer(proxy.handler())
+	defer srv.Close()
+	applyKeyUpdate(t, NewClient(srv.URL, "test-key", true),
+		map[string]string{
+			"key_alias":                    "alias-1",
+			"allowed_passthrough_routes.#": "1",
+			"allowed_passthrough_routes.0": "/previous",
+		},
+		map[string]interface{}{
+			"key_alias":                  "alias-1",
+			"allowed_passthrough_routes": []interface{}{"/replacement"},
+		},
+	)
+	if got := proxy.updates[0]["allowed_passthrough_routes"]; !reflect.DeepEqual(got, []interface{}{"/replacement"}) {
+		t.Errorf("changed passthrough routes = %v, want [/replacement]", got)
+	}
 }
 
 func TestKeyUpdateWithoutMetadataChangePreservesServerMetadata(t *testing.T) {
