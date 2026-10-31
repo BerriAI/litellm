@@ -542,7 +542,7 @@ def merged_codex_catalog(
     slugs: Final = frozenset(model.get("slug") for model in upstream)
     added: Final = tuple(row for row in rows if _codex_can_drive(row.id, row.mode) and row.id not in slugs)
     first_priority: Final = max((_priority(model) for model in upstream), default=-1) + 1
-    entries: Final = _entries(added, stock, instructions, first_priority, "codex", client_version)
+    entries: Final = _entries(added, stock, instructions, first_priority, "deployment", client_version)
     added_models: Final = tuple(_entry_json(entry) for entry in entries)
     serialized: Final = tuple(_compact_json(model) for model in added_models)
     budget: Final = byte_limit - len(_compact_json({**top, "models": upstream}))

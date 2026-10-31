@@ -550,6 +550,20 @@ def test_merged_catalog_keeps_upstream_whole_and_adds_only_the_entries_that_fit_
     assert merged(*rows, byte_limit=upstream_only) is None
 
 
+def test_merged_catalog_gives_an_alias_no_service_tier_or_upgrade_of_codexs_own():
+    upstream = json.dumps({"models": [{"slug": "upstream-model", "priority": 0}]}).encode()
+    rows = (_row("team-sol", upstream_model="openai/gpt-6-sol"), _row("team-55", upstream_model="openai/gpt-5.5"))
+
+    added = json.loads(merged_codex_catalog(upstream, rows, stock=_STOCK, instructions=_PROMPT))["models"][1:]
+
+    assert [
+        (entry["slug"], entry["service_tiers"], entry["default_service_tier"], entry["upgrade"]) for entry in added
+    ] == [
+        ("team-sol", [], None, None),
+        ("team-55", [], None, None),
+    ]
+
+
 def test_merged_catalog_warns_once_with_how_many_models_the_byte_limit_left_out(caplog, monkeypatch):
     upstream = json.dumps({"models": [{"slug": "upstream-model", "priority": 0}]}).encode()
     rows = tuple(_row(f"model-{index}") for index in range(4))
