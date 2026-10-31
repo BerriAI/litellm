@@ -738,6 +738,7 @@ async def test_add_agent_to_db_drops_a_sentinel_value_instead_of_storing_the_pla
                 "aws_secret_access_key": REDACTED_BY_LITELM_STRING,
                 "model": "bedrock/agentcore/my-agent",
             },
+            "static_headers": {"Authorization": REDACTED_BY_LITELM_STRING, "X-Region": "eu"},
         },
         prisma_client=mock_prisma,
         created_by="test-user",
@@ -746,6 +747,7 @@ async def test_add_agent_to_db_drops_a_sentinel_value_instead_of_storing_the_pla
     stored_params: Final = json.loads(mock_create.call_args.kwargs["data"]["litellm_params"])
     assert "aws_secret_access_key" not in stored_params
     assert stored_params["model"] == "bedrock/agentcore/my-agent"
+    assert json.loads(mock_create.call_args.kwargs["data"]["static_headers"]) == {"X-Region": "eu"}
 
 
 @pytest.mark.asyncio
