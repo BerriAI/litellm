@@ -608,6 +608,8 @@ def _build_streaming_logging_obj(
     request: "SendStreamingMessageRequest",
     agent_name: str,
     agent_id: str | None,
+    litellm_call_id: str,
+    litellm_trace_id: str,
     litellm_params: dict[str, object] | None,
     metadata: dict[str, object] | None,
     proxy_server_request: dict[str, object] | None,
@@ -622,8 +624,9 @@ def _build_streaming_logging_obj(
         stream=False,
         call_type="asend_message_streaming",
         start_time=start_time,
-        litellm_call_id=str(request.id),
-        function_id=str(request.id),
+        litellm_call_id=litellm_call_id,
+        litellm_trace_id=litellm_trace_id,
+        function_id=litellm_call_id,
     )
     logging_obj.model = model
     logging_obj.custom_llm_provider = "a2a_agent"
@@ -656,6 +659,8 @@ async def asend_message_streaming(
     proxy_server_request: dict[str, object] | None = None,
     agent_extra_headers: dict[str, str] | None = None,
     agent_name: str | None = None,
+    litellm_call_id: str | None = None,
+    litellm_trace_id: str | None = None,
     **kwargs: object,
 ) -> AsyncIterator["SendStreamingMessageResponse | Mapping[str, object]"]:
     """
@@ -725,13 +730,22 @@ async def asend_message_streaming(
             agent_extra_headers=agent_extra_headers,
         )
         caller_logging_obj: Final = kwargs.get("litellm_logging_obj")
+        bridge_logging_obj_from_caller: Final = caller_logging_obj if isinstance(caller_logging_obj, Logging) else None
+        bridge_call_id: Final = litellm_call_id or str(uuid.uuid4())
+        bridge_trace_id: Final = (
+            (bridge_logging_obj_from_caller.litellm_trace_id if bridge_logging_obj_from_caller else None)
+            or litellm_trace_id
+            or str(uuid.uuid4())
+        )
         bridge_logging_obj: Final = (
-            caller_logging_obj
-            if isinstance(caller_logging_obj, Logging)
+            bridge_logging_obj_from_caller
+            if bridge_logging_obj_from_caller is not None
             else _build_streaming_logging_obj(
                 request=request,
                 agent_name=agent_name or "unknown",
                 agent_id=agent_id,
+                litellm_call_id=bridge_call_id,
+                litellm_trace_id=bridge_trace_id,
                 litellm_params=litellm_params,
                 metadata=metadata,
                 proxy_server_request=proxy_server_request,
@@ -760,17 +774,17 @@ async def asend_message_streaming(
 
     _raw_logging_obj: Final = kwargs.get("litellm_logging_obj")
     logging_obj: Logging | None = _raw_logging_obj if isinstance(_raw_logging_obj, Logging) else None
+    call_id: Final = litellm_call_id or str(uuid.uuid4())
+    trace_id: Final = (logging_obj.litellm_trace_id if logging_obj else None) or litellm_trace_id or str(uuid.uuid4())
 
     if a2a_client is None:
         if api_base is None:
             raise ValueError("Either a2a_client or api_base is required for standard A2A flow")
-        logging_trace_id: Final = getattr(logging_obj, "litellm_trace_id", None) if logging_obj else None
-        trace_id: Final = logging_trace_id or (str(request.id) if request.id else str(uuid.uuid4()))
-        extra_headers: Final[dict[str, str]] = {"X-LiteLLM-Trace-Id": trace_id}
-        if agent_id:
-            extra_headers["X-LiteLLM-Agent-Id"] = agent_id
-        if agent_extra_headers:
-            extra_headers.update(agent_extra_headers)
+        extra_headers: Final = {
+            "X-LiteLLM-Trace-Id": trace_id,
+            **({"X-LiteLLM-Agent-Id": agent_id} if agent_id else {}),
+            **(agent_extra_headers or {}),
+        }
         a2a_client = await create_a2a_client(
             base_url=api_base,
             extra_headers=extra_headers,
@@ -788,6 +802,8 @@ async def asend_message_streaming(
             request=request,
             agent_name=card_agent_name,
             agent_id=agent_id,
+            litellm_call_id=call_id,
+            litellm_trace_id=trace_id,
             litellm_params=litellm_params,
             metadata=metadata,
             proxy_server_request=proxy_server_request,

@@ -41,6 +41,7 @@ from litellm.caching.caching import DualCache
 from litellm.caching.caching_handler import LLMCachingHandler
 from litellm.caching.redis_batch import flush_post_call_redis_batches
 from litellm.constants import (
+    A2A_CALL_TYPES,
     DEFAULT_MOCK_RESPONSE_COMPLETION_TOKEN_COUNT,
     DEFAULT_MOCK_RESPONSE_PROMPT_TOKEN_COUNT,
     EMPTY_MAPPING,
@@ -7749,7 +7750,12 @@ def get_standard_logging_object_payload(
             else raw_usage_dict
         )
 
-        id = response_obj.get("id") or kwargs.get("litellm_call_id")
+        request_id: Final[str | None] = cast(  # cast-ok: preserve dynamic IDs without runtime validation
+            str | None,
+            kwargs.get("litellm_call_id")  # pyright: ignore[reportUnknownMemberType]  # kwargs is an untyped legacy mapping
+            if isinstance(call_type, str) and call_type in A2A_CALL_TYPES
+            else response_obj.get("id") or kwargs.get("litellm_call_id"),
+        )
 
         _model_id: Final = metadata.get("model_info", {}).get("id", "")
         _model_group: Final = metadata.get("model_group", "")
@@ -7787,7 +7793,7 @@ def get_standard_logging_object_payload(
             usage_object=usage_dict,
             proxy_server_request=proxy_server_request,
             start_time=start_time,
-            response_id=id,
+            response_id=request_id,
             custom_llm_provider=selected_provider if isinstance(selected_provider, str) else None,
             is_silent_experiment=logging_obj.is_silent_experiment is True,
         )
@@ -7796,8 +7802,8 @@ def get_standard_logging_object_payload(
             "user", None
         )  # maintain backwards compatibility with old request body check
 
-        if cache_hit is True or served_from_cache(init_response_obj):
-            id = f"{id}_cache_hit{time.time()}"  # do not duplicate the request id
+        is_cached: Final = cache_hit is True or served_from_cache(init_response_obj)
+        id: Final[str | None] = f"{request_id}_cache_hit{time.time()}" if is_cached else request_id
         uncached_price: Final = logging_obj.uncached_price(result=init_response_obj) if cache_hit is True else None
         saved_cache_cost: Final = (uncached_price.cost if uncached_price is not None else None) or 0.0
 

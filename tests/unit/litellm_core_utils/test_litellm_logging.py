@@ -14199,6 +14199,48 @@ def test_a_websocket_turn_row_is_keyed_by_the_response_id_or_else_its_call_id(
     assert payload["id"] == expected_row_id
 
 
+@pytest.mark.parametrize("call_type", ["asend_message", "send_message", "asend_message_streaming"])
+def test_a2a_standard_logging_payload_uses_the_litellm_call_id(
+    logging_obj: LitellmLogging,
+    call_type: str,
+) -> None:
+    now: Final = datetime_unit_test(2026, 1, 1, 12, 0, 0)
+    payload: Final = get_standard_logging_object_payload(
+        kwargs={
+            "call_type": call_type,
+            "litellm_call_id": "litellm-call-id",
+            "litellm_params": {"metadata": {}},
+        },
+        init_response_obj=ModelResponse(id="1", model="a2a_agent/test-agent"),
+        start_time=now,
+        end_time=now,
+        logging_obj=logging_obj,
+        status="success",
+    )
+
+    assert payload is not None and payload["id"] == "litellm-call-id"
+
+
+def test_completion_standard_logging_payload_keeps_the_response_id(
+    logging_obj: LitellmLogging,
+) -> None:
+    now: Final = datetime_unit_test(2026, 1, 1, 12, 0, 0)
+    payload: Final = get_standard_logging_object_payload(
+        kwargs={
+            "call_type": "acompletion",
+            "litellm_call_id": "litellm-call-id",
+            "litellm_params": {"metadata": {}},
+        },
+        init_response_obj=ModelResponse(id="chatcmpl-x", model="gpt-4o-mini"),
+        start_time=now,
+        end_time=now,
+        logging_obj=logging_obj,
+        status="success",
+    )
+
+    assert payload is not None and payload["id"] == "chatcmpl-x"
+
+
 @pytest.mark.parametrize("for_async_request, expected_s3_writes", [(True, 1), (False, 0)])
 def test_legacy_s3_logs_a_streamed_anthropic_messages_call_handed_off_from_the_async_side(
     logging_obj: LitellmLogging, monkeypatch: pytest.MonkeyPatch, for_async_request: bool, expected_s3_writes: int
