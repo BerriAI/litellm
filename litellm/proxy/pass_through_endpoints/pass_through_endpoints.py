@@ -10,7 +10,7 @@ from collections.abc import AsyncGenerator, AsyncIterator, Callable, Iterable, M
 from dataclasses import dataclass
 from datetime import datetime
 from functools import reduce
-from itertools import chain, count, groupby
+from itertools import chain, count, groupby, takewhile
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Protocol, TypeAlias, TypedDict, TypeVar, cast
 from urllib.parse import parse_qs, urlencode, urlparse
@@ -2752,7 +2752,17 @@ def _without_earlier_session_updates(
     frames: Sequence[_FrameT],
     latest_update: _FrameT,
 ) -> tuple[_FrameT, ...]:
-    return tuple(frame for frame in frames if frame is latest_update or upstream_frame_kind(frame) != "updates_session")
+    return tuple(
+        frame
+        for index, frame in enumerate(frames)
+        if frame is latest_update
+        or upstream_frame_kind(frame) != "updates_session"
+        or _unbilled_usage_ran_under(map(upstream_frame_kind, frames[index + 1 :]))
+    )
+
+
+def _unbilled_usage_ran_under(later_kinds: Iterable[WebsocketUpstreamFrameKind]) -> bool:
+    return "bills_usage" in takewhile(lambda kind: kind != "updates_session", later_kinds)
 
 
 def _nested_frame(frame: Mapping[str, object] | None, key: str) -> Mapping[str, object] | None:

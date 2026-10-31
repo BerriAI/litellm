@@ -9031,6 +9031,43 @@ async def test_websocket_passthrough_carries_only_the_latest_session_update_into
 
 
 @pytest.mark.asyncio
+async def test_websocket_passthrough_keeps_the_session_update_a_clip_ran_under_until_its_answer_is_billed():
+    client: Final = _turn_taking_client(
+        [
+            _transcription_session_update("session.update", "gpt-transcribe-a"),
+            json.dumps({"type": "response.create"}),
+            _transcription_session_update("session.update", "gpt-transcribe-b"),
+        ],
+        answered_by='"type"',
+        answers_due=(1, 2, 4, 6),
+    )
+    upstream_ws: Final = ScriptedUpstreamWebSocket(
+        REALTIME_SESSION_CREATED,
+        replies=[
+            [_transcription_session_update("session.updated", "gpt-transcribe-a")],
+            [
+                json.dumps({"type": "response.created", "response": {"status": "in_progress"}}),
+                REALTIME_TRANSCRIPTION_COMPLETED,
+            ],
+            [_transcription_session_update("session.updated", "gpt-transcribe-b"), REALTIME_RESPONSE_DONE],
+        ],
+    )
+
+    relayed: Final = await _relay_turns(client, upstream_ws, RecordingFrameModelGate(), "/openai/v1/realtime")
+
+    assert _logged_frame_types(relayed) == [
+        [
+            "session.created",
+            "session.updated",
+            "response.created",
+            TRANSCRIPTION_COMPLETED,
+            "session.updated",
+            "response.done",
+        ]
+    ]
+
+
+@pytest.mark.asyncio
 async def test_websocket_passthrough_still_bills_the_answer_in_flight_when_a_later_frame_is_refused():
     """
     A refused frame closes the client while the provider may still be sending the
