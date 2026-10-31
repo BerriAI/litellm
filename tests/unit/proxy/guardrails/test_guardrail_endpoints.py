@@ -3,17 +3,19 @@ import time
 from collections.abc import Callable
 from datetime import datetime
 from types import MappingProxyType
-from typing import Dict, Final, List, Optional
+from typing import Dict, Final, List, Literal, Optional
 from unittest.mock import AsyncMock
 
+import httpx
 import pytest
 import yaml
-
-
-from fastapi import HTTPException
+from fastapi import FastAPI, HTTPException
+from pydantic import JsonValue
+from pytest_mock import MockerFixture
 
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.proxy._types import LitellmUserRoles, ProxyException, UserAPIKeyAuth
+from litellm.proxy.guardrails.content_filter_data import DATA_ROOTS
 from litellm.proxy.guardrails.guardrail_endpoints import (
     CreateGuardrailRequest,
     ListGuardrailsResponse,
@@ -37,7 +39,6 @@ from litellm.proxy.guardrails.guardrail_endpoints import (
     reject_guardrail_submission,
     update_guardrail,
 )
-from litellm.proxy.guardrails.content_filter_data import DATA_ROOTS
 from litellm.proxy.guardrails.guardrail_endpoints import (
     test_custom_code_guardrail as run_custom_code_test_endpoint,
 )
@@ -45,6 +46,7 @@ from litellm.proxy.guardrails.guardrail_hooks.azure.prompt_shield import AzureCo
 from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.content_filter import ContentFilterGuardrail
 
 MOCK_ADMIN_USER = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
+from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.proxy.guardrails.guardrail_registry import (
     IN_MEMORY_GUARDRAIL_HANDLER,
     InMemoryGuardrailHandler,
@@ -53,8 +55,8 @@ from litellm.proxy.guardrails.guardrail_registry import (
 from litellm.types.guardrails import (
     ApplyGuardrailRequest,
     BaseLitellmParams,
-    GuardrailEventHooks,
     Guardrail,
+    GuardrailEventHooks,
     GuardrailInfoResponse,
     LitellmParams,
 )
@@ -2198,6 +2200,121 @@ def _patch_apply_guardrail_env(mocker, guardrail_result):
     return mock_guardrail
 
 
+class _NativeFindingGuardrail(CustomGuardrail):
+    def __init__(self, findings: tuple[object, ...]):
+        super().__init__(guardrail_name="grounding", event_hook=GuardrailEventHooks.post_call)
+        self.findings = findings
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict[str, object],
+        input_type: Literal["request", "response"],
+        logging_obj: Logging | None = None,
+    ) -> GenericGuardrailAPIInputs:
+        for finding in self.findings:
+            self.add_standard_logging_guardrail_information_to_request_data(
+                guardrail_json_response=finding, request_data=request_data, guardrail_status="success"
+            )
+        return inputs
+
+
+async def _apply_finding_guardrail_over_http(
+    mocker: MockerFixture, findings: tuple[object, ...], body: dict[str, object]
+) -> httpx.Response:
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+    from litellm.proxy.guardrails.guardrail_endpoints import router
+    from litellm.proxy.proxy_server import openai_exception_handler
+
+    configured: Final = _NativeFindingGuardrail(findings)
+    patched: Final = _patch_apply_guardrail_env(mocker, {})
+    patched.apply_guardrail = configured.apply_guardrail
+    app: Final = FastAPI()
+    app.include_router(router)
+    app.add_exception_handler(ProxyException, openai_exception_handler)
+    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth()
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://guardrails.test") as client:
+        return await client.post("/guardrails/apply_guardrail", json=body)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("is_grounded", [True, False])
+async def test_apply_guardrail_native_response_preserves_structured_findings(
+    mocker: MockerFixture, is_grounded: bool
+) -> None:
+    findings: Final = {"is_grounded": is_grounded, "reason": "Compared answer with evidence", "source_ids": ["doc-1"]}
+    result: Final = await _apply_finding_guardrail_over_http(
+        mocker,
+        (findings,),
+        {"guardrail_name": "grounding", "text": "answer", "response_format": "native"},
+    )
+    assert result.status_code == 200
+    assert result.json() == findings
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_standard_response_stays_unchanged_with_native_findings(mocker: MockerFixture) -> None:
+    result: Final = await _apply_finding_guardrail_over_http(
+        mocker, ({"is_grounded": False},), {"guardrail_name": "grounding", "text": "answer"}
+    )
+    assert result.status_code == 200
+    assert result.json() == {"response_text": "answer"}
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_native_preserves_all_provider_results(mocker: MockerFixture) -> None:
+    findings: Final = ({"is_grounded": False}, {"response_text": "native text", "additional_finding": [1, 2]})
+    result: Final = await _apply_finding_guardrail_over_http(
+        mocker, findings, {"guardrail_name": "grounding", "text": "answer", "response_format": "native"}
+    )
+    assert result.status_code == 200
+    assert result.json() == list(findings)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("finding", "expected"),
+    [
+        ({"is_grounded": True, "source_ids": ("doc-1",)}, {"is_grounded": True, "source_ids": ["doc-1"]}),
+        ({"response_text": "native", "score": 0.2}, {"response_text": "native", "score": 0.2}),
+        ([{"is_grounded": False}], [{"is_grounded": False}]),
+    ],
+)
+async def test_apply_guardrail_native_preserves_provider_json_shape(
+    mocker: MockerFixture, finding: object, expected: JsonValue
+) -> None:
+    result: Final = await _apply_finding_guardrail_over_http(
+        mocker,
+        (finding,),
+        {"guardrail_name": "grounding", "text": "answer", "response_format": "native"},
+    )
+    assert result.status_code == 200
+    assert result.json() == expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("findings", [(), ("allow",)])
+async def test_apply_guardrail_native_rejects_missing_findings_and_caller_supplied_verdicts(
+    mocker: MockerFixture, findings: tuple[JsonValue, ...]
+) -> None:
+    result: Final = await _apply_finding_guardrail_over_http(
+        mocker,
+        findings,
+        {
+            "guardrail_name": "grounding",
+            "text": "answer",
+            "response_format": "native",
+            "metadata": {
+                "standard_logging_guardrail_information": [
+                    {"guardrail_name": "grounding", "guardrail_response": {"is_grounded": True}}
+                ]
+            },
+        },
+    )
+    assert result.status_code == 422
+    assert "did not report structured native findings" in result.text
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("vendor_status", "expected_type"),
@@ -2212,9 +2329,7 @@ async def test_a_guardrail_vendors_rejection_is_labelled_the_way_chat_labels_it(
     mock_guardrail.apply_guardrail.side_effect = HTTPException(
         status_code=vendor_status, detail="vendor refused the request"
     )
-    mocker.patch(
-        "litellm.proxy.proxy_server.proxy_logging_obj.post_call_failure_hook", AsyncMock(return_value=None)
-    )
+    mocker.patch("litellm.proxy.proxy_server.proxy_logging_obj.post_call_failure_hook", AsyncMock(return_value=None))
 
     with pytest.raises(ProxyException) as raised:
         await apply_guardrail(
