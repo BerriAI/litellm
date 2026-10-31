@@ -204,3 +204,21 @@ async def test_sap_chat_required_headers(
                 f"Header '{header_name}' has incorrect value. "
                 f"Expected: '{expected_value}', Got: '{request.headers[header_name]}'"
             )
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_sap_chat_reuses_oauth_token_across_calls(respx_mock, aicore, sap_api_response, sync_mode):
+    import litellm
+
+    aicore.token.respond(json={"access_token": "mock-token", "expires_in": 43200})
+    completion = respx_mock.post(f"{aicore.deployment_url}/v2/completion").respond(json=sap_api_response)
+    messages = [{"role": "user", "content": "Hello"}]
+
+    for _ in range(3):
+        if sync_mode:
+            litellm.completion(model="sap/gpt-4o", messages=messages)
+        else:
+            await litellm.acompletion(model="sap/gpt-4o", messages=messages)
+
+    assert (aicore.token.call_count, completion.call_count) == (1, 3)
