@@ -13,7 +13,7 @@ from io import BytesIO
 from pathlib import Path
 from textwrap import dedent
 from types import SimpleNamespace
-from typing import Final
+from typing import Final, Literal
 from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 
@@ -24,6 +24,8 @@ from starlette.datastructures import UploadFile
 
 import litellm
 import litellm.proxy.proxy_server
+from litellm.proxy import utils as proxy_utils
+from litellm.proxy.common_utils import user_api_key_cache as key_cache_utils
 from litellm.caching.dual_cache import DualCache
 from litellm.constants import LITELLM_PROXY_MASTER_KEY_ALIAS
 from litellm.proxy.common_utils.user_api_key_cache import (
@@ -11274,6 +11276,121 @@ async def test_cached_key_team_member_budget_blocks_at_exact_cap(team_member_spe
 
     assert exc_info.value.type == ProxyErrorTypes.budget_exceeded
     assert f"TeamMember={user_id}:{team_id}" in exc_info.value.message
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "budget_source, route, expect_blocked",
+    [
+        ("member", "/models", False),
+        ("member", "/v1/models", False),
+        ("member", "/utils/model_info", False),
+        ("member", "/model/info", False),
+        ("member", "/key/info", False),
+        ("member", "/user/info", False),
+        ("member", "/v1/chat/completions", True),
+        ("member", "/v1/messages", True),
+        ("key", "/models", False),
+        ("key", "/v1/models", False),
+        ("key", "/utils/model_info", False),
+        ("key", "/model/info", False),
+        ("key", "/key/info", False),
+        ("key", "/user/info", False),
+        ("key", "/v1/chat/completions", True),
+        ("key", "/v1/messages", True),
+        ("member", "/health/services", True),
+        ("member", "/health/test_connection", True),
+    ],
+)
+async def test_cached_key_budget_preserves_non_spending_access(
+    budget_source: Literal["member", "key"],
+    route: str,
+    expect_blocked: bool,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy.common_utils.user_api_key_cache import (
+        team_membership_auth_cache_key,
+    )
+    from litellm.proxy.utils import hash_token
+
+    api_key: Final = "sk-budget-route-fixture"
+    hashed_token: Final = proxy_utils.hash_token(api_key)
+    team_id: Final = "budget-route-team"
+    user_id: Final = "budget-route-user"
+    cache: Final = DualCache()
+    await cache_key_object(
+        hashed_token=hashed_token,
+        user_api_key_obj=UserAPIKeyAuth(
+            token=hashed_token,
+            user_id=user_id,
+            team_id=team_id,
+            team_member_spend=2.0 if budget_source == "member" else None,
+            spend=2.0 if budget_source == "key" else 0.0,
+            max_budget=1.0 if budget_source == "key" else None,
+        ),
+        user_api_key_cache=cache,
+        proxy_logging_obj=None,
+    )
+    await cache.async_set_cache(key=f"team_id:{team_id}", value=LiteLLM_TeamTableCachedObj(team_id=team_id))
+    await cache.async_set_cache(
+        key=user_id,
+        value=LiteLLM_UserTable(user_id=user_id, user_role=LitellmUserRoles.INTERNAL_USER),
+    )
+    await cache.async_set_cache(
+        key=key_cache_utils.team_membership_auth_cache_key(team_id=team_id, user_id=user_id),
+        value=LiteLLM_TeamMembership(
+            user_id=user_id,
+            team_id=team_id,
+            spend=2.0 if budget_source == "member" else 0.0,
+            litellm_budget_table=(LiteLLM_BudgetTable(max_budget=1.0) if budget_source == "member" else None),
+        ),
+    )
+    await cache.async_set_cache(key=f"spend:team_member:{user_id}:{team_id}", value=2.0)
+    await cache.async_set_cache(key=f"spend:key:{hashed_token}", value=2.0)
+    request: Final = Request(
+        scope={
+            "type": "http",
+            "path": route,
+            "method": ("POST" if route in ("/v1/chat/completions", "/v1/messages") else "GET"),
+            "headers": [(b"authorization", f"Bearer {api_key}".encode())],
+            "query_string": b"",
+        }
+    )
+    proxy_logging: Final = MagicMock()
+    proxy_logging.budget_alerts = AsyncMock()
+    proxy_logging.post_call_failure_hook = AsyncMock(return_value=None)
+    monkeypatch.setattr(
+        litellm.proxy.proxy_server,
+        "general_settings",
+        {"disable_budget_reservation": True},
+    )
+    monkeypatch.setattr(litellm.proxy.proxy_server, "master_key", MASTER_KEY)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "prisma_client", MagicMock())
+    monkeypatch.setattr(litellm.proxy.proxy_server, "user_api_key_cache", cache)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "spend_counter_cache", cache)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "proxy_logging_obj", proxy_logging)
+
+    async def authenticate() -> UserAPIKeyAuth:
+        return await user_api_key_auth_builder(
+            request=request,
+            api_key=f"Bearer {api_key}",
+            azure_api_key_header="",
+            anthropic_api_key_header=None,
+            google_ai_studio_api_key_header=None,
+            azure_apim_header=None,
+            request_data={},
+        )
+
+    if expect_blocked:
+        with pytest.raises(ProxyException) as exc_info:
+            await authenticate()
+        assert exc_info.value.type == ProxyErrorTypes.budget_exceeded
+        assert ("TeamMember=" if budget_source == "member" else "Key=") in exc_info.value.message
+        return
+
+    result: Final = await authenticate()
+    assert result.user_id == user_id
+    assert result.team_id == team_id
 
 
 @pytest.mark.asyncio
