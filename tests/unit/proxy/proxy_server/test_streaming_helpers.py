@@ -553,6 +553,14 @@ def test_fast_serialize_simple_model_response_stream_with_usage_returns_none_inv
     assert _fast_serialize_simple_model_response_stream(chunk) is None
 
 
+def test_fast_serialize_simple_model_response_stream_with_reasoning_items_returns_none():
+    chunk = _simple_chunk(content="")
+    chunk.choices[0].delta.reasoning_items = [
+        {"id": "rs_abc", "type": "reasoning", "encrypted_content": "ENCRYPTED-BLOB"}
+    ]
+    assert _fast_serialize_simple_model_response_stream(chunk) is None
+
+
 # ---------------------------------------------------------------------------
 # _serialize_streaming_chunk
 # ---------------------------------------------------------------------------
@@ -571,6 +579,30 @@ def test_serialize_streaming_chunk_simple_uses_fast_path_bytes():
             {
                 "index": 0,
                 "delta": {"role": "assistant", "content": "hi"},
+            }
+        ],
+    }
+
+
+def test_serialize_streaming_chunk_preserves_reasoning_items():
+    chunk = _simple_chunk(content="")
+    chunk.choices[0].delta.reasoning_items = [
+        {"id": "rs_abc", "type": "reasoning", "encrypted_content": "ENCRYPTED-BLOB"}
+    ]
+    payload: Final = json.loads(_serialize_streaming_chunk(chunk))
+    assert payload == {
+        "id": "chatcmpl-test",
+        "created": 0,
+        "model": "gpt-4",
+        "object": "chat.completion.chunk",
+        "choices": [
+            {
+                "index": 0,
+                "delta": {
+                    "role": "assistant",
+                    "content": "",
+                    "reasoning_items": [{"id": "rs_abc", "type": "reasoning", "encrypted_content": "ENCRYPTED-BLOB"}],
+                },
             }
         ],
     }
