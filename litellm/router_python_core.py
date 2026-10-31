@@ -522,6 +522,7 @@ if TYPE_CHECKING:
     from litellm.responses.streaming_iterator import (
         BaseResponsesAPIStreamingIterator,
     )
+    from litellm.router import Router
     from litellm.router_api import UntypedDict
     from litellm.router_strategy.adaptive_router.adaptive_router import (
         AdaptiveRouter,
@@ -3698,19 +3699,19 @@ class PythonCore(DeprecatedRouterMembers):
 
     @overload
     async def acompletion(
-        self, model: str, messages: list[AllMessageValues], stream: Literal[True], **kwargs
+        self, model: str, messages: list[AllMessageValues], stream: Literal[True], **kwargs: object
     ) -> CustomStreamWrapper: 
         ...
 
     @overload
     async def acompletion(
-        self, model: str, messages: list[AllMessageValues], stream: Literal[False] = False, **kwargs
+        self, model: str, messages: list[AllMessageValues], stream: Literal[False] = False, **kwargs: object
     ) -> ModelResponse: 
         ...
 
     @overload
     async def acompletion(
-        self, model: str, messages: list[AllMessageValues], stream: Literal[True, False] = False, **kwargs
+        self, model: str, messages: list[AllMessageValues], stream: Literal[True, False] = False, **kwargs: object
     ) -> CustomStreamWrapper | ModelResponse:
         ...
 
@@ -3733,9 +3734,12 @@ class PythonCore(DeprecatedRouterMembers):
             if self._core_switchyard_routers:
                 from litellm.router_strategy.switchyard_router.switchyard_router import SwitchyardAutoRouter
 
-                selected: Final = self._select_pre_routing_strategy(model, kwargs)
+                strategy_request: Final[Mapping[str, object]] = TypeAdapter(Mapping[str, object]).validate_python(
+                    kwargs
+                )
+                selected: Final = self._select_pre_routing_strategy(model, strategy_request)
                 if selected is not None and isinstance(selected.strategy, SwitchyardAutoRouter):
-                    return await self._execute_switchyard(selected, model, kwargs)
+                    return await self._execute_switchyard(selected, model, strategy_request)
 
             self._update_kwargs_before_fallbacks(model=model, kwargs=kwargs)
             start_time: Final = time.time()
@@ -3807,7 +3811,9 @@ class PythonCore(DeprecatedRouterMembers):
             raise ValueError("Switchyard targets cannot be auto-router deployments")
         marker: Final = self._selected_strategy_marker_deployment(model, selected.tags, request_kwargs)
         await router_host().authorize_strategy_inference(
-            deployment=marker, request_kwargs=request_kwargs, llm_router=self._core_public()
+            deployment=marker,
+            request_kwargs=request_kwargs,
+            llm_router=cast("Router", self._core_public()),  # cast-ok: the facade owns the executing core
         )
         defaults: Final = dict(self._forwardable_alias_marker_params(model, selected.tags, request_kwargs))
         forwarded: Final = tuple(key for key in defaults if key not in request_kwargs)
@@ -3834,13 +3840,13 @@ class PythonCore(DeprecatedRouterMembers):
                 "router_type": "switchyard",
                 "routed_model": target,
                 "signals": (f"algorithm:{config.algorithm}",),
-                **(
-                    {"router_config_fingerprint": selected.definition_fingerprint}
-                    if selected.definition_fingerprint is not None
-                    else {}
-                ),
             }
-            self._record_routing_decision(child, decision)
+            fingerprinted: Final[StandardLoggingRoutingDecision] = (
+                {**decision, "router_config_fingerprint": selected.definition_fingerprint}
+                if selected.definition_fingerprint is not None
+                else decision
+            )
+            self._record_routing_decision(child, fingerprinted)
             request_tags: Final = get_routing_tags_from_request_kwargs(values)
             if (
                 selected.tags
@@ -3882,9 +3888,11 @@ class PythonCore(DeprecatedRouterMembers):
                 on_disconnect=bill_disconnect,
             )
         await finalize()
-        if request_kwargs.get("stream") is True and isinstance(response, ModelResponse):
-            options: Final = request_kwargs.get("stream_options")
-            return SwitchyardReplay(response, isinstance(options, Mapping) and options.get("include_usage") is True)
+        if request_kwargs.get("stream") is True:
+            options: Final[Mapping[str, object]] = TypeAdapter(Mapping[str, object]).validate_python(
+                request_kwargs.get("stream_options") or {}
+            )
+            return SwitchyardReplay(response, options.get("include_usage") is True)
         return response
 
     @staticmethod
@@ -16987,7 +16995,7 @@ class PythonCore(DeprecatedRouterMembers):
 
     @staticmethod
     def _record_routing_decision(
-        request_kwargs: dict,
+        request_kwargs: dict[str, object],  # mutable-ok: stamps routing provenance on the caller's request
         routing_decision: StandardLoggingRoutingDecision | None,
     ) -> None:
         """Make the request's metadata describe THIS routing attempt, and only this one.
@@ -17030,7 +17038,11 @@ class PythonCore(DeprecatedRouterMembers):
         )
 
     @staticmethod
-    def _stamp_or_clear_metadata_key(request_kwargs: dict, key: str, value: object | None) -> None:
+    def _stamp_or_clear_metadata_key(
+        request_kwargs: dict[str, object],  # mutable-ok: updates the caller's metadata buckets
+        key: str,
+        value: object | None,
+    ) -> None:
         """Write a proxy-internal metadata key for THIS routing attempt, or clear it.
 
         Fallbacks and retries re-enter the pre-routing hook with the same
