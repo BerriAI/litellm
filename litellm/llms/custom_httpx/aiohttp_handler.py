@@ -21,6 +21,7 @@ from litellm.llms.custom_httpx.http_handler import (
     get_httpx_client,
     get_ssl_configuration,
 )
+from litellm.llms.custom_httpx.sse_lines import iter_sse_lines
 from litellm.types.llms.openai import FileTypes
 from litellm.types.utils import HttpHandlerRequestFields, ImageResponse, LlmProviders
 from litellm.utils import CustomStreamWrapper, ModelResponse, ProviderConfigManager
@@ -466,7 +467,7 @@ class BaseLLMAIOHTTPHandler:
             )
         else:
             completion_stream = provider_config.get_model_response_iterator(
-                streaming_response=response.iter_lines(), sync_stream=True
+                streaming_response=iter_sse_lines(response.iter_text()), sync_stream=True
             )
 
         # LOGGING
@@ -560,11 +561,8 @@ class BaseLLMAIOHTTPHandler:
         organization: str | None = None,
         headers: dict | None = None,
     ) -> ImageResponse:
-        if model is None:
-            raise ValueError("model is required for non-openai image variations")
-
         provider_config: Final = ProviderConfigManager.get_provider_image_variation_config(
-            model=model,  # openai defaults to dall-e-2
+            model=model or "",
             provider=LlmProviders(custom_llm_provider),
         )
 

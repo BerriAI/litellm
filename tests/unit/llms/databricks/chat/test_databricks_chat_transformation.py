@@ -1,6 +1,6 @@
 import copy
 import json
-from collections.abc import Iterator
+from collections.abc import AsyncIterator, Iterator
 from typing import Final
 from unittest.mock import MagicMock, patch
 
@@ -2160,13 +2160,13 @@ def mock_chat_response_nonanthropic_prompt_caching() -> Dict[str, Any]:
 def mock_http_handler_chat_streaming_response() -> MagicMock:
     mock_stream_chunks = mock_chat_streaming_response_chunks()
 
-    def mock_iter_lines():
+    def mock_iter_text() -> Iterator[str]:
         for chunk in mock_stream_chunks:
             for line in chunk.splitlines():
-                yield line
+                yield f"{line}\n"
 
     mock_response = MagicMock()
-    mock_response.iter_lines.side_effect = mock_iter_lines
+    mock_response.iter_text.side_effect = mock_iter_text
     mock_response.status_code = 200
 
     return mock_response
@@ -2175,13 +2175,13 @@ def mock_http_handler_chat_streaming_response() -> MagicMock:
 def mock_http_handler_chat_async_streaming_response() -> MagicMock:
     mock_stream_chunks = mock_chat_streaming_response_chunks()
 
-    async def mock_iter_lines():
+    async def mock_aiter_text() -> AsyncIterator[str]:
         for chunk in mock_stream_chunks:
             for line in chunk.splitlines():
-                yield line
+                yield f"{line}\n"
 
     mock_response = MagicMock()
-    mock_response.aiter_lines.return_value = mock_iter_lines()
+    mock_response.aiter_text.return_value = mock_aiter_text()
     mock_response.status_code = 200
 
     return mock_response
@@ -2465,6 +2465,41 @@ def test_databricks_claude_drops_the_openai_tool_search_tool_under_drop_params(m
     ]
 
 
+@pytest.mark.parametrize("drop_params", [True, False])
+def test_databricks_chat_drops_beta_gated_thinking_fields_only_under_drop_params(
+    drop_params: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    thinking: Final = {
+        "type": "adaptive",
+        "block_binding": {"prefix_mismatch_behavior": "error"},
+        "display": "updates",
+    }
+    mapped: Final = DatabricksConfig().map_openai_params(
+        non_default_params={"thinking": thinking},
+        optional_params={},
+        model="databricks-claude-opus-5-5",
+        drop_params=drop_params,
+    )
+    assert mapped["thinking"] == ({"type": "adaptive"} if drop_params else thinking)
+    assert thinking == {
+        "type": "adaptive",
+        "block_binding": {"prefix_mismatch_behavior": "error"},
+        "display": "updates",
+    }
+
+
+def test_databricks_chat_keeps_ungated_thinking_display_under_drop_params(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    mapped: Final = DatabricksConfig().map_openai_params(
+        non_default_params={"thinking": {"type": "adaptive", "display": "summarized"}},
+        optional_params={},
+        model="databricks-claude-opus-5-5",
+        drop_params=True,
+    )
+    assert mapped["thinking"] == {"type": "adaptive", "display": "summarized"}
+
+
 _JSON_TOOL_ARGUMENT_FRAGMENTS: Final = ("", "", '{"name": ', '"Ada"', ', "met', 'a": ', "{}", ', "tags": []}')
 _RECORD_RESPONSE_FORMAT: Final = {
     "type": "json_schema",
@@ -2738,3 +2773,66 @@ def test_claude_json_schema_stream_split_across_json_tools_keeps_the_non_stream_
     choices: Final = _json_schema_stream_choices(respx_mock, call, split_stream)
 
     assert [choice.finish_reason for choice in choices if choice.finish_reason] == [answer.finish_reason]
+
+
+@pytest.mark.parametrize(
+    ("model", "base_model"),
+    [("databricks-claude-haiku-5-5", None), ("support-bot-endpoint", "databricks/databricks-claude-haiku-5-5")],
+    ids=["claude_in_the_endpoint_name", "claude_named_only_by_base_model"],
+)
+def test_databricks_claude_request_over_the_cache_control_cap_keeps_the_newest_four_hints_under_drop_params(
+    model: str, base_model: str | None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    hint: Final = {"type": "ephemeral"}
+    messages: Final = [
+        {"role": "system", "content": "system prompt", "cache_control": hint},
+        {"role": "user", "content": "turn 1", "cache_control": hint},
+        {"role": "assistant", "content": "answer 1", "cache_control": hint},
+        {"role": "user", "content": "turn 2", "cache_control": hint},
+        {"role": "assistant", "content": "answer 2"},
+        {"role": "user", "content": "turn 3", "cache_control": hint},
+    ]
+    messages_before: Final = copy.deepcopy(messages)
+
+    body: Final = DatabricksConfig().transform_request(
+        model=model,
+        messages=messages,
+        optional_params={},
+        litellm_params={"drop_params": True, "custom_llm_provider": "databricks", "base_model": base_model},
+        headers={},
+    )
+
+    assert "cache_control" not in json.dumps(body["messages"][0])
+    assert json.dumps(body["messages"]).count('"cache_control"') == 4
+    assert messages == messages_before
+
+
+@pytest.mark.parametrize(
+    "optional_params",
+    [{"cache_control": {"type": "ephemeral"}}, {"extra_body": {"cache_control": {"type": "ephemeral"}}}],
+    ids=["top_level_cache_control", "extra_body_cache_control"],
+)
+def test_databricks_claude_cache_control_cap_keeps_room_for_a_top_level_cache_control_under_drop_params(
+    optional_params: dict[str, object], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    hint: Final = {"type": "ephemeral"}
+    messages: Final = [
+        {"role": "user", "content": "turn 1", "cache_control": hint},
+        {"role": "assistant", "content": "answer 1", "cache_control": hint},
+        {"role": "user", "content": "turn 2", "cache_control": hint},
+        {"role": "assistant", "content": "answer 2", "cache_control": hint},
+        {"role": "user", "content": "turn 3"},
+    ]
+
+    body: Final = DatabricksConfig().transform_request(
+        model="databricks-claude-haiku-5-5",
+        messages=messages,
+        optional_params=copy.deepcopy(optional_params),
+        litellm_params={"drop_params": True, "custom_llm_provider": "databricks"},
+        headers={},
+    )
+
+    assert "cache_control" not in json.dumps(body["messages"][0])
+    assert json.dumps(body["messages"]).count('"cache_control"') == 3

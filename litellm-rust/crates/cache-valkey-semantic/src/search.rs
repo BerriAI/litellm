@@ -53,9 +53,7 @@ pub(crate) fn write_document(
             .arg(ttl.as_secs())
             .ignore();
     }
-    pipeline
-        .query::<()>(connection)
-        .map_err(|_| Error::Unavailable)
+    pipeline.query::<()>(connection).map_err(Error::unavailable)
 }
 
 /// The KNN-1 search within `scope`: the closest document's similarity, and its stored response
@@ -83,7 +81,7 @@ pub(crate) fn search_document(
         .arg("DIALECT")
         .arg(2)
         .query::<redis::Value>(connection)
-        .map_err(|_| Error::Unavailable)?;
+        .map_err(Error::unavailable)?;
     let Some(fields) = search_fields(response)? else {
         return Ok(SemanticLookup::miss(Some(0.0)));
     };
@@ -91,7 +89,7 @@ pub(crate) fn search_document(
         fields
             .iter()
             .find_map(|(field, value)| (field == name).then(|| value.clone()))
-            .ok_or(Error::InvalidEntry)
+            .ok_or(Error::InvalidEntry(None))
     };
     let response = field("response")?;
     let similarity = 1.0 - parse_f64(&field("vector_distance")?)?;
@@ -105,24 +103,24 @@ type SearchFields = Vec<(String, Vec<u8>)>;
 
 fn search_fields(value: redis::Value) -> Result<Option<SearchFields>, Error> {
     let redis::Value::Array(values) = value else {
-        return Err(Error::InvalidEntry);
+        return Err(Error::InvalidEntry(None));
     };
-    let total = parse_i64(values.first().ok_or(Error::InvalidEntry)?)?;
+    let total = parse_i64(values.first().ok_or(Error::InvalidEntry(None))?)?;
     if total <= 0 || values.len() < 3 {
         return Ok(None);
     }
     let redis::Value::Array(fields) = &values[2] else {
-        return Err(Error::InvalidEntry);
+        return Err(Error::InvalidEntry(None));
     };
     let (pairs, remainder) = fields.as_chunks::<2>();
     if !remainder.is_empty() {
-        return Err(Error::InvalidEntry);
+        return Err(Error::InvalidEntry(None));
     }
     pairs
         .iter()
         .map(|pair| {
             Ok((
-                value_text(&pair[0]).ok_or(Error::InvalidEntry)?,
+                value_text(&pair[0]).ok_or(Error::InvalidEntry(None))?,
                 value_bytes(&pair[1])?,
             ))
         })
@@ -132,16 +130,16 @@ fn search_fields(value: redis::Value) -> Result<Option<SearchFields>, Error> {
 
 fn parse_i64(value: &redis::Value) -> Result<i64, Error> {
     value_text(value)
-        .ok_or(Error::InvalidEntry)?
+        .ok_or(Error::InvalidEntry(None))?
         .parse()
-        .map_err(|_| Error::InvalidEntry)
+        .map_err(Error::invalid_entry)
 }
 
 fn parse_f64(value: &[u8]) -> Result<f64, Error> {
     std::str::from_utf8(value)
-        .map_err(|_| Error::InvalidEntry)?
+        .map_err(Error::invalid_entry)?
         .parse()
-        .map_err(|_| Error::InvalidEntry)
+        .map_err(Error::invalid_entry)
 }
 
 pub(crate) fn value_text(value: &redis::Value) -> Option<String> {
@@ -158,6 +156,6 @@ fn value_bytes(value: &redis::Value) -> Result<Vec<u8>, Error> {
         redis::Value::BulkString(bytes) => Ok(bytes.clone()),
         redis::Value::SimpleString(value) => Ok(value.as_bytes().to_vec()),
         redis::Value::Int(value) => Ok(value.to_string().into_bytes()),
-        _ => Err(Error::InvalidEntry),
+        _ => Err(Error::InvalidEntry(None)),
     }
 }

@@ -37,13 +37,15 @@ from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
     validate_langfuse_span_scope_value,
     validate_no_callback_env_reference,
 )
-from litellm.proxy._experimental.mcp_server.stdio_gate import MCP_STDIO_DISABLED_MESSAGE, is_mcp_stdio_enabled
+from litellm.proxy.mcp_server.stdio_gate import MCP_STDIO_DISABLED_MESSAGE, is_mcp_stdio_enabled
+from litellm.proxy.spend_tracking.usage_meter import UsageCaptureSettings
 from litellm.types.agents import (
     AgentCaller as AgentCaller,  # noqa: PLC0414  # public re-export
 )
 from litellm.types.agents import (
     AgentResponse as AgentResponse,  # noqa: PLC0414  # public re-export
 )
+from litellm.types.decisions import OpenAIDecisionResponse
 from litellm.types.integrations.compression_interception import (
     CompressionSavingsMetadata,
 )
@@ -124,6 +126,7 @@ from .types_utils.utils import get_instance_fn, validate_custom_validate_return_
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
 
+    from litellm.repositories.database import Database
     from litellm.tracing import TraceReceiver
 
     Span = _Span | Any
@@ -133,6 +136,7 @@ else:
 
 class ProxyLifespanState(TypedDict):
     tracing_receiver: ReadOnly["TraceReceiver | None"]
+    database: ReadOnly["Database | None"]
 
 
 class ReconcileOutcome(NamedTuple):
@@ -218,6 +222,8 @@ from litellm.types.proxy.auth.user_api_key_auth import (  # noqa: E402  # re-exp
 from litellm.types.proxy.auth.user_roles import (  # noqa: E402  # re-export after the definitions above
     KeyManagementRoutes as KeyManagementRoutes,  # noqa: PLC0414  # public re-export
 )
+
+MODEL_LIST_ROUTES: Final = ("/models", "/v1/models", "/claude_code_gateway/v1/models")
 
 
 class LiteLLMRoutes(enum.Enum):
@@ -307,8 +313,7 @@ class LiteLLMRoutes(enum.Enum):
         "/threads/{thread_id}/runs",
         "/v1/threads/{thread_id}/runs",
         # models
-        "/models",
-        "/v1/models",
+        *MODEL_LIST_ROUTES,
         # token counter
         "/utils/token_counter",
         "/utils/model_info",
@@ -390,6 +395,7 @@ class LiteLLMRoutes(enum.Enum):
     ]
 
     mapped_pass_through_routes = [
+        "/backend-api/codex",
         "/bedrock",
         "/comprehendmedical",
         "/azure_speech",
@@ -577,8 +583,7 @@ class LiteLLMRoutes(enum.Enum):
         "/health/services",
         "/key/list",
         "/user/filter/ui",
-        "/models",
-        "/v1/models",
+        *MODEL_LIST_ROUTES,
         "/sso/get/ui_settings",
         "/get/user_banner",
         "/get/latest_release_info",
@@ -666,6 +671,10 @@ class LiteLLMRoutes(enum.Enum):
             "/team/spend/by_user",
             # gateway request counts (SGR); deployment-wide, admin-only
             "/gateway/daily/activity",
+            "/subscription_accounts/usage",
+            "/subscription_accounts/new",
+            "/subscription_accounts/update",
+            "/subscription_accounts/delete",
             # model
             "/model/new",
             "/model/update",
@@ -760,8 +769,7 @@ class LiteLLMRoutes(enum.Enum):
         "/model/info",
         "/v2/model/info",
         "/v2/key/info",
-        "/models",
-        "/v1/models",
+        *MODEL_LIST_ROUTES,
         "/global/spend",
         "/global/spend/logs",
         "/global/spend/keys",
@@ -1767,8 +1775,10 @@ class BudgetNewRequest(LiteLLMPydanticObjectBase):
     max_parallel_requests: int | None = Field(
         default=None, description="Max concurrent requests allowed for this budget id."
     )
-    tpm_limit: int | None = Field(default=None, description="Max tokens per minute, allowed for this budget id.")
-    rpm_limit: int | None = Field(default=None, description="Max requests per minute, allowed for this budget id.")
+    tpm_limit: int | None = Field(default=None, ge=0, description="Max tokens per minute, allowed for this budget id.")
+    rpm_limit: int | None = Field(
+        default=None, ge=0, description="Max requests per minute, allowed for this budget id."
+    )
     tpd_limit: int | None = Field(
         default=None, description="Max tokens per day, charged by batch submissions, allowed for this budget id."
     )
@@ -1879,6 +1889,8 @@ RouterSettingsDict = Annotated[
 
 
 class NewTeamRequest(TeamBase):
+    tpm_limit: int | None = Field(default=None, ge=0)
+    rpm_limit: int | None = Field(default=None, ge=0)
     router_settings: RouterSettingsDict | None = None
     model_aliases: dict | None = None
     model_max_budget: GenericBudgetConfigType | None = Field(
@@ -1958,8 +1970,8 @@ class UpdateTeamRequest(LiteLLMPydanticObjectBase):
     team_alias: str | None = None
     organization_id: str | None = None
     metadata: dict | None = None
-    tpm_limit: int | None = None
-    rpm_limit: int | None = None
+    tpm_limit: int | None = Field(default=None, ge=0)
+    rpm_limit: int | None = Field(default=None, ge=0)
     tpd_limit: int | None = None
     max_budget: float | None = None
     soft_budget: float | None = None
@@ -2460,6 +2472,22 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     Documents all the fields supported by `general_settings` in config.yaml
     """
 
+    accounting_capture: UsageCaptureSettings | None = Field(
+        None,
+        description="Opt-in durable usage capture. Legacy spend updates remain active. Requires local Prisma writes.",
+    )
+    accounting_sync_ack: bool = Field(
+        False,
+        description="Wait for usage commit on foreground non-stream chat, text, embedding and Responses requests. "
+        "Other requests remain supported with asynchronous usage capture.",
+    )
+    accounting_sync_ack_timeout_seconds: float = Field(
+        20.0, gt=0, description="Maximum response wait for usage commit, including the batch flush interval"
+    )
+    accounting_sync_ack_failure_policy: Literal["fail_closed", "log"] = Field(
+        "fail_closed", description="Return 503 or log the persistence failure after the response wait expires"
+    )
+
     request_tag_mappings: Sequence[RequestTagMapping] | None = Field(
         None,
         description="Map W3C baggage values to request tags. Exact value/tag rules take precedence over tag_prefix fallbacks.",
@@ -2717,6 +2745,13 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
             "hidden model can still be called."
         ),
     )
+    return_wildcard_routes: bool | None = Field(
+        None,
+        description=(
+            "When true, `/v1/models` lists wildcard routes like `openai/*` unless the request passes "
+            "`return_wildcard_routes=false`."
+        ),
+    )
     alerting: list | None = Field(
         None,
         description="List of alerting integrations - e.g. `alerting: ['slack', 'webhook', 'email']`. 'slack' posts Slack-format messages to any Slack-compatible webhook (Slack, Rocket.Chat, Mattermost); 'webhook' posts structured JSON budget alerts to WEBHOOK_URL",
@@ -2821,6 +2856,10 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     store_prompts_in_spend_logs: bool | None = Field(
         None,
         description="If True, stores request messages and responses in spend logs. Default is False.",
+    )
+    claude_code_marketplace_auth_required: bool = Field(
+        False,
+        description="If True, GET /claude-code/marketplace.json requires a LiteLLM key in the Authorization or x-litellm-api-key header (?key= is not accepted) and answers 401 with WWW-Authenticate: Bearer without one, and GET /public/skill_hub returns an empty list. Default is False, which serves the enabled plugins to anyone.",
     )
     disable_requester_ip_address_logging: bool | None = Field(
         None,
@@ -3162,11 +3201,18 @@ from litellm.types.proxy.auth.user_api_key_auth import (
 )
 
 
+class AdminMCPPermissions(LiteLLMPydanticObjectBase):
+    model_config = ConfigDict(frozen=True)
+    tools: tuple[str, ...]
+    action_allowed: bool | None = None
+
+
 class UserInfoResponse(LiteLLMPydanticObjectBase):
     user_id: str | None
     user_info: dict | BaseModel | None
     keys: list
     teams: list
+    admin_mcp_permissions: AdminMCPPermissions | None = None
 
 
 class UserInfoV2Response(LiteLLMPydanticObjectBase):
@@ -3266,7 +3312,7 @@ class LiteLLM_OrganizationTableWithMembers(LiteLLM_OrganizationTable):
 
     members: list[LiteLLM_OrganizationMembershipTable] = []
     teams: list[LiteLLM_TeamTable] = []
-    litellm_budget_table: LiteLLM_BudgetTable | None = None
+    litellm_budget_table: LiteLLM_BudgetTableFull | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -3450,12 +3496,12 @@ class LiteLLM_SpendLogs_ResponseObject(LiteLLMPydanticObjectBase):
 class TokenCountRequest(LiteLLMPydanticObjectBase):
     model: str
     prompt: str | None = None
-    messages: list[dict] | None = None
+    messages: list[dict[Any, Any]] | None = None
     """
     Anthropic token counting endpoint uses /messages
     """
 
-    contents: list[dict] | None = None
+    contents: list[dict[Any, Any]] | None = None
     """
     Google /countTokens endpoint expects contents to be a list of dicts with the following structure:
     """
@@ -3732,7 +3778,9 @@ class SpendLogsMetadata(TypedDict):
     kubernetes_pod_routing: ReadOnly[StandardLoggingKubernetesPodRouting | None]
     internal_call_origin: InternalCallOrigin | None
     billed_retry_attempt: ReadOnly[NotRequired[bool | None]]
+    upstream_provider: ReadOnly[NotRequired[str | None]]
     litellm_roi_estimator: ReadOnly[NotRequired[bool | None]]
+    is_silent_experiment: ReadOnly[NotRequired[bool | None]]
     guardrail_information: list[StandardLoggingGuardrailInformation] | None
     eval_information: Any | None
     status: StandardLoggingPayloadStatus
@@ -3805,6 +3853,16 @@ class ManagementEndpointLoggingPayload(LiteLLMPydanticObjectBase):
     end_time: datetime | None = None
 
 
+def proxy_exception_status_code(message: str, code: str) -> str:
+    # Litellm router.py returns "No healthy deployment available" when there are no deployments available
+    # Should map to 429 errors https://github.com/BerriAI/litellm/issues/2487
+    if "No healthy deployment available" in message or "No deployments available" in message:
+        return "429"
+    if RouterErrors.no_deployments_with_tag_routing.value in message:
+        return "401"
+    return code
+
+
 class ProxyException(Exception):
     # NOTE: DO NOT MODIFY THIS
     # This is used to map exactly to OPENAI Exceptions
@@ -3833,13 +3891,7 @@ class ProxyException(Exception):
                     headers[k] = str(v)
         self.headers = headers or {}
         self.provider_specific_fields = provider_specific_fields
-        # rules for proxyExceptions
-        # Litellm router.py returns "No healthy deployment available" when there are no deployments available
-        # Should map to 429 errors https://github.com/BerriAI/litellm/issues/2487
-        if "No healthy deployment available" in self.message or "No deployments available" in self.message:
-            self.code = "429"
-        elif RouterErrors.no_deployments_with_tag_routing.value in self.message:
-            self.code = "401"
+        self.code = proxy_exception_status_code(self.message, self.code)
 
     def to_dict(self) -> dict:
         """Converts the ProxyException instance to a dictionary."""
@@ -4550,6 +4602,7 @@ PassThroughEndpointLoggingResultValues = (
     | StandardPassThroughResponseObject
     | ResponsesAPIResponse
     | TranscriptionResponse
+    | OpenAIDecisionResponse
 )
 
 
@@ -5255,6 +5308,7 @@ class ToolDiscoveryQueueItem(TypedDict, total=False):
     team_id: str | None  # team that triggered discovery
     key_alias: str | None  # human-readable key alias
     user_agent: str | None  # HTTP User-Agent of the caller
+    call_count: ReadOnly[int]  # invocations folded into this row since the previous flush
 
 
 from litellm.models.managed_files import (  # noqa: E402

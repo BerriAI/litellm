@@ -5,7 +5,7 @@ from typing import Final, TypeAlias, cast  # noqa: TID251  # native binding sele
 
 from litellm.exceptions import BadRequestError
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
-from litellm.llms.anthropic.pass_through.messages import handler as main
+from litellm.llms.anthropic.messages.native import handler as main
 from litellm.rust_bridge import detectors
 from litellm.rust_bridge.catalog import Feature, Route, RouteContext, Target
 from litellm.rust_bridge.dispatch import PublicDispatch
@@ -103,6 +103,7 @@ def _target(request: NativeCall, model: str, provider: str | None) -> Target:
 _FEATURES: Final[detectors.Detectors] = MappingProxyType(
     {
         **detectors.COMMON,
+        Feature.PROVIDER_AFFINITY: route_detectors.provider_affinity,
         Feature.SAFEGUARDS_CLASSIFIER: route_detectors.safeguards_classifier,
         Feature.RESPONSE_CACHE: detectors.response_cache,
         Feature.MODIFY_PARAMS: detectors.modify_params,
@@ -110,6 +111,7 @@ _FEATURES: Final[detectors.Detectors] = MappingProxyType(
         Feature.CACHE_CONTROL_INJECTION: detectors.cache_control_injection,
         Feature.STREAM_COST_INJECTION: route_detectors.stream_cost_injection,
         Feature.THINKING_SIGNATURE_RETRY: route_detectors.thinking_signature_retry,
+        Feature.TOOL_CUSTOM_FIELD: route_detectors.tool_custom_field,
     }
 )
 
@@ -119,6 +121,7 @@ _ASYNC_FEATURES: Final[detectors.Detectors] = MappingProxyType(
         Feature.PRE_REQUEST_HOOK: route_detectors.pre_request_hook,
         Feature.WEBSEARCH_INTERCEPTION: route_detectors.websearch_interception,
         Feature.MESSAGES_INTERCEPTOR: route_detectors.intercepted,
+        Feature.STRICT_TOOLS_RETRY: route_detectors.strict_tools_retry,
     }
 )
 

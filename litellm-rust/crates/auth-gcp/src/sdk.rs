@@ -55,7 +55,7 @@ impl CredentialsProvider for GoogleCredentials {
                 entity_tag: EntityTag::new(),
                 data,
             })
-            .map_err(|_| CredentialsError::from_msg(false, "Google authentication failed"))
+            .map_err(|error| CredentialsError::from_source(false, error))
     }
 
     async fn universe_domain(&self) -> Option<String> {
@@ -102,5 +102,9 @@ mod tests {
         );
         let error = credentials.headers(Extensions::new()).await.unwrap_err();
         assert!(!format!("{error:?}").contains("private"));
+        assert_eq!(
+            std::error::Error::source(&error).and_then(|cause| cause.downcast_ref::<Error>()),
+            Some(&Error::InvalidHeader)
+        );
     }
 }

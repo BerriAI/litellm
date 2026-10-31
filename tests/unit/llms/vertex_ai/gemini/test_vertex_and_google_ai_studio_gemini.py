@@ -3,8 +3,9 @@ import json
 import logging
 import re
 import threading
-from collections.abc import Awaitable, Callable, Iterator, Mapping
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Mapping
 from copy import deepcopy
+from itertools import pairwise
 from typing import Final, List, Literal, cast, get_args
 from unittest.mock import MagicMock, Mock, patch
 
@@ -16,19 +17,25 @@ from pydantic import BaseModel
 import litellm
 from litellm import ModelResponse, completion, embedding, image_generation
 from litellm._logging import verbose_logger
+from litellm.cost_calculator import batch_cost_calculator
 from litellm.litellm_core_utils.exception_mapping_utils import exception_type
 from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
-from litellm.llms.anthropic.pass_through.messages import handler as anthropic_messages_handler
+from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token, parse_prompt_tokens_details
+from litellm.llms.anthropic.messages.native import handler as anthropic_messages_handler
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.gemini.chat.transformation import GoogleAIStudioGeminiConfig
 from litellm.llms.vertex_ai.common_utils import GEMINI_MAX_ENUM_CHARACTERS, VertexAIError
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+    OPENAI_TO_GEMINI_TTS_VOICES,
     VertexGeminiConfig,
     _log_gemini_sampling_params_deprecated,
+    normalize_gemini_speech_config,
+    reject_unknown_gemini_tts_voice_keys,
 )
+from litellm.types.llms.base import CachedTokensDetails
 from litellm.types.llms.vertex_ai import GeminiFinishReason, RequestBody, UsageMetadata
-from litellm.types.utils import ChoiceLogprobs, Usage
+from litellm.types.utils import ChoiceLogprobs, ModelInfo, ModelResponseStream, Usage
 from litellm.utils import _invalidate_model_cost_lowercase_map, CustomStreamWrapper
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.integrations.custom_logger import CustomLogger
@@ -102,6 +109,242 @@ GEMINI_3_IMAGE_SIZE_MAPPINGS: Final[tuple[tuple[str, str, str], ...]] = (
     ("3168x1344", "21:9", "2K"),
     ("6336x2688", "21:9", "4K"),
 )
+
+
+@pytest.mark.parametrize(
+    "speech_config",
+    (
+        {"name": "aLlOy"},
+        {"speech_config": {"voice_name": "aLlOy"}},
+        {"voice_config": {"prebuilt_voice_config": {"voice_name": "aLlOy"}}},
+    ),
+)
+def test_gemini_structured_speech_config_maps_openai_voice_names(speech_config: Mapping[str, object]) -> None:
+    assert normalize_gemini_speech_config(speech_config) == {
+        "voiceConfig": {"prebuiltVoiceConfig": {"voiceName": OPENAI_TO_GEMINI_TTS_VOICES["alloy"]}}
+    }
+
+
+@pytest.mark.parametrize(
+    "speaker",
+    (
+        {"speakerAlias": "Ryan", "speakerId": "alloy"},
+        {"speaker_alias": "Ryan", "speaker_id": "alloy"},
+    ),
+)
+def test_gemini_speech_config_accepts_cloud_tts_speaker_entries(speaker: Mapping[str, object]) -> None:
+    speech_config: Final = {
+        "multi_speaker_voice_config": {
+            "speaker_voice_configs": [speaker, {"speaker": "Katie", "voice_config": {"voice_name": "Leda"}}]
+        }
+    }
+
+    assert normalize_gemini_speech_config(speech_config) == {
+        "multiSpeakerVoiceConfig": {
+            "speakerVoiceConfigs": [
+                {
+                    "speaker": "Ryan",
+                    "voiceConfig": {"prebuiltVoiceConfig": {"voiceName": OPENAI_TO_GEMINI_TTS_VOICES["alloy"]}},
+                },
+                {"speaker": "Katie", "voiceConfig": {"voiceName": "Leda"}},
+            ]
+        }
+    }
+
+
+@pytest.mark.parametrize(
+    ("voice", "expected"),
+    (
+        (
+            {
+                "languageCode": "en-US",
+                "modelName": "gemini-2.5-flash-tts",
+                "multiSpeakerVoiceConfig": {"speakerVoiceConfigs": [{"speakerAlias": "Ryan", "speakerId": "Umbriel"}]},
+            },
+            {
+                "languageCode": "en-US",
+                "multiSpeakerVoiceConfig": {
+                    "speakerVoiceConfigs": [
+                        {"speaker": "Ryan", "voiceConfig": {"prebuiltVoiceConfig": {"voiceName": "Umbriel"}}}
+                    ]
+                },
+            },
+        ),
+        (
+            {"model_name": "gemini-2.5-flash-tts", "voice_config": {"prebuilt_voice_config": {"voice_name": "Leda"}}},
+            {"voiceConfig": {"prebuiltVoiceConfig": {"voiceName": "Leda"}}},
+        ),
+        ({"speech_config": {"modelName": "gemini-2.5-flash-tts", "language_code": "fr-FR"}}, {"languageCode": "fr-FR"}),
+    ),
+)
+def test_gemini_speech_config_drops_cloud_tts_model_name(
+    voice: Mapping[str, object], expected: Mapping[str, object]
+) -> None:
+    assert normalize_gemini_speech_config(voice) == expected
+
+
+def test_gemini_speech_config_drops_non_string_keys_without_adding_voice():
+    speech_config: Final = {
+        "speech_config": {
+            "language_code": "fr-FR",
+            "voice_config": {"prebuilt_voice_config": {"voice_name": "Leda", 1: "discard"}},
+        },
+        "format": "pcm16",
+    }
+
+    assert normalize_gemini_speech_config(speech_config) == {
+        "languageCode": "fr-FR",
+        "voiceConfig": {"prebuiltVoiceConfig": {"voiceName": "Leda"}},
+    }
+
+
+def test_gemini_speech_config_keeps_only_speech_config_fields():
+    speech_config: Final = {
+        "voice": "Kore",
+        "metadata": {"source": "studio"},
+        "speech_config": {"language_code": "fr-FR", "style": "calm"},
+    }
+
+    assert normalize_gemini_speech_config(speech_config) == {
+        "languageCode": "fr-FR",
+        "voiceConfig": {"prebuiltVoiceConfig": {"voiceName": "Kore"}},
+    }
+
+
+@pytest.mark.parametrize(
+    "voice, unknown_keys",
+    [
+        ({"name": "Kore", "style": "calm"}, "style"),
+        ({"speech_config": {"voice": "Kore", "pitch": 2}}, "pitch"),
+        ({"speechConfig": {"voiceConfig": {}}, "tone": "x", "pitch": 2}, "pitch, tone"),
+        ({"speechConfig": {"voiceName": "Kore"}, "speech_config": {"style": "calm"}}, "speech_config"),
+    ],
+)
+def test_unknown_gemini_tts_voice_keys_are_rejected_without_drop_params(voice, unknown_keys):
+    with pytest.raises(litellm.UnsupportedParamsError, match=f"voice keys {unknown_keys}\\."):
+        reject_unknown_gemini_tts_voice_keys("gemini-3.1-flash-tts-preview", voice, False, "vertex_ai")
+
+    reject_unknown_gemini_tts_voice_keys("gemini-3.1-flash-tts-preview", voice, True, "vertex_ai")
+
+
+def test_chat_audio_speech_config_unknown_keys_are_rejected_unless_dropped():
+    audio: Final = {"format": "pcm16", "speech_config": {"voice_name": "Kore", "style": "calm"}}
+
+    with pytest.raises(litellm.UnsupportedParamsError, match="voice keys style\\."):
+        VertexGeminiConfig().map_openai_params(
+            non_default_params={"audio": audio},
+            optional_params={},
+            model="gemini-2.5-flash-preview-tts",
+            drop_params=False,
+        )
+
+    dropped: Final = VertexGeminiConfig().map_openai_params(
+        non_default_params={"audio": audio},
+        optional_params={},
+        model="gemini-2.5-flash-preview-tts",
+        drop_params=True,
+    )
+    assert dropped["speechConfig"] == {"voiceConfig": {"prebuiltVoiceConfig": {"voiceName": "Kore"}}}
+
+    voice_only: Final = VertexGeminiConfig().map_openai_params(
+        non_default_params={"audio": {"voice": "Kore", "format": "pcm16", "style": "calm"}},
+        optional_params={},
+        model="gemini-2.5-flash-preview-tts",
+        drop_params=False,
+    )
+    assert voice_only["speechConfig"] == {"voiceConfig": {"prebuiltVoiceConfig": {"voiceName": "Kore"}}}
+
+
+def test_chat_audio_speech_config_unknown_keys_follow_global_drop_params(monkeypatch):
+    monkeypatch.setattr(litellm, "drop_params", True)
+
+    dropped: Final = VertexGeminiConfig().map_openai_params(
+        non_default_params={"audio": {"format": "pcm16", "speech_config": {"voice_name": "Kore", "style": "calm"}}},
+        optional_params={},
+        model="gemini-2.5-flash-preview-tts",
+        drop_params=False,
+    )
+
+    assert dropped["speechConfig"] == {"voiceConfig": {"prebuiltVoiceConfig": {"voiceName": "Kore"}}}
+
+
+def _chat_speech_config(speech_config: Mapping[str, object], drop_params: bool) -> object:
+    return VertexGeminiConfig().map_openai_params(
+        non_default_params={"audio": {"format": "pcm16", "speech_config": speech_config}},
+        optional_params={},
+        model="gemini-2.5-flash-preview-tts",
+        drop_params=drop_params,
+    )["speechConfig"]
+
+
+def test_chat_audio_drop_params_strips_unknown_fields_inside_speaker_voices():
+    speech_config: Final = {
+        "multi_speaker_voice_config": {
+            "speaker_voice_configs": [
+                {"speaker": "Joe", "voice_config": {"prebuilt_voice_config": {"voice_name": "Puck", "pitch": 2}}},
+                {"speaker_alias": "Jane", "speaker_id": "Kore", "style": "calm"},
+            ],
+            "turn_order": "alternate",
+        }
+    }
+
+    assert _chat_speech_config(speech_config, drop_params=True) == {
+        "multiSpeakerVoiceConfig": {
+            "speakerVoiceConfigs": [
+                {"speaker": "Joe", "voiceConfig": {"prebuiltVoiceConfig": {"voiceName": "Puck"}}},
+                {"speaker": "Jane", "voiceConfig": {"prebuiltVoiceConfig": {"voiceName": "Kore"}}},
+            ]
+        }
+    }
+
+
+GEMINI_VOICE_CONFIG: Final = {
+    "voice": "Kore",
+    "prebuiltVoiceConfig": {"voiceName": "Kore"},
+    "replicatedVoiceConfig": {"mimeType": "audio/wav", "voiceSampleAudio": "UklGRg=="},
+}
+
+
+@pytest.mark.parametrize(
+    "speech_config",
+    [
+        {"voiceConfig": GEMINI_VOICE_CONFIG, "languageCode": "fr-FR"},
+        {
+            "voice_config": {
+                "voice": "Kore",
+                "prebuilt_voice_config": {"voice_name": "Kore"},
+                "replicated_voice_config": {"mime_type": "audio/wav", "voice_sample_audio": "UklGRg=="},
+            },
+            "language_code": "fr-FR",
+        },
+    ],
+)
+def test_chat_audio_drop_params_keeps_every_voice_config_field_gemini_accepts(speech_config: dict[str, object]):
+    assert _chat_speech_config(speech_config, drop_params=True) == {
+        "voiceConfig": GEMINI_VOICE_CONFIG,
+        "languageCode": "fr-FR",
+    }
+
+
+def test_chat_audio_reads_snake_case_wrapper_beside_null_camel_case_wrapper():
+    mapped: Final = VertexGeminiConfig().map_openai_params(
+        non_default_params={"audio": {"format": "pcm16", "speechConfig": None, "speech_config": {"voice_name": "Kore"}}},
+        optional_params={},
+        model="gemini-2.5-flash-preview-tts",
+        drop_params=False,
+    )
+
+    assert mapped["speechConfig"] == {"voiceConfig": {"prebuiltVoiceConfig": {"voiceName": "Kore"}}}
+
+
+def test_unknown_voice_key_error_stays_bounded_for_large_voice_objects():
+    voice: Final = {"name": "Kore", **{f"{index:04d}{'x' * 1000}": index for index in range(2000)}}
+
+    with pytest.raises(litellm.UnsupportedParamsError) as excinfo:
+        reject_unknown_gemini_tts_voice_keys("gemini-3.1-flash-tts-preview", voice, False, "vertex_ai")
+
+    assert "and 1990 more" in excinfo.value.message
+    assert len(excinfo.value.message) < 1500
 
 
 def test_top_logprobs():
@@ -1276,6 +1519,7 @@ def test_vertex_ai_usage_metadata_accumulates_duplicate_modalities():
     v = VertexGeminiConfig()
     usage_metadata = {
         "promptTokenCount": 210,
+        "cachedContentTokenCount": 54,
         "candidatesTokenCount": 50,
         "totalTokenCount": 260,
         "promptTokensDetails": [
@@ -1297,14 +1541,127 @@ def test_vertex_ai_usage_metadata_accumulates_duplicate_modalities():
     usage_metadata = UsageMetadata(**usage_metadata)
     result = v.calculate_usage(completion_response={"usageMetadata": usage_metadata})
 
-    # prompt details are total - cached per modality
-    assert result.prompt_tokens_details.text_tokens == 16  # 20 - 4
-    assert result.prompt_tokens_details.image_tokens == 140  # (90 + 100) - (40 + 10)
+    assert result.prompt_tokens_details.text_tokens == 20
+    assert result.prompt_tokens_details.image_tokens == 190
+    assert result.prompt_tokens_details.cached_tokens == 54
+    assert result.prompt_tokens_details.cached_tokens_details == CachedTokensDetails(text_tokens=4, image_tokens=50)
 
     # candidates details accumulate duplicate modalities
     assert result.completion_tokens_details.text_tokens == 20  # 15 + 5
     assert result.completion_tokens_details.image_tokens == 30
     assert result.completion_tokens == 50
+
+
+def _gemini_usage_with_cached_audio(cached_audio_tokens: int) -> Usage:
+    cache_tokens_details: Final = (
+        (
+            {"modality": "TEXT", "tokenCount": 5},
+            {"modality": "AUDIO", "tokenCount": cached_audio_tokens},
+        )
+        if cached_audio_tokens > 0
+        else ({"modality": "TEXT", "tokenCount": 5},)
+    )
+    completion_response: Final = {
+        "usageMetadata": {
+            "promptTokenCount": 40,
+            "cachedContentTokenCount": 5 + cached_audio_tokens,
+            "promptTokensDetails": (
+                {"modality": "TEXT", "tokenCount": 20},
+                {"modality": "AUDIO", "tokenCount": 20},
+            ),
+            "cacheTokensDetails": cache_tokens_details,
+            "candidatesTokenCount": 7,
+            "totalTokenCount": 47,
+        }
+    }
+    return VertexGeminiConfig.calculate_usage(completion_response=completion_response)
+
+
+def test_gemini_raw_usage_metadata_prices_cached_audio_at_its_batch_rate() -> None:
+    model_info: Final[ModelInfo] = {
+        "input_cost_per_token": 2e-6,
+        "input_cost_per_token_batches": 1e-6,
+        "input_cost_per_audio_token": 6e-6,
+        "input_cost_per_audio_token_batches": 3e-6,
+        "cache_read_input_token_cost": 8e-7,
+        "cache_read_input_token_cost_batches": 4e-7,
+        "cache_read_input_audio_token_cost": 5e-7,
+        "cache_read_input_audio_token_cost_batches": 2e-7,
+    }
+    usage: Final = _gemini_usage_with_cached_audio(5)
+    expected_prompt_cost: Final = (
+        15 * model_info["input_cost_per_token_batches"]
+        + 15 * model_info["input_cost_per_audio_token_batches"]
+        + 5 * model_info["cache_read_input_token_cost_batches"]
+        + 5 * model_info["cache_read_input_audio_token_cost_batches"]
+    )
+
+    prompt_cost, _ = batch_cost_calculator(
+        usage=usage,
+        model="gemini-audio-batch-test-model",
+        custom_llm_provider="gemini",
+        model_info=model_info,
+    )
+
+    assert prompt_cost == pytest.approx(expected_prompt_cost)
+
+
+def test_gemini_raw_usage_metadata_prices_cached_audio_at_its_standard_rate() -> None:
+    model_info: Final[ModelInfo] = {
+        "input_cost_per_token": 2e-6,
+        "input_cost_per_audio_token": 6e-6,
+        "cache_read_input_token_cost": 8e-7,
+        "cache_read_input_audio_token_cost": 5e-7,
+    }
+    usage: Final = _gemini_usage_with_cached_audio(5)
+    expected_prompt_cost: Final = (
+        15 * model_info["input_cost_per_token"]
+        + 15 * model_info["input_cost_per_audio_token"]
+        + 5 * model_info["cache_read_input_token_cost"]
+        + 5 * model_info["cache_read_input_audio_token_cost"]
+    )
+
+    prompt_cost, _ = generic_cost_per_token(
+        model="gemini-audio-standard-test-model",
+        usage=usage,
+        custom_llm_provider="gemini",
+        model_info=model_info,
+    )
+
+    assert prompt_cost == pytest.approx(expected_prompt_cost)
+
+
+def test_gemini_usage_totals_are_subtracted_once_and_audio_cache_rate_matches_audio_rate() -> None:
+    model_info: Final[ModelInfo] = {
+        "input_cost_per_token": 2e-6,
+        "input_cost_per_audio_token": 6e-6,
+        "cache_read_input_token_cost": 8e-7,
+        "cache_read_input_audio_token_cost": 6e-6,
+    }
+    cached_usage: Final = _gemini_usage_with_cached_audio(5)
+    uncached_usage: Final = _gemini_usage_with_cached_audio(0)
+    cached_details: Final = parse_prompt_tokens_details(cached_usage)
+    cached_prompt_cost, _ = generic_cost_per_token(
+        model="gemini-audio-standard-test-model",
+        usage=cached_usage,
+        custom_llm_provider="gemini",
+        model_info=model_info,
+    )
+    uncached_prompt_cost, _ = generic_cost_per_token(
+        model="gemini-audio-standard-test-model",
+        usage=uncached_usage,
+        custom_llm_provider="gemini",
+        model_info=model_info,
+    )
+
+    assert cached_usage.prompt_tokens_details.text_tokens == 20
+    assert cached_usage.prompt_tokens_details.audio_tokens == 20
+    assert cached_usage.prompt_tokens_details.cached_tokens_details == CachedTokensDetails(
+        text_tokens=5, audio_tokens=5
+    )
+    assert cached_details["text_tokens"] == 15
+    assert cached_details["audio_tokens"] == 15
+    assert cached_prompt_cost == pytest.approx(uncached_prompt_cost)
 
 
 def test_vertex_ai_map_thinking_param_with_budget_tokens_0():
@@ -1334,6 +1691,78 @@ def test_vertex_ai_map_thinking_param_without_budget_tokens_for_gemini_3():
     )
 
     assert result["thinkingConfig"] == {"includeThoughts": True}
+
+
+def _budget_drop_warnings(caplog: pytest.LogCaptureFixture) -> tuple[str, ...]:
+    return tuple(
+        r.getMessage()
+        for r in caplog.records
+        if r.levelno == logging.WARNING and "thinking.budget_tokens" in r.getMessage()
+    )
+
+
+@pytest.mark.parametrize("budget", ("high", 1024.5, {"tokens": 1024}))
+def test_gemini_non_integer_thinking_budget_drop_warns_once(budget: object, caplog: pytest.LogCaptureFixture) -> None:
+    with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
+        result: Final = VertexGeminiConfig().map_openai_params(
+            non_default_params={"thinking": {"type": "enabled", "budget_tokens": budget}},
+            optional_params={},
+            model="gemini-2.5-flash",
+            drop_params=False,
+        )
+
+    warnings: Final = _budget_drop_warnings(caplog)
+    assert "thinkingBudget" not in result["thinkingConfig"]
+    assert len(warnings) == 1
+    assert f"thinking.budget_tokens={budget!r}" in warnings[0]
+    assert "gemini-2.5-flash" in warnings[0]
+
+
+def test_gemini_integer_thinking_budget_is_sent_without_warning(caplog: pytest.LogCaptureFixture) -> None:
+    with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
+        result: Final = VertexGeminiConfig().map_openai_params(
+            non_default_params={"thinking": {"type": "enabled", "budget_tokens": 2048}},
+            optional_params={},
+            model="gemini-2.5-flash",
+            drop_params=False,
+        )
+
+    assert result["thinkingConfig"]["thinkingBudget"] == 2048
+    assert _budget_drop_warnings(caplog) == ()
+
+
+def test_gemini_3_thinking_budget_drop_warns_once(caplog: pytest.LogCaptureFixture) -> None:
+    with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
+        result: Final = VertexGeminiConfig().map_openai_params(
+            non_default_params={"thinking": {"type": "enabled", "budget_tokens": 2048}},
+            optional_params={},
+            model="gemini-3-pro-preview",
+            drop_params=False,
+        )
+
+    warnings: Final = _budget_drop_warnings(caplog)
+    assert "thinkingBudget" not in result["thinkingConfig"]
+    assert len(warnings) == 1
+    assert "thinking.budget_tokens=2048" in warnings[0]
+    assert "gemini-3-pro-preview" in warnings[0]
+
+
+@pytest.mark.parametrize(
+    "thinking",
+    ({"type": "enabled"}, {"type": "enabled", "budget_tokens": 0}, {"type": "disabled", "budget_tokens": 2048}),
+)
+def test_gemini_3_thinking_without_a_dropped_budget_does_not_warn(
+    thinking: dict[str, object], caplog: pytest.LogCaptureFixture
+) -> None:
+    with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
+        VertexGeminiConfig().map_openai_params(
+            non_default_params={"thinking": thinking},
+            optional_params={},
+            model="gemini-3-pro-preview",
+            drop_params=False,
+        )
+
+    assert _budget_drop_warnings(caplog) == ()
 
 
 def test_vertex_ai_map_tools():
@@ -1894,7 +2323,9 @@ def test_gemini_tool_use(respx_mock: respx.MockRouter) -> None:
     assert [(call.function.name, json.loads(call.function.arguments)) for call in tool_calls] == [
         ("get_weather", {"location": "Lima, Peru"})
     ]
-    assert [chunk.choices[0].finish_reason for chunk in chunks if chunk.choices[0].finish_reason] == ["tool_calls"]
+    assert [chunk.choices[0].finish_reason for chunk in chunks if chunk.choices and chunk.choices[0].finish_reason] == [
+        "tool_calls"
+    ]
 
 
 @pytest.mark.respx(assert_all_called=True)
@@ -3037,6 +3468,14 @@ async def test_vertex_ai_streaming_bad_request_is_not_wrapped():
         async def dispatch_failure_handlers(self, *args, **kwargs):
             return None
 
+        async def dispatch_attempt_failure_handlers(
+            self, exception: Exception, traceback_exception: str
+        ) -> None:
+            return None
+
+        def attempt_scoped_copy(self) -> "DummyLogging":
+            return self
+
     async def failing_make_call(client=None, **kwargs):
         raise VertexAIError(status_code=400, message="bad input", headers={})
 
@@ -3146,6 +3585,39 @@ def test_vertex_ai_annotation_conversion():
     assert time_annotation["url_citation"]["end_index"] == 85
     assert "google.com" in time_annotation["url_citation"]["url"]
     assert "Current time" in time_annotation["url_citation"]["title"]
+
+
+@pytest.mark.parametrize(
+    "indices, expected_indices",
+    [([2, 0], [2, 0]), ([1, 99, -1, 2, 0], [2, 0]), ([0], [0]), ([], []), ([1, 99], [])],
+    ids=["multiple-sources", "non-web-first", "single-source", "empty", "no-web"],
+)
+def test_grounding_annotations_preserve_all_web_sources(indices: list[int], expected_indices: list[int]) -> None:
+    chunks: Final = [
+        {"web": {"uri": "https://example.com/first", "title": "First"}},
+        {"retrievedContext": {"uri": "gs://documents/source"}},
+        {"web": {"uri": "https://example.com/second", "title": "Second"}},
+    ]
+    metadata: Final = {
+        "groundingChunks": chunks,
+        "groundingSupports": [
+            {"segment": {"startIndex": 4, "endIndex": 11}, "groundingChunkIndices": indices}
+        ],
+    }
+    annotations: Final = VertexGeminiConfig._convert_grounding_metadata_to_annotations([metadata], "The passage")
+    expected: Final = [
+        {
+            "type": "url_citation",
+            "url_citation": {
+                "start_index": 4,
+                "end_index": 11,
+                "url": chunks[index]["web"]["uri"],
+                "title": chunks[index]["web"]["title"],
+            },
+        }
+        for index in expected_indices
+    ]
+    assert json.dumps(annotations) == json.dumps(expected)
 
 
 def test_vertex_ai_annotation_empty_grounding_metadata():
@@ -5901,7 +6373,7 @@ def test_vertex_ai_usage_metadata_with_document_tokens_in_prompt():
 
 
 def test_vertex_ai_usage_metadata_with_document_tokens_cached():
-    """Test that cached DOCUMENT tokens are correctly subtracted from prompt text tokens."""
+    """Test cached DOCUMENT token details and unchanged prompt cost."""
     v = VertexGeminiConfig()
 
     usage_metadata_dict = {
@@ -5925,10 +6397,24 @@ def test_vertex_ai_usage_metadata_with_document_tokens_cached():
     completion_response = {"usageMetadata": usage_metadata_dict}
     result = v.calculate_usage(completion_response=completion_response)
 
-    # DOCUMENT cached tokens map to cached_text_tokens, so:
-    # text_tokens = (8 TEXT + 774 DOCUMENT) - 400 cached = 382
-    assert result.prompt_tokens_details.text_tokens == 382, "text_tokens should be (8 + 774) - 400 cached = 382"
+    assert result.prompt_tokens_details.text_tokens == 782
     assert result.prompt_tokens_details.cached_tokens == 400
+    assert result.prompt_tokens_details.cached_tokens_details.text_tokens == 400
+
+    model_info: Final[ModelInfo] = {
+        "input_cost_per_token": 2e-6,
+        "cache_read_input_token_cost": 5e-7,
+    }
+    prompt_cost, _ = generic_cost_per_token(
+        model="gemini-document-cache-test-model",
+        usage=result,
+        custom_llm_provider="gemini",
+        model_info=model_info,
+    )
+
+    assert prompt_cost == pytest.approx(
+        382 * model_info["input_cost_per_token"] + 400 * model_info["cache_read_input_token_cost"]
+    )
 
 
 def test_async_streaming_uses_custom_client():
@@ -7164,7 +7650,7 @@ def test_gemini_candidate_with_finish_reason_no_content_chat_completion():
 
 
 def test_gemini_candidate_with_finish_reason_no_content_anthropic_messages():
-    from litellm.llms.anthropic.pass_through.adapters.transformation import (
+    from litellm.llms.anthropic.messages.adapters.transformation import (
         LiteLLMAnthropicMessagesAdapter,
     )
 
@@ -7237,7 +7723,7 @@ def test_gemini_candidate_with_finish_reason_no_content_responses_api():
 
 
 def test_gemini_candidate_other_finish_reasons_no_content():
-    from litellm.llms.anthropic.pass_through.adapters.transformation import (
+    from litellm.llms.anthropic.messages.adapters.transformation import (
         LiteLLMAnthropicMessagesAdapter,
     )
     from litellm.responses.litellm_completion_transformation.transformation import (
@@ -7909,11 +8395,12 @@ def test_gemini_image_generation_ignores_non_dict_image_config():
 def test_gemini_image_generation_openai_size_maps_to_google_table(
     size: str, expected_aspect_ratio: str, expected_image_size: str
 ):
+    """Flash table as of 2026-10-26, https://ai.google.dev/gemini-api/docs/image-generation#aspect_ratios_and_image_size."""
     from litellm.llms.gemini.common_utils import (
         map_openai_size_to_gemini_image_config,
     )
 
-    assert map_openai_size_to_gemini_image_config(size, "gemini-3-pro-image-preview") == {
+    assert map_openai_size_to_gemini_image_config(size, "gemini-3.1-flash-image") == {
         "aspectRatio": expected_aspect_ratio,
         "imageSize": expected_image_size,
     }
@@ -7937,7 +8424,7 @@ def test_gemini_image_generation_openai_size_snaps_to_nearest_option(
         map_openai_size_to_gemini_image_config,
     )
 
-    assert map_openai_size_to_gemini_image_config(size, "gemini-3-pro-image-preview") == {
+    assert map_openai_size_to_gemini_image_config(size, "gemini-3.1-flash-image") == {
         "aspectRatio": expected_aspect_ratio,
         "imageSize": expected_image_size,
     }
@@ -9711,7 +10198,7 @@ def test_vertex_ai_streaming_response_id():
 
         mock_response = MagicMock()
         mock_response.status_code = 200
-        mock_response.iter_lines = MagicMock(return_value=stream_response())
+        mock_response.iter_text = MagicMock(return_value=stream_response())
         return mock_response
 
     logging_obj = MagicMock()
@@ -10274,3 +10761,91 @@ async def test_gemini_sends_a_boolean_for_a_gateway_default_written_as_text_or_n
     sent: Final = await _sent_thinking_config("gemini-3.8-flash", {"reasoning_effort": "high"})
 
     assert sent["includeThoughts"] is expected
+
+
+class _BodyInChunks(httpx.SyncByteStream, httpx.AsyncByteStream):
+    def __init__(self, chunks: tuple[bytes, ...]) -> None:
+        self._chunks: Final = chunks
+
+    def __iter__(self) -> Iterator[bytes]:
+        yield from self._chunks
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        for chunk in self._chunks:
+            yield chunk
+
+
+def _split_at(body: bytes, cuts: tuple[int, ...]) -> tuple[bytes, ...]:
+    return tuple(body[start:end] for start, end in pairwise((0, *sorted(cuts), len(body))))
+
+
+async def _gemini_stream(is_async: bool, chunks: tuple[bytes, ...]) -> list[ModelResponseStream]:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, stream=_BodyInChunks(chunks), headers={"content-type": "text/event-stream"})
+
+    kwargs: Final = {
+        "model": "gemini/gemini-3.8-flash",
+        "messages": [{"role": "user", "content": "hi"}],
+        "stream": True,
+        "stream_options": {"include_usage": True},
+        "api_key": "fake-gemini-key",
+    }
+    if is_async:
+        stream: Final = await litellm.acompletion(
+            **kwargs, client=AsyncHTTPHandler(transport=httpx.MockTransport(handler))
+        )
+        return [chunk async for chunk in stream]
+    return list(
+        litellm.completion(**kwargs, client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(handler))))
+    )
+
+
+@pytest.mark.parametrize("is_async", [True, False])
+async def test_gemini_stream_keeps_text_and_usage_when_a_part_contains_a_unicode_line_separator(is_async: bool) -> None:
+    events: Final = (
+        {"candidates": [{"content": {"role": "model", "parts": [{"text": "line one\u2028line two"}]}}]},
+        {
+            "candidates": [{"content": {"role": "model", "parts": [{"text": " and three"}]}, "finishReason": "STOP"}],
+            "usageMetadata": {"promptTokenCount": 10, "candidatesTokenCount": 8, "totalTokenCount": 18},
+        },
+    )
+    body: Final = "".join(f"data: {json.dumps(event, ensure_ascii=False)}\r\n\r\n" for event in events).encode()
+    cut_inside_separator_and_crlf: Final = (body.index(b"\xe2\x80\xa8") + 1, body.index(b"\r") + 1)
+
+    received: Final = await _gemini_stream(is_async, _split_at(body, cut_inside_separator_and_crlf))
+
+    usage: Final = next(chunk.usage for chunk in reversed(received) if getattr(chunk, "usage", None))
+    text: Final = "".join(c.choices[0].delta.content or "" for c in received if c.choices)
+    assert text == "line one\u2028line two and three"
+    assert (usage.prompt_tokens, usage.completion_tokens) == (10, 8)
+
+
+@pytest.mark.parametrize("chunk_indices", [[0, 1], [2, 1, 0]])
+def test_grounding_support_preserves_every_web_source(chunk_indices: list[int]) -> None:
+    metadata: Final = {
+        "groundingChunks": [
+            {"web": {"uri": "https://example.com/a", "title": "A"}},
+            {"web": {"uri": "https://example.com/b", "title": "B"}},
+            {"retrievedContext": {"uri": "gs://document"}},
+        ],
+        "groundingSupports": [
+            {"segment": {"startIndex": 0, "endIndex": 5}, "groundingChunkIndices": chunk_indices},
+            {"segment": {"startIndex": 6, "endIndex": 11}, "groundingChunkIndices": [1]},
+        ],
+    }
+
+    annotations: Final = VertexGeminiConfig._convert_grounding_metadata_to_annotations([metadata], "First claim")
+
+    expected_sources: Final = [(index, 0, 5) for index in chunk_indices if index in (0, 1)] + [(1, 6, 11)]
+    assert annotations == [
+        {
+            "type": "url_citation",
+            "url_citation": {
+                "start_index": start,
+                "end_index": end,
+                "url": metadata["groundingChunks"][index]["web"]["uri"],
+                "title": metadata["groundingChunks"][index]["web"]["title"],
+            },
+        }
+        for index, start, end in expected_sources
+    ]

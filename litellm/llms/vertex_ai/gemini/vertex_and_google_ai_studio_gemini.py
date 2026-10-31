@@ -12,7 +12,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Protocol, Union, cast, get_args
 
 import httpx
-from pydantic import JsonValue
+from pydantic import JsonValue, TypeAdapter
 
 import litellm
 from litellm import verbose_logger
@@ -28,12 +28,12 @@ from litellm.constants import (
     DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET_GEMINI_2_5_PRO,
 )
 from litellm.exceptions import UnsupportedParamsError
-from litellm.litellm_core_utils.core_helpers import normalize_drop_params
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, drops_unsupported_params, normalize_drop_params
 from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 from litellm.litellm_core_utils.json_fragment_accumulator import JSONFragmentAccumulator
-from litellm.litellm_core_utils.prompt_templates.factory import (
-    encode_tool_call_id_with_signature,
-)
+from litellm.litellm_core_utils.model_param_helper import embeds_thought_signature_in_tool_call_id
+from litellm.litellm_core_utils.prompt_templates.factory import encode_tool_call_id_with_signature
+from litellm.litellm_core_utils.reasoning_effort_utils import warn_dropped_reasoning
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
@@ -41,7 +41,9 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     get_httpx_client,
 )
+from litellm.llms.custom_httpx.sse_lines import aiter_sse_lines, iter_sse_lines
 from litellm.types.llms.anthropic import AnthropicThinkingParam
+from litellm.types.llms.base import CachedTokensDetails
 from litellm.types.llms.gemini import BidiGenerateContentServerMessage
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -199,6 +201,13 @@ def _unsupported_reasoning_effort(reasoning_effort: str) -> UnsupportedParamsErr
 
 
 _SAMPLING_DEPRECATION_UNMAPPED_MODELS: Final = "models outside litellm's model map"
+_NON_INTEGER_BUDGET_REASON: Final = (
+    "Gemini takes budget_tokens only as an integer, so it uses its default thinking budget."
+)
+_LEVEL_ONLY_BUDGET_REASON: Final = (
+    "Gemini 3 and later set reasoning by thinking level, not budget, so litellm does not send the budget. "
+    "Send reasoning_effort to pick a level."
+)
 _sampling_deprecation_lock: Final = threading.Lock()
 
 
@@ -230,6 +239,274 @@ def _served_model_name(model_version: object) -> str | None:
     if not isinstance(model_version, str) or not model_version:
         return None
     return model_version.split("@", 1)[0]
+
+
+_GEMINI_SPEECH_CONFIG_KEY_MAP: Final[Mapping[str, str]] = MappingProxyType(
+    {
+        "multi_speaker_voice_config": "multiSpeakerVoiceConfig",
+        "speaker_voice_configs": "speakerVoiceConfigs",
+        "voice_config": "voiceConfig",
+        "prebuilt_voice_config": "prebuiltVoiceConfig",
+        "voice_name": "voiceName",
+        "replicated_voice_config": "replicatedVoiceConfig",
+        "mime_type": "mimeType",
+        "voice_sample_audio": "voiceSampleAudio",
+        "language_code": "languageCode",
+        "speaker_alias": "speakerAlias",
+        "speaker_id": "speakerId",
+    }
+)
+
+
+_SPEECH_CONFIG_ITEMS: Final = TypeAdapter(list[object])
+
+
+def _normalize_gemini_speech_config_item(value: Mapping[str, object]) -> Mapping[str, object]:
+    normalized: Final[dict[str, object]] = {}  # mutable-ok: iterative traversal fills nested output without recursion
+
+    pending: Final[  # mutable-ok: the explicit worklist must grow while avoiding recursive traversal
+        list[tuple[dict[str, object] | list[object], Mapping[str, object] | list[object]]]
+    ] = [(normalized, value)]
+    while pending:
+        target, source = pending.pop()
+        items = source.items() if isinstance(source, Mapping) else enumerate(source)
+        for key, item in items:
+            if isinstance(source, Mapping):
+                if not isinstance(key, str):
+                    continue
+                normalized_key: str | int = _GEMINI_SPEECH_CONFIG_KEY_MAP.get(key, key)
+            else:
+                normalized_key = len(target)
+
+            child: object
+            if (mapping_item := as_str_mapping(item)) is not None:
+                pending.append((child_mapping := dict[str, object](), mapping_item))
+                child = child_mapping
+            elif isinstance(item, list):
+                pending.append((child_items := list[object](), _SPEECH_CONFIG_ITEMS.validate_python(item)))
+                child = child_items
+            else:
+                child = (
+                    OPENAI_TO_GEMINI_TTS_VOICES.get(item.lower(), item)
+                    if normalized_key == "voiceName" and isinstance(item, str)
+                    else item
+                )
+
+            if isinstance(target, dict):
+                assert isinstance(normalized_key, str)
+                target[normalized_key] = child
+            else:
+                target.append(child)
+
+    return normalized
+
+
+def _gemini_speaker_voice_config(item: object) -> object:
+    speaker_config: Final = as_str_mapping(item)
+    if speaker_config is None:
+        return item
+    speaker: Final = speaker_config.get("speakerAlias")
+    voice_name: Final = speaker_config.get("speakerId")
+    if not isinstance(speaker, str) or not isinstance(voice_name, str):
+        return item
+    return {
+        **{key: value for key, value in speaker_config.items() if key not in ("speakerAlias", "speakerId")},
+        "speaker": speaker,
+        "voiceConfig": {
+            "prebuiltVoiceConfig": {"voiceName": OPENAI_TO_GEMINI_TTS_VOICES.get(voice_name.lower(), voice_name)}
+        },
+    }
+
+
+def _with_gemini_speaker_voice_configs(config: Mapping[str, object]) -> Mapping[str, object]:
+    multi_speaker_config: Final = as_str_mapping(config.get("multiSpeakerVoiceConfig"))
+    if multi_speaker_config is None:
+        return config
+    speaker_voice_configs: Final = multi_speaker_config.get("speakerVoiceConfigs")
+    if not isinstance(speaker_voice_configs, list):
+        return config
+    return {
+        **config,
+        "multiSpeakerVoiceConfig": {
+            **multi_speaker_config,
+            "speakerVoiceConfigs": [
+                _gemini_speaker_voice_config(item)
+                for item in _SPEECH_CONFIG_ITEMS.validate_python(speaker_voice_configs)
+            ],
+        },
+    }
+
+
+_GEMINI_SPEECH_CONFIG_FIELDS: Final = frozenset({"voiceConfig", "multiSpeakerVoiceConfig", "languageCode"})
+
+_GEMINI_VOICE_CONFIG_FIELDS: Final = MappingProxyType(
+    {
+        "prebuiltVoiceConfig": frozenset({"voiceName"}),
+        "replicatedVoiceConfig": frozenset({"mimeType", "voiceSampleAudio"}),
+        "voice": None,
+    }
+)
+
+_GEMINI_SPEAKER_VOICE_CONFIG_FIELDS: Final = frozenset({"speaker", "voiceConfig"})
+
+
+def _known_leaf_fields(value: object, fields: frozenset[str] | None) -> object:
+    mapping: Final = as_str_mapping(value)
+    if fields is None or mapping is None:
+        return value
+    return {key: item for key, item in mapping.items() if key in fields}
+
+
+def _known_voice_config_fields(value: object) -> object:
+    mapping: Final = as_str_mapping(value)
+    if mapping is None:
+        return value
+    return {
+        key: _known_leaf_fields(item, _GEMINI_VOICE_CONFIG_FIELDS[key])
+        for key, item in mapping.items()
+        if key in _GEMINI_VOICE_CONFIG_FIELDS
+    }
+
+
+def _known_speaker_voice_config_fields(value: object) -> object:
+    mapping: Final = as_str_mapping(value)
+    if mapping is None:
+        return value
+    return {
+        key: _known_voice_config_fields(item) if key == "voiceConfig" else item
+        for key, item in mapping.items()
+        if key in _GEMINI_SPEAKER_VOICE_CONFIG_FIELDS
+    }
+
+
+def _known_speaker_voice_configs(value: object) -> object:
+    if not isinstance(value, list):
+        return value
+    return [_known_speaker_voice_config_fields(item) for item in _SPEECH_CONFIG_ITEMS.validate_python(value)]
+
+
+def _known_multi_speaker_voice_config_fields(value: object) -> object:
+    mapping: Final = as_str_mapping(value)
+    if mapping is None:
+        return value
+    return {key: _known_speaker_voice_configs(item) for key, item in mapping.items() if key == "speakerVoiceConfigs"}
+
+
+def _known_speech_config_field(key: str, value: object) -> object:
+    match key:
+        case "voiceConfig":
+            return _known_voice_config_fields(value)
+        case "multiSpeakerVoiceConfig":
+            return _known_multi_speaker_voice_config_fields(value)
+        case _:
+            return value
+
+
+def _known_gemini_speech_fields(
+    config: Mapping[str, object],
+) -> dict[str, object]:  # mutable-ok: provider request serialization requires a concrete dict
+    return {
+        key: _known_speech_config_field(key, item)
+        for key, item in config.items()
+        if key in _GEMINI_SPEECH_CONFIG_FIELDS
+    }
+
+
+_GEMINI_TTS_VOICE_KEYS: Final = frozenset(
+    {
+        "format",
+        "name",
+        "voice",
+        "voiceName",
+        "voice_name",
+        "languageCode",
+        "language_code",
+        "modelName",
+        "model_name",
+        "speechConfig",
+        "speech_config",
+        "voiceConfig",
+        "voice_config",
+        "multiSpeakerVoiceConfig",
+        "multi_speaker_voice_config",
+    }
+)
+
+
+_NAMED_UNKNOWN_VOICE_KEYS: Final = 10
+
+_NAMED_VOICE_KEY_CHARS: Final = 100
+
+
+def _gemini_speech_config_wrapper(value: Mapping[str, object]) -> Mapping[str, object] | None:
+    camel_config: Final = as_str_mapping(value.get("speechConfig"))
+    return camel_config if camel_config is not None else as_str_mapping(value.get("speech_config"))
+
+
+def named_voice_keys(keys: Sequence[str]) -> str:
+    named: Final = ", ".join(key[:_NAMED_VOICE_KEY_CHARS] for key in keys[:_NAMED_UNKNOWN_VOICE_KEYS])
+    unnamed_count: Final = len(keys) - _NAMED_UNKNOWN_VOICE_KEYS
+    return f"{named}, and {unnamed_count} more" if unnamed_count > 0 else named
+
+
+def reject_unknown_gemini_tts_voice_keys(
+    model: str, voice: Mapping[str, object], drop_params: bool, llm_provider: str | None
+) -> None:
+    nested_config: Final = _gemini_speech_config_wrapper(voice) or {}
+    ignored_wrapper: Final = (
+        ("speech_config",)
+        if as_str_mapping(voice.get("speechConfig")) is not None and voice.get("speech_config") is not None
+        else ()
+    )
+    unknown_keys: Final = sorted(
+        {*(key for key in (*voice, *nested_config) if key not in _GEMINI_TTS_VOICE_KEYS), *ignored_wrapper}
+    )
+    if not unknown_keys or drops_unsupported_params(drop_params):
+        return
+    raise UnsupportedParamsError(
+        message=(
+            f"{model} does not support the voice keys {named_voice_keys(unknown_keys)}. Remove them, or set "
+            "drop_params to ignore them."
+        ),
+        model=model,
+        llm_provider=llm_provider,
+    )
+
+
+def normalize_gemini_speech_config(
+    value: Mapping[str, object], drop_unknown_fields: bool = False
+) -> dict[str, object]:  # mutable-ok: provider request serialization requires a concrete dict
+    speech_config: Final = {**_with_gemini_speaker_voice_configs(mapped_gemini_speech_config(value))}
+    return _known_gemini_speech_fields(speech_config) if drop_unknown_fields else speech_config
+
+
+def _merge_gemini_speech_config_wrapper(value: Mapping[str, object]) -> Mapping[str, object]:
+    nested_config: Final = _gemini_speech_config_wrapper(value)
+    if nested_config is None:
+        return value
+    return {
+        **{key: item for key, item in value.items() if key not in ("speechConfig", "speech_config")},
+        **nested_config,
+    }
+
+
+def mapped_gemini_speech_config(
+    value: Mapping[str, object],
+) -> dict[str, object]:  # mutable-ok: provider request serialization requires a concrete dict
+    normalized: Final = _normalize_gemini_speech_config_item(_merge_gemini_speech_config_wrapper(value))
+    speech_config: Final = {key: item for key, item in normalized.items() if key in _GEMINI_SPEECH_CONFIG_FIELDS}
+    voice_name: Final = next(
+        (normalized[key] for key in ("name", "voiceName", "voice") if isinstance(normalized.get(key), str)),
+        None,
+    )
+    if "voiceConfig" in speech_config or "multiSpeakerVoiceConfig" in speech_config or not isinstance(voice_name, str):
+        return speech_config
+    return {
+        **speech_config,
+        "voiceConfig": {
+            "prebuiltVoiceConfig": {"voiceName": OPENAI_TO_GEMINI_TTS_VOICES.get(voice_name.lower(), voice_name)}
+        },
+    }
 
 
 class VertexAIBaseConfig:
@@ -419,6 +696,10 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         model: str,
     ) -> bool:
         return cls._forward_gemini_function_call_id(model)
+
+    @classmethod
+    def supports_multimodal_function_responses(cls, model: str) -> bool:
+        return cls.is_gemini_3_or_newer(model)
 
     def _supports_penalty_parameters(self, model: str) -> bool:
         # Gemini 3 models do not support penalty parameters
@@ -1192,6 +1473,14 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     params["includeThoughts"] = False
                 else:
                     params["includeThoughts"] = sends_thoughts
+                    if thinking_budget is not None:
+                        warn_dropped_reasoning(
+                            "thinking.budget_tokens",
+                            thinking_budget,
+                            model,
+                            _LEVEL_ONLY_BUDGET_REASON,
+                            drop_params_gated=False,
+                        )
                     # Follow provider defaults unless explicitly opted into legacy behavior.
                     if litellm.enable_gemini_default_thinking_level_low is True:
                         params["thinkingLevel"] = (
@@ -1204,8 +1493,16 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             # For older Gemini models, use thinkingBudget
             if thinking_enabled and not VertexGeminiConfig._is_thinking_budget_zero(thinking_budget):
                 params["includeThoughts"] = sends_thoughts
-            if thinking_budget is not None and isinstance(thinking_budget, int):
+            if isinstance(thinking_budget, int):
                 params["thinkingBudget"] = thinking_budget
+            elif thinking_budget is not None:
+                warn_dropped_reasoning(
+                    "thinking.budget_tokens",
+                    thinking_budget,
+                    model,
+                    _NON_INTEGER_BUDGET_REASON,
+                    drop_params_gated=False,
+                )
 
         return params
 
@@ -1237,7 +1534,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 status_code=400,
             )
 
-    def _map_audio_params(self, value: dict) -> dict:
+    def _map_audio_params(
+        self, value: Mapping[str, object], drop_unknown_fields: bool = False
+    ) -> dict[str, object]:  # mutable-ok: the public forwarding interface returns a concrete request dictionary
         """
         Expected input:
         {
@@ -1256,12 +1555,6 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             languageCode: "en-US",
         }
         """
-        from litellm.types.llms.vertex_ai import (
-            PrebuiltVoiceConfig,
-            SpeechConfig,
-            VoiceConfig,
-        )
-
         # Validate audio format - Gemini TTS only supports pcm16
         audio_format: Final = value.get("format")
         if audio_format is not None and audio_format != "pcm16":
@@ -1271,22 +1564,46 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 f"Please set audio format to 'pcm16'."
             )
 
-        # Map OpenAI audio parameter to Gemini speech config
-        speech_config: Final[SpeechConfig] = {}
+        camel_speech_config: Final = value.get("speechConfig")
+        snake_speech_config: Final = value.get("speech_config")
+        speech_config_value: Final = (
+            camel_speech_config if isinstance(camel_speech_config, Mapping) else snake_speech_config
+        )
+        language_code: Final = value.get("language_code", value.get("languageCode"))
+        if isinstance(speech_config_value, Mapping):
+            return normalize_gemini_speech_config(value, drop_unknown_fields)
 
-        if "voice" in value:
-            voice: Final = value["voice"]
-            voice_name: Final = (
-                OPENAI_TO_GEMINI_TTS_VOICES.get(voice.lower(), voice) if isinstance(voice, str) else voice
-            )
-            prebuilt_voice_config: Final[PrebuiltVoiceConfig] = {"voiceName": voice_name}
-            voice_config: Final[VoiceConfig] = {"prebuiltVoiceConfig": prebuilt_voice_config}
-            speech_config["voiceConfig"] = voice_config
+        voice: Final = value.get("voice")
+        speech_config_without_language: Final[  # mutable-ok: provider request serialization requires a concrete dict
+            dict[str, object]
+        ] = (
+            {
+                "voiceConfig": {
+                    "prebuiltVoiceConfig": {
+                        "voiceName": OPENAI_TO_GEMINI_TTS_VOICES.get(voice.lower(), voice)
+                        if isinstance(voice, str)
+                        else voice,
+                    }
+                }
+            }
+            if "voice" in value
+            else {}
+        )
 
-        if "language_code" in value:
-            speech_config["languageCode"] = value["language_code"]
+        if language_code is not None:
+            return {
+                **speech_config_without_language,
+                "languageCode": language_code,
+            }
 
-        return cast(dict, speech_config)
+        return speech_config_without_language
+
+    def _map_chat_audio_params(
+        self, model: str, value: Mapping[str, object], drop_params: bool
+    ) -> dict[str, object]:  # mutable-ok: the public forwarding interface returns a concrete request dictionary
+        if _gemini_speech_config_wrapper(value) is not None:
+            reject_unknown_gemini_tts_voice_keys(model, value, drop_params, self.custom_llm_provider)
+        return self._map_audio_params(value, drop_unknown_fields=drops_unsupported_params(drop_params))
 
     def map_audio_params(
         self,
@@ -1351,7 +1668,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             elif param == "n":
                 optional_params["candidate_count"] = value
             elif param == "audio" and isinstance(value, dict):
-                optional_params["speechConfig"] = self._map_audio_params(value)
+                optional_params["speechConfig"] = self._map_chat_audio_params(model, value, drop_params)
             elif param == "stop":
                 if isinstance(value, str):
                     optional_params["stop_sequences"] = [value]
@@ -1773,6 +2090,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         parts: list[HttpxPartType],
         cumulative_tool_call_idx: int,
         is_function_call: bool | None,
+        thought_signature_in_tool_call_id: bool = True,
     ) -> tuple[
         ChatCompletionToolCallFunctionChunk | None,
         list[ChatCompletionToolCallChunk] | None,
@@ -1811,9 +2129,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     # back on the matching `functionResponse`.
                     if gemini_call_id:
                         _tool_response_chunk["id"] = gemini_call_id
-                    # Embed thought signature in ID for OpenAI client compatibility
                     if thought_signature:
                         _tool_response_chunk["provider_specific_fields"] = {"thought_signature": thought_signature}
+                    if thought_signature and thought_signature_in_tool_call_id:
                         _tool_response_chunk["id"] = encode_tool_call_id_with_signature(
                             _tool_response_chunk["id"] or "", thought_signature
                         )
@@ -2076,26 +2394,13 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 elif modality == "DOCUMENT":
                     cached_text_tokens = (cached_text_tokens or 0) + token_count
 
-        ## Calculate non-cached tokens by subtracting cached from total (per modality)
-        ## This is necessary because promptTokensDetails includes both cached and non-cached tokens
-        ## See: https://github.com/BerriAI/litellm/issues/18750
-        if cached_text_tokens is not None and prompt_text_tokens is not None:
-            # Explicit caching: subtract cached tokens per modality from cacheTokensDetails
-            prompt_text_tokens = prompt_text_tokens - cached_text_tokens
-        elif (
+        if (
             cached_tokens is not None
             and prompt_text_tokens is not None
             and cached_text_tokens is None
             and "cacheTokensDetails" not in usage_metadata
         ):
-            # Implicit caching: only cachedContentTokenCount is provided (no cacheTokensDetails)
-            # Subtract from text tokens since implicit caching is primarily for text content
-            # See: https://github.com/BerriAI/litellm/issues/16341
             prompt_text_tokens = prompt_text_tokens - cached_tokens
-        if cached_audio_tokens is not None and prompt_audio_tokens is not None:
-            prompt_audio_tokens = prompt_audio_tokens - cached_audio_tokens
-        if cached_image_tokens is not None and prompt_image_tokens is not None:
-            prompt_image_tokens = prompt_image_tokens - cached_image_tokens
         if cached_video_tokens is not None and prompt_video_tokens is not None:
             prompt_video_tokens = prompt_video_tokens - cached_video_tokens
 
@@ -2116,9 +2421,24 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         billable_text_tokens: Final = (
             prompt_text_tokens if prompt_text_tokens is None else prompt_text_tokens + billable_tool_use_prompt_tokens
         )
+        cached_tokens_details_fields: Final = MappingProxyType(
+            {
+                key: token_count
+                for key, token_count in (
+                    ("text_tokens", cached_text_tokens),
+                    ("audio_tokens", cached_audio_tokens),
+                    ("image_tokens", cached_image_tokens),
+                )
+                if token_count is not None
+            }
+        )
+        cached_tokens_details: Final = (
+            CachedTokensDetails.model_validate(cached_tokens_details_fields) if cached_tokens_details_fields else None
+        )
 
         prompt_tokens_details = PromptTokensDetailsWrapper(
             cached_tokens=cached_tokens,
+            cached_tokens_details=cached_tokens_details,
             audio_tokens=prompt_audio_tokens,
             text_tokens=billable_text_tokens,
             image_tokens=prompt_image_tokens,
@@ -2448,10 +2768,10 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 chunk_indices = support.get("groundingChunkIndices", [])
 
                 if start_index is not None and end_index is not None and chunk_indices:
-                    # Use the first chunk's URL for the annotation
-                    first_chunk_idx = chunk_indices[0]
-                    if first_chunk_idx in chunk_to_uri_map:
-                        uri_info = chunk_to_uri_map[first_chunk_idx]
+                    for chunk_index in chunk_indices:
+                        if chunk_index not in chunk_to_uri_map:
+                            continue
+                        uri_info = chunk_to_uri_map[chunk_index]
 
                         url_citation: ChatCompletionAnnotationURLCitation = {
                             "start_index": start_index,
@@ -2473,6 +2793,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         model_response: Union[ModelResponse, "ModelResponseStream"],
         standard_optional_params: dict,
         cumulative_tool_call_index: int = 0,
+        thought_signature_in_tool_call_id: bool = True,
     ) -> tuple[list[dict], list[dict], list, list, int]:
         """
         Helper method to process candidates and extract metadata
@@ -2575,6 +2896,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     parts=candidate["content"]["parts"],
                     cumulative_tool_call_idx=cumulative_tool_call_index,
                     is_function_call=is_function_call(standard_optional_params),
+                    thought_signature_in_tool_call_id=thought_signature_in_tool_call_id,
                 )
 
             if "logprobsResult" in candidate:
@@ -2658,6 +2980,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         model_response: Union[ModelResponse, "ModelResponseStream"],
         standard_optional_params: dict[str, object],  # mutable-ok: mirrors override contract
         cumulative_tool_call_index: int = 0,
+        thought_signature_in_tool_call_id: bool = True,
     ) -> tuple[  # mutable-ok: mirrors override contract
         list[dict[str, object]],
         list[dict[str, object]],
@@ -2666,7 +2989,11 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         int,
     ]:
         return cls._process_candidates(
-            _candidates, model_response, standard_optional_params, cumulative_tool_call_index
+            _candidates,
+            model_response,
+            standard_optional_params,
+            cumulative_tool_call_index,
+            thought_signature_in_tool_call_id,
         )
 
     def transform_response(
@@ -2749,7 +3076,14 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     safety_ratings,
                     citation_metadata,
                     _,  # cumulative_tool_call_index not needed in non-streaming
-                ) = VertexGeminiConfig._process_candidates(_candidates, model_response, logging_obj.optional_params)
+                ) = VertexGeminiConfig._process_candidates(
+                    _candidates,
+                    model_response,
+                    logging_obj.optional_params,
+                    thought_signature_in_tool_call_id=embeds_thought_signature_in_tool_call_id(
+                        logging_obj.litellm_params  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # Logging.litellm_params is untyped
+                    ),
+                )
 
             usage: Final = VertexGeminiConfig._calculate_usage(
                 completion_response=completion_response,
@@ -2946,7 +3280,7 @@ async def make_call(
             raise
 
     completion_stream: Final = ModelResponseIterator(
-        streaming_response=response.aiter_lines(),
+        streaming_response=aiter_sse_lines(response.aiter_text()),
         sync_stream=False,
         logging_obj=logging_obj,
         response_headers=response.headers,
@@ -3017,7 +3351,7 @@ def make_sync_call(
             raise
 
     completion_stream: Final = ModelResponseIterator(
-        streaming_response=response.iter_lines(),
+        streaming_response=iter_sse_lines(response.iter_text()),
         sync_stream=True,
         logging_obj=logging_obj,
         response_headers=response.headers,
@@ -3585,6 +3919,9 @@ class ModelResponseIterator:
         self.logging_obj = logging_obj
         self.response_headers = response_headers or {}
         self.is_function_call = check_is_function_call(logging_obj)
+        self.thought_signature_in_tool_call_id: Final = embeds_thought_signature_in_tool_call_id(
+            logging_obj.litellm_params  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # Logging.litellm_params is untyped
+        )
         self.cumulative_tool_call_index: int = 0
         self.has_seen_tool_calls: bool = False
         self._resume = resume
@@ -3649,6 +3986,7 @@ class ModelResponseIterator:
             model_response,
             self.logging_obj.optional_params,
             cumulative_tool_call_index=self.cumulative_tool_call_index,
+            thought_signature_in_tool_call_id=self.thought_signature_in_tool_call_id,
         )
 
         # Track whether tool_calls have been seen across streaming chunks.
@@ -3895,7 +4233,7 @@ class ModelResponseIterator:
             log_failed_hop(e)
             return self._truncated_stream_end(token)
         self._start_hop(hop_response, token)
-        self.streaming_response = hop_response.aiter_lines()
+        self.streaming_response = aiter_sse_lines(hop_response.aiter_text())
         self.async_response_iterator = self.streaming_response
         return None
 
@@ -3909,7 +4247,7 @@ class ModelResponseIterator:
             log_failed_hop(e)
             return self._truncated_stream_end(token)
         self._start_hop(hop_response, token)
-        self.streaming_response = hop_response.iter_lines()
+        self.streaming_response = iter_sse_lines(hop_response.iter_text())
         self.response_iterator = self.streaming_response
         return None
 

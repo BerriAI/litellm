@@ -5,7 +5,7 @@ use pyo3::types::PyDict;
 
 /// Converts requests, responses, stream values and errors at the Python boundary.
 pub trait PythonBinding: PythonOwned {
-    type Protocol: Protocol<Error: std::fmt::Display>;
+    type Protocol: Protocol<Error: std::error::Error>;
 
     /// The public exception a native failure maps to, kept as a value until the driver
     /// raises it.

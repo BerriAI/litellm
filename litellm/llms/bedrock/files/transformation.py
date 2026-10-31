@@ -42,6 +42,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     extract_file_data,
     text_completion_prompt_to_messages,
 )
+from litellm.llms.anthropic.common_utils import AnthropicError
 from litellm.llms.base_llm.base_utils import map_developer_role_to_system_role
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.files.batch_records import responses_batch_body_to_chat_body
@@ -49,6 +50,7 @@ from litellm.llms.base_llm.files.transformation import (
     BaseFilesConfig,
     LiteLLMLoggingObj,
 )
+from litellm.llms.custom_httpx.sse_lines import split_sse_lines
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.bedrock import AwsAuthParams, BedrockBatchRecordKind
 from litellm.types.llms.openai import (
@@ -346,7 +348,14 @@ class _BatchInputLine:
     record: _OpenAIBatchRecord
 
 
-_BATCH_RECORD_CONVERSION_ERRORS: Final = (AttributeError, LookupError, TypeError, ValueError, BadRequestError)
+_BATCH_RECORD_CONVERSION_ERRORS: Final = (
+    AttributeError,
+    LookupError,
+    TypeError,
+    ValueError,
+    BadRequestError,
+    AnthropicError,
+)
 
 
 def _batch_line_error(line_number: int, problem: str) -> BedrockError:
@@ -400,7 +409,7 @@ def _batch_input_line(line_number: int, line: str) -> _BatchInputLine:
 
 
 def _non_blank_lines(file_content: str) -> Iterator[tuple[int, str]]:
-    numbered_lines: Final = enumerate(file_content.splitlines(), start=1)
+    numbered_lines: Final = enumerate(split_sse_lines(file_content), start=1)
     return ((line_number, line) for line_number, line in numbered_lines if line.strip())
 
 
@@ -1052,7 +1061,7 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
 
         # --- Anthropic: use existing AmazonAnthropicClaudeConfig ---
         if provider == LlmProviders.ANTHROPIC:
-            from litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude3_transformation import (
+            from litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude_transformation import (
                 AmazonAnthropicClaudeConfig,
             )
 

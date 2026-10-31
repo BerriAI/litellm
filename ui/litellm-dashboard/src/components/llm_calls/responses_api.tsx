@@ -1,5 +1,10 @@
 import { observeResponseHeaders, type ResponseHeadersListener } from "@/lib/http/observeResponseHeaders";
 import openai from "openai";
+import type {
+  Response as OpenAIResponse,
+  ResponseFunctionToolCall,
+  ResponseInputItem,
+} from "openai/resources/responses/responses";
 import { MessageType } from "../chat_ui/types";
 import { TokenUsage } from "../chat_ui/ResponseMetrics";
 import { getGatewayBaseUrl, getProxyBaseUrl } from "@/components/networking";
@@ -17,6 +22,10 @@ import {
 } from "./code_interpreter_handler";
 
 export type { CodeInterpreterResult } from "./code_interpreter_handler";
+
+export interface ResponsesMessage extends MessageType {
+  mcpEvents?: MCPEvent[];
+}
 
 interface ResponseOutputPart {
   type?: string;
@@ -39,6 +48,22 @@ type SynthesizedResponseEvent =
   | { type: "response.output_text.delta"; delta: string }
   | { type: "response.completed"; response: NonStreamedResponse };
 
+const REASONING_PART_SEPARATOR = "\n\n";
+
+const REASONING_DELTA_EVENT_TYPES: ReadonlySet<string> = new Set([
+  "response.reasoning_text.delta",
+  "response.reasoning_summary_text.delta",
+  "response.reasoning.delta",
+]);
+
+const nonEmptyTexts = (parts: ResponseOutputPart[] | undefined): string[] =>
+  (parts ?? []).map((part) => part.text ?? "").filter((text) => text.length > 0);
+
+const reasoningItemText = (item: ResponseOutputItem): string => {
+  const summary = nonEmptyTexts(item.summary);
+  return (summary.length > 0 ? summary : nonEmptyTexts(item.content)).join(REASONING_PART_SEPARATOR);
+};
+
 const responseAsEvents = (response: NonStreamedResponse): SynthesizedResponseEvent[] => {
   const outputItems = response.output ?? [];
   const outputText = outputItems
@@ -49,9 +74,9 @@ const responseAsEvents = (response: NonStreamedResponse): SynthesizedResponseEve
     .join("");
   const reasoningText = outputItems
     .filter((item) => item.type === "reasoning")
-    .flatMap((item) => item.summary ?? [])
-    .map((part) => part.text ?? "")
-    .join("");
+    .map(reasoningItemText)
+    .filter((text) => text.length > 0)
+    .join(REASONING_PART_SEPARATOR);
 
   return [
     ...outputItems.map((item) => ({ type: "response.output_item.done" as const, item })),
@@ -62,7 +87,7 @@ const responseAsEvents = (response: NonStreamedResponse): SynthesizedResponseEve
 };
 
 export async function makeOpenAIResponsesRequest(
-  messages: MessageType[],
+  messages: ResponsesMessage[],
   updateTextUI: (role: string, delta: string, model?: string) => void,
   selectedModel: string,
   accessToken: string | null,
@@ -89,6 +114,7 @@ export async function makeOpenAIResponsesRequest(
   onTotalLatency?: (latency: number) => void,
   customHeaders?: CustomHeaders,
   onResponseHeaders?: ResponseHeadersListener,
+  onBackgroundResponse?: (response: OpenAIResponse) => void,
 ) {
   if (!accessToken) {
     throw new Error("Virtual Key is required");
@@ -119,24 +145,35 @@ export async function makeOpenAIResponsesRequest(
   try {
     const startTime = Date.now();
     let firstTokenReceived = false;
+    let reasoningPartKey: string | null = null;
     let servedFromResponseCache = false;
 
-    // Format messages for the API
-    const formattedInput = messages.map((message) => {
-      // If content is already an array (multimodal), use it directly
-      if (Array.isArray(message.content)) {
-        return {
-          role: message.role,
-          content: message.content,
-          type: "message",
-        };
-      }
-      // Otherwise, wrap text content in the expected format
-      return {
-        role: message.role,
-        content: message.content,
-        type: "message",
-      };
+    const formattedInput = messages.flatMap((message) => {
+      const mcpInput =
+        message.role === "assistant"
+          ? (message.mcpEvents ?? []).flatMap<ResponseFunctionToolCall | ResponseInputItem.FunctionCallOutput>(
+              (event) => {
+                const item = event.item;
+                const callId = item?.id || event.item_id;
+                if (event.type !== "response.output_item.done" || item?.type !== "mcp_call" || !callId) {
+                  return [];
+                }
+                if (!item.name || typeof item.arguments !== "string" || typeof item.output !== "string") {
+                  return [];
+                }
+                return [
+                  { type: "function_call", call_id: callId, name: item.name, arguments: item.arguments },
+                  { type: "function_call_output", call_id: callId, output: item.output },
+                ];
+              },
+            )
+          : [];
+      return [
+        ...mcpInput,
+        ...(mcpInput.length > 0 && message.content === ""
+          ? []
+          : [{ role: message.role, content: message.content, type: "message" }]),
+      ];
     });
 
     // Build tools array
@@ -206,6 +243,16 @@ export async function makeOpenAIResponsesRequest(
       ...(policies ? { policies } : {}),
       ...(tools.length > 0 ? { tools, tool_choice: "auto" } : {}),
     };
+
+    if (onBackgroundResponse) {
+      const response = await client.post<OpenAIResponse>("/responses", {
+        body: { ...requestBody, background: true, stream: false },
+        signal,
+        maxRetries: 0,
+      });
+      onBackgroundResponse(response);
+      return response;
+    }
 
     // Create request to OpenAI responses API
     // Use 'any' type to avoid TypeScript issues with the experimental API
@@ -283,10 +330,16 @@ export async function makeOpenAIResponsesRequest(
         }
 
         // Handle reasoning content
-        if (event.type === "response.reasoning.delta" && "delta" in event) {
-          const delta = event.delta;
-          if (typeof delta === "string" && onReasoningContent) {
-            onReasoningContent(delta);
+        if (REASONING_DELTA_EVENT_TYPES.has(event.type) && typeof event.delta === "string" && event.delta.length > 0) {
+          const partKey = `${event.item_id ?? ""}:${event.summary_index ?? event.content_index ?? 0}`;
+          const separator = reasoningPartKey !== null && reasoningPartKey !== partKey ? REASONING_PART_SEPARATOR : "";
+          reasoningPartKey = partKey;
+          onReasoningContent?.(separator + event.delta);
+
+          const isFirstToken = !firstTokenReceived;
+          firstTokenReceived = true;
+          if (isFirstToken && onTimingData && streamingEnabled) {
+            onTimingData(Date.now() - startTime);
           }
         }
 

@@ -13,6 +13,7 @@ from litellm.proxy.dev_reload import (
     RELOAD_WORKER_HEALTHCHECK_SECONDS,
     ReloadOptions,
     load_app_or_exit,
+    load_worker_app,
     multi_worker_reload_supported,
     pool_config,
 )
@@ -113,6 +114,27 @@ def test_the_reload_pool_accepts_and_keeps_every_uvicorn_arg_the_proxy_cli_build
 def test_the_reload_pool_passes_a_uvicorn_arg_it_does_not_list_through_to_the_workers() -> None:
     config: Final = pool_config(RELOAD_OPTIONS.validate_python({**_options("app:app"), "backlog": 123}), workers=POOL_WORKERS)
     assert (config.backlog, config.reload) == (123, False)
+
+
+def test_the_reload_pool_applies_child_process_overrides_to_its_workers() -> None:
+    config: Final = pool_config(
+        _options("app:app"),
+        workers=POOL_WORKERS,
+        worker_overrides={"app": "litellm_cli.main:proxy_worker_app", "factory": True, "log_config": None},
+    )
+    assert config.app.args == ("litellm_cli.main:proxy_worker_app", True)
+    assert config.factory
+    assert config.log_config is None
+
+
+def test_load_worker_app_calls_the_overridden_factory(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    module: Final = "reload_worker_app_factory"
+    (tmp_path / f"{module}.py").write_text(
+        "def app(scope, receive, send):\n    return None\n\ndef factory():\n    return app\n"
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+    app: Final = importlib.import_module(module).app
+    assert load_worker_app(f"{module}:factory", worker_app_factory=True) is app
 
 
 def test_windows_keeps_single_worker_reload_whatever_the_uvicorn_version() -> None:

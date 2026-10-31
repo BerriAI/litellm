@@ -7,10 +7,12 @@ import {
   type CompliancePrompt,
 } from "@/data/compliancePrompts";
 import useCan from "@/app/(dashboard)/hooks/useCan";
+import { useTerminology } from "@/contexts/TerminologyContext";
 import { getGuardrailsList, testPoliciesAndGuardrails } from "@/components/networking";
 import PolicySelector, { getPolicyOptionEntries } from "@/components/policies/PolicySelector";
 import { Policy } from "@/components/policies/types";
 import { makeOpenAIChatCompletionRequest } from "@/components/llm_calls/chat_completion";
+import { Kbd } from "@/components/ui/kbd";
 import {
   AlertTriangle,
   BarChart3,
@@ -131,7 +133,8 @@ export default function ComplianceUI({
   proxySettings,
 }: ComplianceUIProps) {
   const canViewPolicies = useCan("viewPolicies");
-  const frameworks = getFrameworks();
+  const term = useTerminology();
+  const frameworks = getFrameworks(term);
 
   const [policyValueToLabel, setPolicyValueToLabel] = useState<Map<string, string>>(new Map());
   const [guardrailOptions, setGuardrailOptions] = useState<GuardrailOption[]>([]);
@@ -1304,10 +1307,7 @@ export default function ComplianceUI({
                     />
                     <div className="flex items-center justify-between px-3 pb-2">
                       <span className="text-[10px] text-muted-foreground">
-                        Press <kbd className="px-1 py-0.5 bg-muted rounded-sm text-[10px] font-mono">Enter</kbd> to
-                        submit ·{" "}
-                        <kbd className="px-1 py-0.5 bg-muted rounded-sm text-[10px] font-mono">Shift+Enter</kbd> for new
-                        line
+                        Press <Kbd>Enter</Kbd> to submit · <Kbd>Shift+Enter</Kbd> for new line
                       </span>
                       <span className="text-[10px] text-muted-foreground tabular-nums">{quickTestInput.length}</span>
                     </div>

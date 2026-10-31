@@ -1,8 +1,9 @@
 use std::sync::{
-    Arc, Mutex,
+    Arc,
     atomic::{AtomicU64, Ordering},
 };
 
+use parking_lot::Mutex;
 use pyo3::prelude::*;
 
 use crate::Error;
@@ -36,12 +37,8 @@ impl PythonContext {
             let value = Arc::clone(&value);
             pyo3::types::PyCFunction::new_closure(py, None, None, move |_, _| {
                 Python::attach(|py| -> PyResult<()> {
-                    let body = body
-                        .lock()
-                        .expect("context body slot poisoned")
-                        .take()
-                        .expect("the context body ran more than once");
-                    *value.lock().expect("context value slot poisoned") = Some(body(py));
+                    let body = body.lock().take().ok_or(Error::ContextBodyRanTwice)?;
+                    *value.lock() = Some(body(py));
                     Ok(())
                 })
             })?
@@ -49,7 +46,6 @@ impl PythonContext {
         copy.call_method1("run", (callback,))?;
         value
             .lock()
-            .expect("context value slot poisoned")
             .take()
             .ok_or_else(|| Error::ContextBodyProducedNothing.into())
     }
@@ -84,7 +80,7 @@ where
     match tokio::task::spawn_blocking(move || Python::attach(|py| context.enter(py, f))).await {
         Ok(value) => value,
         Err(error) if error.is_panic() => std::panic::resume_unwind(error.into_panic()),
-        Err(error) => panic!("the blocking pool dropped a Python call: {error}"),
+        Err(error) => Err(Error::BlockingCallCancelled(error).into()),
     }
 }
 

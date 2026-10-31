@@ -30,6 +30,21 @@ if TYPE_CHECKING:
 
 _PROPAGATOR: Final = TraceContextTextMapPropagator()
 _W3C_TRACE_HEADERS: Final = frozenset(("traceparent", "tracestate"))
+_request_traces_excluded: Final[ContextVar[bool]] = ContextVar("litellm_otel_request_traces_excluded", default=False)
+
+
+def request_traces_excluded() -> bool:
+    return _request_traces_excluded.get()
+
+
+@contextmanager
+def request_trace_scope(excluded: bool) -> Generator[None]:
+    token: Final = _request_traces_excluded.set(excluded)
+    try:
+        yield
+    finally:
+        _request_traces_excluded.reset(token)
+
 
 # The request's root span — the FastAPI-owned SERVER span — captured ONCE when the
 # proxy first resolves it, so request-level spans (the LLM call, guardrails) can

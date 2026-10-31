@@ -1,0 +1,91 @@
+name: Cost map pins recheck
+
+on:
+  push:
+    branches:
+      - main
+      - "litellm_**"
+    paths:
+      - model_prices_and_context_window.json
+      - litellm/model_prices_and_context_window_backup.json
+      - ci_cd/cost_map_pins.json
+
+permissions: {}
+
+jobs:
+  rerun-cost-map-guard:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      actions: write
+      contents: read
+      pull-requests: read
+    steps:
+      - name: Re-run the cost map guard on open pull requests the push could break
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BASE_REF: ${{ github.ref_name }}
+          BEFORE_SHA: ${{ github.event.before }}
+          AFTER_SHA: ${{ github.event.after }}
+          FORCED: ${{ github.event.forced }}
+          COST_MAP_PATHS: '["model_prices_and_context_window.json", "litellm/model_prices_and_context_window_backup.json", "ci_cd/cost_map_pins.json"]'
+          PINS_PATHS: '["ci_cd/cost_map_pins.json"]'
+        run: |
+          if [[ "$BEFORE_SHA" =~ ^0+$ || "$FORCED" == true ]] \
+            || ! gh api "repos/${GITHUB_REPOSITORY}/compare/${BEFORE_SHA}...${AFTER_SHA}?per_page=1" \
+              --jq '(env.PINS_PATHS | fromjson) as $pins | (.files | length) < 300 and all(.files[]; [.filename, .previous_filename] | any(IN($pins[])) | not)' \
+              | grep -qx true; then
+            export RECHECK_PATHS="$COST_MAP_PATHS"
+          else
+            export RECHECK_PATHS="$PINS_PATHS"
+          fi
+          rerun_cutoff="$(date -u -d '30 days ago' +%Y-%m-%dT%H:%M:%SZ)"
+          candidates="$(gh api graphql --paginate -F owner="${GITHUB_REPOSITORY_OWNER}" -F name="${GITHUB_REPOSITORY#*/}" -F base="$BASE_REF" \
+            -f query='query($owner: String!, $name: String!, $base: String!, $endCursor: String) {
+              repository(owner: $owner, name: $name) {
+                pullRequests(states: OPEN, baseRefName: $base, first: 25, after: $endCursor) {
+                  nodes { number headRefOid changedFiles files(first: 100) { nodes { path } } }
+                  pageInfo { hasNextPage endCursor }
+                }
+              }
+            }' \
+            --jq '(env.RECHECK_PATHS | fromjson) as $paths | .data.repository.pullRequests.nodes[]
+              | {number, headRefOid, listed: any(.files.nodes[].path; IN($paths[])), unlisted: (.changedFiles > 100)}
+              | select(.listed or .unlisted) | "\(.number) \(.headRefOid) \(.listed)"')"
+          failed=0
+          declare -A rerun_heads
+          while read -r number head_sha listed; do
+            [ -n "$number" ] || continue
+            if [ "$listed" = false ]; then
+              if ! changed="$(gh api --paginate "repos/${GITHUB_REPOSITORY}/pulls/${number}/files?per_page=100" \
+                --jq '(env.RECHECK_PATHS | fromjson) as $paths | .[].filename | select(IN($paths[]))')"; then
+                echo "::error::could not list the files of #$number"
+                failed=1
+                continue
+              fi
+              [ -n "$changed" ] || continue
+            fi
+            [ -z "${rerun_heads[$head_sha]:-}" ] || continue
+            rerun_heads[$head_sha]=1
+            if ! runs="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow cost-map-guard.yml --commit "$head_sha" --limit 100 --json databaseId,createdAt --jq '.[] | "\(.databaseId) \(.createdAt)"')"; then
+              echo "::error::could not list the cost map guard runs of #$number"
+              failed=1
+              continue
+            fi
+            if [ -z "$runs" ]; then
+              echo "::warning::no cost map guard run found for #$number"
+              continue
+            fi
+            while read -r run_id created_at; do
+              if [[ "$created_at" < "$rerun_cutoff" ]]; then
+                echo "::warning::cost map guard run $run_id for #$number is over 30 days old, so GitHub cannot re-run it; #$number gets the pin checks on its next push"
+                continue
+              fi
+              gh run watch "$run_id" --repo "$GITHUB_REPOSITORY" > /dev/null || true
+              if ! gh run rerun "$run_id" --repo "$GITHUB_REPOSITORY"; then
+                echo "::error::could not re-run cost map guard run $run_id for #$number"
+                failed=1
+              fi
+            done <<< "$runs"
+          done <<< "$candidates"
+          exit "$failed"

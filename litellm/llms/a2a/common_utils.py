@@ -31,6 +31,10 @@ class A2AError(BaseLLMException):
         )
 
 
+def _message_role(message: Mapping[str, object]) -> object:
+    return message.get("role", "user")
+
+
 def convert_messages_to_prompt(messages: list[AllMessageValues]) -> str:
     """
     Convert OpenAI messages to a single prompt string for A2A agent.
@@ -51,7 +55,7 @@ def convert_messages_to_prompt(messages: list[AllMessageValues]) -> str:
 
         # Get role
         if isinstance(msg, BaseModel):
-            role = msg.model_dump().get("role", "user")
+            role = _message_role(msg.model_dump())
         elif isinstance(msg, dict):
             role = msg.get("role", "user")
         else:
@@ -156,8 +160,11 @@ async def resolve_a2a_hop_auth_header(
     litellm_params: Mapping[str, object],
     custom_llm_provider: object,
     resolve_entra_header: AgentAuthHeaderResolver = resolve_azure_ai_agent_auth_header,
+    agent_extra_headers: Mapping[str, str] | None = None,
 ) -> Mapping[str, str] | None:
-    """Entra credentials authenticate the A2A hop only; a completion-bridge agent hands them to the model provider it bridges to."""
-    if not a2a_hop_uses_entra(litellm_params, custom_llm_provider):
+    if a2a_hop_uses_entra(litellm_params, custom_llm_provider):
+        return await resolve_entra_header(litellm_params)
+    if custom_llm_provider or any(name.lower() == "authorization" for name in (agent_extra_headers or {})):
         return None
-    return await resolve_entra_header(litellm_params)
+    api_key: Final = litellm_params.get("api_key")
+    return {"Authorization": f"Bearer {api_key}"} if isinstance(api_key, str) and api_key else None

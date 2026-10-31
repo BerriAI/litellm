@@ -1,7 +1,14 @@
 import React, { useState } from "react";
 import { ArrowLeft, Check, Copy, Link2 } from "lucide-react";
+import { useClaudeCodeMarketplaceRequiresKey } from "@/app/(dashboard)/hooks/claudeCodeMarketplace/useClaudeCodeMarketplaceRequiresKey";
 import { cn } from "@/lib/cva.config";
-import { buildMarketplaceSettingsSnippet, formatInstallCommand, getSourceDisplayText, getSourceLink } from "./helpers";
+import {
+  buildMarketplaceSettingsSnippet,
+  formatInstallCommand,
+  getSourceDisplayText,
+  getSourceLink,
+  MARKETPLACE_KEY_PLACEHOLDER,
+} from "./helpers";
 import { Plugin } from "./types";
 
 const SkillSource: React.FC<{ source: Plugin["source"] }> = ({ source }) => {
@@ -45,6 +52,7 @@ interface SkillDetailProps {
 const SkillDetail: React.FC<SkillDetailProps> = ({ skill, onBack }) => {
   const [activeTab, setActiveTab] = useState("overview");
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
+  const marketplaceRequiresKey = useClaudeCodeMarketplaceRequiresKey();
 
   const copyToClipboard = (text: string, key: string) => {
     navigator.clipboard.writeText(text);
@@ -56,6 +64,7 @@ const SkillDetail: React.FC<SkillDetailProps> = ({ skill, onBack }) => {
 
   const settingsSnippet = buildMarketplaceSettingsSnippet(
     typeof window !== "undefined" ? window.location.origin : "<proxy-url>",
+    marketplaceRequiresKey,
   );
 
   const detailRows = [
@@ -226,38 +235,65 @@ const SkillDetail: React.FC<SkillDetailProps> = ({ skill, onBack }) => {
         <div className="max-w-[640px]">
           <h2 className="m-0 mb-2 text-lg font-normal text-foreground">One-time marketplace setup</h2>
 
-          {/* Option 1: single command — fastest path for most users */}
-          <p className="m-0 mb-3 text-sm leading-relaxed text-muted-foreground">
-            Run this command in Claude Code to register the marketplace:
-          </p>
-          <div className="mb-6 overflow-hidden rounded-lg border border-border">
-            <div className="flex items-center justify-between border-b border-border bg-muted px-4 py-2.5">
-              <span className="text-[13px] font-medium text-foreground">Run in Claude Code</span>
-              <button
-                onClick={() => {
-                  const origin = typeof window !== "undefined" ? window.location.origin : "";
-                  copyToClipboard(`/plugin marketplace add ${origin}/claude-code/marketplace.json`, "marketplace-cmd");
-                }}
-                className={cn(
-                  "flex cursor-pointer items-center gap-1 border-none bg-transparent p-0 text-xs",
-                  copiedKey === "marketplace-cmd" ? "text-success" : "text-info",
-                )}
-              >
-                {copiedKey === "marketplace-cmd" ? <Check className="size-3" /> : <Copy className="size-3" />}
-                {copiedKey === "marketplace-cmd" ? "Copied" : "Copy"}
-              </button>
-            </div>
-            <pre className="m-0 bg-card px-4 py-3.5 font-mono text-[13px] text-foreground">
-              {`/plugin marketplace add ${typeof window !== "undefined" ? window.location.origin : "<proxy-url>"}/claude-code/marketplace.json`}
-            </pre>
-          </div>
+          {marketplaceRequiresKey ? (
+            <>
+              <div className="mb-4 rounded-lg border border-warning/30 bg-warning/10 px-4 py-3">
+                <p className="m-0 mb-2 text-[13px] leading-relaxed text-muted-foreground">
+                  If you added this marketplace before without a key, remove it first in Claude Code. Removing it also
+                  uninstalls the plugins you installed from it, so install them again from /plugin after you add the
+                  snippet:
+                </p>
+                <pre className="m-0 bg-transparent font-mono text-[13px] text-foreground">
+                  /plugin marketplace remove litellm
+                </pre>
+              </div>
+              <p className="m-0 mb-3 text-sm leading-relaxed text-muted-foreground">
+                This proxy requires a LiteLLM key to read the marketplace. Add this to{" "}
+                <code className="rounded bg-muted px-1.5 py-px text-[13px]">~/.claude/settings.json</code> and replace{" "}
+                <code className="rounded bg-muted px-1.5 py-px text-[13px]">{MARKETPLACE_KEY_PLACEHOLDER}</code> with
+                your key:
+              </p>
+            </>
+          ) : (
+            <>
+              {/* Option 1: single command — fastest path for most users */}
+              <p className="m-0 mb-3 text-sm leading-relaxed text-muted-foreground">
+                Run this command in Claude Code to register the marketplace:
+              </p>
+              <div className="mb-6 overflow-hidden rounded-lg border border-border">
+                <div className="flex items-center justify-between border-b border-border bg-muted px-4 py-2.5">
+                  <span className="text-[13px] font-medium text-foreground">Run in Claude Code</span>
+                  <button
+                    onClick={() => {
+                      const origin = typeof window !== "undefined" ? window.location.origin : "";
+                      copyToClipboard(
+                        `/plugin marketplace add ${origin}/claude-code/marketplace.json`,
+                        "marketplace-cmd",
+                      );
+                    }}
+                    className={cn(
+                      "flex cursor-pointer items-center gap-1 border-none bg-transparent p-0 text-xs",
+                      copiedKey === "marketplace-cmd" ? "text-success" : "text-info",
+                    )}
+                  >
+                    {copiedKey === "marketplace-cmd" ? <Check className="size-3" /> : <Copy className="size-3" />}
+                    {copiedKey === "marketplace-cmd" ? "Copied" : "Copy"}
+                  </button>
+                </div>
+                <pre className="m-0 bg-card px-4 py-3.5 font-mono text-[13px] text-foreground">
+                  {`/plugin marketplace add ${typeof window !== "undefined" ? window.location.origin : "<proxy-url>"}/claude-code/marketplace.json`}
+                </pre>
+              </div>
 
-          {/* Option 2: settings.json — for persistent config or managed deployments.
-              extraKnownMarketplaces requires source to be a nested object, not a flat string. */}
-          <p className="m-0 mb-3 text-sm leading-relaxed text-muted-foreground">
-            Or add this to <code className="rounded bg-muted px-1.5 py-px text-[13px]">~/.claude/settings.json</code>{" "}
-            for a persistent configuration:
-          </p>
+              {/* Option 2: settings.json — for persistent config or managed deployments.
+                  extraKnownMarketplaces requires source to be a nested object, not a flat string. */}
+              <p className="m-0 mb-3 text-sm leading-relaxed text-muted-foreground">
+                Or add this to{" "}
+                <code className="rounded bg-muted px-1.5 py-px text-[13px]">~/.claude/settings.json</code> for a
+                persistent configuration:
+              </p>
+            </>
+          )}
           <div className="overflow-hidden rounded-lg border border-border">
             <div className="flex items-center justify-between border-b border-border bg-muted px-4 py-2.5">
               <span className="text-[13px] font-medium text-foreground">~/.claude/settings.json</span>

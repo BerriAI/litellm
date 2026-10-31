@@ -95,6 +95,7 @@ ignored_function_names = [
     "arm_routing_read_prefetch",  # Tested in tests/unit/caching/test_request_redis_batch_pre_call.py (file lacks "router" in name)
     "_deployment_params_base_model",  # Tested through log_retry in test_router_helper_utils.py
     "_configured_model_info",  # Tested through get_configured_service_tiers in test_router.py
+    "_every_deployment_refused",  # Tested through the unsupported transcription retry tests in test_router.py
     "_routable_deployments",  # Tested through get_configured_service_tiers and get_routable_upstream_model in test_router.py
     "_async_get_available_deployment",  # Body of the `route {model}` phase wrapper, exercised through async_get_available_deployment in test_router.py
     "_async_get_available_deployment_for_pass_through",  # Same, through async_get_available_deployment_for_pass_through in test_router.py
@@ -106,6 +107,7 @@ ignored_function_names = [
     "_deployment_num_retries",  # Tested through the deployment num_retries mid-stream budget test in test_router.py
     "_request_fallback_list",  # Tested through every mid-stream retry test in test_router.py
     "_request_model_group",  # Tested through test_anthropic_messages_retry_budget_precedence_direct_call
+    "_search_tool_support",  # Tested through the test_get_search_tool_support_* tests
     "_mid_stream_retry_trigger",  # Tested through the retry policy mid-stream budget test in test_router.py
     "_anthropic_messages_group_retry_policy",  # Tested through the retry budget precedence test in test_router.py
     "_anthropic_messages_resolved_retry_policy",  # Tested through the malformed retry policy tests in test_router.py
@@ -122,6 +124,8 @@ ignored_function_names = [
     "_is_fallback_hop",  # Tested through the order fallback hop tests in test_router_order_fallback.py
     "_deployment_that_just_failed",  # Tested through the same-boundary hop test in test_router_order_fallback.py
     "_merged_tools",  # Tested through the _update_kwargs_with_deployment tools merge tests in test_router.py
+    "_malformed_request_params_the_deployment_sets",  # Run by _update_kwargs_with_deployment, tested through the drop_params deployment test in test_thought_signature_in_tool_call_id.py
+    "_drop_malformed_request_params_the_deployment_sets",  # Run by _update_kwargs_with_deployment, tested through the drop_params deployment test in test_thought_signature_in_tool_call_id.py
     "_drops_malformed_request_tools",  # Tested through the _update_kwargs_with_deployment tools merge tests in test_router.py
     "_collect_ptu_share_teams",  # Cached behind team_ptu_ceiling, tested through the live model list test in test_router.py
     "_resolve_team_ptu_ceiling",  # Cached behind team_ptu_ceiling, tested through the live model list test in test_router.py
@@ -138,6 +142,9 @@ ignored_function_names = [
     "_pre_call_check_requested_chat_params",  # Tested through the unsupported-param pre-call check tests in test_router.py
     "_deployment_supports_param",  # Tested through the deployment-capability pre-call check tests in test_router.py
     "_capability_model_and_provider",  # Tested through the authenticating-provider pre-call check test in test_router.py
+    "_route_capability_pin",  # Exercised through Decisions routing tests in test_router.py
+    "_deployment_serves_route",  # Exercised through mixed-group Decisions tests in test_router.py
+    "_without_deployments_that_cannot_serve_route",  # Exercised through Decisions routing tests in test_router.py
     "_exact_base_model_max_input_tokens",  # Tested through get_router_model_info in test_router_model_cost_isolation.py
     "_base_model_widened_window",  # Tested through get_router_model_info in test_router_model_cost_isolation.py
     "_provider_model_id",  # Tested through get_router_model_info in test_router_model_cost_isolation.py
@@ -146,6 +153,18 @@ ignored_function_names = [
     "async_admit_deployment_turn",  # Bound as the WebSocket turn_admission partial, tested through it in test_router_helper_utils.py
     "_deployment_as_configured_now",  # Read by async_admit_deployment_turn, tested through turn_admission in test_router_helper_utils.py
     "_admit_turn_through_routing_strategy",  # Run by async_admit_deployment_turn, tested through turn_admission in test_router_helper_utils.py
+    "_callback_selectors",  # Run by discard, tested through the discard tests in test_router_helper_utils.py
+    "bind_to_request_logging",  # Run by the proxy user_config route, tested through the user_config tests in test_route_llm_request.py
+    "serve_through_request_logging",  # Run by the proxy user_config route, tested through the user_config tests in test_route_llm_request.py
+    "_request_adaptive_router_hooks",  # Run by serve_through_request_logging, tested through the user_config adaptive test
+    "_release_global_callbacks",  # Run by discard, tested through the discard tests in test_router_helper_utils.py
+    "_routing_callbacks",  # Read by the pre-call checks, tested through the user_config limit tests in test_route_llm_request.py
+    "_request_policies_not_set_globally",  # Read by bind_to_request_logging, tested through the user_config budget test in test_route_llm_request.py
+    "_optional_loggers",  # Read by discard and serve_through_request_logging, tested through the budget limiter discard test
+    "retire_routing_state",  # Run by discard, tested through the budget limiter discard test
+    "_slack_alerting_loggers",  # Run by discard, tested through the Slack alerting discard test in test_router_helper_utils.py
+    "_adaptive_router_hooks",  # Run by discard, tested through the adaptive router discard tests in test_router_helper_utils.py
+    "_global_callback_candidates",  # Run by discard, tested through the survivor discard tests in test_router_helper_utils.py
     "without_deployments_that_cannot_batch",  # Tested through the Azure and OpenAI mixed-group acreate_batch tests in test_router.py
     "batch_create_routing",  # Tested through the mixed-group acreate_batch tests in test_router.py
     "is_batch_create_routing",  # Tested through the chat-after-batch-create test in test_router.py
@@ -156,19 +175,40 @@ ignored_function_names = [
     "_deployment_field",  # Read by is_batch_capable, tested through the mixed-group tests in test_router.py
     "_deployment_provider",  # Read by without_deployments_that_cannot_batch, tested through the mixed-group tests in test_router.py
     "_cannot_run_batches",  # Tested through the Azure and OpenAI mixed-group acreate_batch tests in test_router.py
+    "_responses_continuation",  # Tested through the Responses mid-stream fallback tests in tests/unit/llms/base_llm/responses/test_transformation.py
+    "_responses_continuation_ceilings",  # Tested through the Responses mid-stream fallback tests in tests/unit/llms/base_llm/responses/test_transformation.py
+    "_team_deployments_named",  # Tested through the team lookups in the concurrent delete tests in test_router.py
+    "_served_openai_models",  # Cached as served_openai_models, tested through the pre-call check token count tests in test_router.py
+    "priority_header_update",  # Tested through the priority header tests in test_common_request_processing.py
+    "_drops_params",  # Read by split_request_priority and priority_header_update, tested through both
+    "_responses_event_announces_background_run",  # Tested through the background Responses stream tests in test_router.py
+    "_aresponses_background_stream_can_release",  # Tested through the background Responses stream tests in test_router.py
+    "_raise_released_stream_error",  # Tested through the background Responses stream content-policy tests in test_router.py
+    "_mid_stream_error_before_output",  # Tested through the Responses mid-stream fallback and background stream tests
+    "_without_decisions_deployments_refusing_media",  # Tested through the mixed media-flag group tests in tests/unit/decisions/test_main.py
+    "_decisions_deployment_refuses_media",  # Read by _without_decisions_deployments_refusing_media, tested through the same group tests
+    "_active_default_litellm_params",  # Tested through the router default drop_params test in tests/unit/decisions/test_main.py
 ]
+
+
+def public_name(function_name):
+    """
+    The deprecated public name a ``_core_<name>`` router member is reached through. Tests that call the
+    old name run the core member, since ``DeprecatedRouterMembers`` forwards it there.
+    """
+    return function_name.removeprefix("_core_")
 
 
 def main():
     router_file = [
         "./litellm/router.py",
-        "./litellm/router_utils/batch_utils.py",
-        "./litellm/router_utils/pattern_match_deployments.py",
+        "./litellm/litellm_core_utils/batch_utils.py",
+        "./litellm/litellm_core_utils/pattern_match_deployments.py",
     ]
     # router_file = [
     #     "../../litellm/router.py",
-    #     "../../litellm/router_utils/pattern_match_deployments.py",
-    #     "../../litellm/router_utils/batch_utils.py",
+    #     "../../litellm/litellm_core_utils/pattern_match_deployments.py",
+    #     "../../litellm/litellm_core_utils/batch_utils.py",
     # ]  ## LOCAL TESTING
     tests_dir = "./tests/"  # Update this path if your tests directory is located elsewhere
     # tests_dir = "../../tests/"  # LOCAL TESTING
@@ -178,12 +218,16 @@ def main():
         router_functions.extend(get_functions_from_router(file))
     print("router_functions: ", router_functions)
     called_functions_in_tests = get_all_functions_called_in_tests(tests_dir)
-    untested_functions = [fn for fn in router_functions if fn not in called_functions_in_tests]
+    untested_functions = [
+        fn
+        for fn in router_functions
+        if fn not in called_functions_in_tests and public_name(fn) not in called_functions_in_tests
+    ]
 
     if untested_functions:
         all_untested_functions = []
         for func in untested_functions:
-            if func not in ignored_function_names:
+            if func not in ignored_function_names and public_name(func) not in ignored_function_names:
                 all_untested_functions.append(func)
         untested_perc = (len(all_untested_functions)) / len(router_functions)
         print("untested_perc: ", untested_perc)

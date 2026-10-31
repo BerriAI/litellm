@@ -37,7 +37,7 @@ async def app(scope, receive, send):
 REQUIRES_UVICORN_STARTUP_FAILURE: Final = pytest.mark.skipif(
     not multi_worker_reload_supported(), reason="uvicorn<0.50.0 has no startup failure exit code"
 )
-CORE_DUMP_SECONDS: Final = 3
+CORE_DUMP_SECONDS: Final = 15
 SLOW_CORE_DUMP_ON_QUIT: Final = f"""
 import os
 import signal
@@ -167,17 +167,20 @@ def test_a_save_replaces_every_worker_and_a_broken_save_stops_the_pool_until_the
 @REQUIRES_UVICORN_STARTUP_FAILURE
 @pytest.mark.timeout(3 * POOL_TIMEOUT_SECONDS)
 @pytest.mark.parametrize(
-    "kill_reloader",
+    ("kill_reloader", "slow_core_dump", "shutdown_timeout"),
     (
-        pytest.param(kill_stray_process, id="sigkill-reloader"),
-        pytest.param(lambda reloader: signal_group(reloader, signal.SIGHUP), id="terminal-closed"),
-        pytest.param(lambda reloader: signal_group(reloader, signal.SIGQUIT), id="ctrl-backslash"),
+        pytest.param(kill_stray_process, False, POOL_TIMEOUT_SECONDS, id="sigkill-reloader"),
+        pytest.param(
+            lambda reloader: signal_group(reloader, signal.SIGHUP), False, POOL_TIMEOUT_SECONDS, id="terminal-closed"
+        ),
+        pytest.param(lambda reloader: signal_group(reloader, signal.SIGQUIT), True, 10, id="ctrl-backslash"),
     ),
 )
 def test_the_pool_stops_and_frees_the_port_when_the_reloader_dies(
-    tmp_path: Path, kill_reloader: Callable[[int], None]
+    tmp_path: Path, kill_reloader: Callable[[int], None], slow_core_dump: bool, shutdown_timeout: float
 ) -> None:
-    (tmp_path / "reload_pool_app.py").write_text(PID_APP)
+    app_source: Final = PID_APP + (SLOW_CORE_DUMP_ON_QUIT if slow_core_dump else "")
+    (tmp_path / "reload_pool_app.py").write_text(app_source)
     log: Final = tmp_path / "reload.log"
     port: Final = allocate_port()
     process: Final = _start_pool(tmp_path, port, log)
@@ -187,7 +190,11 @@ def test_the_pool_stops_and_frees_the_port_when_the_reloader_dies(
         assert psutil.Process(pool_parent).ppid() == process.pid, log.read_text()
         kill_reloader(process.pid)
         process.wait(timeout=POOL_TIMEOUT_SECONDS)
-        _until(lambda: not psutil.pid_exists(pool_parent) and _port_refuses_connections(port), log)
+        _until(
+            lambda: not psutil.pid_exists(pool_parent) and _port_refuses_connections(port),
+            log,
+            seconds=shutdown_timeout,
+        )
     finally:
         stop_processes(group_members(process.pid))
         process.wait()
@@ -222,7 +229,7 @@ def test_ctrl_backslash_frees_the_port_without_waiting_out_the_worker_healthchec
     (tmp_path / "reload_pool_app.py").write_text(PID_APP + SLOW_CORE_DUMP_ON_QUIT)
     log: Final = tmp_path / "reload.log"
     port: Final = allocate_port()
-    process: Final = _start_pool(tmp_path, port, log, runner=SLOW_CORE_DUMP_ON_QUIT + POOL_RUNNER)
+    process: Final = _start_pool(tmp_path, port, log)
     try:
         workers: Final = _next_pool(log, process, port, frozenset())
         pool_parent: Final = psutil.Process(min(workers)).ppid()

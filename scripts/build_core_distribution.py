@@ -9,7 +9,15 @@ from pathlib import Path
 from typing import Final
 
 ROOT: Final = Path(__file__).resolve().parents[1]
-SOURCES: Final = ("litellm", "litellm-rust", ".cargo", "rust-toolchain.toml", "README.md", "LICENSE")
+SOURCES: Final = (
+    "litellm",
+    "litellm-rust",
+    ".cargo",
+    "rust-toolchain.toml",
+    "model_prices_and_context_window.json",
+    "README.md",
+    "LICENSE",
+)
 
 
 def stage_core_distribution(source: Path, destination: Path) -> None:
