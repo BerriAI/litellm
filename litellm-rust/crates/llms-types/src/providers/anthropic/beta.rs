@@ -728,12 +728,11 @@ mod tests {
 
     #[test]
     fn unknown_values_are_kept_verbatim() {
-        let parsed: AnthropicBeta = "claude-code-20250219".parse().unwrap();
-        assert_eq!(
-            parsed,
-            AnthropicBeta::Other("claude-code-20250219".to_string())
+        let parsed: AnthropicBeta = "example-beta-2099-01-01".parse().unwrap();
+        assert!(
+            matches!(&parsed, AnthropicBeta::Other(value) if value == "example-beta-2099-01-01")
         );
-        assert_eq!(parsed.to_string(), "claude-code-20250219");
+        assert_eq!(parsed.to_string(), "example-beta-2099-01-01");
     }
 
     #[test]
