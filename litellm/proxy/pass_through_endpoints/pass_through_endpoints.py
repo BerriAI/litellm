@@ -867,9 +867,9 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
 async def _inherit_auth_guardrails(
     parsed_body: dict[str, object] | None,  # mutable-ok: merges the guardrails into the live request body
     user_api_key_dict: UserAPIKeyAuth,
-    configured_guardrails: Mapping[str, bool] | None,
+    configured_guardrails: Sequence[object] | None,
     inherit: bool,
-) -> Mapping[str, bool] | Sequence[object] | None:
+) -> Sequence[object] | None:
     """Return the guardrails a pass-through request runs after the provider responds.
 
     The endpoint's configured guardrails win. Without any, and with ``inherit`` and a JSON body, the key, team,
