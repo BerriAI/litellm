@@ -63,7 +63,6 @@ export default function UISettings() {
   const requireAuthForPublicAIHubProperty = schema?.properties?.require_auth_for_public_ai_hub;
   const forwardClientHeadersProperty = schema?.properties?.forward_client_headers_to_llm_api;
   const forwardLLMProviderAuthHeadersProperty = schema?.properties?.forward_llm_provider_auth_headers;
-  const enableProjectsUIProperty = schema?.properties?.enable_projects_ui;
   const enableChatUIProperty = schema?.properties?.enable_chat_ui;
   const enabledPagesProperty = schema?.properties?.enabled_ui_pages_internal_users;
   const disableAgentsProperty = schema?.properties?.disable_agents_for_internal_users;
@@ -142,21 +141,6 @@ export default function UISettings() {
       {
         onSuccess: () => {
           toast.success("UI settings updated successfully");
-        },
-        onError: (error) => {
-          toast.fromError(error);
-        },
-      },
-    );
-  };
-
-  const handleToggleEnableProjectsUI = (checked: boolean) => {
-    updateSettings(
-      { enable_projects_ui: checked },
-      {
-        onSuccess: () => {
-          toast.success("UI settings updated successfully. Refreshing page...");
-          setTimeout(() => window.location.reload(), 1000);
         },
         onError: (error) => {
           toast.fromError(error);
@@ -411,19 +395,6 @@ export default function UISettings() {
                 "Forwards provider auth headers (x-api-key, x-goog-api-key, api-key, ocp-apim-subscription-key) to the upstream LLM, overriding any deployment-configured key for that request. Enable for Claude Code BYOK (clients bring their own API key). Independent of the client-headers toggle — enable only the one(s) you need."
               }
             />
-            {enableProjectsUIProperty && (
-              <SettingRow
-                checked={Boolean(values.enable_projects_ui)}
-                disabled={isUpdating}
-                onCheckedChange={handleToggleEnableProjectsUI}
-                ariaLabel={enableProjectsUIProperty.description ?? "Enable Projects UI"}
-                label="[BETA] Enable Projects (page will refresh)"
-                description={
-                  enableProjectsUIProperty.description ??
-                  "If enabled, shows the Projects feature in the UI sidebar and the project field in key management."
-                }
-              />
-            )}
             <SettingRow
               checked={Boolean(values.enable_chat_ui)}
               disabled={isUpdating}

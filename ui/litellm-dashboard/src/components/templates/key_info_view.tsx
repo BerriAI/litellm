@@ -1,7 +1,6 @@
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { useModelAccessGroupNames } from "@/app/(dashboard)/hooks/models/useModels";
 import { useProjects } from "@/app/(dashboard)/hooks/projects/useProjects";
-import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings";
 import { useApplyUserBudgetToTeamKeys } from "@/app/(dashboard)/hooks/uiSettings/useApplyUserBudgetToTeamKeys";
 import useTeams from "@/app/(dashboard)/hooks/useTeams";
 import { useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
@@ -111,11 +110,9 @@ export default function KeyInfoView({
   const { teams: teamsData } = useTeams();
   const { data: organizations } = useOrganizations();
   const { data: projects } = useProjects();
-  const { data: uiSettingsData } = useUISettings();
   const applyUserBudgetToTeamKeys = useApplyUserBudgetToTeamKeys();
   const { data: allMcpServers } = useMCPServers();
   const { data: allMcpToolsets } = useMCPToolsets();
-  const enableProjectsUI = Boolean(uiSettingsData?.values?.enable_projects_ui);
   const [isEditing, setIsEditing] = useState(false);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [deleteLoading, setDeleteLoading] = useState(false);
@@ -968,21 +965,19 @@ export default function KeyInfoView({
                     </p>
                   </div>
 
-                  {enableProjectsUI && (
-                    <div>
-                      <p className="text-sm font-medium">Project</p>
-                      <p className="text-sm">
-                        {currentKeyData.project_id
-                          ? (() => {
-                              const project = projects?.find((p) => p.project_id === currentKeyData.project_id);
-                              return project?.project_alias
-                                ? `${project.project_alias} (${currentKeyData.project_id})`
-                                : currentKeyData.project_id;
-                            })()
-                          : "Not Set"}
-                      </p>
-                    </div>
-                  )}
+                  <div>
+                    <p className="text-sm font-medium">Project</p>
+                    <p className="text-sm">
+                      {currentKeyData.project_id
+                        ? (() => {
+                            const project = projects?.find((p) => p.project_id === currentKeyData.project_id);
+                            return project?.project_alias
+                              ? `${project.project_alias} (${currentKeyData.project_id})`
+                              : currentKeyData.project_id;
+                          })()
+                        : "Not Set"}
+                    </p>
+                  </div>
 
                   <div>
                     <p className="text-sm font-medium">Organization</p>

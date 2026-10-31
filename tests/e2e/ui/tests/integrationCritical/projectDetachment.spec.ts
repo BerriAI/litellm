@@ -39,22 +39,6 @@ test("project creation and explicit detachment preserve saved scope and restore 
       ),
     );
   try {
-    const previous = await request.get("/get/ui_settings", { headers });
-    expect(previous.ok(), await previous.text()).toBe(true);
-    const priorEnabled =
-      (await previous.json()).values.enable_projects_ui ?? false;
-    resources.push(async () => {
-      const response = await request.patch("/update/ui_settings", {
-        headers,
-        data: { enable_projects_ui: priorEnabled },
-      });
-      expect(response.ok(), await response.text()).toBe(true);
-    });
-    const settings = await request.patch("/update/ui_settings", {
-      headers,
-      data: { enable_projects_ui: true },
-    });
-    expect(settings.ok(), await settings.text()).toBe(true);
     for (const alias of [prefix, `${prefix}-outside`]) {
       const model = await post("/model/new", {
         model_name: alias,

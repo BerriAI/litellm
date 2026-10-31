@@ -477,12 +477,6 @@ _RUNTIME_GENERAL_SETTINGS_FLAGS: Final = [
 # valid inputs.
 _EXTRA_UI_SETTINGS_FIELDS: Final[dict[str, tuple[object, FieldInfo]]] = {}
 
-# Settings OSS knows about as enterprise-gated. If a caller sends one of
-# these keys and no extension package has registered it, the PATCH
-# endpoint returns 403 instead of silently dropping the value, so the
-# client gets a clear signal that the feature requires LiteLLM Enterprise.
-_ENTERPRISE_ONLY_UI_SETTINGS: Final[set[str]] = {"enable_projects_ui"}
-
 # Memoized effective class; invalidated on registration.
 _EFFECTIVE_UI_SETTINGS_CLASS: type[UISettings] | None = None
 
@@ -1976,20 +1970,6 @@ async def update_ui_settings(
 
     # Only include fields the caller actually sent (not Pydantic defaults).
     settings_dict: Final = _json_settings(settings.model_dump(exclude_unset=True))
-
-    # Reject enterprise-only settings up front so the caller gets a clear
-    # signal instead of a silent drop.
-    blocked_enterprise_keys = sorted((settings_dict.keys() & _ENTERPRISE_ONLY_UI_SETTINGS) - ALLOWED_UI_SETTINGS_FIELDS)
-    if blocked_enterprise_keys:
-        raise HTTPException(
-            status_code=403,
-            detail={
-                "error": (
-                    f"Setting(s) {blocked_enterprise_keys} are a LiteLLM "
-                    "Enterprise feature and are not available on this build."
-                )
-            },
-        )
 
     # Enforce allowlist and drop anything unexpected
     incoming: Final = {k: v for k, v in settings_dict.items() if k in ALLOWED_UI_SETTINGS_FIELDS}
