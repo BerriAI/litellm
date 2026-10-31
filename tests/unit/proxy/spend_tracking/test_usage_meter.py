@@ -387,3 +387,43 @@ async def test_shutdown_does_not_cancel_dependency_receipt_or_leak_reserved_capa
     assert meter.pending_records == 0
     assert meter.pending_bytes == 0
     prerequisite.set_result(None)
+
+
+@pytest.mark.asyncio
+async def test_large_write_sequence_drains_within_byte_and_record_bounds() -> None:
+    database: Final = CommitBarrier()
+    database.release.set()
+    meter: Final = DurableUsageMeter(
+        database.write,
+        UsageCaptureSettings(batch_size=8, max_pending_records=4, max_pending_bytes=1024),
+        wait_for_batch=_manual_flush,
+    )
+    writes: Final = tuple(_write(str(index)) for index in range(20))
+    pending: Final = meter.submit((_write("pending"),))
+    await meter.record_writes(writes)
+    await pending
+    with pytest.raises(UsageCaptureError, match="One usage observation"):
+        await meter.record_writes((_write("oversized" * 300),))
+    await meter.close()
+    assert database.committed == ("pending", *(write.event.event_id for write in writes))
+    assert database.transactions > 1
+    assert (meter.pending_bytes, meter.pending_records) == (0, 0)
+    with pytest.raises(UsageCaptureError):
+        await meter.record_writes((_write("closed"),))
+
+
+@pytest.mark.asyncio
+async def test_cancelling_bounded_capture_preserves_admitted_writes_without_admitting_remaining_rows() -> None:
+    database: Final = CommitBarrier()
+    meter: Final = DurableUsageMeter(
+        database.write, UsageCaptureSettings(batch_size=2, max_pending_records=2), wait_for_batch=_manual_flush
+    )
+    recording: Final = asyncio.create_task(meter.record_writes(tuple(_write(str(index)) for index in range(8))))
+    await database.entered.wait()
+    recording.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await recording
+    database.release.set()
+    await meter.close()
+    assert database.committed == ("0", "1")
+    assert meter.pending_bytes == meter.pending_records == 0

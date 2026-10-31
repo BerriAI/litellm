@@ -861,12 +861,12 @@ async def test_callback_overload_is_visible_without_suppressing_legacy_tracking(
     kwargs: Final = {"call_type": "acompletion", "litellm_call_id": "one", "litellm_params": {}}
     try:
         for start, end in ((None, NOW), (NOW, None)):
-            missing_timestamp: Final = captured_callback_kwargs(kwargs, {"id": "one"}, start, end)
+            missing_timestamp: Final = await captured_callback_kwargs(kwargs, {"id": "one"}, start, end)
             assert missing_timestamp == kwargs
         assert "Usage capture requires callback start and end timestamps" in caplog.text
-        admitted: Final = captured_callback_kwargs(kwargs, {"id": "one"}, NOW, NOW)
+        admitted: Final = await captured_callback_kwargs(kwargs, {"id": "one"}, NOW, NOW)
         await database.entered.wait()
-        rejected: Final = captured_callback_kwargs({**kwargs, "litellm_call_id": "two"}, {"id": "two"}, NOW, NOW)
+        rejected: Final = await captured_callback_kwargs({**kwargs, "litellm_call_id": "two"}, {"id": "two"}, NOW, NOW)
         assert "_accounting_capture" in admitted
         assert "_accounting_capture" not in rejected
         assert "Usage capture failed before legacy cost tracking" in caplog.text
@@ -1388,7 +1388,11 @@ async def test_batch_capture_retains_request_basis_for_later_tiered_pricing(
     import litellm
     from litellm.batches.batch_utils import batch_cost_and_usage
     from litellm.cost_calculator import batch_cost_calculator
-    from litellm.proxy.spend_tracking.usage_capture import capture_logging_usage
+    from litellm.proxy.spend_tracking.usage_capture import (
+        UsageBatchWriter,
+        capture_batch_callback,
+        capture_logging_usage,
+    )
     from litellm.types.utils import Usage
 
     rates: Final = {
@@ -1413,13 +1417,23 @@ async def test_batch_capture_retains_request_basis_for_later_tiered_pricing(
     ]
     result: Final = batch_cost_and_usage(rows, "openai", model_info=rates if priced else {})
     database: Final = StoredUsage()
-    meter: Final = DurableUsageMeter(database.insert, UsageCaptureSettings(), wait_for_batch=_manual_flush)
+    writer: Final = UsageBatchWriter(database.insert, database.load)
+    meter: Final = DurableUsageMeter(writer.write, UsageCaptureSettings(), wait_for_batch=_manual_flush)
     logger: Final = _logger("aretrieve_batch")
     logger.model_call_details["response_cost"] = result.cost
     capture_logging_usage(meter, logger, {"id": "batch", "status": "completed", "usage": result.usage}, NOW, NOW)
+    await capture_batch_callback(
+        meter,
+        database.load,
+        logger.model_call_details,
+        {"id": "batch", "status": "completed", "usage": result.usage},
+        NOW,
+        NOW,
+    )
     await meter.close()
-    envelope: Final = json.loads(database.rows[-1].envelope)
-    retained: Final = envelope["usage"]["batch_usage_by_request"]
+    retained: Final = tuple(
+        {"model": "capture-model", "usage": json.loads(write.envelope)["usage"]} for write in database.rows[1:]
+    )
     assert sorted(row["usage"]["prompt_tokens"] for row in retained) == sorted(tokens)
     reconstructed: Final = sum(
         sum(batch_cost_calculator(Usage(**row["usage"]), row["model"], "openai", model_info=rates)) for row in retained
@@ -1427,4 +1441,87 @@ async def test_batch_capture_retains_request_basis_for_later_tiered_pricing(
     expected: Final = sum(n * (0.002 if n > 200000 else 0.001) for n in tokens)
     assert reconstructed == pytest.approx(expected)
     assert result.cost == pytest.approx(expected if priced else 0)
-    assert envelope["usage"]["prompt_tokens"] == sum(tokens)
+    assert database.rows[0].event.metrics is None
+    assert json.loads(database.rows[0].envelope)["charge_eligible"] is False
+    assert all(json.loads(write.envelope)["finalized_cost"] is None for write in database.rows[1:])
+
+
+@pytest.mark.asyncio
+async def test_large_batch_recovers_partial_commit_with_frozen_pricing_and_rejects_changed_usage() -> None:
+    from litellm.proxy.spend_tracking.usage_capture import PricingCapture, UsageBatchWriter, capture_batch_callback
+
+    database: Final = StoredUsage()
+    transactions: Final = asyncio.Queue[tuple[UsageWrite, ...]]()
+    failure: Final = asyncio.Queue[bool]()
+    failure.put_nowait(True)
+
+    async def persist(writes: tuple[UsageWrite, ...]) -> None:
+        assert sum(len(write.envelope.encode()) for write in writes) <= 65536
+        assert len(writes) <= 32
+        if len(database.rows) > 1 and not failure.empty():
+            failure.get_nowait()
+            raise RuntimeError("Interrupted batch persistence")
+        await database.insert(writes)
+        transactions.put_nowait(writes)
+
+    writer: Final = UsageBatchWriter(persist, database.load)
+    meter: Final = DurableUsageMeter(
+        writer.write,
+        UsageCaptureSettings(batch_size=32, max_pending_records=32, max_pending_bytes=65536),
+        wait_for_batch=_manual_flush,
+    )
+    rows: Final = tuple(
+        {
+            "model": "capture-model" if index % 7 else None,
+            "usage": {"prompt_tokens": index % 5 + 1} if index % 7 else None,
+        }
+        for index in range(1000)
+    )
+    response: Final = {"id": "large-batch", "status": "completed", "usage": {"batch_usage_by_request": rows}}
+    pricing: Final = PricingCapture("{}", "{}", json.dumps({"batch_models": {"capture-model": {"rate": 1}}}))
+    kwargs: Final = {
+        "call_type": "aretrieve_batch",
+        "litellm_call_id": "poll",
+        "litellm_params": {},
+        "_accounting_pricing_snapshot": pricing,
+    }
+    with pytest.raises(RuntimeError, match="Interrupted batch persistence"):
+        await capture_batch_callback(meter, database.load, kwargs, response, NOW, NOW)
+    partial: Final = database.rows
+    assert 1 < len(partial) < len(rows) + 1
+    changed_pricing: Final = PricingCapture("{}", "{}", json.dumps({"batch_models": {"capture-model": {"rate": 2}}}))
+    retried: Final = await capture_batch_callback(
+        meter,
+        database.load,
+        {**kwargs, "_accounting_pricing_snapshot": changed_pricing},
+        {**response, "usage": {"batch_usage_by_request": tuple(reversed(rows))}},
+        NOW,
+        NOW,
+    )
+    assert retried.receipt.done() and retried.receipt.exception() is None
+    assert len(database.rows) == len(rows) + 1
+    assert database.rows[: len(partial)] == partial
+    envelopes: Final = tuple(json.loads(write.envelope) for write in database.rows[1:])
+    assert all(
+        envelope["pricing"]["model_map_information"] == ({"rate": 1} if envelope["usage"] is not None else None)
+        for envelope in envelopes
+    )
+    assert sum(envelope["usage"] is None for envelope in envelopes) == sum(row["usage"] is None for row in rows)
+    assert all(envelope["request_count_eligible"] is False for envelope in envelopes)
+    assert sum(envelope["usage"]["prompt_tokens"] for envelope in envelopes if envelope["usage"] is not None) == sum(
+        row["usage"]["prompt_tokens"] for row in rows if row["usage"] is not None
+    )
+    before_conflict: Final = database.rows
+    with pytest.raises(UsageCaptureError, match="identity conflicts"):
+        await capture_batch_callback(
+            meter,
+            database.load,
+            kwargs,
+            {**response, "usage": {"batch_usage_by_request": rows[:-1]}},
+            NOW,
+            NOW,
+        )
+    await meter.close()
+    assert database.rows == before_conflict
+    assert transactions.qsize() > 2
+    assert meter.pending_bytes == meter.pending_records == 0

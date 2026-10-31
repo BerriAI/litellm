@@ -6,7 +6,8 @@ from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from decimal import Decimal
-from itertools import chain
+from hashlib import sha256
+from itertools import chain, islice
 from typing import TYPE_CHECKING, Final
 
 from pydantic import BaseModel, JsonValue, TypeAdapter
@@ -546,7 +547,115 @@ def capture_callback(
     return CapturedUsage(payload, builder.writes, meter.submit(builder.writes, prerequisites=prerequisites))
 
 
-def captured_callback_kwargs(
+def _batch_rows(response: object) -> tuple[Mapping[str, JsonValue], ...]:
+    usage: Final = _response_fields(_response_fields(response).get("usage"))
+    rows: Final = usage.get("batch_usage_by_request")
+    return TypeAdapter(tuple[dict[str, JsonValue], ...]).validate_python(rows) if rows else ()
+
+
+def _batch_root(write: UsageWrite, rows: tuple[Mapping[str, JsonValue], ...]) -> UsageWrite:
+    event: Final = write.event.model_copy(update={"metrics": None})
+    envelope: Final = _JSON_OBJECT.validate_json(write.envelope)
+    return _database_usage_write(
+        event,
+        {
+            **envelope,
+            "event": event.model_dump(mode="json"),
+            "usage": {
+                "batch_row_count": len(rows),
+                "batch_rows_sha256": sha256(_json(rows).encode()).hexdigest(),
+                "batch_charge_eligible": envelope["charge_eligible"],
+            },
+            "usage_source": "unknown",
+            "charge_eligible": False,
+            "ownership": "aggregate",
+        },
+    )
+
+
+def _batch_row_write(root: UsageWrite, row: Mapping[str, JsonValue], index: int) -> UsageWrite:
+    envelope: Final = _JSON_OBJECT.validate_json(root.envelope)
+    pricing: Final = _JSON_OBJECT.validate_python(envelope["pricing"])
+    model: Final = _text(row["model"])
+    usage: Final = _JSON_OBJECT.validate_python(row["usage"]) if row["usage"] is not None else None
+    identity: Final = f"{root.event.event_id}:row:{index}"
+    event: Final = OutboundUsageEvent.model_validate(
+        {
+            **root.event.model_dump(),
+            "event_id": identity,
+            "attempt_id": identity,
+            "metrics": _usage_metrics(usage),
+            "dimensions": (
+                *(dimension for dimension in root.event.dimensions if dimension.name is not DimensionName.MODEL),
+                *((Dimension(name=DimensionName.MODEL, value=model),) if model else ()),
+            ),
+        }
+    )
+    return _database_usage_write(
+        event,
+        {
+            **envelope,
+            "event": event.model_dump(mode="json"),
+            "usage": usage,
+            "usage_source": "unknown" if usage is None else "measured",
+            "charge_eligible": _fields(envelope["usage"])["batch_charge_eligible"],
+            "ownership": "attempt",
+            "parent_request_id": root.event.event_id,
+            "finalized_cost": None,
+            "allocation": None,
+            "pricing": {
+                **pricing,
+                "model_map_information": _fields(pricing.get("batch_models")).get(model or ""),
+                "batch_models": {},
+                "reported_cost": None,
+                "cost_breakdown": None,
+                "response_inputs": {
+                    key: value
+                    for key, value in _fields(pricing.get("response_inputs")).items()
+                    if key not in {"batch_models", "batch_successful_requests"}
+                },
+            },
+        },
+    )
+
+
+async def capture_batch_callback(
+    meter: DurableUsageMeter,
+    load: Callable[[tuple[str, ...]], Awaitable[tuple[UsageWrite, ...]]] | None,
+    kwargs: Mapping[str, object],
+    response: object,
+    start_time: datetime,
+    end_time: datetime,
+) -> CapturedUsage:
+    from litellm.proxy.db.db_spend_update_writer import get_llm_router
+    from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
+
+    if load is None:
+        raise UsageCaptureError("Batch capture requires the existing ledger snapshot reader")
+    rows: Final = tuple(sorted(_batch_rows(response), key=_json))
+    builder: Final = _CaptureBuilder(kwargs, response)
+    payload: Final = get_logging_payload(
+        dict(kwargs), response, start_time, end_time, llm_router=get_llm_router(), capture_usage=builder.observe
+    )
+    if len(builder.writes) != 1 or _terminal_facts(builder.writes[0]) is None:
+        raise UsageCaptureError("Batch rows require one terminal job observation")
+    root: Final = _batch_root(builder.writes[0], rows)
+    for prior in _prior_captures(kwargs):
+        await asyncio.shield(prior.receipt)
+    await meter.record_writes((root,))
+    accepted: Final = await load((root.event.event_id,))
+    if len(accepted) != 1:
+        raise UsageCaptureError("Committed batch snapshot could not be loaded")
+    frozen: Final = _reuse_terminal_snapshot(root, accepted[0])
+    remaining: Final = iter(enumerate(rows))
+    while group := tuple(islice(remaining, meter.settings.batch_size)):
+        await meter.record_writes(tuple(_batch_row_write(frozen, row, index) for index, row in group))
+    receipt: Final[asyncio.Future[None]] = asyncio.get_running_loop().create_future()
+    receipt.set_result(None)
+    return CapturedUsage(payload, (frozen,), receipt)
+
+
+async def captured_callback_kwargs(
     kwargs: Mapping[str, object], response: object, start_time: datetime | None, end_time: datetime | None
 ) -> Mapping[str, object]:
     from litellm.proxy.proxy_server import usage_capture
@@ -559,10 +668,15 @@ def captured_callback_kwargs(
         verbose_proxy_logger.error("Usage capture requires callback start and end timestamps")
         return kwargs
     try:
-        return {**kwargs, "_accounting_capture": capture_callback(usage_meter, kwargs, response, start_time, end_time)}
+        captured: Final = (
+            await capture_batch_callback(usage_meter, usage_capture.load, kwargs, response, start_time, end_time)
+            if _batch_rows(response)
+            else capture_callback(usage_meter, kwargs, response, start_time, end_time)
+        )
     except Exception:  # noqa: BLE001  # capture failure must not suppress legacy billing
         verbose_proxy_logger.exception("Usage capture failed before legacy cost tracking")
         return kwargs
+    return {**kwargs, "_accounting_capture": captured}
 
 
 async def capture_proxy_response(logging_obj: object, response: object, *, background: bool = False) -> None:
@@ -640,7 +754,7 @@ def capture_logging_usage(
             if isinstance(existing_pricing, PricingCapture) and not internal
             else _capture_pricing(logging_obj, normalized, details)
         )
-        if freeze_only:
+        if freeze_only or _batch_rows(normalized):
             if not internal:
                 logging_obj.record_usage_pricing(pricing)
             return
@@ -813,9 +927,14 @@ class UsageBatchWriter:
 class UsageCaptureRuntime:
     def __init__(self) -> None:
         self.meter: DurableUsageMeter | None = None
+        self.load: Callable[[tuple[str, ...]], Awaitable[tuple[UsageWrite, ...]]] | None = None
 
     def start(
-        self, write_batch: Callable[[tuple[UsageWrite, ...]], Awaitable[None]], settings: UsageCaptureSettings
+        self,
+        write_batch: Callable[[tuple[UsageWrite, ...]], Awaitable[None]],
+        settings: UsageCaptureSettings,
+        *,
+        load: Callable[[tuple[str, ...]], Awaitable[tuple[UsageWrite, ...]]] | None = None,
     ) -> None:
         from litellm.litellm_core_utils.litellm_logging import Logging
 
@@ -825,6 +944,7 @@ class UsageCaptureRuntime:
             return
         meter: Final = DurableUsageMeter(write_batch, settings)
         self.meter = meter
+        self.load = load
         Logging.usage_capture_callback = lambda logger, response, start, end, freeze: capture_logging_usage(
             meter, logger, response, start, end, freeze
         )
@@ -839,3 +959,4 @@ class UsageCaptureRuntime:
         finally:
             Logging.usage_capture_callback = None
             self.meter = None
+            self.load = None

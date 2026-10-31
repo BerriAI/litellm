@@ -905,7 +905,7 @@ class _ProxyDBLogger(CustomLogger):
                     resolve_missing_key_identity=str(kwargs.get("call_type")) not in _CAPTURED_IDENTITY_CALL_TYPES,
                 )
                 _write_spend_metadata_to_kwargs(kwargs=kwargs, metadata=metadata)
-            kwargs.update(captured_callback_kwargs(kwargs, completion_response, start_time, end_time))
+            kwargs.update(await captured_callback_kwargs(kwargs, completion_response, start_time, end_time))
             budget_reservation: Final = _get_budget_reservation_from_metadata(metadata=metadata)
             if accounting is not None and (budget_reservation is not None or litellm.apply_search_free_tier):
                 accounting.write_started = True

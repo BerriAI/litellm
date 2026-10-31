@@ -3228,7 +3228,9 @@ def _configure_usage_capture() -> None:
 
     ledger: Final = AccountingLedger.for_client(prisma_client)
     writer: Final = UsageBatchWriter(ledger.insert_usage_batch, ledger.load_usage_batch)
-    usage_capture.start(writer.write, UsageCaptureSettings.model_validate(capture_settings))
+    usage_capture.start(
+        writer.write, UsageCaptureSettings.model_validate(capture_settings), load=ledger.load_usage_batch
+    )
 
 
 def cost_tracking():

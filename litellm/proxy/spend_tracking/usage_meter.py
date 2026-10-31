@@ -153,6 +153,31 @@ class DurableUsageMeter:
         envelope: Final = '{"event":' + event.model_dump_json() + "}"
         await asyncio.shield(self.submit((UsageWrite(event, envelope, usage_delivery_targets(event.dimensions)),)))
 
+    async def record_writes(self, writes: tuple[UsageWrite, ...]) -> None:
+        size: Final = sum(len(write.envelope.encode("utf-8")) for write in writes)
+        if len(writes) > min(self.settings.batch_size, self.settings.max_pending_records) or (
+            size > self.settings.max_pending_bytes and len(writes) > 1
+        ):
+            middle: Final = len(writes) // 2
+            await self.record_writes(writes[:middle])
+            await self.record_writes(writes[middle:])
+            return
+        if size > self.settings.max_pending_bytes:
+            raise UsageCaptureError("One usage observation exceeds capture capacity")
+        while (receipt := self._submit_available(writes)) is None:
+            await self.flush()
+        self._wakeup.set()
+        await asyncio.shield(receipt)
+
+    def _submit_available(self, writes: tuple[UsageWrite, ...]) -> asyncio.Future[None] | None:
+        try:
+            receipt: Final = self.submit(writes)
+        except UsageCaptureError:
+            if self._closed or not self.pending_records or not writes:
+                raise
+            return None
+        return receipt
+
     async def flush(self) -> None:
         self._ensure_worker()
         self._wakeup.set()
