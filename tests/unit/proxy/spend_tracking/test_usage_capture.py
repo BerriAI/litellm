@@ -1644,6 +1644,23 @@ async def test_batch_producers_share_byte_capacity_and_release_it_after_drain() 
         await asyncio.shield(second.receipt)
         assert len(database.rows) == 2002
         assert runtime.meter.pending_bytes == 0
+        admitted: Final = asyncio.Queue[asyncio.Future[None]]()
+        for index in range(100):
+            try:
+                small: Final = runtime.submit_batch(
+                    kwargs,
+                    {**response, "id": f"small-{index}", "usage": {"batch_usage_by_request": rows[1:2]}},
+                    NOW,
+                    NOW,
+                )
+            except UsageCaptureError:
+                break
+            admitted.put_nowait(small.receipt)
+        count: Final = admitted.qsize()
+        assert 1 < count < 100
+        await asyncio.gather(*(admitted.get_nowait() for _ in range(count)))
+        assert len(database.rows) == 2002 + 2 * count
+        assert runtime.meter.pending_bytes == 0
     finally:
         release.set()
         await runtime.stop(1)

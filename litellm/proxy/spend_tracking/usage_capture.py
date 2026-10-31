@@ -1033,7 +1033,9 @@ class UsageCaptureRuntime:
         if len(self._batches) >= meter.settings.max_pending_records:
             raise UsageCaptureError("Batch capture producer capacity exhausted")
         capture: Final = _prepare_batch_capture(kwargs, response, start_time, end_time)
-        retained, chunk_bytes, _ = _batch_capacity(meter, capture.root, capture.rows)
+        retained, chunk_bytes, _ = _batch_capacity(
+            meter, capture.root, capture.rows, extra_bytes=len(capture.root.envelope.encode("utf-8"))
+        )
         reservation: Final = meter.reserve_producer(retained, chunk_bytes)
         task: Final = asyncio.create_task(
             _persist_batch_capture(
