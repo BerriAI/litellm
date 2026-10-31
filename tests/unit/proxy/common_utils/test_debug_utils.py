@@ -1,3 +1,4 @@
+import gc
 import json
 import os
 import socket
@@ -13,6 +14,7 @@ from litellm.proxy import proxy_server
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.bug_report_config import build_proxy_bug_report
+from litellm.proxy.common_utils import debug_utils
 from litellm.proxy.common_utils.debug_utils import (
     PSUTIL_MISSING_ERROR,
     _ProcFilesystemProcess,
@@ -198,3 +200,28 @@ def test_memory_routes_count_prompt_caching_pins(
 
     assert response.status_code == 200
     assert pin_count(response.json()) == expected
+
+
+@pytest.fixture
+def unfrozen_gc() -> Iterator[None]:
+    gc.unfreeze()
+    yield
+    gc.unfreeze()
+
+
+def test_freeze_gc_after_startup_freezes_existing_objects(unfrozen_gc: None, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(debug_utils, "LITELLM_GC_FREEZE_AFTER_STARTUP", True)
+    startup_object = {"loaded": "at startup"}
+
+    debug_utils.freeze_gc_after_startup()
+
+    assert gc.get_freeze_count() > 0
+    assert not any(obj is startup_object for obj in gc.get_objects())
+
+
+def test_freeze_gc_after_startup_does_nothing_when_disabled(unfrozen_gc: None, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(debug_utils, "LITELLM_GC_FREEZE_AFTER_STARTUP", False)
+
+    debug_utils.freeze_gc_after_startup()
+
+    assert gc.get_freeze_count() == 0
