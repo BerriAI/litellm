@@ -50,11 +50,17 @@ def native_health_check_mode(
     return mantle_health_check_mode(model)
 
 
-def _cost_map_mode(model: str) -> str | None:
+def cost_map_entry(model: str) -> Mapping[str, object]:
     import litellm
+    from litellm.litellm_core_utils.health_check_utils import STR_KEY_MAPPING
+
+    return STR_KEY_MAPPING.validate_python(litellm.model_cost.get(model, {}))
+
+
+def _cost_map_mode(model: str) -> str | None:
     from litellm.litellm_core_utils.health_check_utils import OPTIONAL_STR
 
-    return OPTIONAL_STR.validate_python(litellm.model_cost.get(model, {}).get("mode"))
+    return OPTIONAL_STR.validate_python(cost_map_entry(model).get("mode"))
 
 
 def default_health_check_mode(requested_model: str, model: str, custom_llm_provider: str) -> str:

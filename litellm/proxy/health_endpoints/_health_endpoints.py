@@ -80,8 +80,12 @@ from litellm.proxy.db.health_check_latest import (
 from litellm.proxy.db.proxy_worker_heartbeat import count_live_proxy_workers
 from litellm.proxy.health_check import (  # noqa: F401  # legacy module exports
     ADMIN_ONLY_HEALTH_DISPLAY_PARAMS,
+    BILLED_MEDIA_NOT_CHECKED_WARNING,
+    DEPLOYMENTS_ADAPTER,
+    MODEL_IDS_ADAPTER,
     _clean_endpoint_data,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     _update_litellm_params_for_health_check,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    all_bill_media_on_probe,
     clean_endpoint_data,
     deployments_targeted_by_name,
     health_check_filter_kwargs_from_general_settings,
@@ -1577,8 +1581,11 @@ async def health_endpoint(
     ```
     else, the health checks will be run on models when /health is called.
 
-    To skip deployments that set ``model_info.disable_background_health_check: true``
-    on ``GET /health`` as well as in the background loop, set
+    Deployments whose check would generate billed media (image_generation, image_edit, video_generation,
+    and models priced per generated clip) are not checked here or by the background loop unless they set
+    ``model_info.disable_background_health_check: false``. A ``model`` or ``model_id`` that targets only
+    such deployments answers 200 with zero counts and a ``warnings`` entry. To also skip deployments that
+    set ``disable_background_health_check: true`` on ``GET /health``, set
     ``general_settings.health_check_skip_disabled_background_models: true``.
     """
     import time
@@ -1686,6 +1693,18 @@ async def health_endpoint(
                     else f"key not allowed to health-check model {model}"
                 },
             )
+        if targeted_ids is not None and all_bill_media_on_probe(
+            DEPLOYMENTS_ADAPTER.validate_python(_llm_model_list),
+            MODEL_IDS_ADAPTER.validate_python(targeted_ids),
+            **_hc_filter,
+        ):
+            return {
+                "healthy_endpoints": [],
+                "unhealthy_endpoints": [],
+                "healthy_count": 0,
+                "unhealthy_count": 0,
+                "warnings": [BILLED_MEDIA_NOT_CHECKED_WARNING],
+            }
         if use_background_health_checks:
             # The cached background result covers every model. When the
             # caller targets a specific model/model_id we have to narrow the
