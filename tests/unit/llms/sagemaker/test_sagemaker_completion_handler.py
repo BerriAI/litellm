@@ -374,6 +374,27 @@ def test_completion_sagemaker_non_stream(
 
 @pytest.mark.usefixtures("httpx_transport")
 @pytest.mark.usefixtures("fake_provider_credentials")
+def test_completion_sagemaker_sends_the_inference_component_only_as_a_header(respx_mock: respx.MockRouter) -> None:
+    url: Final = "https://runtime.sagemaker.us-west-2.amazonaws.com/endpoints/my-endpoint/invocations"
+    route: Final = respx_mock.post(url).mock(
+        return_value=httpx.Response(200, json={"generated_text": "SageMaker reply"})
+    )
+    litellm.completion(
+        model="sagemaker/my-endpoint",
+        messages=[{"role": "user", "content": "hi"}],
+        temperature=0.2,
+        model_id="my-inference-component",
+        aws_region_name="us-west-2",
+        num_retries=0,
+    )
+
+    request: Final = route.calls[0].request
+    assert request.headers["X-Amzn-SageMaker-Inference-Component"] == "my-inference-component"
+    assert json.loads(request.content) == {"inputs": "hi", "parameters": {"temperature": 0.2}}
+
+
+@pytest.mark.usefixtures("httpx_transport")
+@pytest.mark.usefixtures("fake_provider_credentials")
 def test_completion_sagemaker_non_stream_with_aws_params(respx_mock: respx.MockRouter) -> None:
     url: Final = (
         "https://runtime.sagemaker.us-west-5.amazonaws.com/endpoints/"

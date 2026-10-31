@@ -5,9 +5,12 @@ Uses mock guardrails to validate pipeline execution without external services.
 """
 
 import copy
+import json
 import logging
 import pickle
-from typing import Literal
+from collections.abc import Callable, Iterable, Mapping, Sequence
+from itertools import chain
+from typing import Final, Literal
 from unittest.mock import MagicMock
 
 import pytest
@@ -15,6 +18,7 @@ import pytest
 import litellm
 from litellm.caching.dual_cache import DualCache
 from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.llms.anthropic.chat.guardrail_translation.handler import AnthropicMessagesHandler
 from litellm.llms.base_llm.guardrail_translation.utils import UnappliableRequestRewrite
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_hooks.custom_code.custom_code_guardrail import (
@@ -1727,21 +1731,6 @@ async def test_streaming_step_discards_legacy_rewrite_whose_texts_do_not_line_up
 
 
 @pytest.mark.asyncio
-async def test_streaming_step_discards_legacy_rewrite_that_changes_a_tool_call(monkeypatch, caplog):
-    masked_tool_call = {"function": {"name": "lookup", "arguments": '{"ssn": "[MASKED]"}'}}
-    guardrail = _LegacyHookGuardrail(
-        replacement=_legacy_replacement("[REWRITTEN] hello world", tool_calls=[masked_tool_call])
-    )
-    chunks = [_chunk()]
-
-    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
-        result = await _run_legacy_streaming_step(monkeypatch, guardrail, chunks)
-
-    _assert_passed_with_discard_warning(result, caplog, "the legacy hook changed a tool call's name or arguments")
-    assert chunks == [_chunk()]
-
-
-@pytest.mark.asyncio
 async def test_streaming_step_discards_legacy_rewrite_that_drops_the_tool_calls(monkeypatch, caplog):
     guardrail = _LegacyHookGuardrail(replacement=_legacy_replacement("[REWRITTEN] hello world", tool_calls=[]))
     chunks = [_chunk()]
@@ -1770,21 +1759,6 @@ async def test_streaming_step_passes_a_tool_only_stream_the_legacy_hook_left_alo
     assert result.modified_data["metadata"]["applied_guardrails"] == ["masker"]
     assert chunks == [_tool_only_chunk()]
     assert not any("discarded" in record.getMessage() for record in caplog.records)
-
-
-@pytest.mark.asyncio
-async def test_streaming_step_discards_a_legacy_tool_call_rewrite_on_a_tool_only_stream(monkeypatch, caplog):
-    masked_tool_call = {"function": {"name": "lookup", "arguments": '{"ssn": "[MASKED]"}'}}
-    guardrail = _LegacyHookGuardrail(replacement=_legacy_replacement(tool_calls=[masked_tool_call]))
-    chunks = [_tool_only_chunk()]
-
-    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
-        result = await _run_legacy_streaming_step(
-            monkeypatch, guardrail, chunks, translation=_ToolOnlyLegacyScanningTranslation()
-        )
-
-    _assert_passed_with_discard_warning(result, caplog, "the legacy hook changed a tool call's name or arguments")
-    assert chunks == [_tool_only_chunk()]
 
 
 class _NoHooksGuardrail(CustomGuardrail):
@@ -1823,6 +1797,208 @@ async def test_streaming_step_discards_a_legacy_rewrite_the_translation_cannot_r
 
     _assert_passed_with_discard_warning(result, caplog, "the legacy hook's response could not be rescanned")
     assert chunks == [_chunk()]
+
+
+_AnthropicHookResponse = dict[str, list[dict[str, object]]]
+
+
+class _AnthropicTextRewritingLegacyGuardrail(_LegacyHookGuardrail):
+    async def async_post_call_success_hook(
+        self, data: dict[str, object], user_api_key_dict: UserAPIKeyAuth, response: _AnthropicHookResponse
+    ) -> None:
+        self.calls.append({"response": copy.deepcopy(response)})
+        for block in response["content"]:
+            if block["type"] == "text" and isinstance(text := block.get("text"), str):
+                block["text"] = "[REWRITTEN] " + text
+
+
+def _anthropic_web_search_stream() -> list[bytes]:
+    result_block: Final = {
+        "type": "web_search_tool_result",
+        "tool_use_id": "srvtoolu_1",
+        "content": [
+            {"type": "web_search_result", "url": "https://example.test/a", "title": "A", "encrypted_content": ""}
+        ],
+    }
+    events: Final = (
+        {
+            "type": "message_start",
+            "message": {
+                "id": "msg_1",
+                "type": "message",
+                "role": "assistant",
+                "model": "m",
+                "content": [],
+                "stop_reason": None,
+                "usage": {"input_tokens": 1, "output_tokens": 0},
+            },
+        },
+        {
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {"type": "server_tool_use", "id": "srvtoolu_1", "name": "web_search", "input": {}},
+        },
+        {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {"type": "input_json_delta", "partial_json": '{"query": "a"}'},
+        },
+        {"type": "content_block_stop", "index": 0},
+        {"type": "content_block_start", "index": 1, "content_block": result_block},
+        {"type": "content_block_stop", "index": 1},
+        {"type": "content_block_start", "index": 2, "content_block": {"type": "text", "text": ""}},
+        {"type": "content_block_delta", "index": 2, "delta": {"type": "text_delta", "text": "hello world"}},
+        {"type": "content_block_stop", "index": 2},
+        {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 2}},
+        {"type": "message_stop"},
+    )
+    return _anthropic_sse(events)
+
+
+def _anthropic_sse(events: Iterable[Mapping[str, object]]) -> list[bytes]:
+    return [f"event: {event['type']}\ndata: {json.dumps(event)}\n\n".encode() for event in events]
+
+
+def _anthropic_tool_only_stream() -> list[bytes]:
+    return _anthropic_sse(
+        (
+            {
+                "type": "message_start",
+                "message": {
+                    "id": "msg_1",
+                    "type": "message",
+                    "role": "assistant",
+                    "model": "m",
+                    "content": [],
+                    "stop_reason": None,
+                    "usage": {"input_tokens": 1, "output_tokens": 0},
+                },
+            },
+            {
+                "type": "content_block_start",
+                "index": 0,
+                "content_block": {"type": "tool_use", "id": "toolu_1", "name": "lookup", "input": {}},
+            },
+            {
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "input_json_delta", "partial_json": '{"ssn"'},
+            },
+            {
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "input_json_delta", "partial_json": ': "123"}'},
+            },
+            {"type": "content_block_stop", "index": 0},
+            {"type": "message_delta", "delta": {"stop_reason": "tool_use"}, "usage": {"output_tokens": 2}},
+            {"type": "message_stop"},
+        )
+    )
+
+
+def _streamed_events(chunks: Sequence[bytes]) -> list[dict[str, object]]:
+    return [
+        json.loads(line[len("data: ") :])
+        for line in b"".join(chunks).decode().splitlines()
+        if line.startswith("data: ")
+    ]
+
+
+def _streamed_block_deltas(chunks: Sequence[bytes], index: int, field: str) -> str:
+    deltas: Final = (
+        event["delta"]
+        for event in _streamed_events(chunks)
+        if event.get("index") == index and event["type"] == "content_block_delta"
+    )
+    return "".join(str(delta[field]) for delta in deltas if isinstance(delta, dict))
+
+
+def _streamed_web_search_results(chunks: Sequence[bytes]) -> list[dict[str, str]]:
+    blocks: Final = (
+        event["content_block"] for event in _streamed_events(chunks) if event["type"] == "content_block_start"
+    )
+    results: Final = (
+        block["content"] for block in blocks if isinstance(block, dict) and block["type"] == "web_search_tool_result"
+    )
+    return list(chain.from_iterable(results))
+
+
+@pytest.mark.asyncio
+async def test_streaming_step_delivers_a_legacy_hook_mask_of_web_search_result_titles(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    chunks: Final = _anthropic_web_search_stream()
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        result: Final = await _run_legacy_streaming_step(
+            monkeypatch, _AnthropicMaskingLegacyGuardrail(), chunks, translation=AnthropicMessagesHandler()
+        )
+
+    assert [step.outcome for step in result.step_results] == ["pass"]
+    assert [(item["title"], item["url"]) for item in _streamed_web_search_results(chunks)] == [
+        ("[MASKED]", "https://example.test/a")
+    ]
+    assert _streamed_block_deltas(chunks, 2, "text") == "[MASKED] world"
+    assert not any("discarded" in record.getMessage() for record in caplog.records)
+
+
+class _AnthropicMaskingLegacyGuardrail(_LegacyHookGuardrail):
+    async def async_post_call_success_hook(
+        self, data: dict[str, object], user_api_key_dict: UserAPIKeyAuth, response: _AnthropicHookResponse
+    ) -> None:
+        for block in response["content"]:
+            if block["type"] == "text" and isinstance(text := block.get("text"), str):
+                block["text"] = text.replace("hello", "[MASKED]")
+            if block["type"] == "tool_use" and isinstance(tool_input := block.get("input"), dict):
+                block["input"] = {key: "[MASKED]" for key in tool_input}
+            if block["type"] == "web_search_tool_result" and isinstance(results := block.get("content"), list):
+                block["content"] = [{**result, "title": "[MASKED]"} for result in results]
+
+
+@pytest.mark.parametrize(
+    "stream, masked_key",
+    [(_anthropic_web_search_stream, "query"), (_anthropic_tool_only_stream, "ssn")],
+    ids=["web_search_query", "tool_only"],
+)
+@pytest.mark.asyncio
+async def test_streaming_step_delivers_a_legacy_hook_mask_of_a_streamed_tool_input(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    stream: Callable[[], list[bytes]],
+    masked_key: str,
+) -> None:
+    chunks: Final = stream()
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        result: Final = await _run_legacy_streaming_step(
+            monkeypatch, _AnthropicMaskingLegacyGuardrail(), chunks, translation=AnthropicMessagesHandler()
+        )
+
+    assert result.terminal_action == "allow"
+    assert [step.outcome for step in result.step_results] == ["pass"]
+    assert json.loads(_streamed_block_deltas(chunks, 0, "partial_json")) == {masked_key: "[MASKED]"}
+    assert "hello" not in b"".join(chunks).decode()
+    assert not any("discarded" in record.getMessage() for record in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_streaming_step_delivers_a_legacy_text_rewrite_on_a_web_search_stream(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    guardrail: Final = _AnthropicTextRewritingLegacyGuardrail()
+    chunks: Final = _anthropic_web_search_stream()
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        result: Final = await _run_legacy_streaming_step(
+            monkeypatch, guardrail, chunks, translation=AnthropicMessagesHandler()
+        )
+
+    assert result.terminal_action == "allow"
+    assert [step.outcome for step in result.step_results] == ["pass"]
+    raw: Final = b"".join(chunks).decode()
+    assert "[REWRITTEN] hello world" in raw
+    assert '"title": "A"' in raw and '"url": "https://example.test/a"' in raw
+    assert not any("discarded" in record.getMessage() for record in caplog.records)
 
 
 @pytest.mark.asyncio
