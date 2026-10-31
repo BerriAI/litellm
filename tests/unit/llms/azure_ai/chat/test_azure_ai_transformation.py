@@ -1,4 +1,5 @@
 import json
+import logging
 import traceback
 from collections.abc import Callable
 from types import MappingProxyType
@@ -756,6 +757,66 @@ def test_drop_tool_level_extra_fields_strips_copilot_mcp_server_name():
         assert "copilot_mcp_server_name" not in tool
     assert result["tools"][0]["type"] == "function"
     assert result["tools"][1]["function"]["name"] == "read_file"
+
+
+def test_extra_parameters_error_drops_reasoning_effort_with_one_warning(caplog: pytest.LogCaptureFixture) -> None:
+    import httpx
+
+    error_text: Final = json.dumps(
+        {
+            "error": {
+                "message": "Extra parameters ['reasoning_effort'] are not allowed when extra-parameters is not set "
+                "or set to be 'error'. Set extra-parameters to 'pass-through' to pass to the model."
+            }
+        }
+    )
+    error: Final = httpx.HTTPStatusError(
+        message="422",
+        request=httpx.Request("POST", "https://example.services.ai.azure.com/models/chat/completions"),
+        response=httpx.Response(422, text=error_text),
+    )
+    request_data: Final = {
+        "model": "Kimi-K2.6",
+        "messages": [{"role": "user", "content": "Say hi."}],
+        "reasoning_effort": "high",
+    }
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        retried: Final = AzureAIStudioConfig().transform_request_on_unprocessable_entity_error(error, request_data)
+    drop_warnings: Final = [record.getMessage() for record in caplog.records if "Dropping" in record.getMessage()]
+
+    assert retried == {"model": "Kimi-K2.6", "messages": [{"role": "user", "content": "Say hi."}]}
+    assert len(drop_warnings) == 1
+    assert all(fragment in drop_warnings[0] for fragment in ("reasoning_effort='high'", "Kimi-K2.6"))
+    assert "drop_params" not in drop_warnings[0]
+
+
+def test_extra_inputs_error_names_drop_params_in_the_reasoning_drop_warning(caplog: pytest.LogCaptureFixture) -> None:
+    import httpx
+
+    detail: Final = [
+        {"type": "extra_forbidden", "loc": ["body", "reasoning_effort"], "msg": "Extra inputs are not permitted"}
+    ]
+    error: Final = httpx.HTTPStatusError(
+        message="422",
+        request=httpx.Request("POST", "https://example.services.ai.azure.com/models/chat/completions"),
+        response=httpx.Response(422, text=json.dumps({"error": {"message": json.dumps({"detail": detail})}})),
+    )
+    request_data: Final = {
+        "model": "Mistral-Large-3",
+        "messages": [{"role": "user", "content": "Say hi."}],
+        "reasoning_effort": "high",
+    }
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        retried: Final = AzureAIStudioConfig().transform_request_on_unprocessable_entity_error(error, request_data)
+    drop_warnings: Final = [record.getMessage() for record in caplog.records if "Dropping" in record.getMessage()]
+
+    assert retried == {"model": "Mistral-Large-3", "messages": [{"role": "user", "content": "Say hi."}]}
+    assert len(drop_warnings) == 1
+    assert all(
+        fragment in drop_warnings[0] for fragment in ("reasoning_effort='high'", "Mistral-Large-3", "(drop_params=True)")
+    )
 
 
 def _find_key_anywhere(obj, key: str) -> bool:
