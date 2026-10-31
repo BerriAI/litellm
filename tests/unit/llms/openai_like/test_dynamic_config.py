@@ -1,7 +1,7 @@
 import pytest
 
 from litellm.llms.openai_like import dynamic_config
-from litellm.llms.openai_like.dynamic_config import create_responses_config_class
+from litellm.llms.openai_like.dynamic_config import create_config_class, create_responses_config_class
 from litellm.llms.openai_like.json_loader import SimpleProviderConfig
 from litellm.types.router import GenericLiteLLMParams
 
@@ -19,8 +19,63 @@ def _isolate_generated_class_cache():
     dynamic_config._responses_config_cache.clear()
 
 
-class TestClassCaching:
+class TestGetSupportedOpenaiParamsToolParams:
+    """Tool params survive unless function-calling support is explicitly declared False.
 
+    Models missing from the catalog on JSON-defined providers must behave like
+    unknown models on `openai` itself: tools pass through. See issue #48145.
+    """
+
+    TOOL_PARAMS = ("tools", "tool_choice", "function_call", "functions", "parallel_tool_calls")
+
+    def _config(self, provider):
+        return create_config_class(provider)()
+
+    def test_unknown_model_keeps_tool_params(self):
+        config = self._config(_provider("tools_unknown_model"))
+        supported = config.get_supported_openai_params(model="totally-unknown-model-48145")
+        assert "tools" in supported
+        assert "tool_choice" in supported
+
+    def test_provider_declared_false_strips_tool_params(self, monkeypatch):
+        monkeypatch.setattr(
+            "litellm.utils.get_provider_info",
+            lambda model, custom_llm_provider: {"supports_function_calling": False},
+        )
+        config = self._config(_provider("tools_declared_false"))
+        supported = config.get_supported_openai_params(model="some-model")
+        for param in self.TOOL_PARAMS:
+            assert param not in supported
+
+    def test_provider_declared_true_keeps_tool_params(self, monkeypatch):
+        monkeypatch.setattr(
+            "litellm.utils.get_provider_info",
+            lambda model, custom_llm_provider: {"supports_function_calling": True},
+        )
+        config = self._config(_provider("tools_declared_true"))
+        supported = config.get_supported_openai_params(model="some-model")
+        assert "tools" in supported
+
+    def test_catalog_declared_false_strips_tool_params(self, monkeypatch):
+        monkeypatch.setattr(
+            "litellm.utils.get_model_info_helper",
+            lambda model, custom_llm_provider=None, **kwargs: {"supports_function_calling": False},
+        )
+        config = self._config(_provider("tools_catalog_false"))
+        supported = config.get_supported_openai_params(model="catalog-model")
+        assert "tools" not in supported
+
+    def test_catalog_row_without_the_key_strips_tool_params(self, monkeypatch):
+        monkeypatch.setattr(
+            "litellm.utils.get_model_info_helper",
+            lambda model, custom_llm_provider=None, **kwargs: {"supports_function_calling": None},
+        )
+        config = self._config(_provider("tools_row_unset"))
+        supported = config.get_supported_openai_params(model="catalog-model")
+        assert "tools" not in supported
+
+
+class TestClassCaching:
     def test_cache_is_keyed_on_slug_not_on_the_provider_instance(self):
         first = create_responses_config_class(_provider("cache_by_slug"))
         second = create_responses_config_class(_provider("cache_by_slug"))
