@@ -4416,6 +4416,9 @@ class Router(DeprecatedRouterMembers):
                 sequence_number: Final = getattr(chunk, "sequence_number", None)
                 if not isinstance(sequence_number, int):
                     return chunk
+                if not self.fallback_headers_adopted:
+                    self._last_sequence_number = max(self._last_sequence_number, sequence_number)
+                    return chunk
                 self._last_sequence_number = max(self._last_sequence_number + 1, sequence_number)
                 if self._last_sequence_number == sequence_number:
                     return chunk
