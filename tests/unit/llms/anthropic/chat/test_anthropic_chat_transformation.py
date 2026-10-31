@@ -9283,6 +9283,45 @@ def test_completion_forwards_caller_anthropic_beta_header_with_computer_tool(res
     ]
 
 
+# Tool-to-beta pairs from Anthropic's computer use docs; api.anthropic.com answered 400 to
+# computer_20251124 without computer-use-2025-11-24 and 200 with it on 2026-10-31
+@pytest.mark.usefixtures("local_beta_headers_config")
+@pytest.mark.parametrize(
+    ("tool_type", "expected_beta"),
+    [
+        ("computer_20241022", "computer-use-2024-10-22"),
+        ("computer_20250124", "computer-use-2025-01-24"),
+        ("computer_20251124", "computer-use-2025-11-24"),
+    ],
+)
+def test_completion_adds_the_beta_matching_the_computer_tool_version(
+    respx_mock: respx.MockRouter, tool_type: str, expected_beta: str
+):
+    route: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(
+        return_value=httpx.Response(200, json=_anthropic_message_body([{"type": "text", "text": "hi"}], "end_turn"))
+    )
+
+    litellm.completion(
+        model="anthropic/claude-opus-5",
+        api_key="mock_api_key",
+        messages=[{"role": "user", "content": "Say hi"}],
+        tools=[
+            {
+                "type": tool_type,
+                "function": {
+                    "name": "computer",
+                    "parameters": {"display_height_px": 768, "display_width_px": 1024},
+                },
+            }
+        ],
+    )
+
+    sent_betas: Final = frozenset(
+        beta.strip() for beta in route.calls.last.request.headers["anthropic-beta"].split(",")
+    )
+    assert sent_betas == frozenset({expected_beta})
+
+
 def _anthropic_message_body(content: list[dict[str, object]], stop_reason: str) -> dict[str, object]:
     return {
         "id": "msg_01XrAv7gc5tQNDuoADra7vB4",

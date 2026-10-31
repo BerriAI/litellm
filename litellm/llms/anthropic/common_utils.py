@@ -1271,6 +1271,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
             The corresponding beta header string
         """
         computer_tool_beta_mapping: Final = {
+            "computer_20251124": "computer-use-2025-11-24",
             "computer_20250124": "computer-use-2025-01-24",
             "computer_20241022": "computer-use-2024-10-22",
         }
