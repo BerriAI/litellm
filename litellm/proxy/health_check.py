@@ -351,10 +351,8 @@ def _bills_per_generated_clip(entry: Mapping[str, object]) -> bool:
 
 
 def _priced_per_generated_clip(probe_params: Mapping[str, object]) -> bool:
-    model: Final = probe_params.get("model")
+    model: Final = _STR.validate_python(probe_params.get("model"))
     provider: Final = probe_params.get("custom_llm_provider")
-    if not isinstance(model, str):
-        return False
     names: Final = (model, f"{provider}/{model}") if isinstance(provider, str) else (model,)
     return any(_bills_per_generated_clip(cost_map_entry(name)) for name in names)
 

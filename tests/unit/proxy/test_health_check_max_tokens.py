@@ -1309,6 +1309,11 @@ def test_one_bad_model_info_value_cannot_stop_the_health_checks(model_info: dict
     assert hc_module.all_bill_media_on_probe([bad, control], {"bad"}, False) is False
 
 
+def test_a_failed_memory_reading_does_not_break_health_check_logging():
+    with patch("resource.getrusage", side_effect=OSError("no rusage")):  # test-quality-ok: stdlib call, no seam
+        assert hc_module._rss_mb_for_log() == "unknown"
+
+
 def test_narrowing_by_an_id_that_matches_nothing_keeps_the_whole_list():
     """Pinned because the disabled-dependency fix moved this filter into its own helper."""
     deployments = [{"model_name": "a", "litellm_params": {"model": "openai/a"}, "model_info": {"id": "a-1"}}]
