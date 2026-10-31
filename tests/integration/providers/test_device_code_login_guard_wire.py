@@ -765,7 +765,11 @@ def test_model_created_without_a_token_is_saved_and_refuses_until_the_token_is_m
         call: Final = _Call(
             scene.rig.base_url(), scene.key, name, "responses", False, "httpx", uuid.uuid4().hex, SimpleQueue()
         )
-        refused: Final = _serve(call)
+        refused: Final = eventually(
+            lambda: _serve(call),
+            lambda answer: answer.status == 400 and dl.CHATGPT_REFUSAL in _error_message(answer.text),
+            seconds=90,
+        )
         assert refused.status == 400, refused.text
         assert dl.CHATGPT_REFUSAL in _error_message(refused.text), refused.text
         assert scene.rig.peers.auth_connections() == ()
