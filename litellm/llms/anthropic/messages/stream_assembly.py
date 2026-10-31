@@ -458,6 +458,11 @@ def _sse_event_data(event: str) -> Mapping[str, object] | None:
     return as_str_mapping(extract_sse_data(event))
 
 
+_JSON_ESCAPED_LINE_BREAKS: Final = MappingProxyType(
+    str.maketrans({"\x85": "\\u0085", "\u2028": "\\u2028", "\u2029": "\\u2029"})
+)
+
+
 def _sse_frames(sse_stream: str) -> Sequence[str]:
     return "\n".join(split_sse_lines(sse_stream)).split("\n\n")
 
@@ -578,7 +583,8 @@ def anthropic_sse_event_types(all_chunks: Sequence[object]) -> frozenset[str]:
 
 
 def _is_named_error_event(event: str) -> bool:
-    return ("event", "error") in _sse_fields(event)
+    names: Final = tuple(value for name, value in _sse_fields(event) if name == "event")
+    return names[-1:] == ("error",)
 
 
 def _is_error_event(event: str) -> bool:
@@ -586,13 +592,18 @@ def _is_error_event(event: str) -> bool:
     return event_type == "error" or (_is_named_error_event(event) and not _is_anthropic_event_type(event_type))
 
 
+def _frames_a_client_dispatches(sse_stream: str) -> Sequence[str]:
+    return "\n".join((*split_sse_lines(sse_stream), "")).split("\n\n")[:-1]
+
+
 def _error_events(sse_stream: str) -> tuple[str, ...]:
-    return tuple(event for event in _sse_frames(sse_stream) if _is_error_event(event))
+    return tuple(event for event in _frames_a_client_dispatches(sse_stream) if _is_error_event(event))
 
 
 def _plain_error_event(event: str) -> str:
-    data_line: Final = (_sse_data_payload(event) or "").splitlines()[:1]
-    return "\n".join(("event: error", *(f"data: {line}" for line in data_line)))
+    payload: Final = _sse_data_payload(event) or ""
+    one_line: Final = payload.translate(_JSON_ESCAPED_LINE_BREAKS) if _json_mapping(payload) is not None else payload
+    return "\n".join(("event: error", *(f"data: {line}" for line in one_line.splitlines()[:1])))
 
 
 def anthropic_sse_error_events(all_chunks: Sequence[object]) -> tuple[str, ...]:

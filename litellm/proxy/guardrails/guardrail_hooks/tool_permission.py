@@ -334,7 +334,7 @@ class ToolPermissionGuardrail(CustomGuardrail):
                 parsed_arguments = arguments
             else:
                 return None, "arguments must be a JSON object"
-        except (json.JSONDecodeError, TypeError) as exc:
+        except (json.JSONDecodeError, TypeError, RecursionError) as exc:
             verbose_proxy_logger.warning(
                 "Tool Permission Guardrail: Failed to decode arguments for tool %s: %s",
                 tool_call.function.name,

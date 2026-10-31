@@ -1510,10 +1510,15 @@ class TestToolPermissionGuardrailAnthropicMessages:
         assert {"message_delta", "message_stop"}.isdisjoint(event["type"] for event in events)
 
     @pytest.mark.asyncio
-    async def test_finished_tool_call_whose_input_is_not_json_gets_the_upstream_error_alone(self):
+    @pytest.mark.parametrize(
+        "tool_input",
+        ['{"command" "ls"', "3", "[1]", "[" * 200_000 + "]" * 200_000],
+        ids=["not-json", "number", "list", "nested-too-deep"],
+    )
+    async def test_finished_tool_call_the_rewrite_cannot_rebuild_gets_the_upstream_error_alone(self, tool_input: str):
         sse_chunks: Final = self._sse_chunks("Bash")
-        not_json: Final = {"type": "input_json_delta", "partial_json": '{"command" "ls"'}
-        bad_input: Final = json.dumps({"type": "content_block_delta", "index": 1, "delta": not_json})
+        input_delta: Final = {"type": "input_json_delta", "partial_json": tool_input}
+        bad_input: Final = json.dumps({"type": "content_block_delta", "index": 1, "delta": input_delta})
         chunks: Final = self._ended_by_upstream_error(
             [*sse_chunks[:5], f"event: content_block_delta\ndata: {bad_input}\n\n".encode(), sse_chunks[6]]
         )
@@ -1523,9 +1528,37 @@ class TestToolPermissionGuardrailAnthropicMessages:
         assert self._events(out) == [self.UPSTREAM_ERROR]
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("name", ["error\u2028", "error\x0b", " error"], ids=["u2028", "vertical-tab", "second-space"])
-    async def test_healthy_stream_with_a_frame_no_client_reads_as_an_error_is_passed_through_verbatim(self, name: str):
-        chunks: Final = [*self._sse_chunks("Bash"), f"event: {name}\n\n".encode()]
+    async def test_param_rule_denies_a_tool_input_nested_too_deep_to_parse(self):
+        guardrail: Final = ToolPermissionGuardrail(
+            guardrail_name="anthropic-param-block",
+            rules=[
+                {
+                    "id": "bash_ls_only",
+                    "tool_name": r"^Bash$",
+                    "decision": "allow",
+                    "allowed_param_patterns": {"command": r"^ls$"},
+                }
+            ],
+            default_action="deny",
+            on_disallowed_action="block",
+        )
+        sse_chunks: Final = self._sse_chunks("Bash")
+        input_delta: Final = {"type": "input_json_delta", "partial_json": "[" * 200_000 + "]" * 200_000}
+        deep_input: Final = json.dumps({"type": "content_block_delta", "index": 1, "delta": input_delta})
+
+        with pytest.raises(GuardrailRaisedException, match="could not be parsed"):
+            await self._drain(
+                guardrail, [*sse_chunks[:5], f"event: content_block_delta\ndata: {deep_input}\n\n".encode(), *sse_chunks[6:]]
+            )
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "frame",
+        ["event: error\u2028\n\n", "event: error\x0b\n\n", "event:  error\n\n", "event: error\nevent: ping\n\n", "event: error"],
+        ids=["u2028", "vertical-tab", "second-space", "later-name", "no-blank-line"],
+    )
+    async def test_healthy_stream_with_a_frame_no_client_reads_as_an_error_is_passed_through_verbatim(self, frame: str):
+        chunks: Final = [*self._sse_chunks("Bash"), frame.encode()]
 
         out: Final = await self._drain(self.blocking, chunks)
 

@@ -318,6 +318,54 @@ def test_event_name_no_client_reads_as_error_is_no_error_event(name: str):
     assert anthropic_sse_error_events((f"event: {name}\n\n".encode(),)) == ()
 
 
+@pytest.mark.parametrize(
+    "frame",
+    [
+        "event: error\nevent: ping\n\n",
+        "event: error\nevent:\n\n",
+        "event: error\ndata: {}\nevent: foo\n\n",
+        "event: error\revent: ping\r\r",
+        "event: error",
+        "event: error\n",
+        'event: error\ndata: {"type":"error"}\n',
+        'data: {"type":"error"}',
+    ],
+    ids=[
+        "later-name",
+        "later-empty-name",
+        "later-name-after-data",
+        "later-name-cr",
+        "no-line-end",
+        "no-blank-line",
+        "data-with-no-blank-line",
+        "typed-with-no-blank-line",
+    ],
+)
+def test_frame_no_client_dispatches_as_an_error_is_no_error_event(frame: str):
+    assert anthropic_sse_error_events((*ANTHROPIC_STREAM, frame.encode())) == ()
+
+
+def test_a_later_event_name_of_error_is_an_error_event():
+    assert anthropic_sse_error_events((b"event: ping\nevent: error\n\n",)) == ("event: error",)
+
+
+@pytest.mark.parametrize("line_break", ["\u2028", "\u2029", "\u0085"], ids=["u2028", "u2029", "u0085"])
+def test_line_break_in_an_error_message_keeps_the_json_whole_for_every_reader(line_break: str):
+    error: Final = {"type": "error", "error": {"type": "overloaded_error", "message": f"Over{line_break}loaded"}}
+    frame: Final = f"event: error\ndata: {json.dumps(error, ensure_ascii=False)}\n\n".encode()
+
+    name_line, data_line = anthropic_sse_error_events((frame,))[0].splitlines()
+
+    assert name_line == "event: error"
+    assert json.loads(data_line.removeprefix("data: ")) == error
+
+
+def test_error_frame_data_that_is_not_json_stops_at_the_first_line_any_reader_sees():
+    assert anthropic_sse_error_events(("event: error\ndata: Overloaded\u2028data: hidden\n\n".encode(),)) == (
+        "event: error\ndata: Overloaded",
+    )
+
+
 def test_error_event_with_no_data_stays_a_bare_event_line():
     assert anthropic_sse_error_events((b"event: error\n\n",)) == ("event: error",)
 

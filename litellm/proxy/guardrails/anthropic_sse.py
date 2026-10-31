@@ -12,6 +12,7 @@ from collections.abc import Mapping, Sequence
 from types import MappingProxyType
 from typing import Final
 
+from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.llms.anthropic.messages.native.utils import filtered_safeguard_results, redacted_stop_details
 from litellm.llms.anthropic.messages.stream_assembly import (
@@ -167,16 +168,18 @@ def anthropic_sse_chunks_from_response(
     A source stream that ended in an upstream ``error`` event ends with that event again, never
     with a ``message_delta`` or ``message_stop`` the upstream did not send, with its cut-off text
     block left open unless another block follows it, and with no finished text block when it read
-    no text, since Claude Code does not retry a stream that shows a finished block. When a tool
-    input cannot be parsed the response cannot be re-emitted, and a failed stream is then its error alone.
+    no text, since Claude Code does not retry a stream that shows a finished block. A response that
+    cannot be re-emitted, such as one with a tool input that cannot be parsed, leaves a failed stream
+    its error alone.
     """
     error_events: Final = anthropic_sse_error_events(source_chunks)
     try:
         return _rebuilt_sse_chunks(assembled, source_chunks, error_events, keep_explanations)
-    except ValueError:
-        if error_events:
-            return _sse_chunks_of_events(error_events)
-        raise
+    except Exception:
+        if not error_events:
+            raise
+        verbose_proxy_logger.warning("Failed Anthropic stream could not be rebuilt, sending its upstream error alone")
+        return _sse_chunks_of_events(error_events)
 
 
 def _rebuilt_sse_chunks(
