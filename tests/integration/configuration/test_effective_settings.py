@@ -20,7 +20,7 @@ from pydantic import BaseModel, JsonValue, TypeAdapter
 
 from tests.integration._support.client import Gateway, eventually, object_value, string_value
 from tests.integration._support.database import read_rows, scratch_database
-from tests.integration._support.process import owned_proxy
+from tests.integration._support.process import owned_proxy, owned_proxy_process
 from tests.integration._support.wire import Reply, Request, Wire, wire_server
 
 pytestmark: Final = pytest.mark.shares_worker_state
@@ -1701,3 +1701,57 @@ def test_db_environment_variables_saved_from_a_session_outside_the_tables_schema
 
         assert isinstance(first, int) and isinstance(second, int)
         assert 0 < first < second
+
+
+def test_a_stored_general_setting_no_settings_api_manages_stays_off_and_the_rest_of_the_row_applies(
+    gateway: Gateway, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    alias: Final = "stale-database-setting-" + uuid.uuid4().hex
+    with scratch_database() as database_url, wire_server(lambda _request: _completion_reply("pong")) as provider:
+        monkeypatch.setenv("DATABASE_URL", database_url)
+        _push_schema()
+        with psycopg.connect(database_url, autocommit=True) as writer:
+            writer.execute(
+                'INSERT INTO "LiteLLM_Config" (param_name, param_value) VALUES (%s, %s)',
+                ("general_settings", Jsonb({"enforce_user_param": True, "store_prompts_in_spend_logs": True})),
+            )
+        config: Final = tmp_path / "stale-database-setting.yaml"
+        config.write_text(
+            json.dumps(
+                {
+                    "model_list": [
+                        {
+                            "model_name": alias,
+                            "litellm_params": {
+                                "model": "openai/gpt-4o-mini",
+                                "api_base": provider.url + "/v1",
+                                "api_key": "integration-provider-key",
+                            },
+                        }
+                    ],
+                    "general_settings": {"master_key": gateway.key, "store_model_in_db": True},
+                }
+            )
+        )
+        with owned_proxy_process(
+            gateway,
+            tmp_path / "stale-database-setting",
+            {"DATABASE_URL": database_url, "DISABLE_SCHEMA_UPDATE": "true"},
+            config=config,
+            database_setup=(),
+        ) as owned:
+            answer: Final = owned.gateway.request(
+                "POST", "/v1/chat/completions", {"model": alias, "messages": [{"role": "user", "content": "ping"}]}
+            )
+            listed: Final = owned.gateway.request("GET", "/config/list", params={"config_type": "general_settings"})
+            log: Final = owned.log.read_text()
+
+    assert answer.status_code == 200, answer.text
+    assert listed.status_code == 200, listed.text
+    stored_prompts: Final = next(
+        entry
+        for entry in TypeAdapter(list[dict[str, JsonValue]]).validate_json(listed.content)
+        if entry["field_name"] == "store_prompts_in_spend_logs"
+    )
+    assert (stored_prompts["field_value"], stored_prompts["source"]) == (True, "db")
+    assert "general_settings.enforce_user_param is stored in the database, but the proxy does not apply" in log
