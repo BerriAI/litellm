@@ -31328,7 +31328,7 @@ def _candidate_ids(
     request_kwargs: dict[str, object] | None = None,
 ) -> list[str]:
     candidates: Final = router._without_declared_text_only_deployments(
-        router.get_model_list(model_name="mixed"), "mixed", messages, request_kwargs
+        router._core_get_model_list(model_name="mixed"), "mixed", messages, request_kwargs
     )
     return [d["model_info"]["id"] for d in candidates]
 
@@ -31812,3 +31812,59 @@ def test_router_warns_when_a_deployment_enforces_endpoints_without_a_list(caplog
 
     assert "Deployment 'embed-from-config' sets enforce_supported_endpoints without" in caplog.text
     assert "Deployment 'embed-from-api' sets enforce_supported_endpoints without" in caplog.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["sync", "async"])
+@pytest.mark.parametrize("metadata_key", [None, "metadata", "litellm_metadata"])
+@pytest.mark.parametrize(
+    ("route", "messages", "request_kwargs"),
+    [
+        ("/v1/moderations", None, {"input": ["first", "second"]}),
+        ("/v1/embeddings", None, {"messages": []}),
+        ("/v1/messages", ["malformed"], {}),
+        ("/v1/messages", "malformed", {}),
+        ("/v1/messages", 5, {}),
+        ("/v1/messages", None, {"messages": ["malformed"]}),
+    ],
+    ids=["moderation-list", "embedding-empty-messages", "message-entry", "message-string", "message-number", "kwargs-messages"],
+)
+async def test_image_routing_leaves_non_image_and_malformed_requests_to_the_endpoint(
+    mode: str, metadata_key: str | None, route: str, messages: object, request_kwargs: dict[str, object]
+) -> None:
+    router: Final = _mixed_router(
+        {**_DECLARED_TEXT_LEG, "litellm_params": {**_DECLARED_TEXT_LEG["litellm_params"], "order": 0}},
+        {**_VISION_LEG, "litellm_params": {**_VISION_LEG["litellm_params"], "order": 1}},
+    )
+    kwargs: Final = {
+        **request_kwargs,
+        **({metadata_key: {"user_api_key_request_route": route}} if metadata_key is not None else {}),
+    }
+    original: Final = copy.deepcopy(request_kwargs)
+    deployment: Final = (
+        await router._core_async_get_available_deployment(model="mixed", messages=messages, request_kwargs=kwargs)
+        if mode == "async"
+        else router.get_available_deployment(model="mixed", messages=messages, request_kwargs=kwargs)
+    )
+    assert deployment["model_info"]["id"] == "declared-text"
+    assert all(kwargs[key] == value for key, value in original.items())
+
+
+@pytest.mark.parametrize(
+    "request_kwargs",
+    [
+        {"messages": _IMAGE_CHAT},
+        {"input": _IMAGE_RESPONSES_INPUT},
+        {"messages": [{"role": "user", "content": [{"type": "image", "source": {"type": "url", "url": "https://example.invalid/image.png"}}]}]},
+        {"messages": [{"role": "user", "content": [{"type": "tool_result", "tool_use_id": "call_image", "content": [_IMAGE_PART]}]}]},
+        {"input": [{"type": "function_call_output", "call_id": "call_image", "output": [{"type": "input_image", "image_url": "https://example.invalid/image.png"}]}]},
+        {"input": [{"type": "custom_tool_call_output", "call_id": "call_image", "output": [{"type": "input_image", "image_url": "https://example.invalid/image.png"}]}]},
+        {"input": [{"type": "computer_call_output", "call_id": "call_image", "output": {"type": "computer_screenshot", "image_url": "https://example.invalid/image.png"}}]},
+    ],
+    ids=["chat", "responses", "anthropic", "tool-result", "function-output", "custom-output", "computer-output"],
+)
+def test_image_routing_inspects_native_request_content_without_translation(request_kwargs: dict[str, object]) -> None:
+    router: Final = _mixed_router(_VISION_LEG, _DECLARED_TEXT_LEG)
+    original: Final = copy.deepcopy(request_kwargs)
+    assert _candidate_ids(router, request_kwargs=request_kwargs) == ["vision"]
+    assert request_kwargs == original
