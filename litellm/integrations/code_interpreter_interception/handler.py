@@ -529,6 +529,7 @@ class CodeInterpreterInterceptionLogger(CustomLogger):
         except Exception:
             await self._delete_container_for_cache_key(sandbox_key)
             raise
+        await self._evict_sandbox_if_a_run_failed(sandbox_key, code_interpreter_calls)
 
         optional_params: Final = anthropic_messages_optional_request_params
         request_patch: Final = AgenticLoopRequestPatch(
@@ -583,6 +584,7 @@ class CodeInterpreterInterceptionLogger(CustomLogger):
             raise
         tool_messages: Final = [result[0] for result in tool_results]
         code_interpreter_calls: Final = [result[1] for result in tool_results]
+        await self._evict_sandbox_if_a_run_failed(sandbox_key, code_interpreter_calls)
 
         request_patch: Final = AgenticLoopRequestPatch(
             model=model,
@@ -735,6 +737,12 @@ class CodeInterpreterInterceptionLogger(CustomLogger):
             return json.loads(arguments).get("code", "") if arguments else ""
         except (json.JSONDecodeError, TypeError, AttributeError):
             return ""
+
+    async def _evict_sandbox_if_a_run_failed(
+        self, sandbox_key: str | None, calls: Sequence[CodeInterpreterCall]
+    ) -> None:
+        if any(call["status"] == "failed" for call in calls):
+            await self._delete_container_for_cache_key(sandbox_key)
 
     async def _sandbox_tool_output(self, sandbox: _Sandbox, arguments: str) -> _ToolRun:
         match sandbox:

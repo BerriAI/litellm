@@ -1511,6 +1511,53 @@ async def test_a_sandbox_failure_answers_the_chat_tool_call_with_a_fixed_failure
     assert [call["status"] for call in plan.metadata["code_interpreter_calls"]] == ["failed"]
 
 
+_SESSION_PLAN_SURFACES: Final = (
+    pytest.param({}, FakeResponse(output=[_function_call_item()]), id="responses"),
+    pytest.param(
+        {_ACTIVE_KEY: True, "_agentic_loop_api_surface": CHAT_COMPLETION_AGENTIC_SURFACE},
+        {"choices": [{"message": {"tool_calls": [_chat_function_call_item()]}}]},
+        id="chat",
+    ),
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("surface_kwargs", "response"), _SESSION_PLAN_SURFACES)
+async def test_a_session_sandbox_whose_code_run_fails_is_not_reused_by_the_next_request(surface_kwargs, response):
+    sandbox: Final = _SandboxThatCannotRunCode()
+    logger: Final = CodeInterpreterInterceptionLogger(sandbox_config=sandbox)
+
+    for request_id in ("req1", "req2"):
+        await logger.async_build_agentic_loop_plan(
+            tools={
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "call_id": "c1",
+                        "name": LITELLM_CODE_EXECUTION_TOOL_NAME,
+                        "arguments": '{"code":"print(1)"}',
+                    }
+                ]
+            },
+            model="gpt-5",
+            messages=[{"role": "user", "content": "x"}],
+            response=response,
+            anthropic_messages_provider_config=None,
+            anthropic_messages_optional_request_params={"tools": []},
+            logging_obj=FakeLogging(litellm_call_id=request_id),
+            stream=False,
+            kwargs={
+                "litellm_call_id": request_id,
+                _SANDBOX_KEY: "conv-1",
+                _SESSION_SCOPED_KEY: True,
+                **surface_kwargs,
+            },
+        )
+
+    assert len(sandbox.create_calls) == 2
+    assert len(sandbox.delete_calls) == 2
+
+
 def _anthropic_message(content: list[dict[str, object]], stop_reason: str) -> dict[str, object]:
     return {
         "id": "msg_1",
