@@ -8,7 +8,7 @@ import io
 import json
 import mimetypes
 import re
-from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Hashable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from graphlib import CycleError, TopologicalSorter
 from itertools import chain, groupby, islice
@@ -238,7 +238,7 @@ def is_non_content_values_set(message: AllMessageValues) -> bool:
     return any(message.get(key, None) is not None for key in message if key not in ignore_keys)
 
 
-_IMAGE_CONTENT_PART_TYPES: Final = frozenset({"image_url", "input_image", "image"})
+_IMAGE_CONTENT_PART_TYPES: Final = ("image_url", "input_image", "image", "computer_screenshot")
 _IMAGE_SCAN_MAX_DEPTH: Final = 4
 
 
@@ -557,15 +557,24 @@ def as_openai_image_part(part: Mapping[str, object]) -> ChatCompletionImageObjec
     return {"type": "image_url", "image_url": {"url": url}} if url else None
 
 
-def request_contains_image_content(messages: Sequence[Mapping[str, object]]) -> bool:
-    """Whether any message carries an image content part, across the dialects that reach
-    pre-routing hooks untranslated: chat-completions ``image_url``, Responses ``input_image``,
-    and Anthropic Messages ``image``, including images nested inside ``tool_result`` blocks."""
-    return any(
-        isinstance(content, list) and _content_parts_contain_image(content)
-        for message in messages
-        for content in (message.get("content"),)
-    )
+def _message_contains_image_content(message: object) -> bool:
+    match message:
+        case {"content": list()}:
+            return _content_parts_contain_image(content_parts(_CONTENT_PART.validate_python(message)))
+        case {"type": "function_call_output" | "custom_tool_call_output" | "tool_result", "output": list()}:
+            output: Final = _CONTENT_PART.validate_python(message)["output"]
+            return _content_parts_contain_image(_CONTENT_PARTS.validate_python(output))
+        case {"type": "computer_call_output", "output": dict()}:
+            return _content_parts_contain_image((_CONTENT_PART.validate_python(message)["output"],))
+        case _:
+            return False
+
+
+def request_contains_image_content(messages: object) -> bool:
+    """Inspect native message content without translating or validating the request."""
+    if not isinstance(messages, (list, tuple)):
+        return False
+    return any(_message_contains_image_content(message) for message in _CONTENT_PARTS.validate_python(messages))
 
 
 def audio_or_image_in_message_content(message: AllMessageValues) -> bool:
@@ -3241,3 +3250,15 @@ def text_completion_prompt_to_messages(prompt: object) -> tuple[AllMessageValues
     if string_entries and len(string_entries) == len(entries):
         return tuple(ChatCompletionUserMessage(role="user", content=entry) for entry in string_entries)
     raise ValueError(f"`prompt` must be a non-empty string or a non-empty list of strings. Got: {prompt_type_name}.")
+
+
+def is_present_non_string(value: object) -> bool:
+    return value is not None and not isinstance(value, str)
+
+
+def invalid_type_message(field_path: str, value: object) -> str:
+    return f"Invalid type for '{field_path}': expected a string, got {type(value).__name__}"
+
+
+def is_unhashable_value_behind(error: TypeError, value: object) -> bool:
+    return not isinstance(value, Hashable) and f"unhashable type: '{type(value).__name__}'" in str(error)

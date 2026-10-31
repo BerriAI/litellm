@@ -631,6 +631,8 @@ class RealTimeStreaming:
             if self.session_tools or self.tool_calls:
                 self.logging_obj.model_call_details["realtime_tools"] = self.session_tools
                 self.logging_obj.model_call_details["realtime_tool_calls"] = self.tool_calls
+            if LiteLLMLogging.usage_capture_callback is not None:
+                self.logging_obj.capture_usage_before_logging(self.messages)
             # Route through the bounded logging worker (per-coroutine timeout +
             # concurrency cap) instead of a bare create_task, so a slow callback
             # can't leave suspended tasks pinning each call's response in memory.

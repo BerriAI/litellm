@@ -2,7 +2,9 @@ import copy
 import json
 import re
 import time
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
+from functools import partial
+from itertools import chain
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, ClassVar, Final, NoReturn, cast
 
@@ -27,7 +29,10 @@ from litellm.constants import (
 from litellm.litellm_core_utils.core_helpers import drops_unsupported_params, map_finish_reason
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     DEFS_MAX_INLINED_BYTES,
+    invalid_type_message,
     is_object_schema,
+    is_present_non_string,
+    is_unhashable_value_behind,
     sanitize_input_schema_for_anthropic,
     schema_fragment_ref,
     schema_grammar_branch_count,
@@ -45,6 +50,8 @@ from litellm.litellm_core_utils.prompt_templates.image_handling import (
     inline_remote_image_urls,
 )
 from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import (
+    message_field,
+    parts_of,
     place_mid_conversation_system,
     split_leading_system_run,
 )
@@ -177,6 +184,76 @@ _NATIVE_OUTPUT_STRING_FORMATS: Final = frozenset(
 NATIVE_OUTPUT_MAX_UNION_PARAMETERS: Final = 16
 NATIVE_OUTPUT_MAX_OPTIONAL_PARAMETERS: Final = 24
 NATIVE_OUTPUT_MAX_GRAMMAR_BRANCHES: Final = 2048
+
+
+def _tool_call_ids_failing(
+    index: int, tool_calls: object, fails: Callable[[object], bool]
+) -> Iterator[tuple[str, object]]:
+    ids: Final = ((position, message_field(tool_call, "id")) for position, tool_call in enumerate(parts_of(tool_calls)))
+    return (
+        (f"messages[{index}].tool_calls[{position}].id", tool_call_id)
+        for position, tool_call_id in ids
+        if fails(tool_call_id)
+    )
+
+
+def _roles_failing(messages: Sequence[object], fails: Callable[[object], bool]) -> Iterator[tuple[str, object]]:
+    roles: Final = ((index, message_field(message, "role")) for index, message in enumerate(messages))
+    return ((f"messages[{index}].role", role) for index, role in roles if fails(role))
+
+
+def _is_non_empty_non_string(value: object) -> bool:
+    return bool(value) and is_present_non_string(value)
+
+
+def _assistant_tool_call_ids_failing(
+    messages: Sequence[object], fails: Callable[[object], bool]
+) -> Iterator[tuple[str, object]]:
+    assistant_turns: Final = (
+        (index, message) for index, message in enumerate(messages) if message_field(message, "role") == "assistant"
+    )
+    return chain.from_iterable(
+        _tool_call_ids_failing(index, message_field(message, "tool_calls"), fails) for index, message in assistant_turns
+    )
+
+
+def _tool_answer_ids_failing(
+    messages: Sequence[object], fails: Callable[[object], bool]
+) -> Iterator[tuple[str, object]]:
+    answers: Final = (
+        (index, message_field(message, "tool_call_id"))
+        for index, message in enumerate(messages)
+        if message_field(message, "role") in ("tool", "function")
+    )
+    return ((f"messages[{index}].tool_call_id", tool_call_id) for index, tool_call_id in answers if fails(tool_call_id))
+
+
+def _is_non_string_value_behind(error: AttributeError, value: object) -> bool:
+    return is_present_non_string(value) and value is error.obj
+
+
+def _fields_behind(messages: Sequence[object], error: Exception) -> Iterable[tuple[str, object]]:
+    match error:
+        case TypeError():
+            caused_error: Final = partial(is_unhashable_value_behind, error)
+            return chain(
+                _assistant_tool_call_ids_failing(messages, caused_error),
+                _tool_answer_ids_failing(messages, caused_error),
+                _roles_failing(messages, caused_error),
+            )
+        case AttributeError():
+            return _assistant_tool_call_ids_failing(messages, partial(_is_non_string_value_behind, error))
+        case _:
+            return ()
+
+
+def non_string_message_field_error(messages: Sequence[object], error: Exception) -> AnthropicError | None:
+    malformed_field: Final = next(
+        chain(_roles_failing(messages, _is_non_empty_non_string), _fields_behind(messages, error)), None
+    )
+    if malformed_field is None:
+        return None
+    return AnthropicError(status_code=400, message=invalid_type_message(*malformed_field))
 
 
 def _tool_type(tool: object) -> str | None:
@@ -2370,12 +2447,18 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         # Handling anthropic API Prompt Caching
         if len(anthropic_system_message_list) > 0:
             optional_params["system"] = anthropic_system_message_list
-        conversation: Final = place_mid_conversation_system(
-            later_messages,
-            supports_mid_conversation_system=supports_mid_conversation_system(
-                model=model, custom_llm_provider=self.custom_llm_provider
-            ),
-        )
+        try:
+            conversation: Final = place_mid_conversation_system(
+                later_messages,
+                supports_mid_conversation_system=supports_mid_conversation_system(
+                    model=model, custom_llm_provider=self.custom_llm_provider
+                ),
+            )
+        except TypeError as error:
+            field_error: Final = non_string_message_field_error(messages, error)
+            if field_error is None:
+                raise
+            raise field_error from error
         # Format rest of message according to anthropic guidelines
         try:
             anthropic_messages = anthropic_messages_pt(
@@ -2387,7 +2470,8 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         except litellm.BadRequestError as e:
             raise AnthropicError(status_code=400, message=str(e))
         except Exception as e:
-            raise AnthropicError(
+            conversion_field_error: Final = non_string_message_field_error(messages, e)
+            raise conversion_field_error or AnthropicError(
                 status_code=400,
                 message=f"{e}\nReceived Messages={request_messages}",
             )  # don't use verbose_logger.exception, if exception is raised
