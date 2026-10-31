@@ -22,7 +22,6 @@ from litellm.integrations.custom_guardrail import (
 )
 from litellm.litellm_core_utils.api_route_to_call_types import get_call_types_for_route
 from litellm.llms import discover_guardrail_translation_mappings, load_guardrail_translation_mappings
-from litellm.llms.a2a.chat.guardrail_translation.handler import A2AGuardrailHandler
 from litellm.llms.base_llm.guardrail_translation.base_translation import BaseTranslation
 from litellm.llms.base_llm.guardrail_translation.utils import (
     effective_skip_system_message_for_guardrail,
@@ -590,29 +589,6 @@ class TestUnifiedLLMGuardrails:
                     f"Chunk {i} lost its content (got {content!r}). "
                     f"Expected non-empty content for every streamed chunk."
                 )
-
-        @pytest.mark.asyncio
-        async def test_v1_a2a_stream_route_scans_response_chunks(self, monkeypatch):
-            _patch_translation_mappings(monkeypatch, {CallTypes.asend_message: A2AGuardrailHandler})
-            guardrail = RecordingGuardrail()
-            guardrail.streaming_sampling_rate = 1
-            chunk = {
-                "jsonrpc": "2.0",
-                "id": "stream-1",
-                "result": {
-                    "kind": "task",
-                    "artifacts": [{"parts": [{"kind": "text", "text": "streamed text"}]}],
-                },
-            }
-
-            await _drive_stream(
-                UnifiedLLMGuardrails(),
-                guardrail,
-                [chunk],
-                request_route="/v1/a2a/my-agent/message/stream",
-            )
-
-            assert guardrail.apply_calls[0]["inputs"]["texts"] == ["streamed text"]
 
     class TestResponsesRouteAliases:
         """Every /responses path alias that serves model output must scan it.
@@ -2048,6 +2024,28 @@ class TestStreamingHttpErrorFrames:
     @pytest.fixture(autouse=True)
     def _use_real_mappings(self, monkeypatch):
         _patch_translation_mappings(monkeypatch, load_guardrail_translation_mappings())
+
+    @pytest.mark.asyncio
+    async def test_v1_a2a_stream_route_scans_response_chunks(self):
+        guardrail: Final = RecordingGuardrail()
+        guardrail.streaming_sampling_rate = 1
+        chunk: Final = {
+            "jsonrpc": "2.0",
+            "id": "stream-1",
+            "result": {
+                "kind": "task",
+                "artifacts": [{"parts": [{"kind": "text", "text": "streamed text"}]}],
+            },
+        }
+
+        await _drive_stream(
+            UnifiedLLMGuardrails(),
+            guardrail,
+            [chunk],
+            request_route="/v1/a2a/my-agent/message/stream",
+        )
+
+        assert guardrail.apply_calls[0]["inputs"]["texts"] == ["streamed text"]
 
     @pytest.mark.asyncio
     async def test_chat_eos_block_emits_data_error_frame(self):
