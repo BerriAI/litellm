@@ -65,7 +65,7 @@ class _A2AJsonRpcRequest(BaseModel):
     jsonrpc: Literal["2.0"]
     id: str | int | None = None
     method: str
-    params: dict[str, object]
+    params: Mapping[str, object]
 
 
 class _A2AJsonRpcResponse(BaseModel):
@@ -74,7 +74,7 @@ class _A2AJsonRpcResponse(BaseModel):
     jsonrpc: Literal["2.0"]
     id: str | int | None
     result: object | None = None
-    error: dict[str, object] | None = None
+    error: Mapping[str, object] | None = None
 
 
 _A2A_MESSAGE_STREAM_REQUEST_BODY: Final = inline_request_body(
