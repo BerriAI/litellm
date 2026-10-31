@@ -1742,7 +1742,10 @@ _OPUS_IN_US_EAST_1: Final = TokenCountModel(model="us.anthropic.claude-opus-5-5"
 
 
 async def _ladder(
-    counter: _ScriptedCounter, settings: TokenCountSettings, local_estimate_allowed: bool = True
+    counter: _ScriptedCounter,
+    settings: TokenCountSettings,
+    local_estimate_allowed: bool = True,
+    forwarded_edits: bool = False,
 ) -> TokenCountResponse | None:
     return await _provider_token_count(
         count_with=partial(
@@ -1760,6 +1763,7 @@ async def _ladder(
         request_model=_COUNT_REQUEST.model,
         settings=settings,
         local_estimate_allowed=local_estimate_allowed,
+        forwarded_edits=forwarded_edits,
     )
 
 
@@ -1984,6 +1988,26 @@ async def test_configured_token_count_model_error_stands_even_with_framing(
 
     assert raised.value.code == str(status_code)
     assert raised.value.message.startswith(f"scripted {status_code} for opus")
+    assert raised.value.message.count("counts tokens with us.anthropic.claude-opus-5-5 in us-east-1") == region_hints
+
+
+@pytest.mark.parametrize(("status_code", "region_hints"), [(400, 0), (403, 1)])
+@pytest.mark.asyncio
+async def test_a_pinned_token_count_model_rejecting_forwarded_edits_answers_without_the_region_hint(
+    status_code: int, region_hints: int
+):
+    counter: Final = _ScriptedCounter(
+        {"us.anthropic.claude-opus-5-5": _provider_reply("opus", status_code=status_code)}
+    )
+
+    with pytest.raises(ProxyException) as raised:
+        await _ladder(
+            counter,
+            TokenCountSettings(framing=None, count_model=replace(_OPUS_IN_US_EAST_1, configured=True)),
+            forwarded_edits=True,
+        )
+
+    assert raised.value.code == str(status_code)
     assert raised.value.message.count("counts tokens with us.anthropic.claude-opus-5-5 in us-east-1") == region_hints
 
 
@@ -3737,6 +3761,32 @@ async def test_messages_count_tokens_applies_the_edits_a_responses_api_bridge_po
 
 
 @pytest.mark.asyncio
+async def test_messages_count_tokens_on_a_responses_api_bridge_counts_the_unedited_body_when_an_edit_fails() -> None:
+    from litellm.llms.anthropic.messages.responses_adapters import handler as responses_adapters_handler
+
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "sonar-agent",
+                "litellm_params": {"model": "perplexity/perplexity/sonar", "api_key": "test-key"},
+            }
+        ]
+    )
+    unedited_body: Final[dict[str, JsonValue]] = {
+        "model": "sonar-agent",
+        "messages": _agent_turns_with_tool_results(3),
+        "tools": [_READ_FILE_TOOL],
+    }
+
+    with patch.object(
+        responses_adapters_handler, "apply_context_management", AsyncMock(side_effect=RuntimeError("editor bug"))
+    ):
+        edited: Final = await _input_tokens(router, {**unedited_body, "context_management": _CLEAR_TOOL_USES})
+
+    assert edited == await _input_tokens(router, unedited_body)
+
+
+@pytest.mark.asyncio
 async def test_messages_count_tokens_on_a_responses_api_bridge_rejects_an_invalid_edit_without_drop_params() -> None:
     router: Final = Router(
         model_list=[
@@ -3968,6 +4018,65 @@ async def test_messages_count_tokens_applies_a_responses_api_deployment_edits_on
     assert response == {"input_tokens": 71, "litellm_count_source": "provider"}
     assert len(peer.requests) == 1
     assert peer.requests[0].content.decode().count(_GEMINI_TOOL_OUTPUT) == 1
+
+
+_DATABRICKS_CLAUDE_MODEL: Final = "databricks/databricks-claude-sonnet-4-6"
+
+
+def _databricks_claude_router() -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": "databricks-claude-agent",
+                "litellm_params": {
+                    "model": _DATABRICKS_CLAUDE_MODEL,
+                    "api_key": "test-key",
+                    "api_base": "https://example.cloud.databricks.com/serving-endpoints",
+                },
+            }
+        ]
+    )
+
+
+@pytest.mark.asyncio
+async def test_messages_count_tokens_counts_the_edited_body_on_a_native_messages_deployment_without_a_count_api() -> (
+    None
+):
+    router: Final = _databricks_claude_router()
+    unedited_body: Final[dict[str, JsonValue]] = {
+        "model": "databricks-claude-agent",
+        "messages": _agent_turns_with_tool_results(3),
+        "tools": [_READ_FILE_TOOL],
+    }
+
+    edited: Final = await _input_tokens(router, {**unedited_body, "context_management": _CLEAR_TOOL_USES})
+    unedited: Final = await _input_tokens(router, unedited_body)
+    polyfilled: Final = await _input_tokens(
+        router, {**unedited_body, "messages": await _messages_the_inference_polyfill_sends(_DATABRICKS_CLAUDE_MODEL)}
+    )
+
+    assert edited < unedited
+    assert edited == polyfilled
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("drop_params", [False, True])
+async def test_messages_count_tokens_on_a_native_messages_deployment_without_a_count_api_rejects_an_invalid_edit(
+    drop_params: bool,
+) -> None:
+    with patch.object(litellm, "drop_params", drop_params):
+        response: Final = await _messages_endpoint_count(
+            _databricks_claude_router(),
+            {
+                "model": "databricks-claude-agent",
+                "messages": _agent_turns_with_tool_results(3),
+                "tools": [_READ_FILE_TOOL],
+                "context_management": _INVALID_COMPACT_EDIT,
+            },
+        )
+
+    assert isinstance(response, JSONResponse)
+    assert response.status_code == 400
 
 
 @pytest.mark.asyncio

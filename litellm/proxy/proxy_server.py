@@ -33,7 +33,7 @@ from collections.abc import (
 from collections.abc import (
     Set as AbstractSet,
 )
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from itertools import chain
 from types import MappingProxyType, TracebackType, UnionType
@@ -14963,6 +14963,7 @@ async def _provider_token_count(
     request_model: str,
     settings: TokenCountSettings,
     local_estimate_allowed: bool,
+    forwarded_edits: bool = False,
 ) -> Union["TokenCountResponse", ProviderCountFailure, None]:
     """Count with the provider, using the token_count_model in its region when one is set.
 
@@ -14986,7 +14987,7 @@ async def _provider_token_count(
     pinned_count_model: Final = None if count_model is None or count_model.region is None else count_model
     region_hint: Final = (
         None
-        if pinned_count_model is None
+        if pinned_count_model is None or (forwarded_edits and counted.status_code == 400)
         else f"This model counts tokens with {pinned_count_model.model} in {pinned_count_model.region}. "
         "If that region is not enabled for the AWS account, enable it or set token_count_model in model_info"
     )
@@ -15391,6 +15392,8 @@ async def _responses_request_view(
             context_management=edits,
         )
     except AnthropicContextManagementError as error:
+        if error.status_code >= 500:
+            return InferenceRequestView(messages=messages, system=system)
         return InferenceRequestViewError(error_message=error.message, status_code=error.status_code)
     return InferenceRequestView(messages=edited, system=system)
 
@@ -15698,6 +15701,7 @@ async def _count_request_tokens(
             request_model=request.model,
             settings=settings,
             local_estimate_allowed=litellm.disable_token_counter is not True and contents_estimable,
+            forwarded_edits=context_edits is not None and edited_request is None,
         )
     )
     if isinstance(ladder, TokenCountResponse):
@@ -15715,6 +15719,27 @@ async def _count_request_tokens(
             code=503,
         )
 
+    local_view: Final = (
+        None
+        if route is not Target.MESSAGES or context_edits is None or request_messages is None
+        else await _bridged_request_view(
+            request_messages,
+            system,
+            _COUNT_TOOLS.validate_python(tools),
+            messages_format,
+            replace(context_edits, drop_invalid_edits=False),
+            deployment_view,
+            model_to_use,
+        )
+    )
+    if isinstance(local_view, InferenceRequestViewError):
+        raise _rejected_view(local_view.status_code, local_view.error_message)
+    counted_view: Final = edited_request if local_view is None else local_view
+    local_messages: Final = (
+        request_messages if counted_view is None else [dict(message) for message in counted_view.messages]
+    )
+    local_system: Final = system if counted_view is None else counted_view.system
+
     # Default LiteLLM token counting
     custom_tokenizer: CustomHuggingfaceTokenizer | None = None
     if model_info is not None:
@@ -15722,11 +15747,11 @@ async def _count_request_tokens(
             CustomHuggingfaceTokenizer | None,
             model_info.get("custom_tokenizer", None),
         )
-    system_message: Final = _system_message(inference_system)
+    system_message: Final = _system_message(local_system)
     prompt_turn: Final = prompt_only and not (system_message is None and not tools)
     typed_messages: Final = cast(  # cast-ok: request messages are raw chat-shaped dicts that token_counter normalizes
         Sequence[AllMessageValues] | None,
-        [{"role": "user", "content": prompt}] if prompt_turn else (None if prompt_only else inference_messages),
+        [{"role": "user", "content": prompt}] if prompt_turn else (None if prompt_only else local_messages),
     )
     counted_messages: Final = (
         typed_messages if typed_messages is None or system_message is None else (system_message, *typed_messages)
@@ -15739,8 +15764,8 @@ async def _count_request_tokens(
     exact: Final = (
         await _kimi_k3_count(
             request
-            if edited_request is None
-            else request.model_copy(update={"messages": inference_messages, "system": inference_system}),
+            if counted_view is None
+            else request.model_copy(update={"messages": local_messages, "system": local_system}),
             messages_format,
             model_to_use,
             kimi_k3_messages,

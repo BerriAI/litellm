@@ -4,7 +4,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from enum import Enum
 from typing import Final
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
@@ -1832,7 +1832,7 @@ async def test_vertex_ai_token_counter_forwards_system_and_tools_to_partner_requ
     [("clear_tool_uses_20250919", "context-management-2025-06-27"), ("compact_20260112", "compact-2026-01-12")],
 )
 async def test_vertex_claude_count_forwards_the_context_edits_and_beta_vertex_inference_sends(
-    edit_type: str, expected_beta: str
+    edit_type: str, expected_beta: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from litellm.llms.vertex_ai.vertex_ai_partner_models.count_tokens import handler
 
@@ -1853,14 +1853,9 @@ async def test_vertex_claude_count_forwards_the_context_edits_and_beta_vertex_in
 
     fake_http_client: Final = FakeHttpClient()
     spec: Final[dict[str, JsonValue]] = {"edits": [{"type": edit_type}]}
-    with (
-        patch.object(handler, "get_async_httpx_client", return_value=fake_http_client),
-        patch.object(
-            handler.VertexAIPartnerModelsTokenCounter,
-            "_ensure_access_token_async",
-            new=AsyncMock(return_value=("fake-token", "test-project")),
-        ),
-    ):
+    application_default_credentials: Final = MagicMock(token="fake-token", valid=True, expiry=None)
+    monkeypatch.setattr("google.auth.default", lambda *args, **kwargs: (application_default_credentials, "test-project"))
+    with patch.object(handler, "get_async_httpx_client", return_value=fake_http_client):
         result: Final = await VertexAITokenCounter().count_tokens(
             model_to_use="claude-opus-4-8",
             messages=[{"role": "user", "content": "Hello"}],
