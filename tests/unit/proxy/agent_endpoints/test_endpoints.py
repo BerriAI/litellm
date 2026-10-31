@@ -13,7 +13,13 @@ from fastapi.testclient import TestClient
 from prisma.models import LiteLLM_AgentsTable
 
 from litellm.constants import REDACTED_BY_LITELM_STRING
-from litellm.proxy._types import LiteLLM_AuditLogs, LitellmTableNames, LitellmUserRoles, UserAPIKeyAuth
+from litellm.proxy._types import (
+    LiteLLM_AuditLogs,
+    LiteLLM_ObjectPermissionTable,
+    LitellmTableNames,
+    LitellmUserRoles,
+    UserAPIKeyAuth,
+)
 from litellm.proxy.agent_endpoints import endpoints as agent_endpoints
 from litellm.proxy.agent_endpoints.auth.agent_permission_handler import (
     RestrictedAgentAccess,
@@ -1056,7 +1062,11 @@ def _client_with_agent_card(
     test_app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
         user_id="test-user",
         user_role=role,
-        object_permission={"agents": [agent.agent_id]} if role == LitellmUserRoles.INTERNAL_USER else None,
+        object_permission=(
+            LiteLLM_ObjectPermissionTable(object_permission_id="test-agent-access", agents=[agent.agent_id])
+            if role == LitellmUserRoles.INTERNAL_USER
+            else None
+        ),
     )
     return TestClient(test_app)
 
