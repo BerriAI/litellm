@@ -20,6 +20,46 @@ const BUNDLED_MODEL_MAP: Record<string, { litellm_provider?: string }> = JSON.pa
 );
 
 describe("provider_info_helpers", () => {
+  it("resolves Meta Model API separately from Meta Llama and isolates their bundled models", () => {
+    expect(resolveLitellmProviderSlug("META")).toBe("meta");
+    expect(getPlaceholder(Providers.META)).toBe("meta/muse-spark-1.1");
+    expect(getProviderLogoAndName("meta").displayName).toBe("Meta Model API");
+    const metaModels = Object.keys(BUNDLED_MODEL_MAP).filter(
+      (key) => BUNDLED_MODEL_MAP[key]?.litellm_provider === "meta",
+    );
+    const llamaModels = Object.keys(BUNDLED_MODEL_MAP).filter(
+      (key) => BUNDLED_MODEL_MAP[key]?.litellm_provider === "meta_llama",
+    );
+    expect(metaModels).toContain("meta/muse-spark-1.1");
+    expect(llamaModels.length).toBeGreaterThan(0);
+    expect(getProviderModels("META", BUNDLED_MODEL_MAP).sort()).toEqual(metaModels.sort());
+    expect(getProviderModels("LLAMA", BUNDLED_MODEL_MAP).sort()).toEqual(llamaModels.sort());
+  });
+
+  it("resolves BigModel metadata, name, logo and model placeholder", () => {
+    const metadata = PROVIDER_CREATE_FIELDS.find((provider) => provider.provider === "BIGMODEL");
+    expect(provider_map.BIGMODEL).toBe(metadata?.litellm_provider);
+    expect(getProviderLogoAndName("bigmodel")).toEqual({
+      displayName: "BigModel (Zhipu AI)",
+      logo: providerLogoMap[Providers.BIGMODEL],
+    });
+    expect(getProviderLogoAndName("BIGMODEL")).toEqual(getProviderLogoAndName("bigmodel"));
+    expect(providerLogoMap[Providers.BIGMODEL]).toContain("bigmodel");
+    expect(getPlaceholder(Providers.BIGMODEL)).toMatch(/^bigmodel\//);
+  });
+
+  it("resolves ai& metadata, name, logo and model placeholder", () => {
+    const metadata = PROVIDER_CREATE_FIELDS.find((provider) => provider.provider === "AIAND");
+    expect(provider_map.AIAND).toBe(metadata?.litellm_provider);
+    expect(getProviderLogoAndName("aiand")).toEqual({
+      displayName: "ai&",
+      logo: providerLogoMap[Providers.AIAND],
+    });
+    expect(getProviderLogoAndName("AIAND")).toEqual(getProviderLogoAndName("aiand"));
+    expect(providerLogoMap[Providers.AIAND]).toContain("aiand");
+    expect(getPlaceholder(Providers.AIAND)).toBe("aiand/openai/gpt-oss-120b");
+  });
+
   it("maps Microsoft 365 Copilot to its chat model provider and placeholder", () => {
     expect(provider_map.MICROSOFT_365_COPILOT).toBe("microsoft_365_copilot");
     expect(getPlaceholder(Providers.MICROSOFT_365_COPILOT)).toBe("microsoft_365_copilot/chat");
@@ -222,6 +262,7 @@ describe("provider_info_helpers", () => {
         Providers.PG_VECTOR,
         Providers.PREDIBASE,
         Providers.Sail,
+        Providers.StreamLake,
         Providers.WANDB,
         Providers.ZAI,
         Providers.ZeroGPU,
@@ -460,6 +501,19 @@ describe("provider_info_helpers", () => {
       };
       const result = getProviderModels(Providers.OpenAI, modelMap);
       expect(result).toEqual(["gpt-3.5-turbo", "gpt-4"]);
+    });
+
+    it("should return StreamLake models and exclude models from other providers", () => {
+      const modelMap = {
+        "streamlake/GLM-5.3": { litellm_provider: "streamlake" },
+        "streamlake/DeepSeek-V3": { litellm_provider: "streamlake" },
+        "gpt-4o": { litellm_provider: "openai" },
+      };
+      const result = getProviderModels(Providers.StreamLake, modelMap);
+
+      expect(provider_map.StreamLake).toBe("streamlake");
+      expect(result).toEqual(["streamlake/GLM-5.3", "streamlake/DeepSeek-V3"]);
+      expect(result).not.toContain("gpt-4o");
     });
 
     it("should return models whose litellm_provider is a prefix-anchored variant of the provider", () => {

@@ -10,6 +10,7 @@ from dataclasses import replace as dataclasses_replace
 from datetime import datetime, timedelta
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, List, Literal, Optional, Protocol, Tuple, cast
+from pydantic import TypeAdapter, ValidationError
 
 from litellm_enterprise.proxy.common_utils.managed_object_attribution import (
     ManagedObjectCreatorAttribution,
@@ -50,6 +51,7 @@ def _error_names_resource(error: Exception, resource_id: str) -> bool:
 CHECK_BATCH_COST_USER_AGENT = "LiteLLM Proxy/CheckBatchCost"
 RECENT_BATCH_POLL_WINDOW: Final = timedelta(hours=48)
 GIVE_UP_POLLING_AFTER: Final = timedelta(days=2 * MANAGED_OBJECT_STALENESS_CUTOFF_DAYS)
+_FILE_OBJECT_ADAPTER: Final[TypeAdapter[dict[str, object]]] = TypeAdapter(dict[str, object])
 
 
 PROVIDER_TERMINAL_BATCH_STATUSES: Final[Tuple[str, ...]] = (
@@ -398,7 +400,7 @@ class CheckBatchCost:
         deployment. Once that deployment leaves the router, default fallbacks can
         silently send the retrieve to a provider that never saw the batch, so its
         404 must not retire a potentially recoverable row."""
-        return self.llm_router.get_deployment(model_id=model_id) is not None
+        return self.llm_router.registry().deployment(model_id) is not None
 
     @staticmethod
     def _is_output_file_gone_at_provider(error: Exception, output_file_id: Optional[str]) -> bool:
@@ -550,6 +552,10 @@ class CheckBatchCost:
         llm_provider: str,
         bare_model_name: str,
     ) -> Optional[Tuple[str, str]]:
+        stored_model_id: Final = self._get_stored_model_id(job)
+        if stored_model_id is not None and self._batch_deployment_exists(stored_model_id):
+            return stored_model_id, job.unified_object_id
+
         deployment_id = self._get_deployment_id_for_bare_model(bare_model_name, llm_provider)
         if deployment_id is None:
             verbose_proxy_logger.info(
@@ -564,7 +570,7 @@ class CheckBatchCost:
     def _get_deployment_id_for_bare_model(
         self, bare_model_name: str, llm_provider: str
     ) -> Optional[str]:
-        model_group = self.llm_router.resolve_model_name_from_model_id(bare_model_name)
+        model_group = self.llm_router.registry().resolve(bare_model_name, kind="from_id")
         deployment_id = (
             self._get_deployment_id_for_provider(model_group, llm_provider) if model_group else None
         )
@@ -580,7 +586,7 @@ class CheckBatchCost:
     ) -> Optional[str]:
         from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 
-        for deployment in self.llm_router.get_model_list(model_name=None) or []:
+        for deployment in self.llm_router.registry().deployments() or []:
             litellm_params = deployment.get("litellm_params") or {}
             actual_model = litellm_params.get("model")
             if not isinstance(actual_model, str):
@@ -623,8 +629,9 @@ class CheckBatchCost:
         """
         from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 
-        for deployment_id in self.llm_router.get_model_ids(model_name=model_group):
-            deployment_info = self.llm_router.get_deployment(model_id=deployment_id)
+        registry = self.llm_router.registry()
+        for deployment_id in registry.names(model_group, kind="ids"):
+            deployment_info = registry.deployment(deployment_id)
             if deployment_info is None:
                 continue
             try:
@@ -661,22 +668,35 @@ class CheckBatchCost:
         )
 
     @staticmethod
-    def _get_input_file_id(job: "ManagedObjectRow") -> Optional[str]:
-        from litellm.types.utils import LiteLLMBatch
-
+    def _parse_file_object(job: "ManagedObjectRow") -> Optional[dict[str, object]]:
         file_object: Final = job.file_object
         try:
-            parsed_file_object: Final[object] = (
+            return _FILE_OBJECT_ADAPTER.validate_python(
                 json.loads(file_object) if isinstance(file_object, str) else file_object
             )
-        except (json.JSONDecodeError, ValueError):
+        except (json.JSONDecodeError, ValueError, ValidationError):
             return None
-        if not isinstance(parsed_file_object, dict):
+
+    @classmethod
+    def _get_input_file_id(cls, job: "ManagedObjectRow") -> Optional[str]:
+        from litellm.types.utils import LiteLLMBatch
+
+        parsed_file_object: Final = cls._parse_file_object(job)
+        if parsed_file_object is None:
             return None
         try:
             return LiteLLMBatch.model_validate(parsed_file_object).input_file_id
         except Exception:
             return None
+
+    @classmethod
+    def _get_stored_model_id(cls, job: "ManagedObjectRow") -> Optional[str]:
+        """The deployment that created the batch, written into file_object by the managed
+        files hook at create time. Older rows have no such key and fall back to matching
+        the bare model name against the router."""
+        parsed_file_object: Final = cls._parse_file_object(job)
+        model_id: Final = parsed_file_object.get("model_id") if parsed_file_object else None
+        return model_id if isinstance(model_id, str) and model_id else None
 
     async def _track_completed_batch_cost(
         self,
@@ -743,7 +763,7 @@ class CheckBatchCost:
             except (IndexError, AttributeError):
                 pass
 
-        credentials: Final = self.llm_router.get_deployment_credentials_with_provider(model_id) or {}
+        credentials: Final = self.llm_router.registry().credentials(model_id, form="with_provider") or {}
         _file_content = await afile_content(
             file_id=cast(str, raw_output_file_id),
             _litellm_internal_model_credentials=MappingProxyType(dict(credentials)),
@@ -766,7 +786,7 @@ class CheckBatchCost:
             except Exception:
                 pass
 
-        deployment_info = self.llm_router.get_deployment(model_id=model_id)
+        deployment_info = self.llm_router.registry().deployment(model_id)
         if deployment_info is None:
             verbose_proxy_logger.info(
                 f"Skipping job {job.unified_object_id} because it is not a valid deployment info"
@@ -996,7 +1016,7 @@ class CheckBatchCost:
         )
 
         try:
-            deployment_info: Final = self.llm_router.get_deployment(model_id=model_id)
+            deployment_info: Final = self.llm_router.registry().deployment(model_id)
             if deployment_info is None:
                 verbose_proxy_logger.error(
                     f"CheckBatchCost: deployment {model_id} is no longer in the router, so the line items of batch "
@@ -1009,7 +1029,7 @@ class CheckBatchCost:
                 custom_llm_provider=deployment_info.litellm_params.custom_llm_provider,
             )
             cost_provider: Final = cast(BatchFileProvider, llm_provider)
-            credentials: Final = self.llm_router.get_deployment_credentials_with_provider(model_id) or {}
+            credentials: Final = self.llm_router.registry().credentials(model_id, form="with_provider") or {}
             file_access: Final = {
                 **credentials,
                 "_litellm_internal_model_credentials": MappingProxyType(dict(credentials)),
