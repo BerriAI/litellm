@@ -2457,10 +2457,19 @@ def response_cost_calculator(
                     provider_response_cost: Final = get_response_cost_from_hidden_params(hidden_params)
                     if provider_response_cost is not None and not custom_pricing:
                         if _breakdown_total(litellm_logging_obj) != provider_response_cost:
+                            header_priced_model: Final = select_model_name_for_cost_calc(
+                                model=model,
+                                completion_response=response_object,
+                                custom_llm_provider=custom_llm_provider,
+                                custom_pricing=custom_pricing,
+                                base_model=base_model,
+                                router_model_id=router_model_id,
+                                region_name=region_name,
+                            )
                             header_input_cost, header_output_cost = split_reported_cost_by_cost_map_ratio(
                                 reported_total=provider_response_cost,
-                                model=model,
-                                custom_llm_provider=custom_llm_provider,
+                                model=header_priced_model or model,
+                                custom_llm_provider=pricing_provider or custom_llm_provider,
                                 usage=get_usage_object(response_object),
                                 call_type=call_type,
                                 service_tier=service_tier,

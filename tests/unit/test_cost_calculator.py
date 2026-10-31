@@ -11066,3 +11066,45 @@ def test_upstream_cost_header_total_is_split_by_the_cost_map_rate_ratio(monkeypa
     assert breakdown["input_cost"] == pytest.approx(0.25 * input_share)
     assert breakdown["output_cost"] == pytest.approx(0.25 * (1 - input_share))
     assert breakdown["total_cost"] == 0.25
+
+
+def test_upstream_cost_header_total_on_an_unmapped_alias_is_split_by_the_served_model_rates(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+    litellm.register_model(
+        model_cost={
+            "cc-header-cost-chat": {
+                "litellm_provider": "openai",
+                "mode": "chat",
+                "input_cost_per_token": 0.001,
+                "output_cost_per_token": 0.002,
+            }
+        }
+    )
+    logging_obj: Final = Logging(
+        model="team-alias-for-header-cost",
+        messages=[{"role": "user", "content": "reported cost"}],
+        stream=False,
+        call_type="completion",
+        start_time=datetime.datetime.now(),
+        litellm_call_id="reported-cost-header-alias-split",
+        function_id="f",
+    )
+
+    cost: Final = response_cost_calculator(
+        response_object=_header_cost_chat_response({"llm_provider-x-litellm-response-cost": "0.25"}),
+        model="team-alias-for-header-cost",
+        custom_llm_provider="openai",
+        call_type="completion",
+        optional_params={},
+        litellm_logging_obj=logging_obj,
+    )
+
+    assert cost == 0.25
+    breakdown: Final = logging_obj.cost_breakdown
+    assert breakdown is not None
+    input_share: Final = (10 * 0.001) / (10 * 0.001 + 20 * 0.002)
+    assert breakdown["input_cost"] == pytest.approx(0.25 * input_share)
+    assert breakdown["output_cost"] == pytest.approx(0.25 * (1 - input_share))
