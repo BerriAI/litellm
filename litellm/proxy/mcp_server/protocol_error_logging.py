@@ -32,9 +32,7 @@ from litellm.utils import Rules, function_setup
 # JSON-RPC rejection. Rejection envelopes are tiny; anything larger is a
 # permitted tool result and must not be re-deserialized after it was sent.
 _MCP_PROTOCOL_ERROR_PEEK_MAX_BYTES: Final = 64 * 1024
-EMPTY_MCP_PROTOCOL_PARAMS: Final[Mapping[str, object]] = types.MappingProxyType(
-    {}  # mutable-ok: frozen immediately and reused as the empty request-parameter value
-)
+EMPTY_MCP_PROTOCOL_PARAMS: Final[Mapping[str, object]] = types.MappingProxyType({})
 
 
 class _JSONRPCRequestForLogging(TypedDict, total=False):
@@ -171,11 +169,7 @@ async def _log_mcp_protocol_rejection(
             "model": "MCP: protocol_error",
             "call_type": CallTypes.call_mcp_tool.value,
             "litellm_call_id": str(uuid.uuid4()),
-            "litellm_trace_id": get_chain_id_from_headers(
-                dict(raw_headers)  # mutable-ok: legacy trace helper requires a concrete dict but does not mutate it
-                if raw_headers is not None
-                else None
-            ),
+            "litellm_trace_id": get_chain_id_from_headers(dict(raw_headers) if raw_headers is not None else None),
             "metadata": {
                 "spend_logs_metadata": spend_logs_metadata,
             },
@@ -237,16 +231,12 @@ def _parse_jsonrpc_error_response_for_logging(
     raw_body: bytes,
 ) -> _JSONRPCErrorEnvelopeForLogging | None:
     stripped_body: Final = raw_body.lstrip()
-    if stripped_body.startswith(b"{"):
-        candidate_body = stripped_body
-    else:
-        data_lines: Final = tuple(
-            line.removeprefix(b"data:").lstrip() for line in raw_body.splitlines() if line.startswith(b"data:")
-        )
-        if len(data_lines) != 1:
-            return None
-        candidate_body = data_lines[0]
-    json_body: Final = candidate_body
+    data_lines: Final = tuple(
+        line.removeprefix(b"data:").lstrip() for line in raw_body.splitlines() if line.startswith(b"data:")
+    )
+    if not stripped_body.startswith(b"{") and len(data_lines) != 1:
+        return None
+    json_body: Final = stripped_body if stripped_body.startswith(b"{") else data_lines[0]
     try:
         return _JSONRPC_ERROR_FOR_LOGGING_ADAPTER.validate_json(json_body)
     except ValidationError:
@@ -273,9 +263,7 @@ def wrap_send_for_protocol_error_logging(
     if request_method is None:
         return inner_send
 
-    already_logged: Final = {  # mutable-ok: closure state prevents duplicate records across response chunks
-        "done": False
-    }
+    already_logged: Final = {"done": False}
 
     async def _logging_send(message: Message) -> None:
         await inner_send(message)

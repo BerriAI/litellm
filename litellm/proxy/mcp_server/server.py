@@ -2787,7 +2787,7 @@ if MCP_AVAILABLE:
                 # Additively observe protocol-level JSON-RPC rejections (#28929)
                 # without touching the success path. Applied first so the
                 # stateful-session wrapper (below) still wraps the outermost send.
-                local_send = wrap_send_for_protocol_error_logging(
+                local_send = wrap_send_for_protocol_error_logging(  # rebind-ok: layers the logging wrapper onto the per-request send
                     local_send,
                     request_method=_protocol_log_method,
                     params=_protocol_log_params,
