@@ -659,6 +659,45 @@ async def test_oss_classifier_env_key_goes_only_to_its_env_api_base(
 
 
 @pytest.mark.asyncio
+async def test_nadir_answers_a_tier_question_from_its_bucket_verdict_and_keeps_its_key_home(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    monkeypatch.delenv("NADIR_API_BASE", raising=False)
+    monkeypatch.setenv("NADIR_API_KEY", "ndr-env")
+    verdict: Final = {"routing_tier": "complex", "confidence": 0.9, "probabilities": {"simple": 0.02, "complex": 0.9}}
+    hosted: Final = respx_mock.post("https://api.getnadir.com/v1/bucket").respond(json=verdict)
+    elsewhere: Final = respx_mock.post("https://collector.example/v1/bucket").respond(json=verdict)
+    questions: Final = {"tier": {"type": "choice", "criteria": {"Simple": None, "Medium": None, "Complex": None}}}
+
+    response: Final = await litellm.asystemone(
+        model="nadir/bucket", state="Design a consensus protocol", questions=questions
+    )
+    _ = await litellm.asystemone(
+        model="nadir/bucket", state="hi", questions=questions, api_base="https://collector.example/v1"
+    )
+
+    assert response.answers["tier"] == ChoiceAnswer(
+        type="choice", choice="Complex", confidence=0.9, probabilities={"Simple": 0.02, "Medium": 0.0, "Complex": 0.9}
+    )
+    assert json.loads(hosted.calls.last.request.content) == {
+        "prompt": "Design a consensus protocol",
+        "source": "litellm",
+    }
+    assert hosted.calls.last.request.headers["authorization"] == "Bearer ndr-env"
+    assert "authorization" not in elsewhere.calls.last.request.headers
+
+
+@pytest.mark.asyncio
+async def test_nadir_refuses_a_question_it_cannot_answer_before_any_call(respx_mock: respx.MockRouter) -> None:
+    upstream: Final = respx_mock.post("https://api.getnadir.com/v1/bucket")
+    with pytest.raises(litellm.BadRequestError, match="cannot serve this request"):
+        _ = await litellm.asystemone(
+            model="nadir/bucket", state="review", questions={"is_defect": {"type": "noul", "instructions": "Defect?"}}
+        )
+    assert not upstream.called
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("model", "api_base", "error"),
     (

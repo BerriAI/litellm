@@ -1786,6 +1786,9 @@ if TYPE_CHECKING:
     from .llms.bespoke.decisions.transformation import (
         BespokeDecisionsConfig as BespokeDecisionsConfig,
     )
+    from .llms.nadir.decisions.transformation import (
+        NadirDecisionsConfig as NadirDecisionsConfig,
+    )
     from .llms.eu_jev.decisions.transformation import (
         EuJevDecisionsConfig as EuJevDecisionsConfig,
     )

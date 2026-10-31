@@ -164,6 +164,7 @@ describe("buildComplexityRouterConfig", () => {
     ["bespoke", "bespokelabs/Bespoke-Nimble-9B"],
     ["databricks", "databricks-openjev-qwen35-4b"],
     ["databricks", "ai_decide"],
+    ["nadir", "bucket"],
     ["jev", "custom-jev-model"],
     [undefined, "custom-jev-model"],
   ] as const)("accepts %s model %s before saving or testing", (provider, model) => {
@@ -184,6 +185,8 @@ describe("buildComplexityRouterConfig", () => {
     ["bespoke", "nimble-latest", true],
     ["databricks", "databricks-openjev-qwen35-4b", false],
     ["databricks", "databricks-openjev-qwen35-4b", true],
+    ["nadir", "bucket", false],
+    ["nadir", "bucket", true],
   ] as const)("serializes %s/%s with shared context and no LLM config, custom tiers: %s", (provider, model, custom) => {
     const params: BuildComplexityRouterConfigParams = {
       ...baseParams,
@@ -220,7 +223,8 @@ describe("buildComplexityRouterConfig", () => {
       provider,
       model,
       timeout_ms: 4500,
-      instructions: "Choose the configured tier",
+      // Nadir classifies with its own model, and the gateway rejects instructions for it.
+      ...(provider !== "nadir" && { instructions: "Choose the configured tier" }),
       circuit_breaker_enabled: false,
       circuit_breaker_cooldown_seconds: 12.5,
     };
