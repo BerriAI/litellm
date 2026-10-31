@@ -15,7 +15,9 @@ REQUIRED_HEADINGS: Final[tuple[str, ...]] = (
 )
 PLACEHOLDER: Final = "<blah>"
 AI_SUMMARY_TAG: Final = "<make-me-human-readable>"
+AI_SUMMARY_CLOSING_TAG: Final = "</make-me-human-readable>"
 HEADING_PATTERN: Final = re.compile(r"^## .+$", re.MULTILINE)
+SECTION_PATTERN: Final = re.compile(r"^## .+$\n(?P<content>(?:(?!^## ).*\n?)*)", re.MULTILINE)
 
 
 def template_headings(template_text: str) -> tuple[str, ...]:
@@ -26,20 +28,32 @@ def body_headings(body: str) -> tuple[str, ...]:
     return tuple(heading.strip() for heading in HEADING_PATTERN.findall(body))
 
 
-def uses_template(body: str, headings: Iterable[str]) -> bool:
-    return any(heading in body for heading in headings)
+def uses_template(found: Iterable[str], known: Iterable[str]) -> bool:
+    return any(heading in known for heading in found)
+
+
+def section_is_blank(body: str, heading: str) -> bool:
+    return any(
+        match.group().startswith(heading + "\n") and not match.group("content").strip()
+        for match in SECTION_PATTERN.finditer(body)
+    )
 
 
 def problems(body: str, template_text: str) -> tuple[str, ...]:
     known: Final = template_headings(template_text)
-    if not uses_template(body, known):
-        return ()
     found: Final = body_headings(body)
+    if not uses_template(found, known):
+        return ()
     missing: Final = tuple(f"missing section {heading!r}" for heading in REQUIRED_HEADINGS if heading not in found)
     first: Final = found[0] if found else None
     misplaced: Final = (
         (f"{REQUIRED_HEADINGS[0]!r} must be the first section, found {first!r} first",)
         if REQUIRED_HEADINGS[0] in found and first != REQUIRED_HEADINGS[0]
+        else ()
+    )
+    blank: Final = (
+        (f"the section under {REQUIRED_HEADINGS[0]!r} is empty: write the 1-3 sentence summary there",)
+        if REQUIRED_HEADINGS[0] in found and section_is_blank(body, REQUIRED_HEADINGS[0])
         else ()
     )
     placeholder: Final = (f"template placeholder {PLACEHOLDER!r} left in the body",) if PLACEHOLDER in body else ()
@@ -48,10 +62,10 @@ def problems(body: str, template_text: str) -> tuple[str, ...]:
             f"the summary under {REQUIRED_HEADINGS[0]!r} is still AI-written: the PR author rewrites it in their own "
             f"words and deletes the {AI_SUMMARY_TAG} tag lines",
         )
-        if AI_SUMMARY_TAG in body
+        if AI_SUMMARY_TAG in body or AI_SUMMARY_CLOSING_TAG in body
         else ()
     )
-    return (*missing, *misplaced, *placeholder, *ai_summary)
+    return (*missing, *misplaced, *blank, *placeholder, *ai_summary)
 
 
 def main() -> int:

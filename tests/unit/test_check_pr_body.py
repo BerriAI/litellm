@@ -15,6 +15,23 @@ def test_free_form_body_is_ignored():
     assert problems("Just a quick typo fix.", TEMPLATE) == ()
 
 
+def test_free_form_body_with_a_heading_that_only_starts_like_a_template_one_is_ignored():
+    assert problems("## TypeScript\nSwitched the dashboard build to strict mode\n", TEMPLATE) == ()
+
+
+def test_blank_handwritten_section_fails():
+    assert problems(GOOD_BODY.replace("Adds X so Y works\n", "\n"), TEMPLATE) == (
+        "the section under '## Handwritten 1-3 sentence description' is empty: write the 1-3 sentence summary there",
+    )
+
+
+def test_leftover_closing_tag_alone_fails():
+    assert problems(GOOD_BODY.replace("Adds X so Y works", "Adds X\n`</make-me-human-readable>`"), TEMPLATE) == (
+        "the summary under '## Handwritten 1-3 sentence description' is still AI-written: the PR author rewrites it "
+        "in their own words and deletes the <make-me-human-readable> tag lines",
+    )
+
+
 def test_tags_without_handwritten_heading_fail():
     body = "`<make-me-human-readable>`\nAdds X\n`</make-me-human-readable>`\n## TLDR\n- fix\n## Type\nBug Fix\n"
     assert problems(body, TEMPLATE) == (
