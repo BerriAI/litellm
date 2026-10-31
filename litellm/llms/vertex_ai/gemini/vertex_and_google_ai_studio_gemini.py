@@ -31,9 +31,9 @@ from litellm.exceptions import UnsupportedParamsError
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, drops_unsupported_params, normalize_drop_params
 from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 from litellm.litellm_core_utils.json_fragment_accumulator import JSONFragmentAccumulator
-from litellm.litellm_core_utils.prompt_templates.factory import (
-    encode_tool_call_id_with_signature,
-)
+from litellm.litellm_core_utils.model_param_helper import embeds_thought_signature_in_tool_call_id
+from litellm.litellm_core_utils.prompt_templates.factory import encode_tool_call_id_with_signature
+from litellm.litellm_core_utils.reasoning_effort_utils import warn_dropped_reasoning
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
@@ -201,6 +201,13 @@ def _unsupported_reasoning_effort(reasoning_effort: str) -> UnsupportedParamsErr
 
 
 _SAMPLING_DEPRECATION_UNMAPPED_MODELS: Final = "models outside litellm's model map"
+_NON_INTEGER_BUDGET_REASON: Final = (
+    "Gemini takes budget_tokens only as an integer, so it uses its default thinking budget."
+)
+_LEVEL_ONLY_BUDGET_REASON: Final = (
+    "Gemini 3 and later set reasoning by thinking level, not budget, so litellm does not send the budget. "
+    "Send reasoning_effort to pick a level."
+)
 _sampling_deprecation_lock: Final = threading.Lock()
 
 
@@ -1466,6 +1473,14 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     params["includeThoughts"] = False
                 else:
                     params["includeThoughts"] = sends_thoughts
+                    if thinking_budget is not None:
+                        warn_dropped_reasoning(
+                            "thinking.budget_tokens",
+                            thinking_budget,
+                            model,
+                            _LEVEL_ONLY_BUDGET_REASON,
+                            drop_params_gated=False,
+                        )
                     # Follow provider defaults unless explicitly opted into legacy behavior.
                     if litellm.enable_gemini_default_thinking_level_low is True:
                         params["thinkingLevel"] = (
@@ -1478,8 +1493,16 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             # For older Gemini models, use thinkingBudget
             if thinking_enabled and not VertexGeminiConfig._is_thinking_budget_zero(thinking_budget):
                 params["includeThoughts"] = sends_thoughts
-            if thinking_budget is not None and isinstance(thinking_budget, int):
+            if isinstance(thinking_budget, int):
                 params["thinkingBudget"] = thinking_budget
+            elif thinking_budget is not None:
+                warn_dropped_reasoning(
+                    "thinking.budget_tokens",
+                    thinking_budget,
+                    model,
+                    _NON_INTEGER_BUDGET_REASON,
+                    drop_params_gated=False,
+                )
 
         return params
 
@@ -2067,6 +2090,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         parts: list[HttpxPartType],
         cumulative_tool_call_idx: int,
         is_function_call: bool | None,
+        thought_signature_in_tool_call_id: bool = True,
     ) -> tuple[
         ChatCompletionToolCallFunctionChunk | None,
         list[ChatCompletionToolCallChunk] | None,
@@ -2105,9 +2129,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     # back on the matching `functionResponse`.
                     if gemini_call_id:
                         _tool_response_chunk["id"] = gemini_call_id
-                    # Embed thought signature in ID for OpenAI client compatibility
                     if thought_signature:
                         _tool_response_chunk["provider_specific_fields"] = {"thought_signature": thought_signature}
+                    if thought_signature and thought_signature_in_tool_call_id:
                         _tool_response_chunk["id"] = encode_tool_call_id_with_signature(
                             _tool_response_chunk["id"] or "", thought_signature
                         )
@@ -2769,6 +2793,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         model_response: Union[ModelResponse, "ModelResponseStream"],
         standard_optional_params: dict,
         cumulative_tool_call_index: int = 0,
+        thought_signature_in_tool_call_id: bool = True,
     ) -> tuple[list[dict], list[dict], list, list, int]:
         """
         Helper method to process candidates and extract metadata
@@ -2871,6 +2896,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     parts=candidate["content"]["parts"],
                     cumulative_tool_call_idx=cumulative_tool_call_index,
                     is_function_call=is_function_call(standard_optional_params),
+                    thought_signature_in_tool_call_id=thought_signature_in_tool_call_id,
                 )
 
             if "logprobsResult" in candidate:
@@ -2954,6 +2980,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         model_response: Union[ModelResponse, "ModelResponseStream"],
         standard_optional_params: dict[str, object],  # mutable-ok: mirrors override contract
         cumulative_tool_call_index: int = 0,
+        thought_signature_in_tool_call_id: bool = True,
     ) -> tuple[  # mutable-ok: mirrors override contract
         list[dict[str, object]],
         list[dict[str, object]],
@@ -2962,7 +2989,11 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         int,
     ]:
         return cls._process_candidates(
-            _candidates, model_response, standard_optional_params, cumulative_tool_call_index
+            _candidates,
+            model_response,
+            standard_optional_params,
+            cumulative_tool_call_index,
+            thought_signature_in_tool_call_id,
         )
 
     def transform_response(
@@ -3045,7 +3076,14 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     safety_ratings,
                     citation_metadata,
                     _,  # cumulative_tool_call_index not needed in non-streaming
-                ) = VertexGeminiConfig._process_candidates(_candidates, model_response, logging_obj.optional_params)
+                ) = VertexGeminiConfig._process_candidates(
+                    _candidates,
+                    model_response,
+                    logging_obj.optional_params,
+                    thought_signature_in_tool_call_id=embeds_thought_signature_in_tool_call_id(
+                        logging_obj.litellm_params  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # Logging.litellm_params is untyped
+                    ),
+                )
 
             usage: Final = VertexGeminiConfig._calculate_usage(
                 completion_response=completion_response,
@@ -3881,6 +3919,9 @@ class ModelResponseIterator:
         self.logging_obj = logging_obj
         self.response_headers = response_headers or {}
         self.is_function_call = check_is_function_call(logging_obj)
+        self.thought_signature_in_tool_call_id: Final = embeds_thought_signature_in_tool_call_id(
+            logging_obj.litellm_params  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # Logging.litellm_params is untyped
+        )
         self.cumulative_tool_call_index: int = 0
         self.has_seen_tool_calls: bool = False
         self._resume = resume
@@ -3945,6 +3986,7 @@ class ModelResponseIterator:
             model_response,
             self.logging_obj.optional_params,
             cumulative_tool_call_index=self.cumulative_tool_call_index,
+            thought_signature_in_tool_call_id=self.thought_signature_in_tool_call_id,
         )
 
         # Track whether tool_calls have been seen across streaming chunks.

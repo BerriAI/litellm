@@ -16,6 +16,7 @@ from openai._base_client import make_request_options
 from openai._constants import RAW_RESPONSE_HEADER
 from openai._legacy_response import LegacyAPIResponse
 from openai._types import RequestOptions
+from openai.pagination import SyncCursorPage
 from openai.types import CreateEmbeddingResponse
 from openai.types.beta.assistant_deleted import AssistantDeleted
 from openai.types.chat import ChatCompletion, ChatCompletionChunk
@@ -27,6 +28,7 @@ import litellm
 from litellm import LlmProviders
 from litellm._logging import verbose_logger
 from litellm.constants import DEFAULT_MAX_RETRIES
+from litellm.exceptions import UnsupportedParamsError
 from litellm.files.types import FileContentStreamingResult
 from litellm.litellm_core_utils.core_helpers import set_provider_response_headers_in_hidden_params
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -39,6 +41,7 @@ from litellm.types.utils import (
     LiteLLMBatch,
     ModelResponse,
     ModelResponseStream,
+    openai_batch_status,
 )
 from litellm.utils import (
     CustomStreamWrapper,
@@ -64,6 +67,7 @@ from .common_utils import (
     is_openai_backed_api_base,
     is_output_token_limit_error,
     model_dump_provider_response,
+    upstream_error_response,
 )
 from .workload_identity import (
     build_async_openai_client,
@@ -938,7 +942,9 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                 except openai.UnprocessableEntityError as e:
                     ## check if body contains unprocessable params - related issue https://github.com/BerriAI/litellm/issues/4800
                     if litellm.drop_params is True or drop_params is True:
-                        inference_params = drop_params_from_unprocessable_entity_error(e, inference_params)
+                        inference_params = drop_params_from_unprocessable_entity_error(
+                            e, inference_params, model=model, drop_params_gated=True
+                        )
                     else:
                         raise e
                     # e.message
@@ -970,8 +976,8 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                         litellm.remove_index_from_tool_calls(messages=messages)
                     else:
                         raise e
-        except OpenAIError as e:
-            raise e
+        except (OpenAIError, UnsupportedParamsError):
+            raise
         except Exception as e:
             status_code: Final = getattr(e, "status_code", 500)
             error_headers = getattr(e, "headers", None)
@@ -983,6 +989,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
             raise OpenAIError(
                 status_code=status_code,
                 message=error_text,
+                response=upstream_error_response(e),
                 headers=error_headers,
                 body=error_body,
             )
@@ -1094,7 +1101,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
             except openai.UnprocessableEntityError as e:
                 ## check if body contains unprocessable params - related issue https://github.com/BerriAI/litellm/issues/4800
                 if litellm.drop_params is True or drop_params is True:
-                    data = drop_params_from_unprocessable_entity_error(e, data)
+                    data = drop_params_from_unprocessable_entity_error(e, data, model=model, drop_params_gated=True)
                 else:
                     raise e
                 # e.message
@@ -1110,6 +1117,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                 raise OpenAIError(
                     status_code=status_code,
                     message=message,
+                    response=upstream_error_response(e),
                     headers=error_headers,
                     body=exception_body,
                 )
@@ -1248,7 +1256,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
             except openai.UnprocessableEntityError as e:
                 ## check if body contains unprocessable params - related issue https://github.com/BerriAI/litellm/issues/4800
                 if litellm.drop_params is True or drop_params is True:
-                    data = drop_params_from_unprocessable_entity_error(e, data)
+                    data = drop_params_from_unprocessable_entity_error(e, data, model=model, drop_params_gated=True)
                 else:
                     raise e
             except (
@@ -1282,6 +1290,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                         raise OpenAIError(
                             status_code=getattr(e, "status_code", 500),
                             message=str(e),
+                            response=upstream_error_response(e),
                             headers=error_headers,
                             body=exception_body,
                         )
@@ -1409,7 +1418,12 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
             error_response: Final[object] = getattr(e, "response", None)
             if error_headers is None and error_response:
                 error_headers = getattr(error_response, "headers", None)
-            raise OpenAIError(status_code=status_code, message=error_text, headers=error_headers)
+            raise OpenAIError(
+                status_code=status_code,
+                message=error_text,
+                response=upstream_error_response(e),
+                headers=error_headers,
+            )
 
     def embedding(
         self,
@@ -1499,7 +1513,12 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
             error_response: Final[object] = getattr(e, "response", None)
             if error_headers is None and error_response:
                 error_headers = getattr(error_response, "headers", None)
-            raise OpenAIError(status_code=status_code, message=error_text, headers=error_headers)
+            raise OpenAIError(
+                status_code=status_code,
+                message=error_text,
+                response=upstream_error_response(e),
+                headers=error_headers,
+            )
 
     async def aimage_generation(
         self,
@@ -1666,7 +1685,11 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                 original_response=str(e),
             )
             if hasattr(e, "status_code"):
-                raise OpenAIError(status_code=getattr(e, "status_code", 500), message=str(e))
+                raise OpenAIError(
+                    status_code=getattr(e, "status_code", 500),
+                    message=str(e),
+                    response=upstream_error_response(e),
+                )
             else:
                 raise OpenAIError(status_code=500, message=str(e))
 
@@ -2161,6 +2184,18 @@ class OpenAIFilesAPI(BaseLLM):
         return response
 
 
+def _with_openai_batch_fields(batches: Sequence[Batch]) -> Sequence[Batch]:
+    return [
+        batch.model_copy(
+            update={
+                "object": batch.object or "batch",
+                "status": openai_batch_status(batch.status),
+            }
+        )
+        for batch in batches
+    ]
+
+
 class OpenAIBatchesAPI(BaseLLM):
     """
     OpenAI methods to support for batches
@@ -2351,7 +2386,7 @@ class OpenAIBatchesAPI(BaseLLM):
     ):
         verbose_logger.debug("listing batches, after= %s, limit= %s", after, limit)
         response: Final = await openai_client.batches.list(after=after, limit=limit)
-        return response
+        return response.model_copy(update={"data": _with_openai_batch_fields(response.data)})
 
     def list_batches(
         self,
@@ -2363,7 +2398,7 @@ class OpenAIBatchesAPI(BaseLLM):
         organization: str | None,
         after: str | None = None,
         limit: int | None = None,
-        client: OpenAI | None = None,
+        client: OpenAI | AsyncOpenAI | None = None,
         litellm_params: Mapping[str, object] | None = None,
     ):
         openai_client: Final[OpenAI | AsyncOpenAI | None] = self.get_openai_client(
@@ -2388,7 +2423,9 @@ class OpenAIBatchesAPI(BaseLLM):
                 )
             return self.alist_batches(openai_client=openai_client, after=after, limit=limit)
         response: Final = openai_client.batches.list(after=after, limit=limit)
-        return response
+        if not isinstance(response, SyncCursorPage):
+            return response
+        return response.model_copy(update={"data": _with_openai_batch_fields(response.data)})
 
 
 class OpenAIAssistantsAPI(BaseLLM):

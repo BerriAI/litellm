@@ -26,6 +26,7 @@ from litellm.litellm_core_utils.core_helpers import as_str_mapping, attribute_or
 from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import (
     anthropic_system_messages,
     find_anthropic_server_tool_result,
+    is_anthropic_server_tool_use,
     is_anthropic_tool_search_use,
     message_field,
     parts_of,
@@ -912,9 +913,9 @@ def create_anthropic_image_param(
     image_url_input: str | dict,
     format: str | None = None,
     is_bedrock_invoke: bool = False,
-) -> AnthropicMessagesImageParam:
+) -> AnthropicMessagesImageParam | AnthropicMessagesDocumentParam:
     """
-    Create an AnthropicMessagesImageParam from an image URL input.
+    Create an Anthropic content block from an image URL input.
 
     Supports both URL references (for HTTP/HTTPS URLs) and base64 encoding.
     """
@@ -933,14 +934,7 @@ def create_anthropic_image_param(
         if is_bedrock_invoke or image_url.startswith("http://"):
             base64_url: Final = convert_url_to_base64(url=image_url)
             image_chunk = convert_to_anthropic_image_obj(openai_image_url=base64_url, format=format)
-            return AnthropicMessagesImageParam(
-                type="image",
-                source=AnthropicContentParamSource(
-                    type="base64",
-                    media_type=image_chunk["media_type"],
-                    data=image_chunk["data"],
-                ),
-            )
+            return _anthropic_content_element_factory(image_chunk)
         else:
             # HTTPS URL - pass directly for regular Anthropic
             return AnthropicMessagesImageParam(
@@ -953,14 +947,7 @@ def create_anthropic_image_param(
     else:
         # Convert to base64 for data URIs or other formats
         image_chunk = convert_to_anthropic_image_obj(openai_image_url=image_url, format=format)
-        return AnthropicMessagesImageParam(
-            type="image",
-            source=AnthropicContentParamSource(
-                type="base64",
-                media_type=image_chunk["media_type"],
-                data=image_chunk["data"],
-            ),
-        )
+        return _anthropic_content_element_factory(image_chunk)
 
 
 # The following XML functions will be deprecated once JSON schema support is available on Bedrock and Vertex
@@ -1264,6 +1251,22 @@ def encode_tool_call_id_with_signature(tool_call_id: str, thought_signature: str
 
 
 _encode_tool_call_id_with_signature = encode_tool_call_id_with_signature
+
+
+def _tool_call_id_prefix(tool_call_id: object) -> str | None:
+    return tool_call_id.split(THOUGHT_SIGNATURE_SEPARATOR, 1)[0] if isinstance(tool_call_id, str) else None
+
+
+def _called_tool_name(tool_call_id: str, tool_calls: Sequence[Mapping[str, object]]) -> str | None:
+    exact_matches: Final = tuple(call for call in tool_calls if call.get("id") == tool_call_id)
+    prefix: Final = _tool_call_id_prefix(tool_call_id)
+    prefix_matches: Final = tuple(
+        call for call in tool_calls if prefix and _tool_call_id_prefix(call.get("id")) == prefix
+    )
+    matches: Final = exact_matches or (prefix_matches if len(prefix_matches) == 1 else ())
+    function: Final = matches[0].get("function") if matches else None
+    name: Final = function.get("name") if isinstance(function, Mapping) else None
+    return name if isinstance(name, str) else None
 
 
 def get_thought_signature_from_tool(tool: Mapping[str, object]) -> str | None:
@@ -1705,16 +1708,14 @@ def convert_to_gemini_tool_call_result(
                     )
                 ) is not None:
                     media_parts.append(media_part)
-    name: str | None = message.get("name", "")
-
     # Recover name from last message with tool calls
-    if last_message_with_tool_calls:
-        tools: Final = last_message_with_tool_calls.get("tool_calls", [])
-        msg_tool_call_id: Final = message.get("tool_call_id", None)
-        for tool in tools:
-            prev_tool_call_id = tool.get("id", None)
-            if msg_tool_call_id and prev_tool_call_id and msg_tool_call_id == prev_tool_call_id:
-                name = tool.get("function", {}).get("name", "")
+    msg_tool_call_id: Final = message.get("tool_call_id", None)
+    called_tool_name: Final = (
+        _called_tool_name(msg_tool_call_id, last_message_with_tool_calls.get("tool_calls") or ())
+        if last_message_with_tool_calls and isinstance(msg_tool_call_id, str) and msg_tool_call_id
+        else None
+    )
+    name: Final[str | None] = called_tool_name if called_tool_name is not None else message.get("name", "")
 
     # Echo the OpenAI tool_call_id on functionResponse (strip thought-signature suffix).
     gemini_call_id: str | None = None
@@ -1910,7 +1911,12 @@ def convert_to_anthropic_tool_result(
                         anthropic_content_element=_anthropic_image_param,
                         original_content_element=content,
                     )
-                    anthropic_content_list.append(cast(AnthropicMessagesImageParam, _anthropic_image_param))
+                    anthropic_content_list.append(
+                        cast(
+                            AnthropicMessagesImageParam | AnthropicMessagesDocumentParam,
+                            _anthropic_image_param,
+                        )
+                    )
             elif content["type"] == "tool_reference":
                 anthropic_content_list.append(ToolReference(type="tool_reference", tool_name=content["tool_name"]))
             elif content["type"] == "file":
@@ -2068,6 +2074,54 @@ def _placed_and_paired(
 _AnthropicToolInvokeItem: TypeAlias = AnthropicMessagesToolUseParam | dict[str, Any]
 
 
+def _is_server_tool_result(block: Mapping[str, object]) -> bool:
+    block_type: Final = block.get("type")
+    return isinstance(block_type, str) and block_type.endswith("_tool_result")
+
+
+def _split_unrun_server_tool_uses(
+    groups: Sequence[Sequence[_AnthropicToolInvokeItem]],
+) -> tuple[tuple[Sequence[_AnthropicToolInvokeItem], ...], tuple[_AnthropicToolInvokeItem, ...]]:
+    completed: Final = tuple(group for group in groups if any(_is_server_tool_result(block) for block in group))
+    unrun: Final = tuple(group[0] for group in groups if not any(_is_server_tool_result(block) for block in group))
+    return completed, unrun
+
+
+def _block_id(block: Mapping[str, object]) -> object:
+    return block.get("id")
+
+
+def _unrun_server_tool_use_ids(blocks: Sequence[Mapping[str, object]]) -> frozenset[object]:
+    result_ids: Final = frozenset(block.get("tool_use_id") for block in blocks if _is_server_tool_result(block))
+    return frozenset(
+        _block_id(block)
+        for block in blocks
+        if block.get("type") == "server_tool_use" and _block_id(block) not in result_ids
+    )
+
+
+def _last_block_id_among(blocks: Sequence[Mapping[str, object]], ids: frozenset[object]) -> object:
+    return next(block_id for block in reversed(blocks) if (block_id := _block_id(block)) in ids)
+
+
+def _paused_turn_replay(
+    tool_invokes: Sequence[_AnthropicToolInvokeItem],
+    thinking_blocks: Sequence[ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock],
+    *,
+    is_final_message: bool,
+) -> tuple[
+    tuple[_AnthropicToolInvokeItem, ...],
+    tuple[ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock, ...],
+]:
+    unrun_ids: Final = _unrun_server_tool_use_ids(tool_invokes)
+    if not unrun_ids:
+        return tuple(tool_invokes), tuple(thinking_blocks)
+    dropped_ids: Final = (
+        unrun_ids - frozenset((_last_block_id_among(tool_invokes, unrun_ids),)) if is_final_message else unrun_ids
+    )
+    return tuple(block for block in tool_invokes if _block_id(block) not in dropped_ids), ()
+
+
 def convert_to_anthropic_tool_invoke(
     tool_calls: list[ChatCompletionAssistantToolCall],
     web_search_results: Sequence[object] | None = None,
@@ -2150,6 +2204,15 @@ def convert_to_anthropic_tool_invoke(
             anthropic_tool_invoke.append(server_tool_result)
         elif is_anthropic_tool_search_use(tool_id, tool_name) and tool_id not in answered_tool_ids:
             continue
+        elif is_anthropic_server_tool_use(tool_id) and tool_id not in answered_tool_ids:
+            anthropic_tool_invoke.append(
+                {
+                    "type": "server_tool_use",
+                    "id": tool_id,
+                    "name": tool_name,
+                    "input": tool_input,
+                }
+            )
         else:
             sanitized_tool_id = sanitize_anthropic_tool_use_id(tool_id)
             _anthropic_tool_use_param = AnthropicMessagesToolUseParam(
@@ -3118,6 +3181,30 @@ def anthropic_messages_pt(
                         _has_server_tool_calls = True
                         break
 
+            # Get web_search_results and tool_results from provider_specific_fields
+            # for server_tool_use reconstruction.
+            # Fixes: https://github.com/BerriAI/litellm/issues/17737
+            _provider_specific_fields_raw = assistant_content_block.get("provider_specific_fields")
+            _provider_specific_fields: dict[str, Any] = (
+                cast(dict[str, Any], _provider_specific_fields_raw)
+                if isinstance(_provider_specific_fields_raw, dict)
+                else {}
+            )
+            tool_invoke_results = (
+                convert_to_anthropic_tool_invoke(
+                    assistant_tool_calls,
+                    web_search_results=_provider_specific_fields.get("web_search_results"),
+                    tool_results=_provider_specific_fields.get("tool_results"),
+                    answered_tool_ids=client_answered_tool_ids,
+                )
+                if assistant_tool_calls is not None
+                else ()
+            )
+            turn_paused = bool(_unrun_server_tool_use_ids(tool_invoke_results))
+            replayed_tool_invokes, replayed_thinking_blocks = _paused_turn_replay(
+                tool_invoke_results, thinking_blocks or (), is_final_message=msg_i == len(messages) - 1
+            )
+
             if (
                 thinking_blocks is not None
                 and _has_server_tool_calls
@@ -3130,26 +3217,12 @@ def anthropic_messages_pt(
                 # We must preserve this interleaved order because Anthropic
                 # verifies thinking block signatures based on position.
 
-                # Build the tool call groups (server_tool_use + its result)
-                _provider_specific_fields_raw_tc = assistant_content_block.get("provider_specific_fields")
-                _provider_specific_fields_tc: dict[str, Any] = {}
-                if isinstance(_provider_specific_fields_raw_tc, dict):
-                    _provider_specific_fields_tc = cast(dict[str, Any], _provider_specific_fields_raw_tc)
-                _web_search_results_tc = _provider_specific_fields_tc.get("web_search_results")
-                _tool_results_tc = _provider_specific_fields_tc.get("tool_results")
-                tool_invoke_results = convert_to_anthropic_tool_invoke(
-                    assistant_tool_calls,
-                    web_search_results=_web_search_results_tc,
-                    tool_results=_tool_results_tc,
-                    answered_tool_ids=client_answered_tool_ids,
-                )
-
                 # Group tool invoke results into (server_tool_use, result) pairs
                 # and separate regular tool_use blocks
                 server_tool_groups: list[list[_AnthropicToolInvokeItem]] = []
                 regular_tool_uses: list[_AnthropicToolInvokeItem] = []
                 _current_group: list[_AnthropicToolInvokeItem] = []
-                for item in tool_invoke_results:
+                for item in replayed_tool_invokes:
                     item_type = item.get("type", "") if isinstance(item, dict) else getattr(item, "type", "")
                     if item_type == "server_tool_use":
                         if _current_group:
@@ -3163,6 +3236,9 @@ def anthropic_messages_pt(
                         _current_group.append(item)
                 if _current_group:
                     server_tool_groups.append(_current_group)
+                completed_server_tool_groups, pending_server_tool_uses = _split_unrun_server_tool_uses(
+                    server_tool_groups
+                )
 
                 # Build the text block if content is a non-empty string
                 text_element = None
@@ -3186,15 +3262,15 @@ def anthropic_messages_pt(
                 # Any remaining groups (after all thinking blocks) go after.
                 tb_idx = 0
                 grp_idx = 0
-                num_tb = len(thinking_blocks) if thinking_blocks else 0
-                num_grp = len(server_tool_groups)
+                num_tb = len(replayed_thinking_blocks)
+                num_grp = len(completed_server_tool_groups)
 
                 while tb_idx < num_tb or grp_idx < num_grp:
                     if tb_idx < num_tb and grp_idx < num_grp:
                         # Emit thinking block then its tool group
-                        assistant_content.append(thinking_blocks[tb_idx])
+                        assistant_content.append(replayed_thinking_blocks[tb_idx])
                         tb_idx += 1
-                        for block in server_tool_groups[grp_idx]:
+                        for block in completed_server_tool_groups[grp_idx]:
                             item_id = block.get("id") if isinstance(block, dict) else getattr(block, "id", None)
                             if item_id and item_id in unique_tool_ids:
                                 continue
@@ -3204,11 +3280,11 @@ def anthropic_messages_pt(
                         grp_idx += 1
                     elif tb_idx < num_tb:
                         # More thinking blocks than tool groups - emit before text
-                        assistant_content.append(thinking_blocks[tb_idx])
+                        assistant_content.append(replayed_thinking_blocks[tb_idx])
                         tb_idx += 1
                     else:
                         # More tool groups than thinking blocks - emit remaining
-                        for block in server_tool_groups[grp_idx]:
+                        for block in completed_server_tool_groups[grp_idx]:
                             item_id = block.get("id") if isinstance(block, dict) else getattr(block, "id", None)
                             if item_id and item_id in unique_tool_ids:
                                 continue
@@ -3221,8 +3297,8 @@ def anthropic_messages_pt(
                 if text_element is not None:
                     assistant_content.append(text_element)
 
-                # Add regular (non-server) tool calls at the end
-                for item in regular_tool_uses:
+                # Add regular tool calls, then a paused turn's unrun server tool call, at the end
+                for item in (*regular_tool_uses, *pending_server_tool_uses):
                     item_id = item.get("id") if isinstance(item, dict) else getattr(item, "id", None)
                     if item_id and item_id in unique_tool_ids:
                         continue
@@ -3242,18 +3318,18 @@ def anthropic_messages_pt(
                 )
                 _content_list = assistant_content_block.get("content") if _content_is_list else None
 
-                if (
-                    thinking_blocks is not None and not _content_is_list
-                ):  # IMPORTANT: ADD THIS FIRST, ELSE ANTHROPIC WILL RAISE AN ERROR
-                    assistant_content.extend(thinking_blocks)
+                if not _content_is_list:  # IMPORTANT: ADD THIS FIRST, ELSE ANTHROPIC WILL RAISE AN ERROR
+                    assistant_content.extend(replayed_thinking_blocks)
                 if _content_is_list and _content_list is not None:
-                    for m in _with_missing_thinking_blocks(_content_list, thinking_blocks or ()):
+                    for m in _with_missing_thinking_blocks(_content_list, replayed_thinking_blocks):
                         if not isinstance(m, dict):
                             continue
                         # handle thinking blocks
                         if (thinking_block := _as_thinking_block(m)) is not None:
                             assistant_content.extend(
-                                _replayable_thinking_blocks([thinking_block], drop_params=drop_params)
+                                ()
+                                if turn_paused
+                                else _replayable_thinking_blocks([thinking_block], drop_params=drop_params)
                             )
                             continue
                         text_block = cast(str, m.get("text", ""))
@@ -3293,25 +3369,9 @@ def anthropic_messages_pt(
                     assistant_content.append(_anthropic_text_content_element)
 
             if assistant_tool_calls is not None:  # support assistant tool invoke conversion
-                # Get web_search_results and tool_results from provider_specific_fields
-                # for server_tool_use reconstruction.
-                # Fixes: https://github.com/BerriAI/litellm/issues/17737
-                _provider_specific_fields_raw = assistant_content_block.get("provider_specific_fields")
-                _provider_specific_fields: dict[str, Any] = {}
-                if isinstance(_provider_specific_fields_raw, dict):
-                    _provider_specific_fields = cast(dict[str, Any], _provider_specific_fields_raw)
-                _web_search_results = _provider_specific_fields.get("web_search_results")
-                _tool_results = _provider_specific_fields.get("tool_results")
-                tool_invoke_results = convert_to_anthropic_tool_invoke(
-                    assistant_tool_calls,
-                    web_search_results=_web_search_results,
-                    tool_results=_tool_results,
-                    answered_tool_ids=client_answered_tool_ids,
-                )
-
                 # Prevent "tool_use ids must be unique" errors by filtering duplicates
                 # This can happen when merging history that already contains the tool calls
-                for item in tool_invoke_results:
+                for item in replayed_tool_invokes:
                     # tool_use items are typically dicts, but handle objects just in case
                     item_id = item.get("id") if isinstance(item, dict) else getattr(item, "id", None)
 
@@ -5878,38 +5938,36 @@ def function_call_prompt(
     ]
 
 
-def response_schema_prompt(model: str, response_schema: dict, llm_provider: str) -> str:
+def response_schema_prompt(model: str, response_schema: Mapping[str, object], llm_provider: str) -> str:
     """
     Decides if a user-defined custom prompt or default needs to be used
 
     Returns the prompt str that's passed to the model as a user message
     """
-    custom_prompt_details: dict | None = None
-    response_schema_as_message: Final = [{"role": "user", "content": f"{response_schema}"}]
-    if f"{model}/response_schema_prompt" in litellm.custom_prompt_dict:
-        custom_prompt_details = litellm.custom_prompt_dict[
-            f"{model}/response_schema_prompt"
-        ]  # allow user to define custom response schema prompt by model
-    elif "response_schema_prompt" in litellm.custom_prompt_dict:
-        custom_prompt_details = litellm.custom_prompt_dict["response_schema_prompt"]
-
-    if custom_prompt_details is not None:
-        return render_custom_prompt_template(
-            template=custom_prompt_details, messages=response_schema_as_message, model=model, llm_provider=llm_provider
-        )
-    else:
+    prompts: Final[Mapping[str, Mapping[str, object]]] = litellm.custom_prompt_dict
+    model_prompt_key: Final = f"{model}/response_schema_prompt"
+    custom_prompt_details: Final = prompts.get(
+        model_prompt_key if model_prompt_key in prompts else "response_schema_prompt"
+    )
+    if custom_prompt_details is None:
         return default_response_schema_prompt(response_schema=response_schema)
+    return render_custom_prompt_template(
+        template=custom_prompt_details,
+        messages=[{"role": "user", "content": f"{response_schema}"}],
+        model=model,
+        llm_provider=llm_provider,
+    )
 
 
-def default_response_schema_prompt(response_schema: dict) -> str:
+def default_response_schema_prompt(response_schema: Mapping[str, object]) -> str:
     """
     Used if provider/model doesn't support 'response_schema' param.
 
     This is the default prompt. Allow user to override this with a custom_prompt.
     """
     prompt_str: Final = f"""Use this JSON schema: 
-    ```json 
-    {response_schema}
+    ```json
+    {json.dumps(response_schema, default=str)}
     ```"""
     return prompt_str
 

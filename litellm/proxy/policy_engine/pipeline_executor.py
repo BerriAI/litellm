@@ -98,15 +98,11 @@ def _count_change(sent: tuple[object, ...] | None, returned: tuple[object, ...] 
     return (len(sent), len(returned))
 
 
-def _tool_call_mismatch_reason(
-    sent: tuple[tuple[object, object], ...] | None, returned: tuple[tuple[object, object], ...] | None
-) -> str | None:
-    if sent == returned:
-        return None
+def _tool_call_count_mismatch_reason(sent: Sequence[object] | None, returned: Sequence[object] | None) -> str | None:
     sent_count: Final = len(sent or ())
     returned_count: Final = len(returned or ())
     if sent_count == returned_count:
-        return "the legacy hook changed a tool call's name or arguments, which this path cannot write back"
+        return None
     return f"the legacy hook returned {returned_count} tool calls for a stream that carried {sent_count}"
 
 
@@ -205,11 +201,10 @@ class _LegacyHookStreamAdapter(CustomGuardrail):
     non-streaming hooks, an exception it raises ends the stream through the executor's
     fail/error classification, and the response it hands back, or the one it changed in place
     and returned ``None`` for, is re-scanned by the same translation so its texts reach the
-    client through the translation's ended-stream write-back. A
-    replacement whose scanned texts do not line up with the originals, or whose tool calls
-    differ from them, is undeliverable, so the executor releases the original chunks. A stream
-    that carried no text to scan, such as a tool-only Anthropic message, stays deliverable as
-    long as the hook left the tool calls alone."""
+    client through the translation's ended-stream write-back. Tool calls the hook rewrote go to the translation's
+    tool-call write-back like a unified guardrail's. A replacement whose scanned texts or tool
+    calls do not line up with the originals by count is undeliverable, so the executor releases
+    the original chunks."""
 
     def __init__(
         self,
@@ -258,14 +253,19 @@ class _LegacyHookStreamAdapter(CustomGuardrail):
                 guardrail_name,
                 f"the legacy hook returned {returned_text_count} texts for a stream that carried {sent_text_count}",
             )
-        tool_call_mismatch: Final = _tool_call_mismatch_reason(
-            _tool_call_shapes(inputs.get("tool_calls")), _tool_call_shapes(rescanned.get("tool_calls"))
+        sent_tool_calls: Final = inputs.get("tool_calls")
+        rewritten_tool_calls: Final = rescanned.get("tool_calls")
+        tool_call_count_mismatch: Final = _tool_call_count_mismatch_reason(sent_tool_calls, rewritten_tool_calls)
+        if tool_call_count_mismatch is not None:
+            raise UndeliverableStreamRewrite(guardrail_name, tool_call_count_mismatch)
+        texts_update: Final[GenericGuardrailAPIInputs] = {"texts": rewritten} if rewritten else {}
+        tool_calls_update: Final[GenericGuardrailAPIInputs] = (
+            {"tool_calls": rewritten_tool_calls}
+            if rewritten_tool_calls is not None
+            and _rewrote(_tool_call_shapes(sent_tool_calls), _tool_call_shapes(rewritten_tool_calls))
+            else {}
         )
-        if tool_call_mismatch is not None:
-            raise UndeliverableStreamRewrite(guardrail_name, tool_call_mismatch)
-        if not rewritten:
-            return inputs
-        rewritten_inputs: Final[GenericGuardrailAPIInputs] = {**inputs, "texts": rewritten}
+        rewritten_inputs: Final[GenericGuardrailAPIInputs] = {**inputs, **texts_update, **tool_calls_update}
         return rewritten_inputs
 
     async def _rescan(
@@ -329,6 +329,48 @@ def _prepare_hook_input(
     return hook_input, scans_raw_request
 
 
+async def _run_pre_call_hook(
+    target: CustomLogger,
+    callback: CustomGuardrail,
+    data: dict[str, object],  # mutable-ok: the request payload the run is recorded on
+    hook_input: dict[str, object],  # mutable-ok: same request-payload shape the hooks mutate
+    user_api_key_dict: "UserAPIKeyAuth",
+    call_type: str,
+) -> dict[str, object] | None:
+    try:
+        response: Final = await target.async_pre_call_hook(
+            user_api_key_dict=user_api_key_dict,
+            cache=None,
+            data=hook_input,
+            call_type=call_type,
+        )
+    except Exception:
+        callback.mark_pre_call_hook_ran(data, raised=True)
+        raise
+    callback.mark_pre_call_hook_ran(data)
+    if not isinstance(response, dict):
+        return None
+    payload: Final = cast(dict[str, object], response)  # cast-ok: a pre_call hook returns the request payload
+    callback.mark_pre_call_hook_ran(payload)
+    return payload
+
+
+def _name_step_that_ran(
+    request_data: dict[str, object],  # mutable-ok: the request payload the step's name is recorded on
+    metadata_key: Literal["metadata", "litellm_metadata"],
+    guardrail_name: str,
+) -> None:
+    """Name a step that ran in the applied guardrails of the metadata bucket the pipeline's request started with."""
+    existing: Final = request_data.get(metadata_key)
+    bucket: Final[dict[str, object]] = (  # mutable-ok: the request's own metadata bucket, written in place
+        cast("dict[str, object]", existing)  # cast-ok: metadata buckets are str-keyed
+        if isinstance(existing, dict)
+        else {}
+    )
+    request_data[metadata_key] = bucket  # rebind-ok: the step's name is recorded on the request payload
+    add_guardrail_to_applied_guardrails_header(request_data={metadata_key: bucket}, guardrail_name=guardrail_name)
+
+
 def _release_original_chunks(
     guardrail_name: str,
     reason: str,
@@ -389,6 +431,9 @@ class PipelineExecutor:
             PipelineExecutionResult with terminal action and step results
         """
         step_results: Final[list[PipelineStepResult]] = []
+        metadata_key: Final = get_metadata_variable_name_from_kwargs(
+            cast(Mapping[str, object], data)  # cast-ok: the request payload is str-keyed
+        )
         working_data = data.copy()
         if "metadata" in working_data:
             working_data["metadata"] = working_data["metadata"].copy()
@@ -407,6 +452,7 @@ class PipelineExecutor:
                 data=working_data,
                 user_api_key_dict=user_api_key_dict,
                 call_type=call_type,
+                metadata_key=metadata_key,
                 raw_request_snapshot=raw_request_snapshot,
                 streaming_chunks=streaming_chunks,
                 endpoint_translation=endpoint_translation,
@@ -480,6 +526,7 @@ class PipelineExecutor:
         user_api_key_dict: "UserAPIKeyAuth",
         litellm_logging_obj: "LiteLLMLoggingObj | None",
         stream_already_sent: bool,
+        metadata_key: Literal["metadata", "litellm_metadata"],
     ) -> None:
         """Run one streaming post_call step through the endpoint translation, delivering
         text and tool-call rewrites on translations that support ended-stream write-back. A
@@ -489,8 +536,8 @@ class PipelineExecutor:
         live, one that drops or adds a tool call, or one the translation or adapter refused with
         ``UndeliverableStreamRewrite``) is
         discarded: the buffered chunks go back to the originals and the step passes, so the
-        client gets the stream the merge base sent, and the guardrail stays out of the
-        applied-guardrails header since its output never reached the client. The response an
+        client gets the stream the merge base sent. The guardrail is named in the
+        applied-guardrails header either way, since it ran. The response an
         earlier step's translation stored under ``request_data["response"]`` is dropped first,
         so this step's hook sees the stream as the steps before it left it."""
         scanner: Final = (
@@ -525,12 +572,11 @@ class PipelineExecutor:
         except UndeliverableStreamRewrite as undeliverable:
             _release_original_chunks(step.guardrail, undeliverable.reason, streaming_chunks, originals)
             return
+        finally:
+            _name_step_that_ran(hook_input, metadata_key, step.guardrail)
         discard_reason: Final = observer.discard_reason(rewrite_undeliverable_reason)
         if discard_reason is not None:
             _release_original_chunks(step.guardrail, discard_reason, streaming_chunks, originals)
-            return
-        if not callback.records_own_guardrail_information:
-            add_guardrail_to_applied_guardrails_header(request_data=hook_input, guardrail_name=step.guardrail)
 
     @staticmethod
     async def _run_step(
@@ -539,6 +585,7 @@ class PipelineExecutor:
         data: dict,
         user_api_key_dict: "UserAPIKeyAuth",
         call_type: str,
+        metadata_key: Literal["metadata", "litellm_metadata"],
         raw_request_snapshot: dict | None = None,  # mutable-ok: same request-payload shape as data
         streaming_chunks: list[object] | None = None,  # mutable-ok: shared buffered-stream chunks, read per step
         endpoint_translation: "BaseTranslation | None" = None,
@@ -582,16 +629,7 @@ class PipelineExecutor:
 
         try:
             if mode == "pre_call":
-                response = await target.async_pre_call_hook(
-                    user_api_key_dict=user_api_key_dict,
-                    cache=None,
-                    data=hook_input,
-                    call_type=call_type,
-                )
-                if isinstance(callback, CustomGuardrail):
-                    callback.mark_pre_call_hook_ran(data)
-                    if isinstance(response, dict):
-                        callback.mark_pre_call_hook_ran(response)
+                response = await _run_pre_call_hook(target, callback, data, hook_input, user_api_key_dict, call_type)
             elif mode == "post_call" and streaming_chunks is not None:
                 if endpoint_translation is None:
                     return (
@@ -609,9 +647,15 @@ class PipelineExecutor:
                     user_api_key_dict=user_api_key_dict,
                     litellm_logging_obj=data.get("litellm_logging_obj"),
                     stream_already_sent=stream_already_sent,
+                    metadata_key=metadata_key,
                 )
                 response = None
             elif mode == "post_call":
+                _name_step_that_ran(
+                    cast(dict[str, object], data),  # cast-ok: the request payload is str-keyed
+                    metadata_key,
+                    step.guardrail,
+                )
                 response = await target.async_post_call_success_hook(
                     user_api_key_dict=user_api_key_dict,
                     data=data,
