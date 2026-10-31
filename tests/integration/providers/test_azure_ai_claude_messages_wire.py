@@ -145,7 +145,9 @@ def test_azure_ai_claude_messages_preserves_target_auth_beta_and_typed_response(
 
 
 @pytest.mark.parametrize("stream", [False, True], ids=["non_stream", "stream"])
-def test_azure_ai_claude_messages_filters_auto_injected_betas_by_azure_support(gateway: Gateway, stream: bool) -> None:
+def test_azure_ai_claude_messages_forwards_the_auto_injected_betas_azure_accepts(
+    gateway: Gateway, stream: bool
+) -> None:
     identity: Final = f"msg_azure_claude_beta_filter_{stream}"
     api_path: Final = "/anthropic/v1/messages"
     reply_body: Final = cc.message_reply(identity, _BACKEND, _CONTENT, _USAGE)
@@ -172,7 +174,7 @@ def test_azure_ai_claude_messages_filters_auto_injected_betas_by_azure_support(g
         "context_management": context_management,
     }
     expected_provider_body: Final = {**request_body_template, "model": _BACKEND}
-    expected_beta: Final = "structured-outputs-2025-11-13"
+    expected_beta: Final = "compact-2026-01-12,structured-outputs-2025-11-13"
 
     def respond(request: Request) -> Reply:
         assert request.method == "POST" and request.target == api_path, request.target

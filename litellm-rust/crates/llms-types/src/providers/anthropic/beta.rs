@@ -124,12 +124,86 @@ pub enum AnthropicBeta {
     ToolSearchTool20251019,
     #[strum(serialize = "inline-tools-2026-09-15")]
     InlineTools20260915,
+    #[strum(serialize = "afk-mode-2026-01-31")]
+    AfkMode20260131,
+    #[strum(serialize = "agent-memory-2026-07-22")]
+    AgentMemory20260722,
+    #[strum(serialize = "analytics-usage-cost-2026-08-24")]
+    AnalyticsUsageCost20260824,
+    #[strum(serialize = "cache-diagnosis-2026-04-07")]
+    CacheDiagnosis20260407,
+    #[strum(serialize = "ce-plugins-2026-09-01")]
+    CePlugins20260901,
+    #[strum(serialize = "ce-user-management-2026-07-13")]
+    CeUserManagement20260713,
+    #[strum(serialize = "code-execution-2025-05-22")]
+    CodeExecution20250522,
+    #[strum(serialize = "computer-use-2024-10-22")]
+    ComputerUse20241022,
+    #[strum(serialize = "dev-full-thinking-2025-05-14")]
+    DevFullThinking20250514,
+    #[strum(serialize = "dreaming-2026-04-21")]
+    Dreaming20260421,
+    #[strum(serialize = "experimental-claude-tag-2026-10-21")]
+    ExperimentalClaudeTag20261021,
+    #[strum(serialize = "extended-cache-ttl-2025-04-11")]
+    ExtendedCacheTtl20250411,
+    #[strum(serialize = "fallback-credit-2026-06-01")]
+    FallbackCredit20260601,
+    #[strum(serialize = "fallback-credit-2026-07-01")]
+    FallbackCredit20260701,
+    #[strum(serialize = "managed-agents-2026-04-01")]
+    ManagedAgents20260401,
+    #[strum(serialize = "mcp-client-2026-09-15")]
+    McpClient20260915,
+    #[strum(serialize = "mcp-tunnels-2026-06-22")]
+    McpTunnels20260622,
+    #[strum(serialize = "message-batches-2024-09-24")]
+    MessageBatches20240924,
+    #[strum(serialize = "message-threads-2026-08-12")]
+    MessageThreads20260812,
+    #[strum(serialize = "mid-conversation-system-clear-at-2026-08-21")]
+    MidConversationSystemClearAt20260821,
+    #[strum(serialize = "model-context-window-exceeded-2025-08-26")]
+    ModelContextWindowExceeded20250826,
+    #[strum(serialize = "output-300k-2026-03-24")]
+    Output300k20260324,
+    #[strum(serialize = "pdfs-2024-09-25")]
+    Pdfs20240925,
+    #[strum(serialize = "prompt-caching-2024-07-31")]
+    PromptCaching20240731,
+    #[strum(serialize = "redact-thinking-2026-02-12")]
+    RedactThinking20260212,
+    #[strum(serialize = "server-side-fallback-2026-06-01")]
+    ServerSideFallback20260601,
+    #[strum(serialize = "server-side-fallback-2026-07-01")]
+    ServerSideFallback20260701,
+    #[strum(serialize = "spend-limit-reads-2026-09-26")]
+    SpendLimitReads20260926,
+    #[strum(serialize = "structured-outputs-2025-12-15")]
+    StructuredOutputs20251215,
+    #[strum(serialize = "task-budgets-2026-03-13")]
+    TaskBudgets20260313,
+    #[strum(serialize = "telemetry-destinations-2026-08-11")]
+    TelemetryDestinations20260811,
+    #[strum(serialize = "thinking-token-count-2026-05-13")]
+    ThinkingTokenCount20260513,
+    #[strum(serialize = "token-counting-2024-11-01")]
+    TokenCounting20241101,
+    #[strum(serialize = "user-profiles-2026-03-24")]
+    UserProfiles20260324,
+    #[strum(serialize = "user-profiles-2026-08-18")]
+    UserProfiles20260818,
+    #[strum(serialize = "user-profiles-2026-09-04")]
+    UserProfiles20260904,
+    #[strum(serialize = "webhooks-2026-10-07")]
+    Webhooks20261007,
     #[strum(default, transparent)]
     Other(String),
 }
 
 impl AnthropicBeta {
-    pub const KNOWN: [Self; 40] = [
+    pub const KNOWN: [Self; 77] = [
         Self::Oauth20250420,
         Self::WebFetch20250910,
         Self::WebSearch20250305,
@@ -170,6 +244,43 @@ impl AnthropicBeta {
         Self::ToolExamples20251029,
         Self::ToolSearchTool20251019,
         Self::InlineTools20260915,
+        Self::AfkMode20260131,
+        Self::AgentMemory20260722,
+        Self::AnalyticsUsageCost20260824,
+        Self::CacheDiagnosis20260407,
+        Self::CePlugins20260901,
+        Self::CeUserManagement20260713,
+        Self::CodeExecution20250522,
+        Self::ComputerUse20241022,
+        Self::DevFullThinking20250514,
+        Self::Dreaming20260421,
+        Self::ExperimentalClaudeTag20261021,
+        Self::ExtendedCacheTtl20250411,
+        Self::FallbackCredit20260601,
+        Self::FallbackCredit20260701,
+        Self::ManagedAgents20260401,
+        Self::McpClient20260915,
+        Self::McpTunnels20260622,
+        Self::MessageBatches20240924,
+        Self::MessageThreads20260812,
+        Self::MidConversationSystemClearAt20260821,
+        Self::ModelContextWindowExceeded20250826,
+        Self::Output300k20260324,
+        Self::Pdfs20240925,
+        Self::PromptCaching20240731,
+        Self::RedactThinking20260212,
+        Self::ServerSideFallback20260601,
+        Self::ServerSideFallback20260701,
+        Self::SpendLimitReads20260926,
+        Self::StructuredOutputs20251215,
+        Self::TaskBudgets20260313,
+        Self::TelemetryDestinations20260811,
+        Self::ThinkingTokenCount20260513,
+        Self::TokenCounting20241101,
+        Self::UserProfiles20260324,
+        Self::UserProfiles20260818,
+        Self::UserProfiles20260904,
+        Self::Webhooks20261007,
     ];
 
     pub fn as_str(&self) -> &str {
@@ -195,10 +306,9 @@ impl AnthropicBeta {
 
     fn rejected_by(&self) -> &'static [BetaProvider] {
         match self {
-            Self::AdvancedToolUse20251120 => {
+            Self::AdvancedToolUse20251120 | Self::ToolSearchTool20251019 => {
                 &[BetaProvider::BedrockConverse, BetaProvider::Databricks]
             }
-            Self::ContextManagement20250627 => &[BetaProvider::BedrockConverse],
             Self::AdvisorTool20260301 => &[
                 BetaProvider::AzureAi,
                 BetaProvider::BedrockConverse,
@@ -207,98 +317,99 @@ impl AnthropicBeta {
                 BetaProvider::VertexAi,
                 BetaProvider::Databricks,
             ],
-            Self::Compact20260904 => &[
+            Self::AfkMode20260131
+            | Self::CePlugins20260901
+            | Self::CeUserManagement20260713
+            | Self::Compact20260904
+            | Self::Dreaming20260421
+            | Self::ExperimentalClaudeTag20261021
+            | Self::ExtendedCacheTtl20250411
+            | Self::FallbackCredit20260601
+            | Self::FallbackCredit20260701
+            | Self::InlineTools20260915
+            | Self::ManagedAgents20260401
+            | Self::McpTunnels20260622
+            | Self::MidConversationSystemClearAt20260821
+            | Self::ModelContextWindowExceeded20250826
+            | Self::Oauth20250420
+            | Self::Pdfs20240925
+            | Self::PromptCaching20240731
+            | Self::PromptCachingScope20260105
+            | Self::RedactThinking20260212
+            | Self::ServerSideFallback20260601
+            | Self::SpendLimitReads20260926
+            | Self::StructuredOutputs20251215
+            | Self::TaskBudgets20260313
+            | Self::TelemetryDestinations20260811
+            | Self::ThinkingTokenCount20260513
+            | Self::TokenCounting20241101
+            | Self::UserProfiles20260324
+            | Self::UserProfiles20260818
+            | Self::UserProfiles20260904 => &[
                 BetaProvider::BedrockConverse,
                 BetaProvider::Bedrock,
                 BetaProvider::BedrockMantle,
                 BetaProvider::Databricks,
             ],
-            Self::Bash20241022
+            Self::AgentMemory20260722
+            | Self::Bash20241022
             | Self::Bash20250124
+            | Self::DevFullThinking20250514
             | Self::McpServers20251204
             | Self::StructuredOutput20240301
             | Self::TextEditor20241022
             | Self::TextEditor20250124 => BetaProvider::VARIANTS,
-            Self::ClaudeCode20250219 | Self::ToolExamples20251029 => &[
-                BetaProvider::Anthropic,
-                BetaProvider::AzureAi,
-                BetaProvider::BedrockConverse,
-                BetaProvider::Bedrock,
-                BetaProvider::VertexAi,
-                BetaProvider::Databricks,
-            ],
-            Self::CodeExecution20250825
+            Self::AnalyticsUsageCost20260824
+            | Self::CacheDiagnosis20260407
+            | Self::CodeExecution20250522
+            | Self::CodeExecution20250825
+            | Self::ComputerUse20241022
+            | Self::FastMode20260201
             | Self::FilesApi20250414
             | Self::McpClient20250404
             | Self::McpClient20251120
-            | Self::PromptCachingScope20260105
+            | Self::McpClient20260915
+            | Self::MessageBatches20240924
+            | Self::MessageThreads20260812
+            | Self::Output300k20260324
+            | Self::ServerSideFallback20260701
             | Self::Skills20251002
-            | Self::WebFetch20250910 => &[
+            | Self::WebFetch20250910
+            | Self::Webhooks20261007 => &[
                 BetaProvider::BedrockConverse,
                 BetaProvider::Bedrock,
                 BetaProvider::BedrockMantle,
                 BetaProvider::VertexAi,
                 BetaProvider::Databricks,
             ],
-            Self::Compact20260112 => &[BetaProvider::AzureAi, BetaProvider::BedrockConverse],
+            Self::ClaudeCode20250219
+            | Self::PerTurnControl20260701
+            | Self::ToolExamples20251029 => &[
+                BetaProvider::BedrockConverse,
+                BetaProvider::Bedrock,
+                BetaProvider::Databricks,
+            ],
+            Self::Compact20260112
+            | Self::ContextManagement20250627
+            | Self::DangerousToolUse20260903 => &[BetaProvider::BedrockConverse],
             Self::ComputerUse20250124
             | Self::ComputerUse20251124
             | Self::Context1m20250807
+            | Self::Effort20251124
+            | Self::FineGrainedToolStreaming20250514
             | Self::ThinkingBindingControls20260801
             | Self::ThinkingDisplayUpdates20260818 => &[],
-            Self::DangerousToolUse20260903 => &[BetaProvider::BedrockConverse],
-            Self::Effort20251124 => &[BetaProvider::VertexAi],
-            Self::FastMode20260201 | Self::Oauth20250420 => &[
-                BetaProvider::AzureAi,
-                BetaProvider::BedrockConverse,
-                BetaProvider::Bedrock,
-                BetaProvider::BedrockMantle,
-                BetaProvider::VertexAi,
-                BetaProvider::Databricks,
-            ],
-            Self::FineGrainedToolStreaming20250514 => {
-                &[BetaProvider::AzureAi, BetaProvider::VertexAi]
-            }
-            Self::InterleavedThinking20250514 | Self::WebSearch20250305 => {
-                &[BetaProvider::BedrockConverse, BetaProvider::Bedrock]
-            }
-            Self::MidConversationOutputConfig20260701 => &[
-                BetaProvider::AzureAi,
-                BetaProvider::BedrockConverse,
-                BetaProvider::BedrockMantle,
-                BetaProvider::VertexAi,
-                BetaProvider::Databricks,
-            ],
-            Self::MidConversationToolChanges20260701 => &[
+            Self::InterleavedThinking20250514
+            | Self::Output128k20250219
+            | Self::TokenEfficientTools20250219
+            | Self::WebSearch20250305 => &[BetaProvider::BedrockConverse, BetaProvider::Bedrock],
+            Self::MidConversationOutputConfig20260701
+            | Self::MidConversationToolChanges20260701 => &[
                 BetaProvider::BedrockConverse,
                 BetaProvider::BedrockMantle,
                 BetaProvider::Databricks,
             ],
-            Self::Output128k20250219 | Self::TokenEfficientTools20250219 => &[
-                BetaProvider::AzureAi,
-                BetaProvider::BedrockConverse,
-                BetaProvider::Bedrock,
-                BetaProvider::VertexAi,
-            ],
-            Self::PerTurnControl20260701 => &[
-                BetaProvider::BedrockConverse,
-                BetaProvider::Bedrock,
-                BetaProvider::Databricks,
-            ],
-            Self::StructuredOutputs20251113 => &[BetaProvider::Bedrock, BetaProvider::VertexAi],
-            Self::ToolSearchTool20251019 => &[
-                BetaProvider::Anthropic,
-                BetaProvider::AzureAi,
-                BetaProvider::BedrockConverse,
-                BetaProvider::Databricks,
-            ],
-            Self::InlineTools20260915 => &[
-                BetaProvider::AzureAi,
-                BetaProvider::BedrockConverse,
-                BetaProvider::Bedrock,
-                BetaProvider::BedrockMantle,
-                BetaProvider::Databricks,
-            ],
+            Self::StructuredOutputs20251113 => &[BetaProvider::Bedrock],
             Self::Other(_) => BetaProvider::VARIANTS,
         }
     }
@@ -451,7 +562,44 @@ mod tests {
             AnthropicBeta::TokenEfficientTools20250219,
             AnthropicBeta::ToolExamples20251029,
             AnthropicBeta::ToolSearchTool20251019,
-            AnthropicBeta::InlineTools20260915
+            AnthropicBeta::InlineTools20260915,
+            AnthropicBeta::AfkMode20260131,
+            AnthropicBeta::AgentMemory20260722,
+            AnthropicBeta::AnalyticsUsageCost20260824,
+            AnthropicBeta::CacheDiagnosis20260407,
+            AnthropicBeta::CePlugins20260901,
+            AnthropicBeta::CeUserManagement20260713,
+            AnthropicBeta::CodeExecution20250522,
+            AnthropicBeta::ComputerUse20241022,
+            AnthropicBeta::DevFullThinking20250514,
+            AnthropicBeta::Dreaming20260421,
+            AnthropicBeta::ExperimentalClaudeTag20261021,
+            AnthropicBeta::ExtendedCacheTtl20250411,
+            AnthropicBeta::FallbackCredit20260601,
+            AnthropicBeta::FallbackCredit20260701,
+            AnthropicBeta::ManagedAgents20260401,
+            AnthropicBeta::McpClient20260915,
+            AnthropicBeta::McpTunnels20260622,
+            AnthropicBeta::MessageBatches20240924,
+            AnthropicBeta::MessageThreads20260812,
+            AnthropicBeta::MidConversationSystemClearAt20260821,
+            AnthropicBeta::ModelContextWindowExceeded20250826,
+            AnthropicBeta::Output300k20260324,
+            AnthropicBeta::Pdfs20240925,
+            AnthropicBeta::PromptCaching20240731,
+            AnthropicBeta::RedactThinking20260212,
+            AnthropicBeta::ServerSideFallback20260601,
+            AnthropicBeta::ServerSideFallback20260701,
+            AnthropicBeta::SpendLimitReads20260926,
+            AnthropicBeta::StructuredOutputs20251215,
+            AnthropicBeta::TaskBudgets20260313,
+            AnthropicBeta::TelemetryDestinations20260811,
+            AnthropicBeta::ThinkingTokenCount20260513,
+            AnthropicBeta::TokenCounting20241101,
+            AnthropicBeta::UserProfiles20260324,
+            AnthropicBeta::UserProfiles20260818,
+            AnthropicBeta::UserProfiles20260904,
+            AnthropicBeta::Webhooks20261007
         )]
         beta: AnthropicBeta,
     ) {
@@ -551,7 +699,7 @@ mod tests {
         BetaProvider::Anthropic,
         Some(AnthropicBeta::Oauth20250420)
     )]
-    #[case::rejected("effort-2025-11-24", BetaProvider::VertexAi, None)]
+    #[case::rejected("skills-2025-10-02", BetaProvider::VertexAi, None)]
     #[case::unknown("example-beta-2099-01-01", BetaProvider::Anthropic, None)]
     fn on_resolves_known_spellings_held_as_other(
         #[case] raw: &str,

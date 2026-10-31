@@ -10,10 +10,11 @@ This test validates:
 
 import json
 import os
-from typing import Dict, Final, List
+from typing import Dict, Final, List, get_args
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from anthropic.types.anthropic_beta_param import AnthropicBetaParam
 
 import litellm
 from litellm.anthropic_beta_headers_manager import (
@@ -23,6 +24,13 @@ from litellm.anthropic_beta_headers_manager import (
     update_headers_with_filtered_beta,
     update_request_with_filtered_beta,
 )
+
+
+def _literal_strings(annotation: object) -> frozenset[str]:
+    args: Final = get_args(annotation)
+    if not args:
+        return frozenset({annotation}) if isinstance(annotation, str) else frozenset()
+    return frozenset[str]().union(*(_literal_strings(arg) for arg in args))
 
 
 class TestAnthropicBetaHeadersFiltering:
@@ -50,21 +58,24 @@ class TestAnthropicBetaHeadersFiltering:
         """Get all beta headers from the anthropic provider config."""
         return list(self.config.get("anthropic", {}).keys())
 
+    def get_header_column(self, provider: str) -> Dict[str, str | None]:
+        return {**self.config.get(provider, {}), **self.config.get(f"{provider}_header_only", {})}
+
     def get_supported_headers(self, provider: str) -> List[str]:
         """Get headers with non-null values for a provider."""
-        provider_config = self.config.get(provider, {})
+        provider_config = self.get_header_column(provider)
         return [
             header for header, value in provider_config.items() if value is not None
         ]
 
     def get_unsupported_headers(self, provider: str) -> List[str]:
         """Get headers with null values for a provider."""
-        provider_config = self.config.get(provider, {})
+        provider_config = self.get_header_column(provider)
         return [header for header, value in provider_config.items() if value is None]
 
     def get_mapped_headers(self, provider: str) -> Dict[str, str]:
         """Get mapping of input headers to provider-specific headers."""
-        provider_config = self.config.get(provider, {})
+        provider_config = self.get_header_column(provider)
         return {
             header: value
             for header, value in provider_config.items()
@@ -407,7 +418,15 @@ class TestAnthropicBetaHeadersFiltering:
                 test_case["expected"] in filtered
             ), f"Header '{test_case['input']}' should be mapped to '{test_case['expected']}' for {test_case['provider']}, but got: {filtered}"
 
-    @pytest.mark.parametrize("beta", ["compact-2026-09-04", "inline-tools-2026-09-15"])
+    @pytest.mark.parametrize(
+        "beta",
+        [
+            "compact-2026-09-04",
+            "inline-tools-2026-09-15",
+            "prompt-caching-scope-2026-01-05",
+            "redact-thinking-2026-02-12",
+        ],
+    )
     def test_vertex_ai_header_only_beta_is_forwarded_as_the_header_and_dropped_from_the_body(
         self, beta: str
     ) -> None:
@@ -508,6 +527,44 @@ class TestAnthropicBetaHeadersFiltering:
         )
 
         assert filtered == ["inline-tools-2026-09-15"]
+
+    @pytest.mark.parametrize("provider", ["anthropic", "azure_ai", "vertex_ai"])
+    def test_task_budgets_and_computer_use_betas_reach_every_platform(self, provider: str) -> None:
+        """Live probes on 2026-10-28 found all three platforms accept task-budgets-2026-03-13. On 2026-10-31 Vertex
+        ran the computer tool only with the beta each model takes (computer-use-2025-01-24 on Claude Sonnet 4.5 and
+        Haiku 4.5, computer-use-2025-11-24 on Claude Opus 4.5 and the 4.6 models) and answered 400 to the other, so
+        both reach Vertex and the model decides, the same as calling Vertex directly."""
+        sent: Final = frozenset(("computer-use-2025-01-24", "computer-use-2025-11-24", "task-budgets-2026-03-13"))
+
+        headers: Final = update_headers_with_filtered_beta({"anthropic-beta": ",".join(sorted(sent))}, provider)
+
+        assert frozenset(headers["anthropic-beta"].split(",")) == sent
+
+    @pytest.mark.parametrize("provider", ["anthropic", "azure_ai", "vertex_ai"])
+    def test_claude_code_betas_reach_the_probed_platforms(self, provider: str) -> None:
+        """Claude Code 2.1.299 sends these betas outside the anthropic SDK's list, and live probes on
+        2026-10-28 found Anthropic, Vertex, and Azure AI Foundry accept each of them as the anthropic-beta header."""
+        claude_code_betas: Final = frozenset(
+            ("afk-mode-2026-01-31", "redact-thinking-2026-02-12", "structured-outputs-2025-12-15")
+        )
+
+        headers: Final = update_headers_with_filtered_beta({"anthropic-beta": ",".join(claude_code_betas)}, provider)
+
+        assert frozenset(headers["anthropic-beta"].split(",")) == claude_code_betas
+
+    @pytest.mark.parametrize("provider", ["anthropic", "azure_ai", "vertex_ai"])
+    def test_every_anthropic_sdk_beta_has_a_decision_for_the_probed_platforms(self, provider: str) -> None:
+        sdk_betas: Final = _literal_strings(AnthropicBetaParam)
+        provider_column: Final = GetAnthropicBetaHeadersConfig.load_local_beta_headers_config()[provider]
+
+        assert sdk_betas
+        assert sdk_betas - provider_column.keys() == frozenset()
+
+    @pytest.mark.parametrize("provider", ["azure_ai", "vertex_ai"])
+    def test_every_anthropic_beta_has_a_decision_for_vertex_ai_and_azure_ai(self, provider: str) -> None:
+        config: Final = GetAnthropicBetaHeadersConfig.load_local_beta_headers_config()
+
+        assert config["anthropic"].keys() - config[provider].keys() == set()
 
     def test_null_value_headers_filtered(self):
         """Test that headers with null values are always filtered out."""
