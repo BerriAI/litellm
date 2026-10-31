@@ -39,14 +39,15 @@ Safe to enable globally:
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from functools import cache
-from typing import TYPE_CHECKING, Final, Optional, cast
+from typing import TYPE_CHECKING, Final, Optional, TypeAlias, cast
 
 from pydantic import BaseModel, TypeAdapter
 
+import litellm
 from litellm._logging import verbose_router_logger
 from litellm.exceptions import AuthenticationError, BadRequestError
 from litellm.integrations.custom_logger import CustomLogger, Span
-from litellm.litellm_core_utils.get_llm_provider_logic import declared_authenticating_provider, get_llm_provider
+from litellm.litellm_core_utils.get_llm_provider_logic import declared_provider, get_llm_provider
 from litellm.litellm_core_utils.litellm_logging import has_sensitive_keyword
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     anthropic_content_lists,
@@ -68,6 +69,7 @@ if TYPE_CHECKING:
 _REQUEST_KWARGS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _ACCOUNT_SCOPE_HEADERS: Final = frozenset({"openai-organization", "openai-project", "cookie"})
 _SINGLE_VENDOR_PROVIDERS: Final = frozenset({LlmProviders.OPENAI.value})
+_EncryptionBoundary: TypeAlias = tuple[object, object] | tuple[object, object, str, frozenset[tuple[str, object]]]
 
 
 @dataclass(frozen=True, slots=True)
@@ -223,13 +225,15 @@ class EncryptedContentAffinityCheck(CustomLogger):
     @staticmethod
     def _encryption_boundary_key(
         litellm_params: object,
-    ) -> tuple[object, object, frozenset[tuple[str, object]]] | None:
+    ) -> _EncryptionBoundary | None:
         """
-        ``(api_base, api_key, account scope)`` identifies an upstream encryption boundary.
-        The values are resolved the way the request resolves them, the deployment's own values
-        winning over its named credential's, without modifying the deployment. On a provider that
-        serves one vendor's models, a deployment with no ``api_key`` takes the provider's default
-        key, and one with no ``api_base`` takes the endpoint its Responses URL builder resolves.
+        The upstream encryption boundary a deployment's encrypted reasoning belongs to. The values
+        are resolved the way the request resolves them, the deployment's own values winning over its
+        named credential's, without modifying the deployment. An explicit ``(api_base, api_key)``
+        pair is the whole boundary. On a provider that serves one vendor's models, a deployment with
+        no ``api_key`` takes the provider's default key, one with no ``api_base`` takes the endpoint
+        its Responses URL builder resolves, and the boundary also carries the model and the headers
+        that pick an account.
 
         Accepts plain dicts (the common case in ``healthy_deployments``) as
         well as ``LiteLLM_Params`` Pydantic instances. A stricter
@@ -241,11 +245,10 @@ class EncryptedContentAffinityCheck(CustomLogger):
         if params is None:
             return None
         effective_params: Final = with_named_credential(params)
-        account_scope: Final = EncryptedContentAffinityCheck._account_scope(effective_params)
         explicit_api_key: Final = effective_params.get("api_key")
         explicit_api_base: Final = effective_params.get("api_base")
         if explicit_api_key and explicit_api_base:
-            return (explicit_api_base, explicit_api_key, account_scope)
+            return (explicit_api_base, explicit_api_key)
         route: Final = EncryptedContentAffinityCheck._provider_route(effective_params)
         if route is None or route.provider not in _SINGLE_VENDOR_PROVIDERS:
             return None
@@ -257,7 +260,7 @@ class EncryptedContentAffinityCheck(CustomLogger):
         )
         if not api_base:
             return None
-        return (api_base, api_key, account_scope)
+        return (api_base, api_key, route.model, EncryptedContentAffinityCheck._account_scope(effective_params))
 
     @staticmethod
     def _params_mapping(litellm_params: object) -> Mapping[str, object] | None:
@@ -295,9 +298,10 @@ class EncryptedContentAffinityCheck(CustomLogger):
         if not isinstance(model, str):
             return None
         custom_llm_provider: Final = litellm_params.get("custom_llm_provider")
-        if declared_authenticating_provider(
+        declared: Final = declared_provider(
             model, custom_llm_provider if isinstance(custom_llm_provider, str) else None
-        ):
+        )
+        if declared in litellm.provider_list and declared not in _SINGLE_VENDOR_PROVIDERS:
             return None
         try:
             provider_model, provider, _, provider_api_base = get_llm_provider(
@@ -380,7 +384,7 @@ class EncryptedContentAffinityCheck(CustomLogger):
         )
 
         @cache
-        def target_boundaries() -> frozenset[tuple[object, object, frozenset[tuple[str, object]]]]:
+        def target_boundaries() -> frozenset[_EncryptionBoundary]:
             return frozenset(
                 boundary
                 for target in target_deployments

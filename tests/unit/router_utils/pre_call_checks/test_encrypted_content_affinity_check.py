@@ -1109,7 +1109,6 @@ def test_boundary_key_accepts_pydantic_litellm_params_instance():
         == (
             "https://mateo-resource.openai.azure.com",
             "fake-azure-resource-key-a",
-            frozenset(),
         )
     )
 
@@ -1135,7 +1134,7 @@ def test_boundary_key_resolves_missing_values_from_named_credential():
     ):
         boundary = EncryptedContentAffinityCheck._encryption_boundary_key({"litellm_credential_name": "account-a"})
 
-    assert boundary == ("https://account-a.example.com", "credential-key-a", frozenset())
+    assert boundary == ("https://account-a.example.com", "credential-key-a")
 
 
 @pytest.mark.parametrize(
@@ -2752,6 +2751,12 @@ def no_process_wide_api_base(monkeypatch: pytest.MonkeyPatch) -> None:
         ),
         pytest.param(OPENAI_SHARED_KEY, {**OPENAI_SHARED_KEY, "api_key": "other-key"}, False, id="different key"),
         pytest.param(
+            OPENAI_SHARED_KEY,
+            {**OPENAI_SHARED_KEY, "model": "openai/gpt-5.5-mini"},
+            False,
+            id="same key on the default endpoint for another model",
+        ),
+        pytest.param(
             {"model": "bedrock_mantle/us-west-2/openai.gpt-6-astra", "api_key": "shared-key"},
             {"model": "bedrock_mantle/us-west-2/openai.gpt-6-astra", "api_key": "shared-key"},
             False,
@@ -2816,6 +2821,12 @@ def no_process_wide_api_base(monkeypatch: pytest.MonkeyPatch) -> None:
             {**OPENAI_SHARED_KEY, "extra_headers": {"cookie": "session=account-b"}},
             False,
             id="same key signed in to different accounts by cookie",
+        ),
+        pytest.param(
+            {**OPENAI_SHARED_KEY, "headers": {"api-key": "account-a"}},
+            {**OPENAI_SHARED_KEY, "headers": {"api-key": "account-b"}},
+            False,
+            id="explicit key beside different api-key headers",
         ),
         pytest.param(
             {**OPENAI_SHARED_KEY, "organization": "org-a"},
@@ -2935,10 +2946,10 @@ GATEWAY_BASE: Final = {"model": "openai/gpt-5.5", "api_base": "https://gateway.e
             id="environment key replaced by different Authorization headers",
         ),
         pytest.param(
-            {**GATEWAY_BASE, "api_key": "shared-key", "headers": {"api-key": "account-a"}},
-            {**GATEWAY_BASE, "api_key": "shared-key", "headers": {"api-key": "account-b"}},
-            False,
-            id="explicit key beside different api-key headers",
+            {**GATEWAY_BASE, "api_key": "shared-key", "extra_headers": {"x-idempotency-key": "a"}},
+            {**GATEWAY_BASE, "api_key": "shared-key", "extra_headers": {"x-idempotency-key": "b"}},
+            True,
+            id="explicit pair beside different tag headers",
         ),
         pytest.param(
             {**GATEWAY_BASE, "extra_headers": {"Authorization": "Bearer sk-account-a"}},
@@ -2996,14 +3007,17 @@ class _SecretReadCounter(CustomSecretManager):
 
 
 @pytest.mark.parametrize(
-    "reasoning_minted_by",
+    "deployment_params, reasoning_minted_by",
     [
-        pytest.param(None, id="no reasoning in the input"),
-        pytest.param("target", id="reasoning the hop's target minted"),
+        pytest.param(OPENAI_SHARED_KEY, None, id="no reasoning in the input"),
+        pytest.param(OPENAI_SHARED_KEY, "target", id="reasoning the hop's target minted"),
+        pytest.param(
+            {"model": "groq/llama-4-scout"}, "origin", id="reasoning from a provider with no default boundary"
+        ),
     ],
 )
-def test_hop_strip_reads_no_secrets_when_no_reasoning_needs_a_boundary(
-    monkeypatch: pytest.MonkeyPatch, reasoning_minted_by: str | None
+def test_hop_strip_reads_no_secrets_when_no_default_boundary_needs_resolving(
+    monkeypatch: pytest.MonkeyPatch, deployment_params: dict[str, object], reasoning_minted_by: str | None
 ):
     from litellm.router_utils.pre_call_checks.encrypted_content_affinity_check import (
         EncryptedContentAffinityCheck,
@@ -3011,8 +3025,8 @@ def test_hop_strip_reads_no_secrets_when_no_reasoning_needs_a_boundary(
 
     router: Final = litellm.Router(
         model_list=[
-            _default_endpoint_deployment("origin", OPENAI_SHARED_KEY),
-            _default_endpoint_deployment("target", OPENAI_SHARED_KEY),
+            _default_endpoint_deployment("origin", deployment_params),
+            _default_endpoint_deployment("target", deployment_params),
         ]
     )
     ctx: Final = RoutingContext(router)
