@@ -86,6 +86,7 @@ from litellm.litellm_core_utils.core_helpers import (
     proxy_stamped_kubernetes_pod_routing,
     proxy_stamped_used_client_oauth_token,
     reconstruct_model_name,
+    reports_native_messages_cost,
     set_response_cost_in_hidden_params,
     single_log_line,
 )
@@ -5188,15 +5189,33 @@ class Logging(LiteLLMLoggingBaseClass):
 
     def billable_result(self, result: object) -> object:
         """The response the cost calculator prices: a /v1/messages body served through the chat
-        bridge is replaced by the ModelResponse its spend row is built from, anything else is
+        bridge is replaced by the ModelResponse its spend row is built from, a native one is only
+        converted when its provider reports the cost the bill is read from, anything else is
         priced as is."""
         served: Final[object] = result
         call_type: Final[object] = getattr(self, "call_type", None)
         if not isinstance(result, dict):
             return served
-        if self.bridged_model_response is None and call_type != CallTypes.anthropic_messages.value:
+        if self.bridged_model_response is not None:
+            return self._anthropic_messages_logged_response(result=served)
+        if call_type != CallTypes.anthropic_messages.value:
             return served
+        if not reports_native_messages_cost(self.model_call_details.get("custom_llm_provider")):
+            return self._served_with_requested_speed(result=served)
         return self._anthropic_messages_logged_response(result=served)
+
+    def _served_with_requested_speed(self, result: object) -> object:
+        """A native /v1/messages body priced as served bills the speed the client asked for when its
+        usage block reports none, the same speed its spend row is priced at."""
+        body: Final = _SERVED_ANTHROPIC_BODY.validate_python(result)
+        usage: Final = body.get("usage")
+        requested: Final = _LITELLM_PARAMS.validate_python(getattr(self, "optional_params", None) or {}).get("speed")
+        if not isinstance(requested, str) or not isinstance(usage, dict):
+            return result
+        reported: Final = _SERVED_ANTHROPIC_BODY.validate_python(usage)
+        if isinstance(reported.get("speed"), str):
+            return result
+        return {**body, "usage": {**reported, "speed": requested}}
 
     def _anthropic_messages_logged_response(self, result: object) -> ModelResponse:
         """
