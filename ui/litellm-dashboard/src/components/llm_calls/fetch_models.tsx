@@ -2,9 +2,13 @@
 
 import { excludeProxyWideSentinel } from "@/components/key_team_helpers/fetch_available_models_team_key";
 import { modelAvailableCall, modelHubCall } from "@/components/networking";
+import type { components } from "@/lib/http/schema";
+
+export type ModelTeam = components["schemas"]["ModelGroupTeam"];
 
 export interface ModelGroup {
   model_group: string;
+  available_teams?: ModelTeam[];
   providers?: string[];
   mode?: string;
   supports_reasoning?: boolean;
@@ -14,6 +18,7 @@ export interface ModelGroup {
 
 interface AvailableModel {
   model_group?: string | null;
+  available_teams?: ModelTeam[] | null;
   model_name?: string | null;
   id?: string | null;
   providers?: string[] | null;
@@ -27,6 +32,7 @@ const toModelGroup = (item: AvailableModel): ModelGroup => {
   const groupName = (item.model_group || item.id || item.model_name) ?? "";
   return {
     model_group: groupName,
+    ...(item.available_teams && { available_teams: item.available_teams }),
     ...(item.providers && { providers: item.providers }),
     ...(item.mode && { mode: item.mode }),
     ...(item.supports_reasoning === true && { supports_reasoning: true }),

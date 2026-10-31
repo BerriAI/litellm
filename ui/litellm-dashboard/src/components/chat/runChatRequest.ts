@@ -9,6 +9,7 @@ interface ChatRequestOptions {
   mode: "chat" | "image";
   prompt: string;
   accessToken: string;
+  teamId?: string;
   signal: AbortSignal;
   messages: Pick<
     ChatMessage,
@@ -40,6 +41,7 @@ export async function runChatRequest({
   mode,
   prompt,
   accessToken,
+  teamId,
   signal,
   messages,
   previousResponseId,
@@ -54,7 +56,7 @@ export async function runChatRequest({
   try {
     signal.throwIfAborted();
     if (mode === "image") {
-      const imageRequest = { prompt, model, accessToken, signal };
+      const imageRequest = { prompt, model, accessToken, signal, teamId };
       const generatedImages = await generateChatImages(imageRequest);
       signal.throwIfAborted();
       onUpdate({ generatedImages });
@@ -94,6 +96,7 @@ export async function runChatRequest({
       undefined,
       true,
       (totalLatency) => onUpdate({ totalLatency }),
+      teamId ? { "x-litellm-team-id": teamId } : undefined,
     );
     signal.throwIfAborted();
   } catch (error: unknown) {

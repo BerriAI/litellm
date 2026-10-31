@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { ModelGroup } from "@/components/llm_calls/fetch_models";
 
@@ -15,6 +16,51 @@ export function modelChatMode(model: ModelGroup): ChatMode {
 
 export function isChatModel(model: ModelGroup): boolean {
   return !model.mode || ["chat", "responses", "completion", "image_generation"].includes(model.mode);
+}
+
+export function chatTeamSelection(
+  model: ModelGroup | undefined,
+  selectedTeamId: string | null,
+): { teamId: string | undefined; needsSelection: boolean } {
+  const teams = model?.available_teams ?? [];
+  const team = teams.length === 1 ? teams[0] : teams.find((item) => item.team_id === selectedTeamId);
+  return { teamId: team?.team_id, needsSelection: teams.length > 1 && !team };
+}
+
+export function ChatTeamPicker({
+  model,
+  selectedTeamId,
+  disabled,
+  onSelect,
+}: {
+  model: ModelGroup | undefined;
+  selectedTeamId: string | null;
+  disabled: boolean;
+  onSelect: (teamId: string | null) => void;
+}) {
+  const teams = model?.available_teams ?? [];
+  if (teams.length < 2) return null;
+
+  const selection = chatTeamSelection(model, selectedTeamId);
+  return (
+    <Select
+      value={selection.teamId ?? null}
+      items={teams.map((team) => ({ value: team.team_id, label: team.team_alias || team.team_id }))}
+      disabled={disabled}
+      onValueChange={onSelect}
+    >
+      <SelectTrigger aria-label="Team paying for this request" size="sm" className="max-w-40">
+        <SelectValue placeholder="Choose team" />
+      </SelectTrigger>
+      <SelectContent className="chat-theme w-max min-w-64 max-w-[calc(100vw-2rem)]">
+        {teams.map((team) => (
+          <SelectItem key={team.team_id} value={team.team_id}>
+            {team.team_alias || team.team_id}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
+  );
 }
 
 export default function ChatModelPicker({

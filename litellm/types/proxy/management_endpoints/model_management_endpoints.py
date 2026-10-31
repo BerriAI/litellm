@@ -34,6 +34,13 @@ class PatchModelRequest(updateDeployment):
         return self
 
 
+class ModelGroupTeam(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    team_id: str
+    team_alias: str | None = None
+
+
 class ModelGroupInfoProxy(ModelGroupInfo):
     is_public_model_group: bool = Field(default=False)
     health_status: str | None = Field(default=None)
@@ -41,6 +48,13 @@ class ModelGroupInfoProxy(ModelGroupInfo):
     health_checked_at: str | None = Field(default=None)
     custom_tags: tuple[str, ...] | None = None
     custom_metadata: Mapping[str, str | int | float | bool] | None = None
+    available_teams: tuple[ModelGroupTeam, ...] | None = None
+
+
+class ModelGroupInfoResponse(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    data: tuple[ModelGroupInfoProxy, ...]
 
 
 class UpdateUsefulLinksRequest(LiteLLMBaseModel):
