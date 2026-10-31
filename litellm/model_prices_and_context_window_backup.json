@@ -81106,7 +81106,7 @@
         "input_cost_per_token": 1.5e-07,
         "litellm_provider": "frequency",
         "max_input_tokens": 32768,
-        "max_output_tokens": 1024,
+        "max_output_tokens": 8192,
         "mode": "chat",
         "output_cost_per_token": 5.5e-07,
         "source": "https://scalefrequency.com/pricing",
