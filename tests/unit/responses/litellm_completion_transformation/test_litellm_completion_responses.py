@@ -4364,6 +4364,7 @@ class TestEnsureOutputItemContentPartAdded:
         iterator._queued_web_search_call_ids = set()
         iterator._tool_search = tool_search_routing(None)
         iterator._tool_search_executions = MappingProxyType({})
+        iterator.tool_call_provider_fields = False
         return iterator
 
     def _make_text_chunk(self):
@@ -4745,6 +4746,36 @@ class TestEnsureOutputItemContentPartAdded:
         assert "".join(event.delta for event in delta_events) == '{"message":"hello world"}'
         assert done.item.name == "spawn_agent"
         assert done.item.namespace == "collaboration"
+
+    def test_streaming_final_only_tool_call_keeps_its_provider_specific_fields(self):
+        from litellm.types.utils import Choices, Message, ModelResponse
+
+        iterator = self._make_iterator()
+        iterator.tool_call_provider_fields = True
+        provider_specific_fields = {"thought_signature": "sig-" + "x" * 512}
+        complete_response = ModelResponse(
+            choices=[
+                Choices(
+                    message=Message(
+                        content=None,
+                        tool_calls=[
+                            {
+                                "id": "call_1",
+                                "type": "function",
+                                "function": {"name": "get_weather", "arguments": '{"city":"Paris"}'},
+                                "provider_specific_fields": provider_specific_fields,
+                            }
+                        ],
+                    )
+                )
+            ]
+        )
+
+        iterator._queue_final_tool_call_done_events(complete_response)
+
+        done = iterator._pending_tool_events[-1]
+        assert done.type == "response.output_item.done"
+        assert done.item.provider_specific_fields == provider_specific_fields
 
     def test_streaming_top_level_function_collision_stays_unnamespaced(self):
         iterator = self._make_iterator()

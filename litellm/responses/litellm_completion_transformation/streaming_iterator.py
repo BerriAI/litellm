@@ -92,6 +92,20 @@ def _output_items_with_id(items: tuple[Any, ...], item_type: str, item_id: str |
     )
 
 
+def _tool_call_objects(tool_calls: object) -> tuple[object, ...]:
+    return tuple(tool_calls) if isinstance(tool_calls, list) else ()
+
+
+def _tool_call_provider_specific_fields(tool_call: object) -> Mapping[str, object]:
+    mapping: Final = as_str_mapping(tool_call)
+    fields: Final[object] = (
+        mapping.get("provider_specific_fields")
+        if mapping is not None
+        else getattr(tool_call, "provider_specific_fields", None)
+    )
+    return {"provider_specific_fields": fields} if fields else {}
+
+
 def _is_signed_thinking_block(block: object) -> bool:
     fields: Final = as_str_mapping(block)
     return fields is not None and isinstance(block, dict) and bool(fields.get("signature") or fields.get("data"))
@@ -144,6 +158,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         responses_api_request: ResponsesAPIOptionalRequestParams,
         custom_llm_provider: str | None = None,
         litellm_metadata: dict | None = None,
+        tool_call_provider_fields: bool = False,
     ):
         self.model: str = model
         self.litellm_custom_stream_wrapper: litellm.CustomStreamWrapper = litellm_custom_stream_wrapper
@@ -151,6 +166,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         self.responses_api_request: ResponsesAPIOptionalRequestParams = responses_api_request
         self.custom_llm_provider: str | None = custom_llm_provider
         self.litellm_metadata: dict | None = litellm_metadata or {}
+        self.tool_call_provider_fields: Final = tool_call_provider_fields
         # Store lightweight dict snapshots for stream_chunk_builder to reduce
         # repeated Pydantic attribute access in end-of-stream assembly.
         self.collected_chat_completion_chunks: list[dict[str, object]] = []
@@ -503,10 +519,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         except Exception:
             tool_calls = None
 
-        if not tool_calls or not isinstance(tool_calls, list):
-            return
-
-        for tc in tool_calls:
+        for tc in _tool_call_objects(tool_calls):
             call_id_raw = tc.get("id") if isinstance(tc, dict) else getattr(tc, "id", None)
             if not call_id_raw:
                 continue
@@ -581,7 +594,10 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                 type=ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE,
                 output_index=output_index,
                 sequence_number=self._sequence_number,
-                item=BaseLiteLLMOpenAIResponseObject(**item_kwargs),
+                item=BaseLiteLLMOpenAIResponseObject(
+                    **item_kwargs,
+                    **(_tool_call_provider_specific_fields(tc) if self.tool_call_provider_fields else {}),
+                ),
             )
             self._pending_tool_events.append(item_done_event)
 
