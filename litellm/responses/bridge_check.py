@@ -102,6 +102,24 @@ def str_keyed_mapping(value: object) -> Mapping[str, object] | None:
     )
 
 
+def bridge_check_request_params(request_params: Mapping[str, object]) -> Mapping[str, object]:
+    """The request as ``get_optional_params`` will hand it to the provider: every key named in
+    ``additional_drop_params`` removed at the top level and inside ``extra_body``, so the Responses route
+    decision taken before that call reads the same effort and summary alias the parsed params will carry."""
+    raw_dropped: Final = request_params.get("additional_drop_params")
+    dropped_params: Final = (
+        cast(Sequence[object], raw_dropped)  # cast-ok: isinstance only narrows to Sequence[Unknown]
+        if isinstance(raw_dropped, Sequence) and not isinstance(raw_dropped, str)
+        else ()
+    )
+    dropped: Final = frozenset(param for param in dropped_params if isinstance(param, str))
+    kept: Final = {key: value for key, value in request_params.items() if key not in dropped}
+    extra_body: Final = str_keyed_mapping(kept.get("extra_body"))
+    if extra_body is None:
+        return kept
+    return {**kept, "extra_body": {key: value for key, value in extra_body.items() if key not in dropped}}
+
+
 def bridge_reasoning_effort(
     reasoning_effort: str | Mapping[str, object] | None, extra_body: object
 ) -> str | Mapping[str, object] | None:
