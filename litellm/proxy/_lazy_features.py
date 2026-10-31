@@ -24,6 +24,7 @@ from starlette.routing import BaseRoute, Match
 from starlette.types import ASGIApp, Lifespan, Receive, Scope, Send
 
 from litellm._logging import verbose_proxy_logger
+from litellm.integrations.otel.mount import name_server_span_from_routes
 from litellm.proxy.route_priority import (
     builtin_pass_through_routes_first,
     configured_pass_through_routes_first,
@@ -381,6 +382,7 @@ class LazyFeatureMiddleware:
                 if _eager_route_wins(self._fastapi_app, feat, scope):
                     continue
                 await _force_load(self._fastapi_app, feat, self._features)
+        name_server_span_from_routes(self._fastapi_app, scope)
         await self.app(scope, receive, send)
 
 

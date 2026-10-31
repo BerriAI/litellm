@@ -12,12 +12,15 @@ when the feature gate is off.
 """
 
 import os
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Protocol
 
+from starlette.routing import Match, Mount, Route, WebSocketRoute
+
 from litellm._logging import verbose_logger
 from litellm.integrations.otel.model.config import is_otel_v2_enabled
+from litellm.integrations.otel.model.semconv import HTTP
 
 if TYPE_CHECKING:
     from fastapi import FastAPI
@@ -128,6 +131,33 @@ def _passthrough_span_name_hook(span: "_RenameableSpan | None", scope: Mapping[s
             span.set_attribute("http.route", path)
     except Exception:
         pass
+
+
+def name_server_span_from_routes(app: "FastAPI", scope: "Scope") -> None:
+    """Name the current server span after its route when the route was registered after the span started."""
+    if not is_otel_v2_enabled():
+        return
+    try:
+        from opentelemetry import trace
+        from opentelemetry.sdk.trace import ReadableSpan
+        from opentelemetry.trace import SpanKind
+    except ImportError:
+        return
+    span: Final = trace.get_current_span()
+    if not span.is_recording() or not isinstance(span, ReadableSpan) or span.kind is not SpanKind.SERVER:
+        return
+    if HTTP.ROUTE in (span.attributes or {}):
+        return
+    route: Final = next((route for route in _named_routes(app) if route.matches(scope)[0] is Match.FULL), None)
+    if route is None or not route.path:
+        return
+    method: Final[object] = scope.get("method")
+    span.update_name(f"{method} {route.path}" if isinstance(method, str) else route.path)
+    span.set_attribute(HTTP.ROUTE, route.path)
+
+
+def _named_routes(app: "FastAPI") -> "Iterator[Route | WebSocketRoute | Mount]":
+    return (route for route in app.router.routes if isinstance(route, (Route, WebSocketRoute, Mount)))
 
 
 def instrument_fastapi_app(app: "FastAPI", tracer_provider: "TracerProvider | None" = None) -> None:
