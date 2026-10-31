@@ -10524,7 +10524,13 @@ class PythonCore(DeprecatedRouterMembers):
             return False
         if self._stream_can_fall_back(model_group, kwargs):
             return True
-        configured: Final = kwargs.get("context_window_fallbacks", self._core_context_window_fallbacks)
+        configured: Final = _request_fallback_list(
+            kwargs,
+            "context_window_fallbacks",
+            cast(  # cast-ok: list is invariant and the helper takes list[object]
+                "list[object] | None", self._core_context_window_fallbacks
+            ),
+        )
         if not configured:
             return False
         try:
