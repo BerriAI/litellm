@@ -76,6 +76,41 @@ async def test_async_delete_cache_applies_namespace(namespace, monkeypatch, redi
     mock_redis_instance.delete.assert_awaited_once_with(expected_key)
 
 
+@pytest.mark.parametrize("decode_responses", [False, True])
+@pytest.mark.asyncio
+async def test_async_getrange_reads_a_prefix_of_what_was_set_under_the_namespace(
+    decode_responses, monkeypatch, redis_no_ping
+):
+    from fakeredis import FakeServer
+    from fakeredis.aioredis import FakeRedis
+
+    monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
+    redis_cache: Final = RedisCache(namespace="litellm")
+    client: Final = FakeRedis(server=FakeServer(), decode_responses=decode_responses)
+
+    with patch.object(redis_cache, "init_async_client", return_value=client):
+        await redis_cache.async_set_cache("polling:1", {"status": "cancelled"}, ttl=60)
+
+        assert await redis_cache.async_getrange("polling:1", 0, 11) == '{"status": "'
+        assert await redis_cache.async_getrange("polling:never-set", 0, 11) == ""
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_async_getrange_that_cuts_a_multibyte_character_does_not_raise(monkeypatch, redis_no_ping):
+    from fakeredis import FakeServer
+    from fakeredis.aioredis import FakeRedis
+
+    monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
+    redis_cache: Final = RedisCache()
+    client: Final = FakeRedis(server=FakeServer())
+    await client.set("polling:1", "é".encode())
+
+    with patch.object(redis_cache, "init_async_client", return_value=client):
+        assert await redis_cache.async_getrange("polling:1", 0, 0) == "�"
+    await client.aclose()
+
+
 @pytest.mark.parametrize("namespace", [None, "litellm"])
 def test_delete_cache_applies_namespace(namespace, monkeypatch, redis_no_ping):
     """delete_cache must prefix keys with the namespace, matching every other

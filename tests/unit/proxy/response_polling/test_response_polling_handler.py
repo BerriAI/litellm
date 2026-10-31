@@ -16,6 +16,7 @@ following the OpenAI Response API format.
 
 import asyncio
 import json
+import logging
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from datetime import datetime, timezone
 from typing import Dict, Final, NoReturn, Optional
@@ -24,7 +25,9 @@ from unittest.mock import AsyncMock, Mock, patch
 import pytest
 from fastapi import Request
 from pydantic import ValidationError
+from redis.exceptions import NoPermissionError
 
+from litellm._logging import verbose_proxy_logger
 from litellm.caching.base_cache import BaseCache
 from litellm.proxy.response_polling.polling_handler import ResponsePollingHandler
 
@@ -55,6 +58,9 @@ class _RedisStandIn(BaseCache):
     async def async_set_cache_pipeline(self, cache_list: Sequence[tuple[str, object]], **kwargs: object) -> NoReturn:
         raise NotImplementedError
 
+    async def async_getrange(self, key: str, start: int, end: int) -> str:
+        return self.stored.get(key, "")[start : end + 1]
+
     def async_register_script(self, script: str) -> Callable[..., Awaitable[int]]:
         async def write_unless_cancelled(keys: Sequence[str], args: Sequence[object]) -> int:
             if keys[0] not in self.stored or self.stored[keys[0]].startswith(args[2]):
@@ -63,13 +69,21 @@ class _RedisStandIn(BaseCache):
             self.ttls[keys[0]] = int(args[1])
             return 1
 
-        async def cancelled_or_gone(keys: Sequence[str], args: Sequence[object]) -> int:
-            return int(self.stored.get(keys[0], "")[: len(args[0])] in ("", args[0]))
+        return write_unless_cancelled
 
-        return write_unless_cancelled if "'SET'" in script else cancelled_or_gone
+
+class _ScriptRefusingRedisStandIn(_RedisStandIn):
+    def async_register_script(self, script: str) -> Callable[..., Awaitable[int]]:
+        async def refused(keys: Sequence[str], args: Sequence[object]) -> NoReturn:
+            raise NoPermissionError("this user has no permissions to run the 'evalsha' command")
+
+        return refused
 
 
 class _UnreachableRedisStandIn(_RedisStandIn):
+    async def async_getrange(self, key: str, start: int, end: int) -> NoReturn:
+        raise ConnectionError("redis is unreachable")
+
     def async_register_script(self, script: str) -> Callable[..., Awaitable[int]]:
         async def write_fails(keys: Sequence[str], args: Sequence[object]) -> NoReturn:
             raise ConnectionError("redis is unreachable")
@@ -629,6 +643,27 @@ class TestResponsePollingHandler:
         assert await handler.is_cancelled_or_gone("litellm_poll_never_created") is True
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("redis_type", (_RedisStandIn, _ScriptRefusingRedisStandIn))
+    async def test_a_cancel_sticks_whether_or_not_redis_runs_scripts(self, redis_type: type[_RedisStandIn]) -> None:
+        redis_cache: Final = redis_type.holding(
+            {"id": "litellm_poll_test", "object": "response", "status": "in_progress", "output": []}
+        )
+        handler: Final = ResponsePollingHandler(redis_cache=redis_cache, ttl=120)
+
+        await handler.update_state(polling_id="litellm_poll_test", output=[{"id": "item_1"}])
+        await handler.cancel_polling("litellm_poll_test")
+        await handler.update_state(polling_id="litellm_poll_test", status="completed", output=[{"id": "item_2"}])
+
+        assert await handler.get_state("litellm_poll_test") == {
+            "id": "litellm_poll_test",
+            "object": "response",
+            "status": "cancelled",
+            "output": [{"id": "item_1"}],
+        }
+        assert await handler.is_cancelled_or_gone("litellm_poll_test") is True
+        assert redis_cache.ttls == {ResponsePollingHandler.get_cache_key("litellm_poll_test"): 120}
+
+    @pytest.mark.asyncio
     async def test_a_failed_state_write_keeps_the_stored_state_and_does_not_raise(self) -> None:
         state: Final = {
             "id": "litellm_poll_test",
@@ -642,6 +677,37 @@ class TestResponsePollingHandler:
         await handler.update_state(polling_id="litellm_poll_test", status="completed")
 
         assert await handler.get_state("litellm_poll_test") == state
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("redis_cache", "logged"),
+        (
+            (
+                _UnreachableRedisStandIn.holding({"status": "in_progress"}, polling_id="litellm_poll_a\nforged"),
+                "Failed to write the polling state for litellm_poll_aforged: redis is unreachable",
+            ),
+            (
+                _RedisStandIn(),
+                "No cached state found for polling_id: litellm_poll_aforged",
+            ),
+            (
+                _RedisStandIn.holding({"status": "cancelled"}, polling_id="litellm_poll_a\nforged"),
+                "Skipped the polling state write for litellm_poll_aforged: "
+                "the response was cancelled or has expired",
+            ),
+        ),
+    )
+    async def test_a_polling_id_with_a_line_break_cannot_forge_a_state_write_log_line(
+        self, redis_cache: _RedisStandIn, logged: str, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        handler: Final = ResponsePollingHandler(redis_cache=redis_cache)
+
+        with caplog.at_level(logging.DEBUG, logger=verbose_proxy_logger.name):
+            await handler.update_state(polling_id="litellm_poll_a\nforged", status="cancelled")
+
+        messages: Final = [record.getMessage() for record in caplog.records]
+        assert logged in messages
+        assert not [message for message in messages if "\n" in message]
 
     @pytest.mark.asyncio
     async def test_a_queued_response_reads_back_after_an_update(self) -> None:

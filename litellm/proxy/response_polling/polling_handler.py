@@ -8,11 +8,13 @@ from datetime import datetime, timezone
 from typing import Final
 
 from pydantic import TypeAdapter
+from redis.exceptions import ResponseError
 
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid4
 from litellm.caching.redis_cache import RedisCache
+from litellm.proxy.litellm_pre_call_utils import sanitize_for_log
 from litellm.types.llms.openai import ResponsesAPIResponse, ResponsesAPIStatus
 
 _RESPONSE_POLLING_TARGET: Final = "response_polling"
@@ -39,13 +41,9 @@ redis.call('SET', KEYS[1], ARGV[1], 'EX', ARGV[2])
 return 1
 """
 
-_CANCELLED_OR_GONE_SCRIPT: Final = """
-local head = redis.call('GETRANGE', KEYS[1], 0, string.len(ARGV[1]) - 1)
-if head == '' or head == ARGV[1] then
-  return 1
-end
-return 0
-"""
+
+async def _stored_status_prefix(redis_cache: RedisCache, cache_key: str) -> str:
+    return await redis_cache.async_getrange(cache_key, 0, len(_CANCELLED_PREFIX) - 1)
 
 
 class ResponsePollingHandler:
@@ -181,7 +179,7 @@ class ResponsePollingHandler:
         # Get current state
         cached_state: Final = await self.redis_cache.async_get_cache(cache_key)
         if not cached_state:
-            verbose_proxy_logger.warning("No cached state found for polling_id: %s", polling_id)
+            verbose_proxy_logger.warning("No cached state found for polling_id: %s", sanitize_for_log(polling_id))
             return
 
         # Parse existing ResponsesAPIResponse from cache
@@ -240,20 +238,17 @@ class ResponsePollingHandler:
         if store is not None:
             state["store"] = store
 
-        write_unless_cancelled: Final = self.redis_cache.async_register_script(_WRITE_UNLESS_CANCELLED_SCRIPT)
         try:
-            written: Final = _SCRIPT_REPLY.validate_python(
-                await write_unless_cancelled(
-                    keys=(cache_key,),
-                    args=(_encoded_state(state), self.redis_cache.get_ttl(ttl=self.ttl), _CANCELLED_PREFIX),
-                )
-            )
+            written: Final = await self._write_unless_cancelled(self.redis_cache, cache_key, state)
         except Exception as write_error:  # noqa: BLE001  # a Redis fault must not end the background stream
-            verbose_proxy_logger.error("Failed to write the polling state for %s: %s", polling_id, write_error)
+            verbose_proxy_logger.error(
+                "Failed to write the polling state for %s: %s", sanitize_for_log(polling_id), write_error
+            )
             return
         if written != _WRITTEN:
             verbose_proxy_logger.debug(
-                "Skipped the polling state write for %s: the response was cancelled or has expired", polling_id
+                "Skipped the polling state write for %s: the response was cancelled or has expired",
+                sanitize_for_log(polling_id),
             )
             return
 
@@ -276,13 +271,31 @@ class ResponsePollingHandler:
 
         return None
 
+    async def _write_unless_cancelled(
+        self, redis_cache: RedisCache, cache_key: str, state: Mapping[str, object]
+    ) -> int:
+        write_unless_cancelled: Final = redis_cache.async_register_script(_WRITE_UNLESS_CANCELLED_SCRIPT)
+        try:
+            return _SCRIPT_REPLY.validate_python(
+                await write_unless_cancelled(
+                    keys=(cache_key,),
+                    args=(_encoded_state(state), redis_cache.get_ttl(ttl=self.ttl), _CANCELLED_PREFIX),
+                )
+            )
+        except ResponseError as script_error:
+            verbose_proxy_logger.debug(
+                "Redis did not run the polling write script, writing with GETRANGE and SET: %s", script_error
+            )
+        if await _stored_status_prefix(redis_cache, cache_key) in ("", _CANCELLED_PREFIX):
+            return 0
+        await redis_cache.async_set_cache(cache_key, json.dumps({"status": state["status"], **state}), ttl=self.ttl)
+        return _WRITTEN
+
     @with_service_target(_RESPONSE_POLLING_TARGET)
     async def is_cancelled_or_gone(self, polling_id: str) -> bool:
         if not self.redis_cache:
             return False
-        cancelled_or_gone: Final = self.redis_cache.async_register_script(_CANCELLED_OR_GONE_SCRIPT)
-        reply: Final = await cancelled_or_gone(keys=(self.get_cache_key(polling_id),), args=(_CANCELLED_PREFIX,))
-        return _SCRIPT_REPLY.validate_python(reply) == 1
+        return await _stored_status_prefix(self.redis_cache, self.get_cache_key(polling_id)) in ("", _CANCELLED_PREFIX)
 
     async def cancel_polling(self, polling_id: str) -> bool:
         """
