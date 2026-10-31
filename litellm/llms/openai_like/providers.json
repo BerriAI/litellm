@@ -280,6 +280,19 @@
       "/v1/responses"
     ]
   },
+  "llamay": {
+    "base_url": "http://localhost:11435/v1",
+    "api_key_env": "LLAMAY_API_KEY",
+    "api_base_env": "LLAMAY_API_BASE",
+    "default_api_key": "fake-api-key",
+    "supported_endpoints": [
+      "/v1/chat/completions",
+      "/v1/responses"
+    ],
+    "provider_info": {
+      "supports_function_calling": true
+    }
+  },
   "kyma": {
     "base_url": "https://kymaapi.com/v1",
     "api_key_env": "KYMA_API_KEY",

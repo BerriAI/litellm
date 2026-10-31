@@ -3428,6 +3428,34 @@
     "default_model_placeholder": "refuseless/glm-5.3-abliterated"
   },
   {
+    "provider": "LLAMAY",
+    "provider_display_name": "llamay",
+    "litellm_provider": "llamay",
+    "credential_fields": [
+      {
+        "key": "api_base",
+        "label": "API Base",
+        "placeholder": "http://localhost:11435/v1",
+        "tooltip": "Optional. Leave blank for a llamay server on this machine.",
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "api_key",
+        "label": "API Key",
+        "placeholder": null,
+        "tooltip": "Only needed when the server was started with LLAMAY_API_KEY.",
+        "required": false,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      }
+    ],
+    "default_model_placeholder": "llamay/qwen2.5:0.5b"
+  },
+  {
     "provider": "REPLICATE",
     "provider_display_name": "Replicate",
     "litellm_provider": "replicate",
