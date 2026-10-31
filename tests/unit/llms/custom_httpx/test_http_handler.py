@@ -736,10 +736,12 @@ def _echo_query_transport() -> httpx.MockTransport:
 
 @pytest.mark.parametrize("url,params,expected_query", QUERY_MERGE_CASES)
 @pytest.mark.parametrize("stream", [False, True])
-def test_sync_get_sends_url_query_bytes_unchanged(url, params, expected_query, stream):
-    handler = HTTPHandler(client=httpx.Client(transport=_echo_query_transport()))
+def test_sync_get_sends_url_query_bytes_unchanged(
+    url: str, params: dict[str, str | int] | None, expected_query: bytes, stream: bool
+):
+    handler: Final = HTTPHandler(client=httpx.Client(transport=_echo_query_transport()))
     try:
-        response = handler.get(url, params=params, stream=stream)
+        response: Final = handler.get(url, params=params, stream=stream)
         assert response.read() == expected_query
     finally:
         handler.client.close()
@@ -749,12 +751,14 @@ def test_sync_get_sends_url_query_bytes_unchanged(url, params, expected_query, s
 @pytest.mark.parametrize(
     "get_kwargs", [{}, {"stream": True}, {"max_response_bytes": 1000}], ids=["plain", "stream", "bounded"]
 )
-async def test_async_get_sends_url_query_bytes_unchanged(url, params, expected_query, get_kwargs):
-    handler = AsyncHTTPHandler()
+async def test_async_get_sends_url_query_bytes_unchanged(
+    url: str, params: dict[str, str | int] | None, expected_query: bytes, get_kwargs: dict[str, bool | int]
+):
+    handler: Final = AsyncHTTPHandler()
     await handler.client.aclose()
     handler.client = httpx.AsyncClient(transport=_echo_query_transport())
     try:
-        response = await handler.get(url, params=params, **get_kwargs)
+        response: Final = await handler.get(url, params=params, **get_kwargs)
         assert await response.aread() == expected_query
     finally:
         await handler.client.aclose()

@@ -68,7 +68,7 @@ from litellm.responses.streaming_iterator import (
     BaseResponsesAPIStreamingIterator,
     MockResponsesAPIStreamingIterator,
 )
-from litellm.types.llms.openai import HttpxBinaryResponseContent, ResponsesAPIResponse
+from litellm.types.llms.openai import FileContentRequest, HttpxBinaryResponseContent, ResponsesAPIResponse
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import (
     ImageObject,
@@ -3206,7 +3206,9 @@ SIGNED_DOWNLOAD_QUERY: Final = "X-Amz-Signature=abc&ResponseContentLanguage=&p=a
 
 
 class _SignedDownloadFilesConfig(AnthropicFilesConfig):
-    def transform_file_content_request(self, file_content_request, optional_params, litellm_params):
+    def transform_file_content_request(
+        self, file_content_request: FileContentRequest, optional_params: dict, litellm_params: dict
+    ) -> tuple[str, dict]:
         return f"https://downloads.example/{file_content_request['file_id']}?{SIGNED_DOWNLOAD_QUERY}", {
             "token": "from-params",
             "extra": "1",
@@ -3214,13 +3216,13 @@ class _SignedDownloadFilesConfig(AnthropicFilesConfig):
 
 
 async def test_streaming_file_content_keeps_signed_url_query_and_appends_new_params():
-    async_client = AsyncHTTPHandler()
+    async_client: Final = AsyncHTTPHandler()
     await async_client.client.aclose()
     async_client.client = httpx.AsyncClient(
         transport=httpx.MockTransport(lambda request: httpx.Response(200, request=request, content=request.url.query))
     )
     try:
-        result = await BaseLLMHTTPHandler().async_retrieve_file_content_streaming(
+        result: Final = await BaseLLMHTTPHandler().async_retrieve_file_content_streaming(
             file_content_request={"file_id": "file-abc"},
             provider_config=_SignedDownloadFilesConfig(),
             litellm_params={"api_key": "sk-test"},
@@ -3229,7 +3231,7 @@ async def test_streaming_file_content_keeps_signed_url_query_and_appends_new_par
             chunk_size=1024,
             client=async_client,
         )
-        body = b"".join([chunk async for chunk in result.stream_iterator])
+        body: Final = b"".join([chunk async for chunk in result.stream_iterator])
     finally:
         await async_client.client.aclose()
 
