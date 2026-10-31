@@ -6,6 +6,7 @@ from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from decimal import Decimal
+from itertools import chain
 from typing import TYPE_CHECKING, Final
 
 from pydantic import BaseModel, JsonValue, TypeAdapter
@@ -129,6 +130,7 @@ class UsageCaptureContext:
     provider_timestamps: str = "{}"
     usage_source: str = "measured"
     included_attempt_ids: tuple[str, ...] = ()
+    related_attempt_ids: tuple[str, ...] = ()
 
 
 def _database_usage_write(event: InboundUsageEvent | OutboundUsageEvent, envelope: Mapping[str, object]) -> UsageWrite:
@@ -175,6 +177,7 @@ def usage_writes(
         "usage": usage,
         "usage_source": "unknown" if usage is None else context.usage_source,
         "included_attempt_ids": context.included_attempt_ids,
+        "related_attempt_ids": context.related_attempt_ids,
         "pricing": _JSON_OBJECT.validate_json(context.pricing),
         "charge_eligible": context.charge_eligible,
         "request_count_eligible": context.request_count_eligible,
@@ -267,7 +270,12 @@ def capture_context(payload: SpendLogsPayload, kwargs: Mapping[str, object], res
 
     from litellm.litellm_core_utils.hidden_params import get_hidden_params
     from litellm.litellm_core_utils.internal_call_metadata import is_background_response, is_unbilled_non_inference_call
-    from litellm.litellm_core_utils.litellm_logging import Logging, UsageObservation, mask_api_base_credentials
+    from litellm.litellm_core_utils.litellm_logging import (
+        Logging,
+        UsageCaptureObservation,
+        UsageObservation,
+        mask_api_base_credentials,
+    )
     from litellm.litellm_core_utils.llm_cost_calc.finalization import FinalizedCost
     from litellm.proxy.hooks.search_free_tier import SearchAllowanceAllocation
     from litellm.proxy.spend_tracking.spend_tracking_utils import get_request_model_access_groups
@@ -324,6 +332,7 @@ def capture_context(payload: SpendLogsPayload, kwargs: Mapping[str, object], res
     )
     allocation: Final = allocation_value if isinstance(allocation_value, SearchAllowanceAllocation) else None
     pricing_snapshot: Final = kwargs.get("_accounting_pricing_snapshot")
+    observation: Final = kwargs.get("_accounting_usage_snapshot")
     captured_pricing: Final = {
         "model_map_information": (
             _JSON_OBJECT.validate_json(pricing_snapshot.model_map_information)
@@ -353,7 +362,9 @@ def capture_context(payload: SpendLogsPayload, kwargs: Mapping[str, object], res
             "service_tier": raw_response.get("service_tier"),
             "region_name": hidden.get("region_name"),
         },
-        "reported_cost": standard.get(
+        "reported_cost": observation.response_cost
+        if isinstance(observation, UsageCaptureObservation)
+        else standard.get(
             "response_cost", kwargs.get("response_cost", _fields(get_hidden_params(response)).get("response_cost"))
         ),
         "adjustments": (
@@ -413,10 +424,9 @@ def capture_context(payload: SpendLogsPayload, kwargs: Mapping[str, object], res
         if kwargs.get("_accounting_usage_observed") is UsageObservation.ESTIMATED
         else "measured",
         included_attempt_ids=TypeAdapter(tuple[str, ...]).validate_python(
-            kwargs.get(
-                "_accounting_included_attempt_ids", () if retry else kwargs.get("_accounting_prior_attempt_ids", ())
-            )
+            kwargs.get("_accounting_included_attempt_ids", ())
         ),
+        related_attempt_ids=tuple(write.event.event_id for write in _prior_writes(kwargs)),
         provider_timestamps=_json(
             {
                 key: raw_response.get(key)
@@ -463,7 +473,13 @@ class _CaptureBuilder:
         self.writes: tuple[UsageWrite, ...] = ()
 
     def observe(self, payload: SpendLogsPayload, usage: str | None) -> None:
-        parsed: Final = _JSON_OBJECT.validate_json(usage) if usage is not None else {}
+        from litellm.litellm_core_utils.litellm_logging import UsageCaptureObservation, UsageObservation
+
+        snapshot: Final = self.kwargs.get("_accounting_usage_snapshot")
+        if isinstance(snapshot, UsageCaptureError):
+            raise snapshot
+        effective: Final = snapshot.usage_json if isinstance(snapshot, UsageCaptureObservation) else usage
+        parsed: Final = _JSON_OBJECT.validate_json(effective) if effective is not None else {}
         batch: Final = _fields(parsed.get("batch_usage_by_model"))
         unknown: Final = (bool(batch) or bool(parsed.get("batch_unknown_usage_requests"))) and all(
             value is None for value in batch.values()
@@ -476,10 +492,32 @@ class _CaptureBuilder:
                 }
             )
             if unknown
-            else usage
+            else effective
         )
         context: Final = capture_context(payload, self.kwargs, self.response)
-        self.writes = usage_writes(payload, observed, replace(context, usage_source="unknown") if unknown else context)
+        provenance: Final = (
+            "unknown"
+            if unknown
+            else "estimated"
+            if isinstance(snapshot, UsageCaptureObservation) and snapshot.provenance is UsageObservation.ESTIMATED
+            else context.usage_source
+        )
+        self.writes = usage_writes(payload, observed, replace(context, usage_source=provenance))
+
+
+def _prior_writes(kwargs: Mapping[str, object]) -> tuple[UsageWrite, ...]:
+    prior: Final = kwargs.get("_accounting_prior_captures", ())
+    return (
+        tuple(
+            chain.from_iterable(
+                item.writes
+                for item in TypeAdapter(tuple[object, ...]).validate_python(prior)
+                if isinstance(item, CapturedUsage)
+            )
+        )
+        if isinstance(prior, tuple)
+        else ()
+    )
 
 
 def capture_callback(
@@ -499,7 +537,8 @@ def capture_callback(
     payload: Final = get_logging_payload(
         dict(kwargs), response, start_time, end_time, llm_router=get_llm_router(), capture_usage=builder.observe
     )
-    return CapturedUsage(payload, builder.writes, meter.submit(builder.writes))
+    dependencies: Final = _prior_writes(kwargs)
+    return CapturedUsage(payload, builder.writes, meter.submit((*dependencies, *builder.writes)))
 
 
 def captured_callback_kwargs(
@@ -559,7 +598,7 @@ def capture_logging_usage(
     start_time: datetime,
     end_time: datetime,
     freeze_only: bool = False,
-) -> None:
+) -> CapturedUsage | UsageCaptureError | None:
     from litellm._internal_context import internal_parent_request_id, is_internal_call
     from litellm.batches.batch_utils import batch_cost_is_final
     from litellm.litellm_core_utils.litellm_logging import Logging
@@ -572,10 +611,7 @@ def capture_logging_usage(
         return
     try:
         if not internal and isinstance(logging_obj.model_call_details.get("_accounting_capture"), CapturedUsage):
-            logging_obj.record_usage_capture(
-                capture_callback(meter, logging_obj.model_call_details, response, start_time, end_time)
-            )
-            return
+            return capture_callback(meter, logging_obj.model_call_details, response, start_time, end_time)
         normalized_result: Final = logging_obj.usage_capture_response(response)
         prepared: Final = logging_obj.prepared_cost
         normalized: Final = (
@@ -616,8 +652,11 @@ def capture_logging_usage(
         )
         if not internal:
             logging_obj.record_usage_capture(captured)
-    except Exception:  # noqa: BLE001  # failed capture must not prevent normal logging and legacy charging
+    except Exception as error:  # noqa: BLE001  # failed capture must not prevent normal logging and legacy charging
         verbose_proxy_logger.exception("Usage capture failed at the execution boundary")
+        return UsageCaptureError(str(error))
+    else:
+        return captured
 
 
 @dataclass(frozen=True, slots=True)

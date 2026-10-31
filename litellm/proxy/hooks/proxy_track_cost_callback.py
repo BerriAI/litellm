@@ -22,7 +22,11 @@ from litellm.litellm_core_utils.core_helpers import (
     get_metadata_variable_name_from_kwargs,
     get_parent_otel_span_from_kwargs,
 )
-from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup, UsageObservation
+from litellm.litellm_core_utils.litellm_logging import (
+    StandardLoggingPayloadSetup,
+    UsageCaptureObservation,
+    UsageObservation,
+)
 from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import guardrail_information_cost
 from litellm.litellm_core_utils.redact_messages import MESSAGE_REDACTION_ENABLE_HEADERS
 from litellm.llms.azure.ptu_capacity import is_str_keyed_mapping
@@ -346,6 +350,10 @@ def _attempt_spend_row_kwargs(
         "combined_usage_object": attempt.usage,
         "response_cost": attempt.response_cost,
         "_accounting_usage_observed": UsageObservation.ESTIMATED,
+        "_accounting_usage_snapshot": UsageCaptureObservation.from_usage(
+            attempt.usage, UsageObservation.ESTIMATED, attempt.response_cost
+        ),
+        "_accounting_prior_captures": (),
     }
     row.pop("billed_failed_attempts", None)
     row.pop("_accounting_capture", None)

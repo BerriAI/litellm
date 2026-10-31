@@ -271,6 +271,7 @@ if TYPE_CHECKING:
     from litellm.proxy.hooks.autorouter_baseline_cache import BaselineCacheContext, CapturedBaselineObservation
     from litellm.proxy.hooks.search_free_tier import SearchAllowanceAllocation
     from litellm.proxy.spend_tracking.usage_capture import CapturedUsage
+    from litellm.proxy.spend_tracking.usage_meter import UsageCaptureError
 try:
     from litellm_enterprise.enterprise_callbacks.callback_controls import (
         EnterpriseCallbackControls,
@@ -642,9 +643,34 @@ class UsageObservation(Enum):
     ESTIMATED = "estimated"
 
 
+@dataclass(frozen=True, slots=True)
+class UsageCaptureObservation:
+    usage_json: str | None
+    provenance: UsageObservation
+    response_cost: float | None = None
+
+    @classmethod
+    def from_usage(
+        cls, usage: Usage | None, provenance: UsageObservation, response_cost: float | None = None
+    ) -> "UsageCaptureObservation | UsageCaptureError":
+        from litellm.proxy.spend_tracking.usage_meter import UsageCaptureError
+
+        try:
+            serialized: Final = (
+                None if usage is None or provenance is UsageObservation.UNKNOWN else usage.model_dump_json()
+            )
+        except Exception as error:  # noqa: BLE001  # observation failures must not interrupt legacy retry handling
+            return UsageCaptureError(str(error))
+        else:
+            return cls(serialized, provenance, response_cost)
+
+
 class Logging(LiteLLMLoggingBaseClass):
     usage_capture_callback: ClassVar[
-        Callable[["Logging", object, datetime.datetime, datetime.datetime, bool], None] | None
+        Callable[
+            ["Logging", object, datetime.datetime, datetime.datetime, bool], "CapturedUsage | UsageCaptureError | None"
+        ]
+        | None
     ] = None
 
     def capture_usage_before_logging(
@@ -2592,7 +2618,9 @@ class Logging(LiteLLMLoggingBaseClass):
             },
             usage,
         )
-        self.record_partial_usage_for_failure(usage, raw_cost)
+        self.record_partial_usage_for_failure(
+            usage, raw_cost, observation=self.model_call_details["_accounting_usage_observed"]
+        )
         return self.prepared_cost
 
     def record_finalized_cost(self, finalized: FinalizedCost) -> None:
@@ -2605,10 +2633,14 @@ class Logging(LiteLLMLoggingBaseClass):
     def record_usage_pricing(self, pricing: object) -> None:
         self.model_call_details["_accounting_pricing_snapshot"] = pricing
 
-    def record_partial_usage_for_failure(self, usage: Usage, response_cost: float) -> None:
+    def record_partial_usage_for_failure(
+        self, usage: Usage, response_cost: float, *, observation: UsageObservation = UsageObservation.KNOWN
+    ) -> None:
         """Stash what an interrupted stream already consumed so the failure log bills it instead of zero."""
         self.model_call_details["combined_usage_object"] = usage
         self.model_call_details["response_cost"] = response_cost
+        if type(self).usage_capture_callback is not None:
+            self.model_call_details["_accounting_usage_observed"] = observation
 
     def record_failure_after_earlier_rounds(
         self, earlier: BilledRoundsSpend, failed_usage: Usage, failed_cost: float
@@ -2704,38 +2736,50 @@ class Logging(LiteLLMLoggingBaseClass):
 
     def capture_failed_attempt_usage(self, usage: Usage) -> None:
         from litellm.constants import BILLED_RETRY_ATTEMPT_METADATA_KEY
+        from litellm.proxy.spend_tracking.usage_capture import CapturedUsage
 
         capture: Final = type(self).usage_capture_callback
         if capture is None:
             return
         attempt: Final = self.attempt_scoped_copy()
+        attempt.prepared_cost = None
+        attempt.finalized_cost = None
         identity: Final = (
             f"{self.litellm_call_id}-attempt-{len(self.model_call_details.get('failed_attempts_usage', ()))}"
         )
         params: Final = _LITELLM_PARAMS.validate_python(self.model_call_details.get("litellm_params") or {})
         metadata: Final = StandardLoggingPayloadSetup.merge_litellm_metadata(params)
+        observed: Final[object] = self.model_call_details.get("_accounting_usage_observed")
+        cost: Final[object] = self.model_call_details.get("response_cost")
         attempt.model_call_details = {
             **attempt.model_call_details,
             "litellm_call_id": identity,
             "parent_request_id": self.litellm_call_id,
             "_accounting_capture": None,
+            "_accounting_prior_captures": (),
+            "_accounting_usage_snapshot": UsageCaptureObservation.from_usage(
+                usage,
+                observed if isinstance(observed, UsageObservation) else UsageObservation.KNOWN,
+                float(cost) if isinstance(cost, (int, float)) else None,
+            ),
             "litellm_params": {
                 **params,
                 "metadata": {**metadata, BILLED_RETRY_ATTEMPT_METADATA_KEY: True, "status": "failure"},
                 "litellm_metadata": {**metadata, BILLED_RETRY_ATTEMPT_METADATA_KEY: True, "status": "failure"},
             },
         }
-        capture(
+        captured: Final = capture(
             attempt,
             {"id": identity, "usage": usage.model_dump(), "status": "failed"},
             self.start_time,
             datetime.datetime.now(datetime.timezone.utc),
             False,
         )
-        self.model_call_details["_accounting_prior_attempt_ids"] = (
-            *self.model_call_details.get("_accounting_prior_attempt_ids", ()),
-            identity,
-        )
+        if isinstance(captured, CapturedUsage):
+            self.model_call_details["_accounting_prior_captures"] = (
+                *self.model_call_details.get("_accounting_prior_captures", ()),
+                captured,
+            )
 
     def record_continued_partial(self, usage: Usage, response_cost: float, response_id: str) -> None:
         """Bill what a cut stream already consumed on this continuation's success log, under the id the caller saw."""

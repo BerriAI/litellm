@@ -133,7 +133,10 @@ class StoredUsage:
         existing: Final = {row.event.event_id: row for row in self.rows}
         if any(existing.get(row.event.event_id, row) != row for row in writes):
             raise AccountingConflictError("Same identity has different content")
-        self.rows += tuple(row for row in writes if row.event.event_id not in existing)
+        unique: Final = {row.event.event_id: row for row in writes}
+        if any(unique[row.event.event_id] != row for row in writes):
+            raise AccountingConflictError("Submission contains conflicting content")
+        self.rows += tuple(row for identity, row in unique.items() if identity not in existing)
 
 
 @pytest.mark.asyncio
@@ -537,7 +540,8 @@ async def test_failed_attempt_keeps_its_usage_without_claiming_the_callers_succe
     assert failed["pricing"]["reported_cost"] == 0.4
     assert all(json.loads(row.envelope)["included_attempt_ids"] == [] for row in database.rows[:2])
     successful: Final = json.loads(database.rows[-1].envelope)
-    assert successful["included_attempt_ids"] == ["caller-attempt-0", "caller-attempt-1"]
+    assert successful["related_attempt_ids"] == ["caller-attempt-0", "caller-attempt-1"]
+    assert successful["included_attempt_ids"] == []
     assert successful["usage"]["total_tokens"] == 3
     assert successful["charge_eligible"] is True
     assert database.rows[2].event.outcome is Outcome.SUCCEEDED
@@ -1146,3 +1150,155 @@ async def test_prepared_native_google_capture_preserves_reported_usage(
     ) == tokens
     assert envelope["usage_source"] == ("unknown" if tokens is None else "measured")
     assert response == native_response.json()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("rejected", [False, True])
+async def test_retry_links_only_admitted_usage_and_preserves_later_measurement(rejected: bool) -> None:
+    from litellm.litellm_core_utils.litellm_logging import UsageObservation
+    from litellm.proxy.spend_tracking.usage_capture import UsageCaptureRuntime
+    from litellm.types.utils import ModelResponse, Usage
+
+    database: Final = StoredUsage()
+    runtime: Final = UsageCaptureRuntime()
+    runtime.start(database.insert, UsageCaptureSettings(max_pending_records=4))
+    logger: Final = _logger()
+    assert runtime.meter is not None
+    try:
+        if rejected:
+            runtime.meter.submit(tuple(_write(f"occupied-{index}") for index in range(4)))
+        logger.model_call_details["_accounting_usage_observed"] = UsageObservation.UNKNOWN
+        logger.record_partial_usage_for_failure(Usage(prompt_tokens=5, total_tokens=5), 0.4)
+        logger.carry_failed_attempt_usage()
+        await runtime.meter.flush()
+        logger.capture_usage_before_logging(ModelResponse(id="success", usage=Usage(prompt_tokens=3)), NOW, NOW)
+    finally:
+        await runtime.stop(1)
+    successful: Final = json.loads(next(row.envelope for row in database.rows if row.event.event_id == "success"))
+    assert successful.get("related_attempt_ids", successful["included_attempt_ids"]) == (
+        [] if rejected else ["caller-attempt-0"]
+    )
+    assert successful["usage"]["prompt_tokens"] == 3
+    if not rejected:
+        failed: Final = json.loads(
+            next(row.envelope for row in database.rows if row.event.event_id == "caller-attempt-0")
+        )
+        assert failed["usage"]["prompt_tokens"] == 5
+        assert failed["usage_source"] == "measured"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("current_tokens", [None, 0, 3])
+async def test_final_failure_captures_current_attempt_without_legacy_retry_aggregate(
+    current_tokens: int | None,
+) -> None:
+    from litellm.proxy.spend_tracking.usage_capture import UsageCaptureRuntime, capture_callback
+    from litellm.proxy.utils import _failure_fields_to_lift
+    from litellm.types.utils import Usage
+
+    database: Final = StoredUsage()
+    runtime: Final = UsageCaptureRuntime()
+    runtime.start(database.insert, UsageCaptureSettings())
+    logger: Final = _logger()
+    try:
+        logger.record_partial_usage_for_failure(Usage(prompt_tokens=5, total_tokens=5), 0.4)
+        logger.carry_failed_attempt_usage()
+        if current_tokens is not None:
+            logger.record_partial_usage_for_failure(
+                Usage(prompt_tokens=current_tokens, total_tokens=current_tokens), 0.2
+            )
+        lifted: Final = _failure_fields_to_lift({"litellm_logging_obj": logger}, provider_billed=True)
+        assert lifted["combined_usage_object"].total_tokens == 5 + (current_tokens or 0)
+        assert runtime.meter is not None
+        capture_callback(
+            runtime.meter,
+            {**logger.model_call_details, **lifted, "log_event_type": "failed_api_call"},
+            None,
+            NOW,
+            NOW,
+        )
+    finally:
+        await runtime.stop(1)
+    final: Final = json.loads(next(row.envelope for row in database.rows if row.event.event_id == "caller"))
+    assert (None if final["usage"] is None else final["usage"]["total_tokens"]) == current_tokens
+    assert final["usage_source"] == ("unknown" if current_tokens is None else "measured")
+    assert final["pricing"]["reported_cost"] == (None if current_tokens is None else 0.2)
+    assert final["included_attempt_ids"] == []
+    assert final["related_attempt_ids"] == ["caller-attempt-0"]
+
+
+@pytest.mark.asyncio
+async def test_estimated_final_attempt_keeps_its_provenance_after_measured_retry() -> None:
+    from litellm.proxy.spend_tracking.usage_capture import UsageCaptureRuntime, capture_callback
+    from litellm.proxy.utils import _failure_fields_to_lift
+    from litellm.types.utils import Usage
+
+    database: Final = StoredUsage()
+    runtime: Final = UsageCaptureRuntime()
+    runtime.start(database.insert, UsageCaptureSettings())
+    logger: Final = _logger()
+    logger.messages = [{"role": "user", "content": "hello"}]
+    logger.model_call_details["messages"] = logger.messages
+    try:
+        logger.record_partial_usage_for_failure(Usage(prompt_tokens=5, total_tokens=5), 0.4)
+        logger.carry_failed_attempt_usage()
+        logger.model_call_details["current_attempt_api_call_start_time"] = NOW
+        lifted: Final = _failure_fields_to_lift({"litellm_logging_obj": logger}, provider_billed=True)
+        assert runtime.meter is not None
+        capture_callback(runtime.meter, {**logger.model_call_details, **lifted}, None, NOW, NOW)
+    finally:
+        await runtime.stop(1)
+    final: Final = json.loads(next(row.envelope for row in database.rows if row.event.event_id == "caller"))
+    assert final["usage_source"] == "estimated"
+    assert final["usage"]["total_tokens"] > 0
+    assert lifted["combined_usage_object"].total_tokens == final["usage"]["total_tokens"] + 5
+    assert final["pricing"]["reported_cost"] == 0
+
+
+@pytest.mark.asyncio
+async def test_parent_receipt_cannot_acknowledge_when_a_linked_attempt_conflicts() -> None:
+    from litellm.proxy.spend_tracking.usage_capture import UsageCaptureRuntime
+    from litellm.types.utils import ModelResponse, Usage
+
+    database: Final = StoredUsage()
+    runtime: Final = UsageCaptureRuntime()
+    runtime.start(database.insert, UsageCaptureSettings())
+    logger: Final = _logger()
+    try:
+        logger.record_partial_usage_for_failure(Usage(prompt_tokens=5), 0.4)
+        logger.carry_failed_attempt_usage()
+        assert runtime.meter is not None
+        await runtime.meter.flush()
+        other: Final = _logger()
+        other.record_partial_usage_for_failure(Usage(prompt_tokens=8), 0.8)
+        other.carry_failed_attempt_usage()
+        other.capture_usage_before_logging(ModelResponse(id="success", usage=Usage(prompt_tokens=3)), NOW, NOW)
+        captured: Final = other.model_call_details["_accounting_capture"]
+        await runtime.meter.flush()
+        with pytest.raises(UsageCaptureError, match="identity"):
+            await captured.receipt
+    finally:
+        await runtime.stop(1)
+    assert tuple(row.event.event_id for row in database.rows) == ("caller-attempt-0",)
+
+
+@pytest.mark.asyncio
+async def test_unserializable_observation_does_not_interrupt_retry_or_legacy_usage() -> None:
+    from litellm.proxy.spend_tracking.usage_capture import UsageCaptureRuntime
+    from litellm.types.utils import ModelResponse, Usage
+
+    database: Final = StoredUsage()
+    runtime: Final = UsageCaptureRuntime()
+    runtime.start(database.insert, UsageCaptureSettings())
+    logger: Final = _logger()
+    usage: Final = Usage(prompt_tokens=5, total_tokens=5, opaque_usage=object())
+    try:
+        logger.record_partial_usage_for_failure(usage, 0.4)
+        assert logger.model_call_details["combined_usage_object"] is usage
+        logger.carry_failed_attempt_usage()
+        assert logger.model_call_details["failed_attempts_usage"] == ((usage, 0.4),)
+        logger.capture_usage_before_logging(ModelResponse(id="success", usage=Usage(prompt_tokens=3)), NOW, NOW)
+    finally:
+        await runtime.stop(1)
+    assert tuple(row.event.event_id for row in database.rows) == ("caller:inbound", "success")
+    assert json.loads(database.rows[-1].envelope)["related_attempt_ids"] == []

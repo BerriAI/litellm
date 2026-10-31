@@ -1744,7 +1744,39 @@ def _failure_fields_to_lift(
         if _prompt_estimate is not None
         else ()
     )
+    from litellm.litellm_core_utils.litellm_logging import UsageCaptureObservation
+
     _recorded_observation: Final[object] = _model_call_details.get("_accounting_usage_observed")
+    _current_usage: Final = (
+        _current_failure_usage_to_lift(
+            _model_call_details,
+            request_data,
+            _model_call_details.get("current_attempt_api_call_start_time", _first_handoff) is not None,
+            _billed,
+            _deployment_id,
+            _base_model,
+            dispatched_call_type,
+        )
+        if Logging.usage_capture_callback is not None
+        and (_billed or _model_call_details.get("combined_usage_object") is not None)
+        else None
+    )
+    _current_observation: Final = (
+        _recorded_observation
+        if isinstance(_recorded_observation, UsageObservation)
+        else UsageObservation.UNKNOWN
+        if _current_usage is None
+        else UsageObservation.KNOWN
+        if _model_call_details.get("combined_usage_object") is not None
+        else UsageObservation.ESTIMATED
+    )
+    _capture_observation: Final = UsageCaptureObservation.from_usage(
+        _current_usage[0] if _current_usage is not None and isinstance(_current_usage[0], Usage) else None,
+        _current_observation,
+        float(_current_usage[1])
+        if _current_usage is not None and isinstance(_current_usage[1], (int, float))
+        else None,
+    )
     _entries: Final = (
         ("start_time", _model_call_details.get("start_time")),
         ("first_api_call_start_time", _first_handoff),
@@ -1760,22 +1792,9 @@ def _failure_fields_to_lift(
             "_accounting_allocation",
             _logging_obj.cost_allowance_allocation if isinstance(_logging_obj, Logging) else None,
         ),
-        (
-            "_accounting_usage_observed",
-            (
-                None
-                if Logging.usage_capture_callback is None
-                else _recorded_observation
-                if isinstance(_recorded_observation, UsageObservation)
-                else UsageObservation.UNKNOWN
-                if _usage_to_lift is None
-                else UsageObservation.KNOWN
-                if _model_call_details.get("combined_usage_object") is not None
-                or _model_call_details.get("failed_attempts_usage")
-                else UsageObservation.ESTIMATED
-            ),
-        ),
-        ("_accounting_included_attempt_ids", _model_call_details.get("_accounting_prior_attempt_ids")),
+        ("_accounting_usage_observed", _current_observation if Logging.usage_capture_callback is not None else None),
+        ("_accounting_usage_snapshot", _capture_observation if Logging.usage_capture_callback is not None else None),
+        ("_accounting_prior_captures", _model_call_details.get("_accounting_prior_captures")),
     )
     return MappingProxyType({key: value for key, value in _entries if value is not None})
 

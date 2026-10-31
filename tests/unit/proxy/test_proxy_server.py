@@ -4465,3 +4465,79 @@ async def test_sync_ack_preserves_async_request_support(
     else:
         assert "hi" in response.text
         assert not persisted.empty(), "Terminal usage must still be captured"
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sync_ack", [False, True])
+async def test_text_completion_provider_rejection_captures_unknown_usage(
+    sync_ack: bool, monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    from fastapi import Request
+
+    from litellm.accounting import Outcome
+    from litellm.proxy import proxy_server
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.db.accounting_ledger import UsageWrite
+    from litellm.proxy.hooks.proxy_track_cost_callback import ProxyDBLogger
+    from litellm.proxy.spend_tracking.usage_capture import UsageCaptureRuntime
+    from litellm.proxy.spend_tracking.usage_meter import UsageCaptureSettings
+
+    persisted: Final[asyncio.Queue[UsageWrite]] = asyncio.Queue()
+
+    async def persist(writes: tuple[UsageWrite, ...]) -> None:
+        for write in writes:
+            persisted.put_nowait(write)
+
+    async def authorize(request: Request) -> UserAPIKeyAuth:
+        return UserAPIKeyAuth(api_key="test-key", request_route=request.url.path)
+
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setenv("OPENAI_API_KEY", "test-provider-key")
+    respx_mock.post().respond(
+        404,
+        json={
+            "error": {"message": "The model is unavailable", "type": "invalid_request_error", "code": "model_not_found"}
+        },
+    )
+    runtime: Final = UsageCaptureRuntime()
+    monkeypatch.setattr(proxy_server, "usage_capture", runtime)
+    monkeypatch.setattr(proxy_server, "general_settings", {"accounting_sync_ack": sync_ack})
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    monkeypatch.setattr(
+        proxy_server,
+        "llm_router",
+        litellm.Router(
+            model_list=[
+                {
+                    "model_name": "instruct",
+                    "litellm_params": {"model": "openai/gpt-3.5-turbo-instruct", "api_key": "test-provider-key"},
+                }
+            ],
+            num_retries=0,
+        ),
+    )
+    monkeypatch.setattr(proxy_server, "proxy_logging_obj", ProxyLogging(UserApiKeyCache()))
+    monkeypatch.setattr(litellm, "callbacks", [ProxyDBLogger()])
+    monkeypatch.setitem(proxy_server.app.dependency_overrides, proxy_server.user_api_key_auth, authorize)
+    runtime.start(persist, UsageCaptureSettings())
+    try:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=proxy_server.app), base_url="http://test"
+        ) as client:
+            response: Final = await client.post(
+                "/v1/completions", json={"model": "instruct", "prompt": "hi", "max_tokens": 1}
+            )
+    finally:
+        await runtime.stop(1)
+    assert response.status_code == 404, response.text
+    assert len(respx_mock.calls) == 1
+    assert persisted.qsize() == 2
+    inbound: Final = persisted.get_nowait()
+    outbound: Final = persisted.get_nowait()
+    assert outbound.event.outcome is Outcome.FAILED
+    assert outbound.event.call_type.value == "atext_completion"
+    assert outbound.event.metrics is None
+    assert inbound.event.request_id == outbound.event.request_id
+    envelope: Final = json.loads(outbound.envelope)
+    assert envelope["usage"] is None
+    assert envelope["usage_source"] == "unknown"
+    assert envelope["pricing"]["reported_cost"] is None
