@@ -223,6 +223,7 @@ __all__ = (
     "mcp_get_prompt",
     "mcp_read_resource",
     "raise_denied_scoped_mcp_access",
+    "raise_generic_mcp_access_denial",
 )
 
 
@@ -763,8 +764,14 @@ async def raise_denied_scoped_mcp_access(
                 )
             }
             raise HTTPException(status_code=403, detail=group_denial)
+    raise_generic_mcp_access_denial(requested_names)
+
+
+def raise_generic_mcp_access_denial(requested_names: Sequence[str]) -> NoReturn:
     generic_denial: Final[_McpDeniedDetail] = {
-        "error": f"The key is not allowed to access the requested MCP servers: {', '.join(requested_names)}"
+        "error": (
+            f"The key is not allowed to access the requested MCP servers: {', '.join(dict.fromkeys(requested_names))}"
+        )
     }
     raise HTTPException(status_code=403, detail=generic_denial)
 
