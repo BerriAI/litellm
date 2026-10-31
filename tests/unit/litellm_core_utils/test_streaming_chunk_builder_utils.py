@@ -2757,6 +2757,80 @@ def test_stream_chunk_builder_carries_the_bedrock_guardrail_trace_and_records_it
     assert entry["guardrail_cost"] == pytest.approx(2 * 0.00015)
 
 
+def _vllm_chat_chunk(index: int, content: str, finish_reason: str | None = None, **fields: object) -> ModelResponseStream:
+    return ModelResponseStream(
+        id="chatcmpl-1",
+        created=1,
+        model="qwen3",
+        choices=[StreamingChoices(index=index, delta=Delta(content=content), finish_reason=finish_reason, **fields)],
+    )
+
+
+@pytest.mark.parametrize("finish_content", ["", "4"], ids=["finish-only", "content-then-finish"])
+def test_stream_chunk_builder_keeps_the_vllm_stop_reason_and_every_token_id_of_each_choice(
+    finish_content: str,
+) -> None:
+    built: Final = stream_chunk_builder(
+        chunks=[
+            _vllm_chat_chunk(0, "1,", stop_reason=None, token_ids=[16, 11]),
+            _vllm_chat_chunk(1, "7,", stop_reason=None, token_ids=[22, 11]),
+            _vllm_chat_chunk(0, "2,3", stop_reason=None, token_ids=[17, 11, 18]),
+            _vllm_chat_chunk(0, finish_content, "stop", stop_reason=",5", token_ids=[19]),
+        ]
+    )
+
+    assert built is not None
+    assert [
+        {field: choice[field] for field in ("index", "stop_reason", "token_ids")}
+        for choice in built.model_dump()["choices"]
+    ] == [
+        {"index": 0, "stop_reason": ",5", "token_ids": [16, 11, 17, 11, 18, 19]},
+        {"index": 1, "stop_reason": None, "token_ids": [22, 11]},
+    ]
+
+
+def test_stream_chunk_builder_keeps_null_vllm_fields_and_adds_none_for_other_providers() -> None:
+    vllm_built: Final = stream_chunk_builder(
+        chunks=[
+            _vllm_chat_chunk(0, "hi", stop_reason=None, token_ids=None),
+            _vllm_chat_chunk(0, "", "stop", stop_reason=None, token_ids=None),
+        ]
+    )
+    other_built: Final = stream_chunk_builder(
+        chunks=[_vllm_chat_chunk(0, "hi"), _vllm_chat_chunk(0, "", "stop")]
+    )
+
+    assert vllm_built is not None and other_built is not None
+    assert {
+        field: vllm_built.model_dump()["choices"][0][field] for field in ("stop_reason", "token_ids")
+    } == {"stop_reason": None, "token_ids": None}
+    assert {"stop_reason", "token_ids"}.isdisjoint(other_built.model_dump()["choices"][0])
+
+
+def test_stream_chunk_builder_text_completion_keeps_each_choices_vllm_stop_reason_and_token_ids() -> None:
+    def text_chunk(index: int, text: str, **fields: object) -> TextCompletionResponse:
+        return TextCompletionResponse(
+            id="cmpl-1",
+            object="text_completion",
+            created=1,
+            model="qwen3",
+            choices=[TextChoices(index=index, text=text, **fields)],
+        )
+
+    built: Final = stream_chunk_builder_text_completion(
+        chunks=[
+            text_chunk(0, "1,", token_ids=[16, 11], stop_reason=None),
+            text_chunk(1, "7,", token_ids=[22, 11], stop_reason=None),
+            text_chunk(0, "2", token_ids=[17], stop_reason=", 3"),
+            text_chunk(1, "8", token_ids=[23], stop_reason=151645),
+        ]
+    )
+
+    assert [
+        (choice["index"], choice["stop_reason"], choice["token_ids"]) for choice in built.model_dump()["choices"]
+    ] == [(0, ", 3", [16, 11, 17]), (1, 151645, [22, 11, 23])]
+
+
 @pytest.mark.parametrize(
     ("base_model", "counted_as"), [("azure/gpt-6.1-sol", "azure/gpt-6.1-sol"), ("claude-sonnet-4-5", "my-gpt-6")]
 )

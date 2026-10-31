@@ -3,14 +3,15 @@ import json
 from typing import Final
 from unittest.mock import MagicMock, patch
 
+import httpx
 import pytest
-
 
 from litellm.constants import (
     DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET,
 )
 from litellm.llms.hosted_vllm.chat.transformation import HostedVLLMChatConfig
+from litellm.types.utils import ModelResponse
 
 
 def test_hosted_vllm_chat_transformation_file_url():
@@ -399,6 +400,64 @@ def test_hosted_vllm_custom_tools_use_top_level_input_schema():
     assert tools[0]["function"]["name"] == "search"
     assert tools[0]["function"]["description"] == "Search docs"
     assert tools[0]["function"]["parameters"] == input_schema
+
+
+def _transform_vllm_chat_response(choice_extras: dict[str, object]) -> ModelResponse:
+    payload: Final = {
+        "id": "chatcmpl-1",
+        "object": "chat.completion",
+        "created": 1,
+        "model": "glm",
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "1, 2, 3, 4"},
+                "logprobs": None,
+                "finish_reason": "stop",
+                **choice_extras,
+            }
+        ],
+        "usage": {"prompt_tokens": 5, "completion_tokens": 3, "total_tokens": 8},
+    }
+    raw_response: Final = httpx.Response(
+        200, json=payload, request=httpx.Request("POST", "http://vllm.local/v1/chat/completions")
+    )
+    return HostedVLLMChatConfig().transform_response(
+        model="hosted_vllm/glm",
+        raw_response=raw_response,
+        model_response=ModelResponse(),
+        logging_obj=MagicMock(),
+        request_data={},
+        messages=[],
+        optional_params={},
+        litellm_params={},
+        encoding=None,
+    )
+
+
+@pytest.mark.parametrize(
+    "choice_extras",
+    [
+        {"stop_reason": ", 5", "token_ids": [16, 11, 220]},
+        {"stop_reason": 128009},
+        {"stop_reason": None},
+    ],
+)
+def test_hosted_vllm_keeps_vllm_choice_fields_on_the_choice(choice_extras: dict[str, object]):
+    response: Final = _transform_vllm_chat_response(choice_extras)
+
+    dumped_choice: Final[dict[str, dict[str, object]]] = json.loads(response.model_dump_json())["choices"][0]
+    for field, value in choice_extras.items():
+        assert dumped_choice[field] == value
+        assert dumped_choice["provider_specific_fields"][field] == value
+
+
+def test_hosted_vllm_does_not_invent_vllm_choice_fields():
+    response: Final = _transform_vllm_chat_response({})
+
+    dumped_choice: Final[dict[str, object]] = json.loads(response.model_dump_json())["choices"][0]
+    assert "stop_reason" not in dumped_choice
+    assert "token_ids" not in dumped_choice
 
 
 def _strict_weather_tool() -> dict[str, object]:

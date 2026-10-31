@@ -204,6 +204,20 @@ def test_splitter_splits_combined_chunk_into_content_then_finish():
     assert finish_chunk.choices[0].delta.content is None
 
 
+def test_a_finish_on_another_choice_index_does_not_end_the_message():
+    chunks: Final = [
+        ModelResponseStream(choices=[StreamingChoices(index=0, delta=Delta(content="Hello"))]),
+        ModelResponseStream(choices=[StreamingChoices(index=1, delta=Delta(content="Hi"))]),
+        ModelResponseStream(choices=[StreamingChoices(index=1, delta=Delta(content=""), finish_reason="length")]),
+        ModelResponseStream(choices=[StreamingChoices(index=0, delta=Delta(content=""), finish_reason="stop")]),
+    ]
+
+    events: Final = list(AnthropicStreamWrapper(completion_stream=iter(chunks), model="qwen3"))
+
+    stop_reasons: Final = [event["delta"]["stop_reason"] for event in events if event.get("type") == "message_delta"]
+    assert stop_reasons == ["end_turn"]
+
+
 def test_is_combined_false_when_choices_empty():
     """A metadata-only chunk with no choices is never treated as combined."""
     assert _CombinedChunkSplitter._is_combined(SimpleNamespace(choices=[])) is False
