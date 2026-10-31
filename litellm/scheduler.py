@@ -8,7 +8,6 @@ from typing import Final, TypeAlias
 from typing import Protocol as _Protocol
 
 from pydantic import TypeAdapter
-from redis.exceptions import RedisError as _RedisError
 
 from litellm import print_verbose
 from litellm._internal_context import with_service_target
@@ -45,6 +44,8 @@ class _QueueCache(_Protocol):
 async def _read_queue(cache: _QueueCache, redis_cache: _QueueCache | None, key: str) -> object:
     if redis_cache is None:
         return await cache.async_get_cache(key=key, local_only=True)
+    from redis.exceptions import RedisError as _RedisError
+
     try:
         response: Final = await redis_cache.async_get_cache(key=key, raise_on_error=True)
     except (_RedisError, _RedisCircuitBreakerOpenError) as error:
