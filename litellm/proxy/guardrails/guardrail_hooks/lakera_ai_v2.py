@@ -237,11 +237,8 @@ def _gemini_text(content: object) -> str:
 
 def _has_gemini_contents(data: object) -> bool:
     """True if ``data`` is a Gemini ``generateContent`` body, which carries its prompt in
-    ``contents`` and ``systemInstruction`` instead of ``messages``. A body that also carries
-    ``messages`` or ``input`` is a chat or Responses body and is read as one."""
+    ``contents`` and ``systemInstruction`` instead of ``messages``."""
     fields: Final = as_str_mapping(data) or {}
-    if "messages" in fields or "input" in fields:
-        return False
     return isinstance(fields.get("contents"), list | dict) or isinstance(
         fields.get("systemInstruction") or fields.get("system_instruction"), dict
     )
@@ -251,8 +248,6 @@ def _gemini_inspection_messages(data: Mapping[str, object]) -> Sequence[Mapping[
     """Chat-style messages for a Gemini ``generateContent`` body: ``systemInstruction`` first as a
     system message, then each ``contents`` turn with its text parts joined and ``model`` read as
     ``assistant``. Turns with no text are dropped."""
-    if not _has_gemini_contents(data):
-        return []
     system_text: Final = _gemini_text(data.get("systemInstruction") or data.get("system_instruction"))
     turns: Final = (
         {"role": _GEMINI_ROLES.get(str(content.get("role") or "user"), "user"), "content": _gemini_text(content)}
