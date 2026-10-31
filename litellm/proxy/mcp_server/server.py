@@ -21,7 +21,7 @@ import httpx
 from fastapi import FastAPI, HTTPException
 from pydantic import ConfigDict, TypeAdapter, ValidationError
 from starlette.requests import Request as StarletteRequest
-from starlette.responses import JSONResponse
+from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 from starlette.types import Message, Receive, Scope, Send
 
@@ -2488,6 +2488,9 @@ if MCP_AVAILABLE:
                         },
                     },
                 )(scope, receive, send)
+                return
+            if scope.get("method") == "OPTIONS":
+                await Response(status_code=204, headers={"Allow": "GET, POST, DELETE, OPTIONS"})(scope, receive, send)
                 return
             path: Final = _scope_path(scope)
             peek: Final = _LazyPeekedBody(receive) if scope.get("method") == "POST" else None
