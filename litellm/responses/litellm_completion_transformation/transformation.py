@@ -1633,7 +1633,8 @@ class LiteLLMCompletionResponsesConfig:
         immediately following assistant message.
 
         Signed ``thinking_blocks`` decoded from ``encrypted_content`` travel the
-        same way, but only the newest one is replayed. A reasoning item does not
+        same way, but each assistant message keeps only the newest one, including
+        a reasoning message that hosted search text was merged onto. A reasoning item does not
         record where each block sat between the turn's server tool steps and
         text, and Claude rejects a latest assistant message whose thinking
         blocks sit side by side when it wrote them apart.
@@ -1692,8 +1693,9 @@ class LiteLLMCompletionResponsesConfig:
                     cast(dict[str, object], msg)["reasoning_content"] = combined  # cast-ok: mutable reasoning carrier
                 else:
                     setattr(msg, "reasoning_content", combined)  # noqa: B010  # attribute name is fixed, not dynamic
-            if pending_blocks:
-                replayed: Final = list((pending_blocks + (_thinking_blocks(msg) or ()))[-1:])
+            own_blocks: Final = _thinking_blocks(msg) or ()
+            if pending_blocks or len(own_blocks) > 1:
+                replayed: Final = list((pending_blocks + own_blocks)[-1:])
                 if isinstance(msg, dict):
                     cast(dict[str, object], msg)["thinking_blocks"] = replayed  # cast-ok: mutable reasoning carrier
                 else:
@@ -1736,7 +1738,7 @@ class LiteLLMCompletionResponsesConfig:
                 pending.append((_reasoning_text(msg), _thinking_blocks(msg)))
                 continue
 
-            if pending and _role(msg) == "assistant":
+            if _role(msg) == "assistant":
                 _apply_pending(msg, pending)
                 pending = []
             elif pending:

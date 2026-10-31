@@ -14,6 +14,7 @@ JSON array of thinking blocks on the response side.
 """
 
 import json
+from itertools import chain
 
 import pytest
 
@@ -253,43 +254,46 @@ class TestEncryptedReasoningRoundTrip:
         assert len(messages) == 1
         assert [block["thinking"] for block in messages[0]["thinking_blocks"]] == ["newer"]
 
-    def test_web_search_turn_replays_only_its_last_thinking_block(self):
+    @pytest.mark.parametrize("answer_first", [True, False], ids=["answer_before_searches", "searches_before_answer"])
+    def test_web_search_turn_replays_only_its_last_thinking_block(self, answer_first):
         """Claude rejects a follow-up whose replay puts blocks it wrote apart side by side."""
         blocks = [
             {"type": "thinking", "thinking": "", "signature": "sig-before-search-1"},
             {"type": "thinking", "thinking": "", "signature": "sig-before-search-2"},
             {"type": "thinking", "thinking": "", "signature": "sig-before-answer"},
         ]
+        answer = {
+            "type": "message",
+            "id": "msg_1",
+            "role": "assistant",
+            "status": "completed",
+            "content": [{"type": "output_text", "text": "Paul Haggis.", "annotations": []}],
+        }
+        searches = [
+            {
+                "type": "web_search_call",
+                "id": "ws_1",
+                "status": "completed",
+                "action": {"type": "search", "query": "2006 Best Picture"},
+            },
+            {
+                "type": "web_search_call",
+                "id": "ws_2",
+                "status": "completed",
+                "action": {"type": "search", "query": "Crash 2004 film director"},
+            },
+        ]
         messages = _transform_input(
             [
                 {"role": "user", "content": "Who directed the 2006 Best Picture winner?"},
                 {"type": "reasoning", "id": "rs_1", "summary": [], "encrypted_content": json.dumps(blocks)},
-                {
-                    "type": "message",
-                    "id": "msg_1",
-                    "role": "assistant",
-                    "status": "completed",
-                    "content": [{"type": "output_text", "text": "Paul Haggis.", "annotations": []}],
-                },
-                {
-                    "type": "web_search_call",
-                    "id": "ws_1",
-                    "status": "completed",
-                    "action": {"type": "search", "query": "2006 Best Picture"},
-                },
-                {
-                    "type": "web_search_call",
-                    "id": "ws_2",
-                    "status": "completed",
-                    "action": {"type": "search", "query": "Crash 2004 film director"},
-                },
+                *([answer, *searches] if answer_first else [*searches, answer]),
                 {"role": "user", "content": "Summarize that in one sentence."},
             ]
         )
         assistants = [message for message in messages if message["role"] == "assistant"]
-        assert len(assistants) == 1
-        assert assistants[0]["thinking_blocks"] == [blocks[-1]]
-        assert "Paul Haggis." in json.dumps(assistants[0]["content"])
+        assert list(chain.from_iterable(message.get("thinking_blocks") or [] for message in assistants)) == [blocks[-1]]
+        assert "Paul Haggis." in json.dumps([message["content"] for message in assistants])
         assert messages[-1]["role"] == "user"
 
     def test_reasoning_before_a_user_turn_replays_one_block_in_one_message(self):
