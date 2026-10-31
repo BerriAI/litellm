@@ -3767,12 +3767,16 @@ async def _increment_spend_counters_batched(
         if prisma_client is None:
             return primary_pending
         from litellm.models.team import TeamMemberBudgetWindow
-        from litellm.proxy.auth.auth_checks import get_team_membership, get_team_object
+        from litellm.proxy.auth.auth_checks import TeamNotFoundError, get_team_membership, get_team_object
         from litellm.proxy.common_utils.team_member_budget import MemberBudgetCounter, get_team_member_budget_windows
 
-        team: Final = await get_team_object(
-            team_id=scope_team_id, prisma_client=prisma_client, user_api_key_cache=user_api_key_cache
-        )
+        try:
+            team: Final = await get_team_object(
+                team_id=scope_team_id, prisma_client=prisma_client, user_api_key_cache=user_api_key_cache
+            )
+        except TeamNotFoundError:
+            # A team deleted during an in-flight request has no window settings to apply.
+            return primary_pending
         membership: Final = await get_team_membership(
             user_id=scope_user_id,
             team_id=scope_team_id,

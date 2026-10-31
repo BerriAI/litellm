@@ -409,7 +409,7 @@ class SpendCounterReseed:
         identity: Final = _window_spend_log_identity(entity_type, entity_id)
         if identity is None:
             return None
-        group_fields: Final = tuple(identity)
+        group_fields: Final = list(identity)
         period: Final = {"gte": window_start, **({"lt": window_end} if window_end is not None else {})}
         where: Final = {**identity, "startTime": period}
         try:
