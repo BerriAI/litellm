@@ -69,7 +69,11 @@ def enqueue(body: object, status: int = 200) -> None:
 
 
 def enqueue_stream() -> None:
-    chunk: Final = {**CHAT, "object": "chat.completion.chunk", "choices": [{"index": 0, "delta": {"content": "pong"}}]}
+    chunk: Final = {
+        **CHAT,
+        "object": "chat.completion.chunk",
+        "choices": [{"index": 0, "delta": {"content": "pong"}, "finish_reason": "stop"}],
+    }
     RESPONSES.put((200, f"data: {json.dumps(chunk)}\n\ndata: [DONE]\n\n".encode()))
 
 
