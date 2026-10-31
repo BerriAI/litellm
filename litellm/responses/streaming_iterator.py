@@ -542,27 +542,6 @@ class BaseResponsesAPIStreamingIterator:
                                 _stream_model_id,
                             )
 
-                # Wrap encrypted_content in streaming events (output_item.added, output_item.done)
-                if self.litellm_metadata and self.litellm_metadata.get("encrypted_content_affinity_enabled"):
-                    openai_types = get_openai_response_types()
-                    event_type: Final = getattr(openai_responses_api_chunk, "type", None)
-                    if event_type in (
-                        openai_types.ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED,
-                        openai_types.ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE,
-                    ):
-                        item: Final[object | None] = getattr(openai_responses_api_chunk, "item", None)
-                        if item:
-                            encrypted_content: Final = getattr(item, "encrypted_content", None)
-                            if encrypted_content and isinstance(encrypted_content, str):
-                                model_id: Final = _model_id_from_metadata(self.litellm_metadata)
-                                if model_id:
-                                    wrapped_content: Final = (
-                                        ResponsesAPIRequestUtils.wrap_encrypted_content_with_model_id(
-                                            encrypted_content, model_id
-                                        )
-                                    )
-                                    setattr(item, "encrypted_content", wrapped_content)
-
                 # Store the completed response (also for incomplete/failed so logging still fires)
                 _chunk_type: Final = getattr(openai_responses_api_chunk, "type", None)
                 openai_types = get_openai_response_types()
@@ -611,7 +590,9 @@ class BaseResponsesAPIStreamingIterator:
 
                     return _terminal_chunk
 
-                return openai_responses_api_chunk
+                return ResponsesAPIRequestUtils.update_response_stream_event_with_affinity(
+                    openai_responses_api_chunk, self.litellm_metadata
+                )
 
             return None
         except json.JSONDecodeError:
@@ -2420,9 +2401,6 @@ class _ResponsesWsTurn:
         )
 
 
-_RESPONSES_WS_OUTPUT_ITEM_EVENT_TYPES: Final = frozenset({"response.output_item.added", "response.output_item.done"})
-
-
 def _ws_event_error(event: Mapping[str, object]) -> object:
     if event.get("type") == "error":
         return _error_event_error_object(event)
@@ -2460,24 +2438,6 @@ def _restore_wrapped_ids_in_response_create(msg_obj: Mapping[str, object]) -> di
         {"response": {**nested, **nested_fields}} if _is_json_object(nested) and nested_fields else EMPTY_MAPPING
     )
     return {**msg_obj, **top_fields, **restored_nested}
-
-
-def _wrap_output_item_encrypted_content(
-    event_obj: Mapping[str, object], litellm_metadata: Mapping[str, object]
-) -> dict[str, object] | None:
-    if not litellm_metadata.get("encrypted_content_affinity_enabled"):
-        return None
-    model_id: Final = _model_id_from_metadata(litellm_metadata)
-    item: Final = event_obj.get("item")
-    if model_id is None or not _is_json_object(item):
-        return None
-    encrypted_content: Final = item.get("encrypted_content")
-    if not isinstance(encrypted_content, str) or not encrypted_content:
-        return None
-    wrapped_content: Final = ResponsesAPIRequestUtils.wrap_encrypted_content_with_model_id(
-        encrypted_content=encrypted_content, model_id=model_id
-    )
-    return {**event_obj, "item": {**item, "encrypted_content": wrapped_content}}
 
 
 class ResponsesWebSocketStreaming:
@@ -2665,10 +2625,10 @@ class ResponsesWebSocketStreaming:
                 litellm_metadata=self.litellm_metadata,
             )
             return json.dumps({**event_obj, "response": wrapped_response})
-        if event_obj.get("type") not in _RESPONSES_WS_OUTPUT_ITEM_EVENT_TYPES:
-            return response_str
-        wrapped_event: Final = _wrap_output_item_encrypted_content(event_obj, self.litellm_metadata)
-        return response_str if wrapped_event is None else json.dumps(wrapped_event)
+        wrapped_event: Final = ResponsesAPIRequestUtils.update_response_stream_event_with_affinity(
+            event_obj, self.litellm_metadata
+        )
+        return response_str if wrapped_event is event_obj else json.dumps(wrapped_event)
 
     async def backend_to_client(self) -> None:
         """Forward events from backend WebSocket to the client."""
