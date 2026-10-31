@@ -194,7 +194,46 @@ def test_identity_settings_edit_preserves_runtime_configuration_on_readback(
     )
     preserved: Final = {*runtime, "agent_name", "enabled", "agent_id"}
     assert stored.model_dump(include=preserved) == expected.model_dump(include=preserved)
-    assert {key: readback.json()[key] for key in preserved} == expected.model_dump(mode="json", include=preserved)
+    shown: Final = expected.model_copy(update={"static_headers": {"X-Runtime": REDACTED_BY_LITELM_STRING}})
+    assert {key: readback.json()[key] for key in preserved} == shown.model_dump(mode="json", include=preserved)
+
+
+@pytest.mark.parametrize("method", ["PUT", "PATCH"])
+def test_edit_echoing_masked_static_headers_keeps_the_stored_values(
+    monkeypatch: pytest.MonkeyPatch, method: str
+) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy.agent_endpoints.agent_registry import AgentRegistry
+    from tests.unit.proxy.agent_endpoints.test_agent_registry import _stored_agent_row
+
+    secret_headers: Final = {"Authorization": f"Bearer {SENTINEL_AGENT_API_KEY}"}
+    table: Final = _AgentPersistence(
+        _stored_agent_row({"agent_card_params": _sample_agent_card_params(), "static_headers": secret_headers})
+    )
+    database: Final = SimpleNamespace(
+        litellm_agentstable=table,
+        litellm_verificationtoken=SimpleNamespace(find_many=AsyncMock(return_value=[])),
+    )
+    monkeypatch.setattr(proxy_server, "prisma_client", SimpleNamespace(db=database, writer_db=database))
+    monkeypatch.setattr(agent_endpoints, "AGENT_REGISTRY", AgentRegistry())
+
+    shown: Final = client.get("/v1/agents/agent-123").json()["static_headers"]
+    assert shown == {"Authorization": REDACTED_BY_LITELM_STRING}
+
+    response: Final = client.request(
+        method,
+        "/v1/agents/agent-123",
+        json={
+            "agent_name": "Renamed agent",
+            "agent_card_params": _sample_agent_card_params(),
+            "static_headers": {**shown, "X-Region": "eu", "X-Unknown": REDACTED_BY_LITELM_STRING},
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    assert SENTINEL_AGENT_API_KEY not in response.text
+    stored: Final = AgentResponse.model_validate(table.row.model_dump())
+    assert stored.static_headers == {**secret_headers, "X-Region": "eu"}
 
 
 def test_get_agent_by_id_not_found(
@@ -572,6 +611,7 @@ class TestAgentRBACProxyAdminViewOnly:
                 agent_name=f"Agent {index}",
                 agent_card_params=_sample_agent_card_params(),
                 litellm_params={"api_key": SENTINEL_AGENT_API_KEY},
+                static_headers={"Authorization": f"Bearer {SENTINEL_AGENT_API_KEY}"},
             )
             for index in (1, 2)
         ]
@@ -629,6 +669,7 @@ class TestAgentRBACProxyAdminViewOnly:
         assert admin_by_id["agent-1"]["keys"][0]["token"] == "hash-aaa"
         assert SENTINEL_AGENT_API_KEY not in admin_resp.text
         assert admin_by_id["agent-1"]["litellm_params"]["api_key"] == REDACTED_BY_LITELM_STRING
+        assert admin_by_id["agent-1"]["static_headers"] == {"Authorization": REDACTED_BY_LITELM_STRING}
 
 
 class TestAgentRBACProxyAdmin:
