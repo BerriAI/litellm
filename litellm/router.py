@@ -504,6 +504,7 @@ from litellm.utils import (
     ProviderConfigManager,
     Rules,
     TextCompletionResponse,
+    _restore_correlation_context_if_supported,  # pyright: ignore[reportPrivateUsage]  # same task-local cleanup as the SDK wrapper
     aresolve_api_key_secret_reference,
     function_setup,
     get_llm_provider,
@@ -6011,15 +6012,42 @@ class Router(DeprecatedRouterMembers):
 
     async def _aimage_generation(self, prompt: str, model: str, **kwargs):
         model_name = model
+        start_time: Final = datetime.now()  # noqa: DTZ005  # SDK logging uses naive local timestamps
         try:
             verbose_router_logger.debug("Inside _image_generation()- model: %s", model)
             parent_otel_span: Final = get_parent_otel_span_from_kwargs(kwargs)
-            deployment: Final = await self._core_async_get_available_deployment(
-                model=model,
-                messages=[{"role": "user", "content": "prompt"}],
-                specific_deployment=kwargs.pop("specific_deployment", None),
-                request_kwargs=kwargs,
-            )
+            try:
+                deployment: Final = await self._core_async_get_available_deployment(
+                    model=model,
+                    messages=[{"role": "user", "content": "prompt"}],
+                    specific_deployment=kwargs.pop("specific_deployment", None),
+                    request_kwargs=kwargs,
+                )
+            except Exception as selection_error:
+                # Admitted attempts keep SDK-owned logging, including deployment callbacks and retry state
+                request_kwargs: Final = cast(  # cast-ok: Python kwargs have string keys and opaque values
+                    Mapping[str, object], kwargs
+                )
+                if request_kwargs.get("litellm_logging_obj") is None:
+                    refusal_kwargs: Final = {**request_kwargs, "model": model, "prompt": prompt}
+                    refusal_kwargs.setdefault("litellm_call_id", str(uuid.uuid4()))
+                    logging_obj, _ = function_setup(
+                        "aimage_generation",
+                        Rules(),
+                        start_time,
+                        **refusal_kwargs,  # pyright: ignore[reportArgumentType]  # preserve opaque SDK options, including is_async_call
+                    )
+                    try:
+                        asyncio.create_task(
+                            logging_obj.dispatch_failure_handlers(
+                                exception=selection_error,
+                                traceback_exception=traceback.format_exc(),
+                                prefer_async_handlers=True,
+                            )
+                        )
+                    finally:
+                        _restore_correlation_context_if_supported(logging_obj)
+                raise
             self._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs)
 
             data: Final = deployment["litellm_params"].copy()
