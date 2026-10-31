@@ -872,19 +872,19 @@ describe("autorouter_presets", () => {
       expect(resolveAvailableModel("claude-opus-5-5", availability)).toBeUndefined();
     });
 
-    it("credits nothing to a listed id whose most specific wildcard is paused", () => {
-      const pausedOpusTeam = {
-        modelGroup: "team/opus-*",
+    it.each(["team/", ""])("credits nothing to a listed id whose most specific wildcard %j is paused", (prefix) => {
+      const pausedOpus = {
+        modelGroup: `${prefix}opus-*`,
         underlyingModels: ["anthropic/claude-opus-*"],
         blocked: true,
       };
       const availability = buildModelAvailability(
-        ["team/opus-5-5", "team/haiku-4-5"],
-        [anthropicTeam, pausedOpusTeam],
-        servedBy("anthropic", "team/opus-5-5", "team/haiku-4-5"),
+        [`${prefix}opus-5-5`, `${prefix}haiku-4-5`],
+        [{ ...anthropicTeam, modelGroup: `${prefix}*` }, pausedOpus],
+        servedBy("anthropic", `${prefix}opus-5-5`, `${prefix}haiku-4-5`),
       );
       expect(resolveAvailableModel("claude-opus-5-5", availability)).toBeUndefined();
-      expect(resolveAvailableModel("claude-haiku-4-5", availability)).toBe("team/haiku-4-5");
+      expect(resolveAvailableModel("claude-haiku-4-5", availability)).toBe(`${prefix}haiku-4-5`);
     });
 
     it("keeps replacement patterns in a listed id literal", () => {
@@ -916,9 +916,13 @@ describe("autorouter_presets", () => {
       expect(availability.underlyingIndex.size).toBe(0);
     });
 
-    it("derives no pattern from a slashless wildcard model_name", () => {
-      const availability = buildModelAvailability(["gpt-5.4"], [wildcardDeployment("gpt*")]);
-      expect(availability.underlyingIndex.size).toBe(0);
+    it("credits a listed id through the slashless wildcard the router sends it to", () => {
+      const availability = buildModelAvailability(
+        ["opus-5-5"],
+        [{ modelGroup: "opus-*", underlyingModels: ["anthropic/claude-opus-*"] }],
+        servedBy("anthropic", "opus-5-5"),
+      );
+      expect(resolveAvailableModel("claude-opus-5-5", availability)).toBe("opus-5-5");
     });
 
     it("does not trust a group's name when no wildcard deployment covers it", () => {

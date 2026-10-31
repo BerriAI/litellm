@@ -41,10 +41,10 @@ const substituteCapture = (namePattern: string, deploymentPattern: string, group
   return deploymentPattern.replace("*", () => group.slice(head.length, group.length - tail.length));
 };
 
-const listingPatterns = (deployment: WildcardDeployment): readonly string[] =>
-  (deployment.modelGroup === "*" ? deployment.underlyingModels.filter(isProviderWide) : [deployment.modelGroup]).filter(
-    (pattern) => pattern !== "*" && pattern.includes("*") && pattern.includes("/"),
-  );
+const routingPatterns = (deployment: WildcardDeployment): readonly string[] =>
+  deployment.modelGroup === "*"
+    ? deployment.underlyingModels.filter((model) => model !== "*" && isProviderWide(model))
+    : [deployment.modelGroup].filter((pattern) => pattern.includes("*"));
 
 const routesThroughPattern = (
   deployment: WildcardDeployment,
@@ -93,7 +93,7 @@ const catchAllRoutes = (group: string, deployments: readonly WildcardDeployment[
 
 const routesByPrecedence = (group: string, deployments: readonly WildcardDeployment[]): readonly WildcardRoute[] => {
   const matches = deployments.flatMap((deployment) =>
-    listingPatterns(deployment)
+    routingPatterns(deployment)
       .filter((pattern) => matchesWildcard(pattern, group))
       .map((pattern) => ({ deployment, pattern })),
   );
