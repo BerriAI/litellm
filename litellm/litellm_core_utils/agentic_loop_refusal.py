@@ -40,19 +40,19 @@ async def every_claimed_tool_call(
     return MappingProxyType({"tool_calls": (*_claimed_calls(refused_tool_calls), *chain.from_iterable(claims))})
 
 
+def _call_ids(call: object) -> frozenset[str]:
+    return _strings((message_field(call, "id"), message_field(call, "call_id")))
+
+
 def refused_tool_call_identifiers(tool_calls: object) -> tuple[frozenset[str], frozenset[str]]:
     calls: Final = _claimed_calls(tool_calls)
-    ids: Final = _strings(
-        chain.from_iterable((message_field(call, "id"), message_field(call, "call_id")) for call in calls)
-    )
-    names: Final = _strings(message_field(call, "name") for call in calls)
+    ids: Final = frozenset(chain.from_iterable(_call_ids(call) for call in calls))
+    names: Final = _strings(message_field(call, "name") for call in calls if not _call_ids(call))
     return ids, names
 
 
 def is_refused_call(call_id: object, name: object, refused_ids: frozenset[str], refused_names: frozenset[str]) -> bool:
-    if isinstance(call_id, str) and refused_ids:
-        return call_id in refused_ids
-    return name in refused_names
+    return (isinstance(call_id, str) and call_id in refused_ids) or name in refused_names
 
 
 def is_refused_item(

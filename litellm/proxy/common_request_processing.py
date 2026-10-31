@@ -53,6 +53,7 @@ from litellm.constants import (
 )
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.otel.runtime import phase_event
+from litellm.litellm_core_utils.agentic_followup_failure import is_agentic_followup_failure
 from litellm.litellm_core_utils.bug_report import (
     allowlisted,
     bug_report_notice,
@@ -129,6 +130,7 @@ from litellm.proxy.common_utils.sse_keepalive import (
 from litellm.proxy.dd_span_tagger import DDSpanTagger
 from litellm.proxy.guardrails.auto_router_compression import arm_pre_call as _arm_auto_router_compression
 from litellm.proxy.hooks.parallel_request_limiter_v3 import get_or_create_request_stash
+from litellm.proxy.hooks.proxy_track_cost_callback import failure_row_response_cost
 from litellm.proxy.native_compaction import with_proxy_compaction_executor
 from litellm.proxy.route_llm_request import (
     endpoint_unsupported_by_model,
@@ -4342,6 +4344,7 @@ class ProxyBaseLLMRequestProcessing:
         """Raises ProxyException (OpenAI API compatible) if an exception is raised"""
         log_llm_api_exception(e, self.litellm_call_id)
         billing_logging_obj: Final = _REQUEST_FIELDS.validate_python(self.data).get("litellm_logging_obj")
+        failed_in_agentic_follow_up: Final = is_agentic_followup_failure(e)
         # Allow callbacks to transform the error response
         transformed_exception: Final = await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict,
@@ -4378,7 +4381,9 @@ class ProxyBaseLLMRequestProcessing:
             model_id=model_id,
             version=version,
             response_cost=(
-                _litellm_logging_obj.finalized_cost.amount
+                failure_row_response_cost(self.data)
+                if failed_in_agentic_follow_up
+                else _litellm_logging_obj.finalized_cost.amount
                 if isinstance(_litellm_logging_obj, LiteLLMLoggingObj)
                 and _litellm_logging_obj.finalized_cost is not None
                 else 0

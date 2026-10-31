@@ -1359,16 +1359,16 @@ def _failure_usage_to_lift(
     base_model: str | None = None,
     dispatched_call_type: str | None = None,
 ) -> tuple[object, object] | None:
-    failed_attempts: Final = _FAILED_ATTEMPTS_USAGE.validate_python(model_call_details.get("failed_attempts_usage", ()))
     current_attempt: Final = _current_failure_usage_to_lift(
         model_call_details,
         request_body,
-        dispatched and (provider_billed or not failed_attempts),
+        dispatched,
         provider_billed,
         deployment_id,
         base_model,
         dispatched_call_type=dispatched_call_type,
     )
+    failed_attempts: Final = _FAILED_ATTEMPTS_USAGE.validate_python(model_call_details.get("failed_attempts_usage", ()))
     if not failed_attempts:
         return current_attempt
     current_usage, current_cost = current_attempt if current_attempt is not None else (None, None)

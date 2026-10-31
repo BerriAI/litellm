@@ -10,6 +10,7 @@ from pydantic import TypeAdapter, ValidationError
 
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.agentic_followup_failure import mark_agentic_followup_failure, rounds_served_before
 from litellm.litellm_core_utils.agentic_followup_kwargs import build_agentic_followup_kwargs
 from litellm.litellm_core_utils.agentic_loop_refusal import every_claimed_tool_call, finalize_refused_chat_turn
 from litellm.litellm_core_utils.agentic_loop_settings import (
@@ -54,9 +55,14 @@ async def bill_first_round_on_failure(
 ) -> _DispatchResult:
     try:
         return await dispatch
-    except Exception:
-        if not stream and isinstance(logging_obj, LiteLLMLoggingObject):
-            logging_obj.record_earlier_round_for_failure(response)
+    except Exception as error:
+        if stream or not isinstance(logging_obj, LiteLLMLoggingObject):
+            mark_agentic_followup_failure(error, rounds_served_before(error))
+            raise
+        this_round: Final = logging_obj.served_round(response)
+        served_rounds: Final = (*rounds_served_before(error), *(() if this_round is None else (this_round,)))
+        mark_agentic_followup_failure(error, served_rounds)
+        logging_obj.record_served_rounds_for_failure(served_rounds)
         raise
 
 

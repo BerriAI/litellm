@@ -3,7 +3,7 @@ import gzip
 import importlib
 import json
 import os
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from types import ModuleType
 from typing import Final, Literal, Protocol
 from unittest.mock import MagicMock, Mock, patch
@@ -236,12 +236,12 @@ class _SearchingChatGate(CustomLogger):
         self,
         response: object,
         model: str,
-        messages: list[dict],
-        tools: list[dict] | None,
+        messages: Sequence[Mapping[str, object]],
+        tools: Sequence[Mapping[str, object]] | None,
         stream: bool,
         custom_llm_provider: str,
-        kwargs: dict,
-    ) -> tuple[bool, dict]:
+        kwargs: Mapping[str, object],
+    ) -> tuple[bool, dict[str, object]]:
         return True, {"tool_calls": [{"id": "call-1"}]}
 
 
@@ -253,14 +253,14 @@ class _FailingFollowUpChatLoop(_SearchingChatGate):
 
     async def async_run_chat_completion_agentic_loop(
         self,
-        tools: dict,
+        tools: Mapping[str, object],
         model: str,
-        messages: list[dict],
+        messages: Sequence[Mapping[str, object]],
         response: object,
-        optional_params: dict,
+        optional_params: Mapping[str, object],
         logging_obj: object,
         stream: bool,
-        kwargs: dict,
+        kwargs: Mapping[str, object],
     ) -> object:
         self.runs += 1
         self.logging_objs.append(logging_obj)
@@ -272,26 +272,26 @@ class _RaisingAgenticGate(CustomLogger):
         self,
         response: object,
         model: str,
-        messages: list[dict],
-        tools: list[dict] | None,
+        messages: Sequence[Mapping[str, object]],
+        tools: Sequence[Mapping[str, object]] | None,
         stream: bool,
         custom_llm_provider: str,
-        kwargs: dict,
-    ) -> tuple[bool, dict]:
+        kwargs: Mapping[str, object],
+    ) -> tuple[bool, dict[str, object]]:
         raise ValueError("gate bug")
 
 
 class _AnsweringChatLoop(_SearchingChatGate):
     async def async_run_chat_completion_agentic_loop(
         self,
-        tools: dict,
+        tools: Mapping[str, object],
         model: str,
-        messages: list[dict],
+        messages: Sequence[Mapping[str, object]],
         response: object,
-        optional_params: dict,
+        optional_params: Mapping[str, object],
         logging_obj: object,
         stream: bool,
-        kwargs: dict,
+        kwargs: Mapping[str, object],
     ) -> object:
         self.runs += 1
         return litellm.ModelResponse(
@@ -490,12 +490,12 @@ class _SearchAgainLoop(CustomLogger):
         self,
         response: object,
         model: str,
-        messages: list[dict],
-        tools: list[dict] | None,
+        messages: Sequence[Mapping[str, object]],
+        tools: Sequence[Mapping[str, object]] | None,
         stream: bool,
         custom_llm_provider: str,
-        kwargs: dict,
-    ) -> tuple[bool, dict]:
+        kwargs: Mapping[str, object],
+    ) -> tuple[bool, dict[str, object]]:
         searches: Final = [
             {"id": call.id, "name": call.function.name}
             for call in response.choices[0].message.tool_calls or []
@@ -505,14 +505,14 @@ class _SearchAgainLoop(CustomLogger):
 
     async def async_build_chat_completion_agentic_loop_plan(
         self,
-        tools: dict,
+        tools: Mapping[str, object],
         model: str,
-        messages: list[dict],
+        messages: Sequence[Mapping[str, object]],
         response: object,
-        optional_params: dict,
+        optional_params: Mapping[str, object],
         logging_obj: object,
         stream: bool,
-        kwargs: dict,
+        kwargs: Mapping[str, object],
     ) -> AgenticLoopPlan:
         return AgenticLoopPlan(
             run_agentic_loop=True,

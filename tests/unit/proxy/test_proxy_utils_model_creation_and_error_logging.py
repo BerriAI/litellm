@@ -3561,13 +3561,15 @@ def test_an_earlier_timed_out_responses_attempt_counts_its_input_from_the_newest
     [None, 1700000001.0],
     ids=["retry-not-dispatched", "retry-dispatched"],
 )
-def test_an_unbilled_retry_failure_adds_no_estimated_tokens_to_the_billed_attempts(
+def test_a_retry_failure_bills_input_only_for_dispatched_attempts(
     current_attempt_api_call_start_time: float | None,
 ) -> None:
-    from litellm.proxy.utils import _failure_fields_to_lift
+    from litellm.proxy.utils import _estimate_dispatched_failure_usage, _failure_fields_to_lift
     from litellm.types.utils import Usage
 
     prior_usage: Final = Usage(prompt_tokens=4, completion_tokens=2, total_tokens=6)
+    estimated_retry_usage: Final = _estimate_dispatched_failure_usage(FAILURE_USAGE_MODEL, ONE_USER_MESSAGE, None)
+    assert estimated_retry_usage is not None
 
     lifted: Final = _failure_fields_to_lift(
         {
@@ -3586,43 +3588,63 @@ def test_an_unbilled_retry_failure_adds_no_estimated_tokens_to_the_billed_attemp
 
     usage: Final = lifted["combined_usage_object"]
     assert isinstance(usage, Usage)
-    assert (usage.prompt_tokens, usage.completion_tokens, usage.total_tokens) == (4, 2, 6)
+    expected_retry_tokens: Final = (
+        estimated_retry_usage.prompt_tokens if current_attempt_api_call_start_time is not None else 0
+    )
+    assert usage.prompt_tokens == prior_usage.prompt_tokens + expected_retry_tokens
+    assert usage.completion_tokens == prior_usage.completion_tokens
+    assert usage.total_tokens == prior_usage.total_tokens + expected_retry_tokens
     assert lifted["response_cost"] == 0.25
 
 
-def test_a_responses_failure_after_a_retried_follow_up_bills_only_the_first_calls_usage() -> None:
-    from litellm.litellm_core_utils.litellm_logging import Logging
+@pytest.mark.asyncio
+async def test_an_agentic_follow_up_failure_row_bills_each_served_first_call_without_an_estimate() -> None:
+    import litellm
+    from litellm.litellm_core_utils.chat_completion_agentic_loop import bill_first_round_on_failure
     from litellm.proxy.utils import _failure_fields_to_lift
     from litellm.types.utils import ModelResponse, Usage
 
-    responses_input: Final = [{"role": "user", "content": "Search the web for the latest LiteLLM release"}]
     logging_obj: Final = Logging(
         model=FAILURE_USAGE_MODEL,
-        messages=responses_input,
+        messages=ONE_USER_MESSAGE,
         stream=False,
-        call_type="aresponses",
+        call_type="acompletion",
         start_time=real_datetime.datetime.now(),
-        litellm_call_id="call-responses-retry",
-        function_id="fn-responses-retry",
+        litellm_call_id="call-agentic-follow-up",
+        function_id="fn-agentic-follow-up",
     )
     logging_obj.update_environment_variables(
         model=FAILURE_USAGE_MODEL, user="", optional_params={}, litellm_params={"custom_llm_provider": "openai"}
     )
-    logging_obj.pre_call(input=responses_input, api_key="sk-test")
-    first_call: Final = ModelResponse(usage=Usage(prompt_tokens=559, completion_tokens=113, total_tokens=672))
-    logging_obj.record_earlier_round_for_failure(first_call)
-    first_call_cost: Final = logging_obj.model_call_details["response_cost"]
-    logging_obj.carry_failed_attempt_usage()
-    logging_obj.pre_call(input=responses_input, api_key="sk-test")
 
-    lifted: Final = _failure_fields_to_lift(
-        {"litellm_logging_obj": logging_obj}, provider_billed=False, dispatched_call_type="aresponses"
+    async def failing_follow_up() -> ModelResponse:
+        raise litellm.RateLimitError(message="rate limited", llm_provider="openai", model=FAILURE_USAGE_MODEL)
+
+    async def serve_first_call_then_fail_its_follow_up(usage: Usage) -> float:
+        logging_obj.pre_call(input=ONE_USER_MESSAGE, api_key="sk-test")
+        with pytest.raises(litellm.RateLimitError):
+            await bill_first_round_on_failure(
+                failing_follow_up(),
+                logging_obj=logging_obj,
+                response=ModelResponse(model=FAILURE_USAGE_MODEL, usage=usage),
+                stream=False,
+            )
+        return logging_obj.model_call_details["response_cost"]
+
+    primary_cost: Final = await serve_first_call_then_fail_its_follow_up(
+        Usage(prompt_tokens=559, completion_tokens=113, total_tokens=672)
+    )
+    logging_obj.carry_failed_attempt_usage()
+    backup_cost: Final = await serve_first_call_then_fail_its_follow_up(
+        Usage(prompt_tokens=31, completion_tokens=5, total_tokens=36)
     )
 
+    lifted: Final = _failure_fields_to_lift({"litellm_logging_obj": logging_obj})
+
     usage: Final = lifted["combined_usage_object"]
-    assert (usage.prompt_tokens, usage.completion_tokens) == (559, 113)
-    assert first_call_cost > 0
-    assert lifted["response_cost"] == pytest.approx(first_call_cost)
+    assert (usage.prompt_tokens, usage.completion_tokens) == (559 + 31, 113 + 5)
+    assert primary_cost > 0 and backup_cost > 0
+    assert lifted["response_cost"] == pytest.approx(primary_cost + backup_cost)
 
 
 @pytest.mark.parametrize(

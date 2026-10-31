@@ -5,7 +5,7 @@ import json
 import logging
 import threading
 import time
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from types import MappingProxyType
 from typing import Final
 from unittest.mock import AsyncMock, Mock, patch
@@ -5369,12 +5369,12 @@ class _PlannedChatLoop(CustomLogger):
         self,
         response: object,
         model: str,
-        messages: list[dict],
-        tools: list[dict] | None,
+        messages: Sequence[Mapping[str, object]],
+        tools: Sequence[Mapping[str, object]] | None,
         stream: bool,
         custom_llm_provider: str,
-        kwargs: dict,
-    ) -> tuple[bool, dict]:
+        kwargs: Mapping[str, object],
+    ) -> tuple[bool, dict[str, object]]:
         claimed: Final = [
             {"id": call.id, "name": call.function.name}
             for call in _tool_calls_of(response)
@@ -5384,14 +5384,14 @@ class _PlannedChatLoop(CustomLogger):
 
     async def async_build_chat_completion_agentic_loop_plan(
         self,
-        tools: dict,
+        tools: Mapping[str, object],
         model: str,
-        messages: list[dict],
+        messages: Sequence[Mapping[str, object]],
         response: object,
-        optional_params: dict,
+        optional_params: Mapping[str, object],
         logging_obj: object,
         stream: bool,
-        kwargs: dict,
+        kwargs: Mapping[str, object],
     ) -> AgenticLoopPlan:
         self.logging_objs.append(logging_obj)
         return self._plan
@@ -5406,24 +5406,24 @@ class _RunOnlyChatLoop(CustomLogger):
         self,
         response: object,
         model: str,
-        messages: list[dict],
-        tools: list[dict] | None,
+        messages: Sequence[Mapping[str, object]],
+        tools: Sequence[Mapping[str, object]] | None,
         stream: bool,
         custom_llm_provider: str,
-        kwargs: dict,
-    ) -> tuple[bool, dict]:
+        kwargs: Mapping[str, object],
+    ) -> tuple[bool, dict[str, object]]:
         return True, {"tool_calls": [{"id": "call_search", "name": "litellm_web_search"}]}
 
     async def async_run_chat_completion_agentic_loop(
         self,
-        tools: dict,
+        tools: Mapping[str, object],
         model: str,
-        messages: list[dict],
+        messages: Sequence[Mapping[str, object]],
         response: object,
-        optional_params: dict,
+        optional_params: Mapping[str, object],
         logging_obj: object,
         stream: bool,
-        kwargs: dict,
+        kwargs: Mapping[str, object],
     ) -> object:
         return self._result
 
@@ -5599,12 +5599,12 @@ class _SearchAgainLoop(CustomLogger):
         self,
         response: object,
         model: str,
-        messages: list[dict],
-        tools: list[dict] | None,
+        messages: Sequence[Mapping[str, object]],
+        tools: Sequence[Mapping[str, object]] | None,
         stream: bool,
         custom_llm_provider: str,
-        kwargs: dict,
-    ) -> tuple[bool, dict]:
+        kwargs: Mapping[str, object],
+    ) -> tuple[bool, dict[str, object]]:
         searches: Final = [
             {"id": call.id, "name": call.function.name}
             for call in response.choices[0].message.tool_calls or []
@@ -5614,14 +5614,14 @@ class _SearchAgainLoop(CustomLogger):
 
     async def async_build_chat_completion_agentic_loop_plan(
         self,
-        tools: dict,
+        tools: Mapping[str, object],
         model: str,
-        messages: list[dict],
+        messages: Sequence[Mapping[str, object]],
         response: object,
-        optional_params: dict,
+        optional_params: Mapping[str, object],
         logging_obj: object,
         stream: bool,
-        kwargs: dict,
+        kwargs: Mapping[str, object],
     ) -> AgenticLoopPlan:
         return AgenticLoopPlan(
             run_agentic_loop=True,

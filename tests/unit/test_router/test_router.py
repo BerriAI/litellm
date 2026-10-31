@@ -3652,14 +3652,28 @@ class _CutSSE(httpx.AsyncByteStream):
         raise httpx.RemoteProtocolError("peer closed connection without sending complete message body")
 
 
-_BACKUP_SSE: Final = "".join(
-    f"data: {json.dumps(chunk)}\n\n"
-    for chunk in (
-        {"id": "b", "object": "chat.completion.chunk", "created": 1700000000, "model": "mistral-large-latest",
-         "choices": [{"index": 0, "delta": {"role": "assistant", "content": " self-attention."}, "finish_reason": None}]},
-        {"id": "b", "object": "chat.completion.chunk", "created": 1700000000, "model": "mistral-large-latest",
-         "choices": [{"index": 0, "delta": {"content": ""}, "finish_reason": "stop"}],
-         "usage": {"prompt_tokens": 91, "completion_tokens": 5, "total_tokens": 96}},
+_BACKUP_SSE: Final = (
+    "".join(
+        f"data: {json.dumps(chunk)}\n\n"
+        for chunk in (
+            {
+                "id": "b",
+                "object": "chat.completion.chunk",
+                "created": 1700000000,
+                "model": "mistral-large-latest",
+                "choices": [
+                    {"index": 0, "delta": {"role": "assistant", "content": " self-attention."}, "finish_reason": None}
+                ],
+            },
+            {
+                "id": "b",
+                "object": "chat.completion.chunk",
+                "created": 1700000000,
+                "model": "mistral-large-latest",
+                "choices": [{"index": 0, "delta": {"content": ""}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 91, "completion_tokens": 5, "total_tokens": 96},
+            },
+        )
     )
 ) + "data: [DONE]\n\n"
 
@@ -3907,88 +3921,165 @@ class _ScriptedAgenticFollowUps(CustomLogger):
             self.shared_call_succeeded.set()
 
 
-async def _route_agentic_request_with_retries(
-    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter, follow_ups: tuple[str, ...]
+_AGENTIC_BACKUP_USAGE: Final = {"prompt_tokens": 20, "completion_tokens": 3, "total_tokens": 23}
+_AGENTIC_BACKUP_BODY: Final = {
+    "id": "chatcmpl-backup",
+    "object": "chat.completion",
+    "created": 1700000000,
+    "model": "gpt-4o-mini",
+    "choices": [{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": "42"}}],
+    "usage": _AGENTIC_BACKUP_USAGE,
+}
+_AGENTIC_RATE_LIMITED: Final = {
+    "error": {"message": "Rate limit reached", "type": "requests", "code": "rate_limit_exceeded"}
+}
+
+
+async def _route_agentic_request(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+    follow_ups: tuple[str, ...],
+    model: str = "m",
+    first_call_replies: tuple[httpx.Response, ...] = (),
+    fallbacks: tuple[str, ...] = (),
 ) -> tuple[object, LiteLLMLogging, respx.Route, _ScriptedAgenticFollowUps]:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     hook: Final = _ScriptedAgenticFollowUps(follow_ups)
     monkeypatch.setattr(litellm, "callbacks", [hook])
-    first_calls: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
-        return_value=httpx.Response(200, json=_AGENTIC_FIRST_CALL_BODY)
+    first_calls: Final = (
+        respx_mock.post("https://api.openai.com/v1/chat/completions").mock(side_effect=list(first_call_replies))
+        if first_call_replies
+        else respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
+            return_value=httpx.Response(200, json=_AGENTIC_FIRST_CALL_BODY)
+        )
+    )
+    respx_mock.post("https://backup.test/v1/chat/completions").mock(
+        return_value=httpx.Response(200, json=_AGENTIC_BACKUP_BODY)
     )
     router: Final = Router(
-        model_list=[{"model_name": "m", "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "sk-test"}}],
+        model_list=[
+            {"model_name": "m", "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "sk-test"}},
+            {
+                "model_name": "backup",
+                "litellm_params": {
+                    "model": "openai/gpt-4o-mini",
+                    "api_key": "sk-test",
+                    "api_base": "https://backup.test/v1",
+                },
+            },
+        ],
         num_retries=2,
         retry_after=0,
+        fallbacks=[{"m": list(fallbacks)}] if fallbacks else [],
     )
     messages: Final = [{"role": "user", "content": "what is 6*7?"}]
     shared_logging, _ = litellm.utils.function_setup(
         original_function="acompletion",
         rules_obj=litellm.utils.Rules(),
         start_time=datetime.now(),
-        model="m",
+        model=model,
         messages=messages,
         litellm_call_id="shared-agentic-call",
     )
     try:
         outcome: object = await router.acompletion(
-            model="m", messages=messages, litellm_call_id="shared-agentic-call", litellm_logging_obj=shared_logging
+            model=model, messages=messages, litellm_call_id="shared-agentic-call", litellm_logging_obj=shared_logging
         )
     except litellm.RateLimitError as error:
         outcome = error
     return outcome, shared_logging, first_calls, hook
 
 
+def _gpt_4o_mini_cost(usage: Mapping[str, int]) -> float:
+    return sum(
+        litellm.cost_per_token(
+            model="gpt-4o-mini", prompt_tokens=usage["prompt_tokens"], completion_tokens=usage["completion_tokens"]
+        )
+    )
+
+
 @pytest.mark.asyncio
-async def test_retried_agentic_request_whose_follow_up_always_fails_bills_every_first_call(
+async def test_agentic_request_whose_follow_up_fails_is_not_retried_and_bills_its_one_first_call(
     monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
 ) -> None:
     from litellm.proxy.utils import _failure_fields_to_lift
 
-    outcome, shared_logging, first_calls, _ = await _route_agentic_request_with_retries(
+    outcome, shared_logging, first_calls, _ = await _route_agentic_request(
         monkeypatch, respx_mock, ("litellm.RateLimitError",)
     )
 
     lifted: Final = _failure_fields_to_lift({"litellm_logging_obj": shared_logging})
-    first_call_cost: Final = sum(
-        litellm.cost_per_token(model="gpt-4o-mini", prompt_tokens=50, completion_tokens=7)
-    )
     assert isinstance(outcome, litellm.RateLimitError)
-    assert first_calls.call_count == 3
-    assert lifted["combined_usage_object"].prompt_tokens == 3 * _AGENTIC_FIRST_CALL_USAGE["prompt_tokens"]
-    assert lifted["combined_usage_object"].completion_tokens == 3 * _AGENTIC_FIRST_CALL_USAGE["completion_tokens"]
-    assert lifted["response_cost"] == pytest.approx(3 * first_call_cost)
-
-
-async def _successful_agentic_request_cost_report(
-    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter, follow_ups: tuple[str, ...]
-) -> tuple[int, Mapping[str, object], Mapping[str, str | None]]:
-    from litellm.proxy.common_request_processing import cost_headers
-
-    outcome, shared_logging, _, hook = await _route_agentic_request_with_retries(monkeypatch, respx_mock, follow_ups)
-    await asyncio.wait_for(hook.shared_call_succeeded.wait(), timeout=10)
-    assert isinstance(outcome, litellm.ModelResponse)
-    success: Final = shared_logging.model_call_details["standard_logging_object"]
-    billed: Final = {
-        field: success[field] for field in ("response_cost", "prompt_tokens", "completion_tokens", "cost_breakdown")
-    }
-    return hook.plans_built, billed, cost_headers(success["response_cost"], shared_logging)
+    assert outcome.status_code == 429
+    assert first_calls.call_count == 1
+    assert lifted["combined_usage_object"].prompt_tokens == _AGENTIC_FIRST_CALL_USAGE["prompt_tokens"]
+    assert lifted["combined_usage_object"].completion_tokens == _AGENTIC_FIRST_CALL_USAGE["completion_tokens"]
+    assert lifted["response_cost"] == pytest.approx(_gpt_4o_mini_cost(_AGENTIC_FIRST_CALL_USAGE))
 
 
 @pytest.mark.asyncio
-async def test_retried_agentic_request_that_recovers_reports_the_cost_of_a_first_try_success(
+async def test_agentic_request_whose_first_call_fails_is_still_retried(
     monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
 ) -> None:
-    first_try_attempts, first_try_billed, first_try_headers = await _successful_agentic_request_cost_report(
-        monkeypatch, respx_mock, ("42",)
-    )
-    recovered_attempts, recovered_billed, recovered_headers = await _successful_agentic_request_cost_report(
-        monkeypatch, respx_mock, ("litellm.RateLimitError", "42")
+    outcome, _, first_calls, hook = await _route_agentic_request(
+        monkeypatch,
+        respx_mock,
+        ("42",),
+        first_call_replies=(
+            httpx.Response(429, json=_AGENTIC_RATE_LIMITED),
+            httpx.Response(200, json=_AGENTIC_FIRST_CALL_BODY),
+        ),
     )
 
-    assert (first_try_attempts, recovered_attempts) == (1, 2)
-    assert recovered_billed == first_try_billed
-    assert recovered_headers == first_try_headers
+    assert isinstance(outcome, litellm.ModelResponse)
+    assert first_calls.call_count == 2
+    assert hook.plans_built == 1
+
+
+async def _successful_agentic_request_billing(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+    follow_ups: tuple[str, ...],
+    model: str,
+    fallbacks: tuple[str, ...] = (),
+) -> tuple[Mapping[str, object], Mapping[str, str | None]]:
+    from litellm.proxy.common_request_processing import cost_headers
+
+    outcome, shared_logging, _, hook = await _route_agentic_request(
+        monkeypatch, respx_mock, follow_ups, model=model, fallbacks=fallbacks
+    )
+    await asyncio.wait_for(hook.shared_call_succeeded.wait(), timeout=10)
+    assert isinstance(outcome, litellm.ModelResponse)
+    success: Final = shared_logging.model_call_details["standard_logging_object"]
+    return success, cost_headers(success["response_cost"], shared_logging)
+
+
+@pytest.mark.asyncio
+async def test_fallback_after_a_failed_agentic_follow_up_bills_the_primarys_first_call_on_the_success_row(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    first_try, first_try_headers = await _successful_agentic_request_billing(
+        monkeypatch, respx_mock, ("42",), model="backup"
+    )
+    recovered, recovered_headers = await _successful_agentic_request_billing(
+        monkeypatch, respx_mock, ("litellm.RateLimitError",), model="m", fallbacks=("backup",)
+    )
+
+    first_call_cost: Final = _gpt_4o_mini_cost(_AGENTIC_FIRST_CALL_USAGE)
+    assert first_try["response_cost"] == pytest.approx(_gpt_4o_mini_cost(_AGENTIC_BACKUP_USAGE))
+    assert "failed_attempts_cost" not in first_try["cost_breakdown"].get("additional_costs", {})
+    assert recovered["response_cost"] == pytest.approx(first_try["response_cost"] + first_call_cost)
+    assert recovered["prompt_tokens"] == first_try["prompt_tokens"] + _AGENTIC_FIRST_CALL_USAGE["prompt_tokens"]
+    assert (
+        recovered["completion_tokens"]
+        == first_try["completion_tokens"] + _AGENTIC_FIRST_CALL_USAGE["completion_tokens"]
+    )
+    assert recovered["cost_breakdown"]["total_cost"] == pytest.approx(recovered["response_cost"])
+    assert recovered["cost_breakdown"]["additional_costs"]["failed_attempts_cost"] == pytest.approx(first_call_cost)
+    assert float(recovered_headers["x-litellm-response-cost"]) == pytest.approx(recovered["response_cost"])
+    assert {key: value for key, value in recovered_headers.items() if key != "x-litellm-response-cost"} == {
+        key: value for key, value in first_try_headers.items() if key != "x-litellm-response-cost"
+    }
 
 
 def _responses_sse(*events: Mapping[str, object]) -> str:
@@ -13817,7 +13908,11 @@ def test_get_search_tool_support_reports_each_routable_deployment_of_the_group()
 @pytest.mark.parametrize("provider", ["chatgpt", "github_copilot"])
 @pytest.mark.parametrize("explicit_provider", [False, True])
 async def test_search_tool_catalog_lookup_needs_no_credentials(
-    provider: str, explicit_provider: bool, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+    provider: str,
+    explicit_provider: bool,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
 ) -> None:
     monkeypatch.setenv("CHATGPT_TOKEN_DIR", str(tmp_path / "chatgpt"))
     monkeypatch.setenv("GITHUB_COPILOT_TOKEN_DIR", str(tmp_path / "copilot"))
@@ -17485,13 +17580,16 @@ def test_model_group_info_fast_mode_fails_closed_without_explicit_boolean(
 def test_model_group_info_fast_mode_requires_every_deployment(
     local_model_cost_map: None, other_model: str, expected: bool, reverse: bool
 ) -> None:
-    models: Final = (other_model, "anthropic/claude-opus-5") if reverse else (
-        "anthropic/claude-opus-5", other_model
+    models: Final = (other_model, "anthropic/claude-opus-5") if reverse else ("anthropic/claude-opus-5", other_model)
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "fast-group",
+                "litellm_params": {"model": model, "api_key": "fake-key"},
+            }
+            for model in models
+        ]
     )
-    router: Final = Router(model_list=[{
-        "model_name": "fast-group",
-        "litellm_params": {"model": model, "api_key": "fake-key"},
-    } for model in models])
 
     result: Final = router.get_model_group_info("fast-group")
 
@@ -17849,10 +17947,7 @@ class _AnthropicMessagesFallbackByteStream:
 
 
 def _anthropic_messages_overloaded_error_chunk() -> bytes:
-    return (
-        b"event: error\n"
-        b'data: {"type": "error", "error": {"type": "overloaded_error", "message": "Overloaded"}}\n\n'
-    )
+    return b'event: error\ndata: {"type": "error", "error": {"type": "overloaded_error", "message": "Overloaded"}}\n\n'
 
 
 def _anthropic_messages_invalid_request_error_chunk() -> bytes:
@@ -24600,16 +24695,25 @@ class TestAutoRouterTraceProvenance:
 
         monkeypatch.setattr(litellm, "_async_success_callback", [logger, CallbackComplete()])
         classifier: Final = ObservedClassifier()
-        router: Final = Router(model_list=[
-            {**self._marker("blue"), "litellm_params": {
-                "model": "auto_router/complexity_router",
-                "complexity_router_config": {
-                    "classifier_type": "custom", "classifier_plugin": classifier,
-                    "tiers": {"SIMPLE": "answer"}, "session_affinity": False, "deployment_affinity": False,
+        router: Final = Router(
+            model_list=[
+                {
+                    **self._marker("blue"),
+                    "litellm_params": {
+                        "model": "auto_router/complexity_router",
+                        "complexity_router_config": {
+                            "classifier_type": "custom",
+                            "classifier_plugin": classifier,
+                            "tiers": {"SIMPLE": "answer"},
+                            "session_affinity": False,
+                            "deployment_affinity": False,
+                        },
+                    },
                 },
-            }},
-            {"model_name": "answer", "litellm_params": {"model": "openai/gpt-5.6-luna", "api_key": "test"}},
-        ], plugins=[classifier])
+                {"model_name": "answer", "litellm_params": {"model": "openai/gpt-5.6-luna", "api_key": "test"}},
+            ],
+            plugins=[classifier],
+        )
         stale: Final = {"routing_decision": {"router_model_name": "previous"}, "_autorouter_baseline_route": "old"}
         request: Final = {"metadata": {**stale}, "litellm_metadata": {**stale, "user_api_key_team_id": "team"}}
         with logger.tracer.start_as_current_span("request") as root:
@@ -24694,20 +24798,22 @@ class TestAutoRouterTraceProvenance:
         self, _tracing: "tuple[OpenTelemetryV2, InMemorySpanExporter]"
     ) -> None:
         logger, exporter = _tracing
-        router: Final = Router(model_list=[
-            self._marker("blue"),
-            {
-                "model_name": "traced-router",
-                "model_info": {"id": "definition-semantic"},
-                "litellm_params": {
-                    "model": "auto_router/semantic-router",
-                    "tags": ["blue"],
-                    "auto_router_config": json.dumps({"routes": [{"name": "answer", "utterances": ["hello"]}]}),
-                    "auto_router_default_model": "answer",
-                    "auto_router_embedding_model": "embed",
+        router: Final = Router(
+            model_list=[
+                self._marker("blue"),
+                {
+                    "model_name": "traced-router",
+                    "model_info": {"id": "definition-semantic"},
+                    "litellm_params": {
+                        "model": "auto_router/semantic-router",
+                        "tags": ["blue"],
+                        "auto_router_config": json.dumps({"routes": [{"name": "answer", "utterances": ["hello"]}]}),
+                        "auto_router_default_model": "answer",
+                        "auto_router_embedding_model": "embed",
+                    },
                 },
-            },
-        ])
+            ]
+        )
         with logger.start_phase_span("route traced-router"):
             response: Final = await router.async_pre_routing_hook(
                 model="traced-router", request_kwargs={"metadata": {"tags": ["blue"]}}
@@ -24727,26 +24833,42 @@ class TestAutoRouterTraceProvenance:
     ) -> None:
         logger, exporter = _tracing
         monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
-        respx_mock.post("https://embedding.example/v1/embeddings").respond(200, json={
-            "object": "list",
-            "model": "text-embedding-3-small",
-            "data": [{"object": "embedding", "index": 0, "embedding": [1.0, 0.0]}],
-            "usage": {"prompt_tokens": 1, "total_tokens": 1},
-        })
-        router: Final = Router(model_list=[
-            {
-                "model_name": "internal-semantic-router",
-                "model_info": {"id": "semantic-definition", "team_id": "trace-team", "team_public_model_name": "public-router"},
-                "litellm_params": {
-                    "model": "auto_router/semantic-router",
-                    "auto_router_config": json.dumps({"routes": [{"name": "answer", "utterances": ["hello"]}]}),
-                    "auto_router_default_model": "answer",
-                    "auto_router_embedding_model": "embed",
-                },
+        respx_mock.post("https://embedding.example/v1/embeddings").respond(
+            200,
+            json={
+                "object": "list",
+                "model": "text-embedding-3-small",
+                "data": [{"object": "embedding", "index": 0, "embedding": [1.0, 0.0]}],
+                "usage": {"prompt_tokens": 1, "total_tokens": 1},
             },
-            {"model_name": "embed", "litellm_params": {"model": "openai/text-embedding-3-small", "api_base": "https://embedding.example/v1", "api_key": "test"}},
-            {"model_name": "answer", "litellm_params": {"model": "openai/gpt-5.6-luna", "api_key": "test"}},
-        ])
+        )
+        router: Final = Router(
+            model_list=[
+                {
+                    "model_name": "internal-semantic-router",
+                    "model_info": {
+                        "id": "semantic-definition",
+                        "team_id": "trace-team",
+                        "team_public_model_name": "public-router",
+                    },
+                    "litellm_params": {
+                        "model": "auto_router/semantic-router",
+                        "auto_router_config": json.dumps({"routes": [{"name": "answer", "utterances": ["hello"]}]}),
+                        "auto_router_default_model": "answer",
+                        "auto_router_embedding_model": "embed",
+                    },
+                },
+                {
+                    "model_name": "embed",
+                    "litellm_params": {
+                        "model": "openai/text-embedding-3-small",
+                        "api_base": "https://embedding.example/v1",
+                        "api_key": "test",
+                    },
+                },
+                {"model_name": "answer", "litellm_params": {"model": "openai/gpt-5.6-luna", "api_key": "test"}},
+            ]
+        )
         request: Final = {"metadata": {"user_api_key_team_id": "trace-team"}}
         with logger.tracer.start_as_current_span("request"):
             await router.async_get_available_deployment(

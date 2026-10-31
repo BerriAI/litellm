@@ -22,6 +22,7 @@ they stay out of the body even without it.
 
 import datetime
 import json
+from collections.abc import Mapping, Sequence
 from typing import Any, Dict, Final, List, Optional, Tuple
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -264,8 +265,6 @@ class _GateOnlyLogger(CustomLogger):
 
 
 class _RecordingGateLogger(_GateOnlyLogger):
-    """Also keeps every follow-up response the loop hands to the post hook."""
-
     def __init__(self, plan: AgenticLoopPlan, tool_calls: Dict[str, Any]) -> None:
         super().__init__(plan=plan, tool_calls=tool_calls)
         self.followups: tuple[ModelResponse, ...] = ()
@@ -623,6 +622,35 @@ async def test_refused_rerun_drops_every_hooks_internal_call_and_keeps_the_clien
 
 
 @pytest.mark.asyncio
+async def test_refused_rerun_drops_a_call_claimed_only_by_name_next_to_one_claimed_by_id(restore_callbacks):
+    response: Final = ModelResponse(
+        choices=[
+            Choices(
+                finish_reason="tool_calls",
+                message=Message(
+                    role="assistant",
+                    content=None,
+                    tool_calls=[
+                        _tool_call("call_abc", "litellm_code_execution"),
+                        _tool_call("call_search", "litellm_web_search"),
+                        _tool_call("call_client", "lookup"),
+                    ],
+                ),
+            )
+        ]
+    )
+
+    result: Final = await _run_refused_rerun(
+        response,
+        _REFUSING_RAILS[0],
+        gate_tool_calls={"tool_calls": [{"id": "call_abc"}]},
+        other_hooks_tool_calls=({"tool_calls": [{"name": "litellm_web_search"}]},),
+    )
+
+    assert [call.id for call in result.choices[0].message.tool_calls] == ["call_client"]
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "response, gate_tool_calls",
     [(_plain_model_response(), _REFUSED_GATE_TOOL_CALLS), (_tool_call_model_response(), None)],
@@ -714,6 +742,118 @@ async def test_acompletion_bills_the_first_call_on_the_failure_log_when_the_foll
     assert logging_obj.model_call_details["response_cost"] == pytest.approx(
         5 * price["input_cost_per_token"] + 3 * price["output_cost_per_token"]
     )
+
+
+def _tool_call_turn(call_id: str, usage: Usage) -> ModelResponse:
+    return ModelResponse(
+        model="gpt-4o-mini",
+        choices=[
+            Choices(
+                finish_reason="tool_calls",
+                message=Message(role="assistant", content=None, tool_calls=[_tool_call(call_id, "litellm_web_search")]),
+            )
+        ],
+        usage=usage,
+    )
+
+
+class _TwoRoundLogger(CustomLogger):
+    def __init__(self, middle_round: ModelResponse) -> None:
+        super().__init__()
+        self._follow_ups: Final = (middle_round, "litellm.RateLimitError")
+        self.logging_objs: tuple[object, ...] = ()
+
+    async def async_should_run_agentic_loop(
+        self,
+        response: object,
+        model: str,
+        messages: Sequence[Mapping[str, object]],
+        tools: Sequence[Mapping[str, object]] | None,
+        stream: bool,
+        custom_llm_provider: str,
+        kwargs: Mapping[str, object],
+    ) -> tuple[bool, dict[str, object]]:
+        assert isinstance(response, ModelResponse)
+        calls: Final = response.choices[0].message.tool_calls or []
+        return bool(calls), {"tool_calls": [{"id": call.id} for call in calls]}
+
+    async def async_build_agentic_loop_plan(
+        self,
+        tools: Mapping[str, object],
+        model: str,
+        messages: Sequence[Mapping[str, object]],
+        response: object,
+        anthropic_messages_provider_config: object,
+        anthropic_messages_optional_request_params: Mapping[str, object],
+        logging_obj: object,
+        stream: bool,
+        kwargs: Mapping[str, object],
+    ) -> AgenticLoopPlan:
+        follow_up: Final = self._follow_ups[len(self.logging_objs)]
+        self.logging_objs = (*self.logging_objs, logging_obj)
+        return AgenticLoopPlan(
+            run_agentic_loop=True,
+            request_patch=AgenticLoopRequestPatch(messages=_patched_messages(), kwargs={"mock_response": follow_up}),
+        )
+
+
+@pytest.mark.asyncio
+async def test_acompletion_bills_every_served_round_on_the_failure_log_when_a_later_follow_up_fails(
+    restore_callbacks, monkeypatch: pytest.MonkeyPatch
+):
+    first_usage: Final = Usage(prompt_tokens=5, completion_tokens=3, total_tokens=8)
+    middle_usage: Final = Usage(prompt_tokens=11, completion_tokens=4, total_tokens=15)
+    logger: Final = _TwoRoundLogger(middle_round=_tool_call_turn("call_next", middle_usage))
+    monkeypatch.setattr(litellm, "callbacks", [logger])
+    mock_client: Final = MagicMock()
+    mock_client.post = AsyncMock(return_value=_raw_response_for(_tool_call_turn("call_abc", first_usage)))
+
+    with pytest.raises(litellm.RateLimitError):
+        await litellm.acompletion(
+            model="openai/gpt-4o-mini",
+            messages=[{"role": "user", "content": "what is 6*7?"}],
+            api_key="sk-test",
+            client=mock_client,
+            num_retries=0,
+        )
+
+    first_logging_obj, _ = logger.logging_objs
+    assert isinstance(first_logging_obj, Logging)
+    price: Final = litellm.model_cost["gpt-4o-mini"]
+    billed_usage: Final = first_logging_obj.model_call_details["combined_usage_object"]
+    assert (billed_usage.prompt_tokens, billed_usage.completion_tokens) == (5 + 11, 3 + 4)
+    assert first_logging_obj.model_call_details["response_cost"] == pytest.approx(
+        (5 + 11) * price["input_cost_per_token"] + (3 + 4) * price["output_cost_per_token"]
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stream", [False, True], ids=["non_stream", "stream"])
+async def test_a_follow_up_failing_with_a_builtin_error_reaches_the_caller_unchanged(stream: bool):
+    from litellm.litellm_core_utils.chat_completion_agentic_loop import bill_first_round_on_failure
+
+    sandbox_error: Final = RuntimeError("sandbox crashed")
+
+    async def failing_follow_up() -> ModelResponse:
+        raise sandbox_error
+
+    with pytest.raises(RuntimeError) as raised:
+        await bill_first_round_on_failure(
+            failing_follow_up(),
+            logging_obj=Logging(
+                model="gpt-4o-mini",
+                messages=[{"role": "user", "content": "hi"}],
+                stream=stream,
+                call_type="acompletion",
+                start_time=datetime.datetime(2026, 1, 1, tzinfo=datetime.timezone.utc),
+                litellm_call_id="call-builtin-error",
+                function_id="fn-builtin-error",
+            ),
+            response=_tool_call_turn("call_abc", Usage(prompt_tokens=5, completion_tokens=3, total_tokens=8)),
+            stream=stream,
+        )
+
+    assert raised.value is sandbox_error
 
 
 class _RunOnlyLoopLogger(CustomLogger):

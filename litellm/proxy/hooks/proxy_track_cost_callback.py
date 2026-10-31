@@ -218,6 +218,32 @@ def _guardrail_info_lifted_from_litellm_metadata(
     return {"standard_logging_guardrail_information": guardrail_info}
 
 
+def _failure_row_guardrail_information(request_data: Mapping[str, object]) -> object:
+    metadata: Final = _str_keyed_fields(request_data.get("metadata"))
+    lifted: Final = _guardrail_info_lifted_from_litellm_metadata(
+        _str_keyed_fields(request_data.get("litellm_metadata")),
+        guardrail_info_already_set="standard_logging_guardrail_information" in metadata,
+    )
+    return {**metadata, **lifted}.get("standard_logging_guardrail_information")
+
+
+def failure_row_response_cost(request_data: Mapping[str, object]) -> float:
+    stashed_cost: Final = request_data.get("response_cost")
+    recovered_stream_cost: Final = (
+        max(float(stashed_cost), 0.0)
+        if isinstance(request_data.get("combined_usage_object"), litellm.Usage)
+        and isinstance(stashed_cost, (int, float))
+        else 0.0
+    )
+    finalized_failure: Final = _str_keyed_fields(request_data.get("standard_logging_object"))
+    finalized_amount: Final = finalized_failure.get("response_cost")
+    return (
+        float(finalized_amount)
+        if finalized_failure.get("cost_finalized") is True and isinstance(finalized_amount, (int, float))
+        else recovered_stream_cost + guardrail_information_cost(_failure_row_guardrail_information(request_data))
+    )
+
+
 def _redaction_opt_in_lifted_from_litellm_metadata(
     litellm_metadata: ObjectMapping, *, caller_set_headers: bool
 ) -> ObjectMapping:
@@ -543,19 +569,7 @@ class _ProxyDBLogger(CustomLogger):
         # recovered cost onto request_data (the usage rides along in
         # ``combined_usage_object`` for the token columns), so attribute the
         # real partial spend to this failure row instead of zero.
-        recovered_stream_cost: Final = (
-            max(float(request_data.get("response_cost") or 0.0), 0.0)
-            if isinstance(request_data.get("combined_usage_object"), litellm.Usage)
-            else 0.0
-        )
-        finalized_failure: Final = _str_keyed_fields(request_data.get("standard_logging_object"))
-        finalized_amount: Final = finalized_failure.get("response_cost")
-        recovered_response_cost: Final = (
-            float(finalized_amount)
-            if finalized_failure.get("cost_finalized") is True and isinstance(finalized_amount, (int, float))
-            else recovered_stream_cost
-            + guardrail_information_cost(existing_metadata.get("standard_logging_guardrail_information"))
-        )
+        recovered_response_cost: Final = failure_row_response_cost(request_data)
 
         failure_snapshot_with_late_guardrails: Final = _failure_snapshot_with_guardrails_recorded_after_it(
             request_data.get("standard_logging_object"),

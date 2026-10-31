@@ -26,7 +26,7 @@ from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.xai.common_utils import xai_reported_cost_in_usd
 from litellm.proxy.mcp_server import mcp_server_manager
 from litellm.proxy.mcp_server.faults.list_outcomes import ServerListOk
-from litellm.proxy.utils import _failure_fields_to_lift
+from litellm.proxy.utils import _estimate_dispatched_failure_usage, _failure_fields_to_lift
 from litellm.responses.mcp.litellm_proxy_mcp_handler import LiteLLM_Proxy_MCP_Handler
 from litellm.responses.mcp.mcp_streaming_iterator import MCPEnhancedStreamingIterator
 from litellm.types.llms.openai import (
@@ -540,13 +540,9 @@ async def test_mcp_allowed_tools_filtering():
     ]
 
     # First filter by allowed tools
-    filtered_tools_with_duplicates = (
-        LiteLLM_Proxy_MCP_Handler._filter_mcp_tools_by_allowed_tools(
-            mcp_tools=mock_mcp_tools_with_duplicates,
-            mcp_tools_with_litellm_proxy=cast(
-                List[ToolParam], mcp_tool_config_with_duplicates
-            ),
-        )
+    filtered_tools_with_duplicates = LiteLLM_Proxy_MCP_Handler._filter_mcp_tools_by_allowed_tools(
+        mcp_tools=mock_mcp_tools_with_duplicates,
+        mcp_tools_with_litellm_proxy=cast(List[ToolParam], mcp_tool_config_with_duplicates),
     )
 
     # Then deduplicate the filtered tools
@@ -605,11 +601,9 @@ async def test_mcp_allowed_tools_filtering():
         },
     ]
 
-    filtered_tools_multiple = (
-        LiteLLM_Proxy_MCP_Handler._filter_mcp_tools_by_allowed_tools(
-            mcp_tools=mock_mcp_tools_from_server,
-            mcp_tools_with_litellm_proxy=cast(List[ToolParam], multiple_mcp_configs),
-        )
+    filtered_tools_multiple = LiteLLM_Proxy_MCP_Handler._filter_mcp_tools_by_allowed_tools(
+        mcp_tools=mock_mcp_tools_from_server,
+        mcp_tools_with_litellm_proxy=cast(List[ToolParam], multiple_mcp_configs),
     )
 
     # Should return union of all allowed tools (3 unique tools)
@@ -1918,7 +1912,7 @@ def _router_retrying_once() -> litellm.Router:
 
 
 @pytest.mark.asyncio
-async def test_non_stream_auto_execute_retried_after_a_failed_follow_up_bills_each_attempt_its_own_rounds(
+async def test_non_stream_auto_execute_retried_after_a_failed_follow_up_bills_the_failed_attempts_first_round_on_success(
     respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
 ):
     _serve_responses(
@@ -1945,9 +1939,11 @@ async def test_non_stream_auto_execute_retried_after_a_failed_follow_up_bills_ea
     assert len(recorder.logged) == 1
     row: Final = recorder.logged[0]
     assert row["id"] == response.id
-    assert (row["prompt_tokens"], row["completion_tokens"]) == (500 + 149, 40 + 5)
-    assert (row["prompt_tokens"], row["completion_tokens"]) == (response.usage.input_tokens, response.usage.output_tokens)
-    assert row["response_cost"] == pytest.approx(_round_cost(_RETRIED_ROUND_ONE) + _round_cost(_ROUND_TWO_BODY))
+    assert (response.usage.input_tokens, response.usage.output_tokens) == (500 + 149, 40 + 5)
+    assert (row["prompt_tokens"], row["completion_tokens"]) == (500 + 149 + 71, 40 + 5 + 19)
+    assert row["response_cost"] == pytest.approx(
+        _round_cost(_RETRIED_ROUND_ONE) + _round_cost(_ROUND_TWO_BODY) + _round_cost(_ROUND_ONE_BODY)
+    )
 
 
 @pytest.mark.asyncio
@@ -1982,7 +1978,22 @@ async def test_non_stream_auto_execute_failing_every_retry_bills_each_paid_first
     failure_row_fields: Final = _failure_fields_to_lift(MappingProxyType({"litellm_logging_obj": logging_obj}))
     billed_usage: Final = failure_row_fields["combined_usage_object"]
     assert isinstance(billed_usage, Usage)
-    assert (billed_usage.prompt_tokens, billed_usage.completion_tokens) == billed_tokens
+    estimated_failure_usage: Final = (
+        _estimate_dispatched_failure_usage(
+            model="gpt-5.6",
+            request_input=logging_obj.model_call_details.get("messages"),
+            system_input=None,
+        )
+        if not retried_first_rounds
+        else None
+    )
+    expected_prompt_tokens: Final = billed_tokens[0] + (
+        estimated_failure_usage.prompt_tokens if estimated_failure_usage is not None else 0
+    )
+    assert (billed_usage.prompt_tokens, billed_usage.completion_tokens) == (
+        expected_prompt_tokens,
+        billed_tokens[1],
+    )
     assert failure_row_fields["response_cost"] == pytest.approx(
         _round_cost(_ROUND_ONE_BODY) + sum(_round_cost(body) for body in retried_first_rounds)
     )
