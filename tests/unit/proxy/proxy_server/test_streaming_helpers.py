@@ -34,7 +34,7 @@ from fastapi import HTTPException, Response
 from fastapi.responses import JSONResponse, StreamingResponse
 from openai import APIError as OpenAIAPIError
 from openai.types.responses import ResponseOutputMessage, ResponseOutputText
-from pydantic import BaseModel, Field, PrivateAttr
+from pydantic import BaseModel, Field, PrivateAttr, model_serializer
 
 import litellm
 import litellm.proxy.proxy_server as ps
@@ -204,8 +204,8 @@ class _MaskedEverywhereString(str):
         return "***"
 
 
-async def _responses_frames(chunks: Iterable[Mapping[str, object]]) -> tuple[str, ...]:
-    async def upstream() -> AsyncIterator[Mapping[str, object]]:
+async def _responses_frames(chunks: Iterable[object]) -> tuple[str, ...]:
+    async def upstream() -> AsyncIterator[object]:
         for chunk in chunks:
             yield chunk
 
@@ -240,6 +240,24 @@ async def test_responses_stream_sends_a_hook_chunk_its_event_model_cannot_read_a
     frames: Final = await _responses_frames((chunk,))
 
     assert frames == (f"data: {json.dumps(chunk)}\n\n",)
+
+
+class _TypeDroppedOnTheWire(BaseModel, frozen=True):
+    type: str = "response.completed"
+    sequence_number: int = 3
+
+    @model_serializer
+    def _without_type(self) -> Mapping[str, int]:
+        return {"sequence_number": self.sequence_number}
+
+
+@pytest.mark.asyncio
+async def test_responses_stream_names_a_model_chunk_from_the_json_it_sends() -> None:
+    frames: Final = await _responses_frames((_TypeDroppedOnTheWire(),))
+
+    assert len(frames) == 1
+    assert frames[0].startswith("data: ")
+    assert json.loads(frames[0].removeprefix("data: ")) == {"sequence_number": 3}
 
 
 class _HookOutputItem(BaseModel, frozen=True):

@@ -12,6 +12,7 @@ import asyncio
 import json
 from collections.abc import AsyncIterable, Callable, Mapping, Sequence
 from http import HTTPStatus
+from itertools import takewhile
 from time import perf_counter
 from typing import TYPE_CHECKING, Final, Protocol, TypeAlias, runtime_checkable
 
@@ -90,8 +91,17 @@ class _StreamsBody(Protocol):
     def body_iterator(self) -> AsyncIterable[str | bytes | memoryview]: ...
 
 
-def _sse_frame_data(frame: str) -> str | None:
-    return next((line[6:].strip() for line in split_sse_lines(frame) if line.startswith("data: ")), None)
+def _payloads_before_done(frame: str) -> tuple[tuple[str, ...], bool]:
+    payloads: Final = tuple(line[6:].strip() for line in split_sse_lines(frame) if line.startswith("data: "))
+    return tuple(takewhile(lambda payload: payload != "[DONE]", payloads)), "[DONE]" in payloads
+
+
+def _terminal_response(event: _StreamEvent) -> _TerminalResponse:
+    match event.get("response"):
+        case Mapping() as response:
+            return response
+        case _:
+            return {}
 
 
 def _event_error(event: Mapping[str, object]) -> Mapping[str, object]:
@@ -279,10 +289,8 @@ async def background_streaming_task(
                 ):
                     frame_failure = responses_error_fields(_event_error(_StreamEventParser.parse(error_data)))
 
-                if isinstance(chunk, str) and (chunk_data := _sse_frame_data(chunk)) is not None:
-                    if chunk_data == "[DONE]":
-                        break
-
+                payloads, stream_done = _payloads_before_done(chunk) if isinstance(chunk, str) else ((), False)
+                for chunk_data in payloads:
                     try:
                         event: _StreamEvent = _StreamEventParser.parse(chunk_data)
                         event_type = event.get("type", "")
@@ -394,7 +402,7 @@ async def background_streaming_task(
                             # Terminal event - extract all ResponsesAPIResponse fields
                             # https://platform.openai.com/docs/api-reference/responses-streaming
                             finished_at = perf_counter()
-                            response_data = event.get("response", {})
+                            response_data = _terminal_response(event)
                             terminal_status = response_data.get(
                                 "status",
                                 _event_to_status.get(event_type, "completed"),
@@ -428,15 +436,19 @@ async def background_streaming_task(
                             if "output" in response_data:
                                 final_output = response_data.get("output", [])
                                 for item in final_output:
-                                    item_id = item.get("id")
-                                    if item_id:
-                                        output_items[item_id] = item
+                                    match item:
+                                        case {"id": item_id} if item_id:
+                                            output_items[item_id] = item
+                                        case _:
+                                            continue
                                 state_dirty = True
 
                     except (json.JSONDecodeError, AttributeError, TypeError) as e:
                         verbose_proxy_logger.warning("Failed to parse streaming chunk: %s", e)
                     else:
                         await flush_state_if_needed()
+                if stream_done:
+                    break
 
             # Final flush to ensure all accumulated state is saved
             await flush_state_if_needed(force=True)

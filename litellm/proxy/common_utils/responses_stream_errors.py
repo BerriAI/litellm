@@ -517,11 +517,9 @@ class ResponsesStreamErrorState:
         self.sequence_number = -1
         self.terminal_emitted = False
         self._pending_event: _StreamEvent | None = None
-        self._pending_on_wire = False
 
     def observe_chunk(self, chunk: object) -> None:
         self._pending_event = _observed_event(chunk)
-        self._pending_on_wire = isinstance(chunk, Mapping)
 
     def _record(self, event: _StreamEvent) -> None:
         if event.sequence_number is not None:
@@ -543,7 +541,7 @@ class ResponsesStreamErrorState:
         observed: Final = self._pending_event
         if observed is None:
             return frame
-        event: Final = _wire_event(frame) if self._pending_on_wire else observed
+        event: Final = _wire_event(frame)
         self._record(observed if event is None else event)
         if event is None or not event.type or "\n" in event.type or "\r" in event.type:
             return frame

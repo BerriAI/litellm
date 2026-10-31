@@ -1679,6 +1679,28 @@ class TestBackgroundStreamingTerminalEvents:
                 None,
                 None,
             ),
+            (('data: {"type": "response.failed", "response": "hook-text"}\n\n',), "failed", None, None),
+            (('data: {"type": "response.failed", "response": null}\n\n',), "failed", None, None),
+            (
+                (
+                    'event: error\ndata: {"error": {"code": "400", "message": "output blocked by policy"}}\n\n'
+                    'event: response.incomplete\ndata: {"type": "response.incomplete", '
+                    '"response": {"status": "incomplete", "usage": {"input_tokens": 3}}}\n\n',
+                ),
+                "incomplete",
+                None,
+                {"input_tokens": 3},
+            ),
+            (
+                (
+                    'event: error\ndata: {"error": {"code": "400", "message": "output blocked by policy"}}\n\n',
+                    'data: {"type": "response.output_text.delta", "delta": "hi"}\n\n'
+                    'data: {"type": "response.completed", "response": {"status": "completed", "usage": {"input_tokens": 3}}}\n\n',
+                ),
+                "completed",
+                None,
+                {"input_tokens": 3},
+            ),
         ],
         ids=[
             "error_frame_after_a_delta",
@@ -1688,6 +1710,10 @@ class TestBackgroundStreamingTerminalEvents:
             "output_item_done_with_a_string_item_then_completed",
             "error_frame_then_completed_in_one_chunk",
             "error_frame_after_done_in_one_chunk",
+            "failed_event_whose_response_is_a_string",
+            "failed_event_whose_response_is_null",
+            "error_frame_and_incomplete_in_one_chunk",
+            "error_frame_then_completed_behind_a_delta_in_one_chunk",
         ],
     )
     async def test_a_poll_stores_what_its_stream_ended_with(
@@ -1723,6 +1749,37 @@ class TestBackgroundStreamingTerminalEvents:
         assert final_call.kwargs["status"] == expected_status
         assert final_call.kwargs["error"] == expected_error
         assert final_call.kwargs["usage"] == expected_usage
+
+    @pytest.mark.asyncio
+    async def test_a_poll_stores_the_final_output_items_beside_one_that_is_not_an_object(self):
+        from litellm.proxy.response_polling.background_streaming import (
+            background_streaming_task,
+        )
+
+        final_item: Final = {"id": "msg_1", "content": [{"type": "output_text", "text": "final"}]}
+        draft_item: Final = {"id": "msg_1", "content": [{"type": "output_text", "text": ""}]}
+        completed: Final = {"type": "response.completed", "response": {"status": "completed", "output": ["hook-text", final_item]}}
+
+        async def _body_iterator():
+            yield f"data: {json.dumps({'type': 'response.output_item.added', 'item': draft_item})}\n\n".encode()
+            yield b'data: {"type": "response.output_text.delta", "item_id": "msg_1", "delta": "draft"}\n\n'
+            yield f"data: {json.dumps(completed)}\n\n".encode()
+
+        mock_response: Final = Mock()
+        mock_response.body_iterator = _body_iterator()
+        handler: Final = AsyncMock(spec=ResponsePollingHandler)
+        kwargs: Final = _make_background_streaming_kwargs("poll_final_output", handler)
+
+        with patch(  # test-quality-ok: the processor is built inside the task, same idiom as the sibling tests
+            "litellm.proxy.response_polling.background_streaming.ProxyBaseLLMRequestProcessing"
+        ) as MockProcessor:
+            MockProcessor.return_value.base_process_llm_request = AsyncMock(
+                return_value=mock_response
+            )
+            await background_streaming_task(**kwargs)
+
+        stored_outputs: Final = [call.kwargs["output"] for call in handler.update_state.call_args_list if "output" in call.kwargs]
+        assert stored_outputs[-1] == [final_item]
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
