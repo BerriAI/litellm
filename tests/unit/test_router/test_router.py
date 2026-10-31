@@ -2893,11 +2893,11 @@ def test_switch_routing_strategy_installs_lar1_then_restores_the_default_selecto
         },
     )
     assert router.routing_strategy == "lar1"
-    assert "_core_async_get_available_deployment" in router.__dict__
+    assert "_core_async_get_available_deployment" in router._core.__dict__
 
     router._switch_routing_strategy("usage-based-routing-v2", {})
     assert router.lowesttpm_logger_v2 is not None
-    assert "async_get_available_deployment" not in router.__dict__
+    assert "_core_async_get_available_deployment" not in router._core.__dict__
 
 
 @pytest.mark.parametrize(
@@ -22656,6 +22656,9 @@ _SSE_CHUNKS: Final[tuple[bytes, ...]] = tuple(
     b'data: {"id":"c","object":"chat.completion.chunk","created":1,"model":"gpt-5.6",'
     b'"choices":[{"index":0,"delta":{"content":"x"},"finish_reason":null}]}\n\n'
     for _ in range(5)
+) + (
+    b'data: {"id":"c","object":"chat.completion.chunk","created":1,"model":"gpt-5.6",'
+    b'"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}\n\n',
 )
 
 
@@ -24271,7 +24274,7 @@ def _record_phase_events(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, dic
     def record(name: str, attributes: dict[str, str | int]) -> None:
         events.append((name, dict(attributes)))
 
-    monkeypatch.setattr(litellm.router, "phase_event", record)
+    monkeypatch.setattr(litellm.router_python_core, "phase_event", record)
     return events
 
 
@@ -25666,7 +25669,9 @@ def test_get_model_list_from_model_alias_should_not_iterate_for_non_alias_lookup
         ],
         model_group_alias={"alias-1": "gpt-5.5"},
     )
-    router.model_group_alias = NoItemsAliasDict({f"alias-{idx}": "gpt-5.5" for idx in range(200)})
+    # Assigning model_group_alias copies the value (a changeset detaches it), so the tripwire goes
+    # straight onto the core, where the lookup reads it.
+    router._core._core_model_group_alias = NoItemsAliasDict({f"alias-{idx}": "gpt-5.5" for idx in range(200)})
 
     model_alias_list = router.get_model_list_from_model_alias(model_name="gpt-5-mini")
     assert model_alias_list == []
@@ -25686,7 +25691,9 @@ def test_map_team_model_should_not_iterate_aliases_for_non_alias_team_model_name
         ],
         model_group_alias={"alias-1": "gpt-5.5"},
     )
-    router.model_group_alias = NoItemsAliasDict({f"alias-{idx}": "gpt-5.5" for idx in range(200)})
+    # Assigning model_group_alias copies the value (a changeset detaches it), so the tripwire goes
+    # straight onto the core, where the lookup reads it.
+    router._core._core_model_group_alias = NoItemsAliasDict({f"alias-{idx}": "gpt-5.5" for idx in range(200)})
 
     # map_team_model should return the public name unchanged (not the internal UUID name)
     # so the router can find all sibling deployments via team_id filtering
@@ -29139,13 +29146,13 @@ def test_reset_custom_routing_strategy():
     router = _create_custom_routing_router()
     router.set_custom_routing_strategy(SpecialEndpointRoutingStrategy(router))
 
-    assert "get_available_deployment" in router.__dict__
-    assert "_core_async_get_available_deployment" in router.__dict__
+    assert "get_available_deployment" in router._core.__dict__
+    assert "_core_async_get_available_deployment" in router._core.__dict__
 
     router._reset_custom_routing_strategy()
 
-    assert "get_available_deployment" not in router.__dict__
-    assert "async_get_available_deployment" not in router.__dict__
+    assert "get_available_deployment" not in router._core.__dict__
+    assert "_core_async_get_available_deployment" not in router._core.__dict__
     assert router.async_get_available_deployment.__func__ is Router.async_get_available_deployment
 
     router._reset_custom_routing_strategy()
@@ -30985,7 +30992,7 @@ async def test_responses_fallback_wrapper_disconnect_billing_keeps_the_primary_s
 
 
 _SYNC_SECONDS: Final = 10
-_ROUTER_FILE: Final = Router.__init__.__code__.co_filename
+_ROUTER_FILE: Final = Router._update_deployment_indices_after_removal.__code__.co_filename
 _INDEX_LOCK_LINES: Final = frozenset(
     number
     for number, line in enumerate(linecache.getlines(_ROUTER_FILE), start=1)
@@ -31328,7 +31335,7 @@ def _candidate_ids(
     request_kwargs: dict[str, object] | None = None,
 ) -> list[str]:
     candidates: Final = router._without_declared_text_only_deployments(
-        router.get_model_list(model_name="mixed"), "mixed", messages, request_kwargs
+        router._core_get_model_list(model_name="mixed"), "mixed", messages, request_kwargs
     )
     return [d["model_info"]["id"] for d in candidates]
 
@@ -31442,6 +31449,7 @@ def test_request_carries_image_sees_chat_parts_and_responses_input_items():
     assert litellm.Router._request_carries_image(None, {"input": _IMAGE_RESPONSES_INPUT}) is True
     assert litellm.Router._request_carries_image([{"role": "user", "content": "Say hi"}], {}) is False
     assert litellm.Router._request_carries_image(None, {"input": "Say hi"}) is False
+    assert litellm.Router._request_carries_image(None, {"input": ["safe text", "more safe text"]}) is False
 
 
 @pytest.mark.asyncio
@@ -31812,3 +31820,65 @@ def test_router_warns_when_a_deployment_enforces_endpoints_without_a_list(caplog
 
     assert "Deployment 'embed-from-config' sets enforce_supported_endpoints without" in caplog.text
     assert "Deployment 'embed-from-api' sets enforce_supported_endpoints without" in caplog.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["sync", "async"])
+@pytest.mark.parametrize("metadata_key", [None, "metadata", "litellm_metadata"])
+@pytest.mark.parametrize(
+    ("route", "messages", "request_kwargs"),
+    [
+        ("/v1/moderations", None, {"input": ["first", "second"]}),
+        ("/v1/embeddings", None, {"messages": []}),
+        ("/v1/messages", ["malformed"], {}),
+        ("/v1/messages", "malformed", {}),
+        ("/v1/messages", 5, {}),
+        ("/v1/messages", None, {"messages": ["malformed"]}),
+        ("/v1/responses", None, {"input": [{"type": "computer_call_output", "output": {"type": "text", "text": "no image"}}]}),
+        ("/v1/responses", None, {"input": [{"type": "computer_call_output", "output": "malformed"}]}),
+    ],
+    ids=["moderation-list", "embedding-empty-messages", "message-entry", "message-string", "message-number", "kwargs-messages", "computer-output-text", "computer-output-string"],
+)
+async def test_image_routing_leaves_non_image_and_malformed_requests_to_the_endpoint(
+    mode: str, metadata_key: str | None, route: str, messages: object, request_kwargs: dict[str, object]
+) -> None:
+    router: Final = _mixed_router(
+        {**_DECLARED_TEXT_LEG, "litellm_params": {**_DECLARED_TEXT_LEG["litellm_params"], "order": 0}},
+        {**_VISION_LEG, "litellm_params": {**_VISION_LEG["litellm_params"], "order": 1}},
+    )
+    kwargs: Final = {
+        **request_kwargs,
+        **({metadata_key: {"user_api_key_request_route": route}} if metadata_key is not None else {}),
+    }
+    original: Final = copy.deepcopy(request_kwargs)
+    deployment: Final = (
+        await router._core_async_get_available_deployment(model="mixed", messages=messages, request_kwargs=kwargs)
+        if mode == "async"
+        else router.get_available_deployment(model="mixed", messages=messages, request_kwargs=kwargs)
+    )
+    assert deployment["model_info"]["id"] == "declared-text"
+    assert all(kwargs[key] == value for key, value in original.items())
+
+
+@pytest.mark.parametrize(
+    "request_kwargs",
+    [
+        {"messages": _IMAGE_CHAT},
+        {"input": _IMAGE_RESPONSES_INPUT},
+        {"messages": [{"role": "user", "content": [{"type": "image", "source": {"type": "url", "url": "https://example.invalid/image.png"}}]}]},
+        {"messages": [{"role": "user", "content": [{"type": "tool_result", "tool_use_id": "call_image", "content": [_IMAGE_PART]}]}]},
+        {"input": [{"type": "function_call_output", "call_id": "call_image", "output": [{"type": "input_image", "image_url": "https://example.invalid/image.png"}]}]},
+        {"input": [{"type": "custom_tool_call_output", "call_id": "call_image", "output": [{"type": "input_image", "image_url": "https://example.invalid/image.png"}]}]},
+        {"input": [{"type": "computer_call_output", "call_id": "call_image", "output": {"type": "computer_screenshot", "image_url": "https://example.invalid/image.png"}}]},
+        {"input": [{"role": "user", "content": [{"type": "computer_screenshot", "image_url": "https://example.invalid/image.png"}]}]},
+        {"input": [{"type": "function_call_output", "call_id": "call_image", "output": [{"type": "computer_screenshot", "image_url": "https://example.invalid/image.png"}]}]},
+        {"input": [{"type": "custom_tool_call_output", "call_id": "call_image", "output": [{"type": "computer_screenshot", "image_url": "https://example.invalid/image.png"}]}]},
+        {"input": [{"type": "computer_call_output", "call_id": "call_image", "output": {"type": "computer_screenshot", "url": "https://example.invalid/image.png"}}]},
+    ],
+    ids=["chat", "responses", "anthropic", "tool-result", "function-output", "custom-output", "computer-output", "screenshot-content", "screenshot-function-output", "screenshot-custom-output", "screenshot-url"],
+)
+def test_image_routing_inspects_native_request_content_without_translation(request_kwargs: dict[str, object]) -> None:
+    router: Final = _mixed_router(_VISION_LEG, _DECLARED_TEXT_LEG)
+    original: Final = copy.deepcopy(request_kwargs)
+    assert _candidate_ids(router, request_kwargs=request_kwargs) == ["vision"]
+    assert request_kwargs == original

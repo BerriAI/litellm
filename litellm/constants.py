@@ -432,6 +432,7 @@ WEBSOCKET_CLOSE_REASON_MAX_BYTES: Final = 123
 DEEPGRAM_DEFAULT_API_BASE: Final = "https://api.deepgram.com/v1"
 NADIR_DEFAULT_API_BASE: Final = "https://api.getnadir.com/v1"
 DEEPGRAM_LISTEN_DEFAULT_MODEL: Final = "nova-3"
+DEEPGRAM_SPEAK_DEFAULT_MODEL: Final = "aura-asteria-en"
 
 BEDROCK_REALTIME_PENDING_OPENING_MESSAGE_SCOPE_KEY: Final = "litellm.bedrock_realtime.pending_opening_message"
 BEDROCK_REALTIME_SESSION_COMMITTED_SCOPE_KEY: Final = "litellm.bedrock_realtime.session_committed"
@@ -675,7 +676,7 @@ request_timeout: float = (
     DEFAULT_REQUEST_TIMEOUT_SECONDS if _request_timeout_from_env is None else _request_timeout_from_env
 )
 request_timeout_explicitly_set: bool = _request_timeout_from_env is not None
-DEFAULT_A2A_AGENT_TIMEOUT: Final[float] = get_env_float("DEFAULT_A2A_AGENT_TIMEOUT", 6000.0)  # 10 minutes
+DEFAULT_A2A_AGENT_TIMEOUT: Final[float] = get_env_float("DEFAULT_A2A_AGENT_TIMEOUT", 6000.0)
 AGENT_KILL_SWITCH_TIMEOUT_SECONDS: Final = 10.0
 AGENT_KILL_SWITCH_RESPONSE_BODY_MAX_CHARS: Final = 2000
 # Patterns that indicate a localhost/internal URL in A2A agent cards that should be

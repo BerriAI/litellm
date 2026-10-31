@@ -53,7 +53,7 @@ def httpx_transport(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
 @pytest.fixture
 def router_minute_pinned(monkeypatch: pytest.MonkeyPatch) -> None:
     pinned: Final = datetime(2026, 1, 1, 12, 0, 30, tzinfo=timezone.utc)
-    monkeypatch.setattr("litellm.router.get_utc_datetime", lambda: pinned)
+    monkeypatch.setattr("litellm.router_python_core.get_utc_datetime", lambda: pinned)
 
 
 class _RouterLoggingCapture(CustomLogger):
