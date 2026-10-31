@@ -45,6 +45,7 @@ from litellm.constants import (
     REDACTED_BY_LITELLM,
     REDACTED_TOOL_CALL_ARGUMENTS_PLACEHOLDER,
 )
+from litellm.exceptions import BadRequestError
 from litellm.integrations.anthropic_cache_control_hook import (
     AnthropicCacheControlHook,
     block_with_cache_control,
@@ -65,6 +66,12 @@ from litellm.litellm_core_utils.hidden_params import (
 )
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.model_param_helper import embeds_thought_signature_in_tool_call_id
+from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    invalid_type_message,
+    is_present_non_string,
+    is_unhashable_value_behind,
+)
+from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import message_field, parts_of
 from litellm.llms.anthropic.common_utils import supports_anthropic_cache_control
 from litellm.llms.anthropic.messages.native.utils import anthropic_stop_reason, openai_chat_refusal_text
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
@@ -268,6 +275,7 @@ _IMAGE_URL_ADAPTER: Final = TypeAdapter(ChatCompletionImageUrlObject)
 _FILE_PART_ADAPTER: Final = TypeAdapter(_ResponsesFilePart)
 _MessageT = TypeVar("_MessageT")
 _MediaT: Final = TypeVar("_MediaT")
+_InputItemT: Final = TypeVar("_InputItemT")
 _CACHED_CONTENT_ADAPTER: Final = TypeAdapter(ChatCompletionCachedContent)
 _DICT_ITEMS_LIST_ADAPTER: Final = TypeAdapter(list[dict[object, object]])
 _TEXT_ADAPTER: Final = TypeAdapter(str)
@@ -443,6 +451,86 @@ def tool_output_to_chat_content(
 TOOL_CALL_OUTPUT_ITEM_TYPES: Final = frozenset(
     {"function_call_output", "custom_tool_call_output", "computer_call_output", "tool_result"}
 )
+
+
+def _read_positions(
+    input_items: Sequence[_InputItemT], read_input: str | ResponseInputParam
+) -> Iterator[tuple[int, _InputItemT]]:
+    read_ids: Final = frozenset(map(id, parts_of(read_input)))
+    return ((index, item) for index, item in enumerate(input_items) if id(item) in read_ids)
+
+
+def _first_invalid_input_type(fields: Iterator[tuple[str, object]]) -> BadRequestError | None:
+    first: Final = next(fields, None)
+    return None if first is None else _invalid_input_type(*first)
+
+
+def _is_tool_output_item(item: object) -> bool:
+    item_type: Final = message_field(item, "type")
+    return isinstance(item_type, str) and item_type in TOOL_CALL_OUTPUT_ITEM_TYPES
+
+
+def _converts_before(
+    convert_input: Callable[[str | ResponseInputParam], object], sent_input: str | ResponseInputParam, position: int
+) -> bool:
+    try:
+        convert_input(sent_input[:position])
+    except TypeError:
+        return False
+    return True
+
+
+def _unhashable_tool_output_call_id_error(
+    input: str | ResponseInputParam,
+    read_input: str | ResponseInputParam,
+    error: TypeError,
+    converts_before: Callable[[int], bool],
+) -> BadRequestError | None:
+    call_ids: Final = (
+        (f"input[{index}].call_id", message_field(item, "call_id"), item)
+        for index, item in _read_positions(parts_of(input), read_input)
+        if _is_tool_output_item(item)
+    )
+    first: Final = next((candidate for candidate in call_ids if is_unhashable_value_behind(error, candidate[1])), None)
+    if first is None:
+        return None
+    path, call_id, item = first
+    read_position: Final = next(
+        position for position, read_item in enumerate(parts_of(read_input)) if read_item is item
+    )
+    return _invalid_input_type(path, call_id) if converts_before(read_position) else None
+
+
+def _carries_non_string_field(message: object) -> bool:
+    tool_call_ids: Final = (
+        message_field(tool_call, "id") for tool_call in parts_of(message_field(message, "tool_calls"))
+    )
+    return is_present_non_string(message_field(message, "role")) or any(map(is_present_non_string, tool_call_ids))
+
+
+def _non_string_item_fields(
+    item: Mapping[str, object], convert_item: Callable[[Mapping[str, object]], Sequence[object]]
+) -> Iterator[tuple[str, object]]:
+    messages: Final = convert_item(item)
+    tool_call_id_field: Final = "call_id" if item.get("call_id") else "id"
+    roles: Final = (("role", message_field(message, "role")) for message in messages)
+    tool_calls: Final = chain.from_iterable(parts_of(message_field(message, "tool_calls")) for message in messages)
+    tool_call_ids: Final = ((tool_call_id_field, message_field(tool_call, "id")) for tool_call in tool_calls)
+    return ((field, value) for field, value in chain(roles, tool_call_ids) if is_present_non_string(value))
+
+
+def _indexed_non_string_item_fields(
+    input: ResponseInputParam,
+    read_input: str | ResponseInputParam,
+    convert_item: Callable[[Mapping[str, object]], Sequence[object]],
+) -> Iterator[tuple[str, object]]:
+    for index, item in _read_positions(input, read_input):
+        for field, value in _non_string_item_fields(item, convert_item):
+            yield f"input[{index}].{field}", value
+
+
+def _invalid_input_type(field_path: str, value: object) -> BadRequestError:
+    return BadRequestError(message=invalid_type_message(field_path, value), model="", llm_provider="")
 
 
 def _input_item_role(input_item: Mapping[str, object]) -> str:
@@ -1101,6 +1189,9 @@ class LiteLLMCompletionResponsesConfig:
         stream: bool | None = None,
         extra_headers: Mapping[str, object] | None = None,
         drop_params: object = None,
+        *,
+        caller_input: str | ResponseInputParam | None = None,
+        names_non_string_fields: bool = False,
         **kwargs,
     ) -> dict:
         """
@@ -1149,6 +1240,7 @@ class LiteLLMCompletionResponsesConfig:
         native_compaction: Final = _replays_compaction_block(
             request_input, context_management
         ) and provider_takes_compaction_blocks(model, custom_llm_provider)
+        numbered_input: Final = request_input if caller_input is None else caller_input
         bridged_messages: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
             input=request_input,
             responses_api_request=responses_api_request,
@@ -1157,7 +1249,28 @@ class LiteLLMCompletionResponsesConfig:
             tool_call_provider_fields=not embeds_thought_signature_in_tool_call_id(request_kwargs),
             native_compaction=native_compaction,
             only_since_compaction=not native_compaction,
+            caller_input=numbered_input,
         )
+        malformed_field_error: Final = (
+            _first_invalid_input_type(
+                _indexed_non_string_item_fields(
+                    numbered_input,
+                    _input_to_read(request_input, not native_compaction, native_compaction),
+                    partial(
+                        LiteLLMCompletionResponsesConfig._transform_responses_api_input_item_to_chat_completion_message,
+                        replay_reasoning=True,
+                        native_compaction=native_compaction,
+                    ),
+                )
+            )
+            if names_non_string_fields
+            and isinstance(numbered_input, list)
+            and any(map(_carries_non_string_field, bridged_messages))
+            and provider_builds_anthropic_request(model, custom_llm_provider)
+            else None
+        )
+        if malformed_field_error is not None:
+            raise malformed_field_error
 
         litellm_completion_request: dict = {
             "messages": (
@@ -1221,6 +1334,7 @@ class LiteLLMCompletionResponsesConfig:
         tool_call_provider_fields: bool = False,
         native_compaction: bool = False,
         only_since_compaction: bool = False,
+        caller_input: str | ResponseInputParam | None = None,
     ) -> list[
         AllMessageValues
         | GenericChatCompletionMessage
@@ -1274,13 +1388,27 @@ class LiteLLMCompletionResponsesConfig:
 
         dumped_input: Final = with_compaction_items_as_params(input)
         read_input: Final = _input_to_read(dumped_input, only_since_compaction, native_compaction)
-        messages.extend(
-            LiteLLMCompletionResponsesConfig._transform_response_input_param_to_chat_completion_message(
-                input=_without_item_keys(read_input, _dropped_item_keys(item_cache_control, tool_call_provider_fields)),
-                replay_reasoning=replay_reasoning,
-                native_compaction=native_compaction,
-            )
+        sent_input: Final = _without_item_keys(
+            read_input, _dropped_item_keys(item_cache_control, tool_call_provider_fields)
         )
+        convert_input: Final = partial(
+            LiteLLMCompletionResponsesConfig._transform_response_input_param_to_chat_completion_message,
+            replay_reasoning=replay_reasoning,
+            native_compaction=native_compaction,
+        )
+        try:
+            converted: Final = convert_input(sent_input)
+        except TypeError as error:
+            call_id_error: Final = _unhashable_tool_output_call_id_error(
+                dumped_input if caller_input is None else caller_input,
+                read_input,
+                error,
+                partial(_converts_before, convert_input, sent_input),
+            )
+            if call_id_error is None:
+                raise
+            raise call_id_error from error
+        messages.extend(converted)
 
         return messages
 

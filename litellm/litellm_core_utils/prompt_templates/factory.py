@@ -32,6 +32,7 @@ from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import 
     parts_of,
     place_mid_conversation_system,
     split_leading_system_run,
+    string_field,
 )
 from litellm.litellm_core_utils.url_utils import async_safe_get, safe_get
 from litellm.llms.custom_httpx.http_handler import HTTPHandler, get_async_httpx_client, header_value
@@ -2023,7 +2024,7 @@ def _server_tool_answers_replaced_after(messages: Sequence[object], index: int) 
     following: Final = _messages_until_the_next_assistant(messages, index)
     a_user_turn_remains: Final = any(
         message_field(message, "role") in ("user", "tool", "function")
-        and message_field(message, "tool_call_id") not in kept_server_result_ids
+        and string_field(message, "tool_call_id") not in kept_server_result_ids
         for message in following
     )
     return _tool_call_ids_in_tool_messages(following) & kept_server_result_ids if a_user_turn_remains else frozenset()
