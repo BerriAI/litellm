@@ -2,6 +2,8 @@
 Test for response_format to text.format conversion in completion -> responses bridge
 """
 
+from typing import Final
+
 import pytest
 from litellm.completion_extras.litellm_responses_transformation.transformation import (
     LiteLLMResponsesTransformationHandler,
@@ -267,9 +269,9 @@ class _LoggingObj:
 def test_transform_request_flattens_chat_web_search_user_location_for_the_responses_tool():
     """Chat Completions nests the location under `approximate`; OpenAI's Responses web_search tool rejects that
     key ("Unknown parameter: 'tools[0].user_location.approximate'") and takes the fields flat."""
-    handler = LiteLLMResponsesTransformationHandler()
+    handler: Final = LiteLLMResponsesTransformationHandler()
 
-    result = handler.transform_request(
+    result: Final = handler.transform_request(
         model="gpt-5.6-sol",
         messages=[{"role": "user", "content": "What is a top local headline today?"}],
         optional_params={
@@ -293,9 +295,9 @@ def test_transform_request_flattens_chat_web_search_user_location_for_the_respon
 
 
 def test_transform_request_keeps_a_web_search_option_without_a_location_as_sent():
-    handler = LiteLLMResponsesTransformationHandler()
+    handler: Final = LiteLLMResponsesTransformationHandler()
 
-    result = handler.transform_request(
+    result: Final = handler.transform_request(
         model="gpt-5.6-sol",
         messages=[{"role": "user", "content": "What is the top headline today?"}],
         optional_params={"web_search_options": {"search_context_size": "low"}},
