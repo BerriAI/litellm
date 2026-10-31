@@ -53,8 +53,11 @@ def _forwarded_user_params(litellm_params: GenericLiteLLMParams) -> Mapping[str,
 
 def _bundled_cost_map_declares_mid_conversation_system(model: str) -> bool:
     bundled_cost_map: Final[Mapping[str, object]] = get_bundled_model_cost_map()
-    entry: Final = bundled_cost_map.get(f"fireworks_ai/{model.removeprefix('fireworks_ai/')}")
-    return deployment_declared_mid_conversation_system_support(entry) is True
+    names: Final = (model.removeprefix("fireworks_ai/"), resolve_fireworks_resource_name(model))
+    return any(
+        deployment_declared_mid_conversation_system_support(bundled_cost_map.get(f"fireworks_ai/{name}")) is True
+        for name in names
+    )
 
 
 class FireworksAIResponsesAPIConfig(OpenAIResponsesAPIConfig):

@@ -222,6 +222,8 @@ def test_responses_call_keeps_developer_items_in_place_for_a_deployment_that_acc
         "fireworks_ai/accounts/fireworks/models/glm-5p3",
         "fireworks_ai/accounts/fireworks/routers/kimi-k3-fast",
         "fireworks_ai/glm-5p3-us",
+        "fireworks_ai/models/kimi-k3",
+        "fireworks_ai/routers/kimi-k3-fast",
     ],
 )
 def test_responses_call_keeps_developer_items_in_place_for_a_model_the_cost_map_declares_accepts_them(
