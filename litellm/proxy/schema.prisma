@@ -358,6 +358,11 @@ model LiteLLM_ObjectPermissionTable {
   agents_table          LiteLLM_AgentsTable[]
 }
 
+enum MCPExecutionMode {
+  litellm
+  provider
+}
+
 // Holds the MCP server configuration 
 model LiteLLM_MCPServerTable {
   server_id    String         @id @default(uuid())
@@ -367,7 +372,8 @@ model LiteLLM_MCPServerTable {
   instructions String?
   url          String?
   spec_path    String?
-  transport    String         @default("sse")
+  execution_mode MCPExecutionMode @default(litellm)
+  transport    String?        @default("sse")
   auth_type    String?        
   credentials  Json?          @default("{}")
   created_at   DateTime?      @default(now()) @map("created_at")

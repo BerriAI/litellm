@@ -1,15 +1,15 @@
 # Provider-executed MCP registration
 
-Status: schema proposal for review, implementation has not started
+Status: schema approved, database changes prepared for local diff review
 
 ## Implementation plan
 
-Work through these layers in order on `litellm_provider_mcp_registration`. Update this table as each layer is reviewed and implemented
+Work through these layers in order on `litellm_provider_mcp_registration`. Update this table as each layer is reviewed and implemented. Open changes in VS Code for review before committing. Keep each review slice uncommitted until the user has reviewed it
 
 | Layer | Scope | Status |
 | --- | --- | --- |
-| 1 | Settle registration fields, values, storage, and validation | Proposed in this change |
-| 2 | Implement persistence and execution-mode isolation before enabling provider registration | Pending layer 1 review |
+| 1 | Settle registration fields, values, storage, and validation | Approved |
+| 2 | Implement persistence and execution-mode isolation before enabling provider registration | Database schema/migration ready for review; runtime models, persistence validation, and isolation pending |
 | 3 | Management UI/API, stored tool options, and existing key/team/toolset selectors | Pending |
 | 4 | Authorize effective OpenAI Responses and Anthropic Messages MCP attachments through existing MCP permissions | Pending |
 | 5 | Live provider tests, streaming admission tests, UI tests, and gateway regressions | Pending |
@@ -52,7 +52,7 @@ No `native_mcp_policy`, `declared_tools`, `native_url`, provider-specific server
 
 ### Storage
 
-Add one enum column and make the existing transport column nullable. The following is the proposed Prisma change, not an applied migration
+Add one enum column and make the existing transport column nullable. The first implementation slice adds these fields to all three synchronized Prisma schemas and a schema-only migration. The migration has not been applied to a running LiteLLM deployment
 
 ```prisma
 enum MCPExecutionMode {
@@ -199,4 +199,6 @@ Existing `metadata.allowed_tools` remains an independent compatibility restricti
 | API coverage | OpenAI Responses and both Anthropic Messages formats; request-supplied and model-configured attachments; streaming and non-streaming |
 | Live evidence | Real providers execute authorized read-only MCP tools; denied requests produce zero provider dispatches; existing gateway execution still works |
 
-This change contains only the proposal and implementation checklist. No schema migration, executable model, management endpoint, or authorization behavior is changed yet
+The first implementation slice contains the database schema and migration only. Provider registration is not enabled through management APIs or config, and executable models, connection isolation, and authorization integration remain pending. This is an intermediate review slice, not a complete or deployable provider-registration feature
+
+Database-slice validation passed with Prisma schema validation, identical schema copies, the repository's no-data-rewriting migration check, and six checks on a disposable PostgreSQL 16 database built from the pre-change schema. Those checks cover existing rows and duplicate gateway URLs, new legacy defaults, provider records with null connection fields and exact tool lists, duplicate provider URL rejection, distinct provider URLs with empty tool lists, and invalid/null mode rejection. Application-level URL canonicalization, field validation, and authorization are not covered by this database-only proof
