@@ -2285,6 +2285,17 @@ def client(original_function):
                     ):
                         kwargs["num_retries"] = num_retries
                         return litellm.responses_with_retries(*args, **kwargs)
+            elif call_type in (CallTypes.decisions.value, CallTypes.systemone.value):
+                retry_call: Final[partial[object]] = partial(wrapper, *args, **kwargs)
+                decision_num_retries, _ = _get_wrapper_num_retries(kwargs=retry_call.keywords, exception=e)
+                if (
+                    decision_num_retries
+                    and not _is_litellm_router_call(retry_call.keywords, is_async=False)
+                    and isinstance(e, openai.APIError)
+                ):
+                    return litellm.completion_with_retries(
+                        original_function=retry_call, num_retries=decision_num_retries
+                    )
             traceback_exception: Final = traceback.format_exc()
             end_time = datetime.datetime.now()
 
@@ -2608,6 +2619,20 @@ def client(original_function):
                     else:
                         return result
 
+            elif retry_call_type in (CallTypes.adecisions.value, CallTypes.asystemone.value):
+                if (
+                    num_retries
+                    and not _is_litellm_router_call(kwargs, is_async=True)
+                    and isinstance(e, openai.APIError)
+                ):
+                    retry_call: Final[partial[object]] = partial(wrapper_async, *args, **kwargs)
+                    return await litellm.acompletion_with_retries(
+                        num_retries=num_retries,
+                        original_function=retry_call,
+                        retry_strategy="exponential_backoff_retry"
+                        if isinstance(e, openai.RateLimitError)
+                        else "constant_retry",
+                    )
             deployment_num_retries: Final = kwargs.get("num_retries")
             if deployment_num_retries is not None:
                 setattr(e, "num_retries", deployment_num_retries)
