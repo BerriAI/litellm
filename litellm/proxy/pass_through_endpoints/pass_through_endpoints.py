@@ -205,6 +205,8 @@ _GUARDRAIL_HEADER_METADATA_FIELDS: Final = frozenset(
 )
 # h11's header field-value grammar: no NUL, line breaks or other whitespace beyond spaces and tabs between characters.
 _SENDABLE_HEADER_VALUE: Final = re.compile(rb"(?:[^\x00\s]+(?:[ \t]+[^\x00\s]+)*)?")
+# Half of the 16 KB response header limit in Node.js, the smallest common client limit, leaving room for the others.
+_GUARDRAIL_HEADERS_MAX_BYTES: Final = 8192
 
 
 def _is_mergeable_client_metadata(key: str, value: object) -> bool:
@@ -244,6 +246,11 @@ def _is_sendable_header_value(value: str) -> bool:
     )
 
 
+def _with_header_in_budget(kept: Mapping[str, str], header: tuple[str, str]) -> Mapping[str, str]:
+    size: Final = sum(len(name) + len(value) for name, value in (*kept.items(), header))
+    return MappingProxyType({**kept, header[0]: header[1]}) if size <= _GUARDRAIL_HEADERS_MAX_BYTES else kept
+
+
 def _guardrail_response_headers(
     parsed_body: object = None, kwargs: object = None, post_call_data: object = None
 ) -> Mapping[str, str]:
@@ -251,7 +258,8 @@ def _guardrail_response_headers(
 
     Pre-call guardrails record on the request body's metadata, which ``init_kwargs_for_pass_through_endpoint`` moves to
     ``kwargs["litellm_params"]``, and post-call guardrails record on ``post_call_data``, so list entries such as the
-    applied guardrail names are combined. A ``litellm_params`` object sent in the request body is never read.
+    applied guardrail names are combined. A ``litellm_params`` object sent in the request body is never read. A header
+    that would take these headers past ``_GUARDRAIL_HEADERS_MAX_BYTES`` is left out.
     """
     scopes: Final = (
         as_str_mapping(parsed_body) or {},
@@ -270,7 +278,9 @@ def _guardrail_response_headers(
         for field, entries in groupby(sorted(recorded, key=lambda entry: entry[0]), key=lambda entry: entry[0])
     }
     headers: Final = _RESPONSE_HEADERS.validate_python(get_logging_caching_headers({"metadata": merged}) or {})
-    return MappingProxyType({name: value for name, value in headers.items() if _is_sendable_header_value(value)})
+    sendable: Final = ((name, value) for name, value in headers.items() if _is_sendable_header_value(value))
+    no_headers: Final[Mapping[str, str]] = MappingProxyType({})
+    return reduce(_with_header_in_budget, sendable, no_headers)
 
 
 class _RegisteredPassThroughRoute(TypedDict):

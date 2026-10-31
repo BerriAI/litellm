@@ -292,3 +292,20 @@ def test_header_value_with_a_line_break_is_left_out(rig: HeaderRig, suffix: str)
     assert response.headers.get("x-litellm-applied-policies") == TAG_POLICY
     assert "x-litellm-policy-sources" not in response.headers
     assert "x-injected" not in response.headers
+
+
+@pytest.mark.parametrize("stream", [False, True])
+def test_response_to_a_body_naming_thousands_of_guardrails_stays_readable(rig: HeaderRig, stream: bool) -> None:
+    gateway: Final = rig.owned.gateway
+    body: Final[dict[str, JsonValue]] = {
+        **_route_body(OPENAI_ROUTE),
+        "stream": stream,
+        "guardrails": [f"caller-named-{index}" for index in range(10_000)],
+        "metadata": {"tags": [f"{POLICY_TAG_PREFIX}prod"]},
+    }
+    with gateway.scenario() as scenario:
+        response: Final = _send(gateway, scenario, OPENAI_ROUTE, body)
+
+    assert response.status_code == 200, response.text
+    assert HEADER not in response.headers
+    assert response.headers.get("x-litellm-applied-policies") == TAG_POLICY

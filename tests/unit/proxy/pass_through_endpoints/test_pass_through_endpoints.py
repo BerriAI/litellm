@@ -12125,3 +12125,18 @@ class TestGuardrailResponseHeaders:
 
         assert headers == {"x-litellm-applied-policies": "tag-policy"}
         assert h11.Response(status_code=200, headers=[*headers.items()]).status_code == 200
+
+    def test_guardrail_headers_past_the_size_budget_are_left_out_so_a_client_can_read_the_response(self):
+        names: Final = [f"caller-named-{index}" for index in range(10_000)]
+        headers: Final = _guardrail_response_headers(
+            {}, {"litellm_params": {"metadata": {"applied_guardrails": names, "applied_policies": ["tag-policy"]}}}
+        )
+        server: Final = h11.Connection(h11.SERVER)
+        server.receive_data(b"GET / HTTP/1.1\r\nhost: proxy\r\n\r\n")
+        server.next_event()
+        client: Final = h11.Connection(h11.CLIENT)
+        client.send(h11.Request(method="GET", target="/", headers=[("host", "proxy")]))
+        client.receive_data(server.send(h11.Response(status_code=200, headers=[*headers.items()])) or b"")
+
+        assert headers == {"x-litellm-applied-policies": "tag-policy"}
+        assert isinstance(client.next_event(), h11.Response)
