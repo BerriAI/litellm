@@ -2548,6 +2548,58 @@ async def test_apply_to_output_streaming_anthropic_sse_bytes_cut_off_by_an_upstr
     assert "event: message_stop" not in joined
 
 
+@pytest.mark.asyncio
+async def test_apply_to_output_streaming_anthropic_sse_bytes_with_a_tool_input_that_is_not_json_send_the_upstream_error_alone():
+    guardrail: Final = OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        apply_to_output=True,
+        mock_redacted_text={"text": "<CREDIT_CARD>"},
+    )
+    upstream_error: Final = {"type": "error", "error": {"type": "overloaded_error", "message": "Overloaded"}}
+    byte_chunks: Final = (
+        _anthropic_sse(
+            "message_start",
+            {"type": "message_start", "message": {"id": "msg_1", "model": "claude", "content": [], "usage": {}}},
+        ),
+        _anthropic_sse(
+            "content_block_start",
+            {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+        ),
+        _anthropic_sse(
+            "content_block_delta",
+            {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "4111 1111 1111 1111"}},
+        ),
+        _anthropic_sse("content_block_stop", {"type": "content_block_stop", "index": 0}),
+        _anthropic_sse(
+            "content_block_start",
+            {
+                "type": "content_block_start",
+                "index": 1,
+                "content_block": {"type": "tool_use", "id": "toolu_bad_input", "name": "Bash", "input": {}},
+            },
+        ),
+        _anthropic_sse(
+            "content_block_delta",
+            {"type": "content_block_delta", "index": 1, "delta": {"type": "input_json_delta", "partial_json": '{"command" "ls"'}},
+        ),
+        _anthropic_sse("content_block_stop", {"type": "content_block_stop", "index": 1}),
+        _anthropic_sse("error", upstream_error),
+    )
+
+    async def mock_stream() -> AsyncIterator[bytes]:
+        for chunk in byte_chunks:
+            yield chunk
+
+    collected: Final = [
+        chunk
+        async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=UserAPIKeyAuth(api_key="test-key"), response=mock_stream(), request_data={}
+        )
+    ]
+
+    assert b"".join(collected).decode() == f"event: error\ndata: {json.dumps(upstream_error)}\n\n"
+
+
 def _anthropic_sse_chunks_led_by_a_non_object_data_line(*, line_in_its_own_chunk: bool) -> tuple[bytes, ...]:
     non_object_line: Final = b"data: 5\n\n"
     message_start: Final = _anthropic_sse(

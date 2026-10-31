@@ -1510,6 +1510,28 @@ class TestToolPermissionGuardrailAnthropicMessages:
         assert {"message_delta", "message_stop"}.isdisjoint(event["type"] for event in events)
 
     @pytest.mark.asyncio
+    async def test_finished_tool_call_whose_input_is_not_json_gets_the_upstream_error_alone(self):
+        sse_chunks: Final = self._sse_chunks("Bash")
+        not_json: Final = {"type": "input_json_delta", "partial_json": '{"command" "ls"'}
+        bad_input: Final = json.dumps({"type": "content_block_delta", "index": 1, "delta": not_json})
+        chunks: Final = self._ended_by_upstream_error(
+            [*sse_chunks[:5], f"event: content_block_delta\ndata: {bad_input}\n\n".encode(), sse_chunks[6]]
+        )
+
+        out: Final = await self._drain(self.blocking, chunks)
+
+        assert self._events(out) == [self.UPSTREAM_ERROR]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("name", ["error\u2028", "error\x0b", " error"], ids=["u2028", "vertical-tab", "second-space"])
+    async def test_healthy_stream_with_a_frame_no_client_reads_as_an_error_is_passed_through_verbatim(self, name: str):
+        chunks: Final = [*self._sse_chunks("Bash"), f"event: {name}\n\n".encode()]
+
+        out: Final = await self._drain(self.blocking, chunks)
+
+        assert out == chunks
+
+    @pytest.mark.asyncio
     async def test_non_object_data_frame_in_a_stream_ended_by_an_upstream_error_is_left_out(self):
         sse_chunks: Final = self._sse_chunks("Bash")
         chunks: Final = self._ended_by_upstream_error([sse_chunks[0], b"data: 5\n\n", *sse_chunks[1:3]])

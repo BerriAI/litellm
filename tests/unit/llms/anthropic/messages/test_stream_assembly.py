@@ -313,6 +313,11 @@ def test_line_separators_inside_a_json_string_do_not_make_frames():
     assert anthropic_sse_error_events((frame,)) == ()
 
 
+@pytest.mark.parametrize("name", ["error\u2028", "error\u0085", "error\x0b", "error\x0c", "error\x1c", " error"])
+def test_event_name_no_client_reads_as_error_is_no_error_event(name: str):
+    assert anthropic_sse_error_events((f"event: {name}\n\n".encode(),)) == ()
+
+
 def test_error_event_with_no_data_stays_a_bare_event_line():
     assert anthropic_sse_error_events((b"event: error\n\n",)) == ("event: error",)
 

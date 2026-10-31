@@ -151,6 +151,10 @@ def _sent_by_the_failed_upstream(chunk: bytes, block_left_open: int | None, end_
     return block_left_open is None or anthropic_sse_stopped_block_index(event) != block_left_open
 
 
+def _sse_chunks_of_events(events: Sequence[str]) -> tuple[bytes, ...]:
+    return tuple(f"{event}\n\n".encode() for event in events)
+
+
 def anthropic_sse_chunks_from_response(
     assembled: ModelResponse, source_chunks: Sequence[object] = (), *, keep_explanations: bool = False
 ) -> tuple[bytes, ...]:
@@ -163,8 +167,21 @@ def anthropic_sse_chunks_from_response(
     A source stream that ended in an upstream ``error`` event ends with that event again, never
     with a ``message_delta`` or ``message_stop`` the upstream did not send, with its cut-off text
     block left open unless another block follows it, and with no finished text block when it read
-    no text, since Claude Code does not retry a stream that shows a finished block.
+    no text, since Claude Code does not retry a stream that shows a finished block. When a tool
+    input cannot be parsed the response cannot be re-emitted, and a failed stream is then its error alone.
     """
+    error_events: Final = anthropic_sse_error_events(source_chunks)
+    try:
+        return _rebuilt_sse_chunks(assembled, source_chunks, error_events, keep_explanations)
+    except ValueError:
+        if error_events:
+            return _sse_chunks_of_events(error_events)
+        raise
+
+
+def _rebuilt_sse_chunks(
+    assembled: ModelResponse, source_chunks: Sequence[object], error_events: Sequence[str], keep_explanations: bool
+) -> tuple[bytes, ...]:
     from litellm.llms.anthropic.messages.adapters.transformation import (
         LiteLLMAnthropicMessagesAdapter,
     )
@@ -183,7 +200,6 @@ def anthropic_sse_chunks_from_response(
     unchanged_tool_use_ids: Final = _unchanged_tool_use_ids(
         source_content or (), anthropic_response.get("content") or ()
     )
-    error_events: Final = anthropic_sse_error_events(source_chunks)
     rewritten_chunks: Final = FakeAnthropicMessagesStreamIterator(
         response=_without_empty_text(anthropic_response) if error_events else anthropic_response,
         message_delta_fields=_rewritten_message_delta_fields(source_chunks, unchanged_tool_use_ids, keep_explanations),
@@ -194,5 +210,5 @@ def anthropic_sse_chunks_from_response(
     end_events_sent: Final = _MESSAGE_END_EVENT_TYPES & anthropic_sse_event_types(source_chunks)
     return (
         *(chunk for chunk in rewritten_chunks if _sent_by_the_failed_upstream(chunk, block_left_open, end_events_sent)),
-        *(f"{event}\n\n".encode() for event in error_events),
+        *_sse_chunks_of_events(error_events),
     )

@@ -578,9 +578,7 @@ def anthropic_sse_event_types(all_chunks: Sequence[object]) -> frozenset[str]:
 
 
 def _is_named_error_event(event: str) -> bool:
-    return any(
-        line.startswith("event:") and line[len("event:") :].strip() == "error" for line in split_sse_lines(event)
-    )
+    return ("event", "error") in _sse_fields(event)
 
 
 def _is_error_event(event: str) -> bool:

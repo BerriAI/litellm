@@ -410,3 +410,21 @@ def test_masked_stream_that_failed_after_its_message_delta_still_carries_that_me
 
     assert [event for event, _ in rewritten][-2:] == ["message_delta", "error"]
     assert next(payload for event, payload in rewritten if event == "message_delta")["delta"]["stop_reason"] == "end_turn"
+
+
+def test_healthy_stream_with_a_tool_input_that_is_not_json_still_raises():
+    healthy: Final = _upstream_stream({"stop_reason": "tool_use", "stop_sequence": None})
+    tool_block: Final = {"type": "tool_use", "id": "tu_1", "name": "Bash", "input": {}}
+    tool_input: Final = {"type": "input_json_delta", "partial_json": '{"command" "ls"'}
+    upstream: Final = (
+        *healthy[:-2],
+        _frame("content_block_start", {"type": "content_block_start", "index": 1, "content_block": tool_block}),
+        _frame("content_block_delta", {"type": "content_block_delta", "index": 1, "delta": tool_input}),
+        _frame("content_block_stop", {"type": "content_block_stop", "index": 1}),
+        *healthy[-2:],
+    )
+    assembled: Final = assemble_anthropic_sse_stream(upstream)
+    assert assembled is not None
+
+    with pytest.raises(ValueError, match="Failed to parse tool call arguments"):
+        anthropic_sse_chunks_from_response(assembled, upstream)
