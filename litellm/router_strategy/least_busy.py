@@ -287,7 +287,8 @@ class LeastBusyLoggingHandler(CustomLogger):
         self,
         healthy_deployments: Sequence[Mapping[str, object]],
         deployment_ids: tuple[str, ...],
-        counts: tuple[int, ...],
+        keys: tuple[str, ...],
+        shared: tuple[int, ...] | None,
         reserve: bool,
         call_id: str | None,
     ) -> Mapping[str, object] | None:
@@ -295,6 +296,9 @@ class LeastBusyLoggingHandler(CustomLogger):
             return None
         with _RESERVATIONS_LOCK:
             now: Final = self._clock()
+            counts: Final = (
+                self._this_workers_counts(keys) if shared is None else self._at_least_this_workers(keys, shared)
+            )
             live: Final = tuple(self._live_reservations(deployment_id, now) for deployment_id in deployment_ids)
             index: Final = _least_busy_index(tuple(count + len(r) for count, r in zip(counts, live, strict=True)))
             if reserve:
@@ -308,6 +312,7 @@ class LeastBusyLoggingHandler(CustomLogger):
         with _RESERVATIONS_LOCK:
             now: Final = self._clock()
             self._take_reservation(ref[1], call_id, now)
+            self._count_locally(_request_count_key(*ref), 1)
             if call_id is not None:
                 key: Final = _started_attempts_key(call_id, ref)
                 started: Final = (*_attempt_times(self._reservations, key), now)
@@ -315,12 +320,15 @@ class LeastBusyLoggingHandler(CustomLogger):
 
     def _end_attempt(self, ref: tuple[str, str], call_id: str | None) -> bool:
         if call_id is None:
+            with _RESERVATIONS_LOCK:
+                self._count_locally(_request_count_key(*ref), -1)
             return True
         key: Final = _started_attempts_key(call_id, ref)
         with _RESERVATIONS_LOCK:
             started: Final = _attempt_times(self._reservations, key)
             if started:
                 _put(self._reservations, key, started[1:], IN_FLIGHT_COUNT_TTL_SECONDS)
+                self._count_locally(_request_count_key(*ref), -1)
             else:
                 self._take_reservation(ref[1], call_id, self._clock())
         return bool(started)
@@ -331,7 +339,7 @@ class LeastBusyLoggingHandler(CustomLogger):
         if ref is None:
             return
         self._start_attempt(ref, call_id_of(kwargs))
-        self._increment(_request_count_key(*ref), 1)
+        self._count_shared(_request_count_key(*ref), 1)
 
     @with_service_target("router_usage")
     def log_success_event(
@@ -382,10 +390,8 @@ class LeastBusyLoggingHandler(CustomLogger):
             except Exception as e:
                 _warn_unreadable(model_group, e)
             else:
-                return self._select(
-                    healthy_deployments, deployment_ids, self._at_least_this_workers(keys, shared), reserve, call_id
-                )
-        return self._select(healthy_deployments, deployment_ids, self._this_workers_counts(keys), reserve, call_id)
+                return self._select(healthy_deployments, deployment_ids, keys, shared, reserve, call_id)
+        return self._select(healthy_deployments, deployment_ids, keys, None, reserve, call_id)
 
     @with_service_target("router_usage")
     async def async_get_available_deployments(
@@ -404,22 +410,20 @@ class LeastBusyLoggingHandler(CustomLogger):
             except Exception as e:
                 _warn_unreadable(model_group, e)
             else:
-                return self._select(
-                    healthy_deployments, deployment_ids, self._at_least_this_workers(keys, shared), reserve, call_id
-                )
-        return self._select(healthy_deployments, deployment_ids, self._this_workers_counts(keys), reserve, call_id)
+                return self._select(healthy_deployments, deployment_ids, keys, shared, reserve, call_id)
+        return self._select(healthy_deployments, deployment_ids, keys, None, reserve, call_id)
 
     def _settle(self, kwargs: Mapping[str, object]) -> None:
         ref: Final = _deployment_ref(kwargs)
         if ref is None or not self._end_attempt(ref, call_id_of(kwargs)):
             return
-        self._increment(_request_count_key(*ref), -1)
+        self._count_shared(_request_count_key(*ref), -1)
 
     async def _async_settle(self, kwargs: Mapping[str, object]) -> None:
         ref: Final = _deployment_ref(kwargs)
         if ref is None or not self._end_attempt(ref, call_id_of(kwargs)):
             return
-        await self._async_increment(_request_count_key(*ref), -1)
+        await self._async_count_shared(_request_count_key(*ref), -1)
 
     def _this_workers_counts(self, keys: tuple[str, ...]) -> tuple[int, ...]:
         return _local_counts(self.router_cache.batch_get_cache(list(keys), local_only=True), keys)
@@ -427,30 +431,30 @@ class LeastBusyLoggingHandler(CustomLogger):
     def _at_least_this_workers(self, keys: tuple[str, ...], shared: tuple[int, ...]) -> tuple[int, ...]:
         return tuple(max(counts) for counts in zip(shared, self._this_workers_counts(keys), strict=True))
 
-    def _increment(self, key: str, delta: int) -> None:
-        redis_cache: Final = self.router_cache.redis_cache
+    def _count_locally(self, key: str, delta: int) -> None:
         try:
             local: Final = self.router_cache.increment_cache(
                 key, delta, local_only=True, ttl=IN_FLIGHT_COUNT_TTL_SECONDS
             )
             if local < 0:
                 self.router_cache.set_cache(key, 0, local_only=True, ttl=IN_FLIGHT_COUNT_TTL_SECONDS)
-            if redis_cache is None:
-                return
+        except TypeError as e:
+            _warn_unwritable(key, e)
+
+    def _count_shared(self, key: str, delta: int) -> None:
+        redis_cache: Final = self.router_cache.redis_cache
+        if redis_cache is None:
+            return
+        try:
             redis_cache.increment_with_floor(key, delta, IN_FLIGHT_COUNT_TTL_SECONDS)
         except Exception as e:
             _warn_unwritable(key, e)
 
-    async def _async_increment(self, key: str, delta: int) -> None:
+    async def _async_count_shared(self, key: str, delta: int) -> None:
         redis_cache: Final = self.router_cache.redis_cache
+        if redis_cache is None:
+            return
         try:
-            local: Final = await self.router_cache.async_increment_cache(
-                key, delta, local_only=True, ttl=IN_FLIGHT_COUNT_TTL_SECONDS
-            )
-            if local is not None and local < 0:
-                await self.router_cache.async_set_cache(key, 0, local_only=True, ttl=IN_FLIGHT_COUNT_TTL_SECONDS)
-            if redis_cache is None:
-                return
             await redis_cache.async_increment_with_floor(key, delta, IN_FLIGHT_COUNT_TTL_SECONDS)
         except Exception as e:
             _warn_unwritable(key, e)

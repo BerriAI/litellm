@@ -610,6 +610,36 @@ def test_a_reservation_and_a_release_on_one_deployment_at_once_both_count() -> N
     assert worker.get_available_deployments(GROUP, HEALTHY, reserve=True) is DEPLOYMENT_B
 
 
+
+class _SlowLocalRead(InMemoryCache):
+    """Answers a count read with the counts from when the read started, after giving another thread a moment to run."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.while_reading: Callable[[], None] = lambda: None
+        self.other_thread: threading.Thread | None = None
+
+    def batch_get_cache(self, keys: list[str], **kwargs: object) -> list[object]:
+        counts_when_asked: Final = super().batch_get_cache(keys, **kwargs)
+        self.other_thread = threading.Thread(target=self.while_reading)
+        self.other_thread.start()
+        self.other_thread.join(timeout=0.2)
+        return counts_when_asked
+
+
+def test_a_request_that_starts_on_another_thread_while_counts_are_read_still_counts_on_its_deployment() -> None:
+    local: Final = _SlowLocalRead()
+    worker: Final = LeastBusyLoggingHandler(router_cache=DualCache(in_memory_cache=local))
+    assert worker.get_available_deployments(GROUP, HEALTHY, reserve=True) is DEPLOYMENT_A
+    local.while_reading = lambda: worker.log_pre_api_call(model="m", messages=[], kwargs=_call_kwargs("dep-a"))
+
+    picked_while_the_other_thread_started: Final = worker.get_available_deployments(GROUP, HEALTHY, reserve=True)
+    if local.other_thread is not None:
+        local.other_thread.join()
+
+    assert picked_while_the_other_thread_started is DEPLOYMENT_B
+
+
 def _router_pick(router: Router, group: str = ROUTER_GROUP) -> str:
     deployment: Final = router.get_available_deployment(group, request_kwargs={"metadata": {}})
     return deployment["model_info"]["id"]
