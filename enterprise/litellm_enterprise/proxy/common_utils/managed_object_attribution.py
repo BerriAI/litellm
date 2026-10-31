@@ -159,8 +159,12 @@ class ManagedObjectCreatorAttribution:
 
     async def batch_metadata(self, job: ManagedObjectRow, object_id: str) -> Mapping[str, object]:
         rows: Final = await self._rows(job, object_id)
-        return {"user_api_key_user_id": job.created_by, **_shared_metadata(job, rows)}
-
+        end_user_id: Final = getattr(job, "end_user_id", None)
+        return {
+            "user_api_key_user_id": job.created_by,
+            **_shared_metadata(job, rows),
+            **({"user_api_key_end_user_id": end_user_id} if end_user_id else {}),
+        }
     async def response_creator(self, job: ManagedObjectRow, object_id: str) -> ResponseCreator:
         try:
             return await self._read_response_creator(job, object_id)

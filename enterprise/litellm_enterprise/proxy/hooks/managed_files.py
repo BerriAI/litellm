@@ -782,7 +782,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         from prisma import Json
 
         api_key = LiteLLMProxyRequestSetup.get_logged_api_key(user_api_key_dict) or None
-        end_user_id: Final = user_api_key_dict.end_user_id if file_purpose == "response" else None
+        end_user_id: Final = user_api_key_dict.end_user_id if file_purpose in ["response", "batch"] else None
         attribution_columns = (
             {
                 **({"api_key": api_key} if api_key is not None else {}),
