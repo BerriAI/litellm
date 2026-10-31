@@ -16,6 +16,7 @@ from lifecycle import ResourceManager
 from models import (
     AnthropicMessagesBody,
     AnthropicMessagesResponse,
+    AnthropicRequestMetadata,
     ChatBody,
     ChatMessage,
     ChatMetadata,
@@ -491,6 +492,7 @@ class GuardrailsClient:
         *,
         guardrails: list[str] | None = None,
         max_tokens: int = 16,
+        metadata: AnthropicRequestMetadata | None = None,
     ) -> Result[AnthropicMessagesResponse]:
         return self.proxy.messages(
             key,
@@ -499,6 +501,7 @@ class GuardrailsClient:
                 messages=[ChatMessage(role="user", content=text)],
                 max_tokens=max_tokens,
                 guardrails=guardrails,
+                metadata=metadata,
             ),
         )
 

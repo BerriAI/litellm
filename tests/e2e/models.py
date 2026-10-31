@@ -632,6 +632,10 @@ class AnthropicToolChoice(BaseModel):
     name: str | None = None
 
 
+class AnthropicRequestMetadata(BaseModel):
+    user_id: str
+
+
 class AnthropicMessagesBody(BaseModel):
     model: str
     messages: list[AnthropicMessage]
@@ -641,6 +645,7 @@ class AnthropicMessagesBody(BaseModel):
     tool_choice: AnthropicToolChoice | None = None
     thinking: ThinkingParam | None = None
     guardrails: list[str] | None = None
+    metadata: AnthropicRequestMetadata | None = None
     cache: dict[str, bool] | None = {"no-cache": True}
 
 
@@ -672,6 +677,7 @@ class AnthropicMessagesResponse(BaseModel):
     for triage."""
 
     model_config = ConfigDict(extra="allow")
+    id: str | None = None
     model: str | None = None
     content: list[AnthropicContentBlock] | None = None
     choices: list[ChatChoice] | None = None
