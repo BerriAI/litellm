@@ -1,5 +1,6 @@
+from dataclasses import dataclass
 from enum import Enum
-from typing import Final
+from typing import Final, Protocol
 
 from pydantic import Field
 from typing_extensions import TypedDict
@@ -24,6 +25,12 @@ LITELLM_PASS_THROUGH_DEPLOYMENT_MODEL_INFO_STATE_KEY: Final = "litellm_pass_thro
 # custom path that collides with a built-in route never suppresses model-access checks:
 # on a collision FastAPI dispatches the built-in handler, which does not carry this flag.
 LITELLM_PASS_THROUGH_ENDPOINT_MARKER: Final = "__litellm_pass_through_endpoint__"
+
+SETTLES_BACKGROUND_RESPONSE_KWARG: Final = "settles_background_response"
+
+
+class BackgroundResponseSettlement(str, Enum):
+    SETTLES = "settles"
 
 
 class EndpointType(str, Enum):
@@ -67,6 +74,19 @@ class PassthroughStandardLoggingPayload(TypedDict, total=False):
 
     Optional field, we use this for cost tracking only if it's set.
     """
+
+
+@dataclass(frozen=True, slots=True)
+class WebSocketSessionUsage:
+    model: str
+    custom_llm_provider: str
+    response_cost: float | None
+
+
+class WebSocketSessionMeter(Protocol):
+    def measure(self, client_text: str) -> int: ...
+
+    def price(self, total: int) -> WebSocketSessionUsage: ...
 
 
 class PassThroughGuardrailSettings(LiteLLMPydanticObjectBase):

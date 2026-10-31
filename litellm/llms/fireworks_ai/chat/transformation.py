@@ -17,6 +17,8 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     strip_litellm_response_only_fields,
     unpack_legacy_defs,
 )
+from litellm.litellm_core_utils.reasoning_effort_utils import OPAQUE_VALUE, warn_dropped_reasoning
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -96,6 +98,7 @@ def _json_schema_response_format(schema: object, name: str) -> Mapping[str, obje
 
 
 EFFORT_KWARG_KEYS: Final = frozenset({"enable_thinking", "thinking", "reasoning_budget", "low_effort"})
+_NOT_A_REASONING_MODEL_REASON: Final = "litellm's model map does not list it as a reasoning model."
 
 
 def _bool_from_kwargs(kwargs: Mapping[str, object], keys: tuple[str, ...]) -> bool | None:
@@ -104,6 +107,13 @@ def _bool_from_kwargs(kwargs: Mapping[str, object], keys: tuple[str, ...]) -> bo
         if isinstance(value, bool):
             return value
     return None
+
+
+def warn_dropped_effort_kwargs(chat_template_kwargs: object, effort: object, model: str) -> None:
+    if effort != "none":
+        warn_dropped_reasoning(
+            "chat_template_kwargs", chat_template_kwargs, model, _NOT_A_REASONING_MODEL_REASON, drop_params_gated=False
+        )
 
 
 def effort_from_chat_template_kwargs(kwargs: Mapping[str, object]) -> object:
@@ -437,10 +447,7 @@ class FireworksAIConfig(FireworksAIMixin, OpenAIGPTConfig):
         if effort is None:
             return ()
         if not supports_reasoning(model=model, custom_llm_provider="fireworks_ai"):
-            verbose_logger.debug(
-                "fireworks_ai model %r does not support reasoning; dropping chat_template_kwargs effort keys.",
-                model,
-            )
+            warn_dropped_effort_kwargs(OPAQUE_VALUE.validate_python(chat_template_kwargs), effort, model)
             return ()
         return (("reasoning_effort", effort),)
 
@@ -544,7 +551,7 @@ class FireworksAIConfig(FireworksAIMixin, OpenAIGPTConfig):
             return cached[2]
 
         index: Final[list[tuple[str, dict]]] = []
-        for key, model_info in model_cost.items():
+        for key, model_info in (*model_cost.items(),):
             if not key.startswith("fireworks_ai/"):
                 continue
             if not isinstance(model_info, dict):
@@ -826,7 +833,7 @@ class FireworksAIConfig(FireworksAIMixin, OpenAIGPTConfig):
         base = api_base.rstrip("/")
         base = base.removesuffix("/v1")
         response: Final = litellm.module_level_client.get(
-            url=f"{base}/v1/accounts/{account_id}/models",
+            url=join_api_base(base, f"v1/accounts/{account_id}/models"),
             headers={"Authorization": f"Bearer {api_key}"},
         )
 

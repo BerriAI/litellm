@@ -50,6 +50,8 @@ from integration.authorization._responses_compact import (
 )
 from pydantic import JsonValue
 
+pytestmark: Final = pytest.mark.shares_worker_state
+
 _CLIENTS: Final = ("sync", "async", "httpx")
 
 

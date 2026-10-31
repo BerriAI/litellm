@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Final
 
 import httpx
+import pytest
 from integration._support.client import Gateway, eventually, object_value, string_value
 from integration._support.process import owned_proxy_process
 from integration._support.redis_process import owned_redis
@@ -23,6 +24,8 @@ from test_cache_hit_guardrail_metrics import (
     _provider,
     _rig,
 )
+
+pytestmark: Final = pytest.mark.shares_worker_state
 
 BURST: Final = 10
 

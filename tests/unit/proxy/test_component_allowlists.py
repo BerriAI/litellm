@@ -57,7 +57,7 @@ _PRE_EXISTING_ENV = {key: os.environ.get(key) for key in _THROWAWAY_ENV}
 for _key, _value in _THROWAWAY_ENV.items():
     os.environ.setdefault(_key, _value)
 
-from prometheus_client import make_asgi_app
+from prometheus_client import CollectorRegistry, Counter, make_asgi_app
 
 # gateway/ and backend/ live at the repo root, not inside litellm/.
 _REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
@@ -71,6 +71,7 @@ from litellm.proxy._lazy_features import LazyFeature, attach_lazy_features
 from litellm.proxy.auth.authorization_dependencies import get_log_team_lookup
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.proxy_server import app
+from litellm.integrations.prometheus_metrics_endpoint import make_metrics_asgi_app
 from tests.test_litellm_rust.support.child_interpreter import run_child_interpreter
 
 for _key, _previous in _PRE_EXISTING_ENV.items():
@@ -355,6 +356,26 @@ def test_gateway_trim_keeps_metrics_mount():
         "/metrics Mount must survive the gateway route trim"
 
 
+@pytest.mark.parametrize("enabled", (False, True))
+def test_backend_serves_metrics_after_startup_when_enabled(enabled: bool) -> None:
+    registry: Final = CollectorRegistry()
+    failures: Final = Counter("litellm_postgres_failed_requests", "Failed database requests", registry=registry)
+    failures.inc(2)
+
+    @asynccontextmanager
+    async def lifespan(application: Starlette) -> AsyncGenerator[None, None]:
+        if enabled:
+            application.mount("/metrics", make_metrics_asgi_app(registry))
+        yield
+
+    application: Final = FastAPI(lifespan=partial(_backend_lifespan, lifespan=lifespan))
+    with TestClient(application) as client:
+        response: Final = client.get("/metrics")
+        assert response.status_code == (200 if enabled else 404), response.text
+        if enabled:
+            assert "litellm_postgres_failed_requests_total 2.0\n" in response.text
+
+
 def test_gateway_drops_ui_and_swagger_mounts():
     """UI static and swagger Mounts must still be trimmed from the gateway."""
     for path in ("/ui", "/_next", "/litellm-asset-prefix/_next", "/swagger"):
@@ -374,6 +395,22 @@ def test_gateway_keeps_memory_summary_and_trims_the_other_debug_routes():
         "/debug/memory/summary must survive the gateway route trim"
     for path in ("/debug/memory/details", "/debug/memory/gc/configure"):
         assert not _is_gateway_route(debug_memory_routes[path]), f"{path} must not be served by the gateway"
+
+
+@pytest.mark.parametrize(
+    ("path", "served"),
+    [
+        ("/eu_jev/v1/systemone", True),
+        ("/eu_jev/v1/systemone2", False),
+        ("/eu_jev/v1/systemone/{subpath:path}", False),
+        ("/eu_jev/custom", False),
+    ],
+)
+def test_gateway_serves_the_eu_jev_decision_route_and_no_other_eu_jev_path(path: str, served: bool) -> None:
+    async def endpoint() -> None:
+        return None
+
+    assert _is_gateway_route(Route(path, endpoint, methods=["POST"])) is served
 
 
 def test_every_app_mount_is_assigned_to_a_component():
@@ -431,7 +468,10 @@ def test_admin_mcp_survives_only_management_component_lifespans(
 
     @application.get("/user/info")
     async def user_info() -> dict[str, object]:
-        return {"user_id": "admin", "user_info": {"user_id": "admin", "user_role": "proxy_admin"}}
+        return {
+            "user_id": "admin", "user_info": {"user_id": "admin", "user_role": "proxy_admin"},
+            "admin_mcp_permissions": {"tools": ["list_teams"], "action_allowed": True},
+        }
 
     if component_lifespan is not None:
         application.router.lifespan_context = partial(component_lifespan, lifespan=application.router.lifespan_context)

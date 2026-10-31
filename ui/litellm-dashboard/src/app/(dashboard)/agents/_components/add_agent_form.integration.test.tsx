@@ -10,6 +10,7 @@ import { chooseSelectOption, renderWithProviders as render } from "../../../../.
 vi.mock("@/components/networking", () => ({
   apiClient: { get: vi.fn() },
   createAgentCall: vi.fn(),
+  getProxyBaseUrl: vi.fn(() => "http://gw.test:4000/"),
   getAgentCreateMetadata: vi.fn(),
   getAgentsList: vi.fn(),
   keyCreateForAgentCall: vi.fn(),

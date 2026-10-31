@@ -17,6 +17,7 @@ serde_json.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
+litellm-error.workspace = true
 litellm-inference-testing.workspace = true
 litellm-tracing.workspace = true
 rstest.workspace = true

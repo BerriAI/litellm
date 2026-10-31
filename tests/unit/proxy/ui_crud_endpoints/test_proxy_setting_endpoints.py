@@ -1,6 +1,8 @@
 import json
 import os
+from collections.abc import Iterator
 from typing import Final
+from unittest.mock import patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -179,6 +181,12 @@ def mock_auth():
     app.dependency_overrides[user_api_key_auth] = mock_user_api_key_auth
     yield
     app.dependency_overrides.pop(user_api_key_auth, None)
+
+
+@pytest.fixture(autouse=True)
+def isolated_environment() -> Iterator[None]:
+    with patch.dict(os.environ):
+        yield
 
 
 @pytest.fixture(autouse=True)
@@ -1351,35 +1359,45 @@ class TestProxySettingEndpoints:
         assert values["logo_url"] == "https://cdn.example.com/logo.png"
         assert values["favicon_url"] == "https://cdn.example.com/favicon.ico"
 
+    @pytest.mark.parametrize("env_logo", [
+        "https://env.example.com/logo.png", "/mnt/secret/internal/logo.png",
+    ])
     def test_get_ui_theme_settings_stored_value_wins_over_env(
-        self, mock_auth, monkeypatch
-    ):
+        self, monkeypatch: pytest.MonkeyPatch, env_logo: str,
+    ) -> None:
         """A stored ui_theme_config field outranks the env var for that field.
 
         The env fallback only fills fields the stored config leaves blank, so the
         UI-driven flow is unchanged while an unstored field still resolves.
         """
         from litellm.proxy.proxy_server import proxy_config
+        from litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints import UIThemeSettingsResponse
 
-        stored_config = {
+        stored_config: Final[dict[str, object]] = {
             "litellm_settings": {
-                "ui_theme_config": {"logo_url": "https://db.example.com/logo.png"}
+                "ui_theme_config": {
+                    "logo_url": "https://db.example.com/logo.png",
+                    "logo_url_dark": "https://db.example.com/logo-dark.png",
+                }
             }
         }
 
-        async def mock_get_config():
+        async def mock_get_config() -> dict[str, object]:
             return stored_config
 
         monkeypatch.setattr(proxy_config, "get_config", mock_get_config)
-        monkeypatch.setenv("UI_LOGO_PATH", "https://env.example.com/logo.png")
+        monkeypatch.setenv("UI_LOGO_PATH", env_logo)
+        monkeypatch.setenv("UI_LOGO_PATH_DARK", env_logo)
         monkeypatch.setenv("LITELLM_FAVICON_URL", "https://env.example.com/favicon.ico")
 
-        response = client.get("/get/ui_theme_settings")
+        response: Final = client.get("/get/ui_theme_settings")
 
         assert response.status_code == 200
-        values = response.json()["values"]
-        assert values["logo_url"] == "https://db.example.com/logo.png"
-        assert values["favicon_url"] == "https://env.example.com/favicon.ico"
+        result: Final = UIThemeSettingsResponse.model_validate(response.json())
+        assert result.values["logo_url"] == "https://db.example.com/logo.png"
+        assert result.values["logo_url_dark"] == "https://db.example.com/logo-dark.png"
+        assert result.values["favicon_url"] == "https://env.example.com/favicon.ico"
+        assert (result.logo_url_via_proxy, result.logo_url_dark_via_proxy) == (False, False)
 
     def test_get_ui_theme_settings_reports_unset_when_absent_everywhere(
         self, mock_proxy_config, monkeypatch
@@ -1395,22 +1413,45 @@ class TestProxySettingEndpoints:
         assert values["logo_url"] is None
         assert values["favicon_url"] is None
 
-    def test_get_ui_theme_settings_does_not_disclose_local_path_env_value(
-        self, mock_proxy_config, monkeypatch
-    ):
-        """This endpoint is public, so an env-configured local filesystem branding
-        path must never be surfaced to anonymous callers; only public http(s) URLs.
-        """
-        monkeypatch.setenv("UI_LOGO_PATH", "/mnt/secret/internal/logo.png")
+    @pytest.mark.usefixtures("mock_proxy_config")
+    @pytest.mark.parametrize("light,public_light,light_via_proxy", [
+        (None, None, False),
+        ("  ", None, False),
+        ("https://cdn.example.com/light.png", "https://cdn.example.com/light.png", False),
+        ("/mnt/secret/internal/light.png", None, True),
+    ])
+    @pytest.mark.parametrize("dark,public_dark,dark_via_proxy", [
+        (None, None, False),
+        ("  ", None, False),
+        ("https://cdn.example.com/dark.png", "https://cdn.example.com/dark.png", False),
+        ("/mnt/secret/internal/dark.png", None, True),
+    ])
+    def test_get_ui_theme_settings_separates_private_logo_rendering_from_settings(
+        self, monkeypatch: pytest.MonkeyPatch,
+        light: str | None, public_light: str | None, light_via_proxy: bool,
+        dark: str | None, public_dark: str | None, dark_via_proxy: bool,
+    ) -> None:
+        from litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints import UIThemeSettingsResponse
+
+        for key, value in (("UI_LOGO_PATH", light), ("UI_LOGO_PATH_DARK", dark)):
+            if value is None:
+                monkeypatch.delenv(key, raising=False)
+            else:
+                monkeypatch.setenv(key, value)
         monkeypatch.setenv("LITELLM_FAVICON_URL", "file:///etc/favicon.ico")
 
-        response = client.get("/get/ui_theme_settings")
+        response: Final = client.get("/get/ui_theme_settings")
 
         assert response.status_code == 200
-        values = response.json()["values"]
-        # the local path / file scheme is withheld rather than disclosed
-        assert values["logo_url"] is None
-        assert values["favicon_url"] is None
+        result: Final = UIThemeSettingsResponse.model_validate(response.json())
+        assert (result.values["logo_url"], result.values["logo_url_dark"]) == (public_light, public_dark)
+        assert (result.logo_url_via_proxy, result.logo_url_dark_via_proxy) == (light_via_proxy, dark_via_proxy)
+        assert result.values["favicon_url"] is None
+        assert "/mnt/secret/internal/" not in response.text
+        assert "file:///etc/favicon.ico" not in response.text
+        for hint in ("logo_url_via_proxy", "logo_url_dark_via_proxy"):
+            assert hint not in result.values
+            assert hint not in json.dumps(result.field_schema)
 
     def test_get_ui_settings(self, mock_auth, monkeypatch):
         """Test retrieving UI settings with allowlist sanitization"""
@@ -4345,3 +4386,105 @@ class TestMoyaiUrlSetting:
 
         await update_ui_settings({"moyai_url": None}, actor)
         assert persisted["moyai_url"] is None
+
+
+@pytest.mark.parametrize("preset", ["today", "last_7_days", "last_30_days", "month_to_date", "year_to_date"])
+def test_usage_default_range_round_trips_without_overwriting_other_settings(
+    mock_auth, monkeypatch: pytest.MonkeyPatch, preset: str,
+) -> None:
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock, MagicMock
+    from litellm.proxy import proxy_server
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+    from litellm.proxy.config_resolvers import SettingsStore
+
+    prisma: Final = MagicMock()
+    prisma.db.litellm_uisettings.find_unique = AsyncMock(return_value=SimpleNamespace(
+        ui_settings={"disable_custom_api_keys": True},
+    ))
+    prisma.db.litellm_uisettings.upsert = AsyncMock()
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+    monkeypatch.setattr(proxy_server, "store_model_in_db", True)
+    monkeypatch.setattr(proxy_server.proxy_config, "settings", SettingsStore("general_settings"))
+    actor: Final = UserAPIKeyAuth(user_id="test-admin", user_role=LitellmUserRoles.PROXY_ADMIN)
+    app.dependency_overrides[user_api_key_auth] = lambda: actor
+    try:
+        initial: Final = client.get("/get/ui_settings")
+        assert initial.json()["values"]["usage_default_time_range"] == "last_7_days"
+        response: Final = client.patch("/update/ui_settings", json={"usage_default_time_range": preset})
+        assert response.status_code == 200, response.text
+        stored: Final = json.loads(prisma.db.litellm_uisettings.upsert.call_args.kwargs["data"]["update"]["ui_settings"])
+        assert stored == {"disable_custom_api_keys": True, "usage_default_time_range": preset}
+        prisma.db.litellm_uisettings.find_unique.return_value = SimpleNamespace(ui_settings=stored)
+        fetched: Final = client.get("/get/ui_settings")
+        assert fetched.json()["values"]["usage_default_time_range"] == preset
+        assert fetched.json()["source"]["usage_default_time_range"] == "db"
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.parametrize("submitted", ["invalid", None, 7])
+def test_usage_default_range_rejects_invalid_values_without_writing(
+    mock_auth, monkeypatch: pytest.MonkeyPatch, submitted: object,
+) -> None:
+    from unittest.mock import AsyncMock, MagicMock
+    from litellm.proxy import proxy_server
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+    prisma: Final = MagicMock()
+    prisma.db.litellm_uisettings.upsert = AsyncMock()
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+    monkeypatch.setattr(proxy_server, "store_model_in_db", True)
+    actor: Final = UserAPIKeyAuth(user_id="test-admin", user_role=LitellmUserRoles.PROXY_ADMIN)
+    app.dependency_overrides[user_api_key_auth] = lambda: actor
+    try:
+        response: Final = client.patch("/update/ui_settings", json={"usage_default_time_range": submitted})
+        assert response.status_code == 422, response.text
+        prisma.db.litellm_uisettings.upsert.assert_not_called()
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.parametrize("role", [LitellmUserRoles.INTERNAL_USER, LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY])
+def test_usage_default_range_cannot_be_changed_by_non_admins(
+    mock_auth, monkeypatch: pytest.MonkeyPatch, role: LitellmUserRoles,
+) -> None:
+    from unittest.mock import AsyncMock, MagicMock
+    from litellm.proxy import proxy_server
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+    prisma: Final = MagicMock()
+    prisma.db.litellm_uisettings.upsert = AsyncMock()
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+    monkeypatch.setattr(proxy_server, "store_model_in_db", True)
+    actor: Final = UserAPIKeyAuth(user_id="test-user", user_role=role)
+    app.dependency_overrides[user_api_key_auth] = lambda: actor
+    try:
+        response: Final = client.patch("/update/ui_settings", json={"usage_default_time_range": "month_to_date"})
+        assert response.status_code == 403, response.text
+        prisma.db.litellm_uisettings.upsert.assert_not_called()
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_usage_default_range_reports_config_precedence(mock_auth, monkeypatch: pytest.MonkeyPatch) -> None:
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock, MagicMock
+    from litellm.proxy import proxy_server
+    from litellm.proxy.config_resolvers import SettingsStore
+
+    prisma: Final = MagicMock()
+    prisma.db.litellm_uisettings.find_unique = AsyncMock(return_value=SimpleNamespace(
+        ui_settings={"usage_default_time_range": "today"},
+    ))
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+    settings: Final = SettingsStore("general_settings")
+    settings.load_yaml({"usage_default_time_range": "month_to_date"})
+    monkeypatch.setattr(proxy_server.proxy_config, "settings", settings)
+    response: Final = client.get("/get/ui_settings")
+    assert response.status_code == 200, response.text
+    assert response.json()["values"]["usage_default_time_range"] == "month_to_date"
+    assert response.json()["source"]["usage_default_time_range"] == "config"

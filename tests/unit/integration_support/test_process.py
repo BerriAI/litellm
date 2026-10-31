@@ -2,15 +2,17 @@ from __future__ import annotations
 
 import importlib
 import os
+import select
+import socket
 import subprocess
 import sys
 import threading
 import time
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from functools import reduce
 from pathlib import Path
-from types import ModuleType
+from types import MappingProxyType, ModuleType
 from typing import Final
 from unittest.mock import MagicMock
 
@@ -20,20 +22,55 @@ import pytest
 import yaml
 from pydantic import TypeAdapter
 
+from litellm.proxy.types_utils.utils import get_instance_fn
 from tests.integration._support.client import Gateway, eventually
 from tests.integration._support.process import (
+    OWNED_STATE_VARIABLE,
     OwnedProxy,
+    OwnedState,
+    PrivateState,
     WorkerHealthcheck,
     WorkerKill,
+    _is_gone,
+    _proxy_environment,
+    boots_private_state,
     healthcheck_seconds,
     kill_stray_process,
+    owned_environment,
     owned_proxy_process,
+    private_configuration,
     replacement_pid,
     stop_process_group,
     worker_configuration,
 )
 
 TESTS_DIR: Final = Path(__file__).resolve().parents[2]
+
+
+@pytest.mark.parametrize("config_contents", ("[]\n", "general_settings: []\n", "general_settings: {}\n"))
+def test_worker_configuration_preserves_sibling_auth_modules(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    config_contents: str,
+) -> None:
+    monkeypatch.setenv("INTEGRATION_WORKER_ISOLATION", "1")
+    monkeypatch.setenv("INTEGRATION_PROVIDER_PORT", "8203")
+    monkeypatch.setenv("INTEGRATION_UPSTREAM_URL", "http://127.0.0.1:8202")
+    source: Final = tmp_path / "source.yaml"
+    source.write_text(config_contents)
+    auth_state: Final = tmp_path / "sibling_auth.json"
+    auth_state.write_text("authenticated")
+    (tmp_path / "sibling_auth.py").write_text(
+        "from pathlib import Path\n"
+        "def authenticate():\n"
+        "    return Path(__file__).with_suffix('.json').read_text()\n"
+    )
+
+    configured: Final = worker_configuration(source, tmp_path / "worker")
+
+    assert get_instance_fn("sibling_auth.authenticate", config_file_path=str(configured))() == "authenticated"
+    auth_state.write_text("updated")
+    assert get_instance_fn("sibling_auth.authenticate", config_file_path=str(configured))() == "updated"
 
 
 def test_worker_configuration_routes_stock_edges_to_its_own_servers_and_preserves_other_targets(
@@ -91,6 +128,42 @@ def test_worker_configuration_budgets_implicit_pools_without_changing_connection
         }
     }
     assert yaml.safe_load(source.read_text()) == original
+
+
+def test_worker_configuration_keeps_modules_beside_a_test_config_importable(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("INTEGRATION_WORKER_ISOLATION", "1")
+    source: Final = tmp_path / "proxy.yaml"
+    source.write_text(yaml.safe_dump({"general_settings": {"custom_auth": "sibling_auth.authenticate"}}))
+    (tmp_path / "sibling_auth.py").write_text("def authenticate() -> str:\n    return 'sibling'\n")
+    configured: Final = worker_configuration(source, tmp_path / "gateway")
+    assert configured != source
+    assert get_instance_fn("sibling_auth.authenticate", config_file_path=str(configured))() == "sibling"
+
+
+def test_worker_configuration_writes_the_repository_config_copy_into_the_worker_directory(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("INTEGRATION_WORKER_ISOLATION", "1")
+    monkeypatch.setenv("INTEGRATION_PROVIDER_PORT", "8203")
+    monkeypatch.setenv("INTEGRATION_UPSTREAM_URL", "http://127.0.0.1:8202")
+    monkeypatch.setenv("INTEGRATION_PROXY_ROOT", str(tmp_path / "product"))
+    configured: Final = worker_configuration(TESTS_DIR / "integration/proxy_config.yaml", tmp_path / "worker")
+    assert configured.parent == tmp_path / "worker"
+
+
+def test_worker_configuration_writes_the_proxy_checkout_config_copy_into_the_worker_directory(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("INTEGRATION_WORKER_ISOLATION", "1")
+    checkout: Final = tmp_path / "checkout"
+    monkeypatch.setenv("INTEGRATION_PROXY_ROOT", str(checkout))
+    source: Final = checkout / "tests/integration/proxy_config.yaml"
+    source.parent.mkdir(parents=True)
+    source.write_text("model_list: []\n")
+    configured: Final = worker_configuration(source, tmp_path / "worker")
+    assert configured.parent == tmp_path / "worker"
 
 
 def test_serial_proxy_keeps_the_requested_configuration(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -319,6 +392,98 @@ def test_owned_runtime_configuration_preserves_custom_worker_startup_hooks(
     )
 
 
+WORKER_STATE: Final = MappingProxyType(
+    {"DATABASE_URL": "postgresql://admin@127.0.0.1/worker", "REDIS_HOST": "127.0.0.1", "REDIS_PORT": "6379"}
+)
+PRIVATE_DATABASE: Final = "postgresql://admin@127.0.0.1/owned_private"
+
+
+@contextmanager
+def _private_state(directory: Path, inherited: Mapping[str, str]) -> Iterator[PrivateState]:
+    yield PrivateState(
+        PRIVATE_DATABASE,
+        MappingProxyType({"DATABASE_URL": PRIVATE_DATABASE, "REDIS_HOST": "127.0.0.2", "REDIS_PORT": "6390"}),
+    )
+
+
+@pytest.mark.parametrize(
+    ("state", "overrides", "remove_environment", "marked", "private"),
+    (
+        (None, {}, (), False, True),
+        (None, {"DATABASE_URL": "postgresql://admin@127.0.0.1/scratch"}, (), False, False),
+        (None, {}, ("DATABASE_URL",), False, False),
+        (OwnedState.SHARED_WITH_WORKER, {}, (), False, False),
+        (None, {}, (), True, False),
+        (OwnedState.PRIVATE, {}, (), True, True),
+    ),
+    ids=("default", "explicit-database", "stripped-database", "shared", "marked-module", "private-in-marked-module"),
+)
+def test_an_owned_proxy_boots_private_state_unless_it_shares_or_brings_its_own_database(
+    state: OwnedState | None,
+    overrides: Mapping[str, str],
+    remove_environment: tuple[str, ...],
+    marked: bool,
+    private: bool,
+) -> None:
+    marker: Final = {OWNED_STATE_VARIABLE: OwnedState.SHARED_WITH_WORKER.value} if marked else {}
+    inherited: Final = {**WORKER_STATE, **marker}
+    assert boots_private_state(state, overrides, remove_environment, inherited) is private
+
+
+def test_a_default_owned_proxy_runs_on_its_own_database_and_redis(tmp_path: Path) -> None:
+    with (
+        httpx.Client(base_url="http://127.0.0.1:1", trust_env=False) as client,
+        owned_environment(tmp_path, {}, (), None, WORKER_STATE, _private_state) as owned,
+    ):
+        environment: Final = _proxy_environment(
+            Gateway(client, "owned-test-key", "http://127.0.0.1:1"), owned.overrides, (), WORKER_STATE
+        )
+    assert environment["DATABASE_URL"] == PRIVATE_DATABASE != WORKER_STATE["DATABASE_URL"]
+    assert (environment["REDIS_HOST"], environment["REDIS_PORT"]) == ("127.0.0.2", "6390")
+    assert owned.database_url == PRIVATE_DATABASE
+
+
+@pytest.mark.parametrize(
+    ("overrides", "remove_environment", "redis"),
+    (
+        ({}, ("REDIS_HOST", "REDIS_PORT"), (None, None)),
+        ({"REDIS_HOST": "redis.caller", "REDIS_PORT": "7000"}, (), ("redis.caller", "7000")),
+    ),
+    ids=("stripped", "caller-owned"),
+)
+def test_a_private_owned_proxy_leaves_redis_to_a_caller_that_chose_it(
+    tmp_path: Path,
+    overrides: Mapping[str, str],
+    remove_environment: tuple[str, ...],
+    redis: tuple[str | None, str | None],
+) -> None:
+    with (
+        httpx.Client(base_url="http://127.0.0.1:1", trust_env=False) as client,
+        owned_environment(tmp_path, overrides, remove_environment, None, WORKER_STATE, _private_state) as owned,
+    ):
+        environment: Final = _proxy_environment(
+            Gateway(client, "owned-test-key", "http://127.0.0.1:1"), owned.overrides, remove_environment, WORKER_STATE
+        )
+    assert environment["DATABASE_URL"] == PRIVATE_DATABASE
+    assert (environment.get("REDIS_HOST"), environment.get("REDIS_PORT")) == redis
+
+
+@pytest.mark.parametrize(
+    ("router_settings", "retries"),
+    (({"allowed_fails": 3}, 0), ({"num_retries": 2}, 2), (None, 0)),
+    ids=("inherits-worker-default", "keeps-explicit", "no-router-settings"),
+)
+def test_a_private_owned_proxy_keeps_the_worker_retry_default_unless_its_config_sets_one(
+    tmp_path: Path, router_settings: dict[str, int] | None, retries: int
+) -> None:
+    source: Final = tmp_path / "source.yaml"
+    router: Final = {"router_settings": router_settings} if router_settings else {}
+    source.write_text(yaml.safe_dump({"model_list": [], **router}))
+    configured: Final = yaml.safe_load(private_configuration(source, tmp_path / "proxy").read_text())
+    assert configured["router_settings"]["num_retries"] == retries
+    assert configured["model_list"] == []
+
+
 _SUPERVISOR: Final = """import multiprocessing
 import time
 
@@ -404,6 +569,46 @@ def test_a_frozen_victim_stays_stopped_until_the_kill() -> None:
         assert kill.freeze().status() == psutil.STATUS_STOPPED
         kill()
         assert victim.status() == psutil.STATUS_ZOMBIE
+
+
+_LEADER_EXITS_FIRST: Final = """import ctypes
+import socket
+import threading
+
+listener = socket.create_server(("127.0.0.1", 0))
+
+
+def hold() -> None:
+    connection, _ = listener.accept()
+    connection.recv(1)
+
+
+threading.Thread(target=hold).start()
+print(listener.getsockname()[1], flush=True)
+ctypes.CDLL(None).pthread_exit(None)
+"""
+
+
+def _closed_by_peer(connection: socket.socket) -> bool:
+    return bool(select.select((connection,), (), (), 0)[0])
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="only Linux keeps a zombie thread-group leader's other threads")
+def test_a_process_is_not_gone_while_a_thread_outliving_its_leader_still_holds_its_sockets() -> None:
+    with subprocess.Popen((sys.executable, "-I", "-c", _LEADER_EXITS_FIRST), stdout=subprocess.PIPE) as child:
+        try:
+            assert child.stdout is not None
+            port: Final = int(child.stdout.readline())
+            with socket.create_connection(("127.0.0.1", port), timeout=5) as connection:
+                leader: Final = psutil.Process(child.pid)
+                eventually(leader.status, lambda status: status == psutil.STATUS_ZOMBIE, seconds=10)
+                assert not _closed_by_peer(connection)
+                assert not _is_gone(leader)
+                connection.sendall(b"x")
+                eventually(lambda: _is_gone(leader), bool, seconds=10)
+                assert _closed_by_peer(connection)
+        finally:
+            child.kill()
 
 
 def _kill_after_freezing_the_supervisor(owned: OwnedProxy, worker: int, supervisor: psutil.Process) -> None:

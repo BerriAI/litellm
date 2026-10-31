@@ -26,6 +26,8 @@ from openai.types.chat.chat_completion_chunk import ChoiceDeltaToolCall
 from openai.types.responses import FunctionToolParam, ResponseFunctionToolCall, ResponseOutputItemDoneEvent
 from pydantic import JsonValue, TypeAdapter
 
+pytestmark: Final = pytest.mark.shares_worker_state
+
 _BACKEND: Final = "mistral-multi-tool"
 _PROVIDER_MODEL: Final = f"mistral/{_BACKEND}"
 _PROVIDER_KEY: Final = "integration-provider-key"

@@ -70,11 +70,18 @@ proxyConfigMap:
 proxy_config:
   general_settings:
     master_key: os.environ/PROXY_MASTER_KEY
+  model_list: []
+```
+
+The chart ships no models, so add them under `proxy_config.model_list` or from the Admin UI with `store_model_in_db: true`
+
+```
+proxy_config:
   model_list:
-    - model_name: gpt-3.5-turbo
+    - model_name: gpt-5.6
       litellm_params:
-        model: gpt-3.5-turbo
-        api_key: eXaMpLeOnLy
+        model: openai/gpt-5.6
+        api_key: os.environ/OPENAI_API_KEY
 ```
 
 #### Example using existing `proxyConfigMap` instead of creating it:
@@ -249,6 +256,10 @@ itself.
 
 ## Connect Lens
 
-`lensWorker.mode` selects `disabled`, `bundled` or `external`. Bundled mode generates separate service and identity-signing credentials. External mode requires `lensWorker.gateway.secretName` and `lensWorker.serviceTokenSecret.name`; their keys default to `gateway-secret` and `service-token`. Provision distinct values matching the external Lens deployment
+This chart does not deploy Lens. Deploy Lens from [its own chart](https://github.com/BerriAI/lens/tree/main/helm/lens), then set `lens.enabled: true`, `lens.url`, `lens.publicUrl`, `lens.gatewaySecret.name` and `lens.serviceTokenSecret.name`. The secret keys default to `gateway-secret` and `service-token`. Set `lens.service.name` when that Lens runs in this release's namespace and the chart ingress should route `/lens-ingest` to it. The old `lensWorker` values are no longer read, and enabling them fails the render
 
-Follow the [Lens Helm connection guide](https://github.com/BerriAI/lens/blob/main/helm/lens/README.md#connect-a-gateway) for complete values, verification, GitOps credential requirements and existing-data migration. Source-chart installation requires a built Lens image until the first signed Lens release is published
+## Shutdown accounting
+
+`GRACEFUL_SHUTDOWN_TIMEOUT` defaults to 30 seconds. Pending success callbacks share the time remaining since SIGTERM or the first `/health/drain` call. Callback flushing reserves the existing 10-second teardown headroom for cancellation, tracked accounting tasks and persistence. Exhausting this budget can discard callbacks, which is logged
+
+Set `terminationGracePeriodSeconds` to at least `GRACEFUL_SHUTDOWN_TIMEOUT + 10`, allowing additional time for preStop hooks and database writes. This is not a hard shutdown bound or a guarantee of persistence. Database retries retain their own limits, and cancellation-resistant callbacks can remain alive. The existing preStop hook can also be followed by Uvicorn's separate connection drain, as described in `values.yaml`

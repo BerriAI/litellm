@@ -21,6 +21,8 @@ from integration._support.process import owned_proxy_process
 from integration._support.wire import Reply, Request, Wire, wire_server
 from pydantic import JsonValue, TypeAdapter
 
+pytestmark: Final = pytest.mark.shares_worker_state
+
 _BACKEND: Final = "anthropic.claude-haiku-4-5"
 _API_KEY: Final = "synthetic-mantle-bearer"
 _CONFIG_MODEL: Final = "bedrock-mantle-claude-chat-chaos"

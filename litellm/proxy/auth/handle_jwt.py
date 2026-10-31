@@ -225,7 +225,7 @@ def jwks_unavailable_exception(error: JWKSUnreachableError) -> ProxyException:
             f"unreachable, so the JWT signature could not be verified. Please retry shortly. Error: {error}"
         ),
         type=ProxyErrorTypes.auth_provider_unavailable,
-        param="None",
+        param=None,
         code=status.HTTP_503_SERVICE_UNAVAILABLE,
     )
 
@@ -1767,6 +1767,7 @@ class JWTAuthManager:
         from litellm.proxy.proxy_server import llm_router
 
         denied_pass_through_team: LiteLLM_TeamTable | None = None
+        route_denied_team_id: str | None = None  # rebind-ok: retain route-denied team while checking all claims
 
         if not team_ids:
             if (
@@ -1780,7 +1781,7 @@ class JWTAuthManager:
             return None, None
 
         any_claim_team_resolved = False
-        for team_id in team_ids:
+        for team_id in sorted(team_ids, key=str):
             try:
                 team_object = await get_team_object(
                     team_id=team_id,
@@ -1809,7 +1810,9 @@ class JWTAuthManager:
                             user_route=route,
                             litellm_proxy_roles=jwt_handler.litellm_jwtauth,
                         )
-                        if is_allowed and not JWTAuthManager._team_has_passthrough_route_access(
+                        if not is_allowed:
+                            route_denied_team_id = team_id
+                        elif not JWTAuthManager._team_has_passthrough_route_access(
                             team_object=team_object,
                             route=route,
                             request_method=request_method,
@@ -1832,7 +1835,13 @@ class JWTAuthManager:
             # Claim resolved but no model access, or fallback disabled — deny.
             raise HTTPException(
                 status_code=403,
-                detail=f"No team has access to the requested model: {requested_model}. Checked teams={team_ids}. Check `/models` to see all available models.",
+                detail=(
+                    f"Team {route_denied_team_id} can access model {requested_model} but route {route} "
+                    "is not in litellm_jwtauth.team_allowed_routes"
+                    if route_denied_team_id is not None
+                    else f"No team has access to the requested model: {requested_model}. "
+                    f"Checked teams={team_ids}. Check `/models` to see all available models."
+                ),
             )
 
         # No claim team resolved and fallback enabled — defer to fallback.
@@ -2003,7 +2012,7 @@ class JWTAuthManager:
             status_code=403,
             detail=(
                 f"x-litellm-team-id '{header_value}' does not resolve to a team id or a unique team alias in your "
-                f"JWT's allowed teams. Allowed team ids: {sorted(allowed_team_ids)}"
+                f"JWT's allowed teams. Allowed team ids: {sorted(allowed_team_ids, key=str)}"
             ),
         )
 
@@ -2190,15 +2199,19 @@ class JWTAuthManager:
         # not mistaken for claimless and left with stale DB memberships the fallback
         # could later attribute. With the flag off, keep the upstream plural-only
         # reconciliation so existing deployments are unchanged.
-        jwt_team_ids: Final = set(
-            jwt_handler.get_all_jwt_team_ids(jwt_valid_token)
-            if jwt_handler.litellm_jwtauth.fallback_to_db_teams
-            else jwt_handler.get_team_ids_from_jwt(jwt_valid_token)
+        claim_team_ids: Final = tuple(
+            dict.fromkeys(
+                jwt_handler.get_all_jwt_team_ids(jwt_valid_token)
+                if jwt_handler.litellm_jwtauth.fallback_to_db_teams
+                else jwt_handler.get_team_ids_from_jwt(jwt_valid_token)
+            )
         )
-        existing_teams: Final = set(user_object.teams or [])
-        teams_to_add: Final = jwt_team_ids - existing_teams
+        jwt_team_ids: Final = frozenset(claim_team_ids)
+        existing_team_order: Final = tuple(dict.fromkeys(user_object.teams or []))
+        existing_teams: Final = frozenset(existing_team_order)
+        teams_to_add: Final = tuple(team_id for team_id in claim_team_ids if team_id not in existing_teams)
         preserve_db_teams_without_claims: Final = jwt_handler.litellm_jwtauth.fallback_to_db_teams and not jwt_team_ids
-        teams_to_remove: Final = set() if preserve_db_teams_without_claims else existing_teams - jwt_team_ids
+        teams_to_remove: Final = frozenset() if preserve_db_teams_without_claims else existing_teams - jwt_team_ids
         if teams_to_add or teams_to_remove:
             from litellm.proxy.management_endpoints.scim.scim_v2 import (
                 patch_team_membership,
@@ -2209,7 +2222,10 @@ class JWTAuthManager:
                 teams_ids_to_add_user_to=list(teams_to_add),
                 teams_ids_to_remove_user_from=list(teams_to_remove),
             )
-            user_object.teams = list(jwt_team_ids)
+            user_object.teams = [
+                *(team_id for team_id in existing_team_order if team_id not in teams_to_remove),
+                *teams_to_add,
+            ]
             if user_api_key_cache is not None:
                 await user_api_key_cache.async_set_cache(
                     key=user_object.user_id,

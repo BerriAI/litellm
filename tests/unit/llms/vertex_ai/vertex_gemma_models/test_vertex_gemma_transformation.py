@@ -6,9 +6,10 @@ Maps to: litellm/llms/vertex_ai/vertex_gemma_models/transformation.py
 
 import json
 from collections.abc import AsyncIterator
-from typing import cast
+from typing import Final, cast
 from unittest.mock import AsyncMock, Mock, patch
 
+import httpx
 import pytest
 
 import litellm
@@ -16,6 +17,11 @@ from litellm.types.llms.openai import (
     OutputTextDeltaEvent,
     ResponseCompletedEvent,
     ResponsesAPIStreamingResponse,
+)
+from tests.unit.llms.bedrock.slow_upstream import (
+    STREAM_TIMEOUT_SECONDS,
+    UPSTREAM_FIRST_BYTE_SECONDS,
+    slow_upstream_transport,
 )
 
 
@@ -626,7 +632,7 @@ class TestVertexGemmaCompletion:
         assert chunks[0].choices[0].delta.content == "READY"
         assert chunks[1].choices[0].finish_reason == "stop"
         if stream_options and stream_options["include_usage"]:
-            assert chunks[-1].choices[0].delta.content is None
+            assert chunks[-1].choices == []
             assert chunks[-1].usage.total_tokens == 114
             assert span.get_metric("_dd.llmobs.total_tokens") == 114
         else:
@@ -1352,6 +1358,25 @@ def test_sync_gemma_stream(_gemma_cached_access_token):
     assert len(chunks) == 2
     assert chunks[0].choices[0].delta.content == "READY"
     assert chunks[1].choices[0].finish_reason == "stop"
+
+
+def test_gemma_stream_is_bounded_by_the_request_timeout_not_the_stream_timeout(_gemma_cached_access_token: None) -> None:
+    stream: Final = litellm.completion(
+        model="vertex_ai/gemma/test-model",
+        messages=[{"role": "user", "content": "Reply exactly READY"}],
+        stream=True,
+        stream_timeout=STREAM_TIMEOUT_SECONDS,
+        timeout=UPSTREAM_FIRST_BYTE_SECONDS * 2,
+        api_base=_GEMMA_VERTEX_URL,
+        vertex_project="test",
+        vertex_location="us-central1",
+        vertex_credentials=_FAKE_GEMMA_CREDENTIALS,
+        client=httpx.Client(
+            transport=slow_upstream_transport(json.dumps(_make_gemma_vertex_response(content="READY")).encode())
+        ),
+    )
+
+    assert "".join(chunk.choices[0].delta.content or "" for chunk in stream) == "READY"
 
 
 @pytest.mark.asyncio

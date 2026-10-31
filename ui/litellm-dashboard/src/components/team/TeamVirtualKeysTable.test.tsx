@@ -1,12 +1,13 @@
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi, MockedFunction } from "vitest";
 import { QueryClient, QueryObserver } from "@tanstack/react-query";
-import { fireEvent, renderWithProviders, screen, waitFor, within } from "../../../tests/test-utils";
+import { chooseSelectOption, fireEvent, renderWithProviders, screen, waitFor, within } from "../../../tests/test-utils";
 import { TeamVirtualKeysTable } from "./TeamVirtualKeysTable";
 import { KeysResponse, useKeys } from "@/app/(dashboard)/hooks/keys/useKeys";
 import { useTeamMemberBudgets } from "@/app/(dashboard)/hooks/teams/useTeamMemberBudgets";
 import { KeyResponse } from "../key_team_helpers/key_list";
 import { Organization } from "../networking";
+import KeyInfoView from "../templates/key_info_view";
 
 vi.mock("@/app/(dashboard)/hooks/keys/useKeys", () => ({
   useKeys: vi.fn(),
@@ -283,6 +284,53 @@ describe("TeamVirtualKeysTable", () => {
     );
   });
 
+  it.each([
+    ["expires", "Expires", "asc"],
+    ["last_active", "Last Active", "asc"],
+    ["budget_reset_at", "Budget Reset", "asc"],
+    ["total_spend", "Lifetime Spend", "desc"],
+  ])("sorts %s in both directions while preserving the team scope", async (field, label, direction) => {
+    const user = userEvent.setup();
+    renderWithProviders(<TeamVirtualKeysTable {...defaultProps} />);
+    await user.click(screen.getByRole("button", { name: label, exact: true }));
+    await waitFor(() => {
+      expect(mockUseKeys).toHaveBeenLastCalledWith(
+        1,
+        50,
+        expect.objectContaining({ teamID: "team-1", sortBy: field, sortOrder: direction }),
+      );
+    });
+    await user.click(screen.getByRole("button", { name: label, exact: true }));
+    await waitFor(() => {
+      expect(mockUseKeys).toHaveBeenLastCalledWith(
+        1,
+        50,
+        expect.objectContaining({ teamID: "team-1", sortBy: field, sortOrder: direction === "asc" ? "desc" : "asc" }),
+      );
+    });
+  });
+
+  it.each([
+    ["TPM", "tpm_limit"],
+    ["RPM", "rpm_limit"],
+  ])("sorts by %s through the rate-limit menu", async (label, field) => {
+    const user = userEvent.setup();
+    renderWithProviders(<TeamVirtualKeysTable {...defaultProps} />);
+    await chooseSelectOption(
+      user,
+      screen.getByRole("button", { name: "Sort options for TPM or RPM" }),
+      `${label} ascending`,
+      "menuitem",
+    );
+    await waitFor(() => {
+      expect(mockUseKeys).toHaveBeenLastCalledWith(
+        1,
+        50,
+        expect.objectContaining({ teamID: "team-1", sortBy: field, sortOrder: "asc" }),
+      );
+    });
+  });
+
   it("resets to the first page when the sort changes", async () => {
     const user = userEvent.setup();
     mockUseKeys.mockImplementation(
@@ -440,6 +488,22 @@ describe("TeamVirtualKeysTable", () => {
     await waitFor(() => {
       expect(screen.getByText("Key Info View")).toBeInTheDocument();
     });
+  });
+
+  it("should open a key without its own organization without the team's organization", async () => {
+    const keyWithoutOrganization = {
+      keys: [createMockKey({ token: "sk-no-org", key_alias: "no_org_key", organization_id: null })],
+      total_count: 1,
+      current_page: 1,
+      total_pages: 1,
+    };
+    mockUseKeys.mockReturnValue(createKeysQueryResult(keyWithoutOrganization));
+    renderWithProviders(<TeamVirtualKeysTable {...defaultProps} organization={mockOrganization} />);
+
+    await userEvent.click(await screen.findByRole("button", { name: /sk-no-org/ }));
+
+    await screen.findByText("Key Info View");
+    expect(vi.mocked(KeyInfoView).mock.lastCall?.[0].keyData).toMatchObject({ organization_id: null });
   });
 
   describe("entity links out of the key rows", () => {
