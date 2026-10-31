@@ -1537,6 +1537,62 @@ class Cleared(BaseModel):
 CLEAR: Final = Cleared()
 
 
+class SSORoleMappings(BaseModel):
+    provider: str
+    group_claim: str
+    roles: dict[str, list[str]]
+
+
+class SSOSettingsUpdateBody(BaseModel):
+    """PATCH /update/sso_settings is a merge patch like /key/update: a field left `None`
+    is dropped from the body and keeps its stored value, `CLEAR` sends an explicit null
+    that clears it. The dashboard sends the client secret back exactly as
+    /get/sso_settings showed it, which is the masked form, and that must keep the stored
+    secret rather than replace it."""
+
+    generic_client_id: str | Cleared | None = None
+    generic_client_secret: str | Cleared | None = Field(default=None, repr=False)
+    generic_authorization_endpoint: str | Cleared | None = None
+    generic_token_endpoint: str | Cleared | None = None
+    generic_userinfo_endpoint: str | Cleared | None = None
+    generic_scope: str | Cleared | None = None
+    proxy_base_url: str | Cleared | None = None
+    role_mappings: SSORoleMappings | Cleared | None = None
+
+
+class SSOSettingsValues(BaseModel):
+    """The generic-provider slice of `values` in /get/sso_settings. Secrets come back masked."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    generic_client_id: str | None = None
+    generic_client_secret: str | None = Field(default=None, repr=False)
+    generic_authorization_endpoint: str | None = None
+    generic_token_endpoint: str | None = None
+    generic_userinfo_endpoint: str | None = None
+    generic_scope: str | None = None
+    proxy_base_url: str | None = None
+    role_mappings: SSORoleMappings | None = None
+
+
+class SSOSettingsResponse(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    values: SSOSettingsValues
+
+
+class SSOSettingsUpdateResponse(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    status: str
+    settings: SSOSettingsValues
+
+
+class SSOCallbackParams(BaseModel):
+    code: str
+    state: str
+
+
 class KeyUpdateBody(BaseModel):
     """POST /key/update is a merge patch: a field left `None` is dropped from the body and
     keeps its stored value, `CLEAR` sends an explicit null that clears it (`budget_duration`

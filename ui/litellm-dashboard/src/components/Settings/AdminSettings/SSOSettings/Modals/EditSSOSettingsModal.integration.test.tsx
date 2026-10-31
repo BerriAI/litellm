@@ -49,7 +49,7 @@ describe("EditSSOSettingsModal (real form tree)", () => {
     expect(mutateAsync).not.toHaveBeenCalled();
   });
 
-  it("sends only the mounted fields when the form is valid", async () => {
+  it("sends the mounted fields and clears every other provider's fields and the unchecked mappings", async () => {
     const user = userEvent.setup({ pointerEventsCheck: 0 });
     renderWithProviders(<EditSSOSettingsModal isVisible={true} onCancel={vi.fn()} onSuccess={vi.fn()} />);
 
@@ -64,6 +64,21 @@ describe("EditSSOSettingsModal (real form tree)", () => {
       google_client_secret: "stored-client-secret",
       user_email: "admin@example.com",
       proxy_base_url: "https://gateway.example.com",
+      microsoft_client_id: null,
+      microsoft_client_secret: null,
+      microsoft_tenant: null,
+      generic_client_id: null,
+      generic_client_secret: null,
+      generic_authorization_endpoint: null,
+      generic_token_endpoint: null,
+      generic_userinfo_endpoint: null,
+      generic_scope: null,
+      saml_idp_metadata_url: null,
+      saml_idp_metadata_xml: null,
+      saml_sp_entity_id: null,
+      saml_allow_unsolicited: null,
+      role_mappings: null,
+      team_mappings: null,
     });
   });
 });

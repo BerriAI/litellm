@@ -199,10 +199,17 @@ export const mountedSSOFieldNames = (values: SSOSettingsFormValues, variant: SSO
   ];
 };
 
-export const pickMountedSSOValues = (values: SSOSettingsFormValues, variant: SSOFormVariant): SSOSettingsFormValues =>
-  Object.fromEntries(
-    mountedSSOFieldNames(values, variant).map((name) => [name, values[name as keyof SSOSettingsFormValues]]),
-  );
+const ALL_PROVIDER_FIELD_NAMES: readonly string[] = [
+  ...new Set(Object.values(ssoProviderConfigs).flatMap((config) => config.fields.map((field) => field.name))),
+];
+
+export const pickMountedSSOValues = (values: SSOSettingsFormValues, variant: SSOFormVariant): SSOSettingsFormValues => {
+  const mounted = mountedSSOFieldNames(values, variant);
+  return Object.fromEntries([
+    ...ALL_PROVIDER_FIELD_NAMES.filter((name) => !mounted.includes(name)).map((name) => [name, null]),
+    ...mounted.map((name) => [name, values[name as keyof SSOSettingsFormValues]]),
+  ]);
+};
 
 export const submitMountedSSOValues =
   (

@@ -29,10 +29,11 @@ from e2e_http import (
     get_external,
     post_form_external,
     post_json_external,
+    put_json_external,
     unwrap,
 )
 from e2e_metadata import step
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, RootModel
 
 KEYCLOAK_URL_ENV: Final = "E2E_KEYCLOAK_URL"
 KEYCLOAK_REALM_ENV: Final = "E2E_KEYCLOAK_REALM"
@@ -321,6 +322,25 @@ class Keycloak:
         assert configured.attributes.pkce == "S256"
         return client
 
+    @step("Turn on Keycloak's login event log for the realm")
+    def enable_login_events(self) -> None:
+        write: Final = put_json_external(
+            self._admin_url("/events/config"), headers=self._admin_headers(), json=EventsConfigBody()
+        )
+        if write.status_code != 204:
+            pytest.fail(f"Keycloak refused to enable login events: HTTP {write.status_code} {write.body[:300]}")
+
+    @step("Read the code-to-token errors Keycloak logged for the browser SSO client, newest first")
+    def code_to_token_errors(self, client: BrowserClient) -> tuple[str, ...]:
+        events: Final = unwrap(
+            get_external(
+                self._admin_url(f"/events?client={client.client_id}&type=CODE_TO_TOKEN_ERROR&max=100"),
+                headers=self._admin_headers(),
+                response_type=LoginEvents,
+            )
+        )
+        return tuple(event.error for event in events.root)
+
     @step("Get a Keycloak access token for {identity.username} through the browser SSO client")
     def browser_token(self, identity: Identity, client: BrowserClient) -> str:
         return self._token(
@@ -385,6 +405,19 @@ class Discovery(BaseModel):
 class UserInfo(BaseModel):
     sub: str
     email: str
+
+
+class EventsConfigBody(BaseModel):
+    events_enabled: bool = Field(default=True, alias="eventsEnabled")
+
+
+class LoginEvent(BaseModel):
+    type: str
+    error: str = ""
+
+
+class LoginEvents(RootModel[tuple[LoginEvent, ...]]):
+    pass
 
 
 class BrowserAttributes(BaseModel):

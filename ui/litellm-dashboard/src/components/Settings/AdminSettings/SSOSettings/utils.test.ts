@@ -24,9 +24,9 @@ describe("processSSOSettingsPayload", () => {
       expect(result).toEqual({
         other_field: "value",
         another_field: 123,
+        role_mappings: null,
+        team_mappings: null,
       });
-      expect(result.role_mappings).toBeUndefined();
-      expect(result.team_mappings).toBeUndefined();
     });
 
     it("should return all fields except role mapping fields when use_role_mappings is not present", () => {
@@ -46,9 +46,29 @@ describe("processSSOSettingsPayload", () => {
 
       expect(result).toEqual({
         other_field: "value",
+        role_mappings: null,
+        team_mappings: null,
       });
-      expect(result.role_mappings).toBeUndefined();
-      expect(result.team_mappings).toBeUndefined();
+    });
+
+    it("clears mappings the user unchecked on a provider that supports them", () => {
+      const result = processSSOSettingsPayload({
+        sso_provider: "generic",
+        use_role_mappings: false,
+        use_team_mappings: false,
+        group_claim: "groups",
+        team_ids_jwt_field: "teams",
+      });
+
+      expect(result.role_mappings).toBeNull();
+      expect(result.team_mappings).toBeNull();
+    });
+
+    it("leaves mappings alone when the form has no toggle for them", () => {
+      const result = processSSOSettingsPayload({ sso_provider: "generic", use_role_mappings: false });
+
+      expect(result.role_mappings).toBeNull();
+      expect(result).not.toHaveProperty("team_mappings");
     });
   });
 
@@ -274,8 +294,8 @@ describe("processSSOSettingsPayload", () => {
       expect(result).toEqual({
         sso_provider: "okta",
         other_field: "value",
+        team_mappings: null,
       });
-      expect(result.team_mappings).toBeUndefined();
     });
 
     it("should return all fields except team mapping fields when use_team_mappings is not present", () => {
@@ -307,8 +327,9 @@ describe("processSSOSettingsPayload", () => {
       expect(result).toEqual({
         sso_provider: "google",
         other_field: "value",
+        role_mappings: null,
+        team_mappings: null,
       });
-      expect(result.team_mappings).toBeUndefined();
     });
 
     it("should not include team mappings for microsoft provider even when use_team_mappings is true", () => {
@@ -324,8 +345,9 @@ describe("processSSOSettingsPayload", () => {
       expect(result).toEqual({
         sso_provider: "microsoft",
         other_field: "value",
+        role_mappings: null,
+        team_mappings: null,
       });
-      expect(result.team_mappings).toBeUndefined();
     });
   });
 
@@ -401,7 +423,7 @@ describe("processSSOSettingsPayload", () => {
     it("should handle empty form values", () => {
       const result = processSSOSettingsPayload({});
 
-      expect(result).toEqual({});
+      expect(result).toEqual({ role_mappings: null, team_mappings: null });
     });
 
     it("should preserve other fields in the payload", () => {
@@ -425,6 +447,8 @@ describe("processSSOSettingsPayload", () => {
         redirect_url: "http://example.com",
         custom_field: { nested: "value" },
         array_field: [1, 2, 3],
+        role_mappings: null,
+        team_mappings: null,
       });
     });
   });
