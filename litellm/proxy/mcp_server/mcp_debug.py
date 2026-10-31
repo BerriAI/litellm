@@ -122,6 +122,7 @@ from starlette.types import Message, Send
 
 from litellm.litellm_core_utils.secret_redaction import REDACTED, redact_string
 from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
+from litellm.proxy._types import UserAPIKeyAuth, user_api_key_has_admin_view
 
 if TYPE_CHECKING:
     from litellm.proxy.mcp_server.outbound_credentials.types import AuthResolution
@@ -361,12 +362,15 @@ class MCPDebug:
         mcp_servers: list[str] | None,
         oauth2_headers: dict[str, str] | None,
         client_ip: str | None,
+        user_api_key_auth: UserAPIKeyAuth | None = None,
     ) -> dict[str, str]:
         """
         Build debug headers if debug mode is enabled, otherwise return empty dict.
 
         This is the single entry point called from the MCP request handler.
         """
+        if user_api_key_auth is None or not user_api_key_has_admin_view(user_api_key_auth):
+            return {}
         if not raw_headers or not MCPDebug.is_debug_enabled(raw_headers):
             return {}
 

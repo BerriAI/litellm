@@ -2563,6 +2563,7 @@ if MCP_AVAILABLE:
                 mcp_servers=mcp_servers,
                 oauth2_headers=oauth2_headers,
                 client_ip=_client_ip,
+                user_api_key_auth=user_api_key_auth,
             )
             diagnostics: Final = MCPAuthDiagnostics() if _debug_headers else None
             if diagnostics is not None:
