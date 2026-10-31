@@ -957,10 +957,12 @@ async def _inherit_auth_guardrails(
     return tuple(_GUARDRAIL_ENTRIES.validate_python(merged))
 
 
-def _named_guardrail_runs_post_call(data: dict[str, object]) -> bool:
+def _named_guardrail_runs_post_call(data: Mapping[str, object]) -> bool:
     return any(
         guardrail.default_on is not True
-        and guardrail.should_run_guardrail(data=data, event_type=GuardrailEventHooks.post_call)
+        and guardrail.should_run_guardrail(  # pyright: ignore[reportUnknownMemberType]  # takes the untyped request dict
+            data=data, event_type=GuardrailEventHooks.post_call
+        )
         for guardrail in litellm.logging_callback_manager.get_custom_loggers_for_type(callback_type=CustomGuardrail)
         if isinstance(guardrail, CustomGuardrail)
     )
