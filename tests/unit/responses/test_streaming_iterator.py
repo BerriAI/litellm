@@ -2870,7 +2870,7 @@ def test_synthetic_stream_serializes_every_event_position_from_zero(output: list
     transformed: Final = ResponsesAPIResponse.model_validate(
         {
             "id": "resp_seq",
-            "created_at": int(datetime.now().timestamp()),
+            "created_at": 1741476542,
             "status": "completed",
             "model": "claude-sonnet-5-5",
             "object": "response",
