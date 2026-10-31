@@ -47,6 +47,7 @@ from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.custom_httpx.llm_http_handler import (
     BaseLLMHTTPHandler,
     _collect_ws_project_quota_callbacks,
+    _collect_ws_token_limit_callbacks,
     _google_genai_streaming_hidden_params,
     _has_pre_call_deployment_hook,
     _rust_responses_websocket_enabled,
@@ -4043,26 +4044,29 @@ def test_a_callback_that_overrides_the_deployment_hook_is_detected(monkeypatch):
     assert _has_pre_call_deployment_hook(logging_obj) is True
 
 
-def test_only_callbacks_that_can_charge_a_frame_are_collected_for_ws_quota(monkeypatch):
+@pytest.mark.parametrize(
+    "collect, frame_check",
+    [
+        (_collect_ws_project_quota_callbacks, "enforce_project_io_token_quota_for_frame"),
+        (_collect_ws_token_limit_callbacks, "enforce_token_limits_for_frame"),
+    ],
+    ids=["project-quota", "token-limits"],
+)
+def test_only_callbacks_that_can_check_a_frame_are_collected_for_ws_turns(monkeypatch, collect, frame_check):
     from litellm.integrations.custom_logger import CustomLogger
 
-    class _PlainLogger(CustomLogger):
-        pass
+    async def check_frame(self, *args, **kwargs):
+        return None
 
-    class _QuotaLogger(CustomLogger):
-        async def enforce_project_io_token_quota_for_frame(self, *args, **kwargs):
-            return None
-
-    class _NotCallableAttribute:
-        enforce_project_io_token_quota_for_frame = "not a method"
-
-    plain, quota, decoy = _PlainLogger(), _QuotaLogger(), _NotCallableAttribute()
+    plain: Final = CustomLogger()
+    checker: Final = type("_FrameChecker", (CustomLogger,), {frame_check: check_frame})()
+    decoy: Final = type("_NotCallableAttribute", (), {frame_check: "not a method"})()
 
     monkeypatch.setattr(litellm, "callbacks", [plain, decoy])
-    assert _collect_ws_project_quota_callbacks() == ()
+    assert collect() == ()
 
-    monkeypatch.setattr(litellm, "callbacks", [plain, quota, decoy])
-    assert _collect_ws_project_quota_callbacks() == (quota,)
+    monkeypatch.setattr(litellm, "callbacks", [plain, checker, decoy])
+    assert collect() == (checker,)
 
 
 @pytest.mark.asyncio
