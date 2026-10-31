@@ -2212,6 +2212,22 @@ def test_should_redact_failed_request_falls_back_to_the_global_setting_for_an_un
     assert should_redact_failed_request(request_data) is global_redaction
 
 
+@pytest.mark.parametrize(
+    "request_data",
+    [
+        {"turn_off_message_logging": True, "langfuse_host": "os.environ/LANGFUSE_HOST"},
+        {"metadata": {"turn_off_message_logging": True, "langfuse_host": "os.environ/LANGFUSE_HOST"}},
+    ],
+    ids=["body_flag", "metadata_flag"],
+)
+def test_should_redact_failed_request_keeps_the_request_opt_in_past_a_rejected_callback_param(
+    monkeypatch: pytest.MonkeyPatch, request_data: dict
+) -> None:
+    monkeypatch.setattr(litellm, "turn_off_message_logging", False)
+
+    assert should_redact_failed_request(request_data) is True
+
+
 def test_should_redact_failed_request_reads_the_request_setting_past_non_mapping_headers(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

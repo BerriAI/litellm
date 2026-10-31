@@ -8,6 +8,7 @@
 #  Thank you users! We ❤️ you! - Krrish & Ishaan
 
 import asyncio
+import contextlib
 import copy
 import inspect
 import itertools
@@ -28,6 +29,7 @@ from litellm.litellm_core_utils.core_helpers import (
 )
 from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
     initialize_standard_callback_dynamic_params,
+    iter_client_callback_metadata_dicts,
 )
 from litellm.litellm_core_utils.served_output_texts import SERVED_OUTPUT_TEXTS_KEY
 from litellm.llms.base_llm.guardrail_translation.utils import stream_item_field, stream_item_items
@@ -851,12 +853,12 @@ def should_redact_failed_request(request_data: Mapping[str, object]) -> bool:
     """
     The redaction decision for proxy failure hooks, which get the request body but not its logging
     object: the same metadata, headers and dynamic params the logging object would read. When the
-    logging object would reject the request's callback params, the global setting decides.
+    logging object would reject another of the request's callback params, the request's own
+    ``turn_off_message_logging`` still counts, and when it would reject that too the global setting decides.
     """
     body: Final = dict(request_data)
-    try:
-        dynamic_params: Final = initialize_standard_callback_dynamic_params(body)
-    except ValueError:
+    dynamic_params: Final = _request_callback_params(body)
+    if dynamic_params is None:
         return litellm.turn_off_message_logging is True
     return should_redact_failure_logging(
         {
@@ -864,6 +866,27 @@ def should_redact_failed_request(request_data: Mapping[str, object]) -> bool:
             "standard_callback_dynamic_params": dynamic_params,
         }
     )
+
+
+def _request_callback_params(body: Mapping[str, object]) -> StandardCallbackDynamicParams | None:
+    """
+    The callback params the logging object reads from ``body``. When it would reject one of them, only the
+    request's own ``turn_off_message_logging``, and ``None`` when it would reject that too.
+    """
+    with contextlib.suppress(ValueError):
+        return initialize_standard_callback_dynamic_params(dict(body))
+    sources: Final[tuple[Mapping[str, object], ...]] = (
+        body,
+        *(metadata for _, metadata in iter_client_callback_metadata_dicts(body)),
+    )
+    redaction_choice: Final = next(
+        (source["turn_off_message_logging"] for source in sources if "turn_off_message_logging" in source), None
+    )
+    with contextlib.suppress(ValueError):
+        return initialize_standard_callback_dynamic_params(
+            {} if redaction_choice is None else {"turn_off_message_logging": redaction_choice}
+        )
+    return None
 
 
 def scrubbed_error_information_for_request(
