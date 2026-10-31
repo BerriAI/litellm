@@ -489,14 +489,30 @@ def test_empty_exa_search_reaches_the_model_without_the_exa_response_envelope(ga
         assert targets[-3:] == (("POST", "/v1/messages"), ("POST", "/exa/search"), ("POST", "/v1/messages")), targets
 
 
-@pytest.mark.parametrize("stream", [False, True])
-def test_web_search_follow_up_call_keeps_the_client_max_tokens(gateway: Gateway, tmp_path: Path, stream: bool) -> None:
+@pytest.mark.parametrize(
+    ("stream", "bedrock_model", "thinking"),
+    [
+        pytest.param(False, BEDROCK_MODEL, None, id="non-streaming"),
+        pytest.param(True, BEDROCK_MODEL, None, id="streaming"),
+        pytest.param(
+            False,
+            "us.anthropic.claude-opus-5-5",
+            {"type": "enabled", "budget_tokens": 8000},
+            id="adaptive-model-with-a-thinking-budget-above-max-tokens",
+        ),
+    ],
+)
+def test_web_search_follow_up_call_keeps_the_client_max_tokens(
+    gateway: Gateway, tmp_path: Path, stream: bool, bedrock_model: str, thinking: dict[str, object] | None
+) -> None:
+    invoke_target: Final = f"/model/{bedrock_model}/invoke"
+
     def respond(request: Request) -> Reply:
         assert request.method == "POST", request.target
         body: Final = json.loads(request.body)
         if request.target == SEARCH_TARGET:
             return Reply(body=json.dumps({"query": body["query"], "results": [SEARCH_RESULT]}).encode())
-        assert request.target == INVOKE_TARGET, request.target
+        assert request.target == invoke_target, request.target
         searched: Final = any(
             isinstance(message["content"], list)
             and any(block["type"] == "tool_result" for block in message["content"])
@@ -513,7 +529,7 @@ def test_web_search_follow_up_call_keeps_the_client_max_tokens(gateway: Gateway,
                     "id": "msg_max_tokens",
                     "type": "message",
                     "role": "assistant",
-                    "model": BEDROCK_MODEL,
+                    "model": bedrock_model,
                     "content": content,
                     "stop_reason": "end_turn" if searched else "tool_use",
                     "stop_sequence": None,
@@ -547,7 +563,7 @@ def test_web_search_follow_up_call_keeps_the_client_max_tokens(gateway: Gateway,
         path.write_text(yaml.safe_dump(config))
         with owned_proxy(gateway, tmp_path, {}, config=path) as candidate, candidate.scenario() as scenario:
             model: Final = scenario.model(
-                model=f"bedrock/{BEDROCK_MODEL}",
+                model=f"bedrock/{bedrock_model}",
                 api_key="synthetic-bedrock-token",
                 api_base=wire.url,
                 aws_region_name="us-east-1",
@@ -562,13 +578,14 @@ def test_web_search_follow_up_call_keeps_the_client_max_tokens(gateway: Gateway,
                     "stream": stream,
                     "messages": [{"role": "user", "content": "search and answer at length"}],
                     "tools": [{"type": "web_search_20250305", "name": "web_search"}],
+                    **({"thinking": thinking} if thinking else {}),
                 },
             )
         assert response.status_code == 200, response.text
         assert "the long answer" in response.text, response.text
         upstream: Final = wire.drain()
-        assert [request.target for request in upstream] == [INVOKE_TARGET, SEARCH_TARGET, INVOKE_TARGET]
-        assert [json.loads(request.body)["max_tokens"] for request in upstream if request.target == INVOKE_TARGET] == [
+        assert [request.target for request in upstream] == [invoke_target, SEARCH_TARGET, invoke_target]
+        assert [json.loads(request.body)["max_tokens"] for request in upstream if request.target == invoke_target] == [
             4000,
             4000,
         ]
