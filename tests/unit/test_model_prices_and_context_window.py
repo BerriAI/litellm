@@ -132,6 +132,16 @@ def test_zerogpu_rows_have_an_output_limit_that_fits_the_context_window(path: Pa
     assert tuple(key for key, row in rows.items() if row.max_output_tokens > row.max_input_tokens) == ()
 
 
+@pytest.mark.parametrize("path", (PRICES_PATH, BACKUP_PRICES_PATH), ids=("main", "backup"))
+def test_flexai_chat_rows_have_an_output_limit_that_fits_the_context_window(path: Path) -> None:
+    prices: Final[dict[str, JsonValue]] = TypeAdapter(dict[str, JsonValue]).validate_json(path.read_bytes())
+    rows: Final = MappingProxyType(
+        {key: _TokenLimits.model_validate(value) for key, value in prices.items() if key.startswith("flexai/") and isinstance(value, dict) and value.get("mode") == "chat"}
+    )
+    assert rows, f"No FlexAI chat rows found in {path}"
+    assert tuple(key for key, row in rows.items() if row.max_output_tokens > row.max_input_tokens) == ()
+
+
 def test_github_copilot_rows_resolve_through_get_model_info() -> None:
     rows: Final[Mapping[str, _CopilotEndpointRow]] = _copilot_endpoint_rows(PRICES_PATH)
     assert {
