@@ -1,5 +1,6 @@
 import { Code, Trash2 } from "lucide-react";
 import React, { useState } from "react";
+import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { DeletableGuardrail, GuardrailDeleteModal } from "./GuardrailDeleteModal";
 
@@ -20,6 +21,7 @@ export function GuardrailSettingsActions({
   accessToken,
   onDeleted,
 }: GuardrailSettingsActionsProps) {
+  const { t } = useTranslation();
   const [isModalOpen, setIsModalOpen] = useState(false);
 
   if (isEditing || guardrail.guardrail_definition_location === "config") return null;
@@ -29,16 +31,16 @@ export function GuardrailSettingsActions({
       {guardrail.litellm_params?.guardrail === "custom_code" ? (
         <Button variant="outline" onClick={onEditCode}>
           <Code />
-          Edit Code
+          {t("guardrails.settingsActions.editCode")}
         </Button>
       ) : (
         <Button variant="outline" onClick={onEdit}>
-          Edit Settings
+          {t("guardrails.settingsActions.editSettings")}
         </Button>
       )}
       <Button variant="destructive" onClick={() => setIsModalOpen(true)}>
         <Trash2 />
-        Delete
+        {t("guardrails.settingsActions.delete")}
       </Button>
       <GuardrailDeleteModal
         guardrail={isModalOpen ? guardrail : null}
