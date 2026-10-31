@@ -18,6 +18,18 @@ V1 supports URL-based OpenAI Responses MCP and both Anthropic Messages connector
 
 Response/SSE inspection, per-invocation argument policy inside a provider's tool loop, automatic MCP discovery for provider registrations, local MCP references, provider connector IDs, and additional API bridges are outside v1
 
+## Current invocation routing
+
+On the Responses path, `type: "mcp"` alone does not tell LiteLLM to connect to the server. An external `server_url` such as `https://custom.example/mcp` stays in the provider-bound tools. On a provider/API supporting native MCP, the provider discovers and calls that endpoint, subject to its own connectivity, authentication, and approval requirements. An unsupported provider/API may reject the attachment. LiteLLM does not automatically become the MCP executor
+
+The explicit LiteLLM gateway reference is `litellm_proxy/mcp/<name>`, or `litellm_proxy` for the whole gateway. This selects registered gateway resources. LiteLLM discovers their tools and supplies function definitions to the model. Automatic execution additionally requires every gateway reference in that request to set `require_approval: "never"`. That approval value by itself does not convert an external native attachment into LiteLLM execution
+
+Current main also recognizes HTTP(S) URLs ending in `/mcp/<name>` when the name resolves to a registered server, access group, or toolset. It rewrites those references to `litellm_proxy/mcp/<name>`. This shortcut matches the path name without validating the hostname. A URL on an unrelated host can therefore select a local registered resource if its final name matches. The gateway then uses the registered resource's connection configuration, rather than connecting to that unrelated host
+
+These branches are implemented in [tool_precheck.py](../../litellm/responses/mcp/tool_precheck.py), [split_mcp_tools and gateway name resolution](../../litellm/responses/mcp/litellm_proxy_mcp_handler.py), and [Responses orchestration](../../litellm/responses/main.py). The prior live reproduction demonstrated provider execution of custom URLs under metadata and tool-permission guardrail restrictions. It did not configure registered-server object permissions
+
+The proposed `execution_mode` constrains which registered resource may be used in each path. Provider registrations must never enter gateway discovery or execution, including through the HTTPS path shortcut or toolset membership. Layer 2 must isolate them before enabling registration. Layer 4 must resolve native attachments by the approved canonical endpoint and prevent path-name collisions from silently selecting a different executor. The existing hostname-blind shortcut needs an explicit compatibility decision during that work
+
 ## Layer 1 schema proposal
 
 ### Entity and terminology
