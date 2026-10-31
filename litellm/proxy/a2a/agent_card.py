@@ -12,9 +12,7 @@ from collections.abc import Mapping
 from copy import deepcopy
 from typing import Final, Literal
 
-from pydantic import TypeAdapter
-
-from litellm.litellm_core_utils.core_helpers import as_str_mapping
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, iter_items
 
 SupportedA2AVersion = Literal["0.3", "1.0"]
 
@@ -24,8 +22,6 @@ SUPPORTED_A2A_PROTOCOL_VERSIONS: Final[tuple[SupportedA2AVersion, ...]] = ("0.3"
 
 # Default served version when the agent card does not pin one.
 LITELLM_A2A_PROTOCOL_VERSION: Final = "1.0"
-
-_AGENT_CARD_INTERFACES: Final = TypeAdapter(list[object])
 
 _PROTOCOL_VERSION_PATTERN: Final = re.compile(
     r"^(\d+\.\d+)(?:\.\d+(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?)?$"
@@ -59,25 +55,18 @@ def point_agent_card_at_proxy(
     agent_card: Mapping[str, object],
     proxy_url: str,
 ) -> dict[str, object]:  # mutable-ok: the public helper contract requires a dictionary
-    supported_interfaces: Final = agent_card.get("supportedInterfaces")
-    copied_card: Final = deepcopy(dict(agent_card))
-    copied_interfaces: Final = (
-        deepcopy(_AGENT_CARD_INTERFACES.validate_python(supported_interfaces))
-        if isinstance(supported_interfaces, list)
-        else None
+    interfaces: Final = agent_card.get("supportedInterfaces")
+    interface_items: Final = (
+        tuple(iter_items(agent_card.get("supportedInterfaces"))) if isinstance(interfaces, list) else ()
     )
-    first_interface_entry: Final[object] = copied_interfaces[0] if copied_interfaces else None
-    first_interface: Final = as_str_mapping(first_interface_entry)
-    if copied_interfaces is None or not isinstance(first_interface_entry, dict) or first_interface is None:
-        return {**copied_card, "url": proxy_url}
-    return {
-        **copied_card,
-        "url": proxy_url,
-        "supportedInterfaces": [
-            {**deepcopy(dict(first_interface)), "url": proxy_url},
-            *copied_interfaces[1:],
-        ],
-    }
+    first: Final[object] = interface_items[0] if interface_items else None
+    first_mapping: Final = as_str_mapping(first)
+    pointed_interfaces: Final = (
+        {"supportedInterfaces": [{**first_mapping, "url": proxy_url}, *interface_items[1:]]}
+        if isinstance(first, dict) and first_mapping is not None
+        else {}
+    )
+    return deepcopy({**agent_card, "url": proxy_url, **pointed_interfaces})
 
 
 # Security scheme exposed by the LiteLLM-fronted agent card. Always replaces
