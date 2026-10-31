@@ -10427,6 +10427,19 @@ def test_chat_audio_unsupported_format_error_caps_the_echoed_format() -> None:
     assert "x" * 101 not in str(raised.value)
 
 
+@pytest.mark.parametrize("audio_format", [5, {"codec": "mp3"}, ["x"] * 300])
+def test_chat_audio_non_string_format_error_names_the_value_as_sent(audio_format: object) -> None:
+    with pytest.raises(litellm.UnsupportedParamsError) as raised:
+        VertexGeminiConfig().map_openai_params(
+            non_default_params={"modalities": ["audio"], "audio": {"voice": "Kore", "format": audio_format}},
+            optional_params={},
+            model="gemini-3.8-flash-tts",
+            drop_params=False,
+        )
+
+    assert f"audio format {repr(audio_format)[:100]}. Set format" in str(raised.value)
+
+
 def test_map_audio_params_rejects_an_unsupported_format() -> None:
     with pytest.raises(litellm.UnsupportedParamsError, match="audio format 'mp3'"):
         VertexGeminiConfig().map_audio_params({"voice": "Kore", "format": "mp3"})

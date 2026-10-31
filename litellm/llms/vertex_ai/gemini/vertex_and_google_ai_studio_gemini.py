@@ -468,6 +468,12 @@ def reject_unknown_gemini_tts_voice_keys(
     )
 
 
+def _named_audio_format(audio_format: object) -> str:
+    if isinstance(audio_format, str):
+        return repr(audio_format[:_NAMED_AUDIO_FORMAT_CHARS])
+    return repr(audio_format)[:_NAMED_AUDIO_FORMAT_CHARS]
+
+
 def unsupported_gemini_tts_audio_format(
     model: str, audio: Mapping[str, object], drop_params: bool, llm_provider: str | None
 ) -> UnsupportedParamsError | None:
@@ -479,7 +485,7 @@ def unsupported_gemini_tts_audio_format(
         return None
     return UnsupportedParamsError(
         message=(
-            f"{model} does not take the audio format {str(audio_format)[:_NAMED_AUDIO_FORMAT_CHARS]!r}. Set format "
+            f"{model} does not take the audio format {_named_audio_format(audio_format)}. Set format "
             "to 'pcm16' or leave it out, or set drop_params to drop it."
         ),
         model=model,
