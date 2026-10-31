@@ -1,4 +1,5 @@
 import copy
+import json
 import os
 from collections.abc import Mapping, Sequence
 from datetime import datetime
@@ -230,6 +231,21 @@ def _bedrock_items(value: object) -> Sequence[object]:
     return _BEDROCK_ITEMS.validate_python(value) if isinstance(value, list) else ()
 
 
+def _bedrock_text_block(block: object) -> object:
+    """A Converse ``guardContent`` text block or ``json`` tool-result block as a plain ``{"text": ...}`` block, so its
+    text is inspected like any other; every other block is returned as given."""
+    fields: Final = as_str_mapping(block) or {}
+    guard_text: Final = as_str_mapping((as_str_mapping(fields.get("guardContent")) or {}).get("text")) or {}
+    if isinstance(guard_text.get("text"), str):
+        return {"text": guard_text["text"]}
+    return {"text": json.dumps(fields["json"])} if "json" in fields else block
+
+
+def _bedrock_blocks(value: object) -> Sequence[object]:
+    """The content blocks of a Bedrock ``content`` or ``system`` list, with nested text lifted to a top-level ``text``."""
+    return list(map(_bedrock_text_block, _bedrock_items(value)))
+
+
 def _bedrock_tool_result_texts(block: object) -> Sequence[object]:
     """The content of an Anthropic ``tool_result`` block or a Converse ``toolResult`` block, else nothing."""
     fields: Final = as_str_mapping(block) or {}
@@ -237,14 +253,14 @@ def _bedrock_tool_result_texts(block: object) -> Sequence[object]:
         fields if fields.get("type") == "tool_result" else as_str_mapping(fields.get("toolResult")) or {}
     )
     content: Final = tool_result.get("content")
-    return [{"text": content}] if isinstance(content, str) else _bedrock_items(content)
+    return [{"text": content}] if isinstance(content, str) else _bedrock_blocks(content)
 
 
 def _bedrock_turns(message: object) -> Sequence[Mapping[str, object]]:
     """One Bedrock ``messages`` turn as chat messages: its tool results as ``tool`` turns, then its text."""
     fields: Final = as_str_mapping(message) or {}
     content: Final = fields.get("content")
-    blocks: Final = _bedrock_items(content)
+    blocks: Final = _bedrock_blocks(content)
     tool_results: Final = tuple(filter(len, map(_bedrock_tool_result_texts, blocks)))
     return [
         *({"role": "tool", "content": tool_content} for tool_content in tool_results),
@@ -260,9 +276,10 @@ def _bedrock_inspection_messages(data: Mapping[str, object]) -> Sequence[Mapping
     if body is None:
         return []
     system: Final = body.get("system")
+    system_content: Final = system if isinstance(system, str) else _bedrock_blocks(system)
     turns: Final = chain.from_iterable(map(_bedrock_turns, _bedrock_items(body.get("messages"))))
     return build_inspection_messages(
-        {"messages": [*([{"role": "system", "content": system}] if system else []), *turns]}
+        {"messages": [*([{"role": "system", "content": system_content}] if system_content else []), *turns]}
     )
 
 

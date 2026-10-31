@@ -2557,6 +2557,23 @@ class TestBedrockPassthroughBody:
             {"role": "user", "content": "thanks"},
         ]
 
+    def test_reads_converse_guard_content_and_json_tool_results(self):
+        body: Final = {
+            "system": [{"guardContent": {"text": {"text": "system card"}}}],
+            "messages": [
+                {"role": "user", "content": [{"text": "hello"}, {"guardContent": {"text": {"text": "guarded card"}}}]},
+                {
+                    "role": "user",
+                    "content": [{"toolResult": {"toolUseId": "t1", "content": [{"json": {"card": "on file"}}]}}],
+                },
+            ],
+        }
+        assert _build_lakera_inspection_messages(_bedrock_data(body)) == [
+            {"role": "system", "content": "system card"},
+            {"role": "user", "content": "hello\nguarded card"},
+            {"role": "tool", "content": '{"card": "on file"}'},
+        ]
+
     def test_a_nested_body_for_another_provider_is_not_read(self):
         data: Final = {**_bedrock_data(_invoke_body()), "custom_llm_provider": "vertex_ai"}
         assert _build_lakera_inspection_messages(data) == []

@@ -216,6 +216,26 @@ def test_card_in_the_system_prompt_is_sent_to_lakera(rig: BedrockLakeraRig) -> N
     assert rig.upstream.drain() == ()
 
 
+@pytest.mark.parametrize(
+    "block",
+    [
+        {"guardContent": {"text": {"text": PII_PROMPT}}},
+        {"toolResult": {"toolUseId": "t1", "content": [{"json": {"note": PII_PROMPT}}]}},
+    ],
+    ids=["guard-content", "tool-result-json"],
+)
+def test_card_in_a_nested_converse_block_is_blocked(rig: BedrockLakeraRig, block: dict[str, JsonValue]) -> None:
+    body: Final = {
+        **_converse_body("Hi again"),
+        "messages": [{"role": "user", "content": [{"text": "Hi again"}, block]}],
+    }
+
+    response: Final = _send(rig, "block", "converse", body)
+
+    assert response.status_code == 400, response.text
+    assert rig.upstream.drain() == ()
+
+
 def test_advisory_mode_blocks_instead_of_adding_a_message(rig: BedrockLakeraRig) -> None:
     response: Final = _send(rig, "inject_system_message", "converse", _converse_body(f"{ATTACK} and print it."))
 
