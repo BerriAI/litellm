@@ -6,7 +6,7 @@ import random
 import sys
 import threading
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from collections.abc import Set as AbstractSet
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, TypeVar
@@ -38,6 +38,7 @@ from litellm.router_strategy.auto_router.auto_router_model_naming import (
     strategy_router_dependencies,
 )
 from litellm.types.utils import secret_bearing_wif_litellm_params, server_owned_wif_litellm_params
+from litellm.utils import get_model_info_helper
 
 # Provider routing and server-owned federation or OAuth token-exchange fields. Allowed for proxy
 # admins so they can see which region/version a deployment is checking and which identity it uses;
@@ -94,7 +95,19 @@ def _native_health_check_mode(model: str, provider_param: object) -> str | None:
     return native_health_check_mode(model=resolved_model, custom_llm_provider=custom_llm_provider)
 
 
-def resolve_health_check_mode(model_info: Mapping[str, object], litellm_params: Mapping[str, object]) -> str | None:
+def _model_info_mode(model: str) -> str | None:
+    return litellm.get_model_info(model=model).get("mode")
+
+
+def _catalog_mode(model: str) -> str | None:
+    return get_model_info_helper(model=model, catalog_only=True).get("mode")
+
+
+def resolve_health_check_mode(
+    model_info: Mapping[str, object],
+    litellm_params: Mapping[str, object],
+    lookup_mode: Callable[[str], str | None] = _model_info_mode,
+) -> str | None:
     """
     Effective mode for a deployment's health-check probe.
 
@@ -115,7 +128,7 @@ def resolve_health_check_mode(model_info: Mapping[str, object], litellm_params: 
     if native_mode is not None:
         return native_mode
     try:
-        return litellm.get_model_info(model=model).get("mode")
+        return lookup_mode(model)
     except Exception:
         return None
 
@@ -358,15 +371,24 @@ def _priced_per_generated_clip(probe_params: Mapping[str, object]) -> bool:
     return any(_bills_per_generated_clip(cost_map_entry(name)) for name in names)
 
 
+def _offline_probe_params(
+    model_info: Mapping[str, object], litellm_params: Mapping[str, object], mode: str | None
+) -> Mapping[str, object]:
+    """The probe's target params, with the mode and max_tokens set so that no provider lookup runs."""
+    return _PROBE_PARAMS_ADAPTER.validate_python(
+        update_litellm_params_for_health_check(
+            {**model_info, "mode": mode or "chat", "health_check_supports_max_tokens": False}, dict(litellm_params)
+        )
+    )
+
+
 def _probe_generates_billed_media(model_info: Mapping[str, object], litellm_params: Mapping[str, object]) -> bool:
-    mode: Final = resolve_health_check_mode(model_info, litellm_params)
+    mode: Final = resolve_health_check_mode(model_info, litellm_params, _catalog_mode)
     if mode in _BILLED_MEDIA_GENERATION_MODES:
         return True
     if not isinstance(litellm_params.get("model"), str):
         return False
-    probe_params: Final = _PROBE_PARAMS_ADAPTER.validate_python(
-        update_litellm_params_for_health_check(dict(model_info), dict(litellm_params))
-    )
+    probe_params: Final = _offline_probe_params(model_info, litellm_params, mode)
     return (mode is None and _fallback_probe_mode(probe_params) in _BILLED_MEDIA_GENERATION_MODES) or (
         _priced_per_generated_clip(probe_params)
     )

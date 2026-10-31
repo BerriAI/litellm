@@ -728,6 +728,34 @@ async def test_latest_health_checks_stops_repeating_an_old_verdict_for_a_skipped
 
 
 @pytest.mark.asyncio
+async def test_latest_health_checks_lists_a_skipped_media_model_with_no_saved_row(monkeypatch):
+    prisma = MagicMock()
+    prisma.get_all_latest_health_checks = AsyncMock(return_value=(_saved_row("chat", "healthy", None),))
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", prisma)
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.llm_model_list",
+        [
+            {
+                "model_name": "image-group",
+                "litellm_params": {"model": "gemini/gemini-3-pro-image"},
+                "model_info": {"id": "image-new", "mode": "image_generation"},
+            },
+            {"litellm_params": {"model": "openai/gpt-4o-mini"}, "model_info": {"id": "chat"}},
+        ],
+    )
+
+    response = await latest_health_checks_endpoint(user_api_key_dict=UserAPIKeyAuth())
+
+    rows = response["latest_health_checks"]
+    assert response["total_models"] == 2
+    assert rows["image-new"]["model_name"] == "image-group"
+    assert rows["image-new"]["status"] == "skipped"
+    assert rows["image-new"]["error_message"] == BILLED_MEDIA_NOT_CHECKED_WARNING
+    assert rows["image-new"]["checked_at"] is None
+    assert set(rows["image-new"]) == set(rows["chat"])
+
+
+@pytest.mark.asyncio
 async def test_latest_health_checks_endpoint_serialises_raw_rows(monkeypatch):
     row = LatestHealthCheckRow(
         health_check_id="hc-1",

@@ -1271,6 +1271,21 @@ def test_health_checks_skip_billed_media_by_the_mode_the_probe_would_run():
     )
 
 
+@pytest.mark.parametrize("model", ("huggingface/acme/llm", "lemonade/local-llm", "ollama/unmapped-local-llm"))
+def test_working_out_which_checks_bill_media_calls_no_provider(model: str):
+    deployment: Final = {"litellm_params": {"model": model}, "model_info": {"id": "local"}}
+
+    with (
+        patch.object(litellm.module_level_client, "get") as provider_get,
+        patch.object(litellm.module_level_client, "post") as provider_post,
+    ):
+        media_ids: Final = hc_module.billed_media_model_ids((deployment,))
+
+    assert media_ids == ()
+    provider_get.assert_not_called()
+    provider_post.assert_not_called()
+
+
 @pytest.mark.parametrize(
     ("litellm_params", "billed"),
     [

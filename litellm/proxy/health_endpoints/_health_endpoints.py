@@ -1696,7 +1696,9 @@ async def health_endpoint(
             )
         deployments: Final = DEPLOYMENTS_ADAPTER.validate_python(_llm_model_list)
         probe_ids: Final = None if targeted_ids is None else MODEL_IDS_ADAPTER.validate_python(targeted_ids)
-        if probe_ids is not None and all_bill_media_on_probe(deployments, probe_ids, **_hc_filter):
+        if probe_ids is not None and await asyncio.to_thread(
+            all_bill_media_on_probe, deployments, probe_ids, **_hc_filter
+        ):
             return {
                 "healthy_endpoints": [],
                 "unhealthy_endpoints": [],
@@ -1830,6 +1832,23 @@ def _latest_check_row(check: LatestHealthCheckRow, skipped_ids: frozenset[str]) 
     return {**row, "status": "skipped", "error_message": BILLED_MEDIA_NOT_CHECKED_WARNING}
 
 
+def _never_checked_media_row(model_name: object, model_id: str) -> Mapping[str, object]:
+    return {
+        "health_check_id": None,
+        "model_name": model_name,
+        "model_id": model_id,
+        "status": "skipped",
+        "healthy_count": 0,
+        "unhealthy_count": 0,
+        "error_message": BILLED_MEDIA_NOT_CHECKED_WARNING,
+        "response_time_ms": None,
+        "details": None,
+        "checked_by": None,
+        "checked_at": None,
+        "created_at": None,
+    }
+
+
 @router.get("/health/latest", tags=["health"], dependencies=[Depends(user_api_key_auth)])
 async def latest_health_checks_endpoint(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
@@ -1845,14 +1864,24 @@ async def latest_health_checks_endpoint(
 
     try:
         latest_checks: Final = await prisma_client.get_all_latest_health_checks()
-        skipped_ids: Final = frozenset(
-            await asyncio.to_thread(billed_media_model_ids, DEPLOYMENTS_ADAPTER.validate_python(llm_model_list or ()))
-        )
+        deployments: Final = DEPLOYMENTS_ADAPTER.validate_python(llm_model_list or ())
+        skipped_ids: Final = frozenset(await asyncio.to_thread(billed_media_model_ids, deployments))
+        model_names_by_id: Final = {
+            str(info["id"]): d.get("model_name")
+            for d in deployments
+            if isinstance(info := d.get("model_info"), Mapping) and info.get("id")
+        }
 
         # Convert to dict format for JSON response using helper function
         checks_data: Final = {
-            (check.model_id if check.model_id else check.model_name): _latest_check_row(check, skipped_ids)
-            for check in latest_checks
+            **{
+                model_id: _never_checked_media_row(model_names_by_id.get(model_id), model_id)
+                for model_id in skipped_ids
+            },
+            **{
+                (check.model_id if check.model_id else check.model_name): _latest_check_row(check, skipped_ids)
+                for check in latest_checks
+            },
         }
 
         return {
