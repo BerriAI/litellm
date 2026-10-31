@@ -10,8 +10,10 @@ import copy
 import importlib
 import json
 import os
+import random
 import threading
-from collections.abc import AsyncIterator, Mapping
+import tracemalloc
+from collections.abc import AsyncIterator, Callable, Mapping
 from datetime import datetime
 from types import MappingProxyType, SimpleNamespace
 from typing import Final, Optional, Union
@@ -20,7 +22,7 @@ from unittest.mock import patch
 import httpx
 import pytest
 import pytest_asyncio
-from pydantic import JsonValue
+from pydantic import JsonValue, TypeAdapter, ValidationError
 
 import litellm
 from litellm.constants import LOGGING_WORKER_MAX_TIME_PER_COROUTINE
@@ -33,6 +35,11 @@ from litellm.litellm_core_utils.redact_messages import (
     redacted_model_call_details_for_custom_logger,
     redacted_response_obj_for_custom_logger,
     redacted_standard_logging_payload,
+    request_texts,
+    scrub_request_text,
+    scrubbed_error_information_for_request,
+    scrubbed_exception_text,
+    should_redact_failed_request,
     should_redact_message_logging,
 )
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
@@ -43,6 +50,7 @@ from litellm.types.utils import (
     ModelResponseStream,
     ResponsesAPIResponse,
     StandardLoggingPayload,
+    StandardLoggingPayloadErrorInformation,
     TextCompletionResponse,
 )
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
@@ -2076,3 +2084,256 @@ def test_perform_redaction_strips_the_matched_text_from_the_bedrock_guardrail_tr
     assert "US_SSN" in redacted.model_dump_json(), "the finding stays, only its matched text goes"
     assert "123-45-6789" not in str(redacted_dict)
     assert "123-45-6789" in response.model_dump_json(), "the caller's own response is not redacted"
+
+
+PROMPT: Final = "my ssn is 123-45-6789\nand my pin is 4321, keep both safe"
+LONG_PROMPT: Final = f"my ssn is 123-45-6789 'keep it' and \"safe\" {'and more ' * 200}until the end"
+
+
+@pytest.mark.parametrize(
+    "quoted",
+    [PROMPT, json.dumps(PROMPT)[1:-1], repr(PROMPT)[1:-1]],
+    ids=["verbatim", "json", "repr"],
+)
+def test_scrub_request_text_replaces_each_way_an_error_quotes_the_prompt(quoted: str) -> None:
+    scrubbed: Final = scrub_request_text(f"Invalid content: <{quoted}> rejected", request_texts(PROMPT))
+
+    assert "123-45-6789" not in scrubbed and "4321" not in scrubbed
+    assert "redacted-by-litellm" in scrubbed
+    assert scrubbed.startswith("Invalid content: <") and scrubbed.endswith("> rejected")
+
+
+@pytest.mark.parametrize(
+    "prompt",
+    ['say "hi" to Bob', "C:\\Users\\bob", "café for Bob", "tab\tfor Bob"],
+    ids=["double_quote", "backslash", "non_ascii", "control_character"],
+)
+@pytest.mark.parametrize("escaped", [json.dumps, repr], ids=["json", "repr"])
+def test_scrub_request_text_replaces_an_escaped_echo_of_a_prompt_that_escaping_changes(
+    prompt: str, escaped: Callable[[str], str]
+) -> None:
+    error: Final = f"Invalid content: <{escaped(prompt)[1:-1]}> rejected"
+
+    assert scrub_request_text(error, request_texts(prompt)) == "Invalid content: <redacted-by-litellm> rejected"
+
+
+@pytest.mark.parametrize(
+    "value",
+    [PROMPT, [PROMPT], {"content": PROMPT}, [{"content": PROMPT}], [{"content": LONG_PROMPT}], [LONG_PROMPT]],
+    ids=[
+        "str",
+        "list",
+        "dict",
+        "nested_under_12_characters",
+        "text_longer_than_the_error",
+        "text_longer_than_the_error_cut_inside_an_escaped_quote",
+    ],
+)
+def test_scrub_request_text_replaces_both_sides_of_a_pydantic_cut_input_value(value: object) -> None:
+    with pytest.raises(ValidationError, match="input_value=") as raised:
+        TypeAdapter(int).validate_python(value)
+
+    scrubbed: Final = scrub_request_text(str(raised.value), request_texts(value))
+
+    assert "my ssn" not in scrubbed and "4321" not in scrubbed
+    assert "redacted-by-litellm...redacted-by-litellm" in scrubbed
+
+
+SINGLE_QUOTED_PROMPT: Final = "account 'secret' " + "x" * 1_000 + " end 'private'"
+BOTH_QUOTED_PROMPT: Final = 'said "secret" it\'s ' + "x" * 1_000 + ' it\'s "private"'
+DOTTED_PROMPT: Final = "account secret is there." + "x" * 1_000 + ".private secret is here"
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        SINGLE_QUOTED_PROMPT,
+        [SINGLE_QUOTED_PROMPT],
+        {"content": SINGLE_QUOTED_PROMPT},
+        BOTH_QUOTED_PROMPT,
+        [BOTH_QUOTED_PROMPT],
+        {"content": BOTH_QUOTED_PROMPT},
+        DOTTED_PROMPT,
+    ],
+    ids=[
+        "single_quotes_str",
+        "single_quotes_list",
+        "single_quotes_dict",
+        "both_quotes_str",
+        "both_quotes_list",
+        "both_quotes_dict",
+        "dots_beside_both_cuts",
+    ],
+)
+def test_scrub_request_text_replaces_pydantic_cut_sides_that_hold_the_prompts_own_quotes(value: object) -> None:
+    with pytest.raises(ValidationError, match="input_value=") as raised:
+        TypeAdapter(int).validate_python(value)
+
+    scrubbed: Final = scrub_request_text(str(raised.value), request_texts(value))
+
+    assert not any(word in scrubbed for word in ("account", "said", "secret", "private"))
+    assert "redacted-by-litellm...redacted-by-litellm" in scrubbed
+
+
+def test_scrub_request_text_leaves_an_error_that_does_not_quote_the_prompt() -> None:
+    assert scrub_request_text("Incorrect API key provided", request_texts(PROMPT, "hi")) == "Incorrect API key provided"
+
+
+def test_scrub_request_text_replaces_a_short_text_only_between_quotes() -> None:
+    scrubbed: Final = scrub_request_text("Invalid value '432' and \"432\"; 432 is too short", request_texts("432"))
+
+    assert scrubbed == "Invalid value 'redacted-by-litellm' and \"redacted-by-litellm\"; 432 is too short"
+
+
+def test_scrub_request_text_replaces_the_whole_text_when_the_search_is_too_large() -> None:
+    texts: Final = request_texts([f"message number {index}" for index in range(5_000)])
+
+    assert scrub_request_text("x" * 5_000, texts) == "redacted-by-litellm"
+
+
+def test_scrub_request_text_replaces_the_whole_text_when_the_cut_side_search_is_too_large() -> None:
+    rng: Final = random.Random(0)
+    error: Final = "".join(rng.choice("'ab") if index % 10 else "..." for index in range(10_000))
+    texts: Final = request_texts([f'say "hi" {index}' for index in range(800)])
+
+    assert scrub_request_text(error, texts) == "redacted-by-litellm"
+
+
+def test_scrub_request_text_never_copies_a_request_text_longer_than_the_error() -> None:
+    error: Final = "litellm.RateLimitError: rate limit reached for gpt-4o"
+    image_urls: Final = request_texts([f"data:image/png;base64,{index}{'A' * 1_000_000}" for index in range(4)])
+    already_tracing: Final = tracemalloc.is_tracing()
+    if not already_tracing:
+        tracemalloc.start()
+    tracemalloc.reset_peak()
+    baseline, _ = tracemalloc.get_traced_memory()
+    try:
+        scrubbed: Final = scrub_request_text(error, image_urls)
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        if not already_tracing:
+            tracemalloc.stop()
+
+    assert scrubbed == error
+    assert peak - baseline < 1_000_000, f"scrubbing a short error allocated {peak - baseline} bytes, copying the images"
+
+
+def test_request_texts_reads_content_and_skips_structural_fields() -> None:
+    texts: Final = request_texts(
+        [
+            {"role": "assistant", "content": [{"type": "text", "text": "part one text"}]},
+            {"role": "tool", "tool_call_id": "call_123456", "name": "lookup", "content": "tool output"},
+            litellm.Message(role="assistant", content="from a model object"),
+        ]
+    )
+
+    assert texts == {"part one text", "tool output", "from a model object"}
+
+
+@pytest.mark.parametrize(
+    "request_data",
+    [
+        {"turn_off_message_logging": True},
+        {"metadata": {"turn_off_message_logging": True}},
+        {"metadata": {"headers": {"x-litellm-enable-message-redaction": "true"}}},
+    ],
+    ids=["body_flag", "metadata_flag", "enable_header"],
+)
+def test_should_redact_failed_request_follows_the_request_opt_ins(request_data: dict) -> None:
+    assert should_redact_failed_request(request_data) is True
+    assert should_redact_failed_request({}) is False
+
+
+@pytest.mark.parametrize(
+    "request_data",
+    [{"metadata": {"headers": "x"}}, {"turn_off_message_logging": "os.environ/REDACT"}],
+    ids=["non_mapping_headers", "env_reference"],
+)
+@pytest.mark.parametrize("global_redaction", [True, False], ids=["global_on", "global_off"])
+def test_should_redact_failed_request_falls_back_to_the_global_setting_for_an_undecidable_request(
+    monkeypatch: pytest.MonkeyPatch, request_data: dict, global_redaction: bool
+) -> None:
+    monkeypatch.setattr(litellm, "turn_off_message_logging", global_redaction)
+
+    assert should_redact_failed_request(request_data) is global_redaction
+
+
+@pytest.mark.parametrize(
+    "request_data",
+    [
+        {"turn_off_message_logging": True, "langfuse_host": "os.environ/LANGFUSE_HOST"},
+        {"metadata": {"turn_off_message_logging": True, "langfuse_host": "os.environ/LANGFUSE_HOST"}},
+    ],
+    ids=["body_flag", "metadata_flag"],
+)
+def test_should_redact_failed_request_keeps_the_request_opt_in_past_a_rejected_callback_param(
+    monkeypatch: pytest.MonkeyPatch, request_data: dict
+) -> None:
+    monkeypatch.setattr(litellm, "turn_off_message_logging", False)
+
+    assert should_redact_failed_request(request_data) is True
+
+
+def test_should_redact_failed_request_reads_the_request_setting_past_non_mapping_headers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "turn_off_message_logging", False)
+
+    assert should_redact_failed_request({"metadata": {"headers": "x"}, "turn_off_message_logging": True}) is True
+
+
+@pytest.mark.parametrize(
+    "error_information",
+    [
+        {"error_message": "bad: redacted-by-litellm", "traceback": "tb"},
+        {"error_message": "bad input", "traceback": "tb redacted-by-litellm"},
+    ],
+    ids=["message", "traceback_only"],
+)
+def test_scrubbed_exception_text_reports_a_scrub_of_either_field(error_information: dict) -> None:
+    logged: Final = scrubbed_exception_text({"standard_logging_object": {"error_information": error_information}})
+
+    assert logged == (error_information["error_message"], error_information["traceback"])
+    assert scrubbed_exception_text({"standard_logging_object": {"error_information": {"error_message": "bad"}}}) is None
+
+
+def test_scrubbed_exception_text_reports_a_scrub_of_the_logged_traceback() -> None:
+    model_call_details: Final = {
+        "traceback_exception": "ValueError: bad: redacted-by-litellm",
+        "standard_logging_object": {"error_information": {"error_message": "outer", "traceback": "frames"}},
+    }
+
+    assert scrubbed_exception_text(model_call_details) == ("outer", "ValueError: bad: redacted-by-litellm")
+
+
+def test_scrubbed_exception_text_reads_the_message_off_the_traceback_without_a_logged_message() -> None:
+    traceback_text: Final = (
+        "Traceback (most recent call last):\n"
+        '  File "main.py", line 1, in completion\n'
+        "    raise BadRequestError(message)\n"
+        "BadRequestError: Invalid content: 'redacted-by-litellm'\n"
+        "Received Messages=['redacted-by-litellm']\n"
+    )
+
+    assert scrubbed_exception_text({"traceback_exception": traceback_text}) == (
+        "BadRequestError: Invalid content: 'redacted-by-litellm'\nReceived Messages=['redacted-by-litellm']",
+        traceback_text,
+    )
+
+
+def test_scrubbed_error_information_for_request_scrubs_only_when_the_request_redacts() -> None:
+    error_information: Final = StandardLoggingPayloadErrorInformation(
+        error_code="400", error_class="BadRequestError", error_message=f"bad: {PROMPT}", traceback=f"tb {PROMPT}"
+    )
+    messages: Final = [{"role": "user", "content": PROMPT}]
+
+    scrubbed: Final = scrubbed_error_information_for_request(
+        error_information, {"messages": messages, "turn_off_message_logging": True}
+    )
+
+    assert scrubbed == {
+        **error_information,
+        "error_message": "bad: redacted-by-litellm",
+        "traceback": "tb redacted-by-litellm",
+    }
+    assert scrubbed_error_information_for_request(error_information, {"messages": messages}) == error_information
