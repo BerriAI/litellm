@@ -96,6 +96,30 @@ def test_anthropic_json_mode_non_streaming_mixed_internal_and_user_tools():
     assert extra == '{"answer": 42}'
 
 
+@pytest.mark.parametrize("completion_response", [{}, {"content": None}, {"content": []}])
+def test_calculate_usage_without_content_preserves_reported_tokens(completion_response: dict[str, object]) -> None:
+    usage: Final = AnthropicConfig().calculate_usage(
+        usage_object={"input_tokens": 12, "output_tokens": 3},
+        reasoning_content=None,
+        completion_response=completion_response,
+    )
+    assert (usage.prompt_tokens, usage.completion_tokens, usage.total_tokens) == (12, 3, 15)
+
+
+@pytest.mark.parametrize("content_fields", [{}, {"content": None}, {"content": []}])
+def test_transform_response_without_content_preserves_reported_usage(content_fields: dict[str, object]) -> None:
+    body: Final = {
+        "id": "msg_empty",
+        "model": "claude-opus-5-5",
+        "stop_reason": "end_turn",
+        "usage": {"input_tokens": 12, "output_tokens": 3},
+        **content_fields,
+    }
+    response: Final = _transform_message_body(body)
+    assert response.choices[0].message.content is None
+    assert (response.usage.prompt_tokens, response.usage.completion_tokens, response.usage.total_tokens) == (12, 3, 15)
+
+
 def test_calculate_usage():
     """
     Do not include cache_creation_input_tokens in the prompt_tokens

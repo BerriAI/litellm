@@ -179,6 +179,14 @@ NATIVE_OUTPUT_MAX_OPTIONAL_PARAMETERS: Final = 24
 NATIVE_OUTPUT_MAX_GRAMMAR_BRANCHES: Final = 2048
 
 
+class _ResponseContent(BaseModel):
+    model_config = ConfigDict(frozen=True, from_attributes=True)
+    content: object = None
+
+
+_RESPONSE_FIELDS: Final = TypeAdapter(_ResponseContent)
+
+
 def _tool_type(tool: object) -> str | None:
     match tool:
         case {"type": str() as tool_type}:
@@ -2593,7 +2601,8 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         web_search_results: list[object] | None = None
         tool_results: list[_AnthropicToolResultBlock] | None = None
         compaction_blocks: list[object] | None = None
-        for idx, content in enumerate(completion_response["content"]):
+        response_fields: Final = _RESPONSE_FIELDS.validate_python(completion_response)
+        for idx, content in enumerate(completion_response["content"] if response_fields.content is not None else []):
             if content["type"] == "text":
                 text_content += content["text"]
             ## TOOL CALLING
@@ -2830,7 +2839,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         # Anthropic doesn't always include tool_search_requests in the usage object
         if tool_search_requests is None and completion_response is not None:
             tool_search_count = 0
-            for content in completion_response.get("content", []):
+            for content in completion_response.get("content") or []:
                 if content.get("type") == "server_tool_use":
                     tool_name = content.get("name", "")
                     if "tool_search" in tool_name:
@@ -3092,7 +3101,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             _message = json_mode_message
 
         model_response.choices[0].message = _message
-        model_response.hidden_params["original_response"] = completion_response["content"]
+        model_response.hidden_params["original_response"] = _RESPONSE_FIELDS.validate_python(
+            completion_response
+        ).content
         model_response.choices[0].finish_reason = cast(
             OpenAIChatCompletionFinishReason,
             map_finish_reason(completion_response["stop_reason"]),
