@@ -3,8 +3,9 @@ from __future__ import annotations
 import json
 import os
 import uuid
-from collections.abc import Callable
-from typing import Final
+from collections.abc import AsyncIterator, Callable, Iterator
+from copy import deepcopy
+from typing import Final, Protocol, runtime_checkable
 
 import openai
 import pytest
@@ -14,11 +15,24 @@ from integration._support.worker_readiness import wait_for_worker_readiness
 from openai.types.responses import ResponseCompletedEvent
 from pydantic import JsonValue, TypeAdapter
 
+import litellm
+from litellm.types.llms.openai import ResponsesAPIResponse
+
 _MODEL: Final = "gpt-5"
 _API_KEY: Final = "synthetic-responses-key"
 _JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
 _PROXY_WORKERS: Final = max(1, int(os.environ.get("INTEGRATION_PROXY_WORKERS", "1")))
 _ALIASES: Final = ("/v1", "", "/openai/v1")
+
+
+@runtime_checkable
+class _AsyncResponseEvents(Protocol):
+    def __aiter__(self) -> AsyncIterator[object]: ...
+
+
+@runtime_checkable
+class _ResponseEvents(Protocol):
+    def __iter__(self) -> Iterator[object]: ...
 
 
 def _deployments_in_group(gateway: Gateway, group: str) -> int:
@@ -67,6 +81,157 @@ def _stream(identity: str) -> tuple[bytes, ...]:
             {"type": "response.completed", "response": json.loads(_response(identity))},
         )
     ) + (b"data: [DONE]\n\n",)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", (False, True), ids=("sync", "async"))
+@pytest.mark.parametrize("stream", (False, True), ids=("nonstream", "stream"))
+@pytest.mark.parametrize("extra", (False, True), ids=("top-level", "extra-body-precedence"))
+async def test_regression_sdk_comparison_response_id_is_raw_on_the_wire(
+    asynchronous: bool, stream: bool, extra: bool
+) -> None:
+    raw_id: Final = f"resp_sdk_comparison_{uuid.uuid4().hex}"
+
+    def respond(request: Request) -> Reply:
+        assert (request.method, request.target) == ("POST", "/v1/responses")
+        body: Final = _JSON_OBJECT.validate_json(request.body)
+        if body["input"] == "seed comparison":
+            assert body == {"model": _MODEL, "input": "seed comparison"}, request.body
+            return Reply(body=_response(raw_id))
+        assert body == {
+            "model": _MODEL,
+            "input": "compare response",
+            "stream": stream,
+            "previous_response_id": raw_id,
+            "prompt_cache_options": {"comparison_response_id": raw_id},
+        }, request.body
+        return (
+            Reply(content_type="text/event-stream", chunks=_stream(raw_id)) if stream else Reply(body=_response(raw_id))
+        )
+
+    with wire_server(respond) as wire:
+        seeded: Final = litellm.responses(
+            model=f"openai/{_MODEL}", input="seed comparison", api_base=f"{wire.url}/v1", api_key=_API_KEY
+        )
+        assert isinstance(seeded, ResponsesAPIResponse), seeded
+        assert seeded.id != raw_id, seeded
+        params: Final = {
+            "model": f"openai/{_MODEL}",
+            "input": "compare response",
+            "stream": stream,
+            "previous_response_id": seeded.id,
+            "api_base": f"{wire.url}/v1",
+            "api_key": _API_KEY,
+            "num_retries": 0,
+            **(
+                {
+                    "prompt_cache_options": {"mode": "explicit", "ttl": "12h"},
+                    "extra_body": {"prompt_cache_options": {"comparison_response_id": seeded.id}},
+                }
+                if extra
+                else {"prompt_cache_options": {"comparison_response_id": seeded.id}}
+            ),
+        }
+        original: Final = deepcopy(params)
+        result: Final = await litellm.aresponses(**params) if asynchronous else litellm.responses(**params)
+        if stream:
+            if asynchronous:
+                assert isinstance(result, _AsyncResponseEvents), result
+                async_events: Final = tuple([event async for event in result])
+                async_completed: Final = ResponseCompletedEvent.model_validate(async_events[-1])
+                assert async_completed.response.status == "completed", async_events
+            else:
+                assert isinstance(result, _ResponseEvents), result
+                sync_events: Final = tuple(result)
+                sync_completed: Final = ResponseCompletedEvent.model_validate(sync_events[-1])
+                assert sync_completed.response.status == "completed", sync_events
+        else:
+            assert isinstance(result, ResponsesAPIResponse), result
+            assert result.status == "completed", result
+        assert params == original, "The caller's comparison options were mutated"
+        assert len(wire.drain()) == 2
+
+
+@pytest.mark.parametrize("extra", (False, True))
+@pytest.mark.parametrize("comparison_id", ("resp_custom_vendor_id", "resp_!!!not-base64", "cmF3X3ZlbmRvcl9pZA=="))
+def test_guard_sdk_custom_host_preserves_unmanaged_comparison_ids(extra: bool, comparison_id: str) -> None:
+    def respond(request: Request) -> Reply:
+        assert (request.method, request.target) == ("POST", "/v1/responses")
+        assert _JSON_OBJECT.validate_json(request.body) == {
+            "model": _MODEL,
+            "input": "custom comparison",
+            "prompt_cache_options": {"comparison_response_id": comparison_id, "mode": "implicit", "ttl": "30m"},
+        }, request.body
+        return Reply(body=_response("resp_custom_result"))
+
+    with wire_server(respond) as wire:
+        options: Final = {
+            "comparison_response_id": comparison_id,
+            "mode": "implicit",
+            "ttl": "30m",
+        }
+        params: Final = (
+            {"extra_body": {"prompt_cache_options": options}} if extra else {"prompt_cache_options": options}
+        )
+        original: Final = deepcopy(params)
+        result: Final = litellm.responses(
+            model=f"openai/{_MODEL}", input="custom comparison", api_base=f"{wire.url}/v1", api_key=_API_KEY, **params
+        )
+        assert isinstance(result, ResponsesAPIResponse), result
+        assert result.status == "completed", result
+        assert params == original
+        assert len(wire.drain()) == 1
+
+
+@pytest.mark.parametrize("provider", ("azure", "xai"))
+@pytest.mark.parametrize("extra", (False, True))
+def test_guard_inherited_responses_providers_preserve_comparison_wrappers(provider: str, extra: bool) -> None:
+    raw_id: Final = f"resp_inherited_{uuid.uuid4().hex}"
+
+    def seed(request: Request) -> Reply:
+        assert _JSON_OBJECT.validate_json(request.body) == {"model": _MODEL, "input": "seed inherited comparison"}
+        return Reply(body=_response(raw_id))
+
+    with wire_server(seed) as seed_wire:
+        seeded: Final = litellm.responses(
+            model=f"openai/{_MODEL}",
+            input="seed inherited comparison",
+            api_base=f"{seed_wire.url}/v1",
+            api_key=_API_KEY,
+        )
+        assert isinstance(seeded, ResponsesAPIResponse), seeded
+        assert seeded.id != raw_id
+        assert len(seed_wire.drain()) == 1
+
+    def respond(request: Request) -> Reply:
+        assert request.method == "POST", request
+        expected_target: Final = (
+            "/openai/responses?api-version=2025-03-01-preview" if provider == "azure" else "/v1/responses"
+        )
+        assert request.target == expected_target, request.target
+        assert _JSON_OBJECT.validate_json(request.body) == {
+            "model": _MODEL,
+            "input": "inherited comparison",
+            "prompt_cache_options": {"comparison_response_id": seeded.id},
+        }, request.body
+        return Reply(body=_response(raw_id))
+
+    with wire_server(respond) as wire:
+        options: Final = {"comparison_response_id": seeded.id}
+        params: Final = (
+            {"extra_body": {"prompt_cache_options": options}} if extra else {"prompt_cache_options": options}
+        )
+        result: Final = litellm.responses(
+            model=f"{provider}/{_MODEL}",
+            input="inherited comparison",
+            api_base=wire.url if provider == "azure" else f"{wire.url}/v1",
+            api_key=_API_KEY,
+            api_version="2025-03-01-preview" if provider == "azure" else None,
+            **params,
+        )
+        assert isinstance(result, ResponsesAPIResponse), result
+        assert result.status == "completed", result
+        assert len(wire.drain()) == 1
 
 
 def _register_in_group(scenario: Scenario, wire: Wire, group: str, order: int | None = None) -> str:
