@@ -130,7 +130,7 @@ The following arguments are supported:
 
 * `metadata` - (Optional) A map of string metadata key-value pairs associated with the team. `tags` and `soft_budget_alerting_emails` are stored by the proxy under metadata but are managed through their own attributes below, not this map.
 
-* `tags` - (Optional) List of tags applied to the team, used for [spend tracking](https://docs.litellm.ai/docs/proxy/enterprise#tracking-spend-for-custom-tags) and [tag-based routing](https://docs.litellm.ai/docs/proxy/tag_routing).
+* `tags` - (Optional) List of tags applied to the team, used for [spend tracking](https://docs.litellm.ai/docs/proxy/cost_tracking#custom-tags) and [tag-based routing](https://docs.litellm.ai/docs/proxy/tag_routing).
 
 * `blocked` - (Optional) Whether the team is blocked from making requests. Default is `false`.
 
