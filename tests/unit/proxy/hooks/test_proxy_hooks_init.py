@@ -14,8 +14,15 @@ silently swallowed the ImportError in `hooks/__init__.py`, leaving
 ``managed_files`` unregistered and the /files endpoint returning 500.
 """
 
+import importlib
+import logging
+import sys
+from typing import Final
+
 import pytest
 
+import litellm.proxy
+from litellm._logging import verbose_proxy_logger
 from litellm.proxy.hooks import PROXY_HOOKS, get_proxy_hook
 
 
@@ -49,3 +56,73 @@ def test_isolation_module_does_not_pull_in_proxy_utils():
     importlib.import_module("litellm.llms.base_llm.managed_resources.isolation")
     assert "litellm.proxy.utils" not in sys.modules
     assert "litellm.proxy.management_endpoints.common_utils" not in sys.modules
+
+
+def test_managed_hooks_register_from_litellm_enterprise_without_the_repo_only_enterprise_package(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    pytest.importorskip("litellm_enterprise")
+    from litellm_enterprise.proxy.hooks.managed_files import PROXY_LiteLLMManagedFiles
+    from litellm_enterprise.proxy.hooks.managed_vector_stores import PROXY_LiteLLMManagedVectorStores
+
+    monkeypatch.setitem(sys.modules, "enterprise", None)
+    monkeypatch.setitem(sys.modules, "enterprise.enterprise_hooks", None)
+    monkeypatch.delitem(sys.modules, "litellm.proxy.hooks")
+    monkeypatch.delattr(litellm.proxy, "hooks")
+
+    wheel_install_hooks: Final = importlib.import_module("litellm.proxy.hooks")
+
+    assert wheel_install_hooks.get_proxy_hook("managed_files") is PROXY_LiteLLMManagedFiles
+    assert wheel_install_hooks.get_proxy_hook("managed_vector_stores") is PROXY_LiteLLMManagedVectorStores
+
+
+def test_proxy_hooks_still_import_and_warn_when_litellm_enterprise_cannot_load(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+):
+    monkeypatch.setitem(sys.modules, "litellm_enterprise.proxy.hooks.managed_files", None)
+    monkeypatch.delitem(sys.modules, "litellm.proxy.hooks")
+    monkeypatch.delattr(litellm.proxy, "hooks")
+    verbose_proxy_logger.addHandler(caplog.handler)
+    try:
+        with caplog.at_level(logging.WARNING, logger=verbose_proxy_logger.name):
+            hooks_without_enterprise: Final = importlib.import_module("litellm.proxy.hooks")
+    finally:
+        verbose_proxy_logger.removeHandler(caplog.handler)
+
+    assert "managed_files" not in hooks_without_enterprise.PROXY_HOOKS
+    assert "managed_vector_stores" not in hooks_without_enterprise.PROXY_HOOKS
+    assert "parallel_request_limiter" in hooks_without_enterprise.PROXY_HOOKS
+    assert any(
+        "Managed files and managed vector stores are disabled" in record.getMessage() for record in caplog.records
+    )
+
+
+class _LitellmEnterpriseNotInstalled:
+    def find_spec(self, fullname: str, path: object, target: object = None) -> None:
+        if fullname.partition(".")[0] == "litellm_enterprise":
+            raise ModuleNotFoundError(f"No module named {fullname!r}", name=fullname)
+        return None
+
+
+def test_proxy_hooks_import_without_a_warning_when_litellm_enterprise_is_not_installed(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+):
+    for enterprise_module in [name for name in sys.modules if name.partition(".")[0] == "litellm_enterprise"]:
+        monkeypatch.delitem(sys.modules, enterprise_module)
+    monkeypatch.setattr(sys, "meta_path", [_LitellmEnterpriseNotInstalled(), *sys.meta_path])
+    monkeypatch.delitem(sys.modules, "litellm.proxy.hooks")
+    monkeypatch.delattr(litellm.proxy, "hooks")
+    verbose_proxy_logger.addHandler(caplog.handler)
+    try:
+        with caplog.at_level(logging.WARNING, logger=verbose_proxy_logger.name):
+            sdk_only_hooks: Final = importlib.import_module("litellm.proxy.hooks")
+    finally:
+        verbose_proxy_logger.removeHandler(caplog.handler)
+
+    assert "managed_files" not in sdk_only_hooks.PROXY_HOOKS
+    assert "parallel_request_limiter" in sdk_only_hooks.PROXY_HOOKS
+    assert not any(
+        "Managed files and managed vector stores are disabled" in record.getMessage() for record in caplog.records
+    )

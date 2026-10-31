@@ -13,3 +13,11 @@ class CommonProxyErrors(str, enum.Enum):
     max_parallel_request_limit_reached = "Crossed TPM / RPM / Max Parallel Request Limit"
     missing_enterprise_package = "Missing litellm-enterprise package. Please install it to use this feature. Run `pip install litellm-enterprise`"
     missing_enterprise_package_docker = "This uses the enterprise folder - only available on the Docker image."
+    managed_files_unavailable = (
+        "Managed files need a database (set DATABASE_URL) and the litellm-enterprise package, "
+        "and this proxy is missing one of them"
+    )
+    managed_vector_stores_unavailable = (
+        "Managed vector stores need a database (set DATABASE_URL) and the litellm-enterprise package, "
+        "and this proxy is missing one of them"
+    )

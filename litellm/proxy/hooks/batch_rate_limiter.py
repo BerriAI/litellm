@@ -40,6 +40,7 @@ from litellm.constants import BATCH_TPD_DESCRIPTOR_SUFFIX, BATCH_TPD_WINDOW_SECO
 from litellm.exceptions import RateLimitErrorCategory
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import (
+    CommonProxyErrors,
     ProxyErrorTypes,
     ProxyException,
     SpecialModelNames,
@@ -1221,7 +1222,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
 
         managed_files_obj: Final = proxy_logging_obj.get_proxy_hook("managed_files")
         if managed_files_obj is None:
-            raise ValueError("Managed files hook not found. Cannot access managed file.")
+            raise ValueError(CommonProxyErrors.managed_files_unavailable.value)
 
         if not isinstance(managed_files_obj, BaseFileEndpoints):
             raise ValueError("Managed files hook is not a BaseFileEndpoints instance.")

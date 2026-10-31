@@ -3466,3 +3466,116 @@ def test_proxy_vector_store_writes_send_only_the_callers_metadata_when_the_raw_b
     assert response.status_code == 200, response.text
     assert len(sent_bodies) == 1
     assert sent_bodies[0].get("metadata") == CALLERS_METADATA
+
+
+class _ManagedStoreRow:
+    def __init__(self, resource_object: dict) -> None:
+        self.resource_object = resource_object
+
+    def model_dump(self) -> dict:
+        return {"created_by": "store-owner", "team_id": None}
+
+
+class _ManagedStoreTable:
+    def __init__(self) -> None:
+        self.rows = {}
+
+    async def find_first(self, where):
+        return self.rows.get(where["unified_resource_id"])
+
+    async def delete(self, where):
+        return self.rows.pop(where["unified_resource_id"])
+
+
+_PROVIDER_STORE_ROUTE = "https://api.openai.com/v1/vector_stores/vs_provider"
+_PROVIDER_DELETED_STORE = {"id": "vs_provider", "object": "vector_store.deleted", "deleted": True}
+
+
+def _proxy_serving_one_managed_vector_store(monkeypatch):
+    from types import SimpleNamespace
+
+    from fastapi.testclient import TestClient
+    from litellm_enterprise.proxy.hooks.managed_vector_stores import PROXY_LiteLLMManagedVectorStores
+
+    from litellm.caching import DualCache
+    from litellm.proxy import proxy_server
+    from litellm.proxy.proxy_server import app
+
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    monkeypatch.setattr(proxy_server, "master_key", "sk-master-test")
+    monkeypatch.setattr(
+        proxy_server,
+        "llm_router",
+        litellm.Router(
+            model_list=[{"model_name": "model-a", "litellm_params": {"model": "openai/gpt-5", "api_key": "sk-test"}}]
+        ),
+    )
+    table = _ManagedStoreTable()
+    hook = PROXY_LiteLLMManagedVectorStores(
+        DualCache(), prisma_client=SimpleNamespace(db=SimpleNamespace(litellm_managedvectorstoretable=table))
+    )
+    provider_store = {
+        "id": "vs_provider",
+        "object": "vector_store",
+        "created_at": 0,
+        "name": "store",
+        "usage_bytes": 0,
+        "file_counts": {"in_progress": 0, "completed": 0, "failed": 0, "cancelled": 0, "total": 0},
+        "status": "completed",
+        "metadata": {},
+    }
+    unified_id = hook.generate_unified_resource_id(resource_objects=[provider_store], target_model_names_list=["model-a"])
+    table.rows[unified_id] = _ManagedStoreRow(provider_store)
+    monkeypatch.setitem(proxy_server.proxy_logging_obj.proxy_hook_mapping, "managed_vector_stores", hook)
+    monkeypatch.setattr(litellm, "callbacks", [hook])
+    return TestClient(app, headers={"Authorization": "Bearer sk-master-test"}), table, unified_id, provider_store
+
+
+def test_proxy_answers_by_managed_vector_store_id_and_forgets_the_store_once_the_provider_deletes_it(monkeypatch):
+    import httpx
+    import respx
+
+    client, _, unified_id, provider_store = _proxy_serving_one_managed_vector_store(monkeypatch)
+
+    with respx.mock(assert_all_called=False) as upstream:
+        upstream.get(_PROVIDER_STORE_ROUTE).mock(return_value=httpx.Response(200, json=provider_store))
+        upstream.post(_PROVIDER_STORE_ROUTE).mock(return_value=httpx.Response(200, json={**provider_store, "name": "renamed"}))
+        upstream.delete(_PROVIDER_STORE_ROUTE).mock(return_value=httpx.Response(200, json=_PROVIDER_DELETED_STORE))
+
+        retrieved = client.get(f"/v1/vector_stores/{unified_id}")
+        updated = client.post(f"/v1/vector_stores/{unified_id}", json={"name": "renamed"})
+        deleted = client.delete(f"/v1/vector_stores/{unified_id}")
+        retrieved_after_delete = client.get(f"/v1/vector_stores/{unified_id}")
+        upstream_requests = [(call.request.method, call.request.url.path) for call in upstream.calls]
+
+    assert retrieved.status_code == 200, retrieved.text
+    assert (retrieved.json()["id"], retrieved.json()["name"]) == (unified_id, "store")
+    assert updated.status_code == 200, updated.text
+    assert (updated.json()["id"], updated.json()["name"]) == (unified_id, "renamed")
+    assert deleted.status_code == 200, deleted.text
+    assert (deleted.json()["id"], deleted.json()["deleted"]) == (unified_id, True)
+    assert retrieved_after_delete.status_code == 404, retrieved_after_delete.text
+    assert upstream_requests == [
+        ("GET", "/v1/vector_stores/vs_provider"),
+        ("POST", "/v1/vector_stores/vs_provider"),
+        ("DELETE", "/v1/vector_stores/vs_provider"),
+    ]
+
+
+def test_proxy_confirms_a_managed_vector_store_delete_when_a_concurrent_delete_already_forgot_the_store(monkeypatch):
+    import httpx
+    import respx
+
+    client, table, unified_id, _ = _proxy_serving_one_managed_vector_store(monkeypatch)
+
+    def provider_deletes_after_a_concurrent_delete_forgot_the_store(request):
+        table.rows.pop(unified_id)
+        return httpx.Response(200, json=_PROVIDER_DELETED_STORE)
+
+    with respx.mock(assert_all_called=False) as upstream:
+        upstream.delete(_PROVIDER_STORE_ROUTE).mock(side_effect=provider_deletes_after_a_concurrent_delete_forgot_the_store)
+        deleted = client.delete(f"/v1/vector_stores/{unified_id}")
+
+    assert deleted.status_code == 200, deleted.text
+    assert (deleted.json()["id"], deleted.json()["deleted"]) == (unified_id, True)

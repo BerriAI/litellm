@@ -137,7 +137,9 @@ class AutoRouterBaselineCache(CustomLogger):
             return
         try:
             raw_metadata: Final = kwargs.get(get_metadata_variable_name_from_kwargs(kwargs))
-            metadata: Final = _METADATA.validate_python(raw_metadata) if isinstance(raw_metadata, Mapping) else {}
+            metadata: Final[Mapping[str, object]] = (
+                _METADATA.validate_python(raw_metadata) if isinstance(raw_metadata, Mapping) else {}
+            )
             if metadata.get(INTERNAL_CALL_ORIGIN_METADATA_KEY):
                 return
             if logging_obj.baseline_cache_context is not None:
@@ -157,7 +159,7 @@ class AutoRouterBaselineCache(CustomLogger):
             prices: Final = _PRICES.validate_python(
                 _effective_model_info(router, request.route.baseline_deployment_id, request.route.baseline_model)
             )
-            params: Final = (
+            params: Final[Mapping[str, object]] = (
                 _METADATA.validate_python(deployment.litellm_params.model_dump(mode="json")) if deployment else {}
             )
             projected: Final = (

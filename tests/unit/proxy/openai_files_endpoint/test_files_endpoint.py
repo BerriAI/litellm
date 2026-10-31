@@ -6306,6 +6306,17 @@ def test_create_file_passthrough_fails_closed_when_guardrails_would_scan_the_bat
     assert forwarded_calls == []
 
 
+def test_upload_with_target_model_names_on_a_proxy_without_a_database_says_what_it_needs(batch_upload_seams):
+    stored, provider_upload, _ = batch_upload_seams
+
+    response = _upload_batch_file({}, {"target_model_names": "gemini-2.0-flash"})
+
+    assert response.status_code == 500, response.text
+    assert "DATABASE_URL" in response.json()["error"]["message"]
+    stored.assert_not_awaited()
+    provider_upload.assert_not_awaited()
+
+
 def _callers_files_on_every_deployment() -> list[MagicMock]:
     return [
         _managed_file_row("unified-gpt-newer", model_mappings={"gpt-3.5-turbo-id": "file-gpt-newer"}),
