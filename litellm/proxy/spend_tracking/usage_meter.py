@@ -43,7 +43,7 @@ class UsageCaptureSettings(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     batch_size: int = Field(default=1000, ge=2, le=1000)
-    flush_interval_seconds: float = Field(default=0.2, gt=0, le=10)
+    flush_interval_seconds: float = Field(default=5.0, gt=0, le=10)
     max_pending_bytes: int = Field(default=16 * 1024 * 1024, ge=1024)
     max_pending_records: int = Field(default=10000, ge=2)
 

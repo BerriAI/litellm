@@ -259,6 +259,7 @@ async def test_elapsed_flush_deadline_commits_a_partial_batch() -> None:
     database.release.set()
 
     async def expired_flush(wakeup: asyncio.Event, timeout: float) -> None:
+        assert timeout == 5.0
         await _wait_for_batch(wakeup, 0)
 
     meter: Final = DurableUsageMeter(database.write, UsageCaptureSettings(batch_size=10), wait_for_batch=expired_flush)
