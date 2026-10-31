@@ -614,9 +614,18 @@ def test_clear_tool_inputs_list_clears_only_the_named_tools():
     }
 
 
+def _history_with_first_block_field(index: int, field: str, value: object) -> list[dict[str, object]]:
+    history: Final = _make_history(n_pairs=4)
+    return [
+        {**message, "content": [{**message["content"][0], field: value}, *message["content"][1:]]}
+        if position == index
+        else message
+        for position, message in enumerate(history)
+    ]
+
+
 def test_a_tool_use_with_a_non_string_id_is_left_for_the_provider_to_reject():
-    messages = _make_history(n_pairs=4)
-    messages[1]["content"][0]["id"] = ["toolu_00"]
+    messages: Final = _history_with_first_block_field(1, "id", ["toolu_00"])
     new_messages, applied = apply_clear_tool_uses_20250919(
         model=MODEL,
         messages=messages,
@@ -636,8 +645,7 @@ def test_a_tool_use_with_a_non_string_id_is_left_for_the_provider_to_reject():
 
 
 def test_a_tool_result_with_a_non_string_tool_use_id_is_left_for_the_provider_to_reject():
-    messages = _make_history(n_pairs=4)
-    messages[2]["content"][0]["tool_use_id"] = ["toolu_00"]
+    messages: Final = _history_with_first_block_field(2, "tool_use_id", ["toolu_00"])
     new_messages, applied = apply_clear_tool_uses_20250919(
         model=MODEL,
         messages=messages,
