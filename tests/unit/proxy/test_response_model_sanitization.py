@@ -99,8 +99,6 @@ def test_restamp_streaming_chunk_skips_matching_model():
 
 
 def test_serialize_streaming_chunk_omits_a_missing_model_instead_of_null():
-    """Strict OpenAI-compatible clients reject ``null`` for optional string
-    fields, so a chunk without a model leaves the key out of the frame."""
     from litellm.proxy.proxy_server import _serialize_streaming_chunk
 
     chunk = _make_model_response_stream_chunk("client-model")

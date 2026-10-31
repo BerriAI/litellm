@@ -79,6 +79,10 @@ def _simple_chunk(model: str = "gpt-4", content: str = "hi") -> ModelResponseStr
     )
 
 
+def _sse_text(frame: str | bytes) -> str:
+    return frame.decode() if isinstance(frame, bytes) else frame
+
+
 async def _async_iter(items):
     for it in items:
         yield it
@@ -663,7 +667,7 @@ async def test_async_data_generator_yields_sse_chunks_and_done(monkeypatch):
         out.append(line)
 
     assert out[-1] == "data: [DONE]\n\n"
-    payload = json.loads(out[0].removeprefix("data: ").removesuffix("\n\n"))
+    payload = json.loads(_sse_text(out[0]).removeprefix("data: ").removesuffix("\n\n"))
     assert normalize(payload) == {
         "id": "<VOLATILE>",
         "object": "chat.completion.chunk",
@@ -761,7 +765,7 @@ async def test_async_data_generator_sse_frame_keeps_provider_fields_on_a_text_ch
         )
     ]
 
-    assert read_field(json.loads(out[0].removeprefix("data: ").removesuffix("\n\n"))) == sent
+    assert read_field(json.loads(_sse_text(out[0]).removeprefix("data: ").removesuffix("\n\n"))) == sent
 
 
 @pytest.mark.asyncio
@@ -785,7 +789,7 @@ async def test_async_data_generator_uses_response_fallback_metadata(monkeypatch)
     ):
         out.append(line)
 
-    payload = json.loads(out[0].removeprefix("data: ").removesuffix("\n\n"))
+    payload = json.loads(_sse_text(out[0]).removeprefix("data: ").removesuffix("\n\n"))
     assert payload["model"] == "fallback-model"
 
 
@@ -808,7 +812,7 @@ async def test_async_data_generator_uses_chunk_fallback_metadata(monkeypatch):
     ):
         out.append(line)
 
-    payload = json.loads(out[0].removeprefix("data: ").removesuffix("\n\n"))
+    payload = json.loads(_sse_text(out[0]).removeprefix("data: ").removesuffix("\n\n"))
     assert payload["model"] == "fallback-model"
 
 
@@ -835,8 +839,8 @@ async def test_async_data_generator_switches_model_mid_stream_on_fallback(monkey
     ):
         out.append(line)
 
-    first_payload = json.loads(out[0].removeprefix("data: ").removesuffix("\n\n"))
-    second_payload = json.loads(out[1].removeprefix("data: ").removesuffix("\n\n"))
+    first_payload = json.loads(_sse_text(out[0]).removeprefix("data: ").removesuffix("\n\n"))
+    second_payload = json.loads(_sse_text(out[1]).removeprefix("data: ").removesuffix("\n\n"))
     assert first_payload["model"] == "primary-model"
     assert second_payload["model"] == "fallback-model"
 
@@ -872,7 +876,7 @@ async def test_async_data_generator_emits_fallback_error_metadata_event(monkeypa
     ):
         out.append(line)
 
-    chunk_payload = json.loads(out[0].removeprefix("data: ").removesuffix("\n\n"))
+    chunk_payload = json.loads(_sse_text(out[0]).removeprefix("data: ").removesuffix("\n\n"))
     assert chunk_payload["model"] == "fallback-model"
     assert isinstance(out[1], str)
     assert out[1].startswith("data: ")
@@ -920,7 +924,7 @@ async def test_async_data_generator_skips_fallback_error_event_without_opt_in(
     ):
         out.append(line)
 
-    payload = json.loads(out[0].removeprefix("data: ").removesuffix("\n\n"))
+    payload = json.loads(_sse_text(out[0]).removeprefix("data: ").removesuffix("\n\n"))
     assert payload["model"] == "fallback-model"
 
 

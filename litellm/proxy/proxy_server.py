@@ -10070,8 +10070,8 @@ def _restamp_nested_response_model_in_sse_line(line: bytes, target_model: str) -
     return _SSE_DATA_FIELD + b" " + serialized_event.encode() + line_ending
 
 
-def _serialize_streaming_chunk(chunk: BaseModel) -> str:
-    return chunk.model_dump_json(exclude_none=True, exclude_unset=True)
+def _serialize_streaming_chunk(chunk: BaseModel) -> bytes:
+    return chunk.model_dump_json(exclude_none=True, exclude_unset=True).encode()
 
 
 def _is_injected_stream_usage_artifact(chunk: object) -> bool:
