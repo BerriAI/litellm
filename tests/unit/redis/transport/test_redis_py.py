@@ -4,10 +4,12 @@ from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 from typing import Final, Literal
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import fakeredis
 import pytest
+from redis.asyncio.client import Pipeline, Redis
+from redis.exceptions import ConnectionError as RedisConnectionError
 from redis.exceptions import ResponseError
 
 import litellm
@@ -389,6 +391,8 @@ _WRONG_TYPE_COMMANDS: Final[tuple[_Command, ...]] = (
 _OUTAGE_COMMANDS: Final[tuple[_Command, ...]] = (
     lambda t: t.incrby("k", 1),
     lambda t: t.expire("k", timedelta(seconds=1)),
+    lambda t: t.expire_seconds("k", timedelta(seconds=1)),
+    lambda t: t.set_seconds("k", "v", ttl=timedelta(seconds=1)),
     lambda t: t.ttl("k"),
     lambda t: t.lpop("k"),
     lambda t: t.scan("k", limit=1),
@@ -426,6 +430,139 @@ async def test_expire_sets_the_ttl_in_milliseconds_and_ttl_reads_it_back(
     assert 1000 < await raw.pttl("k") <= 1500
     assert await transport.ttl("k") == 1
     assert await transport.ttl("absent") == -2
+
+
+def _typed_pipeline(client: "Redis[bytes]") -> "Pipeline[bytes]":
+    return client.pipeline(transaction=False)
+
+
+def _seconds_commands(transport: RedisPyTransport, mode: str) -> RedisPyTransport | RedisPyCommandBatch:
+    if mode == "direct":
+        return transport
+    if mode == "alone":
+        backend: Final = replace(transport.batch().engine.backend, runs_alone=True)
+        return RedisPyCommandBatch(transport, PipelineBatch(backend, name="seconds"))
+    return transport.batch(transaction=mode == "transaction")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ("direct", "batch", "transaction", "alone"))
+@pytest.mark.parametrize("seconds", (2, 1.9, 0.5, 0, -0.5, -1))
+async def test_native_expire_truncates_seconds_and_deletes_nonpositive_expiry(
+    server: fakeredis.FakeServer, raw: fakeredis.FakeAsyncRedis, mode: str, seconds: float
+) -> None:
+    transport: Final = fake_redis_transport(raw, failure_threshold=1, namespace="ns")
+    commands: Final = _seconds_commands(transport, mode)
+    with patch("time.time", return_value=1700000000.0):
+        await raw.set("ns:k", "v")
+        assert await commands.expire_seconds("ns:k", timedelta(seconds=seconds)) is True
+        assert await commands.expire_seconds("absent", timedelta(seconds=seconds)) is False
+        if seconds >= 1:
+            assert await raw.pttl("ns:k") == int(seconds) * 1000
+            assert await raw.get("ns:k") == b"v"
+        else:
+            with patch("time.time", return_value=1700000000.001):
+                assert await raw.get("ns:k") is None
+        assert await raw.exists("ns:ns:k") == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ("direct", "batch", "transaction", "alone"))
+async def test_native_set_preserves_seconds_expiry_persistence_and_nx(
+    server: fakeredis.FakeServer, raw: fakeredis.FakeAsyncRedis, mode: str
+) -> None:
+    commands: Final = _seconds_commands(fake_redis_transport(raw, failure_threshold=1, namespace="ns"), mode)
+    with patch("time.time", return_value=1700000000.0):
+        assert await commands.set_seconds("k", b"1.25", ttl=timedelta(seconds=1.9), nx=True) is True
+        assert await commands.set_seconds("ns:k", "rejected", ttl=None, nx=True) is False
+        assert await raw.get("ns:k") == b"1.25"
+        assert await raw.pttl("ns:k") == 1000
+        assert await commands.set_seconds("ns:k", "persist", ttl=None) is True
+        assert await raw.get("ns:k") == b"persist"
+        assert await raw.pttl("ns:k") == -1
+        assert await raw.keys("*") == [b"ns:k"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ("direct", "batch", "transaction", "alone"))
+@pytest.mark.parametrize("seconds", (0.5, 0, -0.5, -1))
+async def test_native_set_rejection_keeps_value_and_connection_and_emits_one_event(
+    server: fakeredis.FakeServer, raw: fakeredis.FakeAsyncRedis, mode: str, seconds: float
+) -> None:
+    events: Final = _RecordingEvents()
+    transport: Final = fake_redis_transport(raw, failure_threshold=1, events=events, namespace="ns")
+    commands: Final = _seconds_commands(transport, mode)
+    await raw.set("ns:k", "before")
+    with service_target("seconds_test"):
+        rejected: Final = await commands.set_seconds("k", "after", ttl=timedelta(seconds=seconds))
+    assert isinstance(rejected, RedisFailure) and rejected.kind == "server"
+    assert await raw.get("ns:k") == b"before"
+    assert len(events.seen) == 1
+    assert events.seen[0].outcome == ("failure" if mode in ("direct", "alone") else "success")
+    assert events.seen[0].target == "seconds_test"
+    assert await commands.expire_seconds("k", timedelta(seconds=30)) is True
+    await _settle()
+    assert len(events.seen) == 2
+    assert events.seen[1].outcome == "success"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ("direct", "batch"))
+async def test_native_seconds_outage_opens_breaker_without_duplicate_events(
+    server: fakeredis.FakeServer, raw: fakeredis.FakeAsyncRedis, mode: str
+) -> None:
+    events: Final = _RecordingEvents()
+    commands: Final = _seconds_commands(fake_redis_transport(raw, failure_threshold=1, events=events), mode)
+    server.connected = False
+    failed: Final = await commands.expire_seconds("k", timedelta(seconds=30))
+    assert isinstance(failed, RedisFailure) and failed.kind == "transport"
+    server.connected = True
+    refused: Final = await commands.set_seconds("k", "v", ttl=None)
+    assert isinstance(refused, RedisFailure) and refused.kind == "breaker_open"
+    await _settle()
+    assert tuple(event.outcome for event in events.seen) == (
+        ("failure",) if mode == "direct" else ("failure", "failure")
+    )
+    assert await raw.get("k") is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ("direct", "batch"))
+@pytest.mark.parametrize("reply", (b"malformed", 2, 1.0, (True,), [True], {"unexpected": True}))
+async def test_native_seconds_rejects_malformed_command_replies(
+    server: fakeredis.FakeServer, raw: fakeredis.FakeAsyncRedis, mode: str, reply: object
+) -> None:
+    transport: Final = fake_redis_transport(raw, failure_threshold=1)
+    pipeline: Final = _typed_pipeline(raw)
+    with (
+        patch.object(raw, "expire", new=AsyncMock(return_value=reply)),
+        patch.object(raw, "set", new=AsyncMock(return_value=reply)),
+        patch.object(raw, "pipeline", return_value=pipeline),
+        patch.object(pipeline, "execute", return_value=[reply]),
+    ):
+        commands: Final = _seconds_commands(transport, mode)
+        expired: Final = await commands.expire_seconds("k", timedelta(seconds=30))
+        written: Final = await commands.set_seconds("k", "v", ttl=None)
+    assert isinstance(expired, RedisFailure) and expired.kind == "decode"
+    assert isinstance(written, RedisFailure) and written.kind == "decode"
+
+
+@pytest.mark.asyncio
+async def test_native_expire_lost_reply_is_unknown_applied_without_retry(
+    server: fakeredis.FakeServer, raw: fakeredis.FakeAsyncRedis
+) -> None:
+    transport: Final = fake_redis_transport(raw, failure_threshold=1)
+    expire: Final = raw.expire
+    await raw.set("k", "v")
+
+    async def lose_reply(name: str, time: int) -> bool:
+        await expire(name, time)
+        raise RedisConnectionError("reply lost after expiry applied")
+
+    with patch("time.time", return_value=1700000000.0), patch.object(raw, "expire", side_effect=lose_reply):
+        result: Final = await transport.expire_seconds("k", timedelta(seconds=30))
+        assert isinstance(result, RedisFailure) and result.kind == "transport"
+        assert await raw.pttl("k") == 30000
 
 
 @pytest.mark.asyncio
@@ -654,10 +791,13 @@ async def test_request_batch_commands_share_the_round_trip_of_redis_batch_caller
         old_read = legacy.mget(["legacy"])
         new_read = commands.get("moved")
         missing = commands.get("absent")
+        written = commands.set_seconds("seconds", "v", ttl=None)
+        expired = commands.expire_seconds("seconds", timedelta(seconds=30))
 
         assert await old_read == {"legacy": "old"}
         assert await new_read == b"new"
         assert await missing is None
+        assert await written is True and await expired is True
         assert legacy.flushes == 1
         assert legacy.read_as_missing("absent") is True
         assert legacy.read_as_missing("moved") is False

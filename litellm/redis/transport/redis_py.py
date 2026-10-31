@@ -61,6 +61,13 @@ class RedisPyTransport:
         px: Final = None if ttl is None else ttl_ms(ttl)
         return _bool_reply(await self._run("set", lambda: self.client().set(self._key(key), value, px=px, nx=nx)))
 
+    async def set_seconds(
+        self, key: str, value: Arg, *, ttl: timedelta | None, nx: bool = False
+    ) -> bool | RedisFailure:
+        return _set_reply(
+            await self._run("set_seconds", lambda: self.client().set(self._key(key), value, ex=ttl, nx=nx))
+        )
+
     async def delete(self, *keys: str) -> int | RedisFailure:
         namespaced: Final = tuple(self._key(k) for k in keys)
         return _int_reply(await self._run("delete", lambda: self.client().delete(*namespaced)))
@@ -73,6 +80,11 @@ class RedisPyTransport:
 
     async def expire(self, key: str, ttl: timedelta) -> bool | RedisFailure:
         return _bool_reply(await self._run("expire", lambda: self.client().pexpire(self._key(key), ttl_ms(ttl))))
+
+    async def expire_seconds(self, key: str, ttl: timedelta) -> bool | RedisFailure:
+        return _expire_reply(
+            await self._run("expire_seconds", lambda: self.client().expire(self._key(key), int(ttl.total_seconds())))
+        )
 
     async def ttl(self, key: str) -> int | RedisFailure:
         return _int_reply(await self._run("ttl", lambda: self.client().ttl(self._key(key))))
@@ -228,6 +240,17 @@ class RedisPyCommandBatch:
             lambda: self.transport.delete(*keys),
         )
 
+    def set_seconds(
+        self, key: str, value: Arg, *, ttl: timedelta | None, nx: bool = False
+    ) -> BatchResult[bool | RedisFailure]:
+        name: Final = self.transport._key(key)  # pyright: ignore[reportPrivateUsage]  # the batch is the transport's own
+        self.engine.note_present(key)
+        return self._declare(
+            lambda pipe: _one(pipe.set(name, value, ex=ttl, nx=nx)),
+            lambda replies: _set_reply(replies[0]),
+            lambda: self.transport.set_seconds(key, value, ttl=ttl, nx=nx),
+        )
+
     def incrby(self, key: str, amount: int) -> BatchResult[int | RedisFailure]:
         name: Final = self.transport._key(key)  # pyright: ignore[reportPrivateUsage]  # the batch is the transport's own
         self.engine.note_present(key)
@@ -258,6 +281,14 @@ class RedisPyCommandBatch:
         name: Final = self.transport._key(key)  # pyright: ignore[reportPrivateUsage]  # the batch is the transport's own
         return self._declare(
             lambda pipe: _one(pipe.ttl(name)), lambda replies: _int_reply(replies[0]), lambda: self.transport.ttl(key)
+        )
+
+    def expire_seconds(self, key: str, ttl: timedelta) -> BatchResult[bool | RedisFailure]:
+        name: Final = self.transport._key(key)  # pyright: ignore[reportPrivateUsage]  # the batch is the transport's own
+        return self._declare(
+            lambda pipe: _one(pipe.expire(name, ttl)),
+            lambda replies: _expire_reply(replies[0]),
+            lambda: self.transport.expire_seconds(key, ttl),
         )
 
     def rpush(self, key: str, *values: Arg) -> BatchResult[int | RedisFailure]:
@@ -489,6 +520,24 @@ def _bool_reply(reply: object) -> bool | RedisFailure:
     if isinstance(reply, RedisFailure):
         return reply
     return reply is not None and reply is not False and reply != 0
+
+
+def _expire_reply(reply: object) -> bool | RedisFailure:
+    if isinstance(reply, (RedisFailure, bool)):
+        return reply
+    if type(reply) is int and reply in (0, 1):
+        return reply == 1
+    return _decode_failure(reply)
+
+
+def _set_reply(reply: object) -> bool | RedisFailure:
+    if isinstance(reply, RedisFailure):
+        return reply
+    if reply is None or reply is False:
+        return False
+    if reply is True or reply in (b"OK", "OK"):
+        return True
+    return _decode_failure(reply)
 
 
 def _int_reply(reply: object) -> int | RedisFailure:
