@@ -1451,6 +1451,36 @@ def test_transcription_usage_cost_returns_zero_for_unknown_type():
     assert _transcription_usage_cost({}, {}) == 0.0
 
 
+def test_realtime_transcription_prices_a_clip_at_the_latest_configured_transcription_model(monkeypatch):
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+
+    from litellm.cost_calculator import handle_realtime_transcription_cost_calculation
+
+    realtime_model = "gpt-realtime-2.1-mini"
+    first_asr, latest_asr = "gpt-4o-transcribe", "gpt-transcribe"
+    first_rate = litellm.model_cost[first_asr]["input_cost_per_second"]
+    latest_rate = litellm.model_cost[latest_asr]["input_cost_per_second"]
+    assert first_rate != latest_rate and latest_rate > 0
+
+    def session_frame(frame_type: str, asr_model: str | None) -> dict[str, object]:
+        transcription = None if asr_model is None else {"model": asr_model}
+        return {"type": frame_type, "session": {"model": realtime_model, "audio": {"input": {"transcription": transcription}}}}
+
+    results: OpenAIRealtimeStreamList = [
+        session_frame("session.created", None),
+        session_frame("session.updated", first_asr),
+        session_frame("session.updated", latest_asr),
+        {"type": "conversation.item.input_audio_transcription.completed", "usage": {"type": "duration", "seconds": 5}},
+    ]
+
+    cost = handle_realtime_transcription_cost_calculation(
+        results=results, custom_llm_provider="openai", litellm_model_name=realtime_model
+    )
+
+    assert cost == pytest.approx(5 * latest_rate, rel=1e-9)
+
+
 def test_get_transcription_model_falls_back_to_session_model(monkeypatch):
     """session.model is used when transcription-specific model fields are absent."""
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
