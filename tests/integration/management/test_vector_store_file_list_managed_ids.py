@@ -1082,6 +1082,7 @@ def test_two_targets_served_by_one_team_wildcard_keep_one_upload_that_delete_rem
         managed: Final = _upload(gateway, key, f"{prefix}/gpt-one,{prefix}/gpt-two", "a.txt")
         assert _carried_provider_file_id(managed) == first_upload, _decoded(managed)
         assert [row["flat_model_file_ids"] for row in read_rows(MANAGED_FILE_ROW, (managed,))] == [[first_upload]]
+        eventually(lambda: wire.received.qsize(), lambda received: received >= 3)
         create_requests: Final = wire.drain()
         assert [(request.method, request.target) for request in create_requests] == [
             ("POST", "/v1/files"),

@@ -1495,20 +1495,11 @@ class _FailedTrackingAlerts:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("call_type", "model", "alerted"),
-    [
-        ("_aresponses_websocket", "gpt-5-mini", True),
-        ("_arealtime", "gpt-5-mini", False),
-        ("afile_delete", "openai/*", False),
-    ],
-)
-async def test_track_cost_callback_alerts_only_on_a_billable_call_with_no_logging_object(
-    call_type: str, model: str, alerted: bool
-):
+@pytest.mark.parametrize(("call_type", "alerted"), [("_aresponses_websocket", True), ("_arealtime", False)])
+async def test_track_cost_callback_alerts_on_a_websocket_turn_with_no_logging_object(call_type: str, alerted: bool):
     kwargs: Final = {
         "call_type": call_type,
-        "model": model,
+        "model": "gpt-5-mini",
         "litellm_call_id": "turn-call-id",
         "litellm_params": {},
         "stream": False,
@@ -1525,28 +1516,6 @@ async def test_track_cost_callback_alerts_only_on_a_billable_call_with_no_loggin
         await asyncio.sleep(0)
 
     assert any(f"call_type: {call_type}" in message for message in alerts.messages) is alerted
-
-
-@pytest.mark.asyncio
-async def test_track_cost_callback_logs_no_warning_for_a_file_delete_routed_to_a_deployment(caplog: pytest.LogCaptureFixture):
-    kwargs: Final = {
-        "call_type": "afile_delete",
-        "model": "openai/*",
-        "litellm_call_id": "delete-call-id",
-        "litellm_params": {},
-        "stream": False,
-    }
-
-    with patch("litellm.proxy.proxy_server.proxy_logging_obj", _FailedTrackingAlerts()):
-        with caplog.at_level(logging.WARNING, logger=verbose_proxy_logger.name):
-            await ProxyDBLogger()._PROXY_track_cost_callback(
-                kwargs=kwargs,
-                completion_response=None,
-                start_time=datetime.now(),
-                end_time=datetime.now(),
-            )
-
-    assert [record.getMessage() for record in caplog.records if record.levelno >= logging.WARNING] == []
 
 
 @pytest.mark.asyncio

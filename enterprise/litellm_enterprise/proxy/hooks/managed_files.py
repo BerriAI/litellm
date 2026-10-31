@@ -35,7 +35,7 @@ from typing_extensions import ReadOnly, Unpack
 
 import litellm
 from litellm import Router, verbose_logger
-from litellm._internal_context import post_response_phase, with_service_target
+from litellm._internal_context import internal_sub_call, post_response_phase, with_service_target
 from litellm._uuid import uuid
 from litellm.caching.caching import DualCache
 from litellm.constants import (
@@ -96,6 +96,7 @@ from litellm.proxy.pass_through_endpoints.llm_provider_handlers.batch_attributio
     request_tags_from_metadata,
 )
 from litellm.repositories.managed_file_repository import ManagedFileRepository
+from litellm.responses.streaming_iterator import spawn_logging_task
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.llms.openai import (  # pyright: ignore[reportAttributeAccessIssue]
     AllMessageValues,
@@ -420,8 +421,15 @@ def _provider_uploads(file_object: OpenAIFileObject) -> tuple[_ProviderUpload, .
     )
 
 
-def _is_first_upload_to_its_deployment(uploads: Sequence[_ProviderUpload], index: int) -> bool:
-    return all(earlier.model_id != uploads[index].model_id for earlier in uploads[:index])
+def _keeps_one_upload_per_target(llm_router: Router, model_id: str) -> bool:
+    credentials: Final = _provider_file_retrieve_credentials(llm_router=llm_router, model_id=model_id)
+    return (credentials or {}).get("custom_llm_provider") == LlmProviders.LITELLM_PROXY.value
+
+
+def _is_kept_upload(uploads: Sequence[_ProviderUpload], index: int, per_target_model_ids: frozenset[str]) -> bool:
+    upload: Final = uploads[index]
+    other_uploads: Final = uploads[index + 1 :] if upload.model_id in per_target_model_ids else uploads[:index]
+    return all(other.model_id != upload.model_id for other in other_uploads)
 
 
 async def _delete_provider_file(
@@ -446,9 +454,6 @@ async def _delete_provider_file(
     )
 
 
-_REDUNDANT_UPLOAD_DELETES: Final[set[asyncio.Task[None]]] = set()  # mutable-ok: strong refs keep cleanup deletes alive
-
-
 async def _delete_redundant_upload(
     llm_router: Router,
     upload: _ProviderUpload,
@@ -469,7 +474,8 @@ async def _delete_redundant_uploads(
     uploads: Sequence[_ProviderUpload],
     delete_request: Mapping[str, object],
 ) -> None:
-    await asyncio.gather(*(_delete_redundant_upload(llm_router, upload, delete_request) for upload in uploads))
+    with internal_sub_call():
+        await asyncio.gather(*(_delete_redundant_upload(llm_router, upload, delete_request) for upload in uploads))
 
 
 def _start_deleting_redundant_uploads(
@@ -483,9 +489,11 @@ def _start_deleting_redundant_uploads(
         {k: v for k, v in create_file_request.items() if k not in _FILE_UPLOAD_ONLY_FIELDS}
     )
     with post_response_phase():
-        task: Final = asyncio.create_task(_delete_redundant_uploads(llm_router, uploads, delete_request))
-    _REDUNDANT_UPLOAD_DELETES.add(task)
-    task.add_done_callback(_REDUNDANT_UPLOAD_DELETES.discard)
+        spawn_logging_task(
+            asyncio.get_running_loop(),
+            _delete_redundant_uploads(llm_router, uploads, delete_request),
+            task_name="managed file repeat upload cleanup",
+        )
 
 
 def _managed_database(prisma_client: _ManagedResourcePrismaClient) -> _ManagedResourceDatabase:
@@ -2128,11 +2136,13 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         )
 
         uploads: Final = tuple(chain.from_iterable(map(_provider_uploads, responses)))
-        kept_uploads: Final = tuple(
-            upload for index, upload in enumerate(uploads) if _is_first_upload_to_its_deployment(uploads, index)
+        per_target_model_ids: Final = frozenset(
+            model_id
+            for model_id in {upload.model_id for upload in uploads}
+            if _keeps_one_upload_per_target(llm_router, model_id)
         )
-        _start_deleting_redundant_uploads(
-            llm_router, tuple(upload for upload in uploads if upload not in kept_uploads), create_file_request
+        kept_uploads: Final = tuple(
+            upload for index, upload in enumerate(uploads) if _is_kept_upload(uploads, index, per_target_model_ids)
         )
         model_mappings: Final = {upload.model_id: upload.provider_file_id for upload in kept_uploads}
 
@@ -2142,6 +2152,15 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             litellm_parent_otel_span=litellm_parent_otel_span,
             model_mappings=model_mappings,
             user_api_key_dict=user_api_key_dict,
+        )
+        _start_deleting_redundant_uploads(
+            llm_router,
+            tuple(
+                upload
+                for upload in uploads
+                if upload not in kept_uploads and upload.model_id not in per_target_model_ids
+            ),
+            create_file_request,
         )
 
         # Emit Prometheus metrics for managed file creation
