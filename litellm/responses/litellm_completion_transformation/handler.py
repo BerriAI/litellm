@@ -244,8 +244,13 @@ class LiteLLMCompletionTransformationHandler:
             }
         )
 
+        completion_kwargs: Final[Mapping[str, object]] = {
+            **request_kwargs,
+            **completion_request,
+            "_skip_responses_api_bridge": True,
+        }
         litellm_completion_response: Final[ModelResponse | litellm.CustomStreamWrapper] = await litellm.acompletion(
-            **{**kwargs, **completion_request, "_skip_responses_api_bridge": True},
+            **completion_kwargs
         )
         if isinstance(litellm_completion_response, ModelResponse):
             responses_api_response: Final[ResponsesAPIResponse] = (
