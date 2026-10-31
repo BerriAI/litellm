@@ -1983,8 +1983,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                       schemaLoading={isTeamMetadataSchemaLoading}
                     />
                     <FieldDescription>
-                      {t("teams.teamInfo.editForm.metadataDescription")}
-                      {'{"region": "us"}'}.
+                      {t("teams.teamInfo.editForm.metadataDescription", { example: '{"region": "us"}' })}
                     </FieldDescription>
                   </Field>
 

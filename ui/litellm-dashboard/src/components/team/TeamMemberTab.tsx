@@ -26,6 +26,8 @@ const BUDGET_SOURCE_LABEL_KEYS: Record<Exclude<TeamMemberBudgetSource, "none">, 
   custom: "teams.memberTab.budgetSource.custom",
 };
 
+const ESCAPED_VALUES = { interpolation: { escapeValue: true } } as const;
+
 const formatBudget = (t: TFunction, value: number | null): string =>
   value === null ? t("teams.memberTab.unlimited") : `$${formatNumberWithCommas(value, 2)}`;
 
@@ -372,6 +374,8 @@ export default function TeamMemberTab({
               i18nKey="teams.memberTab.resetSpendDialog.prompt"
               values={{ member: memberToResetSpend?.user_email || memberToResetSpend?.user_id }}
               components={{ strong: <strong /> }}
+              tOptions={ESCAPED_VALUES}
+              shouldUnescape
             />
           </p>
           <p className="text-sm text-muted-foreground">
@@ -386,6 +390,8 @@ export default function TeamMemberTab({
                 amount: formatNumberWithCommas(getUserCurrentPeriodSpend(memberToResetSpend?.user_id ?? null), 4),
               }}
               components={{ strong: <strong /> }}
+              tOptions={ESCAPED_VALUES}
+              shouldUnescape
             />
           </p>
           <DialogFooter>
@@ -411,6 +417,8 @@ export default function TeamMemberTab({
                 budget: formatBudget(t, teamDefaultBudget),
               }}
               components={{ strong: <strong /> }}
+              tOptions={ESCAPED_VALUES}
+              shouldUnescape
             />
           </p>
           <p className="text-sm text-muted-foreground">
@@ -418,6 +426,8 @@ export default function TeamMemberTab({
               i18nKey="teams.memberTab.resetBudgetDialog.summary"
               values={{ budget: formatBudget(t, getUserBudget(memberToResetBudget?.user_id ?? null)) }}
               components={{ strong: <strong /> }}
+              tOptions={ESCAPED_VALUES}
+              shouldUnescape
             />
           </p>
           <DialogFooter>

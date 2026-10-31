@@ -217,10 +217,12 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
                 <div className="mt-2 text-sm text-foreground">
                   <p className="text-xl font-semibold">${formatNumberWithCommas(orgData.spend, 4)}</p>
                   <p>
-                    {t("organizations.view.overview.budgetOf")}{" "}
-                    {orgData.litellm_budget_table.max_budget === null
-                      ? t("organizations.view.overview.unlimited")
-                      : `$${formatNumberWithCommas(orgData.litellm_budget_table.max_budget, 4)}`}
+                    {t("organizations.view.overview.budgetOf", {
+                      budget:
+                        orgData.litellm_budget_table.max_budget === null
+                          ? t("organizations.view.overview.unlimited")
+                          : `$${formatNumberWithCommas(orgData.litellm_budget_table.max_budget, 4)}`,
+                    })}
                   </p>
                   {orgData.litellm_budget_table.budget_duration && (
                     <p className="text-muted-foreground">
@@ -366,10 +368,12 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
                   <div>
                     <p className="font-medium text-foreground">{t("organizations.view.settings.budgetLabel")}</p>
                     <div>
-                      {t("organizations.view.settings.maxBudgetLabel")}{" "}
-                      {orgData.litellm_budget_table.max_budget !== null
-                        ? `$${formatNumberWithCommas(orgData.litellm_budget_table.max_budget, 4)}`
-                        : t("organizations.view.settings.noLimit")}
+                      {t("organizations.view.settings.maxBudget", {
+                        budget:
+                          orgData.litellm_budget_table.max_budget !== null
+                            ? `$${formatNumberWithCommas(orgData.litellm_budget_table.max_budget, 4)}`
+                            : t("organizations.view.settings.noLimit"),
+                      })}
                     </div>
                     <div>
                       {t("organizations.view.settings.resetLabel")}

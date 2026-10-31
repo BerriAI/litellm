@@ -17,10 +17,6 @@ export const TEAM_ADMIN_CREATE_MEMBER_KEYS_PERMISSION = "create_member_keys";
 
 export const TEAM_ADMIN_METADATA_FIELD = "metadata";
 
-export const TEAM_ADMIN_EDITING_DISABLED_TITLE = "Team admins cannot edit team settings on this proxy";
-export const TEAM_ADMIN_EDITING_DISABLED_DESCRIPTION =
-  "Ask a proxy admin to enable fields under Settings > UI > Team admin editable fields.";
-
 const teamAdminEditAccessShape = {
   kind: z.literal("team_admin"),
   editable_fields: z.array(z.string()),
