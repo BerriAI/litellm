@@ -6222,6 +6222,7 @@ def completion(
                     "fireworks_forward_user_id",
                     "responses_api_version",
                     "allowed_openai_params",
+                    "xai_oauth_token_file",
                 )
                 if key in kwargs
             },
