@@ -27,6 +27,8 @@ from litellm.router_utils.fallback_event_handlers import (
     PRE_ROUTING_SELECTED_MODEL_KEY,
     AttemptedFallbackTargets,
     MidStreamFallbackControls,
+    _crosses_gemini_endpoint_boundary,
+    _get_model_group_custom_llm_provider,
     _trigger_cooldown_for_failed_deployment,
     attempted_retries_for_request,
     carry_over_routed_deployment,
@@ -138,11 +140,15 @@ class RecordingRouter:
     fallback_access_check = None
     fallback_budget_check = None
 
-    def __init__(self):
+    def __init__(self, deployments_by_model_group=None):
         self.received_kwargs = None
+        self.deployments_by_model_group = deployments_by_model_group or {}
 
     def log_retry(self, kwargs, e):
         return kwargs
+
+    def get_model_list(self, model_name=None, team_id=None):
+        return self.deployments_by_model_group.get(model_name)
 
     async def async_function_with_fallbacks(self, *args, **kwargs):
         self.received_kwargs = kwargs
@@ -2940,3 +2946,180 @@ def test_is_bad_request_without_fallback_only_stops_on_a_real_400_when_the_flag_
 ) -> None:
     assert is_bad_request_without_fallback(exception, fallback_on_unsupported_params=False) is stops_fallbacks
     assert is_bad_request_without_fallback(exception, fallback_on_unsupported_params=True) is False
+
+
+def _gemini_tool_call_message(tool_call_id):
+    return {
+        "role": "assistant",
+        "content": None,
+        "tool_calls": [
+            {
+                "id": tool_call_id,
+                "type": "function",
+                "provider_specific_fields": {"thought_signature": "VERTEX_SIG"},
+                "function": {"name": "test_tool", "arguments": "{}"},
+            }
+        ],
+    }
+
+
+class TestGetModelGroupCustomLlmProvider:
+    """A thought signature is endpoint-bound, so detecting a fallback's
+    provider correctly is a prerequisite for knowing whether a boundary
+    was crossed."""
+
+    def test_uses_explicit_custom_llm_provider_when_present(self):
+        router = RecordingRouter(
+            deployments_by_model_group={
+                "primary-model": [{"litellm_params": {"custom_llm_provider": "vertex_ai", "model": "gemini-3-pro-preview"}}]
+            }
+        )
+
+        assert _get_model_group_custom_llm_provider(router, "primary-model") == "vertex_ai"
+
+    def test_infers_custom_llm_provider_from_model_prefix(self):
+        router = RecordingRouter(
+            deployments_by_model_group={"fallback-model": [{"litellm_params": {"model": "gemini/gemini-3-pro-preview"}}]}
+        )
+
+        assert _get_model_group_custom_llm_provider(router, "fallback-model") == "gemini"
+
+    def test_returns_none_when_model_group_has_no_deployments(self):
+        router = RecordingRouter()
+
+        assert _get_model_group_custom_llm_provider(router, "unregistered-model") is None
+
+    def test_returns_none_when_deployment_has_no_model_to_infer_from(self):
+        router = RecordingRouter(deployments_by_model_group={"broken-model": [{"litellm_params": {}}]})
+
+        assert _get_model_group_custom_llm_provider(router, "broken-model") is None
+
+    def test_returns_none_when_provider_cannot_be_inferred_from_model_string(self):
+        router = RecordingRouter(
+            deployments_by_model_group={
+                "unrecognized-model": [{"litellm_params": {"model": "totally-unknown-nonexistent-model-xyz-123"}}]
+            }
+        )
+
+        assert _get_model_group_custom_llm_provider(router, "unrecognized-model") is None
+
+
+class TestCrossesGeminiEndpointBoundary:
+    def test_true_between_vertex_ai_and_gemini(self):
+        assert _crosses_gemini_endpoint_boundary("vertex_ai", "gemini") is True
+        assert _crosses_gemini_endpoint_boundary("gemini", "vertex_ai") is True
+
+    def test_true_between_vertex_ai_beta_and_gemini(self):
+        """vertex_ai_beta is a distinct custom_llm_provider from vertex_ai in
+        this codebase; a deployment configured with it must still be caught
+        falling back to Google AI Studio."""
+        assert _crosses_gemini_endpoint_boundary("vertex_ai_beta", "gemini") is True
+        assert _crosses_gemini_endpoint_boundary("gemini", "vertex_ai_beta") is True
+
+    def test_false_when_providers_match(self):
+        assert _crosses_gemini_endpoint_boundary("vertex_ai", "vertex_ai") is False
+
+    def test_false_when_either_side_is_not_a_gemini_endpoint(self):
+        assert _crosses_gemini_endpoint_boundary("vertex_ai", "openai") is False
+        assert _crosses_gemini_endpoint_boundary(None, "gemini") is False
+
+
+@pytest.mark.asyncio
+async def test_run_async_fallback_strips_foreign_thought_signature_across_gemini_boundary():
+    """The Router falling back from a Vertex AI Gemini deployment to its
+    Google AI Studio twin (or vice versa) must not replay a thought
+    signature minted by the other endpoint, or the fallback call itself
+    gets rejected with a 400 'Corrupted thought signature.' error."""
+    router = RecordingRouter(
+        deployments_by_model_group={
+            "primary-model": [{"litellm_params": {"custom_llm_provider": "vertex_ai", "model": "vertex_ai/gemini-3-pro-preview"}}],
+            "fallback-model": [{"litellm_params": {"custom_llm_provider": "gemini", "model": "gemini/gemini-3-pro-preview"}}],
+        }
+    )
+    tool_call_id = "call_abc123__thought__VERTEX_SIG"
+
+    await run_async_fallback(
+        litellm_router=router,
+        fallback_model_group=["fallback-model"],
+        original_model_group="primary-model",
+        original_exception=RuntimeError("upstream limited request"),
+        max_fallbacks=3,
+        fallback_depth=0,
+        messages=[_gemini_tool_call_message(tool_call_id)],
+    )
+
+    tool_call = router.received_kwargs["messages"][0]["tool_calls"][0]
+    assert tool_call["id"] == "call_abc123"
+    assert "thought_signature" not in tool_call["provider_specific_fields"]
+
+
+@pytest.mark.asyncio
+async def test_run_async_fallback_does_not_strip_signature_within_same_provider():
+    """A fallback between two Vertex AI deployments never crosses the
+    endpoint boundary, so the signature must be replayed unchanged."""
+    router = RecordingRouter(
+        deployments_by_model_group={
+            "primary-model": [{"litellm_params": {"custom_llm_provider": "vertex_ai", "model": "vertex_ai/gemini-3-pro-preview"}}],
+            "fallback-model": [{"litellm_params": {"custom_llm_provider": "vertex_ai", "model": "vertex_ai/gemini-3-flash"}}],
+        }
+    )
+    tool_call_id = "call_abc123__thought__VERTEX_SIG"
+
+    await run_async_fallback(
+        litellm_router=router,
+        fallback_model_group=["fallback-model"],
+        original_model_group="primary-model",
+        original_exception=RuntimeError("upstream limited request"),
+        max_fallbacks=3,
+        fallback_depth=0,
+        messages=[_gemini_tool_call_message(tool_call_id)],
+    )
+
+    tool_call = router.received_kwargs["messages"][0]["tool_calls"][0]
+    assert tool_call["id"] == tool_call_id
+    assert tool_call["provider_specific_fields"]["thought_signature"] == "VERTEX_SIG"
+
+
+class CountingRouter(RecordingRouter):
+    """Fails on the first fallback candidate and succeeds on the second, so
+    tests can prove the original model group's provider is only looked up
+    once even when the loop iterates over multiple fallback candidates."""
+
+    def __init__(self, deployments_by_model_group=None):
+        super().__init__(deployments_by_model_group)
+        self.get_model_list_calls = []
+
+    def get_model_list(self, model_name=None, team_id=None):
+        self.get_model_list_calls.append(model_name)
+        return super().get_model_list(model_name=model_name, team_id=team_id)
+
+    async def async_function_with_fallbacks(self, *args, **kwargs):
+        if kwargs.get("model") == "fallback-model-1":
+            raise RuntimeError("first fallback also failed")
+        self.received_kwargs = kwargs
+        return StreamingWrapper()
+
+
+@pytest.mark.asyncio
+async def test_run_async_fallback_looks_up_original_provider_only_once_across_candidates():
+    router = CountingRouter(
+        deployments_by_model_group={
+            "primary-model": [{"litellm_params": {"custom_llm_provider": "vertex_ai", "model": "vertex_ai/gemini-3-pro-preview"}}],
+            "fallback-model-1": [{"litellm_params": {"custom_llm_provider": "vertex_ai", "model": "vertex_ai/gemini-3-flash"}}],
+            "fallback-model-2": [{"litellm_params": {"custom_llm_provider": "gemini", "model": "gemini/gemini-3-pro-preview"}}],
+        }
+    )
+
+    await run_async_fallback(
+        litellm_router=router,
+        fallback_model_group=["fallback-model-1", "fallback-model-2"],
+        original_model_group="primary-model",
+        original_exception=RuntimeError("upstream limited request"),
+        max_fallbacks=3,
+        fallback_depth=0,
+        messages=[_gemini_tool_call_message("call_abc123__thought__VERTEX_SIG")],
+    )
+
+    assert router.get_model_list_calls.count("primary-model") == 1
+    assert router.get_model_list_calls.count("fallback-model-1") == 1
+    assert router.get_model_list_calls.count("fallback-model-2") == 1

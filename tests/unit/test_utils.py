@@ -72,6 +72,8 @@ from litellm.types.utils import (
     ImageResponse,
     LlmProviders,
     LLMResponseTypes,
+    ChatCompletionMessageToolCall,
+    Message,
     ModelResponse,
     ModelResponseStream,
     PromptTokensDetailsWrapper,
@@ -100,6 +102,7 @@ from litellm.utils import (
     get_potential_model_names,
     _is_litellm_router_call,
     _is_streaming_request,
+    _remove_foreign_thought_signatures_from_messages,
     _run_success_deployment_hook_on_converted_chat_stream,
     _snapshot_exception_for_hook,
     async_post_call_failure_deployment_hook,
@@ -4847,6 +4850,169 @@ def test_is_prompt_caching_valid_prompt_without_messages_is_not_cacheable(local_
     tools = [{"type": "function", "function": {"name": "f", "parameters": {"type": "object", "properties": {}}}}]
     assert is_prompt_caching_valid_prompt(model="claude-opus-4-8", messages=None, tools=tools) is False
     assert is_prompt_caching_valid_prompt(model="claude-opus-4-8", messages=None) is False
+
+
+class TestRemoveForeignThoughtSignaturesFromMessages:
+    """A Gemini thought signature minted by one endpoint (Vertex AI or Google
+    AI Studio) is rejected by the other. These tests cover stripping it from
+    both channels a replayed tool call can carry it in: the provider_specific_fields
+    dict and the tool call ID suffix."""
+
+    def test_strips_signature_from_provider_specific_fields_and_id(self):
+        messages = [
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "call_abc123__thought__VERTEX_SIG",
+                        "type": "function",
+                        "provider_specific_fields": {"thought_signature": "VERTEX_SIG"},
+                        "function": {"name": "get_weather", "arguments": "{}"},
+                    }
+                ],
+            }
+        ]
+
+        result = _remove_foreign_thought_signatures_from_messages(messages, "__thought__")
+
+        tool_call = result[0]["tool_calls"][0]
+        assert tool_call["id"] == "call_abc123"
+        assert "thought_signature" not in tool_call["provider_specific_fields"]
+
+    def test_leaves_other_provider_specific_fields_untouched(self):
+        messages = [
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "call_abc123__thought__VERTEX_SIG",
+                        "type": "function",
+                        "provider_specific_fields": {
+                            "thought_signature": "VERTEX_SIG",
+                            "other_field": "keep_me",
+                        },
+                        "function": {"name": "get_weather", "arguments": "{}"},
+                    }
+                ],
+            }
+        ]
+
+        result = _remove_foreign_thought_signatures_from_messages(messages, "__thought__")
+
+        assert result[0]["tool_calls"][0]["provider_specific_fields"] == {"other_field": "keep_me"}
+
+    def test_does_not_mutate_the_caller_supplied_messages(self):
+        original_tool_call = {
+            "id": "call_abc123__thought__VERTEX_SIG",
+            "type": "function",
+            "provider_specific_fields": {"thought_signature": "VERTEX_SIG"},
+            "function": {"name": "get_weather", "arguments": "{}"},
+        }
+        messages = [{"role": "assistant", "content": None, "tool_calls": [original_tool_call]}]
+
+        _remove_foreign_thought_signatures_from_messages(messages, "__thought__")
+
+        assert original_tool_call["id"] == "call_abc123__thought__VERTEX_SIG"
+        assert original_tool_call["provider_specific_fields"]["thought_signature"] == "VERTEX_SIG"
+
+    def test_ignores_messages_without_tool_calls(self):
+        messages = [{"role": "user", "content": "hello"}]
+
+        result = _remove_foreign_thought_signatures_from_messages(messages, "__thought__")
+
+        assert result == messages
+
+    def test_strips_matching_tool_response_id_so_it_still_pairs_with_the_tool_call(self):
+        messages = [
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "call_abc123__thought__VERTEX_SIG",
+                        "type": "function",
+                        "provider_specific_fields": {"thought_signature": "VERTEX_SIG"},
+                        "function": {"name": "get_weather", "arguments": "{}"},
+                    }
+                ],
+            },
+            {
+                "role": "tool",
+                "tool_call_id": "call_abc123__thought__VERTEX_SIG",
+                "content": "72 degrees",
+            },
+        ]
+
+        result = _remove_foreign_thought_signatures_from_messages(messages, "__thought__")
+
+        stripped_tool_call_id = result[0]["tool_calls"][0]["id"]
+        stripped_tool_response_id = result[1]["tool_call_id"]
+        assert stripped_tool_call_id == "call_abc123"
+        assert stripped_tool_response_id == stripped_tool_call_id
+
+    def test_ignores_tool_messages_without_a_signature_suffix(self):
+        messages = [{"role": "tool", "tool_call_id": "call_abc123", "content": "72 degrees"}]
+
+        result = _remove_foreign_thought_signatures_from_messages(messages, "__thought__")
+
+        assert result[0]["tool_call_id"] == "call_abc123"
+
+    def test_strips_signature_from_a_pydantic_message_object(self):
+        """Real SDK responses hand back Message objects, not plain dicts, so
+        the model_dump() branch needs its own coverage."""
+        message = Message(
+            role="assistant",
+            content=None,
+            tool_calls=[
+                {
+                    "id": "call_abc123__thought__VERTEX_SIG",
+                    "type": "function",
+                    "provider_specific_fields": {"thought_signature": "VERTEX_SIG"},
+                    "function": {"name": "get_weather", "arguments": "{}"},
+                }
+            ],
+        )
+
+        result = _remove_foreign_thought_signatures_from_messages([message], "__thought__")
+
+        tool_call = result[0]["tool_calls"][0]
+        assert tool_call["id"] == "call_abc123"
+        assert "thought_signature" not in tool_call["provider_specific_fields"]
+
+    def test_passes_through_a_message_that_is_neither_dict_nor_pydantic(self):
+        messages = ["not-a-message", {"role": "user", "content": "hello"}]
+
+        result = _remove_foreign_thought_signatures_from_messages(messages, "__thought__")
+
+        assert result[0] == "not-a-message"
+        assert result[1] == {"role": "user", "content": "hello"}
+
+    def test_strips_signature_from_a_pydantic_tool_call_object_inside_a_dict_message(self):
+        """Some internal call sites build a dict message whose tool_calls
+        list holds real ChatCompletionMessageToolCall objects rather than
+        dicts, so that branch needs its own coverage too."""
+        tool_call = ChatCompletionMessageToolCall(
+            id="call_abc123__thought__VERTEX_SIG",
+            type="function",
+            function={"name": "get_weather", "arguments": "{}"},
+        )
+        tool_call.provider_specific_fields = {"thought_signature": "VERTEX_SIG"}
+        messages = [{"role": "assistant", "content": None, "tool_calls": [tool_call]}]
+
+        result = _remove_foreign_thought_signatures_from_messages(messages, "__thought__")
+
+        stripped_tool_call = result[0]["tool_calls"][0]
+        assert stripped_tool_call["id"] == "call_abc123"
+        assert "thought_signature" not in stripped_tool_call["provider_specific_fields"]
+
+    def test_passes_through_a_tool_call_that_is_neither_dict_nor_pydantic(self):
+        messages = [{"role": "assistant", "content": None, "tool_calls": ["not-a-tool-call"]}]
+
+        result = _remove_foreign_thought_signatures_from_messages(messages, "__thought__")
+
+        assert result[0]["tool_calls"] == ["not-a-tool-call"]
 
 
 def test_custom_logger_guards_ignore_subclass_instances(monkeypatch: pytest.MonkeyPatch) -> None:
