@@ -3946,10 +3946,10 @@ class TestWifDisabledOnClientRedirectedBase:
         """Setting the sentinel is only half of it. get_litellm_params rebuilds litellm_params from
         kwargs, so a field it does not carry is dropped on the way and the deployment federates for
         the caller-chosen base after all."""
-        from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
-        from litellm.router_utils.clientside_credential_handler import (
+        from litellm.litellm_core_utils.clientside_credential_handler import (
             DISABLE_WORKLOAD_IDENTITY_PARAM,
         )
+        from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
 
         funneled = get_litellm_params(**{DISABLE_WORKLOAD_IDENTITY_PARAM: True})
 
@@ -3958,7 +3958,7 @@ class TestWifDisabledOnClientRedirectedBase:
     def test_the_sentinel_is_not_client_settable(self):
         """It is server-owned in both directions: a caller must not be able to set it, and must not
         be able to clear it either."""
-        from litellm.router_utils.clientside_credential_handler import (
+        from litellm.litellm_core_utils.clientside_credential_handler import (
             DISABLE_WORKLOAD_IDENTITY_PARAM,
         )
         from litellm.types.router import reject_server_owned_wif_params
@@ -3969,11 +3969,11 @@ class TestWifDisabledOnClientRedirectedBase:
     def test_base_override_clears_wif_and_sets_the_sentinel(self):
         """A federation token minted for a client-chosen api_base would send the workload's assertion,
         and then the minted bearer, to that host."""
-        from litellm.llms.anthropic.wif import resolve_anthropic_wif_params
-        from litellm.router_utils.clientside_credential_handler import (
+        from litellm.litellm_core_utils.clientside_credential_handler import (
             DISABLE_WORKLOAD_IDENTITY_PARAM,
             get_dynamic_litellm_params,
         )
+        from litellm.llms.anthropic.wif import resolve_anthropic_wif_params
 
         admin_deployment = {
             "model": "anthropic/claude-sonnet-5",
@@ -3994,8 +3994,8 @@ class TestWifDisabledOnClientRedirectedBase:
     def test_sentinel_blocks_env_var_configured_federation(self, monkeypatch):
         """Environment-configured federation cannot be cleared out of a dict, so the sentinel is what
         stops it on a redirected deployment."""
+        from litellm.litellm_core_utils.clientside_credential_handler import DISABLE_WORKLOAD_IDENTITY_PARAM
         from litellm.llms.anthropic.wif import resolve_anthropic_wif_params
-        from litellm.router_utils.clientside_credential_handler import DISABLE_WORKLOAD_IDENTITY_PARAM
 
         monkeypatch.setenv("ANTHROPIC_FEDERATION_RULE_ID", "fdrl_env")
         monkeypatch.setenv("ANTHROPIC_ORGANIZATION_ID", "org-env")
@@ -4009,11 +4009,11 @@ class TestWifDisabledOnClientRedirectedBase:
         """Same failure mode the legacy-path test above guards against, for the internal_issuer
         identity source: a signing_key_ref resolved for a client-chosen api_base would mint an
         assertion, and then a bearer token, for that host."""
-        from litellm.llms.anthropic.wif import resolve_anthropic_wif_params
-        from litellm.router_utils.clientside_credential_handler import (
+        from litellm.litellm_core_utils.clientside_credential_handler import (
             DISABLE_WORKLOAD_IDENTITY_PARAM,
             get_dynamic_litellm_params,
         )
+        from litellm.llms.anthropic.wif import resolve_anthropic_wif_params
 
         admin_deployment = {
             "model": "anthropic/claude-sonnet-5",
@@ -4038,11 +4038,11 @@ class TestWifDisabledOnClientRedirectedBase:
     def test_base_override_clears_keycloak_fields(self):
         """Same as the internal_issuer case above, for the keycloak identity source: a
         client_secret_ref resolved for a client-chosen api_base must not follow it there."""
-        from litellm.llms.anthropic.wif import resolve_anthropic_wif_params
-        from litellm.router_utils.clientside_credential_handler import (
+        from litellm.litellm_core_utils.clientside_credential_handler import (
             DISABLE_WORKLOAD_IDENTITY_PARAM,
             get_dynamic_litellm_params,
         )
+        from litellm.llms.anthropic.wif import resolve_anthropic_wif_params
 
         admin_deployment = {
             "model": "anthropic/claude-sonnet-5",
