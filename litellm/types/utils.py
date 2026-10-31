@@ -464,6 +464,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     annotation_cost_per_page: float | None  # for OCR models
     annotation_cost_per_page_batches: ReadOnly[float | None]
     search_context_cost_per_query: SearchContextCostPerQuery | None  # Cost for using web search tool
+    search_queries_cost_per_query: ReadOnly[float | SearchContextCostPerQuery | None]
     web_search_billing_unit: (
         Literal["per_query", "per_prompt"] | None
     )  # "per_query" (Gemini 3.x) or "per_prompt" (Gemini 2.x)
@@ -3323,6 +3324,11 @@ class StandardLoggingRoutingDecision(TypedDict, total=False):
     classifier_cost: float
     classifier_failure_reason: ReadOnly[ClassifierFailureReason]
     classifier_error_type: ReadOnly[str]
+    classifier_input_budget_tokens: ReadOnly[int]
+    classifier_input_tokens: ReadOnly[int]
+    classifier_input_count_method: ReadOnly[str]
+    classifier_input_truncated: ReadOnly[bool]
+    classifier_input_budget_status: ReadOnly[str]
     classifier_probabilities: ReadOnly[Mapping[str, float]]
     classifier_confidence: ReadOnly[float]
     heuristic_v2_forecast: ReadOnly[StandardLoggingHeuristicV2Forecast]
@@ -3381,6 +3387,11 @@ DERIVED_ROUTING_DECISION_FIELDS: Final[frozenset[str]] = frozenset(
         "classifier_cost",
         "classifier_failure_reason",
         "classifier_error_type",
+        "classifier_input_budget_tokens",
+        "classifier_input_tokens",
+        "classifier_input_count_method",
+        "classifier_input_truncated",
+        "classifier_input_budget_status",
         "classifier_probabilities",
         "classifier_confidence",
         "heuristic_v2_forecast",
@@ -3460,6 +3471,7 @@ class StandardLoggingHiddenParams(TypedDict):
     batch_models: list[str] | None
     batch_successful_requests: ReadOnly[int | None]
     batch_failed_requests: ReadOnly[int | None]
+    upstream_provider: ReadOnly[NotRequired[str | None]]
     litellm_model_name: str | None  # the model name sent to the provider by litellm
     usage_object: dict | None
 
@@ -4157,6 +4169,7 @@ class CustomPricingLiteLLMParams(MirroredPricingParams):
     output_cost_per_video_per_second: float | None = None
     output_cost_per_audio_per_second: float | None = None
     search_context_cost_per_query: dict[str, Any] | None = None
+    search_queries_cost_per_query: float | SearchContextCostPerQuery | None = None
     google_maps_grounding_cost_per_query: float | None = None
     citation_cost_per_token: float | None = None
     cache_read_input_token_cost_above_272k_tokens: float | None = None
