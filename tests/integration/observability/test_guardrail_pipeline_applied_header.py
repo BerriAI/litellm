@@ -546,6 +546,21 @@ def test_a_request_pipeline_that_blocks_at_its_first_step_names_only_that_step(r
     assert response.headers.get(_HEADER) == _REQUEST_BLOCKER, dict(response.headers)
 
 
+def test_a_response_pipeline_that_allows_at_its_first_step_names_only_that_step(rig: _Rig) -> None:
+    response: Final = _ask_as_team_tagged(rig, _RESPONSE_STOPS_AFTER_FIRST)
+    assert response.status_code == 200, response.text
+    assert _steps_that_ran(rig) == (_RESPONSE_FIRST,)
+    assert response.headers.get(_HEADER) == _RESPONSE_FIRST, dict(response.headers)
+
+
+def test_a_streamed_response_pipeline_that_allows_at_its_first_step_names_only_that_step(rig: _Rig) -> None:
+    response: Final = _ask_as_team_tagged(rig, _RESPONSE_STOPS_AFTER_FIRST, stream=True)
+    assert response.status_code == 200, response.text
+    assert response.text.rstrip().endswith("data: [DONE]"), response.text
+    assert _steps_that_ran(rig) == (_RESPONSE_FIRST,)
+    assert response.headers.get(_HEADER) == _RESPONSE_FIRST, dict(response.headers)
+
+
 def test_a_request_pipeline_names_a_step_that_flagged_the_request_before_moving_on(rig: _Rig) -> None:
     response: Final = _ask_as_team_tagged(rig, _MOVES_PAST_FIRST)
     assert response.status_code == 200, response.text
@@ -596,6 +611,17 @@ def test_a_request_pipeline_that_allows_at_its_first_step_names_only_that_step_o
     assert response.headers.get(_HEADER) == _REQUEST_FIRST, dict(response.headers)
 
 
+@pytest.mark.parametrize("stream", [False, True], ids=["whole", "streamed"])
+@pytest.mark.parametrize("path", ["/v1/responses", "/v1/messages"])
+def test_a_response_pipeline_that_allows_at_its_first_step_names_only_that_step_on_every_endpoint(
+    rig: _Rig, path: str, stream: bool
+) -> None:
+    response: Final = _ask_as_team_tagged(rig, _RESPONSE_STOPS_AFTER_FIRST, stream=stream, path=path)
+    assert response.status_code == 200, response.text
+    assert _steps_that_ran(rig) == (_RESPONSE_FIRST,)
+    assert response.headers.get(_HEADER) == _RESPONSE_FIRST, dict(response.headers)
+
+
 def test_a_request_pipeline_names_a_step_whose_service_errored_before_moving_on(rig: _Rig) -> None:
     response: Final = _ask_as_team_tagged(rig, _ERRORS_PAST_FIRST)
     assert response.status_code == 200, response.text
@@ -644,6 +670,15 @@ def _spans_naming_guardrails(rig: _Rig, since: int, team: str) -> tuple[Span, ..
         pytest.param(_STOPS_AFTER_FIRST, "/v1/chat/completions", False, [_REQUEST_FIRST], id="request-pipeline"),
         pytest.param(_STOPS_AFTER_FIRST, "/v1/chat/completions", True, [_REQUEST_FIRST], id="request-pipeline-stream"),
         pytest.param(_STOPS_AFTER_FIRST, "/v1/responses", True, [_REQUEST_FIRST], id="request-pipeline-responses"),
+        pytest.param(
+            _RESPONSE_STOPS_AFTER_FIRST, "/v1/chat/completions", False, [_RESPONSE_FIRST], id="response-pipeline"
+        ),
+        pytest.param(
+            _RESPONSE_STOPS_AFTER_FIRST, "/v1/chat/completions", True, [_RESPONSE_FIRST], id="response-pipeline-stream"
+        ),
+        pytest.param(
+            _RESPONSE_STOPS_AFTER_FIRST, "/v1/messages", True, [_RESPONSE_FIRST], id="response-pipeline-messages"
+        ),
     ],
 )
 def test_the_spend_log_and_the_trace_name_only_the_steps_that_ran(
@@ -1009,6 +1044,7 @@ def agent(rig: _Rig) -> Iterator[str]:
         pytest.param(
             (_RESPONSE_MOVES_PAST_FIRST,), [_RESPONSE_BLOCKER, _RESPONSE_SECOND], id="first-step-flags-and-moves-on"
         ),
+        pytest.param((_RESPONSE_STOPS_AFTER_FIRST,), [_RESPONSE_FIRST], id="first-step-allows"),
         pytest.param(
             (_RESPONSE_STOPS_AFTER_FIRST, _RESPONSE_STOPS_AFTER_SECOND),
             [_RESPONSE_FIRST, _RESPONSE_SECOND],
@@ -1174,6 +1210,7 @@ def test_a_concurrent_burst_names_only_each_requests_own_steps(rig: _Rig) -> Non
         {
             _STOPS_AFTER_FIRST: _REQUEST_FIRST,
             _RUNS_EVERY_STEP: f"{_REQUEST_FIRST},{_REQUEST_SECOND}",
+            _RESPONSE_STOPS_AFTER_FIRST: _RESPONSE_FIRST,
         }
     )
     cases: Final = tuple(itertools.product(expected, _ENDPOINTS, (False, True))) * 2
