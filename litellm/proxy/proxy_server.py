@@ -181,6 +181,7 @@ from litellm.proxy.common_utils.token_count_settings import (
 )
 from litellm.proxy.management_helpers.auto_router_availability import AutoRouterCatalogEntry, build_auto_router_catalog
 from litellm.proxy.management_helpers.model_group_custom_fields import model_group_custom_fields
+from litellm.proxy.management_helpers.utils import management_endpoint_span_wrapper
 from litellm.repositories import database as database_runtime
 from litellm.router_strategy.auto_router.auto_router_model_naming import (
     GATED_AUTO_ROUTER_CAPABILITIES,
@@ -12339,6 +12340,7 @@ async def _deployment_hidden_by_listing_callbacks(deployment: Deployment, user_a
 @router.get(
     "/models", dependencies=[Depends(user_api_key_auth)], tags=["model management"]
 )  # if project requires model list
+@management_endpoint_span_wrapper
 async def model_list(
     request: Request = None,  # pyright: ignore[reportArgumentType]  # FastAPI always injects the Request; the None default only serves direct in-process callers
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
@@ -12649,6 +12651,7 @@ async def model_list(
     dependencies=[Depends(user_api_key_auth)],
     tags=["model management"],
 )
+@management_endpoint_span_wrapper
 async def model_info(
     model_id: str,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
@@ -21985,9 +21988,9 @@ async def toolset_mcp_route(toolset_name: str, request: Request):
     Namespace a toolset as its own MCP endpoint.
 
     Connecting to /toolset/<name>/mcp exposes exactly the tools defined in
-    the toolset. Access is enforced: non-admin API keys must have the toolset
-    listed in their object_permission.mcp_toolsets grant list, or the request
-    will be rejected with a 403.
+    the toolset. Access is enforced: API keys other than an admin's key with no
+    team must hold the toolset through one of their grant sources, or the
+    request will be rejected with a 403.
     """
     try:
         from litellm.proxy.mcp_server.mcp_server_manager import (

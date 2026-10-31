@@ -607,6 +607,23 @@ def test_openai_file_object_accepts_pending_status():
     assert file_obj.status == "pending"
 
 
+@pytest.mark.parametrize("object_type", ({}, {"object": None}), ids=["missing", "null"])
+def test_openai_file_object_without_an_object_type_validates_as_a_file(object_type: dict[str, None]) -> None:
+    from litellm.types.llms.openai import OpenAIFileObject
+
+    server_file: Final = {
+        "id": "file-b73f4c",
+        "bytes": 156,
+        "created_at": 1793238707,
+        "filename": "batch_requests.jsonl",
+        "purpose": "batch",
+    }
+
+    file_obj: Final = OpenAIFileObject.model_validate({**server_file, **object_type})
+
+    assert file_obj.model_dump(exclude_none=True) == {**server_file, "object": "file"}
+
+
 class TestOpenAIFileObjectBatchGuardrailSerialization:
     """The proxy-only `litellm_batch_guardrail` key must reach the wire only when something set it."""
 
