@@ -1,7 +1,9 @@
 use std::{future::Future, pin::Pin};
 
 use litellm_auth_gcp::{VertexAuth, VertexConfig};
-use litellm_auth_types::{InputSource, SecretValue, Sourced};
+use litellm_auth_types::{InputSource, Sourced};
+use litellm_secret_value::SecretValue;
+
 use litellm_cache::Error;
 
 pub trait TokenSource: Send + Sync + 'static {
@@ -30,7 +32,7 @@ impl TokenSource for GcpTokenSource {
             self.auth
                 .access_token(&self.config, &|name| std::env::var(name).ok())
                 .await
-                .map_err(|_| Error::Unavailable)
+                .map_err(Error::unavailable)
         })
     }
 }

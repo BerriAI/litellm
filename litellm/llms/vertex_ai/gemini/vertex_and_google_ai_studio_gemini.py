@@ -34,6 +34,7 @@ from litellm.litellm_core_utils.json_fragment_accumulator import JSONFragmentAcc
 from litellm.litellm_core_utils.prompt_templates.factory import (
     encode_tool_call_id_with_signature,
 )
+from litellm.litellm_core_utils.reasoning_effort_utils import warn_dropped_reasoning
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
@@ -41,6 +42,7 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     get_httpx_client,
 )
+from litellm.llms.custom_httpx.sse_lines import aiter_sse_lines, iter_sse_lines
 from litellm.types.llms.anthropic import AnthropicThinkingParam
 from litellm.types.llms.base import CachedTokensDetails
 from litellm.types.llms.gemini import BidiGenerateContentServerMessage
@@ -200,6 +202,13 @@ def _unsupported_reasoning_effort(reasoning_effort: str) -> UnsupportedParamsErr
 
 
 _SAMPLING_DEPRECATION_UNMAPPED_MODELS: Final = "models outside litellm's model map"
+_NON_INTEGER_BUDGET_REASON: Final = (
+    "Gemini takes budget_tokens only as an integer, so it uses its default thinking budget."
+)
+_LEVEL_ONLY_BUDGET_REASON: Final = (
+    "Gemini 3 and later set reasoning by thinking level, not budget, so litellm does not send the budget. "
+    "Send reasoning_effort to pick a level."
+)
 _sampling_deprecation_lock: Final = threading.Lock()
 
 
@@ -688,6 +697,10 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         model: str,
     ) -> bool:
         return cls._forward_gemini_function_call_id(model)
+
+    @classmethod
+    def supports_multimodal_function_responses(cls, model: str) -> bool:
+        return cls.is_gemini_3_or_newer(model)
 
     def _supports_penalty_parameters(self, model: str) -> bool:
         # Gemini 3 models do not support penalty parameters
@@ -1461,6 +1474,14 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     params["includeThoughts"] = False
                 else:
                     params["includeThoughts"] = sends_thoughts
+                    if thinking_budget is not None:
+                        warn_dropped_reasoning(
+                            "thinking.budget_tokens",
+                            thinking_budget,
+                            model,
+                            _LEVEL_ONLY_BUDGET_REASON,
+                            drop_params_gated=False,
+                        )
                     # Follow provider defaults unless explicitly opted into legacy behavior.
                     if litellm.enable_gemini_default_thinking_level_low is True:
                         params["thinkingLevel"] = (
@@ -1473,8 +1494,16 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             # For older Gemini models, use thinkingBudget
             if thinking_enabled and not VertexGeminiConfig._is_thinking_budget_zero(thinking_budget):
                 params["includeThoughts"] = sends_thoughts
-            if thinking_budget is not None and isinstance(thinking_budget, int):
+            if isinstance(thinking_budget, int):
                 params["thinkingBudget"] = thinking_budget
+            elif thinking_budget is not None:
+                warn_dropped_reasoning(
+                    "thinking.budget_tokens",
+                    thinking_budget,
+                    model,
+                    _NON_INTEGER_BUDGET_REASON,
+                    drop_params_gated=False,
+                )
 
         return params
 
@@ -2739,10 +2768,10 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 chunk_indices = support.get("groundingChunkIndices", [])
 
                 if start_index is not None and end_index is not None and chunk_indices:
-                    # Use the first chunk's URL for the annotation
-                    first_chunk_idx = chunk_indices[0]
-                    if first_chunk_idx in chunk_to_uri_map:
-                        uri_info = chunk_to_uri_map[first_chunk_idx]
+                    for chunk_index in chunk_indices:
+                        if chunk_index not in chunk_to_uri_map:
+                            continue
+                        uri_info = chunk_to_uri_map[chunk_index]
 
                         url_citation: ChatCompletionAnnotationURLCitation = {
                             "start_index": start_index,
@@ -3237,7 +3266,7 @@ async def make_call(
             raise
 
     completion_stream: Final = ModelResponseIterator(
-        streaming_response=response.aiter_lines(),
+        streaming_response=aiter_sse_lines(response.aiter_text()),
         sync_stream=False,
         logging_obj=logging_obj,
         response_headers=response.headers,
@@ -3308,7 +3337,7 @@ def make_sync_call(
             raise
 
     completion_stream: Final = ModelResponseIterator(
-        streaming_response=response.iter_lines(),
+        streaming_response=iter_sse_lines(response.iter_text()),
         sync_stream=True,
         logging_obj=logging_obj,
         response_headers=response.headers,
@@ -4186,7 +4215,7 @@ class ModelResponseIterator:
             log_failed_hop(e)
             return self._truncated_stream_end(token)
         self._start_hop(hop_response, token)
-        self.streaming_response = hop_response.aiter_lines()
+        self.streaming_response = aiter_sse_lines(hop_response.aiter_text())
         self.async_response_iterator = self.streaming_response
         return None
 
@@ -4200,7 +4229,7 @@ class ModelResponseIterator:
             log_failed_hop(e)
             return self._truncated_stream_end(token)
         self._start_hop(hop_response, token)
-        self.streaming_response = hop_response.iter_lines()
+        self.streaming_response = iter_sse_lines(hop_response.iter_text())
         self.response_iterator = self.streaming_response
         return None
 

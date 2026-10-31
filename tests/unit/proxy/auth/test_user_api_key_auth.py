@@ -5,7 +5,7 @@
 import litellm.proxy
 import litellm.proxy.proxy_server
 
-from typing import Dict, Final, List, Optional
+from typing import Dict, Final, List, Mapping, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -1311,6 +1311,33 @@ async def test_auth_rejects_wrong_or_empty_present_custom_header(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("api_key", [None, ""], ids=["no_key", "no_bearer_prefix"])
+async def test_auth_rejection_without_a_usable_key_has_a_json_null_param(
+    api_key: str | None, monkeypatch: pytest.MonkeyPatch
+):
+    from fastapi import Request
+
+    from litellm.proxy import proxy_server
+    from litellm.proxy._types import ProxyErrorTypes, ProxyException
+
+    monkeypatch.setattr(proxy_server, "master_key", "sk-test-master")
+    monkeypatch.setattr(proxy_server, "general_settings", {})
+    request = Request(
+        scope={"type": "http", "method": "POST", "path": "/chat/completions", "headers": []},
+        receive=AsyncMock(return_value={"type": "http.request", "body": b"", "more_body": False}),
+    )
+    request._url = URL(url="/chat/completions")
+
+    with pytest.raises(ProxyException) as exc_info:
+        await user_api_key_auth(request=request, api_key=api_key)
+
+    body = json.loads(json.dumps({"error": exc_info.value.to_dict()}))
+    assert body["error"]["code"] == "401"
+    assert body["error"]["type"] == ProxyErrorTypes.auth_error.value
+    assert body["error"]["param"] is None
+
+
+@pytest.mark.asyncio
 async def test_user_api_key_from_query_param():
     """Ensure user_api_key_auth reads API key from `key` query parameter."""
     from fastapi import Request
@@ -1367,7 +1394,9 @@ async def test_check_user_model_budget(user_id, user_model_max_budget, expected_
     calls = []
 
     class _Limiter:
-        async def is_user_within_model_budget(self, user_id, user_model_max_budget, model):
+        async def is_user_within_model_budget(
+            self, user_id: str, user_model_max_budget: Mapping[str, object], model: str, team_id: str | None = None
+        ) -> bool:
             calls.append((user_id, user_model_max_budget, model))
             return True
 
@@ -2031,9 +2060,9 @@ async def test_user_api_key_auth_websocket_rejection_adds_no_traceback_for_other
     assert rejection.value.status_code == 403
     assert "expired key" in str(rejection.value.detail).lower()
     assert sent == [{"type": "websocket.close", "code": status.WS_1008_POLICY_VIOLATION, "reason": ""}]
-    proxy_records: Final = [record for record in caplog.records if record.name == verbose_proxy_logger.name]
+    proxy_records: Final = [record for record in caplog.records if record.name.startswith(verbose_proxy_logger.name)]
     assert [record.getMessage() for record in proxy_records if record.exc_info is not None] == []
-    assert [record.levelno for record in proxy_records if record.levelno >= logging.WARNING] == [logging.ERROR]
+    assert [record.levelno for record in proxy_records if record.levelno >= logging.WARNING] == [logging.WARNING]
 
 
 @pytest.mark.asyncio

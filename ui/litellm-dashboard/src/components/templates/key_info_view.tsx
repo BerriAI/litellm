@@ -56,7 +56,9 @@ import {
   teamMemberBudgetGate,
 } from "../shared/InheritedBudgetHint";
 import { KeyEditView } from "./key_edit_view";
+import { keyOrganizationId } from "./keyEditFieldNormalizers";
 import { isTeamAdminEditingMemberKey, teamAdminMemberKeyPayload } from "./teamAdminMemberKeyPayload";
+import { BudgetPeriodTooltip } from "@/components/shared/BudgetPeriodTooltip";
 
 export function needsLifetimeSpendBackfill(spend: number, totalSpend: number | null | undefined): boolean {
   return (totalSpend ?? 0) < spend;
@@ -239,6 +241,10 @@ export default function KeyInfoView({
         delete formValues.disable_global_guardrails;
       }
 
+      if ((formValues.organization_id || null) === keyOrganizationId(currentKeyData)) {
+        delete formValues.organization_id;
+      }
+
       // Handle max budget empty string
       formValues.max_budget = mapEmptyStringToNull(formValues.max_budget);
 
@@ -397,7 +403,9 @@ export default function KeyInfoView({
 
       const newKeyValues = await keyUpdateCall(accessToken, formValues);
 
-      setCurrentKeyData((prevData) => (prevData ? { ...prevData, ...newKeyValues } : undefined));
+      setCurrentKeyData((prevData) =>
+        prevData ? { ...prevData, ...newKeyValues, org_id: newKeyValues.organization_id } : undefined,
+      );
       void queryClient.invalidateQueries({ queryKey: keyKeys.all });
 
       if (onKeyDataUpdate) {
@@ -545,7 +553,7 @@ export default function KeyInfoView({
   const lastConfiguredAt = currentKeyData.settings_updated_at || currentKeyData.created_at;
 
   const parentTeam = currentKeyData.team_id ? teamsData?.find((team) => team.team_id === currentKeyData.team_id) : null;
-  const orgId = currentKeyData.organization_id || currentKeyData.org_id || parentTeam?.organization_id || "";
+  const orgId = keyOrganizationId(currentKeyData) || parentTeam?.organization_id || "";
   const parentOrg = orgId ? organizations?.find((org) => org.organization_id === orgId) : null;
 
   const hasOwnBudget = currentKeyData.max_budget !== null;
@@ -722,7 +730,15 @@ export default function KeyInfoView({
           <TabsContent value="overview" keepMounted>
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
               <Card className="block p-6">
-                <p className="text-sm">Spend</p>
+                <p className="text-sm">
+                  Spend
+                  <BudgetPeriodTooltip
+                    spend={currentKeyData.spend}
+                    maxBudget={currentKeyData.max_budget}
+                    budgetDuration={currentKeyData.budget_duration}
+                    budgetResetAt={currentKeyData.budget_reset_at}
+                  />
+                </p>
                 <div className="mt-2">
                   <h3 className="text-lg font-medium">${formatNumberWithCommas(currentKeyData.spend, 4)}</h3>
                   <p className="text-sm">
@@ -970,7 +986,7 @@ export default function KeyInfoView({
 
                   <div>
                     <p className="text-sm font-medium">Organization</p>
-                    <p className="text-sm">{(currentKeyData.organization_id ?? currentKeyData.org_id) || "Not Set"}</p>
+                    <p className="text-sm">{keyOrganizationId(currentKeyData) || "Not Set"}</p>
                   </div>
 
                   <div>

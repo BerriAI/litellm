@@ -16,10 +16,11 @@ from pydantic import TypeAdapter
 import litellm
 from litellm import Router
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.llms.anthropic.pass_through.messages.fake_stream_iterator import FakeAnthropicMessagesStreamIterator
+from litellm.llms.anthropic.messages.native.fake_stream_iterator import FakeAnthropicMessagesStreamIterator
 from litellm.litellm_core_utils import get_llm_provider_logic
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+from litellm.router_api import RouterSettings, RoutingContext
 from litellm.router_utils.cooldown_handlers import async_get_cooldown_deployments, mark_advisor_orchestration_failure
 from litellm.types.utils import Choices, Message, ModelResponse, StandardLoggingPayload, Usage
 from litellm.router_utils.fallback_event_handlers import (
@@ -58,24 +59,28 @@ class StreamingWrapper:
         self._hidden_params = {"additional_headers": {}}
 
 
-class FakeRouter:
+class RouterDouble:
+    """The router members RoutingContext forwards to during a fallback: the fallback checks, the retry log and
+    the fallback loop (async_function_with_fallbacks, defined by each double)."""
+
     fallback_access_check = None
     fallback_budget_check = None
 
-    def log_retry(self, kwargs, e):
+    def settings(self) -> RouterSettings:
+        return RouterSettings(
+            fallback_access_check=self.fallback_access_check, fallback_budget_check=self.fallback_budget_check
+        )
+
+    def _core_log_retry(self, kwargs, e):
         return kwargs
 
+
+class FakeRouter(RouterDouble):
     async def async_function_with_fallbacks(self, *args, **kwargs):
         return StreamingWrapper()
 
 
-class AlwaysFailRouter:
-    fallback_access_check = None
-    fallback_budget_check = None
-
-    def log_retry(self, kwargs, e):
-        return kwargs
-
+class AlwaysFailRouter(RouterDouble):
     async def async_function_with_fallbacks(self, *args, **kwargs):
         raise RuntimeError("fallback model also failed")
 
@@ -83,7 +88,7 @@ class AlwaysFailRouter:
 @pytest.mark.asyncio
 async def test_run_async_fallback_adds_errors_when_opted_in():
     response = await run_async_fallback(
-        litellm_router=FakeRouter(),
+        litellm_routing_ctx=RoutingContext(FakeRouter()),
         fallback_model_group=["fallback-model"],
         original_model_group="primary-model",
         original_exception=RuntimeError("upstream limited request"),
@@ -107,7 +112,7 @@ async def test_run_async_fallback_adds_errors_when_opted_in():
 @pytest.mark.asyncio
 async def test_run_async_fallback_omits_errors_without_opt_in():
     response = await run_async_fallback(
-        litellm_router=FakeRouter(),
+        litellm_routing_ctx=RoutingContext(FakeRouter()),
         fallback_model_group=["fallback-model"],
         original_model_group="primary-model",
         original_exception=RuntimeError("upstream limited request"),
@@ -124,7 +129,7 @@ async def test_run_async_fallback_omits_errors_without_opt_in():
 async def test_run_async_fallback_raises_when_all_fallbacks_fail():
     with pytest.raises(RuntimeError, match="fallback model also failed"):
         await run_async_fallback(
-            litellm_router=AlwaysFailRouter(),
+            litellm_routing_ctx=RoutingContext(AlwaysFailRouter()),
             fallback_model_group=["fallback-model"],
             original_model_group="primary-model",
             original_exception=RuntimeError("original request failed"),
@@ -134,15 +139,9 @@ async def test_run_async_fallback_raises_when_all_fallbacks_fail():
         )
 
 
-class RecordingRouter:
-    fallback_access_check = None
-    fallback_budget_check = None
-
+class RecordingRouter(RouterDouble):
     def __init__(self):
         self.received_kwargs = None
-
-    def log_retry(self, kwargs, e):
-        return kwargs
 
     async def async_function_with_fallbacks(self, *args, **kwargs):
         self.received_kwargs = kwargs
@@ -211,7 +210,7 @@ async def test_run_async_fallback_opens_the_hop_without_the_superseded_attempts_
     logging_obj.record_partial_usage_for_failure(partial_usage, 0.01)
 
     await run_async_fallback(
-        litellm_router=HopLoggingItsOwnSuccessRouter(),
+        litellm_routing_ctx=RoutingContext(HopLoggingItsOwnSuccessRouter()),
         fallback_model_group=["fallback-model"],
         original_model_group="primary-model",
         original_exception=RuntimeError("stream dropped before content"),
@@ -234,7 +233,7 @@ async def test_run_async_fallback_preserves_superseded_usage_when_hop_fails_befo
 
     with pytest.raises(RuntimeError, match="fallback model also failed"):
         await run_async_fallback(
-            litellm_router=AlwaysFailRouter(),
+            litellm_routing_ctx=RoutingContext(AlwaysFailRouter()),
             fallback_model_group=["fallback-model"],
             original_model_group="primary-model",
             original_exception=RuntimeError("stream dropped before content"),
@@ -325,7 +324,7 @@ async def test_run_async_fallback_cools_down_a_failed_hop_once(failure_already_l
 
     with pytest.raises(_RateLimitedHop):
         await run_async_fallback(
-            litellm_router=router,
+            litellm_routing_ctx=RoutingContext(router),
             fallback_model_group=["fallback-model"],
             original_model_group="primary-model",
             original_exception=RuntimeError("stream dropped before content"),
@@ -336,7 +335,7 @@ async def test_run_async_fallback_cools_down_a_failed_hop_once(failure_already_l
             metadata={},
         )
 
-    cooled_down: Final = await async_get_cooldown_deployments(litellm_router_instance=router, parent_otel_span=None)
+    cooled_down: Final = await async_get_cooldown_deployments(ctx=RoutingContext(router), parent_otel_span=None)
     assert cooled_down == (["fallback-dep-1"] if failure_already_logged else [])
 
 
@@ -348,7 +347,7 @@ async def test_run_async_fallback_cools_down_the_final_deployment_after_retry_fa
 
     with pytest.raises(_RateLimitedHop):
         await run_async_fallback(
-            litellm_router=router,
+            litellm_routing_ctx=RoutingContext(router),
             fallback_model_group=["fallback-model"],
             original_model_group="primary-model",
             original_exception=RuntimeError("stream dropped before content"),
@@ -359,7 +358,7 @@ async def test_run_async_fallback_cools_down_the_final_deployment_after_retry_fa
         )
 
     assert logging_obj.model_call_details.get("has_logged_async_failure", False) is True
-    cooled_down: Final = await async_get_cooldown_deployments(litellm_router_instance=router, parent_otel_span=None)
+    cooled_down: Final = await async_get_cooldown_deployments(ctx=RoutingContext(router), parent_otel_span=None)
     assert cooled_down == ["fallback-dep-2"]
 
 
@@ -369,7 +368,7 @@ async def test_run_async_fallback_forwards_include_fallback_errors_to_nested_cal
     flag has to reach the nested async_function_with_fallbacks call."""
     router = RecordingRouter()
     await run_async_fallback(
-        litellm_router=router,
+        litellm_routing_ctx=RoutingContext(router),
         fallback_model_group=["fallback-model"],
         original_model_group="primary-model",
         original_exception=RuntimeError("upstream limited request"),
@@ -385,7 +384,7 @@ async def test_run_async_fallback_forwards_include_fallback_errors_to_nested_cal
 async def test_run_async_fallback_does_not_forward_flag_without_opt_in():
     router = RecordingRouter()
     await run_async_fallback(
-        litellm_router=router,
+        litellm_routing_ctx=RoutingContext(router),
         fallback_model_group=["fallback-model"],
         original_model_group="primary-model",
         original_exception=RuntimeError("upstream limited request"),
@@ -399,7 +398,7 @@ async def test_run_async_fallback_does_not_forward_flag_without_opt_in():
 @pytest.mark.asyncio
 async def test_run_async_fallback_skips_original_model_group():
     response = await run_async_fallback(
-        litellm_router=FakeRouter(),
+        litellm_routing_ctx=RoutingContext(FakeRouter()),
         fallback_model_group=["primary-model", "fallback-model"],
         original_model_group="primary-model",
         original_exception=RuntimeError("original failed"),
@@ -410,16 +409,10 @@ async def test_run_async_fallback_skips_original_model_group():
     assert response._hidden_params["additional_headers"]["x-litellm-attempted-fallbacks"] == 1
 
 
-class AttemptRecordingRouter:
-    fallback_access_check = None
-    fallback_budget_check = None
-
+class AttemptRecordingRouter(RouterDouble):
     def __init__(self):
         self.attempted_model_groups = []
         self.received_kwargs = None
-
-    def log_retry(self, kwargs, e):
-        return kwargs
 
     async def async_function_with_fallbacks(self, *args, **kwargs):
         self.attempted_model_groups.append(kwargs.get("model"))
@@ -468,7 +461,7 @@ async def test_run_async_fallback_keeps_uploaded_file_requests_in_their_model_gr
 
     with pytest.raises(RuntimeError, match="openai connection error"):
         await run_async_fallback(
-            litellm_router=router,
+            litellm_routing_ctx=RoutingContext(router),
             fallback_model_group=["azure-group"],
             original_model_group="openai-group",
             original_exception=owning_provider_error,
@@ -488,7 +481,7 @@ async def test_run_async_fallback_keeps_fine_tuning_requests_in_their_model_grou
 
     with pytest.raises(RuntimeError, match="openai connection error"):
         await run_async_fallback(
-            litellm_router=router,
+            litellm_routing_ctx=RoutingContext(router),
             fallback_model_group=["azure-group"],
             original_model_group="openai-group",
             original_exception=RuntimeError("openai connection error"),
@@ -509,7 +502,7 @@ async def test_run_async_fallback_allows_same_model_group_retry_for_uploaded_fil
     router = AttemptRecordingRouter()
 
     await run_async_fallback(
-        litellm_router=router,
+        litellm_routing_ctx=RoutingContext(router),
         fallback_model_group=[{"model": "openai-group", "_target_order": 2}],
         original_model_group="openai-group",
         original_exception=RuntimeError("first deployment failed"),
@@ -532,7 +525,7 @@ async def test_run_async_fallback_keeps_file_creation_in_its_model_group():
 
     with pytest.raises(RuntimeError, match="azure connection error"):
         await run_async_fallback(
-            litellm_router=router,
+            litellm_routing_ctx=RoutingContext(router),
             fallback_model_group=["openai-group"],
             original_model_group="azure-group",
             original_exception=RuntimeError("azure connection error"),
@@ -550,7 +543,7 @@ async def test_run_async_fallback_allows_same_model_group_retry_for_file_creatio
     router = AttemptRecordingRouter()
 
     await run_async_fallback(
-        litellm_router=router,
+        litellm_routing_ctx=RoutingContext(router),
         fallback_model_group=[{"model": "azure-group", "_target_order": 2}],
         original_model_group="azure-group",
         original_exception=RuntimeError("first deployment failed"),
@@ -568,7 +561,7 @@ async def test_run_async_fallback_still_crosses_model_groups_without_an_uploaded
     router = AttemptRecordingRouter()
 
     await run_async_fallback(
-        litellm_router=router,
+        litellm_routing_ctx=RoutingContext(router),
         fallback_model_group=["azure-group"],
         original_model_group="openai-group",
         original_exception=RuntimeError("openai connection error"),
@@ -612,7 +605,7 @@ async def test_run_async_fallback_keeps_provider_scoped_ids_in_their_model_group
 
     with pytest.raises(RuntimeError, match="openai connection error"):
         await run_async_fallback(
-            litellm_router=router,
+            litellm_routing_ctx=RoutingContext(router),
             fallback_model_group=["azure-group"],
             original_model_group="openai-group",
             original_exception=RuntimeError("openai connection error"),
@@ -635,7 +628,7 @@ async def test_run_async_fallback_ignores_stray_resource_ids_on_completion_calls
     router = AttemptRecordingRouter()
 
     await run_async_fallback(
-        litellm_router=router,
+        litellm_routing_ctx=RoutingContext(router),
         fallback_model_group=["azure-group"],
         original_model_group="openai-group",
         original_exception=RuntimeError("openai connection error"),
@@ -654,7 +647,7 @@ async def test_run_async_fallback_allows_same_model_group_retry_for_batch_cancel
     router = AttemptRecordingRouter()
 
     await run_async_fallback(
-        litellm_router=router,
+        litellm_routing_ctx=RoutingContext(router),
         fallback_model_group=[{"model": "openai-group", "_target_order": 2}],
         original_model_group="openai-group",
         original_exception=RuntimeError("first deployment failed"),
@@ -675,7 +668,7 @@ async def test_run_async_fallback_handles_explicitly_none_metadata():
     router = AttemptRecordingRouter()
 
     await run_async_fallback(
-        litellm_router=router,
+        litellm_routing_ctx=RoutingContext(router),
         fallback_model_group=["azure-group"],
         original_model_group="openai-group",
         original_exception=RuntimeError("openai connection error"),
@@ -699,7 +692,7 @@ async def test_run_async_fallback_records_batch_model_group_outside_provider_met
     router = AttemptRecordingRouter()
 
     await run_async_fallback(
-        litellm_router=router,
+        litellm_routing_ctx=RoutingContext(router),
         fallback_model_group=[{"model": "openai-group", "_target_order": 2}],
         original_model_group="openai-group",
         original_exception=RuntimeError("first deployment failed"),
@@ -724,8 +717,8 @@ class AccessCheckedRouter(AttemptRecordingRouter):
 
     fallback_budget_check = None
 
-    async def fallback_access_check(self, *, model, request_kwargs, llm_router):
-        self.access_checks.append((model, request_kwargs["metadata"]["user_api_key"], llm_router is self))
+    async def fallback_access_check(self, *, model, request_kwargs, ctx):
+        self.access_checks.append((model, request_kwargs["metadata"]["user_api_key"], ctx.belongs_to(self)))
         return model in self.allowed_models
 
 
@@ -734,7 +727,7 @@ async def test_run_async_fallback_skips_targets_the_access_check_rejects():
     router = AccessCheckedRouter(allowed_models=frozenset({"allowed-model"}))
 
     await run_async_fallback(
-        litellm_router=router,
+        litellm_routing_ctx=RoutingContext(router),
         fallback_model_group=[
             {"model": "secret-model", "messages": [{"role": "user", "content": "hi"}]},
             "allowed-model",
@@ -754,13 +747,39 @@ async def test_run_async_fallback_skips_targets_the_access_check_rejects():
     ]
 
 
+class LegacyAccessCheckedRouter(AccessCheckedRouter):
+    async def fallback_access_check(self, *, model, request_kwargs, llm_router):
+        self.access_checks.append((model, request_kwargs["metadata"]["user_api_key"], llm_router is self))
+        return model in self.allowed_models
+
+
+@pytest.mark.asyncio
+async def test_run_async_fallback_still_runs_a_deprecated_llm_router_access_check():
+    router = LegacyAccessCheckedRouter(allowed_models=frozenset({"allowed-model"}))
+
+    with pytest.warns(DeprecationWarning, match="llm_router"):
+        await run_async_fallback(
+            litellm_routing_ctx=RoutingContext(router),
+            fallback_model_group=["secret-model", "allowed-model"],
+            original_model_group="primary-model",
+            original_exception=RuntimeError("primary failed"),
+            max_fallbacks=3,
+            fallback_depth=0,
+            model="primary-model",
+            metadata={"user_api_key": "hashed"},
+        )
+
+    assert router.attempted_model_groups == ["allowed-model"]
+    assert router.access_checks == [("secret-model", "hashed", True), ("allowed-model", "hashed", True)]
+
+
 @pytest.mark.asyncio
 async def test_run_async_fallback_raises_original_error_when_no_target_is_authorized():
     router = AccessCheckedRouter(allowed_models=frozenset())
 
     with pytest.raises(RuntimeError, match="primary failed"):
         await run_async_fallback(
-            litellm_router=router,
+            litellm_routing_ctx=RoutingContext(router),
             fallback_model_group=["secret-model", "other-secret-model"],
             original_model_group="primary-model",
             original_exception=RuntimeError("primary failed"),
@@ -779,7 +798,7 @@ async def test_run_async_fallback_does_not_consult_access_check_for_same_model_g
     router = AccessCheckedRouter(allowed_models=frozenset())
 
     await run_async_fallback(
-        litellm_router=router,
+        litellm_routing_ctx=RoutingContext(router),
         fallback_model_group=[{"model": "primary-model", "_target_order": 2}],
         original_model_group="primary-model",
         original_exception=RuntimeError("first order level failed"),
@@ -793,15 +812,9 @@ async def test_run_async_fallback_does_not_consult_access_check_for_same_model_g
     assert router.access_checks == []
 
 
-class RecordingFailRouter:
-    fallback_access_check = None
-    fallback_budget_check = None
-
+class RecordingFailRouter(RouterDouble):
     def __init__(self):
         self.attempted_models = []
-
-    def log_retry(self, kwargs, e):
-        return kwargs
 
     async def async_function_with_fallbacks(self, *args, **kwargs):
         self.attempted_models.append(kwargs.get("model"))
@@ -818,7 +831,7 @@ async def test_run_async_fallback_skips_model_group_already_attempted():
 
     with pytest.raises(RuntimeError, match="original failed"):
         await run_async_fallback(
-            litellm_router=router,
+            litellm_routing_ctx=RoutingContext(router),
             fallback_model_group=["already-attempted"],
             original_model_group="primary-model",
             original_exception=RuntimeError("original failed"),
@@ -836,7 +849,7 @@ async def test_run_async_fallback_attempts_a_repeated_target_once():
 
     with pytest.raises(RuntimeError, match="fallback model also failed"):
         await run_async_fallback(
-            litellm_router=router,
+            litellm_routing_ctx=RoutingContext(router),
             fallback_model_group=["fallback-model", "fallback-model", "other-model"],
             original_model_group="primary-model",
             original_exception=RuntimeError("original failed"),
@@ -855,7 +868,7 @@ async def test_run_async_fallback_forwards_attempted_model_groups_to_nested_call
     router = RecordingRouter()
 
     await run_async_fallback(
-        litellm_router=router,
+        litellm_routing_ctx=RoutingContext(router),
         fallback_model_group=["fallback-model"],
         original_model_group="primary-model",
         original_exception=RuntimeError("original failed"),
@@ -876,7 +889,7 @@ async def test_run_async_fallback_can_target_the_requested_group_when_a_pre_rout
     router = RecordingRouter()
 
     await run_async_fallback(
-        litellm_router=router,
+        litellm_routing_ctx=RoutingContext(router),
         fallback_model_group=["requested-model"],
         original_model_group="requested-model",
         original_exception=RuntimeError("selected tier failed"),
@@ -905,7 +918,7 @@ async def test_run_async_fallback_still_retargets_the_same_group_via_dict_entry(
     router = RecordingRouter()
 
     await run_async_fallback(
-        litellm_router=router,
+        litellm_routing_ctx=RoutingContext(router),
         fallback_model_group=[entry],
         original_model_group="primary-model",
         original_exception=RuntimeError("original failed"),
@@ -926,7 +939,7 @@ async def test_run_async_fallback_skips_a_repeated_dict_target():
 
     with pytest.raises(RuntimeError, match="original failed"):
         await run_async_fallback(
-            litellm_router=router,
+            litellm_routing_ctx=RoutingContext(router),
             fallback_model_group=[{"model": "already-attempted"}],
             original_model_group="primary-model",
             original_exception=RuntimeError("original failed"),
@@ -945,7 +958,7 @@ async def test_run_async_fallback_attempts_a_repeated_dict_target_once():
 
     with pytest.raises(RuntimeError, match="fallback model also failed"):
         await run_async_fallback(
-            litellm_router=router,
+            litellm_routing_ctx=RoutingContext(router),
             fallback_model_group=[entry, entry, {"model": "other-model"}],
             original_model_group="primary-model",
             original_exception=RuntimeError("original failed"),
@@ -965,7 +978,7 @@ async def test_run_async_fallback_keeps_a_request_override_distinct_from_the_bar
 
     with pytest.raises(RuntimeError, match="fallback model also failed"):
         await run_async_fallback(
-            litellm_router=router,
+            litellm_routing_ctx=RoutingContext(router),
             fallback_model_group=[{"model": "already-attempted", "messages": [{"role": "user", "content": "shorter"}]}],
             original_model_group="primary-model",
             original_exception=RuntimeError("original failed"),
@@ -1028,17 +1041,24 @@ def test_get_fallback_model_group_does_not_mutate_fallbacks():
     assert fallbacks == [{"gpt-3.5-turbo": ["claude-3-haiku"]}, "gpt-4o-mini"]
 
 
+def _cooldown_ctx(*, cooldown_time: float = 60.0, deployment_dict: Mapping[str, object] | None = None) -> MagicMock:
+    """A RoutingContext double for the fallback cooldown trigger: no deployment, this model info, this cooldown time."""
+    ctx: Final = MagicMock()
+    ctx.registry.return_value.deployment.return_value = None
+    ctx.registry.return_value.deployment_dict.return_value = deployment_dict
+    ctx.settings.return_value.cooldown_time = cooldown_time
+    return ctx
+
+
 class TestTriggerCooldownForFailedDeployment:
     def test_calls_set_cooldown_deployments_with_stamped_deployment_id(self):
-        mock_router = MagicMock()
-        mock_router.cooldown_time = 60.0
-        mock_router.get_model_info.return_value = None
+        ctx = _cooldown_ctx(cooldown_time=60.0)
 
         exc = litellm.RateLimitError("Rate limit", "openai", "gpt-4")
         exc.failed_deployment_id = "fallback-deployment"
 
         with patch("litellm.router_utils.fallback_event_handlers.set_cooldown_deployments") as mock_set_cooldown:
-            _trigger_cooldown_for_failed_deployment(litellm_router=mock_router, kwargs={}, exception=exc)
+            _trigger_cooldown_for_failed_deployment(ctx=ctx, kwargs={}, exception=exc)
 
             mock_set_cooldown.assert_called_once()
             call_kwargs = mock_set_cooldown.call_args[1]
@@ -1050,9 +1070,7 @@ class TestTriggerCooldownForFailedDeployment:
         one without knowing this call's function_name, so a client with
         permission to set metadata must not be able to get an arbitrary
         deployment cooled down by forging a deployment_model_name marker."""
-        mock_router = MagicMock()
-        mock_router.cooldown_time = 60.0
-        mock_router.get_model_info.return_value = None
+        ctx = _cooldown_ctx(cooldown_time=60.0)
 
         exc = litellm.RateLimitError("Rate limit", "openai", "gpt-4")
         kwargs = {
@@ -1063,7 +1081,7 @@ class TestTriggerCooldownForFailedDeployment:
         }
 
         with patch("litellm.router_utils.fallback_event_handlers.set_cooldown_deployments") as mock_set_cooldown:
-            _trigger_cooldown_for_failed_deployment(litellm_router=mock_router, kwargs=kwargs, exception=exc)
+            _trigger_cooldown_for_failed_deployment(ctx=ctx, kwargs=kwargs, exception=exc)
 
             mock_set_cooldown.assert_not_called()
 
@@ -1071,9 +1089,7 @@ class TestTriggerCooldownForFailedDeployment:
         """The fallback path must feed the same per-minute failure counter the
         primary path uses, or repeated fallback failures never accumulate
         toward the default percent-fail-rate cooldown threshold."""
-        mock_router = MagicMock()
-        mock_router.cooldown_time = 60.0
-        mock_router.get_model_info.return_value = None
+        ctx = _cooldown_ctx(cooldown_time=60.0)
 
         exc = litellm.RateLimitError("Rate limit", "openai", "gpt-4")
         exc.failed_deployment_id = "fallback-deployment"
@@ -1084,47 +1100,39 @@ class TestTriggerCooldownForFailedDeployment:
                 "litellm.router_utils.fallback_event_handlers.increment_deployment_failures_for_current_minute"
             ) as mock_increment,
         ):
-            _trigger_cooldown_for_failed_deployment(litellm_router=mock_router, kwargs={}, exception=exc)
+            _trigger_cooldown_for_failed_deployment(ctx=ctx, kwargs={}, exception=exc)
 
-            mock_increment.assert_called_once_with(
-                litellm_router_instance=mock_router, deployment_id="fallback-deployment"
-            )
+            mock_increment.assert_called_once_with(ctx=ctx, deployment_id="fallback-deployment")
             mock_set_cooldown.assert_called_once()
 
     def test_no_op_when_deployment_id_missing(self):
-        mock_router = MagicMock()
+        ctx = _cooldown_ctx()
 
         with patch("litellm.router_utils.fallback_event_handlers.set_cooldown_deployments") as mock_set_cooldown:
-            _trigger_cooldown_for_failed_deployment(
-                litellm_router=mock_router, kwargs={}, exception=RuntimeError("no metadata")
-            )
+            _trigger_cooldown_for_failed_deployment(ctx=ctx, kwargs={}, exception=RuntimeError("no metadata"))
 
             mock_set_cooldown.assert_not_called()
 
     def test_skipped_for_advisor_orchestration_failure(self):
-        mock_router = MagicMock()
-        mock_router.cooldown_time = 60.0
-        mock_router.get_model_info.return_value = None
+        ctx = _cooldown_ctx(cooldown_time=60.0)
 
         exc = litellm.RateLimitError("Rate limit", "openai", "gpt-4")
         exc.failed_deployment_id = "fallback-deployment"
         mark_advisor_orchestration_failure(exc)
 
         with patch("litellm.router_utils.fallback_event_handlers.set_cooldown_deployments") as mock_set_cooldown:
-            _trigger_cooldown_for_failed_deployment(litellm_router=mock_router, kwargs={}, exception=exc)
+            _trigger_cooldown_for_failed_deployment(ctx=ctx, kwargs={}, exception=exc)
 
             mock_set_cooldown.assert_not_called()
 
     def test_uses_deployment_litellm_params_cooldown_time_override(self):
-        mock_router = MagicMock()
-        mock_router.cooldown_time = 300.0
-        mock_router.get_model_info.return_value = {"litellm_params": {"cooldown_time": 30.0}}
+        ctx = _cooldown_ctx(cooldown_time=300.0, deployment_dict={"litellm_params": {"cooldown_time": 30.0}})
 
         exc = litellm.RateLimitError("Rate limit", "openai", "gpt-4")
         exc.failed_deployment_id = "fallback-deployment"
 
         with patch("litellm.router_utils.fallback_event_handlers.set_cooldown_deployments") as mock_set_cooldown:
-            _trigger_cooldown_for_failed_deployment(litellm_router=mock_router, kwargs={}, exception=exc)
+            _trigger_cooldown_for_failed_deployment(ctx=ctx, kwargs={}, exception=exc)
 
             call_kwargs = mock_set_cooldown.call_args[1]
             assert call_kwargs["time_to_cooldown"] == 30.0
@@ -1133,24 +1141,20 @@ class TestTriggerCooldownForFailedDeployment:
         """Precedence must match Router.deployment_callback_on_failure's primary
         path: deployment config, then the response's Retry-After header, then the
         router default."""
-        mock_router = MagicMock()
-        mock_router.cooldown_time = 60.0
-        mock_router.get_model_info.return_value = {"litellm_params": {}}
+        ctx = _cooldown_ctx(cooldown_time=60.0, deployment_dict={"litellm_params": {}})
 
         exc = RuntimeError("upstream error")
         exc.failed_deployment_id = "fallback-deployment"
         exc.litellm_response_headers = httpx.Headers({"retry-after": "45"})
 
         with patch("litellm.router_utils.fallback_event_handlers.set_cooldown_deployments") as mock_set_cooldown:
-            _trigger_cooldown_for_failed_deployment(litellm_router=mock_router, kwargs={}, exception=exc)
+            _trigger_cooldown_for_failed_deployment(ctx=ctx, kwargs={}, exception=exc)
 
             call_kwargs = mock_set_cooldown.call_args[1]
             assert call_kwargs["time_to_cooldown"] == 45
 
     def test_silently_catches_exceptions(self):
-        mock_router = MagicMock()
-        mock_router.cooldown_time = 60.0
-        mock_router.get_model_info.return_value = None
+        ctx = _cooldown_ctx(cooldown_time=60.0)
 
         exc = RuntimeError("upstream error")
         exc.failed_deployment_id = "fallback-deployment"
@@ -1159,16 +1163,14 @@ class TestTriggerCooldownForFailedDeployment:
             "litellm.router_utils.fallback_event_handlers.set_cooldown_deployments",
             side_effect=RuntimeError("cooldown error"),
         ):
-            _trigger_cooldown_for_failed_deployment(litellm_router=mock_router, kwargs={}, exception=exc)
+            _trigger_cooldown_for_failed_deployment(ctx=ctx, kwargs={}, exception=exc)
 
     def test_skips_request_scoped_404_on_generic_api_call(self):
         """A generic API call (files/batches/threads/rerank/...) forwards a caller-supplied
         resource id, so a 404 there means "that id doesn't exist", not "this deployment is
         unhealthy". Without this guard, a single bad id would 404 every deployment in the
         fallback chain and cool all of them down from one request."""
-        mock_router = MagicMock()
-        mock_router.cooldown_time = 60.0
-        mock_router.get_model_info.return_value = None
+        ctx = _cooldown_ctx(cooldown_time=60.0)
 
         exc = litellm.NotFoundError("not found", "openai", "gpt-4")
         exc.failed_deployment_id = "fallback-deployment"
@@ -1180,7 +1182,7 @@ class TestTriggerCooldownForFailedDeployment:
             ) as mock_increment,
         ):
             _trigger_cooldown_for_failed_deployment(
-                litellm_router=mock_router,
+                ctx=ctx,
                 kwargs={"original_generic_function": MagicMock()},
                 exception=exc,
             )
@@ -1192,15 +1194,13 @@ class TestTriggerCooldownForFailedDeployment:
         """The request-scoped-404 guard is scoped to generic API calls only: a 404 on a
         regular completion fallback (no original_generic_function in kwargs) must still
         cool down the deployment as before."""
-        mock_router = MagicMock()
-        mock_router.cooldown_time = 60.0
-        mock_router.get_model_info.return_value = None
+        ctx = _cooldown_ctx(cooldown_time=60.0)
 
         exc = litellm.NotFoundError("not found", "openai", "gpt-4")
         exc.failed_deployment_id = "fallback-deployment"
 
         with patch("litellm.router_utils.fallback_event_handlers.set_cooldown_deployments") as mock_set_cooldown:
-            _trigger_cooldown_for_failed_deployment(litellm_router=mock_router, kwargs={}, exception=exc)
+            _trigger_cooldown_for_failed_deployment(ctx=ctx, kwargs={}, exception=exc)
 
             mock_set_cooldown.assert_called_once()
 
@@ -1213,9 +1213,7 @@ class TestTriggerCooldownForFailedDeployment:
         The failure logger never stamps end_time for a fallback hop (has_logged_async_failure
         is already set), so model_call_details still carries the previous hop's end_time, which
         predates this hop's api_call_start_time. The guard must not trust it."""
-        mock_router = MagicMock()
-        mock_router.cooldown_time = 60.0
-        mock_router.get_model_info.return_value = None
+        ctx = _cooldown_ctx(cooldown_time=60.0)
 
         exc = litellm.Timeout(message="timeout", model="gpt-4", llm_provider="openai")
         exc.failed_deployment_id = "fallback-deployment"
@@ -1227,7 +1225,7 @@ class TestTriggerCooldownForFailedDeployment:
             ) as mock_increment,
         ):
             _trigger_cooldown_for_failed_deployment(
-                litellm_router=mock_router,
+                ctx=ctx,
                 kwargs={"client_side_timeout": True},
                 exception=exc,
                 model_call_details={
@@ -1255,7 +1253,12 @@ class TestTriggerCooldownForFailedDeployment:
                     "model_name": "fallback-model",
                     "litellm_params": {"model": "openai/gpt-5.6", "api_key": "sk-fake"},
                     "model_info": {"id": "fallback-deployment"},
-                }
+                },
+                {
+                    "model_name": "fallback-model",
+                    "litellm_params": {"model": "openai/gpt-5.6", "api_key": "sk-fake"},
+                    "model_info": {"id": "fallback-sibling"},
+                },
             ],
             allowed_fails=0,
             cooldown_time=60,
@@ -1266,7 +1269,7 @@ class TestTriggerCooldownForFailedDeployment:
         started = datetime.now()
 
         _trigger_cooldown_for_failed_deployment(
-            litellm_router=router,
+            ctx=RoutingContext(router),
             kwargs={"client_side_timeout": True},
             exception=exc,
             model_call_details={
@@ -1277,9 +1280,7 @@ class TestTriggerCooldownForFailedDeployment:
         )
 
         assert (
-            get_deployment_failures_for_current_minute(
-                litellm_router_instance=router, deployment_id="fallback-deployment"
-            )
+            get_deployment_failures_for_current_minute(ctx=RoutingContext(router), deployment_id="fallback-deployment")
             == 1
         )
         active = router.cooldown_cache.get_active_cooldowns(model_ids=["fallback-deployment"], parent_otel_span=None)
@@ -1289,15 +1290,13 @@ class TestTriggerCooldownForFailedDeployment:
         """The client-side-timeout guard is scoped to caller-supplied timeouts only: a
         408 that did not come from x-litellm-timeout (no client_side_timeout in kwargs)
         must still cool down the deployment as before."""
-        mock_router = MagicMock()
-        mock_router.cooldown_time = 60.0
-        mock_router.get_model_info.return_value = None
+        ctx = _cooldown_ctx(cooldown_time=60.0)
 
         exc = litellm.Timeout(message="timeout", model="gpt-4", llm_provider="openai")
         exc.failed_deployment_id = "fallback-deployment"
 
         with patch("litellm.router_utils.fallback_event_handlers.set_cooldown_deployments") as mock_set_cooldown:
-            _trigger_cooldown_for_failed_deployment(litellm_router=mock_router, kwargs={}, exception=exc)
+            _trigger_cooldown_for_failed_deployment(ctx=ctx, kwargs={}, exception=exc)
 
             mock_set_cooldown.assert_called_once()
 
@@ -1345,7 +1344,12 @@ async def test_a_fallback_deployment_whose_stream_stalled_stays_out_of_cooldown(
                 "model_name": "fallback-model",
                 "litellm_params": {"model": "openai/gpt-5.6", "api_key": "sk-fake"},
                 "model_info": {"id": "fallback-deployment"},
-            }
+            },
+            {
+                "model_name": "fallback-model",
+                "litellm_params": {"model": "openai/gpt-5.6", "api_key": "sk-fake"},
+                "model_info": {"id": "fallback-sibling"},
+            },
         ],
         allowed_fails=0,
         cooldown_time=60,
@@ -1358,26 +1362,14 @@ async def test_a_fallback_deployment_whose_stream_stalled_stays_out_of_cooldown(
     )
     error.failed_deployment_id = "fallback-deployment"
 
-    _trigger_cooldown_for_failed_deployment(litellm_router=router, kwargs={}, exception=error)
+    _trigger_cooldown_for_failed_deployment(ctx=RoutingContext(router), kwargs={}, exception=error)
 
     active: Final = router.cooldown_cache.get_active_cooldowns(model_ids=["fallback-deployment"], parent_otel_span=None)
     assert tuple(entry[0] for entry in active) == cooled
 
 
 class TestRunAsyncFallbackTriggersCooldown:
-    class RouterWithLoggingKwarg:
-        fallback_access_check = None
-        fallback_budget_check = None
-
-        def __init__(self):
-            self.cooldown_time = 60.0
-
-        def log_retry(self, kwargs, e):
-            return kwargs
-
-        def get_model_info(self, id):
-            return None
-
+    class RouterWithLoggingKwarg(RouterDouble):
         async def async_function_with_fallbacks(self, *args, **kwargs):
             logging_obj: Final = kwargs.get("litellm_logging_obj")
             if isinstance(logging_obj, Logging):
@@ -1400,7 +1392,7 @@ class TestRunAsyncFallbackTriggersCooldown:
         ) as mock_trigger:
             with pytest.raises(RuntimeError, match="fallback model also failed"):
                 await run_async_fallback(
-                    litellm_router=self.RouterWithLoggingKwarg(),
+                    litellm_routing_ctx=RoutingContext(self.RouterWithLoggingKwarg()),
                     fallback_model_group=["fallback-model"],
                     original_model_group="primary-model",
                     original_exception=RuntimeError("original request failed"),
@@ -1422,7 +1414,7 @@ class TestRunAsyncFallbackTriggersCooldown:
         ) as mock_trigger:
             with pytest.raises(RuntimeError, match="fallback model also failed"):
                 await run_async_fallback(
-                    litellm_router=self.RouterWithLoggingKwarg(),
+                    litellm_routing_ctx=RoutingContext(self.RouterWithLoggingKwarg()),
                     fallback_model_group=["fallback-model"],
                     original_model_group="primary-model",
                     original_exception=RuntimeError("original request failed"),
@@ -1440,7 +1432,7 @@ class TestRunAsyncFallbackTriggersCooldown:
         ) as mock_trigger:
             with pytest.raises(RuntimeError, match="fallback model also failed"):
                 await run_async_fallback(
-                    litellm_router=self.RouterWithLoggingKwarg(),
+                    litellm_routing_ctx=RoutingContext(self.RouterWithLoggingKwarg()),
                     fallback_model_group=["fallback-model"],
                     original_model_group="primary-model",
                     original_exception=RuntimeError("original request failed"),
@@ -1462,7 +1454,7 @@ async def test_a_stored_fallback_target_cannot_carry_a_federation_field():
         match="server-owned workload identity federation or OAuth token exchange parameter",
     ):
         await run_async_fallback(
-            litellm_router=FakeRouter(),
+            litellm_routing_ctx=RoutingContext(FakeRouter()),
             fallback_model_group=[{"model": "anthropic-backup", "anthropic_federation_workspace_id": "wrkspc_other"}],
             original_model_group="primary-model",
             original_exception=RuntimeError("upstream limited request"),
@@ -1477,7 +1469,7 @@ async def test_a_stored_fallback_target_cannot_carry_an_openai_federation_field(
     naming a token file would pick which workload assertion is exchanged for the bearer."""
     with pytest.raises(ValueError, match="openai_identity_token_file"):
         await run_async_fallback(
-            litellm_router=FakeRouter(),
+            litellm_routing_ctx=RoutingContext(FakeRouter()),
             fallback_model_group=[
                 {"model": "openai-backup", "openai_identity_token_file": "/var/run/secrets/tokens/other"}
             ],
@@ -1516,7 +1508,7 @@ async def test_a_stored_fallback_target_cannot_make_the_proxy_read_an_oidc_api_k
 
     with pytest.raises(ValueError, match="oidc/"):
         await run_async_fallback(
-            litellm_router=FakeRouter(),
+            litellm_routing_ctx=RoutingContext(FakeRouter()),
             fallback_model_group=[target],
             original_model_group="primary-model",
             original_exception=RuntimeError("upstream limited request"),
@@ -1531,7 +1523,7 @@ async def test_the_refusal_is_not_swallowed_as_a_fallback_error():
     that target's failure and the run would quietly continue to the next one."""
     with pytest.raises(ValueError, match="anthropic_issuer_signing_key_ref"):
         await run_async_fallback(
-            litellm_router=FakeRouter(),
+            litellm_routing_ctx=RoutingContext(FakeRouter()),
             fallback_model_group=[
                 {"model": "anthropic-backup", "anthropic_issuer_signing_key_ref": "os.environ/ADMIN_KEY"},
                 "a-perfectly-fine-model",
@@ -1550,7 +1542,7 @@ async def test_run_async_fallback_stamps_fallback_info_into_metadata():
     router = RecordingRouter()
 
     await run_async_fallback(
-        litellm_router=router,
+        litellm_routing_ctx=RoutingContext(router),
         fallback_model_group=["fallback-model"],
         original_model_group="primary-model",
         original_exception=RuntimeError("original failed"),
@@ -1571,7 +1563,7 @@ async def test_run_async_fallback_preserves_original_model_group_on_nested_fallb
     router = RecordingRouter()
 
     await run_async_fallback(
-        litellm_router=router,
+        litellm_routing_ctx=RoutingContext(router),
         fallback_model_group=["second-fallback"],
         original_model_group="first-fallback",
         original_exception=RuntimeError("first fallback failed"),
@@ -2582,7 +2574,7 @@ async def test_run_async_fallback(function_name):
         request_kwargs["messages"] = [{"role": "user", "content": "Hello, world!"}]
 
     result = await run_async_fallback(
-        litellm_router=router,
+        litellm_routing_ctx=RoutingContext(router),
         original_function=original_function,
         num_retries=1,
         fallback_model_group=fallback_model_group,
@@ -2692,7 +2684,7 @@ async def test_failed_fallbacks_raise_most_recent_exception(function_name):
 
     with pytest.raises(litellm.exceptions.RateLimitError):
         await run_async_fallback(
-            litellm_router=router,
+            litellm_routing_ctx=RoutingContext(router),
             original_function=original_function,
             num_retries=1,
             fallback_model_group=fallback_model_group,
@@ -2844,7 +2836,7 @@ async def test_multiple_fallbacks(function_name, respx_mock: respx.MockRouter, m
         request_kwargs["messages"] = [{"role": "user", "content": "Hello, world!"}]
 
     result = await run_async_fallback(
-        litellm_router=router_2,
+        litellm_routing_ctx=RoutingContext(router_2),
         original_function=original_function,
         num_retries=1,
         fallback_model_group=fallback_model_group,

@@ -103,7 +103,7 @@ def finalize(
     update(response, logger, model if isinstance(model, str) else None, kwargs, start_time, end_time)
     cache_key: Final = logger.model_call_details.get("cache_key")
     if logger.model_call_details.get("cache_hit") is True and isinstance(cache_key, str):
-        from litellm.router_utils.add_retry_fallback_headers import get_hidden_params_dict
+        from litellm.litellm_core_utils.add_retry_fallback_headers import get_hidden_params_dict
 
         hidden: Final = get_hidden_params_dict(response, create=True)
         hidden.update({"cache_key": cache_key, "cache_hit": True})
@@ -377,7 +377,7 @@ def stream_success(
     end: datetime.datetime,
     first_chunk: datetime.datetime | None,
 ) -> None:
-    from litellm.llms.anthropic.pass_through.messages.streaming_iterator import (
+    from litellm.llms.anthropic.messages.native.streaming_iterator import (
         GLOBAL_PASS_THROUGH_SUCCESS_HANDLER_OBJ,
     )
     from litellm.proxy.pass_through_endpoints.streaming_handler import PassThroughStreamingHandler
