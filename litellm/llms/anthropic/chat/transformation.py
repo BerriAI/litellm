@@ -4,11 +4,11 @@ import re
 import time
 from collections.abc import Callable, Mapping, Sequence
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, ClassVar, Final, NoReturn, cast
+from typing import TYPE_CHECKING, Annotated, Any, ClassVar, Final, NoReturn, cast
 
 import httpx
 from openai.types.responses.response_function_web_search import ResponseFunctionWebSearch
-from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
+from pydantic import BaseModel, BeforeValidator, ConfigDict, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, TypedDict
 
 import litellm
@@ -121,15 +121,17 @@ from litellm.utils import (
 )
 
 from ..common_utils import (
-    REFUSAL_STOP_FIELDS,
+    STOP_REASON_FIELDS,
     AnthropicError,
     AnthropicModelInfo,
     eager_input_streaming_flag,
     process_anthropic_headers,
-    refusal_provider_specific_fields,
+    refusal_params,
     requires_native_compaction_beta,
+    stop_reason_provider_specific_fields,
     strip_advisor_blocks_from_messages,
     tools_marked_for_a_tool_config_point,
+    validated_object_mapping,
 )
 
 if TYPE_CHECKING:
@@ -168,6 +170,7 @@ _DEFER_LOADING_ADAPTER: Final = TypeAdapter(bool)
 _TOOL_FIELDS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _TOOLS_ADAPTER: Final = TypeAdapter(list[object])
 _CONTENT_BLOCKS_ADAPTER: Final = TypeAdapter(tuple[object, ...])
+_RESPONSE_BLOCKS: Final = TypeAdapter(tuple[Mapping[str, object], ...])
 _LITELLM_PARAMS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _REQUEST_PARAMS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _NATIVE_OUTPUT_STRING_FORMATS: Final = frozenset(
@@ -274,6 +277,15 @@ def _server_tool_use_id(block: object) -> str | None:
             return call_id
         case _:
             return None
+
+
+def _dict_or_empty(value: object) -> object:
+    return validated_object_mapping(value) or {}
+
+
+_RESPONSE_BODY_ADAPTER: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(
+    Annotated[Mapping[str, object], BeforeValidator(_dict_or_empty)]
+)
 
 
 def _server_tool_use_ids(completion_response: Mapping[str, object]) -> frozenset[str]:
@@ -2957,12 +2969,11 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         web_search_results: Sequence[object],
         completion_response: Mapping[str, object],
     ) -> list[ResponseFunctionWebSearch]:
-        content: Final = completion_response.get("content")
-        blocks: Final = content if isinstance(content, Sequence) else ()
+        blocks: Final = _CONTENT_BLOCKS_ADAPTER.validate_python(completion_response.get("content") or ())
         results_by_call: Final = {
             (tool_use_id, result.get("type")): result
-            for result in web_search_results
-            if isinstance(result, dict) and isinstance((tool_use_id := result.get("tool_use_id")), str)
+            for result in _RESPONSE_BLOCKS.validate_python(web_search_results)
+            if isinstance((tool_use_id := result.get("tool_use_id")), str)
         }
         return [
             _hosted_web_call(call_id, tool_name, tool_input, results_by_call.get((call_id, f"{tool_name}_tool_result")))
@@ -2993,7 +3004,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             provider_specific_fields["web_search_results"] = web_search_results
 
         web_search_calls: Final = self._build_web_search_calls(web_search_results or (), completion_response)
-        if web_search_calls:
+        if web_search_results is not None or web_search_calls:
             provider_specific_fields["web_search_calls"] = web_search_calls
 
         if tool_results is not None:
@@ -3020,10 +3031,10 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         if server_tool_calls:
             provider_specific_fields["server_tool_calls"] = server_tool_calls
 
-        refusal_fields: Final = refusal_provider_specific_fields(
-            REFUSAL_STOP_FIELDS.validate_python(completion_response)
+        stop_reason_fields: Final = stop_reason_provider_specific_fields(
+            STOP_REASON_FIELDS.validate_python(completion_response)
         )
-        return {**provider_specific_fields, **refusal_fields}
+        return {**provider_specific_fields, **stop_reason_fields}
 
     def transform_parsed_response(
         self,
@@ -3079,7 +3090,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         ):
             text_content = prefix_prompt + text_content
 
-        server_tool_use_ids: Final = _server_tool_use_ids(completion_response)
+        server_tool_use_ids: Final = _server_tool_use_ids(_RESPONSE_BODY_ADAPTER.validate_python(completion_response))
         client_tool_calls: Final = [tc for tc in tool_calls if tc["id"] not in server_tool_use_ids]
         provider_specific_fields: Final = self._build_provider_specific_fields(
             completion_response,
@@ -3101,22 +3112,26 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         if json_extra_content:
             merged_text = merged_text + json_extra_content if merged_text else json_extra_content
 
+        refusal_fields: Final = refusal_params(STOP_REASON_FIELDS.validate_python(completion_response))
         _message = litellm.Message(
             tool_calls=tool_calls_for_message,
             content=merged_text or None,
             provider_specific_fields=provider_specific_fields,
             thinking_blocks=thinking_blocks,
             reasoning_content=reasoning_content,
+            **refusal_fields,
         )
         _message.provider_specific_fields = provider_specific_fields
 
         if json_mode_message is not None:
-            refusal_fields: Final = refusal_provider_specific_fields(
-                REFUSAL_STOP_FIELDS.validate_python(completion_response)
+            stop_reason_fields: Final = stop_reason_provider_specific_fields(
+                STOP_REASON_FIELDS.validate_python(completion_response)
             )
             completion_response["stop_reason"] = "stop"
-            if refusal_fields:
-                json_mode_message.provider_specific_fields = dict(refusal_fields)
+            if stop_reason_fields:
+                json_mode_message.provider_specific_fields = dict(stop_reason_fields)
+            if "refusal" in refusal_fields:
+                json_mode_message.refusal = refusal_fields["refusal"]
             if thinking_blocks:
                 json_mode_message.thinking_blocks = thinking_blocks
                 json_mode_message.reasoning_content = reasoning_content

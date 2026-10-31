@@ -4339,6 +4339,7 @@ class TestEnsureOutputItemContentPartAdded:
 
         iterator = LiteLLMCompletionStreamingIterator.__new__(LiteLLMCompletionStreamingIterator)
         iterator.sent_output_item_added_event = False
+        iterator.sent_message_item_added_event = False
         iterator.sent_content_part_added_event = False
         iterator._sequence_number = 0
         iterator._cached_item_id = None
@@ -4363,6 +4364,7 @@ class TestEnsureOutputItemContentPartAdded:
         iterator._queued_web_search_call_ids = set()
         iterator._tool_search = tool_search_routing(None)
         iterator._tool_search_executions = MappingProxyType({})
+        iterator.tool_call_provider_fields = False
         return iterator
 
     def _make_text_chunk(self):
@@ -4744,6 +4746,36 @@ class TestEnsureOutputItemContentPartAdded:
         assert "".join(event.delta for event in delta_events) == '{"message":"hello world"}'
         assert done.item.name == "spawn_agent"
         assert done.item.namespace == "collaboration"
+
+    def test_streaming_final_only_tool_call_keeps_its_provider_specific_fields(self):
+        from litellm.types.utils import Choices, Message, ModelResponse
+
+        iterator = self._make_iterator()
+        iterator.tool_call_provider_fields = True
+        provider_specific_fields = {"thought_signature": "sig-" + "x" * 512}
+        complete_response = ModelResponse(
+            choices=[
+                Choices(
+                    message=Message(
+                        content=None,
+                        tool_calls=[
+                            {
+                                "id": "call_1",
+                                "type": "function",
+                                "function": {"name": "get_weather", "arguments": '{"city":"Paris"}'},
+                                "provider_specific_fields": provider_specific_fields,
+                            }
+                        ],
+                    )
+                )
+            ]
+        )
+
+        iterator._queue_final_tool_call_done_events(complete_response)
+
+        done = iterator._pending_tool_events[-1]
+        assert done.type == "response.output_item.done"
+        assert done.item.provider_specific_fields == provider_specific_fields
 
     def test_streaming_top_level_function_collision_stays_unnamespaced(self):
         iterator = self._make_iterator()
@@ -5220,24 +5252,17 @@ class TestHostedWebSearchReplay:
         "leading_text", ((), ({"type": "text", "text": "Let me look that up."},)), ids=("alone", "after_text")
     )
     @pytest.mark.parametrize(
-        ("server_tool_use", "expected_input"),
+        "server_tool_use",
         (
-            (
-                {"type": "server_tool_use", "id": "srvtoolu_01Pending", "name": "web_fetch", "input": {"url": _FETCHED_URL}},
-                {"url": _FETCHED_URL},
-            ),
-            (
-                {"type": "server_tool_use", "id": "srvtoolu_01Pending", "name": "web_search", "input": {"query": "python"}},
-                {"query": "python"},
-            ),
+            {"type": "server_tool_use", "id": "srvtoolu_01Pending", "name": "web_fetch", "input": {"url": _FETCHED_URL}},
+            {"type": "server_tool_use", "id": "srvtoolu_01Pending", "name": "web_search", "input": {"query": "python"}},
         ),
         ids=("web_fetch", "web_search"),
     )
-    def test_pending_claude_web_call_replays_to_anthropic_as_its_own_server_tool_use(
+    def test_pending_claude_web_call_is_never_replayed_to_anthropic_as_a_client_tool_use(
         self,
         leading_text: tuple[Mapping[str, object], ...],
         server_tool_use: Mapping[str, object],
-        expected_input: Mapping[str, object],
     ) -> None:
         response: Final = _anthropic_turn_on_responses((*leading_text, server_tool_use, _WEATHER_TOOL_USE))
         history: Final = [
@@ -5256,7 +5281,6 @@ class TestHostedWebSearchReplay:
 
         assert [turn["role"] for turn in anthropic_turns] == ["user", "assistant", "user"]
         assert [block for block in anthropic_turns[1]["content"] if block["type"] != "text"] == [
-            {"type": "server_tool_use", "id": "srvtoolu_01Pending", "name": server_tool_use["name"], "input": expected_input},
             {"type": "tool_use", "id": "toolu_01Weather", "name": "get_weather", "input": {"city": "Paris"}},
         ]
         assert [(block["type"], block["tool_use_id"]) for block in anthropic_turns[2]["content"]] == [
@@ -7036,6 +7060,51 @@ _CHECKING_OSAKA: Final = {
 
 def _reasoning_item(item_id: str, thinking: Mapping[str, str]) -> Mapping[str, object]:
     return {"type": "reasoning", "id": item_id, "summary": [], "encrypted_content": encode_thinking_blocks([thinking])}
+
+
+def _hosted_search(search_id: str, status: str) -> Mapping[str, object]:
+    return {
+        "type": "web_search_call",
+        "id": search_id,
+        "status": status,
+        "action": {"type": "search", "query": search_id, "queries": [search_id], "sources": []},
+    }
+
+
+@pytest.mark.parametrize(
+    ("last_search_status", "replayed_thinking"),
+    [
+        pytest.param("in_progress", None, id="paused_turn"),
+        pytest.param("completed", [_ANSWERED_THINKING], id="finished_turn"),
+    ],
+)
+def test_a_new_message_after_a_paused_search_turn_replays_only_that_turn_without_its_thinking(
+    last_search_status: str, replayed_thinking: list[Mapping[str, str]] | None
+) -> None:
+    tokyo_thinking: Final = {"type": "thinking", "thinking": "Need Tokyo weather.", "signature": "sig_tokyo"}
+    messages: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+        model="anthropic/claude-sonnet-5-5",
+        input=cast(
+            ResponseInputParam,
+            [
+                {"role": "user", "content": "Plan a Tokyo trip."},
+                _reasoning_item("rs_tokyo", tokyo_thinking),
+                {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "Tokyo is sunny."}]},
+                _hosted_search("ws_srvtoolu_01Tokyo", "completed"),
+                {"role": "user", "content": "Now Osaka."},
+                _reasoning_item("rs_osaka", _ANSWERED_THINKING),
+                _CHECKING_OSAKA,
+                _hosted_search("ws_srvtoolu_02Osaka", "completed"),
+                _hosted_search("ws_srvtoolu_03Osaka", last_search_status),
+                {"role": "user", "content": "Please continue."},
+            ],
+        ),
+        responses_api_request=ResponsesAPIOptionalRequestParams(),
+    )["messages"]
+
+    assert [message["role"] for message in messages] == ["user", "assistant", "user", "assistant", "user"]
+    assert messages[1].get("thinking_blocks") == [tokyo_thinking]
+    assert messages[3].get("thinking_blocks") == replayed_thinking
 
 
 def test_summary_replay_keeps_only_the_reasoning_of_the_turn_whose_call_a_later_output_answers() -> None:

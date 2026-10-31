@@ -71,7 +71,12 @@ from litellm.types.utils import (
 )
 
 from ...base import BaseLLM
-from ..common_utils import AnthropicError, process_anthropic_headers, refusal_provider_specific_fields
+from ..common_utils import (
+    AnthropicError,
+    process_anthropic_headers,
+    refusal_params,
+    stop_reason_provider_specific_fields,
+)
 from .transformation import ANTHROPIC_TOOL_NAME_REVERSE_MAP_KEY, AnthropicConfig, JsonModeRequest
 
 if TYPE_CHECKING:
@@ -928,6 +933,18 @@ class ModelResponseIterator:
     def _web_search_call_snapshot(self) -> dict[str, object]:
         return dict(self._web_search_calls)
 
+    def _refresh_pending_web_search_call(self, tool_use_id: str, tool_name: str) -> bool:
+        if tool_use_id not in self._web_search_calls:
+            return False
+        self._web_search_calls[tool_use_id] = build_web_search_call(
+            tool_use_id,
+            self._server_tool_inputs.get(tool_use_id, {}),
+            {"content": []},
+            status="in_progress",
+            tool_name=tool_name,
+        )
+        return True
+
     def _complete_web_search_call(self, result: dict[str, object], tool_name: str) -> None:
         tool_use_id: Final = result.get("tool_use_id")
         if not isinstance(tool_use_id, str) or tool_use_id not in self._web_search_calls:
@@ -1137,14 +1154,9 @@ class ModelResponseIterator:
                             except (json.JSONDecodeError, TypeError):
                                 pass
                         server_tool_input: Final = self._server_tool_inputs.get(self._current_server_tool_id, {})
-                        if self._current_server_tool_id in self._web_search_calls:
-                            self._web_search_calls[self._current_server_tool_id] = build_web_search_call(
-                                self._current_server_tool_id,
-                                server_tool_input,
-                                {"content": []},
-                                status="in_progress",
-                                tool_name=self._current_server_tool_name,
-                            )
+                        if self._refresh_pending_web_search_call(
+                            self._current_server_tool_id, self._current_server_tool_name
+                        ):
                             provider_specific_fields["web_search_calls"] = self._web_search_call_snapshot()
                         self._server_tool_calls = (
                             *self._server_tool_calls,
@@ -1171,8 +1183,8 @@ class ModelResponseIterator:
                 # These are automatically handled by Anthropic API, we just pass them through
                 pass
             elif type_chunk == "message_delta":
-                finish_reason, usage, container, refusal_fields = self._handle_message_delta(chunk)
-                provider_specific_fields.update(refusal_fields)
+                finish_reason, usage, container, stop_reason_fields = self._handle_message_delta(chunk)
+                provider_specific_fields.update(stop_reason_fields)
                 text = self._release_answer_close() + self._drain_split_answer_blocks()
                 if container:
                     provider_specific_fields["container"] = container
@@ -1221,6 +1233,7 @@ class ModelResponseIterator:
                 )
 
             text, tool_use = self._handle_json_mode_chunk(text=text, tool_use=tool_use)
+            refusal_fields: Final = refusal_params(provider_specific_fields)
 
             returned_chunk: Final = ModelResponseStream(
                 choices=[
@@ -1232,6 +1245,7 @@ class ModelResponseIterator:
                             provider_specific_fields=(provider_specific_fields if provider_specific_fields else None),
                             thinking_blocks=(thinking_blocks if thinking_blocks else None),
                             reasoning_content=reasoning_content,
+                            **refusal_fields,
                         ),
                         finish_reason=finish_reason,
                     )
@@ -1402,7 +1416,7 @@ class ModelResponseIterator:
             self._handle_usage(anthropic_usage_chunk=message_delta["usage"]) if "usage" in message_delta else None
         )
         container: Final = message_delta["delta"].get("container")
-        return finish_reason, usage, container, refusal_provider_specific_fields(message_delta["delta"])
+        return finish_reason, usage, container, stop_reason_provider_specific_fields(message_delta["delta"])
 
     def _handle_accumulated_json_chunk(self, data_str: str, is_final: bool = False) -> ModelResponseStream | None:
         """

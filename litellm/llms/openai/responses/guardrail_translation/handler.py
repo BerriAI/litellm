@@ -38,6 +38,7 @@ from itertools import accumulate, chain, groupby, repeat
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, NamedTuple, Protocol, TypeVar, Union, cast
 
+from openai.types.responses.response_output_refusal import ResponseOutputRefusal
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, TypedDict
 
@@ -283,6 +284,7 @@ _TOOL_CALL_PAYLOAD_EVENT_TYPES: Final = _TOOL_CALL_PAYLOAD_DELTA_EVENT_TYPES | f
 )
 _OUTPUT_ITEM_EVENT_TYPES: Final = frozenset({"response.output_item.added", "response.output_item.done"})
 _OUTPUT_TEXT_EVENT_TYPES: Final = frozenset({"response.output_text.delta", "response.output_text.done"})
+_TEXT_DELTA_EVENT_TYPES: Final = frozenset({"response.output_text.delta", "response.refusal.delta"})
 _TOOL_OUTPUT_TEXT_PART_TYPES: Final = frozenset({"input_text", "output_text", "text"})
 _PATCHABLE_ITEM_FIELDS: Final[Mapping[str, str]] = MappingProxyType(
     {"function_call_output": "output", "custom_tool_call_output": "output", "message": "content"}
@@ -571,6 +573,14 @@ def _input_item_role(item: object) -> str:
 
 def _scanned_text_field(item: Mapping[str, object]) -> str:
     return "output" if item.get("type") in TOOL_CALL_OUTPUT_ITEM_TYPES else "content"
+
+
+def _content_part_text_field(part: object) -> str:
+    return "refusal" if stream_item_field(part, "type") == "refusal" else "text"
+
+
+def _has_writable_field(part: object, field: str) -> bool:
+    return isinstance(part, dict) or hasattr(part, field)
 
 
 def _tool_output_part_text(part: object) -> str | None:
@@ -1029,7 +1039,7 @@ class OpenAIResponsesHandler(BaseTranslation):
             for content_idx, content_item in enumerate(content):
                 if isinstance(content_item, dict):
                     # Extract text
-                    text_str = content_item.get("text", None)
+                    text_str = content_item.get(_content_part_text_field(content_item), None)
                     if text_str is not None:
                         texts_to_check.append(text_str)
                         task_mappings.append((msg_idx, int(content_idx)))
@@ -1078,8 +1088,7 @@ class OpenAIResponsesHandler(BaseTranslation):
 
             elif isinstance(content, list):
                 # Replace specific text item in list content
-                if isinstance(messages[msg_idx][field][content_idx_optional], dict):
-                    messages[msg_idx][field][content_idx_optional]["text"] = guardrail_response
+                self._write_content_part_text(content[content_idx_optional], guardrail_response)
 
     async def process_output_response(
         self,
@@ -1421,7 +1430,8 @@ class OpenAIResponsesHandler(BaseTranslation):
             if isinstance(output_index, int) and isinstance(content_index, int)
         )
         if len(placeable_positions) != len(scanned_positions) or any(
-            stream_item_field(event, "type") not in _OUTPUT_TEXT_EVENT_TYPES for event in scanned_events
+            stream_item_field(event, "type") not in _OUTPUT_TEXT_EVENT_TYPES | _TEXT_DELTA_EVENT_TYPES
+            for event in scanned_events
         ):
             from litellm.proxy.policy_engine.pipeline_executor import UndeliverableStreamRewrite
 
@@ -1443,6 +1453,12 @@ class OpenAIResponsesHandler(BaseTranslation):
             setattr(event, field, value)
 
     @staticmethod
+    def _write_content_part_text(part: object, text: str) -> None:
+        field: Final = _content_part_text_field(part)
+        if _has_writable_field(part, field):
+            OpenAIResponsesHandler._write_event_field(part, field, text)
+
+    @staticmethod
     def _write_compaction_summary(item: object, summary: str) -> None:
         encrypted_content: Final = stream_item_field(item, "encrypted_content")
         if isinstance(encrypted_content, str):
@@ -1457,11 +1473,12 @@ class OpenAIResponsesHandler(BaseTranslation):
     ) -> None:
         """Sync pre-completion stream events with the rewritten completed
         response, keyed by ``(output_index, content_index)``: the first
-        ``output_text.delta`` for a rewritten item carries the full rewritten
-        text and the rest are blanked, while ``output_text.done``,
-        ``content_part.done``, and ``output_item.done`` events carry the full
-        rewritten text, so every event a client may read agrees with the
-        rewritten ``response.completed`` payload."""
+        ``output_text.delta`` or ``refusal.delta`` for a rewritten item carries
+        the full rewritten text and the rest are blanked, while
+        ``output_text.done``, ``refusal.done``, ``content_part.done``, and
+        ``output_item.done`` events carry the full rewritten text, so every
+        event a client may read agrees with the rewritten ``response.completed``
+        payload."""
         delta_replacements: Final = MappingProxyType(
             {position: chain((rewritten,), repeat("")) for position, rewritten in rewrites_by_position.items()}
         )
@@ -1477,14 +1494,14 @@ class OpenAIResponsesHandler(BaseTranslation):
             if not isinstance(output_index, int) or not isinstance(content_index, int):
                 continue
             position = (output_index, content_index)
-            if event_type == "response.output_text.delta" and position in delta_replacements:
+            if event_type in _TEXT_DELTA_EVENT_TYPES and position in delta_replacements:
                 self._write_event_field(event, "delta", next(delta_replacements[position]))
             elif event_type == "response.output_text.done" and position in rewrites_by_position:
                 self._write_event_field(event, "text", rewrites_by_position[position])
+            elif event_type == "response.refusal.done" and position in rewrites_by_position:
+                self._write_event_field(event, "refusal", rewrites_by_position[position])
             elif event_type == "response.content_part.done" and position in rewrites_by_position:
-                part = event.get("part")
-                if isinstance(part, dict) or hasattr(part, "text"):
-                    self._write_event_field(part, "text", rewrites_by_position[position])
+                self._write_content_part_text(event.get("part"), rewrites_by_position[position])
 
     @staticmethod
     def _sync_output_item_done_event(
@@ -1500,7 +1517,7 @@ class OpenAIResponsesHandler(BaseTranslation):
         for (item_idx, content_idx), rewritten in rewrites_by_position.items():
             if item_idx != output_index or not 0 <= content_idx < len(content):
                 continue
-            OpenAIResponsesHandler._write_event_field(content[content_idx], "text", rewritten)
+            OpenAIResponsesHandler._write_content_part_text(content[content_idx], rewritten)
 
     def _deliver_ended_stream_tool_call_rewrites(
         self,
@@ -1849,7 +1866,7 @@ class OpenAIResponsesHandler(BaseTranslation):
             return
 
         # Handle both GenericResponseOutputItem and dict
-        content: list[OutputText] | list[dict] | None = None
+        content: list[OutputText | ResponseOutputRefusal] | list[dict[str, object]] | None = None
         if isinstance(output_item, BaseModel):
             try:
                 output_item_dump: Final = output_item.model_dump()
@@ -1872,17 +1889,9 @@ class OpenAIResponsesHandler(BaseTranslation):
 
         verbose_proxy_logger.debug("OpenAI Responses API: Processing output item: %s", output_item)
 
-        # Iterate through content items (list of OutputText objects)
         for content_idx, content_item in enumerate(content):
-            # Handle both OutputText objects and dicts
-            if isinstance(content_item, OutputText):
-                text_content = content_item.text
-            elif isinstance(content_item, dict):
-                text_content = content_item.get("text")
-            else:
-                continue
-
-            if text_content:
+            text_content = stream_item_field(content_item, _content_part_text_field(content_item))
+            if isinstance(text_content, str) and text_content:
                 texts_to_check.append(text_content)
                 task_mappings.append((output_idx, int(content_idx)))
 
@@ -1922,33 +1931,24 @@ class OpenAIResponsesHandler(BaseTranslation):
             # Handle both GenericResponseOutputItem, BaseModel, and dict
             if isinstance(output_item, GenericResponseOutputItem):
                 if output_item.content and content_idx < len(output_item.content):
-                    content_item = output_item.content[content_idx]
-                    if isinstance(content_item, OutputText):
-                        content_item.text = guardrail_response
-                    elif isinstance(content_item, dict):
-                        content_item["text"] = guardrail_response
+                    self._write_content_part_text(output_item.content[content_idx], guardrail_response)
             elif isinstance(output_item, BaseModel):
                 # Handle other Pydantic models by converting to GenericResponseOutputItem
                 try:
                     generic_item = GenericResponseOutputItem.model_validate(output_item.model_dump())
-                    if generic_item.content and content_idx < len(generic_item.content):
-                        content_item = generic_item.content[content_idx]
-                        if isinstance(content_item, OutputText):
-                            content_item.text = guardrail_response
-                            # Update the original response output
-                            if hasattr(output_item, "content") and output_item.content:
-                                original_content = output_item.content[content_idx]
-                                if hasattr(original_content, "text"):
-                                    original_content.text = guardrail_response
+                    if (
+                        generic_item.content
+                        and content_idx < len(generic_item.content)
+                        and hasattr(output_item, "content")
+                        and output_item.content
+                    ):
+                        self._write_content_part_text(output_item.content[content_idx], guardrail_response)
                 except Exception:
                     pass
             elif isinstance(output_item, dict):
                 content = output_item.get("content", [])
                 if content and content_idx < len(content):
-                    if isinstance(content[content_idx], dict):
-                        content[content_idx]["text"] = guardrail_response
-                    elif hasattr(content[content_idx], "text"):
-                        content[content_idx].text = guardrail_response
+                    self._write_content_part_text(content[content_idx], guardrail_response)
 
     def build_block_sse_chunks(
         self,
