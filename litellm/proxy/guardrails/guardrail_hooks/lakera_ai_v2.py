@@ -222,8 +222,9 @@ def _unmaskable_reason(
 
 def _gemini_items(value: object) -> Sequence[object]:
     """A repeated Gemini field as a sequence: a JSON array, or the single object Google also accepts in its place."""
-    if isinstance(value, dict):
-        return (value,)
+    single: Final = as_str_mapping(value)
+    if single is not None:
+        return (single,)
     return _OBJECT_LIST.validate_python(value) if isinstance(value, list) else ()
 
 
