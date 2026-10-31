@@ -13,7 +13,7 @@ import asyncio
 import json
 import os
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Protocol, cast
+from typing import TYPE_CHECKING, Any, Final, Protocol
 
 from pydantic import TypeAdapter
 
@@ -292,10 +292,7 @@ class QdrantSemanticCache(BaseCache):
         prompt: Final = get_semantic_cache_prompt_from_messages(messages)
 
         # create an embedding for prompt
-        embedding_response: Final = cast(
-            EmbeddingResponse,
-            self._get_embedding(prompt, metadata=kwargs.get("metadata")),
-        )
+        embedding_response: Final = self._get_embedding(prompt, metadata=kwargs.get("metadata"))
 
         # get the embedding
         embedding: Final = _EMBEDDING_VECTOR.validate_python(embedding_response["data"][0]["embedding"])
@@ -331,10 +328,7 @@ class QdrantSemanticCache(BaseCache):
         prompt: Final = get_semantic_cache_prompt_from_messages(messages)
 
         # convert to embedding
-        embedding_response: Final = cast(
-            EmbeddingResponse,
-            self._get_embedding(prompt, metadata=kwargs.get("metadata")),
-        )
+        embedding_response: Final = self._get_embedding(prompt, metadata=kwargs.get("metadata"))
 
         # get the embedding
         embedding: Final = _EMBEDDING_VECTOR.validate_python(embedding_response["data"][0]["embedding"])

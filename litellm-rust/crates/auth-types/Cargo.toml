@@ -7,9 +7,9 @@ repository.workspace = true
 
 [dependencies]
 litellm-error.workspace = true
+litellm-secret-value.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-subtle.workspace = true
 thiserror.workspace = true
 veil.workspace = true
 

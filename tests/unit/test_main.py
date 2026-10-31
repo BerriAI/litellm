@@ -23,7 +23,7 @@ import respx
 from openai import APITimeoutError, AsyncOpenAI, OpenAI
 from openai._legacy_response import LegacyAPIResponse
 from openai.types.chat.chat_completion import ChatCompletion
-from pydantic import TypeAdapter
+from pydantic import BaseModel, ConfigDict, TypeAdapter
 
 import litellm
 from litellm import (
@@ -48,7 +48,14 @@ from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.types.litellm_params import ControlOptions
 from litellm.types.llms.openai import AllMessageValues, HttpxBinaryResponseContent
 from litellm.types.prompts.init_prompts import PromptSpec
-from litellm.types.utils import Delta, ModelResponseStream, StandardCallbackDynamicParams, StreamingChoices, Usage
+from litellm.types.utils import (
+    Delta,
+    ModelResponseStream,
+    StandardCallbackDynamicParams,
+    StreamingChoices,
+    TextCompletionResponse,
+    Usage,
+)
 from tests.unit.llms.bedrock.slow_upstream import (
     CONVERSE_ANSWER,
     STREAM_TIMEOUT_SECONDS,
@@ -501,25 +508,6 @@ def test_bedrock_latency_optimized_inference():
         mock_post.assert_called_once()
         json_data = json.loads(mock_post.call_args.kwargs["data"])
         assert json_data["performanceConfig"]["latency"] == "optimized"
-
-
-@pytest.mark.parametrize(
-    ("custom_llm_provider", "model", "expected"),
-    [
-        ("anthropic", "claude-sonnet-5", True),
-        ("bedrock", "us.anthropic.claude-sonnet-5-20260501-v1:0", True),
-        ("bedrock", "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/abc123", True),
-        ("bedrock", "us.amazon.nova-2-lite-v1:0", False),
-        ("vertex_ai", "claude-sonnet-5", True),
-        ("vertex_ai", "gemini-3.8-flash", False),
-        ("azure_ai", "claude-sonnet-4-6", True),
-        ("azure_ai", "gpt-5.6", False),
-        ("openai", "gpt-5.6", False),
-        ("gemini", "gemini-3.8-flash", False),
-    ],
-)
-def test_is_claude_tool_target(custom_llm_provider: str, model: str, expected: bool):
-    assert litellm_main._is_claude_tool_target(custom_llm_provider=custom_llm_provider, model=model) is expected
 
 
 @pytest.mark.parametrize("key", ["input_examples", "eager_input_streaming"])
@@ -2475,6 +2463,463 @@ _BRIDGED_RESPONSE_ANSWER: Final = json.dumps(
 ).encode()
 
 
+@pytest.fixture
+def non_openai_responses_bridge(
+    restore_model_registry, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> Callable[[str], tuple[str, Mapping[str, str], respx.Route]]:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.delenv("LITELLM_REASONING_AUTO_SUMMARY", raising=False)
+    for chatgpt_env in ("CHATGPT_AUTH_FILE", "CHATGPT_API_BASE", "OPENAI_CHATGPT_API_BASE"):
+        monkeypatch.delenv(chatgpt_env, raising=False)
+    monkeypatch.setenv("CHATGPT_TOKEN_DIR", str(tmp_path))
+    (tmp_path / "auth.json").write_text(
+        json.dumps({"access_token": "token", "account_id": "acct", "expires_at": 4102444800})
+    )
+    monkeypatch.setenv("GITHUB_COPILOT_TOKEN_DIR", str(tmp_path))
+    (tmp_path / "api-key.json").write_text(
+        json.dumps({"token": "token", "expires_at": 4102444800, "endpoints": {"api": "https://api.githubcopilot.com"}})
+    )
+    litellm.register_model(
+        {
+            **{
+                model_name: {
+                    "litellm_provider": "openai",
+                    "mode": "chat",
+                    "supports_reasoning": True,
+                    "reasoning_modes": ["standard"],
+                    "reasoning_contexts": ["auto", "current_turn", "all_turns"],
+                    "input_cost_per_token": 0.0,
+                    "output_cost_per_token": 0.0,
+                }
+                for model_name in ("gpt-6", "gpt-6.1-standard-only")
+            },
+            **{
+                f"{provider}/{model_name}": {
+                    "litellm_provider": provider,
+                    "mode": "responses",
+                    "supports_reasoning": True,
+                    "input_cost_per_token": 0.0,
+                    "output_cost_per_token": 0.0,
+                }
+                for provider, model_name in (
+                    ("chatgpt", "gpt-6.1-bridge-test"),
+                    ("perplexity", "bridge-test-model"),
+                    ("github_copilot", "gpt-6.1-bridge-test"),
+                )
+            },
+        },
+        persist_across_reloads=False,
+    )
+    backends: Final = {
+        "azure": (
+            "azure/responses/gpt-6.1-standard-only",
+            "https://test.openai.azure.com/",
+            {"api_base": "https://test.openai.azure.com", "api_key": "fake-key"},
+        ),
+        "azure_ai": (
+            "azure_ai/responses/gpt-6.1-standard-only-prod",
+            _FOUNDRY_API_BASE,
+            {"api_base": _FOUNDRY_API_BASE, "api_key": "fake-key"},
+        ),
+        "chatgpt": ("chatgpt/gpt-6.1-bridge-test", "https://chatgpt.com/backend-api/codex/responses", {}),
+        "github_copilot": ("github_copilot/gpt-6.1-bridge-test", "https://api.githubcopilot.com/responses", {}),
+        "databricks": (
+            "databricks/responses/databricks-gpt-bridge-test",
+            "https://dbx.example/serving-endpoints/responses",
+            {"api_base": "https://dbx.example/serving-endpoints", "api_key": "fake-key"},
+        ),
+        "perplexity": (
+            "perplexity/bridge-test-model",
+            "https://api.perplexity.ai/v1/responses",
+            {"api_key": "fake-key"},
+        ),
+        "xai": ("xai/responses/grok-bridge-test", "https://api.x.ai/v1/responses", {"api_key": "fake-key"}),
+        "fireworks_ai": (
+            "fireworks_ai/responses/accounts/fireworks/models/bridge-test",
+            "https://api.fireworks.ai/inference/v1/responses",
+            {"api_key": "fake-key"},
+        ),
+        "openrouter": (
+            "openrouter/responses/openai/gpt-6.1-standard-only",
+            "https://openrouter.ai/api/v1/responses",
+            {"api_key": "fake-key"},
+        ),
+        "litellm_proxy": (
+            "litellm_proxy/responses/gpt-6.1-standard-only",
+            "https://proxy.example/v1/responses",
+            {"api_base": "https://proxy.example/v1", "api_key": "fake-key"},
+        ),
+    }
+
+    def route_backend(backend: str) -> tuple[str, Mapping[str, str], respx.Route]:
+        model, url, kwargs = backends[backend]
+        route: Final = respx_mock.post(url__startswith=url).respond(
+            content=_BRIDGED_RESPONSE_ANSWER, headers={"content-type": "application/json"}
+        )
+        return model, kwargs, route
+
+    return route_backend
+
+
+@pytest.mark.parametrize(
+    ("backend", "reasoning_effort"),
+    [
+        ("azure", {"effort": "low", "mode": "pro", "context": "all_turns"}),
+        ("chatgpt", {"effort": "low", "mode": "pro", "context": "all_turns"}),
+        ("github_copilot", {"effort": "low", "mode": "standard", "context": "all_turns"}),
+        ("databricks", {"effort": "low", "mode": "pro", "context": "all_turns"}),
+        ("openrouter", {"effort": "low", "mode": "pro", "context": "all_turns"}),
+        ("perplexity", {"effort": "low", "mode": "standard", "context": "all_turns", "generate_summary": "auto"}),
+        ("xai", {"effort": "low", "mode": "standard", "generate_summary": "auto"}),
+        ("fireworks_ai", {"effort": "low", "mode": "standard", "generate_summary": "auto"}),
+    ],
+)
+@pytest.mark.parametrize("summary", [{}, {"summary": "auto"}])
+def test_non_openai_responses_bridge_sends_the_whole_reasoning_effort_dict_with_or_without_summary(
+    backend: str,
+    reasoning_effort: dict[str, str],
+    summary: dict[str, str],
+    non_openai_responses_bridge: Callable[[str], tuple[str, Mapping[str, str], respx.Route]],
+):
+    model, kwargs, route = non_openai_responses_bridge(backend)
+    requested: Final = {**reasoning_effort, **summary}
+
+    litellm.completion(
+        model=model, messages=[{"role": "user", "content": "hello"}], reasoning_effort=requested, **kwargs
+    )
+
+    assert json.loads(route.calls[0].request.content)["reasoning"] == requested
+
+
+@pytest.mark.parametrize(
+    ("backend", "reasoning_effort", "expected_reasoning"),
+    [
+        ("azure", {"effort": "low", "mode": "pro", "context": "all_turns"}, {"effort": "low", "context": "all_turns"}),
+        (
+            "chatgpt",
+            {"effort": "low", "mode": "pro", "context": "all_turns"},
+            {"effort": "low", "context": "all_turns"},
+        ),
+        (
+            "chatgpt",
+            {"effort": "low", "mode": "standard", "context": "current_turn"},
+            {"effort": "low", "mode": "standard", "context": "current_turn"},
+        ),
+        (
+            "github_copilot",
+            {"effort": "low", "mode": "pro", "context": "all_turns"},
+            {"effort": "low", "context": "all_turns"},
+        ),
+        (
+            "openrouter",
+            {"effort": "low", "mode": "pro", "context": "all_turns"},
+            {"effort": "low", "context": "all_turns"},
+        ),
+        (
+            "perplexity",
+            {"effort": "low", "mode": "pro", "context": "all_turns"},
+            {"effort": "low", "context": "all_turns"},
+        ),
+        ("perplexity", {"effort": "low", "mode": "standard", "context": "every_turn"}, {"effort": "low", "mode": "standard"}),
+        ("xai", {"effort": "low", "mode": "pro", "context": "all_turns"}, {"effort": "low"}),
+        ("fireworks_ai", {"effort": "low", "mode": "pro", "context": "all_turns"}, {"effort": "low"}),
+    ],
+)
+@pytest.mark.parametrize("summary", [{}, {"summary": "auto"}])
+def test_non_openai_responses_bridge_drops_reasoning_fields_the_backend_refuses_under_drop_params(
+    backend: str,
+    reasoning_effort: dict[str, str],
+    expected_reasoning: dict[str, str],
+    summary: dict[str, str],
+    non_openai_responses_bridge: Callable[[str], tuple[str, Mapping[str, str], respx.Route]],
+):
+    model, kwargs, route = non_openai_responses_bridge(backend)
+
+    litellm.completion(
+        model=model,
+        messages=[{"role": "user", "content": "hello"}],
+        reasoning_effort={**reasoning_effort, **summary},
+        drop_params=True,
+        **kwargs,
+    )
+
+    assert json.loads(route.calls[0].request.content)["reasoning"] == {**expected_reasoning, **summary}
+
+
+@pytest.mark.parametrize(
+    ("backend", "ignored"),
+    [
+        ("perplexity", {"mode": "pro"}),
+        ("perplexity", {"context": "every_turn"}),
+        ("xai", {"context": "all_turns"}),
+        ("fireworks_ai", {"context": "all_turns"}),
+        ("github_copilot", {"mode": "pro"}),
+    ],
+)
+@pytest.mark.parametrize("summary", [{}, {"summary": "auto"}])
+def test_responses_bridge_rejects_reasoning_fields_the_backend_ignores_without_drop_params(
+    backend: str,
+    ignored: dict[str, str],
+    summary: dict[str, str],
+    non_openai_responses_bridge: Callable[[str], tuple[str, Mapping[str, str], respx.Route]],
+):
+    model, kwargs, route = non_openai_responses_bridge(backend)
+
+    with pytest.raises(litellm.UnsupportedParamsError, match=rf"reasoning_effort\.{next(iter(ignored))}") as raised:
+        litellm.completion(
+            model=model,
+            messages=[{"role": "user", "content": "hello"}],
+            reasoning_effort={"effort": "low", **ignored, **summary},
+            **kwargs,
+        )
+
+    assert raised.value.status_code == 400
+    assert route.called is False
+
+
+@pytest.mark.parametrize("backend", ["perplexity", "xai", "fireworks_ai"])
+def test_responses_bridge_sends_the_rest_when_additional_drop_params_removes_the_refused_fields(
+    backend: str,
+    non_openai_responses_bridge: Callable[[str], tuple[str, Mapping[str, str], respx.Route]],
+):
+    model, kwargs, route = non_openai_responses_bridge(backend)
+
+    litellm.completion(
+        model=model,
+        messages=[{"role": "user", "content": "hello"}],
+        reasoning_effort={"effort": "low", "mode": "pro", "context": "all_turns", "summary": "auto"},
+        additional_drop_params=["reasoning_effort.mode", "reasoning_effort.context"],
+        **kwargs,
+    )
+
+    assert json.loads(route.calls[0].request.content)["reasoning"] == {"effort": "low", "summary": "auto"}
+
+
+@pytest.mark.parametrize("backend", ["perplexity", "xai", "fireworks_ai"])
+def test_responses_bridge_forwards_a_null_reasoning_field_instead_of_rejecting_it(
+    backend: str,
+    non_openai_responses_bridge: Callable[[str], tuple[str, Mapping[str, str], respx.Route]],
+):
+    model, kwargs, route = non_openai_responses_bridge(backend)
+
+    litellm.completion(
+        model=model,
+        messages=[{"role": "user", "content": "hello"}],
+        reasoning_effort={"effort": "low", "mode": None},
+        **kwargs,
+    )
+
+    assert json.loads(route.calls[0].request.content)["reasoning"] == {"effort": "low", "mode": None}
+
+
+def test_chatgpt_bridge_keeps_a_reasoning_mode_its_catalog_row_declares_under_drop_params(
+    non_openai_responses_bridge: Callable[[str], tuple[str, Mapping[str, str], respx.Route]],
+):
+    _, kwargs, route = non_openai_responses_bridge("chatgpt")
+    litellm.register_model(
+        {
+            "chatgpt/gpt-6.1-pro-bridge-test": {
+                "litellm_provider": "chatgpt",
+                "mode": "responses",
+                "supports_reasoning": True,
+                "reasoning_modes": ["pro"],
+                "input_cost_per_token": 0.0,
+                "output_cost_per_token": 0.0,
+            }
+        },
+        persist_across_reloads=False,
+    )
+
+    litellm.completion(
+        model="chatgpt/gpt-6.1-pro-bridge-test",
+        messages=[{"role": "user", "content": "hello"}],
+        reasoning_effort={"effort": "low", "mode": "pro"},
+        drop_params=True,
+        **kwargs,
+    )
+
+    assert json.loads(route.calls[0].request.content)["reasoning"] == {"effort": "low", "mode": "pro"}
+
+
+@pytest.mark.parametrize(
+    ("model", "model_info"),
+    [
+        ("azure/responses/custom-deployment-name", {"base_model": "azure/gpt-6.1-standard-only"}),
+        ("azure/responses/custom-deployment-name", {"base_model": "azure/eu/gpt-6.1-standard-only"}),
+        ("azure/responses/custom-deployment-name", {"base_model": "azure/gpt-6.1-standard-only-2026-07-09"}),
+        ("azure/responses/gpt-6.1-standard-only-prod", {}),
+        ("azure/responses/eu-gpt-6.1-standard-only-prod", {}),
+        ("azure/responses/gpt-6-2026-07-09", {}),
+    ],
+)
+def test_azure_bridge_reads_reasoning_modes_from_the_deployment_model_family_under_drop_params(
+    model: str,
+    model_info: dict[str, str],
+    non_openai_responses_bridge: Callable[[str], tuple[str, Mapping[str, str], respx.Route]],
+):
+    _, kwargs, route = non_openai_responses_bridge("azure")
+
+    litellm.completion(
+        model=model,
+        messages=[{"role": "user", "content": "hello"}],
+        reasoning_effort={"effort": "low", "mode": "pro", "context": "all_turns"},
+        model_info=model_info,
+        drop_params=True,
+        **kwargs,
+    )
+
+    assert json.loads(route.calls[0].request.content)["reasoning"] == {"effort": "low", "context": "all_turns"}
+
+
+def test_azure_ai_bridge_judges_reasoning_fields_by_the_request_api_base_under_drop_params(
+    non_openai_responses_bridge: Callable[[str], tuple[str, Mapping[str, str], respx.Route]],
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setenv("AZURE_AI_API_BASE", "https://legacy-models.eastus2.inference.ai.azure.com")
+    model, kwargs, route = non_openai_responses_bridge("azure_ai")
+
+    litellm.completion(
+        model=model,
+        messages=[{"role": "user", "content": "hello"}],
+        reasoning_effort={"effort": "low", "mode": "pro", "context": "all_turns"},
+        drop_params=True,
+        **kwargs,
+    )
+
+    assert json.loads(route.calls[0].request.content)["reasoning"] == {"effort": "low", "context": "all_turns"}
+
+
+@pytest.mark.parametrize("model", ["azure/responses/custom-gpt-6x", "azure/responses/gpt-6-1-sol"])
+@pytest.mark.parametrize("summary", [{}, {"summary": "auto"}])
+def test_azure_bridge_sends_only_effort_and_summary_to_an_unknown_gpt_series_deployment_under_drop_params(
+    model: str,
+    summary: dict[str, str],
+    non_openai_responses_bridge: Callable[[str], tuple[str, Mapping[str, str], respx.Route]],
+):
+    _, kwargs, route = non_openai_responses_bridge("azure")
+
+    litellm.completion(
+        model=model,
+        messages=[{"role": "user", "content": "hello"}],
+        reasoning_effort={"effort": "low", "mode": "pro", "context": "all_turns", **summary},
+        drop_params=True,
+        **kwargs,
+    )
+
+    assert json.loads(route.calls[0].request.content)["reasoning"] == {"effort": "low", **summary}
+
+
+@pytest.mark.parametrize(
+    ("backend", "model"),
+    [
+        ("azure", "azure/responses/terra-prod"),
+        ("databricks", "databricks/responses/databricks-gpt-bridge-test"),
+        ("databricks", "databricks/responses/databricks-gpt-6.1-standard-only"),
+        ("litellm_proxy", "litellm_proxy/responses/gpt-6.1-standard-only"),
+    ],
+)
+@pytest.mark.parametrize("summary", [{}, {"summary": "auto"}])
+def test_responses_bridge_forwards_mode_and_context_it_cannot_judge_under_drop_params(
+    backend: str,
+    model: str,
+    summary: dict[str, str],
+    non_openai_responses_bridge: Callable[[str], tuple[str, Mapping[str, str], respx.Route]],
+):
+    _, kwargs, route = non_openai_responses_bridge(backend)
+    requested: Final = {"effort": "low", "mode": "pro", "context": "all_turns", **summary}
+
+    litellm.completion(
+        model=model,
+        messages=[{"role": "user", "content": "hello"}],
+        reasoning_effort=requested,
+        drop_params=True,
+        **kwargs,
+    )
+
+    assert json.loads(route.calls[0].request.content)["reasoning"] == requested
+
+
+def test_azure_bridge_applies_a_deployment_reasoning_modes_only_to_that_deployment_under_drop_params(
+    non_openai_responses_bridge: Callable[[str], tuple[str, Mapping[str, str], respx.Route]],
+):
+    _, kwargs, route = non_openai_responses_bridge("azure")
+    litellm.register_model(
+        {
+            "gpt-6.1-pro-capable": {
+                "litellm_provider": "openai",
+                "mode": "chat",
+                "supports_reasoning": True,
+                "reasoning_modes": ["standard", "pro"],
+                "input_cost_per_token": 0.0,
+                "output_cost_per_token": 0.0,
+            }
+        },
+        persist_across_reloads=False,
+    )
+    litellm_params: Final = {"model": "azure/responses/gpt-6.1-pro-capable", **kwargs}
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "standard-only",
+                "litellm_params": litellm_params,
+                "model_info": {"reasoning_modes": ["standard"]},
+            },
+            {"model_name": "pro-capable", "litellm_params": litellm_params},
+        ]
+    )
+    requested: Final = {"effort": "low", "mode": "pro"}
+
+    for model_name in ("standard-only", "pro-capable"):
+        router.completion(
+            model=model_name,
+            messages=[{"role": "user", "content": "hello"}],
+            reasoning_effort=requested,
+            drop_params=True,
+        )
+    litellm.completion(
+        model="azure/responses/gpt-6.1-pro-capable",
+        messages=[{"role": "user", "content": "hello"}],
+        reasoning_effort=requested,
+        drop_params=True,
+        **kwargs,
+    )
+
+    assert [json.loads(call.request.content)["reasoning"] for call in route.calls] == [
+        {"effort": "low"},
+        requested,
+        requested,
+    ]
+
+
+def test_azure_bridge_reads_reasoning_modes_from_the_deployment_cost_map_row_under_drop_params(
+    non_openai_responses_bridge: Callable[[str], tuple[str, Mapping[str, str], respx.Route]],
+):
+    _, kwargs, route = non_openai_responses_bridge("azure")
+    litellm.register_model(
+        {
+            "azure/custom-standard-deployment": {
+                "litellm_provider": "azure",
+                "mode": "responses",
+                "supports_reasoning": True,
+                "reasoning_modes": ["standard"],
+                "input_cost_per_token": 0.0,
+                "output_cost_per_token": 0.0,
+            }
+        },
+        persist_across_reloads=False,
+    )
+
+    litellm.completion(
+        model="azure/responses/custom-standard-deployment",
+        messages=[{"role": "user", "content": "hello"}],
+        reasoning_effort={"effort": "low", "mode": "pro", "context": "all_turns"},
+        drop_params=True,
+        **kwargs,
+    )
+
+    assert json.loads(route.calls[0].request.content)["reasoning"] == {"effort": "low", "context": "all_turns"}
+
+
 def test_responses_bridge_fake_stream_is_bounded_by_the_request_timeout_not_the_stream_timeout(
     restore_model_registry: None,
 ) -> None:
@@ -2843,9 +3288,10 @@ def test_stream_chunk_builder_keeps_tool_calls_carried_only_by_a_later_choice_of
 
     response = stream_chunk_builder(chunks=chunks)
 
-    tool_calls = response.choices[0].message.tool_calls
-    assert tool_calls is not None
-    assert [(call.id, call.function.name, call.function.arguments) for call in tool_calls] == [
+    text_choice, tool_choice = response.choices
+    assert (text_choice.index, text_choice.message.content, text_choice.message.tool_calls) == (0, "hello world", None)
+    assert tool_choice.index == 1
+    assert [(call.id, call.function.name, call.function.arguments) for call in tool_choice.message.tool_calls] == [
         ("call_1", "lookup_fruit", '{"fruit":"kiwi"}')
     ]
 
@@ -4155,6 +4601,95 @@ def test_mock_text_completion_stream_and_non_stream_report_the_same_zero_admissi
     assert non_stream.usage.prompt_tokens == 0
 
 
+def _carries_text_or_finish(frame: TextCompletionResponse) -> bool:
+    return frame.choices[0].text is not None or frame.choices[0].finish_reason is not None
+
+
+@pytest.mark.asyncio
+async def test_mock_atext_completion_stream_hides_the_usage_chunk_the_proxy_asked_for_on_the_clients_behalf():
+    response: Final = await litellm.atext_completion(
+        model="openai/gpt-5.4-mini",
+        prompt="hi",
+        mock_response="ok then",
+        api_key="mock",
+        stream=True,
+        stream_options={"include_usage": True},
+        _litellm_strip_stream_usage=True,
+    )
+
+    frames: Final[list[TextCompletionResponse]] = [frame async for frame in response]
+
+    assert len(frames) == 4
+    assert all(_carries_text_or_finish(frame) for frame in frames)
+    assert all(frame.usage is None for frame in frames)
+
+
+def _native_completions_reply(outbound: list[dict[str, object]]) -> Callable[[httpx.Request], httpx.Response]:
+    def respond(request: httpx.Request) -> httpx.Response:
+        outbound.append(json.loads(request.content))
+        base: Final = {"id": "cmpl-native", "object": "text_completion", "created": 1, "model": "code-model"}
+        frames: Final = (
+            {**base, "choices": [{"index": 0, "text": "def ", "finish_reason": None, "logprobs": None}]},
+            {**base, "choices": [{"index": 0, "text": "main", "finish_reason": "length", "logprobs": None}]},
+            {**base, "choices": [], "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}},
+        )
+        content: Final = "".join(f"data: {json.dumps(frame)}\n\n" for frame in frames) + "data: [DONE]\n\n"
+        return httpx.Response(200, headers={"content-type": "text/event-stream"}, content=content.encode())
+
+    return respond
+
+
+def _native_completions_upstream(outbound: list[dict[str, object]]) -> OpenAI:
+    transport: Final = httpx.MockTransport(_native_completions_reply(outbound))
+    return OpenAI(api_key="transport-only", http_client=httpx.Client(transport=transport))
+
+
+def _async_native_completions_upstream(outbound: list[dict[str, object]]) -> AsyncOpenAI:
+    transport: Final = httpx.MockTransport(_native_completions_reply(outbound))
+    return AsyncOpenAI(api_key="transport-only", http_client=httpx.AsyncClient(transport=transport))
+
+
+@pytest.mark.asyncio
+async def test_native_atext_completion_stream_hides_the_usage_chunk_the_proxy_asked_for_on_the_clients_behalf():
+    outbound: Final[list[dict[str, object]]] = []
+    response: Final = await litellm.atext_completion(
+        model="text-completion-openai/code-model",
+        prompt="hi",
+        client=_async_native_completions_upstream(outbound),
+        api_key="transport-only",
+        stream=True,
+        stream_options={"include_usage": True},
+        _litellm_strip_stream_usage=True,
+    )
+
+    frames: Final[list[TextCompletionResponse]] = [frame async for frame in response]
+
+    assert [sent.get("stream_options") for sent in outbound] == [{"include_usage": True}]
+    assert [(frame.choices[0].text, frame.choices[0].finish_reason) for frame in frames] == [
+        ("def ", None),
+        ("main", None),
+        (None, "length"),
+    ]
+    assert all(frame.usage is None for frame in frames)
+
+
+def test_native_text_completion_stream_keeps_the_usage_chunk_the_client_asked_for():
+    frames: Final = list(
+        litellm.text_completion(
+            model="text-completion-openai/code-model",
+            prompt="hi",
+            client=_native_completions_upstream([]),
+            api_key="transport-only",
+            stream=True,
+            stream_options={"include_usage": True},
+        )
+    )
+
+    assert len(frames) == 4
+    assert all(_carries_text_or_finish(frame) for frame in frames[:3])
+    assert (frames[-1].usage.prompt_tokens, frames[-1].usage.completion_tokens) == (10, 5)
+
+
 def test_mock_completion_stream_with_model_response():
     """Test that mock_completion correctly handles stream=True with a ModelResponse as mock_response."""
     from litellm import completion
@@ -4312,7 +4847,6 @@ class TestCallTypesOCR:
 
 def test_stream_chunk_builder_text_completion_combines_text_and_usage():
     from litellm.main import stream_chunk_builder_text_completion
-    from litellm.types.utils import TextCompletionResponse
 
     chunks = [
         TextCompletionResponse(
@@ -5364,6 +5898,68 @@ def test_stream_chunk_builder_keeps_provider_reported_usage_cost():
     assert response is not None
     assert getattr(response.usage, "cost", None) == pytest.approx(0.5)
     assert response._hidden_params["response_cost"] == pytest.approx(0.5)
+
+
+@pytest.mark.parametrize("reported_cost", [float("nan"), float("inf")])
+def test_stream_chunk_builder_bills_the_token_price_when_the_provider_cost_is_not_finite(reported_cost: float):
+    usage_chunk: Final = _stream_builder_text_chunk("gpt-4o", "")
+    usage_chunk.usage = Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15, cost=reported_cost)
+    chunks: Final = [
+        _stream_builder_text_chunk("gpt-4o", "Hello "),
+        _stream_builder_text_chunk("gpt-4o", "world.", finish_reason="stop"),
+        usage_chunk,
+    ]
+
+    response: Final = litellm.stream_chunk_builder(
+        chunks=chunks, messages=[{"role": "user", "content": "hi"}], logging_obj=_stream_builder_logging_obj()
+    )
+
+    assert response is not None
+    prompt_cost, completion_cost = litellm.cost_per_token(model="gpt-4o", usage_object=response.usage)
+    token_price: Final = prompt_cost + completion_cost
+    assert token_price > 0
+    assert getattr(response.usage, "cost", None) == pytest.approx(token_price)
+    assert response._hidden_params["response_cost"] == pytest.approx(token_price)
+
+
+def test_completion_cost_on_a_stamped_stream_still_bills_the_reported_charge():
+    usage_chunk: Final = _stream_builder_text_chunk("gpt-4o", "")
+    usage_chunk.usage = Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15, cost=0.5)
+    chunks: Final = [
+        _stream_builder_text_chunk("gpt-4o", "Hello ", finish_reason="stop"),
+        usage_chunk,
+    ]
+
+    response: Final = litellm.stream_chunk_builder(
+        chunks=chunks, messages=[{"role": "user", "content": "hi"}], logging_obj=_stream_builder_logging_obj()
+    )
+
+    assert response is not None
+    assert litellm.completion_cost(completion_response=response) == pytest.approx(0.5)
+
+
+def test_stream_chunk_builder_stamps_a_zero_operator_price_over_a_reported_cost():
+    logging_obj: Final = _stream_builder_logging_obj()
+    logging_obj.litellm_params = {
+        **logging_obj.litellm_params,
+        "input_cost_per_token": 0.0,
+        "output_cost_per_token": 0.0,
+    }
+    logging_obj.custom_cost_per_token = {"input_cost_per_token": 0.0, "output_cost_per_token": 0.0}
+    usage_chunk: Final = _stream_builder_text_chunk("gpt-4o", "")
+    usage_chunk.usage = Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15, cost=0.5)
+    chunks: Final = [
+        _stream_builder_text_chunk("gpt-4o", "Hello ", finish_reason="stop"),
+        usage_chunk,
+    ]
+
+    response: Final = litellm.stream_chunk_builder(
+        chunks=chunks, messages=[{"role": "user", "content": "hi"}], logging_obj=logging_obj
+    )
+
+    assert response is not None
+    assert getattr(response.usage, "cost", None) == 0.0
+    assert response._hidden_params["response_cost"] == 0.0
 
 
 def test_stream_chunk_builder_prices_alias_from_openai_sdk_usage_chunk():
@@ -9666,9 +10262,10 @@ def test_a_non_numeric_thinking_budget_on_adaptive_claude_is_rejected_with_a_400
 @pytest.mark.parametrize("drop_globally", [False, True])
 @pytest.mark.parametrize("model_info", [None, _OPUS_DECLARING_LOW_AND_HIGH])
 @pytest.mark.parametrize("body_sent", [_anthropic_chat_body_sent, _bedrock_converse_request_fields_sent])
-def test_drop_params_drops_a_non_numeric_thinking_budget_on_adaptive_claude(
+def test_drop_params_drops_a_non_numeric_thinking_budget_on_adaptive_claude_with_one_warning(
     respx_mock: respx.MockRouter,
     monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
     body_sent: Callable[..., Mapping[str, object]],
     model_info: Mapping[str, object] | None,
     drop_globally: bool,
@@ -9676,13 +10273,40 @@ def test_drop_params_drops_a_non_numeric_thinking_budget_on_adaptive_claude(
     monkeypatch.setattr(litellm, "drop_params", drop_globally)
     request_drop: Final = {} if drop_globally else {"drop_params": True}
 
-    dropped: Final = body_sent(
-        respx_mock, model_info, thinking={"type": "enabled", "budget_tokens": "lots"}, **request_drop
-    )
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        dropped: Final = body_sent(
+            respx_mock, model_info, thinking={"type": "enabled", "budget_tokens": "lots"}, **request_drop
+        )
+    drop_warnings: Final = [record.getMessage() for record in caplog.records if "Dropping" in record.getMessage()]
     adaptive_alone: Final = body_sent(respx_mock, model_info, thinking={"type": "adaptive"}, **request_drop)
 
     assert "output_config" not in adaptive_alone
     assert dropped == adaptive_alone
+    assert len(drop_warnings) == 1
+    assert all(
+        fragment in drop_warnings[0]
+        for fragment in ("thinking.budget_tokens='lots'", "claude-opus-5-5", "(drop_params=True)")
+    )
+
+
+@pytest.mark.parametrize("model_info", [None, _KIMI_DEPLOYMENT])
+def test_drop_params_drops_a_non_numeric_thinking_budget_on_hosted_vllm_with_one_warning(
+    respx_mock: respx.MockRouter, caplog: pytest.LogCaptureFixture, model_info: Mapping[str, object] | None
+) -> None:
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        sent: Final = _chat_body_sent(
+            respx_mock,
+            "hosted_vllm/my-kimi",
+            None,
+            model_info,
+            thinking={"type": "enabled", "budget_tokens": "lots"},
+            drop_params=True,
+        )
+
+    assert not {"reasoning_effort", "thinking"} & sent.keys()
+    drop_warnings: Final = [record.getMessage() for record in caplog.records if "Dropping" in record.getMessage()]
+    assert len(drop_warnings) == 1
+    assert all(fragment in drop_warnings[0] for fragment in ("thinking.budget_tokens='lots'", "my-kimi"))
 
 
 @pytest.mark.parametrize("model", ["azure_ai/my-kimi", "hosted_vllm/my-kimi"])
@@ -10217,6 +10841,309 @@ async def test_atranscription_ignores_a_non_string_base_url_when_api_base_is_set
 
     assert route.called
     assert response.text == "four score"
+
+
+_PDF_FILE_PART: Final = {
+    "type": "file",
+    "file": {"filename": "report.pdf", "file_data": "data:application/pdf;base64,JVBERi0xLjQK"},
+}
+_SUMMARIZE_TEXT_PART: Final = {"type": "text", "text": "Summarize this."}
+
+
+def _pdf_messages() -> list[dict[str, object]]:
+    return [{"role": "user", "content": [_SUMMARIZE_TEXT_PART, _PDF_FILE_PART]}]
+
+
+class _SentChatRequest(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    messages: list[dict[str, object]]
+
+
+def _sent_messages(respx_mock: respx.MockRouter) -> list[dict[str, object]]:
+    request: Final[httpx.Request] = respx_mock.calls[0].request
+    return _SentChatRequest.model_validate_json(request.content).messages
+
+
+def _mock_pdf_chat_route(respx_mock: respx.MockRouter, api_base: str) -> respx.Route:
+    return respx_mock.post(url__regex=rf"{api_base}/chat/completions.*").mock(
+        return_value=httpx.Response(
+            status_code=200,
+            json={
+                "id": "chatcmpl-pdf",
+                "object": "chat.completion",
+                "created": 1712697600,
+                "model": "qa-pdf-model",
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            },
+        )
+    )
+
+
+def test_drop_params_drops_a_pdf_the_model_cannot_read(respx_mock: respx.MockRouter) -> None:
+    api_base: Final = "http://localhost:12347/v1"
+    _mock_pdf_chat_route(respx_mock, api_base)
+
+    litellm.completion(
+        model="openai/qa-text-only-model",
+        messages=_pdf_messages(),
+        api_base=api_base,
+        api_key="fake_openai_api_key",
+        model_info={"supports_pdf_input": False},
+        drop_params=True,
+    )
+
+    assert _sent_messages(respx_mock) == [{"role": "user", "content": [_SUMMARIZE_TEXT_PART]}]
+
+
+@pytest.mark.parametrize(
+    "pdf_file",
+    [
+        {"filename": "report.pdf", "file_data": "JVBERi0xLjQK"},
+        {"file_id": "file-report", "format": "application/pdf"},
+        {"file_id": "file-report", "filename": "Report.PDF"},
+    ],
+    ids=["bare_base64_named_pdf", "file_id_with_pdf_format", "file_id_named_pdf"],
+)
+def test_drop_params_drops_a_pdf_file_part_without_a_data_url(
+    respx_mock: respx.MockRouter, pdf_file: dict[str, str]
+) -> None:
+    api_base: Final = "http://localhost:12350/v1"
+    _mock_pdf_chat_route(respx_mock, api_base)
+
+    litellm.completion(
+        model="openai/qa-text-only-model",
+        messages=[{"role": "user", "content": [_SUMMARIZE_TEXT_PART, {"type": "file", "file": pdf_file}]}],
+        api_base=api_base,
+        api_key="fake_openai_api_key",
+        model_info={"supports_pdf_input": False},
+        drop_params=True,
+    )
+
+    assert _sent_messages(respx_mock) == [{"role": "user", "content": [_SUMMARIZE_TEXT_PART]}]
+
+
+def test_drop_params_drops_a_user_turn_that_held_only_a_pdf(respx_mock: respx.MockRouter) -> None:
+    api_base: Final = "http://localhost:12352/v1"
+    _mock_pdf_chat_route(respx_mock, api_base)
+
+    litellm.completion(
+        model="openai/qa-text-only-model",
+        messages=[
+            {"role": "user", "content": [_PDF_FILE_PART]},
+            {"role": "user", "content": [_SUMMARIZE_TEXT_PART]},
+        ],
+        api_base=api_base,
+        api_key="fake_openai_api_key",
+        model_info={"supports_pdf_input": False},
+        drop_params=True,
+    )
+
+    assert _sent_messages(respx_mock) == [{"role": "user", "content": [_SUMMARIZE_TEXT_PART]}]
+
+
+def test_drop_params_keeps_roles_alternating_after_dropping_a_pdf_only_turn(respx_mock: respx.MockRouter) -> None:
+    api_base: Final = "http://localhost:12353/v1"
+    _mock_pdf_chat_route(respx_mock, api_base)
+
+    litellm.completion(
+        model="openai/qa-text-only-model",
+        messages=[
+            {"role": "user", "content": [_SUMMARIZE_TEXT_PART]},
+            {"role": "assistant", "content": "Send the file."},
+            {"role": "user", "content": [_PDF_FILE_PART]},
+            {"role": "assistant", "content": "Got it."},
+            {"role": "user", "content": [_SUMMARIZE_TEXT_PART]},
+        ],
+        api_base=api_base,
+        api_key="fake_openai_api_key",
+        model_info={"supports_pdf_input": False},
+        drop_params=True,
+        ensure_alternating_roles=True,
+    )
+
+    sent_roles: Final = [message["role"] for message in _sent_messages(respx_mock)]
+    assert sent_roles == ["user", "assistant", "user", "assistant", "user"]
+
+
+def test_drop_params_keeps_an_image_data_url_whose_filename_says_pdf(respx_mock: respx.MockRouter) -> None:
+    api_base: Final = "http://localhost:12351/v1"
+    _mock_pdf_chat_route(respx_mock, api_base)
+    image_part: Final = {
+        "type": "file",
+        "file": {"filename": "scan.pdf", "file_data": "data:image/png;base64,iVBORw0KGgo="},
+    }
+
+    litellm.completion(
+        model="openai/qa-text-only-model",
+        messages=[{"role": "user", "content": [_SUMMARIZE_TEXT_PART, image_part]}],
+        api_base=api_base,
+        api_key="fake_openai_api_key",
+        model_info={"supports_pdf_input": False},
+        drop_params=True,
+    )
+
+    assert _sent_messages(respx_mock) == [{"role": "user", "content": [_SUMMARIZE_TEXT_PART, image_part]}]
+
+
+def test_pdf_to_a_model_that_cannot_read_it_is_rejected_without_drop_params(respx_mock: respx.MockRouter) -> None:
+    api_base: Final = "http://localhost:12348/v1"
+    route: Final = _mock_pdf_chat_route(respx_mock, api_base)
+
+    with pytest.raises(litellm.BadRequestError, match="does not accept PDF input"):
+        litellm.completion(
+            model="openai/qa-text-only-model",
+            messages=_pdf_messages(),
+            api_base=api_base,
+            api_key="fake_openai_api_key",
+            model_info={"supports_pdf_input": False},
+        )
+
+    assert not route.called
+
+
+def test_pdf_to_a_model_with_unknown_pdf_support_is_sent_even_with_drop_params(respx_mock: respx.MockRouter) -> None:
+    api_base: Final = "http://localhost:12349/v1"
+    _mock_pdf_chat_route(respx_mock, api_base)
+
+    litellm.completion(
+        model="openai/qa-unlisted-model",
+        messages=_pdf_messages(),
+        api_base=api_base,
+        api_key="fake_openai_api_key",
+        drop_params=True,
+    )
+
+    assert _sent_messages(respx_mock) == _pdf_messages()
+
+
+def test_pdf_to_ollama_is_rejected_without_drop_params() -> None:
+    with pytest.raises(litellm.BadRequestError, match="does not accept PDF input"):
+        litellm.completion(model="ollama_chat/llama3.2", messages=_pdf_messages(), api_base="http://127.0.0.1:9")
+
+
+def _azure_ai_model_without_pdf_input() -> str:
+    return next(
+        name
+        for name, entry in litellm.model_cost.items()
+        if entry.get("litellm_provider") == "azure_ai" and entry.get("supports_pdf_input") is False
+    )
+
+
+def test_pdf_to_a_deployment_whose_base_model_cannot_read_it_is_rejected() -> None:
+    with pytest.raises(litellm.BadRequestError, match="does not accept PDF input"):
+        litellm.completion(
+            model="azure_ai/qa-custom-deployment",
+            messages=_pdf_messages(),
+            api_base="http://127.0.0.1:9",
+            api_key="fake_azure_ai_api_key",
+            model_info={"base_model": _azure_ai_model_without_pdf_input()},
+        )
+
+
+def test_drop_params_drops_a_pdf_a_deployments_base_model_cannot_read(respx_mock: respx.MockRouter) -> None:
+    api_base: Final = "http://localhost:12353"
+    _mock_pdf_chat_route(respx_mock, api_base)
+
+    litellm.completion(
+        model="azure_ai/qa-custom-deployment",
+        messages=_pdf_messages(),
+        api_base=api_base,
+        api_key="fake_azure_ai_api_key",
+        model_info={"base_model": _azure_ai_model_without_pdf_input()},
+        drop_params=True,
+    )
+
+    assert _sent_messages(respx_mock) == [{"role": "user", "content": _SUMMARIZE_TEXT_PART["text"]}]
+
+
+def _azure_ai_model_with_pdf_input() -> str:
+    return next(
+        name
+        for name, entry in litellm.model_cost.items()
+        if entry.get("litellm_provider") == "azure_ai" and entry.get("supports_pdf_input") is True
+    )
+
+
+def test_pdf_to_a_deployment_whose_base_model_param_cannot_read_it_is_rejected() -> None:
+    with pytest.raises(litellm.BadRequestError, match="does not accept PDF input"):
+        litellm.completion(
+            model="azure_ai/qa-custom-deployment",
+            messages=_pdf_messages(),
+            api_base="http://127.0.0.1:9",
+            api_key="fake_azure_ai_api_key",
+            base_model=_azure_ai_model_without_pdf_input(),
+        )
+
+
+def test_drop_params_keeps_a_pdf_a_deployments_base_model_param_reads(respx_mock: respx.MockRouter) -> None:
+    api_base: Final = "http://localhost:12357"
+    _mock_pdf_chat_route(respx_mock, api_base)
+
+    litellm.completion(
+        model="azure_ai/qa-custom-deployment",
+        messages=_pdf_messages(),
+        api_base=api_base,
+        api_key="fake_azure_ai_api_key",
+        base_model=_azure_ai_model_with_pdf_input(),
+        drop_params=True,
+    )
+
+    assert _sent_messages(respx_mock) == _pdf_messages()
+
+
+def test_drop_params_rejects_a_request_whose_only_user_turn_was_a_pdf(respx_mock: respx.MockRouter) -> None:
+    api_base: Final = "http://localhost:12354/v1"
+    route: Final = _mock_pdf_chat_route(respx_mock, api_base)
+
+    with pytest.raises(litellm.BadRequestError, match="no user message is left"):
+        litellm.completion(
+            model="openai/qa-text-only-model",
+            messages=[
+                {"role": "system", "content": "You read documents."},
+                {"role": "user", "content": [_PDF_FILE_PART]},
+            ],
+            api_base=api_base,
+            api_key="fake_openai_api_key",
+            model_info={"supports_pdf_input": False},
+            drop_params=True,
+        )
+
+    assert not route.called
+
+
+def test_drop_params_drops_a_pdf_an_unlisted_azure_ai_model_never_declared_it_reads(
+    respx_mock: respx.MockRouter,
+) -> None:
+    api_base: Final = "http://localhost:12355"
+    _mock_pdf_chat_route(respx_mock, api_base)
+
+    litellm.completion(
+        model="azure_ai/qa-unlisted-deployment",
+        messages=_pdf_messages(),
+        api_base=api_base,
+        api_key="fake_azure_ai_api_key",
+        drop_params=True,
+    )
+
+    assert _sent_messages(respx_mock) == [{"role": "user", "content": _SUMMARIZE_TEXT_PART["text"]}]
+
+
+def test_drop_params_keeps_a_pdf_an_azure_ai_deployment_declares_it_reads(respx_mock: respx.MockRouter) -> None:
+    api_base: Final = "http://localhost:12356"
+    _mock_pdf_chat_route(respx_mock, api_base)
+
+    litellm.completion(
+        model="azure_ai/qa-unlisted-deployment",
+        messages=_pdf_messages(),
+        api_base=api_base,
+        api_key="fake_azure_ai_api_key",
+        model_info={"supports_pdf_input": True},
+        drop_params=True,
+    )
+
+    assert _sent_messages(respx_mock) == _pdf_messages()
 
 
 @pytest.mark.parametrize("stream", (False, True))
