@@ -528,23 +528,17 @@ class TestAnthropicBetaHeadersFiltering:
 
         assert filtered == ["inline-tools-2026-09-15"]
 
-    @pytest.mark.parametrize(
-        ("provider", "expected_beta"),
-        [
-            ("anthropic", "computer-use-2025-11-24,task-budgets-2026-03-13"),
-            ("azure_ai", "computer-use-2025-11-24,task-budgets-2026-03-13"),
-            ("vertex_ai", "task-budgets-2026-03-13"),
-        ],
-    )
-    def test_betas_follow_what_each_platform_accepts(self, provider: str, expected_beta: str) -> None:
-        """Live probes on 2026-10-28 (each beta alone on a minimal Messages call): all three platforms
-        accept task-budgets-2026-03-13, and Vertex answers 400 "Unexpected value(s)" for
-        computer-use-2025-11-24 while Anthropic and Azure AI Foundry accept it."""
-        headers: Final = update_headers_with_filtered_beta(
-            {"anthropic-beta": "task-budgets-2026-03-13,computer-use-2025-11-24"}, provider
-        )
+    @pytest.mark.parametrize("provider", ["anthropic", "azure_ai", "vertex_ai"])
+    def test_task_budgets_and_computer_use_betas_reach_every_platform(self, provider: str) -> None:
+        """Live probes on 2026-10-28 found all three platforms accept task-budgets-2026-03-13. On 2026-10-31 Vertex
+        ran the computer tool only with the beta each model takes (computer-use-2025-01-24 on Claude Sonnet 4.5 and
+        Haiku 4.5, computer-use-2025-11-24 on Claude Opus 4.5 and the 4.6 models) and answered 400 to the other, so
+        both reach Vertex and the model decides, the same as calling Vertex directly."""
+        sent: Final = frozenset(("computer-use-2025-01-24", "computer-use-2025-11-24", "task-budgets-2026-03-13"))
 
-        assert headers == {"anthropic-beta": expected_beta}
+        headers: Final = update_headers_with_filtered_beta({"anthropic-beta": ",".join(sorted(sent))}, provider)
+
+        assert frozenset(headers["anthropic-beta"].split(",")) == sent
 
     @pytest.mark.parametrize("provider", ["anthropic", "azure_ai", "vertex_ai"])
     def test_claude_code_betas_reach_the_probed_platforms(self, provider: str) -> None:

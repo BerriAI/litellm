@@ -22,13 +22,18 @@ _BEDROCK_MODEL_ID: Final = "us.anthropic.claude-fable-5-1"
 _BETA_CONFIG_FILE: Final = TypeAdapter(dict[str, JsonValue])
 _BETA_MAPPING: Final = TypeAdapter(dict[str, str | None])
 _CODE_EXECUTION: Final[ToolUnionParam] = {"type": "code_execution_20250825", "name": "code_execution"}
+# A live Vertex probe on 2026-10-31: each Claude 4.5 and 4.6 model takes one of these and Claude 5.5 takes neither
+_VERTEX_PER_MODEL_BETAS: Final = frozenset({"computer-use-2025-01-24", "computer-use-2025-11-24"})
+_NO_PER_MODEL_BETAS: Final[frozenset[str]] = frozenset()
 
 
-def _mapped_beta_headers(provider: str) -> str:
+def _mapped_beta_headers(provider: str, per_model: frozenset[str]) -> str:
     config: Final = _BETA_CONFIG_FILE.validate_json(_BETA_CONFIG.read_text())
     mapping: Final = _BETA_MAPPING.validate_python(config[provider])
     header_only: Final = _BETA_MAPPING.validate_python(config.get(f"{provider}_header_only", {}))
-    return ",".join(name for name, value in {**mapping, **header_only}.items() if value is not None)
+    forwarded: Final = {name for name, value in {**mapping, **header_only}.items() if value is not None}
+    assert per_model <= forwarded, per_model - forwarded
+    return ",".join(sorted(forwarded - per_model))
 
 
 def _deployment(backend: str) -> LiteLLMParamsBody:
@@ -59,13 +64,21 @@ def _deployment(backend: str) -> LiteLLMParamsBody:
 
 class TestAnthropicBetaHeaders:
     @pytest.mark.parametrize(
-        ("backend", "beta_provider", "tools"),
+        ("backend", "beta_provider", "tools", "per_model"),
         [
-            pytest.param(_ANTHROPIC_MODEL, "anthropic", [_CODE_EXECUTION], id="anthropic"),
-            pytest.param(_VERTEX_MODEL, "vertex_ai", [], id="vertex-ai"),
-            pytest.param(_AZURE_AI_MODEL, "azure_ai", [], id="azure-ai"),
-            pytest.param(f"bedrock/invoke/{_BEDROCK_MODEL_ID}", "bedrock", [], id="bedrock-invoke"),
-            pytest.param(f"bedrock/converse/{_BEDROCK_MODEL_ID}", "bedrock_converse", [], id="bedrock-converse"),
+            pytest.param(_ANTHROPIC_MODEL, "anthropic", [_CODE_EXECUTION], _NO_PER_MODEL_BETAS, id="anthropic"),
+            pytest.param(_VERTEX_MODEL, "vertex_ai", [], _VERTEX_PER_MODEL_BETAS, id="vertex-ai"),
+            pytest.param(_AZURE_AI_MODEL, "azure_ai", [], _NO_PER_MODEL_BETAS, id="azure-ai"),
+            pytest.param(
+                f"bedrock/invoke/{_BEDROCK_MODEL_ID}", "bedrock", [], _NO_PER_MODEL_BETAS, id="bedrock-invoke"
+            ),
+            pytest.param(
+                f"bedrock/converse/{_BEDROCK_MODEL_ID}",
+                "bedrock_converse",
+                [],
+                _NO_PER_MODEL_BETAS,
+                id="bedrock-converse",
+            ),
         ],
     )
     @pytest.mark.covers(
@@ -92,6 +105,7 @@ class TestAnthropicBetaHeaders:
         backend: str,
         beta_provider: str,
         tools: list[ToolUnionParam],
+        per_model: frozenset[str],
     ) -> None:
         model: Final = f"e2e-messages-beta-{unique_marker()}"
         model_id: Final = proxy.create_model(model, _deployment(backend))
@@ -102,7 +116,7 @@ class TestAnthropicBetaHeaders:
             max_tokens=64,
             messages=[{"role": "user", "content": "Say 'hello' and nothing else"}],
             tools=tools,
-            extra_headers={"anthropic-beta": _mapped_beta_headers(beta_provider)},
+            extra_headers={"anthropic-beta": _mapped_beta_headers(beta_provider, per_model)},
             extra_body=NO_PROXY_CACHE,
         )
 

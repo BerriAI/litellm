@@ -15,8 +15,8 @@ from pydantic import JsonValue, TypeAdapter
 pytestmark: Final = pytest.mark.shares_worker_state
 
 ANTHROPIC_MODEL: Final = "beta-gated-anthropic"
-FOUNDRY_MODEL: Final = "beta-gated-foundry"
-FOUNDRY_DROP_PARAMS_MODEL: Final = "beta-gated-foundry-drop-params"
+DATABRICKS_MODEL: Final = "beta-gated-databricks"
+DATABRICKS_DROP_PARAMS_MODEL: Final = "beta-gated-databricks-drop-params"
 CLEAR_AT_BETA: Final = "mid-conversation-system-clear-at-2026-08-21"
 _JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
 _NONCE: Final = re.compile(rb"nonce-([0-9a-f]{32})")
@@ -71,9 +71,16 @@ def write_config(directory: Path, wire_url: str) -> Path:
             {
                 "model_list": [
                     deployment(ANTHROPIC_MODEL, "anthropic/claude-opus-4-8", f"{wire_url}/anthropic"),
-                    deployment(FOUNDRY_MODEL, "azure_ai/claude-opus-4-8", f"{wire_url}/foundry"),
                     deployment(
-                        FOUNDRY_DROP_PARAMS_MODEL, "azure_ai/claude-opus-4-8", f"{wire_url}/foundry", drop_params=True
+                        DATABRICKS_MODEL,
+                        "databricks/databricks-claude-opus-4-8",
+                        f"{wire_url}/databricks/serving-endpoints",
+                    ),
+                    deployment(
+                        DATABRICKS_DROP_PARAMS_MODEL,
+                        "databricks/databricks-claude-opus-4-8",
+                        f"{wire_url}/databricks/serving-endpoints",
+                        drop_params=True,
                     ),
                 ],
                 "general_settings": {
@@ -150,7 +157,7 @@ def system_message(body: bytes) -> dict[str, JsonValue]:
 
 def test_a_drop_params_leg_whose_row_lacks_the_beta_sends_neither_the_beta_nor_clear_at(rig: Rig) -> None:
     request_nonce: Final = nonce()
-    status, raw = rig.send(FOUNDRY_DROP_PARAMS_MODEL, request_nonce)
+    status, raw = rig.send(DATABRICKS_DROP_PARAMS_MODEL, request_nonce)
     assert reply_text(status, raw) == f"answered {request_nonce.removeprefix('nonce-')}"
     upstream: Final = rig.received(request_nonce)
     assert CLEAR_AT_BETA not in beta_header(upstream.headers), upstream.headers
@@ -159,7 +166,7 @@ def test_a_drop_params_leg_whose_row_lacks_the_beta_sends_neither_the_beta_nor_c
 
 def test_a_leg_whose_row_lacks_the_beta_forwards_clear_at_as_sent_without_drop_params(rig: Rig) -> None:
     request_nonce: Final = nonce()
-    status, raw = rig.send(FOUNDRY_MODEL, request_nonce)
+    status, raw = rig.send(DATABRICKS_MODEL, request_nonce)
     assert reply_text(status, raw) == f"answered {request_nonce.removeprefix('nonce-')}"
     upstream: Final = rig.received(request_nonce)
     assert CLEAR_AT_BETA not in beta_header(upstream.headers), upstream.headers

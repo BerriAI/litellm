@@ -392,8 +392,9 @@ impl AnthropicBeta {
             Self::Compact20260112
             | Self::ContextManagement20250627
             | Self::DangerousToolUse20260903 => &[BetaProvider::BedrockConverse],
-            Self::ComputerUse20250124 | Self::ComputerUse20251124 => &[BetaProvider::VertexAi],
-            Self::Context1m20250807
+            Self::ComputerUse20250124
+            | Self::ComputerUse20251124
+            | Self::Context1m20250807
             | Self::Effort20251124
             | Self::FineGrainedToolStreaming20250514
             | Self::ThinkingBindingControls20260801
@@ -698,7 +699,7 @@ mod tests {
         BetaProvider::Anthropic,
         Some(AnthropicBeta::Oauth20250420)
     )]
-    #[case::rejected("computer-use-2025-11-24", BetaProvider::VertexAi, None)]
+    #[case::rejected("skills-2025-10-02", BetaProvider::VertexAi, None)]
     #[case::unknown("example-beta-2099-01-01", BetaProvider::Anthropic, None)]
     fn on_resolves_known_spellings_held_as_other(
         #[case] raw: &str,
