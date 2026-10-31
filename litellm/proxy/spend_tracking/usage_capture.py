@@ -1014,7 +1014,12 @@ def _capture_effective_pricing(
                         custom_llm_provider=provider,
                         init_response_obj={"model": model},
                     )
-                    for model in _image_tool_pricing_models(normalized, provider)
+                    for model in _image_pricing_models(
+                        normalized,
+                        provider,
+                        logging_obj.get_deployment_model_for_cost(),
+                        _fields(details.get("optional_params")),
+                    )
                     if model in _fields(vars(litellm)["model_cost"])
                 },
                 "batch_models": {
@@ -1065,9 +1070,24 @@ def _tool_cost_inputs(response: object) -> Mapping[str, object]:
     }
 
 
-def _image_tool_pricing_models(response: object, provider: str | None) -> tuple[str, ...]:
+def _image_pricing_models(
+    response: object, provider: str | None, deployment_model: str | None, optional_params: Mapping[str, object]
+) -> tuple[str, ...]:
     from litellm.cost_calculator import image_cost_model_candidates
+    from litellm.litellm_core_utils.llm_cost_calc.utils import image_response_size_and_quality
 
+    if isinstance(response, ImageResponse) and deployment_model is not None:
+        size, quality = image_response_size_and_quality(response, optional_params)
+        return tuple(
+            key
+            for key in image_cost_model_candidates(
+                deployment_model,
+                provider,
+                quality,
+                size,
+            )
+            if key is not None
+        )
     raw: Final = _tool_cost_inputs(response)
     models: Final = tuple(
         model

@@ -1611,7 +1611,14 @@ async def test_live_adjustment_reload_is_captured_and_replay_remains_frozen(monk
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("pricing", "width", "expected"),
-    (("tokens", 2048, 0.2), ("images", 2048, 0.5), ("pixels", 2048, 0.4), ("pixels", 2049, 0.6)),
+    (
+        ("tokens", 2048, 0.2),
+        ("images", 2048, 0.5),
+        ("pixels", 2048, 0.4),
+        ("pixels", 2049, 0.6),
+        ("tiered", 2048, 1.5),
+        ("tiered-request", 2048, 1.5),
+    ),
 )
 async def test_image_capture_replays_the_existing_image_calculator(
     monkeypatch: pytest.MonkeyPatch, pricing: str, width: int, expected: float
@@ -1625,7 +1632,13 @@ async def test_image_capture_replays_the_existing_image_calculator(
 
     monkeypatch.setattr(litellm, "cost_discount_config", {"openai": 0.1})
     monkeypatch.setattr(litellm, "cost_margin_config", {"global": {"fixed_amount": 0.2}})
-    model: Final = {"tokens": "gpt-image-capture", "images": "dall-e-capture", "pixels": "fal-ai/flux/dev"}[pricing]
+    model: Final = {
+        "tokens": "gpt-image-capture",
+        "images": "dall-e-capture",
+        "pixels": "fal-ai/flux/dev",
+        "tiered": "dall-e-capture",
+        "tiered-request": "dall-e-capture",
+    }[pricing]
     provider: Final = "fal_ai" if pricing == "pixels" else "openai"
     catalog_key: Final = f"{provider}/{model}" if pricing == "pixels" else model
     monkeypatch.setitem(
@@ -1637,14 +1650,26 @@ async def test_image_capture_replays_the_existing_image_calculator(
             **{
                 "tokens": {"input_cost_per_token": 0.01, "output_cost_per_image_token": 0.02},
                 "images": {"output_cost_per_image": 0.25},
+                "tiered": {"output_cost_per_image": 0.25},
+                "tiered-request": {"output_cost_per_image": 0.25},
                 "pixels": {"output_cost_per_image": 0.1, "output_cost_per_pixel": 0.1 / (1024 * 1024)},
             }[pricing],
         },
     )
+    tier_key: Final = f"hd/1024-x-1024/{model}"
+    if pricing.startswith("tiered"):
+        monkeypatch.setitem(
+            litellm.model_cost,
+            tier_key,
+            {"litellm_provider": provider, "mode": "image_generation", "output_cost_per_image": 0.75},
+        )
     logger: Final = _logger("aimage_generation")
     logger.model = model
     logger.update_environment_variables(
-        model=model, custom_llm_provider=provider, litellm_params={}, optional_params={}
+        model=model,
+        custom_llm_provider=provider,
+        litellm_params={},
+        optional_params={"size": "1024*1024", "quality": "hd"} if pricing == "tiered-request" else {},
     )
     response: Final = ImageResponse.model_validate(
         {
@@ -1661,8 +1686,8 @@ async def test_image_capture_replays_the_existing_image_calculator(
                 }
             ]
             * 2,
-            "size": "1024x1024",
-            "quality": "standard",
+            "size": None if pricing == "tiered-request" else "1024x1024",
+            "quality": None if pricing == "tiered-request" else "hd" if pricing == "tiered" else "standard",
             "usage": {
                 "input_tokens": 10,
                 "output_tokens": 5,
@@ -1683,6 +1708,7 @@ async def test_image_capture_replays_the_existing_image_calculator(
         envelope: Final = database.rows[-1].envelope
         assert "private-image-content" not in envelope
         monkeypatch.delitem(litellm.model_cost, catalog_key)
+        monkeypatch.delitem(litellm.model_cost, tier_key, raising=False)
         replay: Final = price_usage(envelope)
         assert isinstance(replay, PricingSnapshot)
         assert float(replay.total_cost) == pytest.approx(source)
