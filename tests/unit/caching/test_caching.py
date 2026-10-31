@@ -483,6 +483,23 @@ def test_cache_key_tells_apart_requests_that_ask_for_token_ids() -> None:
     assert cache.get_cache_key(**request, return_token_ids=None) == plain_key
 
 
+def test_cache_key_tells_apart_requests_that_differ_only_in_tool_call_id_shape() -> None:
+    cache: Final = Cache(type=LiteLLMCacheType.LOCAL)
+    request: Final = {
+        "model": "gemini/gemini-3.5-flash",
+        "messages": [{"role": "user", "content": "What is the weather in Paris?"}],
+    }
+
+    signed_ids_key: Final = cache.get_cache_key(**request)
+    short_ids_key: Final = cache.get_cache_key(**request, thought_signature_in_tool_call_id=False)
+
+    assert short_ids_key != signed_ids_key
+    assert cache.get_cache_key(**request, thought_signature_in_tool_call_id="false") == short_ids_key
+    assert cache.get_cache_key(**request, thought_signature_in_tool_call_id=0) == short_ids_key
+    assert cache.get_cache_key(**request, thought_signature_in_tool_call_id=True) == signed_ids_key
+    assert cache.get_cache_key(**request, thought_signature_in_tool_call_id=None) == signed_ids_key
+
+
 class PhaseRecordingCache(InMemoryCache):
     """Records the target and the active span each read / write ran under, as a Redis span would."""
 

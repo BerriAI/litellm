@@ -177,6 +177,8 @@ MID_STREAM_FAILURE_LOG_WAIT_SECONDS: Final = 1.0
 # Set to 0 to disable truncation.
 MAX_BASE64_LENGTH_FOR_LOGGING: Final = get_env_int("MAX_BASE64_LENGTH_FOR_LOGGING", 64)
 BASE64_TRUNCATION_OFFLOAD_THRESHOLD_CHARS: Final = 256 * 1024
+BASE64_TRUNCATION_OFFLOAD_THRESHOLD_STRINGS: Final = 256
+BASE64_TRUNCATION_INLINE_COPY_MAX_CHARS: Final = 8 * 1024 * 1024
 REDACTED_BY_LITELLM: Final = "redacted-by-litellm"
 # in-memory stand-in handed to provider converters for redacted arguments; never stored
 REDACTED_TOOL_CALL_ARGUMENTS_PLACEHOLDER: Final = "{}"
@@ -1692,6 +1694,7 @@ BAGGAGE_MAPPED_TAGS_METADATA_KEY: Final = "_baggage_mapped_tags"
 VECTOR_STORE_CALLER_METADATA_KWARG: Final = "litellm_vector_store_caller_metadata"
 ROUTER_USAGE_COUNTED_TOKENS_METADATA_KEY: Final = "_litellm_router_usage_counted_tokens"
 INTERNAL_CALL_ORIGIN_METADATA_KEY: Final = "internal_call_origin"
+RESPONSES_WEBSOCKET_CALL_ID_METADATA_KEY: Final = "responses_websocket_call_id"
 BILLED_RETRY_ATTEMPT_METADATA_KEY: Final = "billed_retry_attempt"
 MANAGED_BACKGROUND_RESPONSE_METADATA_KEY: Final = "_managed_background_response"
 SESSION_ID_GENERATED_METADATA_KEY: Final = "litellm_session_id_generated"

@@ -25,7 +25,11 @@ from litellm._internal_context import current_service_target, service_target
 from litellm._logging import verbose_logger
 from litellm.constants import CACHED_STREAMING_CHUNK_DELAY
 from litellm.integrations.otel.runtime import phase_span
-from litellm.litellm_core_utils.model_param_helper import ModelParamHelper, peek_reasoning_summary_aliases
+from litellm.litellm_core_utils.model_param_helper import (
+    ModelParamHelper,
+    embeds_thought_signature_in_tool_call_id,
+    peek_reasoning_summary_aliases,
+)
 from litellm.types.caching import *
 from litellm.types.utils import EmbeddingResponse, is_litellm_owned_kwarg
 
@@ -421,7 +425,12 @@ class Cache:
         reasoning_summary_material: Final = (
             "" if reasoning_summary is None else f"reasoning_summary: {reasoning_summary}"
         )
-        hashed_cache_key = Cache._get_hashed_cache_key(cache_key + reasoning_summary_material)
+        tool_call_id_shape_material: Final = (
+            "" if embeds_thought_signature_in_tool_call_id(kwargs) else "thought_signature_in_tool_call_id: False"
+        )
+        hashed_cache_key = Cache._get_hashed_cache_key(
+            cache_key + reasoning_summary_material + tool_call_id_shape_material
+        )
         hashed_cache_key = self._add_namespace_to_cache_key(hashed_cache_key, **kwargs)
         verbose_logger.debug(
             "\nCreated cache key: %s (source material length: %d)",
