@@ -25,6 +25,13 @@ def test_blank_handwritten_section_fails():
     )
 
 
+def test_blank_handwritten_section_with_crlf_and_trailing_spaces_fails():
+    body = "## Handwritten 1-3 sentence description  \r\n\r\n## TLDR\r\n- fix\r\n## Type\r\nBug Fix\r\n"
+    assert problems(body, TEMPLATE) == (
+        "the section under '## Handwritten 1-3 sentence description' is empty: write the 1-3 sentence summary there",
+    )
+
+
 def test_leftover_closing_tag_alone_fails():
     assert problems(GOOD_BODY.replace("Adds X so Y works", "Adds X\n`</make-me-human-readable>`"), TEMPLATE) == (
         "the summary under '## Handwritten 1-3 sentence description' is still AI-written: the PR author rewrites it "

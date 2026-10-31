@@ -17,7 +17,6 @@ PLACEHOLDER: Final = "<blah>"
 AI_SUMMARY_TAG: Final = "<make-me-human-readable>"
 AI_SUMMARY_CLOSING_TAG: Final = "</make-me-human-readable>"
 HEADING_PATTERN: Final = re.compile(r"^## .+$", re.MULTILINE)
-SECTION_PATTERN: Final = re.compile(r"^## .+$\n(?P<content>(?:(?!^## ).*\n?)*)", re.MULTILINE)
 
 
 def template_headings(template_text: str) -> tuple[str, ...]:
@@ -33,10 +32,13 @@ def uses_template(found: Iterable[str], known: Iterable[str]) -> bool:
 
 
 def section_is_blank(body: str, heading: str) -> bool:
-    return any(
-        match.group().startswith(heading + "\n") and not match.group("content").strip()
-        for match in SECTION_PATTERN.finditer(body)
-    )
+    matches: Final = tuple(HEADING_PATTERN.finditer(body))
+    for index, match in enumerate(matches):
+        if match.group().strip() != heading:
+            continue
+        end = matches[index + 1].start() if index + 1 < len(matches) else len(body)
+        return not body[match.end() : end].strip()
+    return False
 
 
 def problems(body: str, template_text: str) -> tuple[str, ...]:
