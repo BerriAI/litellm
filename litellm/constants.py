@@ -634,6 +634,8 @@ STS_CREDENTIAL_EXPIRY_SAFETY_MARGIN_SECONDS: Final = 60
 BEDROCK_MIN_THINKING_BUDGET_TOKENS: Final = get_env_int("BEDROCK_MIN_THINKING_BUDGET_TOKENS", 1024)
 # Anthropic's Messages API rejects thinking.budget_tokens < 1024.
 ANTHROPIC_MIN_THINKING_BUDGET_TOKENS: Final = 1024
+ANTHROPIC_MAX_USER_ID_LENGTH: Final = 512
+ANTHROPIC_COMPATIBLE_MAX_USER_ID_LENGTH: Final = 255
 ANTHROPIC_BILLING_METADATA_PREFIX: Final = "x-anthropic-billing-header:"
 REPLICATE_POLLING_DELAY_SECONDS: Final = get_env_float("REPLICATE_POLLING_DELAY_SECONDS", 0.5)
 DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS: Final = get_env_int("DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS", 128000)
@@ -1166,6 +1168,7 @@ openai_compatible_providers: Final[list[str]] = [
     "cortecs",
     "scx-ai",
     "prism",
+    "hostinger_router",
     "sail",
     "reka",
     "streamlake",

@@ -1,6 +1,7 @@
+import copy
 import json
 from typing import Final
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
@@ -457,3 +458,43 @@ def test_hosted_vllm_does_not_invent_vllm_choice_fields():
     dumped_choice: Final[dict[str, object]] = json.loads(response.model_dump_json())["choices"][0]
     assert "stop_reason" not in dumped_choice
     assert "token_ids" not in dumped_choice
+
+
+def _strict_weather_tool() -> dict[str, object]:
+    return {
+        "type": "function",
+        "function": {
+            "name": "get_weather",
+            "strict": True,
+            "parameters": {
+                "type": "object",
+                "properties": {"city": {"type": "string"}},
+                "required": ["city"],
+                "additionalProperties": False,
+            },
+        },
+    }
+
+
+def test_hosted_vllm_tools_are_rewritten_without_touching_the_callers_tool() -> None:
+    tools: Final = [_strict_weather_tool()]
+    tools_before: Final = copy.deepcopy(tools)
+
+    optional_params: Final = HostedVLLMChatConfig().map_openai_params(
+        non_default_params={"tools": tools}, optional_params={}, model="gpt-oss-120b", drop_params=False
+    )
+
+    assert optional_params["tools"] == [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_weather",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"city": {"type": "string"}},
+                    "required": ["city"],
+                },
+            },
+        }
+    ]
+    assert tools == tools_before
