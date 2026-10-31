@@ -43,6 +43,23 @@ def _sample_agent_card_params() -> dict:
     }
 
 
+_AGENT_CARD_BACKEND_URL: Final = "http://agent.internal:9000/plain/"
+
+
+def _sample_agent_card_params_with_backend_url() -> dict[str, object]:
+    return {
+        **_sample_agent_card_params(),
+        "url": _AGENT_CARD_BACKEND_URL,
+        "supportedInterfaces": [
+            {
+                "url": _AGENT_CARD_BACKEND_URL,
+                "protocolBinding": "JSONRPC",
+                "protocolVersion": "1.0",
+            }
+        ],
+    }
+
+
 def _sample_agent_config() -> dict:
     return {
         "agent_name": "Test Agent",
@@ -1013,6 +1030,103 @@ class TestAgentHealthCheck:
         )
         assert resp.status_code == 200
         assert len(resp.json()) == 2
+
+
+def _client_with_agent_card(
+    monkeypatch: pytest.MonkeyPatch,
+    role: LitellmUserRoles,
+    agent: AgentResponse,
+) -> TestClient:
+    from litellm.proxy import proxy_server
+    from litellm.proxy.agent_endpoints import agent_registry
+
+    registry: Final = MagicMock()
+    registry.get_agent_by_id = MagicMock(return_value=agent)
+    registry.get_agent_list = MagicMock(return_value=(agent,))
+    registry.ids_for_agent = MagicMock(return_value=(agent.agent_id,))
+    monkeypatch.setattr(agent_endpoints, "AGENT_REGISTRY", registry)
+    monkeypatch.setattr(agent_registry, "global_agent_registry", registry)
+    prisma: Final = MagicMock()
+    prisma.db.litellm_agentstable.find_many = AsyncMock(return_value=[])
+    prisma.db.litellm_agentstable.find_unique = AsyncMock(return_value=None)
+    prisma.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+    test_app: Final = FastAPI()
+    test_app.include_router(router)
+    test_app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_id="test-user",
+        user_role=role,
+        object_permission={"agents": [agent.agent_id]} if role == LitellmUserRoles.INTERNAL_USER else None,
+    )
+    return TestClient(test_app)
+
+
+@pytest.mark.parametrize("path", ["/v1/agents", "/v1/agents/agent-123"])
+def test_non_admin_agent_card_urls_point_at_proxy(
+    monkeypatch: pytest.MonkeyPatch,
+    path: str,
+) -> None:
+    agent: Final = AgentResponse(
+        agent_id="agent-123",
+        agent_name="Test Agent",
+        agent_card_params=_sample_agent_card_params_with_backend_url(),
+    )
+    test_client: Final = _client_with_agent_card(monkeypatch, LitellmUserRoles.INTERNAL_USER, agent)
+
+    response: Final = test_client.get(path, headers={"Authorization": "Bearer k"})
+
+    assert response.status_code == 200, response.text
+    agents: Final = response.json()
+    result: Final = agents[0] if path == "/v1/agents" else agents
+    card: Final = result["agent_card_params"]
+    proxy_url: Final = "http://testserver/a2a/agent-123"
+    assert card["url"] == proxy_url
+    assert card["supportedInterfaces"][0]["url"] == proxy_url
+    assert "agent.internal" not in response.text
+
+
+def test_proxy_admin_agent_listing_keeps_backend_card_urls(monkeypatch: pytest.MonkeyPatch) -> None:
+    agent: Final = AgentResponse(
+        agent_id="agent-123",
+        agent_name="Test Agent",
+        agent_card_params=_sample_agent_card_params_with_backend_url(),
+    )
+    test_client: Final = _client_with_agent_card(monkeypatch, LitellmUserRoles.PROXY_ADMIN, agent)
+
+    response: Final = test_client.get("/v1/agents", headers={"Authorization": "Bearer k"})
+
+    assert response.status_code == 200, response.text
+    card: Final = response.json()[0]["agent_card_params"]
+    assert card["url"] == _AGENT_CARD_BACKEND_URL
+    assert card["supportedInterfaces"][0]["url"] == _AGENT_CARD_BACKEND_URL
+
+
+def test_non_admin_health_check_probes_backend_and_returns_proxy_card(monkeypatch: pytest.MonkeyPatch) -> None:
+    agent: Final = AgentResponse(
+        agent_id="agent-123",
+        agent_name="Test Agent",
+        agent_card_params=_sample_agent_card_params_with_backend_url(),
+    )
+    test_client: Final = _client_with_agent_card(monkeypatch, LitellmUserRoles.INTERNAL_USER, agent)
+    health_check: Final = AsyncMock(return_value={"agent_id": agent.agent_id, "healthy": True})
+    monkeypatch.setattr(agent_endpoints, "_check_agent_url_health", health_check)
+
+    response: Final = test_client.get("/v1/agents?health_check=true", headers={"Authorization": "Bearer k"})
+
+    assert response.status_code == 200, response.text
+    assert health_check.await_args.args[0].agent_card_params["url"] == _AGENT_CARD_BACKEND_URL
+    assert response.json()[0]["agent_card_params"]["url"] == "http://testserver/a2a/agent-123"
+
+
+def test_non_admin_agent_card_without_interfaces_does_not_add_them(monkeypatch: pytest.MonkeyPatch) -> None:
+    agent: Final = _sample_agent_response()
+    test_client: Final = _client_with_agent_card(monkeypatch, LitellmUserRoles.INTERNAL_USER, agent)
+
+    response: Final = test_client.get("/v1/agents/agent-123", headers={"Authorization": "Bearer k"})
+
+    assert response.status_code == 200, response.text
+    assert response.json()["agent_card_params"]["url"] == "http://testserver/a2a/agent-123"
+    assert "supportedInterfaces" not in response.json()["agent_card_params"]
 
 
 class TestCheckAgentUrlHealth:
