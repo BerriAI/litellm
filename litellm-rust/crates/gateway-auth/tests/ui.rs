@@ -1,6 +1,6 @@
 use axum_login::{AuthUser, AuthnBackend};
-use litellm_auth_types::SecretValue;
 use litellm_gateway_auth::{UiBackend, UiCredentials};
+use litellm_secret_value::SecretValue;
 use rstest::{fixture, rstest};
 
 #[fixture]

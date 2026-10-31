@@ -30,12 +30,12 @@ from litellm.caching.affinity_cache import (
 from litellm.caching.dual_cache import DualCache
 from litellm.constants import SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY, SESSION_ID_GENERATED_METADATA_KEY
 from litellm.integrations.custom_logger import CustomLogger, Span
-from litellm.responses.utils import ResponsesAPIRequestUtils
-from litellm.router_utils.common_utils import (
+from litellm.litellm_core_utils.routing_common_utils import (
     deployment_ids_failed_in_request,
     web_search_alternatives_to_pin,
     web_search_capable_deployments,
 )
+from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import CallTypes
 
