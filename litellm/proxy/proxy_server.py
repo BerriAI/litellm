@@ -10070,7 +10070,13 @@ def _restamp_nested_response_model_in_sse_line(line: bytes, target_model: str) -
     return _SSE_DATA_FIELD + b" " + serialized_event.encode() + line_ending
 
 
+def _null_for_unencodable(_value: object) -> None:
+    return None
+
+
 def _serialize_streaming_chunk(chunk: BaseModel) -> bytes:
+    if isinstance(chunk, ModelResponseStream):
+        return chunk.model_dump_json(exclude_none=True, exclude_unset=True, fallback=_null_for_unencodable).encode()
     return chunk.model_dump_json(exclude_none=True, exclude_unset=True).encode()
 
 
