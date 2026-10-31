@@ -951,3 +951,22 @@ def test_is_lock_timeout_error_recognises_a_statement_cancelled_under_lock_timeo
 )
 def test_is_lock_timeout_error_excludes_other_failures(error: Exception) -> None:
     assert PrismaDBExceptionHandler.is_lock_timeout_error(error) is False
+
+
+def test_is_database_configured(monkeypatch):
+    """No DATABASE_URL/DIRECT_URL and no general_settings database_url
+    means no database was configured (#47119); setting DATABASE_URL means
+    a database is configured even if it is currently unreachable."""
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.delenv("DIRECT_URL", raising=False)
+    with patch("litellm.proxy.proxy_server.general_settings", {}):
+        assert PrismaDBExceptionHandler.is_database_configured() is False
+    monkeypatch.setenv("DATABASE_URL", "postgresql://user:pass@localhost:5432/litellm")
+    with patch("litellm.proxy.proxy_server.general_settings", {}):
+        assert PrismaDBExceptionHandler.is_database_configured() is True
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    with patch(
+        "litellm.proxy.proxy_server.general_settings",
+        {"database_url": "postgresql://localhost:5432/litellm"},
+    ):
+        assert PrismaDBExceptionHandler.is_database_configured() is True
