@@ -236,6 +236,11 @@ async def test_repository_queries_and_exports_seeded_daily_activity(monkeypatch:
             "user-1",
             "user@example.com",
         )
+        assert deleted_key_export.key_metadata == {"tags": ["archived"]}
+        assert deleted_key_export.user_metadata == {"department": "research"}
+        active_key_export: Final = next(row for row in exports if row.api_key == "key-a")
+        assert active_key_export.key_metadata == {"tags": ["blue", "gold"]}
+        assert active_key_export.user_metadata == {"department": "research"}
         user_exports: Final = tuple(
             [row async for row in repository.export_rows(team_scope, export_type=ExportType.DAILY_WITH_USERS)]
         )
@@ -245,11 +250,14 @@ async def test_repository_queries_and_exports_seeded_daily_activity(monkeypatch:
             "user@example.com",
             273.0,
         )
+        assert user_exports[0].user_metadata == {"department": "research"}
+        assert user_exports[0].key_metadata == {}
         daily_export: Final = tuple(
             [row async for row in repository.export_rows(team_scope, export_type=ExportType.DAILY)]
         )
         assert len(daily_export) == 1
         assert daily_export[0].spend == 1273.0
+        assert (daily_export[0].key_metadata, daily_export[0].user_metadata) == ({}, {})
         assert daily_export[0].flat_cost == 42.0
 
         metadata: Final = await repository.key_metadata(frozenset(("key-a", "key-target")), None)
@@ -684,9 +692,7 @@ async def test_user_page_ranks_users_and_folds_null_ids() -> None:
         repository: Final = _repository(database)
         full_page: Final = await repository.user_page(scope, offset=0, limit=50)
         empty_page: Final = await repository.user_page(scope, offset=full_page.total_users + 1, limit=50)
-        scoped_page: Final = await repository.user_page(
-            replace(scope, entity_ids=("user-alpha",)), offset=0, limit=50
-        )
+        scoped_page: Final = await repository.user_page(replace(scope, entity_ids=("user-alpha",)), offset=0, limit=50)
 
         assert tuple((row.user_id, row.spend) for row in full_page.rows) == (
             (None, 45.0),

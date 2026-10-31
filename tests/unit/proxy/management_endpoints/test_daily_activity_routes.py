@@ -1,5 +1,6 @@
 import csv
 import io
+import json
 from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
 from dataclasses import dataclass, fields
 from itertools import chain
@@ -390,6 +391,8 @@ class _FakeRepository:
                 failed_requests=row.failed_requests,
                 cache_read_input_tokens=row.cache_read_input_tokens,
                 cache_creation_input_tokens=row.cache_creation_input_tokens,
+                key_metadata={"cost_center": "=finance", "tier": 2},
+                user_metadata={"department": "research"},
             )
 
 
@@ -1160,6 +1163,9 @@ def test_export_routes_stream_csv_and_preserve_row_counts(
     assert len(records) == 7
     assert records[1][2] == "'=entity"
     assert records[1][4] == "'+key"
+    columns: Final = dict(zip(records[0], records[1], strict=True))
+    assert json.loads(columns["key_metadata"]) == {"cost_center": "=finance", "tier": 2}
+    assert json.loads(columns["user_metadata"]) == {"department": "research"}
 
 
 @pytest.mark.parametrize(("prefix", "query_name", "entity_id"), _ENTITY_CASES)
@@ -1180,6 +1186,8 @@ def test_export_routes_stream_json_arrays(
     records: Final = response.json()
     assert isinstance(records, list) and len(records) == 6, response.text
     assert records[0]["entity_alias"] == "=entity"
+    assert records[0]["key_metadata"] == {"cost_center": "=finance", "tier": 2}
+    assert records[0]["user_metadata"] == {"department": "research"}
 
 
 def test_export_first_row_error_returns_json_error_before_streaming(

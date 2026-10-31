@@ -198,8 +198,10 @@ def seed_daily_activity_fixture(connection: psycopg.Connection, *, schema: str, 
             ),
         )
         cursor.execute(
-            sql.SQL("INSERT INTO {} (user_id, user_email, models) VALUES (%s, %s, %s)").format(user_table),
-            ("user-1", "user@example.com", []),
+            sql.SQL("INSERT INTO {} (user_id, user_email, models, metadata) VALUES (%s, %s, %s, %s)").format(
+                user_table
+            ),
+            ("user-1", "user@example.com", [], '{"department": "research"}'),
         )
         cursor.execute(
             sql.SQL("INSERT INTO {} (team_id, team_alias, admins, members, models) VALUES (%s, %s, %s, %s, %s)").format(
