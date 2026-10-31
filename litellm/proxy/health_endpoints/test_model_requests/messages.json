@@ -61,7 +61,16 @@
     },
     {
       "role": "user",
-      "content": "Thanks. Is that warm enough for a short walk? Repeat the temperature you found in your answer."
+      "content": [
+        {
+          "type": "text",
+          "text": "<system-reminder>The user prefers short answers. Keep the temperature in the reply.</system-reminder>"
+        },
+        {
+          "type": "text",
+          "text": "Thanks. Is that warm enough for a short walk? Repeat the temperature you found in your answer."
+        }
+      ]
     }
   ]
 }

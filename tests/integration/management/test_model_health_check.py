@@ -1456,7 +1456,8 @@ def _test_model_chat_reply(request: Request, *, cached_tokens: int) -> Reply:
     assert body["tools"] == _TEST_MODEL_CHAT_REQUEST["tools"], body["tools"]
     assert isinstance(messages[-1], dict), messages
     if tool_turn and messages[-1]["role"] == "user":
-        assert messages[-2] == {"role": "assistant", "content": "Boston is 72F and sunny."}, messages[-2]
+        assert messages[-3] == {"role": "assistant", "content": "Boston is 72F and sunny."}, messages[-3]
+        assert isinstance(messages[-2], dict) and messages[-2]["role"] == "system", messages[-2]
         message: dict[str, JsonValue] = {"role": "assistant", "content": "Yes, 72F is warm enough for a walk."}
     elif tool_turn:
         assert messages[-1]["tool_call_id"] == _TEST_MODEL_TOOL_CALL_ID, messages[-1]

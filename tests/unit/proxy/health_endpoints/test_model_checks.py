@@ -219,13 +219,15 @@ def test_every_endpoint_passes_all_three_checks_and_feeds_each_reply_back_in_its
     assert "<turn " not in sent_json, sent_json
     assert turn_three[key][: len(turn_two[key])] == turn_two[key], turn_three
     follow_up: Final = turn_three[key][-1]
-    assert follow_up["role"] == "user" and "Repeat the temperature" in follow_up["content"], follow_up
+    assert follow_up["role"] == "user" and "Repeat the temperature" in json.dumps(follow_up), follow_up
+    assert "<system-reminder>" in json.dumps(turn_three[key][-2:]), turn_three[key][-2:]
     if script is CHAT_COMPLETIONS_SCRIPT:
         tool_message: Final = turn_two["messages"][-1]
         assert tool_message == {"role": "tool", "tool_call_id": _TOOL_CALL_ID, "content": WEATHER_TOOL_RESULT}
         assert turn_two["messages"][-2]["tool_calls"][0]["id"] == _TOOL_CALL_ID
-        assert turn_three["messages"][-2]["role"] == "assistant", turn_three
-        assert turn_three["messages"][-2]["content"] == _TURN_TWO_ANSWER, turn_three
+        assert turn_three["messages"][-2]["role"] == "system", turn_three
+        assert turn_three["messages"][-3]["role"] == "assistant", turn_three
+        assert turn_three["messages"][-3]["content"] == _TURN_TWO_ANSWER, turn_three
     elif script is RESPONSES_SCRIPT:
         assert turn_two["input"][-1] == {
             "type": "function_call_output",
@@ -233,8 +235,9 @@ def test_every_endpoint_passes_all_three_checks_and_feeds_each_reply_back_in_its
             "output": WEATHER_TOOL_RESULT,
         }
         assert [item["type"] for item in turn_two["input"][1:-1]] == ["reasoning", "function_call"]
-        assert turn_three["input"][-2]["type"] == "message", turn_three
-        assert turn_three["input"][-2]["content"][0]["text"] == _TURN_TWO_ANSWER, turn_three
+        assert turn_three["input"][-2]["role"] == "system", turn_three
+        assert turn_three["input"][-3]["type"] == "message", turn_three
+        assert turn_three["input"][-3]["content"][0]["text"] == _TURN_TWO_ANSWER, turn_three
     else:
         assert turn_two["messages"][-1]["content"] == [
             {"type": "tool_result", "tool_use_id": _TOOL_CALL_ID, "content": WEATHER_TOOL_RESULT}
