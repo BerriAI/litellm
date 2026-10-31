@@ -94,6 +94,15 @@ def test_usd_non_json_streaming_malformed_and_unlisted_responses_are_untouched()
         assert "x-litellm-display-currency" not in eur.get(path).headers
 
 
+def test_display_values_are_rounded_without_changing_usd_amounts() -> None:
+    client: Final = _client(Currency(code="EUR", usd_rate=0.92))
+    info: Final = client.get("/key/info").json()
+    assert info["spend"] == 10
+    assert info["spend_display"] == 9.2
+    assert info["nested"][0]["max_budget_display"] == 18.4
+    assert client.get("/budget/list").json()[0]["soft_budget_display"] == 4.6
+
+
 @pytest.mark.asyncio
 async def test_usd_passes_the_original_send_through() -> None:
     async def send(message: Message) -> None:

@@ -114,7 +114,7 @@ def _display_values(value: object, rate: float) -> object:
     return {
         **{key: _display_values(item, rate) for key, item in values.items()},
         **{
-            f"{key}_display": item * rate
+            f"{key}_display": round(item * rate, 10)
             for key, item in values.items()
             if key in MONEY_FIELDS and isinstance(item, (int, float)) and not isinstance(item, bool)
         },
