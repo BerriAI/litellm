@@ -3090,14 +3090,60 @@ def token_counter(
     )
 
 
+HTTPX_TIMEOUT_SUPPORTED_PROVIDERS: Final[frozenset[str]] = frozenset(
+    {
+        "openai",
+        "azure",
+        "bedrock",
+        "bedrock_mantle",
+        "custom_openai",
+        "text-completion-openai",
+        "openai_like",
+        "chatgpt",
+        "anthropic",
+        "anthropic_text",
+        "mistral",
+        "codestral",
+        "cohere",
+        "cohere_chat",
+        "ollama",
+        "ollama_chat",
+        "openrouter",
+        "vertex_ai",
+        "gemini",
+        "deepseek",
+        "groq",
+        "together_ai",
+        "fireworks_ai",
+        "perplexity",
+        "xai",
+        "zai",
+        "cerebras",
+        "sambanova",
+        "baseten",
+        "cloudflare",
+        "databricks",
+        "hosted_vllm",
+        "minimax",
+        "huggingface",
+    }
+)
+
+
 def supports_httpx_timeout(custom_llm_provider: str) -> bool:
     """
     Helper function to know if a provider implementation supports httpx timeout
     """
-    supported_providers: Final = ["openai", "azure", "bedrock"]
-
-    if custom_llm_provider in supported_providers:
+    if custom_llm_provider in HTTPX_TIMEOUT_SUPPORTED_PROVIDERS:
         return True
+
+    try:
+        from litellm.constants import openai_compatible_providers
+
+        if custom_llm_provider in openai_compatible_providers:
+            return True
+    except ImportError:
+        pass
 
     return False
 
