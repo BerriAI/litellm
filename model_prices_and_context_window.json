@@ -51387,6 +51387,11 @@
         "max_input_tokens": 200000,
         "max_output_tokens": 64000,
         "mode": "chat",
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
         "output_cost_per_token": 5e-06,
         "output_cost_per_token_batches": 2.5e-06,
         "regional_endpoint_uplift_multiplier": 1.1,
@@ -51415,6 +51420,11 @@
         "max_input_tokens": 200000,
         "max_output_tokens": 64000,
         "mode": "chat",
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
         "output_cost_per_token": 5e-06,
         "output_cost_per_token_batches": 2.5e-06,
         "regional_endpoint_uplift_multiplier": 1.1,
@@ -52161,6 +52171,11 @@
         "max_input_tokens": 200000,
         "max_output_tokens": 64000,
         "mode": "chat",
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
         "output_cost_per_token": 1.5e-05,
         "output_cost_per_token_batches": 7.5e-06,
         "regional_endpoint_uplift_multiplier": 1.1,
@@ -52266,6 +52281,11 @@
         "max_input_tokens": 200000,
         "max_output_tokens": 64000,
         "mode": "chat",
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
         "output_cost_per_token": 1.5e-05,
         "output_cost_per_token_batches": 7.5e-06,
         "regional_endpoint_uplift_multiplier": 1.1,
