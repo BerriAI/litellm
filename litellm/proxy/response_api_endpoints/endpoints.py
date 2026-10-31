@@ -1895,6 +1895,7 @@ async def cancel_response(
     from litellm.proxy.proxy_server import (
         general_settings,
         llm_router,
+        polling_cache_ttl,
         proxy_config,
         proxy_logging_obj,
         read_request_body,
@@ -1915,7 +1916,7 @@ async def cancel_response(
         if not redis_usage_cache:
             raise HTTPException(status_code=500, detail="Redis cache not configured.")
 
-        polling_handler: Final = ResponsePollingHandler(redis_cache=redis_usage_cache)
+        polling_handler: Final = ResponsePollingHandler(redis_cache=redis_usage_cache, ttl=polling_cache_ttl)
 
         # Get current state to verify it exists
         state: Final = await polling_handler.get_state(response_id)

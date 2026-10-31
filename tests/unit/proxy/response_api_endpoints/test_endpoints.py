@@ -9,7 +9,7 @@ import datetime
 import json
 import re
 import unittest
-from collections.abc import Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from typing import Any, Final, Literal, cast
 from unittest.mock import AsyncMock, MagicMock, call, patch
 
@@ -23,6 +23,7 @@ from fastapi.testclient import TestClient
 from httpx import Response
 
 import litellm
+from litellm.caching.base_cache import BaseCache
 from litellm.caching.caching import DualCache
 from litellm.constants import EMPTY_MAPPING
 from litellm.integrations.custom_guardrail import CustomGuardrail
@@ -1065,6 +1066,55 @@ async def test_a_finished_read_or_cancel_bills_usage_only_the_configured_deploym
     assert fastapi_response.headers.getlist("x-litellm-response-cost") == _billed_costs(spend_events.payloads)
     (row,) = stored.table.rows
     assert row.status == "completed"
+
+
+class _OnePollingStateRedis(BaseCache):
+    def __init__(self, state: Mapping[str, object]) -> None:
+        super().__init__()
+        self.state = json.dumps(state)
+        self.ttls: tuple[int, ...] = ()
+
+    async def async_get_cache(self, key: str, **kwargs: object) -> str:
+        return self.state
+
+    async def async_set_cache_pipeline(self, cache_list: object, **kwargs: object) -> None:
+        raise NotImplementedError
+
+    def async_register_script(self, script: str) -> Callable[..., Awaitable[int]]:
+        async def write(keys: Sequence[str], args: Sequence[str]) -> int:
+            self.state = json.loads(args[0])
+            self.ttls = (*self.ttls, int(args[1]))
+            return 1
+
+        return write
+
+
+@pytest.mark.asyncio
+async def test_cancelling_a_polling_response_keeps_the_configured_polling_ttl() -> None:
+    from fastapi import Response as FastAPIResponse
+
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.response_api_endpoints.endpoints import cancel_response
+
+    redis: Final = _OnePollingStateRedis({"id": "litellm_poll_ttl", "object": "response", "status": "in_progress"})
+
+    with (
+        patch(
+            "litellm.proxy.proxy_server.redis_usage_cache", redis
+        ),  # test-quality-ok: the endpoint reads the proxy singletons at call time
+        patch(
+            "litellm.proxy.proxy_server.polling_cache_ttl", 120
+        ),  # test-quality-ok: the endpoint reads the proxy singletons at call time
+    ):
+        cancelled: Final = await cancel_response(
+            response_id="litellm_poll_ttl",
+            request=_request_for("POST", "/v1/responses/litellm_poll_ttl/cancel", b""),
+            fastapi_response=FastAPIResponse(),
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-canceller"),
+        )
+
+    assert cancelled["status"] == "cancelled"
+    assert redis.ttls == (120,)
 
 
 @pytest.mark.asyncio

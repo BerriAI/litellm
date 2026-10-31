@@ -23,7 +23,7 @@ import litellm
 from litellm import Router
 from litellm.caching.caching import DualCache
 from litellm.caching.in_memory_cache import InMemoryCache
-from litellm.constants import INTERNAL_CALL_ORIGIN_METADATA_KEY
+from litellm.constants import INTERNAL_CALL_ORIGIN_METADATA_KEY, LITELLM_HTTP_STATUS_CLIENT_DISCONNECTED
 from litellm.integrations.custom_secret_manager import CustomSecretManager
 from litellm.litellm_core_utils import ptu_pricing
 from litellm.litellm_core_utils.ptu_shares import PTUTeamCeiling
@@ -4837,6 +4837,85 @@ async def test_sse_keepalive_releases_parallel_capacity(
 
     for index in range(3):
         await contextvars.Context().run(asyncio.create_task, request(f"keepalive-{index}"))
+        assert handler._gauge_in_flight_from_cache_value(await cache.async_get_cache(counter)) == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("leaves_by", ["close", "cancel"])
+@pytest.mark.parametrize("preadmitted", [False, True], ids=["producer-admission", "existing-admission"])
+async def test_sse_keepalive_releases_parallel_capacity_when_the_reader_leaves_during_pings(
+    leaves_by: str, preadmitted: bool
+) -> None:
+    from fastapi.responses import StreamingResponse
+
+    from litellm.proxy.common_request_processing import open_sse_before_first_byte
+    from litellm.proxy.common_utils.sse_keepalive import SSE_COMMENT_PING_BYTES
+
+    cache: Final = DualCache()
+    handler: Final = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(cache))
+    api_key: Final = hash_token("sk-keepalive-reader-leaves")
+    auth: Final = UserAPIKeyAuth(api_key=api_key, max_parallel_requests=1)
+    counter: Final = f"{{api_key:{api_key}}}:max_parallel_requests"
+
+    async def request(call_id: str) -> None:
+        data: Final = {"model": "test-model", "litellm_call_id": call_id}
+        admitted: Final = asyncio.Event()
+        never_answers: Final = asyncio.Event()
+        upstream_cancelled: Final = asyncio.Event()
+        reported: Final = asyncio.Queue[Exception]()
+
+        async def admit() -> None:
+            await handler.async_pre_call_hook(
+                user_api_key_dict=auth, cache=cache, data=data, call_type="acompletion"
+            )
+
+        async def failure(exc: Exception) -> None:
+            await reported.put(exc)
+            await handler.async_post_call_failure_hook(
+                request_data=data, original_exception=exc, user_api_key_dict=auth
+            )
+
+        async def produce() -> StreamingResponse:
+            if not preadmitted:
+                await admit()
+            admitted.set()
+            try:
+                await never_answers.wait()
+            except asyncio.CancelledError:
+                upstream_cancelled.set()
+                raise
+            return StreamingResponse(iter(()))
+
+        if preadmitted:
+            await admit()
+        response: Final = await open_sse_before_first_byte(produce(), 0.001, on_late_failure=failure)
+        assert isinstance(response, StreamingResponse)
+        assert await anext(response.body_iterator) == SSE_COMMENT_PING_BYTES
+        await admitted.wait()
+
+        reading: Final = asyncio.Event()
+
+        async def read_until_cancelled() -> None:
+            async for _ in response.body_iterator:
+                reading.set()
+
+        if leaves_by == "close":
+            body: Final = response.body_iterator
+            assert isinstance(body, AsyncGenerator)
+            await body.aclose()
+        else:
+            reader: Final = asyncio.ensure_future(read_until_cancelled())
+            await reading.wait()
+            reader.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await reader
+        assert upstream_cancelled.is_set()
+        left: Final = reported.get_nowait()
+        assert isinstance(left, HTTPException) and left.status_code == LITELLM_HTTP_STATUS_CLIENT_DISCONNECTED
+        assert reported.empty()
+
+    for index in range(3):
+        await contextvars.Context().run(asyncio.create_task, request(f"keepalive-left-{index}"))
         assert handler._gauge_in_flight_from_cache_value(await cache.async_get_cache(counter)) == 0
 
 

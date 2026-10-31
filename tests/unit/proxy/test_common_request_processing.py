@@ -1,4 +1,5 @@
 import asyncio
+import collections.abc
 import contextvars
 import copy
 import datetime
@@ -10723,6 +10724,28 @@ async def test_ttft_keepalive_cancels_the_in_flight_call_when_the_client_gives_u
     assert upstream_cancelled.is_set()
 
 
+@pytest.mark.asyncio
+async def test_ttft_keepalive_cancels_the_in_flight_call_when_its_caller_is_cancelled_before_the_first_ping():
+    upstream_started = asyncio.Event()
+    upstream_cancelled = asyncio.Event()
+
+    async def never_answers():
+        upstream_started.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            upstream_cancelled.set()
+            raise
+
+    caller = asyncio.create_task(open_sse_before_first_byte(never_answers(), ping_interval_seconds=60))
+    await upstream_started.wait()
+    caller.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await caller
+
+    assert upstream_cancelled.is_set()
+
+
 @pytest.mark.parametrize(
     "request_data, global_interval, expected",
     [
@@ -10892,6 +10915,56 @@ async def test_a_late_failure_is_reported_to_the_failure_hook():
     assert [type(exc).__name__ for exc in audited] == ["HTTPException"]
     assert getattr(audited[0], "detail", None) == "upstream exploded"
     assert collected[-1] == b"data: [DONE]\n\n"
+
+
+@pytest.mark.asyncio
+async def test_a_failure_that_lands_as_the_reader_leaves_is_reported_instead_of_a_disconnect():
+    outcome: Final[asyncio.Future[StreamingResponse]] = asyncio.get_running_loop().create_future()
+    audited: Final = asyncio.Queue[Exception]()
+
+    async def record(exc: Exception) -> None:
+        await audited.put(exc)
+
+    response: Final = await open_sse_before_first_byte(outcome, ping_interval_seconds=0.05, on_late_failure=record)
+    body: Final = response.body_iterator
+    assert isinstance(body, collections.abc.AsyncGenerator)
+    assert await body.__anext__() == TTFT_PING
+    outcome.set_exception(HTTPException(status_code=429, detail="rate limited"))
+    await body.aclose()
+
+    reported: Final = audited.get_nowait()
+    assert isinstance(reported, HTTPException) and reported.status_code == 429
+    assert audited.empty()
+
+
+@pytest.mark.asyncio
+async def test_a_reader_leaving_as_the_model_answers_is_not_reported_as_a_disconnect():
+    answer: Final[asyncio.Future[StreamingResponse]] = asyncio.get_running_loop().create_future()
+    audited: Final = asyncio.Queue[Exception]()
+    upstream_closed: Final = asyncio.Event()
+
+    async def upstream() -> AsyncGenerator[str, None]:
+        try:
+            yield 'data: {"a": 1}\n\n'
+            await asyncio.Event().wait()
+        finally:
+            upstream_closed.set()
+
+    upstream_gen: Final = upstream()
+    await upstream_gen.__anext__()
+
+    async def record(exc: Exception) -> None:
+        await audited.put(exc)
+
+    response: Final = await open_sse_before_first_byte(answer, ping_interval_seconds=0.05, on_late_failure=record)
+    body: Final = response.body_iterator
+    assert isinstance(body, collections.abc.AsyncGenerator)
+    assert await body.__anext__() == TTFT_PING
+    answer.set_result(StreamingResponse(upstream_gen, media_type="text/event-stream"))
+    await body.aclose()
+
+    assert audited.empty()
+    assert upstream_closed.is_set()
 
 
 @pytest.mark.asyncio

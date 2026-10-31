@@ -91,6 +91,8 @@ class _AsyncRedisCommands(Protocol):
 
     def lpop(self, name: str, count: int | None = None) -> Awaitable[object]: ...
 
+    def getrange(self, key: str, start: int, end: int) -> Awaitable[object]: ...
+
     def pipeline(self, transaction: bool = True) -> "Pipeline[bytes]": ...
 
     def eval(self, script: str, numkeys: int, *keys_and_args: str | bytes | float) -> Awaitable[object]: ...
@@ -141,6 +143,7 @@ _INCREMENT_IF_PRESENT_LUA: Final = (
 _LUA_COUNT: Final = TypeAdapter(int)
 _LUA_OPTIONAL_TOTAL: Final[TypeAdapter[float | None]] = TypeAdapter(float | None)
 _OPTIONAL_COUNTS: Final = TypeAdapter(tuple[int | None, ...])
+_GETRANGE_REPLY: Final[TypeAdapter[bytes | str]] = TypeAdapter(bytes | str)
 
 
 def _decoded_counts(values: Sequence[bytes | str | None]) -> tuple[int | None, ...]:
@@ -1736,6 +1739,13 @@ class RedisCache(BaseCache):
             log_redis_failure(verbose_logger, logging.ERROR, "Error occurred in batch get cache", e)
             _record_swallowed_redis_failure(self._circuit_breaker, e)
             return key_value_dict
+
+    @_redis_circuit_breaker_guard
+    async def async_getrange(self, key: str, start: int, end: int) -> str:
+        value: Final = _GETRANGE_REPLY.validate_python(
+            await self._async_commands().getrange(self.check_and_fix_namespace(key=key), start, end)
+        )
+        return value.decode("utf-8", errors="replace") if isinstance(value, bytes) else value
 
     @_redis_circuit_breaker_guard
     async def async_get_cache(
