@@ -1328,6 +1328,26 @@ async def test_the_replayed_turns_become_the_next_turns_path_to_the_root():
 
 
 @pytest.mark.asyncio
+async def test_a_turn_continuing_a_session_stored_before_paths_existed_records_every_turn_it_replayed():
+    """The legacy replay feeds the whole session to the model, so the new turn's path must name all of it."""
+    fake_prisma_client: Final = _FakePrismaClient(
+        results=[
+            [
+                _spend_log("old-1", "session", "My favorite number is 7.", "ok"),
+                _spend_log("old-2", "session", "My second number is 42.", "ok"),
+            ]
+        ]
+    )
+
+    with patch("litellm.proxy.proxy_server.prisma_client", fake_prisma_client):
+        session: Final = await ResponsesSessionHandler.get_chat_completion_message_history_for_previous_response_id(
+            "old-1"
+        )
+
+    assert session["previous_response_ids"] == ("old-1", "old-2")
+
+
+@pytest.mark.asyncio
 async def test_session_lookup_keeps_jwt_users_and_teams_apart_when_they_share_an_empty_api_key():
     sqlite_db: Final = _SqliteBackedPrismaDB(
         [

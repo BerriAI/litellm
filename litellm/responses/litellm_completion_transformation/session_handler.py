@@ -357,7 +357,7 @@ class ResponsesSessionHandler:
             messages=chat_completion_message_history,
             litellm_session_id=litellm_session_id,
             instructions=_latest_replayable_instructions(proxy_server_requests),
-            previous_response_ids=tuple(spend_log["request_id"] for spend_log in all_spend_logs[:replayable_turns]),
+            previous_response_ids=tuple(spend_log["request_id"] for spend_log in all_spend_logs[:replayed_turns]),
         )
 
     @staticmethod
