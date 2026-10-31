@@ -189,8 +189,11 @@ def _is_empty_text_block(block: object) -> bool:
     match block:
         case {"type": "text", "text": str() as text}:
             return not text.strip()
-        case {"type": "text", "text": object() as text}:
-            return not text
+        case {"type": "text", "text": object() as text} if text:
+            raise DatabricksException(
+                status_code=400,
+                message=f"A text content block needs a string 'text', got {type(text).__name__}",
+            )
         case {"type": "text"}:
             return True
         case _:

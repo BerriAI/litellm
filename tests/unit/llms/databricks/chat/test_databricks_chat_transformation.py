@@ -21,6 +21,7 @@ from litellm.constants import (
     DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
 )
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from litellm.llms.databricks.common_utils import DatabricksException
 from litellm.llms.databricks.chat.transformation import (
     DatabricksChatResponseIterator,
     DatabricksConfig,
@@ -701,14 +702,18 @@ def test_transform_request_joins_plain_text_blocks_only_for_hosted_non_claude_js
     assert _outgoing_messages(model, messages, optional_params) == [{"role": "user", "content": expected_content}]
 
 
-def test_transform_request_keeps_a_text_block_whose_text_is_a_truthy_non_string() -> None:
-    block: Final = {"type": "text", "text": 7}
+@pytest.mark.parametrize("response_format", [None, {"type": "json_object"}], ids=["no-response-format", "json-object"])
+def test_transform_request_rejects_a_text_block_whose_text_is_a_truthy_non_string(
+    response_format: dict[str, str] | None,
+) -> None:
+    with pytest.raises(DatabricksException) as error:
+        _outgoing_messages(
+            "databricks-meta-llama-3-3-70b-instruct",
+            [{"role": "user", "content": [{"type": "text", "text": "Reply in JSON"}, {"type": "text", "text": 7}]}],
+            {} if response_format is None else {"response_format": response_format},
+        )
 
-    assert _outgoing_messages(
-        "databricks-meta-llama-3-3-70b-instruct",
-        [{"role": "user", "content": [block]}],
-        {},
-    ) == [{"role": "user", "content": [block]}]
+    assert error.value.status_code == 400
 
 
 def test_transform_request_json_object_keeps_earlier_turns_as_sent() -> None:

@@ -1616,7 +1616,7 @@ def test_databricks_non_string_text_block_is_rejected_before_reaching_upstream(g
         )
         received: Final = wire.drain()
     assert response.status_code == 400, response.text
-    assert "'int' object has no attribute 'strip'" in response.text
+    assert "A text content block needs a string 'text', got int" in response.text
     assert received == ()
 
 
