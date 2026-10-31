@@ -27274,20 +27274,20 @@ async def test_acompletion_queues_the_resolved_priority_exactly_once(
     default_priority: int | None, request_kwargs: dict[str, object], queued_priority: int
 ) -> None:
     router: Final = _priority_router(default_priority)
-    with patch.object(router.scheduler, "add_request", wraps=router.scheduler.add_request) as add_request:
+    with patch.object(router.scheduler, "wait_for_turn", wraps=router.scheduler.wait_for_turn) as wait_for_turn:
         response: Final = await router.acompletion(
             model="qa-chat", messages=_PRIORITY_MESSAGES, mock_response="pong", **request_kwargs
         )
-    assert add_request.await_count == 1
-    assert add_request.await_args.kwargs["request"].priority == queued_priority
+    assert wait_for_turn.await_count == 1
+    assert wait_for_turn.await_args.kwargs["request"].priority == queued_priority
     assert response._hidden_params["additional_headers"]["x-litellm-request-prioritization-used"] is True
 
 
 async def test_acompletion_without_any_priority_never_enters_the_scheduler() -> None:
     router: Final = _priority_router(None)
-    with patch.object(router.scheduler, "add_request", wraps=router.scheduler.add_request) as add_request:
+    with patch.object(router.scheduler, "wait_for_turn", wraps=router.scheduler.wait_for_turn) as wait_for_turn:
         response: Final = await router.acompletion(model="qa-chat", messages=_PRIORITY_MESSAGES, mock_response="pong")
-    assert add_request.await_count == 0
+    assert wait_for_turn.await_count == 0
     assert "x-litellm-request-prioritization-used" not in response._hidden_params.get("additional_headers", {})
 
 
@@ -27351,12 +27351,12 @@ async def test_acompletion_with_an_integer_priority_sends_no_priority_to_the_pro
 
 async def test_schedule_acompletion_under_a_default_priority_queues_the_explicit_priority_once() -> None:
     router: Final = _priority_router(3)
-    with patch.object(router.scheduler, "add_request", wraps=router.scheduler.add_request) as add_request:
+    with patch.object(router.scheduler, "wait_for_turn", wraps=router.scheduler.wait_for_turn) as wait_for_turn:
         response: Final = await router.schedule_acompletion(
             model="qa-chat", messages=_PRIORITY_MESSAGES, priority=1, mock_response="pong"
         )
-    assert add_request.await_count == 1
-    assert add_request.await_args.kwargs["request"].priority == 1
+    assert wait_for_turn.await_count == 1
+    assert wait_for_turn.await_args.kwargs["request"].priority == 1
     assert response._hidden_params["additional_headers"]["x-litellm-request-prioritization-used"] is True
 
 
@@ -27383,11 +27383,11 @@ async def test_acompletion_drops_a_non_integer_priority_under_the_router_or_depl
         default_priority=3,
         default_litellm_params=router_defaults,
     )
-    with patch.object(router.scheduler, "add_request", wraps=router.scheduler.add_request) as add_request:
+    with patch.object(router.scheduler, "wait_for_turn", wraps=router.scheduler.wait_for_turn) as wait_for_turn:
         response: Final = await router.acompletion(
             model="qa-chat", messages=_PRIORITY_MESSAGES, mock_response="pong", priority="high"
         )
-    assert add_request.await_args.kwargs["request"].priority == 3
+    assert wait_for_turn.await_args.kwargs["request"].priority == 3
     assert response._hidden_params["additional_headers"]["x-litellm-request-prioritization-used"] is True
 
 
@@ -27431,7 +27431,7 @@ async def test_deployment_drop_params_drop_a_non_integer_priority_on_every_deplo
 ) -> None:
     monkeypatch.setattr(litellm, "drop_params", False)
     router: Final = Router(model_list=[deployment], default_priority=3)
-    with patch.object(router.scheduler, "add_request", wraps=router.scheduler.add_request) as add_request:
+    with patch.object(router.scheduler, "wait_for_turn", wraps=router.scheduler.wait_for_turn) as wait_for_turn:
         response: Final = await router.acompletion(
             model=requested_model,
             messages=_PRIORITY_MESSAGES,
@@ -27439,7 +27439,7 @@ async def test_deployment_drop_params_drop_a_non_integer_priority_on_every_deplo
             priority="high",
             **routing_fields,
         )
-    assert add_request.await_args.kwargs["request"].priority == 3
+    assert wait_for_turn.await_args.kwargs["request"].priority == 3
     assert response._hidden_params["additional_headers"]["x-litellm-request-prioritization-used"] is True
 
 
@@ -27467,12 +27467,12 @@ async def test_schedule_acompletion_queues_a_prompt_management_model(monkeypatch
         litellm_call_id="prompt-management-priority",
         function_id="f",
     )
-    with patch.object(router.scheduler, "add_request", wraps=router.scheduler.add_request) as add_request:
+    with patch.object(router.scheduler, "wait_for_turn", wraps=router.scheduler.wait_for_turn) as wait_for_turn:
         response: Final = await router.schedule_acompletion(
             model="cached-chat", messages=_PRIORITY_MESSAGES, priority=1, litellm_logging_obj=logging_obj
         )
-    assert add_request.await_count == 1
-    assert add_request.await_args.kwargs["request"].priority == 1
+    assert wait_for_turn.await_count == 1
+    assert wait_for_turn.await_args.kwargs["request"].priority == 1
     assert provider.await_count == 1
     assert "priority" not in provider.await_args.kwargs
     assert response._hidden_params["additional_headers"]["x-litellm-request-prioritization-used"] is True
@@ -27499,9 +27499,9 @@ def test_an_invalid_default_priority_is_ignored_with_a_warning(
 
 async def test_an_invalid_default_priority_leaves_every_request_unscheduled() -> None:
     router: Final = _priority_router("high")
-    with patch.object(router.scheduler, "add_request", wraps=router.scheduler.add_request) as add_request:
+    with patch.object(router.scheduler, "wait_for_turn", wraps=router.scheduler.wait_for_turn) as wait_for_turn:
         response: Final = await router.acompletion(model="qa-chat", messages=_PRIORITY_MESSAGES, mock_response="pong")
-    assert add_request.await_count == 0
+    assert wait_for_turn.await_count == 0
     assert "x-litellm-request-prioritization-used" not in response._hidden_params.get("additional_headers", {})
 
 
@@ -27518,12 +27518,12 @@ async def test_schedule_acompletion_without_a_priority_or_a_default_is_rejected_
 
 async def test_schedule_acompletion_without_a_priority_queues_the_default_once() -> None:
     router: Final = _priority_router(3)
-    with patch.object(router.scheduler, "add_request", wraps=router.scheduler.add_request) as add_request:
+    with patch.object(router.scheduler, "wait_for_turn", wraps=router.scheduler.wait_for_turn) as wait_for_turn:
         response: Final = await router.schedule_acompletion(
             model="qa-chat", messages=_PRIORITY_MESSAGES, mock_response="pong"
         )
-    assert add_request.await_count == 1
-    assert add_request.await_args.kwargs["request"].priority == 3
+    assert wait_for_turn.await_count == 1
+    assert wait_for_turn.await_args.kwargs["request"].priority == 3
     assert response._hidden_params["additional_headers"]["x-litellm-request-prioritization-used"] is True
 
 
@@ -27547,10 +27547,10 @@ async def test_atext_completion_queues_the_resolved_priority_exactly_once(
 ) -> None:
     provider: Final = _priority_provider(respx_mock, monkeypatch)
     router: Final = _priority_router(default_priority)
-    with patch.object(router.scheduler, "add_request", wraps=router.scheduler.add_request) as add_request:
+    with patch.object(router.scheduler, "wait_for_turn", wraps=router.scheduler.wait_for_turn) as wait_for_turn:
         response: Final = await router.atext_completion(model="qa-chat", prompt="pong?", **request_kwargs)
-    assert add_request.await_count == 1
-    assert add_request.await_args.kwargs["request"].priority == queued_priority
+    assert wait_for_turn.await_count == 1
+    assert wait_for_turn.await_args.kwargs["request"].priority == queued_priority
     assert response._hidden_params["additional_headers"]["x-litellm-request-prioritization-used"] is True
     assert "priority" not in json.loads(provider.calls.last.request.content)
 
@@ -27560,9 +27560,9 @@ async def test_atext_completion_without_any_priority_never_enters_the_scheduler(
 ) -> None:
     provider: Final = _priority_provider(respx_mock, monkeypatch)
     router: Final = _priority_router(None)
-    with patch.object(router.scheduler, "add_request", wraps=router.scheduler.add_request) as add_request:
+    with patch.object(router.scheduler, "wait_for_turn", wraps=router.scheduler.wait_for_turn) as wait_for_turn:
         response: Final = await router.atext_completion(model="qa-chat", prompt="pong?")
-    assert add_request.await_count == 0
+    assert wait_for_turn.await_count == 0
     assert "x-litellm-request-prioritization-used" not in response._hidden_params.get("additional_headers", {})
     assert provider.called
 
