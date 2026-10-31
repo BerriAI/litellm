@@ -861,6 +861,25 @@ def _anthropic_stream_should_decline_fallback(has_generated_content: bool, error
     return has_generated_content or not error.is_pre_first_chunk
 
 
+def _anthropic_stream_error_skips_recovery(
+    error: Exception, has_generated_content: bool, holds_for_overflow_only: bool
+) -> bool:
+    """
+    A held stream whose only possible recovery is a context window fallback lets every other failure through
+    with its held frames, as it would have reached the client with no hold.
+    """
+    from litellm.exceptions import MidStreamFallbackError
+
+    if isinstance(error, MidStreamFallbackError) and _anthropic_stream_should_decline_fallback(
+        has_generated_content, error
+    ):
+        return True
+    if not holds_for_overflow_only:
+        return False
+    underlying: Final = error.original_exception if isinstance(error, MidStreamFallbackError) else error
+    return not isinstance(underlying, litellm.ContextWindowExceededError)
+
+
 def _stream_raised_error_status(error: Exception) -> int | None:
     raw_status: Final = getattr(error, "status_code", None)
     if isinstance(raw_status, int):
@@ -6936,9 +6955,14 @@ class Router(DeprecatedRouterMembers):
             # to take over there is nothing to buffer for, so every frame,
             # including pings and provider error frames, is forwarded live.
             model: Final = cast(str, initial_kwargs.get("model"))  # cast-ok: kwargs always carries the model group
+            can_retry_or_fall_back: Final = self._anthropic_messages_stream_can_retry(
+                initial_kwargs
+            ) or self._stream_can_fall_back(model, initial_kwargs)
+            holds_for_overflow_only: Final = not can_retry_or_fall_back and self._stream_can_fall_back_on_overflow(
+                model, initial_kwargs
+            )
             has_generated_content = not (  # rebind-ok: set once real content is seen, the buffer cap is hit, or neither a retry nor a fallback can take over
-                self._anthropic_messages_stream_can_retry(initial_kwargs)
-                or self._stream_can_fall_back_on_overflow(model, initial_kwargs)
+                can_retry_or_fall_back or holds_for_overflow_only
             )
             buffered_lifecycle_chunks: tuple[bytes, ...] = ()  # rebind-ok: flushed once committed or on decline
             try:
@@ -7000,6 +7024,7 @@ class Router(DeprecatedRouterMembers):
                 async for item in self._aanthropic_messages_recover_stream_error(
                     stream_error,
                     has_generated_content,
+                    holds_for_overflow_only,
                     buffered_lifecycle_chunks,
                     model,
                     initial_kwargs,
@@ -7020,6 +7045,7 @@ class Router(DeprecatedRouterMembers):
         self,
         stream_error: Exception,
         has_generated_content: bool,
+        holds_for_overflow_only: bool,
         buffered_lifecycle_chunks: tuple[bytes, ...],
         model: str,
         initial_kwargs: dict[str, object],  # mutable-ok: _aanthropic_messages_fallback_attempt mutates it
@@ -7029,12 +7055,10 @@ class Router(DeprecatedRouterMembers):
         """Turns a source-iterator failure into a fallback attempt or the error reaching the caller."""
         from litellm.exceptions import MidStreamFallbackError
 
-        if isinstance(stream_error, MidStreamFallbackError) and _anthropic_stream_should_decline_fallback(
-            has_generated_content, stream_error
-        ):
+        if _anthropic_stream_error_skips_recovery(stream_error, has_generated_content, holds_for_overflow_only):
             for buffered_chunk in buffered_lifecycle_chunks:
                 yield buffered_chunk
-            if stream_error.original_exception is not None:
+            if isinstance(stream_error, MidStreamFallbackError) and stream_error.original_exception is not None:
                 raise stream_error.original_exception from stream_error
             raise stream_error
         fallback_error: Final = (
@@ -7180,7 +7204,7 @@ class Router(DeprecatedRouterMembers):
                 context_window_fallbacks=_request_fallback_list(
                     kwargs,
                     "context_window_fallbacks",
-                    cast(  # cast-ok: untyped router attribute
+                    cast(  # cast-ok: list is invariant and the helper takes list[object]
                         "list[object] | None", self._core_context_window_fallbacks
                     ),
                 ),

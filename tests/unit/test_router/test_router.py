@@ -19313,6 +19313,39 @@ async def test_anthropic_messages_stream_overflow_surfaces_when_no_fallback_can_
     assert len(provider.calls) == 1
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("raised", "expected_error"),
+    [
+        pytest.param(
+            litellm.ServiceUnavailableError(message="unavailable", llm_provider="bedrock_mantle", model="glm"),
+            litellm.ServiceUnavailableError,
+            id="raised-503",
+        ),
+        pytest.param(
+            litellm.BadRequestError(message="bad request", llm_provider="bedrock_mantle", model="glm"),
+            litellm.BadRequestError,
+            id="raised-400",
+        ),
+        pytest.param(_anthropic_messages_transport_drop(), litellm.APIConnectionError, id="transport-drop"),
+    ],
+)
+async def test_anthropic_messages_stream_context_window_only_group_forwards_other_errors_after_message_start(
+    raised: Exception, expected_error: type[Exception]
+) -> None:
+    router: Final = _anthropic_messages_retry_router(num_retries=0, context_window_fallbacks=[{"glm": ["cw"]}])
+    provider: Final = _AnthropicMessagesScriptedProvider(
+        lambda: _AnthropicMessagesRaisingByteStream([_anthropic_messages_message_start_chunk()], raised)
+    )
+
+    stream: Final = await _anthropic_messages_stream_through_router(router, provider)
+    outcome: Final = [chunk async for chunk in _events_until_error(stream)]
+
+    assert outcome[:-1] == [_anthropic_messages_message_start_chunk()]
+    assert isinstance(outcome[-1], expected_error)
+    assert len(provider.calls) == 1
+
+
 @pytest.mark.parametrize(
     ("context_window_fallbacks", "request_kwargs", "expected"),
     [
@@ -20210,7 +20243,14 @@ async def test_aanthropic_messages_recover_stream_error_flushes_buffered_frames_
 
     with patch.object(router, "_aanthropic_messages_fallback_attempt") as mock_attempt:
         recovery = router._aanthropic_messages_recover_stream_error(
-            declined, True, buffered, "primary", {"model": "primary"}, _anthropic_messages_make_wrapper(), AsyncMock()
+            declined,
+            True,
+            False,
+            buffered,
+            "primary",
+            {"model": "primary"},
+            _anthropic_messages_make_wrapper(),
+            AsyncMock(),
         )
         with pytest.raises(BedrockError) as exc_info:
             await drain(recovery)
@@ -20231,7 +20271,7 @@ async def test_aanthropic_messages_recover_stream_error_hands_converted_raise_to
 
     with patch.object(router, "_aanthropic_messages_fallback_attempt", new=fake_attempt):
         recovery = router._aanthropic_messages_recover_stream_error(
-            raised, False, (), "primary", {"model": "primary"}, _anthropic_messages_make_wrapper(), AsyncMock()
+            raised, False, False, (), "primary", {"model": "primary"}, _anthropic_messages_make_wrapper(), AsyncMock()
         )
         collected = [chunk async for chunk in recovery]
     assert collected == [b"fallback"]

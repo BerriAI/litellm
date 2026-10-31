@@ -936,6 +936,9 @@ _BEDROCK_MANTLE_CONTEXT_WINDOW_PATTERNS: Final = (
     re.compile(r"Input length \((\d+)\) exceeds model\\?'s maximum context length \((\d+)\)"),
     re.compile(r"The engine prompt length (\d+) exceeds the max_model_len (\d+)"),
 )
+_BEDROCK_MANTLE_OUTPUT_BUDGET_PATTERN: Final = re.compile(
+    r"maximum context length is (\d+) tokens\. However, you requested (\d+) output tokens"
+)
 _BEDROCK_MANTLE_CONTEXT_LENGTH_EXCEEDED_CODE_PATTERN: Final = re.compile(
     r"""\\?["']code\\?["']\s*:\s*\\?["']context_length_exceeded\\?["']"""
 )
@@ -968,13 +971,19 @@ def _get_bedrock_mantle_context_window_message(error_str: str) -> str | None:
     differently for gpt-oss, and again on its Responses API), as OpenAI's context_length_exceeded
     code, or in a wording the other providers share, either in a 400 body or in a streamed error
     event with no error type. Clients such as Claude Code only treat "prompt is too long" as overflow
-    (litellm/litellm#36546).
+    (litellm/litellm#36546). qwen's wording caps its input count at the window minus the requested
+    output, so only the output budget says whether a shorter prompt could fit at all; when it cannot,
+    the overflow keeps Mantle's own message so the client is not told to shorten the prompt.
     """
     matches: Final = (pattern.search(error_str) for pattern in _BEDROCK_MANTLE_CONTEXT_WINDOW_PATTERNS)
     match: Final = next((found for found in matches if found is not None), None)
     if match is not None:
         prompt_tokens, max_tokens = match.groups()
         return f"prompt is too long: {prompt_tokens} tokens > {max_tokens} maximum"
+    output_budget: Final = _BEDROCK_MANTLE_OUTPUT_BUDGET_PATTERN.search(error_str)
+    if output_budget is not None:
+        context_window, requested_output_tokens = (int(group) for group in output_budget.groups())
+        return _BEDROCK_MANTLE_CONTEXT_WINDOW_GENERIC_MESSAGE if requested_output_tokens < context_window else error_str
     if _BEDROCK_MANTLE_CONTEXT_LENGTH_EXCEEDED_CODE_PATTERN.search(
         error_str
     ) is not None or ExceptionCheckers.is_error_str_context_window_exceeded(error_str):
