@@ -592,9 +592,9 @@ FORWARDS = [
         ((), {"model_name": "gpt"}),
     ),
     (
-        lambda r: r.registry().deployments("gpt", source="routed_group"),
+        lambda r: r.registry().deployments("gpt", source="routed_group", team_id="t"),
         "_core_get_model_list_of_routed_group",
-        (("gpt",), {}),
+        (("gpt", "t"), {}),
     ),
     (
         lambda r: r.registry().deployments("gpt", source="wildcard", team_id="t"),
@@ -827,3 +827,77 @@ def test_attribute_errors_about_other_objects_pass_through_unchanged(router):
 
     other = AttributeError("'dict' object has no attribute 'x'", name="x", obj={})
     assert _public_attribute_error(router, "_core_x", "x", other) is other
+
+
+# Router-family helpers whose Router parameter became a RoutingContext keep the old spellings.
+
+
+def test_renamed_router_keyword_still_works_and_warns(router):
+    from litellm.router_utils.router_callbacks.track_deployment_metrics import (
+        get_deployment_failures_for_current_minute,
+        increment_deployment_failures_for_current_minute,
+    )
+
+    deployment_id = router.registry().names(kind="ids")[0]
+    label = (
+        "litellm.router_utils.router_callbacks.track_deployment_metrics."
+        "increment_deployment_failures_for_current_minute"
+    )
+    before = DEPRECATED_ROUTER_MEMBER_USES[label]
+
+    with pytest.warns(DeprecationWarning, match=r"litellm_router_instance= is deprecated; pass ctx="):
+        increment_deployment_failures_for_current_minute(litellm_router_instance=router, deployment_id=deployment_id)
+
+    assert DEPRECATED_ROUTER_MEMBER_USES[label] == before + 1
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        assert get_deployment_failures_for_current_minute(ctx=router._core_ctx, deployment_id=deployment_id) == 1
+
+
+def test_router_passed_where_the_context_goes_is_converted_with_a_warning(router):
+    from litellm.router_utils.cooldown_handlers import get_cooldown_deployments
+
+    with pytest.warns(DeprecationWarning, match="passing a Router is deprecated"):
+        assert get_cooldown_deployments(router, None) == []
+    with pytest.warns(DeprecationWarning, match="a Router as ctx= is deprecated"):
+        assert get_cooldown_deployments(ctx=router, parent_otel_span=None) == []
+
+
+def test_renamed_router_keyword_alongside_the_new_one_is_rejected(router):
+    from litellm.router_utils.cooldown_handlers import get_cooldown_deployments
+
+    with pytest.raises(TypeError, match="got both litellm_router_instance= and ctx="):
+        get_cooldown_deployments(ctx=router._core_ctx, litellm_router_instance=router, parent_otel_span=None)
+
+
+def test_renamed_router_param_maps_to_a_differently_named_context(router):
+    from litellm.router_api import RoutingContext
+    from litellm.router_deprecated import renamed_router_param
+
+    @renamed_router_param("litellm_router", new="litellm_routing_ctx")
+    def helper(*, litellm_routing_ctx: RoutingContext) -> RoutingContext:
+        return litellm_routing_ctx
+
+    with pytest.warns(DeprecationWarning, match="litellm_router= is deprecated; pass litellm_routing_ctx="):
+        assert helper(litellm_router=router) is router._core_ctx
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        assert helper(litellm_routing_ctx=router._core_ctx) is router._core_ctx
+
+
+def test_renamed_router_attribute_reads_and_writes_the_context(router):
+    from litellm.router_utils.pre_call_checks.encrypted_content_affinity_check import (
+        EncryptedContentAffinityCheck,
+    )
+
+    check = EncryptedContentAffinityCheck(ctx=router._core_ctx)
+    with pytest.warns(DeprecationWarning, match=r"EncryptedContentAffinityCheck\.router: reading this attribute"):
+        assert check.router is router._core_ctx
+
+    other = _router()
+    with pytest.warns(DeprecationWarning, match="setting this attribute is deprecated; set .ctx"):
+        check.router = other
+    assert check.ctx is other._core_ctx
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        other.retire()

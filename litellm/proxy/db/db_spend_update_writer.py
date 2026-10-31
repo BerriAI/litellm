@@ -34,6 +34,7 @@ from litellm.constants import (
     DB_SPEND_UPDATE_JOB_NAME,
     INTERNAL_CALL_ORIGIN_METADATA_KEY,
 )
+from litellm.litellm_core_utils.core_helpers import finite_cost, single_log_line
 from litellm.litellm_core_utils.litellm_logging import coerce_model_access_groups
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.proxy._types import (
@@ -617,6 +618,7 @@ class DBSpendUpdateWriter:
         """
         from litellm.proxy.proxy_server import (
             disable_spend_logs,
+            general_settings,  # pyright: ignore[reportUnknownVariableType]  # legacy proxy configuration is narrowed below
             litellm_proxy_budget_name,
             prisma_client,
         )
@@ -651,7 +653,14 @@ class DBSpendUpdateWriter:
                 end_time=end_time,
                 llm_router=llm_router,
             )
-            payload["spend"] = response_cost or 0.0
+            billable_cost: Final = finite_cost(response_cost)
+            if response_cost is not None and billable_cost is None:
+                verbose_proxy_logger.warning(
+                    "Spend tracking - recording a non-finite response_cost=%s as 0 for request_id=%s",
+                    response_cost,
+                    single_log_line(payload["request_id"]),
+                )
+            payload["spend"] = billable_cost or 0.0
             if isinstance(payload["startTime"], datetime):
                 payload["startTime"] = payload["startTime"].isoformat()
             if isinstance(payload["endTime"], datetime):
@@ -663,10 +672,18 @@ class DBSpendUpdateWriter:
             if team_id is not None and team_id != "":
                 payload["team_id"] = team_id
 
+            error_log_settings: Final = cast(  # cast-ok: proxy settings use string keys
+                Mapping[str, object], general_settings
+            )
+            keep_spend_logs: Final = disable_spend_logs is False and not (
+                "status" in payload
+                and payload["status"] == "failure"
+                and error_log_settings.get("disable_error_logs") is True
+            )
             if not await self._record_spend_log(
                 payload=payload,
                 prisma_client=prisma_client,
-                disable_spend_logs=disable_spend_logs,
+                disable_spend_logs=not keep_spend_logs,
                 llm_router=llm_router,
             ):
                 return False
@@ -676,9 +693,9 @@ class DBSpendUpdateWriter:
             await self._enqueue_autorouter_turn_transaction(
                 payload=payload,
                 prisma_client=prisma_client,
-                spend_logs_kept=disable_spend_logs is False,
+                spend_logs_kept=keep_spend_logs,
             )
-            if disable_spend_logs is False:
+            if keep_spend_logs:
                 await self._enqueue_tool_usage_transaction(
                     payload=payload,
                     completion_response=completion_response,
@@ -693,7 +710,7 @@ class DBSpendUpdateWriter:
             spawn_logging_task(
                 asyncio.get_running_loop(),
                 self._batch_database_updates(
-                    response_cost=response_cost,
+                    response_cost=billable_cost,
                     user_id=user_id,
                     hashed_token=hashed_token,
                     team_id=team_id,

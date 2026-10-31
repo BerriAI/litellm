@@ -7,6 +7,7 @@ from typing import Final, Literal
 
 from litellm.litellm_core_utils.env_utils import (
     get_env_float,
+    get_env_float_in_range,
     get_env_float_or_none,
     get_env_int,
     get_env_int_in_range,
@@ -67,6 +68,7 @@ RUNTIME_UPDATABLE_ROUTER_SETTINGS: Final[frozenset[str]] = frozenset(
         "retry_after",
         "fallbacks",
         "context_window_fallbacks",
+        "content_policy_fallbacks",
         "retry_policy",
         "model_group_retry_policy",
         "model_group_alias",
@@ -149,6 +151,9 @@ DEFAULT_FAILURE_THRESHOLD_PERCENT: Final = get_env_float(
     "DEFAULT_FAILURE_THRESHOLD_PERCENT", 0.5
 )  # default cooldown a deployment if 50% of requests fail in a given minute
 DEFAULT_MAX_TOKENS: Final = get_env_int("DEFAULT_MAX_TOKENS", 4096)
+NO_MAX_TOKENS_TPM_RESERVATION_FRACTION: Final = get_env_float_in_range(
+    "NO_MAX_TOKENS_TPM_RESERVATION_FRACTION", 0.25, 0.01, 1.0
+)
 DEFAULT_ALLOWED_FAILS: Final = get_env_int("DEFAULT_ALLOWED_FAILS", 3)
 DEFAULT_REDIS_SYNC_INTERVAL: Final = get_env_int("DEFAULT_REDIS_SYNC_INTERVAL", 1)
 DEFAULT_COOLDOWN_TIME_SECONDS: Final = get_env_int("DEFAULT_COOLDOWN_TIME_SECONDS", 5)
@@ -416,6 +421,8 @@ REALTIME_CREDENTIAL_RESOLUTION_TIMEOUT_SECONDS: Final = get_env_float(
     "REALTIME_CREDENTIAL_RESOLUTION_TIMEOUT_SECONDS", 20.0
 )
 BEDROCK_REALTIME_CLOSE_TIMEOUT_SECONDS: Final = get_env_float("BEDROCK_REALTIME_CLOSE_TIMEOUT_SECONDS", 5.0)
+REALTIME_LAZY_SETUP_DEADLINE_SECONDS: Final = 240.0
+REALTIME_LAZY_SETUP_CONTENT_GRACE_SECONDS: Final = 1.0
 
 # RFC 6455 caps the close frame payload at 125 bytes, 2 of which carry the status code
 WEBSOCKET_CLOSE_REASON_MAX_BYTES: Final = 123
@@ -753,7 +760,13 @@ ANTHROPIC_BATCHES_ROUTE: Final = "/v1/messages/batches"
 ANTHROPIC_IMAGE_MAX_LONG_EDGE_PX: Final = 1568
 ANTHROPIC_IMAGE_MAX_PIXELS: Final = 1_150_000
 ANTHROPIC_IMAGE_PIXELS_PER_TOKEN: Final = 750
+OPENAI_PDF_TEXT_PAGE_FRAMING_TOKENS: Final = 13
+OPENAI_CHAT_PDF_FILE_TOKENS: Final = 192
 PDF_DATA_URL_PREFIX: Final = "data:application/pdf;base64,"
+PDF_MAX_FORM_XOBJECT_DEPTH: Final = 32
+PDF_MAX_XOBJECT_DRAWS_PER_PAGE: Final = 10_000
+OPENAI_MODEL_NAME_MAX_DASHES: Final = 16
+OPENAI_CHAT_MODES: Final = frozenset({"chat", "responses"})
 VERTEX_BATCH_PREDICTION_JOBS_ROUTE: Final = "batchPredictionJobs"
 ANTHROPIC_WEB_SEARCH_TOOL_MAX_USES: Final = {
     "low": 1,
@@ -813,6 +826,7 @@ LITELLM_CHAT_PROVIDERS: Final = [
     "ollama",
     "ollama_chat",
     "deepinfra",
+    "clf_ai_gateway",
     "perplexity",
     "mistral",
     "groq",
@@ -886,7 +900,9 @@ PROVIDERS_THAT_AUTHENTICATE_ON_PROVIDER_INFO: Final = frozenset(
     }
 )
 
+SUBSCRIPTION_BACKED_PROVIDERS: Final = frozenset({"chatgpt"})
 A2A_CHAT_COMPLETION_BRIDGE_PROVIDERS: Final = frozenset({"databricks_agent"})
+A2A_COMPLETION_BRIDGE_WORKING_MESSAGE: Final = "Processing request..."
 
 LITELLM_EMBEDDING_PROVIDERS_SUPPORTING_INPUT_ARRAY_OF_TOKENS: Final = [
     "openai",
@@ -1012,6 +1028,7 @@ openai_compatible_endpoints: Final[list[str]] = [
     "api.perplexity.ai",
     "api.endpoints.anyscale.com/v1",
     "api.deepinfra.com/v1/openai",
+    "api.clfaigateway.dev/v1",
     "api.mistral.ai/v1",
     "codestral.mistral.ai/v1/chat/completions",
     "codestral.mistral.ai/v1/fim/completions",
@@ -1083,6 +1100,7 @@ openai_compatible_providers: Final[list[str]] = [
     "deepseek",
     "tencent",
     "deepinfra",
+    "clf_ai_gateway",
     "perplexity",
     "xinference",
     "xai",
@@ -1261,7 +1279,7 @@ empower_models: Final = set(
     ]
 )
 
-together_ai_models: Final[set] = set(
+together_ai_models: Final[set[str]] = set(
     [
         # llama llms - chat
         "togethercomputer/llama-2-70b-chat",
@@ -2029,6 +2047,7 @@ LITELLM_SETTINGS_SAFE_DB_OVERRIDES: Final = [
 SPECIAL_LITELLM_AUTH_TOKEN: Final = ["ui-token"]
 DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL = get_env_int("DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL", 60)
 AUTH_OBJECTS_TARGET: Final = "auth_objects"
+HEALTH_CHECKS_TARGET: Final = "health_checks"
 DEFAULT_ACCESS_GROUP_CACHE_TTL: Final = get_env_int("DEFAULT_ACCESS_GROUP_CACHE_TTL", 600)
 SPEND_LOG_KEY_METADATA_CACHE_TTL: Final = 600
 SPEND_LOG_KEY_METADATA_MISS_CACHE_TTL: Final = 30
