@@ -53,6 +53,7 @@ from litellm.router import (
     FallbackAwareAnthropicMessagesStream,
     _stream_commits_now,
     _anthropic_stream_error_is_gateway_verdict,
+    _anthropic_stream_error_skips_recovery,
     _stream_fallback_error_for_raised,
     _anthropic_stream_forwards_ping_live,
     _stream_raised_error_status,
@@ -18571,6 +18572,53 @@ def test_anthropic_stream_should_decline_fallback_direct_call():
     assert _anthropic_stream_should_decline_fallback(False, post_first_chunk_error) is True
 
 
+def _pre_first_chunk_stream_error(original_exception: Exception) -> MidStreamFallbackError:
+    return MidStreamFallbackError(
+        message="stream failed",
+        model="glm",
+        llm_provider="bedrock_mantle",
+        original_exception=original_exception,
+        is_pre_first_chunk=True,
+    )
+
+
+_STREAM_OVERFLOW: Final = litellm.ContextWindowExceededError(
+    message="prompt is too long: 9 tokens > 8 maximum", llm_provider="bedrock_mantle", model="glm"
+)
+_STREAM_UNAVAILABLE: Final = litellm.ServiceUnavailableError(
+    message="unavailable", llm_provider="bedrock_mantle", model="glm"
+)
+
+
+@pytest.mark.parametrize(
+    ("error", "has_generated_content", "holds_for_overflow_only", "skips"),
+    [
+        pytest.param(_STREAM_UNAVAILABLE, False, False, False, id="full-hold-recovers-any-error"),
+        pytest.param(_STREAM_OVERFLOW, False, True, False, id="overflow-only-hold-recovers-an-overflow"),
+        pytest.param(_STREAM_UNAVAILABLE, False, True, True, id="overflow-only-hold-passes-a-503-through"),
+        pytest.param(
+            _pre_first_chunk_stream_error(_STREAM_OVERFLOW),
+            False,
+            True,
+            False,
+            id="overflow-only-hold-recovers-a-wrapped-overflow",
+        ),
+        pytest.param(
+            _pre_first_chunk_stream_error(_STREAM_UNAVAILABLE),
+            False,
+            True,
+            True,
+            id="overflow-only-hold-passes-a-wrapped-503-through",
+        ),
+        pytest.param(_pre_first_chunk_stream_error(_STREAM_OVERFLOW), True, False, True, id="content-already-sent"),
+    ],
+)
+def test_anthropic_stream_error_skips_recovery_direct_call(
+    error: Exception, has_generated_content: bool, holds_for_overflow_only: bool, skips: bool
+) -> None:
+    assert _anthropic_stream_error_skips_recovery(error, has_generated_content, holds_for_overflow_only) is skips
+
+
 def test_anthropic_stream_commits_now_direct_call():
     content = _anthropic_messages_content_chunk("hi")
     lifecycle_chunk = _anthropic_messages_message_start_chunk()
@@ -19263,6 +19311,180 @@ async def test_anthropic_messages_retry_raising_a_context_window_error_takes_the
 
     assert body == [_anthropic_messages_message_start_chunk(), _anthropic_messages_content_chunk("from cw")]
     assert [model for model, _, _ in provider.calls][-1] == "anthropic/cw-model"
+
+
+def _anthropic_messages_overflow_before_content() -> _AnthropicMessagesRaisingByteStream:
+    return _AnthropicMessagesRaisingByteStream(
+        [_anthropic_messages_message_start_chunk()],
+        litellm.ContextWindowExceededError(
+            message="prompt is too long: 9 tokens > 8 maximum", llm_provider="bedrock_mantle", model="glm"
+        ),
+    )
+
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_stream_overflow_before_content_takes_the_context_window_fallback() -> None:
+    router: Final = _anthropic_messages_retry_router(num_retries=0, context_window_fallbacks=[{"glm": ["cw"]}])
+    provider: Final = _AnthropicMessagesScriptedProvider(
+        _anthropic_messages_overflow_before_content,
+        lambda: _AnthropicMessagesFakeByteStream(
+            [_anthropic_messages_message_start_chunk(), _anthropic_messages_content_chunk("from cw")]
+        ),
+    )
+
+    stream: Final = await _anthropic_messages_stream_through_router(router, provider)
+    body: Final = [chunk async for chunk in stream]
+
+    assert body == [_anthropic_messages_message_start_chunk(), _anthropic_messages_content_chunk("from cw")]
+    assert [model for model, _, _ in provider.calls][-1] == "anthropic/cw-model"
+
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_stream_overflow_on_a_group_missing_from_the_context_window_chain_takes_its_fallbacks() -> (
+    None
+):
+    router: Final = _anthropic_messages_retry_router(
+        num_retries=0, fallbacks=[{"glm": ["fb"]}], context_window_fallbacks=[{"other": ["cw"]}]
+    )
+    provider: Final = _AnthropicMessagesScriptedProvider(
+        _anthropic_messages_overflow_before_content,
+        lambda: _AnthropicMessagesFakeByteStream(
+            [_anthropic_messages_message_start_chunk(), _anthropic_messages_content_chunk("from fb")]
+        ),
+    )
+
+    stream: Final = await _anthropic_messages_stream_through_router(router, provider)
+    body: Final = [chunk async for chunk in stream]
+
+    assert body == [_anthropic_messages_message_start_chunk(), _anthropic_messages_content_chunk("from fb")]
+    assert [model in _ANTHROPIC_MESSAGES_RETRY_GROUP for model, _, _ in provider.calls] == [True, False]
+    assert [model for model, _, _ in provider.calls][-1] == "anthropic/fb-model"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("context_window_fallbacks", "request_kwargs"),
+    [
+        pytest.param(None, {}, id="no-fallback-configured"),
+        pytest.param([{"glm": ["cw"]}], {"disable_fallbacks": True}, id="fallbacks-disabled-for-the-request"),
+    ],
+)
+async def test_anthropic_messages_stream_overflow_surfaces_when_no_fallback_can_take_over(
+    context_window_fallbacks: list[dict[str, list[str]]] | None, request_kwargs: dict[str, object]
+) -> None:
+    router: Final = _anthropic_messages_retry_router(num_retries=0, context_window_fallbacks=context_window_fallbacks)
+    provider: Final = _AnthropicMessagesScriptedProvider(_anthropic_messages_overflow_before_content)
+
+    stream: Final = await _anthropic_messages_stream_through_router(router, provider, **request_kwargs)
+    outcome: Final = [chunk async for chunk in _events_until_error(stream)]
+
+    assert outcome[:-1] == [_anthropic_messages_message_start_chunk()]
+    assert isinstance(outcome[-1], litellm.ContextWindowExceededError)
+    assert len(provider.calls) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("raised", "expected_error"),
+    [
+        pytest.param(
+            litellm.ServiceUnavailableError(message="unavailable", llm_provider="bedrock_mantle", model="glm"),
+            litellm.ServiceUnavailableError,
+            id="raised-503",
+        ),
+        pytest.param(
+            litellm.BadRequestError(message="bad request", llm_provider="bedrock_mantle", model="glm"),
+            litellm.BadRequestError,
+            id="raised-400",
+        ),
+        pytest.param(_anthropic_messages_transport_drop(), litellm.APIConnectionError, id="transport-drop"),
+    ],
+)
+async def test_anthropic_messages_stream_context_window_only_group_forwards_other_errors_after_message_start(
+    raised: Exception, expected_error: type[Exception]
+) -> None:
+    router: Final = _anthropic_messages_retry_router(num_retries=0, context_window_fallbacks=[{"glm": ["cw"]}])
+    provider: Final = _AnthropicMessagesScriptedProvider(
+        lambda: _AnthropicMessagesRaisingByteStream([_anthropic_messages_message_start_chunk()], raised)
+    )
+
+    stream: Final = await _anthropic_messages_stream_through_router(router, provider)
+    outcome: Final = [chunk async for chunk in _events_until_error(stream)]
+
+    assert outcome[:-1] == [_anthropic_messages_message_start_chunk()]
+    assert isinstance(outcome[-1], expected_error)
+    assert len(provider.calls) == 1
+
+
+def _anthropic_messages_refusal_chunk() -> bytes:
+    return (
+        b'event: message_delta\ndata: {"type": "message_delta", "delta": {"stop_reason": "refusal", '
+        b'"stop_details": {"type": "refusal", "category": "cyber"}}, "usage": {"output_tokens": 0}}\n\n'
+    )
+
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_stream_context_window_only_group_passes_a_refusal_through() -> None:
+    router: Final = _anthropic_messages_retry_router(
+        num_retries=0, fallbacks=[{"*": ["fb"]}], context_window_fallbacks=[{"glm": ["cw"]}]
+    )
+    refusal_stream: Final = (_anthropic_messages_message_start_chunk(), _anthropic_messages_refusal_chunk())
+    provider: Final = _AnthropicMessagesScriptedProvider(lambda: _AnthropicMessagesFakeByteStream(list(refusal_stream)))
+
+    stream: Final = await _anthropic_messages_stream_through_router(router, provider, fallbacks=[])
+    body: Final = [chunk async for chunk in stream]
+
+    assert body == list(refusal_stream)
+    assert len(provider.calls) == 1
+
+
+@pytest.mark.parametrize(
+    ("retry_policy", "expected_calls"),
+    [
+        (RetryPolicy(InternalServerErrorRetries=3), 2),
+        (RetryPolicy(InternalServerErrorRetries=2, BadRequestErrorRetries=2), 3),
+    ],
+)
+@pytest.mark.asyncio
+async def test_anthropic_messages_policy_retry_retries_an_overflow_only_when_the_policy_names_it(
+    retry_policy: RetryPolicy, expected_calls: int
+) -> None:
+    router: Final = _anthropic_messages_retry_router(num_retries=0, retry_policy=retry_policy)
+    provider: Final = _AnthropicMessagesScriptedProvider(
+        lambda: _AnthropicMessagesRaisingByteStream(
+            [_anthropic_messages_message_start_chunk()],
+            litellm.InternalServerError(message="upstream reset", llm_provider="bedrock_mantle", model="glm"),
+        ),
+        _anthropic_messages_raise_context_window_error,
+        _anthropic_messages_raise_context_window_error,
+        _anthropic_messages_raise_context_window_error,
+    )
+
+    stream: Final = await _anthropic_messages_stream_through_router(router, provider)
+    with pytest.raises(litellm.ContextWindowExceededError):
+        [chunk async for chunk in stream]
+
+    assert len(provider.calls) == expected_calls
+
+
+@pytest.mark.parametrize(
+    ("context_window_fallbacks", "request_kwargs", "expected"),
+    [
+        pytest.param([{"glm": ["cw"]}], {}, True, id="router-context-window-fallback"),
+        pytest.param(None, {"context_window_fallbacks": [{"glm": ["cw"]}]}, True, id="request-context-window-fallback"),
+        pytest.param(None, {}, False, id="no-fallback-configured"),
+        pytest.param(None, {"fallbacks": [{"glm": ["fb"]}]}, True, id="request-plain-fallback"),
+        pytest.param([{"glm": ["cw"]}], {"disable_fallbacks": True}, False, id="fallbacks-disabled-for-the-request"),
+        pytest.param(None, {"context_window_fallbacks": ["cw"]}, True, id="request-chain-in-a-non-standard-shape"),
+        pytest.param(None, {"context_window_fallbacks": [{}]}, False, id="request-chain-of-an-empty-entry"),
+    ],
+)
+def test_stream_can_fall_back_on_overflow_counts_context_window_fallbacks(
+    context_window_fallbacks: list[dict[str, list[str]]] | None, request_kwargs: dict[str, object], expected: bool
+) -> None:
+    router: Final = _anthropic_messages_retry_router(num_retries=0, context_window_fallbacks=context_window_fallbacks)
+
+    assert router._stream_can_fall_back_on_overflow("glm", {"model": "glm", **request_kwargs}) is expected
 
 
 def test_anthropic_messages_retry_budget_precedence_direct_call():
@@ -20144,7 +20366,14 @@ async def test_aanthropic_messages_recover_stream_error_flushes_buffered_frames_
 
     with patch.object(router, "_aanthropic_messages_fallback_attempt") as mock_attempt:
         recovery = router._aanthropic_messages_recover_stream_error(
-            declined, True, buffered, "primary", {"model": "primary"}, _anthropic_messages_make_wrapper(), AsyncMock()
+            declined,
+            True,
+            False,
+            buffered,
+            "primary",
+            {"model": "primary"},
+            _anthropic_messages_make_wrapper(),
+            AsyncMock(),
         )
         with pytest.raises(BedrockError) as exc_info:
             await drain(recovery)
@@ -20165,7 +20394,7 @@ async def test_aanthropic_messages_recover_stream_error_hands_converted_raise_to
 
     with patch.object(router, "_aanthropic_messages_fallback_attempt", new=fake_attempt):
         recovery = router._aanthropic_messages_recover_stream_error(
-            raised, False, (), "primary", {"model": "primary"}, _anthropic_messages_make_wrapper(), AsyncMock()
+            raised, False, False, (), "primary", {"model": "primary"}, _anthropic_messages_make_wrapper(), AsyncMock()
         )
         collected = [chunk async for chunk in recovery]
     assert collected == [b"fallback"]
