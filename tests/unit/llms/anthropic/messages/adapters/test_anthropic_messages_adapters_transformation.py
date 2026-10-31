@@ -5527,3 +5527,47 @@ async def test_chat_bridge_tool_result_text_block_without_text_reaches_the_model
             ],
         }
     ]
+
+
+@pytest.mark.parametrize(
+    ("tool_choice", "model", "custom_llm_provider", "expected_parallel_tool_calls"),
+    [
+        ({"type": "auto", "disable_parallel_tool_use": True}, "gpt-5.4", "openai", False),
+        ({"type": "any", "disable_parallel_tool_use": True}, "gpt-5.4", "openai", False),
+        ({"type": "auto", "disable_parallel_tool_use": True}, "openai/gpt-oss-120b", "groq", False),
+        ({"type": "auto", "disable_parallel_tool_use": False}, "gpt-5.4", "openai", None),
+        ({"type": "auto"}, "gpt-5.4", "openai", None),
+        ({"type": "auto", "disable_parallel_tool_use": True}, "command-a-03-2025", "cohere_chat", None),
+        ({"type": "auto", "disable_parallel_tool_use": True}, "gpt-5.4", None, None),
+    ],
+    ids=[
+        "openai-auto-disabled",
+        "openai-any-disabled",
+        "groq-auto-disabled",
+        "openai-auto-enabled",
+        "openai-auto-omitted",
+        "cohere-declares-no-parallel-tool-calls-stays-behind",
+        "no-provider-stays-behind",
+    ],
+)
+def test_translate_anthropic_to_openai_disable_parallel_tool_use_sets_parallel_tool_calls(
+    tool_choice: dict[str, object],
+    model: str,
+    custom_llm_provider: str | None,
+    expected_parallel_tool_calls: bool | None,
+) -> None:
+    from litellm.types.llms.anthropic import AnthropicMessagesRequest
+
+    request: Final = AnthropicMessagesRequest(
+        model=model,
+        max_tokens=64,
+        messages=[{"role": "user", "content": "What is the weather in Paris?"}],
+        tools=[{"name": "lookup_weather", "input_schema": {"type": "object", "properties": {}}}],
+        tool_choice=tool_choice,
+    )
+
+    translated, _ = LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(
+        request, custom_llm_provider=custom_llm_provider
+    )
+
+    assert translated.get("parallel_tool_calls") == expected_parallel_tool_calls
