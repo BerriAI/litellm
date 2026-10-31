@@ -9,11 +9,16 @@ parts for server-side tools (e.g. Google Search). These must be:
 """
 
 import json
-from typing import Any, Dict, List
+from collections.abc import Mapping
+from typing import Any, Dict, Final, List
 from unittest.mock import MagicMock
 
+import httpx
 import pytest
 
+import litellm
+from litellm import stream_chunk_builder
+from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.llms.vertex_ai.gemini.transformation import (
     gemini_convert_messages_with_history,
 )
@@ -21,6 +26,8 @@ from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
     VertexGeminiConfig,
 )
 from litellm.types.llms.vertex_ai import HttpxPartType
+from litellm.types.utils import Choices, ModelResponse
+from litellm.utils import CustomStreamWrapper
 
 # --- Response extraction tests ---
 
@@ -197,6 +204,102 @@ class TestExtractServerSideToolInvocations:
         assert result[0]["id"] == "orphan123"
         assert result[0]["response"] == {"result": "some response"}
         assert result[0]["response_thought_signature"] == "sig_resp_1"
+
+
+# --- Streaming tests ---
+
+_SEARCH_CALL: Final = {
+    "toolCall": {"toolType": "GOOGLE_SEARCH_WEB", "id": "srv_1", "args": {"queries": ["weather paris"]}},
+    "thoughtSignature": "sig_call",
+}
+_SEARCH_RESPONSE: Final = {
+    "toolResponse": {"toolType": "GOOGLE_SEARCH_WEB", "id": "srv_1", "response": {"results": ["18C, sunny"]}},
+    "thoughtSignature": "sig_resp",
+}
+_ANSWER_TEXT: Final = "It is 18C and sunny in Paris."
+_QUESTION: Final = {"role": "user", "content": "Weather in Paris?"}
+
+
+def _gemini_body(*parts: Mapping[str, object], finish: str | None = None) -> Mapping[str, object]:
+    return {
+        "candidates": [
+            {
+                "content": {"role": "model", "parts": list(parts)},
+                "index": 0,
+                **({"finishReason": finish} if finish is not None else {}),
+            }
+        ],
+        "usageMetadata": {"promptTokenCount": 10, "candidatesTokenCount": 8, "totalTokenCount": 18},
+    }
+
+
+def _gemini_client(response: httpx.Response) -> HTTPHandler:
+    return HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(lambda request: response)))
+
+
+def _provider_fields(response: object) -> Mapping[str, object]:
+    assert isinstance(response, ModelResponse)
+    choice = response.choices[0]
+    assert isinstance(choice, Choices)
+    assert choice.message.provider_specific_fields is not None
+    return choice.message.provider_specific_fields
+
+
+def _streamed_provider_fields() -> Mapping[str, object]:
+    sse = "".join(
+        f"data: {json.dumps(chunk)}\r\n\r\n"
+        for chunk in (
+            _gemini_body(_SEARCH_CALL),
+            _gemini_body(_SEARCH_RESPONSE),
+            _gemini_body({"text": _ANSWER_TEXT}, finish="STOP"),
+        )
+    )
+    stream = litellm.completion(
+        model="gemini/gemini-3.8-flash",
+        messages=[_QUESTION],
+        api_key="fake-gemini-key",
+        stream=True,
+        client=_gemini_client(
+            httpx.Response(200, content=sse.encode(), headers={"content-type": "text/event-stream"})
+        ),
+    )
+    assert isinstance(stream, CustomStreamWrapper)
+    return _provider_fields(stream_chunk_builder(list(stream), messages=[_QUESTION]))
+
+
+class TestStreamedServerSideToolInvocations:
+    """stream_chunk_builder must rebuild invocations split across chunks (#25869)."""
+
+    def test_rebuilt_stream_matches_the_non_streaming_response(self):
+        unary = litellm.completion(
+            model="gemini/gemini-3.8-flash",
+            messages=[_QUESTION],
+            api_key="fake-gemini-key",
+            client=_gemini_client(
+                httpx.Response(
+                    200,
+                    json=_gemini_body(_SEARCH_CALL, _SEARCH_RESPONSE, {"text": _ANSWER_TEXT}, finish="STOP"),
+                )
+            ),
+        )
+
+        assert (
+            _streamed_provider_fields()["server_side_tool_invocations"]
+            == _provider_fields(unary)["server_side_tool_invocations"]
+        )
+
+    def test_next_turn_sends_the_call_with_its_own_args_and_signature(self):
+        contents = gemini_convert_messages_with_history(
+            [
+                _QUESTION,
+                {"role": "assistant", "content": _ANSWER_TEXT, "provider_specific_fields": _streamed_provider_fields()},
+                {"role": "user", "content": "And tomorrow?"},
+            ]
+        )
+
+        parts = [part for content in contents if content.get("role") == "model" for part in content["parts"]]
+        assert [part for part in parts if "toolCall" in part] == [_SEARCH_CALL]
+        assert [part.get("thoughtSignature") for part in parts if "toolResponse" in part] == ["sig_resp"]
 
 
 # --- Input re-injection tests ---
