@@ -4,7 +4,8 @@ import copy
 import datetime
 import gzip
 import json
-from collections.abc import AsyncIterable, Mapping
+from dataclasses import dataclass
+from collections.abc import AsyncIterable, Awaitable, Mapping
 from types import MappingProxyType, SimpleNamespace
 from typing import AsyncGenerator, Callable, Final, Iterator, Literal, Optional, Sequence
 from urllib.parse import unquote_plus
@@ -31,14 +32,29 @@ from litellm.litellm_core_utils.bug_report import (
     bug_report_notice,
     build_bug_report,
 )
-from litellm.types.router import RouterRateLimitError, RouterRateLimitErrorBasic
-from litellm.types.utils import CachingDetails, Delta, ModelResponseStream, StreamingChoices
+from litellm.types.guardrails import GuardrailEventHooks
+from litellm.types.router import (
+    Deployment,
+    LiteLLM_Params,
+    RouterGeneralSettings,
+    RouterRateLimitError,
+    RouterRateLimitErrorBasic,
+)
+from litellm.types.utils import (
+    CachingDetails,
+    CallTypesLiteral,
+    Delta,
+    GenericGuardrailAPIInputs,
+    ModelResponseStream,
+    StreamingChoices,
+)
 from litellm.constants import (
     CLIENT_REQUESTED_MODEL_SCOPE_KEY,
     MAX_LITELLM_CALL_ID_LENGTH,
     RETURN_RAW_MODEL_NAME_METADATA_KEY,
     STREAM_SSE_KEEPALIVE_PING_BYTES,
 )
+from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.opentelemetry import UserAPIKeyAuth
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
@@ -82,7 +98,7 @@ from litellm.proxy.hooks.model_max_budget_limiter import (
     model_budget_spend_cache_key,
     team_member_budget_entity_id,
 )
-from litellm.proxy.utils import ProxyLogging
+from litellm.proxy.utils import ProxyLogging, hash_token
 from litellm.responses.mcp.parked_stream_dispatch import IN_FLIGHT_ROUND
 from litellm.router import Router
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
@@ -438,7 +454,9 @@ class TestProxyBaseLLMRequestProcessing:
         async def mock_add_litellm_data_to_request(*args, **kwargs):
             return {}
 
-        async def mock_common_processing_pre_call_logic(user_api_key_dict, data, call_type, skip_guardrails=False):
+        async def mock_common_processing_pre_call_logic(
+            user_api_key_dict, data, call_type, skip_guardrails=False, routing_probe=None
+        ):
             data_copy = copy.deepcopy(data)
             return data_copy
 
@@ -713,6 +731,7 @@ class TestProxyBaseLLMRequestProcessing:
             data: dict[str, object],
             call_type: str,
             skip_guardrails: bool = False,
+            routing_probe: object = None,
         ) -> dict[str, object]:
             logging_obj: Final = data["litellm_logging_obj"]
             assert isinstance(logging_obj, LiteLLMLoggingObj)
@@ -773,7 +792,7 @@ class TestProxyBaseLLMRequestProcessing:
         async def mock_add_litellm_data_to_request(*args, **kwargs):
             return copy.deepcopy(request_body)
 
-        async def mock_pre_call_hook(user_api_key_dict, data, call_type, skip_guardrails=False):
+        async def mock_pre_call_hook(user_api_key_dict, data, call_type, skip_guardrails=False, routing_probe=None):
             data.setdefault("metadata", {}).setdefault("tags", []).extend(guardrail_tags)
             return data
 
@@ -949,7 +968,9 @@ class TestProxyBaseLLMRequestProcessing:
         async def retry_add_litellm_data_to_request(*args, **kwargs):
             return first_pass_data
 
-        async def idempotent_pre_call_hook(user_api_key_dict, data, call_type, skip_guardrails=False):
+        async def idempotent_pre_call_hook(
+            user_api_key_dict, data, call_type, skip_guardrails=False, routing_probe=None
+        ):
             return data
 
         monkeypatch.setattr(
@@ -1090,7 +1111,7 @@ class TestProxyBaseLLMRequestProcessing:
 
         seen_metadata: dict = {}
 
-        async def mock_pre_call_hook(user_api_key_dict, data, call_type, skip_guardrails=False):
+        async def mock_pre_call_hook(user_api_key_dict, data, call_type, skip_guardrails=False, routing_probe=None):
             seen_metadata.update(data.get("metadata") or {})
             return data
 
@@ -1161,7 +1182,9 @@ class TestProxyBaseLLMRequestProcessing:
         async def mock_add_litellm_data_to_request(*args, **kwargs):
             return {}
 
-        async def mock_common_processing_pre_call_logic(user_api_key_dict, data, call_type, skip_guardrails=False):
+        async def mock_common_processing_pre_call_logic(
+            user_api_key_dict, data, call_type, skip_guardrails=False, routing_probe=None
+        ):
             data_copy = copy.deepcopy(data)
             return data_copy
 
@@ -2207,7 +2230,7 @@ class TestProxyBaseLLMRequestProcessing:
             data["metadata"] = data.get("metadata", {})
             return data
 
-        async def mock_pre_call_hook(user_api_key_dict, data, call_type, skip_guardrails=False):
+        async def mock_pre_call_hook(user_api_key_dict, data, call_type, skip_guardrails=False, routing_probe=None):
             return copy.deepcopy(data)
 
         mock_proxy_logging_obj = MagicMock(spec=ProxyLogging)
@@ -8070,6 +8093,7 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
             data: dict[str, object],
             call_type: str,
             skip_guardrails: bool = False,
+            routing_probe: object = None,
         ) -> dict[str, object]:
             limiter_models.append(str(data["model"]))
             if data["model"] in untagged_rate_limited_models:
@@ -8551,6 +8575,7 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
             data: dict[str, object],
             call_type: str,
             skip_guardrails: bool = False,
+            routing_probe: object = None,
         ) -> dict[str, object]:
             limited = await run_limiter(user_api_key_dict=user_api_key_dict, data=data, call_type=call_type)
             if guardrail not in (limited["metadata"].get("guardrails") or []):
@@ -9868,7 +9893,9 @@ class TestPerRequestModelGroupAlias:
         async def mock_add_litellm_data_to_request(*args, **kwargs):
             return kwargs.get("data", {})
 
-        async def passthrough_pre_call_hook(user_api_key_dict, data, call_type, skip_guardrails=False):
+        async def passthrough_pre_call_hook(
+            user_api_key_dict, data, call_type, skip_guardrails=False, routing_probe=None
+        ):
             return copy.deepcopy(data)
 
         mock_proxy_logging_obj = MagicMock(spec=ProxyLogging)
@@ -9917,7 +9944,9 @@ class TestPerRequestModelGroupAlias:
         async def mock_add_litellm_data_to_request(*args, **kwargs):
             return kwargs.get("data", {})
 
-        async def passthrough_pre_call_hook(user_api_key_dict, data, call_type, skip_guardrails=False):
+        async def passthrough_pre_call_hook(
+            user_api_key_dict, data, call_type, skip_guardrails=False, routing_probe=None
+        ):
             return copy.deepcopy(data)
 
         mock_proxy_logging_obj = MagicMock(spec=ProxyLogging)
@@ -9956,7 +9985,9 @@ class TestPerRequestModelGroupAlias:
         async def mock_add_litellm_data_to_request(*args, **kwargs):
             return kwargs.get("data", {})
 
-        async def passthrough_pre_call_hook(user_api_key_dict, data, call_type, skip_guardrails=False):
+        async def passthrough_pre_call_hook(
+            user_api_key_dict, data, call_type, skip_guardrails=False, routing_probe=None
+        ):
             return copy.deepcopy(data)
 
         mock_proxy_logging_obj = MagicMock(spec=ProxyLogging)
@@ -10039,7 +10070,7 @@ class TestVideoServedModelPin:
         async def mock_add_litellm_data_to_request(*args, **kwargs):
             return kwargs.get("data", {})
 
-        async def pre_call_hook(user_api_key_dict, data, call_type, skip_guardrails=False):
+        async def pre_call_hook(user_api_key_dict, data, call_type, skip_guardrails=False, routing_probe=None):
             hooked_data = copy.deepcopy(data)
             return hooked_data if hook_rewrite is None else {**hooked_data, "model": hook_rewrite}
 
@@ -11955,6 +11986,7 @@ class TestBackgroundResponseRetrievalGovernance:
             data: dict[str, object],
             call_type: str,
             skip_guardrails: bool = False,
+            routing_probe: object = None,
         ) -> dict[str, object]:
             if data.get("response_id") == client_facing_response_id:
                 data["response_id"] = encoded_response_id
@@ -12791,3 +12823,1081 @@ async def test_a_chained_proxy_redacts_secrets_and_internal_details_from_relayed
     assert {key: answered[key] for key in _DOWNSTREAM_GUARDRAIL_FIELDS} == dict(_DOWNSTREAM_GUARDRAIL_FIELDS)
     assert answered["scanner"]["attempts"] == 2
     assert [value for value in _DOWNSTREAM_LEAKABLE_VALUES if value in json.dumps(answered)] == []
+_RAW_EMAIL: Final = "jane@example.com"
+_ROUTE_PATHS: Final = MappingProxyType(
+    {
+        "acompletion": "/v1/chat/completions",
+        "atext_completion": "/v1/completions",
+        "aresponses": "/v1/responses",
+        "aembedding": "/v1/embeddings",
+    }
+)
+_DEFAULT_BODIES: Final = MappingProxyType(
+    {
+        "acompletion": MappingProxyType({"messages": ({"role": "user", "content": f"email {_RAW_EMAIL}"},)}),
+        "atext_completion": MappingProxyType({"prompt": f"email {_RAW_EMAIL}"}),
+        "aresponses": MappingProxyType({"input": f"email {_RAW_EMAIL}"}),
+        "aembedding": MappingProxyType({"input": f"email {_RAW_EMAIL}"}),
+    }
+)
+
+
+def _routing_router(fallbacks: list[dict[str, list[str]]] | None = None) -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": "gpt-4o-mini",
+                "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "sk-test", "mock_response": "pong"},
+            },
+            {
+                "model_name": "text-embedding-3-small",
+                "litellm_params": {
+                    "model": "openai/text-embedding-3-small",
+                    "api_key": "sk-test",
+                    "mock_response": [0.1, 0.2],
+                },
+            },
+            {
+                "model_name": "blocked-model",
+                "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "sk-test", "mock_response": "pong"},
+                "model_info": {"blocked": True},
+            },
+        ],
+        fallbacks=fallbacks or [],
+    )
+
+
+def _mask_emails(data: dict) -> None:
+    for message in data.get("messages") or []:
+        if isinstance(message.get("content"), str):
+            message["content"] = message["content"].replace(_RAW_EMAIL, "[EMAIL]")
+
+
+class _VendorGuardrail(CustomGuardrail):
+    """Stands in for a vendor guardrail litellm ships: counts its calls and can mask, block, fail or reroute."""
+
+    __module__ = "litellm.proxy.guardrails.guardrail_hooks.vendor_double"
+
+    def __init__(
+        self,
+        behavior: Literal["pass", "mask", "block", "unreachable", "reroute"] = "pass",
+        name: str = "vendor-guardrail",
+        event_hook: GuardrailEventHooks = GuardrailEventHooks.pre_call,
+        run_in_parallel: bool = False,
+        order: list[str] | None = None,
+    ) -> None:
+        super().__init__(guardrail_name=name, event_hook=event_hook, default_on=True)
+        self.behavior: Final = behavior
+        self.run_in_parallel = run_in_parallel
+        self.order: Final = order if order is not None else []
+        self.calls = 0
+
+    async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
+        self.calls += 1
+        self.order.append(self.guardrail_name or "")
+        if self.behavior == "block":
+            raise HTTPException(status_code=400, detail="Prompt blocked by vendor policy")
+        if self.behavior == "unreachable":
+            raise HTTPException(status_code=503, detail="guardrail vendor unreachable")
+        if self.behavior == "reroute":
+            data["model"] = "gpt-4o-mini"
+        if self.behavior == "mask":
+            _mask_emails(data)
+        return data
+
+    async def async_moderation_hook(self, data, user_api_key_dict, call_type):
+        self.calls += 1
+
+
+class _CustomerRoutingGuardrail(CustomGuardrail):
+    """A guardrail from the customer's own code that sends a virtual model to a loaded one."""
+
+    def __init__(self, run_in_parallel: bool = False) -> None:
+        super().__init__(guardrail_name="customer-guardrail", event_hook=GuardrailEventHooks.pre_call, default_on=True)
+        self.run_in_parallel = run_in_parallel
+        self.calls = 0
+
+    async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
+        self.calls += 1
+        if data.get("model") == "virtual-model":
+            data["model"] = "gpt-4o-mini"
+        return data
+
+
+class _InheritedCustomerGuardrail(_CustomerRoutingGuardrail):
+    """A customer guardrail that inherits its pre-call hook from the customer's own base class."""
+
+
+class _CustomerTextGuardrail(CustomGuardrail):
+    """A customer guardrail that only implements ``apply_guardrail``."""
+
+    def __init__(self, run_in_parallel: bool = False) -> None:
+        super().__init__(
+            guardrail_name="customer-text-guardrail", event_hook=GuardrailEventHooks.pre_call, default_on=True
+        )
+        self.run_in_parallel = run_in_parallel
+        self.calls = 0
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: LiteLLMLoggingObj | None = None,
+    ) -> GenericGuardrailAPIInputs:
+        self.calls += 1
+        return inputs
+
+
+class _BuiltInContentCheck(CustomLogger):
+    """Stands in for a content check litellm ships that is not a guardrail: records the messages it was sent."""
+
+    __module__ = "litellm.proxy.hooks.content_check_double"
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.seen: Final[list[str]] = []
+
+    async def async_pre_call_hook(
+        self, user_api_key_dict: ProxyUserAPIKeyAuth, cache: DualCache, data: dict, call_type: CallTypesLiteral
+    ) -> dict:
+        self.seen.append(json.dumps(data.get("messages")))
+        return data
+
+
+class _ModelMappingHook(CustomLogger):
+    """A customer callback that renames a virtual model, editing the request or returning a new one."""
+
+    def __init__(
+        self,
+        source: str = "virtual-model",
+        target: str = "gpt-4o-mini",
+        returns_new_request: bool = False,
+        order: list[str] | None = None,
+    ) -> None:
+        super().__init__()
+        self.source: Final = source
+        self.target: Final = target
+        self.returns_new_request: Final = returns_new_request
+        self.order: Final = order if order is not None else []
+
+    async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
+        self.order.append("mapping-hook")
+        if data.get("model") != self.source:
+            return data
+        if self.returns_new_request:
+            return {**data, "model": self.target}
+        data["model"] = self.target
+        return data
+
+
+class _TaggingHook(CustomLogger):
+    """A customer callback that adds a tag to the request."""
+
+    async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
+        return {**data, "metadata": {**(data.get("metadata") or {}), "tags": ["over-budget-tag"]}}
+
+
+class _EmailMaskingHook(CustomLogger):
+    async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
+        _mask_emails(data)
+        return data
+
+
+class _RejectingHook(CustomLogger):
+    def __init__(self, model: str | None = None) -> None:
+        super().__init__()
+        self.model: Final = model
+
+    async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
+        if self.model in (None, data.get("model")):
+            raise HTTPException(status_code=403, detail="rejected by hook")
+        return data
+
+
+class _RateLimitingHook(CustomLogger):
+    def __init__(self, model: str) -> None:
+        super().__init__()
+        self.model: Final = model
+
+    async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
+        if data.get("model") == self.model:
+            raise ProxyRateLimitError(detail=f"rpm limit reached for {self.model}")
+        return data
+
+
+class _ContentEnforcer(CustomLogger):
+    enforces_request_content = True
+
+    def __init__(self, order: list[str] | None = None) -> None:
+        super().__init__()
+        self.order: Final = order if order is not None else []
+        self.calls = 0
+
+    async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
+        self.calls += 1
+        self.order.append("content-enforcer")
+        return data
+
+
+class _ModerationHook(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.calls = 0
+
+    async def async_moderation_hook(self, data, user_api_key_dict, call_type):
+        self.calls += 1
+
+
+class _FailureLogRecorder(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.logs: Final[list[dict[str, object]]] = []
+        self.dumps: Final[list[str]] = []
+
+    async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+        litellm_params: Final = kwargs.get("litellm_params") or {}
+        logged_request: Final = (litellm_params.get("proxy_server_request") or {}).get("body") or {}
+        standard: Final = kwargs.get("standard_logging_object") or {}
+        self.dumps.append(json.dumps(kwargs, default=str))
+        self.logs.append(
+            {
+                "model": kwargs.get("model"),
+                "messages": kwargs.get("messages"),
+                "standard_model": standard.get("model"),
+                "standard_model_group": standard.get("model_group"),
+                "standard_messages": standard.get("messages"),
+                "request_model": logged_request.get("model"),
+                "request_messages": logged_request.get("messages"),
+                "request_has_call_id": "litellm_call_id" in logged_request,
+            }
+        )
+
+    async def async_post_call_failure_hook(
+        self, request_data, original_exception, user_api_key_dict, traceback_str=None
+    ):
+        self.dumps.append(json.dumps(request_data, default=str))
+
+
+@dataclass(frozen=True)
+class _Sent:
+    status: int
+    message: str
+    failure_logs: tuple[Mapping[str, object], ...]
+    failure_dumps: tuple[str, ...]
+    phase_events: tuple[str, ...]
+    registry_lookups: tuple[str, ...]
+
+
+async def _send(
+    monkeypatch,
+    callbacks: Sequence[CustomLogger],
+    model: str | None = "does-not-exist",
+    route_type: Literal["acompletion", "atext_completion", "aresponses", "aembedding"] = "acompletion",
+    body: Mapping[str, object] | None = None,
+    llm_router: Router | None = None,
+    use_router: bool = True,
+    user_api_key_dict: ProxyUserAPIKeyAuth | None = None,
+    proxy_logging_obj: ProxyLogging | None = None,
+    registry_has: Callable[[str], Awaitable[bool]] | None = None,
+) -> _Sent:
+    """Send one request the way the proxy's endpoint does and report what the client and the failure log saw."""
+    from litellm.proxy import common_request_processing, proxy_server
+    from litellm.proxy.common_utils import registry_read_through
+
+    recorder: Final = _FailureLogRecorder()
+    monkeypatch.setattr(litellm, "callbacks", [*callbacks, recorder])
+    ProxyLogging._callback_capabilities_cache.clear()
+    phase_events: Final = list[str]()
+    monkeypatch.setattr(
+        common_request_processing, "phase_event", lambda name, attributes=None: phase_events.append(name)
+    )
+    lookups: Final = list[str]()
+
+    async def no_db_row(model_name: str) -> bool:
+        lookups.append(model_name)
+        return False
+
+    async def recorded_lookup(model_name: str) -> bool:
+        lookups.append(model_name)
+        return await registry_has(model_name) if registry_has is not None else False
+
+    monkeypatch.setattr(
+        registry_read_through,
+        "model_registry_read_through",
+        registry_read_through.RegistryReadThrough(
+            resync=recorded_lookup if registry_has is not None else no_db_row,
+            is_loaded=registry_read_through._model_is_loaded,
+        ),
+    )
+    router: Final = (llm_router or _routing_router()) if use_router else None
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    path: Final = _ROUTE_PATHS[route_type]
+    data: Final = {
+        **({"model": model} if model is not None else {}),
+        **copy.deepcopy(dict(_DEFAULT_BODIES[route_type])),
+        **copy.deepcopy(dict(body or {})),
+    }
+    data.update({key: list(value) for key, value in data.items() if isinstance(value, tuple)})
+    processor: Final = ProxyBaseLLMRequestProcessing(data=data)
+    auth: Final = user_api_key_dict or ProxyUserAPIKeyAuth(request_route=path)
+    logging_obj: Final = proxy_logging_obj or ProxyLogging(user_api_key_cache=UserApiKeyCache())
+    try:
+        await processor.base_process_llm_request(
+            request=Request({"type": "http", "method": "POST", "path": path, "headers": [], "query_string": b""}),
+            fastapi_response=Response(),
+            user_api_key_dict=auth,
+            route_type=route_type,
+            proxy_logging_obj=logging_obj,
+            general_settings={},
+            proxy_config=proxy_server.ProxyConfig(),
+            select_data_generator=proxy_server.select_data_generator,
+            llm_router=router,
+            version=None,
+        )
+        status_code, message = 200, ""
+    except Exception as request_error:
+        try:
+            await processor.handle_llm_api_exception(
+                e=request_error, user_api_key_dict=auth, proxy_logging_obj=logging_obj
+            )
+        except ProxyException as client_error:
+            status_code, message = int(client_error.code or 0), client_error.message
+    return _Sent(
+        status=status_code,
+        message=message,
+        failure_logs=tuple(recorder.logs),
+        failure_dumps=tuple(recorder.dumps),
+        phase_events=tuple(phase_events),
+        registry_lookups=tuple(lookups),
+    )
+
+
+def _attach_policy_pipeline(monkeypatch, mode: Literal["pre_call", "post_call"], guardrail_name: str) -> None:
+    from litellm.proxy.policy_engine import attachment_registry, policy_registry
+
+    policies: Final = policy_registry.PolicyRegistry()
+    policies.load_policies(
+        {
+            "safety": {
+                "guardrails": {"add": [guardrail_name]},
+                "pipeline": {
+                    "mode": mode,
+                    "steps": [{"guardrail": guardrail_name, "on_fail": "block", "on_pass": "allow"}],
+                },
+            }
+        }
+    )
+    attachments: Final = attachment_registry.AttachmentRegistry()
+    attachments.load_attachments([{"policy": "safety", "scope": "*"}])
+    monkeypatch.setattr(policy_registry, "_policy_registry", policies)
+    monkeypatch.setattr(attachment_registry, "_attachment_registry", attachments)
+
+
+def _shows_no_raw_content(sent: _Sent) -> bool:
+    return bool(sent.failure_dumps) and not any(_RAW_EMAIL in dump for dump in sent.failure_dumps)
+
+
+class TestUnroutableModelSkipsPreCallGuardrails:
+    """LIT-8011: a request whose model the proxy can't route gets the routing error it gets with no guardrail
+    configured, and no pre-call guardrail vendor is called for it."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("behavior", ["pass", "mask", "block", "unreachable"])
+    async def test_unknown_model_gets_the_invalid_model_error_without_calling_the_guardrail(
+        self, monkeypatch, behavior
+    ):
+        guardrail: Final = _VendorGuardrail(behavior=behavior)
+
+        guarded: Final = await _send(monkeypatch, [guardrail])
+        unguarded: Final = await _send(monkeypatch, [])
+
+        assert (guarded.status, guarded.message) == (unguarded.status, unguarded.message)
+        assert guarded.status == 400
+        assert "Invalid model name passed in model=does-not-exist" in guarded.message
+        assert guardrail.calls == 0
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "model",
+        [pytest.param(None, id="missing"), pytest.param("", id="empty"), pytest.param("m" * 5000, id="5000-chars")],
+    )
+    async def test_missing_or_malformed_model_gets_the_routing_error_without_calling_the_guardrail(
+        self, monkeypatch, model
+    ):
+        guardrail: Final = _VendorGuardrail(behavior="block")
+
+        guarded: Final = await _send(monkeypatch, [guardrail], model=model)
+        unguarded: Final = await _send(monkeypatch, [], model=model)
+
+        assert (guarded.status, guarded.message) == (unguarded.status, unguarded.message)
+        assert guarded.status == 400
+        assert guardrail.calls == 0
+
+    @pytest.mark.asyncio
+    async def test_unknown_model_skips_a_parallel_guardrail(self, monkeypatch):
+        guardrail: Final = _VendorGuardrail(behavior="block", run_in_parallel=True)
+
+        sent: Final = await _send(monkeypatch, [guardrail])
+
+        assert sent.status == 400
+        assert "Invalid model name passed in" in sent.message
+        assert guardrail.calls == 0
+
+    @pytest.mark.asyncio
+    async def test_endpoint_without_a_router_skips_the_guardrail_for_an_unknown_model(self, monkeypatch):
+        guardrail: Final = _VendorGuardrail(behavior="block")
+
+        guarded: Final = await _send(monkeypatch, [guardrail], use_router=False)
+        unguarded: Final = await _send(monkeypatch, [], use_router=False)
+
+        assert (guarded.status, guarded.message) == (unguarded.status, unguarded.message)
+        assert "Invalid model name passed in model=does-not-exist" in guarded.message
+        assert guardrail.calls == 0
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("route_type", "body"),
+        [
+            pytest.param("acompletion", {"stream": True}, id="streaming-chat"),
+            pytest.param("aresponses", {}, id="responses"),
+            pytest.param("aembedding", {}, id="embeddings"),
+            pytest.param("atext_completion", {}, id="completions"),
+        ],
+    )
+    async def test_unknown_model_on_other_routes_skips_the_guardrail(self, monkeypatch, route_type, body):
+        guardrail: Final = _VendorGuardrail(behavior="block")
+
+        guarded: Final = await _send(monkeypatch, [guardrail], route_type=route_type, body=body)
+        unguarded: Final = await _send(monkeypatch, [], route_type=route_type, body=body)
+
+        assert (guarded.status, guarded.message) == (unguarded.status, unguarded.message)
+        assert guarded.status == 400
+        assert guardrail.calls == 0
+
+    @pytest.mark.asyncio
+    async def test_model_a_hook_swaps_for_another_unknown_model_is_rejected_under_the_new_name(self, monkeypatch):
+        guardrail: Final = _VendorGuardrail(behavior="block")
+        swap: Final = _ModelMappingHook(target="still-unknown", returns_new_request=True)
+
+        sent: Final = await _send(monkeypatch, [swap, guardrail], model="virtual-model")
+
+        assert sent.status == 400
+        assert "Invalid model name passed in model=still-unknown" in sent.message
+        assert guardrail.calls == 0
+
+    @pytest.mark.asyncio
+    async def test_guardrail_that_would_reroute_an_unknown_model_is_not_called(self, monkeypatch):
+        guardrail: Final = _VendorGuardrail(behavior="reroute")
+
+        sent: Final = await _send(monkeypatch, [guardrail], model="guard-reroute")
+
+        assert sent.status == 400
+        assert "Invalid model name passed in model=guard-reroute" in sent.message
+        assert guardrail.calls == 0
+
+    @pytest.mark.asyncio
+    async def test_rate_limit_fallback_to_an_unknown_model_skips_the_guardrail(self, monkeypatch):
+        guardrail: Final = _VendorGuardrail(behavior="mask")
+
+        sent: Final = await _send(
+            monkeypatch,
+            [_RateLimitingHook(model="gpt-4o-mini"), guardrail],
+            model="gpt-4o-mini",
+            llm_router=_routing_router(fallbacks=[{"gpt-4o-mini": ["does-not-exist"]}]),
+        )
+
+        assert sent.status == 400
+        assert "Invalid model name passed in model=does-not-exist" in sent.message
+        assert guardrail.calls == 0
+        assert _shows_no_raw_content(sent), sent.failure_dumps
+
+    @pytest.mark.asyncio
+    async def test_key_with_router_settings_gets_the_invalid_model_error_without_calling_the_guardrail(
+        self, monkeypatch
+    ):
+        guardrail: Final = _VendorGuardrail(behavior="block")
+        key: Final = ProxyUserAPIKeyAuth(request_route="/v1/chat/completions", router_settings={"num_retries": 0})
+
+        guarded: Final = await _send(monkeypatch, [guardrail], user_api_key_dict=key)
+        unguarded: Final = await _send(monkeypatch, [], user_api_key_dict=key)
+
+        assert (guarded.status, guarded.message) == (unguarded.status, unguarded.message)
+        assert guarded.status == 400
+        assert guardrail.calls == 0
+
+
+class TestUnroutableModelFailureLogHidesUnscannedContent:
+    """A request turned away before a guardrail that applied to it ran must not log, or hand to the hooks after it,
+    the content that guardrail would have scanned, since a masking guardrail never got to mask it."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "body",
+        [
+            pytest.param({}, id="chat-messages"),
+            pytest.param({"system": [{"type": "text", "text": f"email {_RAW_EMAIL}"}]}, id="anthropic-system"),
+            pytest.param({"instructions": f"email {_RAW_EMAIL}"}, id="responses-instructions"),
+            pytest.param(
+                {"contents": [{"role": "user", "parts": [{"text": f"email {_RAW_EMAIL}"}]}]}, id="gemini-contents"
+            ),
+            pytest.param(
+                {"systemInstruction": {"parts": [{"text": f"email {_RAW_EMAIL}"}]}}, id="gemini-system-instruction"
+            ),
+            pytest.param(
+                {"config": {"system_instruction": {"parts": [{"text": f"email {_RAW_EMAIL}"}]}, "temperature": 0}},
+                id="gemini-config-system-instruction",
+            ),
+            pytest.param({"prompt": f"email {_RAW_EMAIL}", "input": [f"email {_RAW_EMAIL}"]}, id="prompt-and-input"),
+            pytest.param(
+                {"tools": [{"type": "function", "function": {"name": "mail", "description": _RAW_EMAIL}}]},
+                id="tool-definitions",
+            ),
+            pytest.param(
+                {"query": f"email {_RAW_EMAIL}", "instruction": f"email {_RAW_EMAIL}"},
+                id="rerank-query-and-instruction",
+            ),
+            pytest.param(
+                {
+                    "state": f"email {_RAW_EMAIL}",
+                    "fields": {
+                        "contact": {"type": "string", "instructions": f"email {_RAW_EMAIL}", "unit": _RAW_EMAIL}
+                    },
+                },
+                id="extraction-state-and-fields",
+            ),
+        ],
+    )
+    async def test_failure_log_hides_every_field_a_skipped_guardrail_would_have_scanned(self, monkeypatch, body):
+        sent: Final = await _send(monkeypatch, [_VendorGuardrail(behavior="mask")], body=body)
+
+        assert sent.status == 400
+        assert _shows_no_raw_content(sent), sent.failure_dumps
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("route_type", "body"),
+        [
+            pytest.param(
+                "aresponses", {"input": [{"role": "user", "content": f"email {_RAW_EMAIL}"}]}, id="responses-list"
+            ),
+            pytest.param(
+                "aresponses",
+                {"input": [{"role": "user", "content": [{"type": "input_text", "text": f"email {_RAW_EMAIL}"}]}]},
+                id="responses-input-text-parts",
+            ),
+            pytest.param("aresponses", {}, id="responses-string"),
+            pytest.param("aembedding", {"input": [f"email {_RAW_EMAIL}"]}, id="embeddings-list"),
+            pytest.param("atext_completion", {}, id="completions"),
+        ],
+    )
+    async def test_failure_log_hides_the_input_of_other_routes(self, monkeypatch, route_type, body):
+        sent: Final = await _send(monkeypatch, [_VendorGuardrail(behavior="mask")], route_type=route_type, body=body)
+
+        assert sent.status == 400
+        assert _shows_no_raw_content(sent), sent.failure_dumps
+
+    @pytest.mark.asyncio
+    async def test_failure_log_hides_content_a_skipped_parallel_guardrail_would_have_scanned(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        sent: Final = await _send(monkeypatch, [_VendorGuardrail(behavior="mask", run_in_parallel=True)])
+
+        assert sent.status == 400
+        assert _shows_no_raw_content(sent), sent.failure_dumps
+
+    @pytest.mark.asyncio
+    async def test_failure_log_hides_content_when_a_built_in_hook_rejects_after_a_skipped_guardrail(
+        self, monkeypatch
+    ):
+        proxy_logging_obj: Final = ProxyLogging(user_api_key_cache=UserApiKeyCache())
+        key: Final = ProxyUserAPIKeyAuth(
+            api_key=hash_token("sk-rpm-one"),
+            token=hash_token("sk-rpm-one"),
+            rpm_limit=1,
+            request_route="/v1/chat/completions",
+        )
+        guardrail: Final = _VendorGuardrail(behavior="mask")
+        callbacks: Final = [guardrail, proxy_logging_obj.max_parallel_request_limiter]
+
+        first: Final = await _send(monkeypatch, callbacks, user_api_key_dict=key, proxy_logging_obj=proxy_logging_obj)
+        limited: Final = await _send(monkeypatch, callbacks, user_api_key_dict=key, proxy_logging_obj=proxy_logging_obj)
+
+        assert (first.status, limited.status, guardrail.calls) == (400, 429, 0)
+        assert _shows_no_raw_content(limited), limited.failure_dumps
+
+    @pytest.mark.asyncio
+    async def test_failure_log_hides_content_when_a_tag_budget_rejects_after_a_skipped_guardrail(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        async def over_budget(**_: object) -> None:
+            raise litellm.BudgetExceededError(current_cost=10.0, max_budget=5.0)
+
+        monkeypatch.setattr(litellm.proxy.common_request_processing, "tag_max_budget_check_for_tags", over_budget)
+        guardrail: Final = _VendorGuardrail(behavior="mask")
+
+        sent: Final = await _send(monkeypatch, [_TaggingHook(), guardrail])
+
+        assert (sent.status, guardrail.calls) == (422, 0), sent.message
+        assert _shows_no_raw_content(sent), sent.failure_dumps
+
+    @pytest.mark.asyncio
+    async def test_built_in_hook_after_a_skipped_guardrail_is_not_sent_the_content_it_would_have_masked(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        check: Final = _BuiltInContentCheck()
+
+        sent: Final = await _send(monkeypatch, [_VendorGuardrail(behavior="mask"), check])
+
+        assert sent.status == 400
+        assert check.seen and not any(_RAW_EMAIL in seen for seen in check.seen), check.seen
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("stream_scope", "stream", "content_hidden"),
+        [
+            pytest.param("streaming", True, True, id="streaming-guardrail-streaming-request"),
+            pytest.param("streaming", False, False, id="streaming-guardrail-plain-request"),
+            pytest.param("non_streaming", True, False, id="plain-guardrail-streaming-request"),
+        ],
+    )
+    async def test_failure_log_hides_content_only_when_the_skipped_guardrail_applied(
+        self, monkeypatch, stream_scope, stream, content_hidden
+    ):
+        guardrail: Final = _VendorGuardrail(behavior="mask")
+        guardrail.apply_stream_scope(stream_scope)
+
+        sent: Final = await _send(monkeypatch, [guardrail], body={"stream": stream})
+
+        assert sent.status == 400
+        assert _shows_no_raw_content(sent) is content_hidden, sent.failure_dumps
+
+
+class TestUnroutableModelLeavesEverythingElseAsBefore:
+    """Everything except the skipped pre-call guardrails behaves as it did before LIT-8011, including the cases
+    earlier attempts at this change broke."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("route_type", "body", "virtual", "target"),
+        [
+            pytest.param("acompletion", {}, "virtual-model", "gpt-4o-mini", id="chat"),
+            pytest.param("acompletion", {"stream": True}, "virtual-model", "gpt-4o-mini", id="streaming-chat"),
+            pytest.param("aresponses", {}, "virtual-model", "gpt-4o-mini", id="responses"),
+            pytest.param("aembedding", {}, "virtual-embedding", "text-embedding-3-small", id="embeddings"),
+        ],
+    )
+    @pytest.mark.parametrize("check", ["guardrail", "parallel-guardrail", "content-enforcer"])
+    async def test_hook_listed_after_a_pre_call_check_can_still_rename_a_virtual_model(
+        self, monkeypatch, route_type, body, virtual, target, check
+    ):
+        guardrail: Final = _VendorGuardrail(run_in_parallel=check == "parallel-guardrail")
+        enforcer: Final = _ContentEnforcer()
+        mapping: Final = _ModelMappingHook(source=virtual, target=target)
+
+        sent: Final = await _send(
+            monkeypatch,
+            [enforcer if check == "content-enforcer" else guardrail, mapping],
+            model=virtual,
+            route_type=route_type,
+            body=body,
+        )
+
+        assert (sent.status, sent.message) == (200, "")
+        assert (enforcer.calls if check == "content-enforcer" else guardrail.calls) == 1
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("customer_guardrail", [_CustomerRoutingGuardrail, _InheritedCustomerGuardrail])
+    async def test_customer_guardrail_can_still_rename_a_virtual_model(
+        self, monkeypatch: pytest.MonkeyPatch, customer_guardrail: type[_CustomerRoutingGuardrail]
+    ):
+        guardrail: Final = _VendorGuardrail()
+        customer: Final = customer_guardrail()
+
+        sent: Final = await _send(monkeypatch, [guardrail, customer], model="virtual-model")
+
+        assert (sent.status, sent.message) == (200, "")
+        assert (guardrail.calls, customer.calls) == (1, 1)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "customer_guardrail", [_CustomerRoutingGuardrail, _InheritedCustomerGuardrail, _CustomerTextGuardrail]
+    )
+    @pytest.mark.parametrize("run_in_parallel", [False, True])
+    async def test_customer_guardrail_still_runs_for_an_unknown_model(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        customer_guardrail: type[_CustomerRoutingGuardrail] | type[_CustomerTextGuardrail],
+        run_in_parallel: bool,
+    ):
+        customer: Final = customer_guardrail(run_in_parallel=run_in_parallel)
+
+        sent: Final = await _send(monkeypatch, [customer])
+
+        assert sent.status == 400
+        assert "Invalid model name passed in model=does-not-exist" in sent.message
+        assert customer.calls == 1
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("mapping_first", [True, False])
+    async def test_pre_call_pipeline_does_not_stop_a_hook_from_renaming_a_virtual_model(
+        self, monkeypatch, mapping_first
+    ):
+        guardrail: Final = _VendorGuardrail(name="pipeline-guardrail")
+        _attach_policy_pipeline(monkeypatch, "pre_call", "pipeline-guardrail")
+        mapping: Final = _ModelMappingHook()
+
+        sent: Final = await _send(
+            monkeypatch, [mapping, guardrail] if mapping_first else [guardrail, mapping], model="virtual-model"
+        )
+
+        assert (sent.status, sent.message) == (200, "")
+        assert guardrail.calls == 1
+
+    @pytest.mark.asyncio
+    async def test_rate_limiter_still_counts_requests_for_unknown_models(self, monkeypatch):
+        proxy_logging_obj: Final = ProxyLogging(user_api_key_cache=UserApiKeyCache())
+        key: Final = ProxyUserAPIKeyAuth(
+            api_key=hash_token("sk-rpm-one"),
+            token=hash_token("sk-rpm-one"),
+            rpm_limit=1,
+            request_route="/v1/chat/completions",
+        )
+        callbacks: Final = [_VendorGuardrail(), proxy_logging_obj.max_parallel_request_limiter]
+
+        statuses: Final = [
+            (
+                await _send(monkeypatch, callbacks, user_api_key_dict=key, proxy_logging_obj=proxy_logging_obj)
+            ).status
+            for _ in range(3)
+        ]
+
+        assert statuses == [400, 429, 429]
+
+    @pytest.mark.asyncio
+    async def test_hook_listed_after_a_guardrail_still_runs_for_an_unknown_model(self, monkeypatch):
+        sent: Final = await _send(monkeypatch, [_VendorGuardrail(), _RejectingHook()])
+
+        assert (sent.status, sent.message) == (403, "rejected by hook")
+
+    @pytest.mark.asyncio
+    async def test_during_call_hooks_still_run_for_an_unknown_model(self, monkeypatch):
+        moderation: Final = _ModerationHook()
+        during_call_guardrail: Final = _VendorGuardrail(name="during-call", event_hook=GuardrailEventHooks.during_call)
+
+        sent: Final = await _send(monkeypatch, [moderation, during_call_guardrail])
+
+        assert sent.status == 400
+        assert (moderation.calls, during_call_guardrail.calls) == (1, 1)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("with_guardrail", [False, True])
+    async def test_pre_call_completed_event_is_still_emitted_for_an_unknown_model(self, monkeypatch, with_guardrail):
+        sent: Final = await _send(monkeypatch, [_VendorGuardrail()] if with_guardrail else [])
+
+        assert sent.status == 400
+        assert "litellm.request.pre_call_completed" in sent.phase_events
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("returns_new_request", "expected"),
+        [
+            pytest.param(
+                False,
+                {
+                    "model": "gpt-4o-mini",
+                    "standard_model": "openai/gpt-4o-mini",
+                    "standard_model_group": "gpt-4o-mini",
+                    "request_model": "virtual-model",
+                },
+                id="hook-edits-the-request",
+            ),
+            pytest.param(
+                True,
+                {
+                    "model": "virtual-model",
+                    "standard_model": "virtual-model",
+                    "standard_model_group": "",
+                    "request_model": "virtual-model",
+                },
+                id="hook-returns-a-new-request",
+            ),
+        ],
+    )
+    async def test_guardrail_block_after_a_rename_logs_the_same_models_as_before(
+        self, monkeypatch, returns_new_request, expected
+    ):
+        mapping: Final = _ModelMappingHook(returns_new_request=returns_new_request)
+
+        sent: Final = await _send(monkeypatch, [mapping, _VendorGuardrail(behavior="block")], model="virtual-model")
+
+        assert (sent.status, sent.message) == (400, "Prompt blocked by vendor policy")
+        assert [{field: log[field] for field in expected} for log in sent.failure_logs] == [expected]
+        assert [log["request_has_call_id"] for log in sent.failure_logs] == [False]
+
+    @pytest.mark.asyncio
+    async def test_hook_rejection_after_the_guardrail_passed_logs_the_request_as_sent(self, monkeypatch):
+        sent: Final = await _send(
+            monkeypatch, [_ModelMappingHook(), _VendorGuardrail(), _RejectingHook()], model="virtual-model"
+        )
+
+        assert (sent.status, sent.message) == (403, "rejected by hook")
+        assert [
+            (log["request_model"], log["request_messages"], log["request_has_call_id"]) for log in sent.failure_logs
+        ] == [("virtual-model", [{"role": "user", "content": f"email {_RAW_EMAIL}"}], False)]
+
+    @pytest.mark.asyncio
+    async def test_unknown_model_without_guardrails_logs_the_request_its_hooks_produced(self, monkeypatch):
+        sent: Final = await _send(monkeypatch, [_EmailMaskingHook()])
+
+        assert sent.status == 400
+        assert [
+            (log["standard_messages"], log["request_messages"], log["request_has_call_id"])
+            for log in sent.failure_logs
+        ] == [([{"role": "user", "content": "email [EMAIL]"}], [{"role": "user", "content": "email [EMAIL]"}], True)]
+
+    @pytest.mark.asyncio
+    async def test_post_call_only_pipeline_leaves_the_failure_log_of_an_unknown_model_unredacted(self, monkeypatch):
+        guardrail: Final = _VendorGuardrail(name="post-call-guardrail", event_hook=GuardrailEventHooks.post_call)
+        _attach_policy_pipeline(monkeypatch, "post_call", "post-call-guardrail")
+
+        sent: Final = await _send(monkeypatch, [guardrail])
+
+        assert sent.status == 400
+        assert [log["request_messages"] for log in sent.failure_logs] == [
+            [{"role": "user", "content": f"email {_RAW_EMAIL}"}]
+        ]
+
+    @pytest.mark.asyncio
+    async def test_rejection_by_a_hook_listed_before_the_guardrail_is_logged_as_before(self, monkeypatch):
+        guardrail: Final = _VendorGuardrail(behavior="mask")
+
+        sent: Final = await _send(monkeypatch, [_RejectingHook(), guardrail])
+
+        assert (sent.status, sent.message) == (403, "rejected by hook")
+        assert guardrail.calls == 0
+        assert [log["request_messages"] for log in sent.failure_logs] == [
+            [{"role": "user", "content": f"email {_RAW_EMAIL}"}]
+        ]
+
+    @pytest.mark.asyncio
+    async def test_rate_limited_unknown_model_whose_fallback_a_hook_rejects_is_logged_as_before(self, monkeypatch):
+        guardrail: Final = _VendorGuardrail(behavior="mask")
+
+        sent: Final = await _send(
+            monkeypatch,
+            [_RateLimitingHook(model="does-not-exist"), _RejectingHook(model="gpt-4o-mini"), guardrail],
+            llm_router=_routing_router(fallbacks=[{"does-not-exist": ["gpt-4o-mini"]}]),
+        )
+
+        assert (sent.status, sent.message) == (403, "rejected by hook")
+        assert guardrail.calls == 0
+        assert [(log["request_model"], log["request_messages"]) for log in sent.failure_logs] == [
+            ("does-not-exist", [{"role": "user", "content": f"email {_RAW_EMAIL}"}])
+        ]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("model", "callbacks", "expected_lookups"),
+        [
+            pytest.param("does-not-exist", lambda: [_VendorGuardrail()], ("does-not-exist",), id="unknown-model"),
+            pytest.param(
+                "unknown-virtual",
+                lambda: [_ModelMappingHook(source="unknown-virtual", target="db-only-model"), _VendorGuardrail()],
+                ("db-only-model",),
+                id="renamed-to-a-model-only-in-the-db",
+            ),
+            pytest.param(
+                "virtual-model",
+                lambda: [_VendorGuardrail(), _ModelMappingHook()],
+                (),
+                id="renamed-to-a-loaded-model",
+            ),
+        ],
+    )
+    async def test_model_registry_is_read_once_for_the_name_routing_ends_up_with(
+        self, monkeypatch, model, callbacks, expected_lookups
+    ):
+        sent: Final = await _send(monkeypatch, callbacks(), model=model)
+
+        assert sent.registry_lookups == expected_lookups
+
+    @pytest.mark.asyncio
+    async def test_model_created_on_another_replica_is_served_with_its_guardrail_on_the_first_request(
+        self, monkeypatch
+    ):
+        router: Final = _routing_router()
+        guardrail: Final = _VendorGuardrail()
+
+        async def load_from_db(model_name: str) -> bool:
+            router.add_deployment(
+                Deployment(
+                    model_name=model_name,
+                    litellm_params=LiteLLM_Params(
+                        model="openai/gpt-4o-mini", api_key="sk-test", mock_response="pong"
+                    ),
+                )
+            )
+            return True
+
+        sent: Final = await _send(
+            monkeypatch, [guardrail], model="created-on-a-sibling", llm_router=router, registry_has=load_from_db
+        )
+
+        assert (sent.status, sent.message, guardrail.calls) == (200, "", 1)
+        assert sent.registry_lookups == ("created-on-a-sibling",)
+
+    @pytest.mark.asyncio
+    async def test_routable_model_runs_every_hook_and_guardrail_once_in_configured_order(self, monkeypatch):
+        order: Final = list[str]()
+
+        sent: Final = await _send(
+            monkeypatch,
+            [_ModelMappingHook(order=order), _VendorGuardrail(order=order), _ContentEnforcer(order=order)],
+            model="gpt-4o-mini",
+        )
+
+        assert (sent.status, order) == (200, ["mapping-hook", "vendor-guardrail", "content-enforcer"])
+
+    @pytest.mark.asyncio
+    async def test_guardrail_still_blocks_a_routable_model(self, monkeypatch):
+        guardrail: Final = _VendorGuardrail(behavior="block")
+
+        sent: Final = await _send(monkeypatch, [guardrail, _RejectingHook()], model="gpt-4o-mini")
+
+        assert (sent.status, sent.message, guardrail.calls) == (400, "Prompt blocked by vendor policy", 1)
+
+    @pytest.mark.asyncio
+    async def test_hook_that_renames_a_blocked_model_to_a_routable_one_is_served(self, monkeypatch):
+        guardrail: Final = _VendorGuardrail()
+
+        sent: Final = await _send(
+            monkeypatch, [_ModelMappingHook(source="blocked-model"), guardrail], model="blocked-model"
+        )
+
+        assert (sent.status, sent.message, guardrail.calls) == (200, "", 1)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("model", "body", "llm_router"),
+        [
+            pytest.param(
+                "openai/anything",
+                {},
+                lambda: Router(
+                    model_list=[
+                        {
+                            "model_name": "openai/*",
+                            "litellm_params": {"model": "openai/*", "api_key": "sk-test", "mock_response": "pong"},
+                        }
+                    ]
+                ),
+                id="wildcard-route",
+            ),
+            pytest.param("does-not-exist", {"api_key": "sk-caller"}, _routing_router, id="caller-api-key"),
+            pytest.param(
+                "does-not-exist",
+                {},
+                lambda: Router(
+                    model_list=[
+                        {
+                            "model_name": "gpt-4o-mini",
+                            "litellm_params": {
+                                "model": "openai/gpt-4o-mini",
+                                "api_key": "sk-test",
+                                "mock_response": "pong",
+                            },
+                        }
+                    ],
+                    router_general_settings=RouterGeneralSettings(pass_through_all_models=True),
+                ),
+                id="pass-through-all-models",
+            ),
+        ],
+    )
+    async def test_request_the_router_resolves_itself_still_runs_its_guardrail(
+        self, monkeypatch, model, body, llm_router
+    ):
+        guardrail: Final = _VendorGuardrail()
+
+        await _send(monkeypatch, [guardrail], model=model, body=body, llm_router=llm_router())
+
+        assert guardrail.calls == 1
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("kind", ["content-enforcer", "pipeline-guardrail"])
+    async def test_unknown_model_still_runs_pipelines_and_content_enforcers(self, monkeypatch, kind):
+        guardrail: Final = _VendorGuardrail(name="pipeline-guardrail")
+        enforcer: Final = _ContentEnforcer()
+        if kind == "pipeline-guardrail":
+            _attach_policy_pipeline(monkeypatch, "pre_call", "pipeline-guardrail")
+
+        sent: Final = await _send(monkeypatch, [enforcer] if kind == "content-enforcer" else [guardrail])
+
+        assert sent.status == 400
+        assert (enforcer.calls if kind == "content-enforcer" else guardrail.calls) == 1
+
+    @pytest.mark.asyncio
+    async def test_guardrails_still_run_for_an_unknown_model_when_one_reroutes_sensitive_data(self, monkeypatch):
+        guardrail: Final = _VendorGuardrail()
+        router_guardrail: Final = CustomGuardrail(
+            guardrail_name="sensitive-router",
+            event_hook=GuardrailEventHooks.pre_call,
+            on_sensitive_data="route",
+            sensitive_data_route_to_model="gpt-4o-mini",
+        )
+
+        sent: Final = await _send(monkeypatch, [guardrail, router_guardrail])
+
+        assert (sent.status, guardrail.calls) == (400, 1)
+
+    @pytest.mark.asyncio
+    async def test_built_in_hook_that_routes_an_unknown_model_after_a_skipped_guardrail_gets_the_routing_error(
+        self, monkeypatch
+    ):
+        from litellm.proxy.hooks.sensitive_data_routing import PROXY_SensitiveDataRoutingHandler
+        from litellm.proxy.utils import InternalUsageCache
+
+        guardrail: Final = _VendorGuardrail()
+        session_pins: Final = PROXY_SensitiveDataRoutingHandler(internal_usage_cache=InternalUsageCache(DualCache()))
+        key: Final = ProxyUserAPIKeyAuth(api_key=hash_token("sk-pinned"), request_route="/v1/chat/completions")
+        await session_pins.set_session_routing("pinned-session", "gpt-4o-mini", key)
+
+        sent: Final = await _send(
+            monkeypatch,
+            [guardrail, session_pins],
+            body={"litellm_session_id": "pinned-session"},
+            user_api_key_dict=key,
+        )
+
+        assert (sent.status, guardrail.calls) == (400, 0)
+        assert "Invalid model name passed in model=does-not-exist" in sent.message
+
+    @pytest.mark.asyncio
+    async def test_caller_that_skips_guardrails_still_runs_content_enforcers_for_a_renamed_model(self, monkeypatch):
+        from litellm.proxy import proxy_server
+
+        enforcer: Final = _ContentEnforcer()
+        guardrail: Final = _VendorGuardrail()
+        monkeypatch.setattr(litellm, "callbacks", [_ModelMappingHook(), enforcer, guardrail])
+        ProxyLogging._callback_capabilities_cache.clear()
+        router: Final = _routing_router()
+        monkeypatch.setattr(proxy_server, "llm_router", router)
+        processor: Final = ProxyBaseLLMRequestProcessing(
+            data={"model": "virtual-model", "messages": [{"role": "user", "content": "hi"}]}
+        )
+
+        data, _ = await processor.common_processing_pre_call_logic(
+            request=Request(
+                {"type": "http", "method": "POST", "path": "/v1/responses", "headers": [], "query_string": b""}
+            ),
+            general_settings={},
+            user_api_key_dict=ProxyUserAPIKeyAuth(request_route="/v1/responses"),
+            proxy_logging_obj=ProxyLogging(user_api_key_cache=UserApiKeyCache()),
+            proxy_config=proxy_server.ProxyConfig(),
+            route_type="aresponses",
+            llm_router=router,
+            skip_guardrails=True,
+        )
+
+        assert (data["model"], enforcer.calls, guardrail.calls) == ("gpt-4o-mini", 1, 0)
