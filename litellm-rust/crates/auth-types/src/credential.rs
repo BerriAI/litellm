@@ -5,7 +5,8 @@ use std::sync::Arc;
 
 use veil::Redact;
 
-use crate::{Error, ResolvedCredential, SecretValue, TokenProviderHandle};
+use crate::{Error, ResolvedCredential, TokenProviderHandle};
+use litellm_secret_value::SecretValue;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CredentialFileRef {
@@ -104,8 +105,8 @@ mod tests {
         CredentialLookup, CredentialLookupFuture, CredentialPlan, CredentialPlanResolution,
         CredentialRef, CredentialResolver, CredentialResolverHandle,
     };
-    use crate::SecretValue;
     use crate::{Error, ErrorDetail};
+    use litellm_secret_value::SecretValue;
 
     #[derive(Debug)]
     struct HostResolver;

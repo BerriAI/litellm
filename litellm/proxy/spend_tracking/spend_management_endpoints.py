@@ -50,6 +50,7 @@ from litellm.proxy.auth.authorization_dependencies import (
     LogTeamLookupDependency,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_utils.openai_error_payload import error_status_code, openai_error_param, openai_error_type
 from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 from litellm.proxy.spend_tracking.committed_spend import committed_spend_tracked, drop_committed_spend
 from litellm.proxy.spend_tracking.spend_capture_rate import (
@@ -637,7 +638,7 @@ async def view_spend_tags(
             raise ProxyException(
                 message=getattr(e, "detail", f"/spend/tags Error({e})"),
                 type="internal_error",
-                param=getattr(e, "param", "None"),
+                param=openai_error_param(e),
                 code=getattr(e, "status_code", status.HTTP_500_INTERNAL_SERVER_ERROR),
             )
         elif isinstance(e, ProxyException):
@@ -645,7 +646,7 @@ async def view_spend_tags(
         raise ProxyException(
             message="/spend/tags Error" + str(e),
             type="internal_error",
-            param=getattr(e, "param", "None"),
+            param=openai_error_param(e),
             code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
 
@@ -1411,7 +1412,7 @@ async def get_global_spend_provider(
             _model_id = row["model_id"]
             _provider = "Unknown"
             if llm_router is not None:
-                _deployment = llm_router.get_deployment(model_id=_model_id)
+                _deployment = llm_router.registry().deployment(_model_id)
                 if _deployment is not None:
                     try:
                         _, _provider, _, _ = litellm.get_llm_provider(
@@ -2143,7 +2144,7 @@ async def global_get_all_tag_names():
             raise ProxyException(
                 message=getattr(e, "detail", f"/spend/all_tag_names Error({e})"),
                 type="internal_error",
-                param=getattr(e, "param", "None"),
+                param=openai_error_param(e),
                 code=getattr(e, "status_code", status.HTTP_500_INTERNAL_SERVER_ERROR),
             )
         elif isinstance(e, ProxyException):
@@ -2151,7 +2152,7 @@ async def global_get_all_tag_names():
         raise ProxyException(
             message="/spend/all_tag_names Error" + str(e),
             type="internal_error",
-            param=getattr(e, "param", "None"),
+            param=openai_error_param(e),
             code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
 
@@ -2225,7 +2226,7 @@ async def global_view_spend_tags(
             raise ProxyException(
                 message=getattr(e, "detail", f"/spend/tags Error({error_str})"),
                 type="internal_error",
-                param=getattr(e, "param", "None"),
+                param=openai_error_param(e),
                 code=getattr(e, "status_code", status.HTTP_500_INTERNAL_SERVER_ERROR),
             )
         elif isinstance(e, ProxyException):
@@ -2233,7 +2234,7 @@ async def global_view_spend_tags(
         raise ProxyException(
             message="/spend/tags Error" + error_str,
             type="internal_error",
-            param=getattr(e, "param", "None"),
+            param=openai_error_param(e),
             code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
 
@@ -2393,17 +2394,19 @@ async def calculate_spend(request: SpendCalculateRequest):
             _model_in_llm_router = None
             cost_per_token: CostPerToken | None = None
             if llm_router is not None:
-                if llm_router.model_group_alias is not None and request.model in llm_router.model_group_alias:
+                router_registry: Final = llm_router.registry()
+                model_group_alias: Final = router_registry.aliases()
+                if model_group_alias is not None and request.model in model_group_alias:
                     # lookup alias in llm_router
-                    _model_group_name: Final = llm_router.model_group_alias[request.model]
-                    for model in llm_router.model_list:
+                    _model_group_name: Final = model_group_alias[request.model]
+                    for model in router_registry.all():
                         if model.get("model_name") == _model_group_name:
                             _model_in_llm_router = model
 
                 else:
                     # no model_group aliases set -> try finding model in llm_router
                     # find model in llm_router
-                    for model in llm_router.model_list:
+                    for model in router_registry.all():
                         if model.get("model_name") == request.model:
                             _model_in_llm_router = model
 
@@ -2446,9 +2449,9 @@ async def calculate_spend(request: SpendCalculateRequest):
         if isinstance(e, HTTPException):
             raise ProxyException(
                 message=getattr(e, "detail", str(e)),
-                type=getattr(e, "type", "None"),
-                param=getattr(e, "param", "None"),
-                code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
+                type=openai_error_type(e, error_status_code(e, status.HTTP_400_BAD_REQUEST)),
+                param=openai_error_param(e),
+                code=error_status_code(e, status.HTTP_400_BAD_REQUEST),
             )
         if isinstance(e, litellm.exceptions.ModelNotMappedError):
             raise ProxyException(
@@ -2460,9 +2463,9 @@ async def calculate_spend(request: SpendCalculateRequest):
         error_msg: Final = f"{e}"
         raise ProxyException(
             message=getattr(e, "message", error_msg),
-            type=getattr(e, "type", "None"),
-            param=getattr(e, "param", "None"),
-            code=getattr(e, "status_code", 500),
+            type=openai_error_type(e, error_status_code(e, 500)),
+            param=openai_error_param(e),
+            code=error_status_code(e, 500),
         )
 
 
@@ -2632,7 +2635,7 @@ async def ui_view_spend_logs(
         raise ProxyException(
             message="Prisma Client is not initialized",
             type="internal_error",
-            param="None",
+            param=None,
             code=status.HTTP_401_UNAUTHORIZED,
         )
 
@@ -2699,7 +2702,7 @@ async def ui_view_spend_logs(
                 raise ProxyException(
                     message="Start date and end date are required",
                     type="bad_request",
-                    param="None",
+                    param=None,
                     code=status.HTTP_400_BAD_REQUEST,
                 )
             formats: Final = ["%Y-%m-%d %H:%M:%S", "%Y-%m-%d"] if is_v2 else ["%Y-%m-%d %H:%M:%S"]
@@ -3680,7 +3683,7 @@ async def view_spend_logs(
             raise ProxyException(
                 message=getattr(e, "detail", f"/spend/logs Error({e})"),
                 type="internal_error",
-                param=getattr(e, "param", "None"),
+                param=openai_error_param(e),
                 code=getattr(e, "status_code", status.HTTP_500_INTERNAL_SERVER_ERROR),
             )
         elif isinstance(e, ProxyException):
@@ -3688,7 +3691,7 @@ async def view_spend_logs(
         raise ProxyException(
             message="/spend/logs Error" + str(e),
             type="internal_error",
-            param=getattr(e, "param", "None"),
+            param=openai_error_param(e),
             code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
 
@@ -3745,7 +3748,7 @@ async def global_spend_reset():
         raise ProxyException(
             message="Prisma Client is not initialized",
             type="internal_error",
-            param="None",
+            param=None,
             code=status.HTTP_401_UNAUTHORIZED,
         )
 
@@ -3778,7 +3781,7 @@ async def global_spend_refresh():
         raise ProxyException(
             message="Prisma Client is not initialized",
             type="internal_error",
-            param="None",
+            param=None,
             code=status.HTTP_401_UNAUTHORIZED,
         )
 
@@ -3849,7 +3852,7 @@ async def global_spend_for_internal_user(
         raise ProxyException(
             message="Prisma Client is not initialized",
             type="internal_error",
-            param="None",
+            param=None,
             code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
     try:
@@ -3910,7 +3913,7 @@ async def global_spend_logs(
             raise ProxyException(
                 message="Prisma Client is not initialized",
                 type="internal_error",
-                param="None",
+                param=None,
                 code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
@@ -3954,7 +3957,7 @@ async def global_spend_logs(
             raise ProxyException(
                 message=getattr(e, "detail", f"/global/spend/logs Error({error_str})"),
                 type="internal_error",
-                param=getattr(e, "param", "None"),
+                param=openai_error_param(e),
                 code=getattr(e, "status_code", status.HTTP_500_INTERNAL_SERVER_ERROR),
             )
         elif isinstance(e, ProxyException):
@@ -3962,7 +3965,7 @@ async def global_spend_logs(
         raise ProxyException(
             message="/global/spend/logs Error" + error_str,
             type="internal_error",
-            param=getattr(e, "param", "None"),
+            param=openai_error_param(e),
             code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
 
@@ -4002,7 +4005,7 @@ async def global_spend():
             raise ProxyException(
                 message=getattr(e, "detail", f"/global/spend Error({error_str})"),
                 type="internal_error",
-                param=getattr(e, "param", "None"),
+                param=openai_error_param(e),
                 code=getattr(e, "status_code", status.HTTP_500_INTERNAL_SERVER_ERROR),
             )
         elif isinstance(e, ProxyException):
@@ -4010,7 +4013,7 @@ async def global_spend():
         raise ProxyException(
             message="/global/spend Error" + error_str,
             type="internal_error",
-            param=getattr(e, "param", "None"),
+            param=openai_error_param(e),
             code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
 
@@ -4407,13 +4410,13 @@ async def provider_budgets() -> ProviderBudgetResponse:
         if llm_router is None:
             raise HTTPException(status_code=500, detail={"error": "No llm_router found"})
 
-        provider_budget_config: Final = llm_router.provider_budget_config
+        provider_budget_config: Final = llm_router.settings().provider_budget_config
         if provider_budget_config is None:
             raise ValueError(
                 "No provider budget config found. Please set a provider budget config in the router settings. https://docs.litellm.ai/docs/proxy/provider_budget_routing"
             )
 
-        router_budget_logger: Final = llm_router.get_router_deployment_budget_limiter()
+        router_budget_logger: Final = llm_router.registry().plugins("budget_limiter")
         if router_budget_logger is None:
             raise ValueError("No router budget logger found")
 

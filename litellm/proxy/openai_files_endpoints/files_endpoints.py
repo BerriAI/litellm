@@ -124,7 +124,7 @@ router: Final = APIRouter()
 
 
 def _names_a_litellm_executed_provider(llm_router: Router, candidate: str, team_id: str | None) -> bool:
-    credentials: Final = llm_router.get_deployment_credentials_with_provider(model_id=candidate, team_id=team_id)
+    credentials: Final = llm_router.registry().credentials(candidate, form="with_provider", team_id=team_id)
     return credentials is not None and litellm_executed_provider_of(credentials) is not None
 
 
@@ -225,7 +225,7 @@ def get_files_provider_config(
 
 
 def _deployment_provider(llm_router: Router, model_id: str, team_id: str | None) -> str | None:
-    credentials: Final = llm_router.get_deployment_credentials_with_provider(model_id=model_id, team_id=team_id)
+    credentials: Final = llm_router.registry().credentials(model_id, form="with_provider", team_id=team_id)
     return None if credentials is None else credentials.get("custom_llm_provider")
 
 
@@ -234,7 +234,7 @@ def _resolves_to_vertex_deployments_only(llm_router: Router | None, model_name: 
         return False
     return all(
         _deployment_provider(llm_router, str(deployment["model_info"]["id"]), team_id) == "vertex_ai"
-        for deployment in llm_router.get_model_list(model_name=model_name, team_id=team_id) or ()
+        for deployment in llm_router.registry().deployments(model_name, team_id=team_id) or ()
         if "id" in deployment.get("model_info", {})
     )
 
@@ -1748,10 +1748,10 @@ def _model_mapping_keys(deployments: Iterable[Deployment]) -> frozenset[str]:
 
 
 def _deployments_serving_model(llm_router: Router, model: str) -> tuple[Deployment, ...]:
-    deployment: Final = llm_router.get_deployment(model_id=model) if llm_router.has_model_id(model) else None
+    deployment: Final = llm_router.registry().deployment(model) if llm_router.registry().has_deployment(model) else None
     if deployment is not None:
         return (deployment,)
-    return tuple(Deployment.model_validate(listed) for listed in llm_router.get_model_list(model_name=model) or ())
+    return tuple(Deployment.model_validate(listed) for listed in llm_router.registry().deployments(model) or ())
 
 
 def _resolved_deployment_provider(deployment: Deployment) -> str | None:
@@ -1769,8 +1769,8 @@ def _deployments_on_provider(llm_router: Router | None, custom_llm_provider: str
         return iter(())
     return (
         deployment
-        for deployment_id in llm_router.get_model_ids()
-        if (deployment := llm_router.get_deployment(model_id=deployment_id)) is not None
+        for deployment_id in llm_router.registry().names(kind="ids")
+        if (deployment := llm_router.registry().deployment(deployment_id)) is not None
         and _resolved_deployment_provider(deployment) == custom_llm_provider
     )
 
@@ -1778,9 +1778,9 @@ def _deployments_on_provider(llm_router: Router | None, custom_llm_provider: str
 def _routed_model_name_on_provider(
     llm_router: Router, custom_llm_provider: str, provider_model_names: frozenset[str], model_name: str
 ) -> bool:
-    if model_name in llm_router.model_names:
+    if model_name in llm_router.registry().names(kind="group_set"):
         return model_name in provider_model_names
-    return llm_router.pattern_router.routes_to_provider(model_name, custom_llm_provider)
+    return llm_router.registry().patterns().routes_to_provider(model_name, custom_llm_provider)
 
 
 def _stored_model_name_routes_to_provider(
@@ -1788,7 +1788,7 @@ def _stored_model_name_routes_to_provider(
 ) -> bool:
     routing_group: Final = llm_router.get_routing_group(model_name)
     routed_model_names: Final = (
-        tuple(routing_group.models) if routing_group is not None else (llm_router.routable_model_group(model_name),)
+        tuple(routing_group.models) if routing_group is not None else (llm_router.registry().resolve(model_name),)
     )
     return any(
         _routed_model_name_on_provider(llm_router, custom_llm_provider, provider_model_names, routed_model_name)

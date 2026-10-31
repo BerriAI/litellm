@@ -170,6 +170,10 @@ class UserAPIKeyAuth(LiteLLM_VerificationTokenView):  # the expected response ob
     # above; a forged value could at most narrow, but the stripping keeps the field's provenance
     # single-owner so its meaning stays trustworthy.
     mcp_session_resource_server_ids: tuple[str, ...] | None = Field(default=None, exclude=True)
+    # Set only by MCP admission when a legacy delegate_auth_to_upstream caller's Authorization is the
+    # upstream token rather than a LiteLLM credential, so egress forwards it. Stripped from validated
+    # input like the markers above: a forged value would forward a LiteLLM credential upstream.
+    mcp_forwards_caller_authorization: bool = Field(default=False, exclude=True)
     mcp_toolset_id: str | None = Field(default=None, exclude=True)
     authenticated_by_custom_auth: bool = Field(default=False, exclude=True)
     via_virtual_key: bool = Field(
@@ -232,6 +236,7 @@ class UserAPIKeyAuth(LiteLLM_VerificationTokenView):  # the expected response ob
         values.pop("mcp_explicit_grants_only", None)
         values.pop("mcp_source_team_rpm_limits", None)
         values.pop("mcp_session_resource_server_ids", None)
+        values.pop("mcp_forwards_caller_authorization", None)
         values.pop("mcp_toolset_id", None)
         values.pop("via_virtual_key", None)
         values.pop("authenticated_by_custom_auth", None)

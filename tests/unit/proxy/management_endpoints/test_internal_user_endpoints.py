@@ -4199,6 +4199,65 @@ async def test_add_new_user_to_default_team_string_teams_have_no_member_budget(m
 
 
 @pytest.mark.asyncio
+async def test_add_new_user_to_default_team_joins_teams_in_the_order_given_and_past_a_failing_team(
+    mocker: MockerFixture,
+) -> None:
+    from litellm.proxy.management_endpoints.internal_user_endpoints import (
+        add_new_user_to_default_team,
+    )
+
+    requested: Final = ("team-zeta", "team-broken", "team-mu", "team-alpha")
+    seconds_per_team: Final = {"team-zeta": 0.03, "team-broken": 0.0, "team-mu": 0.02, "team-alpha": 0.0}
+    finished: Final = mocker.MagicMock()
+
+    async def join_team(*, team_id: str, **_: object) -> None:
+        await asyncio.sleep(seconds_per_team[team_id])
+        if team_id == "team-broken":
+            raise RuntimeError("team row locked")
+        finished(team_id)
+
+    mocker.patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints._add_user_to_team",
+        side_effect=join_team,
+    )
+
+    await add_new_user_to_default_team(
+        user_id="scim-user",
+        user_email=None,
+        user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+        teams=list(requested),
+        prisma_client=mocker.MagicMock(),
+    )
+
+    assert [call.args[0] for call in finished.call_args_list] == ["team-zeta", "team-mu", "team-alpha"]
+
+
+@pytest.mark.asyncio
+async def test_add_new_user_to_default_team_rejects_an_invalid_team_before_joining_any(
+    mocker: MockerFixture,
+) -> None:
+    from litellm.proxy.management_endpoints.internal_user_endpoints import (
+        add_new_user_to_default_team,
+    )
+
+    join_team: Final = mocker.patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints._add_user_to_team",
+        new_callable=mocker.AsyncMock,
+    )
+
+    with pytest.raises(ValueError, match="Invalid team type"):
+        await add_new_user_to_default_team(
+            user_id="new-user",
+            user_email=None,
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+            teams=["team-zeta", {"team_id": "team-mu"}],
+            prisma_client=mocker.MagicMock(),
+        )
+
+    join_team.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_add_user_to_team_logs_unknown_team_at_error(mocker, caplog):
     """A default team that no longer exists makes every membership write 404.
 
@@ -4293,6 +4352,34 @@ async def test_get_user_info_for_proxy_admin_validates_keys_and_teams():
     returned_key = result.keys[0]
     assert returned_key["team_id"] == "team-a"
     assert returned_key["models"] == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "raw_rows",
+    [
+        [{"teams": None, "keys": "sk-row-content-must-not-leak"}],
+        [{"teams": None, "keys": ["sk-row-content-must-not-leak"]}],
+    ],
+)
+async def test_get_user_info_for_proxy_admin_errors_do_not_echo_row_content(raw_rows):
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from pydantic import ValidationError
+
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.internal_user_endpoints import (
+        _get_user_info_for_proxy_admin,
+    )
+
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.query_raw = AsyncMock(return_value=raw_rows)
+
+    with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client):
+        with pytest.raises(ValidationError) as exc_info:
+            await _get_user_info_for_proxy_admin(user_api_key_dict=UserAPIKeyAuth(user_id=None))
+
+    assert "sk-row-content-must-not-leak" not in str(exc_info.value)
 
 
 def _object_permission_mocks(mocker, existing_object_permission_id=None):
@@ -4973,7 +5060,7 @@ _DB_OUTAGE_503_BODY: Final = {
     "error": {
         "message": "Service Unavailable, the authentication database is temporarily unreachable. Please retry shortly.",
         "type": "no_db_connection",
-        "param": "None",
+        "param": None,
         "code": "503",
     }
 }

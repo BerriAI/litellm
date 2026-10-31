@@ -8327,3 +8327,19 @@ async def test_global_spend_reset_still_succeeds_when_listing_the_committed_coun
 
     assert response["status"] == "success"
     db.litellm_teamtable.update_many.assert_awaited_once()
+
+
+def test_spend_calculate_rejection_body_is_openai_shaped(client):
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin_user", api_key="hashed-k"
+    )
+    try:
+        response = client.post("/spend/calculate", json={}, headers={"Authorization": "Bearer sk-test"})
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+    assert response.status_code == 400
+    error = response.json()["error"]
+    assert error["type"] == "invalid_request_error"
+    assert error["param"] is None
+    assert error["code"] == "400"
