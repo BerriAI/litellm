@@ -546,6 +546,26 @@ class TestMCPServerTable:
         with pytest.raises(ValidationError):
             LiteLLM_MCPServerTable(server_id="s1")
 
+    def test_provider_registration_round_trips_without_connection_fields(self) -> None:
+        record: Final = LiteLLM_MCPServerTable(
+            server_id="provider-docs",
+            execution_mode="provider",
+            transport=None,
+            credentials=None,
+            url="https://docs.example/mcp",
+            allowed_tools=["search_docs"],
+        )
+        restored: Final = LiteLLM_MCPServerTable.model_validate_json(record.model_dump_json())
+        assert restored.execution_mode == "provider"
+        assert restored.transport is None
+        assert restored.credentials is None
+        assert restored.allowed_tools == ["search_docs"]
+
+    @pytest.mark.parametrize("mode,transport", [("provider", "http"), ("litellm", None)])
+    def test_execution_mode_requires_the_matching_transport_shape(self, mode: str, transport: str | None) -> None:
+        with pytest.raises(ValidationError, match="transport"):
+            LiteLLM_MCPServerTable(server_id="s1", execution_mode=mode, transport=transport)
+
 
 class TestSpendLogs:
     def test_spend_logs_creation(self):

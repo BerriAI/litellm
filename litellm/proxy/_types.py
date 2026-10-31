@@ -63,6 +63,8 @@ from litellm.types.mcp import (
     MCPAuthType,
     MCPCredentials,
     MCPDisabledCapabilities,
+    MCPExecutionMode,
+    MCPGatewayExecutionMode,
     MCPTransport,
     MCPTransportType,
     MCPUpstreamProtocol,
@@ -1376,6 +1378,7 @@ def _validate_mcp_transport_fields(values: object) -> None:
 
 
 class NewMCPServerRequest(LiteLLMPydanticObjectBase):
+    execution_mode: MCPGatewayExecutionMode = MCPExecutionMode.litellm
     server_id: str | None = None
     server_name: str | None = None
     alias: str | None = None
@@ -1532,6 +1535,13 @@ class UpdateMCPServerRequest(LiteLLMPydanticObjectBase):
     timeout: float | None = None
     max_concurrent_requests: int | None = None
     rpm: int | None = Field(default=None, ge=0)
+
+    @model_validator(mode="before")
+    @classmethod
+    def reject_execution_mode_changes(cls, values: object) -> object:
+        if isinstance(values, dict) and "execution_mode" in values:
+            raise ValueError("execution_mode is immutable; omit it when updating an MCP registration")
+        return values
 
     @model_validator(mode="after")
     def validate_protocol_transport(self) -> "UpdateMCPServerRequest":

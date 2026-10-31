@@ -24,6 +24,7 @@ from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter
 from litellm._logging import verbose_logger
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.proxy.mcp_server.result_conversion import age_freshness, aggregate_freshness
+from litellm.types.mcp import MCPExecutionMode
 
 if TYPE_CHECKING:
     from mcp.types import ListToolsResult, PaginatedRequestParams, PaginatedResult
@@ -415,6 +416,8 @@ class CatalogSnapshots:
         for row in rows:
             try:
                 server = LiteLLM_MCPServerTable.model_validate(row.model_dump())
+                if server.execution_mode == MCPExecutionMode.provider:
+                    continue
                 existing_server = previous_registry.get(server.server_id)
 
                 if (

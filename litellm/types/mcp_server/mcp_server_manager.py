@@ -11,6 +11,8 @@ from litellm.types.mcp import (
     DEFAULT_SUBJECT_TOKEN_TYPE,
     MCPAuth,
     MCPAuthType,
+    MCPExecutionMode,
+    MCPGatewayExecutionMode,
     MCPTokenEndpointAuthMethod,
     MCPTransportType,
     MCPUpstreamProtocol,
@@ -94,6 +96,7 @@ def parse_pinned_tools(value: object) -> dict[str, PinnedMCPTool] | None:
 class MCPServer(LiteLLMBaseModel):
     server_id: str
     name: str
+    execution_mode: MCPGatewayExecutionMode = MCPExecutionMode.litellm
     alias: str | None = None
     server_name: str | None = None
     url: str | None = None

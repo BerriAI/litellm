@@ -230,8 +230,10 @@ from litellm.types.llms.custom_http import httpxSpecialProvider
 from litellm.types.mcp import (
     DEFAULT_SUBJECT_TOKEN_TYPE,
     MCPAuth,
+    MCPExecutionMode,
     MCPTokenEndpointAuthMethod,
     MCPUpstreamProtocol,
+    validate_mcp_gateway_execution,
     without_header,
 )
 from litellm.types.mcp_server.mcp_server_manager import (
@@ -405,6 +407,7 @@ class MCPServerConfig(TypedDict, total=False):
     whatever the admin wrote, and each read applies its own default."""
 
     server_id: ReadOnly[str]
+    execution_mode: ReadOnly[MCPExecutionMode]
     protocol_version: ReadOnly[MCPUpstreamProtocol]
     alias: str
     description: str
@@ -2583,6 +2586,7 @@ class MCPServerManager:
 
         for server_name, raw_server_config in mcp_servers_config.items():
             server_config: MCPServerConfig = raw_server_config
+            validate_mcp_gateway_execution(server_config.get("execution_mode", MCPExecutionMode.litellm))
             _mcp_info: MCPInfo = server_config.get("mcp_info", None) or {}
             # Preserve all custom fields from config while setting defaults for core fields
             mcp_info: MCPInfo = _mcp_info.copy()
@@ -3219,6 +3223,7 @@ class MCPServerManager:
         env_vars_are_encrypted: bool | None = None,
         register_oauth_discovery: bool = True,
     ) -> MCPServer:
+        validate_mcp_gateway_execution(mcp_server.execution_mode)
         _mcp_info: Final[MCPInfo] = mcp_server.mcp_info or {}
         env_dict: Final = _deserialize_json_dict(getattr(mcp_server, "env", None))
         static_headers_dict: Final = _deserialize_json_dict(getattr(mcp_server, "static_headers", None))
@@ -3485,6 +3490,10 @@ class MCPServerManager:
                 self.initialize_tool_name_to_mcp_server_name_mapping()
 
     async def add_server(self, mcp_server: LiteLLM_MCPServerTable):
+        if mcp_server.execution_mode == MCPExecutionMode.provider:
+            if mcp_server.server_id in self.registry:
+                self.remove_server(mcp_server)
+            return
         # The runtime registry is the allowlist for tool calls and health
         # probes (which spawn the underlying transport, including stdio
         # subprocesses). Match the eligibility set used by the bulk DB
@@ -3518,7 +3527,10 @@ class MCPServerManager:
         # If a previously-active server has been moved out of the active
         # state, evict any stale registry entry so subsequent tool calls and
         # health probes can't reach it.
-        if mcp_server.approval_status not in (None, "active", "approved"):
+        if (
+            mcp_server.execution_mode == MCPExecutionMode.provider
+            or mcp_server.approval_status not in (None, "active", "approved")
+        ):
             evicted = self.registry.pop(mcp_server.server_id, None)
             if evicted is None and mcp_server.server_name:
                 evicted = self.registry.pop(mcp_server.server_name, None)
@@ -4388,6 +4400,7 @@ class MCPServerManager:
         protocol_version_override: MCPUpstreamProtocol | None = None,
         for_tool_listing: bool = False,
     ) -> MCPClient:
+        validate_mcp_gateway_execution(server.execution_mode)
         self.catalog.assert_current(server)
         record_auth_resolution(server.server_id, AuthResolution.unresolved)
         resolved_server: Final = await self.ensure_oauth_metadata_discovered(server)

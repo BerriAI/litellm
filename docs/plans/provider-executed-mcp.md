@@ -1,6 +1,6 @@
 # Provider-executed MCP registration
 
-Status: schema approved, database changes prepared for local diff review
+Status: database slice approved and committed, runtime isolation slice prepared for local diff review
 
 ## Implementation plan
 
@@ -9,7 +9,7 @@ Work through these layers in order on `litellm_provider_mcp_registration`. Updat
 | Layer | Scope | Status |
 | --- | --- | --- |
 | 1 | Settle registration fields, values, storage, and validation | Approved |
-| 2 | Implement persistence and execution-mode isolation before enabling provider registration | Database schema/migration ready for review; runtime models, persistence validation, and isolation pending |
+| 2 | Implement persistence and execution-mode isolation before enabling provider registration | Database slice committed; typed mode and gateway isolation ready for review; persistence validation pending |
 | 3 | Management UI/API, stored tool options, and existing key/team/toolset selectors | Pending |
 | 4 | Authorize effective OpenAI Responses and Anthropic Messages MCP attachments through existing MCP permissions | Pending |
 | 5 | Live provider tests, streaming admission tests, UI tests, and gateway regressions | Pending |
@@ -118,7 +118,7 @@ Management reads return the stored field values, including `execution_mode`, `tr
 | Omitted `execution_mode` on create/config | Preserve existing LiteLLM execution and transport defaults |
 | Unknown or null `execution_mode` | Reject |
 | `execution_mode` omitted on update | Preserve stored mode |
-| Change an existing registration's mode | Reject in v1; create a separate registration |
+| `execution_mode` supplied on update | Reject in v1; this field is immutable and must be omitted from updates |
 | Missing or null provider `url` | Reject |
 | Provider URL | Require HTTPS; reject URL userinfo and fragments; lowercase scheme/hostname and omit default port 443; preserve path, trailing slash, and query identity |
 | Provider `transport` omitted or null | Persist null explicitly, rather than applying the database's legacy SSE default |
@@ -199,6 +199,14 @@ Existing `metadata.allowed_tools` remains an independent compatibility restricti
 | API coverage | OpenAI Responses and both Anthropic Messages formats; request-supplied and model-configured attachments; streaming and non-streaming |
 | Live evidence | Real providers execute authorized read-only MCP tools; denied requests produce zero provider dispatches; existing gateway execution still works |
 
-The first implementation slice contains the database schema and migration only. Provider registration is not enabled through management APIs or config, and executable models, connection isolation, and authorization integration remain pending. This is an intermediate review slice, not a complete or deployable provider-registration feature
+The approved database slice was committed as `fd0ac3ca76`. The next slice adds shared execution-mode types, stored-record transport validation, and gateway isolation. Stored records can represent both modes, while the connection-capable `MCPServer` type permits only `litellm`
+
+Provider records are excluded during incremental add/update and database catalog reload, before cached gateway entries can be reused. Direct table-to-runtime conversion and both shared client-creation boundaries reject provider mode before OAuth discovery, credential resolution, or MCP connection. Config loading currently rejects provider mode before discovery. The create request schema currently accepts only `litellm`, so `execution_mode=provider` cannot be silently ignored. Update requests reject any supplied execution mode
+
+This is an intermediate review slice. Management API/config creation of provider registrations remains disabled. Canonical URL and allowlist validation, merged-record update validation, provider inventory loading, and management tool selection are still pending. Later work will enable creation after those contracts are wired in. Native LLM admission authorization is unchanged
 
 Database-slice validation passed with Prisma schema validation, identical schema copies, the repository's no-data-rewriting migration check, and six checks on a disposable PostgreSQL 16 database built from the pre-change schema. Those checks cover existing rows and duplicate gateway URLs, new legacy defaults, provider records with null connection fields and exact tool lists, duplicate provider URL rejection, distinct provider URLs with empty tool lists, and invalid/null mode rejection. Application-level URL canonicalization, field validation, and authorization are not covered by this database-only proof
+
+Runtime isolation was exercised against a real local MCP server. The existing gateway successfully initialized, listed tools, and called an echo tool, producing 11 HTTP requests. Provider-mode table conversion, config loading, manager client creation, and direct upstream client creation were rejected with zero additional HTTP requests. Provider rows produced zero executable catalog entries. This proves the local execution boundary, not native-provider request authorization
+
+The runtime slice passes 369 focused model, request, catalog, and MCP utility tests, along with Ruff and the test lint rules. A type-check comparison of the six changed runtime files found no new diagnostics against the approved commit, and strict Ruff rule counts did not increase. These are focused slice checks, not a full repository CI run
