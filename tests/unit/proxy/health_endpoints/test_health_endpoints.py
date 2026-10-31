@@ -2722,6 +2722,61 @@ async def test_targeted_health_answers_without_probing_billed_media(use_backgrou
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("use_background_health_checks", [True, False])
+async def test_health_names_the_media_models_it_left_out(use_background_health_checks):
+    from fastapi import Response
+
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.health_check import BILLED_MEDIA_NOT_CHECKED_WARNING
+    from litellm.proxy.health_endpoints._health_endpoints import health_endpoint
+
+    def image(model_name: str, model_id: str) -> dict:
+        return {
+            "model_name": model_name,
+            "litellm_params": {"model": "gemini/gemini-3-pro-image"},
+            "model_info": {"id": model_id, "mode": "image_generation"},
+        }
+
+    chat = {"model_name": "mixed", "litellm_params": {"model": "openai/gpt-4o-mini"}, "model_info": {"id": "chat-1"}}
+    model_list = [image("mixed", "image-in-mixed"), image("image", "image-2"), chat]
+    checked = {
+        "healthy_endpoints": [{"model": "openai/gpt-4o-mini", "model_id": "chat-1"}],
+        "unhealthy_endpoints": [],
+        "healthy_count": 1,
+        "unhealthy_count": 0,
+    }
+
+    async def fake_perform(**kwargs):
+        return dict(checked)
+
+    admin = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, token="admin-token")
+    with (
+        _proxy_health_globals(
+            model_list,
+            litellm.Router(model_list=copy.deepcopy(model_list)),
+            use_background_health_checks=use_background_health_checks,
+            health_check_results=checked,
+        ),
+        patch(  # test-quality-ok: the live probe is the outside call; the answer built around it is under test
+            "litellm.proxy.health_endpoints._health_endpoints._perform_health_check_and_save",
+            side_effect=fake_perform,
+        ),
+    ):
+        everything = await health_endpoint(response=Response(), user_api_key_dict=admin, model=None, model_id=None)
+        mixed_response = Response()
+        mixed = await health_endpoint(response=mixed_response, user_api_key_dict=admin, model="mixed", model_id=None)
+        one_chat = await health_endpoint(response=Response(), user_api_key_dict=admin, model=None, model_id="chat-1")
+
+    assert everything["healthy_count"] == 1
+    assert everything["warnings"] == [f"{BILLED_MEDIA_NOT_CHECKED_WARNING} Model ids: image-2, image-in-mixed"]
+    assert mixed_response.status_code == 200
+    assert mixed["healthy_count"] == 1
+    assert mixed["warnings"] == [f"{BILLED_MEDIA_NOT_CHECKED_WARNING} Model ids: image-in-mixed"]
+    assert "warnings" not in one_chat
+    assert "warnings" not in checked
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("model_info", "expected_status"),
     [

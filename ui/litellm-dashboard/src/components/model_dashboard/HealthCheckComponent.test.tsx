@@ -135,6 +135,23 @@ describe("HealthCheckComponent", () => {
     }
   });
 
+  it("shows the skip reason on load when the proxy marks a saved result as skipped", async () => {
+    const warning = "Not checked, because this health check would generate media the provider may bill.";
+    mockLatestHealthChecksCall.mockResolvedValue({
+      latest_health_checks: {
+        "image-1": { status: "skipped", checked_at: "2026-10-01T00:00:00Z", error_message: warning },
+      },
+    });
+    await renderHealthCheck({ modelData: { data: [makeModel("image-1", "image")] }, allModelsOnProxy: ["image-1"] });
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 50));
+    });
+
+    expect(screen.getByText("skipped")).toBeInTheDocument();
+    expect(screen.getByText(warning)).toBeInTheDocument();
+    expect(screen.getByText(warning)).not.toHaveClass("text-destructive");
+  });
+
   it("should page through results with the shared pagination footer", async () => {
     const onPageIndexChange = vi.fn();
     await renderHealthCheck({

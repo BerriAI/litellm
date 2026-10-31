@@ -86,6 +86,7 @@ from litellm.proxy.health_check import (  # noqa: F401  # legacy module exports
     _clean_endpoint_data,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     _update_litellm_params_for_health_check,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     all_bill_media_on_probe,
+    billed_media_model_ids,
     clean_endpoint_data,
     deployments_targeted_by_name,
     health_check_filter_kwargs_from_general_settings,
@@ -1693,11 +1694,9 @@ async def health_endpoint(
                     else f"key not allowed to health-check model {model}"
                 },
             )
-        if targeted_ids is not None and all_bill_media_on_probe(
-            DEPLOYMENTS_ADAPTER.validate_python(_llm_model_list),
-            MODEL_IDS_ADAPTER.validate_python(targeted_ids),
-            **_hc_filter,
-        ):
+        deployments: Final = DEPLOYMENTS_ADAPTER.validate_python(_llm_model_list)
+        probe_ids: Final = None if targeted_ids is None else MODEL_IDS_ADAPTER.validate_python(targeted_ids)
+        if probe_ids is not None and all_bill_media_on_probe(deployments, probe_ids, **_hc_filter):
             return {
                 "healthy_endpoints": [],
                 "unhealthy_endpoints": [],
@@ -1705,6 +1704,12 @@ async def health_endpoint(
                 "unhealthy_count": 0,
                 "warnings": [BILLED_MEDIA_NOT_CHECKED_WARNING],
             }
+        not_checked_ids: Final = await asyncio.to_thread(billed_media_model_ids, deployments, probe_ids, **_hc_filter)
+        media_warning: Final = (
+            {"warnings": [f"{BILLED_MEDIA_NOT_CHECKED_WARNING} Model ids: {', '.join(not_checked_ids)}"]}
+            if not_checked_ids
+            else {}
+        )
         if use_background_health_checks:
             # The cached background result covers every model. When the
             # caller targets a specific model/model_id we have to narrow the
@@ -1743,13 +1748,18 @@ async def health_endpoint(
                         "and were excluded from this response. Ask a proxy admin "
                         "to populate model_info.id for these models."
                     ]
-                return _post_process(filtered)
+                return _post_process({**filtered, **media_warning})
             if targeted_ids is not None:
                 # Admin caller targeting a specific model: filter the cache
                 # so the response (and the targeted-503 check) reflects only
                 # that deployment, not the global aggregate.
-                return _post_process(_filter_health_check_results_by_model_ids(health_check_results, targeted_ids))
-            return _post_process(health_check_results)
+                return _post_process(
+                    {
+                        **_filter_health_check_results_by_model_ids(health_check_results, targeted_ids),
+                        **media_warning,
+                    }
+                )
+            return _post_process({**health_check_results, **media_warning})
         else:
             router_result: Final = await _perform_health_check_and_save(
                 model_list=_llm_model_list,
@@ -1766,7 +1776,7 @@ async def health_endpoint(
                 team_id=user_api_key_dict.team_id,
                 **_hc_filter,
             )
-            return _post_process(router_result)
+            return _post_process({**router_result, **media_warning})
     except Exception as e:
         verbose_proxy_logger.error("litellm.proxy.proxy_server.py::health_endpoint(): Exception occured - %s", e)
         verbose_proxy_logger.debug(traceback.format_exc())
@@ -1813,6 +1823,13 @@ async def health_check_history_endpoint(
         )
 
 
+def _latest_check_row(check: LatestHealthCheckRow, skipped_ids: frozenset[str]) -> Mapping[str, object]:
+    row: Final = convert_health_check_to_dict(check)
+    if check.model_id not in skipped_ids:
+        return row
+    return {**row, "status": "skipped", "error_message": BILLED_MEDIA_NOT_CHECKED_WARNING}
+
+
 @router.get("/health/latest", tags=["health"], dependencies=[Depends(user_api_key_auth)])
 async def latest_health_checks_endpoint(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
@@ -1822,14 +1839,19 @@ async def latest_health_checks_endpoint(
 
     Returns the most recent health check result for each model.
     """
+    from litellm.proxy.proxy_server import llm_model_list
+
     prisma_client: Final = _check_prisma_client()
 
     try:
         latest_checks: Final = await prisma_client.get_all_latest_health_checks()
+        skipped_ids: Final = frozenset(
+            await asyncio.to_thread(billed_media_model_ids, DEPLOYMENTS_ADAPTER.validate_python(llm_model_list or ()))
+        )
 
         # Convert to dict format for JSON response using helper function
         checks_data: Final = {
-            (check.model_id if check.model_id else check.model_name): convert_health_check_to_dict(check)
+            (check.model_id if check.model_id else check.model_name): _latest_check_row(check, skipped_ids)
             for check in latest_checks
         }
 

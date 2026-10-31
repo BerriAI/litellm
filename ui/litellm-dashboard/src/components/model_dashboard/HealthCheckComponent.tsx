@@ -239,6 +239,11 @@ const HealthCheckComponent: React.FC<HealthCheckComponentProps> = ({
 
             const fullError = checkData.error_message || undefined;
 
+            if (checkData.status === "skipped" && fullError) {
+              healthStatusMap[modelId] = skippedStatus(fullError, toCheckedAtLabel(checkData.checked_at, "None"));
+              return;
+            }
+
             healthStatusMap[modelId] = {
               status: checkData.status || "unknown",
               lastCheck: toCheckedAtLabel(checkData.checked_at, "None"),

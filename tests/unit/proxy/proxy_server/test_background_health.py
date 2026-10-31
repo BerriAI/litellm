@@ -802,7 +802,63 @@ async def test_run_background_health_check_names_why_listed_model_groups_probe_n
     with pytest.raises(asyncio.CancelledError):
         await _run_background_health_check()
 
-    assert [call.args[1:] for call in warn.call_args_list] == [(expected_reason, [listed_group])]
+    assert [
+        call.args[1:] for call in warn.call_args_list if call.args[0].startswith("background_health_check_model_groups")
+    ] == [(expected_reason, [listed_group])]
+
+
+@pytest.mark.asyncio
+async def test_run_background_health_check_names_skipped_media_models_once_per_change(monkeypatch):
+    monkeypatch.setattr(proxy_server, "health_check_interval", 60)
+    monkeypatch.setattr(proxy_server, "health_check_concurrency", 1)
+    monkeypatch.setattr(proxy_server, "health_check_details", True)
+    monkeypatch.setattr(proxy_server, "use_shared_health_check", False)
+    monkeypatch.setattr(proxy_server, "redis_usage_cache", None)
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    monkeypatch.setattr(proxy_server, "background_health_check_loop_active", False)
+    monkeypatch.setattr(
+        proxy_server,
+        "llm_router",
+        SimpleNamespace(
+            settings=lambda: RouterSettings(background_health_check_model_groups=frozenset({"image", "chat"}))
+        ),
+    )
+
+    def image(model_id):
+        return {
+            "model_name": "image",
+            "litellm_params": {"model": "gemini/gemini-3-pro-image"},
+            "model_info": {"id": model_id, "mode": "image_generation"},
+        }
+
+    chat = {"model_name": "chat", "litellm_params": {"model": "openai/gpt-4o-mini"}, "model_info": {"id": "chat-1"}}
+    monkeypatch.setattr(proxy_server, "llm_model_list", [image("image-1"), chat])
+    monkeypatch.setattr(proxy_server, "health_check_results", {"healthy_endpoints": [], "unhealthy_endpoints": []})
+    monkeypatch.setattr(
+        proxy_server,
+        "_run_direct_health_check_with_instrumentation",
+        AsyncMock(return_value=([], [], {})),
+    )
+    monkeypatch.setattr(proxy_server, "_schedule_background_health_check_db_save", lambda *a, **kw: None)
+    monkeypatch.setattr(proxy_server, "_write_health_state_to_router_cache", lambda *a, **kw: None)
+    monkeypatch.setattr(proxy_server, "health_check_filter_kwargs_from_general_settings", lambda _gs: {})
+    warn = MagicMock()
+    monkeypatch.setattr("litellm.proxy.proxy_server.verbose_proxy_logger.warning", warn)
+    sleeps = iter((None, [image("image-1"), image("image-2"), chat], None))
+
+    async def _next_cycle(_seconds):
+        step = next(sleeps, asyncio.CancelledError())
+        if isinstance(step, BaseException):
+            raise step
+        if step is not None:
+            monkeypatch.setattr(proxy_server, "llm_model_list", step)
+
+    monkeypatch.setattr(proxy_server.asyncio, "sleep", _next_cycle)
+
+    with pytest.raises(asyncio.CancelledError):
+        await _run_background_health_check()
+
+    assert [call.args[1:] for call in warn.call_args_list] == [(("image-1",),), (("image-1", "image-2"),)]
 
 
 @pytest.mark.asyncio

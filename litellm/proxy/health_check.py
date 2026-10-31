@@ -313,8 +313,9 @@ async def run_with_timeout(task, timeout):
 
 _BILLED_MEDIA_GENERATION_MODES: Final = frozenset({"image_generation", "image_edit", "video_generation"})
 BILLED_MEDIA_NOT_CHECKED_WARNING: Final = (
-    "Not checked, because this health check would generate billed media. "
-    "Set model_info.disable_background_health_check: false to check this model."
+    "Not checked, because this health check would generate media the provider may bill. "
+    "Set model_info.disable_background_health_check: false to check this model on every interval, "
+    "or use Test Connection for one check."
 )
 _DEPLOYMENT_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 DEPLOYMENTS_ADAPTER: Final = TypeAdapter(tuple[Mapping[str, object], ...])
@@ -397,18 +398,35 @@ def background_check_deployments(model_list: Sequence[Mapping[str, object]]) -> 
     return tuple(deployment for deployment in model_list if not skips_background_health_check(deployment))
 
 
+def _probe_targets(
+    deployments: Sequence[Mapping[str, object]],
+    ids: AbstractSet[object] | None,
+    health_check_skip_disabled_background_models: bool,
+) -> tuple[Mapping[str, object], ...]:
+    return tuple(
+        d
+        for d in deployments
+        if (ids is None or _deployment_id(d) in ids)
+        and not (health_check_skip_disabled_background_models and _disable_background_flag(d))
+    )
+
+
 def all_bill_media_on_probe(
     deployments: Sequence[Mapping[str, object]],
     ids: AbstractSet[object],
     health_check_skip_disabled_background_models: bool,
 ) -> bool:
-    targets: Final = tuple(
-        d
-        for d in deployments
-        if _deployment_id(d) in ids
-        and not (health_check_skip_disabled_background_models and _disable_background_flag(d))
-    )
+    targets: Final = _probe_targets(deployments, ids, health_check_skip_disabled_background_models)
     return bool(targets) and all(bills_media_on_probe(d) for d in targets)
+
+
+def billed_media_model_ids(
+    deployments: Sequence[Mapping[str, object]],
+    ids: AbstractSet[object] | None = None,
+    health_check_skip_disabled_background_models: bool = False,
+) -> tuple[str, ...]:
+    targets: Final = _probe_targets(deployments, ids, health_check_skip_disabled_background_models)
+    return tuple(sorted(filter(None, (_deployment_id(d) for d in targets if bills_media_on_probe(d)))))
 
 
 def _health_check_eligible(
