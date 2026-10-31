@@ -60,10 +60,6 @@ class JevChoiceAnswer(LiteLLMBaseModel):
     probabilities: Mapping[str, JevProbability]
     confidence: JevProbability | None = None
 
-    @property
-    def selected_confidence(self) -> float:
-        return self.probabilities.get(self.choice, 0.0) if self.confidence is None else self.confidence
-
 
 class JevUsage(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
@@ -294,7 +290,7 @@ class HttpJevClassifierClient:
 class JevVerdict(NamedTuple):
     label: str
     probabilities: Mapping[str, float]
-    confidence: float
+    confidence: float | None
     model: str
     cost: float | None
     provider: str = "typesafe"

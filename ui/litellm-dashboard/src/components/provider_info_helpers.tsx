@@ -48,6 +48,7 @@ import ollamaLogo from "../../public/assets/logos/ollama.svg";
 import openaiSmallLogo from "../../public/assets/logos/openai_small.svg";
 import openrouterLogo from "../../public/assets/logos/openrouter.svg";
 import oracleLogo from "../../public/assets/logos/oracle.svg";
+import parallelAiLogo from "../../public/assets/logos/parallel_ai.png";
 import perplexityAiLogo from "../../public/assets/logos/perplexity-ai.svg";
 import qwenLogo from "../../public/assets/logos/qwen.png";
 import recraftLogo from "../../public/assets/logos/recraft.svg";
@@ -410,6 +411,7 @@ export const providerLogoMap: Partial<Record<Providers, string>> = {
   [Providers.OpenAI_Compatible]: openaiSmallLogo.src,
   [Providers.Openrouter]: openrouterLogo.src,
   [Providers.Oracle]: oracleLogo.src,
+  [Providers.ParallelAI]: parallelAiLogo.src,
   [Providers.Perplexity]: perplexityAiLogo.src,
   [Providers.Qwen_AI_Platform]: qwenLogo.src,
   [Providers.QwenCloud]: qwenLogo.src,

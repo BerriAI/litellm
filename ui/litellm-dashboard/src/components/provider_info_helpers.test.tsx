@@ -45,6 +45,12 @@ describe("provider_info_helpers", () => {
   });
 
   describe("getProviderLogoAndName", () => {
+    it("shows the Parallel AI logo for the parallel_ai slug", () => {
+      const { logo, displayName } = getProviderLogoAndName("parallel_ai");
+      expect(displayName).toBe(Providers.ParallelAI);
+      expect(logo).toContain("parallel_ai");
+    });
+
     it("should return empty logo and dash display name when providerValue is empty", () => {
       const result = getProviderLogoAndName("");
       expect(result).toEqual({ logo: "", displayName: "-" });
@@ -230,7 +236,6 @@ describe("provider_info_helpers", () => {
         Providers.NLP_CLOUD,
         Providers.NSCALE,
         Providers.OVHCLOUD,
-        Providers.ParallelAI,
         Providers.PETALS,
         Providers.PG_VECTOR,
         Providers.PREDIBASE,
