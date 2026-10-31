@@ -35,6 +35,7 @@ from litellm.proxy.health_endpoints._health_endpoints import (
 from litellm.proxy.health_endpoints._health_endpoints import (
     test_model_connection as health_test_model_connection,
 )
+from litellm.proxy.utils import PrismaClient
 from litellm.router import Router
 from litellm.types.router import RouterModelGroupAliasItem
 from litellm.types.utils import oauth_token_exchange_litellm_params
@@ -47,6 +48,7 @@ from tests._master_key import MASTER_KEY
 
 # Import shared proxy test helpers from conftest
 from tests.unit.proxy.conftest import create_proxy_test_client
+from tests.unit.proxy.db.fake_prisma_engine import engine_call
 
 
 @pytest.mark.asyncio
@@ -6252,3 +6254,61 @@ async def test_unsaved_chatgpt_account_probe_requires_proxy_admin(
                 await call
             assert error.value.code == "403"
             assert len(upstream.calls) == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("alias_layer", ["router", "key", "team", "hierarchical-router"])
+async def test_latest_health_alias_mirrors_the_targets_latest_record(monkeypatch, alias_layer):
+    from litellm.proxy import proxy_server
+
+    llm_router: Final = Router(
+        model_list=[
+            {"model_name": name, "litellm_params": {"model": "openai/gpt-5.6"}, "model_info": {"id": name}}
+            for name in ("chat", "unchecked", "private")
+        ],
+        model_group_alias={
+            **({"default": "chat"} if alias_layer == "router" else {}),
+            "uncached": "unchecked",
+            "restricted": "private",
+            "old-deployment": "chat",
+        },
+    )
+    rows: Final = [
+        {
+            "health_check_id": model_id,
+            "model_name": model_name,
+            "model_id": model_id,
+            "status": status,
+            "healthy_count": int(status == "healthy"),
+            "unhealthy_count": int(status == "unhealthy"),
+            "checked_at": checked_at,
+            "created_at": checked_at,
+            "updated_at": checked_at,
+        }
+        for model_id, model_name, status, checked_at in (
+            ("new-deployment", "chat", "healthy", "2026-10-31T12:00:00+00:00"),
+            ("old-deployment", "chat", "unhealthy", "2026-10-30T12:00:00+00:00"),
+            ("private", "private", "healthy", "2026-10-31T12:00:00+00:00"),
+        )
+    ]
+    prisma: Final = PrismaClient(
+        database_url="postgresql://localhost/test", proxy_logging_obj=proxy_server.proxy_logging_obj
+    )
+    monkeypatch.setattr(prisma, "db", SimpleNamespace(query_raw=engine_call(rows)))
+    caller: Final = UserAPIKeyAuth(
+        models=["chat", "unchecked"],
+        aliases={"default": "chat"} if alias_layer == "key" else {},
+        team_model_aliases={"default": "chat"} if alias_layer == "team" else {},
+        router_settings={"model_group_alias": {"default": "chat"}} if alias_layer == "hierarchical-router" else {},
+    )
+
+    with _proxy_health_globals([], llm_router, prisma_client=prisma):
+        result: Final = await _health_endpoints_module.latest_health_checks_endpoint(user_api_key_dict=caller)
+
+    checks: Final = result["latest_health_checks"]
+    assert set(checks) == {"new-deployment", "old-deployment", "private", "default"}
+    assert checks["default"] == checks["new-deployment"]
+    assert checks["default"]["status"] == "healthy"
+    assert checks["default"]["checked_at"] == "2026-10-31T12:00:00+00:00"
+    assert checks["old-deployment"]["status"] == "unhealthy"
+    assert result["total_models"] == 3
