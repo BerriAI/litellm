@@ -3700,6 +3700,20 @@ def test_get_guardrail_from_metadata() -> None:
     ) == [{"test-guardrail": {"extra_body": {"key": "value"}}}]
 
 
+
+@pytest.mark.parametrize(
+    "caller_metadata",
+    [{"guardrails": []}, {"guardrails": ["not-a-guardrail"]}, {"guardrails": None}],
+)
+def test_caller_metadata_guardrails_never_hide_the_proxy_guardrails_in_litellm_metadata(caller_metadata: dict) -> None:
+    guardrail: Final = CustomGuardrail(
+        guardrail_name="key-guardrail", event_hook=GuardrailEventHooks.pre_call, default_on=False
+    )
+    request_data: Final = {"metadata": caller_metadata, "litellm_metadata": {"guardrails": ["key-guardrail"]}}
+
+    assert guardrail.should_run_guardrail(request_data, GuardrailEventHooks.pre_call) is True
+
+
 def test_guardrail_is_in_requested_guardrails() -> None:
     guardrail: Final = CustomGuardrail(guardrail_name="test-guardrail")
 
@@ -3824,3 +3838,16 @@ def test_native_hook_guardrails_take_apply_guardrail_only_where_their_hooks_read
     guardrail_type: type[CustomGuardrail], call_type: str | None, expected: bool
 ) -> None:
     assert runs_through_apply_guardrail(guardrail_type(guardrail_name="g"), call_type) is expected
+
+
+def test_merged_guardrail_entries_names_each_guardrail_once_preferring_its_first_entry_with_settings():
+    from litellm.integrations.custom_guardrail import merged_guardrail_entries
+
+    assert merged_guardrail_entries(["a"], [{"a": {}, "b": {}}, {"a": {"x": 1}}], ["b", "c", "c"]) == [
+        {"a": {}, "b": {}},
+        "c",
+    ]
+    assert merged_guardrail_entries(["pii", {"pii": {"extra_body": {"threshold": 1}}}], ["model-guard"]) == [
+        {"pii": {"extra_body": {"threshold": 1}}},
+        "model-guard",
+    ]

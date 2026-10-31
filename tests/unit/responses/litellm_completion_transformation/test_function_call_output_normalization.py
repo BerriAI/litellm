@@ -50,9 +50,10 @@ def test_image_detail_mime_and_adjacent_text_survive_normalization(kind: str, de
         else "data:application/octet-stream;base64,AAAA",
         **({} if nested_url else metadata),
     }
-    parts: Final = [{"type": "input_text", "text": "Screenshot follows"}, image]
+    parts: Final = [{"type": "input_text", "text": ""}, {"type": "input_text", "text": "Screenshot follows"}, image]
     original: Final = deepcopy(parts)
     assert _normalize_media_content(kind, parts) == [
+        *([{"type": "text", "text": ""}] if kind == "direct" else []),
         {"type": "text", "text": "Screenshot follows"},
         {"type": "image_url", "image_url": {"url": "data:application/octet-stream;base64,AAAA", **metadata}},
     ]
@@ -97,6 +98,12 @@ def test_media_normalization_preserves_formats_references_and_metadata(kind: str
     ("output", "expected"),
     [
         (None, ""),
+        ("", ""),
+        ([], ""),
+        ([{"type": "input_text", "text": ""}], ""),
+        ([{"type": kind, "text": ""} for kind in ("input_text", "output_text", "text")], ""),
+        ("[]", "[]"),
+        ([{"type": "input_text", "text": " \n"}], " \n"),
         ('{"ok":true}', '{"ok":true}'),
         ([{"type": "input_text", "text": "hello"}, {"type": "input_text", "text": " world"}], "hello world"),
         ({"type": "file", "status": "ready"}, '{"type": "file", "status": "ready"}'),
@@ -106,6 +113,14 @@ def test_media_normalization_preserves_formats_references_and_metadata(kind: str
         ),
         ({"type": "input_image", "format": 17}, '{"type": "input_image", "format": 17}'),
         ([{"type": "unknown", "value": 17}], '[{"type": "unknown", "value": 17}]'),
+        ([{"type": "input_text", "text": 17}], '[{"type": "input_text", "text": 17}]'),
+        ([{"type": "input_text"}], '[{"type": "input_text"}]'),
+        ([{"type": "input_text", "text": None}], '[{"type": "input_text", "text": null}]'),
+        (
+            [{"type": "input_text", "text": ""}, {"type": "unknown", "value": 17}],
+            '[{"type": "input_text", "text": ""}, {"type": "unknown", "value": 17}]',
+        ),
+        ([{"type": "input_text", "text": ""}, 17], '[{"type": "input_text", "text": ""}, 17]'),
         (
             [{"type": "input_text", "text": "keep"}, {"type": "input_image", "file_id": "file-only"}],
             "keep",
