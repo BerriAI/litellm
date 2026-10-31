@@ -458,15 +458,13 @@ def _tags_that_route(request_tags: Sequence[str], metadata: object, routing_pref
 
 def _tag_known_to_group(
     ctx: "RoutingContext",
-    model: str | None,
+    model: str,
     positive_tags: Sequence[str],
     routing_confirmed: frozenset[str],
 ) -> bool:
     tag_set: Final = frozenset(positive_tags)
     if tag_set & routing_confirmed:
         return True
-    if model is None:
-        return False
     try:
         all_deployments: Final = ctx.registry().deployments(model, source="all")
     except Exception:  # noqa: BLE001  # fail safe toward "unrecognized" so lookup errors preserve the existing silent-fallback behavior
