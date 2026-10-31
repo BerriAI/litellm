@@ -10169,6 +10169,19 @@ def test_chat_transform_request_never_blames_a_numeric_assistant_tool_call_id_fo
     assert raised.value.message.startswith("'str' object has no attribute 'get'")
 
 
+@pytest.mark.parametrize("empty_role", [[], 0, False])
+def test_chat_transform_request_never_blames_an_empty_role_for_another_failure(local_model_cost_map, empty_role):
+    list_part_type_after_an_empty_role: Final = [
+        _ASK,
+        {"role": empty_role, "content": "ok"},
+        {"role": "user", "content": [{"type": ["text"], "text": "again"}]},
+        {"role": "system", "content": "Be terse."},
+    ]
+
+    with pytest.raises(TypeError):
+        _chat_request(AnthropicConfig(), FLAGGED_CLAUDE, list_part_type_after_an_empty_role)
+
+
 def test_chat_transform_request_names_no_field_for_a_failure_outside_roles_and_tool_call_ids(local_model_cost_map):
     list_part_type: Final = [
         _ASK,

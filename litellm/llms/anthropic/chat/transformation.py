@@ -195,7 +195,7 @@ def _tool_call_ids_failing(
 
 def _non_string_roles(messages: Sequence[object]) -> Iterator[tuple[str, object]]:
     roles: Final = ((index, message_field(message, "role")) for index, message in enumerate(messages))
-    return ((f"messages[{index}].role", role) for index, role in roles if is_present_non_string(role))
+    return ((f"messages[{index}].role", role) for index, role in roles if role and is_present_non_string(role))
 
 
 def _assistant_tool_call_ids_failing(
