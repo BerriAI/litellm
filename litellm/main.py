@@ -6048,15 +6048,21 @@ def completion(
         bridges_to_responses_api: Final = (
             responses_api_model_info.get("mode") == "responses" and not skip_responses_api_bridge
         )
-        allowed_openai_params: Final[list[str] | None] = (
-            [*(kwargs.get("allowed_openai_params") or []), "reasoning_effort"]
+        bridge_allowed_params: Final[tuple[str, ...]] = (
+            ("reasoning_effort", "web_search_options")
             if bridges_to_responses_api
-            or reasoning_effort_needs_allowing(
+            else ("reasoning_effort",)
+            if reasoning_effort_needs_allowing(
                 chat_reasoning.effort,
                 model=model,
                 custom_llm_provider=custom_llm_provider,
                 base_model=base_model if isinstance(base_model, str) else None,
             )
+            else ()
+        )
+        allowed_openai_params: Final[list[str] | None] = (
+            [*(kwargs.get("allowed_openai_params") or []), *bridge_allowed_params]
+            if bridge_allowed_params
             else kwargs.get("allowed_openai_params")
         )
         optional_param_args: Final = {
