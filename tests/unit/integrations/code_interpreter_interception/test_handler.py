@@ -7,6 +7,7 @@ config and records how it is called.
 
 import asyncio
 import time
+from collections.abc import Mapping
 from typing import Final
 
 import httpx
@@ -29,6 +30,7 @@ from litellm.llms.base_llm.sandbox.transformation import CodeExecutionResult
 from litellm.types.integrations.custom_logger import (
     CHAT_COMPLETION_AGENTIC_SURFACE,
     CODE_INTERPRETER_STREAM_OPTIONS_KEY,
+    AgenticLoopPlan,
     NON_CODE_INTERPRETER_INTERCEPTION_INTERNAL_PREFIXES,
     is_interception_internal_key,
 )
@@ -1522,7 +1524,12 @@ _SESSION_PLAN_SURFACES: Final = (
 )
 
 
-async def _build_session_plan(logger, request_id, surface_kwargs=None, response=None):
+async def _build_session_plan(
+    logger: CodeInterpreterInterceptionLogger,
+    request_id: str,
+    surface_kwargs: Mapping[str, object] | None = None,
+    response: object | None = None,
+) -> AgenticLoopPlan:
     return await logger.async_build_agentic_loop_plan(
         tools={
             "tool_calls": [
@@ -1552,7 +1559,9 @@ async def _build_session_plan(logger, request_id, surface_kwargs=None, response=
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(("surface_kwargs", "response"), _SESSION_PLAN_SURFACES)
-async def test_a_session_sandbox_whose_code_run_fails_is_not_reused_by_the_next_request(surface_kwargs, response):
+async def test_a_session_sandbox_whose_code_run_fails_is_not_reused_by_the_next_request(
+    surface_kwargs: Mapping[str, object], response: object
+) -> None:
     sandbox: Final = _SandboxThatCannotRunCode()
     logger: Final = CodeInterpreterInterceptionLogger(sandbox_config=sandbox)
 
@@ -1564,19 +1573,19 @@ async def test_a_session_sandbox_whose_code_run_fails_is_not_reused_by_the_next_
 
 
 class _SandboxWhoseFirstContainerDies(FakeSandbox):
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__()
-        self.handles = []
+        self.handles: list[FakeHandle] = []
         self.first_run_started = asyncio.Event()
         self.first_run_may_finish = asyncio.Event()
 
-    async def acreate_sandbox(self, **kwargs):
+    async def acreate_sandbox(self, **kwargs: object) -> FakeHandle:
         self.create_calls.append(kwargs)
-        handle = FakeHandle(sandbox_id=f"sbx_{len(self.handles)}")
+        handle: Final = FakeHandle(sandbox_id=f"sbx_{len(self.handles)}")
         self.handles.append(handle)
         return handle
 
-    async def arun_code(self, *, container, code, **kwargs):
+    async def arun_code(self, *, container: FakeHandle, code: str, **kwargs: object) -> CodeExecutionResult:
         self.run_calls.append({"container": container, "code": code})
         if len(self.run_calls) == 1:
             self.first_run_started.set()
@@ -1587,7 +1596,7 @@ class _SandboxWhoseFirstContainerDies(FakeSandbox):
 
 
 @pytest.mark.asyncio
-async def test_a_late_failure_on_a_dead_session_sandbox_keeps_its_healthy_replacement():
+async def test_a_late_failure_on_a_dead_session_sandbox_keeps_its_healthy_replacement() -> None:
     sandbox: Final = _SandboxWhoseFirstContainerDies()
     logger: Final = CodeInterpreterInterceptionLogger(sandbox_config=sandbox)
 
