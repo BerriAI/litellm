@@ -1275,6 +1275,9 @@ class LiteLLMCompletionResponsesConfig:
         if malformed_field_error is not None:
             raise malformed_field_error
 
+        request_fields: Final[Mapping[str, object]] = responses_api_request
+        requested_top_logprobs: Final = request_fields.get("top_logprobs")
+        top_logprobs: Final = requested_top_logprobs if isinstance(requested_top_logprobs, int) else None
         litellm_completion_request: dict = {
             "messages": (
                 list(
@@ -1292,8 +1295,8 @@ class LiteLLMCompletionResponsesConfig:
             ),
             "tools": tools,
             "top_p": responses_api_request.get("top_p"),
-            "top_logprobs": responses_api_request.get("top_logprobs"),
-            "logprobs": True if responses_api_request.get("top_logprobs") is not None else None,
+            "top_logprobs": top_logprobs,
+            "logprobs": True if top_logprobs is not None else None,
             "user": responses_api_request.get("user"),
             "temperature": responses_api_request.get("temperature"),
             "parallel_tool_calls": responses_api_request.get("parallel_tool_calls"),
