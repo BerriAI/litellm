@@ -1579,6 +1579,44 @@ def test_failure_hook_scrubs_the_prompt_out_of_the_server_span_and_the_restamp_k
     assert span.attributes["error.type"] == "ProxyException"
 
 
+def _raised(exc):
+    try:
+        raise exc
+    except Exception as raised:
+        return raised
+
+
+@pytest.mark.parametrize("redact", [True, False], ids=["redaction_on", "redaction_off"])
+def test_restamp_shows_the_handlers_own_error_with_the_prompt_scrubbed(monkeypatch, redact):
+    """The proxy's failure hook and its exception handler stamp the same SERVER span from different
+    exceptions. The handler's restamp keeps its own wording and stack trace, scrubbed like the hook's."""
+    from fastapi import HTTPException
+
+    import litellm
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    secret = "my ssn is 123-45-6789"
+    monkeypatch.setattr(litellm, "turn_off_message_logging", redact)
+    logger, exporter = _logger()
+    server = logger._emitter.start_span(SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME)
+    set_request_root_span(server)
+    asyncio.run(
+        logger.async_post_call_failure_hook(
+            request_data={"messages": [{"role": "user", "content": secret}]},
+            original_exception=HTTPException(status_code=400, detail={"error": f"blocked: {secret}", "mode": "pre"}),
+            user_api_key_dict=UserAPIKeyAuth(),
+            traceback_str=f'  File "/srv/litellm/router.py", line 7, in route\nHTTPException: blocked: {secret}\n',
+        )
+    )
+    logger.record_error_attributes_on_span(server, _raised(_proxy_exc(f"blocked: {secret}", 500)), 500)
+    server.end()
+    (span,) = exporter.get_finished_spans()
+
+    assert span.attributes["error.message"] == f"blocked: {'redacted-by-litellm' if redact else secret}"
+    assert "_raised" in span.attributes["litellm.provider.error.stack_trace"]
+    assert "router.py" not in span.attributes["litellm.provider.error.stack_trace"]
+
+
 def test_record_error_attributes_on_span_does_not_duplicate_an_already_stamped_error():
     """A failure that already went through ``async_post_call_failure_hook`` reaches
     the exception handler too; the second stamp must keep one exception event while

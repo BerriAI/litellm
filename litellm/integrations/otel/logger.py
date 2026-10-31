@@ -1,6 +1,7 @@
 """``CustomLogger`` adapter on the OpenTelemetry span engine."""
 
 import sys
+import weakref
 from collections import OrderedDict
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager, nullcontext
@@ -27,7 +28,6 @@ from typing_extensions import TypedDict, Unpack
 
 import litellm
 from litellm._logging import verbose_logger
-from litellm.constants import REDACTED_BY_LITELLM
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.otel.emitter import SpanEmitter, stamp_error
 from litellm.integrations.otel.mappers import resolve_mappers
@@ -50,7 +50,7 @@ from litellm.integrations.otel.model.payloads import (
     is_mcp_list_tools,
     is_mcp_tool_call,
 )
-from litellm.integrations.otel.model.semconv import Error, LiteLLMError
+from litellm.integrations.otel.model.semconv import Error
 from litellm.integrations.otel.model.spans import SpanRole, span_role_for_service
 from litellm.integrations.otel.model.utils import to_ns
 from litellm.integrations.otel.plumbing.context import (
@@ -132,18 +132,7 @@ def _span_error_from_exception(
     )
 
 
-def _keeping_scrubbed_text(error: SpanError, attributes: Mapping[str, object]) -> SpanError:
-    """``error`` with the span's already stamped message and stack trace when the failure hook scrubbed
-    the request's text out of them, so a restamp from the raw exception does not put it back."""
-    message: Final = attributes.get(Error.MESSAGE)
-    stack_trace: Final = attributes.get(LiteLLMError.STACK_TRACE)
-    if not any(isinstance(text, str) and REDACTED_BY_LITELLM in text for text in (message, stack_trace)):
-        return error
-    return replace(
-        error,
-        message=message if isinstance(message, str) else None,
-        stack_trace=stack_trace if isinstance(stack_trace, str) else None,
-    )
+_failed_request_by_span: Final[weakref.WeakKeyDictionary[Span, Mapping[str, object]]] = weakref.WeakKeyDictionary()
 
 
 # Any callback whose class belongs to one of these modules is "the OTel
@@ -862,14 +851,16 @@ class OpenTelemetryV2(CustomLogger):
         this span already — ``async_post_call_failure_hook`` and the ``auth`` phase
         span record their own, and a second event would duplicate it — while the
         attributes are always restamped so ``error.code`` stays pinned to the real
-        response status."""
+        response status. The restamp scrubs the text of the request the failure hook
+        stamped this span for, as the hook did."""
         if span is None or not is_recordable_span(span):
             return
-        attributes: Final[Mapping[str, object]] = getattr(span, "attributes", None) or {}
-        already_stamped: Final = Error.TYPE in attributes
+        already_stamped: Final = Error.TYPE in (getattr(span, "attributes", None) or ())
         stamp_error(
             span,
-            _keeping_scrubbed_text(_span_error_from_exception(exception, status_code=status_code), attributes),
+            _span_error_from_exception(
+                exception, status_code=status_code, request_data=_failed_request_by_span.get(span)
+            ),
             record_event=not already_stamped,
         )
 
@@ -895,6 +886,7 @@ class OpenTelemetryV2(CustomLogger):
         span: Final = mcp_message_transport_span() or request_root_span() or user_api_key_dict.parent_otel_span
         if span is None or not is_recordable_span(span):
             return
+        _failed_request_by_span[span] = request_data
         stamp_error(
             span,
             _span_error_from_exception(original_exception, traceback_str=traceback_str, request_data=request_data),
