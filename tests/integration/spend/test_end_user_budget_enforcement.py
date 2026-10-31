@@ -1,17 +1,20 @@
 import json
+import os
 import re
 import uuid
 from collections.abc import Callable, Mapping
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Final
 
 import httpx
 import pytest
 from integration._support.client import Gateway, Scenario, eventually, object_value, string_value
-from integration._support.database import read_rows
+from integration._support.database import read_rows, write_rows
 from integration._support.upstream import delete_scenario, register_scenario
 from integration.cost_calculation.cost_tracking_case import JsonResponse
 from pydantic import BaseModel, JsonValue
+from redis import Redis
 
 PROVIDER_AUTHORIZATION: Final = "Bearer integration-provider-key"
 CANNED_CONTENT: Final = "Hello! This is a mock response from the fake OpenAI endpoint."
@@ -639,3 +642,141 @@ def test_streamed_call_is_refused_as_json_once_over_budget(gateway: Gateway) -> 
         assert "data:" not in denied.text, denied.text
         _assert_budget_refusal(denied, end_user, 0.05)
         assert _observed_requests(upstream) == []
+
+
+_COLD_BURST: Final = 40
+_COLD_SEED_SPEND: Final = 6.0
+_COLD_BUDGET: Final = 10.0
+_CHAT_COST: Final = 20 * 0.001 + 20 * 0.002
+
+
+def _serves_model(gateway: Gateway, model: str) -> bool:
+    response: Final = gateway.request("GET", "/model/info")
+    return response.status_code == 200 and any(
+        object_value(entry)["model_name"] == model for entry in object_value(response.json())["data"]
+    )
+
+
+def _counter_cache() -> Redis:
+    return Redis(host=os.environ["REDIS_HOST"], port=int(os.environ["REDIS_PORT"]))
+
+
+def _counter(cache: Redis, end_user: str) -> float | None:
+    raw: Final = cache.get(f"spend:end_user:{end_user}")
+    return None if raw is None else float(raw)
+
+
+def _lose_counter(cache: Redis, end_user: str) -> None:
+    cache.delete(f"spend:end_user:{end_user}")
+
+
+def _set_end_user_row_spend(end_user: str, spend: float) -> None:
+    write_rows('UPDATE "LiteLLM_EndUserTable" SET spend = %s WHERE user_id = %s', (str(spend), end_user))
+
+
+def _await_row_spend(end_user: str, spend: float) -> None:
+    eventually(
+        lambda: _end_user_row(end_user),
+        lambda rows: len(rows) == 1 and float(str(rows[0]["spend"])) == pytest.approx(spend),
+        seconds=70,
+    )
+
+
+def _refused_spend(denied: httpx.Response, end_user: str) -> float:
+    error: Final = _denial_error(denied)
+    assert error["type"] == "budget_exceeded", denied.text
+    matched: Final = _REFUSAL_MESSAGE.match(string_value(error["message"]))
+    assert matched is not None, denied.text
+    assert matched.group("user") == end_user
+    return float(matched.group("spend"))
+
+
+@pytest.mark.parametrize("spelling", ("user", "responses_user", "messages_metadata_user_id"))
+def test_overlapping_cold_starts_count_the_end_user_spend_once(gateway: Gateway, spelling: str) -> None:
+    chosen: Final = SPELLINGS[spelling]
+    with (
+        gateway.scenario() as scenario,
+        httpx.Client(base_url=gateway.upstream_url, timeout=5, trust_env=False) as upstream,
+        _counter_cache() as cache,
+    ):
+        deployment: Final = _deployment(scenario, chosen)
+        key: Final = scenario.key(models=[deployment.model])
+        end_user: Final = f"integration-end-user-{uuid.uuid4().hex}"
+        _new_customer(gateway, end_user, max_budget=_COLD_BUDGET, spend=_COLD_SEED_SPEND)
+        scenario.cleanups.callback(gateway.request, "POST", "/customer/delete", {"user_ids": [end_user]})
+        assert _customer_info(gateway, end_user).spend == _COLD_SEED_SPEND
+        assert _counter(cache, end_user) is None
+        upstream.delete("/__observations").raise_for_status()
+
+        with ThreadPoolExecutor(max_workers=_COLD_BURST) as pool:
+            burst: Final = tuple(
+                pool.map(
+                    lambda index: _send(gateway, chosen, deployment, key, end_user, f"cold {index}"),
+                    range(_COLD_BURST),
+                )
+            )
+        refused: Final = [response.text for response in burst if response.status_code != 200]
+        assert refused == [], refused
+        follow_up: Final = _send(gateway, chosen, deployment, key, end_user, "cold follow-up")
+        _assert_served(chosen, follow_up)
+        assert len(_observed_requests(upstream)) == _COLD_BURST + 1
+
+        expected_spend: Final = _COLD_SEED_SPEND + (_COLD_BURST + 1) * _CHAT_COST
+        _await_row_spend(end_user, expected_spend)
+        assert _customer_info(gateway, end_user).spend == pytest.approx(expected_spend)
+        counted: Final = eventually(
+            lambda: _counter(cache, end_user),
+            lambda value: value is not None and value == pytest.approx(expected_spend),
+            seconds=30,
+            return_last_on_timeout=True,
+        )
+        assert counted == pytest.approx(expected_spend)
+
+
+def test_a_lost_counter_keeps_spend_this_proxy_has_not_written_yet(gateway: Gateway) -> None:
+    with gateway.scenario() as scenario, _counter_cache() as cache:
+        model: Final = scenario.model(input_cost_per_token=0.001, output_cost_per_token=0.25)
+        key: Final = scenario.key(models=[model])
+        end_user: Final = f"integration-end-user-{uuid.uuid4().hex}"
+        call_cost: Final = 20 * 0.001 + 20 * 0.25
+        _new_customer(gateway, end_user, max_budget=_COLD_BUDGET, spend=_COLD_SEED_SPEND)
+        scenario.cleanups.callback(gateway.request, "POST", "/customer/delete", {"user_ids": [end_user]})
+        served: Final = _chat(gateway, model, key, end_user)
+        assert served.status_code == 200, served.text
+        _await_row_spend(end_user, _COLD_SEED_SPEND + call_cost)
+        _set_end_user_row_spend(end_user, _COLD_SEED_SPEND)
+        _lose_counter(cache, end_user)
+
+        denied: Final = _chat(gateway, model, key, end_user)
+
+        assert _refused_spend(denied, end_user) == pytest.approx(_COLD_SEED_SPEND + call_cost)
+
+
+def test_a_lost_counter_keeps_spend_another_proxy_has_not_written_yet(gateway: Gateway, peer: Gateway) -> None:
+    with gateway.scenario() as scenario, _counter_cache() as cache:
+        model: Final = scenario.model(input_cost_per_token=0.001, output_cost_per_token=0.149)
+        eventually(lambda: _serves_model(peer, model), bool, seconds=30)
+        key: Final = scenario.key(models=[model])
+        end_user: Final = f"integration-end-user-{uuid.uuid4().hex}"
+        call_cost: Final = 20 * 0.001 + 20 * 0.149
+        _new_customer(gateway, end_user, max_budget=_COLD_BUDGET, spend=_COLD_SEED_SPEND)
+        scenario.cleanups.callback(gateway.request, "POST", "/customer/delete", {"user_ids": [end_user]})
+        first: Final = _chat(peer, model, key, end_user)
+        assert first.status_code == 200, first.text
+        _await_row_spend(end_user, _COLD_SEED_SPEND + call_cost)
+        _set_end_user_row_spend(end_user, _COLD_SEED_SPEND)
+        _lose_counter(cache, end_user)
+        second: Final = _chat(peer, model, key, end_user)
+        assert second.status_code == 200, second.text
+        expected_spend: Final = _COLD_SEED_SPEND + 2 * call_cost
+        counted: Final = eventually(
+            lambda: _counter(cache, end_user),
+            lambda value: value is not None and value == pytest.approx(expected_spend),
+            seconds=30,
+            return_last_on_timeout=True,
+        )
+
+        denied: Final = _chat(gateway, model, key, end_user)
+
+        assert counted == pytest.approx(expected_spend)
+        assert _denial_error(denied)["type"] == "budget_exceeded", denied.text
