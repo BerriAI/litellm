@@ -14,6 +14,10 @@ from typing_extensions import assert_never
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
+from litellm.litellm_core_utils.reasoning_effort_capability import (
+    deployment_reasoning_effort_levels,
+    resolve_deployment_reasoning_effort,
+)
 from litellm.litellm_core_utils.tool_fields import DropPolicy
 from litellm.llms.anthropic.messages.context_management import AnthropicContextManagementError
 from litellm.llms.anthropic.messages.convertible_blocks import deployment_drops_params, unconvertible_blocks_error
@@ -95,6 +99,24 @@ def _count_error(model_to_use: str, request_model: str, message: str, status_cod
         error_message=message,
         status_code=status_code,
     )
+
+
+def _with_deployment_reasoning(
+    request: Mapping[str, object], model: str, model_info: object, policy: DropPolicy
+) -> Mapping[str, object]:
+    reasoning: Final = as_str_mapping(request.get("reasoning"))
+    if reasoning is None:
+        return request
+    resolved: Final = resolve_deployment_reasoning_effort(
+        reasoning,
+        model=model,
+        custom_llm_provider=LlmProviders.OPENAI.value,
+        deployment_model_info=model_info,
+        model_group=None,
+        drop_params=policy.drop_params,
+    ).value
+    without_reasoning: Final = {field: value for field, value in request.items() if field != "reasoning"}
+    return without_reasoning if resolved is None else {**without_reasoning, "reasoning": resolved}
 
 
 async def _sent_messages(
@@ -261,7 +283,13 @@ class OpenAITokenCounter(BaseTokenCounter):
         resolved: Final = _count_credential(deployment, request_model or model_to_use)
         if isinstance(resolved, OpenAIError):
             return _count_error(model_to_use, request_model, resolved.message, resolved.status_code)
-        body: Final = native_count_request(request, model_to_use, policy)
+        model_info: Final = None if deployment is None else deployment.get("model_info")
+        body: Final = native_count_request(
+            _with_deployment_reasoning(request, model_to_use, model_info, policy),
+            model_to_use,
+            policy,
+            declared_reasoning_efforts=deployment_reasoning_effort_levels(model_info) or (),
+        )
         return await self._counted(
             resolved,
             lambda api_key, api_base: openai_count_tokens_handler.post_count_request(body, api_key, api_base),

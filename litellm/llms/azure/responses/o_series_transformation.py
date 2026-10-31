@@ -8,6 +8,7 @@ Translations handled by LiteLLM:
 - Other parameters follow base Azure OpenAI Responses API behavior
 """
 
+from collections.abc import Collection, Mapping
 from typing import TYPE_CHECKING, Any, Final
 
 from litellm._logging import verbose_logger
@@ -51,28 +52,35 @@ class AzureOpenAIOSeriesResponsesAPIConfig(AzureOpenAIResponsesAPIConfig):
 
         return o_series_supported_params
 
-    def map_openai_params(
+    def map_openai_params_for_deployment(
         self,
         response_api_optional_params: ResponsesAPIOptionalRequestParams,
         model: str,
         drop_params: bool,
-    ) -> dict:
+        *,
+        declared_reasoning_efforts: Collection[str] | None,
+    ) -> Mapping[str, object]:
         """
         Map OpenAI parameters for Azure OpenAI O-series Responses API.
 
-        Drops temperature parameter if drop_params is True since O-series models
+        Drops temperature and malformed values if drop_params is True since O-series models
         don't support temperature in the responses API.
         """
-        mapped_params: Final = dict(response_api_optional_params)
-
-        # If drop_params is enabled, remove temperature parameter for O-series models
-        if drop_params and "temperature" in mapped_params:
+        if not drop_params:
+            return dict(response_api_optional_params)
+        kept: Final = self.params_dropped_for_deployment(
+            response_api_optional_params, model, declared_reasoning_efforts=declared_reasoning_efforts
+        )
+        if "temperature" in kept:
             verbose_logger.debug(
                 "Dropping unsupported parameter 'temperature' for Azure OpenAI O-series responses API model %s", model
             )
-            mapped_params.pop("temperature", None)
+        return {name: value for name, value in kept.items() if name != "temperature"}
 
-        return mapped_params
+    def _reasoning_refusal(
+        self, reasoning: object, model: str, declared_reasoning_efforts: Collection[str] | None
+    ) -> None:
+        return None
 
     def is_o_series_model(self, model: str) -> bool:
         """
