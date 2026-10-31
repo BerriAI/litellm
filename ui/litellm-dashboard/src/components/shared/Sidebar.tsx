@@ -64,7 +64,10 @@ const SidebarFooter = React.forwardRef<HTMLDivElement, React.ComponentPropsWitho
     <div
       ref={ref}
       data-slot="sidebar-footer"
-      className={cn("flex flex-none flex-col gap-2.5 border-t border-sidebar-border p-3", className)}
+      className={cn(
+        "relative z-raised flex flex-none flex-col gap-2.5 border-t border-sidebar-border bg-sidebar p-3",
+        className,
+      )}
       {...props}
     />
   ),
