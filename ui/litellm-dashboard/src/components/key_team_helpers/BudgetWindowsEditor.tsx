@@ -46,7 +46,7 @@ export function BudgetWindowsEditor({ value, onChange }: BudgetWindowsEditorProp
                 value={window.budget_duration}
                 onValueChange={(v: string | null) => v && updateWindow(idx, "budget_duration", v)}
               >
-                <SelectTrigger className="w-[130px]">
+                <SelectTrigger className="w-[130px]" aria-label={`Window ${idx + 1} duration`}>
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -62,6 +62,7 @@ export function BudgetWindowsEditor({ value, onChange }: BudgetWindowsEditorProp
                   <InputGroupText>$</InputGroupText>
                 </InputGroupAddon>
                 <InputGroupInput
+                  aria-label={`Window ${idx + 1} budget (USD)`}
                   type="number"
                   step={0.01}
                   min={0}
@@ -80,6 +81,8 @@ export function BudgetWindowsEditor({ value, onChange }: BudgetWindowsEditorProp
                 />
               </InputGroup>
               <Button
+                type="button"
+                aria-label={`Remove budget window ${idx + 1}`}
                 variant="ghost"
                 size="sm"
                 className="px-1 text-destructive hover:text-destructive/80"
@@ -93,6 +96,7 @@ export function BudgetWindowsEditor({ value, onChange }: BudgetWindowsEditorProp
         );
       })}
       <Button
+        type="button"
         variant="outline"
         size="sm"
         onClick={(e) => {

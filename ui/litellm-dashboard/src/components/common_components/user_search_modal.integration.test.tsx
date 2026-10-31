@@ -85,10 +85,18 @@ describe("UserSearchModal submit payload", () => {
     vi.mocked(userFilterUICall).mockResolvedValue([{ user_id: "u-1", user_email: "picked@example.com" }] as never);
   });
 
-  const setup = () => {
+  const setup = (defaultBudgetWindows?: Array<{ budget_duration: string; max_budget: number }>) => {
     const user = userEvent.setup();
     const onSubmit = vi.fn();
-    render(<UserSearchModal isVisible onCancel={vi.fn()} onSubmit={onSubmit} accessToken="sk-test" />);
+    render(
+      <UserSearchModal
+        isVisible
+        onCancel={vi.fn()}
+        onSubmit={onSubmit}
+        accessToken="sk-test"
+        defaultBudgetWindows={defaultBudgetWindows}
+      />,
+    );
     return { user, onSubmit };
   };
 
@@ -128,6 +136,25 @@ describe("UserSearchModal submit payload", () => {
       user_id: "u-1",
       role: "user",
     });
+  });
+
+  it("should submit custom windows and reset to team defaults for the next member", async () => {
+    const windows = [
+      { budget_duration: "24h", max_budget: 20 },
+      { budget_duration: "30d", max_budget: 200 },
+    ];
+    const { user, onSubmit } = setup(windows);
+    await user.click(screen.getByRole("radio", { name: "Custom budget windows" }));
+    await act(async () => {
+      fireEvent.change(screen.getByRole("spinbutton", { name: "Window 1 budget (USD)" }), { target: { value: "5" } });
+    });
+    await searchByEmail(user, "pick");
+    await user.click(save());
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+    expect(onSubmit.mock.calls[0][0].budget_limits).toEqual([{ ...windows[0], max_budget: 5 }, windows[1]]);
+    expect(screen.getByRole("radio", { name: "Use team defaults" })).toBeChecked();
+    expect(screen.getByText("$20 daily, $200 monthly")).toBeInTheDocument();
+    expect(save()).toBeDisabled();
   });
 
   it("carries a role changed off its default into the payload", async () => {

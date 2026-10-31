@@ -158,6 +158,37 @@ describe("TeamMembersComponent", () => {
     expect(screen.getByRole("columnheader", { name: /actions/i })).toBeInTheDocument();
   });
 
+  it("should show member overrides separately from inherited team windows", () => {
+    const original = createMockTeamData();
+    const teamData: TeamData = {
+      ...original,
+      team_info: {
+        ...original.team_info,
+        team_member_budget_limits: [{ budget_duration: "30d", max_budget: 200 }],
+      },
+      team_memberships: original.team_memberships.map((membership) => ({
+        ...membership,
+        budget_limits: [{ budget_duration: "24h", max_budget: 5 }],
+      })),
+    };
+    renderWithProviders(
+      <TeamMembersComponent
+        teamData={teamData}
+        canEditTeam={false}
+        handleMemberDelete={mockHandleMemberDelete}
+        onMemberSpendReset={mockOnMemberSpendReset}
+        onMemberBudgetReset={mockOnMemberBudgetReset}
+        setSelectedEditMember={mockSetSelectedEditMember}
+        setIsEditMemberModalVisible={mockSetIsEditMemberModalVisible}
+        setIsAddMemberModalVisible={mockSetIsAddMemberModalVisible}
+      />,
+    );
+    expect(screen.getByText("$5.00 daily")).toBeInTheDocument();
+    expect(screen.getByText("Member override")).toBeInTheDocument();
+    expect(screen.getByText("$200.00 monthly")).toBeInTheDocument();
+    expect(screen.getByText("Team default")).toBeInTheDocument();
+  });
+
   it("should render team members data", () => {
     renderWithProviders(
       <TeamMembersComponent

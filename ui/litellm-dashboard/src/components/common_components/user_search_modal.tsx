@@ -11,6 +11,9 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
+import type { BudgetWindowEntry } from "../key_team_helpers/BudgetWindowsEditor";
+import { MemberBudgetWindows } from "../team/MemberBudgetWindows";
+import { memberBudgetWindowsSchema } from "../team/memberBudgetWindowSchema";
 
 interface User {
   user_id: string;
@@ -31,12 +34,14 @@ interface Role {
 }
 
 interface FormValues {
+  budget_limits?: BudgetWindowEntry[];
   user_email: string | null | undefined;
   user_id: string | null | undefined;
   role: string;
 }
 
 interface UserSearchModalProps {
+  defaultBudgetWindows?: BudgetWindowEntry[];
   isVisible: boolean;
   onCancel: () => void;
   onSubmit: (values: FormValues) => void | Promise<void>;
@@ -63,8 +68,14 @@ const UserSearchModal: React.FC<UserSearchModalProps> = ({
   ],
   defaultRole = "user",
   teamId,
+  defaultBudgetWindows,
 }) => {
-  const emptyValues: FormValues = { user_email: undefined, user_id: undefined, role: defaultRole };
+  const emptyValues: FormValues = {
+    user_email: undefined,
+    user_id: undefined,
+    role: defaultRole,
+    ...(defaultBudgetWindows !== undefined ? { budget_limits: [] } : {}),
+  };
   const form = useForm<FormValues>({ defaultValues: emptyValues });
   const selectedUserId = form.watch("user_id");
   const selectedUserEmail = form.watch("user_email");
@@ -124,9 +135,17 @@ const UserSearchModal: React.FC<UserSearchModalProps> = ({
   };
 
   const handleSubmit = async (values: FormValues): Promise<void> => {
+    if (values.budget_limits !== undefined) {
+      const validation = memberBudgetWindowsSchema.safeParse(values.budget_limits);
+      if (!validation.success) {
+        form.setError("budget_limits", { type: "validate", message: validation.error.issues[0]?.message });
+        return;
+      }
+    }
     setIsSubmitting(true);
     try {
       await onSubmit(values);
+      form.reset(emptyValues);
     } finally {
       setIsSubmitting(false);
     }
@@ -235,6 +254,17 @@ const UserSearchModal: React.FC<UserSearchModalProps> = ({
                   </Select>
                 )}
               </FormField>
+              {defaultBudgetWindows !== undefined && (
+                <FormField control={form.control} name="budget_limits" label="Budget windows">
+                  {({ value, onChange }) => (
+                    <MemberBudgetWindows
+                      value={value ?? []}
+                      onChange={onChange}
+                      defaultWindows={defaultBudgetWindows}
+                    />
+                  )}
+                </FormField>
+              )}
             </FieldGroup>
 
             <div className="mt-4 text-right">
