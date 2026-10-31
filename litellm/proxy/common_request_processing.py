@@ -264,6 +264,7 @@ StreamChunkSerializer = Callable[[object], str]
 StreamErrorSerializer = Callable[[ProxyException], str]
 
 if TYPE_CHECKING:
+    from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
     from litellm.proxy.proxy_server import ProxyConfig as _ProxyConfig
 
     ProxyConfig = _ProxyConfig
@@ -546,6 +547,12 @@ async def _bill_in_flight_round_on_disconnect(request_data: Mapping[str, object]
         await bill_in_flight_round()
     except Exception as e:  # noqa: BLE001  # disconnect billing is best-effort; never break stream teardown
         verbose_proxy_logger.debug("Failed to bill the in-flight round after client disconnect: %s", e)
+
+
+async def settle_strategy_stream_disconnect(response: "CustomStreamWrapper") -> None:
+    request_data: Final = {"litellm_logging_obj": response.logging_obj}
+    await _record_streaming_client_disconnect_if_needed(None, request_data, client_disconnected=True)
+    await _bill_partial_streamed_spend_on_disconnect(request_data, response)
 
 
 async def _dispatch_disconnect_billing_event(logging_obj: LiteLLMLoggingObj, partial_response: object) -> bool:

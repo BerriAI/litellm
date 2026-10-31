@@ -3869,8 +3869,17 @@ class PythonCore(DeprecatedRouterMembers):
             await finalize()
             raise
         if isinstance(response, CustomStreamWrapper):
+
+            async def bill_disconnect() -> None:
+                await router_host().bill_strategy_stream_disconnect(response)
+
             return FinalizingStream(
-                response.__aiter__(), finalize, response.aclose, get_hidden_params_dict(response), response.logging_obj
+                response.__aiter__(),
+                finalize,
+                response.aclose,
+                get_hidden_params_dict(response),
+                response.logging_obj,
+                on_disconnect=bill_disconnect,
             )
         await finalize()
         if request_kwargs.get("stream") is True and isinstance(response, ModelResponse):

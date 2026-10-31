@@ -18,13 +18,15 @@ def response(model: str, text: str) -> ModelResponse:
 
 
 class ScriptedProvider:
-    def __init__(self, replies: Mapping[str, ModelResponse | Exception]):
+    def __init__(self, replies: Mapping[str, ModelResponse | Exception | tuple[ModelResponse | Exception, ...]]):
         self.replies = replies
         self.calls: tuple[tuple[str, Mapping[str, object]], ...] = ()
 
     async def __call__(self, model: str, request: Mapping[str, object]) -> ModelResponse:
+        script: Final = self.replies[model]
+        index: Final = sum(1 for called, _ in self.calls if called == model)
+        reply: Final = script[index] if isinstance(script, tuple) else script
         self.calls = (*self.calls, (model, request))
-        reply: Final = self.replies[model]
         if isinstance(reply, Exception):
             raise reply
         return reply
@@ -48,7 +50,7 @@ async def test_weighted_routing_executes_only_selected_target_and_preserves_resp
         SwitchyardRouterConfig.model_validate(
             {
                 "algorithm": "random",
-                "models": {"any": ["fast", "slow"]},
+                "models": {"any": ["fast", "slow"], "judge": ["judge"], "efficient": ["other"]},
                 "weights": [1, 0],
                 "seed": 42,
             }
@@ -221,6 +223,86 @@ async def test_escalation_buffers_intermediate_calls_for_stream_requests() -> No
     actual: Final = await router.execute({"messages": [{"role": "user", "content": "hello"}], "stream": True}, provider)
     assert actual is answer
     assert tuple((model, payload["stream"]) for model, payload in provider.calls) == (("fast", False), ("judge", False))
+
+
+@pytest.mark.asyncio
+async def test_stage_classifier_resolves_selected_target_without_explicit_registry() -> None:
+    answer: Final = response("fast", "answer")
+    provider: Final = ScriptedProvider(
+        {
+            "fast": answer,
+            "judge": response(
+                "judge",
+                '{"p_solve":0.9,"crux":"bounded task","primary_rule":"SUP-1","capability_boundary":"supported"}',
+            ),
+        }
+    )
+    router: Final = SwitchyardAutoRouter(
+        classifier_config(
+            "stage",
+            stage={"picker": "capable_first", "confidence_threshold": 1, "classifier": {"base_threshold": 0.5}},
+        )
+    )
+    actual: Final = await router.execute({"messages": [{"role": "user", "content": "hello"}]}, provider)
+    assert actual is answer
+    assert tuple(model for model, _ in provider.calls) == ("judge", "fast")
+
+
+@pytest.mark.asyncio
+async def test_deescalation_returns_to_efficient_without_explicit_registry() -> None:
+    efficient: Final = response("fast", "efficient answer")
+    capable: Final = response("strong", "capable answer")
+    provider: Final = ScriptedProvider(
+        {
+            "fast": efficient,
+            "strong": capable,
+            "judge": (
+                response("judge", '{"escalate":true,"category":"repetition","new_evidence":true,"reason":"stuck"}'),
+                response("judge", '{"escalate":false,"category":"none","new_evidence":false,"reason":"recovered"}'),
+                response("judge", '{"escalate":false,"category":"none","new_evidence":false,"reason":"routine"}'),
+            ),
+        }
+    )
+    router: Final = SwitchyardAutoRouter(
+        classifier_config(
+            "escalation",
+            escalation={"confirmations": 1, "deescalation": {"strong_min_calls": 2, "confirmations": 1}},
+        )
+    )
+    request: Final = {"messages": [{"role": "user", "content": "Continue the task"}]}
+    headers: Final = {"x-switchyard-session-id": "deescalation-session"}
+    first: Final = await router.execute(request, provider, headers=headers)
+    held: Final = await router.execute(request, provider, headers=headers)
+    released: Final = await router.execute(request, provider, headers=headers)
+    assert (first is capable, held is capable, released is efficient) == (True, True, True)
+    assert tuple(model for model, _ in provider.calls) == (
+        "fast",
+        "judge",
+        "strong",
+        "strong",
+        "judge",
+        "fast",
+        "judge",
+    )
+
+
+@pytest.mark.asyncio
+async def test_judge_model_is_never_used_as_answer_fallback() -> None:
+    failure: Final = ServiceUnavailableError("unavailable", "fake", "fast")
+    provider: Final = ScriptedProvider(
+        {
+            "fast": failure,
+            "strong": failure,
+            "judge": response(
+                "judge",
+                '{"p_solve":0.9,"crux":"bounded task","primary_rule":"SUP-1","capability_boundary":"supported"}',
+            ),
+        }
+    )
+    router: Final = SwitchyardAutoRouter(classifier_config("capability"))
+    with pytest.raises(ServiceUnavailableError):
+        await router.execute({"messages": [{"role": "user", "content": "hello"}]}, provider)
+    assert tuple(model for model, _ in provider.calls) == ("judge", "fast", "strong")
 
 
 @pytest.mark.asyncio

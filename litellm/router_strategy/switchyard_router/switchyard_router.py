@@ -107,6 +107,7 @@ class SwitchyardAutoRouter:
         self.session_namespace: Final[str] = str(uuid4())
         self._api = native_api if native_api is not None else load_native()
         self._algorithm = build_algorithm(self._api, config)
+        self._models = config.runtime_models()
 
     async def async_pre_routing_hook(
         self,
@@ -137,7 +138,7 @@ class SwitchyardAutoRouter:
         stream: bool,
         headers: Mapping[str, str] | None,
     ) -> ModelResponse | CustomStreamWrapper:
-        async for step in self._algorithm.run_stream(normalized, self.config.models, headers=headers):
+        async for step in self._algorithm.run_stream(normalized, self._models, headers=headers):
             if isinstance(step, self._api.Step.CallModel):
                 await step.call.respond(execution.respond(step.call.models, step.call.request))
             elif isinstance(step, self._api.Step.Done):

@@ -179,6 +179,7 @@ OPTION_NAMES: Final = (
     "complexity_router_default_model",
     "adaptive_router_config",
     "adaptive_router_default_model",
+    "switchyard_router_config",
     "quality_router_config",
     "quality_router_default_model",
     "caching",

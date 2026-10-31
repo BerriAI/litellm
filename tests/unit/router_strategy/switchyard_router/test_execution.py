@@ -141,3 +141,40 @@ def test_proxy_missing_identity_cannot_reuse_sdk_scope():
     assert scoped_switchyard_headers(request, sdk_namespace="router") != scoped_switchyard_headers(
         request, sdk_namespace="router"
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cancelled", [False, True])
+async def test_stream_disconnect_bills_before_close_and_finalizes_under_cancellation(cancelled: bool):
+    from collections.abc import AsyncIterator
+
+    import anyio
+
+    from litellm.router_strategy.switchyard_router.execution import FinalizingStream
+    from litellm.types.utils import ModelResponseStream
+
+    events: Final[list[str]] = []
+
+    async def source() -> AsyncIterator[ModelResponseStream]:
+        yield ModelResponseStream(id="first")
+
+    async def bill() -> None:
+        await anyio.lowlevel.checkpoint()
+        events.append("bill")
+
+    async def close() -> None:
+        await anyio.lowlevel.checkpoint()
+        events.append("close")
+
+    async def finalize() -> None:
+        await anyio.lowlevel.checkpoint()
+        events.append("finalize")
+
+    wrapped: Final = FinalizingStream(source(), finalize, close, {}, None, on_disconnect=bill)
+    await anext(wrapped)
+    with anyio.CancelScope() as scope:
+        if cancelled:
+            scope.cancel()
+        await wrapped.aclose()
+    await wrapped.aclose()
+    assert events == ["bill", "close", "finalize"]

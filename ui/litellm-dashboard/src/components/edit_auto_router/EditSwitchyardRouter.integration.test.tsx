@@ -73,6 +73,31 @@ describe("Switchyard editor", () => {
     expect(screen.getByRole("button", { name: "Save Changes" })).toBeEnabled();
   });
 
+  it("allows editing restored defaults returned with legacy model-info null strings", async () => {
+    const reloaded = {
+      ...modelData,
+      litellm_params: {
+        ...modelData.litellm_params,
+        switchyard_router_config: {
+          algorithm: "escalation",
+          models: modelData.litellm_params.switchyard_router_config.models,
+          escalation: { prompt: "None", deescalation: "None" },
+        },
+      },
+    };
+    renderWithProviders(
+      <EditSwitchyardRouter isVisible accessToken="test" modelData={reloaded} onCancel={vi.fn()} onSuccess={vi.fn()} />,
+    );
+    expect(screen.getByRole("button", { name: "Save Changes" })).toBeEnabled();
+    fireEvent.click(screen.getByText("Advanced settings"));
+    fireEvent.click(screen.getByRole("button", { name: "Restore defaults" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
+    await waitFor(() => expect(patch).toHaveBeenCalled());
+    const submitted = patch.mock.calls[0][1].litellm_params.switchyard_router_config;
+    expect(submitted.escalation).not.toHaveProperty("prompt");
+    expect(submitted.escalation).not.toHaveProperty("deescalation");
+  });
+
   it("blocks unsupported member-managed updates", () => {
     renderWithProviders(
       <EditSwitchyardRouter

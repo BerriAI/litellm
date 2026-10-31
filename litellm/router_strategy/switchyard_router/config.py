@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from itertools import chain
 from typing import Final, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -139,3 +140,10 @@ class SwitchyardRouterConfig(BaseModel):
         if self.algorithm == "stage" and self.stage.classifier is None:
             return ("efficient", "capable")
         return ("efficient", "capable", "judge")
+
+    def runtime_models(self) -> Mapping[str, tuple[str, ...]]:
+        if self.algorithm == "random":
+            return self.models
+        target_groups: Final = tuple(names for group, names in self.models.items() if group not in ("judge", "any"))
+        targets: Final = tuple(dict.fromkeys(chain(self.models.get("any", ()), chain.from_iterable(target_groups))))
+        return {**self.models, "any": targets}

@@ -8794,6 +8794,64 @@ class TestStreamingClientDisconnectBilling:
         assert standard_logging_object["response_cost"] >= 0.002
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("consume_all", [False, True])
+    async def test_switchyard_stream_settles_child_once_without_charging_parent(self, consume_all: bool, monkeypatch: pytest.MonkeyPatch):
+        from litellm.router import Router
+        from litellm.router_strategy.switchyard_router.execution import FinalizingStream
+
+        recorder: Final = _RecordingSuccessLogger()
+        monkeypatch.setattr(litellm, "callbacks", [recorder])
+        router: Final = Router(
+            model_list=[
+                {
+                    "model_name": "routed",
+                    "litellm_params": {
+                        "model": "auto_router/switchyard_router",
+                        "switchyard_router_config": {"algorithm": "random", "models": {"any": ["answer"]}},
+                    },
+                },
+                {
+                    "model_name": "answer",
+                    "litellm_params": {
+                        "model": "openai/gpt-4o-mini",
+                        "api_key": "test-key",
+                        "mock_response": "A sufficiently long answer to close after two chunks of generated text.",
+                    },
+                },
+            ],
+            num_retries=0,
+        )
+        try:
+            response: Final = await router.acompletion(
+                model="routed",
+                messages=[{"role": "user", "content": "tell me a story"}],
+                stream=True,
+                litellm_call_id="virtual-parent",
+            )
+            assert isinstance(response, FinalizingStream)
+            await anext(response)
+            await anext(response)
+            if consume_all:
+                async for _ in response:
+                    pass
+            await ProxyBaseLLMRequestProcessing.finalize_streaming_generator_cleanup(
+                request=None,
+                request_data={"litellm_call_id": "virtual-parent"},
+                response=response,
+                stream_completed=consume_all,
+                client_disconnected=not consume_all,
+            )
+            await response.aclose()
+            await asyncio.wait_for(recorder.logged.wait(), timeout=5)
+            assert len(recorder.success_events) == 1
+            event: Final = recorder.success_events[0]["kwargs"]["standard_logging_object"]
+            assert event["id"] != "virtual-parent"
+            assert event["total_tokens"] > 0
+            assert event["response_cost"] > 0
+        finally:
+            router.reset()
+
+    @pytest.mark.asyncio
     async def test_disconnect_bills_partial_spend_for_anthropic_adapter_stream(self):
         """
         The proxy's cleanup gets the FallbackAwareAnthropicMessagesStream the

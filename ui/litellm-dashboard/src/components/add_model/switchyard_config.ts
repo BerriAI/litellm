@@ -15,6 +15,37 @@ const jsonValue = (value: unknown): unknown => {
     return value;
   }
 };
+const NULLABLE_CONFIG_FIELDS: Record<string, { values: readonly string[]; text: readonly string[] }> = {
+  "": { values: ["weights", "seed", "custom"], text: [] },
+  capability: { values: ["recent_turn_window"], text: ["prompt"] },
+  custom: { values: ["recent_turn_window"], text: [] },
+  escalation: { values: ["deescalation"], text: ["prompt"] },
+  "escalation.deescalation": { values: ["strong_max_calls"], text: [] },
+  stage: {
+    values: ["recent_window", "tool_semantics", "classifier"],
+    text: ["escalation_note", "deescalation_note", "capable_system_prompt", "efficient_system_prompt"],
+  },
+  "stage.classifier": { values: ["recent_turn_window"], text: ["prompt"] },
+};
+
+const normalizeNullableConfig = (config: SwitchyardDraft, fromModelInfo: boolean, path = ""): SwitchyardDraft => {
+  const fields = NULLABLE_CONFIG_FIELDS[path];
+  return Object.fromEntries(
+    Object.entries(config).flatMap(([key, value]) => {
+      const nullableValue = fields.values.includes(key);
+      const nullableText = fields.text.includes(key);
+      if (value === null && (nullableValue || nullableText)) return [];
+      if (fromModelInfo && nullableValue && value === "None") return [];
+      const childPath = path ? `${path}.${key}` : key;
+      const knownSection = Object.hasOwn(NULLABLE_CONFIG_FIELDS, childPath);
+      const isObject = value !== null && typeof value === "object" && !Array.isArray(value);
+      const normalized =
+        knownSection && isObject ? normalizeNullableConfig(switchyardRecord(value), fromModelInfo, childPath) : value;
+      return [[key, normalized]];
+    }),
+  );
+};
+
 const positiveInteger = z.number().int().positive();
 const optionalWindow = positiveInteger.nullable().optional();
 const responseFormat = z.enum(["json_schema", "json_object"]).optional();
@@ -140,7 +171,8 @@ export const switchyardConfigSchema = z
     config.algorithm === "random"
       ? config
       : Object.fromEntries(Object.entries(config).filter(([key]) => key !== "weights")),
-  );
+  )
+  .transform((config) => normalizeNullableConfig(config, false));
 
 export const SWITCHYARD_DEFAULTS: Record<SwitchyardAlgorithm, Record<string, unknown>> = {
   random: {},
@@ -193,7 +225,8 @@ export const restoreSwitchyardDefaults = (config: SwitchyardDraft): SwitchyardDr
   };
 };
 
-export const hydrateSwitchyardConfig = (value: unknown): SwitchyardDraft => switchyardRecord(jsonValue(value));
+export const hydrateSwitchyardConfig = (value: unknown): SwitchyardDraft =>
+  normalizeNullableConfig(switchyardRecord(jsonValue(value)), true);
 export const switchyardConfigError = (config: SwitchyardDraft): string | null => {
   const result = switchyardConfigSchema.safeParse(config);
   return result.success

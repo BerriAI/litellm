@@ -16,6 +16,8 @@ from itertools import chain
 from types import MappingProxyType
 from typing import Final, Literal, TypeAlias
 
+from pydantic import TypeAdapter, ValidationError
+
 from litellm.router_strategy.complexity_router.config import (
     COMPLEXITY_ROUTER_CONFIG_KEYS,
     DEFAULT_JEV_INSTRUCTIONS,
@@ -107,7 +109,9 @@ def _pool(value: object, role: StrategyRouterDependencyRole) -> tuple[StrategyRo
     if isinstance(value, str):
         return _named(value, role)
     if isinstance(value, Sequence):
-        return tuple(dep for entry in value for dep in _named(entry, role))
+        return tuple(
+            chain.from_iterable(_named(entry, role) for entry in TypeAdapter(Sequence[object]).validate_python(value))
+        )
     return ()
 
 
@@ -115,7 +119,10 @@ _NO_CONFIG: Final[Mapping[str, object]] = MappingProxyType({})
 
 
 def _mapping(value: object) -> Mapping[str, object]:
-    return value if isinstance(value, Mapping) else _NO_CONFIG
+    try:
+        return TypeAdapter(Mapping[str, object]).validate_python(value)
+    except ValidationError:
+        return _NO_CONFIG
 
 
 def strategy_router_dependencies(

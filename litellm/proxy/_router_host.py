@@ -9,9 +9,12 @@ target up at call time, so patches of the proxy functions apply.
 from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Final
 
+from pydantic import TypeAdapter
+
 from litellm.router_host import CompressionPolicy, RouterHost
 
 if TYPE_CHECKING:
+    from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
     from litellm.router import Router
     from litellm.types.llms.vertex_ai import VERTEX_CREDENTIALS_TYPES
 
@@ -49,10 +52,17 @@ class ProxyRouterHost(RouterHost):
         from litellm.litellm_core_utils.core_helpers import budget_reservation_from_metadata
         from litellm.proxy.spend_tracking.budget_reservation import release_or_invalidate_budget_reservation
 
-        for key in ("metadata", "litellm_metadata"):
-            metadata: Final = request_kwargs.get(key)
+        metadata_values: Final = tuple(request_kwargs.get(key) for key in ("metadata", "litellm_metadata"))
+        for metadata in metadata_values:
             if isinstance(metadata, Mapping):
-                await release_or_invalidate_budget_reservation(budget_reservation_from_metadata(metadata))
+                await release_or_invalidate_budget_reservation(
+                    budget_reservation_from_metadata(TypeAdapter(Mapping[str, object]).validate_python(metadata))
+                )
+
+    async def bill_strategy_stream_disconnect(self, response: "CustomStreamWrapper") -> None:
+        from litellm.proxy.common_request_processing import settle_strategy_stream_disconnect
+
+        await settle_strategy_stream_disconnect(response)
 
     def compression_policy(
         self,

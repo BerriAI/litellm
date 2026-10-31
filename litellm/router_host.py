@@ -15,8 +15,10 @@ from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Final, Protocol
 
 import httpx
+from pydantic import TypeAdapter
 
 if TYPE_CHECKING:
+    from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
     from litellm.router import Router
     from litellm.types.llms.vertex_ai import VERTEX_CREDENTIALS_TYPES
 
@@ -53,7 +55,10 @@ class RouterHost:
     ) -> None:
         """Raise when the caller may not use the routing strategy behind ``deployment``."""
         model_info: Final = deployment.get("model_info") if deployment is not None else None
-        if isinstance(model_info, Mapping) and model_info.get("member_auto_router") is True:
+        if (
+            isinstance(model_info, Mapping)
+            and TypeAdapter(Mapping[str, object]).validate_python(model_info).get("member_auto_router") is True
+        ):
             from litellm.exceptions import PermissionDeniedError
 
             raise PermissionDeniedError(
@@ -65,6 +70,9 @@ class RouterHost:
 
     async def finalize_strategy_request(self, request_kwargs: Mapping[str, object]) -> None:
         """Release admission held by a virtual request whose children settle their own usage."""
+
+    async def bill_strategy_stream_disconnect(self, response: "CustomStreamWrapper") -> None:
+        """Settle the independently billed child stream when its consumer stops early."""
 
     def compression_policy(
         self,

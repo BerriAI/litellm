@@ -59,3 +59,31 @@ def test_custom_configuration_roundtrip_keeps_schema_and_fallback_order() -> Non
     restored: Final = SwitchyardRouterConfig.model_validate_json(parsed.model_dump_json())
     assert restored == parsed
     assert restored.models["code"] == ("a", "b")
+
+
+@pytest.mark.parametrize("explicit", [(), ("strong", "backup")])
+def test_runtime_registry_includes_targets_and_fallbacks_without_judge(explicit: tuple[str, ...]) -> None:
+    groups: Final = {"efficient": ("fast", "backup"), "capable": ("strong", "backup"), "judge": ("judge",)}
+    config: Final = SwitchyardRouterConfig.model_validate(
+        {
+            "models": {**groups, **({"any": explicit} if explicit else {})},
+        }
+    )
+    assert config.runtime_models() == {
+        **groups,
+        "any": ("strong", "backup", "fast") if explicit else ("fast", "backup", "strong"),
+    }
+    assert config.models == {**groups, **({"any": explicit} if explicit else {})}
+
+
+def test_random_registry_keeps_weighted_candidates_even_with_extra_groups() -> None:
+    groups: Final = {"any": ("b", "a", "b"), "efficient": ("extra",), "judge": ("judge",)}
+    config: Final = SwitchyardRouterConfig.model_validate(
+        {
+            "algorithm": "random",
+            "models": groups,
+            "weights": (0, 1, 0),
+        }
+    )
+    assert config.runtime_models() == groups
+    assert config.weights == (0, 1, 0)
