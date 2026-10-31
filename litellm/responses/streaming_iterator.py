@@ -35,9 +35,10 @@ import litellm
 from litellm.constants import (
     EMPTY_MAPPING,
     LITELLM_MAX_STREAMING_DURATION_SECONDS,
+    RESPONSES_WEBSOCKET_CALL_ID_METADATA_KEY,
     STREAM_SSE_DONE_STRING,
 )
-from litellm.exceptions import MidStreamFallbackError, RateLimitError
+from litellm.exceptions import MidStreamFallbackError, RateLimitError, ServiceUnavailableError
 from litellm.litellm_core_utils.asyncify import run_async_function
 from litellm.litellm_core_utils.core_helpers import (
     process_response_headers,
@@ -97,6 +98,12 @@ class ProjectQuotaCallback(Protocol):
         requested_model: str | None,
         estimated_input_tokens: int,
         estimated_output_tokens: int,
+    ) -> None: ...
+
+
+class TokenLimitCallback(Protocol):
+    async def enforce_token_limits_for_frame(
+        self, user_api_key_dict: UserAPIKeyAuth, requested_model: str | None
     ) -> None: ...
 
 
@@ -312,7 +319,7 @@ def map_stream_error_to_exception(
     error_body: Final = {"message": error_message, "type": error_type, "code": error_code}
     provider_exception: Final = BaseLLMException(
         status_code=status_code,
-        message=f"Error code: {status_code} - {{'error': {error_body}}}",
+        message=f"Error code: {status_code} - {json.dumps({'error': error_body})}",
         body=error_body,
         headers=headers,
     )
@@ -2158,6 +2165,25 @@ class _RefusedTurn:
 ResponsesWsTurnAdmission: TypeAlias = Callable[[], Awaitable[Mapping[str, object]]]
 
 
+def with_token_limit_checks(
+    turn_admission: ResponsesWsTurnAdmission | None,
+    token_limit_callbacks: Sequence[TokenLimitCallback],
+    user_api_key_dict: UserAPIKeyAuth | None,
+    requested_model: str | None,
+) -> ResponsesWsTurnAdmission | None:
+    if not token_limit_callbacks or user_api_key_dict is None:
+        return turn_admission
+
+    async def admit() -> Mapping[str, object]:
+        for callback in token_limit_callbacks:
+            await callback.enforce_token_limits_for_frame(
+                user_api_key_dict=user_api_key_dict, requested_model=requested_model
+            )
+        return MappingProxyType({}) if turn_admission is None else await turn_admission()
+
+    return admit
+
+
 async def _admit_frame_turn(
     turn_admission: ResponsesWsTurnAdmission | None, raw_message: str
 ) -> _AdmittedTurn | _RefusedTurn:
@@ -2173,22 +2199,24 @@ async def _admit_frame_turn(
         return _RefusedTurn(e)
 
 
-def _turn_refusal_frame(refusal: RateLimitError) -> str:
+def turn_refusal_frame(refusal: RateLimitError) -> str:
     return json.dumps(
         {"type": "error", "status": 429, "error": {"type": "rate_limit_exceeded", "message": str(refusal)}}
     )
 
 
-def _turn_admission_error_frame(failure: Exception) -> str:
-    return json.dumps({"type": "error", "status": 500, "error": {"type": "server_error", "message": str(failure)}})
+def _turn_admission_error_frame(failure: Exception, status: int) -> str:
+    return json.dumps({"type": "error", "status": status, "error": {"type": "server_error", "message": str(failure)}})
 
 
 def _turn_rejection_frame(rejection: Exception) -> str:
     match rejection:
         case RateLimitError():
-            return _turn_refusal_frame(rejection)
+            return turn_refusal_frame(rejection)
+        case ServiceUnavailableError():
+            return _turn_admission_error_frame(rejection, rejection.status_code)
         case _:
-            return _turn_admission_error_frame(rejection)
+            return _turn_admission_error_frame(rejection, 500)
 
 
 RESPONSES_WS_LOGGED_EVENT_TYPES: Final = [
@@ -2275,6 +2303,29 @@ class GuardedResponsesWsFrame:
 
 
 ResponsesWsFrameGuard: TypeAlias = Callable[[str], Awaitable[GuardedResponsesWsFrame]]
+
+
+class ResponsesWsFrameRejection(ValueError):
+    def __init__(self, message: str, provider_specific_fields: Mapping[str, object] | None = None) -> None:
+        super().__init__(message)
+        self.provider_specific_fields: Final = provider_specific_fields
+
+
+def _frame_rejection_event(rejection: Exception) -> str:
+    provider_fields: Final = (
+        rejection.provider_specific_fields if isinstance(rejection, ResponsesWsFrameRejection) else None
+    )
+    return json.dumps(
+        {
+            "type": "error",
+            "error": {
+                "type": "invalid_request_error",
+                "message": str(rejection),
+                **({"provider_specific_fields": dict(provider_fields)} if provider_fields else {}),
+            },
+        },
+        default=str,
+    )
 
 
 async def _reject_guarded_turn(
@@ -2562,7 +2613,8 @@ class ResponsesWebSocketStreaming:
             return await self.frame_guard(message)
         except Exception as e:  # noqa: BLE001  # any guardrail rejection maps to one client-facing error event
             verbose_logger.info("Responses WebSocket: pre_call guardrail rejected a response.create frame: %s", e)
-            await self._send_error_event("invalid_request_error", str(e))
+            with contextlib.suppress(Exception):
+                await self.websocket.send_text(_frame_rejection_event(e))
             return None
 
     async def _forward_guarded_frame(
@@ -2991,15 +3043,7 @@ class ResponsesWebSocketStreaming:
 
     async def _send_turn_refusal(self, refusal: RateLimitError) -> None:
         try:
-            await self.websocket.send_text(_turn_refusal_frame(refusal))
-        except Exception:  # noqa: BLE001, S110  # client may already be gone
-            pass
-
-    async def _send_error_event(self, error_type: str, message: str) -> None:
-        try:
-            await self.websocket.send_text(
-                json.dumps({"type": "error", "error": {"type": error_type, "message": message}})
-            )
+            await self.websocket.send_text(turn_refusal_frame(refusal))
         except Exception:  # noqa: BLE001, S110  # client may already be gone
             pass
 
@@ -3416,7 +3460,7 @@ class ManagedResponsesWebSocketHandler:
             return await self.frame_guard(raw_message)
         except Exception as e:  # noqa: BLE001  # any guardrail rejection maps to one client-facing error event
             verbose_logger.info("ManagedResponsesWS: pre_call guardrail rejected a response.create frame: %s", e)
-            await self._send_error(str(e), error_type="invalid_request_error")
+            await self._send_frame(_frame_rejection_event(e))
             return None
 
     @staticmethod
@@ -3553,7 +3597,7 @@ class ManagedResponsesWebSocketHandler:
                 self.quota_callbacks, self.user_api_key_dict, self.model_group or self.model, raw_message
             )
         except RateLimitError as e:
-            await self._send_frame(_turn_refusal_frame(e))
+            await self._send_frame(turn_refusal_frame(e))
             return
         guarded: Final = await self._guard_frame(raw_message)
         if guarded is None:
@@ -3597,6 +3641,7 @@ class ManagedResponsesWebSocketHandler:
         call_kwargs["litellm_metadata"] = {
             **(turn_litellm_metadata if _is_json_object(turn_litellm_metadata) else {}),
             **verdict.reservation,
+            RESPONSES_WEBSOCKET_CALL_ID_METADATA_KEY: self.logging_obj.litellm_call_id,
         }
 
         try:

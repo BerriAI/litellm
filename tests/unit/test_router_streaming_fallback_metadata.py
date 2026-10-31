@@ -5,9 +5,9 @@ from unittest.mock import MagicMock
 import pytest
 
 import litellm
+from litellm.litellm_core_utils.add_retry_fallback_headers import get_hidden_params_dict
 from litellm.proxy.proxy_server import _should_include_fallback_errors
 from litellm.router import Router
-from litellm.router_utils.add_retry_fallback_headers import get_hidden_params_dict
 from litellm.types.llms.base import HiddenParams
 
 
