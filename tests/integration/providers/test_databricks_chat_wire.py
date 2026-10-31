@@ -385,21 +385,64 @@ def _shape_reply(identity: str, stream: bool) -> Reply:
             id="A7-chat-stream-json-object-two-blocks-joined",
         ),
         pytest.param(
-            "json-object-system-blocks",
+            "json-object-history",
             "/v1/chat/completions",
             "databricks-meta-llama-3-3-70b-instruct",
             {
                 "messages": [
-                    {"role": "system", "content": [{"type": "text", "text": "Alpha"}, {"type": "text", "text": " rule."}]},
-                    {"role": "system", "content": "Bravo rule."},
+                    {"role": "user", "content": [{"type": "text", "text": "Code: A"}, {"type": "text", "text": "BC"}]},
+                    {"role": "assistant", "content": "Got it."},
                     {"role": "user", "content": [{"type": "text", "text": "Reply"}, {"type": "text", "text": " in JSON"}]},
                 ],
                 "response_format": {"type": "json_object"},
             },
-            [{"role": "system", "content": "Alpha rule.\n\nBravo rule."}, {"role": "user", "content": "Reply in JSON"}],
+            [
+                {"role": "user", "content": [{"type": "text", "text": "Code: A"}, {"type": "text", "text": "BC"}]},
+                {"role": "assistant", "content": "Got it."},
+                {"role": "user", "content": "Reply in JSON"},
+            ],
             False,
             "/chat/completions",
-            id="A8-chat-json-object-system-blocks-keep-break",
+            id="A8-chat-json-object-earlier-turns-kept",
+        ),
+        pytest.param(
+            "json-object-trailing-system",
+            "/v1/chat/completions",
+            "databricks-meta-llama-3-3-70b-instruct",
+            {
+                "messages": [
+                    {"role": "user", "content": "Say hi"},
+                    {"role": "system", "content": [{"type": "text", "text": "Alpha"}, {"type": "text", "text": " rule."}]},
+                    {"role": "system", "content": [{"type": "text", "text": "Reply"}, {"type": "text", "text": " in JSON"}]},
+                ],
+                "response_format": {"type": "json_object"},
+            },
+            [{"role": "user", "content": "Say hi"}, {"role": "system", "content": "Alpha rule.\n\nReply in JSON"}],
+            False,
+            "/chat/completions",
+            id="A8b-chat-json-object-trailing-system-keeps-break",
+        ),
+        pytest.param(
+            "json-object-drop-params-cache-control",
+            "/v1/chat/completions",
+            "databricks-meta-llama-3-3-70b-instruct",
+            {
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": "Reply"},
+                            {"type": "text", "text": " in JSON", "cache_control": {"type": "ephemeral"}},
+                        ],
+                    }
+                ],
+                "response_format": {"type": "json_object"},
+                "drop_params": True,
+            },
+            [{"role": "user", "content": "Reply in JSON"}],
+            False,
+            "/chat/completions",
+            id="A8c-chat-json-object-drop-params-drops-cache-control",
         ),
         pytest.param(
             "json-object-responses-two-parts",

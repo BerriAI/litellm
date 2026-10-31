@@ -4,12 +4,14 @@ Translates from OpenAI's `/v1/chat/completions` to Databricks' `/chat/completion
 
 import os
 from collections.abc import AsyncIterator, Coroutine, Iterator, Mapping, Sequence
+from itertools import takewhile
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, cast, overload
 
 import httpx
 from pydantic import BaseModel, ConfigDict, TypeAdapter
 
+import litellm
 from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
 from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
     handle_invalid_parallel_tool_calls,
@@ -109,22 +111,63 @@ def _collapse_single_text_block(message: Mapping[str, object]) -> Mapping[str, o
             return message
 
 
-def _join_plain_text_blocks(message: AllMessageValues) -> AllMessageValues:
-    match _plain_texts(message):
+def _without_text_cache_control(block: object) -> object:
+    match block:
+        case {"type": "text", "text": str() as text, "cache_control": object() as cache_control} if block == {
+            "type": "text",
+            "text": text,
+            "cache_control": cache_control,
+        }:
+            return {"type": "text", "text": text}
+        case _:
+            return block
+
+
+def _without_cache_control(message: AllMessageValues) -> AllMessageValues:
+    uncached: Final = {key: value for key, value in message.items() if key != "cache_control"}
+    match content := uncached.get("content"):
+        case list():
+            blocks: Final = [_without_text_cache_control(block) for block in _CONTENT_BLOCKS.validate_python(content)]
+            return cast(AllMessageValues, {**uncached, "content": blocks})  # cast-ok: spread keeps the shape
+        case _:
+            return cast(AllMessageValues, uncached)  # cast-ok: only cache_control was left out
+
+
+def _has_string_content(message: Mapping[str, object]) -> bool:
+    return isinstance(message.get("content"), str)
+
+
+def _is_system(message: Mapping[str, object]) -> bool:
+    return message.get("role") == "system"
+
+
+def _json_mode_message(message: AllMessageValues, drop_params: bool) -> AllMessageValues:
+    candidate: Final = _without_cache_control(message) if drop_params else message
+    match _plain_texts(candidate):
         case ():
-            return message
+            return candidate if _has_string_content(candidate) else message
         case texts:
-            return cast(AllMessageValues, {**message, "content": "".join(texts)})  # cast-ok: spread keeps the shape
+            return cast(AllMessageValues, {**candidate, "content": "".join(texts)})  # cast-ok: spread keeps the shape
+
+
+def _json_checked_start(messages: Sequence[AllMessageValues]) -> int:
+    trailing_system: Final = sum(1 for _ in takewhile(_is_system, reversed(messages)))
+    return max(len(messages) - max(trailing_system, 1), 0)
 
 
 def _json_object_ready_messages(
     model: str,
     messages: list[AllMessageValues],  # mutable-ok: inherited transform_request contract
     response_format: object,
+    drop_params: bool,
 ) -> list[AllMessageValues]:  # mutable-ok: inherited transform_request contract
     match response_format:
         case {"type": "json_object"} if "claude" not in model:
-            return [_join_plain_text_blocks(message) for message in messages]
+            checked_start: Final = _json_checked_start(messages)
+            return [
+                *messages[:checked_start],
+                *(_json_mode_message(message, drop_params) for message in messages[checked_start:]),
+            ]
         case _:
             return messages
 
@@ -586,7 +629,12 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
     ) -> dict[str, object]:  # mutable-ok: inherited contract
         return super().transform_request(
             model=model,
-            messages=_json_object_ready_messages(model, messages, optional_params.get("response_format")),
+            messages=_json_object_ready_messages(
+                model,
+                messages,
+                optional_params.get("response_format"),
+                drop_params=litellm.drop_params is True or litellm_params.get("drop_params") is True,
+            ),
             optional_params=optional_params,
             litellm_params=litellm_params,
             headers=headers,
