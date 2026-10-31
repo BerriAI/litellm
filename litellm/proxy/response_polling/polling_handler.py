@@ -3,9 +3,9 @@ Response Polling Handler for Background Responses with Cache
 """
 
 import json
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
-from typing import Final
+from typing import TYPE_CHECKING, Final
 
 from pydantic import TypeAdapter
 
@@ -14,6 +14,9 @@ from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid4
 from litellm.caching.redis_cache import RedisCache
 from litellm.types.llms.openai import ResponsesAPIResponse, ResponsesAPIStatus
+
+if TYPE_CHECKING:
+    from litellm.router import Router
 
 _RESPONSE_POLLING_TARGET: Final = "response_polling"
 _JSON_OBJECT: Final = TypeAdapter(dict[str, object])
@@ -264,10 +267,10 @@ class ResponsePollingHandler:
 
 def should_use_polling_for_request(
     background_mode: bool,
-    polling_via_cache_enabled,  # Can be False, "all", or List[str]
-    redis_cache,  # RedisCache or None
+    polling_via_cache_enabled: bool | str | Sequence[str],
+    redis_cache: RedisCache | None,
     model: str,
-    llm_router,  # Router instance or None
+    llm_router: "Router | None",
     native_background_mode: list[str] | None = None,  # List of models that should use native background mode
 ) -> bool:
     """

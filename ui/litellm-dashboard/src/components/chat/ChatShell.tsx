@@ -192,9 +192,6 @@ const ChatShell: React.FC<{ children: React.ReactNode }> = ({ children }) => {
               </DropdownMenuItem>
             ))}
             <DropdownMenuSeparator />
-            <p className="px-2 py-1 text-xs text-muted-foreground">
-              Chat is a pre-v0 preview and may change unexpectedly. Do not use in production.
-            </p>
             <DropdownMenuItem
               render={
                 <a href="https://github.com/BerriAI/litellm/discussions/32085" target="_blank" rel="noreferrer" />

@@ -1,6 +1,10 @@
 import { observeResponseHeaders, type ResponseHeadersListener } from "@/lib/http/observeResponseHeaders";
 import openai from "openai";
-import type { ResponseFunctionToolCall, ResponseInputItem } from "openai/resources/responses/responses";
+import type {
+  Response as OpenAIResponse,
+  ResponseFunctionToolCall,
+  ResponseInputItem,
+} from "openai/resources/responses/responses";
 import { MessageType } from "../chat_ui/types";
 import { TokenUsage } from "../chat_ui/ResponseMetrics";
 import { getGatewayBaseUrl, getProxyBaseUrl } from "@/components/networking";
@@ -110,6 +114,7 @@ export async function makeOpenAIResponsesRequest(
   onTotalLatency?: (latency: number) => void,
   customHeaders?: CustomHeaders,
   onResponseHeaders?: ResponseHeadersListener,
+  onBackgroundResponse?: (response: OpenAIResponse) => void,
 ) {
   if (!accessToken) {
     throw new Error("Virtual Key is required");
@@ -238,6 +243,16 @@ export async function makeOpenAIResponsesRequest(
       ...(policies ? { policies } : {}),
       ...(tools.length > 0 ? { tools, tool_choice: "auto" } : {}),
     };
+
+    if (onBackgroundResponse) {
+      const response = await client.post<OpenAIResponse>("/responses", {
+        body: { ...requestBody, background: true, stream: false },
+        signal,
+        maxRetries: 0,
+      });
+      onBackgroundResponse(response);
+      return response;
+    }
 
     // Create request to OpenAI responses API
     // Use 'any' type to avoid TypeScript issues with the experimental API
