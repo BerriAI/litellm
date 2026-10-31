@@ -7,6 +7,7 @@ Model format: bedrock/openai/<model-id>
 Example: bedrock/openai/arn:aws:bedrock:us-east-1:123456789012:imported-model/abc123
 """
 
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
@@ -68,12 +69,22 @@ class AmazonBedrockOpenAIConfig(OpenAIGPTConfig, BaseAWSLLM):
 
         return model
 
+    def _get_invoke_model_id(self, model: str, optional_params: Mapping[str, object]) -> str:
+        """
+        `model_id` (e.g. an application inference profile ARN) overrides the model name, like on the other
+        Bedrock routes, so a deployment can keep the real model name and still invoke the profile
+        """
+        model_id: Final = optional_params.get("model_id")
+        if isinstance(model_id, str) and model_id:
+            return model_id
+        return self._get_openai_model_id(model)
+
     def get_complete_url(
         self,
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict,
+        optional_params: dict[str, object],
         litellm_params: dict,
         stream: bool | None = None,
     ) -> str:
@@ -82,7 +93,7 @@ class AmazonBedrockOpenAIConfig(OpenAIGPTConfig, BaseAWSLLM):
 
         Uses the standard Bedrock invoke endpoint format.
         """
-        model_id = self._get_openai_model_id(model)
+        model_id = self._get_invoke_model_id(model, optional_params)
 
         # Get AWS region
         aws_region_name: Final = self._get_aws_region_name(optional_params=optional_params, model=model)
@@ -91,7 +102,9 @@ class AmazonBedrockOpenAIConfig(OpenAIGPTConfig, BaseAWSLLM):
         aws_bedrock_runtime_endpoint: Final = optional_params.get("aws_bedrock_runtime_endpoint", None)
         endpoint_url, proxy_endpoint_url = self.get_runtime_endpoint(
             api_base=api_base,
-            aws_bedrock_runtime_endpoint=aws_bedrock_runtime_endpoint,
+            aws_bedrock_runtime_endpoint=aws_bedrock_runtime_endpoint
+            if isinstance(aws_bedrock_runtime_endpoint, str)
+            else None,
             aws_region_name=aws_region_name,
         )
 
@@ -131,7 +144,7 @@ class AmazonBedrockOpenAIConfig(OpenAIGPTConfig, BaseAWSLLM):
         self,
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
+        optional_params: dict[str, object],
         litellm_params: dict,
         headers: dict,
     ) -> dict:
@@ -144,12 +157,14 @@ class AmazonBedrockOpenAIConfig(OpenAIGPTConfig, BaseAWSLLM):
         # Remove stream from optional_params as it's handled separately in URL
         optional_params.pop("stream", None)
 
-        # Remove AWS-specific params that shouldn't be in the request body
-        inference_params: Final = {k: v for k, v in optional_params.items() if k not in self.aws_authentication_params}
+        # Remove AWS-specific params and model_id (it goes in the URL) that shouldn't be in the request body
+        inference_params: Final = {
+            k: v for k, v in optional_params.items() if k not in self.aws_authentication_params and k != "model_id"
+        }
 
-        # Use parent class transform_request for OpenAI format
+        # Use parent class transform_request for OpenAI format. Bedrock rejects a body "model" that differs from the URL
         return super().transform_request(
-            model=self._get_openai_model_id(model),
+            model=self._get_invoke_model_id(model, optional_params),
             messages=messages,
             optional_params=inference_params,
             litellm_params=litellm_params,
