@@ -4,6 +4,7 @@ from urllib.parse import urlsplit
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.llms.azure_ai.chat.transformation import AzureAIGPT5Config
 from litellm.llms.azure_ai.common_utils import (
@@ -145,6 +146,47 @@ def lift_extra_body_reasoning(
         lifted[0][1] if reasoning_effort is None else reasoning_effort,
         {**params, "extra_body": {key: value for key, value in extra_body.items() if key not in lifted_keys}},
     )
+
+
+def drop_refused_forwarded_reasoning(forwarded_kwargs: Mapping[str, object], *, model: str) -> Mapping[str, object]:
+    requested_api_base: Final = forwarded_kwargs.get("api_base")
+    api_base: Final = requested_api_base if isinstance(requested_api_base, str) else None
+    if (
+        forwarded_kwargs.get("custom_llm_provider") != "openai"
+        or not targets_openai_api(api_base)
+        or not drops_unsupported_params(forwarded_kwargs.get("drop_params"))
+    ):
+        return forwarded_kwargs
+    requested: Final = forwarded_kwargs.get("reasoning_effort")
+    reasoning_effort, lifted_kwargs = lift_extra_body_reasoning(
+        requested if isinstance(requested, str) else str_keyed_mapping(requested),
+        forwarded_kwargs,
+        custom_llm_provider="openai",
+        api_base=api_base,
+        drop_params=True,
+    )
+    reasoning_object: Final = str_keyed_mapping(reasoning_effort)
+    if reasoning_object is None:
+        return lifted_kwargs
+
+    from litellm.responses.utils import bridge_reasoning
+
+    base_model: Final = forwarded_kwargs.get("base_model")
+    accepted: Final = str_keyed_mapping(
+        bridge_reasoning(
+            requested=reasoning_object,
+            effort_kept=True,
+            summary_alias=None,
+            model=model.removeprefix("openai/"),
+            base_model=base_model if isinstance(base_model, str) else None,
+            custom_llm_provider="openai",
+            api_base=api_base,
+            deployment_model_info=str_keyed_mapping(forwarded_kwargs.get("model_info")),
+            drop_params=True,
+            additional_drop_params=forwarded_kwargs.get("additional_drop_params"),
+        )
+    )
+    return {**lifted_kwargs, "reasoning_effort": accepted}
 
 
 def settle_chat_reasoning_effort(

@@ -270,7 +270,9 @@ def _build_responses_kwargs(
     """
     Build the kwargs dict to pass directly to litellm.responses() / litellm.aresponses().
     """
-    forwarded_kwargs: Final = _forwarded_kwargs(extra_kwargs)
+    from litellm.responses.bridge_check import drop_refused_forwarded_reasoning
+
+    forwarded_kwargs: Final = drop_refused_forwarded_reasoning(_forwarded_kwargs(extra_kwargs), model=model)
     reject_malformed_tool_result_text(messages, model, forwarded_kwargs)
     block_rewrite: Final = _prompt_cache_block_rewrite(model, forwarded_kwargs)
     request_messages: Final[AnthropicRequestMessages] = (
