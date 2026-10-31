@@ -622,3 +622,40 @@ async def test_cooling_down_one_group_leaves_other_groups_pickable(make_core: Ma
     with pytest.raises(RouterRateLimitError):
         await core.select("g")
     assert await _picked_ids(core, "h") <= {"c", "d"}
+
+
+# --- custom strategies ---------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_a_registered_strategy_picks_every_deployment_an_endpoint_call_reaches(
+    make_core: MakeCore, host: ScriptedHost
+) -> None:
+    from litellm.types.router import CustomRoutingStrategyBase
+
+    core: Final = make_core(model_list=[deployment("g", "a"), deployment("g", "b"), deployment("g", "c")])
+    seen: Final[list[Mapping[str, object]]] = []  # mutable-ok: the request each pick was asked for
+
+    class HighestId(CustomRoutingStrategyBase):
+        async def async_get_available_deployment(
+            self,
+            model: str,
+            messages: list[dict[str, str]] | None = None,  # mutable-ok: the strategy interface's own type
+            input: str | list | None = None,  # mutable-ok: the strategy interface's own type
+            specific_deployment: bool | None = False,
+            request_kwargs: dict | None = None,  # mutable-ok: the strategy interface's own type
+        ) -> dict:  # mutable-ok: the strategy interface's own type
+            seen.append(dict(request_kwargs or {}))
+            deployments: Final = core.get_model_list(model_name=model)  # pyright: ignore[reportAttributeAccessIssue]  # both cores serve the Python core's lookup
+            return max(deployments, key=lambda d: d["model_info"]["id"])
+
+        def get_available_deployment(self, model: str) -> dict:  # mutable-ok: the strategy interface's own type
+            raise NotImplementedError
+
+    core.register_plugin(HighestId())
+    for _ in range(PICKS):
+        await core.acompletion(model="g", messages=MESSAGES)  # pyright: ignore[reportAttributeAccessIssue]  # endpoint method
+    assert set(host.deployments_called("acompletion")) == {"c"}
+    # The strategy picks from the whole group: no other core narrowed the pick before it.
+    assert len(seen) == PICKS
+    assert not any("_retry_skipped_deployment_ids" in request for request in seen)
