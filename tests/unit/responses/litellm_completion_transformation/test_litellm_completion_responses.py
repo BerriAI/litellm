@@ -4339,6 +4339,7 @@ class TestEnsureOutputItemContentPartAdded:
 
         iterator = LiteLLMCompletionStreamingIterator.__new__(LiteLLMCompletionStreamingIterator)
         iterator.sent_output_item_added_event = False
+        iterator.sent_message_item_added_event = False
         iterator.sent_content_part_added_event = False
         iterator._sequence_number = 0
         iterator._cached_item_id = None
@@ -6814,6 +6815,51 @@ _CHECKING_OSAKA: Final = {
 
 def _reasoning_item(item_id: str, thinking: Mapping[str, str]) -> Mapping[str, object]:
     return {"type": "reasoning", "id": item_id, "summary": [], "encrypted_content": encode_thinking_blocks([thinking])}
+
+
+def _hosted_search(search_id: str, status: str) -> Mapping[str, object]:
+    return {
+        "type": "web_search_call",
+        "id": search_id,
+        "status": status,
+        "action": {"type": "search", "query": search_id, "queries": [search_id], "sources": []},
+    }
+
+
+@pytest.mark.parametrize(
+    ("last_search_status", "replayed_thinking"),
+    [
+        pytest.param("in_progress", None, id="paused_turn"),
+        pytest.param("completed", [_ANSWERED_THINKING], id="finished_turn"),
+    ],
+)
+def test_a_new_message_after_a_paused_search_turn_replays_only_that_turn_without_its_thinking(
+    last_search_status: str, replayed_thinking: list[Mapping[str, str]] | None
+) -> None:
+    tokyo_thinking: Final = {"type": "thinking", "thinking": "Need Tokyo weather.", "signature": "sig_tokyo"}
+    messages: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+        model="anthropic/claude-sonnet-5-5",
+        input=cast(
+            ResponseInputParam,
+            [
+                {"role": "user", "content": "Plan a Tokyo trip."},
+                _reasoning_item("rs_tokyo", tokyo_thinking),
+                {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "Tokyo is sunny."}]},
+                _hosted_search("ws_srvtoolu_01Tokyo", "completed"),
+                {"role": "user", "content": "Now Osaka."},
+                _reasoning_item("rs_osaka", _ANSWERED_THINKING),
+                _CHECKING_OSAKA,
+                _hosted_search("ws_srvtoolu_02Osaka", "completed"),
+                _hosted_search("ws_srvtoolu_03Osaka", last_search_status),
+                {"role": "user", "content": "Please continue."},
+            ],
+        ),
+        responses_api_request=ResponsesAPIOptionalRequestParams(),
+    )["messages"]
+
+    assert [message["role"] for message in messages] == ["user", "assistant", "user", "assistant", "user"]
+    assert messages[1].get("thinking_blocks") == [tokyo_thinking]
+    assert messages[3].get("thinking_blocks") == replayed_thinking
 
 
 def test_summary_replay_keeps_only_the_reasoning_of_the_turn_whose_call_a_later_output_answers() -> None:
