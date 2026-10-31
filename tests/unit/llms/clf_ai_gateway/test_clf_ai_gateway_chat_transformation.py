@@ -7,8 +7,8 @@ import respx
 
 import litellm
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
+from litellm.litellm_core_utils.reasoning_effort_capability import resolve_supported_reasoning_efforts
 from litellm.llms.clf_ai_gateway.chat.transformation import ClfAiGatewayConfig
-from litellm.router_utils.reasoning_effort_capability import resolve_supported_reasoning_efforts
 
 DEFAULT_API_BASE: Final = "https://api.clfaigateway.dev/v1"
 CHAT_URL: Final = f"{DEFAULT_API_BASE}/chat/completions"

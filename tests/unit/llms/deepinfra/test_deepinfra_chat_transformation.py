@@ -1,6 +1,8 @@
 import asyncio
+import copy
 import json
 import os
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -200,3 +202,38 @@ async def test_deepinfra_tool_message_content_transformation_async():
     print(f"✓ Async test passed: {tool_message['content']}")
 
     print("\n✅ DeepInfra async tool message transformation test passed!")
+
+
+@pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
+async def test_deepinfra_request_stringifies_tool_content_without_touching_the_callers_message(is_async: bool) -> None:
+    from litellm.llms.deepinfra.chat.transformation import DeepInfraConfig
+
+    config: Final = DeepInfraConfig()
+    messages: Final = [
+        {"role": "user", "content": "Calculate 10 + 10"},
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {"id": "call_1", "type": "function", "function": {"name": "calculator", "arguments": "{}"}}
+            ],
+        },
+        {"role": "tool", "tool_call_id": "call_1", "content": [{"type": "text", "text": "20"}]},
+    ]
+    messages_before: Final = copy.deepcopy(messages)
+    request_kwargs: Final = {
+        "model": "deepseek-ai/DeepSeek-V3.2",
+        "messages": messages,
+        "optional_params": {},
+        "litellm_params": {},
+        "headers": {},
+    }
+
+    body: Final = (
+        await config.async_transform_request(**request_kwargs)
+        if is_async
+        else config.transform_request(**request_kwargs)
+    )
+
+    assert body["messages"][2]["content"] == "20"
+    assert messages == messages_before

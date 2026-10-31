@@ -219,7 +219,7 @@ mod tests {
         #[default(vec![])] extra_headers: Vec<(String, String)>,
     ) -> OcrConnection {
         OcrConnection {
-            api_key: api_key.map(litellm_auth::SecretValue::new),
+            api_key: api_key.map(litellm_secret_value::SecretValue::new),
             extra_headers,
             ..OcrConnection::default()
         }

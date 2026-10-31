@@ -5,7 +5,7 @@ from typing import Final, Literal
 import pytest
 from pydantic import BaseModel
 
-from litellm.router_utils.add_retry_fallback_headers import (
+from litellm.litellm_core_utils.add_retry_fallback_headers import (
     add_fallback_headers_to_response,
     add_retry_headers_to_response,
     complexity_router_decision_headers,

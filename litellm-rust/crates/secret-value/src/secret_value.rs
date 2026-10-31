@@ -32,9 +32,11 @@ impl Hash for SecretValue {
 
 #[cfg(test)]
 mod tests {
+    use rstest::rstest;
+
     use super::SecretValue;
 
-    #[test]
+    #[rstest]
     fn debug_redacts_plaintext() {
         let debug = format!("{:?}", SecretValue::new("credential-value"));
 
@@ -42,7 +44,7 @@ mod tests {
         assert!(debug.contains("REDACTED"));
     }
 
-    #[test]
+    #[rstest]
     fn equality_compares_plaintext_values() {
         assert_eq!(SecretValue::new("same"), SecretValue::new("same"));
         assert_ne!(SecretValue::new("same"), SecretValue::new("different"));

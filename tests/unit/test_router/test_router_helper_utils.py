@@ -1363,7 +1363,7 @@ def test_deployment_callback_respects_cooldown_time(model_list):
         },
     }
 
-    with patch("litellm.router.set_cooldown_deployments") as mock_set:
+    with patch("litellm.router_python_core.set_cooldown_deployments") as mock_set:
         router.deployment_callback_on_failure(
             kwargs=kwargs,
             completion_response=None,
@@ -1735,7 +1735,7 @@ def _rpm_tpm_router(model_id: str) -> Router:
 
 
 def _pin_router_clock(monkeypatch: pytest.MonkeyPatch, pinned: datetime) -> None:
-    monkeypatch.setattr("litellm.router.get_utc_datetime", lambda: pinned)
+    monkeypatch.setattr("litellm.router_python_core.get_utc_datetime", lambda: pinned)
     monkeypatch.setattr(
         "litellm.router_utils.pre_call_checks.io_token_rate_limit_check.get_utc_datetime", lambda: pinned
     )
@@ -2579,10 +2579,10 @@ def _routers_seen_in_success_loop_discarding_first(first: Router, second: Router
     for callback in litellm.success_callback:
         if not isinstance(callback, MethodType):
             continue
-        if callback.__self__ is first:
+        if callback.__self__ is first._core:
             first.discard()
             yield first
-        if callback.__self__ is second:
+        if callback.__self__ is second._core:
             yield second
 
 
@@ -2795,7 +2795,7 @@ def test_deployments_by_pattern(model_list):
 def test_pattern_match_deployment_set_model_name(user_request_model, model_name, litellm_model, expected_model):
     from re import Match
 
-    from litellm.router_utils.pattern_match_deployments import PatternMatchRouter
+    from litellm.litellm_core_utils.pattern_match_deployments import PatternMatchRouter
 
     pattern_router = PatternMatchRouter()
 
@@ -2980,7 +2980,7 @@ def test_init_auto_router_deployment_success(mock_auto_router, model_list):
         auto_router_config=None,
         default_model="gpt-5-mini",
         embedding_model="text-embedding-3-small",
-        litellm_router_instance=router,
+        ctx=router._core_ctx,
         max_input_chars=DEFAULT_AUTO_ROUTER_MAX_INPUT_CHARS,
     )
 

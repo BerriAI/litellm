@@ -1,4 +1,5 @@
 import json
+import math
 import re
 import time
 from collections.abc import Collection, Mapping, Sequence
@@ -74,6 +75,7 @@ from litellm.types.workload_identity import (
 )
 
 from ..litellm_core_utils.core_helpers import map_finish_reason, process_response_headers
+from ..litellm_core_utils.hidden_params import set_extra_attribute
 from . import litellm_params as _litellm_params
 from .agents import LiteLLMSendMessageResponse
 from .guardrails import GuardrailEventHooks
@@ -104,6 +106,7 @@ from .llms.openai import (
     OpenAIRealtimeStreamList,
     ResponsesAPIResponse,
     WebSearchOptions,
+    _JsonValue,
 )
 from .rerank import RerankResponse as RerankResponse
 
@@ -462,6 +465,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     annotation_cost_per_page: float | None  # for OCR models
     annotation_cost_per_page_batches: ReadOnly[float | None]
     search_context_cost_per_query: SearchContextCostPerQuery | None  # Cost for using web search tool
+    search_queries_cost_per_query: ReadOnly[float | SearchContextCostPerQuery | None]
     web_search_billing_unit: (
         Literal["per_query", "per_prompt"] | None
     )  # "per_query" (Gemini 3.x) or "per_prompt" (Gemini 2.x)
@@ -673,6 +677,12 @@ class CallTypes(str, Enum):
     retrieve_fine_tuning_job = "retrieve_fine_tuning_job"
     responses = "responses"
     aresponses = "aresponses"
+    get_responses = "get_responses"
+    aget_responses = "aget_responses"
+    delete_responses = "delete_responses"
+    adelete_responses = "adelete_responses"
+    cancel_responses = "cancel_responses"
+    acancel_responses = "acancel_responses"
     alist_input_items = "alist_input_items"
     llm_passthrough_route = "llm_passthrough_route"
     allm_passthrough_route = "allm_passthrough_route"
@@ -1971,6 +1981,19 @@ class ServerToolUse(LiteLLMBaseModel):
         return getattr(self, key)
 
 
+_COST_BREAKDOWN_ADAPTER: Final = TypeAdapter(Mapping[object, object])
+
+
+def _is_non_finite_float(value: object) -> bool:
+    return isinstance(value, float) and not math.isfinite(value)
+
+
+def _carries_non_finite_number(cost: object) -> bool:
+    if not isinstance(cost, Mapping):
+        return _is_non_finite_float(cost)
+    return any(_is_non_finite_float(member) for member in _COST_BREAKDOWN_ADAPTER.validate_python(cost).values())
+
+
 class Usage(SafeAttributeModel, CompletionUsage):
     _cache_creation_input_tokens: int = PrivateAttr(
         0
@@ -1978,6 +2001,7 @@ class Usage(SafeAttributeModel, CompletionUsage):
     _cache_read_input_tokens: int = PrivateAttr(
         0
     )  # hidden param for prompt caching. Might change, once openai introduces their equivalent.
+    _dropped_non_finite_cost: bool = PrivateAttr(False)
 
     server_tool_use: ServerToolUse | None = None
     cost: float | None = None
@@ -2084,10 +2108,14 @@ class Usage(SafeAttributeModel, CompletionUsage):
         else:  # maintain openai compatibility in usage object if possible
             del self.server_tool_use
 
-        if cost is not None:
-            self.cost = cost
-        else:
+        dropped_non_finite_cost: Final = cost is not None and _carries_non_finite_number(cost)
+        if cost is None:
             del self.cost
+        elif dropped_non_finite_cost:
+            verbose_logger.warning("Dropping a non-finite provider usage cost")
+            del self.cost
+        else:
+            self.cost = cost
 
         ## ANTHROPIC MAPPING ##
         if "cache_creation_input_tokens" in params and isinstance(params["cache_creation_input_tokens"], int):
@@ -2102,6 +2130,11 @@ class Usage(SafeAttributeModel, CompletionUsage):
 
         for k, v in params.items():
             setattr(self, k, v)
+        self._dropped_non_finite_cost = dropped_non_finite_cost
+
+    @staticmethod
+    def dropped_non_finite_cost(usage: "Usage") -> bool:
+        return usage._dropped_non_finite_cost
 
     def __contains__(self, key) -> bool:
         # Define custom behavior for the 'in' operator
@@ -2125,6 +2158,13 @@ class UnreportedUsage(Usage):
 
 
 class StreamingChoices(OpenAIObject):
+    if TYPE_CHECKING:
+        finish_reason: str | None
+        index: int
+        delta: Delta
+        enhancements: object
+        logprobs: ChoiceLogprobs | JsonValue
+
     def __init__(
         self,
         finish_reason=None,
@@ -2138,25 +2178,22 @@ class StreamingChoices(OpenAIObject):
         # https://github.com/BerriAI/litellm/issues/8455
         params.pop("message", None)
         super().__init__(**params)
-        if finish_reason:
-            self.finish_reason = map_finish_reason(finish_reason)
-        else:
-            self.finish_reason = None
-        self.index = index
+        set_extra_attribute(self, "finish_reason", map_finish_reason(finish_reason) if finish_reason else None)
+        set_extra_attribute(self, "index", index)
         if delta is not None:
             if isinstance(delta, Delta):
-                self.delta = delta
+                set_extra_attribute(self, "delta", delta)
             elif isinstance(delta, dict):
-                self.delta = Delta(**delta)
+                set_extra_attribute(self, "delta", Delta(**delta))
         else:
-            self.delta = Delta()
+            set_extra_attribute(self, "delta", Delta())
         if enhancements is not None:
-            self.enhancements = enhancements
+            set_extra_attribute(self, "enhancements", enhancements)
 
         if isinstance(logprobs, (dict, BaseModel)):
-            self.logprobs = CHOICE_LOGPROBS_OR_JSON.validate_python(logprobs)
+            set_extra_attribute(self, "logprobs", CHOICE_LOGPROBS_OR_JSON.validate_python(logprobs))
         else:
-            self.logprobs = logprobs
+            set_extra_attribute(self, "logprobs", logprobs)
 
     def __contains__(self, key) -> bool:
         # Define custom behavior for the 'in' operator
@@ -2210,7 +2247,10 @@ class ModelResponseBase(OpenAIObject):
 
     @property
     def hidden_params(self) -> dict[str, object]:  # mutable-ok: API requires mutation
-        return self._hidden_params
+        private: Final = self.__pydantic_private__
+        if private is None or "_hidden_params" not in private:
+            return self._hidden_params
+        return private["_hidden_params"]
 
     @hidden_params.setter
     def hidden_params(self, hidden_params: dict[str, object]) -> None:  # mutable-ok: API requires mutation
@@ -3291,6 +3331,11 @@ class StandardLoggingRoutingDecision(TypedDict, total=False):
     classifier_cost: float
     classifier_failure_reason: ReadOnly[ClassifierFailureReason]
     classifier_error_type: ReadOnly[str]
+    classifier_input_budget_tokens: ReadOnly[int]
+    classifier_input_tokens: ReadOnly[int]
+    classifier_input_count_method: ReadOnly[str]
+    classifier_input_truncated: ReadOnly[bool]
+    classifier_input_budget_status: ReadOnly[str]
     classifier_probabilities: ReadOnly[Mapping[str, float]]
     classifier_confidence: ReadOnly[float]
     heuristic_v2_forecast: ReadOnly[StandardLoggingHeuristicV2Forecast]
@@ -3349,6 +3394,11 @@ DERIVED_ROUTING_DECISION_FIELDS: Final[frozenset[str]] = frozenset(
         "classifier_cost",
         "classifier_failure_reason",
         "classifier_error_type",
+        "classifier_input_budget_tokens",
+        "classifier_input_tokens",
+        "classifier_input_count_method",
+        "classifier_input_truncated",
+        "classifier_input_budget_status",
         "classifier_probabilities",
         "classifier_confidence",
         "heuristic_v2_forecast",
@@ -3428,6 +3478,7 @@ class StandardLoggingHiddenParams(TypedDict):
     batch_models: list[str] | None
     batch_successful_requests: ReadOnly[int | None]
     batch_failed_requests: ReadOnly[int | None]
+    upstream_provider: ReadOnly[NotRequired[str | None]]
     litellm_model_name: str | None  # the model name sent to the provider by litellm
     usage_object: dict | None
 
@@ -4125,6 +4176,7 @@ class CustomPricingLiteLLMParams(MirroredPricingParams):
     output_cost_per_video_per_second: float | None = None
     output_cost_per_audio_per_second: float | None = None
     search_context_cost_per_query: dict[str, Any] | None = None
+    search_queries_cost_per_query: float | SearchContextCostPerQuery | None = None
     google_maps_grounding_cost_per_query: float | None = None
     citation_cost_per_token: float | None = None
     cache_read_input_token_cost_above_272k_tokens: float | None = None
@@ -4637,6 +4689,7 @@ class LlmProviders(str, Enum):
     PRISM = "prism"
     OPENINFER = "openinfer"
     INFERENCEAPIS = "inferenceapis"
+    HOSTINGER_ROUTER = "hostinger_router"
     ZEROGPU = "zerogpu"
     DARKBLOOM = "darkbloom"
     META = "meta"
@@ -4918,29 +4971,50 @@ def _batch_usage_from_chat_usage(usage: Usage) -> BatchUsage:
     )
 
 
+OPENAI_BATCH_STATUS_FOR_VLLM_ROUTER_STATUS: Final = MappingProxyType(
+    {"pending": "validating", "running": "in_progress"}
+)
+
+
+def openai_batch_status(status: _JsonValue) -> _JsonValue:
+    return OPENAI_BATCH_STATUS_FOR_VLLM_ROUTER_STATUS.get(status, status) if isinstance(status, str) else status
+
+
 class LiteLLMBatch(Batch):
     _hidden_params: dict = {}
 
+    object: Literal["batch"] = "batch"
+
+    @field_validator("object", mode="before")
+    @classmethod
+    def _default_missing_object_type(cls, value: _JsonValue) -> _JsonValue:
+        return "batch" if value is None else value
+
+    @field_validator("status", mode="before")
+    @classmethod
+    def _map_vllm_router_status(cls, value: _JsonValue) -> _JsonValue:
+        return openai_batch_status(value)
+
     @property
-    def hidden_params(self) -> dict[str, object]:  # mutable-ok: API requires mutation
+    def hidden_params(self) -> dict[str, _JsonValue]:  # mutable-ok: API requires mutation
         return self._hidden_params
 
     @hidden_params.setter
-    def hidden_params(self, hidden_params: dict[str, object]) -> None:  # mutable-ok: API requires mutation
+    def hidden_params(self, hidden_params: dict[str, _JsonValue]) -> None:  # mutable-ok: API requires mutation
         self._hidden_params = hidden_params
 
     usage: Usage | None = None
 
     @field_validator("usage", mode="before")
     @classmethod
-    def _usage_from_batch_token_counts(cls, value: object) -> object:
+    def _usage_from_batch_token_counts(cls, value: _JsonValue) -> _JsonValue:
         counts: Final = _parse_batch_token_counts(value)
         return value if counts is None else _usage_with_batch_token_counts(Usage.model_validate(value), counts)
 
     @field_serializer("usage")
     def _serialize_usage_with_batch_fields(
         self, usage: Usage | None, info: FieldSerializationInfo
-    ) -> Mapping[str, object] | None:
+    ) -> Mapping[str, _JsonValue] | None:
         if not isinstance(usage, Usage):
             return usage
         chat_fields: Final = usage.model_dump(

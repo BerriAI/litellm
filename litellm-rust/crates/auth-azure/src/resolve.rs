@@ -1,7 +1,9 @@
 use litellm_auth_types::{
-    CredentialFileRef, CredentialLookup, CredentialRef, InputSource, ResolvedCredential,
-    SecretValue, Sourced, TokenProviderHandle,
+    CredentialFileRef, CredentialLookup, CredentialRef, InputSource, ResolvedCredential, Sourced,
+    TokenProviderHandle,
 };
+use litellm_secret_value::SecretValue;
+
 use litellm_auth_types::{Error, ErrorDetail};
 use std::future::Future;
 use std::pin::Pin;
@@ -500,8 +502,9 @@ mod tests {
     use litellm_auth_types::ResolvedCredential;
     use litellm_auth_types::{
         CredentialFileRef, CredentialLookup, CredentialLookupFuture, CredentialRef,
-        CredentialResolver, CredentialResolverHandle, InputSource, SecretValue, Sourced,
+        CredentialResolver, CredentialResolverHandle, InputSource, Sourced,
     };
+    use litellm_secret_value::SecretValue;
 
     #[derive(Debug)]
     struct FileResolver;

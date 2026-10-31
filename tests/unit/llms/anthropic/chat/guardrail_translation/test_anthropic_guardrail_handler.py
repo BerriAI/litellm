@@ -6,6 +6,7 @@ with guardrail transformations, specifically testing edge cases with empty choic
 """
 
 import json
+import logging
 import re
 from typing import Any, Literal, Optional, Final
 from unittest.mock import MagicMock, patch
@@ -3391,3 +3392,18 @@ class TestAnthropicMessagesHandlerPostCallHookResponse:
         native = {"type": "message", "role": "assistant", "content": [{"type": "text", "text": "hi"}]}
 
         assert AnthropicMessagesHandler().post_call_hook_response(native) is native
+
+
+def test_reading_a_dropped_budget_for_a_guardrail_logs_no_drop_warning(caplog: pytest.LogCaptureFixture) -> None:
+    data: Final = {
+        "model": "gemini-2.5-flash",
+        "max_tokens": 64,
+        "thinking": {"type": "enabled", "budget_tokens": "high"},
+        "messages": [{"role": "user", "content": "hi"}],
+    }
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        messages: Final = AnthropicMessagesHandler().get_structured_messages(data)
+
+    assert messages == [{"role": "user", "content": "hi"}]
+    assert not [record for record in caplog.records if "Dropping" in record.getMessage()]

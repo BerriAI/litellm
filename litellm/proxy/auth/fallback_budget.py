@@ -44,7 +44,7 @@ from litellm.proxy.auth.auth_checks import (  # noqa: F401  # legacy module expo
     _is_model_cost_zero,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     is_model_cost_zero,  # pyright: ignore[reportPrivateUsage]  # the zero-cost predicate the auth-time budget checks use; no public equivalent
 )
-from litellm.router import Router
+from litellm.router_api import RegistryReader, RoutingContext
 from litellm.types.llms.base import LiteLLMBaseModel
 
 
@@ -118,7 +118,7 @@ async def is_token_within_budget_for_model(
     *,
     model: str,
     valid_token: UserAPIKeyAuth,
-    llm_router: Router,
+    llm_router: RegistryReader,
     team_member_model_budget_limiter: _TeamMemberModelBudgetLimiter | None = None,
 ) -> bool:
     """
@@ -187,19 +187,19 @@ class RouterFallbackBudgetCheck:
     is_enforced: Callable[[], bool]
     team_member_model_budget_limiter: _TeamMemberModelBudgetLimiter | None = None
 
-    async def __call__(self, *, model: str, request_kwargs: Mapping[str, object], llm_router: Router) -> bool:
+    async def __call__(self, *, model: str, request_kwargs: Mapping[str, object], ctx: RoutingContext) -> bool:
         if not self.is_enforced():
             return True
         valid_token: Final = _user_api_key_auth_from_request(request_kwargs)
         if valid_token is None:
             return True
-        budget_models: Final = tuple(dict.fromkeys((model, llm_router.registry().resolve(model))))
+        budget_models: Final = tuple(dict.fromkeys((model, ctx.registry().resolve(model))))
         for budget_model in budget_models:
             try:
                 if not await is_token_within_budget_for_model(
                     model=budget_model,
                     valid_token=valid_token,
-                    llm_router=llm_router,
+                    llm_router=ctx,
                     team_member_model_budget_limiter=self.team_member_model_budget_limiter,
                 ):
                     return False

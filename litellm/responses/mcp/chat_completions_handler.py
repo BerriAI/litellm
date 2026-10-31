@@ -663,7 +663,7 @@ async def acompletion_with_mcp(
     logging_obj: Final = kwargs.get("litellm_logging_obj")
     if isinstance(logging_obj, LiteLLMLoggingObj):
         logging_obj.carry_failed_attempt_usage()
-    with internal_sub_call():
+    with internal_sub_call(logging_obj.litellm_call_id if isinstance(logging_obj, LiteLLMLoggingObj) else None):
         initial_response: Final = await litellm_acompletion(**initial_call_args)
     first_round_breakdown: Final = logging_obj.cost_breakdown if isinstance(logging_obj, LiteLLMLoggingObj) else None
 
@@ -713,7 +713,7 @@ async def acompletion_with_mcp(
         follow_up_call_args["messages"] = follow_up_messages
         follow_up_call_args["stream"] = stream
 
-        with internal_sub_call():
+        with internal_sub_call(logging_obj.litellm_call_id if isinstance(logging_obj, LiteLLMLoggingObj) else None):
             final_response: Final = await litellm_acompletion(**follow_up_call_args)
 
     if not isinstance(final_response, ModelResponse):

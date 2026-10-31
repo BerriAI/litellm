@@ -2,7 +2,9 @@
 //! keyword arguments and acquired on the host's own thread when the call asks for one.
 
 use crate::callable::wrap_failure;
-use litellm_auth::{ResolvedCredential, SecretValue};
+use litellm_auth::ResolvedCredential;
+use litellm_secret_value::SecretValue;
+
 use pyo3::{
     exceptions::PyTypeError,
     gc::{PyTraverseError, PyVisit},

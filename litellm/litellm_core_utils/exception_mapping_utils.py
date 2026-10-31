@@ -98,6 +98,7 @@ class ExceptionCheckers:
         known_exception_substrings: Final = [
             "exceed context limit",
             "this model's maximum context length is",
+            "requested token count exceeds the model's maximum context length",
             "string too long. expected a string with maximum length",
             "model's maximum context limit",
             "is longer than the model's context length",
