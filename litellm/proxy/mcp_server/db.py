@@ -57,7 +57,13 @@ from litellm.repositories.verification_token_repository import (
     VerificationTokenRepository,
 )
 from litellm.types.llms.custom_http import httpxSpecialProvider
-from litellm.types.mcp import MCPCredentials, MCPTransportType, MCPUpstreamProtocol, validate_mcp_protocol_transport
+from litellm.types.mcp import (
+    MCPCredentials,
+    MCPExecutionMode,
+    MCPTransportType,
+    MCPUpstreamProtocol,
+    validate_mcp_protocol_transport,
+)
 from litellm.types.mcp_server.mcp_server_manager import MCPInfo, PinnedMCPTool
 
 if TYPE_CHECKING:
@@ -452,6 +458,8 @@ def _prepare_mcp_server_data(
                 data_dict[json_map_field] = {}
     else:
         data_dict = data.model_dump(exclude_none=True)
+        if isinstance(data, NewMCPServerRequest) and data.execution_mode == MCPExecutionMode.provider:
+            data_dict["transport"] = data.transport
         # Ensure alias is always present in the dict (even if None)
         if "alias" not in data_dict:
             data_dict["alias"] = getattr(data, "alias", None)
@@ -1082,6 +1090,11 @@ async def create_mcp_server(
     """
     Create a new mcp server record in the db
     """
+    if data.execution_mode == MCPExecutionMode.provider:
+        provider_record: Final = await create_mcp_server_if_identifier_free(prisma_client, data, touched_by)
+        if isinstance(provider_record, McpIdentifierConflict):
+            raise HTTPException(status_code=409, detail="An MCP registration already uses this identity")
+        return provider_record
     if data.server_id is None:
         data.server_id = str(uuid.uuid4())
 
@@ -1246,35 +1259,70 @@ def _validate_mcp_protocol_write(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+def _validate_provider_registration_update(
+    stored: "prisma_db_models.LiteLLM_MCPServerTable", data: UpdateMCPServerRequest,
+    fields_set: set[str] | None = None,
+) -> NewMCPServerRequest:
+    patch: Final = data.model_dump(include=fields_set, exclude_unset=True)
+    try:
+        registration: Final = LiteLLM_MCPServerTable.model_validate(stored.model_dump())
+        merged: Final = {**registration.model_dump(), **patch}
+        return NewMCPServerRequest.model_validate(merged)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+def _prepare_provider_registration_update(
+    stored: "prisma_db_models.LiteLLM_MCPServerTable",
+    data: UpdateMCPServerRequest,
+    touched_by: str,
+    fields_set: set[str] | None,
+) -> Mapping[str, object]:
+    from prisma import Json
+
+    validated: Final = _validate_provider_registration_update(stored, data, fields_set)
+    supplied_fields: Final = fields_set if fields_set is not None else data.model_fields_set
+    normalized_patch: Final = data.model_copy(update=validated.model_dump(include=supplied_fields | {"mcp_info"}))
+    serialized: Final = _prepare_mcp_server_data(normalized_patch, exclude_unset=True, fields_set=supplied_fields)
+    return {
+        **serialized,
+        **({"credentials": Json(None)} if "credentials" in serialized and serialized["credentials"] is None else {}),
+        "updated_by": touched_by,
+    }
+
+
 async def _update_mcp_server_row(
     prisma_client: PrismaClient,
     *,
     server_id: str,
     data_dict: Mapping[str, object],
+    prepare_update: Callable[["prisma_db_models.LiteLLM_MCPServerTable"], Mapping[str, object]] | None = None,
     expected_updated_at: datetime | None = None,
 ) -> "prisma_db_models.LiteLLM_MCPServerTable | McpIdentifierConflict | None":
     identifier_write: Final = any(field in data_dict for field in ("server_name", "alias"))
     protocol_write: Final = bool({"transport", "mcp_info"}.intersection(data_dict))
+    needs_stored_row: Final = protocol_write or prepare_update is not None
 
     async def _update(
         table: "TableActions[prisma_db_models.LiteLLM_MCPServerTable]",
     ) -> "prisma_db_models.LiteLLM_MCPServerTable | None":
-        if protocol_write:
-            stored: Final = await table.find_unique(where={"server_id": server_id})
-            if stored is None:
-                return None
+        stored: Final = await table.find_unique(where={"server_id": server_id}) if needs_stored_row else None
+        if needs_stored_row and stored is None:
+            return None
+        if protocol_write and prepare_update is None and stored is not None:
             _validate_mcp_protocol_write(stored, data_dict)
+        write_data: Final = prepare_update(stored) if prepare_update is not None and stored is not None else data_dict
         if expected_updated_at is not None:
             changed: Final = await table.update_many(
-                where={"server_id": server_id, "updated_at": expected_updated_at}, data=data_dict
+                where={"server_id": server_id, "updated_at": expected_updated_at}, data=write_data
             )
             return await table.find_unique(where={"server_id": server_id}) if changed else None
         return await table.update(
             where={"server_id": server_id},
-            data=data_dict,
+            data=write_data,
         )
 
-    if not identifier_write and not protocol_write:
+    if not identifier_write and not needs_stored_row:
         return await _update(_mcp_server_table_actions(prisma_client))
     if "alias" in data_dict and not data_dict["alias"] and "server_name" not in data_dict:
         # Clearing the alias drops the prefix to the stored server_name, which
@@ -1288,7 +1336,7 @@ async def _update_mcp_server_row(
             alias=None,
             exclude_server_id=server_id,
             write=_update,
-            lock_server_id=server_id if protocol_write else None,
+            lock_server_id=server_id if needs_stored_row else None,
         )
     return await _mcp_server_write_if_identifier_free(
         prisma_client,
@@ -1296,7 +1344,7 @@ async def _update_mcp_server_row(
         alias=_identifier_field(data_dict, "alias"),
         exclude_server_id=server_id,
         write=_update,
-        lock_server_id=server_id if protocol_write else None,
+        lock_server_id=server_id if needs_stored_row else None,
     )
 
 
@@ -1315,6 +1363,21 @@ async def update_mcp_server(
     """
     from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 
+    registration: Final = await _db_find_mcp_server_row(prisma_client, data.server_id)
+    if getattr(registration, "execution_mode", MCPExecutionMode.litellm) == MCPExecutionMode.provider:
+        updated_provider: Final = await _update_mcp_server_row(
+            prisma_client,
+            server_id=data.server_id,
+            data_dict=data.model_dump(include=fields_set, exclude_unset=True),
+            prepare_update=lambda stored: _prepare_provider_registration_update(stored, data, touched_by, fields_set),
+            expected_updated_at=expected_updated_at,
+        )
+        return (
+            updated_provider
+            if updated_provider is None or isinstance(updated_provider, McpIdentifierConflict)
+            else LiteLLM_MCPServerTable.model_validate(updated_provider.model_dump())
+        )
+
     # Use helper to prepare data with proper JSON serialization.
     # exclude_unset=True makes this a true partial update: fields the caller did
     # not provide are not written, so they keep their existing DB value instead
@@ -1330,7 +1393,7 @@ async def update_mcp_server(
     url_provided: Final = "url" in prepared_data and prepared_data["url"] is not None
     issuer_provided: Final = "issuer" in prepared_data
     if data.auth_type or has_credentials or explicit_te_write or url_provided or issuer_provided:
-        existing = await _db_find_mcp_server_row(prisma_client, data.server_id)
+        existing = registration
 
     auth_type_changed: Final = bool(
         data.auth_type
@@ -1442,9 +1505,6 @@ async def update_mcp_server(
     # Add audit fields
     data_dict["updated_by"] = touched_by
 
-    # prisma-python rejects a raw ``None`` for a ``Json?`` field ("value is required but not set"); the
-    # clear paths above use ``None`` as the merge-skip sentinel, so translate it here to ``Json(None)``,
-    # which writes SQL null and reads back as ``None``. Done at the edge so the merge guards stay simple.
     if "credentials" in data_dict and data_dict["credentials"] is None:
         from prisma import Json  # noqa: PLC0415  # local import: prisma may be ungenerated at module load in some tools
 

@@ -408,6 +408,7 @@ class TestListMCPServers:
             ),
         ]
         mock_manager.get_all_allowed_mcp_servers = AsyncMock(return_value=mock_servers)
+        mock_manager.get_all_mcp_servers_unfiltered = AsyncMock(return_value=[])
 
         for idx, server in enumerate(mock_servers):
             server.credentials = {"auth_value": f"secret_{idx}"}
@@ -655,6 +656,7 @@ class TestListMCPServers:
             ),
         ]
         mock_manager.get_all_allowed_mcp_servers = AsyncMock(return_value=mock_servers)
+        mock_manager.get_all_mcp_servers_unfiltered = AsyncMock(return_value=[])
 
         for idx, server in enumerate(mock_servers):
             server.credentials = {"auth_value": f"secret_{idx}"}
@@ -774,6 +776,7 @@ class TestListMCPServers:
             ),
         ]
         mock_manager.get_all_allowed_mcp_servers = AsyncMock(return_value=mock_servers)
+        mock_manager.get_all_mcp_servers_unfiltered = AsyncMock(return_value=[])
 
         for idx, server in enumerate(mock_servers):
             server.credentials = {"auth_value": f"secret_{idx}"}
@@ -866,6 +869,7 @@ class TestListMCPServers:
         # Mock manager
         mock_manager = MagicMock()
         mock_manager.get_all_allowed_mcp_servers = AsyncMock(return_value=[server_1, server_2])
+        mock_manager.get_all_mcp_servers_unfiltered = AsyncMock(return_value=[server_1, server_2])
 
         with (
             patch(
@@ -2023,6 +2027,7 @@ class TestFetchAllMCPServersOrdering:
         resolved: Final = list(reversed(servers) if reverse else servers)
         mock_manager: Final = MagicMock()
         mock_manager.get_all_allowed_mcp_servers = AsyncMock(return_value=resolved)
+        mock_manager.get_all_mcp_servers_unfiltered = AsyncMock(return_value=[])
         with (
             patch(  # test-quality-ok: the route reads a module-global manager with no injection seam
                 "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager",
@@ -8096,6 +8101,7 @@ class TestConnectedAppViewAnnotation:
 
         mock_manager = MagicMock()
         mock_manager.get_all_allowed_mcp_servers = AsyncMock(side_effect=per_context_servers)
+        mock_manager.get_all_mcp_servers_unfiltered = AsyncMock(return_value=[])
         mock_manager.get_allowed_mcp_servers = AsyncMock(return_value=["server-1", "server-2"])
 
         with (

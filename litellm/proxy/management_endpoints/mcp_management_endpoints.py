@@ -50,6 +50,7 @@ from pydantic import TypeAdapter
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm.proxy.mcp_server.catalog import catalog_operation, public_catalog_operation
+from litellm.types.mcp import MCPExecutionMode
 
 try:
     from prisma.errors import RecordNotFoundError, UniqueViolationError
@@ -1342,10 +1343,24 @@ if MCP_AVAILABLE:
         aligned with the cards actually rendered: an admin in view_all mode sees
         every server even when their key carries no per-server MCP grant.
         """
-        if _get_user_mcp_management_mode() == "view_all" and not _is_restricted_virtual_key_request(user_api_key_dict):
-            return await global_mcp_server_manager.get_all_mcp_servers_unfiltered()
+        unrestricted: Final = not _is_restricted_virtual_key_request(user_api_key_dict)
+        view_all: Final = unrestricted and _get_user_mcp_management_mode() == "view_all"
+        view_providers: Final = unrestricted and user_api_key_has_admin_view(user_api_key_dict)
+        inventory: Final = (
+            await global_mcp_server_manager.get_all_mcp_servers_unfiltered() if view_all or view_providers else []
+        )
+        visible_inventory: Final = [
+            server for server in inventory
+            if view_providers or getattr(server, "execution_mode", MCPExecutionMode.litellm) != MCPExecutionMode.provider
+        ]
+        if view_all:
+            return visible_inventory
 
-        aggregated: Final[dict[str, LiteLLM_MCPServerTable]] = {}
+        provider_servers: Final = [
+            server for server in visible_inventory
+            if getattr(server, "execution_mode", MCPExecutionMode.litellm) == MCPExecutionMode.provider
+        ]
+        aggregated: Final[dict[str, LiteLLM_MCPServerTable]] = {server.server_id: server for server in provider_servers}
         for auth_context in await build_effective_auth_contexts(user_api_key_dict):
             for server in await global_mcp_server_manager.get_all_allowed_mcp_servers(user_api_key_auth=auth_context):
                 aggregated.setdefault(server.server_id, server)
@@ -1992,18 +2007,21 @@ if MCP_AVAILABLE:
         if from_db:
             await global_mcp_server_manager.add_server(mcp_server)
 
-        # Perform health check on the server using server manager
-        try:
-            health_result: Final = await global_mcp_server_manager.health_check_server(server_id)
-            # Update the server object with health check results
-            mcp_server.status = _mcp_health_status_for_response(health_result.status, include_reachability) or "unknown"
-            mcp_server.last_health_check = health_result.last_health_check
-            mcp_server.health_check_error = health_result.health_check_error
-        except Exception as e:
-            verbose_proxy_logger.debug("Error performing health check on server %s: %s", server_id, e)
-            mcp_server.status = "unknown"
-            mcp_server.last_health_check = datetime.now()
-            mcp_server.health_check_error = str(e)
+        if mcp_server.execution_mode == MCPExecutionMode.litellm:
+            # Perform health check on the server using server manager
+            try:
+                health_result: Final = await global_mcp_server_manager.health_check_server(server_id)
+                # Update the server object with health check results
+                mcp_server.status = (
+                    _mcp_health_status_for_response(health_result.status, include_reachability) or "unknown"
+                )
+                mcp_server.last_health_check = health_result.last_health_check
+                mcp_server.health_check_error = health_result.health_check_error
+            except Exception as e:
+                verbose_proxy_logger.debug("Error performing health check on server %s: %s", server_id, e)
+                mcp_server.status = "unknown"
+                mcp_server.last_health_check = datetime.now()
+                mcp_server.health_check_error = str(e)
 
         redacted: Final = _redact_mcp_credentials(mcp_server)
         if is_restricted_virtual_key:
@@ -2087,6 +2105,10 @@ if MCP_AVAILABLE:
                 payload,
                 touched_by=user_api_key_dict.user_id or LITELLM_PROXY_ADMIN_NAME,
             )
+        except UniqueViolationError as exc:
+            raise HTTPException(
+                status_code=409, detail="An MCP registration already uses this identity or provider endpoint"
+            ) from exc
         except Exception as e:
             verbose_proxy_logger.exception("Error creating mcp server: %s", e)
             raise HTTPException(
@@ -3181,7 +3203,7 @@ if MCP_AVAILABLE:
             raise HTTPException(
                 status_code=503, detail="Cannot validate MCP configuration while stored state is unavailable"
             )
-        if stored is None:
+        if stored is None or stored.execution_mode == MCPExecutionMode.provider:
             return
         effective_transport: Final = payload.transport if "transport" in fields_set else stored.transport
         effective_info: Final = payload.mcp_info if "mcp_info" in fields_set else stored.mcp_info
@@ -3302,12 +3324,17 @@ if MCP_AVAILABLE:
                 )
 
         # try to update the mcp server
-        mcp_server_record_updated: Final = await update_mcp_server(
-            prisma_client,
-            payload,
-            touched_by=user_api_key_dict.user_id or LITELLM_PROXY_ADMIN_NAME,
-            fields_set=payload_fields_set,
-        )
+        try:
+            mcp_server_record_updated: Final = await update_mcp_server(
+                prisma_client,
+                payload,
+                touched_by=user_api_key_dict.user_id or LITELLM_PROXY_ADMIN_NAME,
+                fields_set=payload_fields_set,
+            )
+        except UniqueViolationError as exc:
+            raise HTTPException(
+                status_code=409, detail="An MCP registration already uses this provider endpoint"
+            ) from exc
 
         if isinstance(mcp_server_record_updated, McpIdentifierConflict):
             raise_mcp_identifier_conflict(mcp_server_record_updated)

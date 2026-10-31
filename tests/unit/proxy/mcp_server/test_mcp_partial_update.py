@@ -26,7 +26,7 @@ from litellm.types.mcp_server.mcp_server_manager import PinnedMCPTool
 
 
 def _credentials_cleared(value) -> bool:
-    """The clear sentinel after the edge translation: prisma Json(None) (SQL null) or a bare None."""
+    """The clear sentinel after the edge translation: prisma Json(None) or a bare None."""
     return value is None or (isinstance(value, Json) and getattr(value, "data", "x") is None)
 
 
@@ -1366,3 +1366,85 @@ async def test_issuer_edit_preserves_replacement_with_same_client_id(replacement
     assert credentials["dcr_server_url"] == "https://new.example/mcp"
     assert credentials.get("client_secret") == replacement.get("client_secret")
     assert credentials.get("token_endpoint_auth_method") == replacement.get("token_endpoint_auth_method")
+
+
+@pytest.mark.parametrize(
+    "patch",
+    [
+        {"allowed_tools": None},
+        {"mcp_info": {"tool_allowlist_enforced": False}},
+        {"tool_name_to_description": {"write": "Not approved"}},
+        {"credentials": {"auth_value": "synthetic"}},
+    ],
+)
+def test_provider_update_validates_the_merged_stored_registration(patch: dict[str, object]) -> None:
+    from litellm.proxy.mcp_server.db import _validate_provider_registration_update
+
+    stored = models.LiteLLM_MCPServerTable.model_construct(
+        server_id="provider", execution_mode="provider", url="https://docs.example/mcp", transport=None,
+        allowed_tools=["search"], mcp_info={"tool_allowlist_enforced": True},
+    )
+    with pytest.raises(HTTPException) as error:
+        _validate_provider_registration_update(stored, UpdateMCPServerRequest(server_id="provider", **patch))
+    assert error.value.status_code == 400
+
+
+def test_provider_partial_update_preserves_tools_and_empty_list_stays_enforced() -> None:
+    from litellm.proxy.mcp_server.db import _validate_provider_registration_update
+
+    stored = models.LiteLLM_MCPServerTable.model_construct(
+        server_id="provider", execution_mode="provider", url="https://docs.example/mcp", transport=None,
+        allowed_tools=["search"], mcp_info={"tool_allowlist_enforced": True, "description": "Docs"},
+    )
+    renamed = _validate_provider_registration_update(stored, UpdateMCPServerRequest(server_id="provider", description="New"))
+    assert renamed.allowed_tools == ["search"]
+    assert renamed.mcp_info == {"tool_allowlist_enforced": True, "description": "Docs"}
+    cleared = _validate_provider_registration_update(stored, UpdateMCPServerRequest(server_id="provider", allowed_tools=[]))
+    assert cleared.allowed_tools == []
+    assert cleared.mcp_info["tool_allowlist_enforced"] is True
+
+
+@pytest.mark.parametrize("field", ["description", "instructions", "source_url", "tool_name_to_description"])
+def test_provider_update_clears_explicit_null_metadata_without_writing_omitted_fields(field: str) -> None:
+    from litellm.proxy.mcp_server.db import _prepare_provider_registration_update
+
+    stored = models.LiteLLM_MCPServerTable.model_construct(
+        server_id="provider", execution_mode="provider", url="https://docs.example/mcp", transport=None,
+        allowed_tools=["search"], mcp_info={"tool_allowlist_enforced": True},
+        description="Docs", instructions="Search", source_url="https://docs.example",
+        tool_name_to_description={"search": "Search"},
+    )
+    patch = UpdateMCPServerRequest(server_id="provider", **{field: None})
+    serialized = _prepare_provider_registration_update(stored, patch, "admin", None)
+    assert serialized[field] == ("{}" if field == "tool_name_to_description" else None)
+    assert "allowed_tools" not in serialized
+    assert "url" not in serialized
+    assert json.loads(serialized["mcp_info"])["tool_allowlist_enforced"] is True
+
+
+@pytest.mark.asyncio
+async def test_provider_accepts_neutral_connection_settings_without_credentials_or_gateway_transport():
+    neutral = {
+        "transport": None, "auth_type": None, "credentials": {}, "static_headers": {},
+        "extra_headers": [], "env_vars": [], "is_byok": False, "command": None,
+    }
+    created = NewMCPServerRequest(
+        server_name="provider", execution_mode="provider", url="https://docs.example/mcp",
+        allowed_tools=["search"], **neutral,
+    )
+    assert created.transport is None
+    assert created.credentials is None
+    prisma = _mock_prisma()
+    stored = models.LiteLLM_MCPServerTable.model_construct(
+        server_id="provider", execution_mode="provider", url=created.url, transport=None,
+        allowed_tools=["search"], mcp_info={"tool_allowlist_enforced": True},
+    )
+    prisma.db.litellm_mcpservertable.find_unique.return_value = stored
+    prisma.db.litellm_mcpservertable.update.return_value = stored
+    updated = await update_mcp_server(prisma, UpdateMCPServerRequest(server_id="provider", **neutral), "admin")
+    assert updated.allowed_tools == ["search"]
+    written = prisma.db.litellm_mcpservertable.update.call_args.kwargs["data"]
+    assert written["transport"] is None
+    assert _credentials_cleared(written["credentials"])
+    assert "allowed_tools" not in written
+    assert json.loads(written["mcp_info"])["tool_allowlist_enforced"] is True

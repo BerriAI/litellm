@@ -7868,16 +7868,8 @@ class MCPServerManager:
     _build_mcp_server_table = build_mcp_server_table
 
     async def get_all_mcp_servers_unfiltered(self) -> list[LiteLLM_MCPServerTable]:
-        """Return all MCP servers from registry without applying access controls."""
-
-        registry: Final = self.get_registry()
-        if not registry:
-            return []
-
-        servers: Final[list[LiteLLM_MCPServerTable]] = []
-        for server in registry.values():
-            servers.append(self.build_mcp_server_table(server))
-        return servers
+        """Return the cached management inventory without applying access controls."""
+        return list((await self.catalog.management_inventory()).values())
 
     async def get_all_mcp_servers_with_health_unfiltered(
         self, server_ids: list[str] | None = None

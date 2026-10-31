@@ -23,6 +23,7 @@ from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter
 
 from litellm._logging import verbose_logger
 from litellm.caching.in_memory_cache import InMemoryCache
+from litellm.models.mcp_server import LiteLLM_MCPServerTable
 from litellm.proxy.mcp_server.result_conversion import age_freshness, aggregate_freshness
 from litellm.types.mcp import MCPExecutionMode
 
@@ -60,6 +61,7 @@ class CatalogSnapshot:
     identity: str
     tools: Mapping[str, MCPTool]
     routing: MutableMapping[str, str]
+    management_servers: Mapping[str, LiteLLM_MCPServerTable]
 
 
 def _configuration_identity(server: MCPServer) -> str:
@@ -90,7 +92,10 @@ def _check_oauth_revision(selected: MCPServer, candidate: MCPServer | None) -> N
         raise HTTPException(status_code=503, detail="OAuth metadata discovery changed repeatedly; retry shortly")
 
 
-def _snapshot(manager: MCPServerManager, database_identity: str) -> CatalogSnapshot:
+def _snapshot(
+    manager: MCPServerManager, database_identity: str,
+    registration_only_servers: Mapping[str, LiteLLM_MCPServerTable],
+) -> CatalogSnapshot:
     from litellm.proxy.mcp_server.tool_registry import global_mcp_tool_registry
 
     servers: Final = manager.config_mcp_servers | manager.registry
@@ -108,6 +113,10 @@ def _snapshot(manager: MCPServerManager, database_identity: str) -> CatalogSnaps
         hashlib.sha256(serialized.encode()).hexdigest(),
         MappingProxyType(dict(global_mcp_tool_registry.published_tools)),
         dict(manager.published_tool_routes),
+        MappingProxyType({
+            **{key: manager.build_mcp_server_table(value) for key, value in servers.items()},
+            **{key: value.model_copy(deep=True) for key, value in registration_only_servers.items()},
+        }),
     )
 
 
@@ -116,6 +125,7 @@ class CatalogSnapshots:
         self.manager = manager
         self._refresh_lock = asyncio.Lock()
         self._database_identity = ""
+        self._registration_only_servers: Mapping[str, LiteLLM_MCPServerTable] = MappingProxyType({})
         self._arrival_ticket = 0
         self._completed_ticket = 0
         self._shared_snapshot: CatalogSnapshot | None = None
@@ -150,11 +160,11 @@ class CatalogSnapshots:
         from litellm.proxy.proxy_server import prisma_client
 
         if prisma_client is None:
-            return _snapshot(self.manager, self._database_identity)
+            return _snapshot(self.manager, self._database_identity, self._registration_only_servers)
         from litellm.proxy.proxy_server import should_load_db_object
 
         if not should_load_db_object("mcp"):
-            return _snapshot(self.manager, self._database_identity)
+            return _snapshot(self.manager, self._database_identity, self._registration_only_servers)
         from litellm.proxy.mcp_server.db import get_mcp_catalog_revision
 
         try:
@@ -175,6 +185,10 @@ class CatalogSnapshots:
     async def list(self) -> Mapping[str, MCPServer]:
         async with self.operation() as snapshot:
             return snapshot.servers
+
+    async def management_inventory(self) -> Mapping[str, LiteLLM_MCPServerTable]:
+        async with self.operation() as snapshot:
+            return snapshot.management_servers
 
     def assert_current(self, server: MCPServer) -> None:
         from fastapi import HTTPException
@@ -208,6 +222,9 @@ class CatalogSnapshots:
             shared,
             servers=MappingProxyType({key: value.model_copy(deep=True) for key, value in shared.servers.items()}),
             routing=routing,
+            management_servers=MappingProxyType({
+                key: value.model_copy(deep=True) for key, value in shared.management_servers.items()
+            }),
         )
         closed: Final = asyncio.Event()
         token: Final = self._operation.set((snapshot, closed))
@@ -288,7 +305,7 @@ class CatalogSnapshots:
             self._completed_ticket = covered
             raise
         else:
-            self._shared_snapshot = _snapshot(self.manager, self._database_identity)
+            self._shared_snapshot = _snapshot(self.manager, self._database_identity, self._registration_only_servers)
             self._applied_revision = revision
             self._completed_ticket = covered
         finally:
@@ -490,6 +507,13 @@ class CatalogSnapshots:
         ).hexdigest()
         verbose_logger.info("Found %s MCP servers in database", len(raw_rows))
 
+        registration_only_servers: Final = MappingProxyType({
+            server.server_id: server
+            for server in (
+                LiteLLM_MCPServerTable.model_validate(row.model_dump())
+                for row in raw_rows if row.model_dump().get("execution_mode") == MCPExecutionMode.provider
+            )
+        })
         previous_registry: Final = self.manager.registry
         new_registry: Final = await self._stage_servers(raw_rows, reuse_unchanged=reuse_unchanged)
 
@@ -569,6 +593,7 @@ class CatalogSnapshots:
                 ", ".join(sorted(capturing_config_server_ids)),
             )
         self._warned_capturing_config_server_ids = capturing_config_server_ids
+        self._registration_only_servers = registration_only_servers
 
 
 def catalog_operation(

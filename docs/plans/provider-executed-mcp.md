@@ -1,6 +1,6 @@
 # Provider-executed MCP registration
 
-Status: database slice approved and committed, runtime isolation slice prepared for local diff review
+Status: database, isolation, and admin registration API slices approved. Scoped retrieval and provider config loading are intentionally deferred
 
 ## Implementation plan
 
@@ -9,14 +9,34 @@ Work through these layers in order on `litellm_provider_mcp_registration`. Updat
 | Layer | Scope | Status |
 | --- | --- | --- |
 | 1 | Settle registration fields, values, storage, and validation | Approved |
-| 2 | Implement persistence and execution-mode isolation before enabling provider registration | Database slice committed; typed mode and gateway isolation ready for review; persistence validation pending |
-| 3 | Management UI/API, stored tool options, and existing key/team/toolset selectors | Pending |
+| 2 | Implement persistence and execution-mode isolation before enabling provider registration | Database and isolation committed; API persistence validation approved; YAML provider inventory pending |
+| 3 | Management UI/API, stored tool options, and existing key/team/toolset selectors | Admin CRUD and inventory API approved; UI and scoped selectors pending |
 | 4 | Authorize effective OpenAI Responses and Anthropic Messages MCP attachments through existing MCP permissions | Pending |
 | 5 | Live provider tests, streaming admission tests, UI tests, and gateway regressions | Pending |
 
 V1 supports URL-based OpenAI Responses MCP and both Anthropic Messages connector formats. Request authorization applies to streaming and non-streaming calls before provider dispatch. Server restrictions, team permissions, and key permissions intersect. Existing applicable permission ceilings and explicit denies continue to apply
 
 Response/SSE inspection, per-invocation argument policy inside a provider's tool loop, automatic MCP discovery for provider registrations, local MCP references, provider connector IDs, and additional API bridges are outside v1
+
+## Current review acceptance criteria
+
+This batch covers admin CRUD, input validation, cached management inventory, and execution isolation. Key/team-scoped retrieval, selectors, toolsets, and native-request admission remain later layers. Their absence is intentional for this batch
+
+Core provider fields remain `execution_mode`, `server_name`, `url`, `allowed_tools`, and optional `tool_name_to_description`, alongside the existing shared management fields. Neutral connection values remain accepted where the shared schema permits them, but never enable MCP execution. Active credentials, transports, OAuth settings, commands, and other connection configuration are rejected. No strict five-field schema rewrite is part of this revision
+
+| Acceptance area | Required proof in this batch |
+| --- | --- |
+| Admin CRUD | Create, list, detail, partial update, delete, missing/deleted IDs, duplicate URL, immutable mode |
+| Input validation | Active connection settings reject; supported neutral settings succeed; rejected updates leave the row unchanged; omitted tools preserve scope and an explicit empty list stays enforced |
+| Cached inventory | Provider registrations appear in admin inventory and refresh after updates and deletion without becoming executable |
+| Execution isolation | No provider initialization, discovery, health probe, or tool call from management or gateway endpoints |
+| Compatibility | Existing LiteLLM credential merging and update transaction rules remain in place |
+
+Provider updates keep read-merge-validation atomic through the existing writer. The gateway credential path is not moved into a new blanket transaction. One initial row lookup selects the immutable execution mode and is reused when the gateway credential flow needs stored values
+
+The later permissions layer will test matching list/detail visibility under key/team intersection, explicit denial, disjoint scopes, revocation after caching, and separation of read grants from mutation privileges. The admin-only live run is not evidence for that layer
+
+The next config slice should accept provider entries under the existing `mcp_servers` key, reuse registration validation, and publish read-only management records in the shared catalog without constructing gateway clients. Verify startup and reload, removal, stable IDs, conflicting config/database identities or URLs, and zero upstream activity. Existing LiteLLM config loading must remain unchanged
 
 ## Current invocation routing
 
@@ -78,7 +98,7 @@ The model excerpt shows only the changed fields. All other columns remain in pla
 | `mcp_info.tool_allowlist_enforced` | Existing marker, persisted as `true` for provider mode so `[]` means deny all |
 | `tool_name_to_description` | Existing optional descriptions for names in `allowed_tools` |
 | `transport` | SQL `NULL`. LiteLLM neither chooses nor opens the provider's MCP transport |
-| `auth_type`, `credentials` | SQL `NULL`. LiteLLM does not manage this registration's upstream authentication |
+| `auth_type`, `credentials` | No upstream authentication settings or credentials. Existing empty storage representations are acceptable |
 | Other connection-only settings | Neutral existing defaults, with no active connection configuration accepted |
 | Object permissions and toolsets | Existing tables and existing server IDs/tool names |
 
@@ -190,7 +210,7 @@ Existing `metadata.allowed_tools` remains an independent compatibility restricti
 
 | Area | Required proof |
 | --- | --- |
-| Schema and compatibility | Old registrations load as `litellm`; provider records round-trip with null transport/credentials and exact allowed tools |
+| Schema and compatibility | Old registrations load as `litellm`; provider records round-trip with null transport, no upstream credentials, and exact allowed tools |
 | Field validation | Mode/URL/list validation; partial updates; enforced empty list; duplicate endpoint rejection |
 | Management | API and UI create/edit/select the same server and tool IDs without live MCP discovery |
 | Toolsets | Mixed-mode toolsets remain assignable; grants cannot change execution mode or exceed server/team ceilings |
@@ -199,14 +219,41 @@ Existing `metadata.allowed_tools` remains an independent compatibility restricti
 | API coverage | OpenAI Responses and both Anthropic Messages formats; request-supplied and model-configured attachments; streaming and non-streaming |
 | Live evidence | Real providers execute authorized read-only MCP tools; denied requests produce zero provider dispatches; existing gateway execution still works |
 
-The approved database slice was committed as `fd0ac3ca76`. The next slice adds shared execution-mode types, stored-record transport validation, and gateway isolation. Stored records can represent both modes, while the connection-capable `MCPServer` type permits only `litellm`
+The approved database slice was committed as `fd0ac3ca76` and the approved isolation slice as `42ea534932`. Stored records can represent both modes, while the connection-capable `MCPServer` type permits only `litellm`. The redundant named gateway-mode alias is replaced with a literal annotation, leaving one named execution-mode enum
 
-Provider records are excluded during incremental add/update and database catalog reload, before cached gateway entries can be reused. Direct table-to-runtime conversion and both shared client-creation boundaries reject provider mode before OAuth discovery, credential resolution, or MCP connection. Config loading currently rejects provider mode before discovery. The create request schema currently accepts only `litellm`, so `execution_mode=provider` cannot be silently ignored. Update requests reject any supplied execution mode
+Provider records remain excluded during incremental add/update and database catalog reload, before cached gateway entries can be reused. Direct table-to-runtime conversion and both shared client-creation boundaries reject provider mode before OAuth discovery, credential resolution, or MCP connection. YAML loading still rejects provider mode until its inventory path is implemented
 
-This is an intermediate review slice. Management API/config creation of provider registrations remains disabled. Canonical URL and allowlist validation, merged-record update validation, provider inventory loading, and management tool selection are still pending. Later work will enable creation after those contracts are wired in. Native LLM admission authorization is unchanged
+The current review slice enables provider registration on the existing create API, canonicalizes HTTPS endpoint identity, requires an explicit finite tool list, and rejects active gateway connection settings. Create persists null transport/auth fields and an enforced allowlist. Update validates the merged record under a row lock, preserves omitted fields, rejects null tool lists, and rejects changes to execution mode. The existing provider-only unique index rejects duplicate endpoints with HTTP 409
+
+Admin management inventory includes active provider records. Detail reads return stored allowed tools without running health probes. The UI, scoped key/team selectors, toolset integration, YAML provider inventory, and native LLM admission authorization remain pending. Registration management alone does not yet enforce native-request permissions
+
+Management inventory and executable servers share one revision-based catalog snapshot. A refresh reads active rows once, retains provider registrations for management, and excludes them from runtime construction. Management listing does not issue a second database inventory query
+
+Create normalizes provider input in a dedicated request-model validator, then serializes once. Update locks and reads the row, merges the raw patch, validates through the same request model, then serializes and writes. Gateway credential merging retains its existing flow and transaction rules. No extra credential-cleanup SQL or null-preservation flag is needed
+
+For LiteLLM execution, an empty `allowed_tools` list keeps its existing unrestricted meaning unless `mcp_info.tool_allowlist_enforced=true` is set. Provider registration always persists that marker as true, making its empty list deny all
 
 Database-slice validation passed with Prisma schema validation, identical schema copies, the repository's no-data-rewriting migration check, and six checks on a disposable PostgreSQL 16 database built from the pre-change schema. Those checks cover existing rows and duplicate gateway URLs, new legacy defaults, provider records with null connection fields and exact tool lists, duplicate provider URL rejection, distinct provider URLs with empty tool lists, and invalid/null mode rejection. Application-level URL canonicalization, field validation, and authorization are not covered by this database-only proof
 
 Runtime isolation was exercised against a real local MCP server. The existing gateway successfully initialized, listed tools, and called an echo tool, producing 11 HTTP requests. Provider-mode table conversion, config loading, manager client creation, and direct upstream client creation were rejected with zero additional HTTP requests. Provider rows produced zero executable catalog entries. This proves the local execution boundary, not native-provider request authorization
 
 The runtime slice passes 369 focused model, request, catalog, and MCP utility tests, along with Ruff and the test lint rules. A type-check comparison of the six changed runtime files found no new diagnostics against the approved commit, and strict Ruff rule counts did not increase. These are focused slice checks, not a full repository CI run
+
+Registration API validation uses a real local proxy and disposable PostgreSQL database. The live checks cover create/read/admin inventory, partial updates, explicit empty lists, invalid/null tool scopes, immutable mode, duplicate endpoints, rejected connection settings, gateway-listing denial, and concurrent tool-list/description edits. The prior run verified null connection fields and zero outbound connections. Revised validation checks absence of actual credentials without requiring a particular JSON-null representation. Evidence is local to the review workspace and contains no customer credentials
+
+The registration slice passes 899 focused tests, including the CI directory-coverage check, and 16 live API/database checks. The new API tests retain legacy gateway update coverage alongside provider-specific validation
+
+
+Revision review follows the code in this order
+
+1. `NewMCPServerRequest.normalize_registration` owns provider normalization, separately from transport validation
+2. `update_mcp_server` reads the stored execution mode. Provider updates use the existing writer with a preparation callback under the row lock, validating the merged registration through `NewMCPServerRequest`. Only supplied fields plus normalized `mcp_info` are serialized for the patch. Explicit null metadata clears the value, while omitted tools remain untouched
+3. `CatalogSnapshots._reload` reads active records once. The published snapshot contains both management inventory and gateway-only executable servers. `_resolve_accessible_mcp_servers` applies visibility to that cached inventory
+4. Provider credentials use the existing empty representation. No additional SQL update enforces a distinction between SQL NULL and JSON null
+
+The revision passed 966 focused tests plus 132 catalog/manager tests. The live proxy and PostgreSQL run passed 20 checks including explicit metadata clearing, inventory refresh after updates and deletion, and concurrent edits. The provider endpoint received zero connections. Changed-file Ruff checks passed, strict rule counts did not increase, and a five-file type-check comparison introduced no diagnostics against the approved base. These revisions were reviewed and approved
+
+
+The latest revision restores the gateway credential-update flow and its existing transaction rules. The shared writer accepts a preparation callback only for provider updates, keeping their stored-row validation under the lock. Neutral connection fields remain accepted without enabling upstream activity. No strict five-field rewrite or scoped-retrieval implementation was added
+
+Validation after this trim passed 967 focused tests, followed by 606 affected tests after the final adjustment. All 24 live proxy/PostgreSQL checks passed, including neutral fields on create/update, unchanged records after rejection, deleted-record errors, and concurrent edits. Provider connections remained zero. Type comparison found no new diagnostics and strict Ruff rule counts did not increase. The revision was reviewed in VS Code and approved for commit and push

@@ -851,3 +851,43 @@ async def test_provider_mode_is_rejected_before_upstream_auth_or_connection(boun
     )
     with pytest.raises(ValidationError):
         await attempt
+
+
+@pytest.mark.asyncio
+async def test_management_and_runtime_inventory_share_refresh_and_request_snapshot(monkeypatch: pytest.MonkeyPatch) -> None:
+    from fastapi import HTTPException
+
+    from litellm.models.mcp_server import LiteLLM_MCPServerTable
+    from litellm.proxy import proxy_server
+    from litellm.proxy.mcp_server.mcp_server_manager import MCPServerManager
+
+    provider: Final = LiteLLM_MCPServerTable(
+        server_id="provider", execution_mode="provider", transport=None,
+        url="https://provider.example/mcp", allowed_tools=["search"],
+        mcp_info={"tool_allowlist_enforced": True},
+    )
+    updated: Final = provider.model_copy(update={"allowed_tools": []})
+    read_rows: Final = AsyncMock(side_effect=([provider], [updated], RuntimeError("offline"), []))
+    read_revision: Final = AsyncMock(return_value=SimpleNamespace(reload_revision=1))
+    tables: Final = SimpleNamespace(
+        litellm_mcpservertable=SimpleNamespace(find_many=read_rows),
+        litellm_config=SimpleNamespace(find_unique=read_revision),
+    )
+    monkeypatch.setattr(proxy_server, "prisma_client", SimpleNamespace(db=tables, writer_db=tables))
+    monkeypatch.setattr(proxy_server, "general_settings", {})
+    manager: Final = MCPServerManager()
+    async with manager.catalog.operation():
+        assert (await manager.get_all_mcp_servers_unfiltered())[0].allowed_tools == ["search"]
+        assert await manager.catalog.list() == {}
+        read_revision.return_value = SimpleNamespace(reload_revision=2)
+        assert (await manager.get_all_mcp_servers_unfiltered())[0].allowed_tools == ["search"]
+    assert (await manager.get_all_mcp_servers_unfiltered())[0].allowed_tools == []
+    assert await manager.catalog.list() == {}
+    assert read_rows.await_count == 2
+    read_revision.return_value = SimpleNamespace(reload_revision=3)
+    with pytest.raises(HTTPException) as unavailable:
+        await manager.get_all_mcp_servers_unfiltered()
+    assert unavailable.value.status_code == 503
+    assert await manager.get_all_mcp_servers_unfiltered() == []
+    assert await manager.catalog.list() == {}
+    assert read_rows.await_count == 4
