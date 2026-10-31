@@ -2,8 +2,12 @@ from importlib import import_module
 from typing import Final
 from unittest.mock import AsyncMock, patch
 
+import httpx
+import openai
 import pytest
+import respx
 
+import litellm
 from litellm.llms.anthropic.messages.adapters.transformation import (
     LiteLLMAnthropicMessagesAdapter,
 )
@@ -54,6 +58,28 @@ def test_anthropic_messages_handler_routes_litellm_proxy_mcp_to_the_gateway():
     assert routed.call_args.kwargs["tools"] == [MCP_REFERENCE]
     assert routed.call_args.kwargs["model"] == "claude-sonnet-4-5"
     assert result is not None
+
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_with_mcp_reaches_an_env_only_deployment_with_its_env_credentials(monkeypatch):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setenv("AZURE_AI_API_BASE", "https://example-resource.cognitiveservices.azure.com")
+    monkeypatch.setenv("AZURE_AI_API_KEY", "azure-env-key")
+    litellm.in_memory_llm_clients_cache.flush_cache()
+
+    with respx.mock(assert_all_called=True) as respx_mock:
+        upstream: Final = respx_mock.route().mock(side_effect=httpx.ConnectError("cut at the wire"))
+        with pytest.raises(openai.APIError):
+            await litellm.anthropic.messages.acreate(
+                max_tokens=100,
+                messages=[{"role": "user", "content": "ping"}],
+                model="azure_ai/gpt-6-luna",
+                tools=[{**MCP_REFERENCE, "server_url": "litellm_proxy"}],
+            )
+
+    assert {call.request.url.host for call in upstream.calls} == {"example-resource.cognitiveservices.azure.com"}
+    assert {call.request.headers.get("api-key") for call in upstream.calls} == {"azure-env-key"}
+    assert not any(b"litellm_proxy" in call.request.content for call in upstream.calls)
 
 
 def test_anthropic_messages_handler_skips_the_gateway_on_recursion():
