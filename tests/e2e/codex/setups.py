@@ -4,9 +4,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Final
+from typing import Final, Literal
 
 import pytest
+from _pytest.mark.structures import ParameterSet
 from cli_harness.rate_limiter import RateBucket
 from e2e_metadata import Domain, Mode, Provider, Route, Subject, meta
 from models import LiteLLMParamsBody
@@ -17,6 +18,8 @@ GPT_ON_AZURE_OPENAI: Final = "azure/gpt-6.1-sol"
 GPT_ON_OPENAI: Final = "openai/gpt-6.1-sol"
 CLAUDE_ON_BEDROCK: Final = "bedrock/us.anthropic.claude-sonnet-5-5"
 _BEDROCK_REGION: Final = "us-east-1"
+
+SetupId = Literal["bedrock_mantle", "bedrock_runtime", "azure_openai", "openai", "claude_bedrock"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -82,3 +85,12 @@ SETUPS: Final = (
         marks=_drives(Provider.BEDROCK, CLAUDE_ON_BEDROCK),
     ),
 )
+
+
+def with_expected_failure(setup_id: SetupId, *, reason: str) -> tuple[ParameterSet, ...]:
+    return tuple(
+        pytest.param(*setup.values, id=setup.id, marks=(*setup.marks, pytest.mark.xfail(strict=True, reason=reason)))
+        if setup.id == setup_id
+        else setup
+        for setup in SETUPS
+    )
