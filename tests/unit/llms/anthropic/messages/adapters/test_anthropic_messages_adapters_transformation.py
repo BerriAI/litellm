@@ -126,6 +126,57 @@ def test_translate_chat_length_takes_precedence_over_refusal():
     assert result.get("stop_details") is None
 
 
+@pytest.mark.parametrize(
+    ("provider_specific_fields", "expected_stop_reason"),
+    [({"stop_reason": "pause_turn"}, "pause_turn"), (None, "max_tokens")],
+    ids=["paused_claude_turn", "truncated_turn"],
+)
+def test_translate_chat_length_keeps_a_paused_claude_turn_unfinished(
+    provider_specific_fields: dict[str, object] | None, expected_stop_reason: str
+):
+    """A paused Claude turn reaches chat as ``length``, which a /v1/messages client would read as a cut-off reply."""
+    message: Final = Message(content="Searching", role="assistant", provider_specific_fields=provider_specific_fields)
+    response: Final = ModelResponse(choices=[Choices(index=0, finish_reason="length", message=message)], usage=Usage())
+
+    result: Final = LiteLLMAnthropicMessagesAdapter().translate_openai_response_to_anthropic(response)
+
+    assert result["stop_reason"] == expected_stop_reason
+    assert result["content"] == [{"type": "text", "text": "Searching"}]
+
+
+@pytest.mark.parametrize(
+    ("stop_details", "expected_stop_details"),
+    [
+        (
+            {"type": "refusal", "category": "cyber", "explanation": "I can't help with that."},
+            {"type": "refusal", "category": "cyber", "explanation": "I can't help with that."},
+        ),
+        (
+            {"type": "refusal", "category": 7, "explanation": "I can't help with that."},
+            {"type": "refusal", "category": None, "explanation": "I can't help with that."},
+        ),
+    ],
+    ids=["claude_stop_details", "unreadable_stop_details"],
+)
+def test_translate_claude_refusal_keeps_the_explanation_out_of_the_reply_text(stop_details, expected_stop_details):
+    """Claude's refusal explanation is API metadata, so replaying it as a text block puts words in Claude's mouth."""
+    message: Final = Message(
+        content="Partial answer",
+        role="assistant",
+        refusal=stop_details["explanation"],
+        provider_specific_fields={"stop_reason": "refusal", "stop_details": stop_details},
+    )
+    response: Final = ModelResponse(
+        choices=[Choices(index=0, finish_reason="content_filter", message=message)], usage=Usage()
+    )
+
+    result: Final = LiteLLMAnthropicMessagesAdapter().translate_openai_response_to_anthropic(response)
+
+    assert result["content"] == [{"type": "text", "text": "Partial answer"}]
+    assert result["stop_reason"] == "refusal"
+    assert result.get("stop_details") == expected_stop_details
+
+
 def test_translate_chat_content_filter_to_anthropic_response():
     response = ModelResponse(
         id="chatcmpl-content-filter",

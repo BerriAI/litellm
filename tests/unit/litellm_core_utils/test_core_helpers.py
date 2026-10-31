@@ -265,6 +265,7 @@ class TestMapFinishReasonAnthropic:
             ("max_tokens", "length"),
             ("tool_use", "tool_calls"),
             ("compaction", "length"),
+            ("pause_turn", "length"),
             ("model_context_window_exceeded", "length"),
             ("content_filtered", "content_filter"),
         ],

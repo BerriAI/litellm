@@ -3651,6 +3651,51 @@ def test_streamed_refusal_stop_details_reach_the_assembled_message():
     assert provider_fields["stop_details"] == stop_details
 
 
+def test_streamed_refusal_explanation_reaches_the_client_as_the_message_refusal():
+    stop_details: Final = ANTHROPIC_DOCS_REFUSAL_MESSAGE["stop_details"]
+    assembled: Final = _assemble_stream(_message_stream_events("refusal", stop_details))
+
+    assert assembled.choices[0].message.refusal == stop_details["explanation"]
+
+
+def test_streamed_refusal_without_an_explanation_sets_no_message_refusal():
+    assembled: Final = _assemble_stream(
+        _message_stream_events("refusal", {"type": "refusal", "category": "cyber", "explanation": None})
+    )
+
+    assert assembled.choices[0].message.get("refusal") is None
+
+
+def _paused_search_stream_events() -> tuple[dict, ...]:
+    message_start, message_delta, message_stop = _message_stream_events("pause_turn", None)
+    return (
+        message_start,
+        {
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {"type": "server_tool_use", "id": "srvtoolu_pending", "name": "web_search", "input": {}},
+        },
+        {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {"type": "input_json_delta", "partial_json": '{"query": "next city"}'},
+        },
+        {"type": "content_block_stop", "index": 0},
+        {**message_delta, "delta": {"stop_reason": "pause_turn", "stop_sequence": None}},
+        message_stop,
+    )
+
+
+def test_streamed_pause_turn_is_an_unfinished_turn_listing_the_query_it_will_run():
+    assembled: Final = _assemble_stream(_paused_search_stream_events())
+
+    assert assembled.choices[0].finish_reason == "length"
+    provider_fields: Final = assembled.choices[0].message.provider_specific_fields
+    assert provider_fields["stop_reason"] == "pause_turn"
+    pending: Final = provider_fields["web_search_calls"]["srvtoolu_pending"]
+    assert (pending.status, pending.action.query) == ("in_progress", "next city")
+
+
 def test_streamed_end_turn_carries_no_stop_details():
     assembled: Final = _assemble_stream(_message_stream_events("end_turn", None))
 

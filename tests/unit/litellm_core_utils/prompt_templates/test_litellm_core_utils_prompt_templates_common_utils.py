@@ -2001,6 +2001,12 @@ class TestRequestContainsImageContent:
             [{"role": "user", "content": [{"type": "input_audio", "input_audio": {"data": "x"}}]}],
             [{"role": "user", "content": [{"type": "tool_result", "content": [{"type": "text", "text": "ok"}]}]}],
             [{"role": "user", "content": None}],
+            [{"role": "user", "content": [None, "text", {"type": []}]}],
+            ["malformed"],
+            [None, 5],
+            "malformed",
+            5,
+            None,
             [],
         ],
     )

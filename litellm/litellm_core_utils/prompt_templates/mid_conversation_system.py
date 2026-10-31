@@ -286,6 +286,10 @@ def _separate_thinking_blocks_render(message: object) -> bool:
     return any(_thinking_block_renders(block) for block in parts_of(message_field(message, "thinking_blocks")))
 
 
+def is_anthropic_server_tool_use(tool_id: str) -> bool:
+    return tool_id.startswith(ANTHROPIC_SERVER_TOOL_USE_ID_PREFIX)
+
+
 def is_anthropic_tool_search_use(tool_id: str, tool_name: str) -> bool:
     return tool_id.startswith(ANTHROPIC_SERVER_TOOL_USE_ID_PREFIX) and tool_name in ANTHROPIC_TOOL_SEARCH_TOOL_NAMES
 

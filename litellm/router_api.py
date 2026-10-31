@@ -42,6 +42,8 @@ from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal, Protocol, TypeAlias, overload
 
+from litellm.router_config import detached
+
 if TYPE_CHECKING:
     from typing import Any  # noqa: TID251  # only to spell the cores' untyped (Unknown) containers and one Any type
 
@@ -176,9 +178,9 @@ def deployment_usable_by_team(deployment: "Mapping[str, object] | Deployment", t
     Whether ``team_id`` may use ``deployment``: a team-scoped deployment (``model_info.team_id``
     set) only by that team, any other deployment by everyone. Needs no router instance.
     """
-    from litellm.router import Router
+    from litellm.router_python_core import PythonCore
 
-    return Router._core_deployment_usable_by_team(deployment, team_id)
+    return PythonCore._core_deployment_usable_by_team(deployment, team_id)
 
 
 def deployment_id(model_group: str, litellm_params: Mapping[str, object]) -> str:
@@ -200,9 +202,9 @@ def deployment_id(model_group: str, litellm_params: Mapping[str, object]) -> str
 
 def router_init_args() -> tuple[str, ...]:
     """The arguments ``Router.__init__`` accepts (was ``Router.get_valid_args``). Needs no router instance."""
-    from litellm.router import Router
+    from litellm.router_python_core import PythonCore
 
-    return tuple(Router.get_valid_args())
+    return tuple(PythonCore.get_valid_args())
 
 
 def mark_advisor_orchestration_failure(exception: BaseException) -> None:
@@ -266,9 +268,9 @@ def deployment_metadata(request_kwargs: Mapping[str, object]) -> Mapping[str, ob
 
 
 def _json_default_stable_id(obj: object) -> str:
-    from litellm.router import Router
+    from litellm.router_python_core import PythonCore
 
-    return Router._json_default_stable_id(obj)
+    return PythonCore._json_default_stable_id(obj)
 
 
 class RouterRegistry:
@@ -529,10 +531,10 @@ class RouterRegistry:
         ``should_include_deployment``), or, without ``model_name``, whether the team may use it at
         all (was ``deployment_usable_by_team``).
         """
-        from litellm.router import Router
+        from litellm.router_python_core import PythonCore
 
         if model_name is None:
-            return Router._core_deployment_usable_by_team(deployment, team_id)
+            return PythonCore._core_deployment_usable_by_team(deployment, team_id)
         return self._router._core_should_include_deployment(model_name=model_name, model=deployment, team_id=team_id)
 
     @overload
@@ -1081,6 +1083,12 @@ SETTING_FIELDS: Final[tuple[str, ...]] = (
     "cache_responses",
 )
 
+# Runtime settings kept as plain router attributes rather than ``settings()`` fields. A write
+# to one (``router.num_retries = 2``) is a changeset too: ``ChangeSet(assign={...})``.
+PLAIN_SETTING_ATTRIBUTES: Final[frozenset[str]] = frozenset({"num_retries", "max_fallbacks", "retry_after", "timeout"})
+# Former attributes whose value lives under another name, assignable through a changeset.
+ASSIGNABLE_ALIASES: Final[Mapping[str, str]] = MappingProxyType({"model_group_alias": "_core_model_group_alias"})
+
 _MISSING: Final = object()
 
 
@@ -1196,16 +1204,16 @@ class RouterHealth:
     @staticmethod
     def is_blocked(deployment: "Deployment") -> bool:
         """Whether an admin paused this deployment (was ``is_deployment_blocked``)."""
-        from litellm.router import Router
+        from litellm.router_python_core import PythonCore
 
-        return Router._core_is_deployment_blocked(deployment)
+        return PythonCore._core_is_deployment_blocked(deployment)
 
     @staticmethod
     def all_blocked(deployments: "Sequence[DeploymentTypedDict]") -> bool:
         """Whether every deployment in the list is paused (was ``are_all_deployments_blocked``)."""
-        from litellm.router import Router
+        from litellm.router_python_core import PythonCore
 
-        return Router._core_are_all_deployments_blocked(deployments)
+        return PythonCore._core_are_all_deployments_blocked(deployments)
 
     def fully_blocked_model_names(self) -> set[str]:  # mutable-ok: the core's type, a fresh set
         """Groups whose every deployment is paused (was ``get_fully_blocked_model_names``)."""
@@ -1324,13 +1332,17 @@ class RoutingObservers:
 def apply_changes(router: "Router", changes: ChangeSet) -> ApplyResult:
     if changes.refresh_model_info:
         raise TypeError("ChangeSet(refresh_model_info=True) needs aapply()")
-    unknown: Final = sorted(set(changes.assign) - set(SETTING_FIELDS))
+    unknown: Final = sorted(set(changes.assign) - {*SETTING_FIELDS, *PLAIN_SETTING_ATTRIBUTES, *ASSIGNABLE_ALIASES})
     if unknown:
         raise ValueError(f"not assignable router settings: {unknown}")
     for name, value in changes.assign.items():
-        setattr(router, "_core_" + name, value)
+        setattr(
+            router,
+            name if name in PLAIN_SETTING_ATTRIBUTES else ASSIGNABLE_ALIASES.get(name, "_core_" + name),
+            detached(value),
+        )
     if changes.settings:
-        router._core_update_settings(**changes.settings)
+        router._core_update_settings(**{name: detached(value) for name, value in changes.settings.items()})
     upserted: Final = [router._core_upsert_deployment(deployment=d) for d in changes.upsert]
     deleted: Final = [router._core_delete_deployment(id=i) for i in changes.delete]
     if changes.redis_cache is not None:
@@ -1416,7 +1428,7 @@ class RoutingContext:
         return self._router.observe()
 
     def belongs_to(self, router: "Router") -> bool:
-        return self._router is router
+        return self._router is router or router.__dict__.get("_core") is self._router
 
     @property
     def explicit_allowed_fails(self) -> int | None:
