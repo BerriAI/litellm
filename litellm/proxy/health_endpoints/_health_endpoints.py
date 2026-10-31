@@ -9,7 +9,6 @@ import traceback
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from enum import Enum
 from itertools import chain, groupby
 from types import MappingProxyType
 from typing import Final, Literal, TypedDict
@@ -76,6 +75,7 @@ from litellm.proxy.db.db_lookup_gate import db_lookup_stall_tracker
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.proxy.db.health_check_latest import (
     LatestHealthCheckRow,
+    latest_by_model_name,
     query_latest_health_checks,
 )
 from litellm.proxy.db.proxy_worker_heartbeat import count_live_proxy_workers
@@ -1795,92 +1795,6 @@ async def health_check_history_endpoint(
         )
 
 
-class _ModelHealthStatus(str, Enum):
-    HEALTHY = "healthy"
-    UNHEALTHY = "unhealthy"
-    UNKNOWN = "unknown"
-
-
-class _ModelHealth(TypedDict):
-    status: ReadOnly[_ModelHealthStatus]
-    healthy_count: ReadOnly[int]
-    unhealthy_count: ReadOnly[int]
-    checked_at: ReadOnly[str | None]
-
-
-def _model_health_status(healthy_count: int, unhealthy_count: int, deployment_count: int) -> _ModelHealthStatus:
-    if healthy_count > 0:
-        return _ModelHealthStatus.HEALTHY
-    if unhealthy_count > 0 and unhealthy_count >= deployment_count:
-        return _ModelHealthStatus.UNHEALTHY
-    return _ModelHealthStatus.UNKNOWN
-
-
-def _latest_model_checks(
-    checks: Sequence[LatestHealthCheckRow], deployments: Sequence[Mapping[str, object]], model_name: str
-) -> tuple[LatestHealthCheckRow, ...]:
-    ids: Final = frozenset(
-        model_id for deployment in deployments if (model_id := _deployment_id(deployment)) is not None
-    )
-    names: Final = frozenset(deployment.get("model_name") for deployment in deployments) | {model_name}
-    by_id: Final = {
-        check.model_id: check for check in sorted(checks, key=lambda row: row.checked_at) if check.model_id in ids
-    }
-    group_check: Final = max(
-        (check for check in checks if check.model_id is None and check.model_name in names),
-        key=lambda row: row.checked_at,
-        default=None,
-    )
-    if group_check is not None and all(group_check.checked_at >= check.checked_at for check in by_id.values()):
-        return (group_check,)
-    return tuple(by_id.values())
-
-
-def _summarize_model_health(checks: Sequence[LatestHealthCheckRow], deployment_count: int) -> _ModelHealth:
-    healthy_count: Final = sum(check.healthy_count for check in checks)
-    unhealthy_count: Final = sum(check.unhealthy_count for check in checks)
-    checked_at: Final = min((check.checked_at for check in checks), default=None)
-    return {
-        "status": _model_health_status(healthy_count, unhealthy_count, deployment_count),
-        "healthy_count": healthy_count,
-        "unhealthy_count": unhealthy_count,
-        "checked_at": checked_at.isoformat() if checked_at is not None else None,
-    }
-
-
-async def _latest_health_by_model(
-    checks: Sequence[LatestHealthCheckRow], caller: UserAPIKeyAuth
-) -> Mapping[str, _ModelHealth]:
-    from litellm.proxy.proxy_server import llm_router
-
-    aliases: Final = await _caller_aliases(caller)
-    configured_names: Final = (
-        frozenset(llm_router.registry().names(team_id=caller.team_id))
-        if llm_router is not None
-        else frozenset(check.model_name for check in checks)
-    )
-    names: Final = await _names_key_may_request(
-        configured_names | requestable_alias_names(aliases), aliases, caller, await _key_owner(caller), llm_router
-    )
-    summaries: Final = ((name, _served_group(name, aliases, llm_router)) for name in sorted(names))
-
-    def summarize(model_name: str) -> _ModelHealth:
-        deployments: Final = (
-            _DEPLOYMENTS.validate_python(llm_router.registry().deployments(model_name, team_id=caller.team_id))
-            if llm_router is not None
-            else ()
-        )
-        visible: Final = tuple(
-            deployment for deployment in deployments if deployment_usable_by_team(deployment, caller.team_id)
-        )
-        if llm_router is not None and not visible:
-            return _summarize_model_health((), 0)
-        latest: Final = _latest_model_checks(checks, visible, model_name)
-        return _summarize_model_health(latest, len(visible))
-
-    return MappingProxyType({name: summarize(model_name) for name, model_name in summaries})
-
-
 @router.get("/health/latest", tags=["health"], dependencies=[Depends(user_api_key_auth)])
 async def latest_health_checks_endpoint(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
@@ -1890,21 +1804,34 @@ async def latest_health_checks_endpoint(
 
     Returns the most recent health check result for each model.
     """
+    from litellm.proxy.proxy_server import llm_router
+
     prisma_client: Final = _check_prisma_client()
 
     try:
         latest_checks: Final = await prisma_client.get_all_latest_health_checks()
 
-        # Convert to dict format for JSON response using helper function
+        checks_by_id: Final = {(check.model_id or check.model_name): check for check in latest_checks}
+        checks_by_name: Final = latest_by_model_name(latest_checks)
+        aliases: Final = await _caller_aliases(user_api_key_dict)
+        alias_names: Final = await _names_key_may_request(
+            _alias_names_caller_may_request(aliases, llm_router),
+            aliases,
+            user_api_key_dict,
+            await _key_owner(user_api_key_dict),
+            llm_router,
+        )
+        alias_targets: Final = {
+            alias: checks_by_name.get(_served_group(alias, aliases, llm_router)) for alias in alias_names
+        }
+        alias_checks: Final = {alias: check for alias, check in alias_targets.items() if check is not None}
         checks_data: Final = {
-            (check.model_id if check.model_id else check.model_name): convert_health_check_to_dict(check)
-            for check in latest_checks
+            name: convert_health_check_to_dict(check) for name, check in {**alias_checks, **checks_by_id}.items()
         }
 
         return {
             "latest_health_checks": checks_data,
-            "total_models": len(checks_data),
-            "model_health": await _latest_health_by_model(latest_checks, user_api_key_dict),
+            "total_models": len(checks_by_id),
         }
     except Exception as e:
         verbose_proxy_logger.error("Error getting latest health checks: %s", e)
