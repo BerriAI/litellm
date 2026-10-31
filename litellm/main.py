@@ -115,6 +115,11 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     messages_without_pdf_file_parts,
 )
 from litellm.litellm_core_utils.provider_affinity import add_provider_affinity_header
+from litellm.litellm_core_utils.reasoning_effort_capability import (
+    model_group_from_metadata,
+    reasoning_effort_needs_allowing,
+    resolve_chat_reasoning,
+)
 from litellm.litellm_core_utils.request_timeout_resolver import (
     get_configured_request_timeout,
 )
@@ -146,11 +151,6 @@ from litellm.llms.vertex_ai.common_utils import (
 )
 from litellm.realtime_api.main import realtime_health_check
 from litellm.responses.mcp.tool_precheck import may_name_litellm_mcp_gateway
-from litellm.router_utils.reasoning_effort_capability import (
-    model_group_from_metadata,
-    reasoning_effort_needs_allowing,
-    resolve_chat_reasoning,
-)
 from litellm.secret_managers.main import get_secret_bool, get_secret_str
 from litellm.text_completions.streaming_iterator import TextCompletionStreamWrapper
 from litellm.types.completion import (
@@ -6817,6 +6817,23 @@ async def aembedding(*args, **kwargs) -> EmbeddingResponse:
         )
 
 
+def _embedding_headers(param: str, configured: object, model: str, drop_params: bool) -> Mapping[str, object]:
+    if not configured:
+        return {}
+    if isinstance(configured, Mapping):
+        return dict(cast(Mapping[str, object], configured))  # cast-ok: header names from untyped request JSON
+    try:
+        return dict(cast(Iterable[tuple[str, object]], configured))  # cast-ok: name and value pairs from request JSON
+    except (TypeError, ValueError):
+        if drop_params:
+            return {}
+        raise litellm.UnsupportedParamsError(
+            message=f"{param} must be a JSON object of header names to values. "
+            "To drop it from the call, set `litellm.drop_params = True`.",
+            model=model,
+        )
+
+
 # fmt: off
 
 # Overload for when aembedding=True (returns coroutine)
@@ -6931,11 +6948,10 @@ def embedding(
     azure_ad_token_provider: Final = kwargs.get("azure_ad_token_provider", None)
     aembedding: Final[bool | None] = kwargs.get("aembedding", None)
     extra_headers: Final = kwargs.get("extra_headers", None)
-    headers = kwargs.get("headers", None) or extra_headers
-    if headers is None:
-        headers = {}
-    if extra_headers is not None:
-        headers.update(extra_headers)
+    headers = {
+        **_embedding_headers("headers", kwargs.get("headers"), model, drop_unsupported_params),
+        **_embedding_headers("extra_headers", extra_headers, model, drop_unsupported_params),
+    }
     # Inject proxy auth headers if configured
     if litellm.proxy_auth is not None:
         try:
@@ -7099,7 +7115,7 @@ def embedding(
             # set API KEY
             api_key = api_key or litellm.api_key or litellm.openai_key or get_secret_str("OPENAI_API_KEY")
 
-            if headers is not None and headers != {}:
+            if headers:
                 optional_params["extra_headers"] = headers
 
             requested_encoding_format: Final = (
@@ -7191,14 +7207,15 @@ def embedding(
             custom_llm_provider == "openai_like"
             or custom_llm_provider == "llamafile"
             or custom_llm_provider == "lm_studio"
+            or JSONProviderRegistry.supports_embeddings(custom_llm_provider)
         ):
             api_base = api_base or litellm.api_base or get_secret_str("OPENAI_LIKE_API_BASE")
 
             # set API KEY
-            if api_key is None:
-                api_key = api_key or litellm.api_key or litellm.openai_like_key or get_secret_str("OPENAI_LIKE_API_KEY")
+            if api_key is None and not JSONProviderRegistry.supports_embeddings(custom_llm_provider):
+                api_key = litellm.api_key or litellm.openai_like_key or get_secret_str("OPENAI_LIKE_API_KEY")
 
-            if headers is not None and headers != {}:
+            if headers:
                 optional_params["extra_headers"] = headers
 
             ## EMBEDDING CALL
@@ -7213,10 +7230,9 @@ def embedding(
                 optional_params=optional_params,
                 client=client,
                 aembedding=aembedding,
+                drop_params=drop_unsupported_params,
             )
         elif custom_llm_provider == "oci":
-            if headers is None:
-                headers = {}
             response = base_llm_http_handler.embedding(
                 model=model,
                 input=input,
@@ -7240,11 +7256,6 @@ def embedding(
                 or get_secret_str("CO_API_KEY")
                 or litellm.api_key
             )
-
-            # Use the merged headers variable (already merged at the top of the function)
-            # Don't overwrite it with just extra_headers
-            if headers is None:
-                headers = {}
 
             response = base_llm_http_handler.embedding(
                 model=model,
