@@ -8,7 +8,7 @@ import copy
 import json
 import os
 import re
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from typing import Final, Literal
@@ -35,6 +35,8 @@ from litellm.types.guardrails import LitellmParams, PiiAction, PiiEntityType
 from litellm.types.llms.openai import (
     BaseLiteLLMOpenAIResponseObject,
     OutputItemDoneEvent,
+    OutputTextDeltaEvent,
+    OutputTextDoneEvent,
     RefusalDeltaEvent,
     RefusalDoneEvent,
     ResponseCompletedEvent,
@@ -5079,7 +5081,7 @@ def test_get_session_iterator_reuses_one_session_per_background_loop(
     assert presidio_guardrail._http_session is None
 
 
-_REFUSAL_POSITION: Final = {"item_id": "msg_1", "output_index": 0, "content_index": 0}
+_PART_POSITION: Final = {"item_id": "msg_1", "output_index": 0, "content_index": 0}
 
 
 def _email_masking_guardrail() -> OPTIONAL_PresidioPIIMasking:
@@ -5090,19 +5092,30 @@ def _email_masking_guardrail() -> OPTIONAL_PresidioPIIMasking:
     )
 
 
-def _refusal_stream_events() -> tuple[object, ...]:
-    refusal_part: Final = {"type": "refusal", "refusal": "I cannot help alice@example.com"}
-    message: Final = BaseLiteLLMOpenAIResponseObject(
-        type="message", id="msg_1", role="assistant", content=[refusal_part]
-    )
-    return (
-        RefusalDeltaEvent(type=ResponsesAPIStreamEvents.REFUSAL_DELTA, **_REFUSAL_POSITION, delta="I cannot help "),
-        RefusalDeltaEvent(type=ResponsesAPIStreamEvents.REFUSAL_DELTA, **_REFUSAL_POSITION, delta="alice@example.com"),
-        RefusalDoneEvent(
-            type=ResponsesAPIStreamEvents.REFUSAL_DONE,
-            **_REFUSAL_POSITION,
-            refusal="I cannot help alice@example.com",
+def _text_part_events(part_type: str, text: str) -> tuple[Mapping[str, object], tuple[object, ...]]:
+    deltas: Final = ("I cannot help ", "alice@example.com")
+    if part_type == "refusal":
+        return {"type": "refusal", "refusal": text}, (
+            *(
+                RefusalDeltaEvent(type=ResponsesAPIStreamEvents.REFUSAL_DELTA, **_PART_POSITION, delta=delta)
+                for delta in deltas
+            ),
+            RefusalDoneEvent(type=ResponsesAPIStreamEvents.REFUSAL_DONE, **_PART_POSITION, refusal=text),
+        )
+    return {"type": "output_text", "text": text, "annotations": []}, (
+        *(
+            OutputTextDeltaEvent(type=ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA, **_PART_POSITION, delta=delta)
+            for delta in deltas
         ),
+        OutputTextDoneEvent(type=ResponsesAPIStreamEvents.OUTPUT_TEXT_DONE, **_PART_POSITION, text=text),
+    )
+
+
+def _message_stream_events(part_type: str = "refusal") -> tuple[object, ...]:
+    part, text_events = _text_part_events(part_type, "I cannot help alice@example.com")
+    message: Final = BaseLiteLLMOpenAIResponseObject(type="message", id="msg_1", role="assistant", content=[part])
+    return (
+        *text_events,
         OutputItemDoneEvent(type=ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE, output_index=0, item=message),
         ResponseCompletedEvent(
             type=ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
@@ -5119,7 +5132,7 @@ def _refusal_stream_events() -> tuple[object, ...]:
                             "id": "msg_1",
                             "status": "completed",
                             "role": "assistant",
-                            "content": [refusal_part],
+                            "content": [part],
                         }
                     ],
                     "parallel_tool_calls": False,
@@ -5165,10 +5178,11 @@ async def test_mask_and_unmask_cover_a_chat_refusal():
 
 
 @pytest.mark.asyncio
-async def test_apply_to_output_masks_every_event_of_a_responses_refusal_stream():
-    collected = await _drain_output_masking(_email_masking_guardrail(), _refusal_stream_events())
+@pytest.mark.parametrize("part_type", ["refusal", "output_text"])
+async def test_apply_to_output_masks_every_event_of_a_responses_message_stream(part_type: str):
+    collected = await _drain_output_masking(_email_masking_guardrail(), _message_stream_events(part_type))
 
-    assert len(collected) == len(_refusal_stream_events())
+    assert len(collected) == len(_message_stream_events(part_type))
     assert "alice@example.com" not in json.dumps([event.model_dump() for event in collected], default=str)
     assert "".join(event.delta for event in collected[:2]) == "I cannot help <EMAIL_ADDRESS>"
 
@@ -5180,4 +5194,4 @@ async def test_apply_to_output_blocks_a_responses_stream_before_any_event_is_rel
 
     with patch.object(guardrail, "check_pii", side_effect=blocked):
         with pytest.raises(BlockedPiiEntityError):
-            await _drain_output_masking(guardrail, _refusal_stream_events())
+            await _drain_output_masking(guardrail, _message_stream_events())
