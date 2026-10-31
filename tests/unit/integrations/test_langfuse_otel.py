@@ -1085,6 +1085,61 @@ class TestLangfuseOtelResponsesAPI:
             assert output_data[0]["arguments"] == {}
 
 
+    @pytest.mark.parametrize("tool_input", ("console.log('hello')", "redacted-by-litellm"))
+    def test_responses_api_with_custom_tool_calls(self, tool_input):
+        """Test Langfuse OTEL logger with Responses API custom_tool_call output."""
+        from litellm.types.integrations.langfuse_otel import LangfuseSpanAttributes
+        from litellm.types.responses.main import CustomToolCallOutputItem
+
+        # Create Responses API response with a custom (freeform) tool call
+        response_obj = ResponsesAPIResponse(
+            id="response-790",
+            created_at=1625247700,
+            output=[
+                CustomToolCallOutputItem(
+                    id="ctc-123",
+                    type="custom_tool_call",
+                    name="exec",
+                    call_id="call-def",
+                    input=tool_input,
+                    status="completed",
+                )
+            ],
+        )
+
+        kwargs = {
+            "call_type": "responses",
+            "messages": [{"role": "user", "content": "Print hello"}],
+            "model": "gpt-4o",
+            "optional_params": {},
+        }
+
+        mock_span = MagicMock()
+
+        with patch(
+            "litellm.integrations.arize._utils.safe_set_attribute"
+        ) as mock_safe_set_attribute:
+            LangfuseOtelLogger._set_langfuse_specific_attributes(
+                mock_span, kwargs, response_obj
+            )
+
+            output_calls = [
+                call
+                for call in mock_safe_set_attribute.call_args_list
+                if call.args[1] == LangfuseSpanAttributes.OBSERVATION_OUTPUT.value
+            ]
+
+            assert len(output_calls) > 0, "observation.output should be set"
+            output_data = json.loads(output_calls[0].args[2])
+            assert isinstance(output_data, list)
+            assert len(output_data) == 1
+            assert output_data[0]["type"] == "custom_tool_call"
+            assert output_data[0]["id"] == "ctc-123"
+            assert output_data[0]["name"] == "exec"
+            assert output_data[0]["call_id"] == "call-def"
+            assert output_data[0]["input"] == tool_input
+
+
 _TRACER: Final = TracerProvider().get_tracer("langfuse-otel-tests")
 TRACE_FIELD_KEYS: Final = (
     "langfuse.trace.name",

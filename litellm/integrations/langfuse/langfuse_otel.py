@@ -679,6 +679,16 @@ def _output_items(item: object) -> tuple[dict[str, object], ...]:
                 "content": _attr(first_content, "text", ""),
             },
         )
+    if item_type == "custom_tool_call":
+        return (
+            {
+                "id": _attr(item, "id", ""),
+                "name": _attr(item, "name", ""),
+                "call_id": _attr(item, "call_id", ""),
+                "type": "custom_tool_call",
+                "input": _attr(item, "input", ""),
+            },
+        )
     if item_type == "function_call":
         arguments: Final = _attr(item, "arguments", "{}")
         return (
