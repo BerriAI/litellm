@@ -215,6 +215,10 @@ from litellm.utils import supports_mid_conversation_system
 
 from .streaming_iterator import AnthropicSSEStream, AnthropicStreamWrapper
 
+ANTHROPIC_ONLY_REQUEST_KEYS: Final[frozenset[str]] = frozenset(
+    {"output_config", "safeguards", "inference_geo", "mcp_servers", "speed"}
+)
+
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObject
     from litellm.llms.anthropic.messages.safeguards import SafeguardsEvaluator
@@ -1272,7 +1276,7 @@ class LiteLLMAnthropicMessagesAdapter:
         """Copy through anthropic params that do not require translation."""
         translatable_params: Final = self.translatable_anthropic_params()
         for k, v in anthropic_message_request.items():
-            if k not in translatable_params:  # pass remaining params as is
+            if k not in translatable_params and k not in ANTHROPIC_ONLY_REQUEST_KEYS:
                 new_kwargs[k] = v
 
     def translate_anthropic_to_openai(
