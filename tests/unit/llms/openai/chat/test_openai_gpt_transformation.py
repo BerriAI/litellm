@@ -1891,9 +1891,7 @@ class TestCacheControlStrippingDoesNotMutateCallerInput:
 
         request = self._transform(messages, tools)
 
-        # the outbound body must still be stripped, both message-level and nested
         assert "cache_control" not in json.dumps(request)
-        # and the caller's objects must be untouched, nested content blocks included
         assert messages == messages_before
         assert tools == tools_before
 

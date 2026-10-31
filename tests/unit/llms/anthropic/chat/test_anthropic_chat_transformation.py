@@ -9866,9 +9866,9 @@ def _five_cache_hint_conversation() -> list[dict[str, object]]:
 def _cached_texts(node: object) -> Iterator[str]:
     if isinstance(node, dict):
         yield from ((node["text"],) if "cache_control" in node and "text" in node else ())
-        yield from (text for value in node.values() for text in _cached_texts(value))
+        yield from chain.from_iterable(map(_cached_texts, node.values()))
     elif isinstance(node, list):
-        yield from (text for item in node for text in _cached_texts(item))
+        yield from chain.from_iterable(map(_cached_texts, node))
 
 
 @pytest.mark.parametrize(

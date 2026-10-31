@@ -582,9 +582,7 @@ class TestOpenAIResponsesAPIConfig:
             headers={},
         )
 
-        # the outbound body is still stripped
         assert "cache_control" not in json.dumps(result)
-        # and the caller's objects are untouched, nested content blocks included
         assert input_with_cache_control == input_before
         assert tools_with_cache_control == tools_before
 
