@@ -734,7 +734,6 @@ async def test_mcp_tool_call_hook():
 # called) — the rejection path builds a genuine LiteLLMLoggingObj and drives
 # its async_failure_handler, mirroring list_mcp_tools / call_mcp_tool.
 # ---------------------------------------------------------------------------
-import json
 from datetime import datetime
 
 from litellm.proxy.mcp_server.protocol_error_logging import (
