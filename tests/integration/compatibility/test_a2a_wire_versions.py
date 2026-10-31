@@ -452,8 +452,13 @@ def test_guard_no_agent_key_or_proxy_caller_key_is_sent(gateway: Gateway) -> Non
     (("0.3", "message/stream", _MESSAGE_V03), ("1.0", "SendStreamingMessage", _MESSAGE_V10)),
     ids=("v0.3", "v1.0"),
 )
+@pytest.mark.parametrize(
+    "path",
+    ("/a2a/{identity}", "/a2a/{identity}/message/stream", "/v1/a2a/{identity}/message/stream"),
+    ids=("bare", "message_stream", "v1_message_stream"),
+)
 def test_a2a_stream_relays_each_upstream_event_as_its_own_sse_frame_in_the_pinned_dialect(
-    gateway: Gateway, version: str, method: str, message: dict[str, JsonValue]
+    gateway: Gateway, version: str, method: str, message: dict[str, JsonValue], path: str
 ) -> None:
     marker: Final = "a2astream" + uuid.uuid4().hex
     first_frame_seen: Final = threading.Event()
@@ -482,7 +487,7 @@ def test_a2a_stream_relays_each_upstream_event_as_its_own_sse_frame_in_the_pinne
         )
         with gateway.client.stream(
             "POST",
-            f"/a2a/{identity}",
+            path.format(identity=identity),
             headers={
                 "Authorization": f"Bearer {key}",
                 "a2a-version": version,

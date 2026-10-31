@@ -905,13 +905,21 @@ class CustomStreamWrapper:
         except Exception as e:
             raise e
 
+    def _served_openrouter_model(self) -> str | None:
+        if self.custom_llm_provider == LlmProviders.OPENROUTER.value or (
+            self.custom_llm_provider == "cached_response"
+            and self.logging_obj.model_call_details.get("custom_llm_provider") == LlmProviders.OPENROUTER.value
+        ):
+            return self._provider_response_model
+        return None
+
     def model_response_creator(
         self,
         chunk: dict | None = None,
         hidden_params: Mapping[str, object] | None = None,
         delta: Delta | None = None,
     ) -> ModelResponseStream:
-        _model: Final = self._cached_model_name
+        _model: Final = self._served_openrouter_model() or self._cached_model_name
         _logging_obj_llm_provider: Final = self._cached_logging_llm_provider
 
         if chunk is None:
@@ -1699,7 +1707,7 @@ class CustomStreamWrapper:
                 return dispatch_result.value
             response_obj = dispatch_result.response_obj
 
-            model_response.model = self.model
+            model_response.model = self._served_openrouter_model() or self.model
             ## FUNCTION CALL PARSING
             original_chunk: Final[_UpstreamChunkLike | None] = (
                 response_obj.get("original_chunk") if response_obj is not None else None
@@ -2561,7 +2569,7 @@ class CustomStreamWrapper:
         if partial is None or not isinstance(usage, Usage):
             return None
         if self.model:
-            partial.model = self.model
+            partial.model = self._served_openrouter_model() or self.model
         backfill_missing_cache_usage_fields(usage)
         return partial
 
