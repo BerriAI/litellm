@@ -200,9 +200,9 @@ def _requested_model(kwargs: Mapping[str, object]) -> str | None:
     return model_group if isinstance(model_group, str) else None
 
 
-def _priced_result(model: str, billing: _Billing, start_time: datetime) -> ModelResponse:
+def _priced_result(model: str, billing: _Billing, start_time: datetime, call_id: str) -> ModelResponse:
     result: Final = ModelResponse(
-        id=f"openai-websocket-{start_time.timestamp()}",
+        id=call_id,
         object="chat.completion",
         created=int(start_time.timestamp()),
         model=model,
@@ -246,7 +246,7 @@ class OpenAIWebsocketPassthroughLoggingHandler:
 
         logging_obj.model_call_details.update(MappingProxyType({"response_cost": billing.cost}))
         priced: Final[PassThroughEndpointLoggingTypedDict] = {
-            "result": _priced_result(model, billing, start_time),
+            "result": _priced_result(model, billing, start_time, logging_obj.litellm_call_id),
             "kwargs": {
                 **kwargs,
                 "model": model,

@@ -668,7 +668,7 @@ REALTIME_FRAMES: Final = [
 
 
 def _normalize(url_route: str, response_body: dict[str, object] | list[dict[str, object]]) -> dict:
-    logging_obj: Final = MagicMock(model_call_details={})
+    logging_obj: Final = MagicMock(model_call_details={}, litellm_call_id="call-fake")
     return PassThroughEndpointLogging().normalize_llm_passthrough_logging_payload(
         httpx_response=MagicMock(spec=httpx.Response),
         response_body=response_body,

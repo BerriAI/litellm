@@ -3124,14 +3124,16 @@ async def websocket_passthrough_request(
 
     def log_turn(lane: str | None, in_row: Callable[[Mapping[str, object]], bool]) -> None:
         end_time: Final = datetime.now()
-        if ledger.logged_turns == 0:
+        if upstream_frame_kind is None:
             log_frames(logging_obj, passthrough_logging_payload, kwargs, end_time, lane, in_row)
         else:
             turn_call_id: Final = str(uuid.uuid4())
             turn_logging: Final = new_call_logging(ledger.started, turn_call_id)
             turn_payload: Final = new_call_payload()
             turn_kwargs: Final = init_call_kwargs(
-                user_api_key_dict.model_copy(update={"budget_reservation": None}),
+                user_api_key_dict
+                if ledger.logged_turns == 0
+                else user_api_key_dict.model_copy(update={"budget_reservation": None}),
                 turn_payload,
                 turn_call_id,
                 turn_logging,
@@ -3141,7 +3143,9 @@ async def websocket_passthrough_request(
         ledger.close_turn(lane, end_time)
 
     ### CALL HOOKS ### - modify incoming data / reject request before calling the model
-    websocket_hook_data: Final = guardrail_request_data_with_streaming(MappingProxyType({}), is_streaming=True)
+    websocket_hook_data: Final = guardrail_request_data_with_streaming(
+        MappingProxyType({"litellm_call_id": litellm_call_id}), is_streaming=True
+    )
     await proxy_logging_obj.pre_call_hook(
         user_api_key_dict=user_api_key_dict,
         data=websocket_hook_data,

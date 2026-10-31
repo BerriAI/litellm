@@ -1,3 +1,4 @@
+import uuid
 from collections.abc import Mapping, Sequence
 from datetime import datetime
 from types import MappingProxyType
@@ -15,6 +16,8 @@ from litellm.proxy.pass_through_endpoints.llm_provider_handlers.openai_websocket
     OpenAIWebsocketPassthroughLoggingHandler,
     openai_websocket_frame_kind,
 )
+from litellm.proxy.spend_tracking.spend_tracking_utils import get_spend_logs_id
+from litellm.types.utils import CallTypes
 
 REALTIME_MODEL: Final = "gpt-realtime-2.1"
 RESPONSES_MODEL: Final = "gpt-5.4-mini"
@@ -24,7 +27,7 @@ SESSION_START: Final = datetime(2026, 1, 1, 12, 0, 0)
 
 
 def _logging_obj() -> MagicMock:
-    logging_obj: Final = MagicMock(model_call_details={})
+    logging_obj: Final = MagicMock(model_call_details={}, litellm_call_id=str(uuid.uuid4()))
     return logging_obj
 
 
@@ -288,6 +291,27 @@ def test_the_price_of_a_multi_model_connection_reaches_the_spend_row():
     assert logged_cost == pytest.approx(handled["kwargs"]["response_cost"])
     assert logged_cost > priced_on_the_session_model
     assert handled["kwargs"]["model"] == RESPONSES_MODEL
+
+
+def test_turns_that_start_in_the_same_instant_each_keep_their_own_spend_row():
+    """
+    Spend logs key each row by the id its result carries and skip a repeated id
+    without a word, so two turns that start in the same instant, on one socket
+    or on two, each need an id of their own or one of them is never billed.
+    """
+    turns: Final = [
+        _handle(
+            [_responses_completed(RESPONSES_MODEL, input_tokens=13, output_tokens=5)],
+            url_route="/openai_passthrough/v1/responses",
+        )
+        for _ in range(2)
+    ]
+
+    spend_log_ids: Final = {
+        get_spend_logs_id(CallTypes.pass_through.value, turn["result"].model_dump(), turn["kwargs"]) for turn in turns
+    }
+    assert len(spend_log_ids) == 2
+    assert None not in spend_log_ids
 
 
 def test_a_turn_the_caller_walked_out_of_still_names_the_model_it_ran():

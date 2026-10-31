@@ -1,5 +1,6 @@
 import asyncio
 import base64
+import contextvars
 import gzip
 import json
 import logging
@@ -39,6 +40,8 @@ from litellm.litellm_core_utils.internal_call_metadata import MODEL_ACCESS_GROUP
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.proxy._lazy_features import LazyFeature, attach_lazy_features
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
+from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
+from litellm.proxy.hooks.parallel_request_limiter_v3 import PROXY_MaxParallelRequestsHandler_v3
 from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import router as llm_passthrough_router
 from litellm.proxy.pass_through_endpoints.llm_provider_handlers.vertex_passthrough_logging_handler import (
@@ -77,7 +80,7 @@ from litellm.proxy.pass_through_endpoints.success_handler import (
 )
 from litellm.proxy.route_llm_request import ProxyModelNotFoundError
 from litellm.proxy.spend_tracking.spend_tracking_utils import get_spend_logs_id
-from litellm.proxy.utils import ProxyLogging
+from litellm.proxy.utils import InternalUsageCache, ProxyLogging, hash_token
 from litellm.types import utils as types_utils
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import CallTypes
@@ -8202,6 +8205,89 @@ async def test_websocket_passthrough_logs_each_turn_on_its_own_row_charged_to_th
     assert rows[0]["litellm_call_id"] != rows[1]["litellm_call_id"]
     assert rows[1]["start_time"] == rows[0]["end_time"]
     relayed.proxy_logging.post_call_failure_hook.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_websocket_passthrough_holds_the_keys_parallel_slot_until_the_session_ends():
+    """
+    A key allowed one parallel request holds that slot for as long as its
+    socket stays open. A turn that finishes and reaches spend mid-session must
+    not free it, or a second session gets in while the first is still running.
+    """
+    limiter_cache: Final = DualCache()
+    limiter: Final = PROXY_MaxParallelRequestsHandler_v3(internal_usage_cache=InternalUsageCache(limiter_cache))
+    key: Final = UserAPIKeyAuth(api_key=hash_token("sk-one-socket"), max_parallel_requests=1)
+    logged_rows: Final[list[asyncio.Task[None]]] = []
+
+    async def admit(user_api_key_dict: UserAPIKeyAuth, data: dict[str, object], call_type: str) -> None:
+        await limiter.async_pre_call_hook(
+            user_api_key_dict=user_api_key_dict, cache=limiter_cache, data=data, call_type=call_type
+        )
+
+    async def release(data: dict[str, object], user_api_key_dict: UserAPIKeyAuth, response: object) -> None:
+        await limiter.async_post_call_success_hook(data=data, user_api_key_dict=user_api_key_dict, response=response)
+
+    async def log_row(**row: object) -> None:
+        await limiter.async_log_success_event(
+            kwargs=row, response_obj=None, start_time=row["start_time"], end_time=row["end_time"]
+        )
+
+    async def opens_another_session() -> bool:
+        await asyncio.gather(*logged_rows)
+        try:
+            await asyncio.create_task(
+                admit(key, {"litellm_call_id": str(uuid.uuid4())}, "pass_through_endpoint"),
+                context=contextvars.Context(),
+            )
+        except ProxyRateLimitError:
+            return False
+        return True
+
+    client: Final = _turn_taking_client(
+        [json.dumps({"type": "response.create", "model": "gpt-5.4-mini"})], answered_by='"response.completed"'
+    )
+    take_frame: Final = client.receive
+    while_open: Final[list[bool]] = []
+
+    async def receive() -> Mapping[str, str | bytes]:
+        message: Final = await take_frame()
+        if message["type"] == "websocket.disconnect":
+            while_open.append(await opens_another_session())
+        return message
+
+    client.receive = receive
+
+    with (
+        _patched_websocket_passthrough_environment(
+            ScriptedUpstreamWebSocket(replies=[_responses_turn("gpt-5.4-mini")])
+        ) as proxy_logging,
+        patch("litellm.proxy.pass_through_endpoints.pass_through_endpoints.GLOBAL_LOGGING_WORKER") as worker,
+        patch(SUCCESS_HANDLER, new_callable=AsyncMock, side_effect=log_row),
+    ):
+        proxy_logging.pre_call_hook = AsyncMock(side_effect=admit)
+        proxy_logging.post_call_success_hook = AsyncMock(side_effect=release)
+        worker.ensure_initialized_and_enqueue = MagicMock(
+            side_effect=lambda async_coroutine: logged_rows.append(asyncio.create_task(async_coroutine))
+        )
+        await asyncio.wait_for(
+            websocket_passthrough_request(
+                websocket=client,
+                target="wss://api.openai.com/v1/responses",
+                custom_headers={"Authorization": "Bearer sk-provider"},
+                user_api_key_dict=key,
+                forward_headers=False,
+                endpoint="/openai_passthrough/v1/responses",
+                accept_websocket=False,
+                client_frame_model_gate=RecordingFrameModelGate(),
+                upstream_frame_kind=openai_websocket_frame_kind,
+                walkout_turn_drain_seconds=0.05,
+            ),
+            timeout=10,
+        )
+        after_close: Final = await opens_another_session()
+
+    assert len(logged_rows) == 1
+    assert (while_open, after_close) == ([False], True)
 
 
 @pytest.mark.asyncio
