@@ -279,7 +279,7 @@ def _get_litellm_batch_custom_id_from_labels(labels: Mapping[str, object] | None
             return decoded
         return raw
     readable: Final = labels.get("litellm_custom_id")
-    return readable if isinstance(readable, str) else "unknown"
+    return "unknown" if readable is None else str(readable)
 
 
 def _is_vertex_embeddings_batch_output_row(vertex_output_row: Mapping[str, object]) -> bool:
@@ -1660,7 +1660,7 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
 
         Vertex AI batch output format (predictions.jsonl):
         {
-          "request": {"contents": [...], "labels": {"litellm_custom_id": "request-1", "litellm_custom_id_raw": "..."}},
+          "request": {"contents": [...], "labels": {"litellm_custom_id": "id-request-1", "litellm_custom_id_raw": "..."}},
           "status": "",
           "response": {"candidates": [...], "modelVersion": "gemini-2.5-flash", ...},
           "processed_time": "2026-04-13T10:18:18.102004+00:00"

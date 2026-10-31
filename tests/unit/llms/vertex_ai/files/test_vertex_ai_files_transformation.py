@@ -1081,6 +1081,9 @@ class TestVertexBatchCustomIdLabels:
 
         assert _get_litellm_batch_custom_id_from_labels(labels) == "set-by-hand"
 
+    def test_readable_label_vertex_typed_as_a_number_still_names_a_row_written_without_raw_labels(self):
+        assert _get_litellm_batch_custom_id_from_labels({"litellm_custom_id": 7}) == "7"
+
     def test_custom_ids_survive_the_nulls_vertex_adds_for_label_keys_other_rows_set(self):
         long_custom_id: Final = "request-with-a-long-custom-id-that-needs-a-second-label-0001"
         vertex_rows: Final = _wrap_entries(
