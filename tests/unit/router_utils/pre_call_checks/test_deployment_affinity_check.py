@@ -1479,6 +1479,100 @@ async def test_pin_without_web_search_holds_for_a_web_search_request_once_the_ea
     assert [response._hidden_params["model_id"] for response in served] == ["search", *["no-search"] * 3]
 
 
+def _tiered_web_search_router(
+    optional_pre_call_checks: list[str],  # mutable-ok: Router signature
+    deployments: tuple[tuple[str, bool, int | None, int | None], ...],
+) -> litellm.Router:
+    return litellm.Router(
+        model_list=[
+            {
+                "model_name": "mixed",
+                "litellm_params": {
+                    "model": "openai/gpt-x",
+                    "api_key": "fake-key",
+                    "mock_response": "hi",
+                    **({} if order is None else {"order": order}),
+                    **({} if rpm is None else {"rpm": rpm}),
+                },
+                "model_info": {"id": model_id, **({} if supports_web_search else {"supports_web_search": False})},
+            }
+            for model_id, supports_web_search, order, rpm in deployments
+        ],
+        optional_pre_call_checks=optional_pre_call_checks,
+        num_retries=0,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("deployments", "pinned_id", "served_ids"),
+    [
+        (
+            (("search-early", True, 1, 1), ("no-search", False, None, None), ("search", True, None, None)),
+            "no-search",
+            ["search-early", *["search"] * 3],
+        ),
+        (
+            (("search-early", True, 1, 1), ("no-search", False, 2, None), ("search", True, 2, None)),
+            "no-search",
+            ["search-early", *["search"] * 3],
+        ),
+        (
+            (("no-search-early", False, 1, None), ("no-search", False, 2, None), ("search", True, 2, None)),
+            "no-search",
+            ["search"] * 4,
+        ),
+        (
+            (("search-pinned", True, None, 1), ("search", True, None, None)),
+            "search-pinned",
+            ["search-pinned", *["search"] * 3],
+        ),
+    ],
+    ids=[
+        "rate-limited-search-before-unordered-pin",
+        "rate-limited-search-before-pin-tier",
+        "flagged-before-pin-tier",
+        "pinned-search-at-its-rpm",
+    ],
+)
+@pytest.mark.parametrize(
+    ("affinity_check", "pin_key"),
+    [
+        ("deployment_affinity", DeploymentAffinityCheck.get_affinity_cache_key(model_group="mixed", user_key="caller-1")),
+        (
+            "session_affinity",
+            DeploymentAffinityCheck.get_session_affinity_cache_key(
+                model_group="mixed", session_id="session-1", user_key="caller-1"
+            ),
+        ),
+    ],
+    ids=["user-key-pin", "session-pin"],
+)
+async def test_web_search_request_leaves_a_pin_only_for_an_untried_search_deployment_under_its_limit(
+    affinity_check: str,
+    pin_key: str,
+    deployments: tuple[tuple[str, bool, int | None, int | None], ...],
+    pinned_id: str,
+    served_ids: list[str],  # mutable-ok: expected id sequence
+):
+    router: Final = _tiered_web_search_router([affinity_check, "enforce_model_rate_limits"], deployments)
+    await router.cache.async_set_cache(pin_key, {"model_id": pinned_id}, ttl=3600)
+    messages: Final = [{"role": "user", "content": "hi"}]
+
+    with patch(
+        "litellm.router_utils.pre_call_checks.model_rate_limit_check.get_utc_datetime",
+        return_value=datetime(2026, 1, 1, 12, 30, 15, tzinfo=timezone.utc),
+    ):
+        served: Final = [
+            await router.acompletion(
+                model="mixed", messages=messages, metadata=dict(_CALLER_METADATA), web_search_options={}
+            )
+            for _ in range(4)
+        ]
+
+    assert [response._hidden_params["model_id"] for response in served] == served_ids
+
+
 @pytest.mark.asyncio
 async def test_session_pin_on_a_later_order_tier_holds_for_a_web_search_request_when_it_can_search():
     router: Final = litellm.Router(

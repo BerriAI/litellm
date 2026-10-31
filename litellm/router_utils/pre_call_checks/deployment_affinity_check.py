@@ -33,7 +33,6 @@ from litellm.integrations.custom_logger import CustomLogger, Span
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.router_utils.common_utils import (
     deployment_ids_failed_in_request,
-    prefer_web_search_deployments,
     web_search_alternatives_to_pin,
     web_search_capable_deployments,
 )
@@ -539,9 +538,6 @@ class DeploymentAffinityCheck(CustomLogger):
         at_rate_limit: Final = await self._web_search_deployment_ids_at_limit(
             healthy_deployments, request_kwargs, parent_otel_span
         )
-        pin_candidates: Final = prefer_web_search_deployments(healthy_deployments, request_kwargs, at_rate_limit)
-        if self._find_deployment_by_model_id(healthy_deployments=pin_candidates, model_id=model_id) is None:
-            return (*pin_candidates, pinned)
         return (*web_search_alternatives_to_pin(pinned, healthy_deployments, request_kwargs, at_rate_limit), pinned)
 
     async def _web_search_deployment_ids_at_limit(
