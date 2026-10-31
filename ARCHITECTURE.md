@@ -124,7 +124,7 @@ graph TD
 - `proxy/proxy_server.py` - Main API endpoints
 - `proxy/auth/` - Authentication (API keys, JWT, OAuth2)
 - `proxy/hooks/` - Proxy-level callbacks
-- `router.py` - Load balancing, fallbacks
+- `router.py` - Load balancing, fallbacks (see [docs/architecture/router](docs/architecture/router/README.md))
 - `router_strategy/` - Routing algorithms (`lowest_latency.py`, `simple_shuffle.py`, etc.)
 
 **LLM-specific proxy endpoints:**
