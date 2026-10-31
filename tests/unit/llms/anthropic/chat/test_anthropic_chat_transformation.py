@@ -9849,26 +9849,3 @@ def test_transform_request_tool_config_point_without_tools_drops_the_key():
     assert "cache_control_injection_points" not in data
     assert "tools" not in data
     assert litellm_params["metadata"] == {}
-
-
-@pytest.mark.parametrize(
-    "user, forwarded",
-    [
-        ("user-1", True),
-        ('{"session_id":"s-1"}', True),
-        ("a@example.com", False),
-        ("x@y.z", False),
-        ("reach me at a@example.com today", False),
-        ('{"contact":"a@example.com"}', False),
-        ("+1 415 555 0100", False),
-    ],
-)
-def test_map_openai_params_sends_user_upstream_only_without_an_email_or_phone_number(user: str, forwarded: bool) -> None:
-    mapped: Final = AnthropicConfig().map_openai_params(
-        non_default_params={"user": user},
-        optional_params={},
-        model="claude-sonnet-4-5",
-        drop_params=False,
-    )
-
-    assert mapped.get("metadata") == ({"user_id": user} if forwarded else None)

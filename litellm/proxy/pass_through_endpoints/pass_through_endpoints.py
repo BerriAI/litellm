@@ -72,9 +72,9 @@ from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.litellm_core_utils.redact_messages import should_redact_message_logging
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.llms.anthropic.common_utils import (
-    anthropic_user_id_from_body,
-    is_anthropic_messages_create_url,
+    anthropic_accepts_user_id,
     is_anthropic_messages_url,
+    is_anthropic_upstream_messages_url,
 )
 from litellm.llms.base_llm.managed_resources.utils import (
     resolve_passthrough_managed_id_provider,
@@ -1189,10 +1189,27 @@ def _unfiltered_headers(headers: Mapping[str, str]) -> Mapping[str, str]:
     return headers
 
 
-def _with_anthropic_user_id(
-    body: Mapping[str, object] | None, user_id: str | None, url: str
-) -> Mapping[str, object] | None:
-    if body is None or user_id is None or not is_anthropic_messages_create_url(url):
+def _json_object(value: object) -> Mapping[str, object]:
+    return cast("Mapping[str, object]", value) if isinstance(value, Mapping) else MappingProxyType({})  # cast-ok: json
+
+
+def _anthropic_user_id_to_forward(
+    body: Mapping[str, object] | None,
+    url: str,
+    has_pre_call_guardrails: Callable[[Mapping[str, object]], bool],
+) -> str | None:
+    if body is None or not is_anthropic_upstream_messages_url(url):
+        return None
+    metadata: Final = _json_object(body.get("metadata"))
+    user_id: Final = metadata.get("user_id")
+    if not isinstance(user_id, str) or not anthropic_accepts_user_id(user_id):
+        return None
+    request_metadata: Final = {**metadata, **_json_object(body.get("litellm_metadata"))}
+    return None if has_pre_call_guardrails(request_metadata) else user_id
+
+
+def _with_anthropic_user_id(body: Mapping[str, object] | None, user_id: str | None) -> Mapping[str, object] | None:
+    if body is None or user_id is None:
         return body
     return {**body, "metadata": {"user_id": user_id}}
 
@@ -1434,7 +1451,9 @@ async def pass_through_request(
             cost_per_request=cost_per_request,
         )
         hooked_body: Final = cast("Mapping[str, object] | None", _parsed_body)  # cast-ok: json
-        client_user_id: Final = anthropic_user_id_from_body(hooked_body)
+        client_user_id: Final = _anthropic_user_id_to_forward(
+            hooked_body, str(url), proxy_logging_obj.has_pre_call_guardrails
+        )
         kwargs = HttpPassThroughEndpointHelpers.init_kwargs_for_pass_through_endpoint(  # rebind-ok: pre-existing rebinding on a rename-only line
             user_api_key_dict=user_api_key_dict,
             _parsed_body=_parsed_body,
@@ -1603,7 +1622,7 @@ async def pass_through_request(
                 logging_url = str(url) + "?" + requested_query_params_str
 
         outgoing_body: Final = cast("Mapping[str, object] | None", _parsed_body)  # cast-ok: json
-        upstream_body: Final = _with_anthropic_user_id(outgoing_body, client_user_id, str(url))
+        upstream_body: Final = _with_anthropic_user_id(outgoing_body, client_user_id)
         logging_obj.pre_call(
             input=[{"role": "user", "content": safe_dumps(_parsed_body)}],
             api_key="",

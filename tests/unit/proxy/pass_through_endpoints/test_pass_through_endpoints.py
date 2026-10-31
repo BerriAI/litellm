@@ -11,6 +11,7 @@ from collections.abc import AsyncIterator, Callable, Mapping
 from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 from datetime import datetime
+from functools import partial
 from io import BytesIO
 from types import MappingProxyType, ModuleType, SimpleNamespace
 from typing import Final, Optional, cast
@@ -31,7 +32,7 @@ from starlette.datastructures import UploadFile as StarletteUploadFile
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.dual_cache import DualCache
-from litellm.constants import DEFAULT_REQUEST_TIMEOUT_SECONDS
+from litellm.constants import ANTHROPIC_MAX_USER_ID_LENGTH, DEFAULT_REQUEST_TIMEOUT_SECONDS
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.prometheus import PrometheusLogger
@@ -6667,6 +6668,9 @@ async def _relay_through_pass_through(
             mock_proxy_logging, _ = _enter_relay_logging_mocks(stack, {})
             mock_proxy_logging.pre_call_hook = AsyncMock(side_effect=return_hook_data)
             mock_proxy_logging.post_call_success_hook = AsyncMock(side_effect=return_hook_response)
+            mock_proxy_logging.has_pre_call_guardrails = partial(
+                ProxyLogging.has_pre_call_guardrails, mock_proxy_logging
+            )
             response: Final = await pass_through_request(
                 request=request,
                 target=target,
@@ -6687,48 +6691,60 @@ async def _relay_through_pass_through(
 _MESSAGES_BODY: Final = MappingProxyType(
     {"model": "claude-sonnet-4-5", "max_tokens": 16, "messages": [{"role": "user", "content": "hi"}]}
 )
+_ANTHROPIC_MESSAGES: Final = "https://api.anthropic.com/v1/messages"
+
+
+@pytest.fixture
+def no_configured_anthropic_base(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("ANTHROPIC_API_BASE", raising=False)
+    monkeypatch.delenv("ANTHROPIC_BASE_URL", raising=False)
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("no_configured_anthropic_base")
 @pytest.mark.parametrize("stream", [False, True], ids=["non-streaming", "streaming"])
 @pytest.mark.parametrize(
     "client_metadata, target, forwarded_metadata",
     [
-        ({"user_id": "user-1"}, "http://upstream.test/v1/messages", {"user_id": "user-1"}),
-        ({"user_id": "user-1"}, "http://upstream.test/v1/messages/", {"user_id": "user-1"}),
-        ({"user_id": "user-1"}, "http://upstream.test/v1/messages?beta=true", {"user_id": "user-1"}),
+        ({"user_id": "user-1"}, _ANTHROPIC_MESSAGES, {"user_id": "user-1"}),
+        ({"user_id": "user-1"}, f"{_ANTHROPIC_MESSAGES}/", {"user_id": "user-1"}),
+        ({"user_id": "user-1"}, f"{_ANTHROPIC_MESSAGES}?beta=true", {"user_id": "user-1"}),
         (
             {"user_id": "user-1", "tags": ["a"], "trace_id": "t", "generation_name": "g", "foo": "bar"},
-            "http://upstream.test/v1/messages",
+            _ANTHROPIC_MESSAGES,
             {"user_id": "user-1"},
         ),
-        ({"tags": ["a"], "foo": "bar"}, "http://upstream.test/v1/messages", None),
-        ({"user_id": "a@example.com"}, "http://upstream.test/v1/messages", None),
-        ({"user_id": "reach me at a@example.com today"}, "http://upstream.test/v1/messages", None),
-        ({"user_id": 42}, "http://upstream.test/v1/messages", None),
-        ({"user_id": "user-1"}, "http://upstream.test/v1/messages/count_tokens", None),
-        ({"user_id": "user-1"}, "http://upstream.test/v1/messages/batches", None),
+        ({"user_id": "1234567890"}, _ANTHROPIC_MESSAGES, {"user_id": "1234567890"}),
+        ({"tags": ["a"], "foo": "bar"}, _ANTHROPIC_MESSAGES, None),
+        ({"user_id": "a@example.com"}, _ANTHROPIC_MESSAGES, None),
+        ({"user_id": "x" * (ANTHROPIC_MAX_USER_ID_LENGTH + 1)}, _ANTHROPIC_MESSAGES, None),
+        ({"user_id": 42}, _ANTHROPIC_MESSAGES, None),
+        ({"user_id": "user-1"}, f"{_ANTHROPIC_MESSAGES}/count_tokens", None),
+        ({"user_id": "user-1"}, f"{_ANTHROPIC_MESSAGES}/batches", None),
         ({"user_id": "user-1"}, "https://api.anthropic.com/v1/models", None),
-        ({"user_id": "user-1"}, "http://upstream.test/v1/responses", None),
-        ({"user_id": "user-1"}, "http://upstream.test/v1/chat/completions", None),
+        ({"user_id": "user-1"}, "https://other-vendor.test/anthropic/v1/messages", None),
+        ({"user_id": "user-1"}, "https://other-vendor.test/v1/responses", None),
+        ({"user_id": "user-1"}, "https://other-vendor.test/v1/chat/completions", None),
     ],
     ids=[
         "messages",
         "messages-trailing-slash",
         "messages-with-query",
         "user-id-beside-litellm-and-unknown-keys",
+        "digits-user-id",
         "no-user-id",
         "email-user-id",
-        "email-inside-user-id",
+        "over-long-user-id",
         "integer-user-id",
         "count-tokens",
         "batches",
         "other-anthropic-path",
-        "responses",
-        "chat-completions",
+        "other-vendor-messages",
+        "other-vendor-responses",
+        "other-vendor-chat-completions",
     ],
 )
-async def test_pass_through_forwards_only_a_valid_user_id_to_the_messages_endpoint(
+async def test_pass_through_forwards_only_an_acceptable_user_id_to_anthropic_messages(
     stream: bool, client_metadata: object, target: str, forwarded_metadata: Mapping[str, object] | None
 ) -> None:
     client_body: Final = MappingProxyType(
@@ -6736,7 +6752,7 @@ async def test_pass_through_forwards_only_a_valid_user_id_to_the_messages_endpoi
     )
     body_without_metadata: Final = {k: v for k, v in client_body.items() if k != "metadata"}
 
-    relayed: Final = await _relay_through_pass_through(client_body, target, guardrails_config={"pii-guard": {}})
+    relayed: Final = await _relay_through_pass_through(client_body, target, guardrails_config=None)
 
     assert relayed == (
         body_without_metadata if forwarded_metadata is None else {**body_without_metadata, "metadata": forwarded_metadata}
@@ -6744,22 +6760,90 @@ async def test_pass_through_forwards_only_a_valid_user_id_to_the_messages_endpoi
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("no_configured_anthropic_base")
+@pytest.mark.parametrize("base_env", ["ANTHROPIC_API_BASE", "ANTHROPIC_BASE_URL"])
+@pytest.mark.parametrize(
+    "target, forwarded",
+    [
+        ("http://gateway.test:8080/anthropic/v1/messages", True),
+        ("http://gateway.test:9090/v1/messages", False),
+        ("http://other-gateway.test:8080/v1/messages", False),
+    ],
+    ids=["configured-upstream", "other-port", "other-host"],
+)
+async def test_pass_through_treats_the_configured_anthropic_base_as_anthropic(
+    monkeypatch: pytest.MonkeyPatch, base_env: str, target: str, forwarded: bool
+) -> None:
+    monkeypatch.setenv(base_env, "http://gateway.test:8080/anthropic")
+    client_body: Final = MappingProxyType({**_MESSAGES_BODY, "metadata": {"user_id": "user-1"}})
+
+    relayed: Final = await _relay_through_pass_through(client_body, target, guardrails_config=None)
+
+    assert relayed == (client_body if forwarded else _MESSAGES_BODY)
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("no_configured_anthropic_base")
+@pytest.mark.parametrize(
+    "default_on, event_hook, guardrails_config, litellm_metadata, forwarded",
+    [
+        (False, GuardrailEventHooks.pre_call, None, None, True),
+        (False, GuardrailEventHooks.pre_call, {"unregistered-guard": {}}, None, True),
+        (True, GuardrailEventHooks.post_call, None, None, True),
+        (True, GuardrailEventHooks.pre_call, None, None, False),
+        (False, GuardrailEventHooks.pre_call, {"pii-guard": {}}, None, False),
+        (False, GuardrailEventHooks.pre_call, None, {"guardrails": ["pii-guard"]}, False),
+    ],
+    ids=[
+        "guardrail-not-requested",
+        "guardrail-not-registered",
+        "default-on-post-call-guardrail",
+        "default-on-pre-call-guardrail",
+        "guardrail-on-the-route",
+        "guardrail-in-litellm-metadata",
+    ],
+)
+async def test_pass_through_keeps_the_user_id_from_routes_a_guardrail_scans(
+    default_on: bool,
+    event_hook: GuardrailEventHooks,
+    guardrails_config: dict[str, object] | None,
+    litellm_metadata: Mapping[str, object] | None,
+    forwarded: bool,
+) -> None:
+    guardrail: Final = CustomGuardrail(guardrail_name="pii-guard", default_on=default_on, event_hook=event_hook)
+    client_body: Final = MappingProxyType(
+        {
+            **_MESSAGES_BODY,
+            "metadata": {"user_id": "user-1"},
+            **({} if litellm_metadata is None else {"litellm_metadata": litellm_metadata}),
+        }
+    )
+
+    with patch.object(litellm, "callbacks", [guardrail]):
+        relayed: Final = await _relay_through_pass_through(
+            client_body, _ANTHROPIC_MESSAGES, guardrails_config=guardrails_config
+        )
+
+    assert relayed == ({**_MESSAGES_BODY, "metadata": {"user_id": "user-1"}} if forwarded else _MESSAGES_BODY)
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("no_configured_anthropic_base")
 async def test_pass_through_drops_metadata_that_is_not_an_object() -> None:
     client_body: Final = MappingProxyType({**_MESSAGES_BODY, "metadata": "user-1"})
 
-    relayed: Final = await _relay_through_pass_through(
-        client_body, "http://upstream.test/v1/messages", guardrails_config=None
-    )
+    relayed: Final = await _relay_through_pass_through(client_body, _ANTHROPIC_MESSAGES, guardrails_config=None)
 
     assert relayed == _MESSAGES_BODY
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("no_configured_anthropic_base")
 async def test_pass_through_custom_body_replaces_the_client_user_id() -> None:
     client_body: Final = MappingProxyType({**_MESSAGES_BODY, "metadata": {"user_id": "user-1"}})
 
     relayed: Final = await _relay_through_pass_through(
-        client_body, "http://upstream.test/v1/messages", guardrails_config=None, custom_body=dict(_MESSAGES_BODY)
+        client_body, _ANTHROPIC_MESSAGES, guardrails_config=None, custom_body=dict(_MESSAGES_BODY)
     )
 
     assert relayed == _MESSAGES_BODY
