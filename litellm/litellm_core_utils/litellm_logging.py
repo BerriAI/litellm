@@ -186,11 +186,16 @@ from litellm.litellm_core_utils.logging_utils import (
 from litellm.litellm_core_utils.model_param_helper import ModelParamHelper
 from litellm.litellm_core_utils.ptu_pricing import is_spilled_over_ptu_request
 from litellm.litellm_core_utils.redact_messages import (
+    failure_request_texts,
     redact_message_input_output_from_custom_logger,
     redact_message_input_output_from_logging,
     redacted_model_call_details_for_custom_logger,
     redacted_response_obj_for_custom_logger,
     redacted_standard_logging_payload,
+    scrub_request_text,
+    scrubbed_error_fields,
+    scrubbed_exception_text,
+    should_redact_failure_logging,
     should_redact_message_logging,
 )
 from litellm.litellm_core_utils.served_output_texts import (
@@ -963,6 +968,7 @@ class _McpToolCallRun:
 class _FailureRun:
     exception: Exception
     traceback_exception: str
+    logged_error: str
     result: object
     start_time: datetime.datetime
     end_time: datetime.datetime | None
@@ -5432,8 +5438,9 @@ class Logging(LiteLLMLoggingBaseClass):
             self._failure_exception_ref = weakref.ref(exception)
         except TypeError:
             self._failure_exception_ref = None
+        traceback_text: Final = redact_string(traceback_exception) if isinstance(traceback_exception, str) else None
         self.model_call_details["traceback_exception"] = (
-            redact_string(traceback_exception) if isinstance(traceback_exception, str) else traceback_exception
+            traceback_exception if traceback_text is None else traceback_text
         )
         self.model_call_details["end_time"] = end_time
         self.model_call_details.setdefault("original_response", None)
@@ -5466,6 +5473,12 @@ class Logging(LiteLLMLoggingBaseClass):
             )
             metadata.update(exception_headers)
 
+        # Building the payload redacts the messages in place, so read the request text first
+        redact: Final = should_redact_failure_logging(self.model_call_details)
+        request_texts: Final[frozenset[str]] = (
+            failure_request_texts(self.model_call_details, getattr(self, "messages", None)) if redact else frozenset()
+        )
+
         ## STANDARDIZED LOGGING PAYLOAD
 
         failure_payload: Final = get_standard_logging_object_payload(
@@ -5479,11 +5492,16 @@ class Logging(LiteLLMLoggingBaseClass):
             original_exception=exception,
             standard_built_in_tools_params=self.standard_built_in_tools_params,
         )
-        self.model_call_details["standard_logging_object"] = (
+        payload: Final = (
             redacted_standard_logging_payload(failure_payload)
             if failure_payload is not None and should_redact_message_logging(self.model_call_details)
             else failure_payload
         )
+        self.model_call_details["standard_logging_object"] = (
+            {**payload, **scrubbed_error_fields(payload, request_texts)} if redact and payload is not None else payload
+        )
+        if redact and traceback_text is not None:
+            self.model_call_details["traceback_exception"] = scrub_request_text(traceback_text, request_texts)
         return start_time, end_time
 
     def _should_estimate_failed_prompt(self) -> bool:
@@ -5646,9 +5664,11 @@ class Logging(LiteLLMLoggingBaseClass):
                 )
             )
             self.mark_logging_complete(event_type="sync_failure")
+            scrubbed_exception: Final = scrubbed_exception_text(self.model_call_details)
             run: Final = _FailureRun(
                 exception=exception,
-                traceback_exception=traceback_exception,
+                traceback_exception=traceback_exception if scrubbed_exception is None else scrubbed_exception[1],
+                logged_error=str(exception) if scrubbed_exception is None else scrubbed_exception[0],
                 result=result,
                 start_time=start_time,  # pyright: ignore[reportUnknownArgumentType]  # untyped failure helper
                 end_time=end_time,  # pyright: ignore[reportUnknownArgumentType]  # untyped failure helper
@@ -5776,7 +5796,7 @@ class Logging(LiteLLMLoggingBaseClass):
                     end_time=end_time,
                     response_obj=None,
                     user_id=kwargs.get("user", None),
-                    status_message=str(exception),
+                    status_message=run.logged_error,
                     level="ERROR",
                     kwargs=kwargs,
                 )
@@ -5795,7 +5815,7 @@ class Logging(LiteLLMLoggingBaseClass):
                     response_obj=None,
                     user_id=self.model_call_details.get("user", None),
                     print_verbose=print_verbose,
-                    status_message=str(exception),
+                    status_message=run.logged_error,
                     level="ERROR",
                     kwargs=self.model_call_details,
                 )
