@@ -15040,17 +15040,12 @@ class Router(DeprecatedRouterMembers):
 
     @staticmethod
     def _request_carries_image(
-        messages: list[dict[str, str]] | None,  # mutable-ok: handed to resolve_structured_messages as-is
+        messages: object,
         request_kwargs: Mapping[str, object],
     ) -> bool:
         from litellm.litellm_core_utils.prompt_templates.common_utils import request_contains_image_content
-        from litellm.litellm_core_utils.prompt_templates.factory import resolve_structured_messages
 
-        structured: Final = resolve_structured_messages(
-            messages=cast(list[dict[str, object]] | None, messages),  # cast-ok: chat messages are plain dicts
-            request_kwargs=cast(dict[str, object], request_kwargs),  # cast-ok: the resolver only reads the mapping
-        )
-        return bool(structured) and request_contains_image_content(structured)
+        return request_contains_image_content(messages or request_kwargs.get("messages") or request_kwargs.get("input"))
 
     @staticmethod
     def _pre_call_check_requested_chat_params(request_kwargs: Mapping[str, object]) -> frozenset[str]:
