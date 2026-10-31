@@ -4,6 +4,7 @@ Handler for transforming responses api requests to litellm.completion requests
 
 from collections.abc import Coroutine, Mapping, Sequence
 from dataclasses import dataclass
+from types import MappingProxyType
 from typing import Final
 
 from pydantic import TypeAdapter
@@ -32,6 +33,13 @@ from litellm.types.llms.openai import (
 from litellm.types.utils import ModelResponse
 
 _REQUEST_KWARGS_ADAPTER: Final = TypeAdapter(dict[str, object])
+_BRIDGE_TRANSFORM_KEYWORDS: Final = frozenset({"caller_input", "names_non_string_fields"})
+
+
+def _without_bridge_transform_keywords(request_kwargs: Mapping[str, object]) -> Mapping[str, object]:
+    return MappingProxyType(
+        {key: value for key, value in request_kwargs.items() if key not in _BRIDGE_TRANSFORM_KEYWORDS}
+    )
 
 
 def _chat_verbosity(responses_api_request: Mapping[str, object]) -> Mapping[str, object]:
@@ -95,6 +103,7 @@ class LiteLLMCompletionTransformationHandler:
                 previous_response_id,
                 hoisted,
                 model=model,
+                caller_input=input,
                 responses_api_request=responses_api_request,
                 custom_llm_provider=custom_llm_provider,
                 stream=stream,
@@ -108,11 +117,13 @@ class LiteLLMCompletionTransformationHandler:
             **LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
                 model=model,
                 input=bridged_input,
+                caller_input=input,
+                names_non_string_fields=True,
                 responses_api_request=bridged_request,
                 custom_llm_provider=custom_llm_provider,
                 stream=stream,
                 extra_headers=extra_headers,
-                **kwargs,
+                **_without_bridge_transform_keywords(_REQUEST_KWARGS_ADAPTER.validate_python(kwargs)),
             ),
             **_chat_verbosity(bridged_request),
         }
@@ -163,6 +174,7 @@ class LiteLLMCompletionTransformationHandler:
         /,
         *,
         model: str,
+        caller_input: str | ResponseInputParam,
         responses_api_request: ResponsesAPIOptionalRequestParams,
         custom_llm_provider: str | None,
         stream: bool | None,
@@ -186,11 +198,13 @@ class LiteLLMCompletionTransformationHandler:
                 **LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
                     model=model,
                     input=bridged.input,
+                    caller_input=caller_input,
+                    names_non_string_fields=True,
                     responses_api_request=bridged.responses_api_request,
                     custom_llm_provider=custom_llm_provider,
                     stream=stream,
                     extra_headers=extra_headers,
-                    **request_kwargs,
+                    **_without_bridge_transform_keywords(request_kwargs),
                 ),
                 **_chat_verbosity(bridged.responses_api_request),
             },
