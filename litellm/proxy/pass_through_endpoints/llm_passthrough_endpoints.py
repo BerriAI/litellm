@@ -3614,7 +3614,9 @@ async def deepgram_listen_websocket_route(
     if not deepgram_listen_is_priced(target):
         await websocket.close(
             code=1008,
-            reason=_DEEPGRAM_WS_UNPRICED_REASON.format(registry_key=deepgram_listen_registry_key(target)),
+            reason=truncated_close_reason(
+                _DEEPGRAM_WS_UNPRICED_REASON.format(registry_key=deepgram_listen_registry_key(target))
+            ),
         )
         return
 

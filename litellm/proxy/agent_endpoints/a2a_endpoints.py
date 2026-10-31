@@ -14,7 +14,7 @@ import json
 from collections.abc import AsyncGenerator, Callable, Coroutine, Mapping
 from copy import deepcopy
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Protocol
+from typing import TYPE_CHECKING, Any, Final, Literal, Protocol
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
@@ -43,6 +43,7 @@ from litellm.proxy.agent_endpoints.databricks_oauth import (
 )
 from litellm.proxy.agent_endpoints.utils import merge_agent_headers
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_utils.custom_openapi_spec import inline_request_body
 from litellm.proxy.common_utils.openai_error_payload import status_typed_proxy_exception
 from litellm.proxy.common_utils.sse_keepalive import (
     SSE_COMMENT_PING,
@@ -58,6 +59,42 @@ if TYPE_CHECKING:
     from litellm.types.agents import AgentResponse
 
 router: Final = APIRouter()
+
+
+class _A2AJsonRpcRequest(BaseModel):
+    model_config = ConfigDict(extra="allow", frozen=True)
+
+    jsonrpc: Literal["2.0"]
+    id: str | int | None = None
+    method: str
+    params: Mapping[str, object]
+
+
+class _A2AJsonRpcResponse(BaseModel):
+    model_config = ConfigDict(extra="allow", frozen=True)
+
+    jsonrpc: Literal["2.0"]
+    id: str | int | None
+    result: object | None = None
+    error: Mapping[str, object] | None = None
+
+
+_A2A_MESSAGE_STREAM_REQUEST_BODY: Final = inline_request_body(
+    _A2AJsonRpcRequest,
+    {
+        "jsonrpc": "2.0",
+        "id": "stream-1",
+        "method": "message/stream",
+        "params": {
+            "message": {
+                "messageId": "message-1",
+                "role": "user",
+                "parts": [{"kind": "text", "text": "Hello"}],
+                "kind": "message",
+            }
+        },
+    },
+)
 
 # Mirrors the native seam's own headers: a reverse proxy that batches the whole
 # stream would swallow the keepalives this route sends to defeat idle timeouts.
@@ -204,6 +241,35 @@ def _forwarding_headers(
     trace: Final = (("X-LiteLLM-Trace-Id", str(trace_id)),) if trace_id else ()
     merged: Final = dict((*passthrough, *caller_identity.items(), *trace, *backend_auth))
     return merged or None
+
+
+async def _log_agent_rejection(
+    *,
+    proxy_logging_obj: ProxyLogging,
+    user_api_key_dict: UserAPIKeyAuth,
+    request_id: object,
+    method: str | None,
+    rejection: HTTPException,
+    target_agent_id: str,
+    model: str,
+) -> None:
+    request_data: Final[dict[str, object]] = {  # mutable-ok: the failure hook stamps its logging state onto it
+        "jsonrpc": "2.0",
+        "id": request_id,
+        "method": method,
+        "model": model,
+        "agent_id": target_agent_id,
+        "metadata": {"agent_id": target_agent_id},
+    }
+    try:
+        await proxy_logging_obj.post_call_failure_hook(  # pyright: ignore[reportUnknownMemberType]  # bare dict in sig
+            request_data=request_data,
+            original_exception=rejection,
+            user_api_key_dict=user_api_key_dict,
+            route="/a2a/{agent_id}",
+        )
+    except Exception:  # noqa: BLE001  # a logging failure must not change the rejection the caller gets
+        verbose_proxy_logger.exception("Failed to log rejected A2A request")
 
 
 def _jsonrpc_error(
@@ -717,6 +783,20 @@ async def get_agent_card(
     tags=["[beta] A2A Agents"],
     dependencies=[Depends(user_api_key_auth)],
 )
+@router.post(
+    "/a2a/{agent_id}/message/stream",
+    tags=["[beta] A2A Agents"],
+    dependencies=[Depends(user_api_key_auth)],
+    openapi_extra={"requestBody": _A2A_MESSAGE_STREAM_REQUEST_BODY},
+    responses={200: {"model": _A2AJsonRpcResponse}},
+)
+@router.post(
+    "/v1/a2a/{agent_id}/message/stream",
+    tags=["[beta] A2A Agents"],
+    dependencies=[Depends(user_api_key_auth)],
+    openapi_extra={"requestBody": _A2A_MESSAGE_STREAM_REQUEST_BODY},
+    responses={200: {"model": _A2AJsonRpcResponse}},
+)
 async def invoke_agent_a2a(
     agent_id: str,
     request: Request,
@@ -778,6 +858,15 @@ async def invoke_agent_a2a(
         # Find the agent
         agent: Final = await _get_agent(agent_id)
         if agent is None:
+            await _log_agent_rejection(
+                proxy_logging_obj=proxy_logging_obj,
+                user_api_key_dict=user_api_key_dict,
+                request_id=request_id,
+                method=method,
+                rejection=HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found"),
+                target_agent_id=agent_id,
+                model=f"a2a_agent/{agent_id}",
+            )
             return _jsonrpc_error(request_id, -32000, f"Agent '{agent_id}' not found", 404)
 
         served_version: Final = _served_version(agent, request, original_method)
@@ -787,10 +876,20 @@ async def invoke_agent_a2a(
             user_api_key_auth=user_api_key_dict,
         )
         if not is_allowed:
-            raise HTTPException(
+            denial: Final = HTTPException(
                 status_code=403,
                 detail=f"Agent '{agent_id}' is not allowed for your key/team. Contact proxy admin for access.",
             )
+            await _log_agent_rejection(
+                proxy_logging_obj=proxy_logging_obj,
+                user_api_key_dict=user_api_key_dict,
+                request_id=request_id,
+                method=method,
+                rejection=denial,
+                target_agent_id=agent.agent_id,
+                model=f"a2a_agent/{(as_str_mapping(agent.agent_card_params or {}) or {}).get('name', agent_id)}",
+            )
+            raise denial
 
         user_api_key_dict.invoked_agent_id = agent.agent_id
         strict_policy: Final = agent.identity_managed or bool(user_api_key_dict.requires_fresh_policy)
