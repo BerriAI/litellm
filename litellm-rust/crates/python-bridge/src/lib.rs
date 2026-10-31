@@ -12,6 +12,7 @@ mod marshal;
 mod model_registry;
 mod preflight;
 mod python_settings;
+mod redis;
 mod routes;
 mod secrets;
 mod tokenizer;
@@ -35,6 +36,11 @@ mod _native {
     use crate::logger::NativeDiagnosticProcessor;
     #[pymodule_export]
     use crate::model_registry::bundled_model_cost_map;
+    #[pymodule_export]
+    use crate::redis::{
+        NativeParallelSlots, NativePodLock, NativeRedisClient, NativeRedisFailure, NativeRouterCooldowns,
+        NativeSpendCounters,
+    };
     #[pymodule_export]
     use crate::routes::audio_transcription::{atranscription, transcription};
     #[pymodule_export]

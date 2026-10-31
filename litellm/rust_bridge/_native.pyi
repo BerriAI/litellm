@@ -1,6 +1,6 @@
 from asyncio import Future
 from collections.abc import Mapping, Sequence
-from typing import Never, final
+from typing import Literal, Never, Protocol, final
 
 import httpx
 from pydantic import JsonValue
@@ -86,6 +86,83 @@ def messages(
 def amessages(
     call: NativeCall,
 ) -> Execution: ...
+
+@final
+class NativeRedisClient:
+    def __new__(cls, url: str, *, namespace: str | None = None, timeout_seconds: float) -> NativeRedisClient: ...
+
+@final
+class NativeRedisFailure:
+    @property
+    def kind(self) -> Literal["transport", "server", "decode", "breaker_open"]: ...
+    @property
+    def message(self) -> str: ...
+    @property
+    def timeout(self) -> bool: ...
+
+@final
+class NativeRouterCooldowns:
+    def __new__(cls, client: NativeRedisClient) -> NativeRouterCooldowns: ...
+    def put(
+        self, model_id: str, entry: Mapping[str, object], *, ttl_seconds: int
+    ) -> NativeRedisFailure | None: ...
+    def get_many(
+        self, model_ids: Sequence[str]
+    ) -> list[dict[str, str | float] | NativeRedisFailure | None] | NativeRedisFailure: ...
+    def aget_many(
+        self, model_ids: Sequence[str]
+    ) -> Future[list[dict[str, str | float] | NativeRedisFailure | None] | NativeRedisFailure]: ...
+
+@final
+class NativePodLock:
+    def __new__(cls, client: NativeRedisClient) -> NativePodLock: ...
+    def acquire(
+        self, cronjob_id: str, owner: str, *, ttl_seconds: int
+    ) -> Future[
+        tuple[Literal["acquired", "vacant"], None] | tuple[Literal["held_by"], str] | NativeRedisFailure
+    ]: ...
+    def holder(self, cronjob_id: str) -> Future[str | None | NativeRedisFailure]: ...
+    def release(self, cronjob_id: str, owner: str) -> Future[bool | NativeRedisFailure]: ...
+    def remove(self, cronjob_id: str) -> Future[bool | NativeRedisFailure]: ...
+
+@final
+class NativeParallelSlots:
+    def __new__(cls, client: NativeRedisClient) -> NativeParallelSlots: ...
+    def acquire(
+        self, gauges: Sequence[tuple[str, str, int]], slot_id: str, *, slot_ttl_seconds: int
+    ) -> Future[
+        tuple[Literal["admitted"], list[int]] | tuple[Literal["rejected"], int, int, int] | NativeRedisFailure
+    ]: ...
+    def release(self, descriptors: Sequence[tuple[str, str]], slot_id: str) -> Future[list[int] | NativeRedisFailure]: ...
+    def count(
+        self, descriptors: Sequence[tuple[str, str]], *, slot_ttl_seconds: int
+    ) -> Future[list[int] | NativeRedisFailure]: ...
+
+class _SpendCounter(Protocol):
+    @property
+    def scope(self) -> str: ...
+    @property
+    def id(self) -> str: ...
+    @property
+    def team_id(self) -> str | None: ...
+    @property
+    def window(self) -> str | None: ...
+
+@final
+class NativeSpendCounters:
+    def __new__(cls, client: NativeRedisClient) -> NativeSpendCounters: ...
+    def read(self, counters: Sequence[_SpendCounter]) -> Future[list[float | None] | NativeRedisFailure]: ...
+    def add(
+        self, deltas: Sequence[tuple[_SpendCounter, float]], *, ttl_seconds: int
+    ) -> Future[list[float] | NativeRedisFailure]: ...
+    def seed(
+        self, counter: _SpendCounter, spend: float, *, ttl_seconds: int
+    ) -> Future[
+        tuple[Literal["seeded"], None] | tuple[Literal["existing"], float | None] | NativeRedisFailure
+    ]: ...
+    def raise_to(
+        self, counter: _SpendCounter, spend: float, *, ttl_seconds: int
+    ) -> Future[float | NativeRedisFailure]: ...
 
 @final
 class ResponsesWebSocketConnection:

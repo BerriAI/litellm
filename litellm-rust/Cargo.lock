@@ -4357,6 +4357,8 @@ dependencies = [
  "litellm-llms",
  "litellm-llms-types",
  "litellm-model-catalog",
+ "litellm-redis-client",
+ "litellm-redis-store",
  "litellm-router-types",
  "litellm-secret-value",
  "litellm-secrets",
@@ -4411,6 +4413,21 @@ dependencies = [
  "litellm-secret-value",
  "redis",
  "rstest",
+ "thiserror 2.0.19",
+ "tokio",
+]
+
+[[package]]
+name = "litellm-redis-store"
+version = "0.1.0"
+dependencies = [
+ "litellm-python-compat",
+ "litellm-redis-client",
+ "litellm-redis-testing",
+ "litellm-secret-value",
+ "rstest",
+ "serde",
+ "serde_json",
  "thiserror 2.0.19",
  "tokio",
 ]

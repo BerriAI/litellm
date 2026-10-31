@@ -17,6 +17,13 @@ pub fn dumps(value: &Value) -> Result<String, Error> {
     Ok(out)
 }
 
+/// `json.dumps(text)` for a `str`, which cannot fail.
+pub fn dumps_str(text: &str) -> String {
+    let mut out = String::with_capacity(text.len() + 2);
+    write_string(&mut out, text);
+    out
+}
+
 /// The Python value `json.loads` returns for a JSON document.
 pub fn from_json(value: serde_json::Value) -> Value {
     match value {

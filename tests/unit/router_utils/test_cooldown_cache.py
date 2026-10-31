@@ -387,48 +387,45 @@ class TestCorrectedActiveCooldown:
 
     def test_expired_entry_returns_none_and_evicts(self):
         cc = self._make_cooldown_cache()
-        key = "deployment:expired-dep:cooldown"
+        key = CooldownCache.get_cooldown_cache_key("expired-dep")
         entry = self._entry(timestamp=time.time() - 120.0, cooldown_time=60.0)
         cc.in_memory_cache.set_cache(key, dict(entry), ttl=600)
 
-        result = cc._corrected_active_cooldown(key, dict(entry), current_time=time.time())
-
-        assert result is None
+        assert cc.get_active_cooldowns(["expired-dep"], parent_otel_span=None) == []
         assert cc.in_memory_cache.get_cache(key) is None
 
     def test_active_entry_within_window_returns_value(self):
         cc = self._make_cooldown_cache()
-        key = "deployment:active-dep:cooldown"
+        key = CooldownCache.get_cooldown_cache_key("active-dep")
         entry = self._entry(timestamp=time.time(), cooldown_time=60.0)
         cc.in_memory_cache.set_cache(key, dict(entry), ttl=60)
 
-        result = cc._corrected_active_cooldown(key, dict(entry), current_time=time.time())
+        [(_, result)] = cc.get_active_cooldowns(["active-dep"], parent_otel_span=None)
 
-        assert result is not None
         assert result["status_code"] == "429"
 
     def test_inflated_ttl_is_corrected(self):
         cc = self._make_cooldown_cache()
-        key = "deployment:backfilled-dep:cooldown"
+        key = CooldownCache.get_cooldown_cache_key("backfilled-dep")
         remaining = 30.0
         entry = self._entry(timestamp=time.time() - (60.0 - remaining), cooldown_time=60.0)
         cc.in_memory_cache.set_cache(key, dict(entry), ttl=600)
 
-        result = cc._corrected_active_cooldown(key, dict(entry), current_time=time.time())
-
-        assert result is not None
+        assert [model_id for model_id, _ in cc.get_active_cooldowns(["backfilled-dep"], parent_otel_span=None)] == [
+            "backfilled-dep"
+        ]
         corrected_expiry = cc.in_memory_cache.ttl_dict.get(key)
         assert corrected_expiry is not None
         assert corrected_expiry - time.time() <= 60.0
 
     def test_normal_ttl_not_modified(self):
         cc = self._make_cooldown_cache()
-        key = "deployment:normal-dep:cooldown"
+        key = CooldownCache.get_cooldown_cache_key("normal-dep")
         entry = self._entry(timestamp=time.time(), cooldown_time=60.0)
         cc.in_memory_cache.set_cache(key, dict(entry), ttl=60)
         original_expiry = cc.in_memory_cache.ttl_dict.get(key)
 
-        cc._corrected_active_cooldown(key, dict(entry), current_time=time.time())
+        cc.get_active_cooldowns(["normal-dep"], parent_otel_span=None)
 
         after_expiry = cc.in_memory_cache.ttl_dict.get(key)
         assert after_expiry == original_expiry
