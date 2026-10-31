@@ -106,15 +106,14 @@ def create_config_class(provider: SimpleProviderConfig):
             raise ValueError(f"api_base is required for provider {provider.slug}")
 
         def get_supported_openai_params(self, model: str) -> list:
-            """Get supported OpenAI params, excluding tool-related params for models
-            that don't support function calling."""
-            from litellm.utils import supports_function_calling, supports_reasoning
+            """Get supported OpenAI params, excluding tool-related params only when
+            function-calling support is explicitly declared False. Models missing
+            from the catalog keep tool params, like unknown models on `openai`."""
+            from litellm.utils import supports_reasoning
 
             supported_params: Final = super().get_supported_openai_params(model=model)
 
-            _supports_fc: Final = supports_function_calling(model=model, custom_llm_provider=provider.slug)
-
-            if not _supports_fc:
+            if _rejects_function_calling(model=model, provider_slug=provider.slug):
                 tool_params: Final = [
                     "tools",
                     "tool_choice",
@@ -184,6 +183,28 @@ def create_config_class(provider: SimpleProviderConfig):
             return provider.slug
 
     return JSONProviderConfig
+
+
+def _rejects_function_calling(model: str, provider_slug: str) -> bool:
+    """True when tool params must be stripped for this model.
+
+    Mirrors `supports_function_calling`, except a model missing from the catalog
+    entirely (no row, no provider declaration) counts as supporting function
+    calling, like unknown models on Python-defined providers. See #48145.
+    """
+    from litellm.exceptions import ModelNotMappedError
+    from litellm.utils import get_model_info_helper, get_provider_info, supports_function_calling
+
+    provider_info: Final = get_provider_info(model=model, custom_llm_provider=provider_slug)
+    if provider_info is not None and provider_info.get("supports_function_calling") is False:
+        return True
+    if supports_function_calling(model=model, custom_llm_provider=provider_slug):
+        return False
+    try:
+        get_model_info_helper(model=model, custom_llm_provider=provider_slug)
+    except (ModelNotMappedError, ValueError):
+        return False
+    return True
 
 
 _responses_config_cache: Final[dict[str, "type[OpenAILikeResponsesConfig]"]] = {}
