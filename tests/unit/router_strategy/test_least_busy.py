@@ -327,12 +327,16 @@ ROUTER_GROUP: Final = "least-busy-router-group"
 ROUTER_DEPLOYMENT_IDS: Final = ("1", "2", "3")
 
 
-def _least_busy_router(group: str = ROUTER_GROUP) -> Router:
+def _least_busy_router(group: str = ROUTER_GROUP, *, use_in_pass_through: bool = False) -> Router:
     return Router(
         model_list=[
             {
                 "model_name": group,
-                "litellm_params": {"model": "openai/gpt-4.1-mini", "api_key": f"key-{deployment_id}"},
+                "litellm_params": {
+                    "model": "openai/gpt-4.1-mini",
+                    "api_key": f"key-{deployment_id}",
+                    "use_in_pass_through": use_in_pass_through,
+                },
                 "model_info": {"id": deployment_id},
             }
             for deployment_id in ROUTER_DEPLOYMENT_IDS
@@ -667,6 +671,27 @@ async def test_looking_up_a_deployment_does_not_hold_it_for_later_picks() -> Non
     ]
 
     assert sync_picks + async_picks == [ROUTER_DEPLOYMENT_IDS[0]] * 6
+
+
+@pytest.mark.asyncio
+async def test_looking_up_a_pass_through_deployment_does_not_hold_it_for_later_picks() -> None:
+    router: Final = _least_busy_router(use_in_pass_through=True)
+
+    selected: Final = [
+        (await router.select(ROUTER_GROUP, {"metadata": {}}, kind="pass_through"))["model_info"]["id"] for _ in range(2)
+    ]
+    async_picks: Final = [
+        (await router.async_get_available_deployment_for_pass_through(ROUTER_GROUP, request_kwargs={"metadata": {}}))[
+            "model_info"
+        ]["id"]
+        for _ in range(2)
+    ]
+    sync_picks: Final = [
+        router.get_available_deployment_for_pass_through(ROUTER_GROUP, request_kwargs={"metadata": {}})["model_info"]["id"]
+        for _ in range(2)
+    ]
+
+    assert selected + async_picks + sync_picks == [ROUTER_DEPLOYMENT_IDS[0]] * 6
 
 
 @pytest.mark.asyncio

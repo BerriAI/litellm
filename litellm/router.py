@@ -1430,13 +1430,14 @@ class Router(DeprecatedRouterMembers):
                 health_check_probe=health_check_probe,
             )
         if kind == "pass_through":
-            return self._core_get_available_deployment_for_pass_through(  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # the selection cores return untyped deployment dicts
-                model=model,
-                messages=messages,
-                input=input,
-                specific_deployment=specific_deployment,
-                request_kwargs=request_kwargs,
-            )
+            with picks_reserve(False):
+                return self._core_get_available_deployment_for_pass_through(  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # the selection cores return untyped deployment dicts
+                    model=model,
+                    messages=messages,
+                    input=input,
+                    specific_deployment=specific_deployment,
+                    request_kwargs=request_kwargs,
+                )
         raise ValueError(f"unknown select kind {kind!r}")
 
     def apply(self, changes: ChangeSet) -> ApplyResult:
@@ -16211,7 +16212,7 @@ class Router(DeprecatedRouterMembers):
                 messages=messages,
                 input=input,
                 request_kwargs=request_kwargs,
-                reserve=request_kwargs not in (None, {}),
+                reserve=pick_reserves(default=False) and request_kwargs not in (None, {}),
             )
 
             if deployment is None:
@@ -17270,7 +17271,7 @@ class Router(DeprecatedRouterMembers):
             messages=messages,
             input=input,
             request_kwargs=request_kwargs,
-            reserve=request_kwargs not in (None, {}),
+            reserve=pick_reserves(default=False) and request_kwargs not in (None, {}),
         )
 
         if deployment is None:
