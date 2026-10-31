@@ -430,6 +430,8 @@ _NAMED_UNKNOWN_VOICE_KEYS: Final = 10
 
 _NAMED_VOICE_KEY_CHARS: Final = 100
 
+_NAMED_AUDIO_FORMAT_CHARS: Final = 100
+
 
 def _gemini_speech_config_wrapper(value: Mapping[str, object]) -> Mapping[str, object] | None:
     camel_config: Final = as_str_mapping(value.get("speechConfig"))
@@ -466,16 +468,16 @@ def reject_unknown_gemini_tts_voice_keys(
     )
 
 
-def reject_unsupported_gemini_tts_audio_format(
+def unsupported_gemini_tts_audio_format(
     model: str, audio: Mapping[str, object], drop_params: bool, llm_provider: str | None
-) -> None:
+) -> UnsupportedParamsError | None:
     audio_format: Final = audio.get("format")
     if audio_format is None or audio_format == "pcm16" or drops_unsupported_params(drop_params):
-        return
-    raise UnsupportedParamsError(
+        return None
+    return UnsupportedParamsError(
         message=(
-            f"{model} does not support the audio format {audio_format!r}, only 'pcm16'. Set format to 'pcm16', "
-            "leave it out, or set drop_params to drop it."
+            f"{model} does not take the audio format {str(audio_format)[:_NAMED_AUDIO_FORMAT_CHARS]!r}. Set format "
+            "to 'pcm16' or leave it out, or set drop_params to drop it."
         ),
         model=model,
         llm_provider=llm_provider,
@@ -1548,6 +1550,11 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             languageCode: "en-US",
         }
         """
+        audio_format_error: Final = unsupported_gemini_tts_audio_format(
+            "Gemini TTS", value, drop_unknown_fields, self.custom_llm_provider
+        )
+        if audio_format_error is not None:
+            raise audio_format_error
         camel_speech_config: Final = value.get("speechConfig")
         snake_speech_config: Final = value.get("speech_config")
         speech_config_value: Final = (
@@ -1585,7 +1592,11 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
     def _map_chat_audio_params(
         self, model: str, value: Mapping[str, object], drop_params: bool
     ) -> dict[str, object]:  # mutable-ok: the public forwarding interface returns a concrete request dictionary
-        reject_unsupported_gemini_tts_audio_format(model, value, drop_params, self.custom_llm_provider)
+        audio_format_error: Final = unsupported_gemini_tts_audio_format(
+            model, value, drop_params, self.custom_llm_provider
+        )
+        if audio_format_error is not None:
+            raise audio_format_error
         if _gemini_speech_config_wrapper(value) is not None:
             reject_unknown_gemini_tts_voice_keys(model, value, drop_params, self.custom_llm_provider)
         return self._map_audio_params(value, drop_unknown_fields=drops_unsupported_params(drop_params))

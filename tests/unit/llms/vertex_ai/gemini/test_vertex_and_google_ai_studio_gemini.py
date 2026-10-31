@@ -328,7 +328,9 @@ def test_chat_audio_drop_params_keeps_every_voice_config_field_gemini_accepts(sp
 
 def test_chat_audio_reads_snake_case_wrapper_beside_null_camel_case_wrapper():
     mapped: Final = VertexGeminiConfig().map_openai_params(
-        non_default_params={"audio": {"format": "pcm16", "speechConfig": None, "speech_config": {"voice_name": "Kore"}}},
+        non_default_params={
+            "audio": {"format": "pcm16", "speechConfig": None, "speech_config": {"voice_name": "Kore"}}
+        },
         optional_params={},
         model="gemini-2.5-flash-preview-tts",
         drop_params=False,
@@ -3396,9 +3398,7 @@ async def test_vertex_ai_streaming_bad_request_is_not_wrapped():
         async def dispatch_failure_handlers(self, *args, **kwargs):
             return None
 
-        async def dispatch_attempt_failure_handlers(
-            self, exception: Exception, traceback_exception: str
-        ) -> None:
+        async def dispatch_attempt_failure_handlers(self, exception: Exception, traceback_exception: str) -> None:
             return None
 
         def attempt_scoped_copy(self) -> "DummyLogging":
@@ -3528,9 +3528,7 @@ def test_grounding_annotations_preserve_all_web_sources(indices: list[int], expe
     ]
     metadata: Final = {
         "groundingChunks": chunks,
-        "groundingSupports": [
-            {"segment": {"startIndex": 4, "endIndex": 11}, "groundingChunkIndices": indices}
-        ],
+        "groundingSupports": [{"segment": {"startIndex": 4, "endIndex": 11}, "groundingChunkIndices": indices}],
     }
     annotations: Final = VertexGeminiConfig._convert_grounding_metadata_to_annotations([metadata], "The passage")
     expected: Final = [
@@ -10353,7 +10351,7 @@ def test_map_openai_params_audio_voice_reaches_speech_config_mapped() -> None:
     assert optional_params["speechConfig"]["voiceConfig"]["prebuiltVoiceConfig"]["voiceName"] == "Kore"
 
 
-@pytest.mark.parametrize("audio_format", ("mp3", "wav", "opus", "PCM16"))
+@pytest.mark.parametrize("audio_format", ("mp3", "opus", "flac", "PCM16"))
 @pytest.mark.parametrize(
     "audio",
     (
@@ -10361,16 +10359,19 @@ def test_map_openai_params_audio_voice_reaches_speech_config_mapped() -> None:
         {"speech_config": {"voice_name": "Kore"}},
     ),
 )
+@pytest.mark.parametrize("model", ("gemini/gemini-3.8-flash-tts", "vertex_ai/gemini-3.8-flash-tts"))
 def test_chat_audio_unsupported_format_is_a_400_naming_the_format(
-    audio: Mapping[str, object], audio_format: str
+    model: str, audio: Mapping[str, object], audio_format: str
 ) -> None:
     with respx.mock, pytest.raises(litellm.BadRequestError) as raised:
         completion(
-            model="gemini/gemini-3.8-flash-tts",
+            model=model,
             messages=[{"role": "user", "content": "Say hello"}],
             modalities=["audio"],
             audio={**audio, "format": audio_format},
             api_key="test-key",
+            vertex_project="test-project",
+            vertex_location="us-central1",
         )
 
     assert raised.value.status_code == 400
@@ -10393,6 +10394,30 @@ def test_chat_audio_unsupported_format_is_dropped_under_drop_params(
     assert optional_params == {
         "responseModalities": ["AUDIO"],
         "speechConfig": {"voiceConfig": {"prebuiltVoiceConfig": {"voiceName": "Kore"}}},
+    }
+
+
+def test_chat_audio_unsupported_format_error_caps_the_echoed_format() -> None:
+    with pytest.raises(litellm.UnsupportedParamsError) as raised:
+        VertexGeminiConfig().map_openai_params(
+            non_default_params={"modalities": ["audio"], "audio": {"voice": "Kore", "format": "x" * 300}},
+            optional_params={},
+            model="gemini-3.8-flash-tts",
+            drop_params=False,
+        )
+
+    assert f"audio format '{'x' * 100}'" in str(raised.value)
+    assert "x" * 101 not in str(raised.value)
+
+
+def test_map_audio_params_rejects_an_unsupported_format() -> None:
+    with pytest.raises(litellm.UnsupportedParamsError, match="audio format 'mp3'"):
+        VertexGeminiConfig().map_audio_params({"voice": "Kore", "format": "mp3"})
+
+
+def test_map_audio_params_maps_a_pcm16_voice() -> None:
+    assert VertexGeminiConfig().map_audio_params({"voice": "Kore", "format": "pcm16"}) == {
+        "voiceConfig": {"prebuiltVoiceConfig": {"voiceName": "Kore"}}
     }
 
 
