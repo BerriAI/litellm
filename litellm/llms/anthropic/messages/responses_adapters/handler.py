@@ -24,6 +24,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     prompt_cache_breakpoint_for_wire,
     with_prompt_cache_breakpoint,
 )
+from litellm.litellm_core_utils.tool_fields import drop_policy
 from litellm.responses.utils import auto_reasoning_summary
 from litellm.types.integrations.custom_logger import CONVERTED_STREAM_KEYS
 from litellm.types.llms.anthropic import (
@@ -38,7 +39,7 @@ from litellm.types.llms.anthropic_messages.anthropic_response import (
     AnthropicMessagesResponse,
 )
 from litellm.types.llms.openai import ResponsesAPIResponse
-from litellm.types.utils import CountContextManagement
+from litellm.types.utils import CountContextManagement, LlmProviders
 from litellm.utils import ProviderConfigManager
 
 from ..adapters.handler import context_management_explicitly_dropped, request_safeguards_evaluator
@@ -49,6 +50,7 @@ from ..convertible_blocks import reject_malformed_tool_result_text
 from ..safeguards import with_safeguard_results
 from ..utils import litellm_logging_obj_from_kwargs, local_model_name
 from .streaming_iterator import AnthropicResponsesStreamWrapper
+from .tool_translation import maps_openai_tool_search
 from .transformation import LiteLLMAnthropicToResponsesAPIAdapter
 
 AnthropicRequestMessages: TypeAlias = list[AllAnthropicMessageValues] | list[dict[str, object]]
@@ -170,13 +172,24 @@ def _forwarded_kwargs(extra_kwargs: Mapping[str, object] | None) -> Mapping[str,
     return extra_kwargs or {}
 
 
+def _resolved_provider(model: str, custom_llm_provider: object) -> str:
+    return custom_llm_provider if isinstance(custom_llm_provider, str) else litellm.get_llm_provider(model=model)[1]
+
+
 def _provider_returns_encrypted_reasoning(model: str, custom_llm_provider: object) -> bool:
-    provider: Final = (
-        custom_llm_provider if isinstance(custom_llm_provider, str) else litellm.get_llm_provider(model=model)[1]
-    )
+    provider: Final = _resolved_provider(model, custom_llm_provider)
     provider_model: Final = local_model_name(model, provider)
     responses_config: Final = ProviderConfigManager.get_provider_responses_api_config(provider, provider_model)
     return responses_config is not None and "include" in responses_config.get_supported_openai_params(provider_model)
+
+
+def _maps_tool_search(model: str, forwarded_kwargs: Mapping[str, object]) -> bool:
+    provider: Final = _resolved_provider(model, forwarded_kwargs.get("custom_llm_provider"))
+    return provider == LlmProviders.OPENAI.value and maps_openai_tool_search(
+        local_model_name(model, provider),
+        forwarded_kwargs.get("api_base") or forwarded_kwargs.get("base_url"),
+        forwarded_kwargs.get("additional_drop_params"),
+    )
 
 
 def _reads_prompt_cache_breakpoint(model: str, forwarded_kwargs: Mapping[str, object]) -> bool:
@@ -304,9 +317,11 @@ def _build_responses_kwargs(
         request_data["temperature"] = temperature
     if thinking:
         request_data["thinking"] = thinking
-    if tool_choice:
+    dropped: Final = drop_policy(forwarded_kwargs).additional_drop_params
+    drops_tools: Final = "tools" in dropped
+    if tool_choice and not drops_tools and "tool_choice" not in dropped:
         request_data["tool_choice"] = tool_choice
-    if tools:
+    if tools and not drops_tools:
         request_data["tools"] = tools
     if top_p is not None:
         request_data["top_p"] = top_p
@@ -321,6 +336,7 @@ def _build_responses_kwargs(
         ),
         auto_summary_level=auto_reasoning_summary(model, forwarded_kwargs.get("custom_llm_provider")),
         drop_params=drops_unsupported_params(forwarded_kwargs.get("drop_params")),
+        maps_tool_search=_maps_tool_search(model, forwarded_kwargs),
     )
 
     # Normalize reasoning effort based on model capabilities

@@ -18,6 +18,7 @@ from litellm.litellm_core_utils.tool_fields import DropPolicy
 from litellm.llms.anthropic.messages.context_management import AnthropicContextManagementError
 from litellm.llms.anthropic.messages.convertible_blocks import deployment_drops_params, unconvertible_blocks_error
 from litellm.llms.anthropic.messages.responses_adapters.handler import count_view_messages
+from litellm.llms.anthropic.messages.responses_adapters.tool_translation import maps_openai_tool_search
 from litellm.llms.anthropic.messages.responses_adapters.transformation import (
     LiteLLMAnthropicToResponsesAPIAdapter,
 )
@@ -61,6 +62,14 @@ def _workload_identity_config(
 class _CountCredential:
     api_base: str | None
     credential: str | OpenAIWorkloadIdentityConfig
+
+
+def _deployment_drop_paths(deployment: Mapping[str, object] | None) -> object:
+    match deployment:
+        case {"litellm_params": {"additional_drop_params": object() as additional_drop_params}}:
+            return additional_drop_params
+        case _:
+            return None
 
 
 def _count_credential(deployment: Mapping[str, object] | None, model_label: str) -> _CountCredential | OpenAIError:
@@ -146,11 +155,18 @@ class OpenAITokenCounter(BaseTokenCounter):
         system: object,
         messages_format: TokenCountMessagesFormat,
         output_format: JsonValue,
+        api_base: str | None,
+        additional_drop_params: object,
     ) -> ResponsesCountRequestParts:
         match messages_format:
             case "anthropic":
                 return OpenAICountTokensConfig.anthropic_messages_to_responses_input(
-                    model=model_to_use, messages=messages, system=system, tools=tools, output_format=output_format
+                    model=model_to_use,
+                    messages=messages,
+                    system=system,
+                    tools=tools,
+                    output_format=output_format,
+                    maps_tool_search=maps_openai_tool_search(model_to_use, api_base, additional_drop_params),
                 )
             case "openai":
                 input_items, instructions = OpenAICountTokensConfig.messages_to_responses_input(
@@ -229,6 +245,8 @@ class OpenAITokenCounter(BaseTokenCounter):
             system=system,
             messages_format=messages_format,
             output_format=output_format,
+            api_base=resolved.api_base,
+            additional_drop_params=_deployment_drop_paths(deployment),
         )
 
         # If no input items were produced (e.g., system-only messages), fall back to local counting
