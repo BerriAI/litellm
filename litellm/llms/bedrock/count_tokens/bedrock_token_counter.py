@@ -102,7 +102,9 @@ def _request_data(
 
 def _invoke_model_message(message: Mapping[str, object]) -> Mapping[str, object]:
     content: Final = message.get("content")
-    return {**message, "content": [{"type": "text", "text": content}]} if isinstance(content, str) else message
+    return (
+        {**message, "content": [{"type": "text", "text": content}]} if isinstance(content, str) and content else message
+    )
 
 
 def _invoke_supports_edit(edit: JsonValue) -> bool:

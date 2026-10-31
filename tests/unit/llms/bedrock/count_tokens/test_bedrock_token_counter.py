@@ -217,6 +217,33 @@ async def test_plain_text_history_with_an_edit_is_counted_through_invoke_carryin
 
 
 @pytest.mark.asyncio
+async def test_an_empty_string_turn_with_an_edit_is_sent_as_an_empty_string_not_an_empty_text_block() -> None:
+    bedrock: Final = _Bedrock(runtime=(200, {"inputTokens": 16}), mantle=(200, {"input_tokens": 1}))
+    spec: Final[dict[str, JsonValue]] = {"edits": [{"type": "clear_tool_uses_20250919"}]}
+
+    result: Final = await _counter(bedrock).count_tokens(
+        model_to_use="global.anthropic.claude-opus-4-8",
+        messages=[
+            {"role": "user", "content": "first"},
+            {"role": "assistant", "content": ""},
+            {"role": "user", "content": "third question here"},
+        ],
+        contents=None,
+        deployment=DEPLOYMENT,
+        request_model="claude-opus-4-8",
+        context_management=CountContextManagement(spec=spec, drop_invalid_edits=False),
+    )
+
+    assert result is not None
+    assert result.total_tokens == 16
+    assert _invoke_body(bedrock.requests[0])["messages"] == [
+        {"role": "user", "content": [{"type": "text", "text": "first"}]},
+        {"role": "assistant", "content": ""},
+        {"role": "user", "content": [{"type": "text", "text": "third question here"}]},
+    ]
+
+
+@pytest.mark.asyncio
 async def test_claude_runtime_404_retries_with_system_and_tools_on_mantle() -> None:
     bedrock: Final = _Bedrock(runtime=(404, UNSUPPORTED), mantle=(200, {"input_tokens": 2177}))
     tools: Final = [
