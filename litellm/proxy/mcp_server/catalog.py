@@ -23,6 +23,8 @@ from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter
 
 from litellm._logging import verbose_logger
 from litellm.caching.in_memory_cache import InMemoryCache
+from litellm.proxy.mcp_server.exceptions import MCPUpstreamAuthError
+from litellm.proxy.mcp_server.legacy_callbacks import get_scope_response
 from litellm.proxy.mcp_server.result_conversion import age_freshness, aggregate_freshness
 
 if TYPE_CHECKING:
@@ -943,12 +945,9 @@ async def get_filtered_server_tools(
         )
         return page.model_copy(update={"tools": filtered_tools}), ServerListOk(tool_count=len(filtered_tools))
     except MCPUpstreamAuthError as e:
-        # Absorb so one unauthenticated server does not empty every other server's
-        # tools. Surfacing the upstream 401 to the client as a re-auth challenge is
-        # intentionally not done here: raising from this list handler cannot produce a
-        # 401 + WWW-Authenticate (the MCP session manager serializes it as a JSON-RPC
-        # error). Single-server routes surface it via the request-scope preemptive
-        # check in _raise_preemptive_401_for_unauthenticated_servers instead.
+        scope_response: Final = get_scope_response()
+        if scope_response is not None and len(allowed_mcp_servers) == 1:
+            scope_response.deny(e)
         verbose_logger.debug("MCP list_tools: omitting %s; it needs upstream auth", server.name)
         return ListToolsResult(tools=[]), classify_list_exception(e)
     except Exception as e:
@@ -1199,6 +1198,10 @@ async def list_gateway_catalog(
                     update={"meta": {key: value for key, value in page_meta.items() if key != SERVER_OUTCOMES_META_KEY}}
                 )
             except Exception as error:
+                if isinstance(error, MCPUpstreamAuthError):
+                    scope_response: Final = get_scope_response()
+                    if scope_response is not None and len(allowed) == 1:
+                        scope_response.deny(error)
                 if cursor is not None:
                     raise MCPError(
                         code=INVALID_PARAMS, message="Upstream continuation failed; start a fresh listing"

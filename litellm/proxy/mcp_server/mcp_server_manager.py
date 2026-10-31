@@ -7164,10 +7164,14 @@ class MCPServerManager:
 
         scope_response: Final = get_scope_response()
         if scope_response is not None and not (
-            mcp_server.is_gateway_managed_oauth2
-            and mcp_server.needs_user_oauth_token
-            and not mcp_server.spec_path
-            and mcp_server.transport in (MCPTransport.http, MCPTransport.sse)
+            (
+                mcp_server.is_gateway_managed_oauth2
+                and mcp_server.needs_user_oauth_token
+                and not mcp_server.spec_path
+                and mcp_server.transport in (MCPTransport.http, MCPTransport.sse)
+            )
+            or mcp_server.is_oauth_passthrough
+            or mcp_server.delegate_auth_to_upstream
         ):
             scope_response.allow()
 
