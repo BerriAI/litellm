@@ -1073,6 +1073,8 @@ def _make_reset_budget_windows_job(
 
     fake_module = types.ModuleType("litellm.proxy.proxy_server")
     fake_module.spend_counter_cache = spend_counter_cache
+    fake_module.SPEND_DB_FLOOR_CACHE_TTL_SECONDS = 5
+    fake_module.redis_usage_cache = None
     monkeypatch.setitem(sys.modules, "litellm.proxy.proxy_server", fake_module)
 
     job = ResetBudgetJob(proxy_logging_obj=MagicMock(), prisma_client=prisma_client)
@@ -1289,6 +1291,60 @@ def test_reset_budget_windows_skips_unexpired_key_window(monkeypatch):
     prisma_client.db.litellm_verificationtoken.update.assert_not_awaited()
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("table", "entity_type", "counter_prefix", "id_column"),
+    [
+        ('"LiteLLM_VerificationToken"', "Key", "spend:key", "token"),
+        ('"LiteLLM_TeamTable"', "Team", "spend:team", "team_id"),
+    ],
+    ids=["key", "team"],
+)
+async def test_a_window_floor_read_just_before_the_reset_does_not_bring_back_the_ended_period(
+    table: str, entity_type: str, counter_prefix: str, id_column: str, monkeypatch
+) -> None:
+    from litellm.caching.dual_cache import DualCache
+    from litellm.proxy import proxy_server
+
+    ended_reset_at: Final = datetime(2026, 10, 26, tzinfo=timezone.utc)
+    window_start: Final = ended_reset_at - timedelta(days=7)
+    entity_id: Final = f"floored-{entity_type.lower()}"
+    counter_key: Final = f"{counter_prefix}:{entity_id}:window:7d"
+    windowed_row: Final = {
+        id_column: entity_id,
+        "budget_limits": [{"budget_duration": "7d", "max_budget": 100.0, "reset_at": ended_reset_at.isoformat()}],
+    }
+    prisma_client: Final = MagicMock()
+    prisma_client.db.query_raw = AsyncMock(side_effect=lambda query, *_: [windowed_row] if table in query else [])
+    prisma_client.db.litellm_budgetwindowspend.find_unique = AsyncMock(
+        return_value=types.SimpleNamespace(window_start=window_start, spend=27.0)
+    )
+    prisma_client.db.execute_raw = AsyncMock(return_value=1)
+    prisma_client.db.litellm_verificationtoken.update = AsyncMock(return_value=None)
+    prisma_client.db.litellm_teamtable.update = AsyncMock(return_value=None)
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma_client)
+    monkeypatch.setattr(proxy_server, "spend_counter_cache", DualCache())
+    proxy_server.spend_counter_cache.in_memory_cache.set_cache(key=counter_key, value=28.0)
+
+    async def window_spend() -> float:
+        return await proxy_server.get_current_spend(
+            counter_key=counter_key,
+            fallback_spend=0.0,
+            max_budget=100.0,
+            window_entity_type=entity_type,
+            window_entity_id=entity_id,
+            window_duration="7d",
+            window_start=window_start,
+        )
+
+    floored_before_the_reset: Final = await window_spend()
+    await ResetBudgetJob(proxy_logging_obj=MagicMock(), prisma_client=prisma_client).reset_budget_windows()
+
+    assert (floored_before_the_reset, await window_spend()) == (28.0, 0.0), (
+        "the floor read cached just before the reset raised the zeroed counter back to the ended period's spend"
+    )
+
+
 def test_reset_budget_windows_resets_expired_team_window(monkeypatch):
     """Same as the key test, but for teams."""
     now = datetime.utcnow()
@@ -1377,6 +1433,8 @@ def test_reset_budget_windows_query_error_does_not_break_team_path(monkeypatch):
     spend_counter_cache.redis_cache = None
     fake_module = types.ModuleType("litellm.proxy.proxy_server")
     fake_module.spend_counter_cache = spend_counter_cache
+    fake_module.SPEND_DB_FLOOR_CACHE_TTL_SECONDS = 5
+    fake_module.redis_usage_cache = None
     monkeypatch.setitem(sys.modules, "litellm.proxy.proxy_server", fake_module)
 
     job = ResetBudgetJob(proxy_logging_obj=MagicMock(), prisma_client=prisma_client)
@@ -1424,6 +1482,8 @@ def _make_counter_invalidation_job(monkeypatch):
 
     fake_module = types.ModuleType("litellm.proxy.proxy_server")
     fake_module.spend_counter_cache = spend_counter_cache
+    fake_module.SPEND_DB_FLOOR_CACHE_TTL_SECONDS = 5
+    fake_module.redis_usage_cache = None
     fake_module.user_api_key_cache = user_api_key_cache
     monkeypatch.setitem(sys.modules, "litellm.proxy.proxy_server", fake_module)
 
@@ -2627,6 +2687,8 @@ def _make_leader_election_job(monkeypatch, pod_lock_manager):
     spend_counter_cache.redis_cache = None
     fake_module = types.ModuleType("litellm.proxy.proxy_server")
     fake_module.spend_counter_cache = spend_counter_cache
+    fake_module.SPEND_DB_FLOOR_CACHE_TTL_SECONDS = 5
+    fake_module.redis_usage_cache = None
     monkeypatch.setitem(sys.modules, "litellm.proxy.proxy_server", fake_module)
 
     job = ResetBudgetJob(
@@ -2760,6 +2822,8 @@ def _paginating_window_job(monkeypatch, pages_by_table: Dict[str, List[List[Dict
     spend_counter_cache.redis_cache = None
     fake_module = types.ModuleType("litellm.proxy.proxy_server")
     fake_module.spend_counter_cache = spend_counter_cache
+    fake_module.SPEND_DB_FLOOR_CACHE_TTL_SECONDS = 5
+    fake_module.redis_usage_cache = None
     monkeypatch.setitem(sys.modules, "litellm.proxy.proxy_server", fake_module)
 
     job = ResetBudgetJob(proxy_logging_obj=MagicMock(), prisma_client=prisma_client)
@@ -2830,6 +2894,8 @@ def test_reset_budget_windows_survives_one_table_failing(monkeypatch):
     spend_counter_cache.redis_cache = None
     fake_module = types.ModuleType("litellm.proxy.proxy_server")
     fake_module.spend_counter_cache = spend_counter_cache
+    fake_module.SPEND_DB_FLOOR_CACHE_TTL_SECONDS = 5
+    fake_module.redis_usage_cache = None
     monkeypatch.setitem(sys.modules, "litellm.proxy.proxy_server", fake_module)
     job = ResetBudgetJob(proxy_logging_obj=MagicMock(), prisma_client=prisma_client)
 
@@ -2901,6 +2967,8 @@ def _cursor_paginating_window_job(monkeypatch, key_rows: List[Dict[str, Any]]):
     spend_counter_cache.redis_cache = None
     fake_module = types.ModuleType("litellm.proxy.proxy_server")
     fake_module.spend_counter_cache = spend_counter_cache
+    fake_module.SPEND_DB_FLOOR_CACHE_TTL_SECONDS = 5
+    fake_module.redis_usage_cache = None
     monkeypatch.setitem(sys.modules, "litellm.proxy.proxy_server", fake_module)
 
     job = ResetBudgetJob(proxy_logging_obj=MagicMock(), prisma_client=prisma_client)
