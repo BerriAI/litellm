@@ -212,7 +212,7 @@ def _has_email_shape(token: str) -> bool:
 
 
 def anthropic_accepts_user_id(user_id: str, max_length: int) -> bool:
-    return len(user_id) <= max_length and not any(map(_has_email_shape, user_id.split()))
+    return len(user_id) <= max_length and user_id.isprintable() and not any(map(_has_email_shape, user_id.split()))
 
 
 def is_anthropic_messages_url(url: str) -> bool:

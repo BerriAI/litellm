@@ -11,7 +11,6 @@ from collections.abc import AsyncIterator, Callable, Mapping
 from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 from datetime import datetime
-from functools import partial
 from io import BytesIO
 from types import MappingProxyType, ModuleType, SimpleNamespace
 from typing import Final, Optional, cast
@@ -6642,16 +6641,6 @@ async def _relay_through_pass_through(
     async def receive() -> Mapping[str, object]:
         return {"type": "http.request", "body": json.dumps(dict(client_body)).encode()}
 
-    async def return_hook_data(
-        user_api_key_dict: UserAPIKeyAuth, data: dict[str, object], call_type: str, endpoint_type: EndpointType
-    ) -> dict[str, object]:
-        return data
-
-    async def return_hook_response(
-        data: dict[str, object], user_api_key_dict: UserAPIKeyAuth, response: object
-    ) -> object:
-        return response
-
     request: Final = Request(
         {
             "type": "http",
@@ -6665,11 +6654,9 @@ async def _relay_through_pass_through(
     fake_client, cleanup = _inject_fake_passthrough_client(httpx.MockTransport(_echo_upstream_body), timeout=None)
     try:
         with ExitStack() as stack:
-            mock_proxy_logging, _ = _enter_relay_logging_mocks(stack, {})
-            mock_proxy_logging.pre_call_hook = AsyncMock(side_effect=return_hook_data)
-            mock_proxy_logging.post_call_success_hook = AsyncMock(side_effect=return_hook_response)
-            mock_proxy_logging.request_has_pre_call_guardrails = partial(
-                ProxyLogging.request_has_pre_call_guardrails, mock_proxy_logging
+            _enter_relay_logging_mocks(stack, {})
+            stack.enter_context(
+                patch("litellm.proxy.proxy_server.proxy_logging_obj", ProxyLogging(user_api_key_cache=DualCache()))
             )
             response: Final = await pass_through_request(
                 request=request,
@@ -6719,6 +6706,8 @@ def no_configured_anthropic_base(monkeypatch: pytest.MonkeyPatch) -> None:
         ({"user_id": "a@example.com"}, _ANTHROPIC_MESSAGES, None),
         ({"user_id": "x" * (ANTHROPIC_MAX_USER_ID_LENGTH + 1)}, _ANTHROPIC_MESSAGES, None),
         ({"user_id": 42}, _ANTHROPIC_MESSAGES, None),
+        ({"user_id": "line one\nline two"}, _ANTHROPIC_MESSAGES, None),
+        ({"user_id": "a\x1f@example.com"}, _ANTHROPIC_MESSAGES, None),
         ({"user_id": "user-1"}, f"{_ANTHROPIC_MESSAGES}/count_tokens", None),
         ({"user_id": "user-1"}, f"{_ANTHROPIC_MESSAGES}/batches", None),
         ({"user_id": "user-1"}, "https://api.anthropic.com/v1/models", None),
@@ -6736,6 +6725,8 @@ def no_configured_anthropic_base(monkeypatch: pytest.MonkeyPatch) -> None:
         "email-user-id",
         "over-long-user-id",
         "integer-user-id",
+        "newline-user-id",
+        "control-character-before-at-sign",
         "count-tokens",
         "batches",
         "other-anthropic-path",
@@ -6857,6 +6848,20 @@ async def test_pass_through_keeps_the_user_id_from_routes_a_guardrail_scans(
     assert relayed == (
         {**body_without_client_fields, "metadata": {"user_id": "user-1"}} if forwarded else body_without_client_fields
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("no_configured_anthropic_base")
+async def test_pass_through_warns_without_the_value_when_it_drops_a_refused_user_id(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    client_body: Final = MappingProxyType({**_MESSAGES_BODY, "metadata": {"user_id": "person@example.com"}})
+
+    with caplog.at_level(logging.WARNING, logger=verbose_proxy_logger.name):
+        await _relay_through_pass_through(client_body, _ANTHROPIC_MESSAGES, guardrails_config=None)
+
+    assert "Not forwarding metadata.user_id" in caplog.text
+    assert "person@example.com" not in caplog.text
 
 
 @pytest.mark.asyncio

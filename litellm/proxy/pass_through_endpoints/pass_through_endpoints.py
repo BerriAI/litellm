@@ -719,8 +719,8 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
         # unenforced. Set after the client merge so a request body cannot supply its own budget.
         #
         # Only for the built-in provider routes. `get_model_from_request` returns
-        # None for a user-defined pass-through, deliberately: its body is forwarded
-        # verbatim, so `model` there names an UPSTREAM model rather than a
+        # None for a user-defined pass-through, deliberately: the client's `model`
+        # goes upstream unchanged, so it names an UPSTREAM model rather than a
         # LiteLLM-managed one. Enforcement is therefore skipped on those routes, and
         # charging a counter anyway would track spend that nothing can refuse, and
         # would attribute it to a budget the operator scoped to a LiteLLM model that
@@ -1202,7 +1202,10 @@ def _anthropic_user_id_to_forward(
     if not isinstance(user_id, str):
         return None
     max_length: Final = anthropic_upstream_user_id_limit(url)
-    if max_length is None or not anthropic_accepts_user_id(user_id, max_length):
+    if max_length is None:
+        return None
+    if not anthropic_accepts_user_id(user_id, max_length):
+        verbose_proxy_logger.warning("Not forwarding metadata.user_id because the upstream would refuse it")
         return None
     if has_pre_call_guardrails(body):
         verbose_proxy_logger.debug("Not forwarding metadata.user_id because a pre-call guardrail cannot scan it")
