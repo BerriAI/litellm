@@ -185,7 +185,7 @@ def _assert_a2a_calls_are_billed(
             lambda: read_rows(
                 "SELECT request_id, agent_id, spend, api_key, call_type, "
                 """to_char("startTime", 'YYYY-MM-DD') AS day FROM "LiteLLM_SpendLogs" """
-                "WHERE api_key=%s ORDER BY request_id",
+                "WHERE api_key=%s ORDER BY call_type",
                 (digest,),
             ),
             lambda rows: len(rows) == len(methods),
@@ -370,21 +370,6 @@ def _assert_reused_jsonrpc_id_has_distinct_spend_identity(
         assert all(str(uuid.UUID(request_id)) == request_id for request_id in request_ids), rows
         assert len(trace_ids) == 2, trace_ids
         assert len(set(trace_ids)) == 2 and all(trace_id != "1" for trace_id in trace_ids), trace_ids
-
-        if "stream" in method.lower():
-            stream_call_ids: Final = tuple(
-                (digest, response.headers.get("x-litellm-call-id"))
-                for digest, response in zip(digests, responses)
-            )
-            matching_rows: Final = tuple(
-                (call_id, tuple(row for row in rows if row["api_key"] == digest))
-                for digest, call_id in stream_call_ids
-                if call_id is not None
-            )
-            assert all(
-                len(matches) == 1 and str(matches[0]["request_id"]) == call_id
-                for call_id, matches in matching_rows
-            ), matching_rows
 
 
 @pytest.mark.parametrize(

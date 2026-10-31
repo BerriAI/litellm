@@ -364,7 +364,6 @@ def _get_provider_request_id(original_exception: Exception) -> str | None:
 _CUSTOM_PRICING_KEYS: Final[frozenset[str]] = frozenset(CustomPricingLiteLLMParams.model_fields.keys())
 _METADATA_MAPPING: Final = TypeAdapter(Mapping[str, object])
 _RESPONSE_MAPPING: Final = TypeAdapter(Mapping[str, object])
-_STANDARD_LOGGING_ID_ADAPTER: Final[TypeAdapter[str | None]] = TypeAdapter(str | None)
 _MODEL_INFO_CUSTOM_PRICING_KEYS: Final[frozenset[str]] = _CUSTOM_PRICING_KEYS | DEPLOYMENT_SCOPED_PRICING_FIELDS
 _UNSERIALIZABLE_METADATA_KEYS: Final[frozenset[str]] = frozenset(
     ("user_api_key_auth", "user_api_key_budget_reservation")
@@ -7744,11 +7743,11 @@ def get_standard_logging_object_payload(
             else raw_usage_dict
         )
 
-        litellm_call_id: Final[str | None] = _STANDARD_LOGGING_ID_ADAPTER.validate_python(kwargs.get("litellm_call_id"))
-        request_id: Final[str | None] = (
-            litellm_call_id
+        request_id: Final[str | None] = cast(  # cast-ok: preserve dynamic IDs without runtime validation
+            str | None,
+            kwargs.get("litellm_call_id")  # pyright: ignore[reportUnknownMemberType]  # kwargs is an untyped legacy mapping
             if isinstance(call_type, str) and call_type in A2A_CALL_TYPES
-            else _STANDARD_LOGGING_ID_ADAPTER.validate_python(response_obj.get("id")) or litellm_call_id
+            else response_obj.get("id") or kwargs.get("litellm_call_id"),
         )
 
         _model_id: Final = metadata.get("model_info", {}).get("id", "")

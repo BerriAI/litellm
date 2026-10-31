@@ -781,9 +781,9 @@ async def asend_message_streaming(
         if api_base is None:
             raise ValueError("Either a2a_client or api_base is required for standard A2A flow")
         extra_headers: Final = {
+            "X-LiteLLM-Trace-Id": trace_id,
             **({"X-LiteLLM-Agent-Id": agent_id} if agent_id else {}),
             **(agent_extra_headers or {}),
-            "X-LiteLLM-Trace-Id": trace_id,
         }
         a2a_client = await create_a2a_client(
             base_url=api_base,
