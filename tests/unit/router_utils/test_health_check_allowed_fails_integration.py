@@ -6,13 +6,14 @@ should increment the same counters used by allowed_fails_policy, using the
 actual exception type from the health check error.
 """
 
-from unittest.mock import patch
+from unittest.mock import ANY, patch
 
 import pytest
 
 import litellm
 from litellm.proxy.health_check import run_with_timeout
 from litellm.router import Router
+from litellm.router_api import RoutingContext
 from litellm.types.router import AllowedFailsPolicy
 
 
@@ -160,14 +161,14 @@ class TestHealthCheckCooldownIntegration:
 
         # First call: should not cooldown (1 <= 3)
         result = should_cooldown_based_on_allowed_fails_policy(
-            litellm_router_instance=router,
+            ctx=RoutingContext(router),
             deployment="deploy-1",
             original_exception=timeout_exc,
         )
         assert result is False
 
         # Check counter was incremented
-        current_fails = router.cache.get_cache(key="deployment:deploy-1:allowed_fails")
+        current_fails = router.health().store.get_cache(key="deployment:deploy-1:allowed_fails")
         assert current_fails == 1
 
     def test_health_check_failure_triggers_cooldown_at_threshold(self):
@@ -186,7 +187,7 @@ class TestHealthCheckCooldownIntegration:
         # Fails 1 and 2: should not cooldown
         for _ in range(2):
             result = should_cooldown_based_on_allowed_fails_policy(
-                litellm_router_instance=router,
+                ctx=RoutingContext(router),
                 deployment="deploy-1",
                 original_exception=auth_exc,
             )
@@ -194,7 +195,7 @@ class TestHealthCheckCooldownIntegration:
 
         # Fail 3: should trigger cooldown (3 > 2)
         result = should_cooldown_based_on_allowed_fails_policy(
-            litellm_router_instance=router,
+            ctx=RoutingContext(router),
             deployment="deploy-1",
             original_exception=auth_exc,
         )
@@ -219,7 +220,7 @@ class TestHealthCheckCooldownIntegration:
 
         # Fail 1: should not cooldown (1 <= 1)
         result = should_cooldown_based_on_allowed_fails_policy(
-            litellm_router_instance=router,
+            ctx=RoutingContext(router),
             deployment="deploy-1",
             original_exception=generic_exc,
         )
@@ -227,7 +228,7 @@ class TestHealthCheckCooldownIntegration:
 
         # Fail 2: should trigger cooldown (2 > 1)
         result = should_cooldown_based_on_allowed_fails_policy(
-            litellm_router_instance=router,
+            ctx=RoutingContext(router),
             deployment="deploy-1",
             original_exception=generic_exc,
         )
@@ -266,11 +267,11 @@ class TestHealthCheckCooldownIntegration:
         timeout_exc = litellm.Timeout(message="Health check timeout", model="gpt-4", llm_provider="openai")
 
         result = set_cooldown_deployments(
-            litellm_router_instance=router,
+            ctx=RoutingContext(router),
             original_exception=timeout_exc,
             exception_status=500,
             deployment="deploy-1",
-            time_to_cooldown=router.cooldown_time,
+            time_to_cooldown=router.settings().cooldown_time,
         )
         assert result is False
 
@@ -306,12 +307,13 @@ class TestWriteHealthStateIntegration:
                     exceptions_by_model_id={"deploy-1": timeout_exc},
                 )
                 mock_cooldown.assert_called_once_with(
-                    litellm_router_instance=router,
+                    ANY,
                     original_exception=timeout_exc,
                     exception_status=408,  # Timeout has status_code 408
                     deployment="deploy-1",
-                    time_to_cooldown=router.cooldown_time,
+                    time_to_cooldown=router.settings().cooldown_time,
                 )
+                assert mock_cooldown.call_args.args[0].belongs_to(router)
 
     def test_unhealthy_endpoint_without_exception_skips_cooldown(self):
         """Unhealthy endpoints without an exception key should not trigger cooldown."""
@@ -364,10 +366,8 @@ class TestWriteHealthStateIntegration:
                         unhealthy_endpoints=unhealthy_endpoints,
                         exceptions_by_model_id={"deploy-1": rate_exc},
                     )
-                    mock_increment.assert_called_once_with(
-                        litellm_router_instance=router,
-                        deployment_id="deploy-1",
-                    )
+                    mock_increment.assert_called_once_with(ANY, "deploy-1")
+                    assert mock_increment.call_args.args[0].belongs_to(router)
 
 
 class TestHealthCheckFilterBypassWithPolicy:

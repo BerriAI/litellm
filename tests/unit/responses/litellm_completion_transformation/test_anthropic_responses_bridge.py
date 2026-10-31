@@ -1976,3 +1976,57 @@ def test_streamed_responses_over_anthropic_complete_a_paused_turn_with_its_pendi
     assert _search_calls(finished.response.output) == _EXPECTED_PAUSED_OUTPUT
     assert _reasoning_and_message_statuses(finished.response.output) == ([expected_status], [expected_status])
     assert _last_item(finished.response.output) == ("web_search_call", "in_progress")
+
+
+async def _codex_follow_up_body(**kwargs: object) -> Mapping[str, object]:
+    anthropic: Final = _RecordingRawAnthropicMessages()
+    with patch("litellm.proxy.proxy_server.prisma_client", _FakePrismaClient([_SEARCH_TURN, _CALENDAR_TURN])):
+        await litellm.aresponses(
+            model=_MODEL,
+            previous_response_id="chatcmpl-calendar-turn",
+            input=[{"type": "function_call_output", "call_id": "toolu_standup", "output": "Created Standup."}],
+            tools=[_CODEX_TOOL_SEARCH, _SHELL_TOOL],
+            api_key="sk-ant-fake",
+            client=AsyncHTTPHandler(transport=httpx.MockTransport(anthropic)),
+            **kwargs,
+        )
+    return json.loads(anthropic.body)
+
+
+@pytest.mark.asyncio
+async def test_codex_tool_search_follow_up_rejects_text_verbosity_anthropic_does_not_support(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    anthropic: Final = _RecordingRawAnthropicMessages()
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", _FakePrismaClient([_SEARCH_TURN, _CALENDAR_TURN])),
+        pytest.raises(litellm.UnsupportedParamsError, match="verbosity"),
+    ):
+        await litellm.aresponses(
+            model=_MODEL,
+            previous_response_id="chatcmpl-calendar-turn",
+            input=[{"type": "function_call_output", "call_id": "toolu_standup", "output": "Created Standup."}],
+            tools=[_CODEX_TOOL_SEARCH, _SHELL_TOOL],
+            text={"verbosity": "low"},
+            api_key="sk-ant-fake",
+            num_retries=0,
+            client=AsyncHTTPHandler(transport=httpx.MockTransport(anthropic)),
+        )
+
+    assert anthropic.body == ""
+
+
+@pytest.mark.asyncio
+async def test_codex_tool_search_follow_up_text_verbosity_follows_provider_param_validation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    without_text: Final = await _codex_follow_up_body()
+
+    dropped: Final = await _codex_follow_up_body(text={"verbosity": "low"}, drop_params=True)
+    allowed: Final = await _codex_follow_up_body(text={"verbosity": "low"}, allowed_openai_params=["verbosity"])
+
+    assert dropped == without_text
+    assert allowed == {**without_text, "verbosity": "low"}
