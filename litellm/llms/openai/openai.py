@@ -16,6 +16,7 @@ from openai._base_client import make_request_options
 from openai._constants import RAW_RESPONSE_HEADER
 from openai._legacy_response import LegacyAPIResponse
 from openai._types import RequestOptions
+from openai.pagination import SyncCursorPage
 from openai.types import CreateEmbeddingResponse
 from openai.types.beta.assistant_deleted import AssistantDeleted
 from openai.types.chat import ChatCompletion, ChatCompletionChunk
@@ -40,6 +41,7 @@ from litellm.types.utils import (
     LiteLLMBatch,
     ModelResponse,
     ModelResponseStream,
+    openai_batch_status,
 )
 from litellm.utils import (
     CustomStreamWrapper,
@@ -2182,6 +2184,18 @@ class OpenAIFilesAPI(BaseLLM):
         return response
 
 
+def _with_openai_batch_fields(batches: Sequence[Batch]) -> Sequence[Batch]:
+    return [
+        batch.model_copy(
+            update={
+                "object": batch.object or "batch",
+                "status": openai_batch_status(batch.status),
+            }
+        )
+        for batch in batches
+    ]
+
+
 class OpenAIBatchesAPI(BaseLLM):
     """
     OpenAI methods to support for batches
@@ -2372,7 +2386,7 @@ class OpenAIBatchesAPI(BaseLLM):
     ):
         verbose_logger.debug("listing batches, after= %s, limit= %s", after, limit)
         response: Final = await openai_client.batches.list(after=after, limit=limit)
-        return response
+        return response.model_copy(update={"data": _with_openai_batch_fields(response.data)})
 
     def list_batches(
         self,
@@ -2384,7 +2398,7 @@ class OpenAIBatchesAPI(BaseLLM):
         organization: str | None,
         after: str | None = None,
         limit: int | None = None,
-        client: OpenAI | None = None,
+        client: OpenAI | AsyncOpenAI | None = None,
         litellm_params: Mapping[str, object] | None = None,
     ):
         openai_client: Final[OpenAI | AsyncOpenAI | None] = self.get_openai_client(
@@ -2409,7 +2423,9 @@ class OpenAIBatchesAPI(BaseLLM):
                 )
             return self.alist_batches(openai_client=openai_client, after=after, limit=limit)
         response: Final = openai_client.batches.list(after=after, limit=limit)
-        return response
+        if not isinstance(response, SyncCursorPage):
+            return response
+        return response.model_copy(update={"data": _with_openai_batch_fields(response.data)})
 
 
 class OpenAIAssistantsAPI(BaseLLM):

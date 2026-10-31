@@ -1555,12 +1555,66 @@ def _breakdown_total(litellm_logging_obj: LitellmLoggingObject | None) -> float 
     return float(total) if isinstance(total, (int, float)) and not isinstance(total, bool) else None
 
 
+def _cost_map_priced_input_output(
+    model: str | None,
+    custom_llm_provider: str | None,
+    usage: Usage | None,
+    call_type: CallTypesLiteral | None,
+    service_tier: str | None,
+    data_residency: str | None,
+) -> tuple[float, float]:
+    if not model or usage is None:
+        return 0.0, 0.0
+    try:
+        return cost_per_token(
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            usage_object=usage,
+            call_type=call_type or "completion",
+            service_tier=service_tier,
+            data_residency=data_residency,
+        )
+    except Exception as pricing_error:  # noqa: BLE001  # cost_per_token raises plain Exception for an unmapped model
+        verbose_logger.debug("No cost map price for reported-cost split of %s: %s", model, pricing_error)
+        return 0.0, 0.0
+
+
+def split_reported_cost_by_cost_map_ratio(
+    reported_total: float,
+    model: str | None,
+    custom_llm_provider: str | None,
+    usage: Usage | None,
+    call_type: CallTypesLiteral | None,
+    service_tier: str | None,
+    data_residency: str | None,
+) -> tuple[float, float]:
+    """Apportions a provider-reported total between input and output in the ratio litellm's own cost map would
+    price the same usage, so a per-input-token model books the whole total on input. Unmapped or zero-priced
+    usage keeps the whole total on output."""
+    priced_input, priced_output = _cost_map_priced_input_output(
+        model=model,
+        custom_llm_provider=custom_llm_provider,
+        usage=usage,
+        call_type=call_type,
+        service_tier=service_tier,
+        data_residency=data_residency,
+    )
+    priced_total: Final = priced_input + priced_output
+    if priced_total <= 0:
+        return 0.0, reported_total
+    input_cost: Final = reported_total * (priced_input / priced_total)
+    return input_cost, reported_total - input_cost
+
+
 def _adjusted_provider_billed_cost(
     reported_cost: float,
     custom_llm_provider: str | None,
+    pricing_provider: str | None,
     model: str | None,
     region_name: str | None,
     litellm_logging_obj: LitellmLoggingObject | None,
+    usage: Usage | None,
+    call_type: CallTypesLiteral | None,
     service_tier: str | None,
     data_residency: str | None,
 ) -> float:
@@ -1570,10 +1624,19 @@ def _adjusted_provider_billed_cost(
     adjusted_cost, margin_percent, margin_fixed_amount, margin_total_amount = _apply_cost_margin(
         base_cost=discounted_cost, custom_llm_provider=custom_llm_provider
     )
+    input_cost, output_cost = split_reported_cost_by_cost_map_ratio(
+        reported_total=adjusted_cost,
+        model=model,
+        custom_llm_provider=pricing_provider,
+        usage=usage,
+        call_type=call_type,
+        service_tier=service_tier,
+        data_residency=data_residency,
+    )
     _store_cost_breakdown_in_logging_obj(
         litellm_logging_obj=litellm_logging_obj,
-        prompt_tokens_cost_usd_dollar=0.0,
-        completion_tokens_cost_usd_dollar=adjusted_cost,
+        prompt_tokens_cost_usd_dollar=input_cost,
+        completion_tokens_cost_usd_dollar=output_cost,
         cost_for_built_in_tools_cost_usd_dollar=0.0,
         total_cost_usd_dollar=adjusted_cost,
         original_cost=reported_cost,
@@ -2081,9 +2144,16 @@ def completion_cost(
                     return _adjusted_provider_billed_cost(
                         reported_cost=reported_cost,
                         custom_llm_provider=custom_llm_provider,
+                        pricing_provider=_pricing_provider_for_cost_candidate(
+                            candidate_provider=candidate_pricing_provider,
+                            request_provider=request_pricing_provider,
+                            current_provider=custom_llm_provider,
+                        ),
                         model=model_for_discount,
                         region_name=region_name if isinstance(region_name, str) else None,
                         litellm_logging_obj=litellm_logging_obj,
+                        usage=cost_per_token_usage_object,
+                        call_type=call_type,
                         service_tier=service_tier,
                         data_residency=data_residency,
                     )
@@ -2388,10 +2458,28 @@ def response_cost_calculator(
                     provider_response_cost: Final = get_response_cost_from_hidden_params(hidden_params)
                     if provider_response_cost is not None and not custom_pricing:
                         if _breakdown_total(litellm_logging_obj) != provider_response_cost:
+                            header_priced_model: Final = select_model_name_for_cost_calc(
+                                model=model,
+                                completion_response=response_object,
+                                custom_llm_provider=custom_llm_provider,
+                                custom_pricing=custom_pricing,
+                                base_model=base_model,
+                                router_model_id=router_model_id,
+                                region_name=region_name,
+                            )
+                            header_input_cost, header_output_cost = split_reported_cost_by_cost_map_ratio(
+                                reported_total=provider_response_cost,
+                                model=header_priced_model or model,
+                                custom_llm_provider=pricing_provider or custom_llm_provider,
+                                usage=get_usage_object(response_object),
+                                call_type=call_type,
+                                service_tier=service_tier,
+                                data_residency=data_residency,
+                            )
                             _store_cost_breakdown_in_logging_obj(
                                 litellm_logging_obj=litellm_logging_obj,
-                                prompt_tokens_cost_usd_dollar=0.0,
-                                completion_tokens_cost_usd_dollar=provider_response_cost,
+                                prompt_tokens_cost_usd_dollar=header_input_cost,
+                                completion_tokens_cost_usd_dollar=header_output_cost,
                                 cost_for_built_in_tools_cost_usd_dollar=0.0,
                                 total_cost_usd_dollar=provider_response_cost,
                                 original_cost=provider_response_cost,
@@ -3320,7 +3408,7 @@ class RealtimeAPITokenUsageProcessor(BaseTokenUsageProcessor):
         )
 
 
-_RESPONSES_WS_BILLABLE_EVENT_TYPES: Final = frozenset({"response.completed", "response.incomplete"})
+_RESPONSES_WS_BILLABLE_EVENT_TYPES: Final = frozenset({"response.completed", "response.incomplete", "response.failed"})
 
 
 class _ResponsesWsEventResponse(LiteLLMBaseModel):
