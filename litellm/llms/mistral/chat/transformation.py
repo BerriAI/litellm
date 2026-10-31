@@ -129,8 +129,6 @@ class MistralConfig(OpenAIGPTConfig):
     - `response_format` (object or null): An object specifying the format that the model must output. Setting to { "type": "json_object" } enables JSON mode, which guarantees the message the model generates is in JSON. When using JSON mode you MUST also instruct the model to produce JSON yourself with a system or a user message.
     """
 
-    _is_base_class = False
-
     temperature: int | None = None
     top_p: int | None = None
     max_tokens: int | None = None
