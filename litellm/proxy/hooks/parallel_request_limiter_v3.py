@@ -746,6 +746,17 @@ class RequestRateLimiterStash:
     reservation_released: bool = False
     tpm_limited_tags: frozenset[str] = field(default_factory=frozenset)
 
+    def clear_reserved_tokens(self) -> None:
+        self.reserved_tokens = 0
+        self.ptu_reserved_tokens = 0
+        self.itpm_reserved_tokens = 0
+        self.otpm_reserved_tokens = 0
+
+    def discard_released_reservation(self) -> None:
+        if self.reservation_released:
+            self.clear_reserved_tokens()
+            self.reservation_released = False
+
 
 @dataclass(frozen=True, slots=True)
 class CounterRefund:
@@ -4151,6 +4162,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 requested_model=requested_model,
             )
 
+        stash.discard_released_reservation()
         if itpm_reserved > 0:
             itpm_scopes: Final = tuple(
                 (d["key"], d["value"]) for d in io_token_descriptors if d["key"] == PROJECT_ITPM_DESCRIPTOR_KEY
@@ -4509,6 +4521,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     # incremented so post-call reconciliation only applies
                     # the (actual - reserved) delta to those — unreserved
                     # scopes get charged the full actual usage instead.
+                    stash.discard_released_reservation()
                     stash.reserved_tokens = estimated_tokens
                     stash.ptu_reserved_tokens = ptu_estimated_tokens
                     stash.ptu_reserved_window_identities = frozenset(
@@ -5513,8 +5526,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                         parent_otel_span=litellm_parent_otel_span,
                     )
             if stash is not None:
-                stash.reserved_tokens = 0
-                stash.ptu_reserved_tokens = 0
+                stash.clear_reserved_tokens()
 
         except Exception as e:
             verbose_proxy_logger.exception("Error in rate limit success event: %s", e)
