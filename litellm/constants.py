@@ -1060,6 +1060,7 @@ openai_compatible_endpoints: Final[list[str]] = [
     "https://api.aiand.com/v1",
     "https://api.synthetic.new/openai/v1",
     "https://serverless.tensormesh.ai/v1",
+    "https://api.tokenlab.sh/v1",
     "https://api.stima.tech/v1",
     "https://nano-gpt.com/api/v1",
     "https://api.poe.com/v1",
@@ -1129,6 +1130,7 @@ openai_compatible_providers: Final[list[str]] = [
     "aiand",  # ai& - JSON-configured provider
     "synthetic",  # Synthetic - JSON-configured provider
     "tensormesh",  # Tensormesh - JSON-configured provider
+    "tokenlab",  # TokenLab - JSON-configured provider
     "apertis",  # Apertis - JSON-configured provider
     "nano-gpt",  # Nano-GPT - JSON-configured provider
     "poe",  # Poe - JSON-configured provider
@@ -1191,6 +1193,7 @@ openai_text_completion_compatible_providers: Final[list] = [  # providers that s
     "publicai",
     "synthetic",
     "tensormesh",
+    "tokenlab",
     "apertis",
     "nano-gpt",
     "poe",
