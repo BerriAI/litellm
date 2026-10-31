@@ -89,6 +89,11 @@ from litellm.constants import (
     OPENAI_LIVE_SESSION_START_TIMEOUT_SECONDS,
     RUNTIME_UPDATABLE_ROUTER_SETTINGS,
 )
+from litellm.litellm_core_utils.access_windows import access_windows_config_error
+from litellm.litellm_core_utils.add_retry_fallback_headers import (
+    get_fallback_errors_from_headers,
+    get_hidden_params_dict,
+)
 from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.litellm_core_utils.bug_report import (
     allowlisted,
@@ -100,6 +105,8 @@ from litellm.litellm_core_utils.litellm_logging import (
     initialize_sentry,
 )
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER, LoggingWorker
+from litellm.litellm_core_utils.routing_common_utils import resolve_model_group_alias
+from litellm.litellm_core_utils.routing_groups import parse_routing_groups
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.litellm_core_utils.token_counter import (
@@ -189,13 +196,6 @@ from litellm.router_strategy.auto_router.auto_router_tuning_baseline import (
     snapshot_tuning_baselines,
     tuning_limit_violation,
 )
-from litellm.router_utils.access_windows import access_windows_config_error
-from litellm.router_utils.add_retry_fallback_headers import (
-    get_fallback_errors_from_headers,
-    get_hidden_params_dict,
-)
-from litellm.router_utils.common_utils import resolve_model_group_alias
-from litellm.router_utils.routing_groups import parse_routing_groups
 from litellm.types.caching import RedisPipelineIncrementOperation
 from litellm.types.utils import (
     PRICING_OVERRIDES_KEY,
@@ -999,7 +999,7 @@ from litellm.router import (
     LiteLLM_Params,
     ModelGroupInfo,
 )
-from litellm.router_api import ChangeSet, deployment_id
+from litellm.router_api import ChangeSet, deployment_id, router_init_args
 from litellm.scheduler import FlowItem, Scheduler
 from litellm.secret_managers.aws_secret_manager import load_aws_kms
 from litellm.secret_managers.google_kms import load_google_kms
@@ -4660,10 +4660,6 @@ def _write_health_state_to_router_cache(
     is on.
     """
     from litellm.proxy.health_check import build_deployment_health_states
-    from litellm.router_utils.cooldown_handlers import set_cooldown_deployments
-    from litellm.router_utils.router_callbacks.track_deployment_metrics import (
-        increment_deployment_failures_for_current_minute,
-    )
 
     _exceptions: Final[dict] = exceptions_by_model_id or {}
 
@@ -4715,18 +4711,7 @@ def _write_health_state_to_router_cache(
             ):
                 continue
 
-            increment_deployment_failures_for_current_minute(
-                litellm_router_instance=llm_router,
-                deployment_id=model_id,
-            )
-
-            set_cooldown_deployments(
-                litellm_router_instance=llm_router,
-                original_exception=original_exception,
-                exception_status=exception_status,
-                deployment=model_id,
-                time_to_cooldown=router_settings.cooldown_time,
-            )
+            llm_router.health().record_failure(model_id, original_exception, exception_status)
 
     except Exception as e:
         verbose_proxy_logger.warning("Failed to write health state to router cache: %s", str(e))
@@ -7370,9 +7355,7 @@ class ProxyConfig:
         router_settings: Final = config.get("router_settings", None)
 
         if router_settings and isinstance(router_settings, dict):
-            available_args: Final = [
-                x for x in litellm.Router.get_valid_args() if x not in ROUTER_SETTINGS_MANAGED_OUTSIDE_CONFIG
-            ]
+            available_args: Final = [x for x in router_init_args() if x not in ROUTER_SETTINGS_MANAGED_OUTSIDE_CONFIG]
 
             for k, v in router_settings.items():
                 if k in available_args:
@@ -9596,7 +9579,6 @@ class ProxyConfig:
             SearchToolRegistry,
             keep_loaded_search_tools_that_do_not_decrypt,
         )
-        from litellm.router_utils.search_api_router import SearchAPIRouter
 
         try:
             db_search_tools: Final = keep_loaded_search_tools_that_do_not_decrypt(
@@ -9620,7 +9602,21 @@ class ProxyConfig:
             )
 
             if llm_router is not None:
-                await SearchAPIRouter.update_router_search_tools(router_instance=llm_router, search_tools=search_tools)
+                llm_router.apply(
+                    ChangeSet(
+                        assign={
+                            "search_tools": [
+                                {
+                                    "search_tool_id": tool.get("search_tool_id"),
+                                    "search_tool_name": tool.get("search_tool_name"),
+                                    "litellm_params": tool.get("litellm_params", {}),
+                                    "search_tool_info": tool.get("search_tool_info"),
+                                }
+                                for tool in search_tools
+                            ]
+                        }
+                    )
+                )
                 verbose_proxy_logger.info("Successfully loaded %s search tool(s) into router", len(search_tools))
             else:
                 verbose_proxy_logger.debug(
@@ -16152,7 +16148,7 @@ def _enrich_model_info_with_litellm_data(
     if debug is True:
         _openai_client = "None"
         if llm_router is not None:
-            _openai_client = llm_router._get_client(deployment=model, kwargs={}, client_type="async") or "None"
+            _openai_client = llm_router.registry().client(model, client_type="async") or "None"
         else:
             _openai_client = "llm_router_is_None"
         openai_client: Final = str(_openai_client)
@@ -18602,7 +18598,7 @@ async def async_queue_request(
         router: Final = llm_router
 
         data.update(
-            router.priority_header_update(
+            router.health().priority_header_fields(
                 model=data["model"], kwargs=data, header=request.headers.get(SCHEDULER_PRIORITY_HEADER)
             )
         )
@@ -19751,7 +19747,7 @@ async def update_config(
         raw_router_settings: Final = request_body.get("router_settings")
         if isinstance(raw_router_settings, dict):
             supported_router_settings: Final = RUNTIME_UPDATABLE_ROUTER_SETTINGS | (
-                frozenset(litellm.Router.get_valid_args()) - ROUTER_SETTINGS_MANAGED_OUTSIDE_CONFIG
+                frozenset(router_init_args()) - ROUTER_SETTINGS_MANAGED_OUTSIDE_CONFIG
             )
             unsupported_router_settings: Final = sorted(set(raw_router_settings) - supported_router_settings)
             if unsupported_router_settings:
@@ -21908,6 +21904,7 @@ async def _stream_mcp_asgi_response(handle_fn, scope: dict, receive) -> "Streami
             while True:
                 chunk = await body_queue.get()
                 if chunk is None:
+                    await handler_task
                     break
                 yield chunk
         finally:

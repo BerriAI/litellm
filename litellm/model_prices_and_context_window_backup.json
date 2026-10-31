@@ -25302,6 +25302,38 @@
         "cache_creation_input_token_cost": 1e-06,
         "prompt_cache_min_tokens": 2048
     },
+    "eu.anthropic.claude-haiku-4-5-20251001-v1:0": {
+        "cache_creation_input_token_cost": 1.375e-06,
+        "cache_creation_input_token_cost_above_1hr": 2.2e-06,
+        "cache_read_input_token_cost": 1.1e-07,
+        "input_cost_per_token": 1.1e-06,
+        "deprecation_date": "2026-10-15",
+        "litellm_provider": "bedrock_converse",
+        "supports_tool_search": true,
+        "max_input_tokens": 200000,
+        "max_output_tokens": 64000,
+        "mode": "chat",
+        "output_cost_per_token": 5.5e-06,
+        "source": "https://aws.amazon.com/bedrock/pricing/",
+        "supports_assistant_prefill": true,
+        "supports_computer_use": true,
+        "supports_function_calling": true,
+        "supports_pdf_input": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": true,
+        "supports_native_structured_output": true,
+        "supports_parallel_tool_use_config": true,
+        "prompt_cache_min_tokens": 4096,
+        "input_cost_per_token_batches": 5.5e-07,
+        "output_cost_per_token_batches": 2.75e-06,
+        "token_count_model": {
+            "model": "anthropic.claude-haiku-4-5-20251001-v1:0",
+            "litellm_provider": "bedrock"
+        }
+    },
     "eu.anthropic.claude-3-5-sonnet-20240620-v1:0": {
         "input_cost_per_token": 3e-06,
         "litellm_provider": "bedrock",
@@ -31242,6 +31274,9 @@
         "output_cost_per_image_token": 3e-05,
         "output_cost_per_reasoning_token": 2.5e-06,
         "output_cost_per_token": 2.5e-06,
+        "output_cost_per_token_batches": 1.25e-06,
+        "output_cost_per_token_flex": 1.25e-06,
+        "output_cost_per_token_priority": 4.5e-06,
         "rpm": 100000,
         "source": "https://ai.google.dev/gemini-api/docs/pricing",
         "supported_endpoints": [
