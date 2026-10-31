@@ -134,6 +134,47 @@ beforeEach(() => {
 });
 afterEach(() => vi.unstubAllGlobals());
 
+it("should switch the composer placeholder with deep research on home and in a conversation", async () => {
+  const user = userEvent.setup();
+  const home = renderChat();
+  await screen.findByRole("button", { name: "research-chat" });
+  const homeEditor = screen.getByRole("textbox", { name: "Message" });
+  expect(homeEditor).toHaveAttribute("placeholder", "Ask a question, attach a file, or paste something to work on…");
+
+  const enableResearch = async () => {
+    await user.click(screen.getByRole("button", { name: "Connect tools" }));
+    await user.click(await screen.findByRole("button", { name: "Deep research", exact: true }));
+  };
+  await enableResearch();
+  expect(homeEditor).toHaveAttribute("placeholder", "What should I research on the web?");
+  await user.click(screen.getByRole("button", { name: "Turn off deep research" }));
+  expect(homeEditor).toHaveAttribute("placeholder", "Ask a question, attach a file, or paste something to work on…");
+
+  home.unmount();
+  const conversationId = "saved-chat";
+  const history: Conversation[] = [
+    {
+      id: conversationId,
+      title: "Saved chat",
+      model: "research-chat",
+      messages: [{ id: "saved-message", role: "user", content: "Previous question", timestamp: 1 }],
+      mcpServerNames: [],
+      createdAt: 1,
+      updatedAt: 1,
+    },
+  ];
+  localStorage.setItem(storageKey, JSON.stringify(history));
+  renderChat(conversationId);
+  await screen.findByRole("button", { name: "research-chat" });
+  const conversationEditor = screen.getByRole("textbox", { name: "Message" });
+  expect(conversationEditor).toHaveAttribute("placeholder", "Send a message...");
+
+  await enableResearch();
+  expect(conversationEditor).toHaveAttribute("placeholder", "What should I research on the web?");
+  await user.click(screen.getByRole("button", { name: "Turn off deep research" }));
+  expect(conversationEditor).toHaveAttribute("placeholder", "Send a message...");
+});
+
 async function startResearch(withTools = true) {
   const user = userEvent.setup();
   await screen.findByRole("button", { name: "research-chat" });
