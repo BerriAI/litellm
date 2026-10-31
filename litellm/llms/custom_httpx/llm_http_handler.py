@@ -40,7 +40,7 @@ import litellm.types.utils
 from litellm._logging import redact_string, verbose_logger
 from litellm.anthropic_beta_headers_manager import (
     aload_beta_headers_config,
-    is_foundry_api_base,
+    resolve_beta_provider,
     update_headers_with_filtered_beta,
 )
 from litellm.constants import MAX_FILE_LIST_LIMIT, REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES
@@ -2588,9 +2588,11 @@ class BaseLLMHTTPHandler:
         affinity_api_base: Final = (
             AnthropicModelInfo.get_api_base(api_base) if custom_llm_provider == "anthropic" else api_base
         )
+        takes_another_beta_row: Final = (
+            resolve_beta_provider(custom_llm_provider, affinity_api_base) != custom_llm_provider
+        )
         filters_beta_headers: Final = (
-            anthropic_messages_provider_config.should_filter_anthropic_beta_headers()
-            or is_foundry_api_base(affinity_api_base)
+            anthropic_messages_provider_config.should_filter_anthropic_beta_headers() or takes_another_beta_row
         )
         if request_params.get("safeguards") is not None and filters_beta_headers:
             await aload_beta_headers_config()

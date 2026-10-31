@@ -6266,9 +6266,24 @@ async def test_non_chatgpt_responses_preserves_caller_headers_after_validation(
 
 
 @pytest.mark.asyncio
-async def test_async_anthropic_messages_handler_filters_betas_by_the_azure_ai_row_on_a_foundry_api_base(monkeypatch):
+@pytest.mark.parametrize(
+    ("custom_llm_provider", "pass_through", "forwarded_betas"),
+    [
+        pytest.param("anthropic", False, "thinking-binding-controls-2026-08-01", id="anthropic-takes-the-azure-ai-row"),
+        pytest.param(
+            "openai",
+            True,
+            "advisor-tool-2026-03-01,thinking-binding-controls-2026-08-01",
+            id="messages-pass-through-forwards-as-sent",
+        ),
+    ],
+)
+async def test_async_anthropic_messages_handler_picks_the_beta_row_by_deployment_on_a_foundry_api_base(
+    monkeypatch, custom_llm_provider: str, pass_through: bool, forwarded_betas: str
+):
     from litellm import anthropic_beta_headers_manager
     from litellm.llms.anthropic.messages.native.transformation import AnthropicMessagesConfig
+    from litellm.llms.openai_like.messages.transformation import OpenAILikeAnthropicMessagesConfig
 
     monkeypatch.setenv("LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS", "True")
     anthropic_beta_headers_manager._BETA_HEADERS_CONFIG = None
@@ -6296,9 +6311,11 @@ async def test_async_anthropic_messages_handler_filters_betas_by_the_azure_ai_ro
     await BaseLLMHTTPHandler().async_anthropic_messages_handler(
         model="claude-sonnet-4-6",
         messages=[{"role": "user", "content": "Hello"}],
-        anthropic_messages_provider_config=AnthropicMessagesConfig(),
+        anthropic_messages_provider_config=(
+            OpenAILikeAnthropicMessagesConfig() if pass_through else AnthropicMessagesConfig()
+        ),
         anthropic_messages_optional_request_params={"max_tokens": 8},
-        custom_llm_provider="anthropic",
+        custom_llm_provider=custom_llm_provider,
         litellm_params=GenericLiteLLMParams(api_base=foundry_api_base),
         logging_obj=mock_logging_obj,
         api_key="sk-test",
@@ -6308,7 +6325,7 @@ async def test_async_anthropic_messages_handler_filters_betas_by_the_azure_ai_ro
     )
 
     sent_headers: Final = mock_client.post.call_args.kwargs["headers"]
-    assert sent_headers["anthropic-beta"] == "thinking-binding-controls-2026-08-01"
+    assert sent_headers["anthropic-beta"] == forwarded_betas
 
 
 @pytest.mark.asyncio

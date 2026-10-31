@@ -14,6 +14,7 @@ from typing import Dict, Final, List
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+import respx
 
 import litellm
 from litellm import anthropic_beta_headers_manager
@@ -21,6 +22,7 @@ from litellm.anthropic_beta_headers_manager import (
     GetAnthropicBetaHeadersConfig,
     filter_and_transform_beta_headers,
     get_beta_headers_config,
+    resolve_beta_provider,
     update_headers_with_filtered_beta,
     update_request_with_filtered_beta,
 )
@@ -580,6 +582,30 @@ PRESERVED_THINKING_BETAS: Final = (
 def bundled_config(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS", "True")
     anthropic_beta_headers_manager._BETA_HEADERS_CONFIG = None
+
+
+def test_requests_without_betas_never_fetch_the_beta_table(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS", raising=False)
+    monkeypatch.delenv("LITELLM_OFFLINE_MODE", raising=False)
+    anthropic_beta_headers_manager._BETA_HEADERS_CONFIG = None
+    with respx.mock(assert_all_called=False) as router:
+        remote_table: Final = router.get(litellm.anthropic_beta_headers_url).respond(
+            json=GetAnthropicBetaHeadersConfig.load_local_beta_headers_config()
+        )
+        for api_base in (None, DIRECT_API_BASE, FOUNDRY_API_BASE):
+            update_request_with_filtered_beta(
+                headers={"anthropic-version": "2023-06-01"},
+                request_data={"max_tokens": 8},
+                provider="anthropic",
+                api_base=api_base,
+            )
+        for provider, deployment_api_base in (
+            ("anthropic", DIRECT_API_BASE),
+            ("anthropic", FOUNDRY_API_BASE),
+            ("openai", FOUNDRY_API_BASE),
+        ):
+            resolve_beta_provider(provider, deployment_api_base)
+    assert remote_table.call_count == 0
 
 
 def test_foundry_deployment_headers_follow_the_azure_ai_row(bundled_config: None) -> None:

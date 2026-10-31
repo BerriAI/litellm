@@ -407,7 +407,7 @@ def resolve_beta_provider(provider: str, api_base: str | None = None) -> str:
     An ``anthropic`` deployment whose ``api_base`` is a Foundry host is served by Microsoft and
     gets the ``azure_ai`` row, since Foundry accepts a different set of betas than api.anthropic.com.
     """
-    if get_provider_name(provider) == "anthropic" and is_foundry_api_base(api_base):
+    if provider == "anthropic" and is_foundry_api_base(api_base):
         return "azure_ai"
     return provider
 
@@ -471,8 +471,7 @@ def update_request_with_filtered_beta(
     Returns:
         Tuple of (updated headers, updated request_data)
     """
-    row_provider: Final = resolve_beta_provider(provider, api_base)
-    headers = update_headers_with_filtered_beta(headers=headers, provider=row_provider)
+    headers = update_headers_with_filtered_beta(headers=headers, provider=provider, api_base=api_base)
 
     existing_body_betas: Final = request_data.get("anthropic_beta")
     if not existing_body_betas:
@@ -480,7 +479,7 @@ def update_request_with_filtered_beta(
 
     filtered_body_betas: Final = filter_and_transform_beta_headers(
         beta_headers=existing_body_betas,
-        provider=row_provider,
+        provider=resolve_beta_provider(provider, api_base),
         placement="body",
     )
 
