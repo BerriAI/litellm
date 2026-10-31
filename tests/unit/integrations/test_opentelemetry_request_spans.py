@@ -11,7 +11,9 @@ from opentelemetry.sdk.trace.export import SimpleSpanProcessor, SpanExportResult
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
 import litellm
+from litellm.integrations.langfuse.langfuse_otel import LangfuseOtelLogger
 from litellm.integrations.opentelemetry import OpenTelemetry, OpenTelemetryConfig
+from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 
 _OPENAI_URL: Final = "https://api.openai.com/v1/chat/completions"
 _EXPECTED_SPAN_NAMES: Final = ("litellm_request", "raw_gen_ai_request")
@@ -155,3 +157,42 @@ async def test_otel_callback_emits_the_request_and_raw_provider_spans(
     raw_attributes: Final = spans["raw_gen_ai_request"].attributes or {}
     expected_raw: Final = _RAW_STREAMING_ATTRIBUTES if streaming else _RAW_NON_STREAMING_ATTRIBUTES
     assert all(raw_attributes.get(name) is not None for name in expected_raw)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("logger_class", [OpenTelemetry, LangfuseOtelLogger])
+async def test_concurrent_calls_sharing_one_metadata_dict_each_emit_their_request_span(
+    logger_class: type[OpenTelemetry], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("OTEL_SEMCONV_STABILITY_OPT_IN", raising=False)
+    exporter: Final = InMemorySpanExporter()
+    tracer_provider: Final = TracerProvider()
+    tracer_provider.add_span_processor(SimpleSpanProcessor(exporter))
+    monkeypatch.setattr(
+        litellm,
+        "callbacks",
+        [logger_class(config=OpenTelemetryConfig(exporter=exporter), tracer_provider=tracer_provider)],
+    )
+    shared_metadata: Final = {"session_id": "batch"}
+    users: Final = tuple(f"{_USER}_{index}" for index in range(3))
+
+    await asyncio.gather(
+        *(
+            litellm.acompletion(
+                model="gpt-4.1-mini",
+                messages=[{"role": "user", "content": "hi"}],
+                mock_response="hello",
+                user=user,
+                metadata=shared_metadata,
+            )
+            for user in users
+        )
+    )
+    await GLOBAL_LOGGING_WORKER.flush()
+
+    request_users: Final = sorted(
+        str((span.attributes or {}).get("llm.user"))
+        for span in exporter.get_finished_spans()
+        if span.name == "litellm_request"
+    )
+    assert request_users == sorted(users)

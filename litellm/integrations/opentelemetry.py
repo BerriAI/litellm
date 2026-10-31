@@ -1405,7 +1405,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         # request (notably in streaming code paths). Guard against duplicate
         # span writes — but still close the proxy span on the skip path so
         # the trace doesn't leak an open root span.
-        if not self._emit_once(kwargs, "success"):
+        if not self._emit_once(kwargs, kwargs.get("litellm_call_id"), "success"):
             verbose_logger.debug(
                 "OpenTelemetry: skipping duplicate success span for handler=%s",
                 self.__class__.__name__,
@@ -2191,7 +2191,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         # ``async_post_call_failure_hook`` can append the
         # "Failed Proxy Server Request" child span before closing it —
         # there is no proxy-span side-effect to preserve on the skip path.
-        if not self._emit_once(kwargs, "failure"):
+        if not self._emit_once(kwargs, kwargs.get("litellm_call_id"), "failure"):
             verbose_logger.debug(
                 "OpenTelemetry: skipping duplicate failure span for handler=%s",
                 self.__class__.__name__,
