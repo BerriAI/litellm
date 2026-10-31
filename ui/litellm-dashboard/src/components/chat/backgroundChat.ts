@@ -3,7 +3,7 @@ import type { Response } from "openai/resources/responses/responses";
 import { getGatewayBaseUrl } from "@/components/networking";
 import { parseUsageCost } from "@/components/llm_calls/usage_cost";
 import { extractPromptCacheTokens } from "@/utils/promptCacheUsage";
-import type { AssistantMessageUpdate, ChatBackgroundRun, MCPEvent } from "./types";
+import type { AssistantMessageUpdate, ChatBackgroundRun, ChatCitation, MCPEvent } from "./types";
 
 export const isBackgroundRunPending = (run?: ChatBackgroundRun): boolean =>
   run?.status === "queued" || run?.status === "in_progress";
@@ -17,6 +17,23 @@ type TimedResponse = Response & {
 
 export function backgroundResponseUpdate(response: TimedResponse): AssistantMessageUpdate {
   const output = response.output ?? [];
+  const citations = Array.from(
+    new Map(
+      output
+        .filter((item) => item.type === "message")
+        .flatMap((item) => item.content ?? [])
+        .flatMap((part) => (part.type === "output_text" ? part.annotations ?? [] : []))
+        .filter((annotation) => annotation.type === "url_citation")
+        .filter((citation) => /^https?:\/\//i.test(citation.url))
+        .map((citation): [string, ChatCitation] => [
+          citation.url,
+          { url: citation.url, title: citation.title || citation.url },
+        ]),
+    ).values(),
+  );
+  const webSearchCount = output.filter(
+    (item) => item.type === "web_search_call" && item.action?.type === "search",
+  ).length;
   const content = output
     .filter((item) => item.type === "message")
     .flatMap((item) => item.content ?? [])
@@ -58,6 +75,8 @@ export function backgroundResponseUpdate(response: TimedResponse): AssistantMess
   const timing = response.litellm_response_timing;
   return {
     content,
+    citations,
+    webSearchCount,
     reasoningContent,
     mcpEvents,
     backgroundRun: { id: response.id, status },

@@ -12,9 +12,8 @@ The A2A SDK can point to LiteLLM's URL and invoke agents registered with LiteLLM
 
 import json
 from collections.abc import AsyncGenerator, Callable, Coroutine, Mapping
-from copy import deepcopy
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Protocol
+from typing import TYPE_CHECKING, Any, Final, Literal, Protocol
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
@@ -29,6 +28,7 @@ from litellm.litellm_core_utils.url_utils import SSRFError, validate_url
 from litellm.llms.a2a.common_utils import resolve_a2a_hop_auth_header
 from litellm.llms.custom_httpx.sse_lines import aiter_sse_lines
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
+from litellm.proxy.a2a.agent_card import point_agent_card_at_proxy
 from litellm.proxy.a2a.version_convert import (
     A2AVersion,
     normalize_agent_card,
@@ -43,6 +43,7 @@ from litellm.proxy.agent_endpoints.databricks_oauth import (
 )
 from litellm.proxy.agent_endpoints.utils import merge_agent_headers
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_utils.custom_openapi_spec import inline_request_body
 from litellm.proxy.common_utils.openai_error_payload import status_typed_proxy_exception
 from litellm.proxy.common_utils.sse_keepalive import (
     SSE_COMMENT_PING,
@@ -58,6 +59,42 @@ if TYPE_CHECKING:
     from litellm.types.agents import AgentResponse
 
 router: Final = APIRouter()
+
+
+class _A2AJsonRpcRequest(BaseModel):
+    model_config = ConfigDict(extra="allow", frozen=True)
+
+    jsonrpc: Literal["2.0"]
+    id: str | int | None = None
+    method: str
+    params: Mapping[str, object]
+
+
+class _A2AJsonRpcResponse(BaseModel):
+    model_config = ConfigDict(extra="allow", frozen=True)
+
+    jsonrpc: Literal["2.0"]
+    id: str | int | None
+    result: object | None = None
+    error: Mapping[str, object] | None = None
+
+
+_A2A_MESSAGE_STREAM_REQUEST_BODY: Final = inline_request_body(
+    _A2AJsonRpcRequest,
+    {
+        "jsonrpc": "2.0",
+        "id": "stream-1",
+        "method": "message/stream",
+        "params": {
+            "message": {
+                "messageId": "message-1",
+                "role": "user",
+                "parts": [{"kind": "text", "text": "Hello"}],
+                "kind": "message",
+            }
+        },
+    },
+)
 
 # Mirrors the native seam's own headers: a reverse proxy that batches the whole
 # stream would swallow the keepalives this route sends to defeat idle timeouts.
@@ -713,16 +750,12 @@ async def get_agent_card(
             )
 
         proxy_url: Final = get_custom_url(str(request.base_url), route=f"a2a/{agent_id}")
-        agent_card = deepcopy(agent.agent_card_params)
-        agent_card["url"] = proxy_url
-        interfaces: Final = agent_card.get("supportedInterfaces")
-        if isinstance(interfaces, list) and interfaces:
-            interfaces[0]["url"] = proxy_url
+        agent_card: Final = point_agent_card_at_proxy(agent.agent_card_params, proxy_url)
         served_version: Final = _served_version(agent, request)
-        agent_card = normalize_agent_card(agent_card, served_version)
+        normalized_agent_card: Final = normalize_agent_card(agent_card, served_version)
 
         verbose_proxy_logger.debug("Returning agent card for '%s' with proxy URL: %s", agent_id, proxy_url)
-        return JSONResponse(content=agent_card)
+        return JSONResponse(content=normalized_agent_card)
 
     except HTTPException:
         raise
@@ -745,6 +778,20 @@ async def get_agent_card(
     "/v1/a2a/{agent_id}/message/send",
     tags=["[beta] A2A Agents"],
     dependencies=[Depends(user_api_key_auth)],
+)
+@router.post(
+    "/a2a/{agent_id}/message/stream",
+    tags=["[beta] A2A Agents"],
+    dependencies=[Depends(user_api_key_auth)],
+    openapi_extra={"requestBody": _A2A_MESSAGE_STREAM_REQUEST_BODY},
+    responses={200: {"model": _A2AJsonRpcResponse}},
+)
+@router.post(
+    "/v1/a2a/{agent_id}/message/stream",
+    tags=["[beta] A2A Agents"],
+    dependencies=[Depends(user_api_key_auth)],
+    openapi_extra={"requestBody": _A2A_MESSAGE_STREAM_REQUEST_BODY},
+    responses={200: {"model": _A2AJsonRpcResponse}},
 )
 async def invoke_agent_a2a(
     agent_id: str,
