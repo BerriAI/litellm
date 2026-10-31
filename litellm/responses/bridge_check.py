@@ -18,6 +18,7 @@ from litellm.types.utils import LlmProviders
 from litellm.utils import ProviderConfigManager, get_model_info_helper, model_cost_registration_row
 
 _OPENAI_DEFAULT_API_BASE: Final = "https://api.openai.com/v1"
+_REASONING_OBJECT_KEYS: Final = ("reasoning_effort", "reasoning")
 RESPONSES_ONLY_PROVIDERS: Final = frozenset({"chatgpt", "github_copilot"})
 ROUTABLE_MODES: Final = frozenset({"chat", "responses"})
 
@@ -110,6 +111,85 @@ def bridge_reasoning_effort(
         return reasoning_effort
     nested_effort: Final = nested_body.get("reasoning_effort")
     return nested_effort if isinstance(nested_effort, str) else str_keyed_mapping(nested_effort)
+
+
+def targets_openai_api(api_base: str | None) -> bool:
+    resolved_api_base: Final = _resolve_openai_api_base(api_base).strip()
+    return resolved_api_base == "" or _is_openai_backed_api_base(resolved_api_base)
+
+
+def _reaches_openai(custom_llm_provider: str, api_base: str | None) -> bool:
+    return custom_llm_provider == "openai" and targets_openai_api(api_base)
+
+
+def lift_extra_body_reasoning(
+    reasoning_effort: str | Mapping[str, object] | None,
+    params: Mapping[str, object],
+    *,
+    custom_llm_provider: str,
+    api_base: str | None,
+    drop_params: bool,
+) -> tuple[str | Mapping[str, object] | None, Mapping[str, object]]:
+    extra_body: Final = str_keyed_mapping(params.get("extra_body"))
+    if extra_body is None or not drop_params or not _reaches_openai(custom_llm_provider, api_base):
+        return reasoning_effort, params
+    lifted: Final = tuple(
+        (key, nested)
+        for key in _REASONING_OBJECT_KEYS
+        if (nested := str_keyed_mapping(extra_body.get(key))) is not None
+    )
+    if not lifted:
+        return reasoning_effort, params
+    lifted_keys: Final = frozenset(key for key, _ in lifted)
+    return (
+        lifted[0][1] if reasoning_effort is None else reasoning_effort,
+        {**params, "extra_body": {key: value for key, value in extra_body.items() if key not in lifted_keys}},
+    )
+
+
+def settle_chat_reasoning_effort(
+    optional_params: dict[str, object],  # mutable-ok: the provider handlers write to this dict and logging shares it
+    *,
+    requested: object,
+    model: str,
+    base_model: str | None,
+    custom_llm_provider: str,
+    api_base: str | None,
+    deployment_model_info: Mapping[str, object] | None,
+    drop_params: bool,
+    additional_drop_params: object,
+) -> dict[str, object]:  # mutable-ok: the provider handlers write to this dict and logging shares it
+    reasoning_object: Final = str_keyed_mapping(requested)
+    if (
+        reasoning_object is None
+        or "reasoning_effort" not in optional_params
+        or not _reaches_openai(custom_llm_provider, api_base)
+    ):
+        return optional_params
+
+    from litellm.responses.utils import (
+        RefusedReasoningFields,
+        chat_reasoning_effort,
+        raise_refused_reasoning_fields,
+    )
+
+    effort: Final = chat_reasoning_effort(
+        requested=reasoning_object,
+        model=model,
+        base_model=base_model,
+        custom_llm_provider=custom_llm_provider,
+        api_base=api_base,
+        deployment_model_info=deployment_model_info,
+        drop_params=drop_params,
+        additional_drop_params=additional_drop_params,
+    )
+    if isinstance(effort, RefusedReasoningFields):
+        raise_refused_reasoning_fields(effort, model, custom_llm_provider)
+    if effort is not None:
+        return {**optional_params, "reasoning_effort": effort}
+    if not drop_params:
+        return optional_params
+    return {key: value for key, value in optional_params.items() if key != "reasoning_effort"}
 
 
 def backend_serves_chat_completions(shared_model_info: Mapping[str, object]) -> bool:
@@ -243,7 +323,6 @@ def responses_api_bridge_check(
     # exactly as the chat handler does, so a custom base set via litellm.api_base or
     # OPENAI_BASE_URL/OPENAI_API_BASE isn't misread as the default and bridged to a /responses route it
     # lacks. A whitespace-only base collapses to the default too.
-    resolved_api_base: Final = _resolve_openai_api_base(api_base).strip()
     on_foundry_openai_endpoint: Final = custom_llm_provider == "azure_ai" and azure_ai_supports_native_responses(
         model, api_base
     )
@@ -258,10 +337,7 @@ def responses_api_bridge_check(
     )
     gpt_series_name: Final = mantle_series_name or model
     on_constraint_enforcing_endpoint: Final = (
-        custom_llm_provider == "azure"
-        or on_mantle_responses_endpoint
-        or resolved_api_base == ""
-        or _is_openai_backed_api_base(resolved_api_base)
+        custom_llm_provider == "azure" or on_mantle_responses_endpoint or targets_openai_api(api_base)
     )
     chat_rejects_function_tools: Final = (
         has_function_tool

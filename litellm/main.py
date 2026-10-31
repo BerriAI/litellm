@@ -147,7 +147,7 @@ from litellm.responses.mcp.tool_precheck import may_name_litellm_mcp_gateway
 from litellm.router_utils.reasoning_effort_capability import (
     model_group_from_metadata,
     reasoning_effort_needs_allowing,
-    resolve_chat_reasoning,
+    resolve_chat_reasoning_params,
 )
 from litellm.secret_managers.main import get_secret_bool, get_secret_str
 from litellm.text_completions.streaming_iterator import TextCompletionStreamWrapper
@@ -215,7 +215,6 @@ from litellm.utils import (
 from ._logging import verbose_logger
 from .caching.caching import disable_cache, enable_cache, update_cache
 from .litellm_core_utils.core_helpers import (
-    as_str_mapping,
     drops_unsupported_params,
     normalize_drop_params,
     safe_deep_copy,
@@ -1275,6 +1274,8 @@ from litellm.responses.bridge_check import (  # noqa: E402  # re-export at the o
 from litellm.responses.bridge_check import (
     bridge_reasoning_effort,
     keep_registered_mode,
+    lift_extra_body_reasoning,
+    settle_chat_reasoning_effort,
     str_keyed_mapping,
 )
 from litellm.responses.bridge_check import (  # noqa: E402  # re-export at the old definition site
@@ -5891,27 +5892,26 @@ def completion(
         reasoning_model_group: Final = model_group_from_metadata(
             routing_kwargs.get("metadata"), routing_kwargs.get("litellm_metadata")
         )
-        requested_output_config: Final = as_str_mapping(non_default_params.get("output_config"))
-        chat_reasoning: Final = resolve_chat_reasoning(
+        requested_reasoning_effort, chat_params = lift_extra_body_reasoning(
             reasoning_effort,
+            non_default_params,
+            custom_llm_provider=custom_llm_provider,
+            api_base=api_base,
+            drop_params=drop_unsupported_reasoning,
+        )
+        chat_reasoning_params: Final = resolve_chat_reasoning_params(
+            requested_reasoning_effort,
             thinking,
-            requested_output_config,
+            chat_params,
             model=model,
             custom_llm_provider=custom_llm_provider,
             deployment_model_info=routing_kwargs.get("model_info"),
             model_group=reasoning_model_group,
             drop_params=drop_unsupported_reasoning,
         )
+        chat_reasoning: Final = chat_reasoning_params.reasoning
         resolved_reasoning_effort: Final = chat_reasoning.effort.value
-        resolved_output_config: Final = chat_reasoning.output_config
-        provider_params: Final = (
-            non_default_params
-            if resolved_output_config is requested_output_config
-            else {
-                **{key: value for key, value in non_default_params.items() if key != "output_config"},
-                **({"output_config": resolved_output_config} if resolved_output_config is not None else {}),
-            }
-        )
+        provider_params: Final = chat_reasoning_params.provider_params
 
         if not is_claude_tool_target(custom_llm_provider=custom_llm_provider, model=model):
             tools = _drop_anthropic_only_tool_keys(tools=tools)
@@ -6114,7 +6114,7 @@ def completion(
         processed_non_default_params: Final = pre_process_non_default_params(
             model=model,
             passed_params=optional_param_args,
-            special_params=provider_params,
+            special_params=dict(provider_params),
             custom_llm_provider=custom_llm_provider,
             additional_drop_params=kwargs.get("additional_drop_params"),
             remove_sensitive_keys=True,
@@ -6371,6 +6371,18 @@ def completion(
         ):
             optional_params, _ = strip_reasoning_summary_aliases_from_optional_params(optional_params)
 
+        chat_optional_params: Final = settle_chat_reasoning_effort(
+            optional_params,
+            requested=resolved_reasoning_effort,
+            model=model,
+            base_model=deployment_base_model,
+            custom_llm_provider=custom_llm_provider,
+            api_base=api_base,
+            deployment_model_info=typed_deployment_model_info,
+            drop_params=drop_unsupported_reasoning,
+            additional_drop_params=routing_kwargs.get("additional_drop_params"),
+        )
+
         _dispatch_ctx: Final = CompletionDispatchContext(
             _azure_detection_model=_azure_detection_model,
             acompletion=acompletion,
@@ -6393,7 +6405,7 @@ def completion(
             metadata=metadata,
             model=model,
             model_response=model_response,
-            optional_params=optional_params,
+            optional_params=chat_optional_params,
             optional_params_for_model_info=optional_params_for_model_info,
             organization=organization,
             provider_config=provider_config,

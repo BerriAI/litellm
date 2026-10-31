@@ -11456,7 +11456,7 @@ def reasoning_effort_with_summary_alias(
 
 def strip_reasoning_summary_aliases_from_optional_params(
     optional_params: dict,
-) -> tuple[dict, object | None]:
+) -> tuple[dict[str, object], object | None]:
     """Copy optional_params; remove reasoningSummary aliases from top-level and extra_body."""
     op: Final = dict(optional_params)
     rs_val = op.pop("reasoningSummary", None)

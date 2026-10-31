@@ -375,6 +375,46 @@ def resolve_chat_reasoning(
     )
 
 
+@dataclass(frozen=True, slots=True)
+class ChatReasoningParams:
+    reasoning: ChatReasoning
+    provider_params: Mapping[str, object]
+
+
+def resolve_chat_reasoning_params(
+    reasoning_effort: RequestedReasoningEffort,
+    thinking: AnthropicThinkingParam | None,
+    non_default_params: Mapping[str, object],
+    *,
+    model: str,
+    custom_llm_provider: str,
+    deployment_model_info: object,
+    model_group: str | None,
+    drop_params: bool,
+) -> ChatReasoningParams:
+    requested_output_config: Final = as_str_mapping(non_default_params.get("output_config"))
+    reasoning: Final = resolve_chat_reasoning(
+        reasoning_effort,
+        thinking,
+        requested_output_config,
+        model=model,
+        custom_llm_provider=custom_llm_provider,
+        deployment_model_info=deployment_model_info,
+        model_group=model_group,
+        drop_params=drop_params,
+    )
+    resolved_output_config: Final = reasoning.output_config
+    if resolved_output_config is requested_output_config:
+        return ChatReasoningParams(reasoning=reasoning, provider_params=non_default_params)
+    return ChatReasoningParams(
+        reasoning=reasoning,
+        provider_params={
+            **{key: value for key, value in non_default_params.items() if key != "output_config"},
+            **({"output_config": resolved_output_config} if resolved_output_config is not None else {}),
+        },
+    )
+
+
 def _provider_model(model: str, custom_llm_provider: str | None) -> str:
     if custom_llm_provider is None or model.startswith(f"{custom_llm_provider}/"):
         return model

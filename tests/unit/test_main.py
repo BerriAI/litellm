@@ -2439,6 +2439,356 @@ def test_openai_responses_bridge_gives_a_reasoning_effort_dict_the_auto_summary_
     }
 
 
+_OPENAI_CHAT_ANSWER: Final = {
+    "id": "chatcmpl-test",
+    "object": "chat.completion",
+    "created": 1,
+    "model": "chat-test",
+    "choices": [{"index": 0, "message": {"role": "assistant", "content": "OK"}, "finish_reason": "stop"}],
+}
+_REFUSED_MODE_REASONING: Final = {"effort": "low", "mode": "pro"}
+_MODE_REFUSING_CHAT_MODELS: Final = ("gpt-6.1-standard-only", "o9")
+
+
+@pytest.fixture
+def openai_chat_route(
+    restore_model_registry, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> respx.Route:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+    monkeypatch.delenv("OPENAI_API_BASE", raising=False)
+    monkeypatch.delenv("LITELLM_REASONING_AUTO_SUMMARY", raising=False)
+    litellm.register_model(
+        {
+            model: {
+                "litellm_provider": "openai",
+                "mode": "chat",
+                "supports_reasoning": True,
+                "supports_minimal_reasoning_effort": False,
+                "reasoning_modes": ["standard"],
+                "reasoning_contexts": ["auto", "current_turn"],
+                "input_cost_per_token": 0.0,
+                "output_cost_per_token": 0.0,
+            }
+            for model in _MODE_REFUSING_CHAT_MODELS
+        },
+        persist_across_reloads=False,
+    )
+    litellm.open_ai_chat_completion_models.update(_MODE_REFUSING_CHAT_MODELS)
+    return respx_mock.post("https://api.openai.com/v1/chat/completions").respond(json=_OPENAI_CHAT_ANSWER)
+
+
+@pytest.mark.parametrize("model", _MODE_REFUSING_CHAT_MODELS)
+@pytest.mark.parametrize(
+    "reasoning_effort, refused_field",
+    [
+        (_REFUSED_MODE_REASONING, "mode"),
+        ({"mode": "pro"}, "mode"),
+        ({"effort": "low", "context": "bogus"}, "context"),
+    ],
+    ids=["mode", "mode-with-no-effort", "context"],
+)
+def test_openai_chat_rejects_a_reasoning_field_the_model_refuses_without_drop_params(
+    model: str, reasoning_effort: dict[str, str], refused_field: str, openai_chat_route: respx.Route
+):
+    with pytest.raises(litellm.UnsupportedParamsError, match=rf"reasoning_effort\.{refused_field}") as raised:
+        litellm.completion(
+            model=f"openai/{model}",
+            messages=[{"role": "user", "content": "hello"}],
+            reasoning_effort=reasoning_effort,
+            api_key="fake-key",
+        )
+
+    assert raised.value.status_code == 400
+    assert openai_chat_route.called is False
+
+
+@pytest.mark.parametrize("model", _MODE_REFUSING_CHAT_MODELS)
+@pytest.mark.parametrize(
+    "reasoning",
+    [
+        {"reasoning_effort": _REFUSED_MODE_REASONING},
+        {"extra_body": {"reasoning": _REFUSED_MODE_REASONING}},
+        {"extra_body": {"reasoning_effort": _REFUSED_MODE_REASONING}},
+    ],
+    ids=["top-level", "extra-body-reasoning", "extra-body-reasoning-effort"],
+)
+def test_openai_chat_drops_a_refused_reasoning_mode_and_keeps_the_effort_under_drop_params(
+    model: str, reasoning: dict[str, dict[str, str]], openai_chat_route: respx.Route
+):
+    litellm.completion(
+        model=f"openai/{model}",
+        messages=[{"role": "user", "content": "hello"}],
+        drop_params=True,
+        api_key="fake-key",
+        **reasoning,
+    )
+
+    request_body: Final = json.loads(openai_chat_route.calls[0].request.content)
+    assert request_body["reasoning_effort"] == "low"
+    assert "reasoning" not in request_body
+
+
+@pytest.mark.parametrize("model", _MODE_REFUSING_CHAT_MODELS)
+@pytest.mark.parametrize("reasoning", ({"mode": "pro"}, {"context": "current_turn"}), ids=["refused", "accepted"])
+def test_openai_chat_sends_no_reasoning_effort_for_an_object_with_no_effort_under_drop_params(
+    model: str, reasoning: dict[str, str], openai_chat_route: respx.Route
+):
+    litellm.completion(
+        model=f"openai/{model}",
+        messages=[{"role": "user", "content": "hello"}],
+        reasoning_effort=reasoning,
+        drop_params=True,
+        api_key="fake-key",
+    )
+
+    assert "reasoning_effort" not in json.loads(openai_chat_route.calls[0].request.content)
+
+
+def test_openai_chat_does_not_restore_an_effort_the_model_refuses_under_drop_params(openai_chat_route: respx.Route):
+    litellm.completion(
+        model="openai/gpt-6.1-standard-only",
+        messages=[{"role": "user", "content": "hello"}],
+        reasoning_effort={"effort": "minimal", "mode": "standard"},
+        drop_params=True,
+        api_key="fake-key",
+    )
+
+    assert "reasoning_effort" not in json.loads(openai_chat_route.calls[0].request.content)
+
+
+@pytest.mark.parametrize("model", _MODE_REFUSING_CHAT_MODELS)
+def test_openai_chat_accepts_reasoning_fields_the_model_declares_without_drop_params(
+    model: str, openai_chat_route: respx.Route
+):
+    litellm.completion(
+        model=f"openai/{model}",
+        messages=[{"role": "user", "content": "hello"}],
+        reasoning_effort={"effort": "low", "mode": "standard", "context": "current_turn"},
+        api_key="fake-key",
+    )
+
+    assert json.loads(openai_chat_route.calls[0].request.content)["reasoning_effort"] == "low"
+
+
+def test_openai_chat_forwards_an_object_with_no_effort_as_sent_without_drop_params(openai_chat_route: respx.Route):
+    reasoning: Final = {"context": "current_turn"}
+
+    litellm.completion(
+        model="openai/o9",
+        messages=[{"role": "user", "content": "hello"}],
+        reasoning_effort=reasoning,
+        api_key="fake-key",
+    )
+
+    assert json.loads(openai_chat_route.calls[0].request.content)["reasoning_effort"] == reasoning
+
+
+def test_openai_chat_honors_a_reasoning_mode_the_deployment_declares(openai_chat_route: respx.Route):
+    litellm.completion(
+        model="openai/gpt-6.1-standard-only",
+        messages=[{"role": "user", "content": "hello"}],
+        reasoning_effort=_REFUSED_MODE_REASONING,
+        model_info={"reasoning_modes": ["standard", "pro"]},
+        api_key="fake-key",
+    )
+
+    assert json.loads(openai_chat_route.calls[0].request.content)["reasoning_effort"] == "low"
+
+
+@pytest.mark.parametrize("drop_params", [False, True])
+@pytest.mark.parametrize(
+    "additional_drop_params, expected_effort",
+    [(["reasoning_effort.mode"], "low"), (["reasoning_effort"], None)],
+    ids=["mode", "whole-object"],
+)
+def test_openai_chat_applies_additional_drop_params_to_a_reasoning_object(
+    drop_params: bool, additional_drop_params: list[str], expected_effort: str | None, openai_chat_route: respx.Route
+):
+    litellm.completion(
+        model="openai/gpt-6.1-standard-only",
+        messages=[{"role": "user", "content": "hello"}],
+        reasoning_effort=_REFUSED_MODE_REASONING,
+        additional_drop_params=additional_drop_params,
+        drop_params=drop_params,
+        api_key="fake-key",
+    )
+
+    assert json.loads(openai_chat_route.calls[0].request.content).get("reasoning_effort") == expected_effort
+
+
+@pytest.mark.parametrize("key", ["reasoning", "reasoning_effort"])
+def test_openai_chat_keeps_extra_body_reasoning_as_sent_without_drop_params(key: str, openai_chat_route: respx.Route):
+    litellm.completion(
+        model="openai/gpt-6.1-standard-only",
+        messages=[{"role": "user", "content": "hello"}],
+        extra_body={key: _REFUSED_MODE_REASONING},
+        api_key="fake-key",
+    )
+
+    assert json.loads(openai_chat_route.calls[0].request.content)[key] == _REFUSED_MODE_REASONING
+
+
+@pytest.mark.parametrize("key", ["reasoning", "reasoning_effort"])
+def test_openai_chat_prefers_the_top_level_reasoning_effort_and_keeps_other_extra_body_fields(
+    key: str, openai_chat_route: respx.Route
+):
+    litellm.completion(
+        model="openai/gpt-6.1-standard-only",
+        messages=[{"role": "user", "content": "hello"}],
+        reasoning_effort="high",
+        extra_body={key: _REFUSED_MODE_REASONING, "vendor_field": 1},
+        drop_params=True,
+        api_key="fake-key",
+    )
+
+    request_body: Final = json.loads(openai_chat_route.calls[0].request.content)
+    assert "reasoning" not in request_body
+    assert request_body["vendor_field"] == 1
+    assert request_body["reasoning_effort"] == "high"
+
+
+@pytest.mark.parametrize("base_source", ["argument", "env"])
+@pytest.mark.parametrize(
+    "drop_params, reasoning",
+    [
+        (True, {"extra_body": {"reasoning": _REFUSED_MODE_REASONING}}),
+        (True, {"extra_body": {"reasoning_effort": _REFUSED_MODE_REASONING}}),
+        (False, {"reasoning_effort": _REFUSED_MODE_REASONING}),
+    ],
+    ids=["extra-body-reasoning", "extra-body-reasoning-effort", "top-level-without-drop-params"],
+)
+def test_openai_chat_does_not_judge_reasoning_fields_for_a_compatible_backend(
+    base_source: str,
+    drop_params: bool,
+    reasoning: dict[str, dict[str, str]],
+    openai_chat_route: respx.Route,
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    compatible_base: Final = "https://compatible.example/v1"
+    compatible_route: Final = respx_mock.post(f"{compatible_base}/chat/completions").respond(json=_OPENAI_CHAT_ANSWER)
+    if base_source == "env":
+        monkeypatch.setenv("OPENAI_BASE_URL", compatible_base)
+
+    litellm.completion(
+        model="openai/gpt-6.1-standard-only",
+        messages=[{"role": "user", "content": "hello"}],
+        drop_params=drop_params,
+        api_key="fake-key",
+        **({"api_base": compatible_base} if base_source == "argument" else {}),
+        **reasoning,
+    )
+
+    request_body: Final = json.loads(compatible_route.calls[0].request.content)
+    extra_body: Final = reasoning.get("extra_body", {})
+    assert {key: request_body[key] for key in extra_body} == extra_body
+
+
+@pytest.mark.parametrize("key", ["reasoning", "reasoning_effort"])
+@pytest.mark.parametrize(
+    "model, route_kwargs",
+    [
+        ("openai/responses/gpt-6.1-standard-only", {}),
+        (
+            "openai/gpt-6.1-standard-only",
+            {"tools": [{"type": "function", "function": {"name": "get_time", "parameters": {"type": "object"}}}]},
+        ),
+    ],
+    ids=["responses-prefix", "function-tools"],
+)
+def test_openai_responses_bridge_drops_a_refused_mode_from_extra_body_reasoning_under_drop_params(
+    key: str,
+    model: str,
+    route_kwargs: dict[str, list[dict[str, object]]],
+    openai_chat_route: respx.Route,
+    openai_responses_route: respx.Route,
+):
+    litellm.completion(
+        model=model,
+        messages=[{"role": "user", "content": "hello"}],
+        extra_body={key: _REFUSED_MODE_REASONING},
+        drop_params=True,
+        api_key="fake-key",
+        **route_kwargs,
+    )
+
+    assert openai_chat_route.called is False
+    assert json.loads(openai_responses_route.calls[0].request.content)["reasoning"] == {"effort": "low"}
+
+
+def test_openai_chat_reads_the_reasoning_effort_key_first_when_extra_body_carries_both_objects(
+    openai_chat_route: respx.Route,
+):
+    litellm.completion(
+        model="openai/gpt-6.1-standard-only",
+        messages=[{"role": "user", "content": "hello"}],
+        extra_body={"reasoning": {"effort": "high"}, "reasoning_effort": _REFUSED_MODE_REASONING},
+        drop_params=True,
+        api_key="fake-key",
+    )
+
+    request_body: Final = json.loads(openai_chat_route.calls[0].request.content)
+    assert "reasoning" not in request_body
+    assert request_body["reasoning_effort"] == "low"
+
+
+def test_openai_chat_reads_the_reasoning_catalog_row_of_the_base_model(openai_chat_route: respx.Route):
+    with pytest.raises(litellm.UnsupportedParamsError, match=r"reasoning_effort\.mode"):
+        litellm.completion(
+            model="openai/gpt-6.1-deployment-alias",
+            messages=[{"role": "user", "content": "hello"}],
+            reasoning_effort=_REFUSED_MODE_REASONING,
+            base_model="gpt-6.1-standard-only",
+            api_key="fake-key",
+        )
+
+    assert openai_chat_route.called is False
+
+
+def test_openai_chat_keeps_a_string_extra_body_reasoning_effort_and_other_fields_under_drop_params(
+    openai_chat_route: respx.Route,
+):
+    litellm.completion(
+        model="openai/gpt-6.1-standard-only",
+        messages=[{"role": "user", "content": "hello"}],
+        extra_body={"reasoning_effort": "low", "vendor_field": 1},
+        drop_params=True,
+        api_key="fake-key",
+    )
+
+    request_body: Final = json.loads(openai_chat_route.calls[0].request.content)
+    assert request_body["reasoning_effort"] == "low"
+    assert request_body["vendor_field"] == 1
+
+
+def test_openai_chat_leaves_extra_body_reasoning_as_sent_for_another_provider_under_drop_params(
+    openai_chat_route: respx.Route, respx_mock: respx.MockRouter
+):
+    other_provider_route: Final = respx_mock.post("https://api.anthropic.com/v1/messages").respond(
+        json={
+            "id": "msg_test",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-test",
+            "content": [{"type": "text", "text": "OK"}],
+            "stop_reason": "end_turn",
+            "usage": {"input_tokens": 1, "output_tokens": 1},
+        }
+    )
+
+    litellm.completion(
+        model="anthropic/claude-test",
+        messages=[{"role": "user", "content": "hello"}],
+        extra_body={"reasoning": _REFUSED_MODE_REASONING},
+        max_tokens=16,
+        drop_params=True,
+        api_key="fake-key",
+    )
+
+    assert b'"mode": "pro"' in other_provider_route.calls[0].request.content
+
+
 _BRIDGED_RESPONSE_ANSWER: Final = json.dumps(
     {
         "id": "resp_slow",
