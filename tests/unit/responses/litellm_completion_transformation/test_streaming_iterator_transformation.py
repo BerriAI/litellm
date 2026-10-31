@@ -100,6 +100,197 @@ def _response_ids(events) -> list[str]:
     ]
 
 
+def _custom_tool_stream_chunk(delta: Delta, finish_reason: str | None = None) -> ModelResponseStream:
+    return ModelResponseStream(
+        id=CHAT_COMPLETION_ID,
+        created=1748575031,
+        model="test-model",
+        object="chat.completion.chunk",
+        choices=[StreamingChoices(index=0, delta=delta, finish_reason=finish_reason)],
+    )
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.parametrize("input_mode", ["split", "late_name", "terminal_only"])
+@pytest.mark.parametrize("raw_input", ["", "hello", 'line one\n"世界" \\path 😀'])
+@pytest.mark.asyncio
+async def test_custom_tool_input_events_round_trip_with_interleaved_function(
+    sync_mode: bool, input_mode: str, raw_input: str
+):
+    terminal_only: Final = input_mode == "terminal_only"
+    late_name: Final = input_mode == "late_name"
+    arguments: Final = json.dumps({"content": raw_input}, ensure_ascii=True)
+    first: Final = Delta(
+        content=None,
+        tool_calls=[
+            {
+                "index": 0,
+                "id": "call-custom",
+                "type": "function",
+                "function": {
+                    **({} if late_name else {"name": "write_note"}),
+                    "arguments": arguments if terminal_only else arguments[:3] if late_name else "",
+                },
+            },
+            {
+                "index": 1,
+                "id": "call-function",
+                "type": "function",
+                "function": {
+                    **({} if late_name else {"name": "lookup"}),
+                    "arguments": '{"query":' if late_name else '{"query":"ready"}',
+                },
+            },
+        ],
+    )
+    pieces: Final = (
+        ()
+        if terminal_only
+        else tuple(arguments[offset : offset + 3] for offset in range(3 if late_name else 0, len(arguments), 3))
+    )
+    chunks: Final = (
+        _custom_tool_stream_chunk(first, "tool_calls" if terminal_only else None),
+        *(
+            (
+                _custom_tool_stream_chunk(
+                    Delta(
+                        content=None,
+                        tool_calls=[
+                            {"index": 0, "function": {"name": "write_note", "arguments": ""}},
+                            {"index": 1, "function": {"name": "lookup", "arguments": '"ready"}'}},
+                        ],
+                    )
+                ),
+            )
+            if late_name
+            else ()
+        ),
+        *(
+            _custom_tool_stream_chunk(Delta(content=None, tool_calls=[{"index": 0, "function": {"arguments": piece}}]))
+            for piece in pieces
+        ),
+        *(() if terminal_only else (_custom_tool_stream_chunk(Delta(content=None), "tool_calls"),)),
+    )
+    iterator: Final = LiteLLMCompletionStreamingIterator(
+        model="test-model",
+        litellm_custom_stream_wrapper=_FakeStreamWrapper(chunks),
+        request_input="Write a note and look up its status",
+        responses_api_request={
+            "tools": [
+                {"type": "custom", "name": "write_note", "format": {"type": "text"}},
+                {"type": "function", "name": "lookup", "parameters": {"type": "object"}},
+            ]
+        },
+        custom_llm_provider="openai",
+    )
+    events: Final = (
+        tuple(event.model_dump(exclude_none=True) for event in iterator)
+        if sync_mode
+        else tuple([event.model_dump(exclude_none=True) async for event in iterator])
+    )
+    completed: Final = next(event["response"] for event in events if event["type"] == "response.completed")
+    custom_item: Final = next(item for item in completed["output"] if item["type"] == "custom_tool_call")
+    function_item: Final = next(item for item in completed["output"] if item["type"] == "function_call")
+    custom_deltas: Final = tuple(event for event in events if event["type"] == "response.custom_tool_call_input.delta")
+    custom_done: Final = tuple(event for event in events if event["type"] == "response.custom_tool_call_input.done")
+    custom_add: Final = next(
+        event
+        for event in events
+        if event["type"] == "response.output_item.added" and event["item"].get("call_id") == "call-custom"
+    )
+    function_add: Final = next(
+        event
+        for event in events
+        if event["type"] == "response.output_item.added" and event["item"].get("call_id") == "call-function"
+    )
+    assert custom_add["item"]["type"] == "custom_tool_call"
+    assert custom_add["item"]["id"] == custom_item["id"]
+    assert function_add["item"]["type"] == "function_call"
+    assert function_add["item"]["name"] == function_item["name"] == "lookup"
+    assert custom_item["input"] == raw_input
+    assert "".join(event["delta"] for event in custom_deltas) == raw_input
+    assert len(custom_done) == 1
+    assert custom_done[0]["input"] == custom_item["input"]
+    assert custom_item["call_id"] == "call-custom"
+    assert all(event["item_id"] == custom_item["id"] for event in (*custom_deltas, *custom_done))
+    assert all(isinstance(event["sequence_number"], int) for event in (*custom_deltas, *custom_done))
+    assert all(event["output_index"] == custom_done[0]["output_index"] for event in custom_deltas)
+    function_events: Final = tuple(
+        event for event in events if event["type"].startswith("response.function_call_arguments.")
+    )
+    assert all(event["item_id"] == function_item["id"] for event in function_events)
+    function_deltas: Final = tuple(event for event in function_events if event["type"].endswith(".delta"))
+    assert json.loads("".join(event["delta"] for event in function_deltas)) == {"query": "ready"}
+    function_done: Final = tuple(event for event in function_events if event["type"].endswith(".done"))
+    assert len(function_done) == 1
+    assert function_done[0]["arguments"] == function_item["arguments"]
+    item_done: Final = next(
+        event
+        for event in events
+        if event["type"] == "response.output_item.done" and event["item"]["id"] == custom_item["id"]
+    )
+    assert item_done["item"] == custom_item
+    custom_sequence: Final = tuple(
+        event["sequence_number"] for event in (*custom_deltas, *custom_done, item_done)
+    )
+    assert all(left < right for left, right in zip(custom_sequence, custom_sequence[1:]))
+    assert item_done["sequence_number"] > custom_done[0]["sequence_number"]
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.parametrize("tool_type", ["custom", "function"])
+@pytest.mark.parametrize("late_name", [True, False])
+@pytest.mark.parametrize("citation_first", [True, False])
+@pytest.mark.asyncio
+async def test_emitted_tool_call_prevents_text_only_continuation(
+    sync_mode: bool, tool_type: str, late_name: bool, citation_first: bool
+) -> None:
+    iterator: Final = LiteLLMCompletionStreamingIterator(
+        model="test-model",
+        litellm_custom_stream_wrapper=_FakeStreamWrapper(
+            [
+                *([_annotation_only_chunk()] if citation_first else []),
+                _custom_tool_stream_chunk(
+                    Delta(
+                        content=None,
+                        tool_calls=[{
+                            "index": 0,
+                            "id": "call-note",
+                            "type": "function",
+                            "function": {**({} if late_name else {"name": "write_note"}), "arguments": ""},
+                        }],
+                    )
+                ),
+                _custom_tool_stream_chunk(
+                    Delta(
+                        content=None,
+                        tool_calls=[{
+                            "index": 0,
+                            "function": {
+                                **({"name": "write_note"} if late_name else {}),
+                                "arguments": '{"content":"note"}',
+                            },
+                        }],
+                    ),
+                    "tool_calls",
+                ),
+            ]
+        ),
+        request_input="Write a note",
+        responses_api_request={"tools": [{"type": tool_type, "name": "write_note"}]},
+        custom_llm_provider="openai",
+    )
+    events: Final = await _collect_events(iterator, sync_mode)
+    expected_type: Final = "custom_tool_call" if tool_type == "custom" else "function_call"
+    added_types: Final = tuple(
+        event.item.type
+        for event in events
+        if event.type == "response.output_item.added"
+    )
+    assert added_types == (("message", expected_type) if citation_first else (expected_type,))
+    assert iterator.started_tool_call
+
+
 def test_tool_call_delta_is_emitted_as_responses_events():
     iterator = LiteLLMCompletionStreamingIterator(
         model="test-model",
@@ -1525,21 +1716,36 @@ async def test_plain_text_stream_announces_exactly_one_message_item(sync_mode: b
 
 
 @pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.parametrize("execution", ["server", "client"])
+@pytest.mark.parametrize("late_name", [False, True])
 @pytest.mark.asyncio
-async def test_anthropic_tool_search_call_streams_as_tool_search_call_item(sync_mode: bool):
+async def test_anthropic_tool_search_call_streams_as_tool_search_call_item(
+    sync_mode: bool, execution: str, late_name: bool
+):
+    call_id: Final = "srvtoolu_01Search" if execution == "server" else "toolu_01Search"
+    name: Final = "tool_search_tool_regex" if execution == "server" else "tool_search"
     deltas: Final = (
         Delta(
             content=None,
             tool_calls=[
                 {
                     "index": 0,
-                    "id": "srvtoolu_01Search",
+                    "id": call_id,
                     "type": "function",
-                    "function": {"name": "tool_search_tool_regex", "arguments": ""},
+                    "function": {
+                        **({} if late_name else {"name": name}),
+                        "arguments": '{"pattern": ' if late_name else "",
+                    },
                 }
             ],
         ),
-        Delta(content=None, tool_calls=[{"index": 0, "function": {"arguments": '{"pattern": '}}]),
+        Delta(
+            content=None,
+            tool_calls=[{
+                "index": 0,
+                "function": {"name": name, "arguments": ""} if late_name else {"arguments": '{"pattern": '},
+            }],
+        ),
         Delta(content=None, tool_calls=[{"index": 0, "function": {"arguments": '"weather|forecast"}'}}]),
         Delta(
             content=None,
@@ -1573,7 +1779,7 @@ async def test_anthropic_tool_search_call_streams_as_tool_search_call_item(sync_
         request_input="What is the weather in Paris right now?",
         responses_api_request={
             "tools": [
-                {"type": "tool_search", "execution": "server"},
+                {"type": "tool_search", "execution": execution},
                 {"type": "function", "name": "get_weather", "parameters": {"type": "object"}, "defer_loading": True},
             ]
         },
@@ -1596,16 +1802,17 @@ async def test_anthropic_tool_search_call_streams_as_tool_search_call_item(sync_
     ]
 
     assert completed["type"] == "response.completed"
-    assert search_item["id"] == "tsc_srvtoolu_01Search"
-    assert search_item["call_id"] == "srvtoolu_01Search"
+    assert search_item["id"] == f"tsc_{call_id}"
+    assert search_item["call_id"] == call_id
     assert search_item["arguments"] == {"pattern": "weather|forecast"}
-    assert search_item["execution"] == "server"
+    assert search_item["execution"] == execution
     assert search_item["status"] == "completed"
     assert [event["type"] for event in search_events] == [
         "response.output_item.added",
         "response.output_item.done",
     ]
     assert search_events[0]["item"]["status"] == "in_progress"
+    assert search_events[0]["item"]["execution"] == execution
     assert search_events[0]["item"]["arguments"] == {}
     assert search_events[-1]["item"] == search_item
     assert function_item["name"] == "get_weather"

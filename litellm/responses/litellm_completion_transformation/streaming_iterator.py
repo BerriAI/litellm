@@ -16,6 +16,7 @@ from litellm.responses.litellm_completion_transformation.custom_tools import (
     extract_custom_tool_names,
     is_custom_tool_call,
     serialize_tool_call_arguments,
+    unwrap_custom_tool_arguments,
 )
 from litellm.responses.litellm_completion_transformation.reasoning_items import mint_reasoning_item_id
 from litellm.responses.litellm_completion_transformation.tool_search import (
@@ -37,6 +38,7 @@ from litellm.types.llms.openai import (
     ContentPartDonePartOutputText,
     FunctionCallArgumentsDeltaEvent,
     FunctionCallArgumentsDoneEvent,
+    GenericEvent,
     OutputItemAddedEvent,
     OutputItemDoneEvent,
     OutputTextAnnotationAddedEvent,
@@ -190,6 +192,8 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         self._accumulated_provider_specific_fields: dict[str, object] = {}
         request_tools: Final = self.responses_api_request.get("tools")
         self._custom_tool_names: set[str] = extract_custom_tool_names(request_tools)
+        self._custom_tool_call_ids: frozenset[str] = frozenset()
+        self._unnamed_tool_args_by_call_id: Mapping[str, str] = MappingProxyType({})
         self._namespace_tool_names = LiteLLMCompletionResponsesConfig.namespace_tool_name_map(request_tools)
         self._web_search_calls: dict[str, object] = {}  # mutable-ok: latest call by provider id
         self._queued_web_search_call_ids: set[str] = set()  # mutable-ok: emitted call ids
@@ -442,39 +446,98 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             else:
                 fn_name = str(getattr(fn, "name", "") or "")
                 fn_args_delta = serialize_tool_call_arguments(getattr(fn, "arguments", ""))
-            if call_id not in self._tool_output_index_by_call_id:
-                self._queue_held_annotations()
-            output_index = self._get_or_assign_tool_output_index(call_id)
+            self._queue_named_tool_call_delta(call_id, fn_name, fn_args_delta)
 
-            if (search_execution := self._tool_search_execution(call_id, fn_name)) is not None:
-                self._queue_tool_search_call_added(call_id, output_index, fn_args_delta, search_execution)
-                continue
-            self._started_tool_call = True
+    def _queue_named_tool_call_delta(self, call_id: str, fn_name: str, fn_args_delta: str) -> None:
+        if call_id not in self._tool_output_index_by_call_id:
+            self._queue_held_annotations()
+        output_index: Final = self._get_or_assign_tool_output_index(call_id)
+        if not fn_name and call_id not in self._tool_item_id_by_call_id:
+            self._unnamed_tool_args_by_call_id = MappingProxyType(
+                {
+                    **self._unnamed_tool_args_by_call_id,
+                    call_id: self._unnamed_tool_args_by_call_id.get(call_id, "") + fn_args_delta,
+                }
+            )
+            return
+        args_delta: Final = self._unnamed_tool_args_by_call_id.get(call_id, "") + fn_args_delta
+        if call_id in self._unnamed_tool_args_by_call_id:
+            self._unnamed_tool_args_by_call_id = MappingProxyType(
+                {key: value for key, value in self._unnamed_tool_args_by_call_id.items() if key != call_id}
+            )
+        if (search_execution := self._tool_search_execution(call_id, fn_name)) is not None:
+            self._queue_tool_search_call_added(call_id, output_index, args_delta, search_execution)
+            return
+        if is_custom_tool_call(fn_name, self._custom_tool_names):
+            self._custom_tool_call_ids = self._custom_tool_call_ids | {call_id}
+        self._started_tool_call = True
 
-            if call_id not in self._tool_args_by_call_id:
-                self._tool_args_by_call_id[call_id] = ""
-                item_kwargs = self._tool_call_item_kwargs(call_id, fn_name, "", "in_progress")
-                self._tool_item_id_by_call_id[call_id] = item_kwargs["id"]
-                self._queue_output_item_added(output_index, BaseLiteLLMOpenAIResponseObject(**item_kwargs))
+        if call_id not in self._tool_args_by_call_id:
+            self._tool_args_by_call_id[call_id] = ""
+            item_kwargs: Final = self._tool_call_item_kwargs(call_id, fn_name, "", "in_progress")
+            self._tool_item_id_by_call_id[call_id] = item_kwargs["id"]
+            self._queue_output_item_added(output_index, BaseLiteLLMOpenAIResponseObject(**item_kwargs))
 
-            if fn_args_delta:
-                self._tool_args_by_call_id[call_id] += fn_args_delta
+        self._tool_args_by_call_id[call_id] += args_delta
+        if call_id in self._custom_tool_call_ids:
+            return
+        for offset in range(0, len(args_delta), 10):
+            self._queue_function_tool_argument_delta(call_id, output_index, args_delta[offset : offset + 10])
 
-                # Split large argument deltas into smaller chunks to match OpenAI's streaming behavior
-                # This is especially important for providers like Bedrock that send complete arguments at once
-                chunk_size = 10  # Match typical OpenAI delta size
-                for i in range(0, len(fn_args_delta), chunk_size):
-                    delta_chunk = fn_args_delta[i : i + chunk_size]
-                    self._sequence_number += 1
-                    delta_event: BaseLiteLLMOpenAIResponseObject = FunctionCallArgumentsDeltaEvent(
-                        type=ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DELTA,
-                        item_id=self._tool_item_id_by_call_id.get(call_id, call_id),
-                        output_index=output_index,
-                        delta=delta_chunk,
-                    )
-                    # Add sequence_number as extra field (BaseLiteLLMOpenAIResponseObject allows extra fields)
-                    delta_event.__dict__["sequence_number"] = self._sequence_number
-                    self._pending_tool_events.append(delta_event)
+    def _queue_function_tool_argument_delta(self, call_id: str, output_index: int, delta: str) -> None:
+        self._sequence_number += 1
+        delta_event: Final = FunctionCallArgumentsDeltaEvent(
+            type=ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DELTA,
+            item_id=self._tool_item_id_by_call_id.get(call_id, call_id),
+            output_index=output_index,
+            delta=delta,
+        )
+        delta_event.__dict__["sequence_number"] = self._sequence_number
+        self._pending_tool_events.append(delta_event)
+
+    def _queue_custom_tool_input_done(self, call_id: str, output_index: int, arguments: str) -> None:
+        input_text: Final = unwrap_custom_tool_arguments(arguments)
+        item_id: Final = self._tool_item_id_by_call_id.get(call_id, call_id)
+        if input_text:
+            self._sequence_number += 1
+            self._pending_tool_events.append(
+                GenericEvent.model_validate(
+                    {
+                        "type": ResponsesAPIStreamEvents.CUSTOM_TOOL_CALL_INPUT_DELTA.value,
+                        "sequence_number": self._sequence_number,
+                        "item_id": item_id,
+                        "output_index": output_index,
+                        "delta": input_text,
+                    }
+                )
+            )
+        self._sequence_number += 1
+        self._pending_tool_events.append(
+            GenericEvent.model_validate(
+                {
+                    "type": ResponsesAPIStreamEvents.CUSTOM_TOOL_CALL_INPUT_DONE.value,
+                    "sequence_number": self._sequence_number,
+                    "item_id": item_id,
+                    "output_index": output_index,
+                    "input": input_text,
+                }
+            )
+        )
+
+    def _queue_function_tool_arguments_done(self, call_id: str, output_index: int, final_args: str) -> None:
+        already_streamed: Final = self._tool_args_by_call_id.get(call_id, "")
+        remaining_args: Final = final_args[len(already_streamed) :] if final_args else ""
+        for offset in range(0, len(remaining_args), 10):
+            self._queue_function_tool_argument_delta(call_id, output_index, remaining_args[offset : offset + 10])
+        self._sequence_number += 1
+        done_event: Final = FunctionCallArgumentsDoneEvent(
+            type=ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DONE,
+            item_id=self._tool_item_id_by_call_id.get(call_id, call_id),
+            output_index=output_index,
+            arguments=final_args,
+        )
+        done_event.__dict__["sequence_number"] = self._sequence_number
+        self._pending_tool_events.append(done_event)
 
     def _queue_final_tool_call_done_events(self, litellm_complete_object: ModelResponse) -> None:
         """
@@ -530,36 +593,10 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                 self._queue_output_item_added(output_index, BaseLiteLLMOpenAIResponseObject(**item_kwargs))
 
             final_args = fn_args or self._tool_args_by_call_id.get(call_id, "")
-
-            # Emit delta events for arguments that weren't streamed yet
-            # This handles cases where Bedrock sends the complete tool call at the end
-            already_streamed = self._tool_args_by_call_id.get(call_id, "")
-            remaining_args = final_args[len(already_streamed) :] if final_args else ""
-
-            if remaining_args:
-                # Split into smaller chunks to match OpenAI's streaming behavior
-                chunk_size = 10  # Match typical OpenAI delta size
-                for i in range(0, len(remaining_args), chunk_size):
-                    delta_chunk = remaining_args[i : i + chunk_size]
-                    self._sequence_number += 1
-                    delta_event = FunctionCallArgumentsDeltaEvent(
-                        type=ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DELTA,
-                        item_id=self._tool_item_id_by_call_id.get(call_id, call_id),
-                        output_index=output_index,
-                        delta=delta_chunk,
-                    )
-                    delta_event.__dict__["sequence_number"] = self._sequence_number
-                    self._pending_tool_events.append(delta_event)
-
-            self._sequence_number += 1
-            done_event = FunctionCallArgumentsDoneEvent(
-                type=ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DONE,
-                item_id=self._tool_item_id_by_call_id.get(call_id, call_id),
-                output_index=output_index,
-                arguments=final_args,
-            )
-            done_event.__dict__["sequence_number"] = self._sequence_number
-            self._pending_tool_events.append(done_event)
+            if is_custom_tool_call(fn_name, self._custom_tool_names):
+                self._queue_custom_tool_input_done(call_id, output_index, final_args)
+            else:
+                self._queue_function_tool_arguments_done(call_id, output_index, final_args)
 
             self._sequence_number += 1
             item_kwargs = self._tool_call_item_kwargs(call_id, fn_name, final_args, "completed")
