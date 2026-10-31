@@ -14,11 +14,16 @@ _SUPPORTED_OPENAI_PARAMS: Final = (
     "frequency_penalty",
     "max_retries",
     "max_tokens",
+    "parallel_tool_calls",
     "presence_penalty",
     "response_format",
+    "service_tier",
     "stream",
     "temperature",
+    "tool_choice",
+    "tools",
     "top_p",
+    "user",
 )
 _DECODED_JSON: Final = TypeAdapter(object)
 
@@ -30,7 +35,14 @@ def _reported_cost_usd(raw_response: httpx.Response) -> float | None:
         return None
     metadata: Final = as_str_mapping(body.get("nadir_metadata")) if body is not None else None
     cost_block: Final = as_str_mapping(metadata.get("cost")) if metadata is not None else None
-    cost: Final = cost_block.get("total_cost_usd") if cost_block is not None else None
+    if cost_block is None:
+        return None
+    # An unpriced call still carries a total (0.0, or the sum of the attempts Nadir could price),
+    # flagged in its breakdown. Logging that total would record a paid call as free or cheaper than it was.
+    breakdown: Final = as_str_mapping(cost_block.get("cost_breakdown"))
+    if breakdown is not None and breakdown.get("pricing_failed"):
+        return None
+    cost: Final = cost_block.get("total_cost_usd")
     if isinstance(cost, bool) or not isinstance(cost, (int, float)):
         return None
     if not math.isfinite(cost) or cost < 0:
