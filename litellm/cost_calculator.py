@@ -2352,17 +2352,16 @@ def completion_cost(
 
 
 def get_response_cost_from_hidden_params(
-    hidden_params: dict | BaseModel,
+    hidden_params: Mapping[str, object] | BaseModel,
 ) -> float | None:
-    if isinstance(hidden_params, BaseModel):
-        _hidden_params_dict = hidden_params.model_dump()
-    else:
-        _hidden_params_dict = hidden_params
-
-    additional_headers: Final = _hidden_params_dict.get("additional_headers", {})
-    if additional_headers and "llm_provider-x-litellm-response-cost" in additional_headers:
-        return _billable_header_cost(additional_headers["llm_provider-x-litellm-response-cost"])
-    return None
+    params: Final[Mapping[str, object]] = (
+        hidden_params.model_dump() if isinstance(hidden_params, BaseModel) else hidden_params
+    )
+    additional_headers: Final = params.get("additional_headers")
+    if not isinstance(additional_headers, Mapping):
+        return None
+    headers: Final = TypeAdapter(Mapping[str, object]).validate_python(additional_headers)
+    return _billable_header_cost(headers.get("llm_provider-x-litellm-response-cost"))
 
 
 def _billable_header_cost(value: object) -> float | None:
