@@ -467,6 +467,31 @@ async def test_otel_unhandled_exception_handler_answers_a_db_outage_with_503_no_
     assert json.loads(response.body) == _DB_OUTAGE_503_BODY
 
 
+@pytest.mark.parametrize(
+    ("path", "exc", "status_code"),
+    [
+        ("/v1/messages/count_tokens", RuntimeError("kaboom"), 500),
+        ("/v1/messages/count_tokens", httpx.ConnectError("All connection attempts failed"), 503),
+        ("/v1/traces", RuntimeError("kaboom"), 500),
+    ],
+    ids=["unhandled_500", "db_outage_503", "otlp_500"],
+)
+def test_an_unhandled_exception_response_tells_the_client_to_drop_the_connection(
+    path: str, exc: Exception, status_code: int
+) -> None:
+    async def fail() -> None:
+        raise exc
+
+    app: Final = FastAPI()
+    app.exception_handler(Exception)(otel_unhandled_exception_handler)
+    app.add_api_route(path, fail, methods=["POST"])
+
+    response: Final = TestClient(app, raise_server_exceptions=False).post(path)
+
+    assert response.status_code == status_code
+    assert response.headers["connection"] == "close"
+
+
 @pytest.mark.asyncio
 async def test_otel_unhandled_exception_handler_reraises_proxy_exception_error():
     """ProxyException / HTTPException / RequestValidationError are re-raised
