@@ -77,8 +77,8 @@ class StorageProbe:
     """
     What the catalog says about the spend-log tables, read without scanning them.
 
-    `allocated_bytes` is what the files take on disk (heap, indexes and TOAST of LiteLLM_SpendLogs and
-    LiteLLM_SpendLogToolIndex, partitions included). Deleting rows does not shrink it: deleted rows become dead
+    `allocated_bytes` is what the files take on disk (heap, indexes and TOAST of LiteLLM_SpendLogs,
+    LiteLLM_SpendLogToolIndex and LiteLLM_SpendLogGuardrailIndex, partitions included). Deleting rows does not shrink it: deleted rows become dead
     tuples, autovacuum later turns them into free space that new rows reuse, and only VACUUM FULL or pg_repack
     hands the bytes back to the filesystem. Neither dead tuples nor free space are live data, and Postgres
     tracks only the former (`n_dead_tup`, zeroed by vacuum), so the size rule keeps its own count of the
@@ -253,13 +253,19 @@ class _SizeStepState:
 
     logs_deleted: int
     index_deleted: int
+    guardrail_index_deleted: int
     batches_left: int
     stop_reason: StopReason | None
+
+    @property
+    def rows_deleted(self) -> int:
+        return self.logs_deleted + self.index_deleted + self.guardrail_index_deleted
 
     def stopped(self, reason: StopReason) -> "_SizeStepState":
         return _SizeStepState(
             logs_deleted=self.logs_deleted,
             index_deleted=self.index_deleted,
+            guardrail_index_deleted=self.guardrail_index_deleted,
             batches_left=self.batches_left,
             stop_reason=reason,
         )
@@ -350,7 +356,7 @@ class _OffsetRow(LiteLLMBaseModel):
 
 _OFFSET_ROWS: Final = TypeAdapter(list[_OffsetRow])
 
-_SPEND_LOG_TABLES: Final = ("LiteLLM_SpendLogs", "LiteLLM_SpendLogToolIndex")
+_SPEND_LOG_TABLES: Final = ("LiteLLM_SpendLogs", "LiteLLM_SpendLogToolIndex", "LiteLLM_SpendLogGuardrailIndex")
 
 # Partition children are counted with their parent: a partitioned parent has no storage of its own.
 _STORAGE_SQL: Final = """
@@ -992,6 +998,18 @@ class SpendLogCleanup:
             deadline=deadline,
         )
 
+    async def _delete_old_guardrail_index_rows(
+        self, prisma_client: PrismaClient, cutoff_date: datetime, deadline: float
+    ) -> TableCleanupResult:
+        return await self._delete_old_rows_batched(
+            prisma_client,
+            cutoff_date,
+            table_name="LiteLLM_SpendLogGuardrailIndex",
+            key_columns=("request_id", "guardrail_id"),
+            time_column="start_time",
+            deadline=deadline,
+        )
+
     async def _delete_old_autorouter_session_rows(
         self, prisma_client: PrismaClient, cutoff_date: datetime, deadline: float
     ) -> TableCleanupResult:
@@ -1056,7 +1074,7 @@ class SpendLogCleanup:
         self, prisma_client: PrismaClient, deadline: float
     ) -> tuple[TableCleanupResult, ...]:
         """
-        Prune the spend logs and the tool index rows derived from them.
+        Prune the spend logs and the tool and guardrail index rows derived from them.
 
         When the table is range-partitioned, whole expired partitions are dropped
         first because that reclaims disk immediately. Expired rows can still sit in
@@ -1084,13 +1102,20 @@ class SpendLogCleanup:
             verbose_proxy_logger.info("Dropped %d expired spend-log partitions: %s", len(dropped), dropped)
 
         logs_result: Final = await self._delete_old_logs(
-            prisma_client, cutoff_date, self._group_deadline(deadline, groups_remaining=2, now=self._clock())
+            prisma_client, cutoff_date, self._group_deadline(deadline, groups_remaining=3, now=self._clock())
         )
         verbose_proxy_logger.info("Deleted %s logs", logs_result.rows_deleted)
 
-        index_result: Final = await self._delete_old_tool_index_rows(prisma_client, cutoff_date, deadline)
-        verbose_proxy_logger.info("Deleted %s expired tool index rows", index_result.rows_deleted)
-        return (logs_result, index_result)
+        tool_index_result: Final = await self._delete_old_tool_index_rows(
+            prisma_client, cutoff_date, self._group_deadline(deadline, groups_remaining=2, now=self._clock())
+        )
+        verbose_proxy_logger.info("Deleted %s expired tool index rows", tool_index_result.rows_deleted)
+
+        guardrail_index_result: Final = await self._delete_old_guardrail_index_rows(
+            prisma_client, cutoff_date, deadline
+        )
+        verbose_proxy_logger.info("Deleted %s expired guardrail index rows", guardrail_index_result.rows_deleted)
+        return (logs_result, tool_index_result, guardrail_index_result)
 
     async def _clean_spend_logs_by_size(
         self, prisma_client: PrismaClient, rule: SizeRule, deadline: float
@@ -1104,7 +1129,7 @@ class SpendLogCleanup:
         once, re-measuring after each. Then rows go in steps: the rows still needed to reach the target follow
         from bytes per row, and each step turns that many of the oldest rows (at most
         SPEND_LOG_SIZE_CLEANUP_RECHECK_BATCHES batches) into a cutoff and runs the same bounded DELETE the age
-        rule uses, for the spend logs and the tool index rows derived from them. Progress is counted from the
+        rule uses, for the spend logs and the tool and guardrail index rows derived from them. Progress is counted from the
         deletes themselves, not re-read from pg_stat_user_tables, whose counters trail a DELETE by up to a
         second. The run's batch cap and budget apply to the whole pass, so a pass that stops short reports how
         far above the target it still is and the next check continues from there.
@@ -1230,7 +1255,11 @@ class SpendLogCleanup:
         rows_still_needed: Callable[[int], int],
     ) -> tuple[TableCleanupResult, ...]:
         state = _SizeStepState(  # rebind-ok: one value threaded through the bounded step loop
-            logs_deleted=0, index_deleted=0, batches_left=self.max_batches, stop_reason=None
+            logs_deleted=0,
+            index_deleted=0,
+            guardrail_index_deleted=0,
+            batches_left=self.max_batches,
+            stop_reason=None,
         )
         for _ in range(self.max_batches // SPEND_LOG_SIZE_CLEANUP_RECHECK_BATCHES + 2):
             if state.stop_reason is not None:
@@ -1246,6 +1275,11 @@ class SpendLogCleanup:
                 rows_deleted=state.index_deleted,
                 stop_reason=final_reason,
             ),
+            TableCleanupResult(
+                table_name="LiteLLM_SpendLogGuardrailIndex (size rule)",
+                rows_deleted=state.guardrail_index_deleted,
+                stop_reason=final_reason,
+            ),
         )
 
     async def _run_size_step(
@@ -1256,7 +1290,7 @@ class SpendLogCleanup:
         state: "_SizeStepState",
     ) -> "_SizeStepState":
         """One step: delete the rows still needed, at most SPEND_LOG_SIZE_CLEANUP_RECHECK_BATCHES batches of the oldest."""
-        needed: Final = rows_still_needed(state.logs_deleted + state.index_deleted)
+        needed: Final = rows_still_needed(state.rows_deleted)
         if needed <= 0:
             return state.stopped("target_reached")
         if self._clock() >= deadline:
@@ -1287,15 +1321,29 @@ class SpendLogCleanup:
             deadline=deadline,
             batch_cap=step_cap,
         )
+        guardrail_index_result: Final = await self._delete_old_rows_batched(
+            prisma_client,
+            cutoff,
+            table_name="LiteLLM_SpendLogGuardrailIndex",
+            key_columns=("request_id", "guardrail_id"),
+            time_column="start_time",
+            deadline=deadline,
+            batch_cap=state.batches_left,
+        )
+        guardrail_batches: Final = math.ceil(guardrail_index_result.rows_deleted / self.batch_size)
         advanced: Final = _SizeStepState(
             logs_deleted=state.logs_deleted + logs_result.rows_deleted,
             index_deleted=state.index_deleted + index_result.rows_deleted,
-            batches_left=state.batches_left - step_cap,
+            guardrail_index_deleted=state.guardrail_index_deleted + guardrail_index_result.rows_deleted,
+            batches_left=state.batches_left - max(step_cap, guardrail_batches),
             stop_reason=None,
         )
-        if rows_still_needed(advanced.logs_deleted + advanced.index_deleted) <= 0:
+        if rows_still_needed(advanced.rows_deleted) <= 0:
             return advanced.stopped("target_reached")
-        if logs_result.stop_reason in ("aborted", "budget_exhausted") or index_result.stop_reason == "aborted":
+        if logs_result.stop_reason in ("aborted", "budget_exhausted") or "aborted" in (
+            index_result.stop_reason,
+            guardrail_index_result.stop_reason,
+        ):
             return advanced.stopped(logs_result.stop_reason if logs_result.stop_reason != "exhausted" else "aborted")
         if logs_result.rows_deleted == 0:
             return advanced.stopped("exhausted")
