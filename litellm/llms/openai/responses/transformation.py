@@ -646,13 +646,13 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
             self.custom_llm_provider != LlmProviders.OPENAI
             or options is None
             or not isinstance(comparison_response_id, str)
+            or not comparison_response_id.startswith("resp_")
         ):
             return {}
-        original_response_id: Final = (
-            ResponsesAPIRequestUtils.decode_previous_response_id_to_original_previous_response_id(
-                comparison_response_id
-            )
-        )
+        decoded_id: Final = ResponsesAPIRequestUtils.decode_responses_api_response_id(comparison_response_id)
+        if decoded_id["custom_llm_provider"] != LlmProviders.OPENAI:
+            return {}
+        original_response_id: Final = decoded_id["response_id"]
         if original_response_id == comparison_response_id:
             return {}
         return {"prompt_cache_options": {**options, "comparison_response_id": original_response_id}}

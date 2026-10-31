@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import json
 import os
 import uuid
@@ -138,12 +139,12 @@ async def test_regression_sdk_comparison_response_id_is_raw_on_the_wire(
             if asynchronous:
                 assert isinstance(result, _AsyncResponseEvents), result
                 async_events: Final = tuple([event async for event in result])
-                async_completed: Final = ResponseCompletedEvent.model_validate(async_events[-1])
+                async_completed: Final = ResponseCompletedEvent.model_validate(async_events[-1], from_attributes=True)
                 assert async_completed.response.status == "completed", async_events
             else:
                 assert isinstance(result, _ResponseEvents), result
                 sync_events: Final = tuple(result)
-                sync_completed: Final = ResponseCompletedEvent.model_validate(sync_events[-1])
+                sync_completed: Final = ResponseCompletedEvent.model_validate(sync_events[-1], from_attributes=True)
                 assert sync_completed.response.status == "completed", sync_events
         else:
             assert isinstance(result, ResponsesAPIResponse), result
@@ -153,7 +154,20 @@ async def test_regression_sdk_comparison_response_id_is_raw_on_the_wire(
 
 
 @pytest.mark.parametrize("extra", (False, True))
-@pytest.mark.parametrize("comparison_id", ("resp_custom_vendor_id", "resp_!!!not-base64", "cmF3X3ZlbmRvcl9pZA=="))
+@pytest.mark.parametrize(
+    "comparison_id",
+    (
+        "resp_custom_vendor_id",
+        "resp_!!!not-base64",
+        "cmF3X3ZlbmRvcl9pZA==",
+        pytest.param(
+            "resp_"
+            + base64.b64encode(b"litellm:custom_llm_provider:xai;model_id:foreign;response_id:resp_foreign").decode(),
+            id="foreign-provider-wrapper",
+        ),
+        pytest.param("resp_" + base64.b64encode(b"custom;id;response").decode(), id="unmanaged-semicolons"),
+    ),
+)
 def test_guard_sdk_custom_host_preserves_unmanaged_comparison_ids(extra: bool, comparison_id: str) -> None:
     def respond(request: Request) -> Reply:
         assert (request.method, request.target) == ("POST", "/v1/responses")

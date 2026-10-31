@@ -172,8 +172,10 @@ class ResponsesIDSecurity(CustomLogger):
         )
         retained_id: Final = data.get(ADDRESSED_COMPARISON_RESPONSE_ID_FIELD)
         requested_id: Final = None if options is None else options.get("comparison_response_id")
-        addressed_id: Final = retained_id if isinstance(retained_id, str) and retained_id else requested_id
-        if options is None or not isinstance(addressed_id, str) or not self._is_encrypted_response_id(addressed_id):
+        if options is None or not isinstance(requested_id, str):
+            return {}
+        addressed_id: Final = requested_id if self._is_encrypted_response_id(requested_id) else retained_id
+        if not isinstance(addressed_id, str) or not self._is_encrypted_response_id(addressed_id):
             return {}
         original_response_id, user_id, team_id = self._decrypt_response_id(addressed_id)
         self.check_user_access_to_response_id(user_id, team_id, user_api_key_dict)

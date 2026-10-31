@@ -213,8 +213,9 @@ def test_regression_comparison_response_id_owner_repeated_requests_reach_raw_pro
 
 @pytest.mark.parametrize("nested", (False, True))
 @pytest.mark.parametrize("stranger", ("user", "team"))
+@pytest.mark.parametrize("retained", (False, True), ids=("ordinary", "client-internal-field"))
 def test_regression_comparison_response_id_other_identity_is_denied_before_dispatch(
-    gateway: Gateway, nested: bool, stranger: str
+    gateway: Gateway, nested: bool, stranger: str, retained: bool
 ) -> None:
     raw_id: Final = f"resp_comparison_{uuid.uuid4().hex}"
 
@@ -245,7 +246,16 @@ def test_regression_comparison_response_id_other_identity_is_denied_before_dispa
             assert len(_contract_requests(wire)) == 1
             _refused(
                 lambda: other.responses.create(
-                    model=model, input="compare another identity", extra_body=_comparison_body(created.id, nested)
+                    model=model,
+                    input="compare another identity",
+                    extra_body={
+                        **_comparison_body(created.id, nested),
+                        **(
+                            {"_litellm_addressed_comparison_response_id": "resp_unmanaged_comparison"}
+                            if retained
+                            else {}
+                        ),
+                    },
                 ),
                 _OTHER_USER_DETAIL if stranger == "user" else _OTHER_TEAM_DETAIL,
             )
