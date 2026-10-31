@@ -2922,7 +2922,8 @@ async def get_user_daily_activity(
     ),
     api_key: str | None = fastapi.Query(
         default=None,
-        description="Filter by specific API key",
+        description="Filter by reporting API key ID. Missing keys are reported as unattributed. "
+        "For a literal key unattributed or a key starting with raw:, add an extra raw: prefix",
     ),
     user_id: str | None = fastapi.Query(
         default=None,
