@@ -24268,7 +24268,14 @@
           "properties": {
             "content": {
               "items": {
-                "$ref": "#/components/schemas/OutputText"
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/OutputText"
+                  },
+                  {
+                    "$ref": "#/components/schemas/ResponseOutputRefusal"
+                  }
+                ]
               },
               "title": "Content",
               "type": "array"
@@ -58015,7 +58022,7 @@
     "paths": {
       "/toolset/{toolset_name}/mcp": {
         "delete": {
-          "description": "Namespace a toolset as its own MCP endpoint.\n\nConnecting to /toolset/<name>/mcp exposes exactly the tools defined in\nthe toolset. Access is enforced: non-admin API keys must have the toolset\nlisted in their object_permission.mcp_toolsets grant list, or the request\nwill be rejected with a 403.",
+          "description": "Namespace a toolset as its own MCP endpoint.\n\nConnecting to /toolset/<name>/mcp exposes exactly the tools defined in\nthe toolset. Access is enforced: API keys other than an admin's key with no\nteam must hold the toolset through one of their grant sources, or the\nrequest will be rejected with a 403.",
           "operationId": "toolset_mcp_route_toolset__toolset_name__mcp_delete",
           "parameters": [
             {
@@ -58054,7 +58061,7 @@
           ]
         },
         "get": {
-          "description": "Namespace a toolset as its own MCP endpoint.\n\nConnecting to /toolset/<name>/mcp exposes exactly the tools defined in\nthe toolset. Access is enforced: non-admin API keys must have the toolset\nlisted in their object_permission.mcp_toolsets grant list, or the request\nwill be rejected with a 403.",
+          "description": "Namespace a toolset as its own MCP endpoint.\n\nConnecting to /toolset/<name>/mcp exposes exactly the tools defined in\nthe toolset. Access is enforced: API keys other than an admin's key with no\nteam must hold the toolset through one of their grant sources, or the\nrequest will be rejected with a 403.",
           "operationId": "toolset_mcp_route_toolset__toolset_name__mcp_get",
           "parameters": [
             {
@@ -58093,7 +58100,7 @@
           ]
         },
         "head": {
-          "description": "Namespace a toolset as its own MCP endpoint.\n\nConnecting to /toolset/<name>/mcp exposes exactly the tools defined in\nthe toolset. Access is enforced: non-admin API keys must have the toolset\nlisted in their object_permission.mcp_toolsets grant list, or the request\nwill be rejected with a 403.",
+          "description": "Namespace a toolset as its own MCP endpoint.\n\nConnecting to /toolset/<name>/mcp exposes exactly the tools defined in\nthe toolset. Access is enforced: API keys other than an admin's key with no\nteam must hold the toolset through one of their grant sources, or the\nrequest will be rejected with a 403.",
           "operationId": "toolset_mcp_route_toolset__toolset_name__mcp_head",
           "parameters": [
             {
@@ -58132,7 +58139,7 @@
           ]
         },
         "options": {
-          "description": "Namespace a toolset as its own MCP endpoint.\n\nConnecting to /toolset/<name>/mcp exposes exactly the tools defined in\nthe toolset. Access is enforced: non-admin API keys must have the toolset\nlisted in their object_permission.mcp_toolsets grant list, or the request\nwill be rejected with a 403.",
+          "description": "Namespace a toolset as its own MCP endpoint.\n\nConnecting to /toolset/<name>/mcp exposes exactly the tools defined in\nthe toolset. Access is enforced: API keys other than an admin's key with no\nteam must hold the toolset through one of their grant sources, or the\nrequest will be rejected with a 403.",
           "operationId": "toolset_mcp_route_toolset__toolset_name__mcp_options",
           "parameters": [
             {
@@ -58171,7 +58178,7 @@
           ]
         },
         "patch": {
-          "description": "Namespace a toolset as its own MCP endpoint.\n\nConnecting to /toolset/<name>/mcp exposes exactly the tools defined in\nthe toolset. Access is enforced: non-admin API keys must have the toolset\nlisted in their object_permission.mcp_toolsets grant list, or the request\nwill be rejected with a 403.",
+          "description": "Namespace a toolset as its own MCP endpoint.\n\nConnecting to /toolset/<name>/mcp exposes exactly the tools defined in\nthe toolset. Access is enforced: API keys other than an admin's key with no\nteam must hold the toolset through one of their grant sources, or the\nrequest will be rejected with a 403.",
           "operationId": "toolset_mcp_route_toolset__toolset_name__mcp_patch",
           "parameters": [
             {
@@ -58210,7 +58217,7 @@
           ]
         },
         "post": {
-          "description": "Namespace a toolset as its own MCP endpoint.\n\nConnecting to /toolset/<name>/mcp exposes exactly the tools defined in\nthe toolset. Access is enforced: non-admin API keys must have the toolset\nlisted in their object_permission.mcp_toolsets grant list, or the request\nwill be rejected with a 403.",
+          "description": "Namespace a toolset as its own MCP endpoint.\n\nConnecting to /toolset/<name>/mcp exposes exactly the tools defined in\nthe toolset. Access is enforced: API keys other than an admin's key with no\nteam must hold the toolset through one of their grant sources, or the\nrequest will be rejected with a 403.",
           "operationId": "toolset_mcp_route_toolset__toolset_name__mcp_post",
           "parameters": [
             {
@@ -58249,7 +58256,7 @@
           ]
         },
         "put": {
-          "description": "Namespace a toolset as its own MCP endpoint.\n\nConnecting to /toolset/<name>/mcp exposes exactly the tools defined in\nthe toolset. Access is enforced: non-admin API keys must have the toolset\nlisted in their object_permission.mcp_toolsets grant list, or the request\nwill be rejected with a 403.",
+          "description": "Namespace a toolset as its own MCP endpoint.\n\nConnecting to /toolset/<name>/mcp exposes exactly the tools defined in\nthe toolset. Access is enforced: API keys other than an admin's key with no\nteam must hold the toolset through one of their grant sources, or the\nrequest will be rejected with a 403.",
           "operationId": "toolset_mcp_route_toolset__toolset_name__mcp_put",
           "parameters": [
             {

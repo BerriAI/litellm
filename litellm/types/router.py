@@ -25,7 +25,20 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import httpx
 from openai import Timeout as SDKTimeout
-from pydantic import BeforeValidator, ConfigDict, Field, JsonValue, StrictInt, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    BeforeValidator,
+    ConfigDict,
+    Field,
+    JsonValue,
+    StrictInt,
+    ValidationError,
+    ValidationInfo,
+    ValidatorFunctionWrapHandler,
+    WrapValidator,
+    field_validator,
+    model_validator,
+)
 from typing_extensions import Protocol, ReadOnly, Required, TypedDict, runtime_checkable
 
 from litellm._logging import verbose_logger
@@ -37,7 +50,7 @@ from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.router_weights import RouterWeights
 
 if TYPE_CHECKING:
-    from litellm.router import Router
+    from litellm.router_api import RoutingContext as RouterContext
 
 from .completion import CompletionRequest
 from .embedding import EmbeddingRequest
@@ -531,6 +544,27 @@ def holds_secret_pointer(param_name: str) -> bool:
 
 _RESERVED_INIT_KEYS: Final = frozenset({"self", "params", "__class__"})
 
+_STRICT_LITELLM_PARAMS: Final = MappingProxyType({"strict_litellm_params": True})
+
+_StrictlyValidatedParams: Final = TypeVar("_StrictlyValidatedParams", bound=BaseModel)
+
+
+def validate_litellm_params_strictly(
+    params_model: type[_StrictlyValidatedParams], params: Mapping[str, object]
+) -> _StrictlyValidatedParams:
+    return params_model.model_validate(params, context=_STRICT_LITELLM_PARAMS)
+
+
+def _none_when_malformed_outside_strict_validation(
+    value: object, handler: ValidatorFunctionWrapHandler, info: ValidationInfo
+) -> object:
+    try:
+        return handler(value)
+    except ValidationError:
+        if info.context is _STRICT_LITELLM_PARAMS:
+            raise
+        return None
+
 
 _DAILY_RESET_TIME_PATTERN: Final = re.compile(r"\d{2}:\d{2}")
 
@@ -612,6 +646,9 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
     )
     model_config = ConfigDict(extra="allow", arbitrary_types_allowed=True)
     merge_reasoning_content_in_choices: bool | None = False
+    thought_signature_in_tool_call_id: Annotated[
+        bool | None, WrapValidator(_none_when_malformed_outside_strict_validation)
+    ] = None
     model_info: dict | None = None
     mock_response: str | ModelResponse | Exception | object | None = None
 
@@ -1276,7 +1313,7 @@ class FallbackAccessCheck(Protocol):
     rejects, so a fallback can never reach a model the caller could not have requested directly.
     """
 
-    async def __call__(self, *, model: str, request_kwargs: Mapping[str, object], llm_router: "Router") -> bool: ...
+    async def __call__(self, *, model: str, request_kwargs: Mapping[str, object], ctx: "RouterContext") -> bool: ...
 
 
 class FallbackBudgetCheck(Protocol):
@@ -1289,7 +1326,7 @@ class FallbackBudgetCheck(Protocol):
     and skips targets it rejects, leaving the free attempt itself untouched.
     """
 
-    async def __call__(self, *, model: str, request_kwargs: Mapping[str, object], llm_router: "Router") -> bool: ...
+    async def __call__(self, *, model: str, request_kwargs: Mapping[str, object], ctx: "RouterContext") -> bool: ...
 
 
 class AutoRouterCapabilityLimit(Protocol):
