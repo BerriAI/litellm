@@ -210,6 +210,7 @@ def test_every_endpoint_passes_all_three_checks_and_feeds_turn_one_back_in_its_o
     sent_json: Final = json.dumps(turn_two)
     assert _TOOL_CALL_ID in sent_json and WEATHER_TOOL_RESULT in sent_json, turn_two
     assert "cache_control" not in sent_json and "cachePoint" not in sent_json, turn_two
+    assert "<turn 1 response" not in sent_json, turn_two
     if script is CHAT_COMPLETIONS_SCRIPT:
         tool_message: Final = turn_two["messages"][-1]
         assert tool_message == {"role": "tool", "tool_call_id": _TOOL_CALL_ID, "content": WEATHER_TOOL_RESULT}
@@ -375,12 +376,17 @@ def test_payload_lists_the_checks_in_order_with_their_details():
 
 
 def test_the_three_request_files_send_one_system_prompt_and_one_tool_so_endpoint_verdicts_are_comparable():
-    bodies: Final = {
+    files: Final = {
         path.stem: json.loads(path.read_text(encoding="utf-8")) for path in TEST_MODEL_REQUESTS_DIR.glob("*.json")
     }
-    chat, messages, responses = bodies["chat_completions"], bodies["messages"], bodies["responses"]
+    chat, messages, responses = (files[name]["turn_1"] for name in ("chat_completions", "messages", "responses"))
 
-    assert set(bodies) == {"chat_completions", "messages", "responses"}, bodies.keys()
+    assert set(files) == {"chat_completions", "messages", "responses"}, files.keys()
+    assert all(set(file) == {"turn_1", "turn_2_appended_messages"} for file in files.values()), files
+    for name, file in files.items():
+        appended: Final = json.dumps(file["turn_2_appended_messages"])
+        assert WEATHER_TOOL_RESULT in appended, (name, appended)
+        assert "<turn 1 response: assistant output>" in appended and "<turn 1 response: tool call id>" in appended, name
     assert chat["messages"][0]["content"] == responses["instructions"] == messages["system"]
     assert chat["tools"][0]["function"]["parameters"] == responses["tools"][0]["parameters"]
     assert chat["tools"][0]["function"]["parameters"] == messages["tools"][0]["input_schema"]

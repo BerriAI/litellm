@@ -1,10 +1,12 @@
 """Live checks behind ``POST /health/test_model``.
 
-One two-turn tool-call conversation per selected endpoint. Turn 1 is the JSON body in ``test_model_requests/``
-for that endpoint, in its native request shape with no prompt-cache markers, so the second turn can only report
-cached tokens when the provider caches the repeated prefix on its own. Turn 2 is built from turn 1's reply, since
-it has to carry the tool call id the model returned. Three verdicts come out of the two turns: the conversation
-itself (both turns parse, the tool call lands, the tool result is used), prompt caching, and cost tracking.
+One two-turn tool-call conversation per selected endpoint, read from that endpoint's file in
+``test_model_requests/``. ``turn_1`` is the full first request body in the endpoint's native shape with no
+prompt-cache markers, so the second turn can only report cached tokens when the provider caches the repeated prefix
+on its own. ``turn_2_appended_messages`` lists what the second request adds after turn 1's messages, with
+``<turn 1 response: assistant output>`` and ``<turn 1 response: tool call id>`` filled in from the model's reply.
+Three verdicts come out of the two turns: the conversation itself (both turns parse, the tool call lands, the tool
+result is used), prompt caching, and cost tracking.
 """
 
 from __future__ import annotations
@@ -13,6 +15,7 @@ import json
 import time
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
+from itertools import chain
 from pathlib import Path
 from types import MappingProxyType
 from typing import Final, Literal, TypeAlias
@@ -30,6 +33,8 @@ TEST_MODEL_ENDPOINTS: Final[tuple[TestModelEndpoint, ...]] = ("/v1/chat/completi
 WEATHER_TOOL_NAME: Final = "get_weather"
 WEATHER_TOOL_RESULT: Final = "72F and sunny"
 TEST_MODEL_REQUESTS_DIR: Final = Path(__file__).resolve().parent / "test_model_requests"
+TURN_ONE_ASSISTANT_OUTPUT: Final = "<turn 1 response: assistant output>"
+TURN_ONE_TOOL_CALL_ID: Final = "<turn 1 response: tool call id>"
 
 
 @dataclass(frozen=True, slots=True)
@@ -191,16 +196,60 @@ _JSON_DOCUMENT: Final = TypeAdapter(object)
 _EMPTY_ASSISTANT: Final[Mapping[str, object]] = MappingProxyType({"role": "assistant", "content": None})
 
 
-def _request_file(name: str) -> Callable[[], Mapping[str, object]]:
-    """Turn 1 of each script is a plain JSON request body on disk, replayable with curl, parsed fresh per call so
-    the provider code never touches a shared copy."""
+class RequestFile(BaseModel):
+    """One two-turn conversation on disk: ``turn_1`` is the full first request body, ``turn_2_appended_messages``
+    are the messages the second request adds after it, with the two placeholders filled from turn 1's response."""
+
+    model_config = ConfigDict(frozen=True)
+
+    turn_1: Mapping[str, object]
+    turn_2_appended_messages: Sequence[object]
+
+
+def _request_file(name: str) -> Callable[[], RequestFile]:
     text: Final = (TEST_MODEL_REQUESTS_DIR / f"{name}.json").read_text(encoding="utf-8")
-    return lambda: _PLAIN_OBJECT.validate_json(text)
+    return lambda: RequestFile.model_validate_json(text)
 
 
-_CHAT_TURN_ONE: Final = _request_file("chat_completions")
-_RESPONSES_TURN_ONE: Final = _request_file("responses")
-_MESSAGES_TURN_ONE: Final = _request_file("messages")
+_CHAT_FILE: Final = _request_file("chat_completions")
+_RESPONSES_FILE: Final = _request_file("responses")
+_MESSAGES_FILE: Final = _request_file("messages")
+
+
+def _fill(value: object, turn_one: ParsedTurn) -> object:
+    if value == TURN_ONE_TOOL_CALL_ID:
+        return turn_one.tool_call.id if turn_one.tool_call is not None else ""
+    if value == TURN_ONE_ASSISTANT_OUTPUT:
+        return turn_one.assistant_echo
+    if isinstance(value, dict):
+        return {key: _fill(item, turn_one) for key, item in _PLAIN_OBJECT.validate_python(value).items()}
+    if isinstance(value, list):
+        return [_fill(item, turn_one) for item in _OBJECT_LIST.validate_python(value)]
+    return value
+
+
+def _appended_messages(item: object, turn_one: ParsedTurn) -> Sequence[object]:
+    echo: Final = turn_one.assistant_echo
+    if item == TURN_ONE_ASSISTANT_OUTPUT and isinstance(echo, list):
+        return _OBJECT_LIST.validate_python(echo)
+    return (_fill(item, turn_one),)
+
+
+def _turn_one(file: Callable[[], RequestFile]) -> Callable[[], Mapping[str, object]]:
+    return lambda: file().turn_1
+
+
+def _turn_two(
+    file: Callable[[], RequestFile], conversation_key: Literal["messages", "input"]
+) -> Callable[[ParsedTurn], Mapping[str, object]]:
+    def build(turn_one: ParsedTurn) -> Mapping[str, object]:
+        first: Final = file()
+        appended: Final = chain.from_iterable(
+            _appended_messages(item, turn_one) for item in first.turn_2_appended_messages
+        )
+        return {**first.turn_1, conversation_key: [*_message_list(first.turn_1.get(conversation_key)), *appended]}
+
+    return build
 
 
 def _plain(response: object) -> Mapping[str, object] | None:
@@ -223,19 +272,6 @@ def _arguments(raw: str) -> Mapping[str, object] | None:
     except ValidationError:
         return None
     return MappingProxyType(_PLAIN_OBJECT.validate_python(parsed)) if isinstance(parsed, dict) else None
-
-
-def _chat_turn_two(turn_one: ParsedTurn) -> Mapping[str, object]:
-    first: Final = _CHAT_TURN_ONE()
-    tool_call_id: Final = turn_one.tool_call.id if turn_one.tool_call is not None else ""
-    return {
-        **first,
-        "messages": [
-            *_message_list(first["messages"]),
-            turn_one.assistant_echo,
-            {"role": "tool", "tool_call_id": tool_call_id, "content": WEATHER_TOOL_RESULT},
-        ],
-    }
 
 
 def _message_list(messages: object) -> Sequence[object]:
@@ -282,19 +318,6 @@ def _parse_chat(response: object) -> ParsedTurn | str:
     )
 
 
-def _responses_turn_two(turn_one: ParsedTurn) -> Mapping[str, object]:
-    first: Final = _RESPONSES_TURN_ONE()
-    call_id: Final = turn_one.tool_call.id if turn_one.tool_call is not None else ""
-    return {
-        **first,
-        "input": [
-            *_message_list(first["input"]),
-            *_message_list(turn_one.assistant_echo),
-            {"type": "function_call_output", "call_id": call_id, "output": WEATHER_TOOL_RESULT},
-        ],
-    }
-
-
 def _parse_responses(response: object) -> ParsedTurn | str:
     plain: Final = _plain(response)
     if plain is None:
@@ -331,22 +354,6 @@ def _parse_responses(response: object) -> ParsedTurn | str:
     )
 
 
-def _messages_turn_two(turn_one: ParsedTurn) -> Mapping[str, object]:
-    first: Final = _MESSAGES_TURN_ONE()
-    tool_use_id: Final = turn_one.tool_call.id if turn_one.tool_call is not None else ""
-    return {
-        **first,
-        "messages": [
-            *_message_list(first["messages"]),
-            {"role": "assistant", "content": turn_one.assistant_echo},
-            {
-                "role": "user",
-                "content": [{"type": "tool_result", "tool_use_id": tool_use_id, "content": WEATHER_TOOL_RESULT}],
-            },
-        ],
-    }
-
-
 def _parse_messages(response: object) -> ParsedTurn | str:
     plain: Final = _plain(response)
     if plain is None:
@@ -380,24 +387,24 @@ CHAT_COMPLETIONS_SCRIPT: Final = EndpointScript(
     endpoint="/v1/chat/completions",
     route_type="acompletion",
     metadata_key="metadata",
-    turn_one=_CHAT_TURN_ONE,
-    turn_two=_chat_turn_two,
+    turn_one=_turn_one(_CHAT_FILE),
+    turn_two=_turn_two(_CHAT_FILE, "messages"),
     parse=_parse_chat,
 )
 RESPONSES_SCRIPT: Final = EndpointScript(
     endpoint="/v1/responses",
     route_type="aresponses",
     metadata_key="litellm_metadata",
-    turn_one=_RESPONSES_TURN_ONE,
-    turn_two=_responses_turn_two,
+    turn_one=_turn_one(_RESPONSES_FILE),
+    turn_two=_turn_two(_RESPONSES_FILE, "input"),
     parse=_parse_responses,
 )
 MESSAGES_SCRIPT: Final = EndpointScript(
     endpoint="/v1/messages",
     route_type="anthropic_messages",
     metadata_key="litellm_metadata",
-    turn_one=_MESSAGES_TURN_ONE,
-    turn_two=_messages_turn_two,
+    turn_one=_turn_one(_MESSAGES_FILE),
+    turn_two=_turn_two(_MESSAGES_FILE, "messages"),
     parse=_parse_messages,
 )
 SCRIPTS: Final[Mapping[TestModelEndpoint, EndpointScript]] = MappingProxyType(

@@ -1440,8 +1440,8 @@ def test_health_check_of_gpt_transcribe_probes_without_verbose_json_and_reports_
 
 
 _TEST_MODEL_TOOL_CALL_ID: Final = "call_boston_wire"
-_TEST_MODEL_CHAT_REQUEST: Final = JSON_OBJECT.validate_json(
-    (TEST_MODEL_REQUESTS_DIR / "chat_completions.json").read_text(encoding="utf-8")
+_TEST_MODEL_CHAT_REQUEST: Final = JSON_OBJECT.validate_python(
+    JSON_OBJECT.validate_json((TEST_MODEL_REQUESTS_DIR / "chat_completions.json").read_text(encoding="utf-8"))["turn_1"]
 )
 
 
