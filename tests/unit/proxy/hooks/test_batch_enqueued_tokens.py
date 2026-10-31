@@ -173,8 +173,9 @@ def _redis_store(
     fail_from_call: Mapping[str, int] = MappingProxyType({}),
     raise_after_landing_keys: frozenset[str] = frozenset(),
     monotonic: Callable[[], float] = time.monotonic,
+    namespace: str | None = None,
 ) -> tuple[BatchEnqueuedTokenStore, fakeredis.FakeAsyncRedis]:
-    cache = fake_redis_cache(server)
+    cache = fake_redis_cache(server, namespace=namespace)
     raw = fakeredis.FakeAsyncRedis(server=server)
     litellm.in_memory_llm_clients_cache.set_cache(
         key=cache._get_async_client_cache_key(),
@@ -193,6 +194,26 @@ def _counter(scope: BatchEnqueuedTokenScope) -> str:
 
 def _record(batch_id: str) -> str:
     return f"batch_enqueued_token_reservation:{batch_id}"
+
+
+def _saved_reservation() -> BatchEnqueuedTokenReservation:
+    return BatchEnqueuedTokenReservation(
+        tokens=5,
+        scopes=(
+            BatchEnqueuedTokenScope(key="api_key", value='clé "one"', limit=100),
+            BatchEnqueuedTokenScope(key="team", value="組/二", limit=200),
+        ),
+        backend="memory",
+        owner="worker\n雪",
+        reserved_at_monotonic=1000.25,
+    )
+
+
+_SAVED_DOCUMENT: Final = (
+    '{"tokens":5,"scopes":[{"key":"api_key","value":"clé \\"one\\"","limit":100},'
+    '{"key":"team","value":"組/二","limit":200}],"backend":"memory",'
+    '"owner":"worker\\n雪","reserved_at_monotonic":1000.25}'
+)
 
 
 @pytest.mark.asyncio
@@ -238,6 +259,67 @@ async def test_a_reservation_record_round_trips_with_old_pods():
 
     await store.save_reservation("batch_new", reservation)
     assert await raw.get(_record("batch_new")) == _RESERVATION_ADAPTER.dump_json(reservation)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("namespace", (None, "test-namespace"))
+async def test_redis_reservation_bytes_include_unicode_and_pop_leaves_tombstone(
+    namespace: str | None,
+) -> None:
+    store, raw = _redis_store(fakeredis.FakeServer(), monotonic=lambda: 1000.25, namespace=namespace)
+    reservation: Final = _saved_reservation()
+    batch_id: Final = "batch_wire"
+    record_key: Final = f"{namespace}:{_record(batch_id)}" if namespace else _record(batch_id)
+
+    await store.save_reservation(batch_id, reservation)
+
+    assert await raw.get(record_key) == _SAVED_DOCUMENT.encode("utf-8")
+    if namespace is not None:
+        assert await raw.get(_record(batch_id)) is None
+    popped: Final = await store.pop_reservation(batch_id)
+    assert popped == reservation
+    assert await raw.get(record_key) == b""
+    assert 0 < await raw.pttl(record_key) <= BATCH_ENQUEUED_TOKEN_TTL_SECONDS * 1000
+
+
+@pytest.mark.asyncio
+async def test_malformed_local_reservation_is_consumed_without_a_cache_ghost() -> None:
+    store, _ = _redis_store(fakeredis.FakeServer())
+    record_key: Final = _record("batch_malformed_local")
+    await store.internal_usage_cache.async_set_cache(
+        key=record_key,
+        value="{",
+        litellm_parent_otel_span=None,
+        local_only=True,
+    )
+
+    assert await store.pop_reservation("batch_malformed_local") is None
+    assert (
+        await store.internal_usage_cache.async_get_cache(key=record_key, litellm_parent_otel_span=None, local_only=True)
+        is None
+    )
+
+
+@pytest.mark.asyncio
+async def test_redis_outage_fallback_preserves_timestamp_and_consumes_once() -> None:
+    server: Final = fakeredis.FakeServer()
+    store, _ = _redis_store(server, monotonic=lambda: 1000.25)
+    reservation: Final = _saved_reservation()
+    server.connected = False
+
+    await store.save_reservation("batch_outage", reservation)
+
+    popped: Final = await store.pop_reservation("batch_outage")
+    assert isinstance(popped, BatchEnqueuedTokenReservation)
+    assert popped == reservation
+    assert popped.reserved_at_monotonic == reservation.reserved_at_monotonic
+    assert await store.pop_reservation("batch_outage") is None
+    assert (
+        await store.internal_usage_cache.async_get_cache(
+            key=_record("batch_outage"), litellm_parent_otel_span=None, local_only=True
+        )
+        is None
+    )
 
 
 @pytest.mark.asyncio
