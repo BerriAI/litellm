@@ -3767,6 +3767,11 @@ class Router(DeprecatedRouterMembers):
         priced_partial._hidden_params = {  # pyright: ignore[reportPrivateUsage]  # no public accessor
             key: value for key, value in get_hidden_params_dict(partial_response).items() if key != "response_cost"
         }
+        if LiteLLMLogging.usage_capture_callback is not None:
+            from litellm._internal_context import internal_sub_call
+
+            with internal_sub_call(cut_logging.litellm_call_id):
+                cut_logging.capture_usage_before_logging(priced_partial)
         return ContinuedPartial(
             usage=BaseTokenUsageProcessor.combine_usage_objects(
                 usage_objects=[partial_usage, inherited_usage]

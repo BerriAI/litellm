@@ -473,7 +473,6 @@ from litellm.proxy.common_request_processing import (  # noqa: F401, RUF100  # l
     log_llm_api_exception,
     open_sse_before_first_byte,
     proxy_exception_from_route_error,
-    request_litellm_call_id,
     resolve_litellm_call_id,
     should_return_raw_model_name,
     sse_error_payload,
@@ -840,6 +839,8 @@ from litellm.proxy.spend_tracking.spend_event_producer import (
     SpendEventProducer,
     build_spend_event_producer,
 )
+from litellm.proxy.spend_tracking.usage_capture import UsageBatchWriter, UsageCaptureRuntime
+from litellm.proxy.spend_tracking.usage_meter import UsageCaptureSettings
 from litellm.proxy.telemetry.endpoints import router as telemetry_router
 from litellm.proxy.telemetry.middleware import TelemetryMiddleware
 from litellm.proxy.telemetry.runtime import TelemetryRuntime
@@ -1329,6 +1330,7 @@ async def _flush_spend_around_logging_drain_on_shutdown(
     finally:
         await worker.stop(discard_pending=True, timeout=GracefulShutdownManager.remaining(2.0, clock=clock))
     await drain_tasks(GracefulShutdownManager.remaining(5.0, clock=clock))
+    await usage_capture.stop(GracefulShutdownManager.remaining(clock=clock))
     await flush_spend()
 
 
@@ -3202,9 +3204,39 @@ def load_from_azure_key_vault(use_azure_key_vault: bool = False):
 
 spend_event_producer: SpendEventProducer | None = None
 
+usage_capture: Final = UsageCaptureRuntime()
+
+
+def _configure_usage_capture() -> None:
+    settings: Final = _GENERAL_SETTINGS_VIEW.validate_python(general_settings)
+    capture_settings: Final = settings.get("accounting_capture")
+    if settings.get("accounting_sync_ack") and capture_settings is None:
+        raise ValueError("accounting_sync_ack requires accounting_capture")
+    if capture_settings is None:
+        if usage_capture.meter is not None:
+            raise ValueError("Disabling accounting_capture requires a worker restart")
+        return
+    if (
+        prisma_client is None
+        or CollectorSettings().enabled
+        or os.getenv("SPEND_LOGS_URL")
+        or litellm.apply_search_free_tier
+    ):
+        raise ValueError(
+            "Usage capture requires local Prisma writes and disabled collector, remote writer and search free tier"
+        )
+    from litellm.proxy.db.accounting_ledger import AccountingLedger
+
+    ledger: Final = AccountingLedger.for_client(prisma_client)
+    writer: Final = UsageBatchWriter(ledger.insert_usage_batch, ledger.load_usage_batch)
+    usage_capture.start(
+        writer.write, UsageCaptureSettings.model_validate(capture_settings), load=ledger.load_usage_batch
+    )
+
 
 def cost_tracking():
     global prisma_client, spend_event_producer
+    _configure_usage_capture()
     if prisma_client is not None:
         from litellm.integrations.shadow_eval_logger import ShadowEvalLogger
 
@@ -13006,8 +13038,10 @@ async def completion(
     """
     global user_temperature, user_request_timeout, user_max_tokens, user_api_base
     data = {}
+    base_llm_response_processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:
         data = await read_request_body(request=request)  # rebind-ok: pre-existing rebinding on a rename-only line
+        base_llm_response_processor.data = data
         if user_api_key_dict is not None:
             if data.get("metadata") is None:
                 data["metadata"] = {}
@@ -13021,7 +13055,6 @@ async def completion(
                 data["metadata"]["user_api_key_org_alias"] = user_api_key_dict.organization_alias
             if hasattr(user_api_key_dict, "agent_id") and user_api_key_dict.agent_id is not None:
                 data["metadata"]["agent_id"] = user_api_key_dict.agent_id
-        base_llm_response_processor: Final = ProxyBaseLLMRequestProcessing(data=data)
         return await base_llm_response_processor.base_process_llm_request(
             request=request,
             fastapi_response=fastapi_response,
@@ -13123,9 +13156,12 @@ async def completion(
             return _response
     except Exception as e:
         await proxy_logging_obj.post_call_failure_hook(
-            user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data
+            user_api_key_dict=user_api_key_dict,
+            original_exception=e,
+            request_data=base_llm_response_processor.data,
+            dispatched_call_type=base_llm_response_processor.route_type,
         )
-        litellm_call_id: Final = request_litellm_call_id(data)
+        litellm_call_id: Final = base_llm_response_processor.litellm_call_id
         log_llm_api_exception(e, litellm_call_id)
         if isinstance(e, ProxyException):
             raise with_litellm_call_id(e, litellm_call_id)
