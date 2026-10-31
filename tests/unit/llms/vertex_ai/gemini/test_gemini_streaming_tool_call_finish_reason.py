@@ -11,6 +11,8 @@ Ref: https://github.com/BerriAI/litellm/issues/21041
 
 from unittest.mock import MagicMock
 
+import pytest
+
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
     ModelResponseIterator,
 )
@@ -338,3 +340,77 @@ def test_streaming_metadata_only_chunk_does_not_yield_empty_choices():
     assert len(response.choices) == 1
     assert response.choices[0].finish_reason is None
     assert response.choices[0].delta.content is None
+
+
+@pytest.mark.parametrize(
+    "finish_reason, expected",
+    [
+        ("STOP", "tool_calls"),
+        ("MAX_TOKENS", "tool_calls"),
+        ("SAFETY", "content_filter"),
+    ],
+)
+def test_streaming_tool_call_finish_reason_matches_non_streaming(finish_reason: str, expected: str):
+    """The same reply must report the same reason streamed and not streamed.
+
+    Gemini sends the call in one chunk and the reason in the next.  Only "stop"
+    was rewritten to "tool_calls", so a reply with a call that ran into
+    MAX_TOKENS reported "length" while the non-streaming path reports
+    "tool_calls" for it.  A filtered reply keeps "content_filter" on both paths,
+    so that one is pinned too -- the rewrite must not swallow it.
+    """
+    logging_obj = _make_logging_obj()
+    iterator = ModelResponseIterator(
+        streaming_response=iter([]),
+        sync_stream=True,
+        logging_obj=logging_obj,
+    )
+
+    iterator.chunk_parser(
+        {
+            "candidates": [
+                {
+                    "content": {
+                        "parts": [{"functionCall": {"name": "get_weather", "args": {}}}],
+                        "role": "model",
+                    },
+                    "index": 0,
+                }
+            ]
+        }
+    )
+    final = iterator.chunk_parser({"candidates": [{"finishReason": finish_reason, "index": 0}]})
+
+    assert final is not None
+    assert final.choices[0].finish_reason == expected
+
+
+def test_streaming_tool_call_and_max_tokens_in_one_chunk():
+    """The other chunk shape: the call and the reason arrive together."""
+    logging_obj = _make_logging_obj()
+    iterator = ModelResponseIterator(
+        streaming_response=iter([]),
+        sync_stream=True,
+        logging_obj=logging_obj,
+    )
+
+    response = iterator.chunk_parser(
+        {
+            "candidates": [
+                {
+                    "content": {
+                        "parts": [
+                            {"functionCall": {"name": "get_weather", "args": {}}},
+                            {"text": ""},
+                        ],
+                        "role": "model",
+                    },
+                    "finishReason": "MAX_TOKENS",
+                    "index": 0,
+                }
+            ]
+        }
+    )
+
+    assert response is not None
+    assert response.choices[0].finish_reason == "tool_calls"
