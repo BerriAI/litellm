@@ -15,6 +15,7 @@ from pydantic import BaseModel, JsonValue, TypeAdapter
 
 from litellm._logging import verbose_proxy_logger
 from litellm.accounting import (
+    CostCompiler,
     Dimension,
     DimensionName,
     InboundUsageEvent,
@@ -240,6 +241,7 @@ _PRICING_FIELDS: Final = frozenset(
         "seconds",
         "search_context_size",
         "additional_response_cost",
+        "cost_per_query",
     }
 )
 
@@ -782,7 +784,13 @@ async def capture_proxy_response(logging_obj: object, response: object, *, backg
             timeout: Final = TypeAdapter(float).validate_python(
                 settings.get("accounting_sync_ack_timeout_seconds", 20.0)
             )
-            await asyncio.wait_for(asyncio.shield(captured.receipt), timeout=timeout)
+            async with asyncio.timeout(timeout):
+                await asyncio.shield(captured.receipt)
+                compiler: Final = usage_capture.compiler
+                if compiler is not None:
+                    for write in captured.writes:
+                        if isinstance(write.event, OutboundUsageEvent):
+                            await compiler.compile(write.event)
     except Exception as error:  # noqa: BLE001  # the configured response policy owns every capture failure
         verbose_proxy_logger.exception("Usage capture failed before the response boundary")
         if sync_ack and settings.get("accounting_sync_ack_failure_policy", "fail_closed") == "fail_closed":
@@ -866,6 +874,17 @@ class PricingCapture:
 
 
 def _capture_pricing(logging_obj: Logging, normalized: object, details: Mapping[str, object]) -> PricingCapture:
+    from litellm.litellm_core_utils.llm_cost_calc.pricing_context import retained_pricing
+
+    if logging_obj.request_pricing is not None:
+        with retained_pricing(logging_obj.request_pricing):
+            return _capture_effective_pricing(logging_obj, normalized, details)
+    return _capture_effective_pricing(logging_obj, normalized, details)
+
+
+def _capture_effective_pricing(
+    logging_obj: Logging, normalized: object, details: Mapping[str, object]
+) -> PricingCapture:
     import litellm
     from litellm.litellm_core_utils.cost_discount import resolve_cost_discount
     from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
@@ -900,16 +919,38 @@ def _capture_pricing(logging_obj: Logging, normalized: object, details: Mapping[
                 if builtins.get("web_search_options") is not None
                 else None
             ),
-            "file_search": builtins.get("file_search") is not None,
+            "file_search": {
+                key: value
+                for key, value in _fields(builtins.get("file_search")).items()
+                if key in {"type", "storage_gb", "days"}
+            }
+            if builtins.get("file_search") is not None
+            else None,
         }
     )
-    batch_usage: Final = _fields(_fields(_response_fields(normalized).get("usage")).get("batch_usage_by_model"))
+    realtime_models: Final = tuple(
+        dict.fromkeys(
+            chain.from_iterable(_realtime_pricing_models(event) for event in _realtime_cost_events(normalized))
+        )
+    )
+    batch_usage: Final = _fields(
+        _response_fields(_response_fields(normalized).get("usage")).get("batch_usage_by_model")
+    )
     return PricingCapture(
         _json(pricing),
         adjustments,
         _json(
             {
                 **_pricing_inputs(details, logging_obj, normalized),
+                "realtime_models": {
+                    model: StandardLoggingPayloadSetup.get_model_cost_information(
+                        base_model=model,
+                        custom_pricing=False,
+                        custom_llm_provider=provider,
+                        init_response_obj={"model": model},
+                    )
+                    for model in realtime_models
+                },
                 "batch_models": {
                     model: StandardLoggingPayloadSetup.get_model_cost_information(
                         base_model=model,
@@ -926,10 +967,71 @@ def _capture_pricing(logging_obj: Logging, normalized: object, details: Mapping[
     )
 
 
+def _tool_cost_inputs(response: object) -> Mapping[str, object]:
+    from litellm.litellm_core_utils.llm_cost_calc.tool_call_cost_tracking import StandardBuiltInToolCostTracking
+    from litellm.types.llms.openai import ResponsesAPIResponse
+
+    raw: Final = _response_fields(response)
+    flags: Final = {
+        "web_search": StandardBuiltInToolCostTracking.response_object_includes_web_search_call(response),
+        "file_search": StandardBuiltInToolCostTracking.response_object_includes_file_search_call(response),
+    }
+    if not isinstance(response, ResponsesAPIResponse) and raw.get("object") != "response":
+        return flags if any(flags.values()) else {}
+    return {
+        **flags,
+        "responses_api": True,
+        "usage": _response_fields(raw.get("usage")),
+        "output": tuple(
+            {key: value for key, value in _fields(item).items() if key in {"type", "id", "status", "usage"}}
+            for item in TypeAdapter(tuple[object, ...]).validate_python(raw.get("output") or ())
+        ),
+    }
+
+
+def _realtime_cost_fields(value: object) -> Mapping[str, JsonValue]:
+    fields: Final = _fields(value)
+    return {
+        **{
+            key: _JSON_OBJECT.validate_python(fields[key]) for key in ("usage",) if isinstance(fields.get(key), Mapping)
+        },
+        **{
+            key: value
+            for key, value in fields.items()
+            if key in {"type", "id", "model", "service_tier"} and isinstance(value, str)
+        },
+        **{
+            key: dict(_realtime_cost_fields(fields[key]))
+            for key in ("response", "event", "session", "audio", "input", "transcription", "input_audio_transcription")
+            if isinstance(fields.get(key), Mapping)
+        },
+    }
+
+
+def _realtime_cost_events(response: object) -> tuple[Mapping[str, JsonValue], ...]:
+    results: Final = _response_fields(response).get("results")
+    return (
+        tuple(_realtime_cost_fields(result) for result in TypeAdapter(tuple[object, ...]).validate_python(results))
+        if isinstance(results, list)
+        else ()
+    )
+
+
+def _realtime_pricing_models(value: Mapping[str, JsonValue]) -> Iterator[str]:
+    model: Final = value.get("model")
+    if isinstance(model, str):
+        yield model
+    for key in ("response", "event", "session", "audio", "input", "transcription", "input_audio_transcription"):
+        if isinstance(nested := value.get(key), dict):
+            yield from _realtime_pricing_models(nested)
+
+
 def _pricing_inputs(kwargs: Mapping[str, object], logging_obj: object, response: object) -> Mapping[str, object]:
     from litellm.litellm_core_utils.litellm_logging import Logging
 
     return {
+        "tool_response": _tool_cost_inputs(response),
+        "realtime_events": _realtime_cost_events(response),
         "request": _selected_pricing(kwargs),
         "deployment": _selected_pricing(_fields(kwargs.get("litellm_params"))),
         "optional_params": _selected_pricing(_fields(kwargs.get("optional_params"))),
@@ -1006,6 +1108,7 @@ class UsageCaptureRuntime:
         self._batches: Final[set[asyncio.Task[None]]] = set()  # mutable-ok: owned producer lifecycle
         self._stopping = False
         self.meter: DurableUsageMeter | None = None
+        self.compiler: CostCompiler | None = None
         self.load: Callable[[tuple[str, ...]], Awaitable[tuple[UsageWrite, ...]]] | None = None
 
     def start(
@@ -1014,6 +1117,7 @@ class UsageCaptureRuntime:
         settings: UsageCaptureSettings,
         *,
         load: Callable[[tuple[str, ...]], Awaitable[tuple[UsageWrite, ...]]] | None = None,
+        compiler: CostCompiler | None = None,
     ) -> None:
         from litellm.litellm_core_utils.litellm_logging import Logging
 
@@ -1024,6 +1128,7 @@ class UsageCaptureRuntime:
         meter: Final = DurableUsageMeter(write_batch, settings)
         self.meter = meter
         self.load = load
+        self.compiler = compiler
         self._stopping = False
         Logging.usage_capture_callback = lambda logger, response, start, end, freeze: capture_logging_usage(
             meter, logger, response, start, end, freeze
@@ -1082,3 +1187,4 @@ class UsageCaptureRuntime:
                 Logging.usage_capture_callback = None
                 self.meter = None
                 self.load = None
+                self.compiler = None
