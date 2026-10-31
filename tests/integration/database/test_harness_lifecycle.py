@@ -81,6 +81,7 @@ def _nested_pytest_environment(environment: Mapping[str, str]) -> dict[str, str]
             "INTEGRATION_CASE_SHARD_INDEX",
             "CIRCLE_NODE_TOTAL",
             "CIRCLE_NODE_INDEX",
+            "PYTEST_ADDOPTS",
             "PYTEST_XDIST_WORKER",
             "PYTEST_XDIST_WORKER_COUNT",
             "PYTEST_XDIST_TESTRUNUID",
@@ -107,8 +108,16 @@ def test_runner_environment_drops_inherited_provider_api_keys() -> None:
 
 
 @pytest.mark.parametrize("fails", (False, True), ids=("passing-test", "failing-test"))
-def test_sdk_teardown_delivers_logging_before_restoring_callbacks(tmp_path: Path, fails: bool) -> None:
+def test_sdk_teardown_delivers_logging_before_restoring_callbacks(
+    tmp_path: Path, fails: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
     root: Final = Path(__file__).resolve().parents[3]
+    coverage_report: Final = tmp_path / "outer-coverage.xml"
+    coverage_report.write_text("parent coverage report")
+    monkeypatch.setenv(
+        "PYTEST_ADDOPTS",
+        f"--cov=litellm.proxy.spend_tracking.cost_compiler --cov-report=xml:{coverage_report}",
+    )
     events: Final = tmp_path / "callbacks.json"
     probe: Final = tmp_path / "test_callback_teardown.py"
     probe.write_text(
@@ -175,6 +184,7 @@ def test_sdk_teardown_delivers_logging_before_restoring_callbacks(tmp_path: Path
         check=False,
     )
     assert result.returncode == (1 if fails else 0), result.stdout + result.stderr
+    assert coverage_report.read_text() == "parent coverage report", "nested pytest overwrote parent coverage"
     cases: Final = ElementTree.parse(tmp_path / "junit.xml").findall(".//testcase")
     assert tuple(case.attrib["name"] for case in cases) == ("test_request", "test_next")
     assert all(case.find("error") is None for case in cases), result.stdout + result.stderr
