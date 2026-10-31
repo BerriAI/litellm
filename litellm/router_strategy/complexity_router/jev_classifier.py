@@ -1,4 +1,5 @@
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Annotated, Final, Literal, NamedTuple, Protocol, TypeAlias
@@ -25,10 +26,13 @@ from litellm.llms.pass_through.typesafe_logging_handler import TypeSafePassthrou
 from litellm.router_strategy.complexity_router.config import DEFAULT_JEV_INSTRUCTIONS as _DEFAULT_JEV_INSTRUCTIONS
 from litellm.types.decisions import DecisionsResponse
 from litellm.types.llms.base import LiteLLMBaseModel
-from litellm.types.utils import AUTOROUTER_CLASSIFIER_CALL_ORIGIN
+from litellm.types.utils import AUTOROUTER_CLASSIFIER_CALL_ORIGIN, StandardLoggingRoutingDecision
 
 if TYPE_CHECKING:
     from litellm.router import Router
+    from litellm.router_api import RoutingContext
+    from litellm.router_strategy.complexity_router.config import OpenSourceClassifierConfig
+    from litellm.types.router import Deployment
 
 JevProbability: TypeAlias = Annotated[float, Field(ge=0.0, le=1.0)]
 ClassifierProvider: TypeAlias = Literal["typesafe", "laya", "bespoke", "databricks"]
@@ -50,6 +54,155 @@ class JevSystemOneRequest(LiteLLMBaseModel):
     state: str
     model: str
     questions: Mapping[str, JevChoiceQuestion]
+
+
+@dataclass(frozen=True, slots=True)
+class JevInputTarget:
+    model: str
+    max_tokens: int | None
+
+
+@dataclass(frozen=True, slots=True)
+class JevBudgetedRequest:
+    request: JevSystemOneRequest | None
+    telemetry: StandardLoggingRoutingDecision
+
+
+def jev_input_targets(router: "Router", config: "OpenSourceClassifierConfig") -> tuple[JevInputTarget, ...]:
+    from litellm.router_api import RoutingContext
+    from litellm.types.router import Deployment
+
+    if config.deployment_name is None:
+        provider: Final = "typesafe" if config.provider == "jev" else config.provider
+        return (_jev_input_target({"model": f"{provider}/{config.model}"}, None),)
+    context: Final = RoutingContext(router)
+    deployments: Final = context.registry().deployments(model_name=config.deployment_name) or ()
+    return tuple(
+        _jev_deployment_input_target(context, Deployment.model_validate(deployment)) for deployment in deployments
+    )
+
+
+def _jev_deployment_input_target(context: "RoutingContext", deployment: "Deployment") -> JevInputTarget:
+    params: Final = context.deployment_params({}, deployment)
+    explicit_limit: Final = deployment.model_info.model_dump().get("max_input_tokens")
+    return _jev_input_target(params, explicit_limit)
+
+
+def _jev_input_target(params: Mapping[str, object], explicit_limit: object) -> JevInputTarget:
+    from litellm.decisions.call import decisions_outbound_headers, get_decisions_provider_config
+    from litellm.litellm_core_utils.get_llm_provider_logic import resolve_model_and_provider_for_metadata
+
+    qualified_model: Final = str(params.get("model") or "")
+    override: Final = params.get("custom_llm_provider")
+    try:
+        model, provider = resolve_model_and_provider_for_metadata(
+            qualified_model, override if isinstance(override, str) else None
+        )
+        headers: Final = decisions_outbound_headers(
+            TypeAdapter[Mapping[str, str] | None](Mapping[str, str] | None).validate_python(
+                params.get("extra_headers")
+            ),
+            provider,
+            params,
+        )
+        limits: Final = get_decisions_provider_config(model, provider).get_input_limits(model, provider, headers)
+        candidates: Final = tuple(
+            value
+            for value in (limits.max_request_tokens, limits.max_question_tokens, explicit_limit)
+            if isinstance(value, int) and not isinstance(value, bool) and value > 0
+        )
+        return JevInputTarget(f"{provider}/{model}", min(candidates) if candidates else None)
+    except Exception:  # noqa: BLE001  # unavailable metadata must not turn an existing classifier into a request failure
+        return JevInputTarget(qualified_model, None)
+
+
+def _jev_request_count(request: JevSystemOneRequest, models: Sequence[str], budget: int) -> tuple[int, str]:
+    from litellm._lazy_imports import get_token_counter_new
+
+    payload: Final = request.model_dump_json(exclude={"model"})
+    byte_count: Final = len(payload.encode("utf-8"))
+    if byte_count <= budget or litellm.disable_token_counter:
+        return byte_count, "utf8_bytes"
+    try:
+        counts: Final = tuple(get_token_counter_new()(model=model, text=payload) for model in models)
+        if counts and all(count > 0 for count in counts):
+            return max(counts), "estimated_tokens"
+    except Exception:  # noqa: BLE001  # tokenization is best-effort; byte counting remains available
+        return byte_count, "utf8_bytes"
+    return byte_count, "utf8_bytes"
+
+
+def fit_jev_request(
+    build_request: Callable[[str, str | None], JevSystemOneRequest],
+    prompt: str,
+    system_prompt: str | None,
+    targets: Sequence[JevInputTarget],
+    truncate: Callable[[str, int], str],
+) -> JevBudgetedRequest:
+    known: Final = tuple(target for target in targets if target.max_tokens is not None)
+    if not known:
+        return JevBudgetedRequest(
+            build_request(prompt, system_prompt),
+            {"classifier_input_budget_status": "unknown_limits", "classifier_input_truncated": False},
+        )
+    budget: Final = max(1, int(min(target.max_tokens for target in known if target.max_tokens is not None) * 0.75))
+    models: Final = tuple(dict.fromkeys(target.model for target in known))
+    initial_cap: Final = max(120, budget * 8)
+    bounded_prompt: Final = truncate(prompt, initial_cap)
+    bounded_system: Final = truncate(system_prompt, initial_cap) if system_prompt is not None else None
+    return _fit_jev_components(
+        build_request,
+        bounded_prompt,
+        bounded_system,
+        models,
+        budget,
+        truncate,
+        len(known) != len(targets),
+        bounded_prompt != prompt or bounded_system != system_prompt,
+    )
+
+
+def _fit_jev_components(
+    build_request: Callable[[str, str | None], JevSystemOneRequest],
+    prompt: str,
+    system_prompt: str | None,
+    models: Sequence[str],
+    budget: int,
+    truncate: Callable[[str, int], str],
+    unknown_limits: bool,
+    truncated: bool,
+) -> JevBudgetedRequest:
+    attempts: Final = len(prompt).bit_length() + len(system_prompt or "").bit_length() + 1
+    components: tuple[str, str | None, bool, int] = (  # rebind-ok: bounded iterative fitting state
+        prompt,
+        system_prompt,
+        truncated,
+        attempts,
+    )
+    while True:
+        current_prompt, current_system, was_truncated, remaining = components
+        request = build_request(current_prompt, current_system)
+        count, method = _jev_request_count(request, models, budget)
+        telemetry: StandardLoggingRoutingDecision = {
+            "classifier_input_budget_tokens": budget,
+            "classifier_input_tokens": count,
+            "classifier_input_count_method": method,
+            "classifier_input_truncated": was_truncated,
+            "classifier_input_budget_status": "unknown_limits"
+            if unknown_limits
+            else "truncated"
+            if was_truncated
+            else "within_budget",
+        }
+        if count <= budget:
+            return JevBudgetedRequest(request, telemetry)
+        if remaining == 0 or (len(current_system or "") <= 123 and len(current_prompt) <= 123):
+            return JevBudgetedRequest(None, {**telemetry, "classifier_input_budget_status": "untrimmable_input"})
+        components = (
+            (current_prompt, truncate(current_system, max(120, len(current_system) // 2)), True, remaining - 1)
+            if current_system is not None and len(current_system) > 123
+            else (truncate(current_prompt, max(120, len(current_prompt) // 2)), current_system, True, remaining - 1)
+        )
 
 
 class JevChoiceAnswer(LiteLLMBaseModel):

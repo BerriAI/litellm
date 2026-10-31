@@ -926,3 +926,120 @@ def test_openrouter_claude_request_over_the_cache_control_cap_drops_the_oldest_h
     assert sorted(_cached_texts(body["messages"])) == expected_cached_texts
     assert json.dumps(body).count('"cache_control"') == len(expected_cached_texts)
     assert messages == messages_before
+
+
+def _transform_openrouter_response(body: dict[str, object]) -> litellm.ModelResponse:
+    return OpenrouterConfig().transform_response(
+        model="openrouter/openai/gpt-4o-mini",
+        raw_response=httpx.Response(200, json=body),
+        model_response=litellm.ModelResponse(),
+        logging_obj=MagicMock(),
+        request_data={},
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params={},
+        litellm_params={},
+        encoding=None,
+    )
+
+
+def test_openrouter_nonstream_provider_without_usage_is_preserved_regression() -> None:
+    response: Final = _transform_openrouter_response(
+        {
+            "id": "gen-provider-no-usage",
+            "object": "chat.completion",
+            "created": 1,
+            "model": "openai/gpt-4o-mini",
+            "provider": "serving-site-a",
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {"role": "assistant", "content": "hi"},
+                    "finish_reason": "stop",
+                }
+            ],
+        }
+    )
+
+    assert response._hidden_params.get("upstream_provider") == "serving-site-a"
+
+
+@pytest.mark.parametrize(
+    ("provider_fields", "case"),
+    [
+        pytest.param({}, "missing", id="missing"),
+        pytest.param({"provider": None}, "null", id="null"),
+        pytest.param({"provider": ""}, "empty", id="empty"),
+        pytest.param({"provider": 123}, "non-string", id="non-string"),
+    ],
+)
+def test_openrouter_invalid_provider_keeps_reported_cost_guard(
+    provider_fields: dict[str, object], case: str
+) -> None:
+    response: Final = _transform_openrouter_response(
+        {
+            "id": f"gen-invalid-provider-{case}",
+            "object": "chat.completion",
+            "created": 1,
+            "model": "openai/gpt-4o-mini",
+            **provider_fields,
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {"role": "assistant", "content": "hi"},
+                    "finish_reason": "stop",
+                }
+            ],
+            "usage": {
+                "prompt_tokens": 10,
+                "completion_tokens": 20,
+                "total_tokens": 30,
+                "cost": 0.00015,
+            },
+        }
+    )
+
+    assert response._hidden_params.get("upstream_provider") is None
+    assert response._hidden_params["additional_headers"][OPENROUTER_COST_HEADER] == 0.00015
+
+
+def test_openrouter_streaming_chunk_preserves_provider_regression() -> None:
+    chunk: Final = {
+        "id": "gen-provider-stream",
+        "object": "chat.completion.chunk",
+        "created": 1,
+        "model": "openai/gpt-4o-mini",
+        "provider": "serving-site-a",
+        "choices": [{"index": 0, "delta": {"content": "hi"}, "finish_reason": None}],
+    }
+
+    response: Final = OpenRouterChatCompletionStreamingHandler(
+        streaming_response=None, sync_stream=True
+    ).chunk_parser(chunk)
+
+    assert response._hidden_params.get("upstream_provider") == "serving-site-a"
+
+
+@pytest.mark.parametrize(
+    ("provider_fields", "case"),
+    [
+        pytest.param({}, "missing", id="missing"),
+        pytest.param({"provider": None}, "null", id="null"),
+        pytest.param({"provider": ""}, "empty", id="empty"),
+        pytest.param({"provider": 123}, "non-string", id="non-string"),
+    ],
+)
+def test_openrouter_streaming_chunk_ignores_invalid_provider_guard(provider_fields: dict[str, object], case: str) -> None:
+    chunk: Final = {
+        "id": f"gen-invalid-provider-{case}",
+        "object": "chat.completion.chunk",
+        "created": 1,
+        "model": "openai/gpt-4o-mini",
+        **provider_fields,
+        "choices": [{"index": 0, "delta": {"content": "hi"}, "finish_reason": None}],
+    }
+
+    response: Final = OpenRouterChatCompletionStreamingHandler(
+        streaming_response=None, sync_stream=True
+    ).chunk_parser(chunk)
+
+    assert response._hidden_params.get("upstream_provider") is None
