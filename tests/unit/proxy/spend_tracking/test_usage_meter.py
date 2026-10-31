@@ -271,3 +271,34 @@ async def test_elapsed_flush_deadline_commits_a_partial_batch() -> None:
         assert (meter.pending_records, meter.pending_bytes) == (0, 0)
     finally:
         await meter.stop(0)
+
+
+@pytest.mark.asyncio
+async def test_burst_drains_full_batches_without_waiting_for_partial_batch_deadline() -> None:
+    database: Final = CommitBarrier()
+    database.release.set()
+    waits: Final = asyncio.Queue[bool]()
+
+    async def observe_wait(wakeup: asyncio.Event, timeout: float) -> None:
+        waits.put_nowait(wakeup.is_set())
+        await wakeup.wait()
+
+    meter: Final = DurableUsageMeter(database.write, UsageCaptureSettings(batch_size=2), wait_for_batch=observe_wait)
+    receipts: Final = tuple(meter.submit((_write(str(index)),)) for index in range(5))
+    try:
+        assert await waits.get() is True
+        await asyncio.gather(*receipts[:2])
+        assert await waits.get() is True, "A full queued batch must not wait for the flush deadline"
+        await asyncio.gather(*receipts[2:4])
+        assert await waits.get() is False
+        assert database.committed == ("0", "1", "2", "3")
+        assert meter.pending_records == 1
+        assert not receipts[-1].done()
+        await meter.close()
+        await receipts[-1]
+        assert database.committed == ("0", "1", "2", "3", "4")
+        assert database.transactions == 3
+        assert (meter.pending_records, meter.pending_bytes) == (0, 0)
+    finally:
+        await meter.stop(0)
+        await asyncio.gather(*receipts, return_exceptions=True)

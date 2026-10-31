@@ -228,7 +228,7 @@ class DurableUsageMeter:
                 await self._wait_for_batch(self._wakeup, self.settings.flush_interval_seconds)
                 self._wakeup.clear()
                 await self._commit(self._take_batch())
-                if self._closed:
+                if self._closed or self.pending_records >= self.settings.batch_size:
                     self._wakeup.set()
         except (Exception, asyncio.CancelledError):  # noqa: BLE001  # reject queued receipts if the writer exits abnormally
             while self._queue:
