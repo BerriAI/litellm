@@ -1224,6 +1224,7 @@ class LiteLLMCompletionResponsesConfig:
         drop_params: object = None,
         *,
         caller_input: str | ResponseInputParam | None = None,
+        names_non_string_fields: bool = False,
         **kwargs,
     ) -> dict:
         """
@@ -1294,7 +1295,8 @@ class LiteLLMCompletionResponsesConfig:
                     ),
                 )
             )
-            if isinstance(numbered_input, list)
+            if names_non_string_fields
+            and isinstance(numbered_input, list)
             and any(map(_carries_non_string_field, bridged_messages))
             and provider_builds_anthropic_request(model, custom_llm_provider)
             else None

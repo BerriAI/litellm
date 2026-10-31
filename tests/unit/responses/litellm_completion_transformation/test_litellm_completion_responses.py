@@ -7117,6 +7117,7 @@ def _bridge_to(model: str, history: list[dict[str, object]], **request: object) 
         model=model,
         input=cast(ResponseInputParam, history),
         responses_api_request=cast(ResponsesAPIOptionalRequestParams, request),
+        names_non_string_fields=True,
     )
 
 
