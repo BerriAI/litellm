@@ -1079,6 +1079,7 @@ openai_compatible_endpoints: Final[list[str]] = [
     "https://api.meta.ai/v1",
     "https://api.sailresearch.com/v1",
     "https://api.cognition.ai/v1",
+    "https://api.mixroute.ai/v1",
     "https://inference.coralbricks.ai/v1",
     "https://api.cortecs.ai/v1",
     "https://api.scx.ai/v1",
@@ -1163,6 +1164,7 @@ openai_compatible_providers: Final[list[str]] = [
     "darkbloom",
     "meta",  # Meta Model API (Muse Spark) - JSON-configured provider
     "cognition",
+    "mixroute",
     "coralbricks",
     "cortecs",
     "scx-ai",
