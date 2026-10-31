@@ -2,8 +2,10 @@ import asyncio
 import gzip
 import os
 import time
+import zlib
+from collections.abc import Sequence
 from datetime import datetime
-from typing import Final
+from typing import Final, Literal
 
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_batch_logger import CustomBatchLogger
@@ -21,6 +23,8 @@ from litellm.llms.custom_httpx.http_handler import (
 )
 from litellm.types.integrations.base_health_check import IntegrationHealthCheckStatus
 from litellm.types.integrations.datadog_metrics import (
+    DatadogDistributionPayload,
+    DatadogDistributionSeries,
     DatadogMetricPoint,
     DatadogMetricSeries,
     DatadogMetricsPayload,
@@ -29,6 +33,9 @@ from litellm.types.utils import StandardLoggingPayload
 
 
 class DatadogMetricsLogger(CustomBatchLogger):
+    preserve_events_added_during_flush = True
+    log_queue: list[DatadogMetricSeries | DatadogDistributionSeries]
+
     def __init__(self, start_periodic_flush: bool = True, **kwargs):
         self.dd_api_key = os.getenv("DD_API_KEY")
         self.dd_app_key = os.getenv("DD_APP_KEY")
@@ -38,6 +45,7 @@ class DatadogMetricsLogger(CustomBatchLogger):
             verbose_logger.warning("Datadog Metrics: DD_API_KEY is required. Integration will not work.")
 
         self.upload_url = f"https://api.{self.dd_site}/api/v2/series"
+        self.distribution_upload_url = f"https://api.{self.dd_site}/api/v1/distribution_points"
 
         self.async_client = get_async_httpx_client(llm_provider=httpxSpecialProvider.LoggingCallback)
 
@@ -53,6 +61,10 @@ class DatadogMetricsLogger(CustomBatchLogger):
             kwargs["flush_interval"] = 5
 
         super().__init__(**kwargs)
+
+        # Distribution points at the head of the queue that Datadog rejected; they ride the next flush
+        # but do not count toward `batch_size`
+        self.unsent_distribution_count = 0
 
         # Start periodic flush task only if instructed
         if start_periodic_flush:
@@ -71,9 +83,11 @@ class DatadogMetricsLogger(CustomBatchLogger):
             f"env:{get_datadog_env()}",
             f"service:{get_datadog_service()}",
             f"version:{os.getenv('DD_VERSION', 'unknown')}",
-            f"HOSTNAME:{get_datadog_hostname()}",
             f"POD_NAME:{get_datadog_pod_name()}",
         ]
+
+        if hostname := get_datadog_hostname():
+            tags.append(f"HOSTNAME:{hostname}")
 
         # Add metric-specific tags
         if provider := log.get("custom_llm_provider"):
@@ -102,6 +116,27 @@ class DatadogMetricsLogger(CustomBatchLogger):
 
         return tags
 
+    def _add_latency_metric(
+        self, gauge_metric: str, distribution_metric: str, seconds: float, timestamp: int, tags: Sequence[str]
+    ) -> None:
+        """
+        Queues a latency sample as a gauge under its `litellm.*` name and as a distribution
+        under its `litellm_proxy.*` name, which Datadog can compute percentiles over
+        """
+        gauge: Final[DatadogMetricSeries] = {
+            "metric": gauge_metric,
+            "type": 3,  # gauge
+            "points": [{"timestamp": timestamp, "value": seconds}],
+            "tags": tags,
+        }
+        distribution: Final[DatadogDistributionSeries] = {
+            "metric": distribution_metric,
+            "type": "distribution",
+            "points": ((timestamp, (seconds,)),),
+            "tags": tuple(tags),
+        }
+        self.log_queue.extend((gauge, distribution))
+
     def _add_metrics_from_log(
         self,
         log: StandardLoggingPayload,
@@ -121,43 +156,30 @@ class DatadogMetricsLogger(CustomBatchLogger):
         start_time_dt: Final = kwargs.get("start_time")
         if start_time_dt and end_time_dt:
             total_duration: Final = (end_time_dt - start_time_dt).total_seconds()
-            series_total_latency: Final[DatadogMetricSeries] = {
-                "metric": "litellm.request.total_latency",
-                "type": 3,  # gauge
-                "points": [{"timestamp": timestamp, "value": total_duration}],
-                "tags": tags,
-            }
-            self.log_queue.append(series_total_latency)
+            self._add_latency_metric(
+                "litellm.request.total_latency", "litellm_proxy.request.total_latency", total_duration, timestamp, tags
+            )
 
         # 2. LLM API Latency Metric (Provider alone)
         api_call_start_time: Final = kwargs.get("api_call_start_time")
         if api_call_start_time and end_time_dt:
             llm_api_duration: Final = (end_time_dt - api_call_start_time).total_seconds()
-            series_llm_latency: Final[DatadogMetricSeries] = {
-                "metric": "litellm.llm_api.latency",
-                "type": 3,  # gauge
-                "points": [{"timestamp": timestamp, "value": llm_api_duration}],
-                "tags": tags,
-            }
-            self.log_queue.append(series_llm_latency)
+            self._add_latency_metric(
+                "litellm.llm_api.latency", "litellm_proxy.llm_api.latency", llm_api_duration, timestamp, tags
+            )
 
         # 3. LiteLLM Overhead Latency Metric (total - llm_api time)
         hidden_params: Final = log.get("hidden_params", {}) or {}
         litellm_overhead_time_ms: Final = hidden_params.get("litellm_overhead_time_ms")
         if litellm_overhead_time_ms is not None:
             overhead_tags: Final = self._extract_tags(log)  # no status_code on latency metric
-            series_overhead: Final[DatadogMetricSeries] = {
-                "metric": "litellm.overhead.latency",
-                "type": 3,  # gauge
-                "points": [
-                    {
-                        "timestamp": timestamp,
-                        "value": litellm_overhead_time_ms / 1000,  # convert ms → seconds
-                    }
-                ],
-                "tags": overhead_tags,
-            }
-            self.log_queue.append(series_overhead)
+            self._add_latency_metric(
+                "litellm.overhead.latency",
+                "litellm_proxy.overhead.latency",
+                litellm_overhead_time_ms / 1000,
+                timestamp,
+                overhead_tags,
+            )
 
         # 4. Request Count / Status Code
         series_count: Final[DatadogMetricSeries] = {
@@ -178,7 +200,7 @@ class DatadogMetricsLogger(CustomBatchLogger):
 
             self._add_metrics_from_log(log=standard_logging_object, kwargs=kwargs, status_code="200")
 
-            if len(self.log_queue) >= self.batch_size:
+            if len(self.log_queue) - self.unsent_distribution_count >= self.batch_size:
                 await self.flush_queue()
 
         except Exception as e:
@@ -200,7 +222,7 @@ class DatadogMetricsLogger(CustomBatchLogger):
 
             self._add_metrics_from_log(log=standard_logging_object, kwargs=kwargs, status_code=status_code)
 
-            if len(self.log_queue) >= self.batch_size:
+            if len(self.log_queue) - self.unsent_distribution_count >= self.batch_size:
                 await self.flush_queue()
 
         except Exception as e:
@@ -210,41 +232,69 @@ class DatadogMetricsLogger(CustomBatchLogger):
         if not self.log_queue:
             return
 
-        batch: Final = self.log_queue.copy()
-        payload_data: Final[DatadogMetricsPayload] = {"series": batch}
+        batch: Final[tuple[DatadogMetricSeries | DatadogDistributionSeries, ...]] = tuple(self.log_queue)
+        series: Final[tuple[DatadogMetricSeries, ...]] = tuple(s for s in batch if s["type"] != "distribution")
+        distributions: Final[tuple[DatadogDistributionSeries, ...]] = tuple(
+            s for s in batch if s["type"] == "distribution"
+        )
 
         try:
-            await self._upload_to_datadog(payload_data)
+            if series:
+                await self._upload_to_datadog({"series": series})
         except Exception as e:
             verbose_logger.exception("Datadog Metrics: Error in async_send_batch: %s", e)
             raise
 
+        try:
+            if distributions:
+                await self._upload_distributions_to_datadog({"series": distributions})
+        except (Exception, asyncio.CancelledError) as e:
+            unsent: Final = distributions[-self.batch_size :]
+            self.log_queue[: len(batch)] = unsent
+            self.unsent_distribution_count = len(unsent)
+            if dropped := len(distributions) - len(unsent):
+                verbose_logger.warning(
+                    "Datadog Metrics: keeping the newest %s unsent distribution points; dropped %s older ones.",
+                    len(unsent),
+                    dropped,
+                )
+            verbose_logger.exception("Datadog Metrics: Error in async_send_batch: %s", e)
+            raise
+
+        self.unsent_distribution_count = 0
+
     async def _upload_to_datadog(self, payload: DatadogMetricsPayload):
+        await self._post_compressed(self.upload_url, safe_dumps(payload), len(payload["series"]), encoding="gzip")
+
+    async def _upload_distributions_to_datadog(self, payload: DatadogDistributionPayload) -> None:
+        await self._post_compressed(
+            self.distribution_upload_url, safe_dumps(payload), len(payload["series"]), encoding="deflate"
+        )
+
+    async def _post_compressed(
+        self, url: str, json_data: str, point_count: int, encoding: Literal["gzip", "deflate"]
+    ) -> None:
         if not self.dd_api_key:
             return
 
         headers: Final = {
             "Content-Type": "application/json",
+            "Content-Encoding": encoding,
             "DD-API-KEY": self.dd_api_key,
         }
 
         if self.dd_app_key:
             headers["DD-APPLICATION-KEY"] = self.dd_app_key
 
-        json_data: Final = safe_dumps(payload)
-        compressed_data: Final = gzip.compress(json_data.encode("utf-8"))
-        headers["Content-Encoding"] = "gzip"
+        raw: Final = json_data.encode("utf-8")
+        compressed_data: Final = gzip.compress(raw) if encoding == "gzip" else zlib.compress(raw)
 
-        response: Final = await self.async_client.post(
-            self.upload_url,
-            content=compressed_data,
-            headers=headers,
-        )
+        response: Final = await self.async_client.post(url, content=compressed_data, headers=headers)
 
         response.raise_for_status()
 
         verbose_logger.debug(
-            "Datadog Metrics: Uploaded %s metric points. Status: %s", len(payload["series"]), response.status_code
+            "Datadog Metrics: Uploaded %s metric points. Status: %s", point_count, response.status_code
         )
 
     async def async_health_check(self) -> IntegrationHealthCheckStatus:
