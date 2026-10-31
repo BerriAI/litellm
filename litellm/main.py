@@ -113,6 +113,11 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     messages_without_pdf_file_parts,
 )
 from litellm.litellm_core_utils.provider_affinity import add_provider_affinity_header
+from litellm.litellm_core_utils.reasoning_effort_capability import (
+    model_group_from_metadata,
+    reasoning_effort_needs_allowing,
+    resolve_chat_reasoning,
+)
 from litellm.litellm_core_utils.request_timeout_resolver import (
     get_configured_request_timeout,
 )
@@ -144,11 +149,6 @@ from litellm.llms.vertex_ai.common_utils import (
 )
 from litellm.realtime_api.main import realtime_health_check
 from litellm.responses.mcp.tool_precheck import may_name_litellm_mcp_gateway
-from litellm.router_utils.reasoning_effort_capability import (
-    model_group_from_metadata,
-    reasoning_effort_needs_allowing,
-    resolve_chat_reasoning,
-)
 from litellm.secret_managers.main import get_secret_bool, get_secret_str
 from litellm.text_completions.streaming_iterator import TextCompletionStreamWrapper
 from litellm.types.completion import (

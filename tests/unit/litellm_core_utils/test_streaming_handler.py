@@ -6879,7 +6879,7 @@ def test_rebuilding_a_priced_stream_bills_the_margin_once(monkeypatch: pytest.Mo
 
 
 def test_chunk_creator_keeps_provider_model_private_across_stream():
-    from litellm.router_utils.add_retry_fallback_headers import (
+    from litellm.litellm_core_utils.add_retry_fallback_headers import (
         get_hidden_params_dict,
     )
 
@@ -6940,7 +6940,7 @@ def test_chunk_creator_keeps_provider_model_private_across_stream():
 def test_assembled_stream_uses_later_provider_model_for_cost(
     monkeypatch: pytest.MonkeyPatch,
 ):
-    from litellm.router_utils.add_retry_fallback_headers import (
+    from litellm.litellm_core_utils.add_retry_fallback_headers import (
         get_hidden_params_dict,
     )
 

@@ -41,6 +41,14 @@ def _without_bridge_transform_keywords(request_kwargs: Mapping[str, object]) -> 
     )
 
 
+def _chat_verbosity(responses_api_request: Mapping[str, object]) -> Mapping[str, object]:
+    match responses_api_request.get("text"):
+        case {"verbosity": str() as verbosity}:
+            return {"verbosity": verbosity}
+        case _:
+            return {}
+
+
 @dataclass(frozen=True, slots=True)
 class _BridgedRequest:
     input: str | ResponseInputParam
@@ -104,8 +112,8 @@ class LiteLLMCompletionTransformationHandler:
         bridged: Final = _bridged_request(hoisted, responses_api_request, ())
         bridged_input: Final = bridged.input
         bridged_request: Final = bridged.responses_api_request
-        litellm_completion_request: Final[dict] = (
-            LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+        litellm_completion_request: Final[dict] = {
+            **LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
                 model=model,
                 input=bridged_input,
                 caller_input=input,
@@ -115,8 +123,9 @@ class LiteLLMCompletionTransformationHandler:
                 stream=stream,
                 extra_headers=extra_headers,
                 **_without_bridge_transform_keywords(_REQUEST_KWARGS_ADAPTER.validate_python(kwargs)),
-            )
-        )
+            ),
+            **_chat_verbosity(bridged_request),
+        }
 
         if _is_async:
             return self.async_response_api_handler(
@@ -181,8 +190,8 @@ class LiteLLMCompletionTransformationHandler:
         return await self.async_response_api_handler(
             previous_response_client_ids,
             stored_turns,
-            litellm_completion_request=(
-                LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+            litellm_completion_request={
+                **LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
                     model=model,
                     input=bridged.input,
                     caller_input=caller_input,
@@ -192,8 +201,9 @@ class LiteLLMCompletionTransformationHandler:
                     stream=stream,
                     extra_headers=extra_headers,
                     **_without_bridge_transform_keywords(request_kwargs),
-                )
-            ),
+                ),
+                **_chat_verbosity(bridged.responses_api_request),
+            },
             request_input=bridged.input,
             responses_api_request=bridged.responses_api_request,
             **request_kwargs,
