@@ -1,3 +1,4 @@
+import itertools
 import json
 import logging
 from collections.abc import Callable, Iterator, Mapping
@@ -1085,3 +1086,123 @@ def test_cohere_v2_deployment_model_info_unlocks_params(
 
     body: Final = _sent_body(route)
     assert {key: body.get(key) for key in cohere_params} == cohere_params
+
+
+def _cohere_v2_tool_call_events(index: int, call_id: str, city: str) -> tuple[dict[str, object], ...]:
+    return (
+        {
+            "type": "tool-call-start",
+            "index": index,
+            "delta": {
+                "message": {
+                    "tool_calls": {
+                        "id": call_id,
+                        "type": "function",
+                        "function": {"name": "get_weather", "arguments": ""},
+                    }
+                }
+            },
+        },
+        {
+            "type": "tool-call-delta",
+            "index": index,
+            "delta": {"message": {"tool_calls": {"function": {"arguments": '{"city": '}}}},
+        },
+        {
+            "type": "tool-call-delta",
+            "index": index,
+            "delta": {"message": {"tool_calls": {"function": {"arguments": json.dumps(city) + "}"}}}},
+        },
+        {"type": "tool-call-end", "index": index},
+    )
+
+
+@pytest.mark.usefixtures("_cohere_httpx_transport")
+@pytest.mark.respx(assert_all_called=True)
+async def test_cohere_v2_stream_returns_parallel_tool_calls(respx_mock: respx.MockRouter) -> None:
+    stream_events: Final = (
+        {"type": "message-start", "id": "c0a2b6e1", "delta": {"message": {"role": "assistant"}}},
+        *_cohere_v2_tool_call_events(0, "get_weather_paris", "Paris"),
+        *_cohere_v2_tool_call_events(1, "get_weather_tokyo", "Tokyo"),
+        {
+            "type": "message-end",
+            "delta": {"finish_reason": "TOOL_CALL", "usage": {"tokens": {"input_tokens": 40, "output_tokens": 30}}},
+        },
+    )
+    respx_mock.post(COHERE_V2_CHAT_URL).mock(
+        return_value=httpx.Response(200, content="".join(json.dumps(event) + "\n" for event in stream_events).encode())
+    )
+
+    response: Final = await litellm.acompletion(
+        model="cohere_chat/v2/command-a-plus-05-2026",
+        messages=[{"role": "user", "content": "What is the weather in Paris and in Tokyo?"}],
+        tools=[
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_weather",
+                    "parameters": {"type": "object", "properties": {"city": {"type": "string"}}},
+                },
+            }
+        ],
+        stream=True,
+        api_key="cohere-test-key",
+    )
+    chunks: Final = [chunk async for chunk in response]
+    rebuilt: Final = litellm.stream_chunk_builder(chunks)
+
+    assert rebuilt is not None
+    assert [
+        (call.id, call.function.name, json.loads(call.function.arguments))
+        for call in rebuilt.choices[0].message.tool_calls
+    ] == [
+        ("get_weather_paris", "get_weather", {"city": "Paris"}),
+        ("get_weather_tokyo", "get_weather", {"city": "Tokyo"}),
+    ]
+    assert chunks[-1].choices[0].finish_reason == "tool_calls"
+
+
+@pytest.mark.usefixtures("_cohere_httpx_transport")
+@pytest.mark.respx(assert_all_called=True)
+async def test_cohere_v2_stream_closes_argument_less_tool_call_with_empty_object(respx_mock: respx.MockRouter) -> None:
+    stream_events: Final = (
+        {"type": "message-start", "id": "5d1e9f20", "delta": {"message": {"role": "assistant"}}},
+        {
+            "type": "tool-call-start",
+            "index": 0,
+            "delta": {
+                "message": {
+                    "tool_calls": {
+                        "id": "get_server_time_0",
+                        "type": "function",
+                        "function": {"name": "get_server_time", "arguments": ""},
+                    }
+                }
+            },
+        },
+        {"type": "tool-call-end", "index": 0},
+        {"type": "message-end", "delta": {"finish_reason": "TOOL_CALL"}},
+    )
+    respx_mock.post(COHERE_V2_CHAT_URL).mock(
+        return_value=httpx.Response(200, content="".join(json.dumps(event) + "\n" for event in stream_events).encode())
+    )
+
+    response: Final = await litellm.acompletion(
+        model="cohere_chat/v2/command-a-plus-05-2026",
+        messages=[{"role": "user", "content": "What time is it on the server?"}],
+        tools=[
+            {
+                "type": "function",
+                "function": {"name": "get_server_time", "parameters": {"type": "object", "properties": {}}},
+            }
+        ],
+        stream=True,
+        api_key="cohere-test-key",
+    )
+    deltas_per_chunk: Final = [chunk.choices[0].delta.tool_calls or () async for chunk in response]
+    streamed_calls: Final = tuple(itertools.chain.from_iterable(deltas_per_chunk))
+
+    assert [(call.id, call.function.name) for call in streamed_calls if call.id] == [
+        ("get_server_time_0", "get_server_time")
+    ]
+    assert json.loads("".join(call.function.arguments for call in streamed_calls)) == {}
