@@ -25762,6 +25762,79 @@
           "title": "NoulAnswer",
           "type": "object"
         },
+        "OpenAIChatCompletionLogprobsContent": {
+          "additionalProperties": true,
+          "properties": {
+            "bytes": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "integer"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Bytes"
+            },
+            "logprob": {
+              "title": "Logprob",
+              "type": "number"
+            },
+            "token": {
+              "title": "Token",
+              "type": "string"
+            },
+            "top_logprobs": {
+              "items": {
+                "$ref": "#/components/schemas/OpenAIChatCompletionLogprobsContentTopLogprobs"
+              },
+              "title": "Top Logprobs",
+              "type": "array"
+            }
+          },
+          "required": [
+            "logprob",
+            "token"
+          ],
+          "title": "OpenAIChatCompletionLogprobsContent",
+          "type": "object"
+        },
+        "OpenAIChatCompletionLogprobsContentTopLogprobs": {
+          "additionalProperties": true,
+          "properties": {
+            "bytes": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "integer"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Bytes"
+            },
+            "logprob": {
+              "title": "Logprob",
+              "type": "number"
+            },
+            "token": {
+              "title": "Token",
+              "type": "string"
+            }
+          },
+          "required": [
+            "logprob",
+            "token"
+          ],
+          "title": "OpenAIChatCompletionLogprobsContentTopLogprobs",
+          "type": "object"
+        },
         "OperationCreateFile": {
           "additionalProperties": true,
           "description": "Instruction describing how to create a file via the apply_patch tool.",
@@ -26205,6 +26278,20 @@
                 }
               ],
               "title": "Annotations"
+            },
+            "logprobs": {
+              "anyOf": [
+                {
+                  "items": {
+                    "$ref": "#/components/schemas/OpenAIChatCompletionLogprobsContent"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Logprobs"
             },
             "text": {
               "anyOf": [

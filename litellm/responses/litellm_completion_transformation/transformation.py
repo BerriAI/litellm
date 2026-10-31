@@ -90,6 +90,7 @@ from litellm.types.llms.openai import (
     GenericChatCompletionMessage,
     IncompleteDetails,
     InputTokensDetails,
+    OpenAIChatCompletionLogprobsContent,
     OpenAIChatCompletionTextObject,
     OpenAIMcpServerTool,
     OpenAIWebSearchOptions,
@@ -118,6 +119,7 @@ from litellm.types.responses.main import (
 from litellm.types.utils import (
     ChatCompletionAnnotation,
     ChatCompletionMessageToolCall,
+    ChoiceLogprobs,
     Choices,
     Function,
     Message,
@@ -262,6 +264,25 @@ _CACHED_CONTENT_ADAPTER: Final = TypeAdapter(ChatCompletionCachedContent)
 _DICT_ITEMS_LIST_ADAPTER: Final = TypeAdapter(list[dict[object, object]])
 _TEXT_ADAPTER: Final = TypeAdapter(str)
 _RESPONSES_API_TOOL_CHOICE_ADAPTER: Final = TypeAdapter(ToolChoice)
+_CHOICE_LOGPROBS_ADAPTER: Final = TypeAdapter(ChoiceLogprobs)
+_TOKEN_LOGPROB_ADAPTER: Final = TypeAdapter(OpenAIChatCompletionLogprobsContent)
+_OUTPUT_TEXT_LOGPROBS_INCLUDE: Final = "message.output_text.logprobs"
+
+
+def _asks_for_output_text_logprobs(responses_api_request: ResponsesAPIOptionalRequestParams) -> bool:
+    return "include" in responses_api_request and _OUTPUT_TEXT_LOGPROBS_INCLUDE in (
+        responses_api_request["include"] or ()
+    )
+
+
+def output_text_token_logprobs(choice_logprobs: object) -> tuple[OpenAIChatCompletionLogprobsContent, ...]:
+    if choice_logprobs is None:
+        return ()
+    try:
+        validated: Final = _CHOICE_LOGPROBS_ADAPTER.validate_python(choice_logprobs)
+    except ValidationError:
+        return ()
+    return tuple(_TOKEN_LOGPROB_ADAPTER.validate_python(token.model_dump()) for token in validated.content or ())
 
 
 def _validate_responses_media(adapter: TypeAdapter[_MediaT], value: object) -> _MediaT:
@@ -1221,6 +1242,7 @@ class LiteLLMCompletionResponsesConfig:
             "reasoning_effort": reasoning.effort,
             "reasoning_summary": reasoning.summary,
             "context_management": context_management,
+            "logprobs": True if _asks_for_output_text_logprobs(responses_api_request) else None,
             # litellm specific params
             "custom_llm_provider": custom_llm_provider,
             "extra_headers": extra_headers,
@@ -3576,7 +3598,7 @@ class LiteLLMCompletionResponsesConfig:
                         role=choice.message.role,
                         content=[
                             LiteLLMCompletionResponsesConfig._transform_chat_message_to_response_output_text(
-                                choice.message
+                                choice.message, output_text_token_logprobs(getattr(choice, "logprobs", None))
                             )
                         ],
                     )
@@ -3629,6 +3651,7 @@ class LiteLLMCompletionResponsesConfig:
     @staticmethod
     def _transform_chat_message_to_response_output_text(
         message: Message,
+        token_logprobs: Sequence[OpenAIChatCompletionLogprobsContent],
     ) -> OutputText:
         annotations: Final = getattr(message, "annotations", None)
         transformed_annotations: Final = (
@@ -3641,6 +3664,7 @@ class LiteLLMCompletionResponsesConfig:
             type="output_text",
             text=message.content or "",
             annotations=transformed_annotations,
+            logprobs=list(token_logprobs),
         )
 
     @staticmethod

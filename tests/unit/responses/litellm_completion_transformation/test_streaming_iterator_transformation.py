@@ -1988,3 +1988,97 @@ def test_the_partial_response_billed_on_disconnect_carries_the_logging_objects_b
         partial.response.usage.input_tokens,
         partial.response.usage.output_tokens,
     ), "the bill is priced on the partial's own usage"
+
+
+def _token_logprob(token: str, logprob: float) -> dict[str, object]:
+    encoded: Final = list(token.encode())
+    return {
+        "token": token,
+        "logprob": logprob,
+        "bytes": encoded,
+        "top_logprobs": [{"token": token, "logprob": logprob, "bytes": encoded}],
+    }
+
+
+def _with_logprobs(chunk: ModelResponseStream, *token_logprobs: dict[str, object]) -> ModelResponseStream:
+    choice: Final = chunk.choices[0]
+    return chunk.model_copy(
+        update={
+            "choices": [
+                StreamingChoices(
+                    index=0,
+                    delta=choice.delta,
+                    finish_reason=choice.finish_reason,
+                    logprobs={"content": list(token_logprobs)},
+                )
+            ]
+        }
+    )
+
+
+def _events_of_type(
+    events: list[BaseLiteLLMOpenAIResponseObject], event_type: ResponsesAPIStreamEvents
+) -> list[BaseLiteLLMOpenAIResponseObject]:
+    return [event for event in events if getattr(event, "type", None) == event_type]
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_output_text_events_carry_only_the_streamed_text_tokens_logprobs(sync_mode: bool):
+    hello: Final = _token_logprob("Hello", -0.25)
+    bang: Final = _token_logprob("!", -1.5)
+    finish_chunk: Final = _with_logprobs(_chunk("", finish_reason="stop"), _token_logprob("<|end|>", -0.01))
+    iterator: Final = _build_iterator(
+        [
+            _with_logprobs(_reasoning_chunk("let me think"), _token_logprob("think", -3.0)),
+            _with_logprobs(_chunk("Hello"), hello),
+            _with_logprobs(_chunk("!"), bang),
+            finish_chunk.model_copy(update={"usage": Usage(prompt_tokens=7, completion_tokens=4, total_tokens=11)}),
+        ]
+    )
+
+    events: Final = await _collect_events(iterator, sync_mode)
+
+    deltas: Final = _events_of_type(events, ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA)
+    assert [(event.delta, event.logprobs) for event in deltas] == [("Hello", [hello]), ("!", [bang])]
+    (text_done,) = _events_of_type(events, ResponsesAPIStreamEvents.OUTPUT_TEXT_DONE)
+    assert text_done.logprobs == [hello, bang]
+    message_done: Final = [
+        event for event in _events_of_type(events, ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE) if _is_message_item(event)
+    ]
+    assert [[part["logprobs"] for part in event.item.content] for event in message_done] == [[[hello, bang]]]
+    (completed,) = _events_of_type(events, ResponsesAPIStreamEvents.RESPONSE_COMPLETED)
+    messages: Final = [item for item in completed.response.output if item.type == "message"]
+    assert [[part.logprobs for part in item.content] for item in messages] == [[[hello, bang]]]
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_a_chunk_with_reasoning_and_text_puts_its_logprobs_on_the_text_delta(sync_mode: bool):
+    think: Final = _token_logprob("think", -2.0)
+    hello: Final = _token_logprob("Hello!", -0.5)
+    iterator: Final = _build_iterator(
+        [_with_logprobs(_with_reasoning(_chunk("Hello!", finish_reason="stop"), "let me think"), think, hello)]
+    )
+
+    events: Final = await _collect_events(iterator, sync_mode)
+
+    deltas: Final = _events_of_type(events, ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA)
+    assert [(event.delta, event.logprobs) for event in deltas] == [("Hello!", [think, hello])]
+    (text_done,) = _events_of_type(events, ResponsesAPIStreamEvents.OUTPUT_TEXT_DONE)
+    assert text_done.logprobs == [think, hello]
+
+
+def test_disconnect_partial_response_keeps_the_logprobs_streamed_so_far() -> None:
+    hello: Final = _token_logprob("Hello", -0.25)
+    iterator: Final = _build_iterator(
+        [_with_logprobs(_chunk("Hello"), hello), _with_logprobs(_chunk(" world", finish_reason="stop"))]
+    )
+    relayed: Final = tuple(itertools.takewhile(lambda event: not isinstance(event, OutputTextDeltaEvent), iterator))
+    assert relayed, "the stream must relay at least one chunk before the first text delta"
+
+    partial: Final = iterator.partial_response_on_disconnect()
+
+    assert partial is not None
+    messages: Final = [item for item in partial.response.output if item.type == "message"]
+    assert [[part.logprobs for part in item.content] for item in messages] == [[[hello]]]

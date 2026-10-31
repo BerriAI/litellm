@@ -25,6 +25,7 @@ from litellm.responses.litellm_completion_transformation.tool_search import (
 )
 from litellm.responses.litellm_completion_transformation.transformation import (
     LiteLLMCompletionResponsesConfig,
+    output_text_token_logprobs,
 )
 from litellm.responses.streaming_iterator import ResponsesAPIStreamingIterator, stamp_responses_usage_cost
 from litellm.responses.utils import ResponsesAPIRequestUtils
@@ -37,6 +38,7 @@ from litellm.types.llms.openai import (
     ContentPartDonePartOutputText,
     FunctionCallArgumentsDeltaEvent,
     FunctionCallArgumentsDoneEvent,
+    OpenAIChatCompletionLogprobsContent,
     OutputItemAddedEvent,
     OutputItemDoneEvent,
     OutputTextAnnotationAddedEvent,
@@ -58,7 +60,7 @@ from litellm.types.llms.openai import (
     WebSearchCallInProgressEvent,
     WebSearchCallSearchingEvent,
 )
-from litellm.types.responses.main import GenericResponseOutputItemContentAnnotation
+from litellm.types.responses.main import GenericResponseOutputItem, GenericResponseOutputItemContentAnnotation
 from litellm.types.utils import Delta as ChatCompletionDelta
 from litellm.types.utils import (
     ModelResponse,
@@ -85,6 +87,26 @@ def _output_items_with_id(items: tuple[Any, ...], item_type: str, item_id: str |
 
     return tuple(
         item.model_copy(update={"id": item_id}) if index == target_index else item for index, item in enumerate(items)
+    )
+
+
+def _message_with_output_text_logprobs(
+    item: GenericResponseOutputItem, logprobs: Sequence[OpenAIChatCompletionLogprobsContent]
+) -> GenericResponseOutputItem:
+    return item.model_copy(
+        update={"content": [part.model_copy(update={"logprobs": list(logprobs)}) for part in item.content]}
+    )
+
+
+def _output_items_with_message_logprobs(
+    items: tuple[object, ...], logprobs: Sequence[OpenAIChatCompletionLogprobsContent]
+) -> tuple[object, ...]:
+    message_index: Final = _index_of_output_item_type(items, "message")
+    return tuple(
+        _message_with_output_text_logprobs(item, logprobs)
+        if index == message_index and isinstance(item, GenericResponseOutputItem)
+        else item
+        for index, item in enumerate(items)
     )
 
 
@@ -157,6 +179,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         self.litellm_model_response: ModelResponse | TextCompletionResponse | None = None
         self.completed_response = None
         self.final_text: str = ""
+        self._output_text_logprobs: tuple[OpenAIChatCompletionLogprobsContent, ...] = ()
         self._cached_item_id: str | None = None
         self._message_output_index: int | None = None
         self._reasoning_output_index: int | None = None
@@ -941,6 +964,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             output_index=self._message_index(),
             content_index=0,
             text=getattr(litellm_complete_object.choices[0].message, "content", "") or "",
+            logprobs=list(self._output_text_logprobs),
         )
 
     def create_output_content_part_done_event(self, litellm_complete_object: ModelResponse) -> ContentPartDoneEvent:
@@ -997,6 +1021,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                             "type": "output_text",
                             "text": text,
                             "annotations": response_annotations,
+                            "logprobs": list(self._output_text_logprobs),
                         }
                     ],
                 }
@@ -1417,12 +1442,15 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                 self._queue_message_item_added_events()
             self._hold_tool_calls_behind_text(getattr(chunk.choices[0].delta, "tool_calls", None))
             self._sequence_number += 1
+            delta_logprobs: Final = output_text_token_logprobs(getattr(chunk.choices[0], "logprobs", None))
+            self._output_text_logprobs = (*self._output_text_logprobs, *delta_logprobs)
             text_delta_event: Final = OutputTextDeltaEvent(
                 type=ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA,
                 item_id=item_id,
                 output_index=self._message_index(),
                 content_index=0,
                 delta=delta_content,
+                logprobs=list(delta_logprobs),
             )
             text_delta_event.__dict__["sequence_number"] = self._sequence_number
             return text_delta_event
@@ -1471,7 +1499,8 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             self._cached_reasoning_item_id,
         )
         compaction_aligned: Final = _output_items_with_id(reasoning_aligned, "compaction", self._compaction_item_id)
-        streamed_items: Final = filterfalse(self._is_unstreamed_empty_message, compaction_aligned)
+        logprobs_aligned: Final = _output_items_with_message_logprobs(compaction_aligned, self._output_text_logprobs)
+        streamed_items: Final = filterfalse(self._is_unstreamed_empty_message, logprobs_aligned)
         return tuple(sorted(streamed_items, key=self._streamed_output_position))
 
     def _is_unstreamed_empty_message(self, item: object) -> bool:

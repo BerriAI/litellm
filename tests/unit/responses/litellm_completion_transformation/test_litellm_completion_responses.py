@@ -37,6 +37,7 @@ from litellm.types.llms.openai import ResponsesAPIOptionalRequestParams
 from litellm.types.responses.main import OutputToolSearchCall, build_web_search_call
 from litellm.types.utils import (
     ChatCompletionMessageToolCall,
+    ChoiceLogprobs,
     Choices,
     CompletionTokensDetailsWrapper,
     Function,
@@ -1287,6 +1288,30 @@ class TestFunctionCallTransformation:
         )
 
         assert result["safety_identifier"] == "user-7f3a"
+
+    @pytest.mark.parametrize(
+        "include,expected_logprobs",
+        [
+            (["message.output_text.logprobs"], {"logprobs": True}),
+            (["reasoning.encrypted_content", "message.output_text.logprobs"], {"logprobs": True}),
+            (["reasoning.encrypted_content"], {}),
+            ([], {}),
+            (None, {}),
+        ],
+    )
+    def test_output_text_logprobs_include_asks_the_chat_model_for_logprobs(
+        self, include: list[str] | None, expected_logprobs: dict[str, bool]
+    ) -> None:
+        responses_api_request: Final = {} if include is None else {"include": include}
+
+        result: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+            model="gpt-4.1-mini",
+            input="hi",
+            responses_api_request=responses_api_request,
+            custom_llm_provider="openai",
+        )
+
+        assert {key: value for key, value in result.items() if key == "logprobs"} == expected_logprobs
 
     def test_parallel_tool_calls_dropped_when_no_chat_tools_remain(self) -> None:
         transform: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request
@@ -7101,3 +7126,78 @@ async def test_bridge_partial_response_on_disconnect_bills_only_the_input_since_
     assert await _input_tokens_billed_on_disconnect(
         cast(ResponseInputParam, [*history_it_replaces, *since_compaction])
     ) == await _input_tokens_billed_on_disconnect(since_compaction)
+
+
+def _token_logprob(token: str, logprob: float, encoded: list[int] | None) -> dict[str, object]:
+    return {
+        "token": token,
+        "logprob": logprob,
+        "bytes": encoded,
+        "top_logprobs": [{"token": token, "logprob": logprob, "bytes": encoded}],
+    }
+
+
+class TestBridgedOutputTextLogprobs:
+    UPSTREAM_TOKENS: Final = (_token_logprob("app", -0.125, [97, 112, 112]), _token_logprob("le", -2.5, None))
+
+    @pytest.mark.parametrize(
+        "choice_logprobs",
+        [{"content": list(UPSTREAM_TOKENS)}, ChoiceLogprobs.model_validate({"content": list(UPSTREAM_TOKENS)})],
+        ids=["dict", "ChoiceLogprobs"],
+    )
+    def test_message_output_text_carries_the_choice_token_logprobs(self, choice_logprobs: object) -> None:
+        chat_completion_response: Final = _bridged_chat_completion_response(
+            choices=[
+                Choices(
+                    index=0,
+                    finish_reason="stop",
+                    message=Message(role="assistant", content="apple"),
+                    logprobs=choice_logprobs,
+                )
+            ]
+        )
+
+        response: Final = LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+            request_input="Say the single word: apple",
+            responses_api_request={"include": ["message.output_text.logprobs"]},
+            chat_completion_response=chat_completion_response,
+        )
+
+        (message,) = _bridged_output_items(response, "message")
+        assert [part.logprobs for part in message.content] == [list(self.UPSTREAM_TOKENS)]
+
+    @pytest.mark.parametrize(
+        "choice_logprobs",
+        [{"content": [{"token": "apple", "bytes": [97]}]}, [-0.125, -2.5]],
+        ids=["token_without_logprob", "bare_list"],
+    )
+    def test_upstream_logprobs_outside_the_chat_shape_still_return_the_message(self, choice_logprobs: object) -> None:
+        chat_completion_response: Final = _bridged_chat_completion_response(
+            choices=[
+                Choices(
+                    index=0,
+                    finish_reason="stop",
+                    message=Message(role="assistant", content="apple"),
+                    logprobs=choice_logprobs,
+                )
+            ]
+        )
+
+        response: Final = LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+            request_input="Say the single word: apple",
+            responses_api_request={},
+            chat_completion_response=chat_completion_response,
+        )
+
+        (message,) = _bridged_output_items(response, "message")
+        assert [(part.text, part.logprobs) for part in message.content] == [("apple", [])]
+
+
+def test_output_text_logprobs_include_answers_400_on_a_chat_model_without_logprobs() -> None:
+    with pytest.raises(litellm.UnsupportedParamsError, match="logprobs"):
+        litellm.responses(
+            model="anthropic/claude-sonnet-5-5",
+            input="Say the single word: apple",
+            include=["message.output_text.logprobs"],
+            api_key="sk-ant-unused",
+        )
