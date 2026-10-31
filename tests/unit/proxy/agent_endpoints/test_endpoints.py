@@ -11,9 +11,11 @@ import pytest
 from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 from prisma.models import LiteLLM_AgentsTable
+from pydantic import TypeAdapter
 
 from litellm.constants import REDACTED_BY_LITELM_STRING
 from litellm.proxy._types import LiteLLM_AuditLogs, LitellmTableNames, LitellmUserRoles, UserAPIKeyAuth
+from litellm.proxy.agent_endpoints import agent_registry as agent_registry_module
 from litellm.proxy.agent_endpoints import endpoints as agent_endpoints
 from litellm.proxy.agent_endpoints.auth.agent_permission_handler import (
     RestrictedAgentAccess,
@@ -194,7 +196,40 @@ def test_identity_settings_edit_preserves_runtime_configuration_on_readback(
     )
     preserved: Final = {*runtime, "agent_name", "enabled", "agent_id"}
     assert stored.model_dump(include=preserved) == expected.model_dump(include=preserved)
-    assert {key: readback.json()[key] for key in preserved} == expected.model_dump(mode="json", include=preserved)
+    assert {
+        key: readback.json()[key] for key in preserved if key != "static_headers"
+    } == expected.model_dump(mode="json", include=preserved - {"static_headers"})
+    assert readback.json()["static_headers"] == {"X-Runtime": REDACTED_BY_LITELM_STRING}
+
+
+def test_admin_agent_list_masks_static_headers_from_config(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    agent_name: Final = "config-agent"
+    secret: Final = "Bearer config-secret"
+    registry: Final = agent_registry_module.AgentRegistry()
+    registry.load_agents_from_config(
+        (
+            {
+                "agent_name": agent_name,
+                "agent_card_params": _sample_agent_card_params(),
+                "static_headers": {"Authorization": secret, "X-Tenant": "tenant-a"},
+            },
+        )
+    )
+    monkeypatch.setattr(agent_registry_module, "global_agent_registry", registry)
+
+    with patch("litellm.proxy.proxy_server.prisma_client", None):
+        response: Final = client.get("/v1/agents")
+
+    assert response.status_code == 200, response.text
+    agents: Final = TypeAdapter(tuple[AgentResponse, ...]).validate_json(response.content)
+    assert len(agents) == 1, response.text
+    assert agents[0].static_headers == {
+        "Authorization": REDACTED_BY_LITELM_STRING,
+        "X-Tenant": REDACTED_BY_LITELM_STRING,
+    }, response.text
+    assert secret not in response.text, response.text
 
 
 def test_get_agent_by_id_not_found(

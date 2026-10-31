@@ -12,6 +12,7 @@ import pytest
 from prisma.models import LiteLLM_AgentsTable
 
 from litellm.constants import REDACTED_BY_LITELM_STRING
+from litellm.proxy.agent_endpoints import agent_registry as agent_registry_module
 from litellm.proxy.agent_endpoints.agent_registry import (
     AgentRegistry,
     GrantMigrationResult,
@@ -24,6 +25,53 @@ from litellm.types.agents import PatchAgentRequest
 # fixtures) -- never a real key shape, and must never appear in any response.
 SENTINEL_AWS_ACCESS_KEY_ID: Final = "AKIATESTSENTINEL0000"
 SENTINEL_AWS_SECRET_ACCESS_KEY: Final = "test-sentinel-do-not-use-secret-value"
+
+
+@pytest.mark.parametrize(
+    "incoming, existing, expected",
+    [
+        pytest.param(
+            {"Authorization": REDACTED_BY_LITELM_STRING},
+            {"Authorization": "Bearer stored"},
+            '{"Authorization": "Bearer stored"}',
+            id="restore-matching-stored-value",
+        ),
+        pytest.param(
+            {"Authorization": REDACTED_BY_LITELM_STRING},
+            {"X-Old": "old-value"},
+            "{}",
+            id="drop-marker-without-stored-value",
+        ),
+        pytest.param(
+            {"X-Tenant": "tenant-a"},
+            {"X-Tenant": "tenant-old"},
+            '{"X-Tenant": "tenant-a"}',
+            id="keep-real-value",
+        ),
+        pytest.param(
+            None,
+            {"Authorization": "Bearer stored"},
+            "{}",
+            id="clear-when-incoming-is-none",
+        ),
+        pytest.param(
+            {"Authorization": REDACTED_BY_LITELM_STRING},
+            '{"Authorization": "Bearer stored"}',
+            '{"Authorization": "Bearer stored"}',
+            id="restore-from-json-string",
+        ),
+        pytest.param(
+            {"Authorization": REDACTED_BY_LITELM_STRING},
+            {"Authorization": 1},
+            "{}",
+            id="ignore-invalid-stored-value",
+        ),
+    ],
+)
+def test_serialize_agent_static_headers_restores_only_matching_markers(
+    incoming: Mapping[str, str] | None, existing: object, expected: str
+) -> None:
+    assert agent_registry_module.serialize_agent_static_headers(incoming, existing) == expected
 
 
 def _sample_agent_card_params() -> dict:
