@@ -1699,6 +1699,16 @@ async def _skipped_for_unroutable_model(
 
 
 _SYSTEM_INSTRUCTION_KEYS: Final = ("systemInstruction", "system_instruction")
+_EXTRACTION_SPEC_TEXT_KEYS: Final = ("instructions", "unit")
+
+
+def _without_extraction_spec_texts(spec: object) -> object:
+    spec_fields: Final = _as_str_mapping(spec)
+    return (
+        spec
+        if not isinstance(spec, Mapping)
+        else {**spec_fields, **{key: REDACTED_BY_LITELLM for key in _EXTRACTION_SPEC_TEXT_KEYS if key in spec_fields}}
+    )
 
 
 def without_unscanned_content(request: Mapping[str, object]) -> Mapping[str, object]:
@@ -1711,6 +1721,7 @@ def without_unscanned_content(request: Mapping[str, object]) -> Mapping[str, obj
         "input": "",
         "query": "",
         "instruction": "",
+        "state": "",
         "tools": [],
         "system": REDACTED_BY_LITELLM,
         "instructions": REDACTED_BY_LITELLM,
@@ -1718,8 +1729,15 @@ def without_unscanned_content(request: Mapping[str, object]) -> Mapping[str, obj
     }
     config: Final = request.get("config")
     config_fields: Final = _as_str_mapping(config)
+    extraction_fields: Final = request.get("fields")
+    extraction_specs: Final = _as_str_mapping(extraction_fields)
     return {
         **{key: value for key, value in redactions.items() if key in request},
+        **(
+            {}
+            if not isinstance(extraction_fields, Mapping)
+            else {"fields": {name: _without_extraction_spec_texts(spec) for name, spec in extraction_specs.items()}}
+        ),
         **(
             {}
             if not isinstance(config, Mapping)
