@@ -1814,3 +1814,42 @@ async def test_a_successful_web_search_request_does_not_repin_a_session_in_a_mix
         )
         == session_pin
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("pinned_model_id", "session_pin"),
+    [("removed", {"model_id": "light"}), ("heavy", {"model_id": "heavy"})],
+    ids=["ineligible-pin-moves", "eligible-pin-stays"],
+)
+async def test_a_successful_web_search_request_moves_a_session_only_off_an_ineligible_pin_in_a_mixed_group(
+    pinned_model_id: str,
+    session_pin: dict[str, str],  # mutable-ok: cache value shape
+):
+    router: Final = _web_search_group_router(
+        ["session_affinity"], heavy_can_search=False, heavy_weight=1, session_affinity_repin_on_failover=True
+    )
+    cache_key: Final = DeploymentAffinityCheck.get_session_affinity_cache_key("group", "session-1", "caller-1")
+    await router.cache.async_set_cache(cache_key, {"model_id": pinned_model_id})
+    timestamp: Final = datetime(2026, 1, 1, tzinfo=timezone.utc)
+
+    await router.deployment_callback_on_success(
+        {
+            "litellm_params": {
+                "model_info": {"id": "light"},
+                "metadata": {
+                    "model_group": "group",
+                    "deployment_model_name": "group",
+                    "session_id": "session-1",
+                    "user_api_key_hash": "caller-1",
+                },
+            },
+            "optional_params": {"web_search_options": {}},
+            "standard_logging_object": {"total_tokens": 0},
+        },
+        {"choices": [{"message": {"content": "ok"}}]},
+        timestamp,
+        timestamp,
+    )
+
+    assert await router.cache.async_get_cache(cache_key) == session_pin

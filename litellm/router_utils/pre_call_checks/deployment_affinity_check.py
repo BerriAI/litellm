@@ -14,6 +14,7 @@ where routing to a consistent deployment is still beneficial.
 
 import hashlib
 from collections.abc import Awaitable, Callable, Mapping, Sequence
+from types import MappingProxyType
 from typing import Final, TypeVar, cast
 
 from pydantic import TypeAdapter
@@ -25,6 +26,7 @@ from litellm.caching.affinity_cache import (
     ROUTER_SESSION_PINS_TARGET,
     claim_affinity_pin,
     claim_affinity_pin_in_memory,
+    read_affinity_pin,
     set_local_affinity_pin,
 )
 from litellm.caching.dual_cache import DualCache
@@ -597,17 +599,13 @@ class DeploymentAffinityCheck(CustomLogger):
         request_kwargs: Mapping[str, object],
         model_group: str,
         eligible_deployment_ids: frozenset[str],
-        request_params: Mapping[str, object],
+        request_params: Mapping[str, object] = MappingProxyType({}),
     ) -> None:
         marker_ttl: Final = self._get_marker_session_affinity_ttl(request_kwargs)
         if not self._get_effective_flags(model_group)[2] and marker_ttl is None:
             return
         session_id: Final = self._get_session_id_from_request_kwargs(request_kwargs)
         if session_id is None:
-            return
-        if self.model_group_deployments is not None and web_search_preference_can_narrow(
-            self.model_group_deployments(model_group), request_params
-        ):
             return
         model_info: Final = TypeAdapter(Mapping[str, object]).validate_python(request_kwargs.get("model_info") or {})
         model_id: Final = model_info.get("id")
@@ -616,11 +614,17 @@ class DeploymentAffinityCheck(CustomLogger):
         cache_key: Final = self.get_session_affinity_cache_key(
             model_group, session_id, self.get_user_key_from_request_kwargs(request_kwargs)
         )
+        ttl_seconds: Final = marker_ttl if marker_ttl is not None else self.ttl_seconds
+        is_search_in_mixed_group: Final = self.model_group_deployments is not None and web_search_preference_can_narrow(
+            self.model_group_deployments(model_group), request_params
+        )
+        if is_search_in_mixed_group and await read_affinity_pin(self.cache, cache_key, ttl_seconds) is None:
+            return
         await claim_affinity_pin(
             self.cache,
             cache_key,
             DeploymentAffinityCacheValue(model_id=str(model_id)),
-            marker_ttl if marker_ttl is not None else self.ttl_seconds,
+            ttl_seconds,
             eligible_values=tuple(DeploymentAffinityCacheValue(model_id=value) for value in eligible_deployment_ids),
             preserve_legacy_model_ids=True,
         )

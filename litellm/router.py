@@ -9882,7 +9882,7 @@ class Router(DeprecatedRouterMembers):
             )
 
     async def _repin_session_after_success(
-        self, litellm_params: Mapping[str, object], response: object, optional_params: object
+        self, litellm_params: Mapping[str, object], response: object, optional_params: object = None
     ) -> None:
         if not self.session_affinity_repin_on_failover:
             return
