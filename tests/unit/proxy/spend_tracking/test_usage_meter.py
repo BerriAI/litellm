@@ -395,17 +395,17 @@ async def test_large_write_sequence_drains_within_byte_and_record_bounds() -> No
     database.release.set()
     meter: Final = DurableUsageMeter(
         database.write,
-        UsageCaptureSettings(batch_size=8, max_pending_records=4, max_pending_bytes=1024),
+        UsageCaptureSettings(batch_size=8, max_pending_records=2, max_pending_bytes=1024),
         wait_for_batch=_manual_flush,
     )
     writes: Final = tuple(_write(str(index)) for index in range(20))
-    pending: Final = meter.submit((_write("pending"),))
+    pending: Final = meter.submit((_write("pending-a"), _write("pending-b")))
     await meter.record_writes(writes)
     await pending
     with pytest.raises(UsageCaptureError, match="One usage observation"):
         await meter.record_writes((_write("oversized" * 300),))
     await meter.close()
-    assert database.committed == ("pending", *(write.event.event_id for write in writes))
+    assert database.committed == ("pending-a", "pending-b", *(write.event.event_id for write in writes))
     assert database.transactions > 1
     assert (meter.pending_bytes, meter.pending_records) == (0, 0)
     with pytest.raises(UsageCaptureError):

@@ -1448,7 +1448,12 @@ async def test_batch_capture_retains_request_basis_for_later_tiered_pricing(
 
 @pytest.mark.asyncio
 async def test_large_batch_recovers_partial_commit_with_frozen_pricing_and_rejects_changed_usage() -> None:
-    from litellm.proxy.spend_tracking.usage_capture import PricingCapture, UsageBatchWriter, capture_batch_callback
+    from litellm.proxy.spend_tracking.usage_capture import (
+        PricingCapture,
+        UsageBatchWriter,
+        capture_batch_callback,
+        capture_callback,
+    )
 
     database: Final = StoredUsage()
     transactions: Final = asyncio.Queue[tuple[UsageWrite, ...]]()
@@ -1485,6 +1490,27 @@ async def test_large_batch_recovers_partial_commit_with_frozen_pricing_and_rejec
         "litellm_params": {},
         "_accounting_pricing_snapshot": pricing,
     }
+    failed_database: Final = CommitBarrier(failure=RuntimeError("Earlier capture failed"))
+    failed_database.release.set()
+    prior_meter: Final = DurableUsageMeter(failed_database.write, UsageCaptureSettings(), wait_for_batch=_manual_flush)
+    prior: Final = capture_callback(
+        prior_meter,
+        {"call_type": "acompletion", "litellm_call_id": "earlier", "litellm_params": {}},
+        {"id": "earlier"},
+        NOW,
+        NOW,
+    )
+    await prior_meter.close()
+    with pytest.raises(RuntimeError, match="Earlier capture failed"):
+        await capture_batch_callback(
+            meter,
+            database.load,
+            {**kwargs, "_accounting_prior_captures": (prior,)},
+            response,
+            NOW,
+            NOW,
+        )
+    assert database.rows == ()
     with pytest.raises(RuntimeError, match="Interrupted batch persistence"):
         await capture_batch_callback(meter, database.load, kwargs, response, NOW, NOW)
     partial: Final = database.rows
