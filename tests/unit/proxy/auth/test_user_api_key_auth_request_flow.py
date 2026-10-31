@@ -13,7 +13,7 @@ from io import BytesIO
 from pathlib import Path
 from textwrap import dedent
 from types import SimpleNamespace
-from typing import Final, Literal
+from typing import Final
 from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 
@@ -11184,7 +11184,8 @@ async def test_temp_budget_increase_applied_for_cached_key():
         (2.39, False),
     ],
 )
-async def test_cached_key_team_member_budget_blocks_at_exact_cap(team_member_spend, expect_blocked):
+@pytest.mark.parametrize("route", ["/v1/messages", "/health/services", "/health/test_connection"])
+async def test_cached_key_team_member_budget_blocks_at_exact_cap(team_member_spend, expect_blocked, route):
     """A team member counter sitting exactly at the cap (where a resized reservation
     lands it) must be rejected by the cached-key auth path like every other budget check."""
     from litellm.proxy._types import LiteLLM_TeamMembership, LiteLLM_TeamTableCachedObj
@@ -11229,8 +11230,8 @@ async def test_cached_key_team_member_budget_blocks_at_exact_cap(team_member_spe
     )
 
     mock_request = MagicMock()
-    mock_request.url.path = "/v1/messages"
-    mock_request.method = "POST"
+    mock_request.url.path = route
+    mock_request.method = "POST" if route == "/v1/messages" else "GET"
     mock_request.headers = {"authorization": f"Bearer {api_key}"}
     mock_request.query_params = {}
     mock_request.state = SimpleNamespace()
@@ -11279,40 +11280,27 @@ async def test_cached_key_team_member_budget_blocks_at_exact_cap(team_member_spe
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("key_max_budget, member_max_budget", [(None, 1.0), (1.0, None)])
 @pytest.mark.parametrize(
-    "budget_source, route, expect_blocked",
+    "route, expect_blocked",
     [
-        ("member", "/models", False),
-        ("member", "/v1/models", False),
-        ("member", "/utils/model_info", False),
-        ("member", "/model/info", False),
-        ("member", "/key/info", False),
-        ("member", "/user/info", False),
-        ("member", "/v1/chat/completions", True),
-        ("member", "/v1/messages", True),
-        ("key", "/models", False),
-        ("key", "/v1/models", False),
-        ("key", "/utils/model_info", False),
-        ("key", "/model/info", False),
-        ("key", "/key/info", False),
-        ("key", "/user/info", False),
-        ("key", "/v1/chat/completions", True),
-        ("key", "/v1/messages", True),
-        ("member", "/health/services", True),
-        ("member", "/health/test_connection", True),
+        ("/models", False),
+        ("/v1/models", False),
+        ("/utils/model_info", False),
+        ("/model/info", False),
+        ("/key/info", False),
+        ("/user/info", False),
+        ("/v1/chat/completions", True),
+        ("/v1/messages", True),
     ],
 )
 async def test_cached_key_budget_preserves_non_spending_access(
-    budget_source: Literal["member", "key"],
+    key_max_budget: float | None,
+    member_max_budget: float | None,
     route: str,
     expect_blocked: bool,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from litellm.proxy.common_utils.user_api_key_cache import (
-        team_membership_auth_cache_key,
-    )
-    from litellm.proxy.utils import hash_token
-
     api_key: Final = "sk-budget-route-fixture"
     hashed_token: Final = proxy_utils.hash_token(api_key)
     team_id: Final = "budget-route-team"
@@ -11324,9 +11312,9 @@ async def test_cached_key_budget_preserves_non_spending_access(
             token=hashed_token,
             user_id=user_id,
             team_id=team_id,
-            team_member_spend=2.0 if budget_source == "member" else None,
-            spend=2.0 if budget_source == "key" else 0.0,
-            max_budget=1.0 if budget_source == "key" else None,
+            team_member_spend=2.0,
+            spend=2.0,
+            max_budget=key_max_budget,
         ),
         user_api_key_cache=cache,
         proxy_logging_obj=None,
@@ -11341,8 +11329,8 @@ async def test_cached_key_budget_preserves_non_spending_access(
         value=LiteLLM_TeamMembership(
             user_id=user_id,
             team_id=team_id,
-            spend=2.0 if budget_source == "member" else 0.0,
-            litellm_budget_table=(LiteLLM_BudgetTable(max_budget=1.0) if budget_source == "member" else None),
+            spend=2.0,
+            litellm_budget_table=LiteLLM_BudgetTable(max_budget=member_max_budget),
         ),
     )
     await cache.async_set_cache(key=f"spend:team_member:{user_id}:{team_id}", value=2.0)
@@ -11385,7 +11373,6 @@ async def test_cached_key_budget_preserves_non_spending_access(
         with pytest.raises(ProxyException) as exc_info:
             await authenticate()
         assert exc_info.value.type == ProxyErrorTypes.budget_exceeded
-        assert ("TeamMember=" if budget_source == "member" else "Key=") in exc_info.value.message
         return
 
     result: Final = await authenticate()

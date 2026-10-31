@@ -3019,7 +3019,9 @@ async def validate_resolved_virtual_key(  # noqa: C901  # Preserve ordering of e
             llm_router=llm_router,
             team_id=valid_token.team_id,
         )
-        skip_budget_checks = is_mcp_discovery_request(route=route, request_body=request_data)
+        skip_budget_checks = route_skips_budget_checks(route=route) or is_mcp_discovery_request(
+            route=route, request_body=request_data
+        )
         if not skip_budget_checks and model is not None and llm_router is not None:
             from litellm.proxy.auth.auth_checks import is_model_cost_zero
 
@@ -3030,11 +3032,7 @@ async def validate_resolved_virtual_key(  # noqa: C901  # Preserve ordering of e
                 verbose_proxy_logger.info("Skipping all budget checks for zero-cost model: %s", model)
 
         # Check 3. Check if user is in their team budget
-        if (
-            not skip_budget_checks
-            and not route_skips_budget_checks(route=route)
-            and valid_token.team_member_spend is not None
-        ):
+        if not skip_budget_checks and valid_token.team_member_spend is not None:
             _user_id: Final = valid_token.user_id
             _team_id: Final = valid_token.team_id
             if prisma_client is not None and _user_id is not None and _team_id is not None:
@@ -3136,7 +3134,7 @@ async def validate_resolved_virtual_key(  # noqa: C901  # Preserve ordering of e
                 )
 
                 # Check 5. Token Spend is under budget
-                if RouteChecks.is_llm_api_route(route=route) and not route_skips_budget_checks(route=route):
+                if RouteChecks.is_llm_api_route(route=route):
                     await virtual_key_max_budget_check(
                         valid_token=valid_token,
                         proxy_logging_obj=proxy_logging_obj,
