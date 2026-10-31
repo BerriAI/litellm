@@ -186,6 +186,7 @@ async def test_sdk_rejection_sync_logging_allows_concurrent_ping(
     loop: Final = asyncio.get_running_loop()
     ping_responses: Final = SimpleQueue[EmptyResult]()
     async with Client(server, mode="legacy") as client:
+
         def sync_failure(
             kwargs: dict[str, object], response_obj: object, start_time: datetime, end_time: datetime
         ) -> None:
@@ -326,6 +327,7 @@ def _call_tool_params(name, arguments=None):
 
     return CallToolRequestParams(name=name, arguments=arguments)
 
+
 class TestMCPLogger(CustomLogger):
     def __init__(self):
         self.standard_logging_payload = None
@@ -447,9 +449,7 @@ async def test_mcp_cost_tracking():
             await asyncio.sleep(2)
 
             logged_standard_logging_payload = (
-                test_logger.mcp_tool_call_payloads[-1]
-                if test_logger.mcp_tool_call_payloads
-                else None
+                test_logger.mcp_tool_call_payloads[-1] if test_logger.mcp_tool_call_payloads else None
             )
             print("logged_standard_logging_payload", logged_standard_logging_payload)
 
@@ -575,13 +575,9 @@ async def test_mcp_cost_tracking_per_tool():
             await asyncio.sleep(2)
 
             logged_standard_logging_payload_1 = (
-                test_logger.mcp_tool_call_payloads[-1]
-                if test_logger.mcp_tool_call_payloads
-                else None
+                test_logger.mcp_tool_call_payloads[-1] if test_logger.mcp_tool_call_payloads else None
             )
-            print(
-                "logged_standard_logging_payload_1", logged_standard_logging_payload_1
-            )
+            print("logged_standard_logging_payload_1", logged_standard_logging_payload_1)
 
             # Verify expensive tool cost
             assert logged_standard_logging_payload_1 is not None, "Standard logging payload 1 should not be None"
@@ -601,13 +597,9 @@ async def test_mcp_cost_tracking_per_tool():
             await asyncio.sleep(2)
 
             logged_standard_logging_payload_2 = (
-                test_logger.mcp_tool_call_payloads[-1]
-                if test_logger.mcp_tool_call_payloads
-                else None
+                test_logger.mcp_tool_call_payloads[-1] if test_logger.mcp_tool_call_payloads else None
             )
-            print(
-                "logged_standard_logging_payload_2", logged_standard_logging_payload_2
-            )
+            print("logged_standard_logging_payload_2", logged_standard_logging_payload_2)
 
             # Verify cheap tool cost
             assert logged_standard_logging_payload_2 is not None, "Standard logging payload 2 should not be None"
@@ -725,9 +717,7 @@ async def test_mcp_tool_call_hook():
 
             # check logged standard logging payload
             logged_standard_logging_payload = (
-                test_logger.mcp_tool_call_payloads[-1]
-                if test_logger.mcp_tool_call_payloads
-                else None
+                test_logger.mcp_tool_call_payloads[-1] if test_logger.mcp_tool_call_payloads else None
             )
             print("logged_standard_logging_payload", logged_standard_logging_payload)
             assert logged_standard_logging_payload is not None, "Standard logging payload should not be None"
@@ -1201,7 +1191,7 @@ async def test_mcp_log_protocol_rejection_logging_obj_none_is_noop(monkeypatch):
     capture = _ProtocolRejectionLogger()
     _set_protocol_test_callbacks([capture])
 
-    import litellm.proxy._experimental.mcp_server.server as mcp_server_mod
+    import litellm.proxy.mcp_server.protocol_error_logging as mcp_server_mod
 
     def _fake_function_setup(*args, **kwargs):
         return None, {}
@@ -1263,7 +1253,7 @@ async def test_mcp_protocol_wrapper_swallows_unexpected_error(monkeypatch):
     litellm.logging_callback_manager._reset_all_callbacks()
     _set_protocol_test_callbacks([])
 
-    import litellm.proxy._experimental.mcp_server.server as mcp_server_mod
+    import litellm.proxy.mcp_server.protocol_error_logging as mcp_server_mod
 
     async def _boom(**kwargs):
         raise RuntimeError("unexpected")
@@ -1387,7 +1377,7 @@ async def test_mcp_protocol_sse_rejection_emits_slo():
     assert spend_meta.get("rejection_reason") == "malformed_params"
 
 
-_QUEUED_LOGGING_OUTLIVES_TEST = '''
+_QUEUED_LOGGING_OUTLIVES_TEST = """
 import time
 
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
@@ -1410,7 +1400,7 @@ async def test_2_starts_after_the_previous_tests_logging_ran():
     GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(_record_run())
     await GLOBAL_LOGGING_WORKER.flush()
     assert [t < started_at for t in ran_at] == [True, False]
-'''
+"""
 
 
 def test_logging_queued_by_one_test_is_drained_before_the_next(tmp_path: Path):
@@ -1427,3 +1417,12 @@ def test_logging_queued_by_one_test_is_drained_before_the_next(tmp_path: Path):
         timeout=120,
     )
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_jsonrpc_rejection_reason_maps_internal_error():
+    assert _jsonrpc_rejection_reason(-32603) == "internal_error"
+
+
+def test_parse_jsonrpc_error_response_rejects_multiple_sse_data_lines():
+    body = b'data: {"error":{"code":-32602}}\ndata: {"error":{"code":-32601}}\n'
+    assert _parse_jsonrpc_error_response_for_logging(body) is None

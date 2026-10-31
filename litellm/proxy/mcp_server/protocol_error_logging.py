@@ -27,6 +27,7 @@ from litellm.proxy.litellm_pre_call_utils import (
 )
 from litellm.types.utils import CallTypes
 from litellm.utils import Rules, function_setup
+
 # Upper bound on a response body the send wrapper will parse to detect a
 # JSON-RPC rejection. Rejection envelopes are tiny; anything larger is a
 # permitted tool result and must not be re-deserialized after it was sent.
@@ -78,6 +79,7 @@ def _jsonrpc_rejection_reason(error_code: int | None) -> str:
         case _:
             return "protocol_error"
 
+
 def parse_jsonrpc_request_for_logging(
     body: bytes,
 ) -> tuple[str | None, Mapping[str, object], object]:
@@ -111,6 +113,7 @@ def parse_jsonrpc_request_for_logging(
     except ValidationError:
         return method, EMPTY_MCP_PROTOCOL_PARAMS, request.get("id")
     return method, params, request.get("id")
+
 
 async def _log_mcp_protocol_rejection(
     request_method: str | None,
@@ -164,9 +167,7 @@ async def _log_mcp_protocol_rejection(
         if tool_name is not None:
             spend_logs_metadata["mcp_tool_name"] = tool_name
 
-        request_data: Final[
-            dict[str, object]
-        ] = {  # mutable-ok: auth enrichment mutates this legacy request payload
+        request_data: Final[dict[str, object]] = {  # mutable-ok: auth enrichment mutates this legacy request payload
             "model": "MCP: protocol_error",
             "call_type": CallTypes.call_mcp_tool.value,
             "litellm_call_id": str(uuid.uuid4()),
@@ -231,6 +232,7 @@ async def _log_mcp_protocol_rejection(
     except Exception as log_exc:  # noqa: BLE001  # best-effort: logging must never break the MCP response
         verbose_logger.debug("MCP protocol-error logging failed (continuing): %s", log_exc)
 
+
 def _parse_jsonrpc_error_response_for_logging(
     raw_body: bytes,
 ) -> _JSONRPCErrorEnvelopeForLogging | None:
@@ -249,6 +251,7 @@ def _parse_jsonrpc_error_response_for_logging(
         return _JSONRPC_ERROR_FOR_LOGGING_ADAPTER.validate_json(json_body)
     except ValidationError:
         return None
+
 
 def wrap_send_for_protocol_error_logging(
     inner_send: Send,
