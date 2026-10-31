@@ -34,6 +34,7 @@ from pydantic import ValidationError
 from litellm.proxy.db.db_url_settings import (
     PG_SSL_REQUEST,
     DatabaseURLSettings,
+    schema_from_database_url,
     token_refresh_params_from_url,
     translate_libpq_ssl_params,
     unsupported_db_scheme,
@@ -962,6 +963,18 @@ def test_token_refresh_params_keep_the_options_carrying_the_server_timeouts() ->
         "connection_limit": "5",
         "options": "-c statement_timeout=5000 -c idle_in_transaction_session_timeout=60000",
     }
+
+
+def test_schema_from_database_url_reads_a_pinned_schema_query_param():
+    assert schema_from_database_url("postgresql://db.example.com:5432/litellm_db?schema=litellm") == "litellm"
+
+
+def test_schema_from_database_url_returns_none_without_a_schema_param():
+    assert schema_from_database_url("postgresql://db.example.com:5432/litellm_db?sslmode=require") is None
+
+
+def test_schema_from_database_url_returns_none_for_an_empty_url():
+    assert schema_from_database_url("") is None
 
 
 def _issue_cert(
