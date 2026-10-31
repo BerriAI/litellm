@@ -11,9 +11,9 @@ import pytest
 import respx
 
 import litellm
-
-
-
+from litellm.completion_extras.litellm_responses_transformation.transformation import (
+    LiteLLMResponsesTransformationHandler,
+)
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     TOOL_RESULT_IMAGE_PLACEHOLDER,
     encrypted_reasoning_signature,
@@ -22,6 +22,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     THOUGHT_SIGNATURE_SEPARATOR,
     _bedrock_converse_messages_pt,
 )
+from litellm.llms.anthropic.messages.adapters.handler import LiteLLMMessagesToCompletionTransformationHandler
 from litellm.llms.anthropic.messages.adapters.transformation import (
     OPENAI_MAX_TOOL_NAME_LENGTH,
     AnthropicAdapter,
@@ -37,7 +38,7 @@ from litellm.types.llms.anthropic import (
     AnthopicMessagesAssistantMessageParam,
     AnthropicMessagesUserMessageParam,
 )
-from litellm.types.llms.openai import ChatCompletionAssistantToolCall
+from litellm.types.llms.openai import ChatCompletionAssistantToolCall, ChatCompletionReasoningSummaryTextBlock
 from litellm.types.utils import (
     ChatCompletionDeltaToolCall,
     Choices,
@@ -50,6 +51,52 @@ from litellm.types.utils import (
     Usage,
 )
 from litellm.utils import remove_additional_properties, remove_strict_from_schema
+
+
+@pytest.mark.parametrize("model", ["chatgpt/gpt-5", "openai/responses/gpt-5"])
+@pytest.mark.parametrize("summary", [[], [{"type": "summary_text", "text": "Check the weather"}]])
+def test_responses_reasoning_round_trips_through_anthropic_tool_turn(
+    model: str, summary: list[ChatCompletionReasoningSummaryTextBlock]
+) -> None:
+    response: Final = ModelResponse(
+        model=model,
+        choices=[
+            {
+                "index": 0,
+                "finish_reason": "tool_calls",
+                "message": {
+                    "role": "assistant",
+                    "content": None,
+                    "reasoning_items": [{"type": "reasoning", "summary": summary, "encrypted_content": "opaque-test"}],
+                    "tool_calls": [
+                        {"id": "call_weather", "type": "function", "function": {"name": "weather", "arguments": "{}"}}
+                    ],
+                },
+            }
+        ],
+    )
+    result: Final = LiteLLMAnthropicMessagesAdapter().translate_openai_response_to_anthropic(response)
+    assert result["content"][0] == (
+        {"type": "thinking", "thinking": "Check the weather", "signature": encrypted_reasoning_signature("opaque-test")}
+        if summary
+        else {"type": "redacted_thinking", "data": encrypted_reasoning_signature("opaque-test")}
+    )
+    prepared, _ = LiteLLMMessagesToCompletionTransformationHandler._prepare_completion_kwargs(
+        model=model,
+        max_tokens=100,
+        system="Keep the system instruction",
+        messages=[
+            {"role": "user", "content": "Weather?"},
+            {"role": "assistant", "content": result["content"]},
+            {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "call_weather", "content": "sunny"}]},
+        ],
+    )
+    items, instructions = LiteLLMResponsesTransformationHandler().convert_chat_completion_messages_to_responses_api(
+        prepared["messages"]
+    )
+    assert instructions == "Keep the system instruction"
+    assert [item["type"] for item in items] == ["message", "reasoning", "function_call", "function_call_output"]
+    assert items[1]["encrypted_content"] == "opaque-test"
 
 
 def test_translate_openai_response_to_anthropic_empty_choices() -> None:
