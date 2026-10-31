@@ -17,8 +17,8 @@ if TYPE_CHECKING:
 
     from litellm.litellm_core_utils.litellm_logging import Logging
     from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+    from litellm.router_api import AttemptedFallbackTargets
     from litellm.router_strategy.complexity_router.context_compaction import CompactionState
-    from litellm.router_utils.fallback_event_handlers import AttemptedFallbackTargets
     from litellm.types.caching import DynamicCacheControl
     from litellm.types.llms.openai import ChatCompletionAssistantMessage, ChatCompletionUserMessage
     from litellm.types.proxy.guardrails.guardrail_hooks.headroom import HeadroomRequestContext
@@ -288,6 +288,7 @@ class PromptOptions:
 @dataclass(frozen=True, slots=True, kw_only=True)
 class ResponseOptions:
     merge_reasoning_content_in_choices: bool | None = None
+    thought_signature_in_tool_call_id: bool | None = None
     enable_json_schema_validation: bool | None = None
     complete_response: bool | None = None
     keepalive_seconds: float | None = None
