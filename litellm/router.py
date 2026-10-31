@@ -14886,15 +14886,31 @@ class Router(DeprecatedRouterMembers):
         return cast(_RouteDeploymentsT, filtered_deployments)  # cast-ok: same list shape as the input candidates
 
     @staticmethod
-    def _decisions_deployment_takes_media(
-        deployment: DeploymentTypedDict, group: str, *, audio: bool, videos: bool
+    def _decisions_deployment_refuses_media(
+        deployment: DeploymentTypedDict, group: str, request_kwargs: Mapping[str, object], *, audio: bool, videos: bool
     ) -> bool:
-        from litellm.decisions.call import deployment_takes_media
+        from litellm.decisions.call import deployment_refuses_media
 
         plain_deployment: Final = cast(Mapping[str, object], deployment)  # cast-ok: router deployments are plain dicts
         model_info: Final = cast(Mapping[str, object], plain_deployment.get("model_info") or {})  # cast-ok: plain dict
-        model, custom_llm_provider = Router._capability_model_and_provider(deployment["litellm_params"], group)
-        return deployment_takes_media(model, custom_llm_provider, model_info, audio=audio, videos=videos)
+        deployment_params: Final = cast(Mapping[str, object], deployment["litellm_params"])  # cast-ok: plain dict
+        try:
+            model, custom_llm_provider = Router._capability_model_and_provider(deployment["litellm_params"], group)
+            return deployment_refuses_media(
+                model,
+                custom_llm_provider,
+                model_info,
+                {**deployment_params, **request_kwargs},
+                audio=audio,
+                videos=videos,
+            )
+        except Exception as e:  # noqa: BLE001  # best-effort filter: a deployment it cannot resolve answers for itself
+            verbose_router_logger.debug(
+                "litellm.router.py::_decisions_deployment_refuses_media: keeping a deployment of model=%s. Got - %s",
+                group,
+                e,
+            )
+            return False
 
     @staticmethod
     def _without_decisions_deployments_refusing_media(
@@ -14910,19 +14926,20 @@ class Router(DeprecatedRouterMembers):
         ):
             return healthy_deployments
 
-        media_capable_deployments: Final = [
+        deployments_taking_media: Final = [
             deployment
             for deployment in healthy_deployments
-            if Router._decisions_deployment_takes_media(
+            if not Router._decisions_deployment_refuses_media(
                 cast(DeploymentTypedDict, deployment),  # cast-ok: router candidates use the deployment shape
                 group,
+                call_kwargs,
                 audio=audio,
                 videos=videos,
             )
         ]
-        if not media_capable_deployments:
+        if not deployments_taking_media:
             return healthy_deployments
-        return cast(_RouteDeploymentsT, media_capable_deployments)  # cast-ok: same list shape as the input candidates
+        return cast(_RouteDeploymentsT, deployments_taking_media)  # cast-ok: same list shape as the input candidates
 
     @staticmethod
     def _without_declared_text_only_deployments(

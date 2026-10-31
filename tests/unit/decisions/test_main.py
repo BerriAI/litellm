@@ -3870,10 +3870,12 @@ _MEDIA_SURFACES: Final[Mapping[str, Mapping[str, object]]] = MappingProxyType(
 )
 
 
-def _group_member(group: str, model: str, key: str, weight: int, model_info: Mapping[str, object]) -> dict[str, object]:
+def _group_member(
+    group: str, model: str, key: str, weight: int, model_info: Mapping[str, object], **params: object
+) -> dict[str, object]:
     return {
         "model_name": group,
-        "litellm_params": {"model": model, "api_key": key, "weight": weight},
+        "litellm_params": {"model": model, "api_key": key, "weight": weight, **params},
         "model_info": {"id": f"{group}-{key}", **model_info},
     }
 
@@ -3905,6 +3907,10 @@ async def test_a_group_sends_clips_to_a_deployment_that_takes_them_and_refuses_o
             _group_member("listed", listed, "takes", 0, {}),
             _group_member("none", unlisted, "refuses", 1, {}),
             _group_member("none", listed, "refuses", 1, {"supports_audio_input": False}),
+            _group_member("drops", unlisted, "drops", 1, {}, drop_params=True),
+            _group_member("drops", listed, "takes", 0, {}),
+            _group_member("unresolvable", "databricks/not a serving endpoint", "unresolvable", 0, {}),
+            _group_member("unresolvable", listed, "takes", 1, {}),
         ]
     )
     call: Final = getattr(router, surface)
@@ -3913,10 +3919,14 @@ async def test_a_group_sends_clips_to_a_deployment_that_takes_them_and_refuses_o
         response: Final = call(model=group, **_MEDIA_SURFACES[surface], **media)
         return await response if asyncio.iscoroutine(response) else response
 
-    for group in ("unlisted", "listed"):
+    for group in ("unlisted", "listed", "unresolvable"):
         await send(group, audio=_AUDIO_CLIPS)
         assert respx_mock.calls.last.request.headers["authorization"] == "Bearer takes"
         assert json.loads(respx_mock.calls.last.request.content)["audio"] == list(_AUDIO_CLIPS)
+
+    await send("drops", audio=_AUDIO_CLIPS)
+    assert respx_mock.calls.last.request.headers["authorization"] == "Bearer drops"
+    assert "audio" not in json.loads(respx_mock.calls.last.request.content)
 
     await send("unlisted")
     assert respx_mock.calls.last.request.headers["authorization"] == "Bearer refuses"
