@@ -4728,3 +4728,30 @@ def test_a_billed_failure_on_a_customer_bound_key_is_surcharged_from_either_meta
     assert cost == pytest.approx(1.02)
     recorded: Final = cast("Mapping[str, Mapping[str, object]]", kwargs["standard_logging_object"])
     assert recorded["cost_breakdown"]["customer_margin_amount"] == pytest.approx(0.02)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("redact", [True, False], ids=["redaction_on", "redaction_off"])
+async def test_async_post_call_failure_hook_scrubs_the_prompt_out_of_the_persisted_error(
+    monkeypatch: pytest.MonkeyPatch, redact: bool
+):
+    secret: Final = "my ssn is 123-45-6789"
+    monkeypatch.setattr(litellm, "turn_off_message_logging", redact)
+    spend_writer: Final = create_autospec(DBSpendUpdateWriter, instance=True)
+
+    await ProxyDBLogger(spend_writer=lambda: spend_writer).async_post_call_failure_hook(
+        request_data={"model": "gpt-4o", "messages": [{"role": "user", "content": secret}], "metadata": {}},
+        original_exception=litellm.BadRequestError(
+            message=f"Unsupported content: {secret}", model="gpt-4o", llm_provider="openai"
+        ),
+        user_api_key_dict=UserAPIKeyAuth(api_key="test_api_key"),
+        traceback_str=f"Traceback: {secret}",
+    )
+
+    persisted: Final = spend_writer.update_database.call_args.kwargs["kwargs"]["litellm_params"]["metadata"][
+        "error_information"
+    ]
+    assert (secret in json.dumps(persisted)) is not redact
+    assert "Unsupported content: " in persisted["error_message"]
+    assert persisted["error_class"] == "BadRequestError"
+    assert persisted["error_code"] == "400"
