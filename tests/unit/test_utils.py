@@ -11365,7 +11365,6 @@ def test_get_optional_params_forwards_a_tool_config_cache_point_to_a_downstream_
     assert optional_params["extra_body"] == {"kept": True, "cache_control_injection_points": [point]}
 
 
-
 @pytest.mark.parametrize(
     ("provider", "expected_warnings"),
     (("streamlake", 1), ("veniceai", 1), ("my-own-llm", 0)),
@@ -11415,3 +11414,51 @@ async def test_success_enqueue_is_tracked_without_starting_callbacks_synchronous
     assert GLOBAL_LOGGING_WORKER.pending_count > 0, "Tracked enqueue must finish before worker draining starts"
     await GLOBAL_LOGGING_WORKER.flush()
     assert logging_obj.model_call_details["has_logged_async_success"] is True
+
+
+_FAILING_CALL_CASES: Final = (
+    pytest.param("completion", "chat/completions", {"messages": [{"role": "user", "content": "hi"}]}, id="completion"),
+    pytest.param("responses", "responses", {"input": "hi"}, id="responses"),
+)
+_FAILING_ASYNC_CALL_CASES: Final = (
+    pytest.param(
+        "acompletion", "chat/completions", {"messages": [{"role": "user", "content": "hi"}]}, id="acompletion"
+    ),
+    pytest.param("aresponses", "responses", {"input": "hi"}, id="aresponses"),
+)
+
+
+@respx.mock
+@pytest.mark.parametrize("call_name, path, payload", _FAILING_CALL_CASES)
+def test_failed_call_keeps_global_num_retries_for_later_calls(
+    monkeypatch: pytest.MonkeyPatch, call_name: str, path: str, payload: dict[str, object]
+) -> None:
+    monkeypatch.setattr(litellm, "num_retries", 3)
+    route: Final = respx.post(f"https://api.openai.com/v1/{path}").respond(500, json={"error": {"message": "boom"}})
+    call: Final = getattr(litellm, call_name)
+
+    for _ in range(2):
+        with pytest.raises(litellm.InternalServerError):
+            call(model="openai/gpt-5.6", api_key="sk-test", max_retries=0, **payload)
+
+    assert route.call_count == 8
+    assert litellm.num_retries == 3
+
+
+@pytest.mark.asyncio
+@respx.mock
+@pytest.mark.parametrize("call_name, path, payload", _FAILING_ASYNC_CALL_CASES)
+async def test_failed_async_call_keeps_global_num_retries_for_later_calls(
+    monkeypatch: pytest.MonkeyPatch, call_name: str, path: str, payload: dict[str, object]
+) -> None:
+    monkeypatch.setattr(litellm, "num_retries", 3)
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    route: Final = respx.post(f"https://api.openai.com/v1/{path}").respond(500, json={"error": {"message": "boom"}})
+    call: Final = getattr(litellm, call_name)
+
+    for _ in range(2):
+        with pytest.raises(litellm.InternalServerError):
+            await call(model="openai/gpt-5.6", api_key="sk-test", max_retries=0, **payload)
+
+    assert route.call_count == 8
+    assert litellm.num_retries == 3
