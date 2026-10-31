@@ -4416,12 +4416,11 @@ class Logging(LiteLLMLoggingBaseClass):
         if self.masks_failure_log and self._claim_failure_log_mask():
             self._redact_failure_log_request()
 
-    def _report_failure_log_mask_error(self, guardrail: CustomGuardrail) -> None:
+    def _report_failure_log_mask_error(self, guardrail: CustomGuardrail, error: Exception) -> None:
         verbose_logger.error(
-            "LiteLLM.LoggingError: [Non-Blocking] Exception occurred masking the failure log with %s, so its request "
-            "is redacted %s",
+            "LiteLLM.LoggingError: [Non-Blocking] %s occurred masking the failure log with %s, so its request is redacted",
+            type(error).__name__,
             guardrail.guardrail_name,
-            traceback.format_exc(),
         )
         self._handle_callback_failure(callback=guardrail)
 
@@ -4467,8 +4466,8 @@ class Logging(LiteLLMLoggingBaseClass):
                     )
                 )[0]
             )
-        except Exception:  # noqa: BLE001  # a failing mask redacts the log instead of stopping failure logging
-            self._report_failure_log_mask_error(guardrail)
+        except Exception as error:  # noqa: BLE001  # a failing mask redacts the log instead of stopping failure logging
+            self._report_failure_log_mask_error(guardrail, error)
             return None
         return hooked_details
 
@@ -4542,8 +4541,8 @@ class Logging(LiteLLMLoggingBaseClass):
             hooked: Final = guardrail.logging_hook(
                 kwargs=_failure_log_hook_kwargs(details), result=None, call_type=self._logging_hook_call_type
             )
-        except Exception:  # noqa: BLE001  # a failing mask redacts the log instead of stopping failure logging
-            self._report_failure_log_mask_error(guardrail)
+        except Exception as error:  # noqa: BLE001  # a failing mask redacts the log instead of stopping failure logging
+            self._report_failure_log_mask_error(guardrail, error)
             return None
         return hooked[0]
 

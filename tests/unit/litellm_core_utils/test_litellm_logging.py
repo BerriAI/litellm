@@ -8717,7 +8717,7 @@ class _UnflaggedNameMaskingGuardrail(_NameMaskingGuardrail):
 
 class _RaisingMaskingGuardrail(_NameMaskingGuardrail):
     def _mask(self, kwargs: dict[str, object]) -> dict[str, object]:
-        raise RuntimeError("masking failed")
+        raise RuntimeError(f"masking failed on {kwargs['messages']}")
 
 
 class _BlockingNameMaskingGuardrail(_NameMaskingGuardrail):
@@ -8907,14 +8907,18 @@ async def test_failure_log_keeps_the_prompt_when_no_logging_only_guardrail_masks
 @pytest.mark.asyncio
 @pytest.mark.parametrize("call", ["completion", "acompletion"])
 async def test_failure_is_logged_redacted_when_the_masking_guardrail_raises(
-    monkeypatch: pytest.MonkeyPatch, call: Literal["completion", "acompletion"]
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, call: Literal["completion", "acompletion"]
 ) -> None:
+    caplog.set_level(logging.ERROR, logger="LiteLLM")
     recorder, sync_logged = _register_failure_logging(monkeypatch, _RaisingMaskingGuardrail())
 
     await _fail_chat_call(call, copy.deepcopy(_RAW_LOG))
 
+    error_logs: Final = [record.getMessage() for record in caplog.records if record.levelno >= logging.ERROR]
     assert recorder.logged == [(_REDACTED_LOG, _REDACTED_LOG)]
     assert sync_logged == [_REDACTED_LOG]
+    assert any("RuntimeError occurred masking the failure log" in log for log in error_logs)
+    assert not any(_RAW_PROMPT in log for log in error_logs)
 
 
 @pytest.mark.asyncio
