@@ -108,6 +108,20 @@ async def read_committed_budget_spend(
     return _committed_budget_spend(counter_keys=counter_keys, committed=committed)
 
 
+async def warm_committed_counter_keys(
+    spend_counter_cache: DualCache, counter_keys: EntitySpendCounterKeys
+) -> EntitySpendCounterKeys:
+    """For a charge with no auth to name the budgeted entities: only a budgeted entity's twin exists."""
+    committed: Final = await read_committed_budget_spend(spend_counter_cache, counter_keys)
+    return EntitySpendCounterKeys(
+        key=counter_keys.key if committed.key is not None else None,
+        team=counter_keys.team if committed.team is not None else None,
+        user=counter_keys.user if committed.user is not None else None,
+        org=counter_keys.org if committed.org is not None else None,
+        end_user=counter_keys.end_user if committed.end_user is not None else None,
+    )
+
+
 async def read_admission_committed_spend(
     spend_counter_cache: DualCache, counter_keys: EntitySpendCounterKeys
 ) -> CommittedBudgetSpend:

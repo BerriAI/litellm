@@ -1071,6 +1071,54 @@ async def test_charge_moves_only_the_committed_counters_auth_named_as_budgeted(m
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("tracked", "expected_key", "expected_org"),
+    [(True, pytest.approx(1.2), pytest.approx(2.2)), (False, 1.0, 2.0)],
+)
+async def test_charge_with_no_auth_on_its_row_moves_the_committed_counters_that_exist(
+    tracked, expected_key, expected_org
+):
+    """A background response is billed from its creator's stored attribution, after the request's auth is gone."""
+    from litellm.proxy.proxy_server import increment_spend_counters
+
+    proxy_logging_obj = MagicMock()
+    proxy_logging_obj.db_spend_update_writer.update_database = AsyncMock()
+    spend_counter_cache = DualCache()
+    spend_counter_cache.in_memory_cache.set_cache(key="committed_spend:key:test_api_key", value=1.0)
+    spend_counter_cache.in_memory_cache.set_cache(key="committed_spend:org:test_org_id", value=2.0)
+
+    with (
+        patch("litellm.proxy.hooks.proxy_track_cost_callback.committed_spend_tracked", return_value=tracked),
+        patch("litellm.proxy.proxy_server.spend_counter_cache", spend_counter_cache),
+        patch(
+            "litellm.proxy.spend_tracking.committed_spend.SpendCounterReseed.from_db",
+            AsyncMock(return_value=50.0),
+        ),
+    ):
+        await _update_database_and_spend_counters(
+            proxy_logging_obj=proxy_logging_obj,
+            increment_spend_counters=increment_spend_counters,
+            user_api_key="test_api_key",
+            user_id="test_user_id",
+            end_user_id=None,
+            team_id="test_team_id",
+            org_id="test_org_id",
+            kwargs={"litellm_params": {"metadata": {"user_api_key_hash": "test_api_key"}}},
+            completion_response=None,
+            start_time=datetime.now(),
+            end_time=datetime.now(),
+            response_cost=0.2,
+            budget_reservation=None,
+        )
+
+    cached = spend_counter_cache.in_memory_cache.get_cache
+    assert cached(key="committed_spend:key:test_api_key") == expected_key
+    assert cached(key="committed_spend:org:test_org_id") == expected_org
+    assert cached(key="committed_spend:team:test_team_id") is None
+    assert cached(key="committed_spend:user:test_user_id") is None
+
+
+@pytest.mark.asyncio
 async def test_update_database_and_spend_counters_releases_reservation_when_db_update_fails():
     proxy_logging_obj = MagicMock()
     proxy_logging_obj.db_spend_update_writer.update_database = AsyncMock(side_effect=Exception("db unavailable"))

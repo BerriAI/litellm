@@ -311,6 +311,44 @@ async def test_gauges_read_no_committed_counter_auth_did_not_name_as_budgeted(
     }
 
 
+def _billed_row_metadata() -> dict:
+    return {key: value for key, value in _request_metadata(_authed_token()).items() if key != "user_api_key_auth"}
+
+
+@pytest.mark.asyncio
+async def test_row_with_no_auth_adds_its_cost_to_the_committed_spend_of_the_entities_it_is_charged_to(
+    prometheus_logger, getters, spend_counter_cache
+):
+    """Counter increments flush after the success callbacks, so the row's own charge is not in the counters yet."""
+    _stub_gauges(prometheus_logger)
+    _store_committed(spend_counter_cache, key=6.0, team=33.0, user=11.0, org=63.0)
+
+    await _emit(prometheus_logger, _billed_row_metadata())
+
+    assert _remaining(prometheus_logger) == {
+        "key": pytest.approx(2.0),
+        "team": pytest.approx(265.0),
+        "user": pytest.approx(37.0),
+        "org": 435.0,
+    }
+
+
+@pytest.mark.asyncio
+async def test_row_with_no_auth_and_no_committed_counters_keeps_the_stored_spend(
+    prometheus_logger, getters, spend_counter_cache
+):
+    _stub_gauges(prometheus_logger)
+
+    await _emit(prometheus_logger, _billed_row_metadata())
+
+    assert _remaining(prometheus_logger) == {
+        "key": pytest.approx(7.0),
+        "team": pytest.approx(278.0),
+        "user": pytest.approx(43.0),
+        "org": 458.0,
+    }
+
+
 @pytest.mark.asyncio
 async def test_slow_committed_read_on_a_failed_request_is_bounded_and_keeps_the_auth_time_spend(
     prometheus_logger, getters, monkeypatch

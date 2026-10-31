@@ -2284,6 +2284,7 @@ class PrometheusLogger(CustomLogger):
         _org_alias: Final = _metadata.get("user_api_key_org_alias", None)
         _carried_metadata: Final = _REQUEST_METADATA_ADAPTER.validate_python(_metadata)
         _committed_at_auth: Final = committed_budget_spend_from_metadata(_carried_metadata)
+        _row_carries_auth: Final = "user_api_key_auth" in _carried_metadata
 
         # Bound the per-request budget-metric emission so that slow Redis/DB
         # lookups under load cannot consume the whole LoggingWorker watchdog
@@ -2295,9 +2296,20 @@ class PrometheusLogger(CustomLogger):
         budget_metrics_timeout: Final = _get_budget_metrics_per_request_timeout()
 
         async def emit_budget_metrics() -> tuple[object, ...]:
+            committed_now: Final = await _committed_spend_now(
+                _committed_at_auth.counter_keys
+                if _row_carries_auth
+                else EntitySpendCounterKeys.of(
+                    token=user_api_key,
+                    team_id=user_api_team,
+                    user_id=user_id,
+                    org_id=user_api_key_org_id,
+                    end_user_id=end_user_id,
+                )
+            )
             committed: Final = _committed_spend_before_request(
-                at_auth=_committed_at_auth,
-                now=await _committed_spend_now(_committed_at_auth.counter_keys),
+                at_auth=_committed_at_auth if _row_carries_auth else committed_now,
+                now=committed_now,
                 response_cost=response_cost,
             )
             return await asyncio.gather(

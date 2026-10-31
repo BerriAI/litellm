@@ -39,6 +39,7 @@ from litellm.proxy.db.db_spend_update_writer import (
 from litellm.proxy.hooks.search_free_tier import apply_search_free_tier
 from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup, metadata_variable_name_for_route
 from litellm.proxy.route_llm_request import ProxyModelNotFoundError
+from litellm.proxy.spend_tracking.committed_spend import committed_spend_tracked, warm_committed_counter_keys
 from litellm.proxy.spend_tracking.spend_counter_batch import post_call_counter_keys, spend_counter_batch_scope
 from litellm.proxy.spend_tracking.spend_event import (
     ObjectMapping,
@@ -1022,6 +1023,30 @@ class _IncrementSpendCounters(Protocol):
     ) -> None: ...
 
 
+async def _committed_spend_scope_of_row(
+    kwargs: Mapping[str, object],
+    response_cost: float,
+    token: str | None,
+    team_id: str | None,
+    user_id: str | None,
+    org_id: str | None,
+    end_user_id: str | None,
+) -> EntitySpendCounterKeys:
+    metadata: Final = _OBJECT_MAPPING.validate_python(get_litellm_metadata_from_kwargs(kwargs=dict(kwargs)))
+    if "user_api_key_auth" in metadata:
+        return committed_budget_spend_from_metadata(metadata).counter_keys
+    if response_cost <= 0 or not committed_spend_tracked():
+        return EntitySpendCounterKeys()
+    from litellm.proxy.proxy_server import spend_counter_cache
+
+    return await warm_committed_counter_keys(
+        spend_counter_cache,
+        EntitySpendCounterKeys.of(
+            token=token, team_id=team_id, user_id=user_id, org_id=org_id, end_user_id=end_user_id
+        ),
+    )
+
+
 async def _update_database_and_spend_counters(
     proxy_logging_obj: "ProxyLogging",
     increment_spend_counters: _IncrementSpendCounters,
@@ -1153,9 +1178,15 @@ async def _update_database_and_spend_counters_in_batch(
             request_started_at=start_time,
             model_access_groups=model_access_groups,
             project_id=project_id,
-            committed_spend_scope=committed_budget_spend_from_metadata(
-                _OBJECT_MAPPING.validate_python(get_litellm_metadata_from_kwargs(kwargs=kwargs))
-            ).counter_keys,
+            committed_spend_scope=await _committed_spend_scope_of_row(
+                kwargs=kwargs,
+                response_cost=response_cost,
+                token=user_api_key,
+                team_id=team_id,
+                user_id=user_id,
+                org_id=org_id,
+                end_user_id=end_user_id,
+            ),
         )
     except Exception:
         if budget_reservation is not None:
