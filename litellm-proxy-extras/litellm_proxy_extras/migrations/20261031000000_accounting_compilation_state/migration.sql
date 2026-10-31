@@ -1,3 +1,5 @@
+SET LOCAL lock_timeout = '10s';
+
 ALTER TABLE "LiteLLM_AccountingEvent"
 ADD COLUMN IF NOT EXISTS "compilation_state" TEXT NOT NULL DEFAULT 'pending',
 ADD COLUMN IF NOT EXISTS "compilation_error" TEXT,

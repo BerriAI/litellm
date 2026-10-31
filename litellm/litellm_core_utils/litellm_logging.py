@@ -2172,7 +2172,9 @@ class Logging(LiteLLMLoggingBaseClass):
             {
                 name: value
                 for name, value in overrides.items()
-                if deployment_id is None or normalized.get(name) != value
+                if deployment_id is None
+                or name not in {"input_cost_per_token", "output_cost_per_token"}
+                or normalized.get(name) != value
             },
         )
         keys: Final = (model, f"{provider}/{model}", deployment_id or model, effective["key"])

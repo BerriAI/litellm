@@ -1766,3 +1766,44 @@ def test_router_custom_token_prices_accept_missing_deployment_mode(explicit_null
         assert _snapshot_model_cost_entries(keys) == registered
     finally:
         _restore_model_cost_entries(original)
+
+
+def test_changed_request_flat_rate_preserves_explicit_deployment_tier_prices() -> None:
+    from litellm.types.utils import ModelResponse, Usage
+
+    deployment_id: Final = "request-price-variants"
+    original: Final = _snapshot_model_cost_entries((deployment_id,))
+    variants: Final = {"input_cost_per_token_priority": 0.03, "output_cost_per_token_priority": 0.04}
+    try:
+        litellm.register_model(
+            {
+                deployment_id: {
+                    "litellm_provider": "openai",
+                    "mode": "chat",
+                    "input_cost_per_token": 0.01,
+                    "output_cost_per_token": 0.02,
+                    **variants,
+                }
+            },
+            persist_across_reloads=False,
+        )
+        logger: Final = _request_logger("openai/gpt-4o-mini", "completion")
+        logger.update_environment_variables(
+            model="gpt-4o-mini", custom_llm_provider="openai", litellm_params={}, optional_params={}
+        )
+        logger.set_request_pricing(
+            "gpt-4o-mini",
+            "openai",
+            {"input_cost_per_token": 0.05, "output_cost_per_token": 0.02, **variants},
+            deployment_id,
+        )
+        response: Final = ModelResponse(
+            model="gpt-4o-mini",
+            service_tier="priority",
+            usage=Usage(prompt_tokens=10, completion_tokens=4, total_tokens=14),
+        )
+        assert logger.response_cost_calculator(response, ignore_stamped_cost=True) == pytest.approx(
+            10 * 0.03 + 4 * 0.04
+        )
+    finally:
+        _restore_model_cost_entries(original)
