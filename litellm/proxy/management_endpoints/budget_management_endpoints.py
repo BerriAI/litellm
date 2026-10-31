@@ -141,6 +141,7 @@ async def update_budget(
     - rpm_limit: Optional[int] - The requests per minute limit for the budget.
     - tpd_limit: Optional[int] - The tokens per day limit for the budget. Charged by batch submissions instead of tpm_limit/rpm_limit.
     - model_max_budget: Optional[dict] - Specify max budget for a given model. Example: {"openai/gpt-4o-mini": {"max_budget": 100.0, "budget_duration": "1d", "tpm_limit": 100000, "rpm_limit": 100000}}
+      Send null or {} to clear all per-model limits. Omit this field to keep them unchanged.
     - budget_reset_at: Optional[datetime] - Update the Datetime when the budget was last reset.
     """
     from litellm.proxy.proxy_server import litellm_proxy_admin_name, prisma_client, user_api_key_cache
@@ -189,9 +190,13 @@ async def update_budget(
         else {}
     )
 
+    budget_patch: Final[Mapping[str, object]] = budget_obj.model_dump(exclude_unset=True)
     budget_obj_jsonified: Final[Mapping[str, object]] = jsonify_object(
         {
-            **budget_obj.model_dump(exclude_unset=True),
+            **{
+                field: {} if field == "model_max_budget" and value is None else value
+                for field, value in budget_patch.items()
+            },
             **recomputed_reset_at,
             "updated_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
         }
