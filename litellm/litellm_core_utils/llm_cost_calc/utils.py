@@ -28,6 +28,7 @@ from litellm.types.utils import (
     DataResidency,
     ImageResponse,
     ModelInfo,
+    ModelInfoBase,
     PassthroughCallTypes,
     PromptTokensDetailsWrapper,
     ServiceTier,
@@ -197,15 +198,15 @@ def get_billable_input_tokens(usage: Usage) -> int:
 
 
 def select_cost_metric_for_model(
-    model_info: ModelInfo,
+    model_info: ModelInfoBase,
 ) -> Literal["cost_per_character", "cost_per_token"]:
     """
     Select 'cost_per_character' if model_info has 'input_cost_per_character'
     Select 'cost_per_token' if model_info has 'input_cost_per_token'
     """
-    if model_info.get("input_cost_per_character"):
+    if model_info.get("input_cost_per_character") is not None:
         return "cost_per_character"
-    elif model_info.get("input_cost_per_token"):
+    elif model_info.get("input_cost_per_token") is not None:
         return "cost_per_token"
     else:
         raise ValueError(

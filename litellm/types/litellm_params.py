@@ -21,6 +21,7 @@ if TYPE_CHECKING:
     from litellm.router_utils.fallback_event_handlers import AttemptedFallbackTargets
     from litellm.types.caching import DynamicCacheControl
     from litellm.types.llms.openai import ChatCompletionAssistantMessage, ChatCompletionUserMessage
+    from litellm.types.proxy.guardrails.guardrail_hooks.headroom import HeadroomRequestContext
     from litellm.types.proxy.litellm_pre_call_utils import SecretFields
     from litellm.types.router import ConfigurableClientsideParamsCustomAuth, DeploymentTypedDict, RetryPolicy
     from litellm.types.router_weights import RouterWeights
@@ -352,6 +353,7 @@ class CallState:
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class AgenticLoopState:
+    headroom_context: "HeadroomRequestContext | None" = field(default=None, metadata=wire("_headroom_request_context"))
     depth: int | None = field(default=None, metadata=wire("_agentic_loop_depth"))
     fingerprints: Sequence[str] | None = field(default=None, metadata=wire("_agentic_loop_fingerprints"))
     api_surface: Literal["chat_completions", "responses"] | None = field(
