@@ -145,6 +145,59 @@ class ExceptionCheckers:
         return False
 
 
+DEFAULT_ENGINE_BUSY_MARKERS: Final = ("engine is currently busy",)
+
+
+def _extra_kwargs_metadata(extra_kwargs: object) -> Mapping[str, object]:
+    if isinstance(extra_kwargs, Mapping):
+        metadata: Final = extra_kwargs.get("metadata")
+        if isinstance(metadata, Mapping):
+            return metadata
+    return _NO_LITELLM_PARAMS
+
+
+def _treat_busy_as_rate_limit(extra_kwargs: object) -> bool:
+    metadata: Final = _extra_kwargs_metadata(extra_kwargs)
+    if "treat_busy_as_rate_limit" in metadata:
+        return bool(metadata["treat_busy_as_rate_limit"])
+    if isinstance(extra_kwargs, Mapping) and "treat_busy_as_rate_limit" in extra_kwargs:
+        return bool(extra_kwargs["treat_busy_as_rate_limit"])
+    return bool(getattr(litellm, "treat_busy_as_rate_limit", False))
+
+
+def _engine_busy_markers(extra_kwargs: object) -> tuple[str, ...]:
+    for source in (_extra_kwargs_metadata(extra_kwargs), extra_kwargs):
+        if isinstance(source, Mapping):
+            markers: Final = source.get("treat_busy_markers")
+            if isinstance(markers, str) and markers:
+                return (markers,)
+            if isinstance(markers, (list, tuple)):
+                cleaned: Final = tuple(str(marker) for marker in markers if str(marker))
+                if cleaned:
+                    return cleaned
+    global_markers: Final = getattr(litellm, "treat_busy_markers", None)
+    if isinstance(global_markers, (list, tuple)):
+        cleaned_global: Final = tuple(str(marker) for marker in global_markers if str(marker))
+        if cleaned_global:
+            return cleaned_global
+    return DEFAULT_ENGINE_BUSY_MARKERS
+
+
+def _is_engine_busy_error(error_str: str, markers: tuple[str, ...]) -> bool:
+    lowered: Final = error_str.lower()
+    return any(marker.lower() in lowered for marker in markers if marker)
+
+
+def _is_openai_like_provider(custom_llm_provider: str) -> bool:
+    if custom_llm_provider in ("openai", "text-completion-openai", "custom_openai"):
+        return True
+    openai_compatible: Final = getattr(litellm, "openai_compatible_providers", ())
+    if custom_llm_provider in openai_compatible:
+        return True
+    openai_like: Final = getattr(litellm, "_openai_like_providers", ())
+    return custom_llm_provider in openai_like
+
+
 def get_error_message(error_obj) -> str | None:
     """
     OpenAI Returns Error message that is nested, this extract the message
@@ -2648,6 +2701,22 @@ def exception_type(
                     model=model,
                     custom_llm_provider=custom_llm_provider,
                     body=getattr(mappable_exception, "body", None),
+                )
+            if (
+                getattr(original_exception, "status_code", None) == 503
+                and _is_openai_like_provider(custom_llm_provider)
+                and _treat_busy_as_rate_limit(extra_kwargs)
+                and _is_engine_busy_error(error_str, _engine_busy_markers(extra_kwargs))
+            ):
+                exception_mapping_worked = True
+                busy_message: Final = get_error_message(original_exception) or error_str
+                raise RateLimitError(
+                    message=f"RateLimitError: {exception_provider} - {busy_message}",
+                    model=model,
+                    llm_provider=custom_llm_provider,
+                    response=_litellm_proxy_response(mappable_exception, custom_llm_provider),
+                    litellm_debug_info=extra_information,
+                    body=getattr(original_exception, "body", None),
                 )
             if (
                 custom_llm_provider == "openai"
