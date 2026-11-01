@@ -7,6 +7,8 @@ import sys
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../..")))
 
+import pytest
+
 import litellm
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.llms.openai_like.dynamic_config import create_config_class
@@ -58,3 +60,15 @@ def test_apiko_complete_url_appends_endpoint():
         stream=False,
     )
     assert url == f"{APIKO_BASE_URL}/chat/completions"
+
+
+def test_apiko_does_not_fall_back_to_openai_key(monkeypatch):
+    monkeypatch.delenv("APIKO_API_KEY", raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-unrelated-openai-key")
+    monkeypatch.setattr(litellm, "api_key", None)
+    monkeypatch.setattr(litellm, "openai_key", None)
+    with pytest.raises(litellm.AuthenticationError, match="Set APIKO_API_KEY"):
+        litellm.completion(
+            model="apiko/deepseek-v4-pro",
+            messages=[{"role": "user", "content": "hi"}],
+        )
