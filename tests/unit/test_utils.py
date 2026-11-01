@@ -1211,6 +1211,7 @@ _COST_MAP_ROW_SCHEMA: Final = {
             "supports_anthropic_thinking_payload": {"type": "boolean"},
             "supports_legacy_thinking": {"type": "boolean"},
             "thinking_always_on": {"type": "boolean"},
+            "supports_between_tools_thinking": {"type": "boolean"},
             "supports_mid_conversation_system": {"type": "boolean"},
             "supports_sampling_params": {"type": "boolean"},
             "supports_output_config": {"type": "boolean"},
