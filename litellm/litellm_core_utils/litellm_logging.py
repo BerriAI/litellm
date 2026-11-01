@@ -7519,9 +7519,9 @@ class StandardLoggingPayloadSetup:
         )
         request_tags: Final = next(
             (
-                cast(list[str], tags)  # cast-ok: tags are caller-provided
-                for tags in (metadata.get("tags"), litellm_metadata.get("tags"))
-                if isinstance(tags, list) and tags
+                cast(list[str], tags)  # cast-ok: preserve existing caller-provided list elements
+                for tag_metadata in (metadata, litellm_metadata)
+                if isinstance(tags := tag_metadata.get("tags"), list) and tags
             ),
             (),
         )
