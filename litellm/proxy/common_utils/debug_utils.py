@@ -133,7 +133,7 @@ if os.environ.get("LITELLM_PROFILE", "false").lower() == "true":
         return {"top_50_memory_usage": result}
 
 
-def _prompt_caching_pins(llm_router: "Router | None") -> tuple[Mapping[str, object], Mapping[str, float]]:
+def _prompt_caching_pins(llm_router: "Router | None") -> tuple[Mapping[object, object], Mapping[str, float]]:
     if llm_router is None:
         return {}, {}
     pin_cache: Final = llm_router.registry().plugins("prompt_caching_pins").in_memory_cache
