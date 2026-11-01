@@ -138,7 +138,8 @@ def _assert_translated_request(case: _Case, body: Mapping[str, JsonValue]) -> No
         assert body["model"] == "nvidia/llama-3.2-nv-rerankqa-1b-v2"
         assert body["query"] == {"text": "hello"}
         assert body["passages"] == [{"text": "hello"}, {"text": "world"}]
-        assert body["top_k"] == 2
+        assert "top_k" not in body
+        assert "top_n" not in body
     else:
         assert body["model"] == "jina-reranker-v2-base-multilingual"
         assert body["query"] == "hello"
