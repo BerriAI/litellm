@@ -15,7 +15,7 @@ from starlette.types import ASGIApp
 
 @contextmanager
 def asgi_server(
-    app: ASGIApp, *, before_stop: Callable[[], None] | None = None, port: int = 0, keepalive_seconds: int = 1
+    app: ASGIApp, *, before_stop: Callable[[], None] | None = None, port: int = 0, keepalive_seconds: int = 30
 ) -> Iterator[str]:
     with socket.socket() as listener:
         listener.bind(("127.0.0.1", port))
