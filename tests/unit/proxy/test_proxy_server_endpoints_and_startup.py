@@ -953,6 +953,54 @@ async def test_periodic_reload_job_scheduled_without_store_model_in_db(monkeypat
 
 
 @pytest.mark.asyncio
+async def test_ui_settings_resync_job_scheduled_without_store_model_in_db(monkeypatch):
+    """A UI setting saved through one pod must reach the others without a restart when store_model_in_db is off"""
+    monkeypatch.delenv("DISABLE_PRISMA_SCHEMA_UPDATE", raising=False)
+    monkeypatch.delenv("STORE_MODEL_IN_DB", raising=False)
+    from apscheduler.schedulers.asyncio import AsyncIOScheduler
+
+    from litellm.proxy.proxy_server import ProxyStartupEvent
+    from litellm.proxy.utils import ProxyLogging
+
+    mock_prisma_client: Final = MagicMock()
+    mock_prisma_client.db.litellm_config.find_first = AsyncMock(return_value=None)
+    mock_prisma_client.db.litellm_uisettings.find_unique = AsyncMock(return_value=None)
+    mock_proxy_logging: Final = MagicMock(spec=ProxyLogging)
+    mock_proxy_logging.slack_alerting_instance = MagicMock()
+    mock_proxy_logging.db_spend_update_writer = MagicMock()
+    general_settings: Final[dict[str, object]] = {}
+    scheduler: Final = AsyncIOScheduler()
+
+    try:
+        with (
+            patch("litellm.proxy.proxy_server.proxy_config", _mock_scheduled_proxy_config()),
+            patch("litellm.proxy.proxy_server.store_model_in_db", False),
+            patch("litellm.proxy.proxy_server.get_secret_bool", return_value=False),
+            patch("litellm.proxy.proxy_server.general_settings", general_settings),
+            patch("litellm.proxy.proxy_server.AsyncIOScheduler", return_value=scheduler),
+        ):
+            await ProxyStartupEvent.initialize_scheduled_background_jobs(
+                general_settings={},
+                prisma_client=mock_prisma_client,
+                proxy_budget_rescheduler_min_time=1,
+                proxy_budget_rescheduler_max_time=2,
+                proxy_batch_write_at=5,
+                proxy_logging_obj=mock_proxy_logging,
+            )
+            job: Final = scheduler.get_job("sync_ui_settings_job")
+            assert job is not None, [j.id for j in scheduler.get_jobs()]
+
+            mock_prisma_client.db.litellm_uisettings.find_unique.return_value = types.SimpleNamespace(
+                ui_settings={"disable_model_add_for_internal_users": True}
+            )
+            await job.func(*job.args)
+
+        assert general_settings == {"disable_model_add_for_internal_users": True}
+    finally:
+        scheduler.shutdown(wait=False)
+
+
+@pytest.mark.asyncio
 async def test_initialize_scheduled_jobs_registers_cleanup_when_retention_lives_only_in_the_db(monkeypatch):
     """With no config file, the startup DB sync rebinds general_settings to a store holding the
     retention period; the cleanup job must be registered from that live value, not the stale

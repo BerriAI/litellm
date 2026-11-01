@@ -2006,7 +2006,6 @@ async def update_ui_settings(
     from litellm.proxy.proxy_server import (
         create_config_audit_log,
         prisma_client,
-        store_model_in_db,
     )
 
     if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
@@ -2016,12 +2015,6 @@ async def update_ui_settings(
         raise HTTPException(
             status_code=500,
             detail={"error": "Database not connected. Please connect a database."},
-        )
-
-    if store_model_in_db is not True:
-        raise HTTPException(
-            status_code=500,
-            detail={"error": "Set `'STORE_MODEL_IN_DB='True'` in your env to enable this feature."},
         )
 
     conflicting_keys: Final = sorted(

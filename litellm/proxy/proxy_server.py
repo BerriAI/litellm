@@ -11576,6 +11576,15 @@ class ProxyStartupEvent:
                     replace_existing=True,
                     misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
                 )
+                scheduler.add_job(  # pyright: ignore[reportUnknownMemberType]  # apscheduler is untyped
+                    sync_ui_settings_to_general_settings,
+                    "interval",
+                    seconds=config_reload_interval_seconds,
+                    args=[prisma_client],
+                    id="sync_ui_settings_job",
+                    replace_existing=True,
+                    misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
+                )
                 # DB-backed MCP servers are live objects in every mode, so the registry refresh that
                 # store_model_in_db=True deployments get via the add_deployment job must run here
                 # too; without it, a server whose OAuth discovery failed at startup is rebuilt only
