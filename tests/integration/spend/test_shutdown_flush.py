@@ -1,3 +1,4 @@
+import asyncio
 import hashlib
 import json
 import os
@@ -9,18 +10,25 @@ from collections.abc import Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
+from functools import partial
 from pathlib import Path
-from typing import Final
+from typing import Final, Literal
 
 import httpx
 import psycopg
 import pytest
 import yaml
 from integration._support.client import Gateway, delete_key_if_present, eventually, object_value, string_value
-from integration._support.database import read_rows
+from integration._support.database import read_rows, write_rows
 from integration._support.process import OwnedProxy, owned_proxy_process
+from integration._support.scheduled_write import scheduled_write, wait_for_blocked_update, wait_for_database_idle
 from integration._support.wire import Reply, Request, wire_server
 from psycopg import sql
+from redis import Redis
+
+from litellm.constants import REDIS_UPDATE_BUFFER_KEY
+from litellm.proxy._types import Litellm_EntityType
+from litellm.proxy.utils import PrismaClient, update_spend
 
 REQUESTS_WHILE_BLOCKED: Final = 6
 CANCEL_LOG_LINE: Final = "in-flight scheduled job(s) for shutdown"
@@ -538,3 +546,70 @@ def test_daily_spend_burst_across_two_workers_survives_shutdown_during_commit_ex
             shutdown.terminate_once(lambda: _committing_daily_user_spend() >= 1, lambda: None)
         finally:
             _drop_slow_commit(suffix)
+
+
+@pytest.mark.parametrize("schedule", ("normal", "locked", "cancelled"))
+async def test_key_spend_worker_recovery_records_buffered_increment_exactly_once(
+    key_spend_database: str,
+    buffered_spend_worker: tuple[PrismaClient, "Redis[str]"],
+    schedule: Literal["normal", "locked", "cancelled"],
+) -> None:
+    database, observer = buffered_spend_worker
+    alpha: Final = f"alpha-{uuid.uuid4().hex}"
+    beta: Final = f"beta-{uuid.uuid4().hex}"
+    write_rows(
+        'INSERT INTO "LiteLLM_VerificationToken" (token, spend, total_spend, models) '
+        "VALUES (%s, 100, 200, '{}'), (%s, 100, 200, '{}')",
+        (alpha, beta),
+        database_url=key_spend_database,
+    )
+    queue: Final = database.proxy_logging_obj.db_spend_update_writer.spend_update_queue
+    worker: Final = partial(
+        update_spend, prisma_client=database, db_writer_client=None, proxy_logging_obj=database.proxy_logging_obj
+    )
+    other_key: Final = partial(
+        read_rows,
+        'SELECT row_to_json(k) AS row FROM "LiteLLM_VerificationToken" k WHERE token=%s',
+        (beta,),
+        database_url=key_spend_database,
+    )
+    untouched: Final = other_key()
+
+    def assert_recovered() -> None:
+        assert read_rows(
+            'SELECT token, spend, total_spend FROM "LiteLLM_VerificationToken" '
+            "WHERE token IN (%s, %s) ORDER BY token",
+            (alpha, beta),
+            database_url=key_spend_database,
+        ) == [
+            {"token": alpha, "spend": 103.0, "total_spend": 203.0},
+            {"token": beta, "spend": 100.0, "total_spend": 200.0},
+        ], "Settled worker and replay must record the original +3 once and leave the other key alone"
+        assert observer.lrange(REDIS_UPDATE_BUFFER_KEY, 0, -1) == []
+        assert queue.update_queue.empty()
+        assert other_key() == untouched
+
+    await queue.add_update({"entity_type": Litellm_EntityType.KEY, "entity_id": alpha, "response_cost": 3.0})
+    with psycopg.connect(key_spend_database) as blocker:
+        if schedule != "normal":
+            blocker.execute('SELECT token FROM "LiteLLM_VerificationToken" WHERE token=%s FOR UPDATE', (alpha,))
+        async with scheduled_write(worker) as job:
+            try:
+                if schedule != "normal":
+                    await wait_for_blocked_update(
+                        key_spend_database, blocker.info.backend_pid, "LiteLLM_VerificationToken"
+                    )
+                    assert observer.lrange(REDIS_UPDATE_BUFFER_KEY, 0, -1) == []
+                    assert queue.update_queue.empty()
+                if schedule == "cancelled":
+                    await job.cancel(blocker.rollback)
+            finally:
+                blocker.rollback()
+            outcome, = await asyncio.wait_for(asyncio.gather(job.outcome, return_exceptions=True), timeout=20)
+            assert outcome is None or (schedule == "cancelled" and isinstance(outcome, asyncio.CancelledError)), outcome
+    await wait_for_database_idle(key_spend_database)
+    if schedule != "cancelled":
+        assert_recovered()
+    await asyncio.wait_for(worker(), timeout=20)
+    await wait_for_database_idle(key_spend_database)
+    assert_recovered()
