@@ -11,7 +11,6 @@ const REDIS_TYPE_LABELS: Readonly<Record<string, string>> = {
   node: "Node (Single Instance)",
   cluster: "Cluster",
   sentinel: "Sentinel",
-  semantic: "Semantic",
 };
 
 const RedisTypeSelector: React.FC<RedisTypeSelectorProps> = ({ redisType, redisTypeDescriptions, onTypeChange }) => {
