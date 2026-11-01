@@ -9528,6 +9528,56 @@ def test_streamed_custom_pricing_cost_matches_non_streamed_cost() -> None:
     assert streamed_cost == pytest.approx(non_streamed._hidden_params["response_cost"])
 
 
+@pytest.mark.usefixtures("isolated_pricing_registry")
+@pytest.mark.parametrize("async_mode", [False, True])
+@pytest.mark.asyncio
+@respx.mock
+async def test_stream_wrapper_response_cost_updated_after_exhaustion(async_mode: bool) -> None:
+    respx.post("https://api.openai.com/v1/chat/completions").mock(side_effect=_custom_pricing_upstream)
+    request: Final = {
+        "model": f"openai/{_CUSTOM_PRICING_MODEL}",
+        "messages": [{"role": "user", "content": "Hi"}],
+        "api_key": "sk-test",
+        "stream": True,
+        "stream_options": {"include_usage": True},
+        **_CUSTOM_PRICING_RATES,
+    }
+
+    stream = await litellm.acompletion(**request) if async_mode else litellm.completion(**request)
+    assert stream._hidden_params.get("response_cost") is None
+
+    if async_mode:
+        chunks = [chunk async for chunk in stream]
+    else:
+        chunks = list(stream)
+
+    assert stream._hidden_params["response_cost"] == pytest.approx(_CUSTOM_PRICING_EXPECTED_COST)
+    assert chunks[-1]._hidden_params["response_cost"] == pytest.approx(_CUSTOM_PRICING_EXPECTED_COST)
+
+
+@pytest.mark.usefixtures("isolated_pricing_registry")
+@pytest.mark.asyncio
+@respx.mock
+async def test_stream_wrapper_unpriced_model_leaves_response_cost_none() -> None:
+    respx.post("https://api.openai.com/v1/chat/completions").mock(side_effect=_custom_pricing_upstream)
+    request: Final = {
+        "model": "openai/totally-unpriced-model-xyz",
+        "messages": [{"role": "user", "content": "Hi"}],
+        "api_key": "sk-test",
+        "stream": True,
+        "stream_options": {"include_usage": True},
+    }
+
+    stream = await litellm.acompletion(**request)
+    assert stream._hidden_params.get("response_cost") is None
+
+    async for _ in stream:
+        pass
+
+    assert stream._hidden_params.get("response_cost") is None
+
+
+
 @pytest.mark.parametrize(
     ("model", "provider"),
     [

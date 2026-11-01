@@ -2124,6 +2124,34 @@ class CustomStreamWrapper:
             dict[str, object], getattr(chunk, HIDDEN_PARAMS_ATTR)
         )
 
+    def _update_final_response_cost(
+        self,
+        complete_streaming_response: "_CompleteStreamingResponse | None",
+        usage_chunk: "ModelResponseStream | None" = None,
+    ) -> None:
+        if complete_streaming_response is not None:
+            hidden = getattr(complete_streaming_response, "_hidden_params", None)
+            final_cost = hidden.get("response_cost") if isinstance(hidden, dict) else None
+            if final_cost is None and self.logging_obj is not None:
+                try:
+                    final_cost = self.logging_obj.response_cost_calculator(
+                        result=complete_streaming_response,
+                        litellm_model_name=self.model,
+                    )
+                except Exception:
+                    final_cost = None
+            self._hidden_params["response_cost"] = final_cost
+            if self._last_returned_hidden_params is not None:
+                self._last_returned_hidden_params["response_cost"] = final_cost
+            if (
+                usage_chunk is not None
+                and hasattr(usage_chunk, "_hidden_params")
+                and isinstance(usage_chunk._hidden_params, dict)
+            ):
+                usage_chunk._hidden_params["response_cost"] = final_cost
+        else:
+            self._hidden_params["response_cost"] = None
+
     def __next__(self) -> "ModelResponseStream":
         if self._closed:
             raise StopIteration
@@ -2273,6 +2301,8 @@ class CustomStreamWrapper:
                     final_usage: Final = getattr(complete_streaming_response, "usage", None)
                     if final_usage is not None:
                         self._last_returned_hidden_params["usage"] = final_usage
+
+                self._update_final_response_cost(complete_streaming_response, response)
 
                 if self.sent_stream_usage is False and self.send_stream_usage is True:
                     self.sent_stream_usage = True
@@ -2477,6 +2507,8 @@ class CustomStreamWrapper:
                 final_usage: Final = getattr(complete_streaming_response, "usage", None)
                 if final_usage is not None:
                     self._last_returned_hidden_params["usage"] = final_usage
+
+            self._update_final_response_cost(complete_streaming_response, response)
 
             if self.sent_stream_usage is False and self.send_stream_usage is True:
                 self.sent_stream_usage = True
