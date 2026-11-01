@@ -32,6 +32,32 @@ _HASH_CHUNK_BYTES: Final = 1024 * 1024
 _NO_NEWLINE_MARKER: Final = "\\ No newline at end of file\n"
 
 
+_SHA256_HEX_LEN: Final = 64
+
+
+def remote_snapshot_script() -> str:
+    """`sh -c` script (workdir as $1) printing `sha256sum` lines for the files a snapshot covers."""
+    prune: Final = " -o ".join(f"-name '{name}'" for name in sorted(HARNESS_SNAPSHOT_SKIP_DIRS))
+    return (
+        'cd "$1" && find . -type d \\( '
+        + prune
+        + " \\) -prune -o -type f -size -"
+        + f"{HARNESS_SNAPSHOT_MAX_FILE_BYTES + 1}c"
+        + " -exec sha256sum {} +"
+    )
+
+
+def parse_sha256sum(output: str) -> Mapping[str, str]:
+    """Parse `sha256sum` lines ("<hex>  ./rel/path") into {rel/path: hex}."""
+    return MappingProxyType(
+        {
+            line[_SHA256_HEX_LEN + 2 :].removeprefix("./"): line[:_SHA256_HEX_LEN]
+            for line in output.splitlines()
+            if len(line) > _SHA256_HEX_LEN + 2
+        }
+    )
+
+
 def _hash_file(path: str) -> str:
     digest = hashlib.sha256()
     with open(path, "rb") as fh:
