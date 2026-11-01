@@ -53,7 +53,10 @@ def source_repository(tmp_path: Path) -> Path:
     return source
 
 
-def test_staging_stamps_release_version_without_modifying_sources(tmp_path: Path, source_repository: Path) -> None:
+@pytest.mark.parametrize("package", ["litellm-core", "litellm-gateway"])
+def test_staging_stamps_release_version_without_modifying_sources(
+    tmp_path: Path, source_repository: Path, package: str
+) -> None:
     from scripts.build_core_distribution import SOURCES, stage_core_distribution
 
     source: Final = source_repository
@@ -61,16 +64,17 @@ def test_staging_stamps_release_version_without_modifying_sources(tmp_path: Path
         path: Final = source / name
         path.write_text(f"shared {name}")
     (source / "pyproject.toml").write_text('[project]\nname = "litellm"\nversion = "9.8.7rc1"\n')
-    manifest: Final = source / "packaging/litellm-core/pyproject.toml"
+    manifest: Final = source / "packaging" / package / "pyproject.toml"
     manifest.parent.mkdir(parents=True)
-    manifest.write_bytes((ROOT / "packaging/litellm-core/pyproject.toml").read_bytes())
+    manifest.write_bytes((ROOT / "packaging" / package / "pyproject.toml").read_bytes())
     original: Final = manifest.read_bytes()
     stage: Final = tmp_path / "stage"
-    stage_core_distribution(source, stage)
+    stage_core_distribution(source, stage, package=package)
     assert tomllib.loads((stage / "pyproject.toml").read_text())["project"]["version"] == "9.8.7rc1"
     assert manifest.read_bytes() == original
     assert (source / "pyproject.toml").read_text() == '[project]\nname = "litellm"\nversion = "9.8.7rc1"\n'
-    assert all((stage / name).read_bytes() == (source / name).read_bytes() for name in SOURCES)
+    expected: Final = tuple(name for name in SOURCES if package == "litellm-core" or name != "litellm")
+    assert all((stage / name).read_bytes() == (source / name).read_bytes() for name in expected)
 
 
 @pytest.fixture(scope="module")
@@ -99,7 +103,9 @@ def test_core_wheel_metadata_and_resources(distributions: tuple[Path, Path]) -> 
         assert metadata["Version"] == tomllib.loads((ROOT / "pyproject.toml").read_text())["project"]["version"]
         assert not metadata.get_all("Provides-Extra")
         assert not any(n.endswith(".dist-info/entry_points.txt") for n in names)
-        requirements: Final = tomllib.loads((ROOT / "packaging/litellm-core/pyproject.toml").read_text())["project"]["dependencies"]
+        requirements: Final = tomllib.loads((ROOT / "packaging/litellm-core/pyproject.toml").read_text())["project"][
+            "dependencies"
+        ]
         for python_version in ("3.10", "3.11", "3.12", "3.13", "3.14"):
             environment: Final = {"python_version": python_version, "python_full_version": python_version + ".0"}
             assert {

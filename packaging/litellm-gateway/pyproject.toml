@@ -1,0 +1,16 @@
+[project]
+name = "litellm-gateway"
+version = "1.109.0"
+description = "Opt-in Rust HTTP forwarding server for the LiteLLM Python proxy"
+requires-python = ">=3.10, <3.16"
+license = "MIT"
+
+[build-system]
+requires = ["maturin==1.15.0"]
+build-backend = "maturin"
+
+[tool.maturin]
+manifest-path = "../../litellm-rust/crates/gateway/Cargo.toml"
+bindings = "bin"
+targets = [{ name = "litellm-gateway", kind = "bin" }]
+profile = "release"
