@@ -170,6 +170,33 @@ async def test_finishing_one_of_several_calls_sharing_a_call_id_keeps_the_others
 
 
 @pytest.mark.asyncio
+async def test_a_call_sharing_its_call_id_with_an_earlier_one_keeps_its_own_start_time(
+    shared_redis: RedisCache,
+) -> None:
+    """Callbacks cannot tell which same-id call finished. Keeping the earlier call's start time for
+    the one still running made it age out before it was an hour old"""
+    clock: Final = Clock()
+    worker: Final = _worker(shared_redis, clock)
+
+    worker.log_pre_api_call(model="m", messages=[], kwargs=_call_kwargs("dep-a", "shared"))
+    clock.now = START + 600
+    worker.log_pre_api_call(model="m", messages=[], kwargs=_call_kwargs("dep-a", "shared"))
+    await worker.async_log_success_event(_call_kwargs("dep-a", "shared"), None, None, None)
+    clock.now = START + IN_FLIGHT_COUNT_TTL_SECONDS + 1
+
+    assert await worker.async_get_available_deployments(GROUP, HEALTHY) is DEPLOYMENT_B
+
+    worker.log_pre_api_call(model="m", messages=[], kwargs=_call_kwargs("dep-a", "shared"))
+    worker.log_success_event(_call_kwargs("dep-a", "shared"), None, None, None)
+
+    assert worker.get_available_deployments(GROUP, HEALTHY) is DEPLOYMENT_B
+
+    await worker.async_log_failure_event(_call_kwargs("dep-a", "shared"), None, None, None)
+
+    assert await worker.async_get_available_deployments(GROUP, HEALTHY) is DEPLOYMENT_A
+
+
+@pytest.mark.asyncio
 async def test_a_request_nobody_finished_stops_counting_once_it_is_older_than_the_ttl(
     shared_redis: RedisCache,
 ) -> None:
