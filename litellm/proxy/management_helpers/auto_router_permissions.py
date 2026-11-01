@@ -111,7 +111,7 @@ class _MemberOpenSourceClassifierConfig(LiteLLMBaseModel):
     model_config = ConfigDict(extra="forbid")
 
     deployment_name: str | None = None
-    provider: Literal["jev", "laya", "bespoke", "databricks"] = "jev"
+    provider: Literal["jev", "laya", "bespoke", "databricks", "nace"] = "jev"
     model: str
     api_key: None = None
     api_base: None = None
