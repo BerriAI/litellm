@@ -4745,13 +4745,15 @@ class Logging(LiteLLMLoggingBaseClass):
         if not _masks_synchronously(guardrail):
             return None
         try:
-            hooked: Final = guardrail.logging_hook(
-                kwargs=_failure_log_hook_kwargs(details), result=None, call_type=self._logging_hook_call_type
+            hooked_details: Final = _METADATA_MAPPING.validate_python(
+                guardrail.logging_hook(
+                    kwargs=_failure_log_hook_kwargs(details), result=None, call_type=self._logging_hook_call_type
+                )[0]
             )
         except Exception as error:  # noqa: BLE001  # a failing mask redacts the log instead of stopping failure logging
             self._report_failure_log_mask_error(guardrail, error)
             return None
-        return hooked[0]
+        return hooked_details
 
     def _failure_handler_helper_fn(self, exception, traceback_exception, start_time=None, end_time=None):
         if start_time is None:
@@ -4941,7 +4943,11 @@ class Logging(LiteLLMLoggingBaseClass):
                         print_verbose(f"supabaseClient: {supabaseClient}")
                         supabaseClient.log_event(
                             model=self.model if hasattr(self, "model") else "",
-                            messages=self.messages,
+                            messages=(
+                                self.messages
+                                if self._failure_logged_messages is self._unmasked_messages
+                                else self._failure_logged_messages
+                            ),
                             end_user=self._model_call_details_view.get("user", "default"),
                             response_obj=result,
                             start_time=start_time,

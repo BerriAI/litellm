@@ -8884,6 +8884,13 @@ class _HangingSyncMaskingGuardrail(_NameMaskingGuardrail):
         return self._mask(kwargs), result
 
 
+class _UnpairedSyncMaskingGuardrail(_NameMaskingGuardrail):
+    def logging_hook(
+        self, kwargs: dict[str, object], result: object, call_type: str
+    ) -> tuple[dict[str, object], object]:
+        return cast(tuple[dict[str, object], object], None)
+
+
 class _AsyncOnlyNameMaskingGuardrail(CustomGuardrail):
     masks_logged_request: ClassVar[bool] = True
 
@@ -9194,6 +9201,55 @@ def test_sync_failure_is_logged_redacted_when_the_masking_guardrail_has_only_an_
     logging_obj.failure_handler(litellm.ServiceUnavailableError("503", "openai", "gpt-4o-mini"), "tb")
 
     assert recorder.logged == [(_REDACTED_LOG, _REDACTED_LOG)]
+
+
+@pytest.mark.usefixtures("no_global_callbacks")
+def test_sync_failure_is_logged_redacted_when_the_masking_hook_returns_no_pair() -> None:
+    recorder: Final = _FailureLogRecorder()
+    logging_obj: Final = _sync_failure_logging("unpaired-mask-failure", _UnpairedSyncMaskingGuardrail(), recorder)
+
+    logging_obj.failure_handler(litellm.ServiceUnavailableError("503", "openai", "gpt-4o-mini"), "tb")
+
+    assert recorder.logged == [(_REDACTED_LOG, _REDACTED_LOG)]
+
+
+@pytest.mark.usefixtures("no_global_callbacks")
+def test_supabase_failure_log_gets_the_masked_prompt(monkeypatch: pytest.MonkeyPatch) -> None:
+    supabase_messages: Final[list[object]] = []
+
+    class SupabaseRecorder:
+        def log_event(self, **call: object) -> None:
+            supabase_messages.append(call["messages"])
+
+    monkeypatch.setattr(litellm, "failure_callback", ["supabase"])
+    monkeypatch.setattr(litellm_logging, "supabaseClient", SupabaseRecorder())
+    logging_obj: Final = _sync_failure_logging("supabase-failure", _NameMaskingGuardrail(), _FailureLogRecorder())
+
+    logging_obj.failure_handler(litellm.ServiceUnavailableError("503", "openai", "gpt-4o-mini"), "tb")
+
+    assert supabase_messages == [_MASKED_LOG]
+
+
+@pytest.mark.usefixtures("no_global_callbacks")
+def test_supabase_failure_log_without_a_masking_guardrail_gets_the_request_messages(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    supabase_messages: Final[list[object]] = []
+
+    class SupabaseRecorder:
+        def log_event(self, **call: object) -> None:
+            supabase_messages.append(call["messages"])
+
+    monkeypatch.setattr(litellm, "failure_callback", ["supabase"])
+    monkeypatch.setattr(litellm_logging, "supabaseClient", SupabaseRecorder())
+    logging_obj: Final = _sync_failure_logging(
+        "supabase-unmasked-failure", _NameMaskingGuardrail(event_hook=GuardrailEventHooks.pre_call), _FailureLogRecorder()
+    )
+    logging_obj.messages = [{"role": "user", "content": "rewritten by prompt management"}]
+
+    logging_obj.failure_handler(litellm.ServiceUnavailableError("503", "openai", "gpt-4o-mini"), "tb")
+
+    assert supabase_messages == [logging_obj.messages]
 
 
 @pytest.mark.usefixtures("no_global_callbacks")
