@@ -172,7 +172,8 @@ def _redact_streaming_response(streaming_response):
     elif isinstance(streaming_response, litellm.ResponsesAPIResponse):
         return perform_redaction({}, streaming_response)
     elif hasattr(streaming_response, "output"):
-        _redact_responses_api_output(streaming_response.output)
+        if streaming_response.output is not None:
+            _redact_responses_api_output(streaming_response.output)
         if hasattr(streaming_response, "reasoning") and streaming_response.reasoning is not None:
             streaming_response.reasoning = None
     return streaming_response
@@ -262,8 +263,10 @@ def _redact_field_when_present(item: object, field: str) -> None:
         setattr(item, field, REDACTED_BY_LITELLM)
 
 
-def _redact_responses_api_output(output_items):
+def _redact_responses_api_output(output_items: Sequence[object] | None) -> None:
     """Helper to redact ResponsesAPIResponse output items."""
+    if output_items is None:
+        return
     for output_item in output_items:
         output_type = stream_item_field(output_item, "type")
         if getattr(output_item, "text", None) is not None:
@@ -340,7 +343,11 @@ def _redacted_responses_api_output_item(item: object, redacted_str: str) -> obje
     }
 
 
-def _redact_responses_api_output_dict(output_items: Sequence[object], redacted_str: str) -> Sequence[object]:
+def _redact_responses_api_output_dict(
+    output_items: Sequence[object] | None, redacted_str: str = REDACTED_BY_LITELLM
+) -> Sequence[object] | None:
+    if output_items is None:
+        return None
     return [_redacted_responses_api_output_item(item, redacted_str) for item in output_items]
 
 
@@ -354,9 +361,13 @@ def _redacted_responses_api_response(
     output: Final = response.get("output")
     redacted: Final = {
         **response,
-        "output": _redact_responses_api_output_dict(_RESPONSE_ITEMS.validate_python(output), REDACTED_BY_LITELLM)
-        if isinstance(output, list)
-        else output,
+        "output": (
+            None
+            if output is None
+            else _redact_responses_api_output_dict(_RESPONSE_ITEMS.validate_python(output), REDACTED_BY_LITELLM)
+            if isinstance(output, list)
+            else output
+        ),
     }
     return _with_redacted_instructions(redacted) if redact_instructions else redacted
 
@@ -579,7 +590,7 @@ def perform_redaction(model_call_details: dict, result, redact_streaming_respons
         elif isinstance(_result, dict) and "output" in _result:
             return _redacted_responses_api_response(_result, redact_instructions=redact_streaming_responses)
         elif isinstance(_result, litellm.ResponsesAPIResponse):
-            if hasattr(_result, "output"):
+            if hasattr(_result, "output") and _result.output is not None:
                 _redact_responses_api_output(_result.output)
             # Redact reasoning field in ResponsesAPIResponse
             if hasattr(_result, "reasoning") and _result.reasoning is not None:
