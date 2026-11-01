@@ -179,13 +179,10 @@ async def test_lone_deployment_retries_only_retryable_errors(
     assert len(host.calls_to("acompletion")) == expected_calls
 
 
-@pytest.mark.parametrize(
-    ("builder", "expected_calls"),
-    [(bad_request, 1), (context_window, 1), (content_policy, 1), (server_error, 3), (timeout, 3)],
-)
+@pytest.mark.parametrize("builder", [server_error, timeout])
 @pytest.mark.asyncio
-async def test_two_deployment_group_retries_only_retryable_errors(
-    make_core: MakeCore, host: ScriptedHost, builder: ErrorBuilder, expected_calls: int
+async def test_two_deployment_group_retries_retryable_errors_up_to_the_budget(
+    make_core: MakeCore, host: ScriptedHost, builder: ErrorBuilder
 ) -> None:
     core: Final = make_core(model_list=two_deployments(), num_retries=2)
     host.answer("*", fresh(builder))
@@ -193,7 +190,21 @@ async def test_two_deployment_group_retries_only_retryable_errors(
     error: Final = await attempt(core)
 
     assert type(error) is type(builder())
-    assert len(host.calls_to("acompletion")) == expected_calls
+    assert len(host.calls_to("acompletion")) == 3
+
+
+@pytest.mark.parametrize("builder", [bad_request, context_window, content_policy])
+@pytest.mark.asyncio
+async def test_non_retryable_error_tries_each_deployment_of_the_group_once(
+    make_core: MakeCore, host: ScriptedHost, builder: ErrorBuilder
+) -> None:
+    core: Final = make_core(model_list=two_deployments(), num_retries=2)
+    host.answer("*", fresh(builder))
+
+    error: Final = await attempt(core)
+
+    assert type(error) is type(builder())
+    assert sorted(host.deployments_called("acompletion")) == ["a", "b"]
 
 
 @pytest.mark.asyncio
