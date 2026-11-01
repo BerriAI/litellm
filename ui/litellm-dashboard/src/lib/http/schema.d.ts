@@ -40729,7 +40729,7 @@ export interface components {
         /** OutputTextLogprob */
         OutputTextLogprob: {
             /** Bytes */
-            bytes: number[] | null;
+            bytes?: number[] | null;
             /** Logprob */
             logprob: number;
             /** Token */
@@ -40742,7 +40742,7 @@ export interface components {
         /** OutputTextTopLogprob */
         OutputTextTopLogprob: {
             /** Bytes */
-            bytes: number[] | null;
+            bytes?: number[] | null;
             /** Logprob */
             logprob: number;
             /** Token */

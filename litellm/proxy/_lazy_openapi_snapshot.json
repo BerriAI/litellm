@@ -26512,7 +26512,6 @@
           "required": [
             "token",
             "logprob",
-            "bytes",
             "top_logprobs"
           ],
           "title": "OutputTextLogprob",
@@ -26546,8 +26545,7 @@
           },
           "required": [
             "token",
-            "logprob",
-            "bytes"
+            "logprob"
           ],
           "title": "OutputTextTopLogprob",
           "type": "object"
