@@ -32,10 +32,13 @@ from ..authenticator import Authenticator, get_cached_authenticator, get_chatgpt
 from ..common_utils import (
     CHATGPT_API_BASE,
     GetAccessTokenError,
+    derive_chatgpt_session_id,
     ensure_chatgpt_session_id,
     get_chatgpt_client_credential,
     get_chatgpt_default_headers,
     get_chatgpt_default_instructions,
+    get_explicit_chatgpt_session_id,
+    should_derive_chatgpt_session_id,
     strip_chatgpt_client_credential_headers,
 )
 
@@ -123,13 +126,20 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
         )
         base_instructions: Final = get_chatgpt_default_instructions()
         existing_instructions: Final = request.get("instructions")
-        if existing_instructions:
-            if base_instructions not in existing_instructions:
-                request["instructions"] = f"{base_instructions}\n\n{existing_instructions}"
-        else:
-            request["instructions"] = base_instructions
+        instructions: Final = (
+            f"{base_instructions}\n\n{existing_instructions}"
+            if existing_instructions and base_instructions not in existing_instructions
+            else f"{existing_instructions}"
+            if existing_instructions
+            else base_instructions
+        )
+        request["instructions"] = instructions
         request["store"] = False
         request["stream"] = True
+        should_derive: Final = should_derive_chatgpt_session_id(litellm_params)
+        if should_derive and get_explicit_chatgpt_session_id(litellm_params) is None:
+            derived: Final = derive_chatgpt_session_id(litellm_params, instructions, input)
+            headers["session_id"] = derived  # rebind-ok: must land in the dict validate_environment built
         include: Final = list(request.get("include") or [])
         if "reasoning.encrypted_content" not in include:
             include.append("reasoning.encrypted_content")
