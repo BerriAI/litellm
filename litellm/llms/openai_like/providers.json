@@ -302,5 +302,16 @@
       "preserve_cache_control": true
     },
     "supported_endpoints": ["/v1/chat/completions"]
+  },
+  "bourse": {
+    "base_url": "https://api.bourse.run/v1",
+    "api_key_env": "BOURSE_API_KEY",
+    "api_base_env": "BOURSE_API_BASE",
+    "param_mappings": {
+      "max_completion_tokens": "max_tokens"
+    },
+    "provider_info": {
+      "supports_function_calling": true
+    }
   }
 }
