@@ -1294,11 +1294,14 @@ def _truncated_for_db(value: str, max_length: int) -> str:
         return value
     start_chars: Final = int(max_length * 0.35)
     end_chars: Final = int(max_length * 0.65)
+    # The tail is indexed from the front: `value[-0:]` is the whole string, and both shares
+    # floor to 0 at a limit of 1 or less, so the tightest limits stored the entire prompt.
+    tail_chars: Final = min(end_chars, max_length - start_chars)
     return (
         f"{value[:start_chars]}"
         f"... ({LITELLM_TRUNCATED_PAYLOAD_FIELD} skipped {len(value) - start_chars - end_chars} chars. "
         f"{LITELLM_TRUNCATION_DB_SAFEGUARD_NOTE}) ..."
-        f"{value[-min(end_chars, max_length - start_chars) :]}"
+        f"{value[len(value) - tail_chars :]}"
     )
 
 
