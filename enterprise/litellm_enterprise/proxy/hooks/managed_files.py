@@ -433,6 +433,20 @@ def _is_kept_upload(uploads: Sequence[_ProviderUpload], index: int, per_target_m
     return all(other.model_id != upload.model_id for other in other_uploads)
 
 
+def _upload_from_trailing_id_fields(decoded_unified_file_id: str) -> _ProviderUpload:
+    trailing_fields: Final = decoded_unified_file_id.rpartition(";llm_output_file_id,")[2]
+    provider_file_id, _, model_id = trailing_fields.partition(";llm_output_file_model_id,")
+    return _ProviderUpload(model_id=model_id, provider_file_id=provider_file_id)
+
+
+def _carried_upload_missing_from(unified_file_id: str, model_file_ids: Mapping[str, str]) -> _ProviderUpload | None:
+    decoded: Final = _is_base64_encoded_unified_file_id(unified_file_id)
+    carried: Final = _upload_from_trailing_id_fields(decoded) if decoded else None
+    if carried is None or model_file_ids.get(carried.model_id) in (None, carried.provider_file_id):
+        return None
+    return carried
+
+
 async def _delete_provider_file(
     llm_router: Router,
     model_id: str,
@@ -2811,21 +2825,9 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             return
         for model_id, model_file_id in specific_model_file_id_mapping.items():
             await _delete_provider_file(llm_router, model_id, model_file_id, data)
-        unrecorded_upload: Final = self._carried_upload_missing_from(file_id, specific_model_file_id_mapping)
+        unrecorded_upload: Final = _carried_upload_missing_from(file_id, specific_model_file_id_mapping)
         if unrecorded_upload is not None:
             await _delete_redundant_upload(llm_router, unrecorded_upload, data)
-
-    def _carried_upload_missing_from(
-        self, unified_file_id: str, model_file_ids: Mapping[str, str]
-    ) -> _ProviderUpload | None:
-        decoded: Final = _is_base64_encoded_unified_file_id(unified_file_id)
-        if not decoded or "llm_output_file_model_id," not in decoded:
-            return None
-        carried: Final = _ProviderUpload(
-            model_id=self.get_model_id_from_unified_file_id(decoded),
-            provider_file_id=self.get_output_file_id_from_unified_file_id(decoded),
-        )
-        return carried if model_file_ids.get(carried.model_id) not in (None, carried.provider_file_id) else None
 
     async def afile_content(
         self,

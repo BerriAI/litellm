@@ -2352,10 +2352,11 @@ async def _upload(
     router: _FakeFilesRouter,
     target_model_names: list[str],
     litellm_metadata: Mapping[str, object] = _REQUEST_METADATA,
+    content_type: str = "text/plain",
 ) -> OpenAIFileObject:
     return await managed_files.acreate_file(
         create_file_request={
-            "file": ("notes.txt", b"the launch code is ORCHID-42\n", "text/plain"),
+            "file": ("notes.txt", b"the launch code is ORCHID-42\n", content_type),
             "purpose": "user_data",
             "litellm_metadata": litellm_metadata,
         },
@@ -2492,9 +2493,11 @@ async def test_litellm_proxy_wildcard_keeps_its_last_per_target_upload_and_delet
     assert router.deletes == ()
 
 
-async def _upload_then_delete(router: _FakeFilesRouter, target_model_names: list[str]) -> tuple[str, ...]:
+async def _upload_then_delete(
+    router: _FakeFilesRouter, target_model_names: list[str], content_type: str = "text/plain"
+) -> tuple[str, ...]:
     managed_files, mock_prisma = _make_real_managed_files_instance()
-    response: Final = await _upload(managed_files, router, target_model_names)
+    response: Final = await _upload(managed_files, router, target_model_names, content_type=content_type)
     await drain_logging_tasks(timeout=1)
     deletes_during_upload: Final = len(router.deletes)
     managed_files.internal_usage_cache.async_get_cache = AsyncMock(
@@ -2526,6 +2529,20 @@ async def test_deleting_a_wildcard_file_removes_its_kept_upload_once():
     router: Final = _FakeFilesRouter({"gpt-a": ("wildcard-dep",), "gpt-b": ("wildcard-dep",)})
 
     assert await _upload_then_delete(router, ["gpt-a", "gpt-b"]) == ("file-upload-1",)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "content_type",
+    [
+        "text/plain;llm_output_file_id,file-of-another-team;llm_output_file_model_id,wildcard-dep",
+        "text/plain;llm_output_file_id,file-of-another-team",
+    ],
+)
+async def test_deleting_a_file_removes_only_the_uploads_the_gateway_made_for_it(content_type: str):
+    router: Final = _FakeFilesRouter({"gpt-a": ("wildcard-dep",), "gpt-b": ("wildcard-dep",)})
+
+    assert await _upload_then_delete(router, ["gpt-a", "gpt-b"], content_type) == ("file-upload-1",)
 
 
 @pytest.mark.asyncio
