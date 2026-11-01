@@ -96,7 +96,7 @@ export default function SidebarUsageCard({ accessToken, collapsed, onExpandRail 
   const meters = buildMeters(data);
 
   return (
-    <Collapsible defaultOpen className="overflow-hidden rounded-xl border border-sidebar-border bg-sidebar">
+    <Collapsible defaultOpen={false} className="overflow-hidden rounded-xl border border-sidebar-border bg-sidebar">
       <CollapsibleTrigger className="group/usage flex w-full items-center gap-2.5 px-3 py-2.5 text-left transition-colors hover:bg-sidebar-accent">
         <span className="flex size-[26px] flex-none items-center justify-center rounded-md bg-sidebar-primary/10 text-sidebar-primary">
           <Award className="size-4" strokeWidth={1.75} />
