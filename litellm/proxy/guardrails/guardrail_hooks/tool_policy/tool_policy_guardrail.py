@@ -91,12 +91,13 @@ def _get_request_route_from_data(request_data: dict) -> str | None:
 
 def _resolve_tool_names_from_messages(messages: list[dict]) -> dict[str, str]:
     """
-    Build a map of tool_call_id -> tool_name from assistant messages' tool_calls.
+    Build a map of tool_call_id -> tool_name from assistant messages' tool_calls
+    (OpenAI Chat Completions) and tool_use content blocks (Anthropic /v1/messages).
     Used to resolve which tool produced each tool result in the conversation.
     """
     mapping: Final[dict[str, str]] = {}
     for msg in messages:
-        if msg.get("role") != "assistant":
+        if not isinstance(msg, dict) or msg.get("role") != "assistant":
             continue
         tool_calls = msg.get("tool_calls") or []
         for tc in tool_calls:
@@ -109,7 +110,61 @@ def _resolve_tool_names_from_messages(messages: list[dict]) -> dict[str, str]:
                 fn = getattr(fn_obj, "name", None) if fn_obj else None
             if tc_id and fn:
                 mapping[tc_id] = fn
+        content = msg.get("content")
+        if isinstance(content, list):
+            for block in content:
+                if isinstance(block, dict) and block.get("type") == "tool_use":
+                    tc_id = block.get("id")
+                    fn = block.get("name")
+                    if isinstance(tc_id, str) and tc_id and isinstance(fn, str) and fn:
+                        mapping[tc_id] = fn
     return mapping
+
+
+def _extract_executed_tool_names(request_data: dict) -> list[str]:
+    """
+    Return the ordered list of tool names whose outputs appear in the conversation
+    across OpenAI Chat Completions (`role == "tool"`), Anthropic `/v1/messages`
+    (`type == "tool_result"` blocks), and `/v1/responses` (`type == "function_call_output"`).
+    """
+    executed: Final[list[str]] = []
+    messages: Final = request_data.get("messages") or []
+    if isinstance(messages, list) and messages:
+        tc_id_to_name: Final = _resolve_tool_names_from_messages(messages)
+        for msg in messages:
+            if not isinstance(msg, dict):
+                continue
+            if msg.get("role") == "tool":
+                tool_call_id = msg.get("tool_call_id")
+                source_tool = tc_id_to_name.get(tool_call_id, "") if isinstance(tool_call_id, str) else ""
+                if source_tool:
+                    executed.append(source_tool)
+            content = msg.get("content")
+            if isinstance(content, list):
+                for block in content:
+                    if isinstance(block, dict) and block.get("type") == "tool_result":
+                        tool_use_id = block.get("tool_use_id")
+                        source_tool = tc_id_to_name.get(tool_use_id, "") if isinstance(tool_use_id, str) else ""
+                        if source_tool:
+                            executed.append(source_tool)
+
+    input_items: Final = request_data.get("input")
+    if isinstance(input_items, list) and input_items:
+        call_id_to_name: Final[dict[str, str]] = {}
+        for item in input_items:
+            if isinstance(item, dict) and item.get("type") == "function_call":
+                call_id = item.get("call_id") or item.get("id")
+                fn = item.get("name")
+                if isinstance(call_id, str) and call_id and isinstance(fn, str) and fn:
+                    call_id_to_name[call_id] = fn
+        for item in input_items:
+            if isinstance(item, dict) and item.get("type") == "function_call_output":
+                call_id = item.get("call_id")
+                source_tool = call_id_to_name.get(call_id, "") if isinstance(call_id, str) else ""
+                if source_tool:
+                    executed.append(source_tool)
+
+    return executed
 
 
 class ToolPolicyGuardrail(CustomGuardrail):
@@ -146,11 +201,10 @@ class ToolPolicyGuardrail(CustomGuardrail):
                 if isinstance(t, dict) and isinstance(t.get("function"), dict) and t["function"].get("name")
             ]
             route: Final = _get_request_route_from_data(request_data)
+            route_tool_names: Final = extract_request_tool_names(route, request_data) if route else []
             replayed_tool_names: Final = replayed_tool_search_tool_names(_REQUEST_DATA.validate_python(request_data))
-            tool_names = (
-                extract_request_tool_names(route, request_data)
-                if route and not function_tool_names
-                else [*function_tool_names, *replayed_tool_names]
+            tool_names = list(
+                dict.fromkeys([*function_tool_names, *route_tool_names, *replayed_tool_names])
             )
         else:
             tool_calls: Final = inputs.get("tool_calls") or []
@@ -204,17 +258,8 @@ class ToolPolicyGuardrail(CustomGuardrail):
         if input_type == "response":
             trusted_input_tools: Final = [name for name in tool_names if policy_map.get(name) == "trusted"]
             if trusted_input_tools:
-                messages: Final = request_data.get("messages") or []
-                tc_id_to_name: Final = _resolve_tool_names_from_messages(messages)
-
                 untrusted_sources: Final[list[str]] = []
-                for msg in messages:
-                    if msg.get("role") != "tool":
-                        continue
-                    tool_call_id = msg.get("tool_call_id")
-                    source_tool = tc_id_to_name.get(tool_call_id, "") if tool_call_id else ""
-                    if not source_tool:
-                        continue
+                for source_tool in _extract_executed_tool_names(request_data):
                     if registry.get_output_policy(source_tool) == "untrusted":
                         if source_tool not in untrusted_sources:
                             untrusted_sources.append(source_tool)
