@@ -1,4 +1,3 @@
-import pytest
 from litellm import Router
 
 
