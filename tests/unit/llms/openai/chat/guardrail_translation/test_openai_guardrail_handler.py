@@ -1433,14 +1433,8 @@ class TestOpenAIChatCompletionsHandlerStreamingOutput:
             )
         assert request_data["visited_choices"] == (0, 1)
         assert request_data["metadata"]["trace"] == "retained"
-        if transform:
-            assert request_data["responses"] is chunks
-            restored: Final = request_data["response"]
-            assert isinstance(restored, ModelResponse)
-            assert tuple(choice.index for choice in restored.choices) == (0, 1)
-        else:
-            assert "response" not in request_data
-            assert "responses" not in request_data
+        assert "response" not in request_data
+        assert "responses" not in request_data
 
     @pytest.mark.asyncio
     async def test_undeliverable_rewrite_still_inspects_the_remaining_choices(self) -> None:
@@ -1674,6 +1668,33 @@ class TestOpenAIChatCompletionsHandlerStreamingOutput:
         sent: Final = RecordingGuardrail.seen[-1]
         assert sent is not None
         assert [c["function"]["arguments"] for c in sent] == ['{"city": "Paris"}', '{"city": "Rome"}']
+
+    @pytest.mark.asyncio
+    async def test_a_transform_round_leaves_the_callers_request_data_as_it_found_it(self) -> None:
+        """The round owns these keys only while it runs; what it leaves behind is read by later hooks."""
+        from litellm.llms.base_llm.guardrail_translation.base_translation import StreamTransformSink
+        from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+
+        handler: Final = OpenAIChatCompletionsHandler()
+        request_data: Final[dict[str, object]] = {"model": "gpt-4"}
+        chunks: Final = [ModelResponseStream(choices=[StreamingChoices(
+            index=0,
+            delta=Delta(content="looking", tool_calls=[
+                {"index": 0, "id": "call_0", "type": "function",
+                 "function": {"name": "weather", "arguments": '{"city": "Paris"}'}},
+            ]),
+            finish_reason="tool_calls",
+        )])]
+        await handler.process_output_streaming_response(
+            responses_so_far=chunks,
+            guardrail_to_apply=MockGuardrail(guardrail_name="test"),
+            litellm_logging_obj=None,
+            request_data=request_data,
+            stream_transform_sink=StreamTransformSink(),
+        )
+        assert "response" not in request_data
+        assert "responses" not in request_data
+        assert "guardrail_choice_index" not in request_data
 
     @pytest.mark.asyncio
     async def test_an_unfinished_parallel_call_is_kept_out_of_what_the_guardrail_reads(self) -> None:
