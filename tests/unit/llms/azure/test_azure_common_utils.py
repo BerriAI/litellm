@@ -22,6 +22,7 @@ from litellm.llms.azure.common_utils import (
     get_azure_ad_token_from_entra_id,
     get_azure_ad_token_from_oidc,
     get_azure_ad_token_from_username_password,
+    uses_azure_entra_id_auth,
 )
 from litellm.secret_managers.get_azure_ad_token_provider import (
     get_azure_ad_token_provider,
@@ -2495,3 +2496,42 @@ def test_an_azure_client_litellm_built_its_own_http_client_for_is_still_closed(m
     closer.reap()
 
     assert wrapper.is_closed() is True
+
+
+@pytest.mark.parametrize(
+    ("litellm_params", "environ", "token_refresh_enabled", "expected"),
+    [
+        ({"azure_ad_token": "deployment-token"}, {}, False, True),
+        ({"azure_ad_token_provider": lambda: "token"}, {}, False, True),
+        ({"tenant_id": "t", "client_id": "c", "client_secret": "s"}, {}, False, True),
+        ({}, {"AZURE_TENANT_ID": "t", "AZURE_CLIENT_ID": "c", "AZURE_CLIENT_SECRET": "s"}, False, True),
+        ({"tenant_id": "t", "client_id": "c"}, {"AZURE_CLIENT_SECRET": "s"}, False, True),
+        ({"client_id": "c", "azure_username": "u"}, {"AZURE_PASSWORD": "p"}, False, True),
+        ({}, {}, True, True),
+        ({"tenant_id": "t", "client_id": "c"}, {}, False, False),
+        ({"client_secret": "s"}, {}, False, False),
+        ({"azure_username": "u", "azure_password": "p"}, {}, False, False),
+        ({"tenant_id": None, "client_id": "c", "client_secret": "s"}, {"AZURE_TENANT_ID": "t"}, False, True),
+        ({"tenant_id": "", "client_id": "c", "client_secret": "s"}, {"AZURE_TENANT_ID": "t"}, False, False),
+        ({}, {}, False, False),
+    ],
+    ids=[
+        "ad-token",
+        "ad-token-provider",
+        "service-principal-in-params",
+        "service-principal-in-env",
+        "ids-in-params-secret-in-env",
+        "username-password-split",
+        "token-refresh",
+        "service-principal-missing-secret",
+        "secret-alone",
+        "username-password-missing-client-id",
+        "none-param-falls-back-to-env",
+        "empty-param-does-not-fall-back-to-env",
+        "nothing-set",
+    ],
+)
+def test_uses_azure_entra_id_auth_matches_the_sources_the_azure_client_builds_entra_auth_from(
+    litellm_params, environ, token_refresh_enabled, expected
+):
+    assert uses_azure_entra_id_auth(litellm_params, environ, token_refresh_enabled) is expected

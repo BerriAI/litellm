@@ -145,6 +145,34 @@ def cached_azure_ad_token_refresh_provider(scope: str) -> Callable[[], str]:
     return _cached_azure_ad_token_refresh_provider(scope)
 
 
+def _param_or_env_set(
+    litellm_params: Mapping[str, object], environ: Mapping[str, str], param_key: str, env_var_key: str
+) -> bool:
+    param_value: Final = litellm_params.get(param_key)
+    return bool(param_value if param_value is not None else environ.get(env_var_key))
+
+
+def uses_azure_entra_id_auth(
+    litellm_params: Mapping[str, object], environ: Mapping[str, str], token_refresh_enabled: bool
+) -> bool:
+    client_id_set: Final = _param_or_env_set(litellm_params, environ, "client_id", "AZURE_CLIENT_ID")
+    return (
+        litellm_params.get("azure_ad_token_provider") is not None
+        or bool(litellm_params.get("azure_ad_token"))
+        or (
+            client_id_set
+            and _param_or_env_set(litellm_params, environ, "tenant_id", "AZURE_TENANT_ID")
+            and _param_or_env_set(litellm_params, environ, "client_secret", "AZURE_CLIENT_SECRET")
+        )
+        or (
+            client_id_set
+            and _param_or_env_set(litellm_params, environ, "azure_username", "AZURE_USERNAME")
+            and _param_or_env_set(litellm_params, environ, "azure_password", "AZURE_PASSWORD")
+        )
+        or token_refresh_enabled
+    )
+
+
 def _async_azure_ad_token_provider(
     provider: Callable[[], str | Awaitable[str]],
 ) -> Callable[[], Awaitable[str]]:
