@@ -192,6 +192,10 @@ def _drop_params_hint(dropped: str) -> str:
     )
 
 
+def _one_log_line(text: str) -> str:
+    return text.replace("\r", "").replace("\n", "")
+
+
 def _unrunnable_mcp_error(message: str, model: str, route: str) -> UnsupportedParamsError:
     return UnsupportedParamsError(message=message, model=model, llm_provider=route, status_code=400)
 
@@ -209,7 +213,9 @@ def tools_without_hosted_mcp(tools: Sequence[_ToolT], model: str, route: str, dr
             model=model,
             route=route,
         )
-    verbose_logger.warning(HOSTED_MCP_DROP_WARNING, named_servers, model, route)
+    verbose_logger.warning(
+        HOSTED_MCP_DROP_WARNING, _one_log_line(named_servers), _one_log_line(model), _one_log_line(route)
+    )
     return [tool for tool in tools if _hosted_mcp_server_label(tool) is None]
 
 
@@ -269,7 +275,9 @@ def tools_without_mcp_servers(
             model=model,
             route=route,
         )
-    verbose_logger.warning(MCP_SERVERS_DROP_WARNING, named_servers, model, route)
+    verbose_logger.warning(
+        MCP_SERVERS_DROP_WARNING, _one_log_line(named_servers), _one_log_line(model), _one_log_line(route)
+    )
     return [tool for tool in tools if not _is_mcp_toolset(tool)]
 
 

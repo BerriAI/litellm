@@ -1,4 +1,5 @@
 import datetime
+import logging
 from collections.abc import Callable, Mapping
 from typing import Final
 
@@ -6,8 +7,13 @@ import pytest
 
 import litellm
 from litellm import Router
+from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.litellm_logging import Logging
-from litellm.litellm_core_utils.tool_fields import tool_params_without_hosted_mcp, tools_without_hosted_mcp
+from litellm.litellm_core_utils.tool_fields import (
+    tool_params_without_hosted_mcp,
+    tools_without_hosted_mcp,
+    tools_without_mcp_servers,
+)
 from litellm.utils import async_pre_call_deployment_hook
 
 _GOOD_TOOL: Final = {"type": "function", "function": {"name": "get_weather", "parameters": {"type": "object"}}}
@@ -234,3 +240,44 @@ def test_dropping_every_hosted_mcp_tool_clears_the_tool_selection_params() -> No
     )
 
     assert params == {"temperature": 0.2}
+
+
+class _Records(logging.Handler):
+    def __init__(self) -> None:
+        super().__init__(level=logging.WARNING)
+        self.messages: Final[list[str]] = []
+
+    def emit(self, record: logging.LogRecord) -> None:
+        self.messages.append(record.getMessage())
+
+
+@pytest.mark.parametrize(
+    "drop",
+    [
+        lambda model: tools_without_hosted_mcp(
+            [{"type": "mcp", "server_label": "wiki\r\nFORGED", "server_url": "https://mcp.example.com/mcp"}],
+            model=model,
+            route="deepseek",
+            drop_params=True,
+        ),
+        lambda model: tools_without_mcp_servers(
+            [{"type": "url", "name": "wiki\r\nFORGED", "url": "https://mcp.example.com/mcp"}],
+            tools=[],
+            model=model,
+            route="bedrock",
+            drop_params=True,
+        ),
+    ],
+    ids=["hosted_mcp_tool", "mcp_servers"],
+)
+def test_a_drop_warning_stays_on_one_log_line(drop: Callable[[str], object]) -> None:
+    records: Final = _Records()
+    verbose_logger.addHandler(records)
+    try:
+        drop("deepseek-v4-flash\nFORGED level=CRITICAL")
+    finally:
+        verbose_logger.removeHandler(records)
+
+    assert len(records.messages) == 1
+    assert "\n" not in records.messages[0] and "\r" not in records.messages[0]
+    assert "FORGED level=CRITICAL" in records.messages[0]
