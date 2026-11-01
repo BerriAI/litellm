@@ -31,7 +31,13 @@ from starlette.datastructures import UploadFile as StarletteUploadFile
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.dual_cache import DualCache
-from litellm.constants import ANTHROPIC_COMPATIBLE_MAX_USER_ID_LENGTH, ANTHROPIC_MAX_USER_ID_LENGTH, DEFAULT_REQUEST_TIMEOUT_SECONDS
+from litellm.constants import (
+    ANTHROPIC_COMPATIBLE_MAX_USER_ID_LENGTH,
+    ANTHROPIC_MAX_USER_ID_LENGTH,
+    DEFAULT_REQUEST_TIMEOUT_SECONDS,
+    SERVER_STREAMING_CLASSIFICATION_KEY,
+    SERVER_STREAMING_CLASSIFICATION_MARKER,
+)
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.prometheus import PrometheusLogger
@@ -7630,6 +7636,77 @@ async def test_websocket_passthrough_relays_upstream_policy_close_to_client():
         )
 
     websocket.close.assert_awaited_once_with(code=1008, reason=upstream_reason)
+
+
+def _record_upstream_dials(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    dialed: Final[list[str]] = []
+
+    def dial(target: str, additional_headers: Mapping[str, str]) -> FakeUpstreamConnect:
+        dialed.append(target)
+        return FakeUpstreamConnect(FakeUpstreamWebSocket())
+
+    monkeypatch.setattr("litellm.proxy.pass_through_endpoints.pass_through_endpoints.connect", dial)
+    return dialed
+
+
+async def _relay_one_client_session(caller: UserAPIKeyAuth, model: str | None) -> None:
+    await websocket_passthrough_request(
+        websocket=_client_websocket(AsyncMock(return_value={"type": "websocket.disconnect"})),
+        target="wss://upstream.example.test/v1/speak",
+        custom_headers={},
+        user_api_key_dict=caller,
+        forward_headers=False,
+        endpoint="/ws-model-rpm",
+        accept_websocket=False,
+        model=model,
+    )
+
+
+class _PreCallDataRecorder(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.data: tuple[dict[str, object], ...] = ()
+
+    async def async_pre_call_hook(
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        cache: DualCache,
+        data: dict[str, object],
+        call_type: str,
+    ) -> None:
+        self.data = (*self.data, dict(data))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("model", "hook_data"),
+    [
+        pytest.param(
+            None,
+            {SERVER_STREAMING_CLASSIFICATION_KEY: SERVER_STREAMING_CLASSIFICATION_MARKER},
+            id="route authorized no model",
+        ),
+        pytest.param(
+            "nova-3",
+            {"model": "nova-3", SERVER_STREAMING_CLASSIFICATION_KEY: SERVER_STREAMING_CLASSIFICATION_MARKER},
+            id="route authorized nova-3",
+        ),
+    ],
+)
+async def test_websocket_passthrough_hands_pre_call_hooks_exactly_the_model_it_was_given(
+    model: str | None, hook_data: Mapping[str, object], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy.proxy_server import user_api_key_cache
+
+    recorder: Final = _PreCallDataRecorder()
+    monkeypatch.setattr(litellm, "callbacks", [recorder])
+    monkeypatch.setattr(proxy_server, "proxy_logging_obj", ProxyLogging(user_api_key_cache=user_api_key_cache))
+    _record_upstream_dials(monkeypatch)
+
+    await _relay_one_client_session(UserAPIKeyAuth(), model)
+
+    assert recorder.data == (hook_data,)
 
 
 @pytest.mark.asyncio
