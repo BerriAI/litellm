@@ -1428,8 +1428,9 @@ class OpenAIResponsesHandler(BaseTranslation):
     @staticmethod
     def _write_rewritten_text(event: object, field: str, text: str) -> None:
         """A rewrite replaces the text, so the logprobs that spell out the original text go with it."""
+        changed: Final = stream_item_field(event, field) != text
         OpenAIResponsesHandler._write_event_field(event, field, text)
-        if stream_item_field(event, "logprobs") is not None:
+        if changed and stream_item_field(event, "logprobs") is not None:
             OpenAIResponsesHandler._write_event_field(event, "logprobs", None)
 
     @staticmethod

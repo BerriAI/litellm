@@ -26474,6 +26474,65 @@
         },
         "OutputText": {
           "additionalProperties": true,
+          "description": "Text output content from an assistant message",
+          "properties": {
+            "annotations": {
+              "anyOf": [
+                {
+                  "items": {
+                    "$ref": "#/components/schemas/GenericResponseOutputItemContentAnnotation"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Annotations"
+            },
+            "logprobs": {
+              "anyOf": [
+                {
+                  "items": {
+                    "$ref": "#/components/schemas/OutputTextLogprob"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Logprobs"
+            },
+            "text": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Text"
+            },
+            "type": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Type"
+            }
+          },
+          "required": [
+            "type",
+            "text",
+            "annotations"
+          ],
+          "title": "OutputText",
           "type": "object"
         },
         "OutputTextLogprob": {

@@ -2027,6 +2027,22 @@ def test_streamed_chat_logprobs_reach_the_text_delta_and_done_events() -> None:
     assert completed["response"]["output"][0]["content"][0]["logprobs"] == [hello, period]
 
 
+def test_streamed_answer_logprobs_stay_off_the_reasoning_item_in_the_completed_snapshot() -> None:
+    events: Final = [
+        event.model_dump(mode="json")
+        for event in _build_iterator(
+            [_reasoning_chunk("let me think"), _logprobs_chunk("Hello", -0.25, finish_reason="stop")]
+        )
+    ]
+    hello: Final = {"token": "Hello", "logprob": -0.25, "bytes": None, "top_logprobs": []}
+
+    completed: Final = next(event for event in events if event["type"] == "response.completed")
+    by_type: Final = {item["type"]: item for item in completed["response"]["output"]}
+
+    assert by_type["message"]["content"][0]["logprobs"] == [hello]
+    assert all("logprobs" not in part for part in by_type["reasoning"]["content"])
+
+
 def test_streamed_chat_without_logprobs_emits_text_events_without_a_logprobs_key() -> None:
     events: Final = [
         event.model_dump(mode="json") for event in _build_iterator([_chunk("Hello"), _chunk("!", finish_reason="stop")])

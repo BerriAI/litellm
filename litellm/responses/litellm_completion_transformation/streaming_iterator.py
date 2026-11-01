@@ -1597,7 +1597,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
     def _with_streamed_logprobs(self, item: object) -> object:
         """stream_chunk_builder drops chat logprobs, so the snapshot's text part takes the ones the stream carried."""
         logprobs: Final = self._streamed_text_logprobs()
-        if logprobs is None or not isinstance(item, GenericResponseOutputItem):
+        if logprobs is None or not isinstance(item, GenericResponseOutputItem) or item.type != "message":
             return item
         content: Final = tuple(
             part.model_copy(update={"logprobs": logprobs}) if isinstance(part, OutputText) else part

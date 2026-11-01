@@ -40723,7 +40723,20 @@ export interface components {
         } & {
             [key: string]: unknown;
         };
+        /**
+         * OutputText
+         * @description Text output content from an assistant message
+         */
         OutputText: {
+            /** Annotations */
+            annotations: components["schemas"]["GenericResponseOutputItemContentAnnotation"][] | null;
+            /** Logprobs */
+            logprobs?: components["schemas"]["OutputTextLogprob"][] | null;
+            /** Text */
+            text: string | null;
+            /** Type */
+            type: string | null;
+        } & {
             [key: string]: unknown;
         };
         /** OutputTextLogprob */

@@ -106,7 +106,7 @@ class CarriesOutputTextLogprobs(BaseLiteLLMOpenAIResponseObject):  # frozen-ok: 
     logprobs: Sequence[OutputTextLogprob] | None = None
 
     @model_serializer(mode="wrap")
-    def _without_absent_logprobs(self, handler: SerializerFunctionWrapHandler) -> Mapping[str, object]:
+    def _without_absent_logprobs(self, handler: SerializerFunctionWrapHandler):  # noqa: ANN202  # a return annotation here replaces the model's OpenAPI schema with a bare object
         dumped: Final[Mapping[str, object]] = handler(self)
         if self.logprobs is not None:
             return dumped
