@@ -126,6 +126,8 @@ class Scheduler:
         timeout: float,
         get_healthy_deployments: Callable[[], Awaitable[Sequence[object]]],
     ) -> None:
+        if len(await get_healthy_deployments()) > 0:
+            return
         try:
             await self.add_request(request=request)
             end_time: Final = time.monotonic() + timeout
