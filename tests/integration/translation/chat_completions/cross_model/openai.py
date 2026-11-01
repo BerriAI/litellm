@@ -2704,6 +2704,242 @@ GPT_5_6_TERRA_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
 )
 
 
+def _gpt_6_1_terra_stream_value(value: JsonValue) -> JsonValue:
+    if isinstance(value, dict):
+        return {
+            key: {"cyber": "standard"}
+            if key == "access_programs"
+            else 1793547872
+            if key == "created_at"
+            else 1793547874
+            if key == "completed_at" and item is not None
+            else _gpt_6_1_terra_stream_value(item)
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [_gpt_6_1_terra_stream_value(item) for item in value]
+    if isinstance(value, str):
+        return {
+            "resp_07964387f422fad6006ad04aa9820c87d0b00c0f7e8179e669":
+                "resp_067882b6e08b211f006ae75e608f7c87d1952b1695ca966b80",
+            "fc_07964387f422fad6006ad04aaa99d087d09bf5301d4def0fb9":
+                "fc_067882b6e08b211f006ae75e6284ac87d1854926589ccdeef8",
+            "fc_07964387f422fad6006ad04aaa99e487d0adda87c8afeac85a":
+                "fc_067882b6e08b211f006ae75e62850487d1b7b53aac9602ff43",
+            "call_xDdtGVzn464uEE7X8AuVRiHJ": "call_g1sYS5VaOpk7yFfZWb6C6FhG",
+            "call_yPhpkZWP5B2zJo4SPhCEAxW4": "call_qq6AhKCnaWY7iQsRGkj9tshL",
+            "gpt-5.6-terra": "gpt-6.1-terra",
+            "IFA": "4N0",
+            "RH": "wV",
+        }.get(value, value)
+    return value
+
+
+GPT_6_1_TERRA_AGENT_TEST_CASE: Final = replace(
+    GPT_5_6_TERRA_AGENT_TEST_CASE,
+    litellm_request={**CODING_AGENT_REQUEST, "model": "openai/gpt-6.1-terra"},
+    expected_provider_request={**OPENAI_RESPONSES_AGENT_REQUEST, "model": "gpt-6.1-terra"},
+    mock_provider_response={
+        **GPT_5_6_TERRA_AGENT_TEST_CASE.mock_provider_response,
+        "id": "resp_04952ef9a70cae0b006ae75e5e7ae487d19a9876588a88de0c",
+        "created_at": 1793547870,
+        "completed_at": 1793547872,
+        "model": "gpt-6.1-terra",
+        "access_programs": {"cyber": "standard"},
+        "output": [
+            {
+                "id": "fc_04952ef9a70cae0b006ae75e5fd56087d19886a8f152af5d41",
+                "type": "function_call",
+                "status": "completed",
+                "arguments": '{"query":"retries_remaining"}',
+                "call_id": "call_EtA7LwkZhItDqLqZtTbMuAMT",
+                "name": "search_code",
+            },
+            {
+                "id": "fc_04952ef9a70cae0b006ae75e5fd57487d1871209cffbada8fb",
+                "type": "function_call",
+                "status": "completed",
+                "arguments": '{"path":"tests/test_retry.py"}',
+                "call_id": "call_lVIvxbSII29GTSNa284H8WhK",
+                "name": "run_tests",
+            },
+        ],
+    },
+    expected_litellm_response={
+        **GPT_5_6_TERRA_AGENT_TEST_CASE.expected_litellm_response,
+        "id": "resp_04952ef9a70cae0b006ae75e5e7ae487d19a9876588a88de0c",
+        "model": "openai/gpt-6.1-terra",
+        "choices": [
+            {
+                **GPT_5_6_TERRA_AGENT_TEST_CASE.expected_litellm_response["choices"][0],
+                "message": {
+                    **GPT_5_6_TERRA_AGENT_TEST_CASE.expected_litellm_response["choices"][0]["message"],
+                    "tool_calls": [
+                        {
+                            "index": 0,
+                            "function": {"arguments": '{"query":"retries_remaining"}', "name": "search_code"},
+                            "id": "call_EtA7LwkZhItDqLqZtTbMuAMT",
+                            "type": "function",
+                        },
+                        {
+                            "index": 1,
+                            "function": {"arguments": '{"path":"tests/test_retry.py"}', "name": "run_tests"},
+                            "id": "call_lVIvxbSII29GTSNa284H8WhK",
+                            "type": "function",
+                        },
+                    ],
+                },
+            }
+        ],
+        "access_programs": {"cyber": "standard"},
+    },
+)
+
+GPT_6_1_TERRA_AGENT_FOLLOWUP_TEST_CASE: Final = replace(
+    GPT_6_1_TERRA_AGENT_TEST_CASE,
+    scenario="agent_followup",
+    litellm_request=followup_request(
+        GPT_6_1_TERRA_AGENT_TEST_CASE.litellm_request,
+        _without_replay_record(GPT_6_1_TERRA_AGENT_TEST_CASE.expected_litellm_response),
+    ),
+    expected_provider_request={
+        **GPT_5_6_TERRA_AGENT_FOLLOWUP_TEST_CASE.expected_provider_request,
+        "model": "gpt-6.1-terra",
+        "input": [
+            *list_value(OPENAI_RESPONSES_AGENT_REQUEST["input"]),
+            {
+                "type": "function_call",
+                "call_id": "call_EtA7LwkZhItDqLqZtTbMuAMT",
+                "name": "search_code",
+                "arguments": '{"query":"retries_remaining"}',
+            },
+            {
+                "type": "function_call",
+                "call_id": "call_lVIvxbSII29GTSNa284H8WhK",
+                "name": "run_tests",
+                "arguments": '{"path":"tests/test_retry.py"}',
+            },
+            {
+                "type": "function_call_output",
+                "call_id": "call_EtA7LwkZhItDqLqZtTbMuAMT",
+                "output": [
+                    {
+                        "type": "input_text",
+                        "text": '{"matches": [{"path": "src/worker.py", "line": 12, "text": "remaining = '
+                        'retries_remaining(3, attempts)"}]}',
+                    }
+                ],
+            },
+            {
+                "type": "function_call_output",
+                "call_id": "call_lVIvxbSII29GTSNa284H8WhK",
+                "output": [
+                    {
+                        "type": "input_text",
+                        "text": '{"exit_code": 1, "output": "FAILED tests/test_retry.py::test_retries_remaining - '
+                        'assert 4 == 2"}',
+                    }
+                ],
+            },
+            {
+                "type": "message",
+                "role": "user",
+                "content": [
+                    {
+                        "type": "input_text",
+                        "text": "Stop after these diagnostics. Do not call more tools or change files. Summarize the "
+                        "bug, the caller found and the failed test in two short sentences.",
+                    }
+                ],
+            },
+        ],
+    },
+    mock_provider_response={
+        **GPT_5_6_TERRA_AGENT_FOLLOWUP_TEST_CASE.mock_provider_response,
+        "id": "resp_0b23ebd19ad1a426006ae75e8c1de887d1a118f6e1dd5930de",
+        "created_at": 1793547916,
+        "completed_at": 1793547917,
+        "model": "gpt-6.1-terra",
+        "access_programs": {"cyber": "standard"},
+        "output": [
+            {
+                "id": "msg_0b23ebd19ad1a426006ae75e8caa3087d1b36f6b0c2fa883dd",
+                "type": "message",
+                "status": "completed",
+                "content": [
+                    {
+                        "type": "output_text",
+                        "annotations": [],
+                        "logprobs": [],
+                        "text": "`retries_remaining` adds attempts to the limit instead of subtracting them and clamping the result "
+                        "at zero; a caller was found in `src/worker.py`. The test failed because "
+                        "`retries_remaining(3, 1)` returned 4 instead of 2.",
+                    }
+                ],
+                "phase": "final_answer",
+                "role": "assistant",
+            }
+        ],
+        "usage": {
+            "input_tokens": 619,
+            "input_tokens_details": {"cache_write_tokens": 0, "cached_tokens": 0},
+            "output_tokens": 60,
+            "output_tokens_details": {"reasoning_tokens": 0},
+            "total_tokens": 679,
+        },
+    },
+    expected_litellm_response={
+        **GPT_5_6_TERRA_AGENT_FOLLOWUP_TEST_CASE.expected_litellm_response,
+        "id": "resp_0b23ebd19ad1a426006ae75e8c1de887d1a118f6e1dd5930de",
+        "model": "openai/gpt-6.1-terra",
+        "choices": [
+            {
+                **GPT_5_6_TERRA_AGENT_FOLLOWUP_TEST_CASE.expected_litellm_response["choices"][0],
+                "message": {
+                    **GPT_5_6_TERRA_AGENT_FOLLOWUP_TEST_CASE.expected_litellm_response["choices"][0]["message"],
+                    "content": "`retries_remaining` adds attempts to the limit instead of subtracting them and clamping "
+                    "the result at zero; a caller was found in `src/worker.py`. The test failed because "
+                    "`retries_remaining(3, 1)` returned 4 instead of 2.",
+                },
+            }
+        ],
+        "usage": {
+            **GPT_5_6_TERRA_AGENT_FOLLOWUP_TEST_CASE.expected_litellm_response["usage"],
+            "completion_tokens": 60,
+            "prompt_tokens": 619,
+            "total_tokens": 679,
+        },
+        "access_programs": {"cyber": "standard"},
+    },
+)
+
+GPT_6_1_TERRA_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
+    scenario="agent_streaming",
+    litellm_endpoint=GPT_6_1_TERRA_AGENT_TEST_CASE.litellm_endpoint,
+    litellm_request={
+        **GPT_6_1_TERRA_AGENT_TEST_CASE.litellm_request,
+        "stream": True,
+        "stream_options": {"include_usage": True},
+    },
+    expected_provider_headers=GPT_6_1_TERRA_AGENT_TEST_CASE.expected_provider_headers,
+    expected_provider_endpoint="/responses",
+    expected_provider_request={**OPENAI_RESPONSES_AGENT_REQUEST, "model": "gpt-6.1-terra", "stream": True},
+    mock_provider_frames=tuple(
+        SSEFrame(data=_gpt_6_1_terra_stream_value(frame.data), event=frame.event)
+        for frame in GPT_5_6_TERRA_AGENT_STREAMING_TEST_CASE.mock_provider_frames
+    ),
+    expected_litellm_message=coding_agent_stream_message(
+        ("call_g1sYS5VaOpk7yFfZWb6C6FhG", "call_qq6AhKCnaWY7iQsRGkj9tshL"),
+    ),
+    expected_litellm_usage={
+        "prompt_tokens": 448,
+        "completion_tokens": 53,
+        "total_tokens": 501,
+        "prompt_tokens_details": {"cache_write_tokens": 0, "cached_tokens": 0, "cache_creation_tokens": 0},
+        "completion_tokens_details": {"reasoning_tokens": 0},
+    },
+)
+
 GPT_6_ASTRA_AGENT_TEST_CASE: Final = replace(
     GPT_6_ASTRA_TEST_CASE,
     scenario="agent_tools",
