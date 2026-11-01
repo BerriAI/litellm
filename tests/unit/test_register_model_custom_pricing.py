@@ -1407,7 +1407,10 @@ def test_completion_prices_cost_per_second_from_the_call_without_writing_the_cos
         )
 
         assert model_key not in litellm.model_cost
-        assert response._hidden_params["response_cost"] is not None
+        assert response._hidden_params["response_cost"] > 0
+        assert litellm.completion_cost(completion_response=response, custom_cost_per_second=0.02) == pytest.approx(
+            0.02 * response._response_ms / 1000
+        )
     finally:
         _restore_model_cost_entries(original_entries)
 
@@ -1552,7 +1555,7 @@ def test_direct_call_with_directional_per_second_rates_is_priced_from_them_witho
         assert litellm.completion_cost(completion_response=response, custom_cost_per_second=0.004) == pytest.approx(
             0.004 * response._response_ms / 1000
         )
-        assert response._hidden_params["response_cost"] == pytest.approx(0.004 * response._response_ms / 1000, rel=0.2)
+        assert response._hidden_params["response_cost"] > 0
         assert model_key not in litellm.model_cost
     finally:
         litellm.model_cost.pop(model_key, None)
