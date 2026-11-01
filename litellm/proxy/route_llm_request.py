@@ -155,6 +155,7 @@ ROUTE_ENDPOINT_MAPPING: Final = {
     "arerank": "/rerank",
     "aresponses": "/responses",
     "_aresponses_websocket": "/responses",
+    "anthropic_messages": "/messages",
     "alist_input_items": "/responses/{response_id}/input_items",
     "aimage_edit": "/images/edits",
     "acancel_responses": "/responses/{response_id}/cancel",
