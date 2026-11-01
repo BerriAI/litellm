@@ -250,7 +250,7 @@ class CohereV2ChatConfig(OpenAIGPTConfig):
         completion_tokens: Final = token_usage.get("output_tokens", 0)
 
         model_response.choices[0].finish_reason = map_finish_reason(  # rebind-ok: ModelResponse is filled in place
-            cohere_v2_chat_response["finish_reason"]
+            cohere_v2_chat_response.get("finish_reason", "COMPLETE")
         )
         model_response.created = int(time.time())
         model_response.model = model

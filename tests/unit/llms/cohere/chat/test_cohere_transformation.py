@@ -609,6 +609,25 @@ def test_cohere_v2_maps_finish_reason(
 
 @pytest.mark.usefixtures("_cohere_httpx_transport")
 @pytest.mark.respx(assert_all_called=True)
+def test_cohere_v2_missing_finish_reason_defaults_to_stop(respx_mock: respx.MockRouter) -> None:
+    body_without_finish_reason: Final = {
+        key: value
+        for key, value in _cohere_v2_response({"content": [{"type": "text", "text": "Hello"}]}).items()
+        if key != "finish_reason"
+    }
+    respx_mock.post(COHERE_V2_CHAT_URL).mock(return_value=httpx.Response(200, json=body_without_finish_reason))
+
+    response: Final = litellm.completion(
+        model="cohere_chat/v2/command-a-03-2025",
+        messages=[{"role": "user", "content": "Say hello"}],
+        api_key="cohere-test-key",
+    )
+
+    assert (response.choices[0].message.content, response.choices[0].finish_reason) == ("Hello", "stop")
+
+
+@pytest.mark.usefixtures("_cohere_httpx_transport")
+@pytest.mark.respx(assert_all_called=True)
 async def test_cohere_v2_annotations(respx_mock: respx.MockRouter) -> None:
     documents: Final = [
         {"data": {"title": "Renewable Energy Benefits Document", "snippet": "Solar and wind provide clean power."}},
