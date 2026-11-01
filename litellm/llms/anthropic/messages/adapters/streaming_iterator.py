@@ -29,6 +29,7 @@ from litellm._uuid import uuid
 from litellm.exceptions import ContextWindowExceededError, MidStreamFallbackError
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, attribute_items
 from litellm.litellm_core_utils.hidden_params import set_hidden_params
+from litellm.llms.anthropic.messages.responses_adapters.transformation import LiteLLMAnthropicToResponsesAPIAdapter
 from litellm.llms.anthropic.messages.safeguards import StreamedSafeguardResults
 from litellm.llms.anthropic.messages.utils import anthropic_sse_frame
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
@@ -494,9 +495,10 @@ class _CombinedChunkSplitter:
         )
 
     def _expand(self, chunk: "ModelResponseStream") -> "tuple[ModelResponseStream, ...]":
+        normalized: Final = self._with_reasoning_items(chunk)
         split_chunks: Final = tuple(
             split_chunk
-            for combined_chunk in self._split(chunk)
+            for combined_chunk in self._split(normalized)
             for split_chunk in self._split_by_payload_kind(combined_chunk)  # comprehension-ok: flattens nested splits
         )
         block_chunks: Final = tuple(itertools.chain.from_iterable(map(self._split_thinking_blocks, split_chunks)))
@@ -539,6 +541,26 @@ class _CombinedChunkSplitter:
 
     def _restates_unsigned_thinking(self, text: str) -> bool:
         return len(text) == self._unsigned_thinking_length and text == self._unsigned_thinking.getvalue()
+
+    @staticmethod
+    def _with_reasoning_items(chunk: "ModelResponseStream") -> "ModelResponseStream":
+        if not chunk.choices:
+            return chunk
+        choice: Final = chunk.choices[0]
+        blocks: Final = tuple(
+            block
+            for item in (choice.delta.reasoning_items or ())
+            if (
+                block := LiteLLMAnthropicToResponsesAPIAdapter._thinking_block_from_reasoning_item(
+                    (), item.get("encrypted_content")
+                )
+            )
+            is not None
+        )
+        if not blocks:
+            return chunk
+        delta: Final = choice.delta.model_copy(update={"thinking_blocks": list(blocks)})
+        return chunk.model_copy(update={"choices": [choice.model_copy(update={"delta": delta})]})
 
     def __iter__(self) -> "Iterator[ModelResponseStream]":
         return self

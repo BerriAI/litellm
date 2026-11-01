@@ -720,7 +720,53 @@ class LiteLLMMessagesToCompletionTransformationHandler:
         if chat_reasoning is not None and chat_reasoning.summary is not None:
             completion_kwargs["reasoning_summary"] = chat_reasoning.summary
 
+        if LiteLLMMessagesToCompletionTransformationHandler._uses_responses_bridge(completion_kwargs):
+            from litellm.llms.anthropic.messages.adapters.transformation import LiteLLMAnthropicMessagesAdapter
+            from litellm.types.llms.anthropic import AllAnthropicPassThroughMessageValues, AnthropicMessagesRequest
+
+            adapter: Final = LiteLLMAnthropicMessagesAdapter()
+            replay_messages: Final = adapter.translate_anthropic_messages_to_openai(
+                cast(list[AllAnthropicPassThroughMessageValues], messages),
+                model=model,
+                custom_llm_provider=custom_llm_provider if isinstance(custom_llm_provider, str) else None,
+                preserve_encrypted_reasoning=True,
+            )
+            replay_request: Final = AnthropicMessagesRequest(model=model, messages=messages, system=system)
+            adapter._add_system_message_to_messages(replay_messages, replay_request)
+            completion_kwargs["messages"] = replay_messages
+
         return completion_kwargs, tool_name_mapping
+
+    @staticmethod
+    def _uses_responses_bridge(completion_kwargs: _CompletionKwargs) -> bool:
+        from litellm.responses.bridge_check import responses_api_bridge_check, str_keyed_mapping
+
+        model: Final = completion_kwargs.get("model")
+        if not isinstance(model, str):
+            return False
+        provider: Final = completion_kwargs.get("custom_llm_provider")
+        api_base: Final = completion_kwargs.get("api_base")
+        try:
+            local_model, resolved_provider, _, resolved_api_base = litellm.utils.get_llm_provider(
+                model=model,
+                custom_llm_provider=provider if isinstance(provider, str) else None,
+                api_base=api_base if isinstance(api_base, str) else None,
+            )
+        except (ValueError, litellm.BadRequestError):
+            return False
+        tools: Final = completion_kwargs.get("tools")
+        web_search: Final = completion_kwargs.get("web_search_options")
+        effort: Final = completion_kwargs.get("reasoning_effort")
+        model_info, _ = responses_api_bridge_check(
+            model=local_model,
+            custom_llm_provider=resolved_provider,
+            tools=cast("list[dict[str, object]]", tools) if isinstance(tools, list) else None,
+            web_search_options=cast(OpenAIWebSearchOptions, web_search) if isinstance(web_search, dict) else None,
+            reasoning_effort=effort if isinstance(effort, str) else str_keyed_mapping(effort),
+            api_base=resolved_api_base,
+            deployment_model_info=str_keyed_mapping(completion_kwargs.get("model_info")),
+        )
+        return model_info.get("mode") == "responses"
 
     @staticmethod
     async def async_anthropic_messages_handler(

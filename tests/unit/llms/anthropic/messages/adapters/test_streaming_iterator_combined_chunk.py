@@ -22,6 +22,7 @@ from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response impo
     convert_to_streaming_response,
     convert_to_streaming_response_async,
 )
+from litellm.litellm_core_utils.prompt_templates.common_utils import encrypted_reasoning_signature
 from litellm.llms.anthropic.messages.adapters.streaming_iterator import (
     AnthropicStreamWrapper,
     _CombinedChunkSplitter,
@@ -37,6 +38,27 @@ from litellm.types.utils import (
     StreamingChoices,
     Usage,
 )
+
+
+async def _stream_with_encrypted_reasoning() -> AsyncIterator[ModelResponseStream]:
+    yield ModelResponseStream(choices=[StreamingChoices(index=0, delta=Delta(reasoning_content="Visible summary"))])
+    yield ModelResponseStream(
+        choices=[
+            StreamingChoices(
+                index=0,
+                delta=Delta(reasoning_items=[{"type": "reasoning", "summary": [], "encrypted_content": "opaque-test"}]),
+                finish_reason="stop",
+            )
+        ]
+    )
+
+
+def test_stream_replays_encrypted_reasoning_without_repeating_summary() -> None:
+    content: Final = _anthropic_sdk_final_content(_stream_with_encrypted_reasoning())
+    assert content == [
+        {"type": "thinking", "thinking": "Visible summary", "signature": ""},
+        {"type": "redacted_thinking", "data": encrypted_reasoning_signature("opaque-test")},
+    ]
 
 
 def _build_fake_stream(content: str, finish_reason: str = "stop") -> MockResponseIterator:
@@ -346,9 +368,7 @@ def _anthropic_sdk_final_content(
         lambda request: httpx.Response(200, content=sse.encode(), headers={"content-type": "text/event-stream"})
     )
     client: Final = anthropic.Anthropic(api_key="transport-only", http_client=httpx.Client(transport=transport))
-    with client.messages.stream(
-        model="claude", max_tokens=16, messages=[{"role": "user", "content": "hi"}]
-    ) as stream:
+    with client.messages.stream(model="claude", max_tokens=16, messages=[{"role": "user", "content": "hi"}]) as stream:
         return [block.model_dump(exclude_none=True) for block in stream.get_final_message().content]
 
 
@@ -377,7 +397,12 @@ def test_fake_stream_gives_each_thinking_block_its_own_content_block(thinking_bl
 
 
 def _native_thinking_chunk(thinking: str, index: int, signature: str | None = None) -> ModelResponseStream:
-    block: Final = {"type": "thinking", "thinking": thinking, "index": index, **({"signature": signature} if signature else {})}
+    block: Final = {
+        "type": "thinking",
+        "thinking": thinking,
+        "index": index,
+        **({"signature": signature} if signature else {}),
+    }
     return ModelResponseStream(
         choices=[StreamingChoices(index=0, delta=Delta(reasoning_content=thinking or None, thinking_blocks=[block]))]
     )

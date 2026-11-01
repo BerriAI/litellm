@@ -155,6 +155,7 @@ from litellm.llms.anthropic.messages.native.utils import (
     refusal_reply_text,
     refusal_stop_details,
 )
+from litellm.llms.anthropic.messages.responses_adapters.transformation import LiteLLMAnthropicToResponsesAPIAdapter
 from litellm.types.llms.anthropic import (
     ANTHROPIC_HOSTED_TOOLS,
     AllAnthropicPassThroughMessageValues,
@@ -495,9 +496,14 @@ class LiteLLMAnthropicMessagesAdapter:
         *,
         custom_llm_provider: str | None = None,
         preserve_midturn_system: bool = False,
+        preserve_encrypted_reasoning: bool = False,
     ) -> list[AllMessageValues]:
         new_messages: Final[list[AllMessageValues]] = []
-        replayable_messages: Final = strip_encrypted_reasoning_blocks_from_anthropic_messages(messages)
+        replayable_messages: Final = (
+            messages
+            if preserve_encrypted_reasoning
+            else strip_encrypted_reasoning_blocks_from_anthropic_messages(messages)
+        )
         leading_count: Final = next(
             (i for i, m in enumerate(replayable_messages) if not is_system_role_message(m)),
             len(replayable_messages),
@@ -1435,8 +1441,19 @@ class LiteLLMAnthropicMessagesAdapter:
             for choice in choices
         ):
             new_content.extend(dict(_COMPACTION_BLOCK.validate_python(block)) for block in compaction_blocks)
-            # Handle thinking blocks first
-            if hasattr(choice.message, "thinking_blocks") and choice.message.thinking_blocks:
+            reasoning_blocks: Final = tuple(
+                block
+                for item in (choice.message.reasoning_items or ())
+                if (
+                    block := LiteLLMAnthropicToResponsesAPIAdapter._thinking_block_from_reasoning_item(
+                        item.get("summary", ()), item.get("encrypted_content")
+                    )
+                )
+                is not None
+            )
+            if reasoning_blocks:
+                new_content.extend(reasoning_blocks)
+            elif hasattr(choice.message, "thinking_blocks") and choice.message.thinking_blocks:
                 for thinking_block in choice.message.thinking_blocks:
                     if thinking_block.get("type") == "thinking":
                         if is_empty_unsigned_thinking_block(thinking_block):
