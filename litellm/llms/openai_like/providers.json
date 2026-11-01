@@ -272,6 +272,10 @@
       "/v1/messages"
     ]
   },
+  "routerhub": {
+    "base_url": "https://routerhub.si/v1",
+    "api_key_env": "ROUTERHUB_API_KEY"
+  },
   "refuseless": {
     "base_url": "https://api.refuseless.com/v1",
     "api_key_env": "REFUSELESS_API_KEY",

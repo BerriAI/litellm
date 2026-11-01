@@ -78895,6 +78895,26 @@
         "supports_response_schema": true,
         "supports_vision": true
     },
+    "routerhub/glm-5.3-abliterated": {
+        "cache_read_input_token_cost": 1.6e-07,
+        "input_cost_per_token": 4e-07,
+        "litellm_provider": "routerhub",
+        "max_input_tokens": 917504,
+        "max_output_tokens": 131072,
+        "mode": "chat",
+        "output_cost_per_token": 1.3333333333333332e-06,
+        "source": "https://routerhub.si/models.json"
+    },
+    "routerhub/glm-5.3-flash-abliterated": {
+        "cache_read_input_token_cost": 1.2e-07,
+        "input_cost_per_token": 3e-07,
+        "litellm_provider": "routerhub",
+        "max_input_tokens": 917504,
+        "max_output_tokens": 131072,
+        "mode": "chat",
+        "output_cost_per_token": 1e-06,
+        "source": "https://routerhub.si/models.json"
+    },
     "refuseless/glm-5.3-abliterated": {
         "cache_read_input_token_cost": 1.5e-07,
         "input_cost_per_token": 1e-06,
