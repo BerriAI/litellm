@@ -9598,6 +9598,7 @@ class ProviderConfigManager:
             LlmProviders.HOSTED_VLLM: (lambda: litellm.HostedVLLMChatConfig(), False),
             LlmProviders.LLAMAFILE: (lambda: litellm.LlamafileChatConfig(), False),
             LlmProviders.LM_STUDIO: (lambda: litellm.LMStudioChatConfig(), False),
+            LlmProviders.FOUNDRY_LOCAL: (lambda: litellm.FoundryLocalChatConfig(), False),
             LlmProviders.GALADRIEL: (lambda: litellm.GaladrielChatConfig(), False),
             LlmProviders.REPLICATE: (lambda: litellm.ReplicateConfig(), False),
             LlmProviders.HUGGINGFACE: (lambda: litellm.HuggingFaceChatConfig(), False),
@@ -10179,6 +10180,8 @@ class ProviderConfigManager:
         model: str,
         provider: LlmProviders,
     ) -> BaseAudioTranscriptionConfig | None:
+        if provider == LlmProviders.FOUNDRY_LOCAL:
+            return litellm.FoundryLocalAudioTranscriptionConfig()
         model_cost_entry: Final = _get_model_cost_entry_for_provider_config(
             model=model,
             provider=provider,

@@ -2124,6 +2124,12 @@ if TYPE_CHECKING:
     from .llms.lm_studio.chat.transformation import (
         LMStudioChatConfig as _LMStudioChatConfig,
     )
+    from .llms.foundry_local.chat.transformation import (
+        FoundryLocalChatConfig as _FoundryLocalChatConfig,
+    )
+    from .llms.foundry_local.audio_transcription.transformation import (
+        FoundryLocalAudioTranscriptionConfig as _FoundryLocalAudioTranscriptionConfig,
+    )
     from .llms.lm_studio.embed.transformation import (
         LmStudioEmbeddingConfig as _LmStudioEmbeddingConfig,
     )
@@ -2150,6 +2156,8 @@ if TYPE_CHECKING:
     ClfAiGatewayConfig: type[_ClfAiGatewayConfig]
     LlamafileChatConfig: Type[_LlamafileChatConfig]
     LMStudioChatConfig: Type[_LMStudioChatConfig]
+    FoundryLocalChatConfig: Type[_FoundryLocalChatConfig]
+    FoundryLocalAudioTranscriptionConfig: Type[_FoundryLocalAudioTranscriptionConfig]
     LmStudioEmbeddingConfig: Type[_LmStudioEmbeddingConfig]
     IBMWatsonXEmbeddingConfig: Type[_IBMWatsonXEmbeddingConfig]
     VertexAIConfig: Type[_VertexGeminiConfig]  # Alias for VertexGeminiConfig
