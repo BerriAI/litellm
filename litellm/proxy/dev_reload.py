@@ -65,11 +65,12 @@ def server_options(options: ReloadOptions) -> ServerOptions:
     )
 
 
-def load_app_or_exit(import_path: str) -> Callable[..., object]:
+def load_app_or_exit(import_path: str, factory: bool = False) -> Callable[..., object]:
     module_name: Final = import_path.partition(":")[0]
     try:
         importlib.import_module(module_name)
-        return ASGI_APP.validate_python(import_path)
+        app: Final = ASGI_APP.validate_python(import_path)
+        return ASGI_APP.validate_python(app()) if factory else app
     except Exception:
         LOGGER.exception("Error loading ASGI app %s", import_path)
         sys.exit(uvicorn_config.STARTUP_FAILURE)
@@ -85,8 +86,7 @@ def load_worker_app(import_path: str, worker_app_factory: bool) -> Callable[...,
     pool_parent: Final = multiprocessing.parent_process()
     if pool_parent is not None:
         threading.Thread(target=stop_worker_when_pool_exits, args=(pool_parent,), daemon=True).start()
-    worker_app: Final = load_app_or_exit(import_path)
-    return ASGI_APP.validate_python(worker_app()) if worker_app_factory else worker_app
+    return load_app_or_exit(import_path, worker_app_factory)
 
 
 def pool_config(options: ReloadOptions, workers: int, worker_overrides: Mapping[str, object] | None = None) -> Config:

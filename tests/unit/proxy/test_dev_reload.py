@@ -60,6 +60,34 @@ def test_a_broken_app_exits_the_worker_as_a_startup_failure(
 @pytest.mark.parametrize(
     ("module", "source"),
     (
+        (
+            "reload_factory_missing_module_app",
+            "def factory():\n    import a_module_that_does_not_exist\n",
+        ),
+        (
+            "reload_factory_runtime_error_app",
+            "def factory():\n    raise RuntimeError('broken edit')\n",
+        ),
+    ),
+)
+def test_a_broken_factory_exits_the_worker_as_a_startup_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, module: str, source: str
+) -> None:
+    (tmp_path / f"{module}.py").write_text(source)
+    monkeypatch.syspath_prepend(str(tmp_path))
+    with pytest.raises(SystemExit) as exit_info:
+        pool_config(
+            _options(f"{module}:app"),
+            workers=POOL_WORKERS,
+            worker_overrides={"app": f"{module}:factory", "factory": True},
+        ).load()
+    assert exit_info.value.code == uvicorn_config.STARTUP_FAILURE
+
+
+@REQUIRES_UVICORN_STARTUP_FAILURE
+@pytest.mark.parametrize(
+    ("module", "source"),
+    (
         ("reload_import_error_app", "import os\nfrom os import missing_name\n"),
         ("reload_value_error_app", "import os\nraise ValueError('broken edit')\n"),
     ),
