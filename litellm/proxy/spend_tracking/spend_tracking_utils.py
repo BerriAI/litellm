@@ -61,6 +61,7 @@ from litellm.litellm_core_utils.litellm_logging import (
     is_valid_sha256_hash,
     request_model_access_groups_from_litellm_params,
 )
+from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import message_field, parts_of
 from litellm.litellm_core_utils.ptu_pricing import azure_spillover
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps, strip_null_bytes
 from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
@@ -1270,6 +1271,89 @@ _SENSITIVE_REQUEST_BODY_KEYS: Final = frozenset({"secret_fields"})
 _REQUEST_BODY_CREDENTIAL_MASKER: Final = SensitiveDataMasker(extra_sensitive_patterns=frozenset({"apikey"}))
 _TOOL_INPUT_BLOCK_TYPES: Final = frozenset({"tool_use", "server_tool_use", "mcp_tool_use"})
 _TOOL_OUTPUT_BLOCK_TYPES: Final = frozenset({"tool_result", "mcp_tool_result", "function_call_output"})
+_LATEST_TURN_STORAGE: Final = "latest_turn"
+_STATEFUL_REQUEST_KEYS: Final = frozenset({"previous_response_id", "conversation"})
+_LATEST_TURN_KEPT_KEYS: Final = frozenset({"model"})
+_TURNS_KEYS: Final = ("messages", "input")
+_TEXT_BLOCK_TYPES: Final = frozenset({"text", "input_text"})
+_OMITTED_BLOCK_PLACEHOLDERS: Final = MappingProxyType(
+    {
+        "image": "[image omitted]",
+        "image_url": "[image omitted]",
+        "input_image": "[image omitted]",
+        "file": "[file omitted]",
+        "input_file": "[file omitted]",
+        "document": "[file omitted]",
+        "input_audio": "[audio omitted]",
+    }
+)
+
+
+def stores_latest_turn_only() -> bool:
+    from litellm.proxy.proxy_server import general_settings_view
+
+    return general_settings_view().get("spend_logs_prompt_storage") == _LATEST_TURN_STORAGE
+
+
+def stores_full_prompts_in_spend_logs() -> bool:
+    return should_store_prompts_and_responses_in_spend_logs() and not stores_latest_turn_only()
+
+
+def _block_type(block: object) -> str | None:
+    block_type: Final = message_field(block, "type")
+    return block_type if isinstance(block_type, str) else None
+
+
+def _content_block_text(block: object) -> str | None:
+    if isinstance(block, str):
+        return block
+    block_type: Final = _block_type(block)
+    if block_type in _TEXT_BLOCK_TYPES:
+        text: Final = message_field(block, "text")
+        return text if isinstance(text, str) else None
+    return _OMITTED_BLOCK_PLACEHOLDERS.get(block_type) if block_type is not None else None
+
+
+def _is_tool_output_block(block: object) -> bool:
+    return _block_type(block) in _TOOL_OUTPUT_BLOCK_TYPES
+
+
+def _user_content_text(content: object) -> str | None:
+    if isinstance(content, str):
+        return content or None
+    blocks: Final = parts_of(content)
+    if any(_is_tool_output_block(block) for block in blocks):
+        return None
+    texts: Final = tuple(text for text in map(_content_block_text, blocks) if text)
+    return "\n".join(texts) or None
+
+
+def _latest_user_message_text(turns: object) -> str | None:
+    if isinstance(turns, str):
+        return turns or None
+    latest: Final = next(reversed(parts_of(turns)), None)
+    if message_field(latest, "role") != "user":
+        return None
+    return _user_content_text(message_field(latest, "content"))
+
+
+def _continues_stored_conversation(request_body: Mapping[str, object]) -> bool:
+    return any(request_body.get(key) for key in _STATEFUL_REQUEST_KEYS)
+
+
+def _latest_turn_body(request_body: Mapping[str, object]) -> Mapping[str, object]:
+    if _continues_stored_conversation(request_body):
+        return request_body
+    kept: Final = {key: value for key, value in request_body.items() if key in _LATEST_TURN_KEPT_KEYS}
+    turns_key: Final = next((key for key in _TURNS_KEYS if key in request_body), None)
+    text: Final = None if turns_key is None else _latest_user_message_text(request_body[turns_key])
+    if turns_key is None or text is None:
+        return MappingProxyType(kept)
+    return MappingProxyType({**kept, turns_key: [{"role": "user", "content": text}]})
+
+
+def _stored_request_body(request_body: Mapping[str, object]) -> Mapping[str, object]:
+    return _latest_turn_body(request_body) if stores_latest_turn_only() else request_body
 
 
 def _is_request_body_credential(key: str, value: object) -> bool:
@@ -1532,7 +1616,7 @@ def _sanitize_guardrail_information_for_spend_logs(
     here to match OTEL's defensive read pattern; otherwise iteration would
     yield the dict's keys and crash the whole spend-log write.
     """
-    if guardrail_information is None or should_store_prompts_and_responses_in_spend_logs():
+    if guardrail_information is None or stores_full_prompts_in_spend_logs():
         return guardrail_information
     entries: Final = [guardrail_information] if isinstance(guardrail_information, dict) else guardrail_information
     return [_redact_prompt_fields_in_guardrail_entry(entry) for entry in entries if isinstance(entry, dict)]
@@ -1610,7 +1694,7 @@ def sanitize_error_information_for_spend_logs(
     )
     sanitized = cast(dict, {**persisted})
 
-    if not should_store_prompts_and_responses_in_spend_logs():
+    if not stores_full_prompts_in_spend_logs():
         for field in ("error_message", "traceback"):
             value = sanitized.get(field)
             if isinstance(value, str):
@@ -1951,7 +2035,7 @@ def _get_proxy_server_request_for_spend_logs_payload(
                     _request_body = _convert_mapping_to_json_serializable(without_classifier_audit(_request_body))
                     perform_redaction(model_call_details=_request_body, result=None)
 
-            stored_request_body: Final = _sanitize_proxy_server_request_body(_request_body)
+            stored_request_body: Final = _sanitize_proxy_server_request_body(_stored_request_body(_request_body))
             _request_body_json_str: Final = safe_dumps(
                 _stored_request_without_requester_ip_address(stored_request_body)
                 if drop_requester_ip_address
@@ -1973,7 +2057,7 @@ def _get_vector_store_request_for_spend_logs_payload(
     """
     If user does not want to store prompts and responses, then remove the content from the vector store request metadata
     """
-    if should_store_prompts_and_responses_in_spend_logs():
+    if stores_full_prompts_in_spend_logs():
         return vector_store_request_metadata
 
     # if user does not want to store prompts and responses, then remove the content from the vector store request metadata
