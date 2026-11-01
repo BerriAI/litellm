@@ -1,3 +1,4 @@
+import asyncio
 import importlib
 import logging
 import logging.handlers
@@ -6,6 +7,7 @@ from pathlib import Path
 from typing import Final
 
 import pytest
+from starlette.types import Message, Scope
 from uvicorn import config as uvicorn_config
 
 from litellm.proxy.dev_reload import (
@@ -144,15 +146,54 @@ def test_the_reload_pool_passes_a_uvicorn_arg_it_does_not_list_through_to_the_wo
     assert (config.backlog, config.reload) == (123, False)
 
 
-def test_the_reload_pool_applies_child_process_overrides_to_its_workers() -> None:
-    config: Final = pool_config(
-        _options("app:app"),
-        workers=POOL_WORKERS,
-        worker_overrides={"app": "litellm_cli.main:proxy_worker_app", "factory": True, "log_config": None},
+def test_the_reload_pool_serves_the_overridden_worker_app(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    module: Final = "reload_worker_override_app"
+    (tmp_path / f"{module}.py").write_text(
+        "async def base_app(scope, receive, send):\n"
+        "    await receive()\n"
+        "    await send({'type': 'http.response.start', 'status': 200, 'headers': []})\n"
+        "    await send({'type': 'http.response.body', 'body': b'base app', 'more_body': False})\n"
+        "\n"
+        "async def overridden_app(scope, receive, send):\n"
+        "    await receive()\n"
+        "    await send({'type': 'http.response.start', 'status': 200, 'headers': []})\n"
+        "    await send({'type': 'http.response.body', 'body': b'overridden app', 'more_body': False})\n"
+        "\n"
+        "def base_factory():\n"
+        "    return base_app\n"
+        "\n"
+        "def factory():\n"
+        "    return overridden_app\n"
     )
-    assert config.app.args == ("litellm_cli.main:proxy_worker_app", True)
-    assert config.factory
+    monkeypatch.syspath_prepend(str(tmp_path))
+    config: Final = pool_config(
+        _options(f"{module}:base_factory"),
+        workers=POOL_WORKERS,
+        worker_overrides={"app": f"{module}:factory", "factory": True, "log_config": None},
+    )
     assert config.log_config is None
+    config.load()
+    loaded_app: Final = config.loaded_app
+    assert loaded_app is not None
+    scope: Final[Scope] = {"type": "http", "method": "GET", "path": "/", "headers": []}
+
+    async def run_app() -> tuple[Message, ...]:
+        messages: Final[asyncio.Queue[Message]] = asyncio.Queue()
+
+        async def receive() -> Message:
+            return {"type": "http.request", "body": b"", "more_body": False}
+
+        async def send(message: Message) -> None:
+            await messages.put(message)
+
+        await loaded_app(scope, receive, send)
+        return tuple(messages.get_nowait() for _ in range(messages.qsize()))
+
+    messages: Final = asyncio.run(run_app())
+    assert messages == (
+        {"type": "http.response.start", "status": 200, "headers": []},
+        {"type": "http.response.body", "body": b"overridden app", "more_body": False},
+    )
 
 
 def test_load_worker_app_calls_the_overridden_factory(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
