@@ -106,6 +106,7 @@ from .llms.openai import (
     OpenAIRealtimeStreamList,
     ResponsesAPIResponse,
     WebSearchOptions,
+    _JsonValue,
 )
 from .rerank import RerankResponse as RerankResponse
 
@@ -676,6 +677,12 @@ class CallTypes(str, Enum):
     retrieve_fine_tuning_job = "retrieve_fine_tuning_job"
     responses = "responses"
     aresponses = "aresponses"
+    get_responses = "get_responses"
+    aget_responses = "aget_responses"
+    delete_responses = "delete_responses"
+    adelete_responses = "adelete_responses"
+    cancel_responses = "cancel_responses"
+    acancel_responses = "acancel_responses"
     alist_input_items = "alist_input_items"
     llm_passthrough_route = "llm_passthrough_route"
     allm_passthrough_route = "allm_passthrough_route"
@@ -1144,6 +1151,8 @@ API_ROUTE_TO_CALL_TYPES: Final[Mapping[str, Sequence[CallTypes]]] = {
     # A2A (Agent-to-Agent)
     "/a2a/{agent_id}": [CallTypes.asend_message, CallTypes.send_message],
     "/a2a/{agent_id}/message/send": [CallTypes.asend_message, CallTypes.send_message],
+    "/a2a/{agent_id}/message/stream": [CallTypes.asend_message, CallTypes.send_message],
+    "/v1/a2a/{agent_id}/message/stream": [CallTypes.asend_message, CallTypes.send_message],
     # Passthrough endpoints
     "/llm_passthrough": [
         CallTypes.allm_passthrough_route,
@@ -4682,6 +4691,7 @@ class LlmProviders(str, Enum):
     PRISM = "prism"
     OPENINFER = "openinfer"
     INFERENCEAPIS = "inferenceapis"
+    HOSTINGER_ROUTER = "hostinger_router"
     ZEROGPU = "zerogpu"
     DARKBLOOM = "darkbloom"
     META = "meta"
@@ -4963,29 +4973,50 @@ def _batch_usage_from_chat_usage(usage: Usage) -> BatchUsage:
     )
 
 
+OPENAI_BATCH_STATUS_FOR_VLLM_ROUTER_STATUS: Final = MappingProxyType(
+    {"pending": "validating", "running": "in_progress"}
+)
+
+
+def openai_batch_status(status: _JsonValue) -> _JsonValue:
+    return OPENAI_BATCH_STATUS_FOR_VLLM_ROUTER_STATUS.get(status, status) if isinstance(status, str) else status
+
+
 class LiteLLMBatch(Batch):
     _hidden_params: dict = {}
 
+    object: Literal["batch"] = "batch"
+
+    @field_validator("object", mode="before")
+    @classmethod
+    def _default_missing_object_type(cls, value: _JsonValue) -> _JsonValue:
+        return "batch" if value is None else value
+
+    @field_validator("status", mode="before")
+    @classmethod
+    def _map_vllm_router_status(cls, value: _JsonValue) -> _JsonValue:
+        return openai_batch_status(value)
+
     @property
-    def hidden_params(self) -> dict[str, object]:  # mutable-ok: API requires mutation
+    def hidden_params(self) -> dict[str, _JsonValue]:  # mutable-ok: API requires mutation
         return self._hidden_params
 
     @hidden_params.setter
-    def hidden_params(self, hidden_params: dict[str, object]) -> None:  # mutable-ok: API requires mutation
+    def hidden_params(self, hidden_params: dict[str, _JsonValue]) -> None:  # mutable-ok: API requires mutation
         self._hidden_params = hidden_params
 
     usage: Usage | None = None
 
     @field_validator("usage", mode="before")
     @classmethod
-    def _usage_from_batch_token_counts(cls, value: object) -> object:
+    def _usage_from_batch_token_counts(cls, value: _JsonValue) -> _JsonValue:
         counts: Final = _parse_batch_token_counts(value)
         return value if counts is None else _usage_with_batch_token_counts(Usage.model_validate(value), counts)
 
     @field_serializer("usage")
     def _serialize_usage_with_batch_fields(
         self, usage: Usage | None, info: FieldSerializationInfo
-    ) -> Mapping[str, object] | None:
+    ) -> Mapping[str, _JsonValue] | None:
         if not isinstance(usage, Usage):
             return usage
         chat_fields: Final = usage.model_dump(
