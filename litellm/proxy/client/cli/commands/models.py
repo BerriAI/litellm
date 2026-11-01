@@ -1,7 +1,7 @@
 # stdlib imports
 import re
 from collections import defaultdict
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Final, Literal
@@ -14,7 +14,9 @@ from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 # local imports
 from ... import Client
+from ...exceptions import UnauthorizedError
 from ._cli_context import cli_context_values
+from .auto_sign_in import SignInOnUnauthorizedGroup
 
 if TYPE_CHECKING:
     from rich.console import JustifyMethod
@@ -43,7 +45,7 @@ class ModelYamlInfo:
         return ", ".join(self.access_groups) if self.access_groups else ""
 
 
-def _get_model_info_obj_from_yaml(model: dict[str, Any]) -> ModelYamlInfo:
+def _get_model_info_obj_from_yaml(model: Mapping[str, Any]) -> ModelYamlInfo:
     """Extract model info from a model dict and return as ModelYamlInfo dataclass."""
     model_name: Final[str] = model["model_name"]
     model_params: Final[dict[str, Any]] = model["litellm_params"]
@@ -107,7 +109,7 @@ def create_client(ctx: click.Context) -> Client:
     return Client(base_url=context["base_url"], api_key=context["api_key"])
 
 
-@click.group()
+@click.group(cls=SignInOnUnauthorizedGroup)
 def models() -> None:
     """Manage models on your LiteLLM proxy server"""
 
@@ -394,6 +396,12 @@ def get_model_list_from_yaml_file(yaml_file: str) -> list[dict[str, object]]:
     return model_list
 
 
+def _model_list_from_yaml_argument(
+    _ctx: click.Context, _param: click.Parameter, yaml_file: str
+) -> Sequence[Mapping[str, object]]:
+    return get_model_list_from_yaml_file(yaml_file)
+
+
 def _get_filtered_model_list(model_list, only_models_matching_regex, only_access_groups_matching_regex):
     """Return a list of models that pass the filter criteria."""
     model_regex: Final = re.compile(only_models_matching_regex) if only_models_matching_regex else None
@@ -409,7 +417,12 @@ def _import_models_get_table_title(dry_run: bool) -> str:
 
 
 @models.command("import")
-@click.argument("yaml_file", type=click.Path(exists=True, dir_okay=False, readable=True))
+@click.argument(
+    "model_list",
+    metavar="YAML_FILE",
+    type=click.Path(exists=True, dir_okay=False, readable=True),
+    callback=_model_list_from_yaml_argument,
+)
 @click.option(
     "--dry-run",
     is_flag=True,
@@ -428,7 +441,7 @@ def _import_models_get_table_title(dry_run: bool) -> str:
 @click.pass_context
 def import_models(
     ctx: click.Context,
-    yaml_file: str,
+    model_list: Sequence[Mapping[str, object]],
     dry_run: bool,
     only_models_matching_regex: str | None,
     only_access_groups_matching_regex: str | None,
@@ -436,7 +449,6 @@ def import_models(
     """Import models from a YAML file and add them to the proxy."""
     provider_counts: Final[dict[str, int]] = defaultdict(int)
     added_models: Final[list[ModelYamlInfo]] = []
-    model_list: Final = get_model_list_from_yaml_file(yaml_file)
     filtered_model_list: Final = _get_filtered_model_list(
         model_list, only_models_matching_regex, only_access_groups_matching_regex
     )
@@ -453,6 +465,13 @@ def import_models(
                     model_params=model_info_obj.model_params,
                     model_info=model_info_obj.model_info,
                 )
+            except UnauthorizedError as error:
+                if added_models:
+                    raise click.ClickException(
+                        f"The proxy rejected the API key after {len(added_models)} of {len(filtered_model_list)} "
+                        "models were sent, so the import stopped there."
+                    ) from error
+                raise
             except Exception:
                 pass  # For summary, ignore errors
         added_models.append(model_info_obj)

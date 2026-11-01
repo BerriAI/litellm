@@ -12,6 +12,7 @@ import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from http import HTTPStatus
 from pathlib import Path
 from types import MappingProxyType
 from typing import Final
@@ -23,8 +24,10 @@ from pydantic import ConfigDict, Field, JsonValue, TypeAdapter, ValidationError,
 
 from litellm.types.llms.base_model import LiteLLMBaseModel
 
+from ...exceptions import UnauthorizedError
 from ...http_client import HTTPClient
 from ._cli_context import cli_context_values
+from .auto_sign_in import SignInOnUnauthorizedGroup
 
 CLAUDE_DIR: Final = Path.home() / ".claude"
 REPORT_DIR: Final = Path.home() / ".litellm" / "debug"
@@ -45,6 +48,7 @@ report was saved to so I can hand it off. If nothing failed, say so.
 @dataclass(frozen=True, slots=True)
 class DebugFailure:
     message: str
+    unauthorized: requests.HTTPError | None = None
 
 
 class ErrorInformation(LiteLLMBaseModel):
@@ -141,7 +145,13 @@ def detect_claude_session_id(env: Mapping[str, str], claude_dir: Path) -> str | 
 def _transport_failure(uri: str, error: requests.exceptions.RequestException) -> DebugFailure:
     body: Final = error.response.text[:_TRANSPORT_BODY_CHARS] if error.response is not None else ""
     detail: Final = f"\n{body}" if body else ""
-    return DebugFailure(f"GET {uri} failed: {error}{detail}")
+    return DebugFailure(f"GET {uri} failed: {error}{detail}", _unauthorized(error))
+
+
+def _unauthorized(error: requests.exceptions.RequestException) -> requests.HTTPError | None:
+    if not isinstance(error, requests.HTTPError) or error.response is None:
+        return None
+    return error if error.response.status_code == HTTPStatus.UNAUTHORIZED else None
 
 
 class SpendLogsFetcher:
@@ -311,7 +321,7 @@ def install_slash_command(claude_dir: Path) -> Path:
     return path
 
 
-@click.group()
+@click.group(cls=SignInOnUnauthorizedGroup)
 def debug() -> None:
     """Pull debug reports (spend, request, response, error) for coding-agent sessions"""
 
@@ -360,6 +370,8 @@ def debug_claude(
         recent_bodies=recent_bodies,
         max_chars=max_body_chars,
     )
+    if isinstance(outcome, DebugFailure) and outcome.unauthorized is not None:
+        raise UnauthorizedError(outcome.unauthorized)
     if isinstance(outcome, DebugFailure):
         raise click.ClickException(outcome.message)
     click.echo(outcome)

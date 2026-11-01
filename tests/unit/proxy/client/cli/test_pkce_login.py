@@ -549,6 +549,22 @@ def test_run_pkce_login_stops_before_the_browser_when_registration_fails():
     assert opened == []
 
 
+def test_run_pkce_login_stops_waiting_when_the_browser_launcher_reports_it_did_not_open():
+    http = _FakeHttp(
+        {
+            ("GET", DISCOVERY_URL): _FakeResponse(200, CONTRACT_DOC),
+            ("POST", f"{BASE}/register"): _FakeResponse(201, {"client_id": "llm_dcrc_abc"}),
+        }
+    )
+    launch_failure = PkceFailure("the web browser did not open")
+
+    result = run_pkce_login(
+        BASE, http, open_browser=lambda _url: launch_failure, echo=lambda _: None, timeout_seconds=30
+    )
+
+    assert result == launch_failure
+
+
 def test_pkce_token_record_keeps_every_refresh_input_next_to_the_key():
     credential = PkceCredential(
         access_token="sk-cli-new",

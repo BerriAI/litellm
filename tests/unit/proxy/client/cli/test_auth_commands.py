@@ -710,7 +710,9 @@ class TestWhoamiCommand:
 
             assert result.exit_code == 0
             assert "Not authenticated" in result.output
-            assert "Run 'lite login'" in result.output
+            assert "lite opens your browser to sign in and waits up to 5 minutes" in result.output
+            assert "run 'lite login --pkce'" in result.output
+            assert "or 'lite login' where no browser can open" in result.output
 
     @pytest.mark.parametrize(
         ("proxy_status", "expected_last_line_start"),
