@@ -36,31 +36,63 @@ Safe to enable globally:
 - No cache required.
 """
 
-from collections.abc import Iterator, Mapping, Sequence
-from functools import cache
+from collections.abc import Callable, Iterator, Mapping, Sequence
+from dataclasses import dataclass, field
+from functools import cache, partial
 from typing import TYPE_CHECKING, Final, Optional, cast
 
-from pydantic import TypeAdapter
+from pydantic import BaseModel, TypeAdapter, ValidationError
 
+import litellm
 from litellm._logging import verbose_router_logger
+from litellm.exceptions import AuthenticationError, BadRequestError
 from litellm.integrations.custom_logger import CustomLogger, Span
-from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
+from litellm.litellm_core_utils.get_llm_provider_logic import declared_provider, get_llm_provider
+from litellm.litellm_core_utils.litellm_logging import has_sensitive_keyword
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     anthropic_content_lists,
     encrypted_content_of_block,
     strip_encrypted_reasoning_from_messages,
 )
 from litellm.litellm_core_utils.routing_common_utils import as_excluded_deployment_ids, as_retry_skipped_deployment_ids
+from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.router_deprecated import RenamedRouterAttribute, renamed_router_param
 from litellm.types.llms.openai import AllMessageValues
-from litellm.types.router import Deployment
-from litellm.utils import get_order_filtered_deployments
+from litellm.types.router import Deployment, GenericLiteLLMParams
+from litellm.types.utils import LlmProviders
+from litellm.utils import ProviderConfigManager, get_order_filtered_deployments, with_named_credential
 
 if TYPE_CHECKING:
     from litellm.router_api import RoutingContext
 
 _REQUEST_KWARGS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+_HEADERS_ADAPTER: Final = TypeAdapter(Mapping[object, object])
+_ACCOUNT_SCOPE_HEADERS: Final = frozenset({"openai-organization", "openai-project", "cookie"})
+_SINGLE_VENDOR_PROVIDERS: Final = frozenset({LlmProviders.OPENAI.value})
+
+
+@dataclass(frozen=True, slots=True)
+class _ProviderRoute:
+    model: str
+    provider: str
+    api_base: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class _EncryptionBoundary:
+    api_base: object
+    api_key: object
+    model: Callable[[], str | None] = field(compare=False)
+    account_scope: frozenset[tuple[str, object]]
+    explicit_pair: bool
+
+    def is_shared_with(self, other: "_EncryptionBoundary") -> bool:
+        if (self.api_base, self.api_key) != (other.api_base, other.api_key):
+            return False
+        if self.explicit_pair and other.explicit_pair:
+            return True
+        return self.account_scope == other.account_scope and self.model() == other.model()
 
 
 class EncryptedContentAffinityCheck(CustomLogger):
@@ -209,44 +241,134 @@ class EncryptedContentAffinityCheck(CustomLogger):
     @staticmethod
     def _encryption_boundary_key(
         litellm_params: object,
-    ) -> tuple[object, object] | None:
+    ) -> _EncryptionBoundary | None:
         """
-        ``(api_base, api_key)`` identifies an upstream encryption boundary.
-        The values are resolved from the deployment and its named credential
-        without modifying the deployment.
+        The upstream encryption boundary a deployment's encrypted reasoning belongs to. The values
+        are resolved the way the request resolves them, the deployment's own values winning over its
+        named credential's, without modifying the deployment. Two explicit ``(api_base, api_key)``
+        pairs match on those values alone. On a provider that serves one vendor's models, a deployment
+        with no ``api_key`` takes the provider's default key, one with no ``api_base`` takes the endpoint
+        its Responses URL builder resolves, and a match involving either also needs the same model and
+        the same headers that pick an account.
 
-        Accepts any object exposing dict-style ``.get(key, default)``: plain
-        dicts (the common case in ``healthy_deployments``) as well as
-        ``LiteLLM_Params``-style Pydantic instances, which define a custom
-        ``.get()``. A stricter ``isinstance(dict)`` guard would silently drop
-        the latter from boundary matching and fall back to the full pool —
-        i.e. trigger the exact ``invalid_encrypted_content`` failure this
-        check exists to prevent.
+        Accepts plain dicts (the common case in ``healthy_deployments``) as
+        well as ``LiteLLM_Params`` Pydantic instances. A stricter
+        ``isinstance(dict)`` guard would silently drop the latter from
+        boundary matching and fall back to the full pool — i.e. trigger the
+        exact ``invalid_encrypted_content`` failure this check exists to prevent.
         """
-        getter: Final = getattr(litellm_params, "get", None)
-        if not callable(getter):
+        params: Final = EncryptedContentAffinityCheck._params_mapping(litellm_params)
+        if params is None:
             return None
-        api_base: Final = getter("api_base")
-        api_key: Final = getter("api_key")
-        credential_name: Final = getter("litellm_credential_name")
-        credential_values: Final[Mapping[str, object] | None] = (
-            CredentialAccessor.get_credential_values(credential_name)
-            if isinstance(credential_name, str) and credential_name
-            else None
-        )
-        effective_api_base: Final = (
-            credential_values.get("api_base")
-            if credential_values is not None and "api_base" in credential_values
-            else api_base
-        )
-        effective_api_key: Final = (
-            credential_values.get("api_key")
-            if credential_values is not None and "api_key" in credential_values
-            else api_key
-        )
-        if not effective_api_base or not effective_api_key:
+        effective_params: Final = with_named_credential(params)
+        explicit_api_key: Final = effective_params.get("api_key")
+        explicit_api_base: Final = effective_params.get("api_base")
+        account_scope: Final = EncryptedContentAffinityCheck._account_scope(effective_params)
+        if explicit_api_key and explicit_api_base:
+            return _EncryptionBoundary(
+                explicit_api_base,
+                explicit_api_key,
+                cache(partial(EncryptedContentAffinityCheck._single_vendor_model, effective_params)),
+                account_scope,
+                explicit_pair=True,
+            )
+        route: Final = EncryptedContentAffinityCheck._single_vendor_route(effective_params)
+        if route is None:
             return None
-        return (effective_api_base, effective_api_key)
+        api_key: Final = explicit_api_key or EncryptedContentAffinityCheck._default_api_key(route)
+        if not api_key:
+            return None
+        api_base: Final = explicit_api_base or EncryptedContentAffinityCheck._default_responses_endpoint(
+            route, effective_params
+        )
+        if not api_base:
+            return None
+        return _EncryptionBoundary(api_base, api_key, lambda: route.model, account_scope, explicit_pair=False)
+
+    @staticmethod
+    def _params_mapping(litellm_params: object) -> Mapping[str, object] | None:
+        if isinstance(litellm_params, BaseModel):
+            return litellm_params.model_dump(exclude_none=True)
+        if isinstance(litellm_params, Mapping):
+            return _REQUEST_KWARGS_ADAPTER.validate_python(litellm_params)
+        return None
+
+    @staticmethod
+    def _account_scope(litellm_params: Mapping[str, object]) -> frozenset[tuple[str, object]]:
+        return frozenset(
+            (name.lower(), str(value))
+            for name, value in EncryptedContentAffinityCheck._header_items(litellm_params)
+            if name.lower() in _ACCOUNT_SCOPE_HEADERS or has_sensitive_keyword(name)
+        )
+
+    @staticmethod
+    def _header_items(litellm_params: Mapping[str, object]) -> Iterator[tuple[str, object]]:
+        headers: Final = EncryptedContentAffinityCheck._header_mapping(litellm_params.get("headers"))
+        extra_headers: Final = EncryptedContentAffinityCheck._header_mapping(litellm_params.get("extra_headers"))
+        overridden: Final = frozenset(name.lower() for name in extra_headers)
+        yield from ((name, value) for name, value in headers.items() if name.lower() not in overridden)
+        yield from extra_headers.items()
+
+    @staticmethod
+    def _header_mapping(headers: object) -> Mapping[str, object]:
+        if isinstance(headers, Mapping):
+            return {str(name): value for name, value in _HEADERS_ADAPTER.validate_python(headers).items()}
+        return {}
+
+    @staticmethod
+    def _single_vendor_route(litellm_params: Mapping[str, object]) -> _ProviderRoute | None:
+        route: Final = EncryptedContentAffinityCheck._provider_route(litellm_params)
+        return route if route is not None and route.provider in _SINGLE_VENDOR_PROVIDERS else None
+
+    @staticmethod
+    def _single_vendor_model(litellm_params: Mapping[str, object]) -> str | None:
+        route: Final = EncryptedContentAffinityCheck._single_vendor_route(litellm_params)
+        return route.model if route is not None else None
+
+    @staticmethod
+    def _provider_route(litellm_params: Mapping[str, object]) -> _ProviderRoute | None:
+        model: Final = litellm_params.get("model")
+        if not isinstance(model, str):
+            return None
+        custom_llm_provider: Final = litellm_params.get("custom_llm_provider")
+        declared: Final = declared_provider(
+            model, custom_llm_provider if isinstance(custom_llm_provider, str) else None
+        )
+        if declared in litellm.provider_list and declared not in _SINGLE_VENDOR_PROVIDERS:
+            return None
+        try:
+            provider_model, provider, _, provider_api_base = get_llm_provider(
+                model=model, litellm_params=GenericLiteLLMParams.model_validate(dict(litellm_params))
+            )
+        except (BadRequestError, ValidationError):
+            return None
+        return _ProviderRoute(provider_model, provider, provider_api_base)
+
+    @staticmethod
+    def _default_api_key(route: _ProviderRoute) -> str | None:
+        model_info: Final = ProviderConfigManager.get_provider_model_info(
+            model=route.model, provider=LlmProviders(route.provider)
+        )
+        if model_info is None:
+            return None
+        try:
+            return model_info.get_api_key()
+        except NotImplementedError:
+            return None
+
+    @staticmethod
+    def _default_responses_endpoint(route: _ProviderRoute, litellm_params: Mapping[str, object]) -> str | None:
+        responses_config: Final = ProviderConfigManager.get_provider_responses_api_config(
+            provider=route.provider, model=route.model
+        )
+        if responses_config is None:
+            return None
+        try:
+            return responses_config.get_complete_url(  # pyright: ignore[reportUnknownMemberType]  # the base types litellm_params as a bare dict
+                api_base=route.api_base, litellm_params=dict(litellm_params)
+            )
+        except (ValueError, BaseLLMException, AuthenticationError):
+            return None
 
     def _find_deployments_on_same_encryption_boundary(
         self,
@@ -255,7 +377,7 @@ class EncryptedContentAffinityCheck(CustomLogger):
     ) -> tuple[list[dict], Deployment | None]:
         """
         Deployments in ``healthy_deployments`` sharing the originating
-        deployment's ``(api_base, api_key)``, alongside the originating
+        deployment's encryption boundary, alongside the originating
         deployment object (or ``None`` if it was removed / router unavailable).
         """
         if self.ctx is None:
@@ -267,7 +389,10 @@ class EncryptedContentAffinityCheck(CustomLogger):
         if boundary is None:
             return [], originating
         matches: Final = [
-            d for d in healthy_deployments if self._encryption_boundary_key(d.get("litellm_params", {})) == boundary
+            d
+            for d in healthy_deployments
+            if (candidate := self._encryption_boundary_key(d.get("litellm_params", {}))) is not None
+            and boundary.is_shared_with(candidate)
         ]
         return matches, originating
 
@@ -293,12 +418,15 @@ class EncryptedContentAffinityCheck(CustomLogger):
             for target in target_deployments
             if isinstance((model_info := target.get("model_info")), Mapping) and model_info.get("id") is not None
         )
-        target_boundaries: Final = frozenset(
-            boundary
-            for target in target_deployments
-            if (boundary := EncryptedContentAffinityCheck._encryption_boundary_key(target.get("litellm_params")))
-            is not None
-        )
+
+        @cache
+        def target_boundaries() -> tuple[_EncryptionBoundary, ...]:
+            return tuple(
+                boundary
+                for target in target_deployments
+                if (boundary := EncryptedContentAffinityCheck._encryption_boundary_key(target.get("litellm_params")))
+                is not None
+            )
 
         @cache
         def target_can_decrypt(marked_origin: str | None) -> bool:
@@ -317,7 +445,9 @@ class EncryptedContentAffinityCheck(CustomLogger):
                 if origin is not None
                 else None
             )
-            return origin_boundary is not None and origin_boundary in target_boundaries
+            return origin_boundary is not None and any(
+                origin_boundary.is_shared_with(target_boundary) for target_boundary in target_boundaries()
+            )
 
         def should_strip_input_item(item: Mapping[str, object]) -> bool:
             return not target_can_decrypt(EncryptedContentAffinityCheck._model_id_of_input_item(item))
