@@ -72,7 +72,7 @@ MAX_CACHE_CONTROL_BLOCKS: Final = 4
 
 CACHE_BREAKPOINT_KEYS: Final = ("cache_control", "prompt_cache_breakpoint")
 OPENAI_PROMPT_CACHE_BREAKPOINT_MIN_GPT_VERSION: Final = (5, 6)
-_GPT_VERSION_PATTERN: Final = re.compile(r"^gpt-(\d+)(?:[.-](0|[1-9]\d?)(?![\da-z]))?")
+_GPT_VERSION_PATTERN: Final = re.compile(r"^gpt-(\d+)(?:\.(\d+)|-(0|[1-9]\d?)(?![\da-z]))?")
 _FINE_TUNED_BASE_PATTERN: Final = re.compile(r"^ft:([^:]+)")
 _O_SERIES_PATTERN: Final = re.compile(r"^o\d+(?:-|$)")
 OPENAI_PROMPT_CACHE_BREAKPOINT_BLOCK_TYPES: Final = frozenset(
@@ -365,7 +365,7 @@ def _named_model_breakpoint_support(model: str) -> bool | None:
     version_match: Final = _GPT_VERSION_PATTERN.match(bare_model)
     if version_match is None:
         return None
-    version: Final = (int(version_match.group(1)), int(version_match.group(2) or 0))
+    version: Final = (int(version_match.group(1)), int(version_match.group(2) or version_match.group(3) or 0))
     return version >= OPENAI_PROMPT_CACHE_BREAKPOINT_MIN_GPT_VERSION
 
 
