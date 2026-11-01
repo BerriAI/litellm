@@ -14,6 +14,7 @@ import time
 import types
 from collections import Counter
 from collections.abc import AsyncGenerator, AsyncIterator, Callable, Iterable, Mapping, Sequence, Set
+from datetime import datetime
 from typing import TYPE_CHECKING, Final, Literal, NoReturn, Protocol
 
 import httpx
@@ -519,6 +520,7 @@ if MCP_AVAILABLE:
         "mcp_get_prompt",
         "mcp_read_resource",
         "raise_denied_scoped_mcp_access",
+        "raise_generic_mcp_access_denial",
         "redact_mcp_resource_url",
     )
     from mcp.server import Server
@@ -530,13 +532,15 @@ if MCP_AVAILABLE:
     )
     from mcp.server.auth.middleware.bearer_auth import AuthenticatedUser
     from mcp.server.auth.provider import AccessToken
-    from mcp.server.context import ServerRequestContext
+    from mcp.server.context import CallNext, HandlerResult, ServerRequestContext
     from mcp.server.lowlevel.server import NotificationOptions
     from mcp.server.lowlevel.server import Server as MCPProtocolServer
     from mcp.server.models import InitializationOptions
     from mcp.shared.exceptions import MCPError
     from mcp.shared.inbound import InboundLadderRejection, classify_inbound_request, find_duplicated_routing_header
     from mcp.types import (
+        INVALID_PARAMS,
+        METHOD_NOT_FOUND,
         CallToolRequest,
         GetPromptRequest,
         JSONRPCRequest,
@@ -546,6 +550,7 @@ if MCP_AVAILABLE:
         ListToolsRequest,
         ReadResourceRequest,
     )
+    from mcp_types.methods import CLIENT_REQUESTS, SPEC_CLIENT_METHODS
 
     from litellm.proxy.mcp_server import operations
     from litellm.proxy.mcp_server.contracts import OperationContext
@@ -588,6 +593,7 @@ if MCP_AVAILABLE:
     from litellm.proxy.mcp_server.mcp_server_manager import (
         MCPServerManager,
         global_mcp_server_manager,
+        is_legacy_upstream_delegate,
     )
 
     ######################################################
@@ -642,7 +648,56 @@ if MCP_AVAILABLE:
         name=LITELLM_MCP_SERVER_NAME,
         version=LITELLM_MCP_SERVER_VERSION,
     )
-    server.middleware.extend((finish_scope_response, GatewayVersionPolicy()))
+
+    def _sdk_rejection_code(ctx: ServerRequestContext, error: MCPError | ValidationError) -> int | None:
+        if ctx.request_id is None:
+            return None
+        entry: Final = server.get_request_handler(ctx.method)
+        if entry is None:
+            if ctx.method == "initialize":
+                return None
+            if isinstance(error, ValidationError):
+                return INVALID_PARAMS
+            if error.code == METHOD_NOT_FOUND:
+                return METHOD_NOT_FOUND
+            return None
+        if not isinstance(error, ValidationError):
+            unavailable_for_version: Final = (
+                ctx.method in SPEC_CLIENT_METHODS and (ctx.method, ctx.protocol_version) not in CLIENT_REQUESTS
+            )
+            return METHOD_NOT_FOUND if error.code == METHOD_NOT_FOUND and unavailable_for_version else None
+        try:
+            entry.params_type.model_validate({} if ctx.params is None else ctx.params, by_name=False)
+        except ValidationError:
+            return INVALID_PARAMS
+        return None
+
+    async def _log_sdk_rejection(ctx: ServerRequestContext, call_next: CallNext) -> HandlerResult:
+        start_time: Final = datetime.now()  # noqa: DTZ005  # failure logging uses naive timestamps
+        try:
+            return await call_next(ctx)
+        except (MCPError, ValidationError) as error:
+            try:
+                code: Final = _sdk_rejection_code(ctx, error)
+                if code is not None:
+                    token: Final = active_mcp_request_ctx_var.set(ctx)
+                    try:
+                        auth, *_ = await get_or_extract_auth_context()
+                    finally:
+                        active_mcp_request_ctx_var.reset(token)
+                    if auth is not None:
+                        await operations.log_mcp_sdk_rejection(
+                            method=ctx.method,
+                            request_id=ctx.request_id,
+                            error_code=code,
+                            start_time=start_time,
+                            user_api_key_auth=auth,
+                        )
+            except Exception:  # noqa: BLE001  # logging must not replace the SDK response or expose rejected input
+                verbose_logger.warning("Failed to log MCP SDK rejection")
+            raise
+
+    server.middleware.extend((finish_scope_response, GatewayVersionPolicy(), _log_sdk_rejection))
     server.create_initialization_options = types.MethodType(_gateway_create_initialization_options, server)
     sse: Final[SseServerTransport] = SseServerTransport("/sse/messages")
 
@@ -1143,6 +1198,7 @@ if MCP_AVAILABLE:
         apply_display_name_overrides,
         filter_tools_by_allowed_tools,
         raise_denied_scoped_mcp_access,
+        raise_generic_mcp_access_denial,
     )
 
     @contextlib.asynccontextmanager
@@ -1770,10 +1826,10 @@ if MCP_AVAILABLE:
         row capping it.
 
         Raises HTTPException(403) unless the principal holds toolset_id through one
-        of its grant sources. Admins always pass.
+        of its grant sources. Admins pass unless the key is bound to a real team.
         """
         from litellm.proxy._types import LiteLLM_ObjectPermissionTable
-        from litellm.proxy.management_endpoints.common_utils import user_api_key_has_admin_view
+        from litellm.proxy.mcp_server.auth.user_api_key_auth_mcp import has_team_unbound_mcp_admin_view
 
         # A key scoped to no MCP servers opts out of every MCP path. Enforce it
         # here too, since toolset scoping replaces mcp_servers and would otherwise
@@ -1787,7 +1843,7 @@ if MCP_AVAILABLE:
             )
 
         acting: Final = await acting_user(user_api_key_auth)
-        is_admin: Final = user_api_key_has_admin_view(acting)
+        is_admin: Final = has_team_unbound_mcp_admin_view(acting)
         if not is_admin and toolset_id not in await granted(acting):
             raise HTTPException(
                 status_code=403,
@@ -2162,8 +2218,9 @@ if MCP_AVAILABLE:
         oauth2_headers: Mapping[str, str] | None,
         mcp_server_auth_headers: dict[str, dict[str, str]] | None,
         raw_headers: Mapping[str, str] | None,
+        requested_servers: Sequence[str] | None = None,
     ) -> None:
-        """Probe pass-through upstream servers in parallel before the MCP session starts.
+        """Probe pass-through and legacy delegate upstream servers in parallel before the MCP session starts.
 
         Only servers the caller's key is already authorized to reach are probed —
         the list is derived from _get_allowed_mcp_servers so that a user cannot
@@ -2186,6 +2243,18 @@ if MCP_AVAILABLE:
             mcp_servers=mcp_servers,
             client_ip=client_ip,
         )
+        # A legacy delegate is probed only when the single requested name resolves to it the way admission
+        # resolves it, so neither a multi-server connect nor an access group can be failed by one rejected
+        # token; its challenge echoes the requested name, matching the tokenless challenge.
+        requested_scope: Final = requested_servers if requested_servers is not None else mcp_servers
+        single_requested_name: Final = (
+            requested_scope[0] if requested_scope is not None and len(requested_scope) == 1 else None
+        )
+        requested_server: Final = (
+            operations.global_mcp_server_manager.get_mcp_server_by_name(single_requested_name, client_ip=client_ip)
+            if single_requested_name is not None
+            else None
+        )
         prepared_headers: Final = tuple(
             (
                 srv,
@@ -2201,6 +2270,11 @@ if MCP_AVAILABLE:
             )
             for srv in allowed_servers
             if srv.is_oauth_passthrough
+            or (
+                requested_server is not None
+                and srv.server_id == requested_server.server_id
+                and is_legacy_upstream_delegate(srv)
+            )
         )
         probe_headers: Final = tuple(
             (
@@ -2213,7 +2287,7 @@ if MCP_AVAILABLE:
             for srv, (auth, extra) in prepared_headers
         )
         probe_targets: Final[tuple[tuple[MCPServer, str, str], ...]] = tuple(
-            (srv, auth_header, srv.name)
+            (srv, auth_header, srv.name if srv.is_oauth_passthrough else single_requested_name or srv.name)
             for srv, headers in probe_headers
             if (
                 auth_header := next(
@@ -2311,6 +2385,7 @@ if MCP_AVAILABLE:
             if context.mcp_server_auth_headers is not None
             else None,
             raw_headers=context.raw_headers,
+            requested_servers=context.mcp_servers,
         )
         return None
 

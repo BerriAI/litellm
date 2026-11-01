@@ -201,7 +201,7 @@ def requested_reasoning_summary(thinking: Mapping[str, object]) -> str | None:
 
 def model_reasoning_efforts(model: str, custom_llm_provider: str | None) -> tuple[str, ...] | None:
     """``()`` is a model the map knows takes no effort level, ``None`` a model the map does not know."""
-    from litellm.router_utils.reasoning_effort_capability import resolve_supported_reasoning_efforts
+    from litellm.litellm_core_utils.reasoning_effort_capability import resolve_supported_reasoning_efforts
     from litellm.utils import get_model_info
 
     try:
@@ -236,7 +236,7 @@ def normalize_reasoning_effort_value(
     if chain is None:
         return effort
 
-    from litellm.router_utils.reasoning_effort_capability import deployment_rounds_reasoning_effort
+    from litellm.litellm_core_utils.reasoning_effort_capability import deployment_rounds_reasoning_effort
 
     if deployment_rounds_reasoning_effort(deployment_model_info):
         return effort

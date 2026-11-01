@@ -174,6 +174,7 @@ LLM_CONFIG_NAMES: Final = (
     "OllamaDecisionsConfig",
     "LayaDecisionsConfig",
     "BespokeDecisionsConfig",
+    "EuJevDecisionsConfig",
     "OpenAIDecisionsConfig",
     "AzureDecisionsConfig",
     "AzureAIDecisionsConfig",
@@ -244,6 +245,7 @@ LLM_CONFIG_NAMES: Final = (
     "MistralEmbeddingConfig",
     "OpenAIImageVariationConfig",
     "DeepInfraConfig",
+    "ClfAiGatewayConfig",
     "DeepgramAudioTranscriptionConfig",
     "TopazImageVariationConfig",
     "OpenAITextCompletionConfig",
@@ -753,6 +755,7 @@ _LLM_CONFIGS_IMPORT_MAP: Final = {
     "OllamaDecisionsConfig": (".llms.ollama.decisions.transformation", "OllamaDecisionsConfig"),
     "LayaDecisionsConfig": (".llms.laya.decisions.transformation", "LayaDecisionsConfig"),
     "BespokeDecisionsConfig": (".llms.bespoke.decisions.transformation", "BespokeDecisionsConfig"),
+    "EuJevDecisionsConfig": (".llms.eu_jev.decisions.transformation", "EuJevDecisionsConfig"),
     "OpenAIDecisionsConfig": (".llms.openai.decisions.transformation", "OpenAIDecisionsConfig"),
     "AzureDecisionsConfig": (".llms.azure.decisions.transformation", "AzureDecisionsConfig"),
     "AzureAIDecisionsConfig": (".llms.azure_ai.decisions.transformation", "AzureAIDecisionsConfig"),
@@ -973,6 +976,10 @@ _LLM_CONFIGS_IMPORT_MAP: Final = {
         "OpenAIImageVariationConfig",
     ),
     "DeepInfraConfig": (".llms.deepinfra.chat.transformation", "DeepInfraConfig"),
+    "ClfAiGatewayConfig": (
+        ".llms.clf_ai_gateway.chat.transformation",
+        "ClfAiGatewayConfig",
+    ),
     "DeepgramAudioTranscriptionConfig": (
         ".llms.deepgram.audio_transcription.transformation",
         "DeepgramAudioTranscriptionConfig",
@@ -1462,11 +1469,11 @@ _UTILS_MODULE_IMPORT_MAP: Final = {
     "AsyncHTTPHandler": ("litellm.llms.custom_httpx.http_handler", "AsyncHTTPHandler"),
     "HTTPHandler": ("litellm.llms.custom_httpx.http_handler", "HTTPHandler"),
     "get_num_retries_from_retry_policy": (
-        "litellm.router_utils.get_retry_from_policy",
+        "litellm.litellm_core_utils.get_retry_from_policy",
         "get_num_retries_from_retry_policy",
     ),
     "reset_retry_policy": (
-        "litellm.router_utils.get_retry_from_policy",
+        "litellm.litellm_core_utils.get_retry_from_policy",
         "reset_retry_policy",
     ),
     "get_coroutine_checker": (

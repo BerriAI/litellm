@@ -1,7 +1,8 @@
+import itertools
 import json
 import uuid
 from collections.abc import Callable
-from typing import Final
+from typing import Final, Literal
 
 import pytest
 from integration._support.client import Gateway, Scenario
@@ -16,6 +17,22 @@ class _JsonRpcResult(BaseModel):
     jsonrpc: str
     id: str
     result: dict[str, JsonValue]
+
+
+class _JsonRpcErrorBody(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    code: int
+    message: str
+    data: dict[str, JsonValue]
+
+
+class _JsonRpcError(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    jsonrpc: Literal["2.0"]
+    id: str | int | None
+    error: _JsonRpcErrorBody
 
 
 _STREAM_EVENTS: Final = (
@@ -49,6 +66,13 @@ def _peer_card(url: str, name: str) -> dict[str, JsonValue]:
         "description": "Synthetic peer",
         "version": "1.0.0",
         "url": url + "/",
+        "supportedInterfaces": [
+            {
+                "url": url + "/",
+                "protocolBinding": "JSONRPC",
+                "protocolVersion": "0.3",
+            }
+        ],
         "capabilities": {"streaming": True},
         "defaultInputModes": ["text"],
         "defaultOutputModes": ["text"],
@@ -56,10 +80,15 @@ def _peer_card(url: str, name: str) -> dict[str, JsonValue]:
     }
 
 
-def _register_agent(gateway: Gateway, scenario: Scenario, name: str, url: str) -> str:
-    created: Final = gateway.request(
-        "POST", "/v1/agents", {"agent_name": name, "agent_card_params": _peer_card(url, name)}
-    )
+def _register_agent(
+    gateway: Gateway,
+    scenario: Scenario,
+    name: str,
+    url: str,
+    agent_card: dict[str, JsonValue] | None = None,
+) -> str:
+    card: Final = _peer_card(url, name) if agent_card is None else agent_card
+    created: Final = gateway.request("POST", "/v1/agents", {"agent_name": name, "agent_card_params": card})
     assert created.status_code == 200, created.text
     identity: Final = created.json()["agent_id"]
 
@@ -163,6 +192,14 @@ def test_agent_permissions_on_keys_teams_and_access_groups_gate_a2a_send_and_car
                 separators=(",", ":"),
             )
 
+        def jsonrpc_refusal(text: str, identity: str) -> bool:
+            error: Final = _JsonRpcError.model_validate_json(text)
+            return (error.id, error.error.code, error.error.message) == (
+                marker,
+                -32000,
+                f"Agent '{identity}' is not allowed for your key/team. Contact proxy admin for access.",
+            )
+
         spellings: Final = (
             ("send by id", lambda agent, name: f"/a2a/{agent}", send_payload, "message/send"),
             ("send by name", lambda agent, name: f"/a2a/{name}", send_payload, "message/send"),
@@ -224,13 +261,13 @@ def test_agent_permissions_on_keys_teams_and_access_groups_gate_a2a_send_and_car
 
         for label, key in callers.items():
             for spelling, status, text in attempt(key, denied, denied_name):
-                refused: Final = refusal(denied_name if "by name" in spelling else denied)
-                assert (status, text) == (403, refused), f"{label} {spelling}: {status} {text}"
+                identity: Final = denied_name if "by name" in spelling else denied
+                assert status == 403 and jsonrpc_refusal(text, identity), f"{label} {spelling}: {status} {text}"
             for spelling, payload in denied_tasks:
                 response: Final = gateway.client.post(
                     f"/a2a/{denied}", headers={"Authorization": f"Bearer {key}"}, json=payload
                 )
-                assert (response.status_code, response.text) == (403, refusal(denied)), (
+                assert response.status_code == 403 and jsonrpc_refusal(response.text, denied), (
                     f"{label} {spelling}: {response.status_code} {response.text}"
                 )
             assert card(key, denied) == (403, refusal(denied)), label
@@ -278,11 +315,70 @@ def test_agent_permissions_on_keys_teams_and_access_groups_gate_a2a_send_and_car
         emptied: Final = gateway.request("PUT", f"/v1/access_group/{group_id}", {"access_agent_ids": []})
         assert emptied.status_code == 200, emptied.text
         emptied_outcomes: Final = attempt(callers["access group"], allowed, allowed_name)
-        assert emptied_outcomes == tuple(
-            (spelling, 403, refusal(allowed_name if "by name" in spelling else allowed))
-            for spelling, _, _ in emptied_outcomes
+        assert all(
+            status == 403 and jsonrpc_refusal(text, allowed_name if "by name" in spelling else allowed)
+            for spelling, status, text in emptied_outcomes
         ), emptied_outcomes
         assert wire.drain() == (), emptied_outcomes
+
+
+def test_a2a_refusals_answer_as_jsonrpc_errors_that_echo_the_callers_request_id(gateway: Gateway) -> None:
+    marker: Final = "a2arefuse" + uuid.uuid4().hex[:12]
+
+    def upstream(request: Request) -> Reply:
+        return Reply(body=json.dumps(_peer_card(wire.url, marker)).encode())
+
+    with wire_server(upstream) as wire, gateway.scenario() as scenario:
+        agent: Final = _register_agent(gateway, scenario, marker, wire.url)
+        refused_callers: Final = (
+            (
+                "over budget",
+                scenario.key(object_permission={"agents": [agent]}, max_budget=0.0001, spend=1.0),
+                422,
+                "Budget has been exceeded!",
+                "budget_exceeded",
+            ),
+            (
+                "agent not granted",
+                scenario.key(object_permission={"agents": [marker + "-other"]}),
+                403,
+                f"Agent '{agent}' is not allowed for your key/team. Contact proxy admin for access.",
+                None,
+            ),
+            ("unknown key", "sk-" + uuid.uuid4().hex, 401, "Authentication Error", None),
+        )
+        message: Final = {
+            "kind": "message",
+            "role": "user",
+            "messageId": marker + "-in",
+            "parts": [{"kind": "text", "text": "ping"}],
+        }
+        requests: Final = tuple(
+            (path, method, request_id)
+            for path, (method, request_id) in itertools.product(
+                (f"/a2a/{agent}", f"/a2a/{agent}/message/send", f"/v1/a2a/{agent}/message/send"),
+                (("message/send", marker), ("message/stream", 7), ("SendMessage", "l10")),
+            )
+        )
+        for label, key, status, message_start, error_type in refused_callers:
+            for path, method, request_id in requests:
+                response = gateway.client.post(
+                    path,
+                    headers={"Authorization": f"Bearer {key}", "Accept": "application/json, text/event-stream"},
+                    json={"jsonrpc": "2.0", "id": request_id, "method": method, "params": {"message": message}},
+                )
+                context = f"{label} {path} {method}: {response.status_code} {response.text}"
+                assert response.status_code == status, context
+                error = _JsonRpcError.model_validate_json(response.text)
+                assert (error.id, error.error.code) == (request_id, -32000), context
+                assert error.error.message.startswith(message_start), context
+                assert error_type is None or error.error.data["type"] == error_type, context
+        unparseable: Final = gateway.client.post(
+            f"/a2a/{agent}", headers={"Authorization": "Bearer sk-" + uuid.uuid4().hex}, content=b"not json"
+        )
+        assert unparseable.status_code == 400, unparseable.text
+        assert _JsonRpcError.model_validate_json(unparseable.text).id is None, unparseable.text
+        assert wire.drain() == ()
 
 
 def test_legacy_agent_json_card_path_applies_agent_permissions_to_non_admin_keys(gateway: Gateway) -> None:
@@ -332,3 +428,68 @@ def test_legacy_agent_json_card_path_applies_agent_permissions_to_non_admin_keys
         )
         assert (denied_legacy.status_code, denied_legacy.text) == (403, refusal(denied)), denied_legacy.text
         assert wire.drain() == ()
+
+
+def test_agent_list_and_detail_cards_use_proxy_urls_for_scoped_keys(gateway: Gateway) -> None:
+    marker: Final = "a2acardurl" + uuid.uuid4().hex[:12]
+
+    def upstream(request: Request) -> Reply:
+        assert request.method == "GET", request.method
+        return Reply(body=json.dumps(_peer_card(wire.url, marker)).encode())
+
+    with wire_server(upstream) as wire, gateway.scenario() as scenario:
+        backend_url: Final = wire.url + "/"
+        peer_card: Final = _peer_card(wire.url, marker)
+        peer_interfaces: Final = peer_card["supportedInterfaces"]
+        assert isinstance(peer_interfaces, list)
+        agent_card: Final = {
+            **peer_card,
+            "additionalInterfaces": [{"url": backend_url, "transport": "GRPC"}],
+            "supportedInterfaces": [
+                *peer_interfaces,
+                {
+                    "url": backend_url,
+                    "protocolBinding": "GRPC",
+                    "protocolVersion": "0.3",
+                },
+            ],
+        }
+        agent_id: Final = _register_agent(gateway, scenario, marker, wire.url, agent_card)
+        user_id: Final = scenario.user(user_role="internal_user")
+        scoped_key: Final = scenario.key(user_id=user_id, object_permission={"agents": [agent_id]})
+
+        public_card: Final = gateway.request(
+            "GET",
+            f"/a2a/{agent_id}/.well-known/agent-card.json",
+            key=scoped_key,
+        )
+        listed: Final = gateway.request("GET", "/v1/agents", key=scoped_key)
+        detailed: Final = gateway.request("GET", f"/v1/agents/{agent_id}", key=scoped_key)
+
+        assert public_card.status_code == 200, public_card.text
+        assert listed.status_code == 200, listed.text
+        assert detailed.status_code == 200, detailed.text
+        assert wire.url not in listed.text
+        assert wire.url not in detailed.text
+        assert "additionalInterfaces" not in listed.text
+        assert "additionalInterfaces" not in detailed.text
+        public_urls: Final = (
+            public_card.json()["url"],
+            public_card.json()["supportedInterfaces"][0]["url"],
+        )
+        listed_agent: Final = next(item for item in listed.json() if item["agent_id"] == agent_id)
+        for body in (listed_agent, detailed.json()):
+            card: Final = body["agent_card_params"]
+            assert (card["url"], card["supportedInterfaces"][0]["url"]) == public_urls
+            assert card["supportedInterfaces"] == [
+                {
+                    "url": public_urls[1],
+                    "protocolBinding": "JSONRPC",
+                    "protocolVersion": "0.3",
+                }
+            ]
+
+        admin_listed: Final = gateway.request("GET", "/v1/agents")
+        assert admin_listed.status_code == 200, admin_listed.text
+        admin_agent: Final = next(item for item in admin_listed.json() if item["agent_id"] == agent_id)
+        assert admin_agent["agent_card_params"]["url"] == backend_url

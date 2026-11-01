@@ -36,6 +36,7 @@ from litellm.proxy.vector_store_files_endpoints.endpoints import (
 from litellm.types.utils import EmbeddingResponse, LlmProviders
 from litellm.types.vector_stores import IndexCreateRequest, IndexListResponse
 from litellm.vector_stores.main import _direct_vector_store_embedding_executor
+from tests.unit.proxy.router_entry_point_stubs import route_entry_points_to_stubs
 
 
 def _serialize_litellm_params(litellm_params):
@@ -279,7 +280,7 @@ async def test_vector_store_file_list_resolves_credentials_from_model_query_para
     request.query_params = {"model": "team-openai"}
     request.headers = {}
 
-    llm_router = MagicMock()
+    llm_router = route_entry_points_to_stubs(MagicMock())
     llm_router.get_deployment_credentials_with_provider.return_value = {
         "api_key": "sk-team-openai",
         "api_base": "https://api.openai.com/v1",
@@ -313,7 +314,7 @@ async def test_vector_store_file_list_registry_routed_model_skips_key_model_gran
     request.query_params = {}
     request.headers = {}
 
-    llm_router = MagicMock()
+    llm_router = route_entry_points_to_stubs(MagicMock())
     llm_router.get_deployment_credentials_with_provider.return_value = {
         "api_key": "sk-team-openai",
         "api_base": "https://api.openai.com/v1",
@@ -347,7 +348,7 @@ async def test_vector_store_file_list_resolves_single_openai_team_deployment():
     request.query_params = {}
     request.headers = {}
 
-    llm_router = MagicMock()
+    llm_router = route_entry_points_to_stubs(MagicMock())
     llm_router.get_deployment_credentials_with_provider.return_value = {
         "api_key": "sk-team-openai",
         "api_base": "https://api.openai.com/v1",
@@ -380,7 +381,7 @@ async def test_vector_store_file_list_wildcard_model_hint_falls_back_to_team_dep
     request.query_params = {"model": "openai/*"}
     request.headers = {}
 
-    llm_router = MagicMock()
+    llm_router = route_entry_points_to_stubs(MagicMock())
     llm_router.model_group_alias = {}
     llm_router.get_deployment_credentials_with_provider.side_effect = [
         None,
@@ -418,7 +419,7 @@ async def test_vector_store_file_list_authorizes_wildcard_query_param_before_cre
     request.query_params = {"model": "openai/*"}
     request.headers = {}
 
-    llm_router = MagicMock()
+    llm_router = route_entry_points_to_stubs(MagicMock())
     llm_router.model_group_alias = {}
     data = {"vector_store_id": "vs_123"}
     user_api_key_dict = UserAPIKeyAuth(
@@ -443,7 +444,7 @@ async def test_vector_store_file_list_uses_single_team_model_for_router_routing(
     request.query_params = {}
     request.headers = {}
 
-    llm_router = MagicMock()
+    llm_router = route_entry_points_to_stubs(MagicMock())
     llm_router.get_model_access_groups.return_value = {}
     llm_router.get_deployment_credentials_with_provider.return_value = None
 
@@ -473,7 +474,7 @@ async def test_vector_store_file_list_authorizes_inferred_team_model():
     request.query_params = {}
     request.headers = {}
 
-    llm_router = MagicMock()
+    llm_router = route_entry_points_to_stubs(MagicMock())
     llm_router.model_group_alias = {}
     llm_router.get_deployment_credentials_with_provider.return_value = {
         "api_key": "sk-team-openai",
@@ -503,7 +504,7 @@ async def test_vector_store_file_list_does_not_guess_ambiguous_team_deployment()
     request.query_params = {}
     request.headers = {}
 
-    llm_router = MagicMock()
+    llm_router = route_entry_points_to_stubs(MagicMock())
     llm_router.get_deployment_credentials_with_provider.side_effect = [
         {
             "api_key": "sk-team-openai-1",
@@ -538,7 +539,7 @@ async def test_vector_store_file_list_does_not_override_existing_credentials():
     request.query_params = {"model": "team-openai"}
     request.headers = {}
 
-    llm_router = MagicMock()
+    llm_router = route_entry_points_to_stubs(MagicMock())
     data = {
         "vector_store_id": "vs_123",
         "api_key": "sk-explicit",
@@ -562,7 +563,7 @@ async def test_vector_store_file_list_requires_explicit_openai_provider_for_team
     request.query_params = {}
     request.headers = {}
 
-    llm_router = MagicMock()
+    llm_router = route_entry_points_to_stubs(MagicMock())
     llm_router.get_deployment_credentials_with_provider.return_value = {
         "api_key": "sk-unknown-provider",
         "api_base": "https://example.com/v1",
@@ -591,7 +592,7 @@ async def test_vector_store_file_list_authorizes_model_query_param_before_creden
     request.query_params = {"model": "restricted-deployment"}
     request.headers = {}
 
-    llm_router = MagicMock()
+    llm_router = route_entry_points_to_stubs(MagicMock())
     llm_router.model_group_alias = {}
     data = {"vector_store_id": "vs_123"}
     user_api_key_dict = UserAPIKeyAuth(
@@ -620,7 +621,7 @@ async def test_vector_store_file_list_model_query_param_enforces_project_model_g
     request.query_params = {"model": "team-openai"}
     request.headers = {}
 
-    llm_router = MagicMock()
+    llm_router = route_entry_points_to_stubs(MagicMock())
     llm_router.model_group_alias = {}
     cache = UserApiKeyCache()
     await cache.async_set_cache(
@@ -3064,6 +3065,58 @@ def test_vector_store_search_rejects_caller_embedding_selection_params(blocked_k
 
     assert response.status_code == 400, response.json()
     assert blocked_key in str(response.json())
+
+
+@pytest.mark.parametrize(
+    ("provider", "expected_status", "expected_searches"),
+    [("opensearch", 400, 0), ("opensearch/x", 400, 0), ("openai", 200, 1)],
+)
+def test_vector_store_search_rejects_caller_opensearch_index_name_only_on_opensearch_stores(
+    provider, expected_status, expected_searches
+):
+    """
+    Regression: a caller must not pick the index an OpenSearch store searches, while
+    other providers keep ignoring the key as they did before OpenSearch support.
+    """
+    from fastapi.testclient import TestClient
+
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+    from litellm.proxy.proxy_server import app
+    from litellm.types.vector_stores import VectorStoreSearchResponse
+
+    store = {
+        "vector_store_id": "kb",
+        "custom_llm_provider": provider,
+        "litellm_params": {"vector_store_id": "kb", "custom_llm_provider": provider},
+    }
+    registry = MagicMock()
+    registry.get_litellm_managed_vector_store_from_registry.return_value = store
+    fake_search = AsyncMock(
+        return_value=VectorStoreSearchResponse(object="vector_store.search_results.page", search_query="q", data=[])
+    )
+    mock_auth = UserAPIKeyAuth(user_id="test_internal_user", user_role=LitellmUserRoles.INTERNAL_USER.value)
+    original_overrides = app.dependency_overrides.copy()
+    app.dependency_overrides[user_api_key_auth] = lambda: mock_auth
+    try:
+        with (
+            patch("litellm.vector_stores.main.asearch", new=fake_search),  # test-quality-ok: the search boundary under test
+            patch.object(litellm, "vector_store_registry", registry),  # test-quality-ok: seeds the store under test
+            patch(  # test-quality-ok: store access is not under test, so the request reaches the search boundary
+                "litellm.proxy.vector_store_endpoints.utils.can_user_access_vector_store",
+                new=AsyncMock(return_value=True),
+            ),
+        ):
+            router = litellm.Router(model_list=[])
+            with patch("litellm.proxy.proxy_server.llm_router", router):  # test-quality-ok: router built over the fake search
+                response = TestClient(app).post(
+                    "/v1/vector_stores/kb/search",
+                    json={"query": "q", "opensearch_index_name": "another-teams-index"},
+                )
+    finally:
+        app.dependency_overrides = original_overrides
+
+    assert response.status_code == expected_status, response.json()
+    assert fake_search.await_count == expected_searches
 
 
 class TestConfigOwnedVectorStores:
