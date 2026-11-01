@@ -2614,7 +2614,7 @@
     "default_model_placeholder": "nace/drex-latest"
   },
   {
-    "provider": "ParallelAI",
+    "provider": "PARALLEL_AI",
     "provider_display_name": "Parallel AI",
     "litellm_provider": "parallel_ai",
     "credential_fields": [

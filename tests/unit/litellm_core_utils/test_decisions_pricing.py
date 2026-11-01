@@ -66,15 +66,30 @@ def test_apply_decisions_pricing_leaves_rows_without_decisions_fields_unchanged(
 def test_flat_decisions_rate_overrides_catalog_without_changing_chat(
     monkeypatch: pytest.MonkeyPatch, rate: float
 ) -> None:
+    model: Final = "parallel_ai/decision"
     monkeypatch.setitem(
         litellm.model_cost,
-        "gpt-6-luna",
-        {**litellm.model_cost["gpt-6-luna"], **_ROW, "input_cost_per_query_decisions": rate},
+        model,
+        {**_ROW, "litellm_provider": "parallel_ai", "input_cost_per_query_decisions": rate},
     )
-    assert cost_calculator.cost_per_token(model="gpt-6-luna", prompt_tokens=100, call_type="decisions") == (rate, 0.0)
-    assert cost_calculator.cost_per_token(
-        model="gpt-6-luna", prompt_tokens=100, call_type="completion"
-    ) == pytest.approx((100 * 1e-07, 0.0))
+    assert cost_calculator.cost_per_token(model=model, prompt_tokens=100, call_type="decisions") == (rate, 0.0)
+    assert cost_calculator.cost_per_token(model=model, prompt_tokens=100, call_type="completion") == pytest.approx(
+        (100 * 1e-07, 0.0)
+    )
+
+
+@pytest.mark.parametrize("query_field", ["input_cost_per_query", "input_cost_per_query_decisions"])
+def test_query_price_on_a_provider_that_bills_tokens_stays_unbilled(
+    monkeypatch: pytest.MonkeyPatch, query_field: str
+) -> None:
+    model: Final = "fireworks_ai/accounts/example/models/query-priced"
+    monkeypatch.setitem(
+        litellm.model_cost,
+        model,
+        {query_field: 0.5, "input_cost_per_token": 0.0, "output_cost_per_token": 0.0}
+        | {"litellm_provider": "fireworks_ai", "mode": "evaluation"},
+    )
+    assert cost_calculator.cost_per_token(model=model, prompt_tokens=100, call_type="decisions") == (0.0, 0.0)
 
 
 @pytest.mark.parametrize("call_type", ["adecisions", "asystemone"])

@@ -47,7 +47,7 @@ describe("provider_info_helpers", () => {
   describe("getProviderLogoAndName", () => {
     it("shows the Parallel AI logo for the parallel_ai slug", () => {
       const { logo, displayName } = getProviderLogoAndName("parallel_ai");
-      expect(displayName).toBe(Providers.ParallelAI);
+      expect(displayName).toBe(Providers.PARALLEL_AI);
       expect(logo).toContain("parallel_ai");
     });
 
@@ -560,9 +560,9 @@ describe("provider_info_helpers", () => {
         "parallel_ai/decision": { litellm_provider: "parallel_ai", mode: "evaluation" },
       };
 
-      expect(getProviderModels("ParallelAI", modelMap)).toEqual(["parallel_ai/decision"]);
+      expect(getProviderModels("PARALLEL_AI", modelMap)).toEqual(["parallel_ai/decision"]);
       expect(getProviderLogoAndName("parallel_ai").displayName).toBe("Parallel AI");
-      expect(getPlaceholder("ParallelAI")).toBe("parallel_ai/decision");
+      expect(getPlaceholder("PARALLEL_AI")).toBe("parallel_ai/decision");
     });
 
     it("lists Nace decision models and resolves the provider name and model placeholder", () => {

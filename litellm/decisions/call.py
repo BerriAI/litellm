@@ -13,6 +13,7 @@ from typing_extensions import assert_never
 import litellm
 from litellm.cost_calculator import cost_map_key_prices_anything
 from litellm.litellm_core_utils.core_helpers import RESPONSE_COST_HEADER, normalize_drop_params
+from litellm.litellm_core_utils.decisions_pricing import QUERY_PRICED_DECISIONS_PROVIDERS
 from litellm.litellm_core_utils.get_provider_specific_headers import ProviderSpecificHeaderUtils
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.prompt_templates.image_handling import (
@@ -557,7 +558,9 @@ def prepare_call(
             litellm_params={
                 "litellm_call_id": kwargs.get("litellm_call_id"),
                 "api_base": provider_config.get_complete_url(resolved_api_base, canonical_model),
-                "input_cost_per_query": kwargs.get("input_cost_per_query"),
+                "input_cost_per_query": (
+                    kwargs.get("input_cost_per_query") if provider in QUERY_PRICED_DECISIONS_PROVIDERS else None
+                ),
             },
             custom_llm_provider=provider,
         )

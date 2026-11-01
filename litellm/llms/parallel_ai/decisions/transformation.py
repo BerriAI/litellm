@@ -23,6 +23,7 @@ class ParallelAIDecisionsConfig(BaseDecisionsConfig):
     path = "/v1/decisions"
     api_key_env = ("PARALLEL_AI_API_KEY", "PARALLEL_API_KEY")
     api_base_env = ("PARALLEL_AI_API_BASE",)
+    confidence_optional = True
     openai_evidence_fields = frozenset({"citations", "decision_id", "mode"})
 
     def get_default_api_base(self) -> str:

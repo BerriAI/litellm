@@ -265,6 +265,48 @@ async def test_deployment_query_price_replaces_the_catalog_price(
     await GLOBAL_LOGGING_WORKER.clear_queue()
 
 
+@pytest.mark.asyncio
+async def test_query_price_on_another_provider_leaves_its_token_billing_alone(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    input_rate: Final = 1e-06
+    tokens: Final = 1000
+    model: Final = "fireworks_ai/accounts/example/models/token-billed"
+    monkeypatch.setitem(
+        litellm.model_cost,
+        model,
+        {"input_cost_per_token": input_rate, "output_cost_per_token": 0.0}
+        | {"litellm_provider": "fireworks_ai", "mode": "evaluation"},
+    )
+    respx_mock.post("https://api.fireworks.ai/inference/v1/systemone").respond(
+        json={
+            "model": "token-billed",
+            "answers": {"available": {"type": "noul", "noul": 0.9}},
+            "usage": {"input_tokens": tokens, "output_tokens": 0},
+        }
+    )
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "token-billed",
+                "litellm_params": {"model": model, "api_key": "test-key", "input_cost_per_query": 0.025},
+            }
+        ]
+    )
+    fields: Final = {
+        "model": "token-billed",
+        "input": "Example",
+        "questions": [{"type": "predicate", "name": "available", "instructions": "Available?"}],
+        "litellm_call_id": "token-billed-call",
+    }
+    logging_obj, data = function_setup("adecisions", Rules(), datetime.now(), **fields)
+    response: Final = await router.adecisions(**data, litellm_logging_obj=logging_obj)
+    assert response._hidden_params["response_cost"] == pytest.approx(tokens * input_rate)
+    await GLOBAL_LOGGING_WORKER.clear_queue()
+
+
 @pytest.mark.parametrize(
     "payload", [{"answers": {}}, {"mode": "fast", "answers": {"available": {"type": "noul", "noul": "invalid"}}}]
 )
