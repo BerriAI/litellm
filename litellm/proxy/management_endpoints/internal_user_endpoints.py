@@ -13,6 +13,7 @@ These are members of a Team on LiteLLM
 """
 
 import asyncio
+import contextlib
 import json
 import traceback
 from collections.abc import Awaitable, Mapping, Sequence
@@ -443,30 +444,25 @@ async def add_new_user_to_default_team(
     teams: Sequence[str | NewUserRequestTeam],
     prisma_client: "PrismaClient",
 ):
-    tasks: Final[list[Awaitable[object]]] = []
-    for team in teams:
-        user_role: Literal["user", "admin"] = "user"
-        max_budget_in_team: float | None = None
-        if isinstance(team, str):
-            team_id = team
-        elif isinstance(team, NewUserRequestTeam):
-            team_id = team.team_id
-            user_role = team.user_role
-            max_budget_in_team = team.max_budget_in_team
-        else:
-            raise ValueError(f"Invalid team type: {type(team)}")
-
-        tasks.append(
-            _add_user_to_team(
+    memberships: Final = tuple(_default_team_membership(team) for team in teams)
+    for membership in memberships:
+        with contextlib.suppress(Exception):
+            await _add_user_to_team(
                 user_id=user_id,
-                team_id=team_id,
+                team_id=membership.team_id,
                 user_email=user_email,
                 user_api_key_dict=user_api_key_dict,
-                max_budget_in_team=max_budget_in_team,
-                user_role=user_role,
+                max_budget_in_team=membership.max_budget_in_team,
+                user_role=membership.user_role,
             )
-        )
-    await asyncio.gather(*tasks, return_exceptions=True)
+
+
+def _default_team_membership(team: str | NewUserRequestTeam) -> NewUserRequestTeam:
+    if isinstance(team, str):
+        return NewUserRequestTeam(team_id=team)
+    if isinstance(team, NewUserRequestTeam):
+        return team
+    raise ValueError(f"Invalid team type: {type(team)}")
 
 
 async def _fetch_user_team_ids(user_id: str, prisma_client: "PrismaClient") -> tuple[str, ...]:
@@ -2926,7 +2922,8 @@ async def get_user_daily_activity(
     ),
     api_key: str | None = fastapi.Query(
         default=None,
-        description="Filter by specific API key",
+        description="Filter by reporting API key ID. Missing keys are reported as unattributed. "
+        "For a literal key unattributed or a key starting with raw:, add an extra raw: prefix",
     ),
     user_id: str | None = fastapi.Query(
         default=None,

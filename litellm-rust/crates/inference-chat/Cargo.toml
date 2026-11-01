@@ -6,6 +6,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+litellm-secret-value.workspace = true
 litellm-auth = { workspace = true, features = ["aws", "azure", "gcp"] }
 litellm-cache-response.workspace = true
 litellm-core-utils.workspace = true

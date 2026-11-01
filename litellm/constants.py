@@ -68,6 +68,7 @@ RUNTIME_UPDATABLE_ROUTER_SETTINGS: Final[frozenset[str]] = frozenset(
         "retry_after",
         "fallbacks",
         "context_window_fallbacks",
+        "content_policy_fallbacks",
         "retry_policy",
         "model_group_retry_policy",
         "model_group_alias",
@@ -176,6 +177,8 @@ MID_STREAM_FAILURE_LOG_WAIT_SECONDS: Final = 1.0
 # Set to 0 to disable truncation.
 MAX_BASE64_LENGTH_FOR_LOGGING: Final = get_env_int("MAX_BASE64_LENGTH_FOR_LOGGING", 64)
 BASE64_TRUNCATION_OFFLOAD_THRESHOLD_CHARS: Final = 256 * 1024
+BASE64_TRUNCATION_OFFLOAD_THRESHOLD_STRINGS: Final = 256
+BASE64_TRUNCATION_INLINE_COPY_MAX_CHARS: Final = 8 * 1024 * 1024
 REDACTED_BY_LITELLM: Final = "redacted-by-litellm"
 # in-memory stand-in handed to provider converters for redacted arguments; never stored
 REDACTED_TOOL_CALL_ARGUMENTS_PLACEHOLDER: Final = "{}"
@@ -429,6 +432,7 @@ WEBSOCKET_CLOSE_REASON_MAX_BYTES: Final = 123
 DEEPGRAM_DEFAULT_API_BASE: Final = "https://api.deepgram.com/v1"
 NADIR_DEFAULT_API_BASE: Final = "https://api.getnadir.com/v1"
 DEEPGRAM_LISTEN_DEFAULT_MODEL: Final = "nova-3"
+DEEPGRAM_SPEAK_DEFAULT_MODEL: Final = "aura-asteria-en"
 
 BEDROCK_REALTIME_PENDING_OPENING_MESSAGE_SCOPE_KEY: Final = "litellm.bedrock_realtime.pending_opening_message"
 BEDROCK_REALTIME_SESSION_COMMITTED_SCOPE_KEY: Final = "litellm.bedrock_realtime.session_committed"
@@ -633,6 +637,8 @@ STS_CREDENTIAL_EXPIRY_SAFETY_MARGIN_SECONDS: Final = 60
 BEDROCK_MIN_THINKING_BUDGET_TOKENS: Final = get_env_int("BEDROCK_MIN_THINKING_BUDGET_TOKENS", 1024)
 # Anthropic's Messages API rejects thinking.budget_tokens < 1024.
 ANTHROPIC_MIN_THINKING_BUDGET_TOKENS: Final = 1024
+ANTHROPIC_MAX_USER_ID_LENGTH: Final = 512
+ANTHROPIC_COMPATIBLE_MAX_USER_ID_LENGTH: Final = 255
 ANTHROPIC_BILLING_METADATA_PREFIX: Final = "x-anthropic-billing-header:"
 REPLICATE_POLLING_DELAY_SECONDS: Final = get_env_float("REPLICATE_POLLING_DELAY_SECONDS", 0.5)
 DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS: Final = get_env_int("DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS", 128000)
@@ -670,7 +676,7 @@ request_timeout: float = (
     DEFAULT_REQUEST_TIMEOUT_SECONDS if _request_timeout_from_env is None else _request_timeout_from_env
 )
 request_timeout_explicitly_set: bool = _request_timeout_from_env is not None
-DEFAULT_A2A_AGENT_TIMEOUT: Final[float] = get_env_float("DEFAULT_A2A_AGENT_TIMEOUT", 6000.0)  # 10 minutes
+DEFAULT_A2A_AGENT_TIMEOUT: Final[float] = get_env_float("DEFAULT_A2A_AGENT_TIMEOUT", 6000.0)
 AGENT_KILL_SWITCH_TIMEOUT_SECONDS: Final = 10.0
 AGENT_KILL_SWITCH_RESPONSE_BODY_MAX_CHARS: Final = 2000
 # Patterns that indicate a localhost/internal URL in A2A agent cards that should be
@@ -899,7 +905,9 @@ PROVIDERS_THAT_AUTHENTICATE_ON_PROVIDER_INFO: Final = frozenset(
     }
 )
 
+SUBSCRIPTION_BACKED_PROVIDERS: Final = frozenset({"chatgpt"})
 A2A_CHAT_COMPLETION_BRIDGE_PROVIDERS: Final = frozenset({"databricks_agent"})
+A2A_COMPLETION_BRIDGE_WORKING_MESSAGE: Final = "Processing request..."
 
 LITELLM_EMBEDDING_PROVIDERS_SUPPORTING_INPUT_ARRAY_OF_TOKENS: Final = [
     "openai",
@@ -1160,6 +1168,7 @@ openai_compatible_providers: Final[list[str]] = [
     "cortecs",
     "scx-ai",
     "prism",
+    "hostinger_router",
     "sail",
     "reka",
     "streamlake",
@@ -1683,6 +1692,7 @@ BAGGAGE_MAPPED_TAGS_METADATA_KEY: Final = "_baggage_mapped_tags"
 VECTOR_STORE_CALLER_METADATA_KWARG: Final = "litellm_vector_store_caller_metadata"
 ROUTER_USAGE_COUNTED_TOKENS_METADATA_KEY: Final = "_litellm_router_usage_counted_tokens"
 INTERNAL_CALL_ORIGIN_METADATA_KEY: Final = "internal_call_origin"
+RESPONSES_WEBSOCKET_CALL_ID_METADATA_KEY: Final = "responses_websocket_call_id"
 BILLED_RETRY_ATTEMPT_METADATA_KEY: Final = "billed_retry_attempt"
 MANAGED_BACKGROUND_RESPONSE_METADATA_KEY: Final = "_managed_background_response"
 SESSION_ID_GENERATED_METADATA_KEY: Final = "litellm_session_id_generated"
@@ -2044,6 +2054,7 @@ LITELLM_SETTINGS_SAFE_DB_OVERRIDES: Final = [
 SPECIAL_LITELLM_AUTH_TOKEN: Final = ["ui-token"]
 DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL = get_env_int("DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL", 60)
 AUTH_OBJECTS_TARGET: Final = "auth_objects"
+HEALTH_CHECKS_TARGET: Final = "health_checks"
 DEFAULT_ACCESS_GROUP_CACHE_TTL: Final = get_env_int("DEFAULT_ACCESS_GROUP_CACHE_TTL", 600)
 SPEND_LOG_KEY_METADATA_CACHE_TTL: Final = 600
 SPEND_LOG_KEY_METADATA_MISS_CACHE_TTL: Final = 30

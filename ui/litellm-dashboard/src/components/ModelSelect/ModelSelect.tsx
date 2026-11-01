@@ -240,7 +240,10 @@ export const ModelSelect = (props: ModelSelectProps) => {
   ];
 
   const offeredByValue = new Map(offeredGroups.flatMap((group) => group.items).map((option) => [option.value, option]));
-  const selectedOptions = value.map((v) => offeredByValue.get(v) ?? { label: v, value: v });
+  const selectedOptions = value.map(
+    (v) =>
+      offeredByValue.get(v) ?? MODEL_SENTINEL_OPTIONS.find((option) => option.value === v) ?? { label: v, value: v },
+  );
   const groups: ModelOptionGroup[] = [
     ...unavailableGroups(
       selectedOptions,

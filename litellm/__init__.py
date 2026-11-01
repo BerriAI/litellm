@@ -7,7 +7,6 @@ _apply_process_defaults()
 ### INIT VARIABLES #########################
 import threading
 import os
-import datetime
 
 from collections.abc import Mapping, Sequence
 from typing import (
@@ -550,6 +549,7 @@ _key_management_system: Optional["KeyManagementSystem"] = None
 output_parse_pii: bool = False
 #############################################
 from litellm.litellm_core_utils.get_model_cost_map import get_model_cost_map, mark_litellm_import_complete
+from litellm.litellm_core_utils.model_retirement import is_hidden_as_retired
 
 model_cost = get_model_cost_map(url=model_cost_map_url)
 cost_discount_config: Dict[str, float] = {}  # Provider-specific cost discounts {"vertex_ai": 0.05} = 5% discount
@@ -756,16 +756,6 @@ def is_openai_finetune_model(key: str) -> bool:
     return key.startswith("ft:") and not key.count(":") > 1
 
 
-def _is_past_deprecation_date(value: Mapping[str, object]) -> bool:
-    deprecation_date: Final = value.get("deprecation_date")
-    if not isinstance(deprecation_date, str):
-        return False
-    try:
-        return datetime.date.fromisoformat(deprecation_date) <= datetime.date.today()
-    except ValueError:
-        return False
-
-
 def _populate_provider_model_sets(model_cost_map: Mapping[str, Mapping[str, object]]) -> None:
     for key, value in tuple(model_cost_map.items()):
         if value.get("litellm_provider") == "openai" and not is_openai_finetune_model(key):
@@ -873,12 +863,12 @@ def _populate_provider_model_sets(model_cost_map: Mapping[str, Mapping[str, obje
             if "-to-" not in key and "fireworks-ai-default" not in key:
                 fireworks_ai_models.add(key)
         elif value.get("litellm_provider") == "together_ai":
-            if _is_past_deprecation_date(value):
+            if is_hidden_as_retired(value):
                 together_ai_models.discard(key)
             elif not key.startswith("together-ai-"):
                 together_ai_models.add(key)
         elif value.get("litellm_provider") == "baseten":
-            if _is_past_deprecation_date(value):
+            if is_hidden_as_retired(value):
                 baseten_models.discard(key)
             else:
                 baseten_models.add(key)
@@ -1051,7 +1041,10 @@ def _populate_provider_model_sets(model_cost_map: Mapping[str, Mapping[str, obje
         elif value.get("litellm_provider") == "coralbricks":
             coralbricks_models.add(key)
         elif value.get("litellm_provider") == "aiand":
-            aiand_models.add(key)
+            if is_hidden_as_retired(value):
+                aiand_models.discard(key)
+            else:
+                aiand_models.add(key)
         elif value.get("litellm_provider") == "reducto":
             reducto_models.add(key)
         elif value.get("litellm_provider") == "bedrock_mantle":
@@ -1654,6 +1647,7 @@ def set_global_gitlab_config(config: Mapping[str, object]) -> None:
 # Lazy loading system for heavy modules to reduce initial import time and memory usage
 
 if TYPE_CHECKING:
+    from . import guardrails as guardrails
     from litellm.types.utils import ModelInfo as _ModelInfoType
     from litellm.types.utils import PriorityReservationSettings
     from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
@@ -2506,10 +2500,10 @@ def __getattr__(name: str) -> Any:
         handler_func: Final = registry[name]
         return handler_func(name)
 
-    if name == "proxy":
+    if name in ("proxy", "guardrails"):
         import importlib
 
-        return importlib.import_module("litellm.proxy")
+        return importlib.import_module(f"litellm.{name}")
 
     if name == "harness" or name in _AGENT_EXPORTS:
         import importlib

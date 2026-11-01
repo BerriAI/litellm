@@ -1,8 +1,8 @@
 use std::{future::Future, pin::Pin, sync::Arc, time::SystemTime};
 
 use axum::http::{Request, request::Parts};
-use litellm_auth_types::SecretValue;
 use litellm_config::Config;
+use litellm_secret_value::SecretValue;
 use litellm_secrets::source::SecretSource;
 use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;

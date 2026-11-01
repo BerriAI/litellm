@@ -621,7 +621,7 @@ def test_sync_shadow_gets_kwargs_snapshot_taken_before_primary_mutates_them(reco
 
     router = Router(model_list=_tagged_primary_model_list())
     with patch(  # test-quality-ok: Router has no thread factory to inject; deferring start is the only deterministic way to expose the race
-        "litellm.router.threading", SimpleNamespace(Thread=_DeferredThread)
+        "litellm.router_python_core.threading", SimpleNamespace(Thread=_DeferredThread)
     ):
         response = router.completion(
             model="primary-model",
@@ -653,7 +653,7 @@ def test_sync_shadow_workers_do_not_share_metadata_with_each_other(recording_log
 
     router = Router(model_list=_streaming_model_list(["shadow-a", "shadow-b"]))
     with patch(  # test-quality-ok: Router has no thread factory to inject; deferring start is the only deterministic way to expose the race
-        "litellm.router.threading", SimpleNamespace(Thread=_DeferredThread)
+        "litellm.router_python_core.threading", SimpleNamespace(Thread=_DeferredThread)
     ):
         router.completion(
             model="primary-model",

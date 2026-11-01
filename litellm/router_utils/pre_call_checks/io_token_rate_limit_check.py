@@ -14,6 +14,9 @@ from __future__ import annotations
 import contextlib
 import contextvars
 from collections.abc import Mapping, MutableMapping
+from dataclasses import dataclass
+from datetime import datetime
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
@@ -23,7 +26,15 @@ from litellm import token_counter
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_router_logger
 from litellm.caching.dual_cache import DualCache
+from litellm.caching.redis_cache import RedisCache, RedisCircuitBreakerOpenError
 from litellm.constants import NO_MAX_TOKENS_TPM_RESERVATION_FRACTION
+from litellm.litellm_core_utils.internal_call_metadata import (
+    IO_TOKEN_RESERVATION_KEYS,
+    ITPM_CACHE_KEY,
+    ITPM_RESERVED_KEY,
+    OTPM_CACHE_KEY,
+    OTPM_RESERVED_KEY,
+)
 from litellm.litellm_core_utils.token_counter import deployment_openai_model, offload_token_count
 from litellm.llms.azure.ptu_capacity import is_str_keyed_mapping
 from litellm.router_utils.routing_read_batch import ROUTER_USAGE_TARGET
@@ -39,18 +50,27 @@ else:
 
 RoutingArgsTTL: Final = 60
 
-_io_token_rate_limit_request_kwargs: Final[contextvars.ContextVar[dict[str, object] | None]] = contextvars.ContextVar(
-    "io_token_rate_limit_request_kwargs",
+
+@dataclass(frozen=True, slots=True)
+class _IoTokenRateLimitRequest:
+    kwargs: dict[str, object] | None
+    opens_responses_socket: bool
+    metadata_channel: str
+
+
+_io_token_rate_limit_request: Final[contextvars.ContextVar[_IoTokenRateLimitRequest | None]] = contextvars.ContextVar(
+    "io_token_rate_limit_request",
     default=None,
 )
 
-ITPM_RESERVED_KEY: Final = "_litellm_itpm_reserved"
-OTPM_RESERVED_KEY: Final = "_litellm_otpm_reserved"
-ITPM_CACHE_KEY: Final = "_litellm_itpm_cache_key"
-OTPM_CACHE_KEY: Final = "_litellm_otpm_cache_key"
 
-
-def set_io_token_rate_limit_request_kwargs(kwargs: dict[str, object] | None, store_in_context: bool = True) -> None:
+def set_io_token_rate_limit_request_kwargs(
+    kwargs: dict[str, object] | None,
+    store_in_context: bool = True,
+    *,
+    opens_responses_socket: bool = False,
+    metadata_channel: str,
+) -> None:
     # The reservation sentinels are server-only, but `metadata` is caller
     # controlled on proxy requests. Strip any client-supplied copies here (this
     # runs before the router stashes its own reservation) so a forged
@@ -64,11 +84,14 @@ def set_io_token_rate_limit_request_kwargs(kwargs: dict[str, object] | None, sto
     # every other deployment overwrite the slot with None instead of the
     # kwargs; overwriting (rather than skipping) also releases a previous
     # request's kwargs when a context is reused.
-    _io_token_rate_limit_request_kwargs.set(kwargs if store_in_context else None)
+    _io_token_rate_limit_request.set(
+        _IoTokenRateLimitRequest(kwargs, opens_responses_socket, metadata_channel) if store_in_context else None
+    )
 
 
 def get_io_token_rate_limit_request_kwargs() -> dict[str, object] | None:
-    return _io_token_rate_limit_request_kwargs.get()
+    request: Final = _io_token_rate_limit_request.get()
+    return None if request is None else request.kwargs
 
 
 def seconds_until_minute_reset() -> int:
@@ -224,27 +247,32 @@ def _otpm_reservation(
     return default if from_deployment is None else min(from_deployment, default)
 
 
+def _usage_field(container: object, name: str) -> object:
+    if is_str_keyed_mapping(container):
+        return container.get(name)
+    return getattr(container, name, None)
+
+
+def _cached_prompt_tokens(usage: object) -> int:
+    reported: Final = (
+        _usage_field(_usage_field(usage, "prompt_tokens_details"), "cached_tokens"),
+        _usage_field(_usage_field(usage, "input_tokens_details"), "cached_tokens"),
+        _usage_field(usage, "cache_read_input_tokens"),
+    )
+    return next((int(tokens) for tokens in reported if isinstance(tokens, int | float) and tokens), 0)
+
+
 def _get_usage_tokens(usage: object) -> tuple[int, int, int]:
     if usage is None:
         return 0, 0, 0
     if hasattr(usage, "prompt_tokens") or hasattr(usage, "input_tokens"):
         prompt = int(getattr(usage, "prompt_tokens", None) or getattr(usage, "input_tokens", 0) or 0)
         completion = int(getattr(usage, "completion_tokens", None) or getattr(usage, "output_tokens", 0) or 0)
-        cached = 0
-        details: object = getattr(usage, "prompt_tokens_details", None)
-        if details is not None:
-            cached = int(getattr(details, "cached_tokens", 0) or 0)
-        if not cached:
-            cached = int(getattr(usage, "cache_read_input_tokens", 0) or 0)
-        return prompt, completion, cached
+        return prompt, completion, _cached_prompt_tokens(usage)
     if isinstance(usage, dict):
         prompt = int(usage.get("prompt_tokens") or usage.get("input_tokens") or 0)
         completion = int(usage.get("completion_tokens") or usage.get("output_tokens") or 0)
-        details = usage.get("prompt_tokens_details") or {}
-        cached = int(details.get("cached_tokens", 0) or 0) if isinstance(details, dict) else 0
-        if not cached:
-            cached = int(usage.get("cache_read_input_tokens") or 0)
-        return prompt, completion, cached
+        return prompt, completion, _cached_prompt_tokens(usage)
     return 0, 0, 0
 
 
@@ -298,17 +326,34 @@ def _resolve_reconcile_usage_tokens(
         if isinstance(standard_logging_object, dict):
             prompt_tokens = int(standard_logging_object.get("prompt_tokens") or 0)
             completion_tokens = int(standard_logging_object.get("completion_tokens") or 0)
-            cached_tokens = 0
-            metadata: Final = standard_logging_object.get("metadata")
-            if isinstance(metadata, dict):
-                cached_tokens = int(metadata.get("cache_read_input_tokens") or 0)
+            logged_usage: Final = _usage_field(standard_logging_object.get("metadata"), "usage_object")
+            logged_cached_tokens: Final = _cached_prompt_tokens(logged_usage)
             # Same rationale as _usage_is_present: a bare total_tokens with no
             # prompt/completion breakdown can't be split, so it isn't treated
             # as resolved usage - the reservation is kept instead of refunded.
             if prompt_tokens or completion_tokens:
-                return max(0, prompt_tokens - cached_tokens), completion_tokens, True
+                return max(0, prompt_tokens - logged_cached_tokens), completion_tokens, True
 
     return 0, 0, False
+
+
+def _reservation(
+    itpm_reserved: int, otpm_reserved: int, itpm_cache_key: str | None, otpm_cache_key: str | None
+) -> Mapping[str, object]:
+    return MappingProxyType(
+        {
+            ITPM_RESERVED_KEY: itpm_reserved,
+            OTPM_RESERVED_KEY: otpm_reserved,
+            ITPM_CACHE_KEY: itpm_cache_key,
+            OTPM_CACHE_KEY: otpm_cache_key,
+        }
+    )
+
+
+def _stash_reservation_in_metadata(request: _IoTokenRateLimitRequest | None, reservation: Mapping[str, object]) -> None:
+    metadata: Final = None if request is None or not request.kwargs else request.kwargs.get(request.metadata_channel)
+    if isinstance(metadata, dict):
+        metadata.update(reservation)
 
 
 def _key_for_this_minute(reserved_key: str) -> str:
@@ -324,30 +369,6 @@ def _reconcile_increments(
     return tuple(
         (key if delta < 0 else _key_for_this_minute(key), delta) for key, delta in deltas if key is not None and delta
     )
-
-
-def _stash_reservation_in_metadata(
-    request_kwargs: dict[str, object] | None,
-    *,
-    itpm_reserved: int,
-    otpm_reserved: int,
-    itpm_cache_key: str | None,
-    otpm_cache_key: str | None,
-) -> None:
-    if not request_kwargs:
-        return
-    reservation: Final = {
-        ITPM_RESERVED_KEY: itpm_reserved,
-        OTPM_RESERVED_KEY: otpm_reserved,
-        ITPM_CACHE_KEY: itpm_cache_key,
-        OTPM_CACHE_KEY: otpm_cache_key,
-    }
-    for channel in ("metadata", "litellm_metadata"):
-        existing = request_kwargs.get(channel)
-        if isinstance(existing, dict):
-            existing.update(reservation)
-        elif channel == "metadata":
-            request_kwargs[channel] = dict(reservation)
 
 
 def _extract_reservation(reservation: Mapping[str, int | str | None]) -> tuple[int, int, str | None, str | None]:
@@ -399,7 +420,7 @@ def _clear_reservation_from_kwargs(kwargs: Mapping[str, object] | None) -> None:
     for channel in _reservation_channels(kwargs):
         channel_dict = _as_mutable_mapping(channel)
         if channel_dict is not None:
-            for key in (ITPM_RESERVED_KEY, OTPM_RESERVED_KEY, ITPM_CACHE_KEY, OTPM_CACHE_KEY):
+            for key in IO_TOKEN_RESERVATION_KEYS:
                 channel_dict.pop(key, None)
 
 
@@ -499,7 +520,8 @@ def io_token_pre_call_check(
     if itpm_limit is None and otpm_limit is None:
         return deployment
 
-    request_kwargs: Final = get_io_token_rate_limit_request_kwargs()
+    request: Final = _io_token_rate_limit_request.get()
+    request_kwargs: Final = None if request is None else request.kwargs
     _model, served_model = _tokenizer_and_served_models(deployment)
     estimated_input: Final = _estimate_input_tokens(request_kwargs, model=_model)
     otpm_to_reserve: Final = (
@@ -546,11 +568,13 @@ def io_token_pre_call_check(
             raise
 
     _stash_reservation_in_metadata(
-        request_kwargs,
-        itpm_reserved=itpm_reserved,
-        otpm_reserved=otpm_reserved,
-        itpm_cache_key=itpm_key if itpm_limit is not None else None,
-        otpm_cache_key=otpm_key if otpm_limit is not None else None,
+        request,
+        _reservation(
+            itpm_reserved,
+            otpm_reserved,
+            itpm_key if itpm_limit is not None else None,
+            otpm_key if otpm_limit is not None else None,
+        ),
     )
     return deployment
 
@@ -565,7 +589,14 @@ async def async_io_token_pre_call_check(
     if itpm_limit is None and otpm_limit is None:
         return deployment
 
-    request_kwargs: Final = get_io_token_rate_limit_request_kwargs()
+    request: Final = _io_token_rate_limit_request.get()
+    request_kwargs: Final = None if request is None else request.kwargs
+    if request is not None and request.opens_responses_socket:
+        _stash_reservation_in_metadata(
+            request,
+            await async_admit_io_token_turn(dual_cache, deployment, get_utc_datetime(), parent_otel_span),
+        )
+        return deployment
     _model, served_model = _tokenizer_and_served_models(deployment)
     estimated_input: Final = await offload_token_count(_estimate_input_tokens)(request_kwargs, model=_model)
     otpm_to_reserve: Final = (
@@ -618,13 +649,63 @@ async def async_io_token_pre_call_check(
             raise
 
     _stash_reservation_in_metadata(
-        request_kwargs,
-        itpm_reserved=itpm_reserved,
-        otpm_reserved=otpm_reserved,
-        itpm_cache_key=itpm_key if itpm_limit is not None else None,
-        otpm_cache_key=otpm_key if otpm_limit is not None else None,
+        request,
+        _reservation(
+            itpm_reserved,
+            otpm_reserved,
+            itpm_key if itpm_limit is not None else None,
+            otpm_key if otpm_limit is not None else None,
+        ),
     )
     return deployment
+
+
+async def _async_redis_usage(redis_cache: RedisCache | None, key: str, parent_otel_span: Span | None) -> int | None:
+    if redis_cache is None:
+        return None
+    with contextlib.suppress(RedisCircuitBreakerOpenError):
+        return await redis_cache.async_get_cache(key=key, parent_otel_span=parent_otel_span)
+    return None
+
+
+@with_service_target(ROUTER_USAGE_TARGET)
+async def _async_shared_usage(dual_cache: DualCache, key: str, parent_otel_span: Span | None) -> int | None:
+    shared: Final = await _async_redis_usage(dual_cache.redis_cache, key, parent_otel_span)
+    if shared is not None:
+        return shared
+    return await dual_cache.async_get_cache(key=key, local_only=True)
+
+
+async def _raise_if_at_limit(
+    dual_cache: DualCache, key: str, limit: int | None, limit_label: str, parent_otel_span: Span | None
+) -> None:
+    if limit is None:
+        return
+    usage: Final = await _async_shared_usage(dual_cache, key, parent_otel_span)
+    if usage is not None and usage >= limit:
+        raise _rate_limit_error(limit_label, limit, usage)
+
+
+@with_service_target(ROUTER_USAGE_TARGET)
+async def async_admit_io_token_turn(
+    dual_cache: DualCache,
+    deployment: Mapping[str, object],
+    now: datetime,
+    parent_otel_span: Span | None = None,
+) -> Mapping[str, object]:
+    configured: Final = dict(deployment)
+    itpm_limit, otpm_limit = get_deployment_io_token_limits(configured)
+    if itpm_limit is None and otpm_limit is None:
+        return MappingProxyType({})
+    cache_keys: Final = _get_cache_keys(configured, now.strftime("%H-%M"))
+    if cache_keys is None:
+        return MappingProxyType({})
+    itpm_key, otpm_key = cache_keys
+    await _raise_if_at_limit(dual_cache, itpm_key, itpm_limit, "ITPM", parent_otel_span)
+    await _raise_if_at_limit(dual_cache, otpm_key, otpm_limit, "OTPM", parent_otel_span)
+    return _reservation(
+        0, 0, itpm_key if itpm_limit is not None else None, otpm_key if otpm_limit is not None else None
+    )
 
 
 @with_service_target(ROUTER_USAGE_TARGET)
