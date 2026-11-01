@@ -38,6 +38,10 @@ def inherited_fd() -> int | None:
     return int(value) if value is not None else None
 
 
+def metrics_host(host: str) -> str:
+    return os.environ.get("_LITELLM_GATEWAY_METRICS_HOST", host) if inherited_fd() is not None else host
+
+
 def terminate_group(process: asyncio.subprocess.Process) -> None:
     try:
         os.killpg(process.pid, signal.SIGTERM)
@@ -65,6 +69,7 @@ async def _supervise(binary: str, command: Sequence[str], host: str, port: int) 
                 **os.environ,
                 "LITELLM_RUST_GATEWAY": "false",
                 GATEWAY_FD: str(listener.fileno()),
+                "_LITELLM_GATEWAY_METRICS_HOST": host,
                 "FORWARDED_ALLOW_IPS": "127.0.0.1",
             },
             pass_fds=(listener.fileno(),),
