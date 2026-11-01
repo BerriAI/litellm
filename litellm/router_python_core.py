@@ -2275,13 +2275,20 @@ class PythonCore(DeprecatedRouterMembers):
         return selector
 
     def _register_router_selector(self, selector: CustomLogger) -> None:
+        # Strategy selectors are per-instance stateful callbacks (each holds
+        # its own Router cache), so they must be deduped by identity: the
+        # class-level key treats a second Router's selector as a duplicate of
+        # the first one and silently drops it, leaving the new Router's
+        # latency/usage cache permanently empty (issue #44575). Least-busy
+        # never hit this by luck — its instances differ in a scalar attribute,
+        # so their keys never collided.
         if isinstance(selector, LeastBusyLoggingHandler):
             if isinstance(self._host.callback_list("input_callback"), list):
-                self._host.callbacks.add_litellm_input_callback(selector)
+                self._host.callbacks.add_litellm_input_callback(selector, dedupe_by_identity=True)
             else:
                 self._host.set_callback_list("input_callback", [selector])
         if isinstance(self._host.callback_list("callbacks"), list):
-            self._host.callbacks.add_litellm_callback(selector)
+            self._host.callbacks.add_litellm_callback(selector, dedupe_by_identity=True)
 
     def _callback_selectors(self) -> tuple[RouterStrategySelector, ...]:
         return tuple(
