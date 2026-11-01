@@ -1426,10 +1426,17 @@ class OpenAIResponsesHandler(BaseTranslation):
             setattr(event, field, value)
 
     @staticmethod
+    def _write_rewritten_text(event: object, field: str, text: str) -> None:
+        """A rewrite replaces the text, so the logprobs that spell out the original text go with it."""
+        OpenAIResponsesHandler._write_event_field(event, field, text)
+        if stream_item_field(event, "logprobs") is not None:
+            OpenAIResponsesHandler._write_event_field(event, "logprobs", None)
+
+    @staticmethod
     def _write_content_part_text(part: object, text: str) -> None:
         field: Final = _content_part_text_field(part)
         if _has_writable_field(part, field):
-            OpenAIResponsesHandler._write_event_field(part, field, text)
+            OpenAIResponsesHandler._write_rewritten_text(part, field, text)
 
     @staticmethod
     def _write_compaction_summary(item: object, summary: str) -> None:
@@ -1468,9 +1475,9 @@ class OpenAIResponsesHandler(BaseTranslation):
                 continue
             position = (output_index, content_index)
             if event_type in _TEXT_DELTA_EVENT_TYPES and position in delta_replacements:
-                self._write_event_field(event, "delta", next(delta_replacements[position]))
+                self._write_rewritten_text(event, "delta", next(delta_replacements[position]))
             elif event_type == "response.output_text.done" and position in rewrites_by_position:
-                self._write_event_field(event, "text", rewrites_by_position[position])
+                self._write_rewritten_text(event, "text", rewrites_by_position[position])
             elif event_type == "response.refusal.done" and position in rewrites_by_position:
                 self._write_event_field(event, "refusal", rewrites_by_position[position])
             elif event_type == "response.content_part.done" and position in rewrites_by_position:

@@ -2023,6 +2023,8 @@ def test_streamed_chat_logprobs_reach_the_text_delta_and_done_events() -> None:
     assert done["logprobs"] == [hello, period]
     assert part_done["part"]["logprobs"] == [hello, period]
     assert item_done["item"]["content"][0]["logprobs"] == [hello, period]
+    completed: Final = next(event for event in events if event["type"] == "response.completed")
+    assert completed["response"]["output"][0]["content"][0]["logprobs"] == [hello, period]
 
 
 def test_streamed_chat_without_logprobs_emits_text_events_without_a_logprobs_key() -> None:

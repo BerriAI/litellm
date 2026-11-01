@@ -100,7 +100,7 @@ class OutputTextLogprob(TypedDict):
     top_logprobs: ReadOnly[Sequence[OutputTextTopLogprob]]
 
 
-class CarriesOutputTextLogprobs(BaseLiteLLMOpenAIResponseObject):
+class CarriesOutputTextLogprobs(BaseLiteLLMOpenAIResponseObject):  # frozen-ok: guardrails rewrite these in place
     """A Responses text payload carries ``logprobs`` only when the chat choice behind it sent them."""
 
     logprobs: Sequence[OutputTextLogprob] | None = None

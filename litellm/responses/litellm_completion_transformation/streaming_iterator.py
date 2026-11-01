@@ -1,7 +1,7 @@
 import time
 import uuid
 from collections.abc import Mapping, Sequence
-from itertools import filterfalse
+from itertools import chain, filterfalse
 from types import MappingProxyType
 from typing import Any, Final, cast
 
@@ -63,7 +63,11 @@ from litellm.types.llms.openai import (
     WebSearchCallInProgressEvent,
     WebSearchCallSearchingEvent,
 )
-from litellm.types.responses.main import GenericResponseOutputItemContentAnnotation
+from litellm.types.responses.main import (
+    GenericResponseOutputItem,
+    GenericResponseOutputItemContentAnnotation,
+    OutputText,
+)
 from litellm.types.utils import Delta as ChatCompletionDelta
 from litellm.types.utils import (
     ModelResponse,
@@ -213,7 +217,9 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         self._sent_reasoning_summary_text_done_event: bool = False
         self._sent_reasoning_summary_part_done_event: bool = False
         self._reasoning_summary_text: str = ""
-        self._text_logprobs: tuple[OutputTextLogprob, ...] = ()
+        self._text_logprob_chunks: list[
+            tuple[OutputTextLogprob, ...]
+        ] = []  # mutable-ok: appended per chunk, flattened once at done
         # -- GENERIC RESPONSE-EVENTS PENDING QUEUE as required by fix --
         self._pending_response_events: list[BaseLiteLLMOpenAIResponseObject] = []
         self._reasoning_active = False
@@ -1021,9 +1027,15 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             logprobs=self._final_text_logprobs(litellm_complete_object),
         )
 
+    def _streamed_text_logprobs(self) -> tuple[OutputTextLogprob, ...] | None:
+        if not self._text_logprob_chunks:
+            return None
+        return tuple(chain.from_iterable(self._text_logprob_chunks))
+
     def _final_text_logprobs(self, litellm_complete_object: ModelResponse) -> tuple[OutputTextLogprob, ...] | None:
-        if self._text_logprobs:
-            return self._text_logprobs
+        streamed: Final = self._streamed_text_logprobs()
+        if streamed is not None:
+            return streamed
         return output_text_logprobs(getattr(litellm_complete_object.choices[0], "logprobs", None))
 
     def create_output_content_part_done_event(self, litellm_complete_object: ModelResponse) -> ContentPartDoneEvent:
@@ -1525,7 +1537,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             self._sequence_number += 1
             delta_logprobs: Final = output_text_logprobs(getattr(chunk.choices[0], "logprobs", None))
             if delta_logprobs is not None:
-                self._text_logprobs = (*self._text_logprobs, *delta_logprobs)
+                self._text_logprob_chunks.append(delta_logprobs)
             text_delta_event: Final = OutputTextDeltaEvent(
                 type=ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA,
                 item_id=item_id,
@@ -1582,7 +1594,18 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         )
         compaction_aligned: Final = _output_items_with_id(reasoning_aligned, "compaction", self._compaction_item_id)
         streamed_items: Final = filterfalse(self._is_unstreamed_empty_message, compaction_aligned)
-        return tuple(sorted(streamed_items, key=self._streamed_output_position))
+        return tuple(map(self._with_streamed_logprobs, sorted(streamed_items, key=self._streamed_output_position)))
+
+    def _with_streamed_logprobs(self, item: object) -> object:
+        """stream_chunk_builder drops chat logprobs, so the snapshot's text part takes the ones the stream carried."""
+        logprobs: Final = self._streamed_text_logprobs()
+        if logprobs is None or not isinstance(item, GenericResponseOutputItem):
+            return item
+        content: Final = tuple(
+            part.model_copy(update={"logprobs": logprobs}) if isinstance(part, OutputText) else part
+            for part in item.content
+        )
+        return item.model_copy(update={"content": list(content)})
 
     def _is_unstreamed_empty_message(self, item: object) -> bool:
         if getattr(item, "type", None) != "message" or self._message_output_index is not None:
