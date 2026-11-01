@@ -351,6 +351,34 @@ def test_stock_model_keeps_codex_entry(gateway: Gateway) -> None:
         assert catalog[name] == expected, catalog[name]
 
 
+def test_stock_model_alias_takes_configured_max_input_tokens(gateway: Gateway) -> None:
+    with gateway.scenario() as scenario:
+        stock: Final = _bundled_stock()["gpt-6-sol"]
+        stock_window: Final = stock["context_window"]
+        ceiling: Final = stock["max_context_window"]
+        assert isinstance(stock_window, int) and isinstance(ceiling, int) and stock_window < ceiling, stock
+        raised: Final = _model_name("codex-raised-window")
+        lowered: Final = _model_name("codex-lowered-window")
+        half_set: Final = _model_name("codex-half-set-window")
+        unset: Final = _model_name("codex-unset-window")
+        _new_model(scenario, raised, model="openai/gpt-6-sol", model_info={"max_input_tokens": ceiling + 50000})
+        _new_model(scenario, lowered, model="openai/gpt-6-sol", model_info={"max_input_tokens": stock_window // 2})
+        _new_model(scenario, half_set, model="openai/gpt-6-sol", model_info={"max_input_tokens": ceiling})
+        _new_model(scenario, half_set, model="openai/gpt-6-sol")
+        _new_model(scenario, unset, model="openai/gpt-6-sol")
+        windows: Final = _settled(
+            lambda: {slug: entry["context_window"] for slug, entry in _by_slug(_catalog(gateway)).items()},
+            lambda value: all(name in value for name in (raised, lowered, half_set, unset))
+            and value[raised] == ceiling,
+        )
+        assert {name: windows[name] for name in (raised, lowered, half_set, unset)} == {
+            raised: ceiling,
+            lowered: stock_window // 2,
+            half_set: stock_window,
+            unset: stock_window,
+        }, windows
+
+
 def test_stock_model_configured_tiers_override(gateway: Gateway) -> None:
     with gateway.scenario() as scenario:
         stock: Final = _bundled_stock()["gpt-6-sol"]

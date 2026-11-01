@@ -12680,6 +12680,23 @@ class PythonCore(DeprecatedRouterMembers):
             for deployment in self._routable_deployments(model_name, team_id)
         )
 
+    def _core_get_configured_max_input_tokens(
+        self, model_name: str, team_id: str | None = None
+    ) -> tuple[int | None, ...]:
+        """
+        Return the max_input_tokens each deployment a request from team_id to
+        model_name can route to (see _routable_deployments) sets in its own
+        model_info, in model_list order, None for a deployment that sets none
+        or a malformed one. Unlike get_model_listing_info, neither the cost map
+        nor a discovered limit is read, so only an operator's own value counts.
+
+        Returns an empty tuple for wildcard-expanded or unknown names.
+        """
+        return tuple(
+            coerce_token_limit(_configured_model_info(deployment).get("max_input_tokens"))
+            for deployment in self._routable_deployments(model_name, team_id)
+        )
+
     def _core_get_search_tool_support(self, model_name: str, team_id: str | None = None) -> tuple[bool | None, ...]:
         """
         Whether each deployment a request from team_id to model_name can route

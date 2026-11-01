@@ -7,8 +7,10 @@ never the OpenAI list shape. This module builds that body from the rows ``/v1/mo
 lists: a model Codex knows keeps Codex's own entry for it, any other model gets the fallback entry
 Codex itself uses for an unknown slug, and ``model_info.service_tiers`` becomes the entry's
 ``service_tiers``, which Codex turns into slash commands (``/ultrafast``) that send ``service_tier``
-upstream. A fallback entry offers the model group's ``supported_reasoning_efforts`` as its reasoning
-levels, trimmed to the ones the requesting Codex release can parse.
+upstream. A ``model_info.max_input_tokens`` the operator sets replaces a known model's
+``context_window``, up to the most Codex lets its own ``model_context_window`` raise that model to.
+A fallback entry offers the model group's ``supported_reasoning_efforts`` as its reasoning levels,
+trimmed to the ones the requesting Codex release can parse.
 
 The stock entries are Codex 0.159.3's bundled catalog, vendored unchanged from
 https://github.com/openai/codex/blob/rust-v0.159.3/codex-rs/models-manager/models.json (Apache-2.0)
@@ -158,6 +160,7 @@ class CodexStockModel(LiteLLMBaseModel):
     supports_search_tool: bool = False
     supported_reasoning_levels: tuple[CodexReasoningLevel, ...] = ()
     context_window: int | None = None
+    max_context_window: int | None = None
 
 
 class CodexStockCatalog(LiteLLMBaseModel):
@@ -173,8 +176,9 @@ class CodexCatalogRow:
     """What the catalog needs to know about one listed model: its public id, the listing's mode and
     input limit, the upstream model behind it, the reasoning effort its deployments pin, and the
     `model_info` values the operator set; `service_tiers` holds one raw `model_info.service_tiers`
-    value per deployment behind the id, None where a deployment sets none. `supported_reasoning_efforts`
-    is the model group's, None when unknown."""
+    value per deployment behind the id, None where a deployment sets none, and
+    `configured_max_input_tokens` one `model_info.max_input_tokens` per deployment the same way.
+    `supported_reasoning_efforts` is the model group's, None when unknown."""
 
     id: str
     mode: str | None = None
@@ -185,6 +189,7 @@ class CodexCatalogRow:
     service_tiers: tuple[object, ...] = ()
     supported_reasoning_efforts: tuple[str, ...] | None = None
     search_tool_support: tuple[bool | None, ...] = ()
+    configured_max_input_tokens: tuple[int | None, ...] = ()
 
 
 @cache
@@ -333,6 +338,32 @@ def _alias_context_window(row: CodexCatalogRow, stock_model: CodexStockModel) ->
     return MappingProxyType({"context_window": min(stock_model.context_window, row.max_input_tokens)})
 
 
+def _configured_window(row: CodexCatalogRow, stock_model: CodexStockModel) -> Mapping[str, int]:
+    """The `context_window` the operator's `model_info.max_input_tokens` gives a known model's entry,
+    or nothing, which keeps `stock_model`'s own.
+
+    A request to the row can route to any of its deployments, so the window is the smallest value they
+    set, and only when every one sets a value: a deployment that sets none leaves Codex's own window in
+    place, which is logged. The window never goes past `stock_model`'s `max_context_window`, the most
+    Codex lets its own `model_context_window` setting raise that model to."""
+    per_deployment: Final = row.configured_max_input_tokens
+    declared: Final = tuple(limit for limit in per_deployment if limit is not None)
+    if not declared:
+        return MappingProxyType({})
+    if len(declared) < len(per_deployment):
+        verbose_proxy_logger.warning(
+            "model_info.max_input_tokens for %s is set on %d of its %d deployments, so Codex keeps its own "
+            "context window: the window follows max_input_tokens only when every deployment sets it",
+            row.id,
+            len(declared),
+            len(per_deployment),
+        )
+        return MappingProxyType({})
+    ceiling: Final = stock_model.max_context_window
+    smallest: Final = min(declared)
+    return MappingProxyType({"context_window": smallest if ceiling is None else min(smallest, ceiling)})
+
+
 def _alias_reasoning_level(row: CodexCatalogRow, stock_model: CodexStockModel) -> str | None:
     efforts: Final = frozenset(level.effort for level in stock_model.supported_reasoning_levels)
     return row.reasoning_effort if row.reasoning_effort in efforts else None
@@ -398,6 +429,7 @@ def _entry(
         "upgrade": upgrade,
         **({} if search_tool is None else {"supports_search_tool": search_tool}),
         **(_deployment_defaults(row, stock_model) if is_alias and alias_defaults == "deployment" else {}),
+        **_configured_window(row, stock_model),
     }
     if configured is None:
         return stock_model.model_copy(update=listing)
@@ -473,10 +505,12 @@ def codex_models_response_json(
     byte limit silently and keeps its bundled one, so the body holds only the entries that fit,
     the ones offering a service tier taken first and the rest in listing order, an entry too large
     for the bytes left passed over, every kept entry at its listing position; `byte_limit=None`
-    keeps every entry. A row listed under another name than the Codex model its `upstream_model`
-    names (an alias) takes that model's entry; `alias_defaults="deployment"` drops the defaults
-    Codex picks for that model in favor of what the alias's deployments pin, while `"codex"` keeps
-    them, as Codex would use them for the model's own name. `client_version` is the requesting Codex's version, which decides the reasoning
+    keeps every entry. A row whose deployments all set `model_info.max_input_tokens` gets the smallest
+    as its known model's `context_window`, capped at that model's `max_context_window`. A row listed
+    under another name than the Codex model its `upstream_model` names (an alias) takes that model's
+    entry; `alias_defaults="deployment"` drops the defaults Codex picks for that model in favor of
+    what the alias's deployments pin, while `"codex"` keeps them, as Codex would use them for the
+    model's own name. `client_version` is the requesting Codex's version, which decides the reasoning
     levels a fallback entry may offer; None counts as a version too old for custom levels.
     """
     known: Final = bundled_codex_models() if stock is None else stock
@@ -519,6 +553,9 @@ def _catalog_row(
         search_tool_support=(
             registry.resolve(lookup_id, kind="search_tool_support", team_id=team_id) if registry is not None else ()
         ),
+        configured_max_input_tokens=(
+            registry.group(lookup_id, field="max_input_tokens", team_id=team_id) if registry is not None else ()
+        ),
     )
 
 
@@ -532,9 +569,9 @@ def codex_catalog_rows(
     """`rows` joined with the router's configured metadata, looked up by each entry's internal id so
     team-scoped rows resolve the way the Anthropic listing's display names do, a `model_group_alias`
     reading its target's deployments under its own name; `team_id` is the requesting key's team, so the
-    upstream model that picks Codex's stock entry and the tiers are read only off the deployments its
-    requests can route to, and the reasoning efforts are the ones `/model_group/info` reports for the
-    entry. Display names are read under `label_entries`' ids when given."""
+    upstream model that picks Codex's stock entry, the tiers, and the configured input limits are read
+    only off the deployments its requests can route to, and the reasoning efforts are the ones
+    `/model_group/info` reports for the entry. Display names are read under `label_entries`' ids when given."""
     lookup_ids: Final = MappingProxyType(dict(entries))
     label_ids: Final = lookup_ids if label_entries is None else MappingProxyType(dict(label_entries))
     return tuple(
