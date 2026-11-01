@@ -17,7 +17,8 @@ This pattern can be replicated for other message formats (e.g., Anthropic).
 import json
 import time
 import uuid
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Generator, Iterator, Mapping, Sequence
+from contextlib import contextmanager
 from itertools import chain, groupby
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Union, cast
@@ -76,6 +77,30 @@ if TYPE_CHECKING:
     )
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
+
+
+_INSPECTION_KEYS: Final[tuple[str, ...]] = ("response", "responses", "guardrail_choice_index")
+
+
+@contextmanager
+def _borrowed_inspection_keys(request_data: dict[str, object]) -> Generator[None]:
+    """Lend a round the keys it inspects through, and give the caller's own back.
+
+    The round owns ``response``, ``responses`` and the choice label only while it runs. What it
+    leaves behind is read by later hooks, and a label the caller supplied is not one a round may
+    report, so the incoming label is dropped for the duration.
+    """
+    missing: Final = object()
+    priors: Final = tuple((key, request_data.get(key, missing)) for key in _INSPECTION_KEYS)
+    request_data.pop("guardrail_choice_index", None)
+    try:
+        yield
+    finally:
+        for key, prior in priors:
+            if prior is missing:
+                request_data.pop(key, None)
+            else:
+                request_data[key] = prior
 
 
 class OpenAIChatCompletionsHandler(BaseTranslation):
@@ -678,13 +703,8 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         from litellm.proxy.policy_engine.pipeline_executor import UndeliverableStreamRewrite
 
         inspection_request_data: Final = request_data if request_data is not None else {}
-        missing: Final = object()
-        prior_response: Final = inspection_request_data.get("response", missing)
-        prior_responses: Final = inspection_request_data.get("responses", missing)
-        prior_choice_index: Final = inspection_request_data.get("guardrail_choice_index", missing)
-        inspection_request_data.pop("guardrail_choice_index", None)
         undeliverable: UndeliverableStreamRewrite | None = None  # rebind-ok: keeps the first failure
-        try:
+        with _borrowed_inspection_keys(inspection_request_data):
             for inspection_response in inspection_responses:
                 inspection_request_data["response"] = inspection_response
                 inspection_request_data["guardrail_choice_index"] = (
@@ -709,19 +729,6 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                 except UndeliverableStreamRewrite as exc:
                     if undeliverable is None:
                         undeliverable = exc
-        finally:
-            if prior_response is missing:
-                inspection_request_data.pop("response", None)
-            else:
-                inspection_request_data["response"] = prior_response
-            if prior_responses is missing:
-                inspection_request_data.pop("responses", None)
-            else:
-                inspection_request_data["responses"] = prior_responses
-            if prior_choice_index is missing:
-                inspection_request_data.pop("guardrail_choice_index", None)
-            else:
-                inspection_request_data["guardrail_choice_index"] = prior_choice_index
         if undeliverable is not None:
             raise undeliverable
         if not deliver_ended_stream_rewrites:
@@ -938,17 +945,12 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         resolved_request_data: Final[dict[str, object]] = (
             request_data if request_data is not None else {"responses": responses_so_far}
         )
-        missing: Final = object()
-        prior_response: Final = resolved_request_data.get("response", missing)
-        prior_responses: Final = resolved_request_data.get("responses", missing)
-        prior_choice_index: Final = resolved_request_data.get("guardrail_choice_index", missing)
-        resolved_request_data.pop("guardrail_choice_index", None)
-        if len(indices) == 1:
-            resolved_request_data["guardrail_choice_index"] = indices[0]
-        if "responses" not in resolved_request_data:
-            resolved_request_data["responses"] = responses_so_far
-        self.merge_user_api_key_metadata_into_request(resolved_request_data, user_api_key_dict)
-        try:
+        with _borrowed_inspection_keys(resolved_request_data):
+            if len(indices) == 1:
+                resolved_request_data["guardrail_choice_index"] = indices[0]
+            if "responses" not in resolved_request_data:
+                resolved_request_data["responses"] = responses_so_far
+            self.merge_user_api_key_metadata_into_request(resolved_request_data, user_api_key_dict)
             inputs: Final = GenericGuardrailAPIInputs(texts=texts_to_check)
             if self._streamed_tool_call_fingerprints(responses_so_far):
                 stream_ended: Final = self._first_choice_has_finished(responses_so_far)
@@ -1069,16 +1071,6 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                 }
             )
             sink.record(transformed_texts, transformed_holdback)
-        finally:
-            for key, prior in (
-                ("response", prior_response),
-                ("responses", prior_responses),
-                ("guardrail_choice_index", prior_choice_index),
-            ):
-                if prior is missing:
-                    resolved_request_data.pop(key, None)
-                else:
-                    resolved_request_data[key] = prior
 
     def get_streaming_scan_key(self, responses_so_far: Sequence[object]) -> StreamingScanKey | None:
         chunks: Final = tuple(chunk for chunk in responses_so_far if isinstance(chunk, ModelResponseStream))
