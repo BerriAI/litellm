@@ -4,7 +4,6 @@ Tests for JSON-based provider configuration system.
 
 import os
 import sys
-from unittest.mock import patch
 
 try:
     import pytest
@@ -94,20 +93,24 @@ class TestJSONProviderLoader:
         assert isinstance(supported, list)
         assert len(supported) > 0
 
-    def test_tool_params_excluded_when_function_calling_not_supported(self):
-        """Test that tool-related params are excluded for models that don't support
-        function calling. Regression test for https://github.com/BerriAI/litellm/issues/21125
+    def test_tool_params_excluded_when_function_calling_not_supported(self, monkeypatch):
+        """Test that tool-related params are excluded for models the model map marks as not
+        supporting function calling. Regression test for https://github.com/BerriAI/litellm/issues/21125
         """
+        import litellm
         from litellm.llms.openai_like.dynamic_config import create_config_class
         from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 
+        monkeypatch.setitem(
+            litellm.model_cost,
+            "publicai/some-model-without-fc",
+            {"litellm_provider": "publicai", "mode": "chat", "supports_function_calling": False},
+        )
         provider = JSONProviderRegistry.get("publicai")
         config_class = create_config_class(provider)
         config = config_class()
 
-        # Mock supports_function_calling to return False
-        with patch("litellm.utils.supports_function_calling", return_value=False):
-            supported = config.get_supported_openai_params("some-model-without-fc")
+        supported = config.get_supported_openai_params("some-model-without-fc")
 
         tool_params = [
             "tools",
@@ -126,18 +129,22 @@ class TestJSONProviderLoader:
         assert "max_tokens" in supported
         assert "stop" in supported
 
-    def test_tool_params_included_when_function_calling_supported(self):
+    def test_tool_params_included_when_function_calling_supported(self, monkeypatch):
         """Test that tool-related params are included for models that support function calling."""
+        import litellm
         from litellm.llms.openai_like.dynamic_config import create_config_class
         from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 
+        monkeypatch.setitem(
+            litellm.model_cost,
+            "publicai/some-model-with-fc",
+            {"litellm_provider": "publicai", "mode": "chat", "supports_function_calling": True},
+        )
         provider = JSONProviderRegistry.get("publicai")
         config_class = create_config_class(provider)
         config = config_class()
 
-        # Mock supports_function_calling to return True
-        with patch("litellm.utils.supports_function_calling", return_value=True):
-            supported = config.get_supported_openai_params("some-model-with-fc")
+        supported = config.get_supported_openai_params("some-model-with-fc")
 
         assert "tools" in supported
         assert "tool_choice" in supported

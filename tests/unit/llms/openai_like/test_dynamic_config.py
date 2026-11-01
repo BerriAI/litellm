@@ -1,7 +1,10 @@
+from typing import Final
+
 import pytest
 
+import litellm
 from litellm.llms.openai_like import dynamic_config
-from litellm.llms.openai_like.dynamic_config import create_responses_config_class
+from litellm.llms.openai_like.dynamic_config import create_config_class, create_responses_config_class
 from litellm.llms.openai_like.json_loader import SimpleProviderConfig
 from litellm.types.router import GenericLiteLLMParams
 
@@ -139,3 +142,58 @@ class TestForceStoreFalse:
             headers={},
         )
         assert params["store"] is True
+
+
+class TestToolParamsFollowTheModelMap:
+    _TOOLS: Final = [{"type": "function", "function": {"name": "get_weather", "parameters": {"type": "object"}}}]
+
+    @pytest.mark.parametrize(
+        ("model_supports_fc", "provider_supports_fc", "tools_forwarded"),
+        [
+            (None, None, True),
+            (None, False, False),
+            (None, True, True),
+            (True, None, True),
+            (False, None, False),
+            (True, False, True),
+            (False, True, False),
+        ],
+        ids=[
+            "unmapped",
+            "unmapped_provider_unsupported",
+            "unmapped_provider_supported",
+            "mapped_as_supported",
+            "mapped_as_unsupported",
+            "model_supported_overrides_provider",
+            "model_unsupported_overrides_provider",
+        ],
+    )
+    def test_tools_are_dropped_only_when_the_model_or_provider_says_unsupported(
+        self,
+        model_supports_fc: bool | None,
+        provider_supports_fc: bool | None,
+        tools_forwarded: bool,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        if model_supports_fc is not None:
+            monkeypatch.setitem(
+                litellm.model_cost,
+                "tools_map/some-model",
+                {"litellm_provider": "tools_map", "mode": "chat", "supports_function_calling": model_supports_fc},
+            )
+        provider_overrides: Final = (
+            {}
+            if provider_supports_fc is None
+            else {"provider_info": {"supports_function_calling": provider_supports_fc}}
+        )
+        config: Final = create_config_class(_provider("tools_map", **provider_overrides))()
+
+        optional_params: Final = config.map_openai_params(
+            non_default_params={"tools": self._TOOLS, "tool_choice": "auto"},
+            optional_params={},
+            model="some-model",
+            drop_params=True,
+        )
+
+        assert ("tools" in optional_params) is tools_forwarded
+        assert ("tool_choice" in optional_params) is tools_forwarded
