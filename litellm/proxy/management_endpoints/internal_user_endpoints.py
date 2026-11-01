@@ -1111,13 +1111,11 @@ async def _target_in_caller_admin_org(
     )
     if not admin_memberships:
         return False
-    shared_membership: Final = await prisma_client.db.litellm_organizationmembership.find_first(
-        where={
-            "user_id": target_user_id,
-            "organization_id": {"in": [membership.organization_id for membership in admin_memberships]},
-        }
+    admin_org_ids: Final = {membership.organization_id for membership in admin_memberships}
+    target_memberships: Final = await prisma_client.db.litellm_organizationmembership.find_many(
+        where={"user_id": target_user_id}
     )
-    return shared_membership is not None
+    return any(membership.organization_id in admin_org_ids for membership in target_memberships)
 
 
 @router.get(

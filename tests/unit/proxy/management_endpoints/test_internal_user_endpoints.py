@@ -3738,11 +3738,8 @@ _ORG_MEMBERSHIPS: Final = (
 
 
 def _membership_matches(membership: SimpleNamespace, where: Mapping[str, object]) -> bool:
-    org_filter: Final = where.get("organization_id")
-    return (
-        membership.user_id == where["user_id"]
-        and ("user_role" not in where or membership.user_role == where["user_role"])
-        and (not isinstance(org_filter, dict) or membership.organization_id in org_filter["in"])
+    return membership.user_id == where["user_id"] and (
+        "user_role" not in where or membership.user_role == where["user_role"]
     )
 
 
@@ -3760,13 +3757,9 @@ def _org_admin_prisma(mocker: MockerFixture) -> MagicMock:
     async def find_many(**kwargs: Mapping[str, object]) -> list[SimpleNamespace]:
         return [m for m in _ORG_MEMBERSHIPS if _membership_matches(m, kwargs["where"])]
 
-    async def find_first(**kwargs: Mapping[str, object]) -> SimpleNamespace | None:
-        return next((m for m in _ORG_MEMBERSHIPS if _membership_matches(m, kwargs["where"])), None)
-
     prisma: Final = mocker.MagicMock()
     prisma.db.litellm_usertable.find_unique = mocker.AsyncMock(side_effect=find_unique)
     prisma.db.litellm_organizationmembership.find_many = mocker.AsyncMock(side_effect=find_many)
-    prisma.db.litellm_organizationmembership.find_first = mocker.AsyncMock(side_effect=find_first)
     return prisma
 
 
