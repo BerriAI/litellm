@@ -9383,7 +9383,18 @@ def test_anthropic_messages_pt_text_document_keeps_charset_named_by_the_data_uri
 
 @pytest.mark.parametrize(
     ("charset", "text"),
-    [("shift_jis", "日本語"), ("windows-1252", "café"), ("KOI8-R", "привет"), ("utf-16", "naïve")],
+    [
+        ("shift_jis", "日本語"),
+        ("windows-1252", "café"),
+        ("KOI8-R", "привет"),
+        ("utf-16", "naïve"),
+        ("iso-8859-9", "İstanbul"),
+        ("iso-8859-11", "ไทย"),
+        ("tis-620", "ไทย"),
+        ("gb2312", "中文"),
+        ("big5-hkscs", "香港"),
+        ("ms932", "日本語"),
+    ],
 )
 def test_anthropic_messages_pt_reads_a_text_attachment_in_a_legacy_encoding_its_data_uri_names(charset, text):
     data_uri: Final = f"data:text/plain;charset={charset};base64," + base64.b64encode(text.encode(charset)).decode()
