@@ -1901,6 +1901,7 @@ interface UiSpendLogsParams {
   /** Filter by model ID (litellm model deployment id) */
   model_id?: string;
   key_alias?: string;
+  exclude_key_alias?: string;
   error_code?: string;
   error_message?: string;
   sort_by?: string;
