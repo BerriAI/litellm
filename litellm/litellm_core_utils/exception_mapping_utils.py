@@ -1272,6 +1272,27 @@ def _map_vertex_exception(
 ) -> None:
     status_code: Final[object] = getattr(original_exception, "status_code", None)
     body_code: Final[int | None] = _get_body_error_code(error_str)
+    if (
+        exception_type == "TransportError"
+        or "TransportError" in type(original_exception).__name__
+        or "google.auth.exceptions.TransportError" in str(type(original_exception))
+    ):
+        raise APIConnectionError(
+            message=f"{custom_llm_provider.capitalize()}Exception - Authentication TransportError: {error_str}",
+            llm_provider=custom_llm_provider,
+            model=model,
+            litellm_debug_info=extra_information,
+        )
+    if (
+        exception_type in ("RefreshError", "GoogleAuthError", "DefaultCredentialsError")
+        or "google.auth.exceptions" in str(type(original_exception))
+    ):
+        raise AuthenticationError(
+            message=f"{custom_llm_provider.capitalize()}Exception - Authentication Error: {error_str}",
+            llm_provider=custom_llm_provider,
+            model=model,
+            litellm_debug_info=extra_information,
+        )
     if "Vertex AI API has not been used in project" in error_str or "Unable to find your project" in error_str:
         raise BadRequestError(
             message=f"litellm.BadRequestError: {custom_llm_provider}Exception - {error_str}",

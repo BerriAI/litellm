@@ -772,6 +772,37 @@ def test_vertex_wrapped_500_with_body_code_403_maps_to_bad_request() -> None:
     assert excinfo.value.status_code == 403
 
 
+def test_vertex_auth_transport_error_maps_to_api_connection_error() -> None:
+    import google.auth.exceptions
+    original_exception = google.auth.exceptions.TransportError("Socket timeout")
+
+    with pytest.raises(litellm.APIConnectionError) as excinfo:
+        exception_type(
+            model="gemini/gemini-2.5-flash",
+            original_exception=original_exception,
+            custom_llm_provider="vertex_ai",
+        )
+
+    assert isinstance(excinfo.value, litellm.APIConnectionError)
+    assert "Authentication TransportError" in str(excinfo.value)
+    assert "https://github.com/BerriAI/litellm/issues/new" not in str(excinfo.value)
+
+
+def test_vertex_auth_refresh_error_maps_to_authentication_error() -> None:
+    import google.auth.exceptions
+    original_exception = google.auth.exceptions.RefreshError("Token has been expired or revoked")
+
+    with pytest.raises(litellm.AuthenticationError) as excinfo:
+        exception_type(
+            model="gemini/gemini-2.5-flash",
+            original_exception=original_exception,
+            custom_llm_provider="vertex_ai",
+        )
+
+    assert isinstance(excinfo.value, litellm.AuthenticationError)
+    assert excinfo.value.status_code == 401
+
+
 class TestGetBodyErrorCode:
     """Unit tests for _get_body_error_code helper."""
 
