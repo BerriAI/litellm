@@ -75,7 +75,7 @@ def test_responses_media_reaches_each_gemini_role(role: str) -> None:
             "role": "user",
             "parts": [
                 {
-                    "function_response": {
+                    "functionResponse": {
                         "id": "call_media",
                         "name": "get_media",
                         "response": {"ok": True},
@@ -155,9 +155,9 @@ def test_tool_uri_policy_follows_provider_and_model_placement(
     response: Final = {"name": "get_media", "response": {"ok": True}}
     # Checked 2026-10-26: https://cloud.google.com/vertex-ai/generative-ai/docs/reference/rest/v1/Content#FunctionResponsePart
     assert result[-1]["parts"] == (
-        [{"function_response": {**response, "id": "call_media", "parts": [file]}}]
+        [{"functionResponse": {**response, "id": "call_media", "parts": [file]}}]
         if nested
-        else [{"function_response": response}, {**file, "video_metadata": {"fps": 2}}]
+        else [{"functionResponse": response}, {**file, "video_metadata": {"fps": 2}}]
     )
 
 
@@ -728,12 +728,12 @@ def test_thought_signature_preservation_in_conversion():
 
     # Verify thought signature is preserved in first function call part
     assert len(gemini_parts) == 2
-    assert "function_call" in gemini_parts[0]
+    assert "functionCall" in gemini_parts[0]
     assert "thoughtSignature" in gemini_parts[0]
     assert gemini_parts[0]["thoughtSignature"] == test_signature
 
     # Verify second function call part does not have thought signature
-    assert "function_call" in gemini_parts[1]
+    assert "functionCall" in gemini_parts[1]
     assert "thoughtSignature" not in gemini_parts[1]
 
 
@@ -864,7 +864,7 @@ def test_dummy_signature_added_for_gemini_3_conversation_history():
 
     # Verify dummy signature is added
     assert len(gemini_parts) == 1
-    assert "function_call" in gemini_parts[0]
+    assert "functionCall" in gemini_parts[0]
     assert "thoughtSignature" in gemini_parts[0]
 
     # Verify it's the expected dummy signature (base64 encoded "skip_thought_signature_validator")
@@ -905,7 +905,7 @@ def test_dummy_signature_not_added_for_gemini_2_5():
 
     # Verify no dummy signature is added for non-gemini-3 models
     assert len(gemini_parts) == 1
-    assert "function_call" in gemini_parts[0]
+    assert "functionCall" in gemini_parts[0]
     assert "thoughtSignature" not in gemini_parts[0]
 
 
@@ -944,7 +944,7 @@ def test_dummy_signature_not_added_when_signature_exists():
 
     # Verify real signature is preserved, not replaced with dummy
     assert len(gemini_parts) == 1
-    assert "function_call" in gemini_parts[0]
+    assert "functionCall" in gemini_parts[0]
     assert "thoughtSignature" in gemini_parts[0]
     assert gemini_parts[0]["thoughtSignature"] == real_signature
 
@@ -975,7 +975,7 @@ def test_dummy_signature_with_function_call_mode():
 
     # Verify dummy signature is added
     assert len(gemini_parts) == 1
-    assert "function_call" in gemini_parts[0]
+    assert "functionCall" in gemini_parts[0]
     assert "thoughtSignature" in gemini_parts[0]
 
     # Verify it's the expected dummy signature
@@ -1778,9 +1778,9 @@ def test_convert_tool_response_with_base64_image():
     assert isinstance(result, list), "Should return a parts list when media is present"
     assert len(result) == 1, "Should return one function_response part"
     result_part = result[0]
-    assert "function_response" in result_part
+    assert "functionResponse" in result_part
     assert "inline_data" not in result_part
-    function_response = result_part["function_response"]
+    function_response = result_part["functionResponse"]
     assert function_response["name"] == "click_at"
     assert "response" in function_response
     # Verify JSON response is parsed correctly
@@ -1883,7 +1883,7 @@ def test_gemini_history_places_tool_media_for_model(
     assert contents[-2] == {
         "role": "user",
         "parts": [
-            {"function_response": function_response},
+            {"functionResponse": function_response},
             *([] if nested else media_parts),
         ],
     }
@@ -1920,8 +1920,8 @@ def test_convert_tool_response_text_only():
     assert not isinstance(result, list), "Should return single part when no image"
 
     # Check function_response exists
-    assert "function_response" in result
-    function_response = result["function_response"]
+    assert "functionResponse" in result
+    function_response = result["functionResponse"]
     assert function_response["name"] == "wait_5_seconds"
     # Verify JSON response is parsed correctly
     assert "status" in function_response["response"]
@@ -2209,9 +2209,9 @@ def test_convert_tool_response_with_pdf_file():
     assert isinstance(result, list), "Should return a parts list when media is present"
     assert len(result) == 1, "Should return one function_response part"
     result_part = result[0]
-    assert "function_response" in result_part
+    assert "functionResponse" in result_part
     assert "inline_data" not in result_part
-    function_response = result_part["function_response"]
+    function_response = result_part["functionResponse"]
     assert function_response["name"] == "analyze_document"
     assert "response" in function_response
     # Verify JSON response is parsed correctly
@@ -2259,7 +2259,7 @@ def test_convert_tool_response_with_input_file_type():
     # Check inline_data is nested under functionResponse.parts.
     assert isinstance(result, list), "Should return a parts list when media is present"
     assert len(result) == 1, "Should return one function_response part"
-    function_response = result[0]["function_response"]
+    function_response = result[0]["functionResponse"]
     assert (
         function_response["parts"][0]["inline_data"]["mime_type"] == "application/pdf"
     )
@@ -2296,7 +2296,7 @@ def test_convert_tool_response_with_nested_file_object():
     # Check inline_data is nested under functionResponse.parts.
     assert isinstance(result, list), "Should return a parts list when media is present"
     assert len(result) == 1, "Should return one function_response part"
-    function_response = result[0]["function_response"]
+    function_response = result[0]["functionResponse"]
     inline_data: BlobType = function_response["parts"][0]["inline_data"]
     assert "data" in inline_data
     assert "mime_type" in inline_data
@@ -2548,11 +2548,11 @@ def test_function_response_has_user_role():
 
     assert contents[0]["role"] == "user"
     assert contents[1]["role"] == "model"
-    assert "function_call" in contents[1]["parts"][0]
+    assert "functionCall" in contents[1]["parts"][0]
 
     # The critical assertion: function response must have role="user"
     assert contents[2]["role"] == "user"
-    assert "function_response" in contents[2]["parts"][0]
+    assert "functionResponse" in contents[2]["parts"][0]
 
 
 def test_multi_turn_function_calling_roles():
@@ -2624,9 +2624,9 @@ def test_multi_turn_function_calling_roles():
     # Verify the function response blocks specifically have role="user"
     for i, content in enumerate(contents):
         for part in content["parts"]:
-            if "function_response" in part:
+            if "functionResponse" in part or "function_response" in part:
                 assert content["role"] == "user", (
-                    f"Content block {i} with function_response has role='{content['role']}', expected 'user'"
+                    f"Content block {i} with functionResponse has role='{content['role']}', expected 'user'"
                 )
 
 
@@ -2695,7 +2695,7 @@ def test_gemini_thought_signature_preservation_real_response():
     assert (
         parts_out[0]["thoughtSignature"] == "mock_signature_from_text_part"
     )
-    assert "function_call" in parts_out[1]
+    assert "functionCall" in parts_out[1]
     assert "thoughtSignature" not in parts_out[1]
 
 
@@ -2730,7 +2730,7 @@ def test_gemini_thought_signature_deduplication_assumed_response():
     assert len(parts_out) == 2
     assert "text" in parts_out[0]
     assert "thoughtSignature" not in parts_out[0]
-    assert "function_call" in parts_out[1]
+    assert "functionCall" in parts_out[1]
     assert parts_out[1]["thoughtSignature"] == "mock_signature_63k"
 
 
@@ -2788,7 +2788,7 @@ def test_gemini_thought_signature_pure_tool_call():
     assert "parts" in converted[0]
     parts_out = converted[0]["parts"]
     assert len(parts_out) == 1
-    assert "function_call" in parts_out[0]
+    assert "functionCall" in parts_out[0]
     assert parts_out[0]["thoughtSignature"] == "pure_tool_signature"
 
 
@@ -2816,7 +2816,7 @@ def test_gemini_distinct_text_and_tool_signatures_are_both_preserved():
 
     assert parts[0]["text"] == "Some analysis."
     assert parts[0]["thoughtSignature"] == "text_signature"
-    assert "function_call" in parts[1]
+    assert "functionCall" in parts[1]
     assert parts[1]["thoughtSignature"] == "tool_signature"
 
 
@@ -2847,7 +2847,7 @@ def test_gemini_25_text_signature_survives_replay_to_gemini_3():
 
     assert parts[0]["text"] == "I will list the directory."
     assert parts[0]["thoughtSignature"] == "real_25_signature"
-    assert "function_call" in parts[1]
+    assert "functionCall" in parts[1]
     assert parts[1]["thoughtSignature"] == _get_dummy_thought_signature()
 
 
@@ -2890,7 +2890,7 @@ def test_gemini_function_call_signature_round_trip_no_duplicate():
     signatures = [p["thoughtSignature"] for p in parts if "thoughtSignature" in p]
     assert signatures == ["signature_from_function_call"]
     assert "thoughtSignature" not in parts[0]
-    assert "function_call" in parts[1]
+    assert "functionCall" in parts[1]
 
 
 def test_gemini_server_side_tool_signature_not_duplicated_on_text():
@@ -2958,8 +2958,8 @@ def test_convert_tool_response_with_url_image(content_type: str, nested: bool) -
     inline: Final = {"inline_data": {"data": base64.b64encode(WHITE_PNG).decode(), "mime_type": "image/png"}}
     response: Final = {"name": "type_text_at", "response": {"url": "https://example.com"}}
     assert result == (
-        [{"function_response": {**response, "parts": [inline]}}] if nested else
-        [{"function_response": response}, {**inline, "media_resolution": {"level": "MEDIA_RESOLUTION_HIGH"}}]
+        [{"functionResponse": {**response, "parts": [inline]}}] if nested else
+        [{"functionResponse": response}, {**inline, "media_resolution": {"level": "MEDIA_RESOLUTION_HIGH"}}]
     )
 
 
@@ -3015,4 +3015,4 @@ def test_anthropic_messages_history_replays_to_gemini_without_claude_signature()
     signatures: Final = [part["thoughtSignature"] for part in parts if "thoughtSignature" in part]
     assert signatures == [_get_dummy_thought_signature()]
     assert [part for part in parts if part.get("text") == thinking] == [{"thought": True, "text": thinking}]
-    assert next(part for part in parts if "function_call" in part)["thoughtSignature"] == _get_dummy_thought_signature()
+    assert next(part for part in parts if "functionCall" in part)["thoughtSignature"] == _get_dummy_thought_signature()
