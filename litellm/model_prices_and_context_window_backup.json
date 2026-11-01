@@ -48955,6 +48955,7 @@
     },
     "together_ai/Qwen/Qwen3.8-2.4T-A95B": {
         "cache_read_input_token_cost": 2.5e-07,
+        "deprecation_date": "2026-11-04",
         "input_cost_per_token": 2e-06,
         "litellm_provider": "together_ai",
         "max_input_tokens": 1010000,
