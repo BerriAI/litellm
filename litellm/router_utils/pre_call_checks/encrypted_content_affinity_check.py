@@ -36,12 +36,12 @@ Safe to enable globally:
 - No cache required.
 """
 
-from collections.abc import Iterator, Mapping, Sequence
-from dataclasses import dataclass
-from functools import cache
+from collections.abc import Callable, Iterator, Mapping, Sequence
+from dataclasses import dataclass, field
+from functools import cache, partial
 from typing import TYPE_CHECKING, Final, Optional, cast
 
-from pydantic import BaseModel, TypeAdapter
+from pydantic import BaseModel, TypeAdapter, ValidationError
 
 import litellm
 from litellm._logging import verbose_router_logger
@@ -67,6 +67,7 @@ if TYPE_CHECKING:
     from litellm.router_api import RoutingContext
 
 _REQUEST_KWARGS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+_HEADERS_ADAPTER: Final = TypeAdapter(Mapping[object, object])
 _ACCOUNT_SCOPE_HEADERS: Final = frozenset({"openai-organization", "openai-project", "cookie"})
 _SINGLE_VENDOR_PROVIDERS: Final = frozenset({LlmProviders.OPENAI.value})
 
@@ -82,15 +83,16 @@ class _ProviderRoute:
 class _EncryptionBoundary:
     api_base: object
     api_key: object
-    model: str | None
+    model: Callable[[], str | None] = field(compare=False)
     account_scope: frozenset[tuple[str, object]]
     explicit_pair: bool
 
     def is_shared_with(self, other: "_EncryptionBoundary") -> bool:
         if (self.api_base, self.api_key) != (other.api_base, other.api_key):
             return False
-        both_explicit: Final = self.explicit_pair and other.explicit_pair
-        return both_explicit or (self.model, self.account_scope) == (other.model, other.account_scope)
+        if self.explicit_pair and other.explicit_pair:
+            return True
+        return self.account_scope == other.account_scope and self.model() == other.model()
 
 
 class EncryptedContentAffinityCheck(CustomLogger):
@@ -261,17 +263,16 @@ class EncryptedContentAffinityCheck(CustomLogger):
         effective_params: Final = with_named_credential(params)
         explicit_api_key: Final = effective_params.get("api_key")
         explicit_api_base: Final = effective_params.get("api_base")
-        provider_route: Final = EncryptedContentAffinityCheck._provider_route(effective_params)
-        route: Final = (
-            provider_route
-            if provider_route is not None and provider_route.provider in _SINGLE_VENDOR_PROVIDERS
-            else None
-        )
         account_scope: Final = EncryptedContentAffinityCheck._account_scope(effective_params)
         if explicit_api_key and explicit_api_base:
             return _EncryptionBoundary(
-                explicit_api_base, explicit_api_key, route.model if route else None, account_scope, explicit_pair=True
+                explicit_api_base,
+                explicit_api_key,
+                cache(partial(EncryptedContentAffinityCheck._single_vendor_model, effective_params)),
+                account_scope,
+                explicit_pair=True,
             )
+        route: Final = EncryptedContentAffinityCheck._single_vendor_route(effective_params)
         if route is None:
             return None
         api_key: Final = explicit_api_key or EncryptedContentAffinityCheck._default_api_key(route)
@@ -282,7 +283,7 @@ class EncryptedContentAffinityCheck(CustomLogger):
         )
         if not api_base:
             return None
-        return _EncryptionBoundary(api_base, api_key, route.model, account_scope, explicit_pair=False)
+        return _EncryptionBoundary(api_base, api_key, lambda: route.model, account_scope, explicit_pair=False)
 
     @staticmethod
     def _params_mapping(litellm_params: object) -> Mapping[str, object] | None:
@@ -311,8 +312,18 @@ class EncryptedContentAffinityCheck(CustomLogger):
     @staticmethod
     def _header_mapping(headers: object) -> Mapping[str, object]:
         if isinstance(headers, Mapping):
-            return _REQUEST_KWARGS_ADAPTER.validate_python(headers)
+            return {str(name): value for name, value in _HEADERS_ADAPTER.validate_python(headers).items()}
         return {}
+
+    @staticmethod
+    def _single_vendor_route(litellm_params: Mapping[str, object]) -> _ProviderRoute | None:
+        route: Final = EncryptedContentAffinityCheck._provider_route(litellm_params)
+        return route if route is not None and route.provider in _SINGLE_VENDOR_PROVIDERS else None
+
+    @staticmethod
+    def _single_vendor_model(litellm_params: Mapping[str, object]) -> str | None:
+        route: Final = EncryptedContentAffinityCheck._single_vendor_route(litellm_params)
+        return route.model if route is not None else None
 
     @staticmethod
     def _provider_route(litellm_params: Mapping[str, object]) -> _ProviderRoute | None:
@@ -329,7 +340,7 @@ class EncryptedContentAffinityCheck(CustomLogger):
             provider_model, provider, _, provider_api_base = get_llm_provider(
                 model=model, litellm_params=GenericLiteLLMParams.model_validate(dict(litellm_params))
             )
-        except BadRequestError:
+        except (BadRequestError, ValidationError):
             return None
         return _ProviderRoute(provider_model, provider, provider_api_base)
 

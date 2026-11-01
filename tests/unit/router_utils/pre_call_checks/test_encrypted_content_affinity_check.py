@@ -15,6 +15,7 @@ The mechanism works without any cache and supports two encoding strategies:
   encrypted_content back to their original forms before sending to the upstream provider.
 """
 
+import datetime
 import time
 from collections.abc import Mapping
 from typing import Final
@@ -3049,6 +3050,7 @@ class _SecretReadCounter(CustomSecretManager):
         pytest.param(
             {"model": "groq/llama-4-scout"}, "origin", id="reasoning from a provider with no default boundary"
         ),
+        pytest.param({**GATEWAY_BASE, "api_key": "shared-key"}, "origin", id="reasoning between explicit pairs"),
     ],
 )
 def test_hop_strip_reads_no_secrets_when_no_default_boundary_needs_resolving(
@@ -3082,6 +3084,60 @@ def test_hop_strip_reads_no_secrets_when_no_default_boundary_needs_resolving(
     assert secret_reads.reads == 0
 
 
+@pytest.mark.parametrize(
+    "unreadable_params",
+    [
+        pytest.param(
+            {"model": "openai/gpt-5.5", "litellm_credential_name": "mistyped"},
+            id="named credential with a value of the wrong type",
+        ),
+        pytest.param(
+            {**GATEWAY_BASE, "api_key": "shared-key", "extra_headers": {1: "one"}},
+            id="extra header whose name is not a string",
+        ),
+    ],
+)
+def test_hop_strip_keeps_reasoning_a_target_can_decrypt_beside_a_target_with_unreadable_params(
+    monkeypatch: pytest.MonkeyPatch, unreadable_params: dict[str, object]
+):
+    from litellm.router_utils.pre_call_checks.encrypted_content_affinity_check import (
+        EncryptedContentAffinityCheck,
+    )
+
+    monkeypatch.setattr(
+        litellm,
+        "credential_list",
+        [
+            CredentialItem(
+                credential_name="mistyped",
+                credential_values={"api_key": "shared-key", "api_version": datetime.date(2024, 10, 21)},
+                credential_info={},
+            )
+        ],
+    )
+    shared_pair: Final = {**GATEWAY_BASE, "api_key": "shared-key"}
+    router: Final = litellm.Router(
+        model_list=[
+            _default_endpoint_deployment("origin", shared_pair),
+            _default_endpoint_deployment("unreadable", unreadable_params),
+            _default_endpoint_deployment("target", shared_pair),
+        ]
+    )
+    ctx: Final = RoutingContext(router)
+    reasoning: Final = _reasoning_input_minted_by("origin")[0]
+    original_reasoning: Final = dict(reasoning)
+    request_input: Final = [reasoning, {"role": "user", "content": "and sunsets?"}]
+
+    EncryptedContentAffinityCheck.strip_reasoning_the_targets_cannot_decrypt(
+        ctx,
+        request_input,
+        None,
+        (_deployment_of(ctx, "unreadable"), _deployment_of(ctx, "target")),
+        unmarked_origin=None,
+    )
+
+    assert request_input[0] == original_reasoning
+
 def test_boundary_key_puts_pydantic_and_plain_params_on_one_default_endpoint_boundary():
     from litellm.router_utils.pre_call_checks.encrypted_content_affinity_check import (
         EncryptedContentAffinityCheck,
@@ -3089,9 +3145,12 @@ def test_boundary_key_puts_pydantic_and_plain_params_on_one_default_endpoint_bou
     from litellm.types.router import LiteLLM_Params
 
     pydantic_key: Final = EncryptedContentAffinityCheck._encryption_boundary_key(LiteLLM_Params(**OPENAI_SHARED_KEY))
+    plain_key: Final = EncryptedContentAffinityCheck._encryption_boundary_key(dict(OPENAI_SHARED_KEY))
 
     assert pydantic_key is not None
-    assert pydantic_key == EncryptedContentAffinityCheck._encryption_boundary_key(dict(OPENAI_SHARED_KEY))
+    assert plain_key is not None
+    assert pydantic_key.is_shared_with(plain_key)
+    assert plain_key.is_shared_with(pydantic_key)
 
 
 def test_boundary_key_has_no_default_endpoint_for_a_model_no_provider_claims():
