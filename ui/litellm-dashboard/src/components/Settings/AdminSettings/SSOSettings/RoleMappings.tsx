@@ -27,7 +27,13 @@ export default function RoleMappings({ roleMappings }: { roleMappings: RoleMappi
       id: "role",
       accessorKey: "role",
       header: t("adminPanel.ssoSettings.roleMappings.columns.role"),
-      cell: ({ row }) => <strong className="font-semibold">{t(defaultRoleDisplayNames[row.original.role])}</strong>,
+      cell: ({ row }) => (
+        <strong className="font-semibold">
+          {Object.hasOwn(defaultRoleDisplayNames, row.original.role)
+            ? t(defaultRoleDisplayNames[row.original.role])
+            : ""}
+        </strong>
+      ),
     },
     {
       id: "groups",
@@ -69,7 +75,11 @@ export default function RoleMappings({ roleMappings }: { roleMappings: RoleMappi
                 {t("adminPanel.ssoSettings.roleMappings.defaultRole")}
               </h5>
               <div>
-                <strong className="font-semibold">{t(defaultRoleDisplayNames[roleMappings.default_role])}</strong>
+                <strong className="font-semibold">
+                  {Object.hasOwn(defaultRoleDisplayNames, roleMappings.default_role)
+                    ? t(defaultRoleDisplayNames[roleMappings.default_role])
+                    : ""}
+                </strong>
               </div>
             </div>
           </div>

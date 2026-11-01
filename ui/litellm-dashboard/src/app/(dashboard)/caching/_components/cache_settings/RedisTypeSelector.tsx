@@ -23,7 +23,9 @@ const RedisTypeSelector: React.FC<RedisTypeSelectorProps> = ({ redisType, redisT
       <label className="text-sm font-medium">{t("caching.settings.redisType.label")}</label>
       <Select value={redisType} onValueChange={(value) => value !== null && onTypeChange(value)}>
         <SelectTrigger className="w-full">
-          <SelectValue>{REDIS_TYPE_LABELS[redisType] ? t(REDIS_TYPE_LABELS[redisType]) : redisType}</SelectValue>
+          <SelectValue>
+            {Object.hasOwn(REDIS_TYPE_LABELS, redisType) ? t(REDIS_TYPE_LABELS[redisType]) : redisType}
+          </SelectValue>
         </SelectTrigger>
         <SelectContent>
           {Object.entries(REDIS_TYPE_LABELS).map(([value, label]) => (
@@ -34,7 +36,10 @@ const RedisTypeSelector: React.FC<RedisTypeSelectorProps> = ({ redisType, redisT
         </SelectContent>
       </Select>
       <p className="text-xs text-muted-foreground">
-        {t(redisTypeDescriptions[redisType] || "caching.settings.redisType.fallbackDescription")}
+        {t(
+          (Object.hasOwn(redisTypeDescriptions, redisType) && redisTypeDescriptions[redisType]) ||
+            "caching.settings.redisType.fallbackDescription",
+        )}
       </p>
     </div>
   );

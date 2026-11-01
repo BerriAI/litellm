@@ -248,7 +248,7 @@ export default function SSOSettings() {
               <Logo
                 src={ssoProviderLogoMap[selectedProvider]}
                 label={
-                  ssoProviderDisplayNames[selectedProvider]
+                  Object.hasOwn(ssoProviderDisplayNames, selectedProvider)
                     ? t(ssoProviderDisplayNames[selectedProvider])
                     : selectedProvider
                 }

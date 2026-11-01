@@ -139,7 +139,7 @@ const EditCyberArkModal: React.FC<EditCyberArkModalProps> = ({ isVisible, onCanc
         key={fieldName}
         control={form.control}
         name={fieldName}
-        label={(FIELD_LABELS[fieldName] && t(FIELD_LABELS[fieldName])) ?? fieldName}
+        label={(Object.hasOwn(FIELD_LABELS, fieldName) && t(FIELD_LABELS[fieldName])) || fieldName}
       >
         {({ ref, ...field }) =>
           isSensitive ? (

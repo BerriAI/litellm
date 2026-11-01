@@ -80,7 +80,7 @@ export default function CyberArk() {
         onSuccess: () => {
           toast.success(
             t("adminPanel.cyberArk.toasts.fieldCleared", {
-              field: (FIELD_LABELS[clearingField] && t(FIELD_LABELS[clearingField])) ?? clearingField,
+              field: (Object.hasOwn(FIELD_LABELS, clearingField) && t(FIELD_LABELS[clearingField])) || clearingField,
             }),
           );
           setClearingField(null);
@@ -103,7 +103,7 @@ export default function CyberArk() {
           variant="ghost"
           size="icon-sm"
           aria-label={t("adminPanel.cyberArk.actions.clearField", {
-            field: (FIELD_LABELS[key] && t(FIELD_LABELS[key])) ?? key,
+            field: (Object.hasOwn(FIELD_LABELS, key) && t(FIELD_LABELS[key])) || key,
           })}
           onClick={() => setClearingField(key)}
         >
@@ -191,7 +191,7 @@ export default function CyberArk() {
               <dl className="divide-y divide-border overflow-hidden rounded-md border border-border">
                 <DetailRow label={t("adminPanel.cyberArk.authMethodLabel")}>{detectAuthMethod(rawValues, t)}</DetailRow>
                 {fieldsToShow.map(([key]) => (
-                  <DetailRow key={key} label={(FIELD_LABELS[key] && t(FIELD_LABELS[key])) ?? key}>
+                  <DetailRow key={key} label={(Object.hasOwn(FIELD_LABELS, key) && t(FIELD_LABELS[key])) || key}>
                     {renderValue(key)}
                   </DetailRow>
                 ))}
@@ -229,7 +229,9 @@ export default function CyberArk() {
       <DeleteResourceModal
         isOpen={clearingField !== null}
         title={t("adminPanel.cyberArk.clearModal.title", {
-          field: clearingField ? (FIELD_LABELS[clearingField] && t(FIELD_LABELS[clearingField])) ?? clearingField : "",
+          field: clearingField
+            ? (Object.hasOwn(FIELD_LABELS, clearingField) && t(FIELD_LABELS[clearingField])) || clearingField
+            : "",
         })}
         message={t("adminPanel.cyberArk.clearModal.message")}
         resourceInformationTitle={t("adminPanel.cyberArk.clearModal.resourceTitle")}
@@ -237,7 +239,7 @@ export default function CyberArk() {
           {
             label: t("adminPanel.cyberArk.clearModal.fieldLabel"),
             value: clearingField
-              ? (FIELD_LABELS[clearingField] && t(FIELD_LABELS[clearingField])) ?? clearingField
+              ? (Object.hasOwn(FIELD_LABELS, clearingField) && t(FIELD_LABELS[clearingField])) || clearingField
               : "",
           },
         ]}

@@ -9,4 +9,4 @@ const STRATEGY_LABELS: Readonly<Record<string, ParseKeys>> = {
 };
 
 export const formatStrategyLabel = (strategy: string, t: TFunction): string =>
-  STRATEGY_LABELS[strategy] ? t(STRATEGY_LABELS[strategy]) : strategy;
+  Object.hasOwn(STRATEGY_LABELS, strategy) ? t(STRATEGY_LABELS[strategy]) : strategy;

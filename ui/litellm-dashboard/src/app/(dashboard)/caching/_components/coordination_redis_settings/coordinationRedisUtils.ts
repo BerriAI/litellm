@@ -156,6 +156,6 @@ export const sourceBadge = (
   t: TFunction = i18n.t.bind(i18n),
 ): SourceBadgeDescriptor => {
   const known: Readonly<Record<string, SourceBadgeKeys>> = SOURCE_BADGES;
-  const badge = (source && known[source]) || NOT_CONFIGURED_BADGE;
+  const badge = source && Object.hasOwn(known, source) ? known[source] : NOT_CONFIGURED_BADGE;
   return { tone: badge.tone, label: t(badge.label), tooltip: t(badge.tooltip) };
 };

@@ -126,7 +126,7 @@ export const getLoggingCallbacksTableColumns = (
       return (
         <StatusBadge
           tone={callbackModeTone(mode)}
-          label={CALLBACK_MODE_LABELS[mode] ? t(CALLBACK_MODE_LABELS[mode]) : mode}
+          label={Object.hasOwn(CALLBACK_MODE_LABELS, mode) ? t(CALLBACK_MODE_LABELS[mode]) : mode}
         />
       );
     },

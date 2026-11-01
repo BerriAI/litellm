@@ -387,7 +387,9 @@ export const SSOProviderSelectField = () => {
                     <Logo
                       src={logo}
                       label={
-                        ssoProviderDisplayNames[optionValue] ? t(ssoProviderDisplayNames[optionValue]) : optionValue
+                        Object.hasOwn(ssoProviderDisplayNames, optionValue)
+                          ? t(ssoProviderDisplayNames[optionValue])
+                          : optionValue
                       }
                       className="h-6 w-6 mr-3 object-contain"
                     />
@@ -477,7 +479,7 @@ const DEFAULT_ROLE_OPTIONS: ReadonlyArray<{ value: string; label: ParseKeys }> =
 ];
 
 const providerOptionLabel = (value: string, t: TFunction) =>
-  ssoProviderDisplayNames[value]
+  Object.hasOwn(ssoProviderDisplayNames, value)
     ? t(ssoProviderDisplayNames[value])
     : t("adminPanel.ssoSettings.providers.fallback", { name: value.charAt(0).toUpperCase() + value.slice(1) });
 

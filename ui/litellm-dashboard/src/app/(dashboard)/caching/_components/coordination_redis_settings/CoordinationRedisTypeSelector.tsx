@@ -22,7 +22,11 @@ const CoordinationRedisTypeSelector: React.FC<CoordinationRedisTypeSelectorProps
       </label>
       <Select value={redisType} onValueChange={(value) => value !== null && onTypeChange(value)}>
         <SelectTrigger id="coordination-redis-type" className="w-full">
-          <SelectValue>{t(COORDINATION_REDIS_TYPE_LABELS[redisType])}</SelectValue>
+          <SelectValue>
+            {Object.hasOwn(COORDINATION_REDIS_TYPE_LABELS, redisType)
+              ? t(COORDINATION_REDIS_TYPE_LABELS[redisType])
+              : ""}
+          </SelectValue>
         </SelectTrigger>
         <SelectContent>
           {COORDINATION_REDIS_TYPES.map((type) => (
