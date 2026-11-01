@@ -11444,3 +11444,28 @@ def test_caller_tags_reach_litellm_metadata_whether_metadata_is_a_dict_or_a_json
     LiteLLMProxyRequestSetup.merge_caller_body_tags(request_data=data)
     assert set(data["litellm_metadata"]["tags"]) == {"key-tag", "client-tag"}
     assert data["metadata"] == caller_metadata
+
+
+@pytest.mark.asyncio
+async def test_cache_control_s_maxage_header_sets_the_cache_ttl():
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    request: Final = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/v1/chat/completions",
+            "scheme": "http",
+            "server": ("localhost", 4000),
+            "query_string": b"",
+            "headers": [(b"content-type", b"application/json"), (b"cache-control", b"s-maxage=10")],
+        }
+    )
+    enriched: Final = await add_litellm_data_to_request(
+        data={"model": "qa-model", "messages": [{"role": "user", "content": "hi"}]},
+        request=request,
+        user_api_key_dict=UserAPIKeyAuth(api_key="qa-key"),
+        proxy_config=ProxyConfig(),
+        general_settings={},
+    )
+    assert float(enriched["ttl"]) == 10
