@@ -22,6 +22,7 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.classifier_logging import without_classifier_audit
 from litellm.litellm_core_utils.core_helpers import (
     get_metadata_variable_name_from_kwargs,
+    redact_nested_match_and_regex_keys,  # pyright: ignore[reportUnknownVariableType]  # shared legacy helper uses bare dicts
 )
 from litellm.litellm_core_utils.served_output_texts import SERVED_OUTPUT_TEXTS_KEY
 from litellm.llms.base_llm.guardrail_translation.utils import stream_item_field, stream_item_items
@@ -31,7 +32,7 @@ from litellm.llms.vertex_ai.common_utils import (
 )
 from litellm.secret_managers.main import str_to_bool
 from litellm.types.router import BaselineRouteStamp
-from litellm.types.utils import StandardCallbackDynamicParams
+from litellm.types.utils import PROMPT_CARRYING_GUARDRAIL_FIELDS, StandardCallbackDynamicParams
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import (
@@ -380,6 +381,10 @@ def _redact_standard_logging_object(
 
     if standard_logging_object.get("messages") is not None:
         standard_logging_object["messages"] = [{"role": "user", "content": redacted_str}]
+    if "guardrail_information" in standard_logging_object:
+        standard_logging_object["guardrail_information"] = _redacted_guardrail_information(
+            standard_logging_object["guardrail_information"]
+        )
     model_parameters: Final = _as_mapping(standard_logging_object.get("model_parameters"))
     if model_parameters is not None and redact_instructions:
         standard_logging_object["model_parameters"] = _with_redacted_instructions(model_parameters)
@@ -448,11 +453,33 @@ def _redact_model_response_dict_choices(choices, redacted_str: str):
             _redact_choice_content(choice)
 
 
-def _redacted_baseline_metadata(metadata: Mapping[str, object]) -> Mapping[str, object]:
+def _redacted_guardrail_information(value: object) -> object:
+    if not isinstance(value, (dict, list)):
+        return value
+    return redact_nested_match_and_regex_keys(value, keys=PROMPT_CARRYING_GUARDRAIL_FIELDS)  # pyright: ignore[reportUnknownVariableType]  # opaque result of the legacy redactor
+
+
+def _redacted_logging_metadata(metadata: Mapping[str, object]) -> Mapping[str, object]:
     route: Final = metadata.get("_autorouter_baseline_route")
-    if not isinstance(route, BaselineRouteStamp):
+    if not isinstance(route, BaselineRouteStamp) and "standard_logging_guardrail_information" not in metadata:
         return metadata
-    return {**metadata, "_autorouter_baseline_route": replace(route, request_parameters=None)}
+    return {
+        **metadata,
+        **(
+            {"_autorouter_baseline_route": replace(route, request_parameters=None)}
+            if isinstance(route, BaselineRouteStamp)
+            else {}
+        ),
+        **(
+            {
+                "standard_logging_guardrail_information": _redacted_guardrail_information(
+                    metadata["standard_logging_guardrail_information"]
+                )
+            }
+            if "standard_logging_guardrail_information" in metadata
+            else {}
+        ),
+    }
 
 
 def _redacted_proxy_server_request(request: Mapping[str, object], *, redact_body: bool) -> Mapping[str, object]:
@@ -489,7 +516,7 @@ def redacted_litellm_params(params: Mapping[str, object], *, redact_request_body
     return {
         **(_with_redacted_instructions(params) if redact_request_body else params),
         **{
-            key: _redacted_baseline_metadata(value)
+            key: _redacted_logging_metadata(value)
             for key, value in params.items()
             if key in ("metadata", "litellm_metadata") and isinstance(value, Mapping)
         },
