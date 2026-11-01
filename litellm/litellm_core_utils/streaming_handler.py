@@ -2203,9 +2203,12 @@ class CustomStreamWrapper:
                         if is_empty:
                             continue
                     # add usage as hidden param
-                    if self.sent_last_chunk is True and self.stream_options is None:
-                        self._set_final_chunk_usage(response)
-                        # Add MCP metadata to final chunk if present
+                    if self.sent_last_chunk is True:
+                        if self.stream_options is None:
+                            self._set_final_chunk_usage(response)
+                        # Add MCP metadata to final chunk if present. Unlike usage,
+                        # this is attached regardless of stream_options so the sync
+                        # path matches async __anext__ when include_usage is set.
                         response = self._add_mcp_metadata_to_final_chunk(response)
                     # RETURN RESULT
                     return response
