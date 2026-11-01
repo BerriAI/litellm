@@ -3647,6 +3647,22 @@ def test_get_user_agent_tags():
     assert "User-Agent: litellm/0.1.0" in tags
 
 
+def test_get_user_agent_tags_case_insensitive():
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+
+    tags = StandardLoggingPayloadSetup._get_user_agent_tags(
+        proxy_server_request={
+            "headers": {
+                "User-Agent": "curl/7.68.0",
+            }
+        }
+    )
+
+    assert tags is not None
+    assert "User-Agent: curl" in tags
+    assert "User-Agent: curl/7.68.0" in tags
+
+
 def test_get_request_tags():
     from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
 
