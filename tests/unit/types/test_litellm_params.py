@@ -255,6 +255,7 @@ INTERNAL_STATE_NAMES: Final = (
     "model_alias_map",
     "data_residency",
     "litellm_logging_obj",
+    "parent_otel_span",
     "preset_cache_key",
     "cache_key",
     "stream_response",

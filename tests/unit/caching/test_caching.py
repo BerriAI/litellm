@@ -454,6 +454,24 @@ def test_provider_specific_cache_key_ignores_litellm_owned_kwargs(monkeypatch: p
     assert cache.get_cache_key(**{**request, "top_k": 6}) != base_key
 
 
+def test_get_cache_key_ignores_parent_otel_span_when_provider_optional_params_are_cached() -> None:
+    previous: Final = litellm.enable_caching_on_provider_specific_optional_params
+    litellm.enable_caching_on_provider_specific_optional_params = True
+    try:
+        cache: Final = Cache(type=LiteLLMCacheType.LOCAL)
+        messages: Final = [{"role": "user", "content": "hi"}]
+        span_a: Final = object()
+        span_b: Final = object()
+        key_with_span_a: Final = cache.get_cache_key(model="gpt-4.1-mini", messages=messages, parent_otel_span=span_a)
+        key_with_span_b: Final = cache.get_cache_key(model="gpt-4.1-mini", messages=messages, parent_otel_span=span_b)
+
+        assert key_with_span_a == key_with_span_b
+        assert key_with_span_a == cache.get_cache_key(model="gpt-4.1-mini", messages=messages)
+        assert key_with_span_a != cache.get_cache_key(model="gpt-4.1-mini", messages=messages, top_k=3)
+    finally:
+        litellm.enable_caching_on_provider_specific_optional_params = previous
+
+
 def test_cache_key_tells_apart_requests_that_differ_only_in_continuation_token() -> None:
     cache: Final = Cache(type=LiteLLMCacheType.LOCAL)
     request: Final = {
