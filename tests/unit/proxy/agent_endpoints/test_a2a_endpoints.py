@@ -3196,3 +3196,54 @@ def test_a2a_http_refusals_answer_as_jsonrpc_errors_with_a_null_id_for_unparseab
     assert body["error"]["code"] == -32000
     assert body["error"]["message"] == "Agent 'agent-1' is not allowed"
     assert body["error"]["data"]["code"] == "403"
+
+
+def _mock_request(raw_body: bytes) -> MagicMock:
+    """A request whose json() behaves like Starlette's: empty body is JSONDecodeError."""
+    req: Final = MagicMock()
+    req.headers = {}
+    req.body = AsyncMock(return_value=raw_body)
+
+    async def _json() -> object:
+        return json.loads(raw_body)
+
+    req.json = AsyncMock(side_effect=_json)
+    return req
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("raw_body", "expected_code", "expected_message"),
+    [
+        (b"", -32700, "Parse error"),
+        (b"{", -32700, "Parse error"),
+        (b"[]", -32600, "Invalid Request: body must be a JSON object"),
+        (b'"x"', -32600, "Invalid Request: body must be a JSON object"),
+    ],
+)
+async def test_unparseable_bodies_answer_as_jsonrpc_errors(
+    raw_body: bytes, expected_code: int, expected_message: str
+) -> None:
+    """A2A clients map the JSON-RPC code to a typed error, so an unreadable body has to come back
+    as -32700/-32600 with a null id -- not as -32603 internal error (and not as an AttributeError)."""
+    from litellm.proxy.agent_endpoints.a2a_endpoints import invoke_agent_a2a
+
+    with (
+        patch("litellm.proxy.proxy_server.general_settings", {}),
+        patch("litellm.proxy.proxy_server.proxy_config", MagicMock()),
+        patch("litellm.proxy.proxy_server.version", "1.0.0"),
+        patch("litellm.a2a_protocol.main.A2A_SDK_AVAILABLE", True),
+    ):
+        response: Final = await invoke_agent_a2a(
+            agent_id="agent-1",
+            request=_mock_request(raw_body),
+            fastapi_response=MagicMock(),
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-test"),
+        )
+
+    assert response.status_code == 400
+    assert json.loads(response.body) == {
+        "jsonrpc": "2.0",
+        "id": None,
+        "error": {"code": expected_code, "message": expected_message},
+    }

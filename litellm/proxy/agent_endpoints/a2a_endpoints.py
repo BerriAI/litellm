@@ -12,6 +12,7 @@ The A2A SDK can point to LiteLLM's URL and invoke agents registered with LiteLLM
 
 import json
 from collections.abc import AsyncGenerator, Callable, Coroutine, Mapping
+from json import JSONDecodeError
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Protocol
 from urllib.parse import urlparse
@@ -819,7 +820,16 @@ async def invoke_agent_a2a(
     body: dict[str, Any] = {}
     request_data: dict[str, object] = body
     try:
-        body = await request.json()
+        # JSON-RPC has its own error codes for a bad body, and callers (the a2a-sdk
+        # client included) map them to typed errors. Letting json() raise would send
+        # them an -32603 internal error, or nothing at all.
+        try:
+            body = await request.json()
+        except (JSONDecodeError, UnicodeDecodeError):
+            return _jsonrpc_error(None, -32700, "Parse error")
+        if not isinstance(body, dict):
+            return _jsonrpc_error(None, -32600, "Invalid Request: body must be a JSON object")
+
         request_data = body
 
         verbose_proxy_logger.debug("A2A request for agent '%s': %s", agent_id, body)
