@@ -289,13 +289,13 @@ describe("renderProviderFields", () => {
   it("should return fields for okta provider", () => {
     const result = renderProviderFields("okta");
     expect(result).not.toBeNull();
-    expect(result?.length).toBe(6);
+    expect(result?.length).toBe(7);
   });
 
   it("should return fields for generic provider", () => {
     const result = renderProviderFields("generic");
     expect(result).not.toBeNull();
-    expect(result?.length).toBe(6);
+    expect(result?.length).toBe(7);
   });
 
   it.each(["okta", "generic"])(
@@ -305,6 +305,16 @@ describe("renderProviderFields", () => {
       expect(scopeField).toBeDefined();
       expect(scopeField?.required).toBe(false);
       expect(ssoProviderConfigs[provider].envVarMap.generic_scope).toBe("GENERIC_SCOPE");
+    },
+  );
+
+  it.each(["okta", "generic"])(
+    "renders an optional generic_authorization_params field for %s mapped to GENERIC_AUTHORIZATION_PARAMS",
+    (provider) => {
+      const field = ssoProviderConfigs[provider].fields.find((f) => f.name === "generic_authorization_params");
+      expect(field).toBeDefined();
+      expect(field?.required).toBe(false);
+      expect(ssoProviderConfigs[provider].envVarMap.generic_authorization_params).toBe("GENERIC_AUTHORIZATION_PARAMS");
     },
   );
 
@@ -351,6 +361,48 @@ describe("renderProviderFields", () => {
         expect.objectContaining({
           generic_token_endpoint: "https://idp.example.com/token/v2",
           generic_scope: "openid email profile groups",
+        }),
+      );
+    });
+  });
+
+  it("submits generic_authorization_params untouched, so saving an unrelated edit cannot clear GENERIC_AUTHORIZATION_PARAMS", async () => {
+    const handleSubmit = vi.fn();
+    let form!: ReturnType<typeof useSSOSettingsForm>;
+    const TestWrapper = () => {
+      const formInstance = useSSOSettingsForm("sso-settings");
+      form = formInstance;
+      return <BaseSSOSettingsForm form={formInstance} onFormSubmit={handleSubmit} />;
+    };
+
+    renderWithProviders(<TestWrapper />);
+
+    const savedValues = {
+      ...emptySSOSettingsFormValues,
+      sso_provider: "generic",
+      generic_client_id: "client-id",
+      generic_client_secret: "client-secret",
+      generic_authorization_endpoint: "https://idp.example.com/authorize",
+      generic_token_endpoint: "https://idp.example.com/token",
+      generic_userinfo_endpoint: "https://idp.example.com/userinfo",
+      generic_authorization_params: "resource=https://litellm.example.com/api",
+      proxy_base_url: "https://gateway.example.com",
+      user_email: "admin@example.com",
+    };
+    await act(async () => {
+      form.reset(savedValues);
+    });
+
+    await act(async () => {
+      form.setValue("generic_token_endpoint", "https://idp.example.com/token/v2");
+      submitMountedSSOValues(form, "sso-settings", handleSubmit)();
+    });
+
+    await waitFor(() => {
+      expect(handleSubmit).toHaveBeenCalledWith(
+        expect.objectContaining({
+          generic_token_endpoint: "https://idp.example.com/token/v2",
+          generic_authorization_params: "resource=https://litellm.example.com/api",
         }),
       );
     });
