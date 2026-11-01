@@ -1189,6 +1189,28 @@ async def _run_legacy_update_organization(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
+    ("body", "twin_after"),
+    [
+        ({"organization_id": "org-1", "spend": 0.0}, None),
+        ({"organization_id": "org-1", "organization_alias": "renamed"}, 7.0),
+    ],
+)
+async def test_legacy_update_drops_the_committed_org_spend_only_when_it_writes_the_stored_spend(
+    monkeypatch, body, twin_after
+):
+    from litellm.caching.dual_cache import DualCache
+
+    spend_counter_cache = DualCache()
+    spend_counter_cache.in_memory_cache.set_cache(key="committed_spend:org:org-1", value=7.0)
+    monkeypatch.setattr("litellm.proxy.proxy_server.spend_counter_cache", spend_counter_cache)
+
+    await _run_legacy_update_organization(monkeypatch, body=body, existing_budget_id="budget-1")
+
+    assert spend_counter_cache.in_memory_cache.get_cache(key="committed_spend:org:org-1") == twin_after
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
     "body",
     [
         {"organization_id": "org-1", "tpm_limit": None},

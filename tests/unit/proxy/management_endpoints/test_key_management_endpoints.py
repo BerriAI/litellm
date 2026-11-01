@@ -8672,6 +8672,9 @@ async def test_reset_key_spend_success(monkeypatch):
         mock_spend_counter_cache.in_memory_cache.set_cache.assert_any_call(
             key=f"spend_db_floor:spend:key:{hashed_key}", value=50.0, ttl=5
         )
+        mock_spend_counter_cache.in_memory_cache.delete_cache.assert_called_once_with(
+            key=f"committed_spend:key:{hashed_key}"
+        )
 
 
 @pytest.mark.asyncio
@@ -8987,6 +8990,9 @@ async def test_update_key_spend_updates_counter(monkeypatch):
         )
         mock_spend_counter_cache.redis_cache.async_set_cache.assert_awaited_once_with(
             key=f"spend:key:{hashed_key}", value=0.0, ttl=60
+        )
+        mock_spend_counter_cache.in_memory_cache.delete_cache.assert_called_once_with(
+            key=f"committed_spend:key:{hashed_key}"
         )
 
 

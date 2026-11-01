@@ -13,6 +13,7 @@ import re
 import secrets
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
+from functools import partial
 from types import MappingProxyType
 from typing import Final, NamedTuple, Protocol, Union, cast
 
@@ -169,7 +170,15 @@ from litellm.proxy.db.db_lookup_gate import bounded_db_lookup
 from litellm.proxy.db.db_span import db_span
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
-from litellm.proxy.spend_tracking.carried_budget_state import carry_team_and_user_budget_state
+from litellm.proxy.spend_tracking.carried_budget_state import (
+    carry_committed_budget_spend,
+    carry_team_and_user_budget_state,
+)
+from litellm.proxy.spend_tracking.committed_spend import (
+    bind_committed_admission_counters,
+    committed_spend_tracked,
+    read_admission_committed_spend,
+)
 from litellm.proxy.spend_tracking.spend_counter_batch import (
     bind_admission_counter_keys,
     release_spend_counter_batch,
@@ -3559,6 +3568,7 @@ async def run_centralized_common_checks(
         model_max_budget_limiter,
         prisma_client,
         proxy_logging_obj,
+        spend_counter_cache,
         user_api_key_cache,
         user_custom_auth,
     )
@@ -3869,6 +3879,7 @@ async def run_centralized_common_checks(
         )
 
     bind_admission_counter_keys(user_api_key_auth_obj, end_user_id=end_user_id)
+    bind_committed_admission_counters(user_api_key_auth_obj, end_user_id=end_user_id)
     try:
         _ = await common_checks(
             request=request,
@@ -3944,6 +3955,18 @@ async def run_centralized_common_checks(
                     user_obj=user_object,
                 )
 
+        if committed_spend_tracked():
+            await carry_committed_budget_spend(
+                valid_token=user_api_key_auth_obj,
+                team_object=typed_team_object,
+                user_object=user_object,
+                end_user_object=end_user_object,
+                read_committed=(
+                    None
+                    if route_skips_budget_checks(route=route)
+                    else partial(read_admission_committed_spend, spend_counter_cache)
+                ),
+            )
         await _reserve_budget_after_common_checks(
             user_api_key_auth_obj=user_api_key_auth_obj,
             request=request,
@@ -4256,6 +4279,7 @@ async def _prefetch_referenced_auth_objects(
     """Warm every object and spend counter the checks below will read, in one MGET each (one DB query when cold).
     Runs after the key's model access check so a denied request costs no more than it did before."""
     bind_admission_counter_keys(valid_token, end_user_id=end_user_id or None)
+    bind_committed_admission_counters(valid_token, end_user_id=end_user_id or None)
     await prefetch_auth_objects(
         refs=AuthObjectRefs.from_token(valid_token),
         user_api_key_cache=user_api_key_cache,

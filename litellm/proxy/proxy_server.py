@@ -929,6 +929,12 @@ from litellm.proxy.spend_tracking.budget_reservation import (
     release_unbound_budget_reservation,
     stamp_budget_reservation_actual_cost,
 )
+from litellm.proxy.spend_tracking.committed_spend import (
+    committed_spend_key,
+    committed_spend_keys,
+    is_committed_spend_key,
+    seed_committed_spend,
+)
 from litellm.proxy.spend_tracking.spend_capture_rate import (
     run_scheduled_spend_capture_rate_check,
 )
@@ -936,6 +942,7 @@ from litellm.proxy.spend_tracking.spend_counter_batch import (
     SPEND_COUNTERS_TARGET,
     PendingSpendIncrement,
     active_spend_counter_batch,
+    bind_spend_counter_keys,
     forget_spend_counter,
     post_call_counter_keys,
     read_batched_spend_counter,
@@ -1038,6 +1045,7 @@ from litellm.types.llms.openai import (
     ResponseInProgressEvent,
     ResponsesAPIResponse,
 )
+from litellm.types.proxy.carried_budget_state import EntitySpendCounterKeys
 from litellm.types.proxy.control_plane_endpoints import WorkerRegistryEntry
 from litellm.types.proxy.management_endpoints.model_management_endpoints import (
     ModelGroupInfoProxy,
@@ -3125,6 +3133,7 @@ proxy_budget_rescheduler_min_time = PROXY_BUDGET_RESCHEDULER_MIN_TIME
 proxy_budget_rescheduler_max_time = PROXY_BUDGET_RESCHEDULER_MAX_TIME
 proxy_batch_polling_interval = PROXY_BATCH_POLLING_INTERVAL
 proxy_batch_write_at = PROXY_BATCH_WRITE_AT
+_BATCH_WRITE_JITTER_MAX_SECONDS: Final = 5
 proxy_config_reload_interval_seconds = PROXY_CONFIG_RELOAD_INTERVAL_SECONDS
 litellm_master_key_hash = None
 disable_spend_logs = False
@@ -3574,6 +3583,7 @@ async def increment_spend_counters(
     request_started_at: datetime | None = None,
     model_access_groups: Sequence[str] | None = None,
     project_id: str | None = None,
+    committed_spend_scope: EntitySpendCounterKeys | None = None,
 ):
     """
     Atomically increment spend counters for budget enforcement.
@@ -3610,6 +3620,7 @@ async def increment_spend_counters(
             request_started_at=request_started_at,
             model_access_groups=model_access_groups,
             project_id=project_id,
+            committed_spend_scope=committed_spend_scope,
         )
 
 
@@ -3634,9 +3645,16 @@ async def _increment_spend_counters_batched(
     request_started_at: datetime | None,
     model_access_groups: Sequence[str] | None,
     project_id: str | None = None,
+    committed_spend_scope: EntitySpendCounterKeys | None = None,
 ):
     """Runs inside one spend counter batch: the reservation reconcile and the warm checks share a single MGET, and
     the reconcile adjustments go out in the same INCRBYFLOAT pipeline as the counter increments."""
+    committed_counter_keys: Final = (
+        committed_spend_scope.tracked()
+        if committed_spend_scope is not None and response_cost is not None and response_cost > 0
+        else ()
+    )
+    bind_spend_counter_keys(frozenset(committed_spend_keys(committed_counter_keys)))
     reservation_update: Final = await _reconcile_budget_reservation_for_counter_update(
         budget_reservation=budget_reservation,
         response_cost=response_cost,
@@ -3659,9 +3677,7 @@ async def _increment_spend_counters_batched(
         # if a raw key somehow arrives, hash it; otherwise use as-is to
         # avoid double-hashing (budget checks read valid_token.token which
         # is single-hashed).
-        hashed_token: Final = (
-            hash_token(token=key_token) if isinstance(key_token, str) and key_token.startswith("sk-") else key_token
-        )
+        hashed_token: Final = _spend_counter_token(key_token)
         key_counter_key: Final = f"spend:key:{hashed_token}"
         key_pending: Final[tuple[PendingSpendIncrement, ...]] = (
             ()
@@ -3841,6 +3857,9 @@ async def _increment_spend_counters_batched(
             )
             if project_id is not None
             else None,
+            _prepare_committed_spend_increments(counter_keys=committed_counter_keys, increment=cost)
+            if committed_counter_keys
+            else None,
         )
         if coro is not None
     )
@@ -3914,6 +3933,43 @@ async def _reconcile_budget_reservation_for_counter_update(
             )
         return _ReservationCounterUpdate()
     return _ReservationCounterUpdate(reserved_counter_keys=frozenset(reserved_counter_keys), pending=pending)
+
+
+def _spend_counter_token(key_token: str) -> str:
+    return hash_token(token=key_token) if isinstance(key_token, str) and key_token.startswith("sk-") else key_token
+
+
+def _committed_spend_ttl() -> int | None:
+    """A twin outlives two DB spend writes, or the next charge seeds it from a total still missing spend."""
+    redis_cache: Final = spend_counter_cache.redis_cache
+    redis_ttl: Final = redis_cache.default_ttl if redis_cache is not None else None
+    if redis_ttl is None:
+        return None
+    return max(redis_ttl, 2 * (proxy_batch_write_at + _BATCH_WRITE_JITTER_MAX_SECONDS))
+
+
+def _spend_counter_ttl(counter_key: str, redis_ttl: int | None) -> int | None:
+    return _committed_spend_ttl() if is_committed_spend_key(counter_key) else redis_ttl
+
+
+async def _committed_spend_seeded(counter_key: str) -> bool:
+    return await _is_spend_counter_cache_warm(committed_spend_key(counter_key)) or await seed_committed_spend(
+        spend_counter_cache=spend_counter_cache,
+        prisma_client=prisma_client,
+        counter_key=counter_key,
+        ttl=_committed_spend_ttl(),
+    )
+
+
+async def _prepare_committed_spend_increments(
+    counter_keys: tuple[str, ...], increment: float
+) -> tuple[PendingSpendIncrement, ...]:
+    seeded: Final = await asyncio.gather(*(_committed_spend_seeded(counter_key) for counter_key in counter_keys))
+    return tuple(
+        PendingSpendIncrement(counter_key=committed_spend_key(counter_key), increment=increment)
+        for counter_key, is_seeded in zip(counter_keys, seeded)
+        if is_seeded
+    )
 
 
 async def _prepare_end_user_and_tag_spend_increments(
@@ -4326,7 +4382,9 @@ def _defer_spend_counter_increments(pending: Sequence[PendingSpendIncrement]) ->
     ttl: Final = redis_cache.get_ttl()
     with service_target(SPEND_COUNTERS_TARGET):
         for item in pending:
-            batch.increment(item.counter_key, item.increment, ttl).on_settled(_settle_spend_counter_increment(item))
+            batch.increment(item.counter_key, item.increment, _spend_counter_ttl(item.counter_key, ttl)).on_settled(
+                _settle_spend_counter_increment(item)
+            )
     return True
 
 
@@ -4379,7 +4437,11 @@ async def run_spend_counter_pipeline(pending: Sequence[PendingSpendIncrement]) -
         )
     ttl: Final = redis_cache.get_ttl()
     increment_list: Final = [
-        RedisPipelineIncrementOperation(key=item.counter_key, increment_value=item.increment, ttl=ttl)
+        RedisPipelineIncrementOperation(
+            key=item.counter_key,
+            increment_value=item.increment,
+            ttl=_spend_counter_ttl(item.counter_key, ttl),
+        )
         for item in pending
     ]
     results: Final = await redis_cache.async_increment_pipeline(increment_list=increment_list)
@@ -11384,7 +11446,7 @@ class ProxyStartupEvent:
         )
 
         # Ensure minimum interval of 30 seconds for batch writing to prevent memory issues
-        batch_writing_interval: Final = proxy_batch_write_at + random.randint(0, 5)
+        batch_writing_interval: Final = proxy_batch_write_at + random.randint(0, _BATCH_WRITE_JITTER_MAX_SECONDS)
 
         ### PROXY WORKER HEARTBEAT ###
         worker_heartbeat: Final = ProxyWorkerHeartbeat(prisma_client=prisma_client)

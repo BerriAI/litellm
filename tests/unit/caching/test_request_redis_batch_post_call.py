@@ -21,6 +21,7 @@ from litellm.caching.redis_batch import (
     active_post_call_redis_batch,
     drain_post_call_redis_batches,
     flush_post_call_redis_batches,
+    post_call_writes_unsent,
     request_redis_batch_scope,
 )
 from litellm.integrations.custom_logger import CustomLogger
@@ -514,3 +515,16 @@ async def test_a_cancelled_post_call_flush_keeps_the_shared_spend_counter_and_co
     assert redis_cache.alone == [], "a cancel says nothing about the shared counter, so Redis keeps it"
     assert spend_cache.in_memory_cache.get_cache("spend:key:k1") == 3.5, "the local copy counts the cancelled spend"
     assert spend_cache.in_memory_cache.get_cache("spend:team:t1") is None, "an absent local copy is not seeded"
+
+
+@pytest.mark.asyncio
+async def test_post_call_writes_count_as_unsent_until_a_pipeline_carried_them():
+    assert post_call_writes_unsent() is False
+    redis_cache = PostCallFakeRedisCache(FakeClient(_ok_replies))
+    with request_redis_batch_scope():
+        await flush_post_call_redis_batches()
+        assert post_call_writes_unsent() is True
+        active_post_call_redis_batch(redis_cache).increment("spend:key:k", 1.0, None)
+        assert post_call_writes_unsent() is True
+        await flush_post_call_redis_batches()
+        assert post_call_writes_unsent() is False

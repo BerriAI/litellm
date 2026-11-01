@@ -1454,6 +1454,64 @@ def test_reset_budget_for_keys_invalidates_redis_counter(reset_budget_job, mock_
 
     counter_cache.in_memory_cache.delete_cache.assert_any_call(key="spend:key:sk-abc")
     counter_cache.redis_cache.async_delete_cache.assert_any_await(key="spend:key:sk-abc")
+    counter_cache.redis_cache.async_delete_cache.assert_any_await(key="committed_spend:key:sk-abc")
+
+
+def test_reset_budget_for_keys_without_redis_clears_the_counter_and_its_committed_twin(
+    reset_budget_job, mock_prisma_client, monkeypatch
+):
+    from litellm.caching.dual_cache import DualCache
+
+    spend_counter_cache: Final = DualCache()
+    for counter_key in ("spend:key:sk-abc", "committed_spend:key:sk-abc"):
+        spend_counter_cache.in_memory_cache.set_cache(key=counter_key, value=100.0)
+    fake_module: Final = types.ModuleType("litellm.proxy.proxy_server")
+    fake_module.spend_counter_cache = spend_counter_cache
+    fake_module.user_api_key_cache = DualCache()
+    monkeypatch.setitem(sys.modules, "litellm.proxy.proxy_server", fake_module)
+    mock_prisma_client.data["key"] = [
+        type(
+            "Key",
+            (),
+            {
+                "spend": 100.0,
+                "budget_duration": "30d",
+                "budget_reset_at": datetime.now(timezone.utc),
+                "id": "key-1",
+                "token": "sk-abc",
+            },
+        )
+    ]
+
+    asyncio.run(reset_budget_job.reset_budget_for_litellm_keys())
+
+    assert spend_counter_cache.in_memory_cache.get_cache(key="spend:key:sk-abc") is None
+    assert spend_counter_cache.in_memory_cache.get_cache(key="committed_spend:key:sk-abc") is None
+
+
+def test_a_redis_failure_on_the_key_counter_still_deletes_its_committed_twin(
+    reset_budget_job, mock_prisma_client, monkeypatch
+):
+    counter_cache: Final = _make_counter_invalidation_job(monkeypatch)
+    counter_cache.redis_cache.async_delete_cache = AsyncMock(side_effect=ConnectionError("redis down"))
+    mock_prisma_client.data["key"] = [
+        type(
+            "Key",
+            (),
+            {
+                "spend": 100.0,
+                "budget_duration": "30d",
+                "budget_reset_at": datetime.now(timezone.utc),
+                "id": "key-1",
+                "token": "sk-abc",
+            },
+        )
+    ]
+
+    asyncio.run(reset_budget_job.reset_budget_for_litellm_keys())
+
+    counter_cache.redis_cache.async_delete_cache.assert_any_await(key="spend:key:sk-abc")
+    counter_cache.redis_cache.async_delete_cache.assert_any_await(key="committed_spend:key:sk-abc")
 
 
 def test_reset_budget_for_users_invalidates_redis_counter(reset_budget_job, mock_prisma_client, monkeypatch):
@@ -1812,7 +1870,9 @@ def test_enduser_invalidation_is_paged_and_batched(reset_budget_job, mock_prisma
     invalidated: Final = {
         key for call in counter_cache.async_delete_cache_keys.await_args_list for key in call.args[0]
     }
-    assert invalidated == {f"spend:end_user:cust-{i:06d}" for i in range(population)}
+    assert invalidated == {f"spend:end_user:cust-{i:06d}" for i in range(population)} | {
+        f"committed_spend:end_user:cust-{i:06d}" for i in range(population)
+    }
     evicted: Final = {
         key for call in counter_cache.user_api_key_cache.async_delete_cache_keys.await_args_list for key in call.args[0]
     }

@@ -4054,7 +4054,10 @@ async def test_admin_user_update_spend_invalidates_counter(mocker):
     admin_caller = UserAPIKeyAuth(user_id="admin-1", user_role=LitellmUserRoles.PROXY_ADMIN)
 
     await _update_single_user_helper(user_request=user_request, user_api_key_dict=admin_caller)
-    mock_invalidate.assert_awaited_once_with(counter_key="spend:user:target-user")
+    assert [call.kwargs["counter_key"] for call in mock_invalidate.await_args_list] == [
+        "spend:user:target-user",
+        "committed_spend:user:target-user",
+    ]
 
 
 @pytest.mark.asyncio

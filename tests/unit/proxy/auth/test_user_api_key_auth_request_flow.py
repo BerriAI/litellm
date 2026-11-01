@@ -5088,6 +5088,68 @@ async def test_centralized_common_checks_carries_team_and_user_budget_state_on_t
     }
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("prometheus_registered", [True, False], ids=["prometheus_logger", "no_prometheus_logger"])
+async def test_centralized_common_checks_carry_the_committed_spend_beside_the_stale_cached_spend(
+    monkeypatch: pytest.MonkeyPatch, prometheus_registered: bool
+):
+    """The enforcement counters also hold budget holds, the committed twins only charged spend."""
+    import litellm.proxy.proxy_server as _proxy_server_mod
+    from starlette.datastructures import URL
+
+    from litellm.integrations.prometheus import PrometheusLogger
+    from litellm.proxy.spend_tracking.committed_spend import committed_spend_key
+    from litellm.proxy.utils import ProxyLogging
+    from litellm.types.proxy.carried_budget_state import CommittedBudgetSpend, EntitySpendCounterKeys
+
+    for callback_list in ("success_callback", "failure_callback", "_async_success_callback", "_async_failure_callback"):
+        monkeypatch.setattr(litellm, callback_list, [])
+    monkeypatch.setattr(litellm, "callbacks", [MagicMock(spec=PrometheusLogger)] if prometheus_registered else [])
+    token: Final = UserAPIKeyAuth(api_key="sk-live-spend", max_budget=10.0, spend=0.0, team_id="t-live", team_spend=0.0)
+    user_api_key_cache: Final = UserApiKeyCache()
+    user_api_key_cache.set_cache(
+        key="team_id:t-live", value=LiteLLM_TeamTableCachedObj(team_id="t-live", max_budget=20.0, spend=0.0)
+    )
+    spend_counter_cache: Final = DualCache()
+    for counter_key, held, committed in ((f"spend:key:{token.token}", 0.67, 0.37), ("spend:team:t-live", 1.55, 1.25)):
+        spend_counter_cache.in_memory_cache.set_cache(key=counter_key, value=held)
+        spend_counter_cache.in_memory_cache.set_cache(key=committed_spend_key(counter_key), value=committed)
+    attrs: Final = {
+        **_proxy_attrs_for_centralized_checks(),
+        "llm_router": None,
+        "prisma_client": MagicMock(),
+        "user_api_key_cache": user_api_key_cache,
+        "spend_counter_cache": spend_counter_cache,
+        "proxy_logging_obj": ProxyLogging(user_api_key_cache=user_api_key_cache),
+    }
+    originals: Final = {attribute: getattr(_proxy_server_mod, attribute, None) for attribute in attrs}
+    request: Final = Request(scope={"type": "http"})
+    request._url = URL(url="/chat/completions")
+    try:
+        for attribute, value in attrs.items():
+            setattr(_proxy_server_mod, attribute, value)
+        await run_centralized_common_checks(
+            user_api_key_auth_obj=token,
+            request=request,
+            request_data={"model": "gpt-4o", "messages": [{"role": "user", "content": "hi"}], "max_tokens": 1000},
+            route="/chat/completions",
+        )
+    finally:
+        for attribute, value in originals.items():
+            setattr(_proxy_server_mod, attribute, value)
+
+    assert token.committed_budget_spend == (
+        CommittedBudgetSpend(
+            counter_keys=EntitySpendCounterKeys(key=f"spend:key:{token.token}", team=f"spend:team:{token.team_id}"),
+            key=0.37,
+            team=1.25,
+        )
+        if prometheus_registered
+        else None
+    )
+    assert (token.spend, token.team_spend) == (0.0, 0.0)
+
+
 def _end_user_budget_row(budget_id: str, max_budget: float) -> MagicMock:
     row = MagicMock()
     row.dict = lambda: {"budget_id": budget_id, "max_budget": max_budget}
