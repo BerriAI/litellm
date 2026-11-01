@@ -26,6 +26,7 @@ from litellm.integrations.code_interpreter_interception.handler import (
 )
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.websearch_interception.handler import WebSearchInterceptionLogger
+from litellm.llms.anthropic.files.transformation import AnthropicFilesConfig
 from litellm.llms.azure.responses.transformation import AzureOpenAIResponsesAPIConfig
 from litellm.llms.azure.vector_stores.transformation import AzureOpenAIVectorStoreConfig
 from litellm.llms.base_llm.audio_transcription.transformation import (
@@ -68,7 +69,7 @@ from litellm.responses.streaming_iterator import (
     BaseResponsesAPIStreamingIterator,
     MockResponsesAPIStreamingIterator,
 )
-from litellm.types.llms.openai import HttpxBinaryResponseContent, ResponsesAPIResponse
+from litellm.types.llms.openai import FileContentRequest, HttpxBinaryResponseContent, ResponsesAPIResponse
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import (
     ImageObject,
@@ -3200,6 +3201,42 @@ def test_sync_retrieve_file_content_raises_on_http_error():
         )
 
     assert exc_info.value.status_code == 404
+
+
+SIGNED_DOWNLOAD_QUERY: Final = "X-Amz-Signature=abc&ResponseContentLanguage=&p=a%20b&r=1&r=2&token&t=%7E&s=a%2fb"
+
+
+class _SignedDownloadFilesConfig(AnthropicFilesConfig):
+    def transform_file_content_request(
+        self, file_content_request: FileContentRequest, optional_params: dict, litellm_params: dict
+    ) -> tuple[str, dict]:
+        return f"https://downloads.example/{file_content_request['file_id']}?{SIGNED_DOWNLOAD_QUERY}", {
+            "token": "from-params",
+            "extra": "1",
+        }
+
+
+async def test_streaming_file_content_keeps_signed_url_query_and_appends_new_params():
+    async_client: Final = AsyncHTTPHandler()
+    await async_client.client.aclose()
+    async_client.client = httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda request: httpx.Response(200, request=request, content=request.url.query))
+    )
+    try:
+        result: Final = await BaseLLMHTTPHandler().async_retrieve_file_content_streaming(
+            file_content_request={"file_id": "file-abc"},
+            provider_config=_SignedDownloadFilesConfig(),
+            litellm_params={"api_key": "sk-test"},
+            headers={},
+            logging_obj=Mock(),
+            chunk_size=1024,
+            client=async_client,
+        )
+        body: Final = b"".join([chunk async for chunk in result.stream_iterator])
+    finally:
+        await async_client.client.aclose()
+
+    assert body == f"{SIGNED_DOWNLOAD_QUERY}&extra=1".encode()
 
 
 @pytest.mark.asyncio

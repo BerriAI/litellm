@@ -122,6 +122,7 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     get_httpx_client,
     header_value,
+    url_with_query_params,
 )
 from litellm.llms.custom_httpx.sse_lines import aiter_sse_lines, iter_sse_lines
 from litellm.responses.streaming_iterator import (
@@ -5821,9 +5822,8 @@ class BaseLLMHTTPHandler:
 
         request: Final = async_httpx_client.client.build_request(
             "GET",
-            prepared.url,
+            url_with_query_params(prepared.url, httpx.QueryParams(prepared.params)),
             headers=prepared.headers,
-            params=httpx.QueryParams(HTTPHandler.extract_query_params(prepared.url)).merge(prepared.params),
             timeout=USE_CLIENT_DEFAULT if timeout is None else httpx.Timeout(timeout),
         )
         try:
