@@ -313,6 +313,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         self.presidio_analyze_chunk_size_bytes: int = self._coerce_analyze_chunk_size(presidio_analyze_chunk_size_bytes)
         # Shared HTTP session to prevent memory leaks (issue #14540)
         self._http_session: aiohttp.ClientSession | None = None
+        self._http_session_loop: asyncio.AbstractEventLoop | None = None
         # Lock to prevent race conditions when creating session under concurrent load
         # Note: asyncio.Lock() can be created without an event loop; it only needs one when awaited
         self._session_lock: asyncio.Lock = asyncio.Lock()
@@ -401,6 +402,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             async with self._session_lock:
                 if self._http_session is None or self._http_session.closed:
                     self._http_session = aiohttp.ClientSession()
+                    self._http_session_loop = current_loop
                 yield self._http_session
         else:
             # Background thread/loop -> use loop-bound session cache
@@ -420,6 +422,28 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             if not session.closed:
                 await session.close()
         self._loop_sessions.clear()
+
+    @staticmethod
+    async def _close_owned_session(session: aiohttp.ClientSession, loop: asyncio.AbstractEventLoop | None) -> None:
+        if session.closed:
+            return
+        if loop is None or loop is asyncio.get_running_loop():
+            await session.close()
+        elif loop.is_running():
+            await asyncio.wrap_future(asyncio.run_coroutine_threadsafe(session.close(), loop))
+        else:
+            raise RuntimeError("Presidio session owner loop stopped before callback cleanup")
+
+    async def async_close(self) -> None:
+        """Release sessions after requests/logging drain, on their owning loops."""
+        async with self._session_lock:
+            if self._http_session is not None:
+                await self._close_owned_session(self._http_session, self._http_session_loop)
+                self._http_session = None
+                self._http_session_loop = None
+        for loop, session in tuple(self._loop_sessions.items()):
+            await self._close_owned_session(session, loop)
+            self._loop_sessions.pop(loop, None)
 
     def __del__(self):
         """Cleanup: we try to close, but doing async cleanup in __del__ is risky."""
