@@ -35,11 +35,13 @@ import litellm
 from litellm.constants import (
     EMPTY_MAPPING,
     LITELLM_MAX_STREAMING_DURATION_SECONDS,
+    RESPONSES_WEBSOCKET_CALL_ID_METADATA_KEY,
     STREAM_SSE_DONE_STRING,
 )
-from litellm.exceptions import MidStreamFallbackError, RateLimitError
+from litellm.exceptions import MidStreamFallbackError, RateLimitError, ServiceUnavailableError
 from litellm.litellm_core_utils.asyncify import run_async_function
 from litellm.litellm_core_utils.core_helpers import (
+    UPSTREAM_USAGE_COST,
     process_response_headers,
     provider_reported_usage_cost,
     set_response_cost_in_hidden_params,
@@ -97,6 +99,12 @@ class ProjectQuotaCallback(Protocol):
         requested_model: str | None,
         estimated_input_tokens: int,
         estimated_output_tokens: int,
+    ) -> None: ...
+
+
+class TokenLimitCallback(Protocol):
+    async def enforce_token_limits_for_frame(
+        self, user_api_key_dict: UserAPIKeyAuth, requested_model: str | None
     ) -> None: ...
 
 
@@ -177,6 +185,7 @@ def _typed_gets_litellm_params(fn: _GetsLitellmParams) -> _GetsLitellmParams:
 _SHOULD_STORE_RESULT_IN_CACHE_ATTR: Final = "_should_store_result_in_cache"
 _UNMASK_PII_TEXT_ATTR: Final = "_unmask_pii_text"
 _DECODED_JSON: Final = TypeAdapter(object)
+_HIDDEN_PARAMS: Final = TypeAdapter(dict[str, object])
 
 
 def _load_json_object(payload: str | bytes) -> dict[str, object]:
@@ -224,6 +233,11 @@ def spawn_logging_task(
 
 
 async def drain_logging_tasks(timeout: float = 5.0) -> None:
+    # A task that finished as its loop closed never ran its discard callback, and a
+    # task from another loop cannot be awaited here: forget both, wait on the rest.
+    running_loop: Final = asyncio.get_running_loop()
+    stale: Final = {task for task in _PENDING_LOGGING_TASKS if task.done() or task.get_loop() is not running_loop}
+    _PENDING_LOGGING_TASKS.difference_update(stale)
     if not _PENDING_LOGGING_TASKS:
         return
     _, pending = await asyncio.wait(tuple(_PENDING_LOGGING_TASKS), timeout=timeout)
@@ -686,7 +700,9 @@ class BaseResponsesAPIStreamingIterator:
         source_hidden: Final[object] = getattr(
             getattr(self.completed_response, "response", None), "_hidden_params", None
         )
-        source: Final[Mapping[str, object]] = source_hidden if isinstance(source_hidden, Mapping) else EMPTY_MAPPING
+        source: Final[Mapping[str, object]] = (
+            _HIDDEN_PARAMS.validate_python(source_hidden) if isinstance(source_hidden, Mapping) else {}
+        )
         processed: Final[object] = source.get("additional_headers") or self._hidden_params.get("additional_headers")
         raw: Final[object] = source.get("headers") or self._raw_response_headers
         headers: Final[Mapping[str, object]] = processed if isinstance(processed, Mapping) else EMPTY_MAPPING
@@ -696,6 +712,7 @@ class BaseResponsesAPIStreamingIterator:
         target.hidden_params = {
             "additional_headers": {**headers},
             "headers": {**raw_headers},
+            **_stamped_bill_hidden_params(source),
             **existing,
         }
 
@@ -1740,6 +1757,11 @@ def _dump_json_safely(response: BaseModel) -> str | None:
         return None
 
 
+def _stamped_bill_hidden_params(source: Mapping[str, object]) -> Mapping[str, object]:
+    stamped: Final = UPSTREAM_USAGE_COST in source
+    return {key: source[key] for key in (UPSTREAM_USAGE_COST, "response_cost") if stamped and key in source}
+
+
 def _logging_copy(event: object) -> object:
     """Hand logging callbacks a copy, so their usage rewrite (Responses shape to chat shape) never
     reaches the event the caller is iterating. The round trip through ``model_dump`` sidesteps the
@@ -2156,6 +2178,25 @@ class _RefusedTurn:
 ResponsesWsTurnAdmission: TypeAlias = Callable[[], Awaitable[Mapping[str, object]]]
 
 
+def with_token_limit_checks(
+    turn_admission: ResponsesWsTurnAdmission | None,
+    token_limit_callbacks: Sequence[TokenLimitCallback],
+    user_api_key_dict: UserAPIKeyAuth | None,
+    requested_model: str | None,
+) -> ResponsesWsTurnAdmission | None:
+    if not token_limit_callbacks or user_api_key_dict is None:
+        return turn_admission
+
+    async def admit() -> Mapping[str, object]:
+        for callback in token_limit_callbacks:
+            await callback.enforce_token_limits_for_frame(
+                user_api_key_dict=user_api_key_dict, requested_model=requested_model
+            )
+        return MappingProxyType({}) if turn_admission is None else await turn_admission()
+
+    return admit
+
+
 async def _admit_frame_turn(
     turn_admission: ResponsesWsTurnAdmission | None, raw_message: str
 ) -> _AdmittedTurn | _RefusedTurn:
@@ -2171,22 +2212,24 @@ async def _admit_frame_turn(
         return _RefusedTurn(e)
 
 
-def _turn_refusal_frame(refusal: RateLimitError) -> str:
+def turn_refusal_frame(refusal: RateLimitError) -> str:
     return json.dumps(
         {"type": "error", "status": 429, "error": {"type": "rate_limit_exceeded", "message": str(refusal)}}
     )
 
 
-def _turn_admission_error_frame(failure: Exception) -> str:
-    return json.dumps({"type": "error", "status": 500, "error": {"type": "server_error", "message": str(failure)}})
+def _turn_admission_error_frame(failure: Exception, status: int) -> str:
+    return json.dumps({"type": "error", "status": status, "error": {"type": "server_error", "message": str(failure)}})
 
 
 def _turn_rejection_frame(rejection: Exception) -> str:
     match rejection:
         case RateLimitError():
-            return _turn_refusal_frame(rejection)
+            return turn_refusal_frame(rejection)
+        case ServiceUnavailableError():
+            return _turn_admission_error_frame(rejection, rejection.status_code)
         case _:
-            return _turn_admission_error_frame(rejection)
+            return _turn_admission_error_frame(rejection, 500)
 
 
 RESPONSES_WS_LOGGED_EVENT_TYPES: Final = [
@@ -3013,7 +3056,7 @@ class ResponsesWebSocketStreaming:
 
     async def _send_turn_refusal(self, refusal: RateLimitError) -> None:
         try:
-            await self.websocket.send_text(_turn_refusal_frame(refusal))
+            await self.websocket.send_text(turn_refusal_frame(refusal))
         except Exception:  # noqa: BLE001, S110  # client may already be gone
             pass
 
@@ -3567,7 +3610,7 @@ class ManagedResponsesWebSocketHandler:
                 self.quota_callbacks, self.user_api_key_dict, self.model_group or self.model, raw_message
             )
         except RateLimitError as e:
-            await self._send_frame(_turn_refusal_frame(e))
+            await self._send_frame(turn_refusal_frame(e))
             return
         guarded: Final = await self._guard_frame(raw_message)
         if guarded is None:
@@ -3611,6 +3654,7 @@ class ManagedResponsesWebSocketHandler:
         call_kwargs["litellm_metadata"] = {
             **(turn_litellm_metadata if _is_json_object(turn_litellm_metadata) else {}),
             **verdict.reservation,
+            RESPONSES_WEBSOCKET_CALL_ID_METADATA_KEY: self.logging_obj.litellm_call_id,
         }
 
         try:

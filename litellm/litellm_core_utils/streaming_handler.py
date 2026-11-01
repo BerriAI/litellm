@@ -349,11 +349,14 @@ class CustomStreamWrapper:
         make_call: Callable | None = None,
         _response_headers: dict | httpx.Headers | None = None,
         count_prompt_tokens: Callable[[], int] | None = None,
+        is_mock: bool = False,
     ):
         self.model = model
         self.make_call = make_call
         self.count_prompt_tokens = count_prompt_tokens
         self.custom_llm_provider = custom_llm_provider
+        self.is_mock = is_mock
+        self.uses_openai_chat_stream = False
         self.logging_obj: LiteLLMLoggingObject = logging_obj
         self.completion_stream = completion_stream
         self.sent_first_chunk = False
@@ -376,6 +379,7 @@ class CustomStreamWrapper:
         self._upstream_provider: str | None = None
         self.received_finish_reason: str | None = None
         self.intermittent_finish_reason: str | None = None  # finish reasons that show up mid-stream
+        self.received_any_finish_reason = False  # a later chunk can reset intermittent_finish_reason
         self.special_tokens = [
             "<|assistant|>",
             "<|system|>",
@@ -901,13 +905,21 @@ class CustomStreamWrapper:
         except Exception as e:
             raise e
 
+    def _served_openrouter_model(self) -> str | None:
+        if self.custom_llm_provider == LlmProviders.OPENROUTER.value or (
+            self.custom_llm_provider == "cached_response"
+            and self.logging_obj.model_call_details.get("custom_llm_provider") == LlmProviders.OPENROUTER.value
+        ):
+            return self._provider_response_model
+        return None
+
     def model_response_creator(
         self,
         chunk: dict | None = None,
         hidden_params: Mapping[str, object] | None = None,
         delta: Delta | None = None,
     ) -> ModelResponseStream:
-        _model: Final = self._cached_model_name
+        _model: Final = self._served_openrouter_model() or self._cached_model_name
         _logging_obj_llm_provider: Final = self._cached_logging_llm_provider
 
         if chunk is None:
@@ -1302,8 +1314,8 @@ class CustomStreamWrapper:
             if _is_delta_empty:
                 model_response.choices[0].delta = Delta(content=self._close_open_think_block())
                 # get any function call arguments
-                model_response.choices[0].finish_reason = map_finish_reason(
-                    finish_reason=self.received_finish_reason
+                model_response.choices[0].finish_reason = self._normalize_tool_call_finish_reason(
+                    map_finish_reason(finish_reason=self.received_finish_reason)
                 )  # ensure consistent output to openai
 
                 self.sent_last_chunk = True
@@ -1597,6 +1609,7 @@ class CustomStreamWrapper:
             if response_obj["is_finished"]:
                 self.received_finish_reason = response_obj["finish_reason"]
         else:  # openai / azure chat model
+            self.uses_openai_chat_stream = True
             if isinstance(chunk, ChatCompletionChunk):
                 self._openai_handler_receives_chat_chunks = True
                 if any(str(choice.finish_reason) == "abort" for choice in chunk.choices or ()):
@@ -1617,6 +1630,7 @@ class CustomStreamWrapper:
                 return _ProviderChunkEarlyReturn(None)
             completion_obj["content"] = response_obj["text"]
             self.intermittent_finish_reason = response_obj.get("finish_reason", None)
+            self.received_any_finish_reason |= response_obj["finish_reason"] is not None
             if response_obj["is_finished"]:
                 if response_obj["finish_reason"] == "error":
                     raise Exception(
@@ -1693,7 +1707,7 @@ class CustomStreamWrapper:
                 return dispatch_result.value
             response_obj = dispatch_result.response_obj
 
-            model_response.model = self.model
+            model_response.model = self._served_openrouter_model() or self.model
             ## FUNCTION CALL PARSING
             original_chunk: Final[_UpstreamChunkLike | None] = (
                 response_obj.get("original_chunk") if response_obj is not None else None
@@ -1737,6 +1751,8 @@ class CustomStreamWrapper:
                                         # if function returned but type set to None - mistral's api returns type: None
                                         tool["type"] = "function"
                             model_response.choices[0].delta = Delta(**_json_delta)
+                            if model_response.choices[0].delta.tool_calls:
+                                self.tool_call = True
                         except Exception as e:
                             verbose_logger.exception(
                                 "litellm.CustomStreamWrapper.chunk_creator(): Exception occured - %s", e
@@ -1966,6 +1982,11 @@ class CustomStreamWrapper:
         if self.logging_obj.is_sync_litellm_request(litellm_params):
             self.logging_obj.success_handler(processed_chunk, None, None, cache_hit)
 
+    def _normalize_tool_call_finish_reason(self, finish_reason: str) -> str:
+        if finish_reason == "stop" and self.tool_call:
+            return "tool_calls"
+        return finish_reason
+
     def finish_reason_handler(self):
         model_response: Final = self.model_response_creator(
             hidden_params=None if self.received_model_id is None else {"received_model_id": self.received_model_id}
@@ -1981,20 +2002,29 @@ class CustomStreamWrapper:
         if served_tier is not None:
             setattr(model_response, "service_tier", served_tier)  # noqa: B010  # pydantic extra, not a declared field
         _finish_reason: Final = self.received_finish_reason or self.intermittent_finish_reason
-        if _finish_reason is not None:
-            model_response.choices[0].finish_reason = _finish_reason
-        else:
-            model_response.choices[0].finish_reason = "stop"
-
-        ## if tool use
-        if (
-            model_response.choices[0].finish_reason == "stop" and self.tool_call
-        ):  # don't overwrite for other - potential error finish reasons
-            model_response.choices[0].finish_reason = "tool_calls"
+        model_response.choices[0].finish_reason = self._normalize_tool_call_finish_reason(
+            _finish_reason if _finish_reason is not None else "stop"
+        )
         close_tag: Final = self._close_open_think_block()
         if close_tag is not None:
             model_response.choices[0].delta.content = close_tag
         return model_response
+
+    def _should_fail_on_clean_eof(self) -> bool:
+        return (
+            not self.is_mock
+            and self.uses_openai_chat_stream
+            and self.received_finish_reason is None
+            and self.intermittent_finish_reason is None
+            and not self.received_any_finish_reason
+        )
+
+    @staticmethod
+    def _stream_eof_error() -> httpx.RemoteProtocolError:
+        return httpx.RemoteProtocolError(
+            "Stream ended before a finish_reason was received",
+            request=httpx.Request(method="POST", url="https://docs.litellm.ai/docs"),
+        )
 
     def _final_chunk_for_logging(self, processed_chunk: "ModelResponseStream") -> "ModelResponseStream | None":
         if self.received_finish_reason is not None or self.intermittent_finish_reason is not None:
@@ -2181,6 +2211,13 @@ class CustomStreamWrapper:
                     return response
 
         except StopIteration:
+            if self._should_fail_on_clean_eof():
+                error: Final = self._stream_eof_error()
+                eof_traceback: Final = traceback.format_exc()
+                self._record_partial_usage_for_failure()
+                threading.Thread(target=self.logging_obj.failure_handler, args=(error, eof_traceback)).start()
+                self.close()
+                self._handle_stream_fallback_error(error)
             if self.sent_last_chunk is True:
                 complete_streaming_response: Final = self._build_complete_streaming_response()
                 response = self._new_usage_chunk()
@@ -2384,6 +2421,9 @@ class CustomStreamWrapper:
                             continue
                         return usage_free_chunk
         except (StopAsyncIteration, StopIteration):
+            if self._should_fail_on_clean_eof():
+                await self.aclose()
+                self._log_stream_failure_and_raise(self._stream_eof_error())
             return await self._finalize_completed_stream(cache_hit=cache_hit)
         except httpx.TimeoutException as e:  # if httpx read timeout error occues
             traceback_exception = traceback.format_exc()
@@ -2529,7 +2569,7 @@ class CustomStreamWrapper:
         if partial is None or not isinstance(usage, Usage):
             return None
         if self.model:
-            partial.model = self.model
+            partial.model = self._served_openrouter_model() or self.model
         backfill_missing_cache_usage_fields(usage)
         return partial
 
