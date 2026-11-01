@@ -64525,7 +64525,7 @@
         "supports_vision": false
     },
     "novita/deepseek/deepseek-v4-pro-0813": {
-        "cache_read_input_token_cost": 1.3200000000000002e-07,
+        "cache_read_input_token_cost": 4.4e-08,
         "input_cost_per_token": 1.32e-06,
         "litellm_provider": "novita",
         "max_input_tokens": 1048576,
@@ -64637,13 +64637,13 @@
         "supports_vision": false
     },
     "novita/mindai/macaron-v1-venti": {
-        "cache_read_input_token_cost": 3e-07,
-        "input_cost_per_token": 1.5e-06,
+        "cache_read_input_token_cost": 1.65e-07,
+        "input_cost_per_token": 8.25e-07,
         "litellm_provider": "novita",
         "max_input_tokens": 1048576,
         "max_output_tokens": 131072,
         "mode": "chat",
-        "output_cost_per_token": 4.5e-06,
+        "output_cost_per_token": 2.475e-06,
         "source": "https://novita.ai/pricing",
         "supports_function_calling": true,
         "supports_prompt_caching": true,
@@ -64746,13 +64746,13 @@
         "supports_vision": false
     },
     "novita/mindai/macaron-v1-tall": {
-        "cache_read_input_token_cost": 8e-08,
-        "input_cost_per_token": 4.5000000000000003e-07,
+        "cache_read_input_token_cost": 4.4e-08,
+        "input_cost_per_token": 2.475e-07,
         "litellm_provider": "novita",
         "max_input_tokens": 262144,
         "max_output_tokens": 32768,
         "mode": "chat",
-        "output_cost_per_token": 2.6e-06,
+        "output_cost_per_token": 1.43e-06,
         "source": "https://novita.ai/pricing",
         "supports_function_calling": true,
         "supports_prompt_caching": true,
