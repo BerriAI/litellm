@@ -924,6 +924,7 @@ GPT_5_4_MINI_TEST_CASE: Final = TranslationTestCase(
         "id": "resp_0f005e55e6e18746006ad04ac8e4548196b106305915e785b5",
         "created_at": 1792035528,
         "status": "completed",
+        "access_programs": None,
         "completed_at": 1792035532,
         "content_filters": [
             {
