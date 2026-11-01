@@ -114,6 +114,21 @@ def _uvicorn_params(argv: tuple[str, ...]) -> dict[str, object]:
 
 
 class TestUvicornArgv:
+    @pytest.mark.parametrize("arguments", [("--uds", "/tmp/gateway.sock"), ("--fd", "0"), ("--fd=17",)])
+    @pytest.mark.parametrize("opt_in", ["flag", "environment"])
+    def test_forwarding_rejects_external_sockets_before_starting_processes(
+        self, arguments: tuple[str, ...], opt_in: str, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("LITELLM_RUST_GATEWAY", "true" if opt_in == "environment" else "false")
+        argv: Final = arguments if opt_in == "environment" else ("--rust_gateway", *arguments)
+        with pytest.raises(SystemExit, match=f"does not support {arguments[0].split('=')[0]}"):
+            forward_listener(argv)
+
+    def test_forwarding_disabled_keeps_uvicorn_socket_options(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("LITELLM_RUST_GATEWAY", "false")
+        assert forward_listener(("--uds", "/tmp/gateway.sock")) is None
+        assert forward_listener(("--fd", "0")) is None
+
     @pytest.mark.parametrize("flag", ["--ssl-keyfile", "--ssl-certfile", "--ssl-ciphers"])
     def test_forwarding_rejects_tls_before_starting_database_processes(self, flag: str):
         with pytest.raises(SystemExit, match=flag):

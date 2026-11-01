@@ -98,6 +98,8 @@ def forward_listener(argv: Sequence[str]) -> tuple[str, str, int] | None:
             "--ssl-keyfile": params["ssl_keyfile"],
             "--ssl-certfile": params["ssl_certfile"],
             "--ssl-ciphers": any(arg.split("=")[0] == "--ssl-ciphers" for arg in forwarded),
+            "--uds": params["uds"] is not None,
+            "--fd": params["fd"] is not None,
         },
     )
     if error is not None:
