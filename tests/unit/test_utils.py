@@ -9285,6 +9285,23 @@ def test_get_valid_models_does_not_ask_a_timed_out_provider_again_on_the_next_li
 
 
 @respx.mock
+def test_get_valid_models_does_not_ask_a_timed_out_hosted_vllm_server_again_on_the_next_listing(
+    reset_mock_cache: None,
+) -> None:
+    models_route: Final = respx.get("http://vllm-hung.test:8000/v1/models").mock(
+        side_effect=httpx.ReadTimeout("vLLM did not answer")
+    )
+    deployment: Final = LiteLLM_Params(model="hosted_vllm/*", api_base="http://vllm-hung.test:8000/v1")
+
+    listings: Final = tuple(
+        get_valid_models(check_provider_endpoint=True, custom_llm_provider="hosted_vllm", litellm_params=deployment)
+        for _ in range(2)
+    )
+
+    assert (listings, models_route.call_count) == (([], []), 1)
+
+
+@respx.mock
 def test_get_valid_models_lists_a_provider_again_right_after_a_fast_failure(reset_mock_cache: None) -> None:
     respx.get("https://openrouter.ai/api/v1/models/user").mock(
         side_effect=(httpx.Response(503), httpx.Response(200, json={"data": [{"id": "anthropic/claude-haiku-5-5"}]}))

@@ -10505,12 +10505,14 @@ class ProviderConfigManager:
             from litellm.llms.ollama.common_utils import OllamaModelInfo
 
             return OllamaModelInfo()
-        elif LlmProviders.VLLM == provider or LlmProviders.HOSTED_VLLM == provider:
-            from litellm.llms.vllm.common_utils import (
-                VLLMModelInfo,  # experimental approach, to reduce bloat on __init__.py
-            )
+        elif LlmProviders.VLLM == provider:
+            from litellm.llms.vllm.common_utils import VLLMModelInfo
 
             return VLLMModelInfo()
+        elif LlmProviders.HOSTED_VLLM == provider:
+            from litellm.llms.vllm.common_utils import HostedVLLMModelInfo
+
+            return HostedVLLMModelInfo()
         elif LlmProviders.LEMONADE == provider:
             return litellm.LemonadeChatConfig()
         elif LlmProviders.CLARIFAI == provider:
