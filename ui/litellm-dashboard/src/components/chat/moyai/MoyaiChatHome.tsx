@@ -23,6 +23,7 @@ const starters = [
 export default function MoyaiChatHome({
   children,
   imageMode,
+  researchMode,
   draft,
   busy,
   conversations,
@@ -31,6 +32,7 @@ export default function MoyaiChatHome({
 }: {
   children: ReactNode;
   imageMode: boolean;
+  researchMode: boolean;
   draft: string;
   busy: boolean;
   conversations: Conversation[];
@@ -44,11 +46,15 @@ export default function MoyaiChatHome({
       <div className="moyai-chat-home-content">
         <header className="moyai-chat-home-header">
           <h1>
-            {imageMode ? (
-              "What are we creating?"
-            ) : (
+            {imageMode && "What are we creating?"}
+            {!imageMode && researchMode && (
               <>
-                What are we <span>building?</span>
+                What should we <span>research?</span>
+              </>
+            )}
+            {!imageMode && !researchMode && (
+              <>
+                What are we <span>working on?</span>
               </>
             )}
           </h1>
