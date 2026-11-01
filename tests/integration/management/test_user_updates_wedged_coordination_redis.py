@@ -193,8 +193,10 @@ def test_user_budget_updates_return_promptly_while_coordination_redis_is_wedged(
                     timings["s6_customer_update"] = _timed_post(
                         candidate, "/customer/update", {"user_id": customer_id, "max_budget": 6.0}
                     )
-                    assert timings["s6_customer_update"] < _HANDLER_BUDGET_SECONDS, (
-                        f"/customer/update took {timings['s6_customer_update']:.3f}s with a wedged coordination Redis"
+                    assert timings["s6_customer_update"] < _SHORTEST_REDIS_WAIT_SECONDS, (
+                        f"/customer/update took {timings['s6_customer_update']:.3f}s, reaching the "
+                        f"{_SHORTEST_REDIS_WAIT_SECONDS}s shortest wait the proxy puts on Redis, so it waited on the "
+                        "wedged coordination Redis"
                     )
                     timings["s7_reset_spend"] = _timed_post(candidate, f"/key/{key}/reset_spend", {"reset_to": 0})
                     assert timings["s7_reset_spend"] < _HANDLER_BUDGET_SECONDS, (

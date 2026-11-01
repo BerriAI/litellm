@@ -115,7 +115,7 @@ def test_G7_database_invalid_scope_reads_preserve_pre_call_blocking(gateway: Gat
                     assert blocked_response.status_code == 400, blocked_response.text
                     assert _upstream_requests(gateway.upstream_url) == ()
             finally:
-                _delete_database_guardrail(identity)
+                _delete_database_guardrail(gateway, identity)
     finally:
         delete_scenario(upstream_handle)
 
@@ -678,7 +678,7 @@ def test_database_guardrail_load_keeps_pre_call_blocking(
                             for entry in entries
                         ) == ((identity, "pre_call", "guardrail_intervened"),), entries
                 finally:
-                    _delete_database_guardrail(identity)
+                    _delete_database_guardrail(gateway, identity)
     finally:
         delete_scenario(upstream_handle)
 
@@ -799,7 +799,7 @@ def test_G6_database_guardrail_polling_normalizes_invalid_scope_without_reinitia
                             ) == ((identity, "pre_call", "guardrail_intervened"),), (call_id, entries)
                         assert _upstream_requests(gateway.upstream_url) == ()
                 finally:
-                    _delete_database_guardrail(identity)
+                    _delete_database_guardrail(gateway, identity)
     finally:
         delete_scenario(upstream_handle)
 
@@ -952,7 +952,7 @@ def test_management_post_validates_logging_only_scope(
                 assert isinstance(after_list, list), after_list
                 assert identity not in {object_value(item)["guardrail_name"] for item in after_list}, after_list
     finally:
-        _delete_database_guardrail(identity)
+        _delete_database_guardrail(gateway, identity)
 
 
 def test_H5_management_put_rejection_preserves_database_and_runtime(gateway: Gateway, tmp_path: Path) -> None:
@@ -1074,7 +1074,7 @@ def test_H5_management_put_rejection_preserves_database_and_runtime(gateway: Gat
                         for entry in entries
                     ) == ((identity, "pre_call", "guardrail_intervened"),), (call_id, entries)
     finally:
-        _delete_database_guardrail(identity)
+        _delete_database_guardrail(gateway, identity)
         delete_scenario(upstream_handle)
 
 
@@ -1153,7 +1153,7 @@ def test_H6_management_patch_clears_scope_when_switching_to_blocking_only_mode(
                     for entry in entries
                 ) == ((identity, ("pre_call",), "guardrail_intervened"),), entries
     finally:
-        _delete_database_guardrail(identity)
+        _delete_database_guardrail(gateway, identity)
         delete_scenario(upstream_handle)
 
 
@@ -1240,7 +1240,7 @@ def test_H7_management_patch_rejection_preserves_pre_call_guardrail(gateway: Gat
                         for entry in entries
                     ) == ((identity, "pre_call", "guardrail_intervened"),), (call_id, entries)
     finally:
-        _delete_database_guardrail(identity)
+        _delete_database_guardrail(gateway, identity)
         delete_scenario(upstream_handle)
 
 
@@ -1331,7 +1331,7 @@ def test_management_patch_default_on_heals_stored_scope(
                             for entry in entries
                         ) == ((identity, "pre_call", "guardrail_intervened"),), entries
                 finally:
-                    _delete_database_guardrail(identity)
+                    _delete_database_guardrail(gateway, identity)
     finally:
         delete_scenario(upstream_handle)
 
@@ -1429,7 +1429,7 @@ def test_H10_management_patch_null_scope_restores_both_directions(gateway: Gatew
                     (identity, "logging_only", "guardrail_intervened"),
                 ), entries
     finally:
-        _delete_database_guardrail(identity)
+        _delete_database_guardrail(gateway, identity)
         delete_scenario(upstream_handle)
 
 
@@ -1517,7 +1517,7 @@ def test_H11_management_patch_same_scope_is_idempotent_and_output_only(gateway: 
                     (entry["guardrail_name"], entry["guardrail_mode"], entry["guardrail_status"]) for entry in entries
                 ) == tuple((identity, "logging_only", "guardrail_intervened") for _ in expected_directions), entries
     finally:
-        _delete_database_guardrail(identity)
+        _delete_database_guardrail(gateway, identity)
         delete_scenario(upstream_handle)
 
 
@@ -1550,7 +1550,7 @@ def test_H12_management_reads_expose_typed_logging_only_scope(gateway: Gateway, 
             assert object_value(info["litellm_params"])["logging_only_scope"] == "input", info
             assert object_value(matches[0]["litellm_params"])["logging_only_scope"] == "input", matches
     finally:
-        _delete_database_guardrail(identity)
+        _delete_database_guardrail(gateway, identity)
 
 
 def test_H13_unauthenticated_management_and_chat_requests_do_not_scan(gateway: Gateway, tmp_path: Path) -> None:
@@ -1629,7 +1629,7 @@ def test_K1_post_rejects_continue_flag_outside_logging_only(gateway: Gateway, tm
             assert after_list == before_list, (before_list, after_list)
             assert identity not in {object_value(item)["guardrail_name"] for item in after_list}, after_list
     finally:
-        _delete_database_guardrail(identity)
+        _delete_database_guardrail(gateway, identity)
 
 
 def test_K3_patch_flag_rejection_preserves_raw_stored_row(gateway: Gateway, tmp_path: Path) -> None:
@@ -1675,7 +1675,7 @@ def test_K3_patch_flag_rejection_preserves_raw_stored_row(gateway: Gateway, tmp_
             } == {key: after_params[key] for key in after_params if key != "api_key"}, (before_params, after_params)
             assert str(after_params["api_key"]).startswith("litellm_enc::"), after_params
     finally:
-        _delete_database_guardrail(identity)
+        _delete_database_guardrail(gateway, identity)
 
 
 def test_K4_patch_dropping_logging_only_mode_clears_stored_flag(gateway: Gateway, tmp_path: Path) -> None:
@@ -1713,7 +1713,7 @@ def test_K4_patch_dropping_logging_only_mode_clears_stored_flag(gateway: Gateway
             assert params.get("logging_only_continue_on_input_failure") is None, persisted
             assert params["mode"] == ["pre_call"], persisted
     finally:
-        _delete_database_guardrail(identity)
+        _delete_database_guardrail(gateway, identity)
 
 
 def test_K5_yaml_flag_on_blocking_guardrail_boots_and_keeps_blocking(gateway: Gateway, tmp_path: Path) -> None:
@@ -1759,5 +1759,5 @@ def test_K5_yaml_flag_on_blocking_guardrail_boots_and_keeps_blocking(gateway: Ga
                     log_text: Final = owned.log.read_text()
                     assert "Ignoring logging_only_continue_on_input_failure" in log_text, log_text
     finally:
-        _delete_database_guardrail(identity)
+        _delete_database_guardrail(gateway, identity)
         delete_scenario(upstream_handle)
