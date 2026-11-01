@@ -951,6 +951,8 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         prior_responses: Final = resolved_request_data.get("responses", missing)
         prior_choice_index: Final = resolved_request_data.get("guardrail_choice_index", missing)
         resolved_request_data.pop("guardrail_choice_index", None)
+        if len(indices) == 1:
+            resolved_request_data["guardrail_choice_index"] = indices[0]
         if "responses" not in resolved_request_data:
             resolved_request_data["responses"] = responses_so_far
         self.merge_user_api_key_metadata_into_request(resolved_request_data, user_api_key_dict)

@@ -1702,7 +1702,7 @@ class TestOpenAIChatCompletionsHandlerStreamingOutput:
             request_data=request_data,
             stream_transform_sink=StreamTransformSink(),
         )
-        assert LabelReadingGuardrail.seen == [None]
+        assert LabelReadingGuardrail.seen == [0]
         assert request_data["guardrail_choice_index"] == 7
 
     @pytest.mark.asyncio
