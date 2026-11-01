@@ -287,6 +287,14 @@
       "supports_function_calling": true
     }
   },
+  "apiko": {
+    "base_url": "https://api.apiko.app/v1",
+    "api_key_env": "APIKO_API_KEY",
+    "api_base_env": "APIKO_API_BASE",
+    "supported_endpoints": [
+      "/v1/chat/completions"
+    ]
+  },
   "streamlake": {
     "base_url": "https://vanchin.streamlake.ai/api/gateway/v1/endpoints",
     "api_key_env": "STREAMLAKE_API_KEY",
