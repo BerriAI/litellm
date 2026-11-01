@@ -3,7 +3,7 @@ from typing import Final
 
 from openai._models import BaseModel as OpenAIObject
 from pydantic import ConfigDict, SerializerFunctionWrapHandler, model_serializer
-from typing_extensions import ReadOnly, TypedDict
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm.types.llms.base_model import LiteLLMBaseModel
 
@@ -90,13 +90,13 @@ class CachedTokensDetails(LiteLLMBaseModel):
 class OutputTextTopLogprob(TypedDict):
     token: ReadOnly[str]
     logprob: ReadOnly[float]
-    bytes: ReadOnly[Sequence[int] | None]
+    bytes: NotRequired[ReadOnly[Sequence[int] | None]]
 
 
 class OutputTextLogprob(TypedDict):
     token: ReadOnly[str]
     logprob: ReadOnly[float]
-    bytes: ReadOnly[Sequence[int] | None]
+    bytes: NotRequired[ReadOnly[Sequence[int] | None]]
     top_logprobs: ReadOnly[Sequence[OutputTextTopLogprob]]
 
 
