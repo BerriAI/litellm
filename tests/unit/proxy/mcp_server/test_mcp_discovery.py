@@ -114,7 +114,7 @@ class TestMCPRegistryFile:
         with open(registry_path, "r") as f:
             data = json.load(f)
         proxy_dir: Final = os.path.dirname(registry_path)
-        built_logos_dir: Final = os.path.join(proxy_dir, "_experimental", "out", "assets", "logos")
+        built_logos_dir: Final = os.path.join(proxy_dir, "ui", "out", "assets", "logos")
         source_logos_dir: Final = os.path.join(
             proxy_dir, "..", "..", "ui", "litellm-dashboard", "public", "assets", "logos"
         )

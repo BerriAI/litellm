@@ -761,7 +761,7 @@ def test_ui_extensionless_route_requires_restructure(tmp_path):
 
 
 def test_admin_ui_export_serves_nested_extensionless_routes():
-    out_dir = Path(litellm.__file__).parent / "proxy" / "_experimental" / "out"
+    out_dir = Path(litellm.__file__).parent / "proxy" / "ui" / "out"
     assert out_dir.is_dir(), f"missing UI export at {out_dir}"
 
     nested_html_offenders = [
@@ -799,7 +799,7 @@ def test_admin_ui_export_serves_nested_extensionless_routes():
 def test_restructure_always_happens(monkeypatch):
     """
     Test that restructuring logic always executes regardless of LITELLM_NON_ROOT setting.
-    In development (is_non_root=False), restructuring happens directly in _experimental/out.
+    In development (is_non_root=False), restructuring happens directly in ui/out.
     In non-root Docker (is_non_root=True), restructuring happens in /var/lib/litellm/ui.
     """
     # Test Case 1: is_non_root is True - restructuring happens in /var/lib/litellm/ui

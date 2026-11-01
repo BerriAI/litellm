@@ -117,7 +117,7 @@ def test_core_wheel_metadata_and_resources(distributions: tuple[Path, Path]) -> 
         assert "litellm/router_strategy/complexity_router/fuse_presets.json" in names
         assert "litellm/proxy/proxy_cli.py" in names
         assert any(n.startswith("litellm/rust_bridge/_native.") and n.endswith((".so", ".pyd")) for n in names)
-        assert not any(n.startswith("litellm/proxy/_experimental/out/") for n in names)
+        assert not any(n.startswith("litellm/proxy/ui/out/") for n in names)
 
 
 def test_core_artifacts_exclude_local_configuration(distributions: tuple[Path, Path]) -> None:
