@@ -54886,6 +54886,8 @@
           "type": "object"
         },
         "SCIMGroup": {
+          "additionalProperties": true,
+          "description": "Custom attributes stay on the model so ``scim_settings.organization_id_attribute``\ncan read the one that names the team's organization.",
           "properties": {
             "displayName": {
               "title": "Displayname",

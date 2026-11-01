@@ -4,6 +4,7 @@ import json
 import logging
 import time
 from collections.abc import Awaitable, Callable, Mapping, Sequence
+from datetime import datetime, timezone
 from itertools import chain
 from types import MappingProxyType
 from typing import Final, assert_never
@@ -16,6 +17,7 @@ from pytest_mock import MockerFixture
 
 import litellm.proxy.management_endpoints.scim.scim_v2 as scim_v2_module
 from litellm.proxy._types import (
+    LiteLLM_OrganizationTableWithMembers,
     LiteLLM_TeamTable,
     LiteLLM_UserTable,
     LitellmUserRoles,
@@ -7066,3 +7068,293 @@ async def test_group_push_of_500_members_reads_the_user_table_once_and_writes_th
     assert prisma_client.db.litellm_usertable.find_many.await_count == 1
     prisma_client.db.litellm_usertable.find_unique.assert_not_awaited()
     prisma_client.db.litellm_teamtable.find_many.assert_not_awaited()
+
+
+_ORG_ATTRIBUTE_SETTINGS: Final = {"scim_settings": {"organization_id_attribute": "org_id"}}
+_LITELLM_GROUP_URN: Final = "urn:ietf:params:scim:schemas:extension:litellm:2.0:Group"
+
+
+def _organization(alias: str, organization_id: str) -> LiteLLM_OrganizationTableWithMembers:
+    """What the organization table answers for an organization with no members yet."""
+    return LiteLLM_OrganizationTableWithMembers(
+        organization_id=organization_id,
+        organization_alias=alias,
+        budget_id="budget-1",
+        created_by="admin",
+        updated_by="admin",
+        created_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        updated_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+    )
+
+
+def _organization_mapping_mocks(
+    mocker: MockerFixture,
+    monkeypatch: pytest.MonkeyPatch,
+    litellm_settings: Mapping[str, object],
+    existing_team: LiteLLM_TeamTable | None,
+) -> tuple[MagicMock, AsyncMock, AsyncMock]:
+    """Prisma, alias lookup and org auto-add doubles for a Group write under ``litellm_settings``.
+    The alias lookup answers org-123 for "engineering" and the 404 ``get_org_object_by_alias``
+    raises for anything else."""
+    from litellm.proxy.proxy_server import proxy_config
+
+    async def mock_get_config():
+        return {"litellm_settings": dict(litellm_settings)}
+
+    monkeypatch.setattr(proxy_config, "get_config", mock_get_config)
+    monkeypatch.setattr("litellm.default_team_params", None, raising=False)
+
+    async def lookup(
+        org_alias: str, prisma_client: object, user_api_key_cache: object
+    ) -> LiteLLM_OrganizationTableWithMembers:
+        if org_alias == "engineering":
+            return _organization(org_alias, "org-123")
+        raise HTTPException(status_code=404, detail={"error": f"Organization with alias '{org_alias}' doesn't exist"})
+
+    lookup_mock = mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2.get_org_object_by_alias", AsyncMock(side_effect=lookup)
+    )
+    auto_add_mock = mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2._auto_add_team_members_to_organization", AsyncMock()
+    )
+
+    prisma_client = mocker.MagicMock()
+    prisma_client.db = mocker.MagicMock()
+    prisma_client.db.litellm_teamtable = mocker.MagicMock()
+    prisma_client.db.litellm_teamtable.find_unique = AsyncMock(return_value=existing_team)
+    prisma_client.db.litellm_teamtable.find_many = AsyncMock(return_value=())
+    prisma_client.db.litellm_teamtable.update = AsyncMock(return_value=existing_team)
+    prisma_client.db.litellm_usertable = mocker.MagicMock()
+    prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=mocker.MagicMock())
+    prisma_client.db.litellm_usertable.find_many = AsyncMock(side_effect=_rows_by_exact_id(_user_row_for))
+    prisma_client.db.litellm_organizationtable = mocker.MagicMock()
+    prisma_client.db.litellm_organizationtable.find_unique = AsyncMock(
+        return_value=_organization("engineering", "org-123")
+    )
+    mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2._get_prisma_client_or_raise_exception",
+        AsyncMock(return_value=prisma_client),
+    )
+    mocker.patch("litellm.proxy.management_endpoints.scim.scim_v2._recompute_scim_member_roles", AsyncMock())
+    return prisma_client, lookup_mock, auto_add_mock
+
+
+def _org_team(members: Sequence[str], organization_id: str | None = None) -> LiteLLM_TeamTable:
+    return LiteLLM_TeamTable(
+        team_id="org-group-1",
+        team_alias="Infrastructure",
+        members_with_roles=[Member(user_id=member, role="user") for member in members],
+        metadata={},
+        organization_id=organization_id,
+    )
+
+
+def _org_group(**attributes: object) -> SCIMGroup:
+    return SCIMGroup.model_validate(
+        {
+            "schemas": ["urn:ietf:params:scim:schemas:core:2.0:Group"],
+            "id": "org-group-1",
+            "displayName": "Infrastructure",
+            "members": [{"value": "user1"}],
+            **attributes,
+        }
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("litellm_settings", "attributes"),
+    [
+        (_ORG_ATTRIBUTE_SETTINGS, {"org_id": "engineering"}),
+        (_ORG_ATTRIBUTE_SETTINGS, {"ORG_ID": "engineering"}),
+        (
+            {"scim_settings": {"organization_id_attribute": f"{_LITELLM_GROUP_URN}:org_id"}},
+            {_LITELLM_GROUP_URN: {"org_id": "engineering"}},
+        ),
+    ],
+    ids=["top-level", "case-insensitive", "extension-urn"],
+)
+async def test_create_group_places_team_in_organization_named_by_configured_attribute(  # test-quality-ok: new_team is the DB boundary, its organization_id argument is the effect
+    mocker: MockerFixture,
+    monkeypatch: pytest.MonkeyPatch,
+    litellm_settings: Mapping[str, object],
+    attributes: Mapping[str, object],
+) -> None:
+    """POST /Groups with ``scim_settings.organization_id_attribute`` set resolves the attribute's
+    value as an organization alias and creates the team inside that organization, pulling the
+    members in as org members."""
+    from litellm.proxy.management_endpoints.scim.scim_transformations import ScimTransformations
+
+    group = _org_group(**attributes)
+    prisma_client, _, auto_add_mock = _organization_mapping_mocks(mocker, monkeypatch, litellm_settings, None)
+    prisma_client.db.litellm_teamtable.find_unique = AsyncMock(return_value=None)
+    new_team_mock = mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2.new_team",
+        AsyncMock(return_value=_org_team((), "org-123").model_dump()),
+    )
+    _stub_roster_sync(mocker, _org_team(("user1",), "org-123"))
+    mocker.patch.object(ScimTransformations, "transform_litellm_team_to_scim_group", AsyncMock(return_value=group))
+
+    await create_group(group=group)
+
+    assert new_team_mock.await_args.kwargs["data"].organization_id == "org-123"
+    auto_add_mock.assert_awaited_once()
+    assert auto_add_mock.await_args.kwargs["team"].organization_id == "org-123"
+    assert auto_add_mock.await_args.kwargs["organization"].organization_id == "org-123"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("litellm_settings", "attributes"),
+    [
+        ({}, {"org_id": "engineering"}),
+        (_ORG_ATTRIBUTE_SETTINGS, {}),
+        (_ORG_ATTRIBUTE_SETTINGS, {"org_id": ""}),
+        (_ORG_ATTRIBUTE_SETTINGS, {"department": "engineering"}),
+    ],
+    ids=["setting-unset", "attribute-absent", "attribute-empty", "other-attribute"],
+)
+async def test_create_group_without_the_mapping_keeps_default_team_params_organization(  # test-quality-ok: new_team is the DB boundary, no organization_id reaching it is the effect
+    mocker: MockerFixture,
+    monkeypatch: pytest.MonkeyPatch,
+    litellm_settings: Mapping[str, object],
+    attributes: Mapping[str, object],
+) -> None:
+    """The mapping is opt-in: without the setting, or when the group lacks the attribute, the
+    team request carries no organization so new_team applies default_team_params as today."""
+    from litellm.proxy.management_endpoints.scim.scim_transformations import ScimTransformations
+
+    group = _org_group(**attributes)
+    prisma_client, lookup_mock, auto_add_mock = _organization_mapping_mocks(
+        mocker, monkeypatch, litellm_settings, None
+    )
+    prisma_client.db.litellm_teamtable.find_unique = AsyncMock(return_value=None)
+    new_team_mock = mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2.new_team",
+        AsyncMock(return_value=_org_team(()).model_dump()),
+    )
+    _stub_roster_sync(mocker, _org_team(("user1",)))
+    mocker.patch.object(ScimTransformations, "transform_litellm_team_to_scim_group", AsyncMock(return_value=group))
+
+    await create_group(group=group)
+
+    assert new_team_mock.await_args.kwargs["data"].organization_id is None
+    lookup_mock.assert_not_awaited()
+    auto_add_mock.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_create_group_with_an_unknown_organization_alias_answers_404_and_creates_nothing(
+    mocker: MockerFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An attribute naming an organization that does not exist is a 404 SCIM error. Neither the
+    team nor an organization gets created."""
+    group = _org_group(org_id="nonexistent")
+    prisma_client, _, _ = _organization_mapping_mocks(mocker, monkeypatch, _ORG_ATTRIBUTE_SETTINGS, None)
+    prisma_client.db.litellm_teamtable.find_unique = AsyncMock(return_value=None)
+    new_team_mock = mocker.patch("litellm.proxy.management_endpoints.scim.scim_v2.new_team", AsyncMock())
+    sync_mock = _stub_roster_sync(mocker)
+
+    with pytest.raises(ProxyException) as raised:
+        await create_group(group=group)
+
+    assert raised.value.code == "404"
+    assert "nonexistent" in str(raised.value.message)
+    new_team_mock.assert_not_awaited()
+    sync_mock.assert_not_awaited()
+    prisma_client.db.litellm_organizationtable.create.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("attributes", "expected_organization_id", "members_pulled_in"),
+    [
+        ({"org_id": "engineering"}, "org-123", True),
+        ({}, "org-before", False),
+    ],
+    ids=["attribute-moves-team", "absent-attribute-leaves-organization"],
+)
+async def test_update_group_moves_team_to_the_organization_the_attribute_names(
+    mocker: MockerFixture,
+    monkeypatch: pytest.MonkeyPatch,
+    attributes: Mapping[str, object],
+    expected_organization_id: str,
+    members_pulled_in: bool,
+) -> None:
+    """PUT /Groups/{id} carrying the configured attribute writes the resolved organization_id
+    onto the team and adds the synced roster to that organization. A PUT without the attribute
+    leaves whatever organization the team already has."""
+    from litellm.proxy.management_endpoints.scim.scim_transformations import ScimTransformations
+
+    group = _org_group(**attributes)
+    existing_team = _org_team(("user1",), "org-before")
+    prisma_client, _, auto_add_mock = _organization_mapping_mocks(
+        mocker, monkeypatch, _ORG_ATTRIBUTE_SETTINGS, existing_team
+    )
+    _stub_roster_sync(mocker, _org_team(("user1",), expected_organization_id))
+    mocker.patch.object(ScimTransformations, "transform_litellm_team_to_scim_group", AsyncMock(return_value=group))
+
+    await update_group(group_id="org-group-1", group=group)
+
+    written = prisma_client.db.litellm_teamtable.update.await_args.kwargs["data"]
+    assert written.get("organization_id", "org-before") == expected_organization_id
+    assert auto_add_mock.await_count == (1 if members_pulled_in else 0)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("operation", "expected_organization_id"),
+    [
+        ({"op": "replace", "path": "org_id", "value": "engineering"}, "org-123"),
+        ({"op": "add", "value": {"org_id": "engineering"}}, "org-123"),
+        ({"op": "replace", "path": f"{_LITELLM_GROUP_URN}:org_id", "value": "engineering"}, "org-123"),
+        ({"op": "remove", "path": "org_id"}, None),
+    ],
+    ids=["replace-path", "pathless-add", "urn-path-with-urn-setting", "remove-clears"],
+)
+async def test_patch_group_sets_or_clears_the_organization_the_attribute_names(
+    mocker: MockerFixture,
+    monkeypatch: pytest.MonkeyPatch,
+    operation: Mapping[str, object],
+    expected_organization_id: str | None,
+) -> None:
+    """PATCH /Groups/{id} on the configured attribute resolves the alias into organization_id
+    (add/replace, by path, path-less or under an extension URN) and a remove clears it."""
+    path = operation.get("path")
+    setting = str(path) if isinstance(path, str) and path.startswith("urn:") else "org_id"
+    existing_team = _org_team(("user1",), "org-before")
+    prisma_client, _, auto_add_mock = _organization_mapping_mocks(
+        mocker, monkeypatch, {"scim_settings": {"organization_id_attribute": setting}}, existing_team
+    )
+    patch_ops = SCIMPatchOp.model_validate(
+        {"schemas": ["urn:ietf:params:scim:api:messages:2.0:PatchOp"], "Operations": [dict(operation)]}
+    )
+
+    update_data, final_members, _ = await _process_group_patch_operations(patch_ops, existing_team, prisma_client)
+
+    assert update_data["organization_id"] == expected_organization_id
+    assert final_members == {"user1"}
+    assert "org_id" not in update_data["metadata"]
+    auto_add_mock.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_patch_group_with_an_unknown_organization_alias_answers_404_and_writes_nothing(
+    mocker: MockerFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    existing_team = _org_team(("user1",), "org-before")
+    prisma_client, _, _ = _organization_mapping_mocks(mocker, monkeypatch, _ORG_ATTRIBUTE_SETTINGS, existing_team)
+    sync_mock = _stub_roster_sync(mocker, existing_team)
+    patch_ops = SCIMPatchOp.model_validate(
+        {
+            "schemas": ["urn:ietf:params:scim:api:messages:2.0:PatchOp"],
+            "Operations": [{"op": "replace", "path": "org_id", "value": "nonexistent"}],
+        }
+    )
+
+    with pytest.raises(ProxyException) as raised:
+        await patch_group(group_id="org-group-1", patch_ops=patch_ops)
+
+    assert raised.value.code == "404"
+    prisma_client.db.litellm_teamtable.update.assert_not_awaited()
+    sync_mock.assert_not_awaited()

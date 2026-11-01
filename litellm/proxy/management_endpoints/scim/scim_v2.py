@@ -34,6 +34,7 @@ from litellm.constants import SCIM_GROUP_MEMBER_LOOKUP_BATCH_SIZE
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.models.user import SCIMPlaceholder
 from litellm.proxy._types import (
+    LiteLLM_OrganizationTableWithMembers,
     LiteLLM_TeamTable,
     LiteLLM_UserTable,
     LitellmUserRoles,
@@ -51,6 +52,7 @@ from litellm.proxy.auth.auth_checks import (  # noqa: F401  # legacy module expo
     _delete_cache_key_object,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     delete_cache_key_object,
     delete_cache_team_object,
+    get_org_object_by_alias,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
@@ -69,6 +71,7 @@ from litellm.proxy.management_endpoints.scim.scim_transformations import (
     ScimTransformations,
 )
 from litellm.proxy.management_endpoints.team_endpoints import (
+    _auto_add_team_members_to_organization,  # pyright: ignore[reportPrivateUsage]  # same rule as /team/update
     delete_validated_team_rows,
     new_team,
     team_member_add,
@@ -101,6 +104,7 @@ from litellm.proxy.utils import (  # noqa: F401  # legacy module exports
     premium_user_check,
 )
 from litellm.repositories.chunked_in import find_many_in
+from litellm.repositories.organization_repository import OrganizationRepository
 from litellm.repositories.team_repository import TeamRepository
 from litellm.repositories.user_repository import UserRepository
 from litellm.repositories.verification_token_repository import (
@@ -436,6 +440,23 @@ def _default_scim_user_role() -> ScimUserRole:
     return LitellmUserRoles.INTERNAL_USER_VIEW_ONLY
 
 
+async def _loaded_proxy_config() -> object:
+    from litellm.proxy.proxy_server import proxy_config
+
+    return await proxy_config.get_config()
+
+
+async def _proxy_litellm_settings() -> Mapping[str, object]:
+    """``litellm_settings`` of the loaded proxy config, empty when it cannot be read so every
+    SCIM setting falls back to its default-off behaviour."""
+    try:
+        config: Final = _json_object_fields(await _loaded_proxy_config()) or _NO_FIELDS
+    except Exception as e:
+        verbose_proxy_logger.warning("Error reading litellm_settings for SCIM, defaulting to none: %s", e)
+        return _NO_FIELDS
+    return _json_object_fields(config.get("litellm_settings")) or _NO_FIELDS
+
+
 async def _get_scim_admin_group() -> str | None:
     """
     Get the scim_admin_group setting from litellm_settings.
@@ -443,15 +464,91 @@ async def _get_scim_admin_group() -> str | None:
     Returns the configured admin group identifier, or None when unset so callers
     leave a user's global role untouched (default-safe).
     """
-    try:
-        from litellm.proxy.proxy_server import proxy_config
+    admin_group: Final = (await _proxy_litellm_settings()).get("scim_admin_group")
+    return admin_group if isinstance(admin_group, str) and admin_group else None
 
-        config: Final = await proxy_config.get_config()
-        litellm_settings: Final = config.get("litellm_settings", {}) or {}
-        return litellm_settings.get("scim_admin_group") or None
-    except Exception as e:
-        verbose_proxy_logger.warning("Error reading scim_admin_group setting, defaulting to None: %s", e)
+
+async def _get_scim_organization_id_attribute() -> str | None:
+    """The SCIM Group attribute ``litellm_settings.scim_settings.organization_id_attribute`` names,
+    whose value is the alias of the organization the team belongs to. None when unset, so SCIM
+    keeps leaving a team's organization alone."""
+    scim_settings: Final = _json_object_fields((await _proxy_litellm_settings()).get("scim_settings")) or _NO_FIELDS
+    attribute: Final = scim_settings.get("organization_id_attribute")
+    return attribute if isinstance(attribute, str) and attribute else None
+
+
+def _scim_group_attribute_value(group: SCIMGroup, attribute: str) -> object | None:
+    """The value of a custom Group attribute, matched case-insensitively (RFC 7643 Section 2.1)
+    either as a top-level key or as ``<extension URN>:<field>`` nested under its extension."""
+    extras: Final[Mapping[str, object]] = group.model_extra or {}
+    wanted: Final = attribute.lower()
+    direct: Final = tuple(value for key, value in extras.items() if key.lower() == wanted)
+    if direct:
+        return direct[0]
+    urn, _, field = wanted.rpartition(":")
+    extensions: Final = tuple(value for key, value in extras.items() if key.lower() == urn)
+    extension: Final = _json_object_fields(extensions[0]) if extensions else None
+    if extension is None:
         return None
+    nested: Final = tuple(value for key, value in extension.items() if key.lower() == field)
+    return nested[0] if nested else None
+
+
+def _patched_organization_alias(attribute: str, value: object, configured: str) -> tuple[bool, object]:
+    """Whether a PATCH (attribute, value) pair targets the configured organization attribute, either
+    by its full path or as a field of the extension object a path-less op carries, and the alias it sets."""
+    wanted: Final = configured.lower()
+    if attribute == wanted:
+        return True, value
+    urn, _, field = wanted.rpartition(":")
+    extension: Final = _json_object_fields(value) if urn and attribute == urn else None
+    if extension is None:
+        return False, None
+    nested: Final = tuple(nested for key, nested in extension.items() if key.lower() == field)
+    return (True, nested[0]) if nested else (False, None)
+
+
+async def _organization_id_for_alias(alias: str) -> str:
+    """Resolve an organization alias to its id, raising the SCIM 404 ``get_org_object_by_alias``
+    builds when no organization carries it. Never creates one."""
+    from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
+
+    organization: Final = await get_org_object_by_alias(
+        org_alias=alias, prisma_client=prisma_client, user_api_key_cache=user_api_key_cache
+    )
+    if organization is None or organization.organization_id is None:
+        raise HTTPException(status_code=404, detail={"error": f"Organization with alias '{alias}' not found"})
+    return organization.organization_id
+
+
+async def _organization_id_for_scim_group(group: SCIMGroup) -> str | None:
+    """The organization_id the configured Group attribute assigns, or None when the setting or the
+    attribute is absent so the team keeps today's behaviour (default_team_params on create, untouched on PUT)."""
+    attribute: Final = await _get_scim_organization_id_attribute()
+    if attribute is None:
+        return None
+    alias: Final = _scim_group_attribute_value(group, attribute)
+    if not isinstance(alias, str) or not alias:
+        return None
+    return await _organization_id_for_alias(alias)
+
+
+async def _add_group_members_to_organization(team: LiteLLM_TeamTable, prisma_client: PrismaClient) -> None:
+    """Pull the team's members into its organization the way /team/update does for proxy admins."""
+    if team.organization_id is None:
+        return
+    organization_row: Final = await OrganizationRepository(prisma_client).table.find_unique(
+        where={"organization_id": team.organization_id}, include={"members": True}
+    )
+    if organization_row is None:
+        return
+    await _auto_add_team_members_to_organization(
+        team=team,
+        organization=LiteLLM_OrganizationTableWithMembers.model_validate(
+            organization_row.model_dump(exclude={"teams"})
+        ),
+        prisma_client=prisma_client,
+    )
 
 
 def _resolve_scim_user_role(
@@ -2942,9 +3039,11 @@ def _new_team_request_with_defaults(
     team_id: str,
     team_alias: str | None,
     members_with_roles: Sequence[Member],
+    organization_id: str | None = None,
 ) -> NewTeamRequest:
     """Build the SCIM group's team request, applying litellm.default_team_params
-    (including models) the same way SSO auto-created teams do."""
+    (including models) the same way SSO auto-created teams do. An organization the
+    SCIM group names overrides default_team_params.organization_id."""
     default_params: Final = litellm.default_team_params
     defaults: Final[Mapping[str, object]] = (
         deepcopy(default_params)
@@ -2958,9 +3057,11 @@ def _new_team_request_with_defaults(
         **(default_metadata if isinstance(default_metadata, dict) else {}),
         SCIM_MANAGED_TEAM_METADATA_KEY: True,
     }
+    organization: Final = {"organization_id": organization_id} if organization_id is not None else {}
     return NewTeamRequest.model_validate(
         {
             **defaults,
+            **organization,
             "team_id": team_id,
             "team_alias": team_alias,
             "members_with_roles": members_with_roles,
@@ -3002,12 +3103,14 @@ async def create_group(
 
         # Extract and validate group members (all users must exist)
         member_result: Final = await _extract_group_member_ids(group)
+        organization_id: Final = await _organization_id_for_scim_group(group)
 
         created_team: Final = await new_team(
             data=_new_team_request_with_defaults(
                 team_id=team_id,
                 team_alias=group.displayName,
                 members_with_roles=(),
+                organization_id=organization_id,
             ),
             http_request=Request(scope={"type": "http", "path": "/scim/v2/Groups"}),
             user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
@@ -3017,6 +3120,8 @@ async def create_group(
             if member_result.all_member_ids
             else LiteLLM_TeamTable.model_validate(created_team)
         )
+        if organization_id is not None:
+            await _add_group_members_to_organization(team, prisma_client)
         await _recompute_scim_member_roles(prisma_client, member_result.all_member_ids)
         return await ScimTransformations.transform_litellm_team_to_scim_group(team)
     except Exception as e:
@@ -3058,9 +3163,11 @@ async def update_group(
             SCIM_MANAGED_TEAM_METADATA_KEY: True,
         }
 
+        organization_id: Final = await _organization_id_for_scim_group(group)
         update_data: Final = {
             "team_alias": group.displayName,
             "metadata": safe_dumps(updated_metadata),
+            **({"organization_id": organization_id} if organization_id is not None else {}),
         }
 
         # Update team in database
@@ -3080,6 +3187,8 @@ async def update_group(
         # A rename can flip whether this group matches scim_admin_group by display
         # name, so retained members must be re-resolved too, not just the ones whose
         # membership changed.
+        if organization_id is not None:
+            await _add_group_members_to_organization(sync.team, prisma_client)
         alias_changed: Final = existing_team.team_alias != group.displayName
         await _recompute_scim_member_roles(prisma_client, _roles_to_recompute(sync, alias_changed))
 
@@ -3245,12 +3354,24 @@ async def _process_group_patch_operations(
     # everyone already in the team.
     current_members: Final = set(await _get_team_member_user_ids_from_team(existing_team))
     final_members = current_members.copy()
+    organization_attribute: Final = await _get_scim_organization_id_attribute()
 
     for op in patch_ops.Operations:
         for attribute, value in _group_patch_attribute_values(op):
             op_type = op.op
+            targets_organization, organization_alias = (
+                _patched_organization_alias(attribute, value, organization_attribute)
+                if organization_attribute is not None
+                else (False, None)
+            )
 
-            if attribute == "displayname":
+            if targets_organization:
+                update_data["organization_id"] = (
+                    None
+                    if op_type == "remove" or not organization_alias
+                    else await _organization_id_for_alias(str(organization_alias))
+                )
+            elif attribute == "displayname":
                 if op_type == "remove":
                     update_data["team_alias"] = None
                 else:
@@ -3478,6 +3599,8 @@ async def patch_group(
         await _apply_group_patch_updates(group_id, update_data, prisma_client, existing_team.team_alias)
 
         sync: Final = await _sync_group_roster(group_id, plan, "scim_group_patch", prisma_client)
+        if update_data.get("organization_id") is not None:
+            await _add_group_members_to_organization(sync.team, prisma_client)
 
         # A rename can flip whether this group matches scim_admin_group by display
         # name, so retained members must be re-resolved too, not just the ones whose

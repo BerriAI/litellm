@@ -152,6 +152,11 @@ class SCIMMember(LiteLLMBaseModel):
 
 
 class SCIMGroup(SCIMResource):
+    """Custom attributes stay on the model so ``scim_settings.organization_id_attribute``
+    can read the one that names the team's organization."""
+
+    model_config = ConfigDict(extra="allow")
+
     displayName: str
     members: list[SCIMMember] | None = None
 
