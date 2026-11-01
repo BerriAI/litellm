@@ -10511,6 +10511,10 @@ class ProviderConfigManager:
             )
 
             return VLLMModelInfo()
+        elif LlmProviders.CUSTOM_OPENAI == provider:
+            from litellm.llms.openai_like.model_info import CustomOpenAIModelInfo
+
+            return CustomOpenAIModelInfo()
         elif LlmProviders.LEMONADE == provider:
             return litellm.LemonadeChatConfig()
         elif LlmProviders.CLARIFAI == provider:

@@ -69,11 +69,12 @@ def _is_openai_backed_api_base(api_base: str) -> bool:
     return hostname is not None and (hostname == _OPENAI_API_HOST or hostname.endswith(f".{_OPENAI_API_HOST}"))
 
 
-def _resolve_openai_api_base(api_base: str | None) -> str:
-    """Effective OpenAI base a chat request will hit: arg > global > env > default. The bridge gate
-    and the ``_complete_custom_openai`` chat handler MUST resolve this identically, or a custom base
-    set via ``litellm.api_base`` or ``OPENAI_BASE_URL``/``OPENAI_API_BASE`` is invisible to the gate,
-    which then misreads it as the default OpenAI endpoint and bridges a request the backend can't serve."""
+def resolve_openai_api_base(api_base: str | None) -> str:
+    """Effective OpenAI base a chat request will hit: arg > global > env > default. The bridge gate,
+    the ``_complete_custom_openai`` chat handler and ``custom_openai/*`` model listing MUST resolve this
+    identically, or a custom base set via ``litellm.api_base`` or ``OPENAI_BASE_URL``/``OPENAI_API_BASE``
+    is invisible to the gate, which then misreads it as the default OpenAI endpoint and bridges a request
+    the backend can't serve."""
     return (
         api_base
         or litellm.api_base
@@ -81,6 +82,9 @@ def _resolve_openai_api_base(api_base: str | None) -> str:
         or get_secret_str("OPENAI_API_BASE")
         or _OPENAI_DEFAULT_API_BASE
     )
+
+
+_resolve_openai_api_base: Final = resolve_openai_api_base
 
 
 def _mantle_responses_series_name(model: str) -> str | None:
