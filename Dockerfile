@@ -161,9 +161,7 @@ COPY --from=liteadmin-builder /opt/liteadmin /opt/liteadmin
 COPY --from=builder /app/docker /app/docker
 COPY --from=builder /app/schema.prisma /app/schema.prisma
 COPY --from=builder /app/litellm/proxy/prisma_migration.py /app/litellm/proxy/prisma_migration.py
-# enterprise/ is imported by source path at runtime (proxy_cli puts the
-# working directory on sys.path; litellm/proxy/hooks resolves
-# enterprise.enterprise_hooks from it)
+# enterprise/ is imported by source path at runtime (proxy_cli puts the working directory on sys.path)
 COPY --from=builder /app/enterprise /app/enterprise
 COPY --from=builder /app/litellm-proxy-extras /app/litellm-proxy-extras
 # Prisma CLI + engines are baked under /opt/prisma, a fixed path every

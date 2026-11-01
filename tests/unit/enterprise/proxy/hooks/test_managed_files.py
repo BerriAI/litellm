@@ -332,6 +332,28 @@ def test_get_file_ids_from_messages_skips_bedrock_content_blocks_without_type():
     assert file_ids == ["file-keep"]
 
 
+def test_get_file_ids_from_messages_leaves_malformed_file_parts_to_request_validation():
+    proxy_managed_files = PROXY_LiteLLMManagedFiles(
+        DualCache(), prisma_client=MagicMock()
+    )
+    messages = [
+        "not-a-message",
+        {
+            "role": "user",
+            "content": [
+                "not-a-part",
+                {"type": "file"},
+                {"type": "file", "file": "file-raw"},
+                {"type": "file", "file": None},
+                {"type": "file", "file": {"file_id": 7}},
+                {"type": "file", "file": {"file_id": "file-keep"}},
+            ],
+        }
+    ]
+    file_ids = proxy_managed_files.get_file_ids_from_messages(messages)
+    assert file_ids == ["file-keep"]
+
+
 @pytest.mark.asyncio
 async def test_async_pre_call_hook_batch_retrieve():
     from litellm.proxy._types import UserAPIKeyAuth

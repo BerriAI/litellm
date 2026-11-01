@@ -10,8 +10,14 @@ from typing import (
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 
 from litellm.constants import VECTOR_STORE_CALLER_METADATA_KWARG
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.vector_store_integrations.vector_store_pre_call_hook import (
     LiteLLM_ManagedVectorStore,
+)
+from litellm.llms.base_llm.managed_resources import BaseManagedResource
+from litellm.llms.base_llm.managed_resources.utils import (
+    extract_provider_resource_id_from_unified_id,
+    is_base64_encoded_unified_id,
 )
 from litellm.proxy._types import CommonProxyErrors, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -266,7 +272,7 @@ async def vector_store_create(
         if managed_vector_stores is None:
             raise HTTPException(
                 status_code=500,
-                detail="Managed vector stores not configured. Please ensure the proxy is initialized with database support.",
+                detail=CommonProxyErrors.managed_vector_stores_unavailable.value,
             )
 
         if llm_router is None:
@@ -315,6 +321,21 @@ async def vector_store_create(
         )
 
 
+async def _answer_with_managed_vector_store_id(
+    response: object,
+    vector_store_id: str,
+    managed_vector_stores: CustomLogger | None,
+) -> object:
+    if not isinstance(managed_vector_stores, BaseManagedResource) or not isinstance(response, dict):
+        return response
+    decoded_id: Final = is_base64_encoded_unified_id(vector_store_id)
+    if not decoded_id or response.get("id") != extract_provider_resource_id_from_unified_id(decoded_id):
+        return response
+    if response.get("deleted") is True:
+        await managed_vector_stores.delete_unified_resource_id(vector_store_id)
+    return {**response, "id": vector_store_id}
+
+
 @router.get("/v1/vector_stores/{vector_store_id}", dependencies=[Depends(user_api_key_auth)])
 @router.get("/vector_stores/{vector_store_id}", dependencies=[Depends(user_api_key_auth)])
 async def vector_store_retrieve(
@@ -351,7 +372,7 @@ async def vector_store_retrieve(
 
     processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:
-        return await processor.base_process_llm_request(
+        response: Final = await processor.base_process_llm_request(
             request=request,
             fastapi_response=fastapi_response,
             user_api_key_dict=user_api_key_dict,
@@ -368,6 +389,9 @@ async def vector_store_retrieve(
             user_max_tokens=user_max_tokens,
             user_api_base=user_api_base,
             version=version,
+        )
+        return await _answer_with_managed_vector_store_id(
+            response, vector_store_id, proxy_logging_obj.get_proxy_hook("managed_vector_stores")
         )
     except Exception as e:
         raise await processor.handle_llm_api_exception(
@@ -490,7 +514,7 @@ async def vector_store_update(
 
     processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:
-        return await processor.base_process_llm_request(
+        response: Final = await processor.base_process_llm_request(
             request=request,
             fastapi_response=fastapi_response,
             user_api_key_dict=user_api_key_dict,
@@ -507,6 +531,9 @@ async def vector_store_update(
             user_max_tokens=user_max_tokens,
             user_api_base=user_api_base,
             version=version,
+        )
+        return await _answer_with_managed_vector_store_id(
+            response, vector_store_id, proxy_logging_obj.get_proxy_hook("managed_vector_stores")
         )
     except Exception as e:
         raise await processor.handle_llm_api_exception(
@@ -553,7 +580,7 @@ async def vector_store_delete(
 
     processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:
-        return await processor.base_process_llm_request(
+        response: Final = await processor.base_process_llm_request(
             request=request,
             fastapi_response=fastapi_response,
             user_api_key_dict=user_api_key_dict,
@@ -570,6 +597,9 @@ async def vector_store_delete(
             user_max_tokens=user_max_tokens,
             user_api_base=user_api_base,
             version=version,
+        )
+        return await _answer_with_managed_vector_store_id(
+            response, vector_store_id, proxy_logging_obj.get_proxy_hook("managed_vector_stores")
         )
     except Exception as e:
         raise await processor.handle_llm_api_exception(

@@ -1,5 +1,6 @@
 import base64
 import json
+import threading
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from functools import partial
@@ -265,3 +266,73 @@ def test_managed_vector_store_id_routes_to_creator_deployment_and_enforces_owner
 
         db_row_after_denial: Final = read_rows(_MANAGED_STORE_ROW, (unified_id,))
         assert db_row_after_denial == [{"created_by": creator_user, "team_id": creator_team}]
+
+        update_refused: Final = gateway.request(
+            "POST", f"/v1/vector_stores/{unified_id}", {"name": "renamed"}, key=creator_key
+        )
+        assert update_refused.status_code == 400, update_refused.text
+        delete_refused: Final = gateway.request("DELETE", f"/v1/vector_stores/{unified_id}", key=creator_key)
+        assert delete_refused.status_code == 400, delete_refused.text
+        assert wire_a.drain() == ()
+        assert wire_b.drain() == ()
+
+
+def test_managed_vector_store_id_retrieves_updates_and_deletes_the_provider_store(gateway: Gateway) -> None:
+    store_name: Final = f"managed-store-{uuid.uuid4().hex}"
+    provider_id: Final = f"vs_provider_{uuid.uuid4().hex}"
+    provider_key: Final = f"provider-{uuid.uuid4().hex}"
+    store_path: Final = f"/v1/vector_stores/{provider_id}"
+    store_deleted: Final = threading.Event()
+
+    def respond(request: Request) -> Reply:
+        path: Final = urlsplit(request.target).path
+        assert request.headers["authorization"] == f"Bearer {provider_key}"
+        if request.method == "GET" and path == "/v1/models":
+            return _models_reply()
+        if request.method == "POST" and path == "/v1/vector_stores":
+            _assert_create_request(request, store_name)
+            return _create_reply(provider_id, store_name)
+        assert path == store_path, request.target
+        if request.method == "GET" and store_deleted.is_set():
+            return Reply(status=404, body=json.dumps({"error": {"message": "No vector store found"}}).encode())
+        if request.method == "GET":
+            return _create_reply(provider_id, store_name)
+        if request.method == "POST":
+            assert JSON_OBJECT.validate_json(request.body)["name"] == "renamed"
+            return _create_reply(provider_id, "renamed")
+        assert request.method == "DELETE"
+        store_deleted.set()
+        return Reply(body=json.dumps({"id": provider_id, "object": "vector_store.deleted", "deleted": True}).encode())
+
+    with wire_server(respond) as wire, gateway.scenario() as scenario:
+        model: Final = scenario.model(api_base=f"{wire.url}/v1", api_key=provider_key)
+        _wait_until_every_worker_serves(gateway, model)
+        team: Final = scenario.team(models=[model])
+        user: Final = scenario.member(team)
+        key: Final = scenario.key(team_id=team, user_id=user, models=[model])
+
+        with OpenAI(
+            base_url=f"{str(gateway.client.base_url).rstrip('/')}/v1",
+            api_key=key,
+            http_client=httpx.Client(trust_env=False),
+            max_retries=0,
+        ) as client:
+            created: Final = client.vector_stores.create(name=store_name, extra_body={"target_model_names": model})
+            scenario.cleanups.callback(_delete_managed_store_row, created.id)
+            assert len(_store_creation_requests(wire)) == 1
+
+            retrieved: Final = client.vector_stores.retrieve(created.id)
+            updated: Final = client.vector_stores.update(created.id, name="renamed")
+            deleted: Final = client.vector_stores.delete(created.id)
+
+        assert (retrieved.id, retrieved.name) == (created.id, store_name)
+        assert (updated.id, updated.name) == (created.id, "renamed")
+        assert (deleted.id, deleted.deleted) == (created.id, True)
+        assert [(request.method, urlsplit(request.target).path) for request in wire.drain()] == [
+            ("GET", store_path),
+            ("POST", store_path),
+            ("DELETE", store_path),
+        ]
+        assert read_rows(_MANAGED_STORE_ROW, (created.id,)) == []
+        retrieved_after_delete: Final = gateway.request("GET", f"/v1/vector_stores/{created.id}", key=key)
+        assert retrieved_after_delete.status_code == 404, retrieved_after_delete.text
