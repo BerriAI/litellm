@@ -15,6 +15,10 @@ class _UserId(BaseModel):
 _USER_IDS: Final = TypeAdapter(tuple[_UserId, ...])
 
 
+def _csv_values(raw: str | None) -> tuple[str, ...]:
+    return tuple(value.strip() for value in (raw or "").split(",") if value.strip())
+
+
 async def sorted_user_ids(
     prisma_client: PrismaClient,
     *,
@@ -30,9 +34,9 @@ async def sorted_user_ids(
     organization_ids: str | None,
     search: str | None,
 ) -> Sequence[str]:
-    ids: Final = tuple(value.strip() for value in (user_ids or "").split(",") if value.strip())
-    sso_ids: Final = tuple(value.strip() for value in (sso_user_ids or "").split(",") if value.strip())
-    org_ids: Final = tuple(value.strip() for value in (organization_ids or "").split(",") if value.strip())
+    ids: Final = _csv_values(user_ids)
+    sso_ids: Final = _csv_values(sso_user_ids)
+    org_ids: Final = _csv_values(organization_ids)
     expression: Final = (
         "CASE WHEN u.metadata->'scim_active' = 'false'::jsonb THEN 1 ELSE 0 END"
         if sort_by == "status"

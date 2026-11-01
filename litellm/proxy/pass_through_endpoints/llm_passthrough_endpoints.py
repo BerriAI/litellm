@@ -1400,13 +1400,12 @@ async def handle_bedrock_count_tokens(
         if deployment is not None:
             model_litellm_params: Final = deployment.get("litellm_params", {})
 
-            # Get the resolved model ID from the configuration
             if "model" in model_litellm_params:
                 resolved_model = model_litellm_params["model"]
 
             # Copy all litellm_params - BaseAWSLLM will handle AWS credential discovery
             for key, value in model_litellm_params.items():
-                if key != "user_api_key_dict":  # Don't overwrite user_api_key_dict
+                if key != "user_api_key_dict":
                     litellm_params[key] = value
 
         verbose_proxy_logger.debug("Count tokens litellm_params: %s", litellm_params)

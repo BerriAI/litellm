@@ -1030,9 +1030,7 @@ class BaseResponsesAPIStreamingIterator:
         )
         if estimate is None:
             return
-        usage: Final = ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(  # pyright: ignore[reportPrivateUsage]  # same shared transform the success path above uses
-            estimate
-        )
+        usage: Final = ResponseAPILoggingUtils.transform_response_api_usage_to_chat_usage(estimate)
         served_tier: Final[object] = getattr(self._created_response, "service_tier", None)
         assembled: Final = ModelResponse(
             model=self.model, usage=usage, service_tier=served_tier if isinstance(served_tier, str) else None
@@ -1891,7 +1889,7 @@ def stamp_responses_usage_cost(
         return
     if isinstance(bill, bool) or not isinstance(bill, (int, float)):
         return
-    if bill > 0 or isinstance(getattr(usage_obj, "cost", None), (int, float)):
+    if bill > 0 or isinstance(usage_obj.cost, (int, float)):
         stamp_litellm_bill_on_usage(response_obj, usage_obj, float(bill))
 
 

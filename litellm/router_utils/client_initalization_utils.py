@@ -50,7 +50,7 @@ class MaxParallelRequestsLimit:
 class InitalizeCachedClient:
     @staticmethod
     @renamed_router_param("litellm_router_instance")
-    def set_max_parallel_requests_client(ctx: "RoutingContext", model: dict):
+    def set_max_parallel_requests_client(ctx: "RoutingContext", model: dict) -> None:
         litellm_params: Final = model.get("litellm_params", {})
         model_id: Final = model["model_info"]["id"]
         rpm: Final = litellm_params.get("rpm", None)
