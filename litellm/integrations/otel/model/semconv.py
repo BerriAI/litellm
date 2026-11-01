@@ -317,6 +317,7 @@ class LiteLLM:
     GUARDRAIL_CONFIDENCE_SCORE: Final = "litellm.guardrail.confidence_score"
     GUARDRAIL_RISK_SCORE: Final = "litellm.guardrail.risk_score"
     GUARDRAIL_MASKED_ENTITY_COUNT: Final = "litellm.guardrail.masked_entity_count"
+    GUARDRAIL_CHOICE_INDEX: Final = "litellm.guardrail.choice_index"
     GUARDRAIL_DURATION: Final = "litellm.guardrail.duration"
     GUARDRAIL_ID: Final = "litellm.guardrail.id"
     GUARDRAIL_POLICY_TEMPLATE: Final = "litellm.guardrail.policy_template"

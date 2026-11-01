@@ -3591,6 +3591,7 @@ AUDIT_GUARDRAIL_FIELDS: Final[frozenset[str]] = frozenset(
         "end_time",
         "duration",
         "masked_entity_count",
+        "choice_index",
         "guardrail_id",
         "policy_template",
         "detection_method",
@@ -3630,6 +3631,9 @@ class StandardLoggingGuardrailInformation(TypedDict, total=False):
         "PHONE": 1
     }
     """
+
+    choice_index: ReadOnly[int | None]
+    """Which choice of an n > 1 response this entry inspected, when the guardrail ran per choice."""
 
     guardrail_id: str | None
     """Unique identifier for the guardrail configuration, e.g. 'gd-eu-pii-001'"""
