@@ -1103,14 +1103,7 @@ def test_boundary_key_accepts_pydantic_litellm_params_instance():
     plain_key = EncryptedContentAffinityCheck._encryption_boundary_key(plain_params)
 
     assert pydantic_key is not None
-    assert (
-        pydantic_key
-        == plain_key
-        == (
-            "https://mateo-resource.openai.azure.com",
-            "fake-azure-resource-key-a",
-        )
-    )
+    assert pydantic_key == plain_key
 
 
 def test_boundary_key_resolves_missing_values_from_named_credential():
@@ -1134,7 +1127,13 @@ def test_boundary_key_resolves_missing_values_from_named_credential():
     ):
         boundary = EncryptedContentAffinityCheck._encryption_boundary_key({"litellm_credential_name": "account-a"})
 
-    assert boundary == ("https://account-a.example.com", "credential-key-a")
+    assert boundary is not None
+    assert boundary == EncryptedContentAffinityCheck._encryption_boundary_key(
+        {"api_base": "https://account-a.example.com", "api_key": "credential-key-a"}
+    )
+    assert boundary != EncryptedContentAffinityCheck._encryption_boundary_key(
+        {"api_base": "https://account-a.example.com", "api_key": "credential-key-b"}
+    )
 
 
 @pytest.mark.parametrize(
@@ -2974,6 +2973,42 @@ def test_hop_strip_keeps_accounts_that_sign_in_through_headers_apart(
         model_list=[
             _default_endpoint_deployment("origin", origin_params),
             _default_endpoint_deployment("target", target_params),
+        ]
+    )
+    ctx: Final = RoutingContext(router)
+    reasoning: Final = _reasoning_input_minted_by("origin")[0]
+    original_reasoning: Final = dict(reasoning)
+    request_input: Final = [reasoning, {"role": "user", "content": "and sunsets?"}]
+
+    EncryptedContentAffinityCheck.strip_reasoning_the_targets_cannot_decrypt(
+        ctx, request_input, None, (_deployment_of(ctx, "target"),), unmarked_origin=None
+    )
+
+    assert request_input[0] == (original_reasoning if target_can_decrypt else SUMMARY_ONLY_REASONING)
+
+
+@pytest.mark.parametrize(
+    "environment_key, target_model, target_can_decrypt",
+    [
+        pytest.param("shared-key", GATEWAY_BASE["model"], True, id="environment key equal to the explicit key"),
+        pytest.param("other-key", GATEWAY_BASE["model"], False, id="environment key other than the explicit key"),
+        pytest.param("shared-key", "openai/gpt-5.5-mini", False, id="equal keys serving another model"),
+    ],
+)
+def test_hop_strip_matches_an_explicit_key_and_the_environment_key_on_one_api_base(
+    monkeypatch: pytest.MonkeyPatch, environment_key: str, target_model: str, target_can_decrypt: bool
+):
+    from litellm.router_utils.pre_call_checks.encrypted_content_affinity_check import (
+        EncryptedContentAffinityCheck,
+    )
+
+    monkeypatch.setattr(litellm, "api_key", None)
+    monkeypatch.setattr(litellm, "openai_key", None)
+    monkeypatch.setenv("OPENAI_API_KEY", environment_key)
+    router: Final = litellm.Router(
+        model_list=[
+            _default_endpoint_deployment("origin", {**GATEWAY_BASE, "api_key": "shared-key"}),
+            _default_endpoint_deployment("target", {**GATEWAY_BASE, "model": target_model}),
         ]
     )
     ctx: Final = RoutingContext(router)

@@ -39,7 +39,7 @@ Safe to enable globally:
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from functools import cache
-from typing import TYPE_CHECKING, Final, Optional, TypeAlias, cast
+from typing import TYPE_CHECKING, Final, Optional, cast
 
 from pydantic import BaseModel, TypeAdapter
 
@@ -69,7 +69,6 @@ if TYPE_CHECKING:
 _REQUEST_KWARGS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _ACCOUNT_SCOPE_HEADERS: Final = frozenset({"openai-organization", "openai-project", "cookie"})
 _SINGLE_VENDOR_PROVIDERS: Final = frozenset({LlmProviders.OPENAI.value})
-_EncryptionBoundary: TypeAlias = tuple[object, object] | tuple[object, object, str, frozenset[tuple[str, object]]]
 
 
 @dataclass(frozen=True, slots=True)
@@ -77,6 +76,21 @@ class _ProviderRoute:
     model: str
     provider: str
     api_base: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class _EncryptionBoundary:
+    api_base: object
+    api_key: object
+    model: str | None
+    account_scope: frozenset[tuple[str, object]]
+    explicit_pair: bool
+
+    def is_shared_with(self, other: "_EncryptionBoundary") -> bool:
+        if (self.api_base, self.api_key) != (other.api_base, other.api_key):
+            return False
+        both_explicit: Final = self.explicit_pair and other.explicit_pair
+        return both_explicit or (self.model, self.account_scope) == (other.model, other.account_scope)
 
 
 class EncryptedContentAffinityCheck(CustomLogger):
@@ -229,11 +243,11 @@ class EncryptedContentAffinityCheck(CustomLogger):
         """
         The upstream encryption boundary a deployment's encrypted reasoning belongs to. The values
         are resolved the way the request resolves them, the deployment's own values winning over its
-        named credential's, without modifying the deployment. An explicit ``(api_base, api_key)``
-        pair is the whole boundary. On a provider that serves one vendor's models, a deployment with
-        no ``api_key`` takes the provider's default key, one with no ``api_base`` takes the endpoint
-        its Responses URL builder resolves, and the boundary also carries the model and the headers
-        that pick an account.
+        named credential's, without modifying the deployment. Two explicit ``(api_base, api_key)``
+        pairs match on those values alone. On a provider that serves one vendor's models, a deployment
+        with no ``api_key`` takes the provider's default key, one with no ``api_base`` takes the endpoint
+        its Responses URL builder resolves, and a match involving either also needs the same model and
+        the same headers that pick an account.
 
         Accepts plain dicts (the common case in ``healthy_deployments``) as
         well as ``LiteLLM_Params`` Pydantic instances. A stricter
@@ -247,10 +261,18 @@ class EncryptedContentAffinityCheck(CustomLogger):
         effective_params: Final = with_named_credential(params)
         explicit_api_key: Final = effective_params.get("api_key")
         explicit_api_base: Final = effective_params.get("api_base")
+        provider_route: Final = EncryptedContentAffinityCheck._provider_route(effective_params)
+        route: Final = (
+            provider_route
+            if provider_route is not None and provider_route.provider in _SINGLE_VENDOR_PROVIDERS
+            else None
+        )
+        account_scope: Final = EncryptedContentAffinityCheck._account_scope(effective_params)
         if explicit_api_key and explicit_api_base:
-            return (explicit_api_base, explicit_api_key)
-        route: Final = EncryptedContentAffinityCheck._provider_route(effective_params)
-        if route is None or route.provider not in _SINGLE_VENDOR_PROVIDERS:
+            return _EncryptionBoundary(
+                explicit_api_base, explicit_api_key, route.model if route else None, account_scope, explicit_pair=True
+            )
+        if route is None:
             return None
         api_key: Final = explicit_api_key or EncryptedContentAffinityCheck._default_api_key(route)
         if not api_key:
@@ -260,7 +282,7 @@ class EncryptedContentAffinityCheck(CustomLogger):
         )
         if not api_base:
             return None
-        return (api_base, api_key, route.model, EncryptedContentAffinityCheck._account_scope(effective_params))
+        return _EncryptionBoundary(api_base, api_key, route.model, account_scope, explicit_pair=False)
 
     @staticmethod
     def _params_mapping(litellm_params: object) -> Mapping[str, object] | None:
@@ -356,7 +378,10 @@ class EncryptedContentAffinityCheck(CustomLogger):
         if boundary is None:
             return [], originating
         matches: Final = [
-            d for d in healthy_deployments if self._encryption_boundary_key(d.get("litellm_params", {})) == boundary
+            d
+            for d in healthy_deployments
+            if (candidate := self._encryption_boundary_key(d.get("litellm_params", {}))) is not None
+            and boundary.is_shared_with(candidate)
         ]
         return matches, originating
 
@@ -384,8 +409,8 @@ class EncryptedContentAffinityCheck(CustomLogger):
         )
 
         @cache
-        def target_boundaries() -> frozenset[_EncryptionBoundary]:
-            return frozenset(
+        def target_boundaries() -> tuple[_EncryptionBoundary, ...]:
+            return tuple(
                 boundary
                 for target in target_deployments
                 if (boundary := EncryptedContentAffinityCheck._encryption_boundary_key(target.get("litellm_params")))
@@ -409,7 +434,9 @@ class EncryptedContentAffinityCheck(CustomLogger):
                 if origin is not None
                 else None
             )
-            return origin_boundary is not None and origin_boundary in target_boundaries()
+            return origin_boundary is not None and any(
+                origin_boundary.is_shared_with(target_boundary) for target_boundary in target_boundaries()
+            )
 
         def should_strip_input_item(item: Mapping[str, object]) -> bool:
             return not target_can_decrypt(EncryptedContentAffinityCheck._model_id_of_input_item(item))
