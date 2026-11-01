@@ -2408,18 +2408,38 @@ class CustomStreamWrapper:
                         if processed_chunk is None:
                             continue
 
+                        if self.logging_obj.completion_start_time is None:
+                            self.logging_obj.update_completion_start_time(completion_start_time=datetime.datetime.now())
+
                         if processed_chunk.choices:
                             choice = processed_chunk.choices[0]
                             if isinstance(choice, StreamingChoices):
                                 self._accumulate_streamed_delta(choice.delta)
                         self.rules.post_call_rules(input=self.response_uptil_now, model=self.model)
+                        # Add mcp_list_tools to first chunk if present
+                        if not self.sent_first_chunk and processed_chunk.choices:
+                            processed_chunk = self._add_mcp_list_tools_to_first_chunk(processed_chunk)
+                            self.sent_first_chunk = True
+
                         if not self.send_stream_usage or getattr(processed_chunk, "usage", None) is None:
                             self.chunks.append(processed_chunk)
-                            return processed_chunk
-                        usage_free_chunk = self._record_and_strip_usage_chunk(processed_chunk)
-                        if usage_free_chunk is None:
-                            continue
-                        return usage_free_chunk
+                        else:
+                            usage_free_chunk = self._record_and_strip_usage_chunk(processed_chunk)
+                            if usage_free_chunk is None:
+                                continue
+                            processed_chunk = usage_free_chunk
+
+                        # add usage as hidden param
+                        if self.sent_last_chunk is True and self.stream_options is None:
+                            self._set_final_chunk_usage(processed_chunk)
+
+                        # Call post-call streaming deployment hook for final chunk
+                        if self.sent_last_chunk is True:
+                            processed_chunk = await self._call_post_streaming_deployment_hook(processed_chunk)
+                            # Add MCP metadata to final chunk if present (after hooks)
+                            processed_chunk = self._add_mcp_metadata_to_final_chunk(processed_chunk)
+
+                        return processed_chunk
         except (StopAsyncIteration, StopIteration):
             if self._should_fail_on_clean_eof():
                 await self.aclose()
