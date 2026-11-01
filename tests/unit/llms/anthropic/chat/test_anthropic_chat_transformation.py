@@ -9922,6 +9922,85 @@ def test_transform_request_tool_config_point_without_tools_drops_the_key():
     assert litellm_params["metadata"] == {}
 
 
+_HOSTED_MCP_TOOL: Final = {
+    "type": "mcp",
+    "server_label": "deepwiki",
+    "server_url": "https://mcp.deepwiki.com/mcp",
+    "require_approval": "never",
+}
+_WEATHER_FUNCTION_TOOL: Final = {
+    "type": "function",
+    "function": {"name": "get_weather", "parameters": {"type": "object", "properties": {}}},
+}
+_ROUTES_WITHOUT_THE_MCP_CONNECTOR: Final = (
+    pytest.param(AmazonAnthropicClaudeConfig, "bedrock", id="bedrock_invoke"),
+    pytest.param(VertexAIAnthropicConfig, "vertex_ai", id="vertex_ai"),
+)
+
+
+@pytest.mark.parametrize("config_class", [AnthropicConfig, AzureAnthropicConfig, BedrockClaudePlatformConfig])
+def test_routes_with_the_mcp_connector_send_a_hosted_mcp_tool_as_an_mcp_server(monkeypatch, config_class):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    mapped: Final = config_class().map_openai_params(
+        non_default_params={"tools": [_WEATHER_FUNCTION_TOOL, _HOSTED_MCP_TOOL]},
+        optional_params={},
+        model="claude-haiku-5-5",
+        drop_params=False,
+    )
+    assert [server["url"] for server in mapped["mcp_servers"]] == [_HOSTED_MCP_TOOL["server_url"]]
+    assert [tool["name"] for tool in mapped["tools"]] == ["get_weather"]
+
+
+@pytest.mark.parametrize(("config_class", "route"), _ROUTES_WITHOUT_THE_MCP_CONNECTOR)
+def test_a_hosted_mcp_tool_answers_400_on_claude_routes_without_the_mcp_connector(monkeypatch, config_class, route):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    with pytest.raises(litellm.utils.UnsupportedParamsError) as raised:
+        config_class().map_openai_params(
+            non_default_params={"tools": [_WEATHER_FUNCTION_TOOL, _HOSTED_MCP_TOOL]},
+            optional_params={},
+            model="claude-haiku-5-5",
+            drop_params=False,
+        )
+    assert raised.value.status_code == 400
+    assert f"claude-haiku-5-5 on {route} " in str(raised.value)
+    assert "`deepwiki`" in str(raised.value)
+
+
+@pytest.mark.parametrize(("config_class", "route"), _ROUTES_WITHOUT_THE_MCP_CONNECTOR)
+def test_claude_routes_without_the_mcp_connector_drop_a_hosted_mcp_tool_under_drop_params(
+    monkeypatch, caplog, config_class, route
+):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    with caplog.at_level("WARNING"):
+        mapped: Final = config_class().map_openai_params(
+            non_default_params={"tools": [_HOSTED_MCP_TOOL, _WEATHER_FUNCTION_TOOL]},
+            optional_params={},
+            model="claude-haiku-5-5",
+            drop_params=True,
+        )
+    assert [tool["name"] for tool in mapped["tools"]] == ["get_weather"]
+    assert "mcp_servers" not in mapped
+    assert any(
+        "`deepwiki`" in record.getMessage() and f" on {route} (" in record.getMessage() for record in caplog.records
+    )
+
+
+@pytest.mark.parametrize(("config_class", "route"), _ROUTES_WITHOUT_THE_MCP_CONNECTOR)
+def test_claude_routes_without_the_mcp_connector_send_no_tools_when_drop_params_drops_every_one(
+    monkeypatch, config_class, route
+):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    mapped: Final = config_class().map_openai_params(
+        non_default_params={"tools": [_HOSTED_MCP_TOOL], "tool_choice": "required"},
+        optional_params={},
+        model="claude-haiku-5-5",
+        drop_params=True,
+    )
+    assert "tools" not in mapped
+    assert "mcp_servers" not in mapped
+    assert "tool_choice" not in mapped
+
+
 _KEPT_SEARCH_CALL: Final = {
     "role": "assistant",
     "content": None,

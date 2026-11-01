@@ -9,7 +9,7 @@ from collections.abc import Awaitable, Callable, Mapping, Sequence
 from copy import deepcopy
 from functools import lru_cache, partial
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Protocol, Union, cast, get_args
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, Optional, Protocol, Union, cast, get_args
 
 import httpx
 from pydantic import JsonValue, TypeAdapter
@@ -34,6 +34,7 @@ from litellm.litellm_core_utils.json_fragment_accumulator import JSONFragmentAcc
 from litellm.litellm_core_utils.model_param_helper import embeds_thought_signature_in_tool_call_id
 from litellm.litellm_core_utils.prompt_templates.factory import encode_tool_call_id_with_signature
 from litellm.litellm_core_utils.reasoning_effort_utils import warn_dropped_reasoning
+from litellm.litellm_core_utils.tool_fields import tool_params_without_hosted_mcp
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
@@ -586,6 +587,8 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
     Note: Please make sure to modify the default parameters as required for your use case.
     """
+
+    _route: ClassVar[str] = "vertex_ai"
 
     temperature: float | None = None
     max_output_tokens: int | None = None
@@ -1639,9 +1642,12 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         drop_params: bool,
         allow_integer_enums: bool = True,
     ) -> dict:
-        self._apply_include_server_side_tool_invocations(non_default_params, optional_params)
+        request_params: Final = tool_params_without_hosted_mcp(
+            non_default_params, model=model, route=self._route, drop_params=drop_params
+        )
+        self._apply_include_server_side_tool_invocations(request_params, optional_params)
         supports_sampling_params: Final = self.supports_sampling_params(model)
-        for param, value in non_default_params.items():
+        for param, value in request_params.items():
             if param in ("temperature", "top_p", "top_k") and not supports_sampling_params:
                 continue
             if param == "temperature":
@@ -1705,7 +1711,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 if _tool_choice_value is not None:
                     optional_params["tool_choice"] = _tool_choice_value
             elif param == "parallel_tool_calls":
-                tools_list = non_default_params.get("tools", non_default_params.get("functions"))
+                tools_list = request_params.get("tools", request_params.get("functions"))
                 num_tools = len(tools_list) if isinstance(tools_list, list) else 0
                 # Gemini does not support parallel_tool_calls=False with multiple
                 # tools. Drop the param instead of failing — Responses API clients

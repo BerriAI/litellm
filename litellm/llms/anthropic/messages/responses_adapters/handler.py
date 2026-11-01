@@ -24,6 +24,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     prompt_cache_breakpoint_for_wire,
     with_prompt_cache_breakpoint,
 )
+from litellm.litellm_core_utils.tool_fields import drops_mcp_servers, tools_without_mcp_servers
 from litellm.responses.utils import auto_reasoning_summary
 from litellm.types.integrations.custom_logger import CONVERTED_STREAM_KEYS
 from litellm.types.llms.anthropic import (
@@ -272,6 +273,14 @@ def _build_responses_kwargs(
     """
     forwarded_kwargs: Final = _forwarded_kwargs(extra_kwargs)
     reject_malformed_tool_result_text(messages, model, forwarded_kwargs)
+    target_provider: Final = forwarded_kwargs.get("custom_llm_provider")
+    request_tools: Final = tools_without_mcp_servers(
+        forwarded_kwargs.get("mcp_servers"),
+        tools or (),
+        model=model,
+        route=target_provider if isinstance(target_provider, str) else "this route",
+        drop_params=drops_mcp_servers(forwarded_kwargs),
+    )
     block_rewrite: Final = _prompt_cache_block_rewrite(model, forwarded_kwargs)
     request_messages: Final[AnthropicRequestMessages] = (
         [
@@ -304,10 +313,10 @@ def _build_responses_kwargs(
         request_data["temperature"] = temperature
     if thinking:
         request_data["thinking"] = thinking
-    if tool_choice:
+    if tool_choice and (request_tools or not tools):
         request_data["tool_choice"] = tool_choice
-    if tools:
-        request_data["tools"] = tools
+    if request_tools:
+        request_data["tools"] = list(request_tools)
     if top_p is not None:
         request_data["top_p"] = top_p
     if output_format:
@@ -347,7 +356,7 @@ def _build_responses_kwargs(
         responses_kwargs["stream"] = True
 
     # Forward litellm-specific kwargs (api_key, api_base, logging obj, etc.)
-    excluded: Final = CONVERTED_STREAM_KEYS | {"anthropic_messages"}
+    excluded: Final = CONVERTED_STREAM_KEYS | {"anthropic_messages", "mcp_servers"}
     for key, value in forwarded_kwargs.items():
         if key == "litellm_logging_obj" and value is not None:
             from litellm.litellm_core_utils.litellm_logging import (

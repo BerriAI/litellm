@@ -34,6 +34,7 @@ from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import 
     split_leading_system_run,
     string_field,
 )
+from litellm.litellm_core_utils.tool_fields import tools_without_hosted_mcp
 from litellm.litellm_core_utils.url_utils import async_safe_get, safe_get
 from litellm.llms.custom_httpx.http_handler import HTTPHandler, get_async_httpx_client, header_value
 from litellm.types.files import get_file_extension_from_mime_type
@@ -5916,8 +5917,13 @@ def function_call_prompt(
     llm_provider: str,
     drop_params: bool,
 ) -> list[dict[str, object]]:
+    prompt_functions: Final = tools_without_hosted_mcp(
+        functions, model=model, route=llm_provider, drop_params=drop_params
+    )
+    if not prompt_functions:
+        return messages
     header: Final = """To call a function, reply with JSON ONLY in this format {"name": "function_name", "arguments":{"argument_name": "argument_value"}}. Once a function result answers the request, reply to the user in plain text instead of calling a function again. The following functions are available to you:"""
-    function_prompt: Final = header + "".join(f"\n{function}\n" for function in functions)
+    function_prompt: Final = header + "".join(f"\n{function}\n" for function in prompt_functions)
     if not any(_is_system_message(message) for message in messages):
         return [*messages, {"role": "system", "content": function_prompt}]
     return [

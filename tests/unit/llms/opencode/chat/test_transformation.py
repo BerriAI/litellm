@@ -354,6 +354,17 @@ def test_gemini_custom_base_normalizes_version_and_models(go_catalog: None, suff
         assert response.choices[0].message.content == "hello"
 
 
+def test_gemini_hosted_mcp_error_names_the_opencode_go_route(go_catalog: None) -> None:
+    with pytest.raises(litellm.UnsupportedParamsError, match="fixture-gemini on opencode_go cannot run"):
+        litellm.completion(
+            model="opencode_go/fixture-gemini",
+            api_key="fake-go-key",
+            api_base="https://gateway.example/google",
+            messages=[{"role": "user", "content": "hello"}],
+            tools=[{"type": "mcp", "server_label": "deepwiki", "server_url": "https://mcp.deepwiki.com/mcp"}],
+        )
+
+
 def test_gemini_sync_stream_preserves_tool_calls_and_usage(go_catalog: None) -> None:
     chunk: Final = {
         "candidates": [
