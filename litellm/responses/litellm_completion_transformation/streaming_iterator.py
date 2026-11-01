@@ -219,7 +219,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         self._reasoning_summary_text: str = ""
         self._text_logprob_chunks: list[
             tuple[OutputTextLogprob, ...]
-        ] = []  # mutable-ok: appended per chunk, flattened once at done
+        ] = []
         # -- GENERIC RESPONSE-EVENTS PENDING QUEUE as required by fix --
         self._pending_response_events: list[BaseLiteLLMOpenAIResponseObject] = []
         self._reasoning_active = False
