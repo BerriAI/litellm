@@ -52,6 +52,7 @@ from litellm.llms.base_llm.responses.codex_compat import drop_unsupported_tools,
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.bedrock.common_utils import (
     BEDROCK_CHAT_COMPLETIONS_ROUTE_PREFIX,
+    DROP_DISABLED_REASONING_EFFORT_WARNING,
     BedrockError,
     bedrock_reasoning_effort_disabled,
     bedrock_supports_openai_responses,
@@ -173,7 +174,7 @@ def _without_disabled_reasoning_effort(
             ),
             status_code=400,
         )
-    verbose_logger.debug("Dropping unsupported `reasoning.effort=%s` for Bedrock model=%s.", effort, model)
+    verbose_logger.warning(DROP_DISABLED_REASONING_EFFORT_WARNING, "reasoning.effort", effort, model)
     rest: Final = {key: value for key, value in reasoning.items() if key != "effort"}
     without_reasoning: Final = {key: value for key, value in params.items() if key != "reasoning"}
     return {**without_reasoning, "reasoning": rest} if rest else without_reasoning

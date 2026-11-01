@@ -15,7 +15,7 @@ class BaseLLMObsOTELAttributes(ABC):
         pass
 
 
-def cast_as_primitive_value_type(value) -> str | bool | int | float:
+def cast_as_primitive_value_type(value: object) -> str | bool | int | float:
     """
     Converts a value to an OTEL-supported primitive for Arize/Phoenix observability.
     """

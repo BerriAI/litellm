@@ -1,4 +1,5 @@
 import json
+import math
 import re
 import time
 from collections.abc import Collection, Mapping, Sequence
@@ -7,6 +8,7 @@ from enum import Enum
 from types import MappingProxyType
 from typing import (
     TYPE_CHECKING,
+    Annotated,
     Any,
     Final,
     Literal,
@@ -20,6 +22,7 @@ from openai._models import BaseModel as OpenAIObject
 from openai.types.audio.transcription_create_params import (
     FileTypes as FileTypes,
 )
+from openai.types.batch_usage import BatchUsage, InputTokensDetails, OutputTokensDetails
 from openai.types.chat.chat_completion import ChatCompletion as ChatCompletion
 from openai.types.completion_usage import (
     CompletionTokensDetails,
@@ -37,6 +40,7 @@ from openai.types.moderation_create_response import (
 )
 from pydantic import (
     BaseModel,
+    BeforeValidator,
     ConfigDict,
     Field,
     FieldSerializationInfo,
@@ -44,6 +48,8 @@ from pydantic import (
     JsonValue,
     PrivateAttr,
     SkipValidation,
+    TypeAdapter,
+    ValidationError,
     field_serializer,
     field_validator,
 )
@@ -69,6 +75,7 @@ from litellm.types.workload_identity import (
 )
 
 from ..litellm_core_utils.core_helpers import map_finish_reason, process_response_headers
+from ..litellm_core_utils.hidden_params import set_extra_attribute
 from . import litellm_params as _litellm_params
 from .agents import LiteLLMSendMessageResponse
 from .guardrails import GuardrailEventHooks
@@ -99,6 +106,7 @@ from .llms.openai import (
     OpenAIRealtimeStreamList,
     ResponsesAPIResponse,
     WebSearchOptions,
+    _JsonValue,
 )
 from .rerank import RerankResponse as RerankResponse
 
@@ -225,6 +233,8 @@ class ProviderSpecificModelInfo(TypedDict, total=False):
     supports_xhigh_reasoning_effort: bool | None
     supports_max_reasoning_effort: bool | None
     reasoning_effort_levels: ReadOnly[Sequence[str] | None]
+    reasoning_modes: ReadOnly[Sequence[str] | None]
+    reasoning_contexts: ReadOnly[Sequence[str] | None]
     default_reasoning_effort: ReadOnly[Literal["none", "minimal", "low", "medium", "high", "xhigh"] | None]
     supports_output_config: bool | None
     supports_image_size: bool | None
@@ -261,10 +271,10 @@ class AgenticLoopParams(TypedDict, total=False):
     """
 
     model: str
-    """The model string with provider prefix (e.g., 'bedrock/invoke/...')"""
+    """The model as the caller requested it, usually with its provider prefix (e.g., 'bedrock/invoke/...')"""
 
     custom_llm_provider: str
-    """The LLM provider name (e.g., 'bedrock', 'anthropic')"""
+    """The LLM provider name (e.g., 'bedrock', 'anthropic'), when the recorder resolved one"""
 
 
 class OffPeakWindow(TypedDict, total=False):
@@ -455,6 +465,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     annotation_cost_per_page: float | None  # for OCR models
     annotation_cost_per_page_batches: ReadOnly[float | None]
     search_context_cost_per_query: SearchContextCostPerQuery | None  # Cost for using web search tool
+    search_queries_cost_per_query: ReadOnly[float | SearchContextCostPerQuery | None]
     web_search_billing_unit: (
         Literal["per_query", "per_prompt"] | None
     )  # "per_query" (Gemini 3.x) or "per_prompt" (Gemini 2.x)
@@ -666,6 +677,12 @@ class CallTypes(str, Enum):
     retrieve_fine_tuning_job = "retrieve_fine_tuning_job"
     responses = "responses"
     aresponses = "aresponses"
+    get_responses = "get_responses"
+    aget_responses = "aget_responses"
+    delete_responses = "delete_responses"
+    adelete_responses = "adelete_responses"
+    cancel_responses = "cancel_responses"
+    acancel_responses = "acancel_responses"
     alist_input_items = "alist_input_items"
     llm_passthrough_route = "llm_passthrough_route"
     allm_passthrough_route = "allm_passthrough_route"
@@ -1134,6 +1151,8 @@ API_ROUTE_TO_CALL_TYPES: Final[Mapping[str, Sequence[CallTypes]]] = {
     # A2A (Agent-to-Agent)
     "/a2a/{agent_id}": [CallTypes.asend_message, CallTypes.send_message],
     "/a2a/{agent_id}/message/send": [CallTypes.asend_message, CallTypes.send_message],
+    "/a2a/{agent_id}/message/stream": [CallTypes.asend_message, CallTypes.send_message],
+    "/v1/a2a/{agent_id}/message/stream": [CallTypes.asend_message, CallTypes.send_message],
     # Passthrough endpoints
     "/llm_passthrough": [
         CallTypes.allm_passthrough_route,
@@ -1195,7 +1214,7 @@ class ChatCompletionTokenLogprob(OpenAIObject):
     unlikely.
     """
 
-    top_logprobs: list[TopLogprob]
+    top_logprobs: list[TopLogprob] = Field(default_factory=list)
     """List of the most likely tokens and their log probability, at this token
     position.
 
@@ -1232,8 +1251,12 @@ class ChatCompletionTokenLogprob(OpenAIObject):
 
 
 class ChoiceLogprobs(OpenAIObject):
+    model_config = ConfigDict(defer_build=False)
+
     content: list[ChatCompletionTokenLogprob] | None = None
     """A list of message content tokens with log probability information."""
+
+    refusal: Sequence[ChatCompletionTokenLogprob] | None = None
 
     def __contains__(self, key) -> bool:
         # Define custom behavior for the 'in' operator
@@ -1246,6 +1269,21 @@ class ChoiceLogprobs(OpenAIObject):
     def __getitem__(self, key):
         # Allow dictionary-style access to attributes
         return getattr(self, key)
+
+
+def _sdk_logprobs_as_dict(logprobs: object) -> object:
+    if isinstance(logprobs, ChoiceLogprobs) or not isinstance(logprobs, BaseModel):
+        return logprobs
+    return logprobs.model_dump(exclude_unset=True)
+
+
+CHOICE_LOGPROBS_OR_JSON: Final[TypeAdapter[ChoiceLogprobs | JsonValue]] = TypeAdapter(
+    Annotated[
+        ChoiceLogprobs | JsonValue,
+        Field(union_mode="left_to_right"),
+        BeforeValidator(_sdk_logprobs_as_dict),
+    ]
+)
 
 
 class FunctionCall(OpenAIObject):
@@ -1761,7 +1799,7 @@ class Choices(SafeAttributeModel, OpenAIObject):
                 params["message"] = Message(**dump)
         if logprobs is not None:
             if isinstance(logprobs, dict):
-                params["logprobs"] = ChoiceLogprobs(**logprobs)
+                params["logprobs"] = CHOICE_LOGPROBS_OR_JSON.validate_python(logprobs)
             else:
                 params["logprobs"] = logprobs
         else:
@@ -1945,6 +1983,19 @@ class ServerToolUse(LiteLLMBaseModel):
         return getattr(self, key)
 
 
+_COST_BREAKDOWN_ADAPTER: Final = TypeAdapter(Mapping[object, object])
+
+
+def _is_non_finite_float(value: object) -> bool:
+    return isinstance(value, float) and not math.isfinite(value)
+
+
+def _carries_non_finite_number(cost: object) -> bool:
+    if not isinstance(cost, Mapping):
+        return _is_non_finite_float(cost)
+    return any(_is_non_finite_float(member) for member in _COST_BREAKDOWN_ADAPTER.validate_python(cost).values())
+
+
 class Usage(SafeAttributeModel, CompletionUsage):
     _cache_creation_input_tokens: int = PrivateAttr(
         0
@@ -1952,6 +2003,7 @@ class Usage(SafeAttributeModel, CompletionUsage):
     _cache_read_input_tokens: int = PrivateAttr(
         0
     )  # hidden param for prompt caching. Might change, once openai introduces their equivalent.
+    _dropped_non_finite_cost: bool = PrivateAttr(False)
 
     server_tool_use: ServerToolUse | None = None
     cost: float | None = None
@@ -2058,10 +2110,14 @@ class Usage(SafeAttributeModel, CompletionUsage):
         else:  # maintain openai compatibility in usage object if possible
             del self.server_tool_use
 
-        if cost is not None:
-            self.cost = cost
-        else:
+        dropped_non_finite_cost: Final = cost is not None and _carries_non_finite_number(cost)
+        if cost is None:
             del self.cost
+        elif dropped_non_finite_cost:
+            verbose_logger.warning("Dropping a non-finite provider usage cost")
+            del self.cost
+        else:
+            self.cost = cost
 
         ## ANTHROPIC MAPPING ##
         if "cache_creation_input_tokens" in params and isinstance(params["cache_creation_input_tokens"], int):
@@ -2076,6 +2132,11 @@ class Usage(SafeAttributeModel, CompletionUsage):
 
         for k, v in params.items():
             setattr(self, k, v)
+        self._dropped_non_finite_cost = dropped_non_finite_cost
+
+    @staticmethod
+    def dropped_non_finite_cost(usage: "Usage") -> bool:
+        return usage._dropped_non_finite_cost
 
     def __contains__(self, key) -> bool:
         # Define custom behavior for the 'in' operator
@@ -2099,6 +2160,13 @@ class UnreportedUsage(Usage):
 
 
 class StreamingChoices(OpenAIObject):
+    if TYPE_CHECKING:
+        finish_reason: str | None
+        index: int
+        delta: Delta
+        enhancements: object
+        logprobs: ChoiceLogprobs | JsonValue
+
     def __init__(
         self,
         finish_reason=None,
@@ -2112,25 +2180,22 @@ class StreamingChoices(OpenAIObject):
         # https://github.com/BerriAI/litellm/issues/8455
         params.pop("message", None)
         super().__init__(**params)
-        if finish_reason:
-            self.finish_reason = map_finish_reason(finish_reason)
-        else:
-            self.finish_reason = None
-        self.index = index
+        set_extra_attribute(self, "finish_reason", map_finish_reason(finish_reason) if finish_reason else None)
+        set_extra_attribute(self, "index", index)
         if delta is not None:
             if isinstance(delta, Delta):
-                self.delta = delta
+                set_extra_attribute(self, "delta", delta)
             elif isinstance(delta, dict):
-                self.delta = Delta(**delta)
+                set_extra_attribute(self, "delta", Delta(**delta))
         else:
-            self.delta = Delta()
+            set_extra_attribute(self, "delta", Delta())
         if enhancements is not None:
-            self.enhancements = enhancements
+            set_extra_attribute(self, "enhancements", enhancements)
 
-        if logprobs is not None and isinstance(logprobs, dict):
-            self.logprobs = ChoiceLogprobs(**logprobs)
+        if isinstance(logprobs, (dict, BaseModel)):
+            set_extra_attribute(self, "logprobs", CHOICE_LOGPROBS_OR_JSON.validate_python(logprobs))
         else:
-            self.logprobs = logprobs
+            set_extra_attribute(self, "logprobs", logprobs)
 
     def __contains__(self, key) -> bool:
         # Define custom behavior for the 'in' operator
@@ -2184,7 +2249,10 @@ class ModelResponseBase(OpenAIObject):
 
     @property
     def hidden_params(self) -> dict[str, object]:  # mutable-ok: API requires mutation
-        return self._hidden_params
+        private: Final = self.__pydantic_private__
+        if private is None or "_hidden_params" not in private:
+            return self._hidden_params
+        return private["_hidden_params"]
 
     @hidden_params.setter
     def hidden_params(self, hidden_params: dict[str, object]) -> None:  # mutable-ok: API requires mutation
@@ -2876,7 +2944,7 @@ class TranscriptionUsageTokensObject(LiteLLMBaseModel):
     input_tokens: int
     output_tokens: int
     total_tokens: int
-    input_token_details: TranscriptionUsageInputTokenDetailsObject
+    input_token_details: TranscriptionUsageInputTokenDetailsObject | None = None
 
 
 class TranscriptionResponse(OpenAIObject):
@@ -3265,6 +3333,11 @@ class StandardLoggingRoutingDecision(TypedDict, total=False):
     classifier_cost: float
     classifier_failure_reason: ReadOnly[ClassifierFailureReason]
     classifier_error_type: ReadOnly[str]
+    classifier_input_budget_tokens: ReadOnly[int]
+    classifier_input_tokens: ReadOnly[int]
+    classifier_input_count_method: ReadOnly[str]
+    classifier_input_truncated: ReadOnly[bool]
+    classifier_input_budget_status: ReadOnly[str]
     classifier_probabilities: ReadOnly[Mapping[str, float]]
     classifier_confidence: ReadOnly[float]
     heuristic_v2_forecast: ReadOnly[StandardLoggingHeuristicV2Forecast]
@@ -3323,6 +3396,11 @@ DERIVED_ROUTING_DECISION_FIELDS: Final[frozenset[str]] = frozenset(
         "classifier_cost",
         "classifier_failure_reason",
         "classifier_error_type",
+        "classifier_input_budget_tokens",
+        "classifier_input_tokens",
+        "classifier_input_count_method",
+        "classifier_input_truncated",
+        "classifier_input_budget_status",
         "classifier_probabilities",
         "classifier_confidence",
         "heuristic_v2_forecast",
@@ -3372,6 +3450,7 @@ class StandardLoggingMetadata(StandardLoggingUserAPIKeyMetadata):
     team_alias: str | None
     team_id: str | None
     used_client_oauth_token: ReadOnly[bool | None]
+    is_silent_experiment: ReadOnly[NotRequired[bool]]
 
 
 class AzureSpillover(TypedDict):
@@ -3401,6 +3480,7 @@ class StandardLoggingHiddenParams(TypedDict):
     batch_models: list[str] | None
     batch_successful_requests: ReadOnly[int | None]
     batch_failed_requests: ReadOnly[int | None]
+    upstream_provider: ReadOnly[NotRequired[str | None]]
     litellm_model_name: str | None  # the model name sent to the provider by litellm
     usage_object: dict | None
 
@@ -3789,6 +3869,7 @@ class ClassifierAudit(TypedDict, total=False):
 
 
 class StandardLoggingPayload(ClassifierAudit):
+    cost_finalized: NotRequired[ReadOnly[bool]]
     id: str
     trace_id: str  # Trace multiple LLM calls belonging to same overall request (e.g. fallbacks/retries)
     session_id: str  # End-user/conversation session id (litellm_session_id), independent of trace_id
@@ -4097,6 +4178,7 @@ class CustomPricingLiteLLMParams(MirroredPricingParams):
     output_cost_per_video_per_second: float | None = None
     output_cost_per_audio_per_second: float | None = None
     search_context_cost_per_query: dict[str, Any] | None = None
+    search_queries_cost_per_query: float | SearchContextCostPerQuery | None = None
     google_maps_grounding_cost_per_query: float | None = None
     citation_cost_per_token: float | None = None
     cache_read_input_token_cost_above_272k_tokens: float | None = None
@@ -4128,11 +4210,30 @@ class CustomPricingLiteLLMParams(MirroredPricingParams):
         """
         return {k: v for k, v in model_info.items() if k not in cls.model_fields}
 
+    def custom_pricing_overrides(self) -> Mapping[str, object]:
+        return MappingProxyType(
+            self.model_dump(include=set(CustomPricingLiteLLMParams.model_fields), exclude_none=True)
+        )
+
+    def per_second_pricing(self) -> Mapping[str, float]:
+        return MappingProxyType(
+            self.model_dump(
+                include={"cost_per_second", "input_cost_per_second", "output_cost_per_second"}, exclude_none=True
+            )
+        )
+
 
 DEPLOYMENT_SCOPED_PRICING_FIELDS: Final[frozenset[str]] = frozenset({"off_peak_pricing"})
 
 DEPLOYMENT_SCOPED_CAPABILITY_FIELDS: Final[frozenset[str]] = frozenset(
-    {"supports_regex_lookaround", "supports_assistant_prefill", "supports_bedrock_native_structured_output"}
+    {
+        "supports_regex_lookaround",
+        "supports_assistant_prefill",
+        "supports_bedrock_native_structured_output",
+        "supports_pdf_input",
+        "reasoning_modes",
+        "reasoning_contexts",
+    }
 )
 
 DEPLOYMENT_SCOPED_TOKEN_COUNT_FIELDS: Final[frozenset[str]] = frozenset({"token_count_framing", "token_count_model"})
@@ -4360,6 +4461,7 @@ server_owned_wif_litellm_params: Final = (
     + openai_wif_litellm_params
     + oauth_token_exchange_litellm_params
     + github_copilot_oauth_litellm_params
+    + ("chatgpt_auth_file",)
 )
 secret_bearing_wif_litellm_params: Final = tuple(sorted(WIF_SECRET_BEARING_KEYS))
 
@@ -4414,12 +4516,14 @@ GenericBudgetConfigType = dict[str, BudgetConfig]
 
 
 class LlmProviders(str, Enum):
+    REFUSELESS = "refuseless"
     OPENAI = "openai"
     CHATGPT = "chatgpt"
     OPENAI_LIKE = "openai_like"  # embedding only
     JINA_AI = "jina_ai"
     XAI = "xai"
     ZAI = "zai"
+    BIGMODEL = "bigmodel"
     CUSTOM_OPENAI = "custom_openai"
     TEXT_COMPLETION_OPENAI = "text-completion-openai"
     COHERE = "cohere"
@@ -4441,6 +4545,7 @@ class LlmProviders(str, Enum):
     VERTEX_AI = "vertex_ai"
     VERTEX_AI_BETA = "vertex_ai_beta"
     GEMINI = "gemini"
+    ABLITERATION = "abliteration"
     AI21 = "ai21"
     BASETEN = "baseten"
     BLACK_FOREST_LABS = "black_forest_labs"
@@ -4458,12 +4563,14 @@ class LlmProviders(str, Enum):
     OLLAMA = "ollama"
     OLLAMA_CHAT = "ollama_chat"
     DEEPINFRA = "deepinfra"
+    CLF_AI_GATEWAY = "clf_ai_gateway"
     PERPLEXITY = "perplexity"
     TYPESAFE = "typesafe"
     NACE = "nace"
     STRANDS_DECIDER = "strands_decider"
     LAYA = "laya"
     BESPOKE = "bespoke"
+    EU_JEV = "eu_jev"
     MISTRAL = "mistral"
     MILVUS = "milvus"
     GROQ = "groq"
@@ -4540,6 +4647,7 @@ class LlmProviders(str, Enum):
     S3_VECTORS = "s3_vectors"
     VALKEY = "valkey"
     MONGODB = "mongodb"
+    OPENSEARCH = "opensearch"
     HELICONE = "helicone"
     HYPERBOLIC = "hyperbolic"
     RECRAFT = "recraft"
@@ -4570,6 +4678,7 @@ class LlmProviders(str, Enum):
     POE = "poe"
     CHUTES = "chutes"
     NEOSANTARA = "neosantara"
+    AIAND = "aiand"
     PARASAIL = "parasail"
     XIAOMI_MIMO = "xiaomi_mimo"
     TENSORMESH = "tensormesh"
@@ -4582,14 +4691,18 @@ class LlmProviders(str, Enum):
     PRISM = "prism"
     OPENINFER = "openinfer"
     INFERENCEAPIS = "inferenceapis"
+    HOSTINGER_ROUTER = "hostinger_router"
+    ZEROGPU = "zerogpu"
     DARKBLOOM = "darkbloom"
     META = "meta"
     SAIL = "sail"
     REKA = "reka"
+    STREAMLAKE = "streamlake"
     LITELLM_AGENT = "litellm_agent"
     CURSOR = "cursor"
     BEDROCK_MANTLE = "bedrock_mantle"
     GDC = "gdc"
+    KYMA = "kyma"
 
 
 # Create a set of all provider values for quick lookup
@@ -4640,6 +4753,7 @@ class SearchProviders(str, Enum):
     NIMBLE = "nimble"
     BING_GROUNDING = "bing_grounding"
     DEEPSEEK = "deepseek"
+    XAI = "xai"
 
 
 # Create a set of all search provider values for quick lookup
@@ -4753,18 +4867,179 @@ class LiteLLMFineTuningJob(FineTuningJob):
         self._hidden_params = kwargs.get("_hidden_params", {})
 
 
+class _BatchInputTokensDetails(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    cached_tokens: int | None = None
+
+
+class _BatchOutputTokensDetails(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    reasoning_tokens: int | None = None
+
+
+class _BatchTokenCounts(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    input_tokens: int
+    output_tokens: int
+    total_tokens: int | None = None
+    input_tokens_details: _BatchInputTokensDetails | None = None
+    output_tokens_details: _BatchOutputTokensDetails | None = None
+
+
+def _parse_batch_token_counts(value: object) -> _BatchTokenCounts | None:
+    if not isinstance(value, Mapping):
+        return None
+    try:
+        return _BatchTokenCounts.model_validate(value)
+    except ValidationError:
+        return None
+
+
+def _prompt_details_with_cached_tokens(
+    details: PromptTokensDetailsWrapper | None, cached_tokens: int | None
+) -> PromptTokensDetailsWrapper | None:
+    if not cached_tokens:
+        return details
+    return (details or PromptTokensDetailsWrapper()).model_copy(update={"cached_tokens": cached_tokens})
+
+
+def _completion_details_with_reasoning_tokens(
+    details: CompletionTokensDetailsWrapper | None, reasoning_tokens: int | None
+) -> CompletionTokensDetailsWrapper | None:
+    if not reasoning_tokens:
+        return details
+    return (details or CompletionTokensDetailsWrapper()).model_copy(update={"reasoning_tokens": reasoning_tokens})
+
+
+def _usage_with_batch_token_counts(usage: Usage, counts: _BatchTokenCounts) -> Usage:
+    return usage.model_copy(
+        update={
+            "prompt_tokens": counts.input_tokens,
+            "completion_tokens": counts.output_tokens,
+            "total_tokens": (
+                counts.input_tokens + counts.output_tokens if counts.total_tokens is None else counts.total_tokens
+            ),
+            "prompt_tokens_details": _prompt_details_with_cached_tokens(
+                usage.prompt_tokens_details,
+                counts.input_tokens_details.cached_tokens if counts.input_tokens_details else None,
+            ),
+            "completion_tokens_details": _completion_details_with_reasoning_tokens(
+                usage.completion_tokens_details,
+                counts.output_tokens_details.reasoning_tokens if counts.output_tokens_details else None,
+            ),
+        }
+    )
+
+
+class _ProviderBatchUsageDetails(BaseModel):
+    model_config = ConfigDict(frozen=True, from_attributes=True)
+
+    input_tokens_details: Mapping[str, JsonValue] | None = None
+    output_tokens_details: Mapping[str, JsonValue] | None = None
+
+
+def _provider_batch_usage_details(usage: Usage) -> _ProviderBatchUsageDetails:
+    try:
+        return _ProviderBatchUsageDetails.model_validate(usage)
+    except ValidationError:
+        return _ProviderBatchUsageDetails()
+
+
+def _has_unparsed_batch_token_counts(usage: Usage) -> bool:
+    provider_fields: Final = usage.model_extra or {}
+    sent_batch_counts: Final = "input_tokens" in provider_fields or "output_tokens" in provider_fields
+    return sent_batch_counts and _parse_batch_token_counts(provider_fields) is None
+
+
+def _batch_usage_from_chat_usage(usage: Usage) -> BatchUsage:
+    provider_details: Final = _provider_batch_usage_details(usage)
+    cached_tokens: Final = usage.prompt_tokens_details.cached_tokens if usage.prompt_tokens_details else None
+    reasoning_tokens: Final = (
+        usage.completion_tokens_details.reasoning_tokens if usage.completion_tokens_details else None
+    )
+    return BatchUsage(
+        input_tokens=usage.prompt_tokens,
+        input_tokens_details=InputTokensDetails.model_validate(
+            {**(provider_details.input_tokens_details or {}), "cached_tokens": cached_tokens or 0}
+        ),
+        output_tokens=usage.completion_tokens,
+        output_tokens_details=OutputTokensDetails.model_validate(
+            {**(provider_details.output_tokens_details or {}), "reasoning_tokens": reasoning_tokens or 0}
+        ),
+        total_tokens=usage.total_tokens,
+    )
+
+
+OPENAI_BATCH_STATUS_FOR_VLLM_ROUTER_STATUS: Final = MappingProxyType(
+    {"pending": "validating", "running": "in_progress"}
+)
+
+
+def openai_batch_status(status: _JsonValue) -> _JsonValue:
+    return OPENAI_BATCH_STATUS_FOR_VLLM_ROUTER_STATUS.get(status, status) if isinstance(status, str) else status
+
+
 class LiteLLMBatch(Batch):
     _hidden_params: dict = {}
 
+    object: Literal["batch"] = "batch"
+
+    @field_validator("object", mode="before")
+    @classmethod
+    def _default_missing_object_type(cls, value: _JsonValue) -> _JsonValue:
+        return "batch" if value is None else value
+
+    @field_validator("status", mode="before")
+    @classmethod
+    def _map_vllm_router_status(cls, value: _JsonValue) -> _JsonValue:
+        return openai_batch_status(value)
+
     @property
-    def hidden_params(self) -> dict[str, object]:  # mutable-ok: API requires mutation
+    def hidden_params(self) -> dict[str, _JsonValue]:  # mutable-ok: API requires mutation
         return self._hidden_params
 
     @hidden_params.setter
-    def hidden_params(self, hidden_params: dict[str, object]) -> None:  # mutable-ok: API requires mutation
+    def hidden_params(self, hidden_params: dict[str, _JsonValue]) -> None:  # mutable-ok: API requires mutation
         self._hidden_params = hidden_params
 
     usage: Usage | None = None
+
+    @field_validator("usage", mode="before")
+    @classmethod
+    def _usage_from_batch_token_counts(cls, value: _JsonValue) -> _JsonValue:
+        counts: Final = _parse_batch_token_counts(value)
+        return value if counts is None else _usage_with_batch_token_counts(Usage.model_validate(value), counts)
+
+    @field_serializer("usage")
+    def _serialize_usage_with_batch_fields(
+        self, usage: Usage | None, info: FieldSerializationInfo
+    ) -> Mapping[str, _JsonValue] | None:
+        if not isinstance(usage, Usage):
+            return usage
+        chat_fields: Final = usage.model_dump(
+            mode=info.mode,
+            include=info.include,
+            exclude=info.exclude,
+            exclude_unset=info.exclude_unset,
+            exclude_defaults=info.exclude_defaults,
+            exclude_none=info.exclude_none,
+        )
+        if _has_unparsed_batch_token_counts(usage):
+            return chat_fields
+        return {
+            **chat_fields,
+            **_batch_usage_from_chat_usage(usage).model_dump(
+                mode=info.mode,
+                include=info.include,
+                exclude=info.exclude,
+                exclude_unset=info.exclude_unset,
+                exclude_defaults=info.exclude_defaults,
+                exclude_none=info.exclude_none,
+            ),
+        }
 
     def __contains__(self, key) -> bool:
         # Define custom behavior for the 'in' operator
@@ -4784,6 +5059,15 @@ class LiteLLMBatch(Batch):
         except Exception:
             # if using pydantic v1
             return self.dict()
+
+
+_PROVIDER_ONLY_BATCH_USAGE_FIELDS: Final = frozenset(BatchUsage.model_fields) - frozenset(Usage.model_fields)
+
+
+def batch_chat_usage(batch: LiteLLMBatch) -> Usage | None:
+    if batch.usage is None:
+        return None
+    return Usage.model_validate(batch.usage.model_dump(exclude=set(_PROVIDER_ONLY_BATCH_USAGE_FIELDS)))
 
 
 class LiteLLMRealtimeStreamLoggingObject(LiteLLMPydanticObjectBase):

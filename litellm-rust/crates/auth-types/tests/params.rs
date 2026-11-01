@@ -1,8 +1,9 @@
-use litellm_auth_types::{AwsParams, ParamSpec};
+use litellm_auth_types::{AwsParams, ParamKind, ParamSpec};
 use rstest::rstest;
 
 const LOCATION: ParamSpec = ParamSpec {
     setting: "location",
+    kind: ParamKind::Setting,
     wire: &["vertex_location", "vertex_ai_location"],
     module_global: Some("vertex_location"),
     env: &["VERTEXAI_LOCATION", "VERTEX_LOCATION"],

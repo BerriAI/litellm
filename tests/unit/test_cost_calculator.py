@@ -37,7 +37,7 @@ from litellm.types.llms.xai import RealtimeMeteredUsage
 from litellm.types.rerank import RerankResponse
 from litellm.types.utils import CacheCreationTokenDetails, CallTypes, Choices, CompletionTokensDetailsWrapper, EmbeddingResponse, ImageObject, ImageResponse, ImageUsage, ImageUsageInputTokensDetails, LiteLLMRealtimeStreamLoggingObject, Message, ModelInfo, ModelResponse, PromptTokensDetails, PromptTokensDetailsWrapper, Usage
 from litellm.types.videos.main import VideoObject
-from litellm.utils import supports_prompt_caching
+from litellm.utils import _invalidate_model_cost_lowercase_map, cached_get_model_info_helper, supports_prompt_caching
 import os
 import threading
 from unittest.mock import MagicMock, patch
@@ -422,6 +422,313 @@ def test_completion_cost_prices_rule_only_base_model_from_the_response_model(
     )
 
     assert cost == pytest.approx(usage.prompt_tokens * 0.0000111 + usage.completion_tokens * 0.0000222)
+
+
+def _token_rates_cost(row: Mapping[str, object], usage: Usage) -> float:
+    input_rate: Final = row["input_cost_per_token"]
+    output_rate: Final = row["output_cost_per_token"]
+    assert isinstance(input_rate, float) and isinstance(output_rate, float), row
+    return usage.prompt_tokens * input_rate + usage.completion_tokens * output_rate
+
+
+@pytest.mark.parametrize(
+    "requested_model",
+    ["accounts/fireworks/models/sol-display-test", "fireworks_ai/accounts/fireworks/models/sol-display-test"],
+)
+def test_completion_cost_bills_requested_model_when_response_names_an_unmapped_display_name(
+    _local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch, requested_model: str
+) -> None:
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "fireworks_ai/accounts/fireworks/models/sol-display-test",
+        {"litellm_provider": "fireworks_ai", "mode": "chat", "input_cost_per_token": 3e-6, "output_cost_per_token": 7e-6},
+    )
+    usage: Final = Usage(prompt_tokens=1000, completion_tokens=500, total_tokens=1500)
+
+    cost: Final = completion_cost(
+        completion_response=ModelResponse(model="Sol Display Max", choices=[], usage=usage),
+        model=requested_model,
+        custom_llm_provider="fireworks_ai",
+    )
+
+    assert cost == pytest.approx(
+        _token_rates_cost(litellm.model_cost["fireworks_ai/accounts/fireworks/models/sol-display-test"], usage)
+    )
+
+
+def test_completion_cost_bills_requested_model_when_stream_reports_an_unmapped_display_name(
+    _local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    requested_model: Final = "fireworks_ai/accounts/fireworks/models/sol-display-test"
+    monkeypatch.setitem(
+        litellm.model_cost,
+        requested_model,
+        {"litellm_provider": "fireworks_ai", "mode": "chat", "input_cost_per_token": 3e-6, "output_cost_per_token": 7e-6},
+    )
+    usage: Final = Usage(prompt_tokens=1000, completion_tokens=500, total_tokens=1500)
+    response: Final = ModelResponse(model="accounts/fireworks/models/sol-display-test", choices=[], usage=usage)
+    response._hidden_params["provider_response_model"] = "Sol Display Max"
+
+    cost: Final = completion_cost(
+        completion_response=response, model=requested_model, custom_llm_provider="fireworks_ai"
+    )
+
+    assert cost == pytest.approx(_token_rates_cost(litellm.model_cost[requested_model], usage))
+
+
+def test_completion_cost_bills_requested_model_when_response_row_has_no_rates(
+    _local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "openai/sol-requested-test",
+        {"litellm_provider": "openai", "mode": "chat", "input_cost_per_token": 3e-6, "output_cost_per_token": 7e-6},
+    )
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "openai/sol-served-snapshot-test",
+        {"litellm_provider": "openai", "mode": "chat", "input_cost_per_token": None, "output_cost_per_token": None},
+    )
+    usage: Final = Usage(prompt_tokens=1000, completion_tokens=500, total_tokens=1500)
+
+    cost: Final = completion_cost(
+        completion_response=ModelResponse(model="sol-served-snapshot-test", choices=[], usage=usage),
+        model="openai/sol-requested-test",
+        custom_llm_provider="openai",
+    )
+
+    assert cost == pytest.approx(_token_rates_cost(litellm.model_cost["openai/sol-requested-test"], usage))
+
+
+def test_completion_cost_bills_priced_response_model_over_priced_requested_model(
+    _local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "openai/sol-requested-test",
+        {"litellm_provider": "openai", "mode": "chat", "input_cost_per_token": 3e-6, "output_cost_per_token": 7e-6},
+    )
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "openai/sol-requested-test-2099-01-01",
+        {"litellm_provider": "openai", "mode": "chat", "input_cost_per_token": 5e-6, "output_cost_per_token": 11e-6},
+    )
+    usage: Final = Usage(prompt_tokens=1000, completion_tokens=500, total_tokens=1500)
+
+    cost: Final = completion_cost(
+        completion_response=ModelResponse(model="sol-requested-test-2099-01-01", choices=[], usage=usage),
+        model="openai/sol-requested-test",
+        custom_llm_provider="openai",
+    )
+
+    assert cost == pytest.approx(_token_rates_cost(litellm.model_cost["openai/sol-requested-test-2099-01-01"], usage))
+
+
+def test_completion_cost_keeps_response_pricing_when_requested_alias_has_no_rates(
+    _local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    size_bucket: Final = get_base_model_for_pricing("Sol 70B Display")
+    monkeypatch.setitem(
+        litellm.model_cost,
+        size_bucket,
+        {"litellm_provider": "fireworks_ai", "mode": "chat", "input_cost_per_token": 3e-6, "output_cost_per_token": 7e-6},
+    )
+    usage: Final = Usage(prompt_tokens=1000, completion_tokens=500, total_tokens=1500)
+
+    cost: Final = completion_cost(
+        completion_response=ModelResponse(model="Sol 70B Display", choices=[], usage=usage),
+        model="sol-team-alias",
+        custom_llm_provider="fireworks_ai",
+    )
+
+    assert cost == pytest.approx(_token_rates_cost(litellm.model_cost[size_bucket], usage))
+
+
+def test_completion_cost_bills_requested_model_priced_only_by_a_rule_when_response_row_has_no_rates(
+    _local_model_cost_map: None, _priced_claude_family_generalization: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "anthropic/sol-served-snapshot-test",
+        {"litellm_provider": "anthropic", "mode": "chat", "input_cost_per_token": None, "output_cost_per_token": None},
+    )
+    usage: Final = Usage(prompt_tokens=1000, completion_tokens=500, total_tokens=1500)
+
+    cost: Final = completion_cost(
+        completion_response=ModelResponse(model="sol-served-snapshot-test", choices=[], usage=usage),
+        model="anthropic/claude-sol-9",
+        custom_llm_provider="anthropic",
+    )
+
+    assert cost == pytest.approx(usage.prompt_tokens * 0.0000321 + usage.completion_tokens * 0.0000765)
+
+
+def test_completion_cost_bills_requested_model_from_hidden_params_when_no_model_is_passed(
+    _local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    requested_model: Final = "fireworks_ai/accounts/fireworks/models/sol-display-test"
+    monkeypatch.setitem(
+        litellm.model_cost,
+        requested_model,
+        {"litellm_provider": "fireworks_ai", "mode": "chat", "input_cost_per_token": 3e-6, "output_cost_per_token": 7e-6},
+    )
+    usage: Final = Usage(prompt_tokens=1000, completion_tokens=500, total_tokens=1500)
+    response: Final = ModelResponse(model="Sol Display Max", choices=[], usage=usage)
+    response._hidden_params["litellm_model_name"] = requested_model
+
+    cost: Final = completion_cost(completion_response=response)
+
+    assert cost == pytest.approx(_token_rates_cost(litellm.model_cost[requested_model], usage))
+
+
+def test_completion_cost_bills_requested_model_regional_row_when_response_names_an_unmapped_display_name(
+    _local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "bedrock/sol-regional-test",
+        {"litellm_provider": "bedrock", "mode": "chat", "input_cost_per_token": 3e-6, "output_cost_per_token": 7e-6},
+    )
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "bedrock/eu-central-1/sol-regional-test",
+        {"litellm_provider": "bedrock", "mode": "chat", "input_cost_per_token": 5e-6, "output_cost_per_token": 11e-6},
+    )
+    usage: Final = Usage(prompt_tokens=1000, completion_tokens=500, total_tokens=1500)
+    response: Final = ModelResponse(model="Sol Regional Display", choices=[], usage=usage)
+    response._hidden_params.update(
+        {"litellm_model_name": "bedrock/sol-regional-test", "region_name": "eu-central-1", "custom_llm_provider": "bedrock"}
+    )
+
+    cost: Final = completion_cost(completion_response=response)
+
+    assert cost == pytest.approx(_token_rates_cost(litellm.model_cost["bedrock/eu-central-1/sol-regional-test"], usage))
+
+
+def test_completion_cost_keeps_served_row_rates_filled_by_a_rule_over_the_requested_alias(
+    _local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setitem(litellm.model_cost, "sol-fill-snapshot-test", {"litellm_provider": "openai", "mode": "chat"})
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "sol-fill-alias-test",
+        {"litellm_provider": "openai", "mode": "chat", "input_cost_per_token": 3e-6, "output_cost_per_token": 7e-6},
+    )
+    filled_rates: Final = {"input_cost_per_token": 5e-6, "output_cost_per_token": 11e-6}
+    usage: Final = Usage(prompt_tokens=1000, completion_tokens=500, total_tokens=1500)
+    response: Final = ModelResponse(model="sol-fill-snapshot-test", choices=[], usage=usage)
+    response._hidden_params.update({"litellm_model_name": "openai/sol-fill-alias-test", "custom_llm_provider": "openai"})
+    previous_rules: Final = list(get_fallback_generalization_rules())
+    set_fallback_generalizations(
+        [
+            {
+                "name": "sol-fill-snapshot-rates",
+                "pattern": r"^sol-fill-snapshot-test$",
+                "fill_missing_for_providers": ["openai"],
+                "model_info": filled_rates,
+            }
+        ]
+    )
+    try:
+        cost: Final = completion_cost(completion_response=response)
+    finally:
+        set_fallback_generalizations(previous_rules)
+
+    assert cost == pytest.approx(_token_rates_cost(filled_rates, usage))
+
+
+_SIZE_BUCKET_CASES: Final = (
+    pytest.param(
+        "fireworks_ai",
+        "fireworks_ai/accounts/fireworks/models/sol-bucket-requested-test",
+        "Sol Bucket 405B Display",
+        "fireworks-ai-above-16b",
+        id="fireworks_ai",
+    ),
+    pytest.param(
+        "together_ai",
+        "together_ai/sol-bucket-requested-test",
+        "meta-llama/Sol-Bucket-8B-Test",
+        "together-ai-4.1b-8b",
+        id="together_ai",
+    ),
+)
+
+
+def _size_bucket_response(served_model: str, requested_model: str, custom_llm_provider: str) -> ModelResponse:
+    response: Final = ModelResponse(model=served_model, choices=[], usage=_SIZE_BUCKET_USAGE)
+    response._hidden_params.update({"litellm_model_name": requested_model, "custom_llm_provider": custom_llm_provider})
+    return response
+
+
+_SIZE_BUCKET_USAGE: Final = Usage(prompt_tokens=1000, completion_tokens=500, total_tokens=1500)
+
+
+@pytest.mark.parametrize(("custom_llm_provider", "requested_model", "served_model", "bucket"), _SIZE_BUCKET_CASES)
+def test_completion_cost_bills_requested_listed_rates_over_a_served_size_bucket(
+    _local_model_cost_map: None,
+    monkeypatch: pytest.MonkeyPatch,
+    custom_llm_provider: str,
+    requested_model: str,
+    served_model: str,
+    bucket: str,
+) -> None:
+    monkeypatch.setitem(
+        litellm.model_cost,
+        requested_model,
+        {
+            "litellm_provider": custom_llm_provider,
+            "mode": "chat",
+            "input_cost_per_token": 3e-6,
+            "output_cost_per_token": 7e-6,
+        },
+    )
+
+    cost: Final = completion_cost(
+        completion_response=_size_bucket_response(served_model, requested_model, custom_llm_provider)
+    )
+
+    assert cost == pytest.approx(_token_rates_cost(litellm.model_cost[requested_model], _SIZE_BUCKET_USAGE))
+    assert cost != pytest.approx(_token_rates_cost(litellm.model_cost[bucket], _SIZE_BUCKET_USAGE))
+
+
+@pytest.mark.parametrize(("custom_llm_provider", "requested_model", "served_model", "bucket"), _SIZE_BUCKET_CASES)
+def test_completion_cost_keeps_served_size_bucket_rates_when_the_requested_model_is_unpriced(
+    _local_model_cost_map: None,
+    custom_llm_provider: str,
+    requested_model: str,
+    served_model: str,
+    bucket: str,
+) -> None:
+    cost: Final = completion_cost(
+        completion_response=_size_bucket_response(served_model, requested_model, custom_llm_provider)
+    )
+
+    assert cost == pytest.approx(_token_rates_cost(litellm.model_cost[bucket], _SIZE_BUCKET_USAGE))
+
+
+def test_completion_cost_bills_a_requested_model_priced_after_an_unpriced_lookup(
+    _local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    requested_model: Final = "fireworks_ai/accounts/fireworks/models/sol-late-priced-test"
+    usage: Final = Usage(prompt_tokens=1000, completion_tokens=500, total_tokens=1500)
+
+    def display_name_response() -> ModelResponse:
+        response: Final = ModelResponse(model="Sol Late Display", choices=[], usage=usage)
+        response._hidden_params.update({"litellm_model_name": requested_model, "custom_llm_provider": "fireworks_ai"})
+        return response
+
+    completion_cost(completion_response=display_name_response())
+    monkeypatch.setitem(
+        litellm.model_cost,
+        requested_model,
+        {"litellm_provider": "fireworks_ai", "mode": "chat", "input_cost_per_token": 3e-6, "output_cost_per_token": 7e-6},
+    )
+    _invalidate_model_cost_lowercase_map()
+
+    cost: Final = completion_cost(completion_response=display_name_response())
+
+    assert cost == pytest.approx(_token_rates_cost(litellm.model_cost[requested_model], usage))
 
 
 def test_completion_cost_orders_candidates_without_extra_huggingface_config_requests(
@@ -4291,23 +4598,40 @@ def test_batch_cost_calculator_prices_cache_creation_tokens_at_cache_write_rate(
     assert completion_cost_value == pytest.approx(200 * 15e-6 / 2)
 
 
-def test_batch_cost_calculator_cache_creation_falls_back_to_input_rate():
+@pytest.mark.parametrize("input_rate", (3e-6, 0.0))
+@pytest.mark.parametrize(
+    ("cache_pricing", "expected_write_rate"),
+    [
+        pytest.param({}, None, id="missing"),
+        pytest.param({"cache_creation_input_token_cost": None}, None, id="null"),
+        pytest.param({"cache_creation_input_token_cost": 0.0}, 0.0, id="free"),
+        pytest.param({"cache_creation_input_token_cost": 3.75e-6}, 3.75e-6, id="paid"),
+    ],
+)
+def test_batch_cost_calculator_preserves_cache_write_prices_and_defaults_only_when_unset(
+    cache_pricing: ModelInfo,
+    expected_write_rate: float | None,
+    input_rate: float,
+) -> None:
     from litellm.cost_calculator import batch_cost_calculator
 
-    model_info: ModelInfo = {
+    model_info: Final[ModelInfo] = {
         "supported_openai_params": [],
-        "input_cost_per_token": 3e-6,
+        "input_cost_per_token": input_rate,
         "output_cost_per_token": 15e-6,
         "cache_read_input_token_cost": 3e-7,
+        **cache_pricing,
     }
-    prompt_cost, _ = batch_cost_calculator(
+    prompt_cost, completion_cost_value = batch_cost_calculator(
         usage=_batch_cache_usage(),
-        model="claude-sonnet-4-5-20250929",
+        model="batch-pricing-fixture",
         custom_llm_provider="anthropic",
         model_info=model_info,
     )
 
-    assert prompt_cost == pytest.approx((1000 * 3e-6 + 8000 * 3e-7 + 2000 * 3e-6) / 2)
+    write_rate: Final = input_rate if expected_write_rate is None else expected_write_rate
+    assert prompt_cost == pytest.approx((1000 * input_rate + 8000 * 3e-7 + 2000 * write_rate) / 2)
+    assert completion_cost_value == pytest.approx(200 * 15e-6 / 2)
 
 
 def test_completion_cost_bills_interactions_api_response():
@@ -6810,6 +7134,73 @@ def test_completion_cost_bills_base_when_gemini_serves_on_demand(
     assert cost == pytest.approx(100 * 0.001 + 50 * 0.002)
 
 
+def test_an_unpriced_provider_slug_does_not_bill_the_turn_at_zero(
+    _local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    response_model: Final = "anthropic/claude-test-42161-response"
+    reported_model: Final = "claude-test-42161-unmapped"
+    monkeypatch.delitem(litellm.model_cost, reported_model, raising=False)
+    monkeypatch.delitem(litellm.model_cost, f"anthropic/{reported_model}", raising=False)
+    monkeypatch.setitem(
+        litellm.model_cost,
+        response_model,
+        {
+            "input_cost_per_token": 0.001,
+            "output_cost_per_token": 0.002,
+            "litellm_provider": "anthropic",
+            "mode": "chat",
+        },
+    )
+    response: Final = ModelResponse(
+        model=response_model,
+        choices=[],
+        usage=Usage(prompt_tokens=38, completion_tokens=24, total_tokens=62),
+    )
+    response._hidden_params["provider_response_model"] = reported_model
+
+    cost: Final = completion_cost(completion_response=response, custom_llm_provider="anthropic")
+
+    assert cost == pytest.approx(38 * 0.001 + 24 * 0.002)
+
+
+@pytest.mark.parametrize("reported_rate", (0.0, 0.01))
+def test_a_priced_provider_slug_still_decides_the_rate(
+    _local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch, reported_rate: float
+) -> None:
+    response_model: Final = "anthropic/claude-test-42161-response"
+    reported_model: Final = "claude-test-42161-reported"
+    monkeypatch.setitem(
+        litellm.model_cost,
+        response_model,
+        {
+            "input_cost_per_token": 0.001,
+            "output_cost_per_token": 0.002,
+            "litellm_provider": "anthropic",
+            "mode": "chat",
+        },
+    )
+    monkeypatch.setitem(
+        litellm.model_cost,
+        f"anthropic/{reported_model}",
+        {
+            "input_cost_per_token": reported_rate,
+            "output_cost_per_token": reported_rate * 2,
+            "litellm_provider": "anthropic",
+            "mode": "chat",
+        },
+    )
+    response: Final = ModelResponse(
+        model=response_model,
+        choices=[],
+        usage=Usage(prompt_tokens=38, completion_tokens=24, total_tokens=62),
+    )
+    response._hidden_params["provider_response_model"] = reported_model
+
+    cost: Final = completion_cost(completion_response=response, custom_llm_provider="anthropic")
+
+    assert cost == pytest.approx(38 * reported_rate + 24 * reported_rate * 2)
+
+
 def test_custom_pricing_as_completion_cost_param():
     from litellm import Choices, Message, ModelResponse
     from litellm.utils import Usage
@@ -7443,20 +7834,42 @@ def test_vertex_ai_mistral_predict_cost(usage):
     assert predictive_cost > 0
 
 
+@pytest.mark.usefixtures("_local_model_cost_map")
+@pytest.mark.parametrize("call_type", ("speech", "aspeech"))
+@pytest.mark.parametrize("model", ("speech-fixture", "openai/speech-fixture", "azure/speech-fixture"))
 @pytest.mark.parametrize(
-    "model", ["openai/tts-1", "azure/tts-1", "openai/gpt-4o-mini-tts"]
+    ("pricing", "expected_cost"),
+    (
+        pytest.param({}, None, id="missing"),
+        pytest.param({"input_cost_per_character": None, "input_cost_per_token": None}, None, id="null"),
+        pytest.param({"input_cost_per_token": 0.0}, 0.0, id="free-tokens"),
+        pytest.param({"input_cost_per_character": 0.0, "input_cost_per_token": 2e-6}, 0.0, id="free-characters"),
+        pytest.param({"input_cost_per_token": 2e-6}, 100 * 2e-6, id="missing-character-rate"),
+        pytest.param({"input_cost_per_character": None, "input_cost_per_token": 2e-6}, 100 * 2e-6, id="null-character-rate"),
+        pytest.param({"input_cost_per_character": 3e-6, "input_cost_per_token": 2e-6}, 1000 * 3e-6, id="paid-characters"),
+    ),
 )
-def test_completion_cost_tts(model):
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
-    litellm.model_cost = litellm.get_model_cost_map(url="")
-
-    cost = completion_cost(
-        model=model,
-        prompt="the quick brown fox jumped over the lazy dogs",
-        call_type="speech",
+def test_registered_speech_prices_distinguish_unset_from_zero(
+    call_type: str, model: str, pricing: ModelInfo, expected_cost: float | None
+) -> None:
+    provider: Final = "azure" if model.startswith("azure/") else "openai"
+    litellm.register_model(
+        {model: {"litellm_provider": provider, "mode": "audio_speech", **pricing}},
+        persist_across_reloads=False,
     )
+    compatibility_info: Final = cached_get_model_info_helper(model, provider)
+    assert compatibility_info["input_cost_per_token"] == (pricing.get("input_cost_per_token") or 0.0)
+    litellm.get_model_info(model)
+    response: Final = ModelResponse(usage=Usage(prompt_tokens=100, completion_tokens=0, total_tokens=100))
 
-    assert cost > 0
+    if expected_cost is None:
+        with pytest.raises(ValueError, match="does not have 'input_cost_per_character' or 'input_cost_per_token'"):
+            completion_cost(completion_response=response, model=model, prompt="a" * 1000, call_type=call_type)
+        litellm.register_model({model: {"input_cost_per_token": 0.0}}, persist_across_reloads=False)
+
+    assert completion_cost(
+        completion_response=response, model=model, prompt="a" * 1000, call_type=call_type
+    ) == pytest.approx(expected_cost or 0.0)
 
 
 def test_completion_cost_anthropic():
@@ -10522,3 +10935,176 @@ def test_bedrock_registered_cache_prices_preserve_dynamic_threshold_rates(
     assert entry is not None
     assert entry[1]["input_cost_per_token_above_300k_tokens"] == 0.03
     assert entry[1][tier_field] == (tier_override if tier_override is not None else 0.007)
+
+
+_REPORTED_TOTAL: Final = 0.037
+
+
+def _reported_cost_breakdown(
+    monkeypatch: pytest.MonkeyPatch,
+    model: str,
+    call_type: Literal["completion", "decisions"],
+    cost_map_row: Mapping[str, object] | None,
+) -> Mapping[str, object]:
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+    if cost_map_row is not None:
+        litellm.register_model(model_cost={model: dict(cost_map_row)})
+    logging_obj: Final = Logging(
+        model=model,
+        messages=[{"role": "user", "content": "reported cost"}],
+        stream=False,
+        call_type=call_type,
+        start_time=datetime.datetime.now(),
+        litellm_call_id="reported-cost-split",
+        function_id="f",
+    )
+    response: Final = ModelResponse(
+        model=model,
+        choices=[Choices(message=Message(content="ok"))],
+        usage=Usage(prompt_tokens=100, completion_tokens=20, total_tokens=120, cost=_REPORTED_TOTAL),
+    )
+    spend: Final = completion_cost(
+        completion_response=response,
+        model=model,
+        custom_llm_provider="openai",
+        call_type=call_type,
+        litellm_logging_obj=logging_obj,
+    )
+    assert spend == _REPORTED_TOTAL
+    breakdown: Final = logging_obj.cost_breakdown
+    assert breakdown is not None
+    return breakdown
+
+
+def test_reported_total_is_split_between_input_and_output_by_the_cost_map_rate_ratio(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    breakdown: Final = _reported_cost_breakdown(
+        monkeypatch,
+        model="cc-reported-cost-both-rates",
+        call_type="completion",
+        cost_map_row={
+            "litellm_provider": "openai",
+            "mode": "chat",
+            "input_cost_per_token": 1e-06,
+            "output_cost_per_token": 3e-06,
+        },
+    )
+
+    input_share: Final = (100 * 1e-06) / (100 * 1e-06 + 20 * 3e-06)
+    assert breakdown["input_cost"] == pytest.approx(_REPORTED_TOTAL * input_share)
+    assert breakdown["output_cost"] == pytest.approx(_REPORTED_TOTAL * (1 - input_share))
+    assert breakdown["input_cost"] + breakdown["output_cost"] == _REPORTED_TOTAL
+    assert breakdown["total_cost"] == _REPORTED_TOTAL
+
+
+def test_reported_total_on_a_decisions_model_priced_per_input_token_lands_on_input(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    breakdown: Final = _reported_cost_breakdown(
+        monkeypatch,
+        model="cc-reported-cost-decisions",
+        call_type="decisions",
+        cost_map_row={
+            "litellm_provider": "openai",
+            "mode": "decisions",
+            "input_cost_per_token": 4.2e-08,
+            "output_cost_per_token": 0.0,
+        },
+    )
+
+    assert breakdown["input_cost"] == _REPORTED_TOTAL
+    assert breakdown["output_cost"] == 0.0
+
+
+def test_reported_total_without_a_cost_map_row_falls_back_to_output(monkeypatch: pytest.MonkeyPatch) -> None:
+    breakdown: Final = _reported_cost_breakdown(
+        monkeypatch, model="cc-reported-cost-unmapped", call_type="completion", cost_map_row=None
+    )
+
+    assert breakdown["input_cost"] == 0.0
+    assert breakdown["output_cost"] == _REPORTED_TOTAL
+
+
+def test_upstream_cost_header_total_is_split_by_the_cost_map_rate_ratio(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+    litellm.register_model(
+        model_cost={
+            "cc-header-cost-chat": {
+                "litellm_provider": "openai",
+                "mode": "chat",
+                "input_cost_per_token": 0.001,
+                "output_cost_per_token": 0.002,
+            }
+        }
+    )
+    logging_obj: Final = Logging(
+        model="cc-header-cost-chat",
+        messages=[{"role": "user", "content": "reported cost"}],
+        stream=False,
+        call_type="completion",
+        start_time=datetime.datetime.now(),
+        litellm_call_id="reported-cost-header-split",
+        function_id="f",
+    )
+
+    cost: Final = response_cost_calculator(
+        response_object=_header_cost_chat_response({"llm_provider-x-litellm-response-cost": "0.25"}),
+        model="cc-header-cost-chat",
+        custom_llm_provider="openai",
+        call_type="completion",
+        optional_params={},
+        litellm_logging_obj=logging_obj,
+    )
+
+    assert cost == 0.25
+    breakdown: Final = logging_obj.cost_breakdown
+    assert breakdown is not None
+    input_share: Final = (10 * 0.001) / (10 * 0.001 + 20 * 0.002)
+    assert breakdown["input_cost"] == pytest.approx(0.25 * input_share)
+    assert breakdown["output_cost"] == pytest.approx(0.25 * (1 - input_share))
+    assert breakdown["total_cost"] == 0.25
+
+
+def test_upstream_cost_header_total_on_an_unmapped_alias_is_split_by_the_served_model_rates(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+    litellm.register_model(
+        model_cost={
+            "cc-header-cost-chat": {
+                "litellm_provider": "openai",
+                "mode": "chat",
+                "input_cost_per_token": 0.001,
+                "output_cost_per_token": 0.002,
+            }
+        }
+    )
+    logging_obj: Final = Logging(
+        model="team-alias-for-header-cost",
+        messages=[{"role": "user", "content": "reported cost"}],
+        stream=False,
+        call_type="completion",
+        start_time=datetime.datetime.now(),
+        litellm_call_id="reported-cost-header-alias-split",
+        function_id="f",
+    )
+
+    cost: Final = response_cost_calculator(
+        response_object=_header_cost_chat_response({"llm_provider-x-litellm-response-cost": "0.25"}),
+        model="team-alias-for-header-cost",
+        custom_llm_provider="openai",
+        call_type="completion",
+        optional_params={},
+        litellm_logging_obj=logging_obj,
+    )
+
+    assert cost == 0.25
+    breakdown: Final = logging_obj.cost_breakdown
+    assert breakdown is not None
+    input_share: Final = (10 * 0.001) / (10 * 0.001 + 20 * 0.002)
+    assert breakdown["input_cost"] == pytest.approx(0.25 * input_share)
+    assert breakdown["output_cost"] == pytest.approx(0.25 * (1 - input_share))

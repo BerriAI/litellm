@@ -1,3 +1,4 @@
+import itertools
 import json
 from typing import Final, List, Optional
 from urllib.parse import quote
@@ -12,6 +13,7 @@ from pytest_mock import MockerFixture
 
 import litellm
 from litellm import Router
+from litellm.constants import ANTHROPIC_DEFAULT_FILE_LIST_LIMIT
 from litellm.files.types import FileContentStreamingResult
 from litellm.proxy._types import LiteLLM_UserTableFiltered, LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.hooks import get_proxy_hook
@@ -4969,6 +4971,8 @@ def _managed_file_row(
     stored_file_id: Optional[str] = None,
     created_by: str = "test-user",
     team_id: Optional[str] = None,
+    model_mappings: Optional[dict[str, str]] = None,
+    storage_backend: Optional[str] = None,
 ) -> MagicMock:
     file_object = OpenAIFileObject(
         id=stored_file_id or unified_file_id,
@@ -4984,6 +4988,8 @@ def _managed_file_row(
         file_object=file_object.model_dump(),
         created_by=created_by,
         team_id=team_id,
+        model_mappings=model_mappings or {},
+        storage_backend=storage_backend,
     )
 
 
@@ -5010,15 +5016,48 @@ class _ManagedFileTableOverRows:
         return next(iter(self._owned_rows(where)), None)
 
     async def find_many(self, where, take=None, order=None, cursor=None, skip=0):
-        rows = self._owned_rows(where)
-        if cursor is not None:
-            start = next(
-                index
-                for index, row in enumerate(rows)
-                if row.unified_file_id == cursor["unified_file_id"]
-            )
-            rows = rows[start + skip :]
+        owned_rows: Final = self._owned_rows(where)
+        oldest_first: Final = bool(order) and order[0].get("created_at") == "asc"
+        ordered_rows: Final = owned_rows[::-1] if oldest_first else owned_rows
+        start: Final = (
+            0
+            if cursor is None
+            else skip
+            + next(index for index, row in enumerate(ordered_rows) if row.unified_file_id == cursor["unified_file_id"])
+        )
+        rows: Final = ordered_rows[start:]
         return rows if take is None else rows[:take]
+
+    async def query_raw(self, query: str, *params: object) -> list[dict[str, object]]:
+        keys_index: Final = next(index for index, param in enumerate(params) if isinstance(param, list))
+        owner_ids: Final = frozenset(params[:keys_index])
+        model_mapping_keys: Final = frozenset(params[keys_index])
+        cursor_id: Final = params[keys_index + 1] if len(params) == keys_index + 3 else None
+        ordered_rows: Final = [
+            row
+            for row in (self.rows[::-1] if '"created_at" ASC' in query else self.rows)
+            if not owner_ids or {row.created_by, row.team_id} & owner_ids
+        ]
+        start: Final = (
+            0
+            if cursor_id is None
+            else 1 + next(index for index, row in enumerate(ordered_rows) if row.unified_file_id == cursor_id)
+        )
+        listed_rows: Final = [
+            row
+            for row in ordered_rows[start:]
+            if not model_mapping_keys.isdisjoint(row.model_mappings)
+            or ('"storage_backend" IS NOT NULL' in query and row.storage_backend is not None)
+        ]
+        return [
+            {
+                "unified_file_id": row.unified_file_id,
+                "file_object": row.file_object,
+                "model_mappings": row.model_mappings,
+                "storage_backend": row.storage_backend,
+            }
+            for row in listed_rows[: params[-1]]
+        ]
 
 
 def _setup_unscoped_list_files_route_over_real_hook(
@@ -5041,7 +5080,9 @@ def _setup_unscoped_list_files_route_over_real_hook(
     managed_files = PROXY_LiteLLMManagedFiles(
         internal_usage_cache=MagicMock(), prisma_client=MagicMock()
     )
-    managed_files.prisma_client.db.litellm_managedfiletable = _ManagedFileTableOverRows(rows)
+    managed_file_table = _ManagedFileTableOverRows(rows)
+    managed_files.prisma_client.db.litellm_managedfiletable = managed_file_table
+    managed_files.prisma_client.db.query_raw = managed_file_table.query_raw
 
     proxy_logging_obj = setup_proxy_logging_object(monkeypatch, llm_router)
     proxy_logging_obj.proxy_hook_mapping["managed_files"] = managed_files
@@ -6263,3 +6304,513 @@ def test_create_file_passthrough_fails_closed_when_guardrails_would_scan_the_bat
     assert error["param"] == "passthrough"
     assert "guardrails" in error["message"]
     assert forwarded_calls == []
+
+
+def _callers_files_on_every_deployment() -> list[MagicMock]:
+    return [
+        _managed_file_row("unified-gpt-newer", model_mappings={"gpt-3.5-turbo-id": "file-gpt-newer"}),
+        _managed_file_row("unified-azure", model_mappings={"azure-gpt-3-5-turbo-id": "file-azure"}),
+        _managed_file_row("unified-gemini", model_mappings={"gemini-2.0-flash-id": "file-gemini"}),
+        _managed_file_row(
+            "unified-theirs", created_by="other-user", model_mappings={"gpt-3.5-turbo-id": "file-theirs"}
+        ),
+        _managed_file_row("unified-gpt-older", model_mappings={"gpt-3.5-turbo-id": "file-gpt-older"}),
+    ]
+
+
+def _list_files_as_test_user(path: str, params: dict[str, str], headers: dict[str, str]) -> httpx.Response:
+    import litellm.proxy.proxy_server as ps
+
+    try:
+        return client.get(path, params=params, headers={"Authorization": "Bearer test-key", **headers})
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+@pytest.mark.parametrize(
+    ("path", "params", "headers", "expected_ids"),
+    [
+        ("/openai/v1/files", {}, {}, ["unified-gpt-newer", "unified-gpt-older"]),
+        ("/v1/files", {"provider": "azure"}, {}, ["unified-azure"]),
+        ("/v1/files", {}, {"custom-llm-provider": "gemini"}, ["unified-gemini"]),
+        ("/v1/files", {"target_model_names": "gemini-2.0-flash"}, {}, ["unified-gemini"]),
+        ("/v1/files", {}, {"x-litellm-model": "gpt-3.5-turbo"}, ["unified-gpt-newer", "unified-gpt-older"]),
+        ("/v1/files", {}, {}, ["unified-gpt-newer", "unified-azure", "unified-gemini", "unified-gpt-older"]),
+    ],
+    ids=["provider-path", "provider-query", "provider-header", "target-model-names", "model-header", "no-provider"],
+)
+def test_require_managed_files_lists_the_callers_files_on_the_named_provider_or_model(
+    mocker: MockerFixture,
+    monkeypatch: pytest.MonkeyPatch,
+    llm_router: Router,
+    path: str,
+    params: dict[str, str],
+    headers: dict[str, str],
+    expected_ids: list[str],
+) -> None:
+    _, provider_list = _setup_unscoped_list_files_route_over_real_hook(
+        mocker, monkeypatch, llm_router, _callers_files_on_every_deployment()
+    )
+    monkeypatch.setattr("litellm.require_managed_files", True)
+
+    response: Final = _list_files_as_test_user(path, params, headers)
+
+    assert response.status_code == 200, response.text
+    assert [file["id"] for file in response.json()["data"]] == expected_ids
+    provider_list.assert_not_awaited()
+
+
+def test_require_managed_files_lists_a_teammates_files_on_the_provider_and_no_other_teams(
+    mocker: MockerFixture, monkeypatch: pytest.MonkeyPatch, llm_router: Router
+) -> None:
+    import litellm.proxy.proxy_server as ps
+    from litellm.proxy._types import LitellmUserRoles
+
+    _setup_unscoped_list_files_route_over_real_hook(
+        mocker,
+        monkeypatch,
+        llm_router,
+        [
+            _managed_file_row(
+                "unified-teammate", created_by="teammate", team_id="team-a", model_mappings={"gpt-3.5-turbo-id": "f-1"}
+            ),
+            _managed_file_row("unified-own", model_mappings={"gpt-3.5-turbo-id": "f-2"}),
+            _managed_file_row(
+                "unified-other-team", created_by="outsider", team_id="team-b", model_mappings={"gpt-3.5-turbo-id": "f-3"}
+            ),
+        ],
+    )
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        api_key="test-key", user_role=LitellmUserRoles.INTERNAL_USER, user_id="test-user", team_id="team-a"
+    )
+    monkeypatch.setattr("litellm.require_managed_files", True)
+
+    response: Final = _list_files_as_test_user("/openai/v1/files", {}, {})
+
+    assert response.status_code == 200, response.text
+    assert [file["id"] for file in response.json()["data"]] == ["unified-teammate", "unified-own"]
+
+
+def _router_with_wildcard_and_unprefixed_anthropic_deployments() -> Router:
+    unprefixed_anthropic_model: Final = next(model for model in sorted(litellm.anthropic_models) if "/" not in model)
+    return Router(
+        model_list=[
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {"model": "openai/gpt-3.5-turbo", "api_key": "openai_api_key"},
+                "model_info": {"id": "gpt-3.5-turbo-id"},
+            },
+            {
+                "model_name": "anthropic/*",
+                "litellm_params": {"model": "anthropic/*", "api_key": "anthropic_api_key"},
+                "model_info": {"id": "anthropic-wildcard-id"},
+            },
+            {
+                "model_name": "claude-unprefixed",
+                "litellm_params": {"model": unprefixed_anthropic_model, "api_key": "anthropic_api_key"},
+                "model_info": {"id": "claude-unprefixed-id"},
+            },
+        ],
+        model_group_alias={"claude-alias": "claude-unprefixed"},
+        routing_groups=[
+            {"group_name": "claude-group", "models": ["claude-unprefixed"], "routing_strategy": "simple-shuffle"}
+        ],
+    )
+
+
+def _callers_files_on_wildcard_unprefixed_and_passthrough_deployments() -> list[MagicMock]:
+    return [
+        _managed_file_row("unified-wildcard", model_mappings={"anthropic-wildcard-id": "file-wildcard"}),
+        _managed_file_row("unified-unprefixed", model_mappings={"claude-unprefixed-id": "file-unprefixed"}),
+        _managed_file_row("unified-gpt", model_mappings={"gpt-3.5-turbo-id": "file-gpt"}),
+        _managed_file_row(
+            "unified-passthrough",
+            model_mappings={
+                "_passthrough_openai": "file-passthrough",
+                "_passthrough_provider_marker": "_passthrough_provider:openai",
+            },
+        ),
+        _managed_file_row(
+            "unified-storage",
+            model_mappings={"claude-unprefixed": "litellm_db://unified-storage"},
+            storage_backend="litellm_db",
+        ),
+        _managed_file_row(
+            "unified-wildcard-storage",
+            model_mappings={"anthropic/claude-haiku-5-5": "litellm_db://unified-wildcard-storage"},
+            storage_backend="litellm_db",
+        ),
+        _managed_file_row(
+            "unified-alias-storage",
+            model_mappings={"claude-alias": "s3://bucket/unified-alias-storage"},
+            storage_backend="s3",
+        ),
+        _managed_file_row(
+            "unified-group-storage",
+            model_mappings={"claude-group": "s3://bucket/unified-group-storage"},
+            storage_backend="s3",
+        ),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("path", "params", "headers", "expected_ids"),
+    [
+        (
+            "/v1/files",
+            {"target_model_names": "anthropic/claude-haiku-5-5"},
+            {},
+            ["unified-wildcard", "unified-wildcard-storage"],
+        ),
+        (
+            "/v1/files",
+            {},
+            {"x-litellm-model": "anthropic/claude-haiku-5-5"},
+            ["unified-wildcard", "unified-wildcard-storage"],
+        ),
+        (
+            "/anthropic/v1/files",
+            {},
+            {},
+            [
+                "unified-wildcard",
+                "unified-unprefixed",
+                "unified-storage",
+                "unified-wildcard-storage",
+                "unified-alias-storage",
+                "unified-group-storage",
+            ],
+        ),
+        ("/openai/v1/files", {}, {}, ["unified-gpt", "unified-passthrough"]),
+        ("/v1/files", {"target_model_names": "claude-unprefixed"}, {}, ["unified-unprefixed", "unified-storage"]),
+    ],
+    ids=[
+        "wildcard-target-model-names",
+        "wildcard-model-header",
+        "unprefixed-provider",
+        "passthrough-provider",
+        "storage-backed-model",
+    ],
+)
+def test_require_managed_files_lists_the_callers_files_wherever_the_router_put_them(
+    mocker: MockerFixture,
+    monkeypatch: pytest.MonkeyPatch,
+    path: str,
+    params: dict[str, str],
+    headers: dict[str, str],
+    expected_ids: list[str],
+) -> None:
+    _, provider_list = _setup_unscoped_list_files_route_over_real_hook(
+        mocker,
+        monkeypatch,
+        _router_with_wildcard_and_unprefixed_anthropic_deployments(),
+        _callers_files_on_wildcard_unprefixed_and_passthrough_deployments(),
+    )
+    monkeypatch.setattr("litellm.require_managed_files", True)
+
+    response: Final = _list_files_as_test_user(path, params, headers)
+
+    assert response.status_code == 200, response.text
+    assert [file["id"] for file in response.json()["data"]] == expected_ids
+    provider_list.assert_not_awaited()
+
+
+def _router_with_a_catch_all_openai_deployment() -> Router:
+    unprefixed_anthropic_model: Final = next(model for model in sorted(litellm.anthropic_models) if "/" not in model)
+    return Router(
+        model_list=[
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {"model": "openai/gpt-3.5-turbo", "api_key": "openai_api_key"},
+                "model_info": {"id": "gpt-3.5-turbo-id"},
+            },
+            {
+                "model_name": "*",
+                "litellm_params": {"model": "openai/*", "api_key": "openai_api_key"},
+                "model_info": {"id": "catch-all-id"},
+            },
+            {
+                "model_name": "claude-unprefixed",
+                "litellm_params": {"model": unprefixed_anthropic_model, "api_key": "anthropic_api_key"},
+                "model_info": {"id": "claude-unprefixed-id"},
+            },
+        ]
+    )
+
+
+@pytest.mark.parametrize(
+    ("path", "expected_ids"),
+    [
+        ("/openai/v1/files", ["unified-gpt", "unified-catch-all-storage"]),
+        ("/anthropic/v1/files", ["unified-unprefixed", "unified-storage"]),
+    ],
+    ids=["catch-all-provider", "explicit-provider"],
+)
+def test_require_managed_files_keeps_a_catch_all_route_from_claiming_files_on_other_providers(
+    mocker: MockerFixture,
+    monkeypatch: pytest.MonkeyPatch,
+    path: str,
+    expected_ids: list[str],
+) -> None:
+    _, provider_list = _setup_unscoped_list_files_route_over_real_hook(
+        mocker,
+        monkeypatch,
+        _router_with_a_catch_all_openai_deployment(),
+        [
+            _managed_file_row("unified-unprefixed", model_mappings={"claude-unprefixed-id": "file-unprefixed"}),
+            _managed_file_row("unified-gpt", model_mappings={"gpt-3.5-turbo-id": "file-gpt"}),
+            _managed_file_row(
+                "unified-storage",
+                model_mappings={"claude-unprefixed": "litellm_db://unified-storage"},
+                storage_backend="litellm_db",
+            ),
+            _managed_file_row(
+                "unified-catch-all-storage",
+                model_mappings={"model-only-the-catch-all-serves": "litellm_db://unified-catch-all-storage"},
+                storage_backend="litellm_db",
+            ),
+        ],
+    )
+    monkeypatch.setattr("litellm.require_managed_files", True)
+
+    response: Final = _list_files_as_test_user(path, {}, {})
+
+    assert response.status_code == 200, response.text
+    assert [file["id"] for file in response.json()["data"]] == expected_ids
+    provider_list.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    ("path", "params"),
+    [
+        ("/antropic/v1/files", {}),
+        ("/openai/v1/files", {"after": "unified-gpt", "after_id": "unified-wildcard"}),
+        ("/v1/files", {"target_model_names": "gpt-3.5-turbo,claude-unprefixed"}),
+    ],
+    ids=["unknown-provider", "conflicting-after-cursors", "two-target-model-names"],
+)
+def test_require_managed_files_rejects_a_list_it_cannot_scope(
+    mocker: MockerFixture, monkeypatch: pytest.MonkeyPatch, path: str, params: dict[str, str]
+) -> None:
+    _, provider_list = _setup_unscoped_list_files_route_over_real_hook(
+        mocker,
+        monkeypatch,
+        _router_with_wildcard_and_unprefixed_anthropic_deployments(),
+        _callers_files_on_wildcard_unprefixed_and_passthrough_deployments(),
+    )
+    monkeypatch.setattr("litellm.require_managed_files", True)
+
+    response: Final = _list_files_as_test_user(path, params, {})
+
+    assert response.status_code == 400, response.text
+    provider_list.assert_not_awaited()
+
+
+@pytest.mark.parametrize("cursor_param", ["after", "after_id"])
+def test_require_managed_files_pages_a_provider_list_with_either_cursor_param(
+    mocker: MockerFixture, monkeypatch: pytest.MonkeyPatch, llm_router: Router, cursor_param: str
+) -> None:
+    import litellm.proxy.proxy_server as ps
+
+    _setup_unscoped_list_files_route_over_real_hook(
+        mocker, monkeypatch, llm_router, _callers_files_on_every_deployment()
+    )
+    monkeypatch.setattr("litellm.require_managed_files", True)
+
+    try:
+        first_page: Final = client.get(
+            "/openai/v1/files", params={"limit": "1"}, headers={"Authorization": "Bearer test-key"}
+        )
+        second_page: Final = client.get(
+            "/openai/v1/files",
+            params={"limit": "1", cursor_param: first_page.json()["last_id"]},
+            headers={"Authorization": "Bearer test-key"},
+        )
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+    assert (first_page.status_code, second_page.status_code) == (200, 200), (first_page.text, second_page.text)
+    assert [file["id"] for file in first_page.json()["data"]] == ["unified-gpt-newer"]
+    assert first_page.json()["has_more"] is True
+    assert [file["id"] for file in second_page.json()["data"]] == ["unified-gpt-older"]
+    assert second_page.json()["has_more"] is False
+
+
+def test_require_managed_files_pages_toward_newer_files_with_before_id(
+    mocker: MockerFixture, monkeypatch: pytest.MonkeyPatch, llm_router: Router
+) -> None:
+    import litellm.proxy.proxy_server as ps
+
+    _setup_unscoped_list_files_route_over_real_hook(
+        mocker, monkeypatch, llm_router, _callers_files_on_every_deployment()
+    )
+    monkeypatch.setattr("litellm.require_managed_files", True)
+
+    try:
+        page_before_oldest: Final = client.get(
+            "/v1/files",
+            params={"limit": "2", "before_id": "unified-gpt-older"},
+            headers={"Authorization": "Bearer test-key"},
+        )
+        newest_page: Final = client.get(
+            "/v1/files",
+            params={"limit": "2", "before_id": page_before_oldest.json()["first_id"]},
+            headers={"Authorization": "Bearer test-key"},
+        )
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+    assert (page_before_oldest.status_code, newest_page.status_code) == (200, 200), (
+        page_before_oldest.text,
+        newest_page.text,
+    )
+    assert [file["id"] for file in page_before_oldest.json()["data"]] == ["unified-azure", "unified-gemini"]
+    assert page_before_oldest.json()["has_more"] is True
+    assert [file["id"] for file in newest_page.json()["data"]] == ["unified-gpt-newer"]
+    assert newest_page.json()["has_more"] is False
+
+
+def test_managed_file_list_rejects_both_cursor_directions(
+    mocker: MockerFixture, monkeypatch: pytest.MonkeyPatch, llm_router: Router
+) -> None:
+    _setup_unscoped_list_files_route_over_real_hook(
+        mocker, monkeypatch, llm_router, _callers_files_on_every_deployment()
+    )
+    monkeypatch.setattr("litellm.require_managed_files", True)
+
+    response: Final = _list_files_as_test_user(
+        "/v1/files", {"after": "unified-gpt-newer", "before_id": "unified-gpt-older"}, {}
+    )
+
+    assert response.status_code == 400, response.text
+    assert "not both" in response.json()["error"]["message"]
+
+
+@pytest.mark.parametrize(
+    ("params", "headers"),
+    [({"target_model_names": "gemini-2.0-flash"}, {}), ({}, {"x-litellm-model": "gemini-2.0-flash"})],
+    ids=["target-model-names", "model-header"],
+)
+def test_require_managed_files_list_rejects_a_model_the_key_cannot_use(
+    mocker: MockerFixture,
+    monkeypatch: pytest.MonkeyPatch,
+    llm_router: Router,
+    params: dict[str, str],
+    headers: dict[str, str],
+) -> None:
+    import litellm.proxy.proxy_server as ps
+
+    _setup_unscoped_list_files_route_over_real_hook(
+        mocker, monkeypatch, llm_router, _callers_files_on_every_deployment()
+    )
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        api_key="test-key",
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        user_id="test-user",
+        models=["gpt-3.5-turbo"],
+    )
+    monkeypatch.setattr("litellm.require_managed_files", True)
+
+    response: Final = _list_files_as_test_user("/v1/files", params, headers)
+
+    assert response.status_code == 403, response.text
+    assert "unified-gemini" not in response.text
+
+
+def test_require_managed_files_list_fails_closed_without_the_managed_files_hook(
+    mocker: MockerFixture, monkeypatch: pytest.MonkeyPatch, llm_router: Router
+) -> None:
+    proxy_logging_obj, provider_list = _setup_unscoped_list_files_route_over_real_hook(
+        mocker, monkeypatch, llm_router, _callers_files_on_every_deployment()
+    )
+    proxy_logging_obj.proxy_hook_mapping.pop("managed_files")
+    provider_list.return_value = [_managed_file("file-on-the-shared-key")]
+    monkeypatch.setattr("litellm.require_managed_files", True)
+
+    response: Final = _list_files_as_test_user("/openai/v1/files", {}, {})
+
+    assert response.status_code == 500, response.text
+    assert "file-on-the-shared-key" not in response.text
+    assert "require_managed_files cannot scope the list to the caller" in response.json()["error"]["message"]
+    provider_list.assert_not_awaited()
+
+
+@pytest.mark.parametrize("hook_loaded", [True, False], ids=["hook-loaded", "no-hook"])
+def test_require_managed_files_keeps_the_provider_list_for_an_admin(
+    mocker: MockerFixture,
+    monkeypatch: pytest.MonkeyPatch,
+    llm_router: Router,
+    hook_loaded: bool,
+) -> None:
+    import litellm.proxy.proxy_server as ps
+
+    proxy_logging_obj, provider_list = _setup_unscoped_list_files_route_over_real_hook(
+        mocker, monkeypatch, llm_router, _callers_files_on_every_deployment()
+    )
+    if not hook_loaded:
+        proxy_logging_obj.proxy_hook_mapping.pop("managed_files")
+    provider_list.return_value = [_managed_file("file-on-the-shared-key")]
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        api_key="test-key", user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin-user"
+    )
+    monkeypatch.setattr("litellm.require_managed_files", True)
+
+    response: Final = _list_files_as_test_user("/anthropic/v1/files", {}, {})
+
+    assert response.status_code == 200, response.text
+    assert [file["id"] for file in response.json()["data"]] == ["file-on-the-shared-key"]
+
+
+def test_managed_file_list_without_require_managed_files_ignores_cursor_params_openai_does_not_define(
+    mocker: MockerFixture, monkeypatch: pytest.MonkeyPatch, llm_router: Router
+) -> None:
+    _setup_unscoped_list_files_route_over_real_hook(
+        mocker, monkeypatch, llm_router, _callers_files_on_every_deployment()
+    )
+    monkeypatch.setattr("litellm.require_managed_files", False)
+
+    response: Final = _list_files_as_test_user(
+        "/v1/files", {"after": "unified-gpt-newer", "after_id": "unified-gemini", "before_id": "file-raw"}, {}
+    )
+
+    assert response.status_code == 200, response.text
+    assert [file["id"] for file in response.json()["data"]] == ["unified-azure", "unified-gemini", "unified-gpt-older"]
+
+
+@pytest.mark.parametrize(
+    ("path", "headers", "expected_count", "has_more"),
+    [
+        ("/anthropic/v1/files", {}, ANTHROPIC_DEFAULT_FILE_LIST_LIMIT, True),
+        ("/v1/files", {"x-litellm-model": "claude-unprefixed"}, ANTHROPIC_DEFAULT_FILE_LIST_LIMIT, True),
+        ("/anthropic/v1/files", {"x-litellm-model": "gpt-3.5-turbo"}, ANTHROPIC_DEFAULT_FILE_LIST_LIMIT + 1, False),
+        ("/v1/files", {}, 2 * (ANTHROPIC_DEFAULT_FILE_LIST_LIMIT + 1), False),
+    ],
+    ids=["anthropic-provider", "anthropic-model-header", "openai-model-header", "every-provider"],
+)
+def test_require_managed_files_pages_an_anthropic_list_at_the_anthropic_default_size(
+    mocker: MockerFixture,
+    monkeypatch: pytest.MonkeyPatch,
+    path: str,
+    headers: dict[str, str],
+    expected_count: int,
+    has_more: bool,
+) -> None:
+    _setup_unscoped_list_files_route_over_real_hook(
+        mocker,
+        monkeypatch,
+        _router_with_wildcard_and_unprefixed_anthropic_deployments(),
+        [
+            _managed_file_row(
+                f"unified-{deployment_id}-{index:03d}", model_mappings={deployment_id: f"file-{index:03d}"}
+            )
+            for deployment_id, index in itertools.product(
+                ("claude-unprefixed-id", "gpt-3.5-turbo-id"), range(ANTHROPIC_DEFAULT_FILE_LIST_LIMIT + 1)
+            )
+        ],
+    )
+    monkeypatch.setattr("litellm.require_managed_files", True)
+
+    response: Final = _list_files_as_test_user(path, {}, headers)
+
+    assert response.status_code == 200, response.text
+    assert (len(response.json()["data"]), response.json()["has_more"]) == (expected_count, has_more)

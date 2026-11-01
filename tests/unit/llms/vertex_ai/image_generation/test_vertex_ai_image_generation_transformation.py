@@ -11,6 +11,7 @@ from pydantic import ValidationError
 import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
+from litellm.llms.gemini.image_generation.transformation import GoogleImageGenConfig
 from litellm.llms.vertex_ai.image_generation import (
     get_vertex_ai_image_generation_config,
 )
@@ -21,6 +22,98 @@ from litellm.llms.vertex_ai.image_generation.vertex_imagen_transformation import
     VertexAIImagenImageGenerationConfig,
 )
 from litellm.types.utils import ImageResponse
+
+
+@pytest.mark.parametrize("size", ("1536x1024", "1024x1536", "3072x2048", "256x256", "512x512", "4096x4096"))
+@pytest.mark.parametrize("model", ("gemini-3.1-flash-image", "gemini-3-pro-image", "gemini-3.1-flash-lite-image"))
+def test_vertex_gemini_size_matches_direct_gemini_request(size: str, model: str) -> None:
+    vertex: Final = VertexAIGeminiImageGenerationConfig()
+    direct: Final = GoogleImageGenConfig()
+    vertex_request: Final = vertex.transform_image_generation_request(
+        model, "mountains", vertex.map_openai_params({"size": size}, {}, model, False), {}, {}
+    )
+    direct_request: Final = direct.transform_image_generation_request(
+        model, "mountains", direct.map_openai_params({"size": size}, {}, model, False), {}, {}
+    )
+    assert vertex_request["generationConfig"].get("imageConfig") == direct_request["generationConfig"].get(
+        "imageConfig"
+    )
+
+
+@pytest.mark.parametrize(
+    "size, expected_ratio",
+    (("1536x1024", "4:3"), ("1024x1536", "3:4"), ("100000x1", "16:9")),
+)
+def test_vertex_imagen_generation_size_reaches_request(size: str, expected_ratio: str | None) -> None:
+    model: Final = "imagen-4.0-generate-001"
+    config: Final = VertexAIImagenImageGenerationConfig()
+    request: Final = config.transform_image_generation_request(
+        model, "mountains", config.map_openai_params({"size": size, "n": 2}, {}, model, False), {}, {}
+    )
+    assert request["parameters"] == {
+        "sampleCount": 2,
+        **({"aspectRatio": expected_ratio} if expected_ratio is not None else {}),
+    }
+
+
+@pytest.mark.parametrize("size", ("auto", "unknown", "0x1024", "-1x1024", "1024x", "3:2"))
+@pytest.mark.parametrize(
+    "config_type, model, config_key, expected",
+    (
+        (
+            VertexAIGeminiImageGenerationConfig,
+            "gemini-3.1-flash-image",
+            "generationConfig",
+            {"responseModalities": ["IMAGE"], "imageConfig": {"aspectRatio": "1:1"}},
+        ),
+        (
+            VertexAIImagenImageGenerationConfig,
+            "imagen-4.0-generate-001",
+            "parameters",
+            {"sampleCount": 1, "aspectRatio": "1:1"},
+        ),
+    ),
+)
+def test_vertex_generation_preserves_legacy_size_fallback(
+    size: str,
+    config_type: type[VertexAIGeminiImageGenerationConfig] | type[VertexAIImagenImageGenerationConfig],
+    model: str,
+    config_key: str,
+    expected: dict[str, object],
+) -> None:
+    config: Final = config_type()
+    request: Final = config.transform_image_generation_request(
+        model, "mountains", config.map_openai_params({"size": size}, {}, model, False), {}, {}
+    )
+    assert request[config_key] == expected
+
+
+@pytest.mark.parametrize("config_type", (VertexAIGeminiImageGenerationConfig, VertexAIImagenImageGenerationConfig))
+def test_vertex_generation_warns_when_size_ratio_is_approximated(
+    config_type: type[VertexAIGeminiImageGenerationConfig] | type[VertexAIImagenImageGenerationConfig],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    mapped: Final = config_type().map_openai_params({"size": "100000x1"}, {}, "gemini-3.1-flash-image", False)
+    assert "100000x1" in caplog.text
+    assert str(mapped["aspectRatio"]) in caplog.text
+
+
+@pytest.mark.parametrize("size_first", (True, False))
+@pytest.mark.parametrize(
+    "overrides",
+    (
+        {"aspect_ratio": "9:16", "image_size": "2K"},
+        {"imageConfig": {"aspectRatio": "9:16", "imageSize": "2K"}},
+    ),
+)
+def test_vertex_gemini_explicit_image_settings_override_size(size_first: bool, overrides: dict[str, object]) -> None:
+    model: Final = "gemini-3.1-flash-image"
+    config: Final = VertexAIGeminiImageGenerationConfig()
+    params: Final = {"size": "1536x1024", **overrides} if size_first else {**overrides, "size": "1536x1024"}
+    request: Final = config.transform_image_generation_request(
+        model, "mountains", config.map_openai_params(params, {}, model, False), {}, {}
+    )
+    assert request["generationConfig"]["imageConfig"] == {"aspectRatio": "9:16", "imageSize": "2K"}
 
 
 class TestVertexAIGeminiImageGenerationConfig:
@@ -55,14 +148,13 @@ class TestVertexAIGeminiImageGenerationConfig:
         result = self.config.map_openai_params(non_default_params, optional_params, "gemini-2.5-flash-image", False)
         assert result.get("aspectRatio") == "16:9"
 
-    def test_map_size_to_aspect_ratio(self):
-        """Test size to aspect ratio mapping"""
-        assert self.config._map_size_to_aspect_ratio("1024x1024") == "1:1"
-        assert self.config._map_size_to_aspect_ratio("1792x1024") == "16:9"
-        assert self.config._map_size_to_aspect_ratio("1024x1792") == "9:16"
-        assert self.config._map_size_to_aspect_ratio("1280x896") == "4:3"
-        assert self.config._map_size_to_aspect_ratio("896x1280") == "3:4"
-        assert self.config._map_size_to_aspect_ratio("unknown") == "1:1"  # default
+    @pytest.mark.parametrize(
+        "size, expected_ratio",
+        (("1024x1024", "1:1"), ("1792x1024", "16:9"), ("1024x1792", "9:16"), ("1280x896", "4:3"), ("896x1280", "3:4")),
+    )
+    def test_map_openai_params_legacy_sizes(self, size: str, expected_ratio: str) -> None:
+        mapped: Final = self.config.map_openai_params({"size": size}, {}, "gemini-3.1-flash-image", False)
+        assert mapped["aspectRatio"] == expected_ratio
 
     def test_get_supported_openai_params_includes_native_gemini_params(self):
         """Test that native Gemini imageConfig params are supported"""
@@ -474,11 +566,10 @@ class TestVertexAIImagenImageGenerationConfig:
         result = self.config.map_openai_params(non_default_params, optional_params, "imagegeneration@006", False)
         assert result.get("aspectRatio") == "1:1"
 
-    def test_map_size_to_aspect_ratio(self):
-        """Test size to aspect ratio mapping"""
-        assert self.config._map_size_to_aspect_ratio("1024x1024") == "1:1"
-        assert self.config._map_size_to_aspect_ratio("1792x1024") == "16:9"
-        assert self.config._map_size_to_aspect_ratio("unknown") == "1:1"  # default
+    @pytest.mark.parametrize("size, expected_ratio", (("1024x1024", "1:1"), ("1792x1024", "16:9")))
+    def test_map_openai_params_legacy_sizes(self, size: str, expected_ratio: str) -> None:
+        mapped: Final = self.config.map_openai_params({"size": size}, {}, "imagen-4.0-generate-001", False)
+        assert mapped["aspectRatio"] == expected_ratio
 
     def test_transform_image_generation_request_basic(self):
         """Test basic request transformation"""

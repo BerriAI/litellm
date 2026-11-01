@@ -109,7 +109,7 @@ async fn a_secret_manager_failure_fails_the_call_before_sending(call: MessagesCa
     .expect_err("a secret manager failure fails the call");
 
     assert!(
-        matches!(&error, Error::Secret(source) if matches!(source.source_error(), litellm_secrets::Error::ManagedSecretMissing)),
+        matches!(&error, Error::Secret(_)) && !error.is_request(),
         "{error:?}"
     );
     assert!(received(&upstream).await.is_empty());

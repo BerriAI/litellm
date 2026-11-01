@@ -4,30 +4,54 @@ Mock tests for A2A endpoints.
 Tests that invoke_agent_a2a properly integrates with add_litellm_data_to_request.
 """
 
+import asyncio
+import importlib.util
 import json
 import socket
 import sys
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from contextlib import AbstractContextManager, ExitStack
 from dataclasses import dataclass
+from datetime import datetime
+from types import MappingProxyType
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
 import respx
+from fastapi import HTTPException
+from fastapi.testclient import TestClient
+from pydantic import BaseModel, ConfigDict
 
 import litellm
-from litellm.proxy._types import UserAPIKeyAuth
-from litellm.types.agents import AgentCaller
+from litellm.integrations.custom_logger import CustomLogger
+from litellm.proxy._types import LiteLLM_ObjectPermissionTable, UserAPIKeyAuth
+from litellm.types.agents import AgentCaller, AgentResponse
 
 AddLiteLLMData = Callable[..., Awaitable[dict[str, object]]]
+
+
+class _SSELineStream(httpx.AsyncByteStream):
+    def __init__(self, lines: tuple[str, ...], first_line_delay: float) -> None:
+        self._lines = lines
+        self._first_line_delay = first_line_delay
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        await asyncio.sleep(self._first_line_delay)
+        for line in self._lines:
+            yield f"{line}\n".encode()
+
+
+def _sse_upstream_response(*lines: str, first_line_delay: float = 0.0) -> httpx.Response:
+    return httpx.Response(200, stream=_SSELineStream(lines, first_line_delay))
 
 
 @dataclass(frozen=True, slots=True)
 class CapturedAgentCall:
     request_id: object
     agent_extra_headers: dict[str, str] | None
+    agent_name: object
 
 
 @pytest.mark.asyncio
@@ -611,7 +635,11 @@ async def _invoke_message_method(
 
     kwargs: Final = downstream.call_args.kwargs
     request_id: Final = kwargs["request"].__dict__["id"] if is_send else kwargs["request_id"]
-    return CapturedAgentCall(request_id=request_id, agent_extra_headers=kwargs.get("agent_extra_headers"))
+    return CapturedAgentCall(
+        request_id=request_id,
+        agent_extra_headers=kwargs.get("agent_extra_headers"),
+        agent_name=kwargs.get("agent_name"),
+    )
 
 
 @pytest.mark.asyncio
@@ -941,13 +969,7 @@ async def test_task_methods_extract_litellm_params_before_forwarding(method: str
     mock_http_response.json.return_value = upstream_response
     mock_http_response.is_success = True
 
-    async def fake_aiter_lines():
-        yield 'data: {"jsonrpc":"2.0","id":"req-1","result":{"taskId":"task-1"}}'
-
-    mock_resp = AsyncMock()
-    mock_resp.is_success = True
-    mock_resp.aiter_lines = fake_aiter_lines
-    mock_resp.aclose = AsyncMock()
+    mock_resp = _sse_upstream_response('data: {"jsonrpc":"2.0","id":"req-1","result":{"taskId":"task-1"}}')
 
     mock_async_client = MagicMock()
     mock_async_client.build_request = MagicMock(return_value=MagicMock())
@@ -982,8 +1004,8 @@ async def test_task_methods_extract_litellm_params_before_forwarding(method: str
             user_api_key_dict=user_api_key_dict,
         )
         if method == "tasks/resubscribe":
-            async for _ in response.body_iterator:
-                pass
+            streamed = "".join([chunk async for chunk in response.body_iterator])
+            assert "task-1" in streamed
 
     if method == "tasks/resubscribe":
         forwarded_body = mock_async_client.build_request.call_args.kwargs["json"]
@@ -1007,14 +1029,7 @@ async def test_subscribe_to_task_returns_sse_stream():
         'data: {"jsonrpc":"2.0","id":"req-1","result":{"taskId":"task-1","status":{"state":"completed"}}}',
     ]
 
-    async def fake_aiter_lines():
-        for line in sse_lines:
-            yield line
-
-    mock_resp = AsyncMock()
-    mock_resp.is_success = True
-    mock_resp.aiter_lines = fake_aiter_lines
-    mock_resp.aclose = AsyncMock()
+    mock_resp = _sse_upstream_response(*sse_lines)
 
     mock_async_client = MagicMock()
     mock_async_client.build_request = MagicMock(return_value=MagicMock())
@@ -1058,18 +1073,15 @@ async def test_subscribe_to_task_calls_pre_call_hook():
     """tasks/resubscribe must run pre_call_hook so guardrails configured on
     the agent are enforced before streaming begins."""
     from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.utils import ProxyLogging
 
     agent = _make_agent_mock()
     mock_request = _make_request_mock("tasks/resubscribe", {"id": "task-1"})
     user_api_key_dict = UserAPIKeyAuth(api_key="sk-test", user_id="u1", team_id="t1")
 
-    async def fake_aiter_lines():
-        yield 'data: {"jsonrpc":"2.0","id":"req-1","result":{"taskId":"task-1","status":{"state":"completed"}}}'
-
-    mock_resp = AsyncMock()
-    mock_resp.is_success = True
-    mock_resp.aiter_lines = fake_aiter_lines
-    mock_resp.aclose = AsyncMock()
+    mock_resp = _sse_upstream_response(
+        'data: {"jsonrpc":"2.0","id":"req-1","result":{"taskId":"task-1","status":{"state":"completed"}}}'
+    )
 
     mock_async_client = MagicMock()
     mock_async_client.build_request = MagicMock(return_value=MagicMock())
@@ -1083,7 +1095,7 @@ async def test_subscribe_to_task_calls_pre_call_hook():
         async for chunk in response:
             yield chunk
 
-    mock_proxy_logging = MagicMock()
+    mock_proxy_logging: Final = MagicMock(spec=ProxyLogging)
     mock_proxy_logging.pre_call_hook = AsyncMock(
         side_effect=lambda user_api_key_dict, data, call_type, skip_guardrails=False: data
     )
@@ -1116,9 +1128,9 @@ async def test_subscribe_to_task_calls_pre_call_hook():
         )
 
         assert response.media_type == "text/event-stream"
-        async for _ in response.body_iterator:
-            pass
+        streamed = "".join([chunk async for chunk in response.body_iterator])
 
+    assert "completed" in streamed
     mock_proxy_logging.pre_call_hook.assert_awaited_once()
     call_kwargs = mock_proxy_logging.pre_call_hook.await_args.kwargs
     assert call_kwargs.get("call_type") == "asend_message"
@@ -1148,16 +1160,10 @@ async def test_subscribe_to_task_runs_post_call_streaming_guardrail():
     mock_request = _make_request_mock("tasks/resubscribe", {"id": "task-1"})
     user_api_key_dict = UserAPIKeyAuth(api_key="sk-test", user_id="u1", team_id="t1")
 
-    async def fake_aiter_lines():
-        yield (
-            'data: {"jsonrpc":"2.0","id":"req-1","result":'
-            '{"kind":"message","parts":[{"kind":"text","text":"resubscribe-secret"}]}}'
-        )
-
-    mock_resp = AsyncMock()
-    mock_resp.is_success = True
-    mock_resp.aiter_lines = fake_aiter_lines
-    mock_resp.aclose = AsyncMock()
+    mock_resp = _sse_upstream_response(
+        'data: {"jsonrpc":"2.0","id":"req-1","result":'
+        '{"kind":"message","parts":[{"kind":"text","text":"resubscribe-secret"}]}}'
+    )
 
     mock_async_client = MagicMock()
     mock_async_client.build_request = MagicMock(return_value=MagicMock())
@@ -1599,14 +1605,7 @@ async def test_pascal_method_names_normalize_to_wire_format(pascal_method: str, 
     mock_http_response.is_success = True
     mock_http_response.raise_for_status = MagicMock()
 
-    async def _empty_aiter_lines():
-        return
-        yield  # make it an async generator
-
-    mock_sse_resp = AsyncMock()
-    mock_sse_resp.is_success = True
-    mock_sse_resp.aiter_lines = _empty_aiter_lines
-    mock_sse_resp.aclose = AsyncMock()
+    mock_sse_resp = _sse_upstream_response()
 
     mock_async_client = MagicMock()
     mock_async_client.build_request = MagicMock(return_value=MagicMock())
@@ -1695,6 +1694,76 @@ def test_build_message_send_params_proto_fallback_ignores_unknown_fields():
         }
     )
     assert result.message.role.value == "user"
+
+
+@pytest.mark.asyncio
+async def test_message_stream_names_the_agent_by_its_card_name():
+    agent: Final = _make_agent_mock()
+    agent.agent_card_params = {"url": "http://backend-agent:10001", "name": "trip-planner"}
+
+    captured: Final = await _invoke_message_method(
+        "message/stream",
+        _make_request_mock("message/stream", _HELLO_MESSAGE_PARAMS),
+        UserAPIKeyAuth(api_key="sk-test", user_id="u1"),
+        agent=agent,
+    )
+
+    assert captured.agent_name == "trip-planner"
+
+
+class _StreamedSpend(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    call_type: str
+    model: str
+    response_cost: float
+
+
+class _StreamedSpendRecorder(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.logged: Final = asyncio.Event()
+        self.spend: _StreamedSpend | None = None
+
+    async def async_log_success_event(
+        self, kwargs: Mapping[str, object], response_obj: object, start_time: object, end_time: object
+    ) -> None:
+        spend: Final = _StreamedSpend.model_validate(kwargs["standard_logging_object"])
+        if spend.call_type != "asend_message_streaming":
+            return
+        self.spend = spend
+        self.logged.set()
+
+
+@pytest.mark.skipif(importlib.util.find_spec("a2a") is None, reason="needs the optional a2a-sdk")
+@pytest.mark.asyncio
+async def test_handle_stream_message_bills_a_bridge_agent_under_its_name(monkeypatch: pytest.MonkeyPatch):
+    from litellm.proxy.agent_endpoints.a2a_endpoints import _handle_stream_message
+
+    recorder: Final = _StreamedSpendRecorder()
+    monkeypatch.setattr(litellm, "callbacks", [recorder])
+    monkeypatch.setattr(litellm, "success_callback", [recorder])
+    monkeypatch.setattr(litellm, "_async_success_callback", [recorder])
+
+    response: Final = await _handle_stream_message(
+        api_base=None,
+        request_id="req-1",
+        params=dict(_HELLO_MESSAGE_PARAMS),
+        litellm_params={
+            "custom_llm_provider": "langgraph",
+            "model": "agent",
+            "mock_response": "pong",
+            "cost_per_query": 0.25,
+        },
+        agent_id="agent-1",
+        agent_name="trip-planner",
+    )
+    _ = [chunk async for chunk in response.body_iterator]
+
+    await asyncio.wait_for(recorder.logged.wait(), timeout=10)
+    assert recorder.spend == _StreamedSpend(
+        call_type="asend_message_streaming", model="a2a_agent/trip-planner", response_cost=0.25
+    )
 
 
 @pytest.mark.asyncio
@@ -2348,13 +2417,7 @@ async def test_task_methods_forward_trace_header(method: str):
     mock_http_response.json.return_value = upstream_response
     mock_http_response.is_success = True
 
-    async def fake_aiter_lines():
-        yield 'data: {"jsonrpc":"2.0","id":"req-1","result":{"taskId":"task-1"}}'
-
-    mock_resp = AsyncMock()
-    mock_resp.is_success = True
-    mock_resp.aiter_lines = fake_aiter_lines
-    mock_resp.aclose = AsyncMock()
+    mock_resp = _sse_upstream_response('data: {"jsonrpc":"2.0","id":"req-1","result":{"taskId":"task-1"}}')
 
     mock_async_client = MagicMock()
     mock_async_client.build_request = MagicMock(return_value=MagicMock())
@@ -2389,8 +2452,8 @@ async def test_task_methods_forward_trace_header(method: str):
             user_api_key_dict=user_api_key_dict,
         )
         if method == "tasks/resubscribe":
-            async for _ in response.body_iterator:
-                pass
+            streamed = "".join([chunk async for chunk in response.body_iterator])
+            assert "task-1" in streamed
 
     if method == "tasks/resubscribe":
         forwarded_headers = mock_async_client.build_request.call_args.kwargs["headers"]
@@ -2645,17 +2708,12 @@ def test_served_version_falls_back_to_header_when_unconfigured():
     assert _served_version(_agent(None), _request_with_a2a_header(None)) == "0.3"
 
 
-def _sse_agent_handler(lines):
-    mock_resp = AsyncMock()
-    mock_resp.is_success = True
-    mock_resp.aiter_lines = lines
-    mock_resp.aclose = AsyncMock()
-
-    mock_async_client = MagicMock()
+def _sse_agent_handler(upstream_response: httpx.Response) -> MagicMock:
+    mock_async_client: Final = MagicMock()
     mock_async_client.build_request = MagicMock(return_value=MagicMock())
-    mock_async_client.send = AsyncMock(return_value=mock_resp)
+    mock_async_client.send = AsyncMock(return_value=upstream_response)
 
-    mock_handler = MagicMock()
+    mock_handler: Final = MagicMock()
     mock_handler.client = mock_async_client
     return mock_handler
 
@@ -2684,13 +2742,13 @@ async def test_forward_jsonrpc_sse_pings_while_the_upstream_agent_is_still_silen
 
     monkeypatch.setattr(litellm, "sse_keepalive_ping_interval_seconds", 0.05)
 
-    async def _slow_lines():
-        await asyncio.sleep(0.3)
-        yield 'data: {"jsonrpc": "2.0", "id": "req-1", "result": {"kind": "task"}}'
+    slow_upstream = _sse_upstream_response(
+        'data: {"jsonrpc": "2.0", "id": "req-1", "result": {"kind": "task"}}', first_line_delay=0.3
+    )
 
     with patch(
         "litellm.llms.custom_httpx.http_handler.get_async_httpx_client",
-        return_value=_sse_agent_handler(_slow_lines),
+        return_value=_sse_agent_handler(slow_upstream),
     ):
         response = await _resubscribe_response()
         assert response.headers["x-accel-buffering"] == "no"
@@ -2712,12 +2770,11 @@ async def test_forward_jsonrpc_sse_is_untouched_while_keepalives_are_unconfigure
 
     monkeypatch.setattr(litellm, "sse_keepalive_ping_interval_seconds", None)
 
-    async def _lines():
-        yield 'data: {"jsonrpc": "2.0", "id": "req-1", "result": {"kind": "task"}}'
-
     with patch(
         "litellm.llms.custom_httpx.http_handler.get_async_httpx_client",
-        return_value=_sse_agent_handler(_lines),
+        return_value=_sse_agent_handler(
+            _sse_upstream_response('data: {"jsonrpc": "2.0", "id": "req-1", "result": {"kind": "task"}}')
+        ),
     ):
         response = await _resubscribe_response()
         assert "x-accel-buffering" not in response.headers
@@ -2725,6 +2782,30 @@ async def test_forward_jsonrpc_sse_is_untouched_while_keepalives_are_unconfigure
 
     assert not any(chunk.startswith(":") for chunk in chunks)
     assert json.loads(chunks[-1].removeprefix("data: "))["result"]["kind"] == "task"
+
+
+@pytest.mark.asyncio
+async def test_forward_jsonrpc_sse_keeps_unicode_line_separators_inside_an_event(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "sse_keepalive_ping_interval_seconds", None)
+    separated_text: Final = "before\u2028between\u2029after"
+    event: Final = {
+        "jsonrpc": "2.0",
+        "id": "req-1",
+        "result": {"kind": "message", "parts": [{"kind": "text", "text": separated_text}]},
+    }
+
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.get_async_httpx_client",
+        return_value=_sse_agent_handler(_sse_upstream_response(f"data: {json.dumps(event, ensure_ascii=False)}")),
+    ):
+        response: Final = await _resubscribe_response()
+        chunks: Final = [chunk async for chunk in response.body_iterator]
+
+    assert [json.loads(chunk.removeprefix("data: "))["result"]["parts"][0]["text"] for chunk in chunks] == [
+        separated_text
+    ]
 
 
 async def _stream_message_response():
@@ -2866,3 +2947,252 @@ async def test_failed_upstream_stream_relays_its_body_only_when_that_is_a_json_o
         "id": "req-1",
         "method": "tasks/resubscribe",
     }
+
+
+class _RejectionRecorder(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.failure_payloads: Final[list[Mapping[str, object]]] = []  # mutable-ok: collects callback events
+        self.hook_calls: Final[list[tuple[Mapping[str, object], Exception]]] = []  # mutable-ok: collects hook calls
+
+    async def async_log_failure_event(
+        self,
+        kwargs: dict[str, object],
+        response_obj: object,
+        start_time: datetime | None,
+        end_time: datetime | None,
+    ) -> None:
+        payload: Final = kwargs["standard_logging_object"]
+        assert isinstance(payload, Mapping)
+        self.failure_payloads.append(payload)
+
+    async def async_post_call_failure_hook(
+        self,
+        request_data: dict[str, object],
+        original_exception: Exception,
+        user_api_key_dict: UserAPIKeyAuth,
+        traceback_str: str | None = None,
+    ) -> HTTPException:
+        self.hook_calls.append((dict(request_data), original_exception))
+        return HTTPException(status_code=418, detail="transformed")
+
+
+_SPOOFED_BODY_FIELDS: Final = MappingProxyType(
+    {
+        "agent_id": "spoof",
+        "litellm_call_id": "spoofed-call-id",
+        "metadata": {"agent_id": "spoof", "user_api_key_alias": "spoof", "user_api_key_team_id": "spoof"},
+    }
+)
+
+
+def _rejection_request(path_agent_id: str, request_id: object) -> MagicMock:
+    req: Final = MagicMock()
+    req.headers = {}
+    req.json = AsyncMock(
+        return_value={
+            "jsonrpc": "2.0",
+            "id": request_id,
+            "method": "SendMessage",
+            "params": {**_HELLO_MESSAGE_PARAMS, "litellm_call_id": "spoofed-param-call-id"},
+            **_SPOOFED_BODY_FIELDS,
+        }
+    )
+    return req
+
+
+async def _invoke_rejected(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    registered: bool,
+    proxy_logging_obj: object,
+    request_id: object = "rej-1",
+) -> tuple[int, object]:
+    from litellm.proxy import proxy_server
+    from litellm.proxy.agent_endpoints import agent_registry
+    from litellm.proxy.agent_endpoints.a2a_endpoints import invoke_agent_a2a
+
+    path_agent_id: Final = "denied-agent" if registered else "no-such-agent"
+    registry: Final = agent_registry.AgentRegistry()
+    if registered:
+        registry.register_agent(
+            AgentResponse(
+                agent_id="registered-denied-id",
+                agent_name=path_agent_id,
+                agent_card_params={"name": "Test Agent", "url": "https://agent.example.com"},
+            )
+        )
+    monkeypatch.setattr(agent_registry, "global_agent_registry", registry)
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    monkeypatch.setattr(proxy_server, "proxy_logging_obj", proxy_logging_obj)
+    auth: Final = UserAPIKeyAuth(
+        api_key="hashed-caller",
+        key_alias="caller-alias",
+        user_id="caller-user",
+        team_id="caller-team",
+        object_permission=LiteLLM_ObjectPermissionTable(object_permission_id="caller-grants", agents=["other-agent"]),
+        request_route=f"/a2a/{path_agent_id}",
+    )
+    with respx.mock as upstream:
+        try:
+            response: Final = await invoke_agent_a2a(
+                agent_id=path_agent_id,
+                request=_rejection_request(path_agent_id, request_id),
+                fastapi_response=MagicMock(),
+                user_api_key_dict=auth,
+            )
+        except HTTPException as e:
+            assert not upstream.calls
+            return e.status_code, e.detail
+        assert not upstream.calls
+    return response.status_code, json.loads(response.body.decode())
+
+
+_EXPECTED_REJECTIONS: Final = (
+    pytest.param(
+        True,
+        403,
+        "Agent 'denied-agent' is not allowed for your key/team. Contact proxy admin for access.",
+        "registered-denied-id",
+        "a2a_agent/Test Agent",
+        id="not-granted",
+    ),
+    pytest.param(
+        False,
+        404,
+        {"jsonrpc": "2.0", "id": "rej-1", "error": {"code": -32000, "message": "Agent 'no-such-agent' not found"}},
+        "no-such-agent",
+        "a2a_agent/no-such-agent",
+        id="unknown",
+    ),
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("registered", "status", "body", "target", "model"), _EXPECTED_REJECTIONS)
+async def test_rejected_agent_call_is_logged_once_as_the_caller_without_dispatch(
+    monkeypatch: pytest.MonkeyPatch, registered: bool, status: int, body: object, target: str, model: str
+) -> None:
+    from litellm.caching.caching import DualCache
+    from litellm.proxy.utils import ProxyLogging
+
+    recorder: Final = _RejectionRecorder()
+    for name in ("callbacks", "failure_callback", "_async_failure_callback"):
+        monkeypatch.setattr(litellm, name, [recorder])
+
+    got_status, got_body = await _invoke_rejected(
+        monkeypatch, registered=registered, proxy_logging_obj=ProxyLogging(user_api_key_cache=DualCache())
+    )
+
+    assert (got_status, got_body) == (status, body)
+    assert len(recorder.failure_payloads) == 1
+    payload: Final = recorder.failure_payloads[0]
+    metadata: Final = payload["metadata"]
+    assert (payload["status"], payload["call_type"], payload["model"], payload["response_cost"]) == (
+        "failure",
+        "asend_message",
+        model,
+        0,
+    )
+    assert (
+        metadata["user_api_key_alias"],
+        metadata["user_api_key_user_id"],
+        metadata["user_api_key_team_id"],
+        metadata["user_api_key_hash"],
+    ) == ("caller-alias", "caller-user", "caller-team", "hashed-caller")
+    assert payload["id"] not in {"spoofed-call-id", "spoofed-param-call-id", "rej-1"}
+    assert len(recorder.hook_calls) == 1
+    hook_data, hook_exception = recorder.hook_calls[0]
+    assert (hook_data["agent_id"], hook_data["metadata"]["agent_id"]) == (target, target)
+    assert isinstance(hook_exception, HTTPException) and hook_exception.status_code == status
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("registered", "status", "body", "target", "model"), _EXPECTED_REJECTIONS)
+async def test_rejected_agent_call_response_survives_a_failing_failure_hook(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    registered: bool,
+    status: int,
+    body: object,
+    target: str,
+    model: str,
+) -> None:
+    proxy_logging_obj: Final = MagicMock()
+    proxy_logging_obj.post_call_failure_hook = AsyncMock(side_effect=RuntimeError("logging down"))
+
+    got_status, got_body = await _invoke_rejected(
+        monkeypatch, registered=registered, proxy_logging_obj=proxy_logging_obj
+    )
+
+    assert (got_status, got_body) == (status, body)
+    proxy_logging_obj.post_call_failure_hook.assert_awaited_once()
+    assert any(record.getMessage() == "Failed to log rejected A2A request" for record in caplog.records)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("request_id", [0, 7, "abc"])
+async def test_unknown_agent_rejection_echoes_the_jsonrpc_id(
+    monkeypatch: pytest.MonkeyPatch, request_id: object
+) -> None:
+    proxy_logging_obj: Final = MagicMock()
+    proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
+
+    _, got_body = await _invoke_rejected(
+        monkeypatch, registered=False, proxy_logging_obj=proxy_logging_obj, request_id=request_id
+    )
+
+    assert isinstance(got_body, dict) and got_body["id"] == request_id and type(got_body["id"]) is type(request_id)
+
+
+def _a2a_app_refusing_with(refusal: Exception) -> TestClient:
+    from fastapi import FastAPI
+
+    from litellm.proxy.agent_endpoints.a2a_endpoints import router
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+    def refuse() -> UserAPIKeyAuth:
+        raise refusal
+
+    app: Final = FastAPI()
+    app.include_router(router)
+    app.dependency_overrides[user_api_key_auth] = refuse
+    return TestClient(app)
+
+
+@pytest.mark.parametrize("path", ["/a2a/agent-1", "/a2a/agent-1/message/send", "/v1/a2a/agent-1/message/send"])
+def test_a2a_auth_refusals_answer_as_jsonrpc_errors_with_the_callers_id(path: str):
+    from litellm.proxy._types import ProxyException
+
+    client: Final = _a2a_app_refusing_with(
+        ProxyException(message="Budget has been exceeded!", type="budget_exceeded", param=None, code=422)
+    )
+
+    response: Final = client.post(path, json={"jsonrpc": "2.0", "id": "req-7", "method": "message/send"})
+
+    assert response.status_code == 422
+    assert response.json() == {
+        "jsonrpc": "2.0",
+        "id": "req-7",
+        "error": {
+            "code": -32000,
+            "message": "Budget has been exceeded!",
+            "data": {"type": "budget_exceeded", "param": None, "code": "422"},
+        },
+    }
+
+
+def test_a2a_http_refusals_answer_as_jsonrpc_errors_with_a_null_id_for_unparseable_bodies():
+    from fastapi import HTTPException
+
+    client: Final = _a2a_app_refusing_with(HTTPException(status_code=403, detail="Agent 'agent-1' is not allowed"))
+
+    response: Final = client.post("/a2a/agent-1", content=b"not json")
+
+    assert response.status_code == 403
+    body: Final = response.json()
+    assert body["jsonrpc"] == "2.0"
+    assert body["id"] is None
+    assert body["error"]["code"] == -32000
+    assert body["error"]["message"] == "Agent 'agent-1' is not allowed"
+    assert body["error"]["data"]["code"] == "403"
