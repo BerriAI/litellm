@@ -41,11 +41,10 @@ async fn drive_until(
             Err(error) => break Err(error),
         };
         let answer = match op {
-            HostRequest::Intercept(InterceptRequest::ResultReady { facts, reply }) => host
-                .result_ready(facts)
-                .await
-                .map(|()| reply.send(()))
-                .map_err(HostFailure::Error),
+            HostRequest::Intercept(InterceptRequest::ResultReady { facts, reply }) => {
+                reply.send(host.result_ready(facts).await);
+                Ok(())
+            }
             HostRequest::Stream(stream) => match stream {
                 litellm_host::protocol::StreamDelivery::Open(head, _) => match head {},
                 litellm_host::protocol::StreamDelivery::Chunk(chunk, _) => match chunk {},
@@ -64,10 +63,8 @@ async fn drive_until(
             }
             HostRequest::Intercept(InterceptRequest::AfterProviderResponse { raw, reply }) => {
                 ops.push("response");
-                host.after_provider_response(raw)
-                    .await
-                    .map(|()| reply.send(()))
-                    .map_err(HostFailure::Error)
+                reply.send(host.after_provider_response(raw).await);
+                Ok(())
             }
         };
         if let Err(failure) = answer {
@@ -85,10 +82,10 @@ async fn drive_until_notified(machine: &mut OcrMachine, host: &LocalOcrHost, sto
                 _ = stop.notified() => break,
                 step = machine.resume() => {
                     match step.unwrap() {
-                        MachineStep::Suspended(HostRequest::Intercept(InterceptRequest::ResultReady { reply, .. })) => reply.send(()),
+                        MachineStep::Suspended(HostRequest::Intercept(InterceptRequest::ResultReady { reply, .. })) => reply.send(Ok(())),
                         MachineStep::Suspended(HostRequest::HostCall(op)) => host.handle_host_call(op).await.unwrap(),
                         MachineStep::Suspended(HostRequest::Intercept(InterceptRequest::BeforeProviderRequest { wire, reply, .. })) => reply.send(*wire),
-                        MachineStep::Suspended(HostRequest::Intercept(InterceptRequest::AfterProviderResponse { reply, .. })) => reply.send(()),
+                        MachineStep::Suspended(HostRequest::Intercept(InterceptRequest::AfterProviderResponse { reply, .. })) => reply.send(Ok(())),
                         MachineStep::Suspended(HostRequest::Stream(stream)) => match stream {
                             litellm_host::protocol::StreamDelivery::Open(head, _) => match head {},
                             litellm_host::protocol::StreamDelivery::Chunk(chunk, _) => match chunk {},
@@ -117,10 +114,14 @@ async fn a_hand_driven_machine_performs_the_same_call() {
     assert_eq!(outcome.unwrap().pages[0].markdown, "native");
     assert_eq!(received(&upstream).await.len(), 1);
     assert_eq!(ops, ["BeforeSend", "response"]);
-    assert!(matches!(
-        machine.resume().await,
-        Err(Error::InvalidRequest(_))
-    ));
+    let Err(error) = machine.resume().await else {
+        panic!("resuming a finished call is a host protocol fault");
+    };
+    assert!(!error.is_request(), "{error:?}");
+    assert!(
+        litellm_error::find::<litellm_host::machine::MachineFault>(&error).is_some(),
+        "{error:?}"
+    );
 }
 
 #[rstest::rstest]
@@ -153,8 +154,11 @@ async fn a_path_document_is_read_by_core_without_a_host_operation() {
 }
 
 #[rstest]
-#[case::failed(HostFailure::Error(Error::InvalidRequest("before_provider_request failed".into())), "before_provider_request failed")]
-#[case::cancelled(HostFailure::Cancelled(Error::InvalidRequest("cancelled".into())), "cancelled")]
+#[case::failed(
+    HostFailure::Error(Error::MissingField("before_provider_request failed")),
+    "before_provider_request failed"
+)]
+#[case::cancelled(HostFailure::Cancelled(Error::MissingField("cancelled")), "cancelled")]
 #[tokio::test]
 async fn a_before_send_failure_ends_the_call_without_reaching_transport(
     #[case] failure: HostFailure<Error>,
@@ -174,7 +178,7 @@ async fn a_before_send_failure_ends_the_call_without_reaching_transport(
     .await;
 
     assert!(
-        matches!(&outcome, Err(Error::InvalidRequest(actual)) if actual == message),
+        matches!(&outcome, Err(Error::MissingField(actual)) if *actual == message),
         "{outcome:?}"
     );
     assert_eq!(ops, ["BeforeSend"]);
@@ -255,17 +259,17 @@ async fn interrupt_drops_provider_captures_before_returning() {
 
     drive_until_notified(&mut machine, &host, &entered).await;
     assert!(!dropped.load(Ordering::SeqCst));
-    let acknowledgement = machine.interrupt(HostFailure::Cancelled(Error::InvalidRequest(
-        "cancelled".into(),
-    )));
+    let acknowledgement =
+        machine.interrupt(HostFailure::Cancelled(Error::MissingField("cancelled")));
 
     assert!(
         dropped.load(Ordering::SeqCst),
         "interrupt returned while provider captures were still alive"
     );
-    assert!(
-        matches!(acknowledgement.await, Err(Error::InvalidRequest(message)) if message == "cancelled")
-    );
+    assert!(matches!(
+        acknowledgement.await,
+        Err(Error::MissingField("cancelled"))
+    ));
 }
 
 #[rstest::rstest]
@@ -290,7 +294,7 @@ async fn interrupting_an_in_flight_provider_request_closes_its_connection() {
     let mut machine = ocr_route().machine(host.request().unwrap(), None);
 
     drive_until_notified(&mut machine, &host, &received).await;
-    let cancelled = Error::InvalidRequest("cancelled".into());
+    let cancelled = Error::MissingField("cancelled");
 
     assert!(
         machine

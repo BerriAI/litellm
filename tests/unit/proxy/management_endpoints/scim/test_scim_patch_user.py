@@ -502,9 +502,9 @@ def test_apply_patch_ops_remove_group_filtered_path_without_value():
         Operations=[SCIMPatchOperation(op="remove", path='groups[value eq "team-1"]')]
     )
 
-    _, final_team_set = _apply_patch_ops(existing_user=user, patch_ops=patch_ops)
+    _, final_teams = _apply_patch_ops(existing_user=user, patch_ops=patch_ops)
 
-    assert final_team_set == {"team-2"}
+    assert final_teams == ("team-2",)
 
 
 def test_apply_patch_ops_add_group_filtered_path_without_value():
@@ -519,9 +519,9 @@ def test_apply_patch_ops_add_group_filtered_path_without_value():
         Operations=[SCIMPatchOperation(op="add", path="groups[value eq 'team-3']")]
     )
 
-    _, final_team_set = _apply_patch_ops(existing_user=user, patch_ops=patch_ops)
+    _, final_teams = _apply_patch_ops(existing_user=user, patch_ops=patch_ops)
 
-    assert final_team_set == {"team-1", "team-3"}
+    assert final_teams == ("team-1", "team-3")
 
 
 def test_apply_patch_ops_replace_groups_empty_value_does_not_use_path_filter():
@@ -539,9 +539,70 @@ def test_apply_patch_ops_replace_groups_empty_value_does_not_use_path_filter():
         ]
     )
 
-    _, final_team_set = _apply_patch_ops(existing_user=user, patch_ops=patch_ops)
+    _, final_teams = _apply_patch_ops(existing_user=user, patch_ops=patch_ops)
 
-    assert final_team_set == set()
+    assert final_teams == ()
+
+
+@pytest.mark.parametrize(
+    "operations,expected_teams",
+    [
+        pytest.param(
+            [
+                SCIMPatchOperation(op="add", path="groups", value=[{"value": "team-mu"}, {"value": "team-beta"}]),
+                SCIMPatchOperation(op="remove", path='groups[value eq "team-kappa"]'),
+                SCIMPatchOperation(op="add", path="groups", value=[{"value": "team-alpha"}, {"value": "team-omega"}]),
+            ],
+            ("team-zeta", "team-alpha", "team-delta", "team-mu", "team-beta", "team-omega"),
+            id="adds_follow_the_record_in_op_order",
+        ),
+        pytest.param(
+            [
+                SCIMPatchOperation(
+                    op="replace",
+                    path="groups",
+                    value=[{"value": "team-omega"}, {"value": "team-delta"}, {"value": "team-beta"}],
+                )
+            ],
+            ("team-delta", "team-omega", "team-beta"),
+            id="replace_keeps_teams_the_user_has_in_record_order_and_adds_new_ones_in_request_order",
+        ),
+        pytest.param(
+            [
+                SCIMPatchOperation(
+                    op="replace",
+                    path="groups",
+                    value=[{"value": "team-omega"}, {"value": "team-delta"}, {"value": "team-beta"}],
+                ),
+                SCIMPatchOperation(op="add", path="groups", value=[{"value": "team-mu"}]),
+                SCIMPatchOperation(op="remove", path='groups[value eq "team-delta"]'),
+            ],
+            ("team-delta", "team-omega", "team-beta"),
+            id="a_replace_wins_over_later_group_ops",
+        ),
+        pytest.param(
+            [
+                SCIMPatchOperation(op="remove", path='groups[value eq "team-zeta"]'),
+                SCIMPatchOperation(op="add", path="groups", value=[{"value": "team-zeta"}]),
+            ],
+            ("team-zeta", "team-alpha", "team-kappa", "team-delta"),
+            id="removing_and_re_adding_a_team_keeps_its_place",
+        ),
+    ],
+)
+def test_apply_patch_ops_keeps_team_order_so_the_first_team_stays_first(
+    operations: list[SCIMPatchOperation], expected_teams: tuple[str, ...]
+):
+    user: Final = LiteLLM_UserTable(
+        user_id="user-order",
+        user_email="order@example.com",
+        teams=["team-zeta", "team-alpha", "team-kappa", "team-delta"],
+        metadata={},
+    )
+
+    _, final_teams = _apply_patch_ops(existing_user=user, patch_ops=SCIMPatchOp(Operations=operations))
+
+    assert final_teams == expected_teams
 
 
 @pytest.mark.asyncio

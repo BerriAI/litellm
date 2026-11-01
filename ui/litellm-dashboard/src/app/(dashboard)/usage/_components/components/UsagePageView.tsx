@@ -19,7 +19,6 @@ import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from "
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
 import { useAgents } from "@/app/(dashboard)/hooks/agents/useAgents";
-import { useCustomers } from "@/app/(dashboard)/hooks/customers/useCustomers";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import useIsOrgAdmin from "@/app/(dashboard)/hooks/useIsOrgAdmin";
 import { useCurrentUser } from "@/app/(dashboard)/hooks/users/useCurrentUser";
@@ -27,7 +26,7 @@ import { useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrgan
 import { toast } from "@/lib/toast";
 import { hasCapability } from "@/utils/capabilities";
 import { copyToClipboard } from "@/utils/dataUtils";
-import { hasProxyWideSpendView, internalUserRoles } from "@/utils/roles";
+import { hasProxyWideSpendView, internalUserRoles, isProxyAdminRole } from "@/utils/roles";
 import { ActivityMetrics, processActivityData } from "@/components/activity_metrics";
 import CloudZeroExportModal from "@/components/cloudzero_export_modal";
 import UserDropdown from "@/components/common_components/UserDropdown";
@@ -82,6 +81,7 @@ import {
   clientDateRangePatch,
   clientPanelPatch,
   dateRangeFromParams,
+  defaultUsageDateRange,
   dateRangePatch,
   entitySelectionPatch,
   selectedEntitiesFromParams,
@@ -92,7 +92,7 @@ import {
   usageViewFromParams,
   usageViewPatch,
 } from "../usageUrlState";
-import { overviewTotals, rollUpBreakdown } from "./overview/overviewData";
+import { overviewTotals, providerSpendRows } from "./overview/overviewData";
 import TopAgents from "./overview/TopAgents";
 import { parseUsageClient, topAgents, type AgentRow } from "./overview/agentCatalog";
 import ClientUsagePanel from "./ClientUsagePanel";
@@ -100,6 +100,7 @@ import { resolveClientUsageScope } from "../hooks/clientUsageScope";
 import { useUsagePanelContext } from "../hooks/useUsagePanelContext";
 import ClientUsageSelect from "./ClientUsageSelect";
 import SpendByProvider from "./EntityUsage/SpendByProvider";
+import SubscriptionCosts from "./SubscriptionCost/SubscriptionCosts";
 import { useTagSummary } from "@/app/(dashboard)/hooks/tags/useTagSummary";
 import { Panel } from "./overview/Primitives";
 import UsageOverview from "./overview/UsageOverview";
@@ -108,22 +109,23 @@ interface UsagePageProps {
   teams: Team[];
   organizations: Organization[];
   teamsLoading?: boolean;
+  defaultTimeRange?: string;
 }
 
-const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations, teamsLoading = false }) => {
-  const { accessToken, userRole, userId: userID, premiumUser, isLoading: authorizationLoading } = useAuthorized();
+const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations, teamsLoading = false, defaultTimeRange }) => {
+  const { accessToken, userRole, userId: userID, premiumUser, isViewOnly, isLoading: authLoading } = useAuthorized();
   const [gatewayActivityData, setGatewayActivityData] = useState<FetchedGatewayActivity | null>(null);
 
-  // Create initial dates outside of state to prevent recreation
-  const initialFromDate = useMemo(() => new Date(Date.now() - 7 * 24 * 60 * 60 * 1000), []);
-  const initialToDate = useMemo(() => new Date(), []);
+  const defaultRange = useMemo(() => defaultUsageDateRange(defaultTimeRange), [defaultTimeRange]);
 
   const [urlParams, setUrlParams] = useQueryStates(usageUrlParsers);
   const { range, from, to } = urlParams;
   const dateValue = useMemo<DateRangePickerValue>(
-    () => dateRangeFromParams({ range, from, to }) ?? { from: initialFromDate, to: initialToDate },
-    [range, from, to, initialFromDate, initialToDate],
+    () => dateRangeFromParams({ range, from, to }) ?? defaultRange.value,
+    [range, from, to, defaultRange],
   );
+
+  const presetShortLabel = range ?? (from === null && to === null ? defaultRange.preset : null);
 
   const { client_range, client_from, client_to } = urlParams;
   const clientDateValue = useMemo<DateRangePickerValue>(
@@ -136,9 +138,6 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations, teamsLoadin
     clientStartTime?.getTime() === dateValue.from?.getTime() && clientEndTime?.getTime() === dateValue.to?.getTime();
 
   const [fetchedTags, setFetchedTags] = useState<FetchedForRange<EntityList[]> | null>(null);
-  // No [] default: an unresolved query must stay undefined so the customer
-  // filter reads as loading rather than as a range with no customers.
-  const { data: customers } = useCustomers();
   const { data: agentsResponse } = useAgents();
   const { data: currentUser } = useCurrentUser();
   const isAdmin = hasProxyWideSpendView(userRole);
@@ -189,7 +188,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations, teamsLoadin
   };
 
   const { isLoading: organizationsLoading } = useOrganizations();
-  const authorizationSettled = !authorizationLoading && userRole !== null;
+  const authorizationSettled = !authLoading && userRole !== null;
   const accessSettled = authorizationSettled && !organizationsLoading && !teamsLoading;
   useEffect(() => {
     if (!accessSettled) return;
@@ -376,10 +375,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations, teamsLoadin
     () => overviewTotals(userSpendData.metadata, gatewayActivity),
     [userSpendData.metadata, gatewayActivity],
   );
-  const providerSpend = useMemo(
-    () => rollUpBreakdown(userSpendData.results, "providers").map(({ key, ...row }) => ({ provider: key, ...row })),
-    [userSpendData.results],
-  );
+  const providerSpend = useMemo(() => providerSpendRows(userSpendData.results), [userSpendData.results]);
   const {
     data: tagSummary,
     isLoading: tagSummaryLoading,
@@ -481,7 +477,11 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations, teamsLoadin
             </div>
           )}
           <div className="flex items-center gap-2">
-            <AdvancedDatePicker value={dateValue} onValueChange={handleDateChange} presetShortLabel={urlParams.range} />
+            <AdvancedDatePicker
+              value={dateValue}
+              onValueChange={handleDateChange}
+              presetShortLabel={presetShortLabel}
+            />
             <Button variant="outline" onClick={() => void copyToClipboard(window.location.href, "Link copied")}>
               <Link2 />
               Copy Share Link
@@ -544,6 +544,16 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations, teamsLoadin
                     loading={loading}
                     requestCountsPending={requestCountsPending}
                     budget={currentUser?.max_budget ?? null}
+                    subscriptionCosts={
+                      <SubscriptionCosts
+                        accessToken={accessToken}
+                        startTime={startTime}
+                        endTime={endTime}
+                        enabled={isAdmin && effectiveUserId === null}
+                        meteredSpend={totals.spend}
+                        canEdit={!isViewOnly && isProxyAdminRole(userRole || "")}
+                      />
+                    }
                     topKeys={
                       <TopKeyView
                         topKeys={topKeys}
@@ -713,12 +723,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations, teamsLoadin
               {...entitySelection("customer")}
               userID={userID}
               userRole={userRole}
-              entityList={
-                customers?.map((customer) => ({
-                  label: customer.alias || customer.user_id,
-                  value: customer.user_id,
-                })) || null
-              }
+              entityList={null}
               premiumUser={premiumUser}
               dateValue={dateValue}
             />
@@ -815,7 +820,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations, teamsLoadin
           startTime={clientStartTime}
           endTime={clientEndTime}
           dateValue={clientDateValue}
-          presetShortLabel={client_range ?? (clientInheritsRange ? urlParams.range : null)}
+          presetShortLabel={client_range ?? (clientInheritsRange ? presetShortLabel : null)}
           onDateChange={(value, preset) => void setUrlParams(clientDateRangePatch(value, preset), { scroll: false })}
           agent={clientInheritsRange ? clientAgent : null}
           daily={clientInheritsRange ? tagDaily : []}

@@ -8,6 +8,7 @@ from typing_extensions import NotRequired, ReadOnly, TypedDict
 import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.url_utils import join_api_base
+from litellm.llms.anthropic.common_utils import tools_without_custom_field
 from litellm.llms.anthropic.count_tokens.transformation import COUNT_TOKEN_OPTION_NAMES, AnthropicCountTokensConfig
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM, run_aws_signing
 from litellm.llms.bedrock.common_utils import BedrockError, build_mantle_messages_url
@@ -26,6 +27,7 @@ class MantleCountTokensRequest(TypedDict):
 _COUNT_REQUEST: Final = TypeAdapter(MantleCountTokensRequest)
 _COUNT_RESPONSE: Final = TypeAdapter(dict[str, JsonValue])
 _COUNT_OPTIONS: Final[TypeAdapter[Mapping[str, JsonValue]]] = TypeAdapter(Mapping[str, JsonValue])
+_TOOLS: Final = TypeAdapter(list[dict[str, JsonValue]])
 
 
 class BedrockMantleCountTokensHandler(BaseAWSLLM):
@@ -59,10 +61,15 @@ class BedrockMantleCountTokensHandler(BaseAWSLLM):
                 self.get_aws_region_name, optional_params=litellm_params, model=resolved_model, model_id=None
             )
             endpoint_url: Final = await run_aws_signing(self.get_mantle_count_tokens_endpoint, aws_region_name)
+            tools: Final = request.get("tools")
             body: Final = self._anthropic_config.transform_request_to_count_tokens(
                 model=resolved_model,
                 messages=request["messages"],
-                tools=request.get("tools"),
+                tools=None
+                if tools is None
+                else _TOOLS.validate_python(
+                    tools_without_custom_field(tools, hoist_defer_loading=True, drop_custom=True)
+                ),
                 system=request.get("system"),
                 optional_params=_COUNT_OPTIONS.validate_python(
                     {name: value for name, value in request_data.items() if name in COUNT_TOKEN_OPTION_NAMES}

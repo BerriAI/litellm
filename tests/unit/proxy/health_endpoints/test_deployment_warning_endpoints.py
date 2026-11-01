@@ -1,10 +1,11 @@
 import json
 import logging
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from typing import Final
+from unittest.mock import MagicMock
 
 import pytest
 from fastapi import FastAPI
@@ -13,14 +14,15 @@ from pydantic import JsonValue
 
 from litellm._logging import verbose_logger
 from litellm.constants import LITELLM_PROXY_ADMIN_NAME
+from litellm.models.deployment_warning import AdminIgnore
 from litellm.proxy._types import AUDIT_ACTIONS, LitellmTableNames, LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.deps.repositories import get_deployment_warning_ignore_repository
 from litellm.proxy.health_endpoints.deployment_warning_endpoints import (
     WarningCondition,
     config_audit_logger,
     current_warning_conditions,
     deployment_warning_conditions,
-    deployment_warning_ignore_store,
     license_expiry_condition,
     router,
     utc_now,
@@ -28,7 +30,9 @@ from litellm.proxy.health_endpoints.deployment_warning_endpoints import (
 from litellm.proxy.proxy_server import (
     _dump_redacted_config,  # pyright: ignore[reportPrivateUsage]  # the exact redaction every config audit row goes through
 )
+from litellm.repositories.database import Database
 from litellm.repositories.deployment_warning_ignore_repository import DEPLOYMENT_WARNING_IGNORES_ROW_ID
+from litellm.rust_bridge._native import NativeDatabase
 
 T0: Final = datetime(2026, 10, 14, 12, 0, tzinfo=timezone.utc)
 THIRTY_DAYS: Final = 30 * 24 * 60 * 60
@@ -36,13 +40,13 @@ THIRTY_DAYS: Final = 30 * 24 * 60 * 60
 
 @dataclass
 class InMemoryIgnoreStore:
-    raw: object = None
+    saved: list[Mapping[str, AdminIgnore]] = field(default_factory=list)
 
-    async def get_raw_ignores(self) -> object:
-        return self.raw
+    async def get_ignores(self) -> Mapping[str, AdminIgnore]:
+        return self.saved[-1] if self.saved else {}
 
-    async def upsert_ignores(self, payload: str) -> None:
-        self.raw = json.loads(payload)
+    async def save_ignores(self, ignores: Mapping[str, AdminIgnore]) -> None:
+        self.saved.append(ignores)
 
 
 @dataclass
@@ -87,7 +91,7 @@ class Harness:
         self.app.dependency_overrides[current_warning_conditions] = lambda: conditions
 
     def without_database(self) -> None:
-        self.app.dependency_overrides[deployment_warning_ignore_store] = lambda: None
+        self.app.dependency_overrides[get_deployment_warning_ignore_repository] = lambda: None
 
     def warnings(self) -> dict[str, dict[str, object]]:
         response = self.client.get("/health/deployment_warnings")
@@ -102,7 +106,7 @@ def harness() -> Iterator[Harness]:
     store = InMemoryIgnoreStore()
     audit = RecordingAuditLogger()
     clock = [T0]
-    app.dependency_overrides[deployment_warning_ignore_store] = lambda: store
+    app.dependency_overrides[get_deployment_warning_ignore_repository] = lambda: store
     app.dependency_overrides[config_audit_logger] = lambda: audit
     app.dependency_overrides[utc_now] = lambda: clock[0]
     h = Harness(app=app, client=TestClient(app), store=store, audit=audit, clock=clock)
@@ -233,28 +237,29 @@ class TestCurrentWarningConditions:
 
 
 class TestDeploymentWarningIgnoreStore:
-    def test_no_database_means_no_store(self, monkeypatch):
-        monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
-        assert deployment_warning_ignore_store() is None
+    @pytest.mark.asyncio
+    async def test_no_database_means_no_store(self):
+        assert await get_deployment_warning_ignore_repository(None) is None
 
     @pytest.mark.asyncio
-    async def test_reads_ignores_from_the_writer_not_a_lagging_replica(self, monkeypatch):
+    async def test_reads_ignores_from_the_writer_not_a_lagging_replica(self):
         def ui_settings_table(row: object) -> SimpleNamespace:
             async def find_unique(where: dict[str, str]) -> object:
                 return row
 
             return SimpleNamespace(litellm_uisettings=SimpleNamespace(find_unique=find_unique))
 
-        fresh = {"detailed_debug": {"ignored_by": "a", "ignored_at": "2026-10-14T12:00:00Z"}}
-        monkeypatch.setattr(
-            "litellm.proxy.proxy_server.prisma_client",
-            SimpleNamespace(
-                db=ui_settings_table(None), writer_db=ui_settings_table(SimpleNamespace(ui_settings=fresh))
-            ),
+        fresh: Final = {"detailed_debug": {"ignored_by": "a", "ignored_at": "2026-10-14T12:00:00Z"}}
+        prisma: Final = MagicMock(
+            db=ui_settings_table(None), writer_db=ui_settings_table(SimpleNamespace(ui_settings=fresh))
         )
-        store = deployment_warning_ignore_store()
+        store: Final = await get_deployment_warning_ignore_repository(
+            Database(prisma=prisma, native=await NativeDatabase.connect())
+        )
         assert store is not None
-        assert await store.get_raw_ignores() == fresh
+        assert await store.get_ignores() == {
+            "detailed_debug": AdminIgnore(ignored_by="a", ignored_at=datetime(2026, 10, 14, 12, tzinfo=timezone.utc))
+        }
 
 
 class TestGetDeploymentWarnings:
@@ -294,20 +299,6 @@ class TestGetDeploymentWarnings:
             WarningCondition(id="no_redis", severity="warning", env_var_ignore="LITELLM_DISABLE_NO_REDIS_WARNING")
         )
         assert harness.warnings()["no_redis"]["ignore"]["source"] == "env_var"
-
-    def test_stored_ignore_without_timezone_reads_as_unreadable(self, harness):
-        harness.store.raw = {
-            "detailed_debug": {"ignored_by": "a", "ignored_at": "2026-10-14T12:00:00", "ignored_until": None}
-        }
-        warnings = harness.warnings()
-        assert set(warnings) == {"env_credential_login", "detailed_debug"}
-        assert warnings["detailed_debug"]["ignore"] is None
-
-    def test_corrupt_stored_ignores_read_as_none(self, harness):
-        harness.store.raw = "{not json"
-        warnings = harness.warnings()
-        assert set(warnings) == {"env_credential_login", "detailed_debug"}
-        assert all(w["ignore"] is None for w in warnings.values())
 
     def test_without_database_ignoring_is_reported_unavailable(self, harness):
         harness.without_database()
@@ -438,7 +429,7 @@ class TestUpdateDeploymentWarningIgnore:
             "/health/deployment_warnings/detailed_debug", json={"ignored": True, "snooze_seconds": snooze_seconds}
         )
         assert response.status_code == 422
-        assert harness.store.raw is None
+        assert harness.store.saved == []
 
     def test_thirty_day_snooze_is_allowed(self, harness):
         response = harness.client.patch(
@@ -457,14 +448,14 @@ class TestUpdateDeploymentWarningIgnore:
     def test_unknown_warning_is_rejected(self, harness, warning_id):
         response = harness.client.patch(f"/health/deployment_warnings/{warning_id}", json={"ignored": True})
         assert response.status_code == 404
-        assert harness.store.raw is None
+        assert harness.store.saved == []
 
     @pytest.mark.parametrize("role", [LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY, LitellmUserRoles.INTERNAL_USER])
     def test_only_proxy_admins_can_ignore(self, harness, role):
         harness.as_role(role)
         response = harness.client.patch("/health/deployment_warnings/detailed_debug", json={"ignored": True})
         assert response.status_code == 403
-        assert harness.store.raw is None
+        assert harness.store.saved == []
         assert harness.audit.calls == []
 
     def test_without_database_ignoring_is_unavailable(self, harness):

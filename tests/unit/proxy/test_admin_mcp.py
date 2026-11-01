@@ -1,6 +1,7 @@
 import asyncio
 import json
 import sys
+from types import SimpleNamespace
 from typing import Final
 
 import httpx2
@@ -12,11 +13,11 @@ from starlette.testclient import TestClient
 
 from litellm.constants import STANDARD_CUSTOMER_ID_HEADERS
 from litellm.proxy import proxy_server
-from litellm.proxy._types import LiteLLM_UserTable, ProxyException, SpecialHeaders
-from litellm.proxy.admin_mcp import admin_mcp_lifespan
-from litellm.proxy.auth.user_api_key_auth import get_api_key, get_api_key_from_custom_header
+from litellm.proxy._types import LiteLLM_UserTable, LitellmUserRoles, ProxyException, SpecialHeaders, UserAPIKeyAuth
+from litellm.proxy.admin_mcp import admin_mcp_lifespan, get_admin_mcp_permissions
+from litellm.proxy.auth.user_api_key_auth import get_api_key, get_api_key_from_custom_header, user_api_key_auth
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
-from litellm.proxy.management_endpoints import internal_user_endpoints
+from litellm.proxy.management_endpoints import internal_user_endpoints, team_callback_endpoints
 from litellm.proxy.middleware.admission_control_middleware import (
     AdmissionControlMiddleware,
     AdmissionControlSettings,
@@ -66,12 +67,22 @@ def management_app(monkeypatch: pytest.MonkeyPatch) -> FastAPI:
         if credential not in {"admin-a", "admin-b", "admin-b-limited", "member", "viewer"}:
             raise HTTPException(status_code=401)
         user_id: Final = "admin-b" if credential == "admin-b-limited" else credential
+        role: Final = {"member": LitellmUserRoles.INTERNAL_USER, "viewer": LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY}.get(
+            user_id, LitellmUserRoles.PROXY_ADMIN
+        )
+        auth: Final = UserAPIKeyAuth(
+            user_id=user_id, user_role=role,
+            allowed_routes=["/user/info"] if credential == "admin-b-limited" else None,
+        )
         return {
             "user_id": user_id,
             "user_info": {
                 "user_id": user_id,
-                "user_role": {"member": "internal_user", "viewer": "proxy_admin_viewer"}.get(user_id, "proxy_admin"),
+                "user_role": role.value,
             },
+            "admin_mcp_permissions": get_admin_mcp_permissions(
+                auth, request, request.query_params.get("mcp_tool"), request.query_params.get("mcp_path")
+            ).model_dump(mode="json"),
         }
 
     @app.get("/key/list", operation_id="list_keys_key_list_get")
@@ -565,3 +576,168 @@ async def test_oauth2_proxy_auth_preserves_native_identity_and_peer_trust(
     assert response.status_code == status, response.text
     if status == 200:
         assert "list_keys" in {tool["name"] for tool in response.json()["result"]["tools"]}
+
+
+@pytest.fixture
+def user_info_http_app(monkeypatch: pytest.MonkeyPatch, grant: str) -> FastAPI:
+    class EmptyDatabase:
+        async def query_raw(self, _: str) -> tuple[dict[str, None], ...]:
+            return ({"teams": None, "keys": None},)
+
+    monkeypatch.setattr(proxy_server, "prisma_client", SimpleNamespace(db=EmptyDatabase()))
+    auth: Final = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, allowed_routes=["/user/info", grant])
+    app: Final = FastAPI()
+    app.include_router(internal_user_endpoints.router)
+    app.include_router(team_callback_endpoints.router)
+    app.dependency_overrides[user_api_key_auth] = lambda: auth
+    return app
+
+
+@pytest.fixture
+def permissions_request() -> Request:
+    return Request({"type": "http", "method": "GET", "path": "/user/info", "headers": [], "app": proxy_server.app})
+
+
+@pytest.mark.skipif(sys.version_info < (3, 12), reason="Admin MCP requires Python 3.12+")
+@pytest.mark.parametrize(
+    "routes,session,can_write",
+    [
+        (None, False, True),
+        ([], False, True),
+        (["management_routes"], False, True),
+        (["info_routes"], False, False),
+        (["llm_api_routes"], False, False),
+        (None, True, True),
+        (["info_routes"], True, False),
+    ],
+)
+def test_admin_mcp_uses_credential_routes_without_removing_full_access(
+    routes: list[str] | None, session: bool, can_write: bool, permissions_request: Request
+) -> None:
+    auth: Final = UserAPIKeyAuth(
+        user_id="admin",
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+        allowed_routes=routes,
+        is_session_token=session,
+    )
+    permissions: Final = get_admin_mcp_permissions(auth, permissions_request, "create_key", "/key/generate")
+    assert permissions.action_allowed is can_write
+    assert ("create_key" in permissions.tools) is can_write
+
+
+@pytest.mark.skipif(sys.version_info < (3, 12), reason="Admin MCP requires Python 3.12+")
+@pytest.mark.parametrize(
+    "team_id,grant",
+    [
+        ("team-a", "/team/team-a/callback"),
+        ("team-a", "/team/team-a/*"),
+        ("org/team-a", "/team/org/team-a/callback"),
+        ("org/team-a", "/team/org/team-a/*"),
+        ("org/team-a", "/team/org/team-a/call*"),
+    ],
+)
+def test_admin_mcp_checks_the_concrete_resource_even_when_the_tool_is_visible(
+    team_id: str, grant: str, permissions_request: Request
+) -> None:
+    auth: Final = UserAPIKeyAuth(
+        user_id="admin",
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+        allowed_routes=["/user/info", grant],
+        metadata={"is_session_token": True, "user_role": "proxy_admin"},
+    )
+    own: Final = get_admin_mcp_permissions(auth, permissions_request, "get_team_callbacks", f"/team/{team_id}/callback")
+    other: Final = get_admin_mcp_permissions(auth, permissions_request, "get_team_callbacks", "/team/other/callback")
+    wrong_route: Final = get_admin_mcp_permissions(auth, permissions_request, "get_team_callbacks", "/key/generate")
+    assert "get_team_callbacks" in own.tools
+    assert own.action_allowed is True
+    assert other.action_allowed is False
+    assert wrong_route.action_allowed is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.skipif(sys.version_info < (3, 12), reason="Admin MCP requires Python 3.12+")
+@pytest.mark.parametrize(
+    "grant,path,allowed",
+    [
+        ("/team/team a/callback", "/team/team%20a/callback", True),
+        ("/team/org/team-a/callback", "/team/org%2Fteam-a/callback", True),
+        ("/team/team%2Fa/callback", "/team/team%252Fa/callback", True),
+        ("/team/team+a/callback", "/team/team+a/callback", True),
+        ("/team/team-é/callback", "/team/team-%C3%A9/callback", True),
+        ("/team/team/a/callback", "/team/team%252Fa/callback", False),
+        ("/team/team a/callback", "/team/team+a/callback", False),
+        ("/team/team%41/callback", "/team/team%2541/callback", True),
+    ],
+)
+async def test_user_info_decodes_mcp_path_after_query_parsing(
+    user_info_http_app: FastAPI,
+    path: str,
+    allowed: bool,
+) -> None:
+    async with httpx2.AsyncClient(
+        transport=httpx2.ASGITransport(app=user_info_http_app),
+        base_url="http://testserver",
+        params={"admin_mcp": "true", "mcp_tool": "get_team_callbacks"},
+    ) as client:
+        own: Final = await client.get("/user/info", params={"mcp_path": path})
+        sibling: Final = await client.get("/user/info", params={"mcp_path": "/team/other/callback"})
+    assert own.status_code == 200, own.text
+    assert sibling.status_code == 200, sibling.text
+    assert "get_team_callbacks" in own.json()["admin_mcp_permissions"]["tools"]
+    assert own.json()["admin_mcp_permissions"]["action_allowed"] is allowed
+    assert sibling.json()["admin_mcp_permissions"]["action_allowed"] is False
+
+
+@pytest.mark.skipif(sys.version_info < (3, 12), reason="Admin MCP requires Python 3.12+")
+@pytest.mark.parametrize("grant", ["/te?m/*", "/[t]eam/*", "/te*m/*"])
+def test_admin_mcp_does_not_invent_glob_permissions(grant: str, permissions_request: Request) -> None:
+    auth: Final = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, allowed_routes=["/user/info", grant])
+    permissions: Final = get_admin_mcp_permissions(
+        auth, permissions_request, "get_team_callbacks", "/team/team-a/callback"
+    )
+    assert "get_team_callbacks" not in permissions.tools
+    assert permissions.action_allowed is False
+
+
+@pytest.mark.skipif(sys.version_info < (3, 12), reason="Admin MCP requires Python 3.12+")
+def test_admin_mcp_discovery_respects_disabled_management_routes(
+    permissions_request: Request, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(proxy_server, "premium_user", True)
+    monkeypatch.setenv("DISABLE_ADMIN_ENDPOINTS", "true")
+    auth: Final = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, allowed_routes=["/user/info", "/key/key-a/reset_spend"]
+    )
+    permissions: Final = get_admin_mcp_permissions(
+        auth, permissions_request, "reset_key_spend", "/key/key-a/reset_spend"
+    )
+    assert permissions.tools == ()
+    assert permissions.action_allowed is False
+
+
+@pytest.mark.skipif(sys.version_info < (3, 12), reason="Admin MCP requires Python 3.12+")
+def test_admin_mcp_preserves_http_prefix_grants(permissions_request: Request) -> None:
+    auth: Final = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, allowed_routes=["/user/info", "/key/list"])
+    own: Final = get_admin_mcp_permissions(auth, permissions_request, "reset_key_spend", "/key/list/reset_spend")
+    other: Final = get_admin_mcp_permissions(auth, permissions_request, "reset_key_spend", "/key/other/reset_spend")
+    assert "reset_key_spend" in own.tools
+    assert own.action_allowed is True
+    assert other.action_allowed is False
+
+
+@pytest.mark.asyncio
+async def test_user_info_explains_missing_admin_mcp_dependency(
+    permissions_request: Request, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setitem(sys.modules, "litellm_admin_mcp.catalog", None)
+    auth: Final = UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN)
+    with pytest.raises(ProxyException, match="admin-mcp dependency group") as exc:
+        await internal_user_endpoints.user_info(
+            request=permissions_request,
+            user_id=None,
+            user_api_key_dict=auth,
+            admin_mcp=True,
+            mcp_tool=None,
+            mcp_path=None,
+        )
+    assert exc.value.code == "503"

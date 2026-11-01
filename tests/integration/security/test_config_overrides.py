@@ -100,7 +100,7 @@ def _assert_non_admin_refusal(response: httpx.Response, route: str, user_id: str
                 f"new keys/users/teams. Route={route}. Your role=internal_user. Your user_id={masked_user_id}"
             ),
             "type": "auth_error",
-            "param": "None",
+            "param": None,
             "code": "401",
         }
     }, response.text
@@ -244,7 +244,7 @@ def test_saved_vault_config_reads_back_masked_and_refuses_non_admins(
                         "message": "user not allowed to access this route, role= proxy_admin_viewer. "
                         "Trying to access: /config_overrides/hashicorp_vault",
                         "type": "auth_error",
-                        "param": "None",
+                        "param": None,
                         "code": "403",
                     }
                 }, viewer_post.text
@@ -386,7 +386,7 @@ def test_saved_cyberark_config_reads_back_masked_and_refuses_non_admins(
                         "message": "user not allowed to access this route, role= proxy_admin_viewer. "
                         "Trying to access: /config_overrides/cyberark",
                         "type": "auth_error",
-                        "param": "None",
+                        "param": None,
                         "code": "403",
                     }
                 }, viewer_post.text
@@ -715,8 +715,11 @@ def test_cyberark_incremental_update_encrypts_reloads_on_restart_and_delete_clea
             }, saved.text
             stored_full: Final = _stored_override(database_url, "cyberark")
             assert set(stored_full) == set(full_config), stored_full
+            assert all(stored_full[key] != value for key, value in full_config.items()), stored_full
             serialized_full: Final = json.dumps(stored_full)
-            assert all(value not in serialized_full for value in full_config.values()), serialized_full
+            assert all(value not in serialized_full for value in (cyberark_wire.url, account, username, api_key)), (
+                serialized_full
+            )
 
             model_one: Final = "integration-cyberark-" + uuid.uuid4().hex
             _new_model(first, model_one, provider_wire.url, secret_names[0])

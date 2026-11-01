@@ -28,6 +28,7 @@ from litellm.proxy.spend_tracking.budget_reservation import (
     estimate_request_max_cost,
     get_budget_window_start,
     release_unbound_budget_reservation,
+    count_request_input_tokens,
     reserve_budget_for_request,
 )
 from litellm.proxy.utils import ProxyLogging
@@ -426,3 +427,164 @@ async def test_reservation_holds_cost_against_cached_org_and_project_budgets(spe
 )
 def test_budget_window_start_reads_json_encoded_windows(window: str, expected: datetime | None) -> None:
     assert get_budget_window_start(window) == expected
+
+
+@pytest.mark.asyncio
+async def test_reservation_counts_a_pdf_with_the_deployment_behind_a_gpt_named_group() -> None:
+    from litellm.proxy.spend_tracking.input_tokens import count_input_tokens_for_model
+    from tests.unit.proxy.spend_tracking.test_input_tokens import _one_page_pdf_message
+
+    request_body: Final = {"model": "gpt-4o", "messages": _one_page_pdf_message()}
+    router: Final = Router(
+        model_list=[{"model_name": "gpt-4o", "litellm_params": {"model": "anthropic/claude-haiku-5-5", "api_key": "x"}}]
+    )
+
+    counts: Final = await count_request_input_tokens(
+        request_body=request_body, route="/chat/completions", llm_router=router, team_id=None
+    )
+
+    assert counts == {"gpt-4o": count_input_tokens_for_model(request_body=request_body, model="claude-haiku-5-5")}
+    assert counts["gpt-4o"] > count_input_tokens_for_model(request_body=request_body, model="gpt-4o")
+
+
+_MULTILINGUAL_MESSAGES: Final = [{"role": "user", "content": "日本語のテキストとहिन्दी पाठ और русский текст. " * 20}]
+
+
+def _router_with_groups(*groups: tuple[str, str]) -> Router:
+    return Router(
+        model_list=[
+            {"model_name": name, "litellm_params": {"model": model, "api_key": "sk-test"}} for name, model in groups
+        ]
+    )
+
+
+async def _input_tokens(router: Router, model: str) -> dict[str, int]:
+    return dict(
+        await count_request_input_tokens(
+            request_body={"model": model, "messages": _MULTILINGUAL_MESSAGES},
+            route="/v1/chat/completions",
+            llm_router=router,
+            team_id=None,
+        )
+    )
+
+
+async def _reserved_input_tokens(router: Router, model: str, route: str, messages: list[dict[str, object]]) -> int:
+    counts: Final = await count_request_input_tokens(
+        request_body={"model": model, "messages": messages}, route=route, llm_router=router, team_id=None
+    )
+    return counts[model]
+
+
+@pytest.mark.asyncio
+async def test_an_openai_chat_request_reserves_what_openai_chat_bills_on_top_of_each_pdf_files_pages() -> None:
+    from litellm.constants import OPENAI_CHAT_PDF_FILE_TOKENS
+    from tests.unit.proxy.spend_tracking.test_input_tokens import _one_page_pdf_message
+
+    router: Final = _router_with_groups(("on-openai", "openai/gpt-5.6-sol"), ("on-azure", "azure/gpt-5.6-sol"))
+    two_pdfs: Final = [*_one_page_pdf_message(), *_one_page_pdf_message()]
+
+    assert await _reserved_input_tokens(router, "on-openai", "/v1/chat/completions", two_pdfs) == (
+        await _reserved_input_tokens(router, "on-azure", "/v1/chat/completions", two_pdfs)
+        + 2 * OPENAI_CHAT_PDF_FILE_TOKENS
+    )
+    assert await _reserved_input_tokens(router, "on-openai", "/v1/messages", two_pdfs) == (
+        await _reserved_input_tokens(router, "on-azure", "/v1/messages", two_pdfs)
+    )
+    assert await _reserved_input_tokens(router, "on-openai", "/v1/chat/completions", _MULTILINGUAL_MESSAGES) == (
+        await _reserved_input_tokens(router, "on-azure", "/v1/chat/completions", _MULTILINGUAL_MESSAGES)
+    )
+
+
+@pytest.mark.asyncio
+async def test_alias_group_of_an_openai_model_reserves_on_that_models_token_count():
+    router: Final = _router_with_groups(("gpt-6.1-sol", "openai/gpt-6.1-sol"), ("prod-gpt-6", "openai/gpt-6.1-sol"))
+
+    by_name: Final = await _input_tokens(router, "gpt-6.1-sol")
+
+    assert await _input_tokens(router, "prod-gpt-6") == {"prod-gpt-6": by_name["gpt-6.1-sol"]}
+
+
+@pytest.mark.asyncio
+async def test_model_group_alias_of_an_openai_group_reserves_on_that_groups_token_count():
+    router: Final = Router(
+        model_list=[
+            {"model_name": "gpt-6.1-sol", "litellm_params": {"model": "openai/gpt-6.1-sol", "api_key": "sk-test"}}
+        ],
+        model_group_alias={"prod": "gpt-6.1-sol"},
+    )
+
+    by_name: Final = await _input_tokens(router, "gpt-6.1-sol")
+
+    assert await _input_tokens(router, "prod") == {"prod": by_name["gpt-6.1-sol"]}
+
+
+@pytest.mark.asyncio
+async def test_model_group_alias_of_a_group_no_openai_model_serves_reserves_on_the_alias_as_written():
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "claude-sonnet-5-5",
+                "litellm_params": {"model": "anthropic/claude-sonnet-5-5", "api_key": "sk-test"},
+            }
+        ],
+        model_group_alias={"claude-alias": "claude-sonnet-5-5"},
+    )
+
+    assert await _input_tokens(router, "claude-alias") == {
+        "claude-alias": litellm.token_counter(model="claude-alias", messages=_MULTILINGUAL_MESSAGES)
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("name", ["gpt-6-claude", "o4-alias"])
+async def test_release_named_group_or_alias_no_openai_model_serves_reserves_on_an_unknown_names_count(
+    name: str,
+) -> None:
+    router: Final = Router(
+        model_list=[
+            {"model_name": group, "litellm_params": {"model": "anthropic/claude-sonnet-5-5", "api_key": "sk-test"}}
+            for group in ("claude-sonnet-5-5", "gpt-6-claude")
+        ],
+        model_group_alias={"o4-alias": "claude-sonnet-5-5"},
+    )
+
+    assert await _input_tokens(router, name) == {
+        name: litellm.token_counter(model="my-model", messages=_MULTILINGUAL_MESSAGES)
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("group", "counted_as"),
+    [("gpt-6.1-sol", "my-model"), ("openai/gpt-6.1-sol", "my-model"), ("mixed", "my-model"), ("gpt-4o", "gpt-4o")],
+)
+async def test_group_mixing_in_a_non_openai_model_reserves_on_its_name_as_written_and_its_openai_models(
+    group: str, counted_as: str
+):
+    served: Final = ("openai/gpt-6.1-sol", "cohere/command-r-plus")
+    router: Final = _router_with_groups(*((group, model) for model in served))
+
+    reserved: Final = (await _input_tokens(router, group))[group]
+
+    assert reserved == max(
+        litellm.token_counter(model=counted_as, messages=_MULTILINGUAL_MESSAGES),
+        litellm.token_counter(model="openai/gpt-6.1-sol", messages=_MULTILINGUAL_MESSAGES),
+    )
+
+
+@pytest.mark.asyncio
+async def test_group_reserves_on_its_current_deployments_after_another_vendors_deployment_joins():
+    router: Final = _router_with_groups(("prod", "openai/gpt-6.1-sol"))
+    openai_only: Final = (await _input_tokens(router, "prod"))["prod"]
+
+    router.add_deployment(
+        Deployment(
+            model_name="prod",
+            litellm_params=LiteLLM_Params(model="anthropic/claude-sonnet-5-5", api_key="sk-test"),
+        )
+    )
+
+    by_own_name: Final = litellm.token_counter(model="prod", messages=_MULTILINGUAL_MESSAGES)
+    assert openai_only != by_own_name
+    assert (await _input_tokens(router, "prod"))["prod"] == by_own_name

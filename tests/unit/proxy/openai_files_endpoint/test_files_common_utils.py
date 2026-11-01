@@ -3,10 +3,13 @@ from types import MappingProxyType
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
+import httpx
 import pytest
+import respx
 from fastapi import HTTPException
 from litellm_enterprise.proxy.hooks.managed_files import _PROXY_LiteLLMManagedFiles
 
+import litellm
 from litellm import Router
 from litellm.caching.caching import DualCache
 from litellm.proxy._types import UserAPIKeyAuth
@@ -21,12 +24,13 @@ from litellm.proxy.openai_files_endpoints.common_utils import (
 from litellm.proxy.route_llm_request import ProxyModelNotFoundError
 from litellm.proxy.utils import InternalUsageCache, handle_exception_on_proxy
 from litellm.types.utils import LiteLLMBatch
+from tests.unit.proxy.router_entry_point_stubs import route_entry_points_to_stubs
 
 _RAW_MODEL_WITH_PROMPT: Final = "opus-4.6 Please summarize my medical records\nPatient has diabetes"
 
 
 def test_get_credentials_for_model_rejects_an_unknown_model_without_persisting_the_raw_model():
-    llm_router: Final = MagicMock()
+    llm_router: Final = route_entry_points_to_stubs(MagicMock())
     llm_router.get_deployment_credentials_with_provider.return_value = None
 
     with pytest.raises(ProxyModelNotFoundError) as raised:
@@ -406,7 +410,7 @@ def test_add_internal_model_credentials_attaches_an_immutable_snapshot():
         add_internal_model_credentials,
     )
 
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.get_deployment_credentials_with_provider = MagicMock(
         return_value={"s3_bucket_name": "configured-bucket", "aws_region_name": "us-east-1"}
     )
@@ -434,7 +438,7 @@ def test_add_internal_model_credentials_is_a_noop_without_a_resolvable_deploymen
         add_internal_model_credentials,
     )
 
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.get_deployment_credentials_with_provider = MagicMock(return_value=credentials)
     data = {"batch_id": "unified-batch-id"}
 
@@ -451,7 +455,7 @@ def test_add_internal_model_credentials_survives_a_failing_deployment_lookup():
         add_internal_model_credentials,
     )
 
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.get_deployment_credentials_with_provider = MagicMock(side_effect=KeyError("deployment-gone"))
     data = {"batch_id": "unified-batch-id"}
 
@@ -851,3 +855,112 @@ def test_a_team_keeps_its_first_config_file_openai_deployment_over_older_db_ones
 
     assert credentials is not None
     assert credentials["api_key"] == "deployment-z-key"
+
+
+@pytest.mark.parametrize(
+    ("custom_llm_provider", "openrouter_key", "api_key"),
+    [("openai", "sk-or-files-openai", "openai-key"), ("openrouter", "sk-or-files-openrouter", "sk-or-files-openrouter")],
+)
+def test_a_provider_credential_lookup_never_lists_an_openrouter_wildcards_live_catalog(
+    monkeypatch: pytest.MonkeyPatch, custom_llm_provider: str, openrouter_key: str, api_key: str
+):
+    monkeypatch.setattr(litellm, "check_provider_endpoint", True)
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "openrouter/*",
+                "litellm_params": {
+                    "model": "openrouter/*",
+                    "api_key": openrouter_key,
+                    "api_base": "https://openrouter.ai/api/v1",
+                },
+            },
+            {"model_name": "gpt-5.4-mini", "litellm_params": {"model": "openai/gpt-5.4-mini", "api_key": "openai-key"}},
+        ]
+    )
+
+    with respx.mock(assert_all_called=False) as respx_mock:
+        catalog_route: Final = respx_mock.get("https://openrouter.ai/api/v1/models/user").mock(
+            return_value=httpx.Response(200, json={"data": [{"id": "openai/gpt-5.4-mini"}]})
+        )
+        credentials: Final = get_team_provider_credentials(
+            llm_router=router,
+            user_api_key_dict=UserAPIKeyAuth(api_key="test-key", user_id="test-user"),
+            custom_llm_provider=custom_llm_provider,
+            include_accessible_deployments=True,
+        )
+
+    assert credentials is not None
+    assert (credentials["custom_llm_provider"], credentials["api_key"]) == (custom_llm_provider, api_key)
+    assert catalog_route.call_count == 0
+
+
+@pytest.mark.parametrize(
+    ("key_models", "deployments", "custom_llm_provider", "api_key"),
+    [
+        (
+            ["anthropic/*"],
+            (("anthropic/claude-*", "anthropic/claude-*", "anthropic-narrow-key"),),
+            "anthropic",
+            "anthropic-narrow-key",
+        ),
+        (["anthropic/claude-3*"], (("anthropic/*", "anthropic/*", "anthropic-wide-key"),), "anthropic", "anthropic-wide-key"),
+        (["openrouter/*"], (("openrouter/openai/*", "openrouter/openai/*", "sk-or-narrow"),), "openrouter", "sk-or-narrow"),
+        (
+            ["team/*"],
+            (("team/*", "openrouter/*", "sk-or-team"), ("team/openai/*", "openai/*", "openai-team-key")),
+            "openai",
+            "openai-team-key",
+        ),
+    ],
+)
+def test_a_key_wildcard_finds_the_deployment_it_grants_without_listing_any_provider_catalog(
+    monkeypatch: pytest.MonkeyPatch,
+    key_models: list[str],
+    deployments: tuple[tuple[str, str, str], ...],
+    custom_llm_provider: str,
+    api_key: str,
+):
+    monkeypatch.setattr(litellm, "check_provider_endpoint", True)
+    router: Final = Router(
+        model_list=[
+            {"model_name": model_name, "litellm_params": {"model": model, "api_key": deployment_key}}
+            for model_name, model, deployment_key in deployments
+        ]
+    )
+
+    with respx.mock(assert_all_called=False) as respx_mock:
+        catalog_requests: Final = respx_mock.route().mock(return_value=httpx.Response(200, json={"data": []}))
+        credentials: Final = get_team_provider_credentials(
+            llm_router=router,
+            user_api_key_dict=UserAPIKeyAuth(api_key="test-key", user_id="test-user", models=key_models),
+            custom_llm_provider=custom_llm_provider,
+            include_accessible_deployments=True,
+        )
+
+    assert credentials is not None
+    assert (credentials["custom_llm_provider"], credentials["api_key"]) == (custom_llm_provider, api_key)
+    assert catalog_requests.call_count == 0
+
+
+@pytest.mark.parametrize(
+    ("deployed_name", "api_key"), [("gpt-4o-mini", None), ("openai/gpt-4o-mini", "openai-deployment-key")]
+)
+def test_a_provider_wildcard_grant_finds_only_deployments_named_under_it(deployed_name: str, api_key: str | None):
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": deployed_name,
+                "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "openai-deployment-key"},
+            }
+        ]
+    )
+
+    credentials: Final = get_team_provider_credentials(
+        llm_router=router,
+        user_api_key_dict=UserAPIKeyAuth(api_key="test-key", user_id="test-user", models=["openai/*"]),
+        custom_llm_provider="openai",
+        include_accessible_deployments=True,
+    )
+
+    assert (None if credentials is None else credentials["api_key"]) == api_key

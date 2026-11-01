@@ -113,10 +113,8 @@ def _namespace_tool() -> dict[str, JsonValue]:
     }
 
 
-def _search_tools(route: Route, search: Search) -> tuple[dict[str, JsonValue], ...]:
-    if search == "absent":
-        return ()
-    return (_tool_search(execution="client"),) if route == "anthropic" else (_tool_search(),)
+def _search_tools(search: Search) -> tuple[dict[str, JsonValue], ...]:
+    return () if search == "absent" else (_tool_search(),)
 
 
 def _gemini_frame(marker: str) -> dict[str, JsonValue]:
@@ -406,7 +404,6 @@ _UNDEFERRING: Final[tuple[tuple[Route, Search], ...]] = (
 _KEEPING: Final[tuple[tuple[Route, Search], ...]] = (
     ("unlisted_claude", "absent"),
     ("anthropic", "absent"),
-    ("anthropic", "dropped"),
     ("azure_ai", "absent"),
 )
 
@@ -428,7 +425,7 @@ def test_without_a_search_tool_on_the_wire_every_tool_arrives_without_defer_load
     call: Final = _Call(route, stream, uuid.uuid4().hex)
     with wire_server(_vendor(route)) as wire, gateway.scenario() as scenario:
         model: Final = _deployment(scenario, route, wire.url)
-        tools: Final = (*_search_tools(route, search), _function_tool(), _namespace_tool())
+        tools: Final = (*_search_tools(search), _function_tool(), _namespace_tool())
         response: Final = _raw(gateway, _responses_body(model, call.marker, tools, stream))
         _assert_served(response, call.marker, stream)
         request, body = _only_request(wire)
@@ -442,7 +439,7 @@ def test_a_claude_route_sent_no_server_search_tool_keeps_each_tools_own_defer_lo
     call: Final = _Call(route, stream, uuid.uuid4().hex)
     with wire_server(_vendor(route)) as wire, gateway.scenario() as scenario:
         model: Final = _deployment(scenario, route, wire.url)
-        tools: Final = (*_search_tools(route, search), _function_tool(), _namespace_tool(), _loaded_tool())
+        tools: Final = (*_search_tools(search), _function_tool(), _namespace_tool(), _loaded_tool())
         response: Final = _raw(gateway, _responses_body(model, call.marker, tools, stream))
         _assert_served(response, call.marker, stream)
         request, body = _only_request(wire)
@@ -454,6 +451,26 @@ def test_a_claude_route_sent_no_server_search_tool_keeps_each_tools_own_defer_lo
             ("finance__get_stock_price", True),
             ("send_email", None),
         ], sent
+
+
+@pytest.mark.parametrize("stream", [False, True], ids=["sync", "stream"])
+def test_a_client_search_tool_on_anthropic_goes_out_as_a_function_and_holds_back_the_deferred_tools(
+    gateway: Gateway, stream: bool
+) -> None:
+    marker: Final = uuid.uuid4().hex
+    with wire_server(_claude) as wire, gateway.scenario() as scenario:
+        model: Final = _deployment(scenario, "anthropic", wire.url)
+        tools: Final = (_tool_search(execution="client"), _function_tool(), _namespace_tool(), _loaded_tool())
+        response: Final = _raw(gateway, _responses_body(model, marker, tools, stream))
+        _assert_served(response, marker, stream)
+        request, body = _only_request(wire)
+        _assert_target("anthropic", stream, request, body)
+        sent: Final = _ITEMS.validate_python(body["tools"])
+        assert [(tool["name"], tool.get("defer_loading")) for tool in sent] == [
+            ("tool_search", None),
+            ("send_email", None),
+        ], sent
+        assert "defer_loading" not in request.body.decode(), body
 
 
 def test_a_false_defer_loading_never_reaches_an_openai_compatible_wire_as_a_key(gateway: Gateway) -> None:
@@ -682,7 +699,7 @@ def test_a_streamed_answer_closes_its_message_item_with_every_streamed_delta(gat
 
 
 async def _send(client: httpx.AsyncClient, key: str, model: str, call: _Call) -> _Served:
-    tools: Final = (*_search_tools(call.route, "dropped"), _function_tool(), _namespace_tool())
+    tools: Final = (*_search_tools("dropped"), _function_tool(), _namespace_tool())
     body: Final = _responses_body(model, call.marker, tools, call.stream)
     async with client.stream(
         "POST", "/v1/responses", json=body, headers={"Authorization": f"Bearer {key}"}

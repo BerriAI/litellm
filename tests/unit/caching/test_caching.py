@@ -250,6 +250,15 @@ def test_semantic_cache_key_reads_tenant_identity_from_litellm_metadata():
     assert key_a == key_a_in_litellm_params
 
 
+def test_cache_rejects_unsupported_type() -> None:
+    cache_params: Final = {"type": "not-a-cache"}
+    with pytest.raises(
+        ValueError, match=re.escape("Unsupported cache type 'not-a-cache'. Supported types: ")
+    ) as raised:
+        Cache(**cache_params)
+    assert str(raised.value).split("Supported types: ")[1].split(", ") == [member.value for member in LiteLLMCacheType]
+
+
 def test_semantic_cache_scope_rejects_unknown_value():
     with pytest.raises(ValueError, match="'team' is not a valid SemanticCacheScope"):
         _semantic_cache(semantic_cache_scope="team")
@@ -461,6 +470,23 @@ def test_cache_key_tells_apart_requests_that_differ_only_in_continuation_token()
     assert cache.get_cache_key(**request, continuation_token="dG9rLTE=") == resumed_key
     assert cache.get_cache_key(**request, continuation_token=None) == first_segment_key
     assert cache.get_cache_key(**request, continuation_token="") == first_segment_key
+
+
+def test_cache_key_tells_apart_requests_that_differ_only_in_tool_call_id_shape() -> None:
+    cache: Final = Cache(type=LiteLLMCacheType.LOCAL)
+    request: Final = {
+        "model": "gemini/gemini-3.5-flash",
+        "messages": [{"role": "user", "content": "What is the weather in Paris?"}],
+    }
+
+    signed_ids_key: Final = cache.get_cache_key(**request)
+    short_ids_key: Final = cache.get_cache_key(**request, thought_signature_in_tool_call_id=False)
+
+    assert short_ids_key != signed_ids_key
+    assert cache.get_cache_key(**request, thought_signature_in_tool_call_id="false") == short_ids_key
+    assert cache.get_cache_key(**request, thought_signature_in_tool_call_id=0) == short_ids_key
+    assert cache.get_cache_key(**request, thought_signature_in_tool_call_id=True) == signed_ids_key
+    assert cache.get_cache_key(**request, thought_signature_in_tool_call_id=None) == signed_ids_key
 
 
 class PhaseRecordingCache(InMemoryCache):
@@ -1228,6 +1254,22 @@ def test_custom_redis_cache_params(redis_client_without_network: None) -> None:
     cache: Final = Cache(type=LiteLLMCacheType.REDIS, host="127.0.0.1", port="6379", db=4)
 
     assert cache.cache.redis_client.connection_pool.connection_kwargs["db"] == 4
+
+
+def test_redis_cache_ignores_a_leftover_disk_cache_dir(
+    redis_client_without_network: None, caplog: pytest.LogCaptureFixture
+) -> None:
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        Cache(type=LiteLLMCacheType.REDIS, host="127.0.0.1", port="6379")
+    assert "disk_cache_dir" not in caplog.text
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        cache: Final = Cache(
+            type=LiteLLMCacheType.REDIS, host="127.0.0.1", port="6379", disk_cache_dir="/tmp/litellm-cache"
+        )
+
+    assert isinstance(cache.cache, RedisCache)
+    assert "disk_cache_dir" in caplog.text
 
 
 def test_custom_redis_cache_with_key(monkeypatch: pytest.MonkeyPatch) -> None:

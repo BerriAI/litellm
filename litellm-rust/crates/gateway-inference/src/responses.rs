@@ -4,7 +4,6 @@ use axum::{Json, body::Bytes, extract::State, response::Response};
 use litellm_gateway_auth::AuthenticatedRequest;
 use litellm_host_http::Sse;
 use litellm_inference_responses::{route::Responses, types::ResponsesCall};
-use serde_json::json;
 
 use crate::{Error, Gateway, JsonObject, request};
 
@@ -13,7 +12,7 @@ pub(crate) async fn create(
     identity: AuthenticatedRequest,
     JsonObject(body): JsonObject,
 ) -> Result<Response, Error> {
-    let deployment = request::resolve_deployment(&gateway, &body)?;
+    let deployment = request::resolve_deployment(&gateway, "/responses", &body)?;
     request::authorize_model(&identity, deployment, &body).await?;
     let (body, cache_options) = crate::caching::prepare(&identity, body)?;
     let route = gateway.responses.clone();
@@ -40,11 +39,7 @@ pub(crate) async fn create(
     };
     let machine = route.machine(call, cache_options.policy);
     let stream = Sse::<Responses, _, _>::new(Json, |error| {
-        let error = Error::from(error);
-        Bytes::from(format!(
-            "event: error\ndata: {}\n\n",
-            json!({"type": "error", "code": error.status().as_u16().to_string(), "message": error.to_string(), "param": null})
-        ))
+        Bytes::from(Error::from(error).responses_sse_frame())
     });
     let headers = crate::caching::CacheHeaders::default();
     let response = litellm_host_http::serve(machine, (), headers.clone(), stream, None).await?;

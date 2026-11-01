@@ -2,9 +2,9 @@ use std::{sync::Arc, time::Duration};
 
 use base64::{Engine, engine::general_purpose::STANDARD};
 use litellm_core_utils::settings::Lookup;
-use litellm_secrets_types::{
-    BaseSecretManager, GoogleOperationContext, Secret, SecretCache, SecretValue,
-};
+use litellm_secret_value::SecretValue;
+use litellm_secrets_types::{BaseSecretManager, GoogleOperationContext, Secret, SecretCache};
+
 use serde::Deserialize;
 
 use litellm_auth_gcp::GoogleCredentials;
@@ -92,12 +92,12 @@ impl GoogleSecretManager {
         let ttl = environment
             .get(GOOGLE_SECRET_MANAGER_REFRESH_INTERVAL)
             .filter(|v| !v.is_empty())
-            .map(|v| v.parse::<i64>().map_err(|_| Error::RefreshInterval))
+            .map(|v| v.parse::<i64>().map_err(Error::RefreshInterval))
             .transpose()?
             .unwrap_or(
                 environment
                     .get(SECRET_MANAGER_REFRESH_INTERVAL)
-                    .map(|v| v.parse::<i64>().map_err(|_| Error::RefreshInterval))
+                    .map(|v| v.parse::<i64>().map_err(Error::RefreshInterval))
                     .transpose()?
                     .unwrap_or(DEFAULT_REFRESH_INTERVAL.as_secs() as i64),
             );
@@ -164,20 +164,21 @@ impl GoogleSecretManager {
                 ),
                 percent_encoding::utf8_percent_encode(name, percent_encoding::NON_ALPHANUMERIC)
             ))
-            .map_err(|_| Error::Endpoint)?;
+            .map_err(Error::Endpoint)?;
         let response = self
             .client
             .get(url)
             .headers(self.credentials.request_headers().await?)
             .send()
-            .await?;
+            .await
+            .map_err(litellm_http::Error::from)?;
         if response.status() == reqwest::StatusCode::NOT_FOUND {
             return Ok(None);
         }
         if response.status() != reqwest::StatusCode::OK {
             return Err(Error::Status(response.status().as_u16()));
         }
-        let response: Response = response.json().await?;
+        let response: Response = response.json().await.map_err(litellm_http::Error::from)?;
         let Some(payload) = response.payload else {
             return Err(Error::MissingPayload);
         };
@@ -186,12 +187,15 @@ impl GoogleSecretManager {
         };
         let bytes = STANDARD.decode(data)?;
         if let Some(expected) = payload.data_crc32c {
-            let expected = expected.parse::<u32>().map_err(|_| Error::Checksum)?;
+            let expected = expected
+                .parse::<u32>()
+                .map_err(|error| Error::Checksum(Some(error)))?;
             if crc32c::crc32c(&bytes) != expected {
-                return Err(Error::Checksum);
+                return Err(Error::Checksum(None));
             }
         }
-        let plaintext = String::from_utf8(bytes).map_err(|_| Error::Utf8)?;
+        let plaintext =
+            String::from_utf8(bytes).map_err(|error| Error::Utf8(error.utf8_error()))?;
         let value = SecretValue::new(plaintext);
         Ok(Some(value))
     }

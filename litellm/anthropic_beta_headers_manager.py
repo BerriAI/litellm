@@ -30,7 +30,7 @@ from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor
 from functools import cache
 from importlib.resources import files
-from typing import Final, TypeAlias
+from typing import Final, Literal, TypeAlias
 
 import httpx
 from pydantic import TypeAdapter
@@ -45,6 +45,10 @@ _BETA_HEADERS_CONFIG_LOADER: Final = ThreadPoolExecutor(max_workers=1, thread_na
 
 BetaHeadersConfig: TypeAlias = Mapping[str, str | Mapping[str, str | None]]
 _BETA_HEADERS_CONFIG_ADAPTER: Final = TypeAdapter(BetaHeadersConfig)
+_DECODED_JSON: Final = TypeAdapter(object)
+
+BetaPlacement: TypeAlias = Literal["header", "body"]
+_HEADER_ONLY_COLUMN_SUFFIX: Final = "_header_only"
 
 
 class GetAnthropicBetaHeadersConfig:
@@ -76,7 +80,7 @@ class GetAnthropicBetaHeadersConfig:
             }
 
     @staticmethod
-    def _check_is_valid_dict(fetched_config: dict) -> bool:
+    def _check_is_valid_dict(fetched_config: object) -> bool:
         """Check if fetched config is a non-empty dict with expected structure."""
         if not isinstance(fetched_config, dict):
             verbose_logger.warning(
@@ -110,7 +114,7 @@ class GetAnthropicBetaHeadersConfig:
         return True
 
     @classmethod
-    def validate_beta_headers_config(cls, fetched_config: dict) -> bool:
+    def validate_beta_headers_config(cls, fetched_config: object) -> bool:
         """
         Validate the integrity of a fetched beta headers config.
 
@@ -119,7 +123,7 @@ class GetAnthropicBetaHeadersConfig:
         return cls._check_is_valid_dict(fetched_config)
 
     @staticmethod
-    def fetch_remote_beta_headers_config(url: str, timeout: int = 5) -> dict:
+    def fetch_remote_beta_headers_config(url: str, timeout: int = 5) -> object:
         """
         Fetch the beta headers config from a remote URL.
 
@@ -128,7 +132,7 @@ class GetAnthropicBetaHeadersConfig:
         """
         response: Final = httpx.get(url, timeout=timeout)
         response.raise_for_status()
-        return response.json()
+        return _DECODED_JSON.validate_python(response.json())
 
 
 def get_beta_headers_config(url: str) -> dict:
@@ -161,7 +165,9 @@ def get_beta_headers_config(url: str) -> dict:
         return GetAnthropicBetaHeadersConfig.load_local_beta_headers_config()
 
     # Validate the fetched config
-    if not GetAnthropicBetaHeadersConfig.validate_beta_headers_config(fetched_config=content):
+    if not GetAnthropicBetaHeadersConfig.validate_beta_headers_config(fetched_config=content) or not isinstance(
+        content, dict
+    ):
         verbose_logger.warning(
             "LiteLLM: Fetched beta headers config failed integrity check. Using local backup instead. url=%s",
             url,
@@ -238,9 +244,42 @@ def get_provider_name(provider: str) -> str:
     return aliases.get(provider, provider)
 
 
+def _beta_column(name: str) -> Mapping[str, str | None]:
+    column: Final[Mapping[str, str | None]] = _load_beta_headers_config().get(name, {})
+    return column
+
+
+def _header_only_column(canonical_provider: str) -> Mapping[str, str | None]:
+    return _beta_column(f"{canonical_provider}{_HEADER_ONLY_COLUMN_SUFFIX}")
+
+
+def _provider_beta_mapping(provider: str, placement: BetaPlacement) -> Mapping[str, str | None]:
+    canonical_provider: Final = get_provider_name(provider)
+    column: Final = _beta_column(canonical_provider)
+    header_only: Final = _header_only_column(canonical_provider)
+    match placement:
+        case "header":
+            return {**column, **header_only}
+        case "body":
+            return {beta: name for beta, name in column.items() if beta not in header_only}
+
+
+def get_header_only_betas(provider: str) -> frozenset[str]:
+    header_only: Final = _header_only_column(get_provider_name(provider))
+    return frozenset(beta for beta, name in header_only.items() if name is not None)
+
+
+def has_beta_headers_config(provider: str) -> bool:
+    config: Final = _bundled_beta_headers_config()
+    aliases: Final = config.get("provider_aliases", {})
+    canonical_provider: Final = (aliases.get(provider) if isinstance(aliases, Mapping) else None) or provider
+    return canonical_provider in config
+
+
 def filter_and_transform_beta_headers(
     beta_headers: list[str],
     provider: str,
+    placement: BetaPlacement = "header",
 ) -> list[str]:
     """
     Filter and transform beta headers based on provider's mapping configuration.
@@ -253,6 +292,7 @@ def filter_and_transform_beta_headers(
     Args:
         beta_headers: List of Anthropic beta header values
         provider: Provider name (e.g., "anthropic", "bedrock", "vertex_ai")
+        placement: Whether the betas travel as the anthropic-beta header or the anthropic_beta body field
 
     Returns:
         List of filtered and transformed beta headers for the provider
@@ -260,11 +300,7 @@ def filter_and_transform_beta_headers(
     if not beta_headers:
         return []
 
-    config: Final = _load_beta_headers_config()
-    provider = get_provider_name(provider)
-
-    # Get the header mapping for this provider
-    provider_mapping: Final = config.get(provider, {})
+    provider_mapping: Final = _provider_beta_mapping(provider, placement)
 
     filtered_headers: Final[set[str]] = set()
 
@@ -394,7 +430,7 @@ def update_request_with_filtered_beta(
     headers: dict,
     request_data: dict,
     provider: str,
-) -> tuple[dict, dict]:
+) -> tuple[dict[str, str], dict[str, object]]:
     """
     Update both headers and request body beta fields based on provider support.
     Modifies both dicts in place and returns them.
@@ -416,6 +452,7 @@ def update_request_with_filtered_beta(
     filtered_body_betas: Final = filter_and_transform_beta_headers(
         beta_headers=existing_body_betas,
         provider=provider,
+        placement="body",
     )
 
     if filtered_body_betas:
