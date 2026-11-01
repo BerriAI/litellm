@@ -255,6 +255,7 @@ def _genai_content_messages(content: object) -> tuple[AllMessageValues, ...]:
         return ()
     parts: Final = _genai_content_parts(fields.get("parts", ()))
     converted: Final = _genai_message_parts(parts)
+    responses: Final = tuple(response for part in parts if (response := _genai_tool_response(part)) is not None)
     role: Final = fields.get("role", "user")
     if role == "user":
         user_message: Final = (
@@ -269,18 +270,20 @@ def _genai_content_messages(content: object) -> tuple[AllMessageValues, ...]:
             if converted
             else ()
         )
-        responses: Final = tuple(response for part in parts if (response := _genai_tool_response(part)) is not None)
         return (*user_message, *responses)
     if role != "model":
         return ()
     text: Final = "".join(part["text"] for part in converted if part["type"] == "text")
     calls: Final = [call for part in parts if (call := _genai_tool_call(part)) is not None]
     assistant_content: Final = list(converted) if any(part["type"] != "text" for part in converted) else text or None
-    return (
+    if responses and not calls and assistant_content is None:
+        return responses
+    assistant_message: Final = (
         ChatCompletionAssistantMessage(role="assistant", content=assistant_content, tool_calls=calls)
         if calls
-        else ChatCompletionAssistantMessage(role="assistant", content=assistant_content),
+        else ChatCompletionAssistantMessage(role="assistant", content=assistant_content)
     )
+    return (assistant_message, *responses)
 
 
 class GoogleGenAIStreamWrapper(AdapterCompletionStreamWrapper):
