@@ -18,6 +18,11 @@ spent producing the tool request, so it is billed and settled where it stops
 rather than polled until the timeout, which would both lose that usage and
 hold its budget reservation open for the whole timeout window.
 
+``requires_continuation`` is terminal for the same reason. A caller resumes a
+long decode by creating a new interaction that carries the returned
+``continuation_token``, and the stopped interaction keeps the tokens it already
+spent decoding.
+
 Deleting an interaction makes every subsequent poll fail, which would let a
 caller retrieve the completed output themselves and then delete it before the
 poll task settles, leaving the work unbilled and the budget reservation
@@ -70,13 +75,13 @@ from litellm.types.utils import CustomPricingLiteLLMParams
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
-_TERMINAL_STATUSES: Final = frozenset(
-    {"completed", "failed", "cancelled", "incomplete", "budget_exceeded", "requires_action"}
+_STATUSES_THAT_PRODUCED_OUTPUT: Final = frozenset({"completed", "requires_action", "requires_continuation"})
+
+_TERMINAL_STATUSES: Final = _STATUSES_THAT_PRODUCED_OUTPUT | frozenset(
+    {"failed", "cancelled", "incomplete", "budget_exceeded"}
 )
 
 _POLLABLE_STATUSES: Final = frozenset({"in_progress", "queued"})
-
-_STATUSES_THAT_PRODUCED_OUTPUT: Final = frozenset({"completed", "requires_action"})
 
 SettlementOutcome: TypeAlias = Literal["billed", "released", "unsettled"]
 
@@ -629,13 +634,12 @@ def missing_usage_is_expected(response: InteractionsAPIResponse) -> bool:
     """
     Whether a response arriving with no usage block is a normal outcome rather
     than lost billing data. An interaction that is still running, or that
-    stopped at ``failed``, ``cancelled``, ``incomplete`` or ``budget_exceeded``,
-    has nothing to charge for and should not raise a cost-tracking alarm.
+    stopped without producing output, has nothing to charge for and should not
+    raise a cost-tracking alarm.
 
-    ``completed`` and ``requires_action`` both mean the model produced output,
-    so a usage block is always expected with them. If one arrives without it
-    the charge for real work has been lost, which is precisely what the
-    proxy's cost-tracking alert exists to surface.
+    A response in ``_STATUSES_THAT_PRODUCED_OUTPUT`` that arrives without a
+    usage block means the charge for real work has been lost, which is
+    precisely what the proxy's cost-tracking alert exists to surface.
     """
     return response.status not in _STATUSES_THAT_PRODUCED_OUTPUT
 
