@@ -159,11 +159,11 @@ def _all_constants(cls):
 
 
 def test_attribute_keys_are_unique_across_namespaces():
-    from litellm.integrations.otel import MCP, Client, JsonRpc, LiteLLMError, Network
+    from litellm.integrations.otel import MCP, Client, JsonRpc, LiteLLMError, Network, OpenAI
 
     # prefixes are allowed to be substrings; exact keys must not collide.
     exact = set()
-    for cls in (GenAI, Error, LiteLLMError, Server, HTTP, DB, MCP, JsonRpc, Network, Client):
+    for cls in (GenAI, Error, LiteLLMError, Server, HTTP, DB, MCP, JsonRpc, Network, Client, OpenAI):
         for key in _all_constants(cls):
             assert key not in exact, f"duplicate attribute key {key}"
             exact.add(key)
