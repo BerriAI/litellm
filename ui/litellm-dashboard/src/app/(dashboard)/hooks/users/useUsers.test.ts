@@ -330,54 +330,24 @@ describe("useUserLookup", () => {
     expect(result.current.data?.user_id).toBe("user-1-0");
   });
 
-  it("falls back when user info returns a different user id", async () => {
-    const response = buildUserListResponse(1, 1);
-    const exactUser = { ...response.users[0], user_id: "a b", user_alias: "Right User" };
+  it("resolves to no user when user info returns a different user id", async () => {
     vi.mocked(userGetInfoV2).mockResolvedValue(buildUserInfoV2Response("a+b"));
-    vi.mocked(userListCall).mockResolvedValue({
-      ...response,
-      page_size: 100,
-      users: [exactUser],
-    });
 
     const { result } = renderHook(() => useUserLookup("a b"), { wrapper });
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
-    expect(result.current.data).toMatchObject({ user_id: "a b", user_alias: "Right User" });
-    expect(userListCall).toHaveBeenCalledWith("test-access-token", ["a b"], 1, 100);
+    expect(result.current.data).toBeNull();
+    expect(userListCall).not.toHaveBeenCalled();
   });
 
-  it("falls back to the exact user list match when the user info endpoint returns a 404", async () => {
-    const response = buildUserListResponse(1, 1);
-    const exactUser = { ...response.users[1], user_id: "bob", user_alias: "Bob" };
-    vi.mocked(userListCall).mockResolvedValue({
-      ...response,
-      page_size: 100,
-      users: [{ ...response.users[0], user_id: "bob2" }, exactUser],
-    });
-    vi.mocked(userGetInfoV2).mockRejectedValue(new ApiError("Not Found", 404, {}));
-
-    const { result } = renderHook(() => useUserLookup("bob"), { wrapper });
-
-    await waitFor(() => expect(result.current.isSuccess).toBe(true));
-    expect(result.current.data).toMatchObject(exactUser);
-    expect(userListCall).toHaveBeenCalledWith("test-access-token", ["bob"], 1, 100);
-  });
-
-  it("resolves to null when the user list contains only a substring match", async () => {
-    const response = buildUserListResponse(1, 1);
-    vi.mocked(userListCall).mockResolvedValue({
-      ...response,
-      page_size: 100,
-      users: [{ ...response.users[0], user_id: "bob2" }],
-    });
+  it("resolves to no user when the user info endpoint returns a 404", async () => {
     vi.mocked(userGetInfoV2).mockRejectedValue(new ApiError("Not Found", 404, {}));
 
     const { result } = renderHook(() => useUserLookup("bob"), { wrapper });
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
     expect(result.current.data).toBeNull();
-    expect(userListCall).toHaveBeenCalledWith("test-access-token", ["bob"], 1, 100);
+    expect(userListCall).not.toHaveBeenCalled();
   });
 
   it("rethrows errors other than 404", async () => {
