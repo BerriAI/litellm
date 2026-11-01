@@ -60,7 +60,6 @@ from litellm.types.responses.main import (
 )
 from litellm.types.utils import (
     Delta,
-    GenericStreamingChunk,
     LlmProviders,
     ModelResponse,
     ModelResponseStream,
@@ -1502,14 +1501,7 @@ class ModelResponseIterator:
                         return result
                     # If None, continue loop to get more chunks for accumulation
                 else:
-                    return GenericStreamingChunk(
-                        text="",
-                        is_finished=False,
-                        finish_reason="",
-                        usage=None,
-                        index=0,
-                        tool_use=None,
-                    )
+                    continue
             except StopIteration:
                 raise StopIteration
             except ValueError as e:
@@ -1551,14 +1543,7 @@ class ModelResponseIterator:
                         return result
                     # If None, continue loop to get more chunks for accumulation
                 else:
-                    return GenericStreamingChunk(
-                        text="",
-                        is_finished=False,
-                        finish_reason="",
-                        usage=None,
-                        index=0,
-                        tool_use=None,
-                    )
+                    continue
             except StopAsyncIteration:
                 raise StopAsyncIteration
             except ValueError as e:
