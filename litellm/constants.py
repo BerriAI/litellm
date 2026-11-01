@@ -1694,6 +1694,7 @@ ROUTER_USAGE_COUNTED_TOKENS_METADATA_KEY: Final = "_litellm_router_usage_counted
 INTERNAL_CALL_ORIGIN_METADATA_KEY: Final = "internal_call_origin"
 RESPONSES_WEBSOCKET_CALL_ID_METADATA_KEY: Final = "responses_websocket_call_id"
 BILLED_RETRY_ATTEMPT_METADATA_KEY: Final = "billed_retry_attempt"
+USER_API_KEY_IS_VIRTUAL_KEY_METADATA_KEY: Final = "user_api_key_is_virtual_key"
 MANAGED_BACKGROUND_RESPONSE_METADATA_KEY: Final = "_managed_background_response"
 SESSION_ID_GENERATED_METADATA_KEY: Final = "litellm_session_id_generated"
 SESSION_ID_OMITTED_METADATA_KEY: Final = "litellm_session_id_omitted"

@@ -2082,6 +2082,7 @@ class LiteLLMProxyRequestSetup:
                 user_api_key_dict.budget_reset_at.isoformat() if user_api_key_dict.budget_reset_at else None
             ),
             user_api_key_auth_metadata=auth_metadata,
+            user_api_key_is_virtual_key=LiteLLMProxyRequestSetup.authenticated_with_virtual_key(user_api_key_dict),
         )
         return user_api_key_logged_metadata
 
@@ -2092,6 +2093,12 @@ class LiteLLMProxyRequestSetup:
         team_tags: Final = (user_api_key_dict.team_metadata or {}).get("tags") or ()
         project_tags: Final = (user_api_key_dict.project_metadata or {}).get("tags") or ()
         return tuple(dict.fromkeys((*key_tags, *team_tags, *project_tags)))
+
+    @staticmethod
+    def authenticated_with_virtual_key(user_api_key_dict: UserAPIKeyAuth) -> bool:
+        """A serializable copy of the unforgeable via_virtual_key marker, carried in the key's logged
+        metadata so spend paths that drop the auth object still know the request came through a virtual key."""
+        return user_api_key_dict.via_virtual_key and not user_api_key_dict.is_session_token
 
     @staticmethod
     def add_user_api_key_auth_to_request_metadata(

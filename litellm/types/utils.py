@@ -3076,6 +3076,7 @@ class StandardLoggingUserAPIKeyMetadata(TypedDict):
     user_api_key_end_user_id: str | None
     user_api_key_request_route: str | None
     user_api_key_auth_metadata: dict[str, str] | None
+    user_api_key_is_virtual_key: ReadOnly[NotRequired[bool]]
 
 
 class StandardLoggingMCPToolCall(TypedDict, total=False):

@@ -50,6 +50,7 @@ from litellm.constants import (
     PROVIDER_REQUEST_ID_HEADERS,
     REALTIME_METERED_USAGE_KEY,
     REDACTED_BY_LITELLM,
+    USER_API_KEY_IS_VIRTUAL_KEY_METADATA_KEY,
 )
 from litellm.cost_calculator import (
     RealtimeAPITokenUsageProcessor,
@@ -329,9 +330,10 @@ _in_memory_loggers: Final[list[CustomLogger]] = []
 _STANDARD_LOGGING_METADATA_RESOLVED_KEYS: Final[frozenset[str]] = frozenset(
     ("used_client_oauth_token", "usage_object", KUBERNETES_POD_ROUTING_KEY, "is_silent_experiment")
 )
-_STANDARD_LOGGING_METADATA_KEYS: Final[frozenset[str]] = (
-    frozenset(StandardLoggingMetadata.__annotations__.keys()) - _STANDARD_LOGGING_METADATA_RESOLVED_KEYS
-)
+_STANDARD_LOGGING_METADATA_KEYS: Final[frozenset[str]] = frozenset(StandardLoggingMetadata.__annotations__.keys()) - {
+    *_STANDARD_LOGGING_METADATA_RESOLVED_KEYS,
+    USER_API_KEY_IS_VIRTUAL_KEY_METADATA_KEY,
+}
 
 
 def _get_provider_request_id(original_exception: Exception) -> str | None:
@@ -8090,7 +8092,10 @@ def get_standard_logging_metadata(
     )
     if isinstance(metadata, dict):
         # Update the clean_metadata with values from input metadata that match StandardLoggingMetadata fields
-        for key in (metadata.keys() & StandardLoggingMetadata.__annotations__.keys()) - {"is_silent_experiment"}:
+        for key in (metadata.keys() & StandardLoggingMetadata.__annotations__.keys()) - {
+            "is_silent_experiment",
+            USER_API_KEY_IS_VIRTUAL_KEY_METADATA_KEY,
+        }:
             clean_metadata[key] = metadata[key]
 
         if metadata.get("user_api_key") is not None:
