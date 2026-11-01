@@ -10,7 +10,8 @@ import litellm
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
 from litellm.responses.litellm_completion_transformation.transformation import LiteLLMCompletionResponsesConfig
-from litellm.responses.utils import ResponseAPILoggingUtils, ResponsesAPIRequestUtils
+from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
+from litellm.responses.utils import ResponseAPILoggingUtils, ResponsesAPIRequestUtils, bridge_reasoning
 from litellm.types.llms.openai import ResponseAPIUsage, ResponsesAPIOptionalRequestParams, ResponsesAPIResponse
 from litellm.types.utils import ModelInfo, Usage
 from litellm.utils import _invalidate_model_cost_lowercase_map
@@ -1009,3 +1010,130 @@ def test_responses_object_bills_an_explicit_cache_hit_at_the_explicit_rate():
         else:
             litellm.model_cost[model] = previous_row
         _invalidate_model_cost_lowercase_map()
+
+
+@pytest.mark.parametrize(("field", "declarations"), [("mode", "reasoning_modes"), ("context", "reasoning_contexts")])
+def test_the_chat_bridge_drops_a_reasoning_value_no_openai_row_declares_under_drop_params(
+    local_model_cost_map: None, field: str, declarations: str
+) -> None:
+    undeclared_model: Final = next(
+        name
+        for name, row in litellm.model_cost.items()
+        if row.get("litellm_provider") == "openai"
+        and row.get("supports_reasoning")
+        and declarations not in row
+        and OpenAIGPTConfig.is_openai_catalog_model(name)
+    )
+    requested: Final = {"effort": "high", "summary": "auto", field: "not-a-declared-value"}
+
+    def bridged(drop_params: bool) -> object:
+        return bridge_reasoning(
+            requested=requested,
+            effort_kept=True,
+            summary_alias=None,
+            model=undeclared_model,
+            base_model=None,
+            custom_llm_provider="openai",
+            api_base=None,
+            deployment_model_info=None,
+            drop_params=drop_params,
+            additional_drop_params=None,
+        )
+
+    assert bridged(True) == {"effort": "high", "summary": "auto"}
+    assert bridged(False) == requested
+
+def test_the_chat_bridge_outside_the_openai_catalog_drops_undeclared_values_and_keeps_other_keys(
+    local_model_cost_map: None,
+) -> None:
+    declared_mode: Final = litellm.model_cost["gpt-6.1-sol"]["reasoning_modes"][-1]
+    requested: Final = {"effort": "high", "mode": declared_mode, "context": "forever", "max_tokens": 2000}
+
+    def bridged(drop_params: bool) -> object:
+        return bridge_reasoning(
+            requested=requested,
+            effort_kept=True,
+            summary_alias=None,
+            model="my-fine-tuned-model",
+            base_model=None,
+            custom_llm_provider="openai",
+            api_base=None,
+            deployment_model_info=None,
+            drop_params=drop_params,
+            additional_drop_params=None,
+        )
+
+    assert bridged(True) == {"effort": "high", "mode": declared_mode, "max_tokens": 2000}
+    assert bridged(False) == requested
+
+
+def test_the_chat_bridge_keeps_other_keys_for_an_openai_prefixed_name_it_resolves_to_a_catalog_row(
+    local_model_cost_map: None,
+) -> None:
+    declared_mode: Final = litellm.model_cost["gpt-6.1-sol"]["reasoning_modes"][-1]
+    requested: Final = {"effort": "high", "mode": "not-a-declared-value", "max_tokens": 2000}
+
+    def bridged(model: str, drop_params: bool) -> object:
+        return bridge_reasoning(
+            requested={**requested, "mode": declared_mode} if model == "gpt-6.1-sol" else requested,
+            effort_kept=True,
+            summary_alias=None,
+            model=model,
+            base_model=None,
+            custom_llm_provider="openai",
+            api_base=None,
+            deployment_model_info=None,
+            drop_params=drop_params,
+            additional_drop_params=None,
+        )
+
+    assert bridged("openai/gpt-6.1-sol", True) == {"effort": "high", "max_tokens": 2000}
+    assert bridged("openai/gpt-6.1-sol", False) == requested
+    assert bridged("gpt-6.1-sol", True) == {"effort": "high", "mode": declared_mode}
+
+
+def test_the_chat_bridge_keeps_every_reasoning_value_for_a_provider_that_declares_none(
+    local_model_cost_map: None,
+) -> None:
+    requested: Final = {"effort": "high", "mode": "turbo", "context": "forever"}
+
+    bridged: Final = bridge_reasoning(
+        requested=requested,
+        effort_kept=True,
+        summary_alias=None,
+        model="my-vllm-model",
+        base_model=None,
+        custom_llm_provider="hosted_vllm",
+        api_base=None,
+        deployment_model_info=None,
+        drop_params=True,
+        additional_drop_params=None,
+    )
+
+    assert bridged == requested
+
+
+def test_the_chat_bridge_keeps_only_effort_for_a_catalog_model_that_does_not_reason(local_model_cost_map: None) -> None:
+    non_reasoning_model: Final = next(
+        name
+        for name, row in litellm.model_cost.items()
+        if row.get("litellm_provider") == "openai"
+        and row.get("mode") == "chat"
+        and row.get("supports_reasoning") is False
+        and OpenAIGPTConfig.is_openai_catalog_model(name)
+    )
+
+    bridged: Final = bridge_reasoning(
+        requested={"effort": "low", "summary": "auto", "mode": "standard"},
+        effort_kept=True,
+        summary_alias=None,
+        model=non_reasoning_model,
+        base_model=None,
+        custom_llm_provider="openai",
+        api_base=None,
+        deployment_model_info=None,
+        drop_params=True,
+        additional_drop_params=None,
+    )
+
+    assert bridged == {"effort": "low"}

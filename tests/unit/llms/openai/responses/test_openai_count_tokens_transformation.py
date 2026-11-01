@@ -2,10 +2,12 @@ from typing import Final
 
 import pytest
 
+import litellm
 from litellm.llms.anthropic.messages.responses_adapters.transformation import (
     LiteLLMAnthropicToResponsesAPIAdapter,
 )
 from litellm.litellm_core_utils.tool_fields import DropPolicy
+from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.llms.openai.responses.count_tokens.transformation import (
     OpenAICountTokensConfig,
     native_count_request,
@@ -630,7 +632,7 @@ def test_a_saved_conversation_with_a_null_created_by_is_counted_without_it() -> 
 
     policy: Final = DropPolicy(drop_params=False, additional_drop_params=frozenset())
 
-    body: Final = native_count_request(request, "gpt-5.6", policy)
+    body: Final = native_count_request(request, "gpt-5.6", policy, declared_reasoning_efforts=())
 
     assert body["input"] == [compaction, tool_output, sent_created_by]
 
@@ -641,7 +643,7 @@ def test_a_set_created_by_is_counted_without_it_under_drop_params() -> None:
     request: Final = {"model": "gpt-5.6", "input": [{**tool_output, "created_by": "user_1"}]}
     policy: Final = DropPolicy(drop_params=True, additional_drop_params=frozenset())
 
-    body: Final = native_count_request(request, "gpt-5.6", policy)
+    body: Final = native_count_request(request, "gpt-5.6", policy, declared_reasoning_efforts=())
 
     assert body["input"] == [tool_output]
 
@@ -649,7 +651,9 @@ def test_a_set_created_by_is_counted_without_it_under_drop_params() -> None:
 def test_a_text_input_is_counted_as_sent() -> None:
     policy: Final = DropPolicy(drop_params=False, additional_drop_params=frozenset())
 
-    body: Final = native_count_request({"model": "gpt-5.6", "input": "Hello"}, "gpt-5.6", policy)
+    body: Final = native_count_request(
+        {"model": "gpt-5.6", "input": "Hello"}, "gpt-5.6", policy, declared_reasoning_efforts=()
+    )
 
     assert body["input"] == "Hello"
 
@@ -662,6 +666,48 @@ def test_a_reasoning_item_is_counted_without_its_null_fields() -> None:
     }
     policy: Final = DropPolicy(drop_params=False, additional_drop_params=frozenset())
 
-    body: Final = native_count_request(request, "gpt-5.6", policy)
+    body: Final = native_count_request(request, "gpt-5.6", policy, declared_reasoning_efforts=())
 
     assert body["input"] == [reasoning]
+
+
+def _disabled_effort(model: str) -> str:
+    row: Final = litellm.model_cost[model]
+    return next(
+        level
+        for level in ("none", "minimal", "low", "medium", "high", "xhigh")
+        if row.get(f"supports_{level}_reasoning_effort") is False
+    )
+
+
+_DROP: Final = DropPolicy(drop_params=True, additional_drop_params=frozenset())
+
+
+def test_the_count_drops_what_inference_drops_under_drop_params(local_model_cost_map: None) -> None:
+    malformed: Final = {
+        "tool_choice": "required",
+        "parallel_tool_calls": "true",
+        "previous_response_id": 12,
+        "reasoning": {"effort": _disabled_effort("gpt-6.1-sol"), "mode": "turbo", "summary": "auto"},
+    }
+
+    body: Final = native_count_request(
+        {"model": "gpt-6.1-sol", "input": "hi", **malformed}, "gpt-6.1-sol", _DROP, declared_reasoning_efforts=()
+    )
+    inference: Final = OpenAIResponsesAPIConfig().map_openai_params(dict(malformed), "gpt-6.1-sol", True)
+
+    assert body == {"model": "gpt-6.1-sol", "input": "hi", **inference}
+    assert inference == {"reasoning": {"summary": "auto"}}
+
+
+def test_the_count_keeps_an_effort_the_deployment_declares(local_model_cost_map: None) -> None:
+    effort: Final = _disabled_effort("gpt-6.1-sol")
+
+    body: Final = native_count_request(
+        {"model": "gpt-6.1-sol", "input": "hi", "reasoning": {"effort": effort}},
+        "gpt-6.1-sol",
+        _DROP,
+        declared_reasoning_efforts=(effort,),
+    )
+
+    assert body["reasoning"] == {"effort": effort}

@@ -760,3 +760,49 @@ async def test_native_count_answers_openais_rejection_with_its_status_and_text(
 
     assert result is not None
     assert (result.error, result.status_code, result.error_message) == (True, 400, rejection)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("declared", "effort_counted"), [(True, True), (False, False)], ids=["declared", "undeclared"])
+async def test_the_count_reads_the_deployments_declared_efforts_under_drop_params(
+    local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch, declared: bool, effort_counted: bool
+) -> None:
+    row: Final = litellm.model_cost["gpt-6.1-sol"]
+    effort: Final = next(
+        level for level in ("none", "minimal", "low") if row.get(f"supports_{level}_reasoning_effort") is False
+    )
+    model_info: Final = {"reasoning_effort_levels": [effort]} if declared else {}
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    with respx.mock:
+        route: Final = respx.post(COUNT_URL).mock(return_value=httpx.Response(200, json={"input_tokens": 9}))
+        await OpenAITokenCounter().count_responses_request(
+            model_to_use="gpt-6.1-sol",
+            request={"model": "my-gpt", "input": "hi", "reasoning": {"effort": effort}},
+            policy=DropPolicy(drop_params=True, additional_drop_params=frozenset()),
+            deployment={"litellm_params": {"api_key": "sk-test"}, "model_info": model_info},
+            request_model="my-gpt",
+        )
+        sent: Final = json.loads(route.calls.last.request.content)
+
+    assert ("reasoning" in sent) is effort_counted
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("drop_params", [True, False], ids=["drop-params", "send-as-is"])
+async def test_the_count_rounds_the_effort_to_a_declared_level_as_inference_does(
+    local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch, drop_params: bool
+) -> None:
+    declared: Final = ["low", "medium", "high"]
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    with respx.mock:
+        route: Final = respx.post(COUNT_URL).mock(return_value=httpx.Response(200, json={"input_tokens": 9}))
+        await OpenAITokenCounter().count_responses_request(
+            model_to_use="gpt-6.1-sol",
+            request={"model": "my-gpt", "input": "hi", "reasoning": {"effort": "max", "summary": "auto"}},
+            policy=DropPolicy(drop_params=drop_params, additional_drop_params=frozenset()),
+            deployment={"litellm_params": {"api_key": "sk-test"}, "model_info": {"reasoning_effort_levels": declared}},
+            request_model="my-gpt",
+        )
+        sent: Final = json.loads(route.calls.last.request.content)
+
+    assert sent["reasoning"] == {"effort": "high", "summary": "auto"}

@@ -1,7 +1,8 @@
 from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
+from dataclasses import dataclass
 from functools import lru_cache
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Protocol, cast, get_type_hints
+from typing import TYPE_CHECKING, Any, Final, Protocol, TypeAlias, cast, get_args, get_type_hints
 
 import httpx
 from openai.types.responses import ResponseReasoningItem
@@ -15,7 +16,7 @@ from litellm.integrations.anthropic_cache_control_hook import (
     openai_prompt_cache_breakpoint_support,
     targets_openai_api,
 )
-from litellm.litellm_core_utils.core_helpers import normalize_drop_params, process_response_headers
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, normalize_drop_params, process_response_headers
 from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
     safe_convert_created_field,
@@ -35,6 +36,7 @@ from litellm.llms.openai.chat.gpt_reasoning_transformation import (
     refused_reasoning_effort_warning,
     unsupported_reasoning_effort_message,
 )
+from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 from litellm.responses.litellm_completion_transformation.custom_tools import TOOL_CALL_ITEM_ID_PREFIX_BY_TYPE
 from litellm.responses.litellm_completion_transformation.reasoning_items import is_litellm_minted_reasoning_item
 from litellm.responses.litellm_completion_transformation.tool_search import (
@@ -44,9 +46,11 @@ from litellm.responses.litellm_completion_transformation.tool_search import (
     tools_with_anthropic_tool_search_mapped,
     tools_without_anthropic_tool_search,
 )
+from litellm.responses.utils import openai_api_well_formed_reasoning, openai_well_formed_reasoning
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.openai import *
+from litellm.types.llms.openai import REASONING_EFFORT
 from litellm.types.responses.main import *
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
@@ -314,6 +318,99 @@ def _bundled_openai_reasoning_models() -> frozenset[str]:
     )
 
 
+_TOOL_CHOICES_WITHOUT_TOOLS: Final = frozenset({"auto", "none"})
+_TOOL_CHOICE_STRINGS: Final = _TOOL_CHOICES_WITHOUT_TOOLS | {"required"}
+
+
+_PROVIDERS_CHECKED_FOR_MALFORMED_VALUES: Final = (LlmProviders.OPENAI, LlmProviders.AZURE)
+_REASONING_EFFORTS: Final = frozenset(get_args(REASONING_EFFORT))
+
+
+_NON_HOSTED_TOOL_TYPES: Final = frozenset({"function", "custom", "mcp", "namespace"})
+
+
+def _tool_mappings(tools: object) -> tuple[Mapping[str, object], ...]:
+    return tuple(mapping for mapping in map(as_str_mapping, _json_array_or_empty(tools)) if mapping is not None)
+
+
+def _names_a_sent_tool(tool_choice: object, tools: tuple[Mapping[str, object], ...]) -> bool:
+    choice: Final = as_str_mapping(tool_choice)
+    if choice is None:
+        return False
+    if choice.get("type") != "allowed_tools":
+        return _sent_tools_include(choice, tools)
+    allowed: Final = choice.get("tools")
+    entries: Final = tuple(map(as_str_mapping, _json_array_or_empty(allowed)))
+    return not isinstance(allowed, list | tuple) or all(
+        entry is not None and _sent_tools_include(entry, tools) for entry in entries
+    )
+
+
+def _sent_tools_include(choice: Mapping[str, object], tools: tuple[Mapping[str, object], ...]) -> bool:
+    match choice.get("type"):
+        case "allowed_tools":
+            return False
+        case "function":
+            return any(tool.get("type") == "function" and tool.get("name") == choice.get("name") for tool in tools)
+        case "custom":
+            return any(tool.get("type") == "custom" for tool in tools)
+        case "mcp":
+            return any(
+                tool.get("type") == "mcp" and tool.get("server_label") == choice.get("server_label") for tool in tools
+            )
+        case str():
+            return any(tool.get("type") not in _NON_HOSTED_TOOL_TYPES for tool in tools)
+        case _:
+            return True
+
+
+def _has_tool_choice_shape(tool_choice: object) -> bool:
+    if isinstance(tool_choice, str):
+        return tool_choice in _TOOL_CHOICE_STRINGS
+    return as_str_mapping(tool_choice) is not None
+
+
+def _accepts_tool_choice(tool_choice: object, params: Mapping[str, object]) -> bool:
+    if tool_choice is None:
+        return True
+    if params.get("prompt") is not None:
+        return _has_tool_choice_shape(tool_choice)
+    tools: Final = params.get("tools")
+    if isinstance(tool_choice, str):
+        return tool_choice in _TOOL_CHOICES_WITHOUT_TOOLS or (tool_choice == "required" and bool(tools))
+    listed: Final = _json_array_or_empty(tools)
+    return bool(tools) and (
+        not isinstance(tools, list | tuple) or _names_a_sent_tool(tool_choice, _tool_mappings(listed))
+    )
+
+
+def _is_well_formed(name: str, value: object, params: Mapping[str, object]) -> bool:
+    match name:
+        case "tool_choice":
+            return _accepts_tool_choice(value, params)
+        case "parallel_tool_calls":
+            return value is None or isinstance(value, bool)
+        case "previous_response_id":
+            return value is None or (isinstance(value, str) and value != "")
+        case "reasoning":
+            return value is None or as_str_mapping(value) is not None
+        case _:
+            return True
+
+
+@dataclass(frozen=True, slots=True)
+class _ReasoningUnsupported:
+    pass
+
+
+@dataclass(frozen=True, slots=True)
+class _EffortDisabled:
+    effort: str
+
+
+_ReasoningRefusal: TypeAlias = _ReasoningUnsupported | _EffortDisabled
+
+
 class _DeleteResponseBody(TypedDict):
     """Decoded body of the Responses API delete call."""
 
@@ -435,8 +532,74 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
     def _requested_effort(reasoning: object) -> object:
         return reasoning.get("effort") if isinstance(reasoning, Mapping) else getattr(reasoning, "effort", None)
 
+    def _reasoning_refusal(
+        self, reasoning: object, model: str, declared_reasoning_efforts: Collection[str] | None
+    ) -> _ReasoningRefusal | None:
+        if (
+            self.custom_llm_provider == LlmProviders.OPENAI
+            and self._requests_reasoning_effort(reasoning)
+            and not self._supports_reasoning_param(model=model)
+        ):
+            return _ReasoningUnsupported()
+        lookup_name: Final = self._model_map_lookup_name(model)
+        effort: Final = (as_str_mapping(reasoning) or {}).get("effort")
+        if (
+            isinstance(effort, str)
+            and effort not in (declared_reasoning_efforts or ())
+            and self._is_gpt_5_model(model=lookup_name)
+            and self._effort_level_is_disabled(lookup_name, effort)
+        ):
+            return _EffortDisabled(effort)
+        return None
+
+    def _accepted_reasoning(self, reasoning: Mapping[str, object], model: str) -> Mapping[str, object]:
+        if self.custom_llm_provider not in _PROVIDERS_CHECKED_FOR_MALFORMED_VALUES:
+            return reasoning
+        if self.custom_llm_provider != LlmProviders.OPENAI:
+            return openai_api_well_formed_reasoning(reasoning, keeps_unlisted_keys=False)
+        if not OpenAIGPTConfig.is_openai_catalog_model(model):
+            return openai_api_well_formed_reasoning(reasoning, keeps_unlisted_keys=True)
+        return openai_well_formed_reasoning(reasoning, model, model_reasons=self._supports_reasoning_param(model=model))
+
+    def _is_well_formed_effort(self, effort: object, declared_reasoning_efforts: Collection[str] | None) -> bool:
+        if effort is None or self.custom_llm_provider not in _PROVIDERS_CHECKED_FOR_MALFORMED_VALUES:
+            return True
+        return isinstance(effort, str) and (
+            effort in _REASONING_EFFORTS or effort in (declared_reasoning_efforts or ())
+        )
+
+    def _well_formed_params(self, params: Mapping[str, object]) -> Mapping[str, object]:
+        if self.custom_llm_provider not in _PROVIDERS_CHECKED_FOR_MALFORMED_VALUES:
+            return params
+        return {name: value for name, value in params.items() if _is_well_formed(name, value, params)}
+
+    def params_dropped_for_deployment(
+        self, params: Mapping[str, object], model: str, *, declared_reasoning_efforts: Collection[str] | None
+    ) -> Mapping[str, object]:
+        """The request params this deployment forwards under drop_params, malformed values removed."""
+        well_formed: Final = self._well_formed_params(params)
+        without_reasoning: Final = {name: value for name, value in well_formed.items() if name != "reasoning"}
+        reasoning: Final = well_formed.get("reasoning")
+        refusal: Final = self._reasoning_refusal(reasoning, model, declared_reasoning_efforts)
+        if isinstance(refusal, _ReasoningUnsupported):
+            return without_reasoning
+        reasoning_fields: Final = as_str_mapping(reasoning)
+        if reasoning_fields is None:
+            return well_formed
+        effort_kept: Final = not isinstance(refusal, _EffortDisabled) and self._is_well_formed_effort(
+            reasoning_fields.get("effort"), declared_reasoning_efforts
+        )
+        kept_reasoning: Final = self._accepted_reasoning(
+            {key: value for key, value in reasoning_fields.items() if effort_kept or key != "effort"}, model
+        )
+        return (
+            {**without_reasoning, "reasoning": kept_reasoning}
+            if kept_reasoning or not reasoning_fields
+            else without_reasoning
+        )
+
     @staticmethod
-    def _enforce_min_max_output_tokens(max_output_tokens: "int | None") -> "int | None":
+    def _enforce_min_max_output_tokens(max_output_tokens: object) -> object:
         """Raise sub-minimum max_output_tokens up to the OpenAI Responses API minimum.
 
         OpenAI's Responses API rejects max_output_tokens below 16 for every model
@@ -497,21 +660,27 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         'none' on models that support it).
         Apply the same validation used by the chat completions path.
         """
-        params: Final = dict(response_api_optional_params)
-
-        if "max_output_tokens" in params:
-            params["max_output_tokens"] = self._enforce_min_max_output_tokens(params.get("max_output_tokens"))
-
-        if (
-            self.custom_llm_provider == LlmProviders.OPENAI
-            and self._requests_reasoning_effort(params.get("reasoning"))
-            and not self._supports_reasoning_param(model=model)
-        ):
-            if drop_params or litellm.drop_params:
-                dropped_reasoning: Final = params.pop("reasoning", None)
-                if self._requested_effort(dropped_reasoning) != "none" or not self._is_known_non_reasoning_model(model):
-                    verbose_logger.warning(DROP_UNSUPPORTED_REASONING_WARNING, dropped_reasoning, model)
-            else:
+        requested: Final[Mapping[str, object]] = response_api_optional_params
+        drops: Final = drop_params or litellm.drop_params
+        requested_reasoning: Final = requested.get("reasoning")
+        refusal: Final = self._reasoning_refusal(requested_reasoning, model, declared_reasoning_efforts)
+        match refusal:
+            case _ReasoningUnsupported() if drops:
+                if self._requested_effort(requested_reasoning) != "none" or not self._is_known_non_reasoning_model(
+                    model
+                ):
+                    verbose_logger.warning(DROP_UNSUPPORTED_REASONING_WARNING, requested_reasoning, model)
+            case _EffortDisabled(effort=dropped_effort) if drops:
+                verbose_logger.warning(
+                    refused_reasoning_effort_warning(
+                        suggest_declared_levels=declared_reasoning_efforts is not None, suggest_base_model=False
+                    ),
+                    "reasoning.effort",
+                    dropped_effort,
+                    model,
+                    self._model_map_lookup_name(model),
+                )
+            case _ReasoningUnsupported():
                 raise litellm.UnsupportedParamsError(
                     message=(
                         f"{model} doesn't support `reasoning.effort` "
@@ -520,37 +689,24 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
                     ),
                     status_code=400,
                 )
+            case _EffortDisabled(effort=disabled_effort):
+                raise litellm.UnsupportedParamsError(
+                    message=unsupported_reasoning_effort_message("reasoning.effort", disabled_effort, model),
+                    status_code=400,
+                )
+            case None:
+                pass
+        params: Final = dict(
+            self.params_dropped_for_deployment(requested, model, declared_reasoning_efforts=declared_reasoning_efforts)
+            if drops
+            else requested
+        )
+
+        if "max_output_tokens" in params:
+            params["max_output_tokens"] = self._enforce_min_max_output_tokens(params.get("max_output_tokens"))
 
         lookup_name: Final = self._model_map_lookup_name(model)
         if self._is_gpt_5_model(model=lookup_name):
-            reasoning: Final = params.get("reasoning") or {}
-            requested_effort: Final = reasoning.get("effort") if isinstance(reasoning, dict) else None
-            if (
-                isinstance(reasoning, dict)
-                and isinstance(requested_effort, str)
-                and requested_effort not in (declared_reasoning_efforts or ())
-                and self._effort_level_is_disabled(lookup_name, requested_effort)
-            ):
-                if not (drop_params or litellm.drop_params):
-                    raise litellm.UnsupportedParamsError(
-                        message=unsupported_reasoning_effort_message("reasoning.effort", requested_effort, model),
-                        status_code=400,
-                    )
-                verbose_logger.warning(
-                    refused_reasoning_effort_warning(
-                        suggest_declared_levels=declared_reasoning_efforts is not None, suggest_base_model=False
-                    ),
-                    "reasoning.effort",
-                    requested_effort,
-                    model,
-                    lookup_name,
-                )
-                remaining: Final = reasoning.copy()
-                remaining.pop("effort", None)
-                if remaining:
-                    params["reasoning"] = remaining
-                else:
-                    params.pop("reasoning", None)
             forwarded_reasoning: Final = params.get("reasoning")
             effort: Final = forwarded_reasoning.get("effort") if isinstance(forwarded_reasoning, dict) else None
             supports_none: Final = self._supports_reasoning_effort_none(model=lookup_name)
