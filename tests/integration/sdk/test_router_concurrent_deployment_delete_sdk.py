@@ -8,7 +8,7 @@ import threading
 import uuid
 from collections.abc import AsyncIterable, Awaitable, Callable, Iterable
 from concurrent.futures import ThreadPoolExecutor
-from types import FrameType
+from types import FrameType, MappingProxyType
 from typing import Final, TypeVar
 
 import pytest
@@ -28,12 +28,23 @@ _BURST_THREADS: Final = 8
 _BURST_CALLS: Final = 24
 _CHURN_UPSERTS: Final = 120
 _UNREPORTED_MODEL_ID: Final = frozenset({"aresponses-stream", "aanthropic-messages"})
-_ROUTER_FILE: Final = Router.__init__.__code__.co_filename
-_INDEX_LOCK_LINES: Final = frozenset(
-    number
-    for number, line in enumerate(linecache.getlines(_ROUTER_FILE), start=1)
-    if "with self._deployment_index_lock" in line
-)
+_REINDEX: Final = Router._update_deployment_indices_after_removal.__code__
+
+
+def _router_source_files() -> frozenset[str]:
+    facade_files: Final = (sys.modules[cls.__module__].__file__ for cls in Router.__mro__ if cls is not object)
+    return frozenset({_REINDEX.co_filename, *(path for path in facade_files if path is not None)})
+
+
+def _lock_lines(path: str) -> frozenset[int]:
+    return frozenset(
+        number
+        for number, line in enumerate(linecache.getlines(path), start=1)
+        if "with self._deployment_index_lock" in line
+    )
+
+
+_INDEX_LOCK_LINES: Final = MappingProxyType({path: _lock_lines(path) for path in _router_source_files()})
 
 T = TypeVar("T")
 
@@ -80,7 +91,6 @@ def _read_during_held_write(read: Callable[[], T], write: Callable[[], object]) 
     """Run `read` on its own thread while `write` waits where the list has shrunk but the index maps have not caught
     up. The write resumes once `read` returns or reaches the router's index lock, so a read that skips the lock meets
     the half-updated list and a read that takes the lock waits for the write"""
-    reindex: Final = Router._update_deployment_indices_after_removal.__code__
     held: Final = threading.Event()
     release: Final = threading.Event()
     settled: Final = threading.Event()
@@ -89,7 +99,7 @@ def _read_during_held_write(read: Callable[[], T], write: Callable[[], object]) 
     failure: Final[list[BaseException]] = []
 
     def hold_at_reindex(frame: FrameType, event: str, _arg: object) -> None:
-        if event == "call" and frame.f_code is reindex and not held.is_set():
+        if event == "call" and frame.f_code is _REINDEX and not held.is_set():
             held.set()
             released_in_time.append(release.wait(timeout=_SYNC_SECONDS))
 
@@ -102,9 +112,10 @@ def _read_during_held_write(read: Callable[[], T], write: Callable[[], object]) 
             sys.setprofile(previous)
 
     def watch_read(frame: FrameType, event: str, _arg: object) -> Callable[..., object] | None:
-        if frame.f_code.co_filename != _ROUTER_FILE:
+        lock_lines: Final = _INDEX_LOCK_LINES.get(frame.f_code.co_filename)
+        if lock_lines is None:
             return None
-        if event == "line" and frame.f_lineno in _INDEX_LOCK_LINES:
+        if event == "line" and frame.f_lineno in lock_lines:
             settled.set()
         return watch_read
 

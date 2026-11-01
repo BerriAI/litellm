@@ -105,10 +105,10 @@ LAZY_FEATURES: Final[tuple[LazyFeature, ...]] = (
     LazyFeature(
         name="a2a",
         module_path="litellm.proxy.agent_endpoints.a2a_endpoints",
-        # ``/v1/a2a/{agent_id}/message/send`` is caught via the suffix so the
+        # ``/v1/a2a/{agent_id}/message/send`` and ``/message/stream`` are caught via suffixes so the
         # ``/v1/a2a`` prefix doesn't subsume the discover prefix below.
         path_prefixes=("/a2a",),
-        path_suffixes=("/message/send",),
+        path_suffixes=("/message/send", "/message/stream"),
     ),
     LazyFeature(
         name="a2a_registration",
