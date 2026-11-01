@@ -113,6 +113,7 @@ class GenAI:
     USAGE_OUTPUT_TOKENS: Final = "gen_ai.usage.output_tokens"
     USAGE_CACHE_CREATION_INPUT_TOKENS: Final = "gen_ai.usage.cache_creation.input_tokens"
     USAGE_CACHE_READ_INPUT_TOKENS: Final = "gen_ai.usage.cache_read.input_tokens"
+    USAGE_REASONING_OUTPUT_TOKENS: Final = "gen_ai.usage.reasoning.output_tokens"
     # content (opt-in, gated by capture mode)
     INPUT_MESSAGES: Final = "gen_ai.input.messages"
     OUTPUT_MESSAGES: Final = "gen_ai.output.messages"

@@ -67,6 +67,7 @@ class GenAIMapper:
         GenAI.USAGE_OUTPUT_TOKENS: lambda d: d.usage.output_tokens,
         GenAI.USAGE_CACHE_CREATION_INPUT_TOKENS: lambda d: d.usage.cache_creation_input_tokens,
         GenAI.USAGE_CACHE_READ_INPUT_TOKENS: lambda d: d.usage.cache_read_input_tokens,
+        GenAI.USAGE_REASONING_OUTPUT_TOKENS: lambda d: d.usage.reasoning_tokens,
         Error.TYPE: lambda d: d.error.error_type if d.error else None,
         Server.ADDRESS: lambda d: d.server.address if d.server else None,
         Server.PORT: lambda d: d.server.port if d.server else None,
