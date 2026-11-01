@@ -192,6 +192,23 @@ class TestMergeSessionIntoLitellmParams:
             await merge_a2a_session_into_litellm_params(LITELLM_PARAMS, _params(), "hash-a")
         assert LITELLM_PARAMS == original
 
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("sessions", [[], None])
+    async def test_session_backed_call_bypasses_response_cache(self, sessions):
+        user_id = derive_agent_engine_user_id("ctx-1", "hash-a")
+        existing = [{"name": f"{ENGINE_PATH}/sessions/777", "userId": user_id, "updateTime": "2026-01-01T00:00:00Z"}]
+        token_patch, client_patch, _ = _mock_sessions_api(existing if sessions is None else sessions)
+        with token_patch, client_patch:
+            merged = await merge_a2a_session_into_litellm_params(LITELLM_PARAMS, _params(), "hash-a")
+        assert merged["cache"] == {"no-cache": True, "no-store": True}
+
+    @pytest.mark.asyncio
+    async def test_noop_path_leaves_cache_settings_alone(self):
+        token_patch, client_patch, _ = _mock_sessions_api([])
+        with token_patch, client_patch:
+            merged = await merge_a2a_session_into_litellm_params(LITELLM_PARAMS, _params(None), "hash-a")
+        assert "cache" not in merged
+
 
 class TestVertexAgentEngineA2AConfig:
     def test_registered_for_agent_engine_models(self):

@@ -159,4 +159,11 @@ async def merge_a2a_session_into_litellm_params(
     existing_session: Final = _str_param(litellm_params, "session_id")
     session_id: Final = existing_session or await lookup_latest_session_id(litellm_params, user_id)
     session_update: Final[Mapping[str, object]] = {"session_id": session_id} if session_id else {}
-    return {**litellm_params, "user_id": user_id, **session_update}
+    # The reply depends on server-side session history, but the response cache key ignores
+    # user_id/session_id, so a cached reply could be served to another key or a later turn.
+    return {
+        **litellm_params,
+        "user_id": user_id,
+        **session_update,
+        "cache": {"no-cache": True, "no-store": True},
+    }
