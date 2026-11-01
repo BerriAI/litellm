@@ -19,6 +19,7 @@ import pytest
 import respx
 from fastapi import HTTPException, Request, Response, status
 from fastapi.responses import JSONResponse, StreamingResponse
+from starlette.types import Message
 
 import litellm
 from litellm._uuid import uuid
@@ -5737,6 +5738,74 @@ class TestCancelOnDisconnect:
 
         return Request(scope={"type": "http", "headers": []}, receive=receive)
 
+    @pytest.mark.parametrize("enabled", (True, False))
+    async def test_disconnect_cancels_a_waiting_pre_call_hook(
+        self, monkeypatch: pytest.MonkeyPatch, enabled: bool
+    ) -> None:
+        from litellm.proxy.proxy_server import ProxyConfig as RealProxyConfig
+
+        entered: Final = asyncio.Event()
+        release: Final = asyncio.Event()
+        cancelled: Final = asyncio.Event()
+        messages: Final[asyncio.Queue[Message]] = asyncio.Queue()
+
+        class WaitingHook(CustomLogger):
+            async def async_pre_call_hook(
+                self, user_api_key_dict: UserAPIKeyAuth, cache: DualCache, data: dict[str, object], call_type: str
+            ) -> dict[str, object]:
+                entered.set()
+                try:
+                    await release.wait()
+                except asyncio.CancelledError:
+                    cancelled.set()
+                    raise
+                return data
+
+        monkeypatch.setattr(litellm, "callbacks", [WaitingHook()])
+        request: Final = Request(
+            scope={"type": "http", "method": "POST", "path": "/v1/chat/completions", "headers": []},
+            receive=messages.get,
+        )
+        processor: Final = ProxyBaseLLMRequestProcessing(
+            data={"model": "openai/test-model", "messages": [{"role": "user", "content": "hello"}]}
+        )
+        task: Final = asyncio.create_task(
+            processor.common_processing_pre_call_logic(
+                request=request,
+                general_settings={"cancel_on_disconnect": enabled},
+                user_api_key_dict=ProxyUserAPIKeyAuth(),
+                proxy_logging_obj=ProxyLogging(user_api_key_cache=UserApiKeyCache()),
+                proxy_config=RealProxyConfig(),
+                route_type="acompletion",
+            )
+        )
+        try:
+            await asyncio.wait_for(entered.wait(), 5)
+            messages.put_nowait({"type": "http.disconnect"})
+            if enabled:
+                with pytest.raises(HTTPException) as exc_info:
+                    await asyncio.wait_for(task, 5)
+                assert exc_info.value.status_code == 499
+                assert cancelled.is_set()
+            else:
+                release.set()
+                data, _ = await asyncio.wait_for(task, 5)
+                assert data["model"] == "openai/test-model"
+                assert not cancelled.is_set()
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+    async def test_disconnect_watcher_preserves_hook_context_changes(self) -> None:
+        value: Final = contextvars.ContextVar("hook-context", default="before")
+
+        async def pre_call() -> str:
+            value.set("after")
+            return "completed"
+
+        assert await _await_llm_call_cancelling_on_disconnect(self._request([]), pre_call()) == "completed"
+        assert value.get() == "after"
+
     async def test_monitor_cancels_llm_call_and_sets_event_on_disconnect(self):
         request = self._request(
             [
@@ -7671,7 +7740,10 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
                     "litellm_params": {"model": "openai/text-embedding-3-small", "api_key": "sk-synthetic"},
                     "model_info": {"enforce_supported_endpoints": True, "supported_endpoints": ["/v1/embeddings"]},
                 },
-                {"model_name": "chat-model", "litellm_params": {"model": "openai/gpt-5.4-nano", "api_key": "sk-synthetic"}},
+                {
+                    "model_name": "chat-model",
+                    "litellm_params": {"model": "openai/gpt-5.4-nano", "api_key": "sk-synthetic"},
+                },
             ],
             fallbacks=[{"rate-limited": ["embed-alias", "chat-model"]}],
         )

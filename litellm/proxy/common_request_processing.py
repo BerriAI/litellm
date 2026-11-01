@@ -1991,7 +1991,7 @@ def log_llm_api_exception(e: Exception, litellm_call_id: str | None) -> None:
 
 async def _cancel_llm_call_on_client_disconnect(
     request: Request,
-    llm_api_call: "asyncio.Future[_LlmCallT]",
+    llm_api_call: "asyncio.Future[_LlmCallT] | anyio.CancelScope",
     disconnect_event: asyncio.Event,
 ) -> None:
     try:
@@ -2010,21 +2010,18 @@ async def _cancel_llm_call_on_client_disconnect(
 
 async def _await_llm_call_cancelling_on_disconnect(
     request: Request,
-    llm_api_call: "asyncio.Future[_LlmCallT]",
+    llm_api_call: Awaitable[_LlmCallT],
 ) -> _LlmCallT:
     disconnect_event: Final = asyncio.Event()
-    monitor: Final = asyncio.create_task(_cancel_llm_call_on_client_disconnect(request, llm_api_call, disconnect_event))
-    try:
-        return await llm_api_call
-    except asyncio.CancelledError:
-        if disconnect_event.is_set():
-            raise HTTPException(
-                status_code=499,
-                detail=_CLIENT_DISCONNECT_DETAIL,
-            )
-        raise
-    finally:
-        monitor.cancel()
+    with anyio.CancelScope() as cancel_scope:
+        monitor: Final = asyncio.create_task(
+            _cancel_llm_call_on_client_disconnect(request, cancel_scope, disconnect_event)
+        )
+        try:
+            return await llm_api_call
+        finally:
+            monitor.cancel()
+    raise HTTPException(status_code=499, detail=_CLIENT_DISCONNECT_DETAIL)
 
 
 def _timing_values(
@@ -2640,11 +2637,16 @@ class ProxyBaseLLMRequestProcessing:
         prefetch_model = self.data.get("model")
         if llm_router is not None and isinstance(prefetch_model, str):
             RoutingContext(llm_router).arm_read_prefetch(prefetch_model, self.data)
-        self.data = await proxy_logging_obj.pre_call_hook(
+        pre_call: Final = proxy_logging_obj.pre_call_hook(
             user_api_key_dict=user_api_key_dict,
             data=self.data,
             call_type=route_type,
             skip_guardrails=skip_guardrails,
+        )
+        self.data = (
+            await _await_llm_call_cancelling_on_disconnect(request, pre_call)
+            if general_settings.get("cancel_on_disconnect", False)
+            else await pre_call
         )
         await _enforce_guardrail_added_tag_budgets(
             data=self.data,
