@@ -33,8 +33,9 @@ from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
     normalize_gemini_speech_config,
     reject_unknown_gemini_tts_voice_keys,
 )
+from litellm.types.llms.anthropic import AnthropicThinkingParam
 from litellm.types.llms.base import CachedTokensDetails
-from litellm.types.llms.vertex_ai import GeminiFinishReason, RequestBody, UsageMetadata
+from litellm.types.llms.vertex_ai import GeminiFinishReason, GeminiThinkingConfig, RequestBody, UsageMetadata
 from litellm.types.utils import ChoiceLogprobs, ModelInfo, ModelResponseStream, Usage
 from litellm.utils import _invalidate_model_cost_lowercase_map, CustomStreamWrapper
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
@@ -328,7 +329,9 @@ def test_chat_audio_drop_params_keeps_every_voice_config_field_gemini_accepts(sp
 
 def test_chat_audio_reads_snake_case_wrapper_beside_null_camel_case_wrapper():
     mapped: Final = VertexGeminiConfig().map_openai_params(
-        non_default_params={"audio": {"format": "pcm16", "speechConfig": None, "speech_config": {"voice_name": "Kore"}}},
+        non_default_params={
+            "audio": {"format": "pcm16", "speechConfig": None, "speech_config": {"voice_name": "Kore"}}
+        },
         optional_params={},
         model="gemini-2.5-flash-preview-tts",
         drop_params=False,
@@ -3468,9 +3471,7 @@ async def test_vertex_ai_streaming_bad_request_is_not_wrapped():
         async def dispatch_failure_handlers(self, *args, **kwargs):
             return None
 
-        async def dispatch_attempt_failure_handlers(
-            self, exception: Exception, traceback_exception: str
-        ) -> None:
+        async def dispatch_attempt_failure_handlers(self, exception: Exception, traceback_exception: str) -> None:
             return None
 
         def attempt_scoped_copy(self) -> "DummyLogging":
@@ -3600,9 +3601,7 @@ def test_grounding_annotations_preserve_all_web_sources(indices: list[int], expe
     ]
     metadata: Final = {
         "groundingChunks": chunks,
-        "groundingSupports": [
-            {"segment": {"startIndex": 4, "endIndex": 11}, "groundingChunkIndices": indices}
-        ],
+        "groundingSupports": [{"segment": {"startIndex": 4, "endIndex": 11}, "groundingChunkIndices": indices}],
     }
     annotations: Final = VertexGeminiConfig._convert_grounding_metadata_to_annotations([metadata], "The passage")
     expected: Final = [
@@ -8893,7 +8892,7 @@ def test_anthropic_thinking_param_to_gemini_3_provider_defaults():
         )
 
         assert result_disabled.get("includeThoughts") is False
-        assert "thinkingLevel" not in result_disabled or result_disabled.get("thinkingLevel") is None
+        assert result_disabled.get("thinkingLevel") == "low"
 
         thinking_param_zero: AnthropicThinkingParam = {
             "type": "enabled",
@@ -8906,7 +8905,7 @@ def test_anthropic_thinking_param_to_gemini_3_provider_defaults():
         )
 
         assert result_zero["includeThoughts"] is False
-        assert "thinkingLevel" not in result_zero or result_zero.get("thinkingLevel") is None
+        assert result_zero["thinkingLevel"] == "minimal"
 
         result_gemini3flashpreview = VertexGeminiConfig._map_thinking_param(
             thinking_param=thinking_param,
@@ -10849,3 +10848,189 @@ def test_grounding_support_preserves_every_web_source(chunk_indices: list[int]) 
         }
         for index, start, end in expected_sources
     ]
+
+
+@pytest.mark.parametrize(
+    ("model", "expected_is_gemini_3", "expected_supports_minimal"),
+    [
+        ("gemini-3-flash", True, True),
+        ("gemini-3-flash-preview", True, True),
+        ("gemini-3.1-flash", True, True),
+        ("gemini-3.1-flash-lite-preview", True, True),
+        ("gemini-3.5-flash", True, True),
+        ("gemini-3.5-flash-preview", True, True),
+        ("gemini-3.5-flash-lite", True, True),
+        ("au.gemini-3.5-flash", True, True),
+        ("eu.gemini-3.5-flash", True, True),
+        ("us.gemini-3.5-flash", True, True),
+        ("ca.gemini-3.5-flash", True, True),
+        ("jp.gemini-3.5-flash", True, True),
+        ("uk.gemini-3.5-flash", True, True),
+        ("in.gemini-3.5-flash", True, True),
+        ("sg.gemini-3.5-flash", True, True),
+        ("kr.gemini-3.5-flash", True, True),
+        ("global.gemini-3.5-flash", True, True),
+        ("apac.gemini-3.5-flash", True, True),
+        ("us-central1.gemini-3.5-flash", True, True),
+        ("europe-west4.gemini-3.5-flash", True, True),
+        ("australia-southeast1.gemini-3.5-flash", True, True),
+        ("asia-northeast1.gemini-3.5-flash", True, True),
+        ("southamerica-east1.gemini-3.5-flash", True, True),
+        ("me-central1.gemini-3.5-flash", True, True),
+        ("vertex_ai/au.gemini-3.5-flash", True, True),
+        ("vertex_ai/eu.gemini-3.5-flash", True, True),
+        ("vertex_ai/us-central1.gemini-3.5-flash", True, True),
+        ("gemini/au.gemini-3.5-flash", True, True),
+        ("gemini/gemini-3.5-flash-preview", True, True),
+        ("gemini-3-pro", True, False),
+        ("gemini-3-pro-preview", True, False),
+        ("gemini-3.1-pro", True, False),
+        ("gemini-3.1-pro-preview", True, False),
+        ("gemini-3.5-pro", True, False),
+        ("au.gemini-3.1-pro", True, False),
+        ("eu.gemini-3.5-pro", True, False),
+        ("us-central1.gemini-3.5-pro", True, False),
+        ("vertex_ai/au.gemini-3.5-pro", True, False),
+        ("gemini-2.5-flash", False, False),
+        ("au.gemini-2.5-flash", False, False),
+        ("eu.gemini-2.5-pro", False, False),
+        ("us.gemini-2.5-flash", False, False),
+        ("us-central1.gemini-2.0-flash", False, False),
+        ("vertex_ai/au.gemini-2.5-flash", False, False),
+        ("gemini/eu.gemini-2.5-flash", False, False),
+        ("eu.gemma-3-27b-it", False, False),
+    ],
+)
+def test_gemini_3_helpers_with_regional_prefixes(
+    local_model_cost_map: None,
+    model: str,
+    expected_is_gemini_3: bool,
+    expected_supports_minimal: bool,
+) -> None:
+    assert VertexGeminiConfig._is_gemini_3_or_newer(model) is expected_is_gemini_3
+    assert VertexGeminiConfig._supports_minimal_thinking_level(model) is expected_supports_minimal
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "gemini-3.5-flash",
+        "au.gemini-3.5-flash",
+        "eu.gemini-3.5-flash",
+        "us.gemini-3.5-flash",
+        "global.gemini-3.5-flash",
+        "us-central1.gemini-3.5-flash",
+        "europe-west4.gemini-3.5-flash",
+        "australia-southeast1.gemini-3.5-flash",
+        "vertex_ai/au.gemini-3.5-flash",
+        "gemini/au.gemini-3.5-flash",
+        "gemini-3.5-flash-preview",
+        "gemini-3.1-flash",
+        "gemini-3-flash",
+    ],
+)
+@pytest.mark.parametrize(
+    ("reasoning_effort", "expected"),
+    [
+        ("none", {"thinkingLevel": "minimal", "includeThoughts": False}),
+        ("disable", {"thinkingLevel": "minimal", "includeThoughts": False}),
+        ("minimal", {"thinkingLevel": "minimal", "includeThoughts": True}),
+        ("low", {"thinkingLevel": "low", "includeThoughts": True}),
+        ("medium", {"thinkingLevel": "medium", "includeThoughts": True}),
+        ("high", {"thinkingLevel": "high", "includeThoughts": True}),
+    ],
+)
+def test_gemini_3_flash_reasoning_effort_mapping_all_regions(
+    local_model_cost_map: None,
+    model: str,
+    reasoning_effort: str,
+    expected: GeminiThinkingConfig,
+) -> None:
+    result: Final = VertexGeminiConfig._map_reasoning_effort_to_thinking_level(
+        reasoning_effort=reasoning_effort,
+        model=model,
+    )
+    assert result == expected
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "gemini-3.1-pro",
+        "gemini-3.1-pro-preview",
+        "gemini-3.5-pro",
+        "au.gemini-3.1-pro",
+        "eu.gemini-3.5-pro",
+        "us-central1.gemini-3.5-pro",
+        "vertex_ai/au.gemini-3.7-flash",
+        "us-central1.gemini-3.8-flash",
+    ],
+)
+@pytest.mark.parametrize(
+    ("reasoning_effort", "expected"),
+    [
+        ("none", {"thinkingLevel": "low", "includeThoughts": False}),
+        ("disable", {"thinkingLevel": "low", "includeThoughts": False}),
+        ("minimal", {"thinkingLevel": "low", "includeThoughts": True}),
+        ("low", {"thinkingLevel": "low", "includeThoughts": True}),
+        ("medium", {"thinkingLevel": "medium", "includeThoughts": True}),
+        ("high", {"thinkingLevel": "high", "includeThoughts": True}),
+    ],
+)
+def test_gemini_3_pro_and_37_38_flash_reasoning_effort_mapping_all_regions(
+    local_model_cost_map: None,
+    model: str,
+    reasoning_effort: str,
+    expected: GeminiThinkingConfig,
+) -> None:
+    result: Final = VertexGeminiConfig._map_reasoning_effort_to_thinking_level(
+        reasoning_effort=reasoning_effort,
+        model=model,
+    )
+    assert result == expected
+
+
+@pytest.mark.parametrize(
+    ("model", "expected_level"),
+    [
+        ("gemini-3.5-flash", "minimal"),
+        ("au.gemini-3.5-flash", "minimal"),
+        ("eu.gemini-3.5-flash", "minimal"),
+        ("us.gemini-3.5-flash", "minimal"),
+        ("us-central1.gemini-3.5-flash", "minimal"),
+        ("europe-west4.gemini-3.5-flash", "minimal"),
+        ("australia-southeast1.gemini-3.5-flash", "minimal"),
+        ("vertex_ai/au.gemini-3.5-flash", "minimal"),
+        ("gemini/eu.gemini-3.5-flash", "minimal"),
+        ("gemini-3.5-flash-preview", "minimal"),
+        ("gemini-3.1-flash", "minimal"),
+        ("gemini-3-flash", "minimal"),
+        ("gemini-3.1-pro", "low"),
+        ("gemini-3.1-pro-preview", "low"),
+        ("gemini-3.5-pro", "low"),
+        ("au.gemini-3.5-pro", "low"),
+        ("gemini-3.8-flash", "low"),
+        ("au.gemini-3.8-flash", "low"),
+    ],
+)
+@pytest.mark.parametrize(
+    "thinking_param",
+    [
+        {"type": "disabled"},
+        {"type": "enabled", "budget_tokens": 0},
+    ],
+)
+def test_map_thinking_param_disabled_or_zero_budget_gemini_3(
+    local_model_cost_map: None,
+    model: str,
+    expected_level: str,
+    thinking_param: AnthropicThinkingParam,
+) -> None:
+    result: Final = VertexGeminiConfig._map_thinking_param(
+        thinking_param=thinking_param,
+        model=model,
+    )
+    assert result == {
+        "thinkingLevel": expected_level,
+        "includeThoughts": False,
+    }
