@@ -2761,7 +2761,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             # Process each grounding support to create annotations
             for support in grounding_supports:
                 segment = support.get("segment", {})
-                start_index = segment.get("startIndex")
+                start_index = segment.get("startIndex", 0)
                 end_index = segment.get("endIndex")
 
                 # Get the chunk indices for this support
