@@ -1939,6 +1939,25 @@ async def test_logging_only_block_records_every_match_as_flagged(
 
 
 @pytest.mark.asyncio
+async def test_logging_only_flags_an_unnamed_block_rule_on_a_number_put_back_after_failing_the_checksum() -> None:
+    entries: Final = await _log_call(
+        _observing_filter(
+            patterns=(
+                ContentFilterPattern(
+                    pattern_type="prebuilt", pattern_name="credit_card", action=ContentFilterAction.MASK
+                ),
+                ContentFilterPattern(pattern_type="regex", pattern="secret", action=ContentFilterAction.MASK),
+                ContentFilterPattern(pattern_type="regex", pattern=r"\b\d{4}\b", action=ContentFilterAction.BLOCK),
+            )
+        ),
+        "secret 4111 1111 1111 1112",
+        Message(role="assistant", content="here you go"),
+    )
+
+    assert entries[0]["guardrail_status"] == "guardrail_flagged"
+
+
+@pytest.mark.asyncio
 async def test_logging_only_block_scans_the_response_after_a_request_match() -> None:
     entries: Final = await _log_call(
         _observing_filter(patterns=SECRET_PATTERNS),
