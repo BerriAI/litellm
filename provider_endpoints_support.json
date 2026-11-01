@@ -4472,7 +4472,7 @@
         "text_completion": true,
         "embeddings": false,
         "image_generations": true,
-        "image_edits": false,
+        "image_edits": true,
         "audio_transcriptions": true,
         "audio_speech": false,
         "rerank": false,
