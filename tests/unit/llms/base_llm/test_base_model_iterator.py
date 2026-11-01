@@ -14,10 +14,21 @@ from pydantic import BaseModel
 
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
-from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator, convert_model_response_to_streaming
+from litellm.llms.base_llm.base_model_iterator import (
+    BaseModelResponseIterator,
+    MockResponseIterator,
+    convert_model_response_to_streaming,
+)
 from litellm.llms.openai.chat.gpt_transformation import OpenAIChatCompletionStreamingHandler
 from litellm.llms.openai.common_utils import OpenAIError
-from litellm.types.utils import Choices, GenericStreamingChunk, Message, ModelResponse
+from litellm.types.utils import (
+    ChoiceLogprobs,
+    Choices,
+    GenericStreamingChunk,
+    Message,
+    ModelResponse,
+    ModelResponseStream,
+)
 
 
 class TestBaseModelResponseIterator:
@@ -435,3 +446,89 @@ def test_error_frame_mentioning_done_raises_instead_of_ending_the_stream() -> No
         list(OpenAIChatCompletionStreamingHandler(streaming_response=iter((line,)), sync_stream=True))
 
     assert error.value.status_code == 400
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.parametrize("preserve_logprobs", [True, False])
+@pytest.mark.asyncio
+async def test_fake_stream_preserves_each_choices_logprobs(sync_mode: bool, preserve_logprobs: bool) -> None:
+    response: Final = ModelResponse(
+        id="chatcmpl-logprobs",
+        created=1_790_000_000,
+        model="test-model",
+        choices=[
+            Choices(
+                index=2,
+                message=Message(content="Yes"),
+                logprobs={
+                    "content": [
+                        {
+                            "token": "Yes",
+                            "logprob": -0.25,
+                            "bytes": [89, 101, 115],
+                            "top_logprobs": [
+                                {"token": "Yes", "logprob": -0.25, "bytes": [89, 101, 115]},
+                                {"token": "No", "logprob": -1.75, "bytes": [78, 111]},
+                            ],
+                        }
+                    ],
+                    "refusal": [],
+                },
+            ),
+            Choices(
+                index=7,
+                message=Message(content=None, refusal="Cannot help"),
+                logprobs={
+                    "content": [],
+                    "refusal": [
+                        {"token": "Cannot", "logprob": -0.5, "bytes": [67, 97, 110, 110, 111, 116], "top_logprobs": []}
+                    ],
+                },
+            ),
+            Choices(index=9, message=Message(content="No probabilities requested")),
+        ],
+    )
+    original: Final = response.model_dump_json()
+    iterator: Final = (
+        MockResponseIterator(response, preserve_logprobs=True) if preserve_logprobs else MockResponseIterator(response)
+    )
+    chunks: Final = list(iterator) if sync_mode else [chunk async for chunk in iterator]
+
+    assert len(chunks) == 1
+    chunk: Final = chunks[0]
+    assert isinstance(chunk, ModelResponseStream)
+    assert [choice.index for choice in chunk.choices] == [2, 7, 9]
+    for logprobs, source_logprobs in zip(
+        (choice.logprobs for choice in chunk.choices[:2]),
+        (choice.logprobs for choice in response.choices[:2]),
+        strict=True,
+    ):
+        if preserve_logprobs:
+            assert isinstance(logprobs, ChoiceLogprobs)
+            assert isinstance(source_logprobs, ChoiceLogprobs)
+            assert logprobs.model_dump() == source_logprobs.model_dump()
+        else:
+            assert logprobs is None
+    assert chunk.choices[2].logprobs is None
+    assert chunk.choices[0].delta.content == "Yes"
+    assert getattr(chunk.choices[1].delta, "refusal", None) == "Cannot help"
+    assert response.model_dump_json() == original
+
+
+def test_response_replay_drops_original_token_probabilities_by_default() -> None:
+    response: Final = ModelResponse(
+        choices=[
+            Choices(
+                message=Message(content="[REDACTED]"),
+                logprobs={
+                    "content": [{"token": "original-secret", "logprob": -0.25, "bytes": None, "top_logprobs": []}],
+                    "refusal": [],
+                },
+            )
+        ]
+    )
+
+    for chunk in (convert_model_response_to_streaming(response), next(MockResponseIterator(response))):
+        assert chunk.choices[0].delta.content == "[REDACTED]"
+        assert chunk.choices[0].logprobs is None
+        assert "original-secret" not in chunk.model_dump_json()

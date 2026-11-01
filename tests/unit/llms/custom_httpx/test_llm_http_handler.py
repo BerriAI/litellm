@@ -7,6 +7,7 @@ import threading
 import time
 from collections.abc import Awaitable, Callable, Mapping
 from types import MappingProxyType
+from datetime import datetime, timezone
 from typing import Final
 from unittest.mock import AsyncMock, Mock, patch
 
@@ -20,6 +21,7 @@ from h2.events import ConnectionTerminated
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.integrations.code_interpreter_interception.handler import (
     CodeInterpreterInterceptionLogger,
     LITELLM_CODE_EXECUTION_TOOL_NAME,
@@ -59,6 +61,7 @@ from litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude_trans
 from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
 from litellm.llms.anthropic.skills.transformation import AnthropicSkillsConfig
 from litellm.llms.openai.evals.transformation import OpenAIEvalsConfig
+from litellm.llms.openai_like.chat.transformation import OpenAILikeChatConfig
 from litellm.llms.mistral.files.transformation import MistralFilesConfig
 from litellm.llms.openai.vector_store_files.transformation import OpenAIVectorStoreFilesConfig
 from litellm.llms.openai.vector_stores.transformation import OpenAIVectorStoreConfig
@@ -71,6 +74,7 @@ from litellm.responses.streaming_iterator import (
 from litellm.types.llms.openai import HttpxBinaryResponseContent, ResponsesAPIResponse
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import (
+    ChoiceLogprobs,
     ImageObject,
     ImageResponse,
     ModelResponse,
@@ -6254,3 +6258,82 @@ async def test_a_stream_answered_with_one_json_body_is_not_replayed_for_a_provid
         )
         with pytest.raises(litellm.exceptions.MidStreamFallbackError, match="before any terminal event"):
             _ = tuple([event async for event in stream])
+
+
+@pytest.mark.parametrize("sync_stream", [True, False])
+@pytest.mark.parametrize("include_logprobs", [True, False])
+async def test_fake_chat_stream_keeps_provider_logprobs(sync_stream: bool, include_logprobs: bool) -> None:
+    expected: Final = ChoiceLogprobs(
+        content=[
+            {
+                "token": "answer",
+                "logprob": -0.25,
+                "bytes": [97, 110, 115, 119, 101, 114],
+                "top_logprobs": [{"token": "answer", "logprob": -0.25, "bytes": [97, 110, 115, 119, 101, 114]}],
+            }
+        ],
+        refusal=[],
+    )
+    payload: Final = {
+        "id": "chatcmpl-logprobs",
+        "created": 1_790_000_000,
+        "model": "test-model",
+        "choices": [
+            {
+                "index": 0,
+                "finish_reason": "stop",
+                "message": {"role": "assistant", "content": "answer"},
+                "logprobs": expected.model_dump() if include_logprobs else None,
+            }
+        ],
+    }
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=payload)
+
+    handler: Final = BaseLLMHTTPHandler()
+    data: Final = {"model": "test-model", "messages": []}
+    call_args: Final = {
+        "provider_config": OpenAILikeChatConfig(),
+        "api_base": "https://provider.example/v1/chat/completions",
+        "headers": {},
+        "data": data,
+        "model": "test-model",
+        "messages": [],
+        "logging_obj": Logging(
+            model="test-model",
+            messages=[],
+            stream=True,
+            call_type="completion",
+            start_time=datetime(2026, 10, 30, tzinfo=timezone.utc),
+            litellm_call_id="test-logprobs",
+            function_id="test-function",
+        ),
+        "optional_params": {},
+        "litellm_params": {},
+        "timeout": 5.0,
+        "fake_stream": True,
+    }
+    transport: Final = httpx.MockTransport(respond)
+    iterator, _ = (
+        handler.make_sync_call(
+            **call_args,
+            signed_json_body=None,
+            original_data=data,
+            client=HTTPHandler(client=httpx.Client(transport=transport)),
+        )
+        if sync_stream
+        else await handler.make_async_call_stream_helper(
+            **call_args, custom_llm_provider="openai", client=AsyncHTTPHandler(transport=transport)
+        )
+    )
+    chunks: Final = list(iterator) if sync_stream else [chunk async for chunk in iterator]
+
+    assert len(chunks) == 1
+    assert chunks[0].choices[0].delta.content == "answer"
+    actual: Final = chunks[0].choices[0].logprobs
+    if include_logprobs:
+        assert isinstance(actual, ChoiceLogprobs)
+        assert actual == expected
+    else:
+        assert actual is None
