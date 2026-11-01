@@ -601,3 +601,14 @@ def test_batch_file_caps_accept_only_positive_limits(setting):
         with pytest.raises(ValidationError):
             ConfigGeneralSettings.model_validate({setting: invalid})
     assert getattr(ConfigGeneralSettings.model_validate({setting: 3}), setting) == 3
+
+
+def test_require_key_mcp_access_defined_is_a_validated_bool_setting():
+    from litellm.proxy._types import ConfigGeneralSettings
+
+    assert ConfigGeneralSettings().require_key_mcp_access_defined is None
+    assert ConfigGeneralSettings.model_validate(
+        {"require_key_mcp_access_defined": True}
+    ).require_key_mcp_access_defined is True
+    with pytest.raises(ValidationError):
+        ConfigGeneralSettings.model_validate({"require_key_mcp_access_defined": "not-a-bool"})

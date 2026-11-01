@@ -2994,6 +2994,10 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         default=False,
         description="Require aggregate MCP requests to include x-mcp-servers unless a toolset or gateway OAuth session already scopes the server. Off by default.",
     )
+    require_key_mcp_access_defined: bool | None = Field(
+        None,
+        description="When true, a virtual key that grants no MCP servers of its own inherits none from its team, so the team acts as a ceiling rather than a default and the key reaches no MCP servers until it grants some explicitly or through an access group. Keyless subjects admitted through a gateway or the dashboard are unaffected, since team membership is their only access path. Default false: such a key inherits every MCP server its team holds.",
+    )
     mcp_client_id_header: str | None = Field(
         None,
         description="Request header whose value names the calling MCP client application (for example 'x-mcp-client') for callers that did not authenticate with a JWT, used only while mcp_allowed_clients is set. The client picks this value itself, so it is a policy control rather than a security boundary; prefer litellm_jwtauth.mcp_client_id_jwt_field where callers use JWTs.",
