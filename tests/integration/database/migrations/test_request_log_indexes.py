@@ -9,7 +9,7 @@ import threading
 import time
 import uuid
 from collections.abc import Callable, Iterator, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from types import MappingProxyType
 from typing import Final
@@ -45,6 +45,8 @@ API_KEY_INDEX_MIGRATION: Final = "20260823000000_add_spend_logs_api_key_starttim
 CALL_ID_INDEX_MIGRATION: Final = "20260831120001_spend_logs_litellm_call_id_index"
 API_KEY_INDEX: Final = "LiteLLM_SpendLogs_api_key_startTime_idx"
 CALL_ID_INDEX: Final = "LiteLLM_SpendLogs_litellm_call_id_idx"
+ERROR_INDEX: Final = "LiteLLM_SpendLogs_error_code_startTime_idx"
+START_TIME_INDEX: Final = "LiteLLM_SpendLogs_startTime_idx"
 PARTITIONED_PARENT_ERROR: Final = 'cannot create index on partitioned table "LiteLLM_SpendLogs" concurrently'
 ORIGINAL_MIGRATION_SQL: Final = MappingProxyType(
     {
@@ -61,6 +63,7 @@ ORIGINAL_MIGRATION_SQL: Final = MappingProxyType(
     }
 )
 CALL_ID_INDEX_DEFINITION: Final = next(index for index in REQUEST_LOG_INDEXES if index.name == CALL_ID_INDEX)
+ERROR_INDEX_DEFINITION: Final = next(index for index in REQUEST_LOG_INDEXES if index.name == ERROR_INDEX)
 RELEASES: Final = pytest.mark.parametrize(
     "release", (API_KEY_INDEX_MIGRATION, CALL_ID_INDEX_MIGRATION), ids=("v1.102.1", "v1.103.0")
 )
@@ -72,6 +75,7 @@ PARTITIONS: Final = MappingProxyType(
 )
 DEFAULT_PARTITION: Final = "LiteLLM_SpendLogs_pdefault"
 ROWS_PER_PARTITION: Final = 200
+SEEDED_ROWS: Final = 50
 RESOLVERS: Final = pytest.mark.parametrize("use_v2_resolver", (True, False), ids=("v2", "v1"))
 
 
@@ -259,6 +263,21 @@ def _index_oids(database_url: str) -> Mapping[str, int]:
     return MappingProxyType({row.name: row.oid for row in rows})
 
 
+@dataclass(frozen=True, slots=True)
+class _PredicateRow:
+    predicate: "str | None"
+
+
+def _index_predicate(database_url: str, index: str) -> "str | None":
+    with psycopg.connect(database_url) as conn, conn.cursor(row_factory=class_row(_PredicateRow)) as cursor:
+        row: Final = cursor.execute(
+            "SELECT pg_get_expr(indpred, indrelid) AS predicate FROM pg_index WHERE indexrelid = to_regclass(%s)",
+            (f'"{index}"',),
+        ).fetchone()
+    assert row is not None, index
+    return row.predicate
+
+
 def _migration_job(use_v2_resolver: bool) -> bool:
     return ProxyExtrasDBManager.run_migration_job(use_migrate=True, use_v2_resolver=use_v2_resolver)
 
@@ -288,13 +307,14 @@ def _assert_index_covers_every_partition(database_url: str, parent_index: str, s
 @requires_db
 @RESOLVERS
 @RELEASES
-def test_a_partitioned_spend_logs_upgrade_builds_both_indexes_per_partition_and_a_rerun_is_idempotent(
+def test_a_partitioned_spend_logs_upgrade_builds_every_index_per_partition_and_a_rerun_is_idempotent(
     partitioned_database: str, use_v2_resolver: bool
 ) -> None:
     assert _migration_job(use_v2_resolver) is True
 
     _assert_index_covers_every_partition(partitioned_database, API_KEY_INDEX, "api_key_startTime_idx")
     _assert_index_covers_every_partition(partitioned_database, CALL_ID_INDEX, "litellm_call_id_idx")
+    _assert_index_covers_every_partition(partitioned_database, ERROR_INDEX, "error_code_startTime_idx")
     ledger: Final = _assert_every_ledger_row_is_finished(partitioned_database)
     _assert_no_pending_migrations(partitioned_database)
     oids: Final = _index_oids(partitioned_database)
@@ -304,14 +324,11 @@ def test_a_partitioned_spend_logs_upgrade_builds_both_indexes_per_partition_and_
             'CREATE TABLE "LiteLLM_SpendLogs_p2026_10" PARTITION OF "LiteLLM_SpendLogs" '
             "FOR VALUES FROM ('2026-10-01') TO ('2026-11-01')"
         )
-    inherited: Final = frozenset(
-        ("LiteLLM_SpendLogs_p2026_10", f"LiteLLM_SpendLogs_p2026_10_{suffix}")
-        for suffix in ("api_key_startTime_idx", "litellm_call_id_idx")
-    )
-    attached: Final = _attached_children(partitioned_database, API_KEY_INDEX) | _attached_children(
-        partitioned_database, CALL_ID_INDEX
-    )
-    assert inherited <= attached, attached
+    inherited: Final = {
+        index: "LiteLLM_SpendLogs_p2026_10" in {table for table, _ in _attached_children(partitioned_database, index)}
+        for index in (API_KEY_INDEX, CALL_ID_INDEX, ERROR_INDEX)
+    }
+    assert all(inherited.values()), inherited
 
     assert _migration_job(use_v2_resolver) is True
     assert _ledger(partitioned_database) == ledger
@@ -321,7 +338,7 @@ def test_a_partitioned_spend_logs_upgrade_builds_both_indexes_per_partition_and_
 @requires_db
 @RESOLVERS
 @RELEASES
-def test_a_plain_spend_logs_upgrade_builds_both_indexes_and_a_second_job_run_rebuilds_nothing(
+def test_a_plain_spend_logs_upgrade_builds_every_index_and_a_second_job_run_rebuilds_nothing(
     scratch_database: str, use_v2_resolver: bool
 ) -> None:
     with psycopg.connect(scratch_database, autocommit=True) as conn:
@@ -332,6 +349,7 @@ def test_a_plain_spend_logs_upgrade_builds_both_indexes_and_a_second_job_run_reb
 
     assert _index_validity(scratch_database, "api_key_startTime_idx") == {API_KEY_INDEX: True}
     assert _index_validity(scratch_database, "litellm_call_id_idx") == {CALL_ID_INDEX: True}
+    assert _index_validity(scratch_database, "error_code_startTime_idx") == {ERROR_INDEX: True}
     _assert_every_ledger_row_is_finished(scratch_database)
     _assert_no_pending_migrations(scratch_database)
     oids: Final = _index_oids(scratch_database)
@@ -359,7 +377,8 @@ def test_a_database_that_applied_the_original_migration_files_sees_no_pending_mi
     assert _migration_job(use_v2_resolver) is True
 
     assert _ledger(scratch_database) == before
-    assert _index_oids(scratch_database) == oids
+    after: Final = _index_oids(scratch_database)
+    assert {name: after[name] for name in oids} == oids
 
 
 @requires_db
@@ -540,22 +559,29 @@ def test_an_invalid_child_index_left_by_an_interrupted_build_is_rebuilt_and_atta
 
 
 @requires_db
-def test_partitioning_a_table_the_index_job_already_covered_moves_its_call_id_index_aside(
+def test_partitioning_a_table_the_index_job_already_covered_moves_its_indexes_aside(
     scratch_database: str,
 ) -> None:
     """The runbook renames the Prisma indexes off the legacy table so the partitioned table can take their
-    names. The call-id index is built by the index job, not Prisma, and a deployment that partitions after
-    that job ran kept the name on the legacy table, so every later job run reported it as on another table."""
+    names. The call-id and error indexes are built by the index job, not Prisma, and a deployment that partitions
+    after that job ran kept their names on the legacy table, so every later job run reported them as on another
+    table."""
     assert ensure_request_log_indexes(scratch_database, "public") is True
     assert _indexed_table(scratch_database, CALL_ID_INDEX) == "LiteLLM_SpendLogs"
+    assert _indexed_table(scratch_database, ERROR_INDEX) == "LiteLLM_SpendLogs"
 
     _partition_spend_logs(scratch_database)
 
     assert (
         _indexed_table(scratch_database, "LiteLLM_SpendLogs_legacy_litellm_call_id_idx") == "LiteLLM_SpendLogs_legacy"
     )
+    assert (
+        _indexed_table(scratch_database, "LiteLLM_SpendLogs_legacy_error_code_startTime_idx")
+        == "LiteLLM_SpendLogs_legacy"
+    )
     assert ensure_request_log_indexes(scratch_database, "public") is True
     _assert_index_covers_every_partition(scratch_database, CALL_ID_INDEX, "litellm_call_id_idx")
+    _assert_index_covers_every_partition(scratch_database, ERROR_INDEX, "error_code_startTime_idx")
 
 
 @requires_db
@@ -884,6 +910,154 @@ def test_a_hand_built_child_index_under_another_name_is_renamed_and_attached(par
 
 
 @requires_db
+def test_the_partial_error_index_is_built_beside_the_plain_start_time_index_never_renamed_from_it(
+    scratch_database: str,
+) -> None:
+    start_time_index: Final = _index_oids(scratch_database)[START_TIME_INDEX]
+
+    assert ensure_request_log_indexes(scratch_database, "public") is True
+
+    oids: Final = _index_oids(scratch_database)
+    assert oids[START_TIME_INDEX] == start_time_index
+    assert oids[ERROR_INDEX] != start_time_index
+    assert _index_predicate(scratch_database, START_TIME_INDEX) is None
+    assert _index_predicate(scratch_database, ERROR_INDEX) is not None
+
+
+def _seed_spend_logs(database_url: str, partitioned: bool) -> None:
+    """Seed the spend logs, partitioned or not, and never ANALYZE them, as in a freshly restored database."""
+    if partitioned:
+        _partition_spend_logs(database_url)
+    with psycopg.connect(database_url, autocommit=True) as conn:
+        for n in range(SEEDED_ROWS):
+            _insert_spend_log(conn, f"capped-{n}", "2026-10-01")
+
+
+def _run_the_logged_statements(database_url: str, messages: list[str]) -> None:
+    logged: Final = next(message for message in messages if "Not building index" in message)
+    with psycopg.connect(database_url, autocommit=True) as conn:
+        for statement in logged.split("finds it in place:\n", 1)[1].splitlines():
+            conn.execute(statement.encode())
+
+
+@requires_db
+@pytest.mark.parametrize("partitioned", (False, True), ids=("plain", "partitioned"))
+def test_an_index_on_a_table_over_its_size_cap_is_left_for_an_operator_without_failing_the_build(
+    scratch_database: str, partitioned: bool, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A metadata index takes time to build in proportion to the table's size on disk, so on a table over its cap
+    the migration job must finish without it instead of running past its deadline and failing the upgrade."""
+    _seed_spend_logs(scratch_database, partitioned)
+    capped: Final = replace(ERROR_INDEX_DEFINITION, max_bytes=1)
+
+    with caplog.at_level("WARNING", logger="litellm_proxy_extras"):
+        assert ensure_request_log_indexes(scratch_database, "public", (capped,)) is True
+    assert f"Not building index {ERROR_INDEX}" in caplog.text
+    assert f"in place except {ERROR_INDEX}" in caplog.text
+    assert _indexed_table(scratch_database, ERROR_INDEX) is None
+
+    assert ensure_request_log_indexes(scratch_database, "public", (ERROR_INDEX_DEFINITION,)) is True
+    assert _index_validity(scratch_database, "error_code_startTime_idx")[ERROR_INDEX] is True
+
+
+@requires_db
+@pytest.mark.parametrize("partitioned", (False, True), ids=("plain", "partitioned"))
+def test_the_statements_logged_for_an_index_over_its_cap_build_it_and_the_next_build_finds_it_in_place(
+    scratch_database: str, partitioned: bool, caplog: pytest.LogCaptureFixture
+) -> None:
+    _seed_spend_logs(scratch_database, partitioned)
+    capped: Final = replace(ERROR_INDEX_DEFINITION, max_bytes=1)
+    with caplog.at_level("WARNING", logger="litellm_proxy_extras"):
+        assert ensure_request_log_indexes(scratch_database, "public", (capped,)) is True
+    _run_the_logged_statements(scratch_database, caplog.messages)
+    hand_built: Final = _index_oids(scratch_database)[ERROR_INDEX]
+    caplog.clear()
+
+    with caplog.at_level("WARNING", logger="litellm_proxy_extras"):
+        assert ensure_request_log_indexes(scratch_database, "public", (capped,)) is True
+    assert "Not building index" not in caplog.text
+    assert _index_oids(scratch_database)[ERROR_INDEX] == hand_built
+    if partitioned:
+        _assert_index_covers_every_partition(scratch_database, ERROR_INDEX, "error_code_startTime_idx")
+    else:
+        assert _index_validity(scratch_database, "error_code_startTime_idx") == {ERROR_INDEX: True}
+
+
+def _leave_an_invalid_error_index(database_url: str, name: str, table: str) -> None:
+    with _pin_a_snapshot_on(database_url, table):
+        with psycopg.connect(database_url, autocommit=True) as builder:
+            builder.execute("SET statement_timeout = '1s'")
+            prefix: Final = sql.SQL("CREATE INDEX CONCURRENTLY {} ON {} ").format(
+                sql.Identifier(name), sql.Identifier(table)
+            )
+            with pytest.raises(psycopg.errors.QueryCanceled):
+                builder.execute(prefix.as_bytes(builder) + ERROR_INDEX_DEFINITION.body.encode())
+
+
+@requires_db
+def test_an_interrupted_build_of_an_index_over_its_cap_is_left_to_the_logged_reindex_instead_of_repaired_at_boot(
+    scratch_database: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    _seed_spend_logs(scratch_database, partitioned=False)
+    _leave_an_invalid_error_index(scratch_database, ERROR_INDEX, "LiteLLM_SpendLogs")
+    capped: Final = replace(ERROR_INDEX_DEFINITION, max_bytes=1)
+
+    assert ProxyExtrasDBManager.repair_invalid_indexes() is True
+    assert _index_validity(scratch_database, "error_code_startTime_idx") == {ERROR_INDEX: False}
+
+    with caplog.at_level("WARNING", logger="litellm_proxy_extras"):
+        assert ensure_request_log_indexes(scratch_database, "public", (capped,)) is True
+    _run_the_logged_statements(scratch_database, caplog.messages)
+
+    assert _index_validity(scratch_database, "error_code_startTime_idx") == {ERROR_INDEX: True}
+    assert ensure_request_log_indexes(scratch_database, "public", (capped,)) is True
+
+
+@requires_db
+def test_a_partitioned_build_interrupted_between_partitions_over_its_cap_is_finished_by_the_logged_statements(
+    scratch_database: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A partitioned build that stopped with one child attached, one left invalid and one never started must be
+    finished by the logged statements, and the boot-time repair must leave the invalid child to them."""
+    _seed_spend_logs(scratch_database, partitioned=True)
+    suffix: Final = "error_code_startTime_idx"
+    attached, interrupted = PARTITIONS
+    with psycopg.connect(scratch_database, autocommit=True) as conn:
+        parent: Final = sql.SQL("CREATE INDEX {} ON ONLY {} ").format(
+            sql.Identifier(ERROR_INDEX), sql.Identifier("LiteLLM_SpendLogs")
+        )
+        conn.execute(parent.as_bytes(conn) + ERROR_INDEX_DEFINITION.body.encode())
+        child: Final = sql.SQL("CREATE INDEX CONCURRENTLY {} ON {} ").format(
+            sql.Identifier(f"{attached}_{suffix}"), sql.Identifier(attached)
+        )
+        conn.execute(child.as_bytes(conn) + ERROR_INDEX_DEFINITION.body.encode())
+        conn.execute(
+            sql.SQL("ALTER INDEX {} ATTACH PARTITION {}").format(
+                sql.Identifier(ERROR_INDEX), sql.Identifier(f"{attached}_{suffix}")
+            )
+        )
+    _leave_an_invalid_error_index(scratch_database, f"{interrupted}_{suffix}", interrupted)
+    capped: Final = replace(ERROR_INDEX_DEFINITION, max_bytes=1)
+
+    assert ProxyExtrasDBManager.repair_invalid_indexes() is True
+    assert _index_validity(scratch_database, suffix) == {
+        ERROR_INDEX: False,
+        f"{attached}_{suffix}": True,
+        f"{interrupted}_{suffix}": False,
+    }
+
+    with caplog.at_level("WARNING", logger="litellm_proxy_extras"):
+        assert ensure_request_log_indexes(scratch_database, "public", (capped,)) is True
+    _run_the_logged_statements(scratch_database, caplog.messages)
+    caplog.clear()
+
+    _assert_index_covers_every_partition(scratch_database, ERROR_INDEX, suffix)
+    with caplog.at_level("WARNING", logger="litellm_proxy_extras"):
+        assert ensure_request_log_indexes(scratch_database, "public", (capped,)) is True
+    assert "Not building index" not in caplog.text
+
+
+@requires_db
 def test_an_index_with_another_definition_is_not_taken_for_the_managed_one(scratch_database: str) -> None:
     with psycopg.connect(scratch_database, autocommit=True) as conn:
         conn.execute(sql.SQL("DROP INDEX {}").format(sql.Identifier(API_KEY_INDEX)))
@@ -922,7 +1096,7 @@ def test_a_valid_partitioned_parent_index_under_another_name_is_renamed_with_its
     with caplog.at_level("INFO", logger="litellm_proxy_extras"):
         assert ensure_request_log_indexes(partitioned_database, "public") is True
 
-    assert "Building index" not in caplog.text
+    assert not [line for line in caplog.messages if line.startswith("Building index") and "litellm_call_id" in line]
     oids: Final = _index_oids(partitioned_database)
     assert "call_id_parent_by_hand" not in oids and oids[CALL_ID_INDEX] == hand_built
     assert _attached_children(partitioned_database, CALL_ID_INDEX) == children_before

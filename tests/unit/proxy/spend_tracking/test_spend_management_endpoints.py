@@ -7,6 +7,7 @@ import re
 import sqlite3
 from collections.abc import Mapping
 from datetime import timezone
+from types import MappingProxyType
 from typing import Final, Literal
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -124,7 +125,7 @@ def _reconstruct_ui_where_from_sql(sql_query, params):
         gte = re.search(r'"startTime" >= \(\$(\d+)', cond)
         lte = re.search(r'"startTime" <= \(\$(\d+)', cond)
         alias = re.search(r"user_api_key_alias' LIKE \$(\d+)", cond)
-        code = re.search(r"error_code' = \$(\d+)", cond)
+        code = re.search(r"error_code'(?:, 128\))? = \$(\d+)", cond)
         msg = re.search(r"error_message' LIKE \$(\d+)", cond)
         credential = re.fullmatch(r"metadata->>'used_client_oauth_token' = \$(\d+)", cond)
         sess = re.fullmatch(r"session_id LIKE \$(\d+)", cond)
@@ -207,7 +208,9 @@ def _reconstruct_ui_where_from_sql(sql_query, params):
     return where
 
 
-def make_ui_spend_logs_mock_prisma(mock_spend_logs, filter_fn, team_lookup_fn=None, query_observer=None):
+def make_ui_spend_logs_mock_prisma(
+    mock_spend_logs, filter_fn, team_lookup_fn=None, query_observer=None, error_code_index_ready: bool = False
+):
     """
     Create a MockPrismaClient for /spend/logs/ui endpoint tests.
 
@@ -238,6 +241,8 @@ def make_ui_spend_logs_mock_prisma(mock_spend_logs, filter_fn, team_lookup_fn=No
                 query_observer(sql_query, params)
             if "mcp_tool_call_count" in sql_query:
                 return []
+            if "FROM pg_index" in sql_query:
+                return [{"ready": error_code_index_ready}]
             if 'SELECT DISTINCT "user", team_id' in sql_query:
                 return _emulate_spend_log_owner_lookup(mock_spend_logs, sql_query, params)
             filtered = filter_fn(_reconstruct_ui_where_from_sql(sql_query, params))
@@ -4697,7 +4702,8 @@ async def test_view_spend_logs_summarize_unhashed_api_key_without_padding(client
 
 
 @pytest.mark.asyncio
-async def test_ui_view_spend_logs_with_error_code(client):
+@pytest.mark.parametrize("error_code_index_ready", [True, False], ids=["with_the_index", "without_the_index"])
+async def test_ui_view_spend_logs_with_error_code(client: TestClient, error_code_index_ready: bool):
     """Test filtering spend logs by error code"""
     mock_spend_logs = [
         {
@@ -4743,7 +4749,9 @@ async def test_ui_view_spend_logs_with_error_code(client):
         with patch.object(
             ps,
             "prisma_client",
-            make_ui_spend_logs_mock_prisma(mock_spend_logs, filter_by_error_code),
+            make_ui_spend_logs_mock_prisma(
+                mock_spend_logs, filter_by_error_code, error_code_index_ready=error_code_index_ready
+            ),
         ):
             start_date, end_date = _default_date_range()
 
@@ -4769,6 +4777,54 @@ async def test_ui_view_spend_logs_with_error_code(client):
     finally:
         app.dependency_overrides.pop(ps.user_api_key_auth, None)
 
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("error_code_index_ready", [True, False], ids=["with_the_index", "without_the_index"])
+async def test_ui_view_spend_logs_with_a_long_error_code_returns_only_that_exact_code(
+    client: TestClient, error_code_index_ready: bool
+) -> None:
+    prefix: Final = "E" * 128
+    codes: Final = MappingProxyType({f"log-{suffix}": prefix + suffix for suffix in ("first", "second")})
+    mock_spend_logs: Final = [
+        {
+            "id": log_id,
+            "request_id": f"req-{log_id}",
+            "api_key": "sk-test-key",
+            "spend": 0.05,
+            "startTime": datetime.datetime.now(timezone.utc).isoformat(),
+            "model": "gpt-4",
+            "metadata": json.dumps({"error_information": {"error_code": code}}),
+        }
+        for log_id, code in codes.items()
+    ]
+
+    def filter_by_exact_error_code(where: Mapping[str, Mapping[str, object]]) -> list[dict[str, str | float]]:
+        wanted: Final = str(where.get("metadata", {}).get("equals", "")).strip('"')
+        return [log for log in mock_spend_logs if codes[str(log["id"])] == wanted]
+
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin_user"
+    )
+    try:
+        with patch.object(
+            ps,
+            "prisma_client",
+            make_ui_spend_logs_mock_prisma(
+                mock_spend_logs, filter_by_exact_error_code, error_code_index_ready=error_code_index_ready
+            ),
+        ):
+            start_date, end_date = _default_date_range()
+            response = client.get(
+                "/spend/logs/ui",
+                params={"error_code": prefix + "first", "start_date": start_date, "end_date": end_date},
+                headers={"Authorization": "Bearer sk-test"},
+            )
+
+        assert response.status_code == 200
+        assert [row["id"] for row in response.json()["data"]] == ["log-first"]
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
 
 @pytest.mark.asyncio
 async def test_ui_view_spend_logs_with_error_message(client):
