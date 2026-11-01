@@ -520,6 +520,22 @@ def _fold_choices_into_one(
         *chain.from_iterable(_message_reasoning_items(m) for m in messages),
         *trailing_reasoning_items,
     )
+    # A single Chat Completions message can carry one scalar phase. Preserve it
+    # only when every folded Responses message has the same declared phase.
+    message_phases: Final = tuple(
+        (message.provider_specific_fields or {}).get("phase") for message in content_messages
+    )
+    shared_phase: Final = (
+        message_phases[0]
+        if message_phases
+        and isinstance(message_phases[0], str)
+        and all(phase == message_phases[0] for phase in message_phases)
+        else None
+    )
+    provider_fields: Final = {
+        **(_tool_search_provider_fields(tool_search_items) or {}),
+        **({"phase": shared_phase} if shared_phase is not None else {}),
+    }
     return Choices(
         message=Message(
             role=messages[0].role if messages else "assistant",
@@ -528,7 +544,7 @@ def _fold_choices_into_one(
             tool_calls=list(tool_calls) or None,
             reasoning_content=" ".join(value for value in reasoning_contents if value) or None,
             reasoning_items=_as_chat_reasoning_items(reasoning_items),
-            provider_specific_fields=_tool_search_provider_fields(tool_search_items),
+            provider_specific_fields=provider_fields or None,
         ),
         finish_reason="tool_calls" if tool_calls else "stop",
         index=0,
@@ -825,10 +841,13 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                         annotations = LiteLLMResponsesTransformationHandler._convert_annotations_to_chat_format(
                             content_item.get("annotations", None)
                         )
+                        phase = item.get("phase")
+                        provider_specific_fields = {"phase": phase} if isinstance(phase, str) else None
                         msg = Message(
                             role=item.get("role", "assistant"),
                             content=response_text if response_text else "",
                             annotations=annotations,
+                            provider_specific_fields=provider_specific_fields,
                         )
                         choice = Choices(message=msg, finish_reason="stop", index=index)
                         return choice, index + 1
@@ -1289,6 +1308,8 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                     annotations = LiteLLMResponsesTransformationHandler._convert_annotations_to_chat_format(
                         raw_annotations
                     )
+                    phase = getattr(item, "phase", None)
+                    provider_specific_fields = {"phase": phase} if isinstance(phase, str) else None
                     msg = Message(
                         role=item.role,
                         content=response_text if response_text else "",
@@ -1298,6 +1319,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                             list[ChatCompletionReasoningItem] | None,
                             (list(pending_reasoning_items) or None),
                         ),
+                        provider_specific_fields=provider_specific_fields,
                     )
 
                     choices.append(
@@ -1977,6 +1999,7 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
         self._chat_completion_id: str | None = None
         self._served_service_tier: str | None = None
         self._tool_call_index_map: dict[int, int] = {}  # mutable-ok: per-stream accumulator state
+        self._message_phase_by_output_index: dict[int, str] = {}  # mutable-ok: per-stream message metadata
         self._structured_output: Final = structured_output
         self._first_message_item_done: bool = False
         self._reasoning_summary_streamed: bool = False
@@ -2020,6 +2043,7 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
     def translate_responses_chunk_to_openai_stream(
         parsed_chunk: dict | BaseModel,
         tool_call_index_map: dict[int, int] | None = None,  # mutable-ok: per-stream state, remapped in place
+        message_phase_by_output_index: Mapping[int, str] | None = None,
         replays_openai_history: bool = False,
         structured_output: bool = False,
         reasoning_summary_streamed: bool = False,
@@ -2030,6 +2054,7 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
         Args:
             parsed_chunk: Dict containing the Responses API event chunk
             tool_call_index_map: Per-stream output_index -> sequential tool_call index map
+            message_phase_by_output_index: Per-stream Responses message output_index -> phase mapping
             replays_openai_history: Record the completed output's item sequence for the next turn
             structured_output: Only the first message item became content
             reasoning_summary_streamed: Whether earlier chunks already streamed reasoning summary text
@@ -2118,6 +2143,18 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
                         )
                     ]
                 )
+            elif output_item.get("type") == "message":
+                phase = output_item.get("phase")
+                provider_specific_fields = {"phase": phase} if isinstance(phase, str) else None
+                return ModelResponseStream(
+                    choices=[
+                        StreamingChoices(
+                            index=0,
+                            delta=Delta(content="", provider_specific_fields=provider_specific_fields),
+                            finish_reason=None,
+                        )
+                    ]
+                )
         elif event_type in (
             ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DELTA,
             ResponsesAPIStreamEvents.CUSTOM_TOOL_CALL_INPUT_DELTA,
@@ -2202,11 +2239,17 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
             # Content part added to output
             content_part = parsed_chunk.get("delta", None)
             if content_part is not None:
+                output_index = cast(int, parsed_chunk.get("output_index", 0))
+                phase = message_phase_by_output_index.get(output_index) if message_phase_by_output_index else None
+                provider_specific_fields = {"phase": phase} if phase is not None else None
                 return ModelResponseStream(
                     choices=[
                         StreamingChoices(
                             index=0,
-                            delta=Delta(content=content_part),
+                            delta=Delta(
+                                content=content_part,
+                                provider_specific_fields=provider_specific_fields,
+                            ),
                             finish_reason=None,
                         )
                     ]
@@ -2314,12 +2357,14 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
         """
         verbose_logger.debug("Chat provider: transform_streaming_response called with chunk: %s", chunk)
         self._remember_served_service_tier(chunk)
+        self._remember_message_phase(chunk)
         translated: Final = (
             self._empty_content_chunk()
             if self._is_text_delta_after_structured_answer(chunk)
             else OpenAiResponsesToChatCompletionStreamIterator.translate_responses_chunk_to_openai_stream(
                 chunk,
                 tool_call_index_map=self._tool_call_index_map,
+                message_phase_by_output_index=self._message_phase_by_output_index,
                 replays_openai_history=self._replays_openai_history,
                 structured_output=self._structured_output,
                 reasoning_summary_streamed=self._reasoning_summary_streamed,
@@ -2345,6 +2390,16 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
         from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
 
         return ModelResponseStream(choices=[StreamingChoices(index=0, delta=Delta(content=""), finish_reason=None)])
+
+    def _remember_message_phase(self, chunk: dict[str, object]) -> None:
+        if _responses_event_type(chunk) != ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED.value:
+            return
+        output_item = chunk.get("item")
+        if not isinstance(output_item, dict) or output_item.get("type") != "message":
+            return
+        phase = output_item.get("phase")
+        if isinstance(phase, str):
+            self._message_phase_by_output_index[cast(int, chunk.get("output_index", 0))] = phase
 
     def _remember_served_service_tier(self, chunk: dict[str, object]) -> None:
         response_payload: Final = chunk.get("response")
