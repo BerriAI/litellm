@@ -11,7 +11,8 @@ The A2A SDK can point to LiteLLM's URL and invoke agents registered with LiteLLM
 """
 
 import json
-from collections.abc import AsyncGenerator, Callable, Coroutine, Mapping
+from collections.abc import AsyncGenerator, Callable, Coroutine, Iterable, Iterator, Mapping
+from itertools import chain
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Protocol
 from urllib.parse import urlparse
@@ -270,6 +271,32 @@ async def _log_agent_rejection(
         )
     except Exception:  # noqa: BLE001  # a logging failure must not change the rejection the caller gets
         verbose_proxy_logger.exception("Failed to log rejected A2A request")
+
+
+_CONVENTION_CREDENTIAL_HEADERS: Final = frozenset({"authorization", "proxy-authorization", "cookie", "x-api-key"})
+
+
+def _convention_headers(
+    headers: Mapping[str, str],
+    aliases: Iterable[str],
+    *,
+    block_credentials: bool,
+) -> Mapping[str, str]:
+    """Collect x-a2a-{agent_id_or_name}-{header_name} headers, case-insensitive.
+
+    Agents that set block_convention_credential_headers never receive caller
+    credentials this way, only their own static headers.
+    """
+    stripped: Final = chain.from_iterable(_strip_prefix(headers, f"x-a2a-{alias.lower()}-") for alias in aliases)
+    return {
+        name: val
+        for name, val in stripped
+        if name and not (block_credentials and name in _CONVENTION_CREDENTIAL_HEADERS)
+    }
+
+
+def _strip_prefix(headers: Mapping[str, str], prefix: str) -> Iterator[tuple[str, str]]:
+    return ((key.lower()[len(prefix) :], val) for key, val in headers.items() if key.lower().startswith(prefix))
 
 
 def _jsonrpc_error(
@@ -977,13 +1004,13 @@ async def invoke_agent_a2a(
 
         # 2. Convention-based forwarding: x-a2a-{agent_id_or_name}-{header_name}
         #    Matches both agent_id (UUID) and agent_name (alias), case-insensitive.
-        for alias in (agent.agent_id.lower(), agent.agent_name.lower()):
-            prefix = f"x-a2a-{alias}-"
-            for key, val in normalized.items():
-                if key.startswith(prefix):
-                    header_name = key[len(prefix) :]
-                    if header_name:
-                        dynamic_headers[header_name] = val
+        dynamic_headers.update(
+            _convention_headers(
+                normalized,
+                (agent.agent_id, agent.agent_name),
+                block_credentials=litellm_params.get("block_convention_credential_headers") is True,
+            )
+        )
 
         merged_agent_headers: Final = merge_agent_headers(
             dynamic_headers=dynamic_headers or None,

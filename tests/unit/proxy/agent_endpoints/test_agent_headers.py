@@ -313,6 +313,75 @@ async def test_convention_unrelated_prefix_not_forwarded():
     assert headers == {"X-LiteLLM-User-Id": "u1"}
 
 
+@pytest.mark.parametrize(
+    "block_credentials, expected",
+    [
+        (
+            False,
+            {
+                "authorization": "Bearer caller",
+                "cookie": "session=caller",
+                "proxy-authorization": "Basic caller",
+                "x-api-key": "caller-key",
+                "x-request-id": "req-1",
+            },
+        ),
+        (True, {"x-request-id": "req-1"}),
+    ],
+)
+def test_convention_headers_drop_credentials_only_when_the_agent_opts_in(block_credentials, expected):
+    from litellm.proxy.agent_endpoints.a2a_endpoints import _convention_headers
+
+    headers: Final = {
+        "x-a2a-my-agent-authorization": "Bearer caller",
+        "x-a2a-my-agent-cookie": "session=caller",
+        "x-a2a-my-agent-proxy-authorization": "Basic caller",
+        "x-a2a-agent-123-x-api-key": "caller-key",
+        "x-a2a-my-agent-x-request-id": "req-1",
+        "x-a2a-other-agent-x-request-id": "not-for-this-agent",
+        "authorization": "Bearer sk-litellm-key",
+    }
+
+    forwarded: Final = _convention_headers(headers, ("agent-123", "my-agent"), block_credentials=block_credentials)
+    assert dict(forwarded) == expected
+
+
+@pytest.mark.asyncio
+async def test_agent_opted_in_never_receives_caller_credentials_via_convention():
+    mock_agent = _make_mock_agent()
+    mock_agent.agent_name = "my-agent"
+    mock_agent.litellm_params = {"block_convention_credential_headers": True}
+    mock_request = _make_mock_request(
+        extra_headers={
+            "x-a2a-my-agent-authorization": "Bearer forged-by-caller",
+            "x-a2a-my-agent-cookie": "session=forged-by-caller",
+            "x-a2a-my-agent-x-request-id": "req-abc",
+        }
+    )
+
+    mock_asend = await _invoke(mock_agent, mock_request, None)
+
+    assert mock_asend.call_args.kwargs.get("agent_extra_headers") == {
+        "x-request-id": "req-abc",
+        "X-LiteLLM-User-Id": "u1",
+    }
+
+
+@pytest.mark.asyncio
+async def test_agent_opted_in_still_sends_its_static_credentials():
+    mock_agent = _make_mock_agent(static_headers={"Authorization": "Bearer backend-static-secret"})
+    mock_agent.agent_name = "my-agent"
+    mock_agent.litellm_params = {"block_convention_credential_headers": True}
+    mock_request = _make_mock_request(extra_headers={"x-a2a-my-agent-authorization": "Bearer forged-by-caller"})
+
+    mock_asend = await _invoke(mock_agent, mock_request, None)
+
+    assert mock_asend.call_args.kwargs.get("agent_extra_headers") == {
+        "Authorization": "Bearer backend-static-secret",
+        "X-LiteLLM-User-Id": "u1",
+    }
+
+
 # ---------------------------------------------------------------------------
 # Databricks App OAuth M2M injection
 # ---------------------------------------------------------------------------
