@@ -13,7 +13,6 @@ from itertools import chain
 from typing import TYPE_CHECKING, Any, Final, Literal, TypeAlias, TypeVar, cast
 
 from pydantic import TypeAdapter
-from redis.exceptions import RedisError
 
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
@@ -542,6 +541,8 @@ class RedisUpdateBuffer:
         if self.redis_cache is None:
             return
 
+        from redis.exceptions import RedisError
+
         restore_configs: Final = (
             (db_spend_update_transactions, REDIS_UPDATE_BUFFER_KEY),
             (daily_spend_update_transactions, REDIS_DAILY_SPEND_UPDATE_BUFFER_KEY),
@@ -584,6 +585,9 @@ class RedisUpdateBuffer:
         """Move this worker's pending tool rows to Redis so only the leader writes LiteLLM_ToolTable."""
         if self.redis_cache is None:
             return
+
+        from redis.exceptions import RedisError
+
         items: Final = tool_discovery_queue.flush()
         if not items:
             return
