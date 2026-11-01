@@ -1339,6 +1339,7 @@ def test_default_latency_buckets(prometheus_logger):
     from litellm.types.integrations.prometheus import LATENCY_BUCKETS
 
     assert prometheus_logger.latency_buckets == LATENCY_BUCKETS
+    assert tuple(prometheus_logger.litellm_deployment_latency_per_output_token._upper_bounds) == LATENCY_BUCKETS
     # 420 and 600 should be present
     assert 420.0 in prometheus_logger.latency_buckets
     assert 600.0 in prometheus_logger.latency_buckets
@@ -1349,8 +1350,9 @@ def test_default_latency_buckets(prometheus_logger):
 
 def test_custom_latency_buckets():
     """prometheus_latency_buckets in litellm settings overrides the defaults."""
-    import litellm
     from prometheus_client import REGISTRY
+
+    import litellm
 
     custom_buckets = [0.1, 0.5, 1.0, 5.0, 10.0]
     original = litellm.prometheus_latency_buckets
@@ -1364,6 +1366,17 @@ def test_custom_latency_buckets():
         litellm.prometheus_latency_buckets = custom_buckets
         logger = PrometheusLogger()
         assert logger.latency_buckets == tuple(custom_buckets)
+        assert tuple(logger.litellm_deployment_latency_per_output_token._upper_bounds[:-1]) == tuple(custom_buckets)
+        for histogram in (
+            logger.litellm_request_total_latency_metric,
+            logger.litellm_llm_api_latency_metric,
+            logger.litellm_llm_api_time_to_first_token_metric,
+            logger.litellm_overhead_latency_metric,
+            logger.litellm_overhead_with_guardrails_latency_metric,
+            logger.litellm_request_queue_time_metric,
+            logger.litellm_guardrail_latency_metric,
+        ):
+            assert tuple(histogram._upper_bounds[:-1]) == tuple(custom_buckets)
     finally:
         litellm.prometheus_latency_buckets = original
         for collector in list(REGISTRY._collector_to_names.keys()):
