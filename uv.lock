@@ -22,6 +22,7 @@ pypdf = "2026-10-28T17:01:00Z"
 members = [
     "litellm",
     "litellm-enterprise",
+    "litellm-gateway",
     "litellm-proxy-extras",
 ]
 constraints = [
@@ -5040,6 +5041,7 @@ proxy = [
     { name = "httpx2" },
     { name = "inquirerpy" },
     { name = "litellm-enterprise" },
+    { name = "litellm-gateway" },
     { name = "litellm-proxy-extras" },
     { name = "mcp" },
     { name = "orjson" },
@@ -5271,6 +5273,7 @@ requires-dist = [
     { name = "keyring", marker = "extra == 'cli'", specifier = ">=25.6.0,<26.0" },
     { name = "langfuse", marker = "extra == 'proxy-runtime'", specifier = ">=4.7,<5.0" },
     { name = "litellm-enterprise", marker = "extra == 'proxy'", editable = "enterprise" },
+    { name = "litellm-gateway", marker = "extra == 'proxy'", editable = "packaging/litellm-gateway" },
     { name = "litellm-proxy-extras", marker = "extra == 'proxy'", editable = "litellm-proxy-extras" },
     { name = "llm-sandbox", marker = "extra == 'proxy-runtime'", specifier = ">=0.3.39,<1.0" },
     { name = "mangum", marker = "extra == 'proxy-runtime'", specifier = ">=0.17.0,<1.0" },
@@ -5470,6 +5473,11 @@ provides-extras = ["test"]
 name = "litellm-enterprise"
 version = "0.1.81"
 source = { editable = "enterprise" }
+
+[[package]]
+name = "litellm-gateway"
+version = "1.109.0"
+source = { editable = "packaging/litellm-gateway" }
 
 [[package]]
 name = "litellm-proxy-extras"
