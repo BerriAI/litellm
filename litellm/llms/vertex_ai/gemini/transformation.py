@@ -44,6 +44,7 @@ from litellm.types.files import (
 from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionAssistantMessage,
+    ChatCompletionAssistantToolCall,
     ChatCompletionTextObject,
     ChatCompletionUserMessage,
 )
@@ -844,6 +845,11 @@ def gemini_convert_messages_with_history(
                     )  # add a blank text, to ensure Gemini doesn't fail the request.
                 contents.append(ContentType(role="user", parts=user_content))
             assistant_content = []
+            # Tool calls of every assistant message merged into this model turn.
+            # A tool result may answer a call from an earlier message of the run
+            # (e.g. [function_call, reasoning, function_call] from the Responses
+            # API), so names are recovered from all of them, not only the last.
+            turn_tool_calls: tuple[ChatCompletionAssistantToolCall, ...] = ()
             ## MERGE CONSECUTIVE ASSISTANT CONTENT ##
             while msg_i < len(messages) and messages[msg_i]["role"] == "assistant":
                 if isinstance(messages[msg_i], BaseModel):
@@ -954,6 +960,13 @@ def gemini_convert_messages_with_history(
                     # corresponding tool call for tool response message".
                     if assistant_msg.get("tool_calls") or assistant_msg.get("function_call") is not None:
                         last_message_with_tool_calls = assistant_msg
+                        if assistant_msg.get("tool_calls"):
+                            prior: Final = turn_tool_calls
+                            turn_tool_calls = (*prior, *assistant_msg["tool_calls"])
+                            if prior:
+                                last_message_with_tool_calls = ChatCompletionAssistantMessage(
+                                    **{**assistant_msg, "tool_calls": [*turn_tool_calls]}
+                                )
 
                 ## HANDLE SERVER-SIDE TOOL INVOCATIONS (context circulation)
                 _psf = assistant_msg.get("provider_specific_fields")
