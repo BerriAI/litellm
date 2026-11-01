@@ -217,9 +217,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         self._sent_reasoning_summary_text_done_event: bool = False
         self._sent_reasoning_summary_part_done_event: bool = False
         self._reasoning_summary_text: str = ""
-        self._text_logprob_chunks: list[
-            tuple[OutputTextLogprob, ...]
-        ] = []
+        self._text_logprob_chunks: list[tuple[OutputTextLogprob, ...]] = []
         # -- GENERIC RESPONSE-EVENTS PENDING QUEUE as required by fix --
         self._pending_response_events: list[BaseLiteLLMOpenAIResponseObject] = []
         self._reasoning_active = False
