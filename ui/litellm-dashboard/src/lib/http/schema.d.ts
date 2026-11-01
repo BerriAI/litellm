@@ -452,6 +452,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/a2a/{agent_id}/message/stream": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Invoke Agent A2A
+         * @description Invoke an agent using the A2A protocol (JSON-RPC 2.0).
+         *
+         *     Supported methods:
+         *     - message/send: Send a message and get a response
+         *     - message/stream: Send a message and stream the response
+         */
+        post: operations["invoke_agent_a2a_a2a__agent_id__message_stream_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/access_group/list": {
         parameters: {
             query?: never;
@@ -5851,6 +5875,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/get/background_chat_settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Background Chat Settings
+         * @description Get saved background-response settings and the prerequisites for changing them.
+         */
+        get: operations["get_background_chat_settings_get_background_chat_settings_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/get/config/callbacks": {
         parameters: {
             query?: never;
@@ -8527,7 +8571,7 @@ export interface paths {
          *     - soft_budget: Optional[float] - Specify soft budget for a given key. Will trigger a slack alert when this soft budget is reached.
          *     - tags: Optional[List[str]] - Tags for [tracking spend](https://litellm.vercel.app/docs/proxy/enterprise#tracking-spend-for-custom-tags) and/or doing [tag-based routing](https://litellm.vercel.app/docs/proxy/tag_routing).
          *     - prompts: Optional[List[str]] - List of prompts that the key is allowed to use.
-         *     - enforced_params: Optional[List[str]] - List of enforced params for the key (Enterprise only). [Docs](https://docs.litellm.ai/docs/proxy/enterprise#enforce-required-params-for-llm-requests)
+         *     - enforced_params: Optional[List[str]] - List of enforced params for the key (Enterprise only). [Docs](https://docs.litellm.ai/docs/enterprise#governance-and-cost)
          *     - prompts: Optional[List[str]] - List of prompts that the key is allowed to use.
          *     - allowed_routes: Optional[list] - List of allowed routes for the key. Store the actual route or store a wildcard pattern for a set of routes. Example - ["/chat/completions", "/embeddings", "/keys/*"]
          *     - allowed_passthrough_routes: Optional[list] - List of allowed pass through endpoints for the key. Store the actual endpoint or store a wildcard pattern for a set of endpoints. Example - ["/my-custom-endpoint"]. Use this instead of allowed_routes, if you just want to specify which pass through endpoints the key can access, without specifying the routes. If allowed_routes is specified, allowed_pass_through_endpoints is ignored.
@@ -8848,7 +8892,7 @@ export interface paths {
          *     - tpd_limit: Optional[int] - Specify tpd limit for a given key (Tokens per day). Charged by batch submissions instead of tpm_limit/rpm_limit.
          *     - soft_budget: Optional[float] - Specify soft budget for a given key. Will trigger a slack alert when this soft budget is reached.
          *     - tags: Optional[List[str]] - Tags for [tracking spend](https://litellm.vercel.app/docs/proxy/enterprise#tracking-spend-for-custom-tags) and/or doing [tag-based routing](https://litellm.vercel.app/docs/proxy/tag_routing).
-         *     - enforced_params: Optional[List[str]] - List of enforced params for the key (Enterprise only). [Docs](https://docs.litellm.ai/docs/proxy/enterprise#enforce-required-params-for-llm-requests)
+         *     - enforced_params: Optional[List[str]] - List of enforced params for the key (Enterprise only). [Docs](https://docs.litellm.ai/docs/enterprise#governance-and-cost)
          *     - allowed_routes: Optional[list] - List of allowed routes for the key. Store the actual route or store a wildcard pattern for a set of routes. Example - ["/chat/completions", "/embeddings", "/keys/*"]
          *     - object_permission: Optional[LiteLLM_ObjectPermissionBase] - key-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"], "agents": ["agent_1", "agent_2"], "agent_access_groups": ["dev_group"]}. IF null or {} then no object permission.
          *     Examples:
@@ -8962,7 +9006,7 @@ export interface paths {
          *     - models: Optional[list] - Model_name's a user is allowed to call
          *     - tags: Optional[List[str]] - Tags for organizing keys (Enterprise only)
          *     - prompts: Optional[List[str]] - List of prompts that the key is allowed to use.
-         *     - enforced_params: Optional[List[str]] - List of enforced params for the key (Enterprise only). [Docs](https://docs.litellm.ai/docs/proxy/enterprise#enforce-required-params-for-llm-requests)
+         *     - enforced_params: Optional[List[str]] - List of enforced params for the key (Enterprise only). [Docs](https://docs.litellm.ai/docs/enterprise#governance-and-cost)
          *     - spend: Optional[float] - Amount spent by key
          *     - max_budget: Optional[float] - Max budget for key
          *     - model_max_budget: Optional[Dict[str, BudgetConfig]] - Model-specific budgets keyed by model name, `*` pattern like "claude-opus*", or model access group, e.g. {"gpt-4": {"budget_limit": 0.0005, "time_period": "30d"}}
@@ -18242,6 +18286,26 @@ export interface paths {
         patch: operations["typesafe_proxy_route_typesafe__endpoint__patch"];
         trace?: never;
     };
+    "/update/background_chat_settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Update Background Chat Settings
+         * @description Save background-response polling settings for the proxy configuration refresh.
+         */
+        patch: operations["update_background_chat_settings_update_background_chat_settings_patch"];
+        trace?: never;
+    };
     "/update/default_team_settings": {
         parameters: {
             query?: never;
@@ -19263,6 +19327,30 @@ export interface paths {
          *     - message/stream: Send a message and stream the response
          */
         post: operations["invoke_agent_a2a_v1_a2a__agent_id__message_send_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/a2a/{agent_id}/message/stream": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Invoke Agent A2A
+         * @description Invoke an agent using the A2A protocol (JSON-RPC 2.0).
+         *
+         *     Supported methods:
+         *     - message/send: Send a message and get a response
+         *     - message/stream: Send a message and stream the response
+         */
+        post: operations["invoke_agent_a2a_v1_a2a__agent_id__message_stream_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -26414,6 +26502,8 @@ export interface components {
             metadata?: {
                 [key: string]: unknown;
             } | null;
+            /** @default standard */
+            response_format: components["schemas"]["GuardrailResponseFormat"];
             /** Text */
             text: string;
         };
@@ -27159,6 +27249,37 @@ export interface components {
         } & {
             [key: string]: unknown;
         };
+        /** BackgroundChatSettings */
+        BackgroundChatSettings: {
+            /**
+             * Enabled
+             * @description Enable cache-backed background Responses for Chat and API requests.
+             */
+            enabled: boolean;
+        };
+        /** BackgroundChatSettingsResponse */
+        BackgroundChatSettingsResponse: {
+            /**
+             * Can Save
+             * @description Whether database-backed configuration updates are available.
+             */
+            can_save: boolean;
+            /**
+             * Enabled
+             * @description Enable cache-backed background Responses for Chat and API requests.
+             */
+            enabled: boolean;
+            /**
+             * Managed By Config
+             * @description Whether the responses configuration is owned by the config file.
+             */
+            managed_by_config: boolean;
+            /**
+             * Redis Configured
+             * @description Whether this proxy has coordination Redis configured.
+             */
+            redis_configured: boolean;
+        };
         /** BaseLitellmParams */
         BaseLitellmParams: {
             /**
@@ -27488,6 +27609,11 @@ export interface components {
             /** Entities */
             entities: components["schemas"]["BedrockChecksSensitiveInformationEntityItem"][];
         };
+        /**
+         * BedrockGuardrailOutputScope
+         * @enum {string}
+         */
+        BedrockGuardrailOutputScope: "INTERVENTIONS" | "FULL";
         /** BillingPeriod */
         BillingPeriod: {
             /**
@@ -33501,6 +33627,11 @@ export interface components {
             /** @description Guardrail spend and unpriced units across all matching API keys */
             metrics: components["schemas"]["GuardrailSpendMetrics"];
         };
+        /**
+         * GuardrailResponseFormat
+         * @enum {string}
+         */
+        GuardrailResponseFormat: "standard" | "native";
         /** GuardrailSpendMetrics */
         GuardrailSpendMetrics: {
             /**
@@ -37088,6 +37219,11 @@ export interface components {
              */
             fail_on_error: boolean | null;
             /**
+             * File Checkpoint Id
+             * @description File-checkpoint ID for the Ovalix Tracker service (falls back to pre/post).
+             */
+            file_checkpoint_id?: string | null;
+            /**
              * File Guardrail Timeout
              * @description HTTP timeout in seconds for checking attached files. Default: 10.
              */
@@ -37293,6 +37429,8 @@ export interface components {
             only_scan_new_messages: boolean | null;
             /** @description Optional parameters for the guardrail */
             optional_params?: components["schemas"]["CiscoAIDefenseGuardrailConfigModelOptionalParams"] | null;
+            /** @description ApplyGuardrail response scope. FULL includes detected and non-detected findings. Omit to retain Bedrock's default of returning detected findings only. */
+            outputScope?: components["schemas"]["BedrockGuardrailOutputScope"] | null;
             /**
              * Output Parse Pii
              * @description When True, LiteLLM will replace the masked text with the original text in the response
@@ -38806,6 +38944,12 @@ export interface components {
             supported_openai_params: string[] | null;
             /** Supported Reasoning Efforts */
             supported_reasoning_efforts?: string[] | null;
+            /**
+             * Supports Background Chat
+             * @description Whether cache-backed background Responses runs are enabled for this model group
+             * @default false
+             */
+            supports_background_chat: boolean;
             /**
              * Supports Fast Mode
              * @default false
@@ -50715,6 +50859,24 @@ export interface components {
             /** Status */
             status?: ("pending" | "running" | "paused" | "completed" | "failed") | null;
         };
+        /** _A2AJsonRpcResponse */
+        _A2AJsonRpcResponse: {
+            /** Error */
+            error?: {
+                [key: string]: unknown;
+            } | null;
+            /** Id */
+            id: string | number | null;
+            /**
+             * Jsonrpc
+             * @constant
+             */
+            jsonrpc: "2.0";
+            /** Result */
+            result?: unknown | null;
+        } & {
+            [key: string]: unknown;
+        };
         /** ModelInfo */
         litellm__proxy___types__ModelInfo: {
             /** Base Model */
@@ -52074,6 +52236,77 @@ export interface operations {
             };
         };
     };
+    invoke_agent_a2a_a2a__agent_id__message_stream_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                agent_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                /**
+                 * @example {
+                 *       "id": "stream-1",
+                 *       "jsonrpc": "2.0",
+                 *       "method": "message/stream",
+                 *       "params": {
+                 *         "message": {
+                 *           "kind": "message",
+                 *           "messageId": "message-1",
+                 *           "parts": [
+                 *             {
+                 *               "kind": "text",
+                 *               "text": "Hello"
+                 *             }
+                 *           ],
+                 *           "role": "user"
+                 *         }
+                 *       }
+                 *     }
+                 */
+                "application/json": {
+                    /** Id */
+                    id?: string | number | null;
+                    /**
+                     * Jsonrpc
+                     * @constant
+                     */
+                    jsonrpc: "2.0";
+                    /** Method */
+                    method: string;
+                    /** Params */
+                    params: {
+                        [key: string]: unknown;
+                    };
+                } & {
+                    [key: string]: unknown;
+                };
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["_A2AJsonRpcResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_access_groups_access_group_list_get: {
         parameters: {
             query?: never;
@@ -52897,7 +53130,9 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ApplyGuardrailResponse"];
+                    "application/json": components["schemas"]["ApplyGuardrailResponse"] | {
+                        [key: string]: components["schemas"]["JsonValue"];
+                    } | components["schemas"]["JsonValue"][];
                 };
             };
             /** @description Validation Error */
@@ -60984,6 +61219,26 @@ export interface operations {
             };
         };
     };
+    get_background_chat_settings_get_background_chat_settings_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BackgroundChatSettingsResponse"];
+                };
+            };
+        };
+    };
     get_config_get_config_callbacks_get: {
         parameters: {
             query?: never;
@@ -62024,7 +62279,9 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ApplyGuardrailResponse"];
+                    "application/json": components["schemas"]["ApplyGuardrailResponse"] | {
+                        [key: string]: components["schemas"]["JsonValue"];
+                    } | components["schemas"]["JsonValue"][];
                 };
             };
             /** @description Validation Error */
@@ -76304,6 +76561,39 @@ export interface operations {
             };
         };
     };
+    update_background_chat_settings_update_background_chat_settings_patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BackgroundChatSettings"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BackgroundChatSettingsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     update_default_team_settings_update_default_team_settings_patch: {
         parameters: {
             query?: never;
@@ -77641,6 +77931,77 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    invoke_agent_a2a_v1_a2a__agent_id__message_stream_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                agent_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                /**
+                 * @example {
+                 *       "id": "stream-1",
+                 *       "jsonrpc": "2.0",
+                 *       "method": "message/stream",
+                 *       "params": {
+                 *         "message": {
+                 *           "kind": "message",
+                 *           "messageId": "message-1",
+                 *           "parts": [
+                 *             {
+                 *               "kind": "text",
+                 *               "text": "Hello"
+                 *             }
+                 *           ],
+                 *           "role": "user"
+                 *         }
+                 *       }
+                 *     }
+                 */
+                "application/json": {
+                    /** Id */
+                    id?: string | number | null;
+                    /**
+                     * Jsonrpc
+                     * @constant
+                     */
+                    jsonrpc: "2.0";
+                    /** Method */
+                    method: string;
+                    /** Params */
+                    params: {
+                        [key: string]: unknown;
+                    };
+                } & {
+                    [key: string]: unknown;
+                };
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["_A2AJsonRpcResponse"];
                 };
             };
             /** @description Validation Error */

@@ -20,6 +20,7 @@ from litellm.responses.litellm_completion_transformation.transformation import (
     LiteLLMCompletionResponsesConfig,
 )
 from litellm.responses.main import previous_response_client_ids
+from litellm.types.llms.openai import ResponseInputParam
 from litellm.utils import ProviderConfigManager
 
 _COUNTED_CHAT_PARAMS: Final = (
@@ -113,6 +114,15 @@ def with_provider_file_ids(
     }
 
 
+def _caller_input(responses_request: Mapping[str, object]) -> ResponseInputParam | None:
+    responses_input: Final = responses_request.get("input")
+    return (
+        cast(ResponseInputParam, responses_input)  # cast-ok: forwarded as sent, as inference does
+        if isinstance(responses_input, list)
+        else None
+    )
+
+
 def _with_emulated_file_search(responses_request: Mapping[str, object]) -> Mapping[str, object]:
     tools: Final = responses_request.get("tools")
     if tools is None:
@@ -187,6 +197,7 @@ async def chat_count_request(
                 ),
                 custom_llm_provider,
                 policy.drop_params,
+                caller_input=_caller_input(responses_request),
             ),
             model,
             custom_llm_provider,
