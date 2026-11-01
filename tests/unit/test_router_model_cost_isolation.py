@@ -31,6 +31,7 @@ import litellm
 from litellm import Router
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.constants import DEFAULT_MAX_LRU_CACHE_SIZE
+from litellm.router_api import ChangeSet
 from litellm.litellm_core_utils.ptu_pricing import ptu_config_error
 from litellm.litellm_core_utils.llm_cost_calc.utils import SERVICE_TIER_COST_KEY_SUFFIXES
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
@@ -340,7 +341,7 @@ async def test_discovered_limits_expire_after_the_last_successful_refresh(monkey
     _invalidate_model_cost_lowercase_map()
 
 
-@pytest.mark.parametrize("provider", ("hosted_vllm", "openai", "openai_like", "text-completion-openai"))
+@pytest.mark.parametrize("provider", ("hosted_vllm", "openai", "openai_like", "text-completion-openai", "lm_studio"))
 async def test_discovered_limits_are_isolated_overridable_and_refreshable(
     provider: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -348,9 +349,24 @@ async def test_discovered_limits_are_isolated_overridable_and_refreshable(
     upstream_limit: Final = iter((8192, 4096, 16384, 2048))
 
     def respond(request: httpx.Request) -> httpx.Response:
-        assert request.url.path == "/v1/models"
+        assert request.url.path == ("/api/v1/models" if provider == "lm_studio" else "/v1/models")
         assert request.headers["authorization"] == "Bearer local-key"
-        return httpx.Response(200, json={"data": [{"id": "org/local-model", "max_model_len": next(upstream_limit)}]})
+        limit: Final = next(upstream_limit)
+        return httpx.Response(
+            200,
+            json=(
+                {
+                    "models": [
+                        {
+                            "key": "org/local-model",
+                            "loaded_instances": [{"id": "org/local-model", "config": {"context_length": limit}}],
+                        }
+                    ]
+                }
+                if provider == "lm_studio"
+                else {"data": [{"id": "org/local-model", "max_model_len": limit}]}
+            ),
+        )
 
     router: Final = Router(
         model_list=[
@@ -4502,3 +4518,77 @@ def test_pricing_provider_fills_unset_rates_from_that_providers_catalog_row() ->
     finally:
         _restore_model_cost_entries(model_cost_entries)
         litellm.get_model_info.cache_clear()
+
+
+@pytest.mark.parametrize(
+    "response",
+    (
+        httpx.Response(200, json={"models": [{"key": "org/model", "loaded_instances": []}]}),
+        httpx.Response(200, json={"models": []}),
+        httpx.Response(503),
+    ),
+)
+@pytest.mark.parametrize("input_limit", (None, 1000))
+async def test_lm_studio_refresh_clears_active_limits_but_preserves_explicit_overrides(
+    response: httpx.Response,
+    input_limit: int | None,
+    local_model_cost_map: None,
+) -> None:
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "alias",
+                "litellm_params": {"model": "lm_studio/org/model", "api_base": "https://backend.test/v1"},
+                "model_info": {"id": "lm-deployment", "max_output_tokens": 123, "max_input_tokens": input_limit},
+            }
+        ]
+    )
+    responses: Final = iter(
+        (
+            httpx.Response(
+                200,
+                json={
+                    "models": [
+                        {
+                            "key": "org/model",
+                            "loaded_instances": [{"id": "org/model", "config": {"context_length": 4096}}],
+                        }
+                    ]
+                },
+            ),
+            response,
+        )
+    )
+    handler: Final = AsyncHTTPHandler()
+    await handler.client.aclose()
+    async with httpx.AsyncClient(transport=httpx.MockTransport(lambda request: next(responses))) as client:
+        handler.client = client
+        await router.aapply(ChangeSet(refresh_model_info=True, refresh_client=handler))
+        assert router.registry().group("alias", field="token_limits") == (input_limit or 4096, 123)
+        router.cache.in_memory_cache.flush_cache()
+        await router.aapply(ChangeSet(refresh_model_info=True, refresh_client=handler))
+        assert router.registry().group("alias", field="token_limits") == (input_limit, 123)
+
+
+async def test_lm_studio_refresh_without_server_does_not_send_api_key(
+    monkeypatch: pytest.MonkeyPatch,
+    local_model_cost_map: None,
+) -> None:
+    monkeypatch.delenv("LM_STUDIO_API_BASE", raising=False)
+    monkeypatch.setenv("LM_STUDIO_API_KEY", "local-only-key")
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "alias",
+                "litellm_params": {"model": "lm_studio/org/model"},
+            }
+        ]
+    )
+    responder: Final = Mock(side_effect=AssertionError("LM Studio credentials must not reach a default endpoint"))
+    handler: Final = AsyncHTTPHandler()
+    await handler.client.aclose()
+    async with httpx.AsyncClient(transport=httpx.MockTransport(responder)) as client:
+        handler.client = client
+        await router.aapply(ChangeSet(refresh_model_info=True, refresh_client=handler))
+        assert router.registry().group("alias", field="token_limits") == (None, None)
+        assert responder.call_count == 0

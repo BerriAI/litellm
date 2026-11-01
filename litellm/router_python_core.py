@@ -230,6 +230,7 @@ from litellm.llms.base_llm.vector_store.transformation import (
 )
 from litellm.llms.bedrock.common_utils import get_bedrock_base_model
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, get_async_httpx_client
+from litellm.llms.lm_studio.model_info import get_lm_studio_model_info
 from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 from litellm.llms.openai_like.model_info import (
     MODEL_INFO_DISCOVERY_PROVIDERS,
@@ -12466,7 +12467,7 @@ class PythonCore(DeprecatedRouterMembers):
         model, provider, dynamic_api_key, api_base = self._host.invoke("get_llm_provider")(
             model=params.model, litellm_params=params
         )
-        if provider not in MODEL_INFO_DISCOVERY_PROVIDERS:
+        if provider not in MODEL_INFO_DISCOVERY_PROVIDERS and provider != "lm_studio":
             return
         if api_base is None or "*" in model or params.get("use_clientside_credentials"):
             return
@@ -12482,7 +12483,8 @@ class PythonCore(DeprecatedRouterMembers):
         auth_headers: Final = (
             MappingProxyType({"authorization": f"Bearer {api_key}"}) if api_key else MappingProxyType({})
         )
-        limits: Final = await get_openai_compatible_model_info(
+        discover: Final = get_lm_studio_model_info if provider == "lm_studio" else get_openai_compatible_model_info
+        limits: Final = await discover(
             model=model,
             api_base=api_base,
             headers=MappingProxyType(
@@ -12495,7 +12497,11 @@ class PythonCore(DeprecatedRouterMembers):
             cache=self._core_cache.in_memory_cache,
         )
         model_id: Final = deployment.model_info.id
-        if not limits or model_id is None or self._core_get_model_info(model_id) is not raw_deployment:
+        if (
+            (not limits and provider != "lm_studio")
+            or model_id is None
+            or self._core_get_model_info(model_id) is not raw_deployment
+        ):
             return
         self._discovered_model_info_cache.max_size_in_memory = max(len(self._core_model_list), 1)
         self._discovered_model_info_cache.delete_cache(model_id)

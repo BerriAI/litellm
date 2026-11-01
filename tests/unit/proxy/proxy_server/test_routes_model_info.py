@@ -119,7 +119,9 @@ async def test_discovery_preserves_model_info_fallbacks(
     _invalidate_model_cost_lowercase_map()
 
 
+@pytest.mark.parametrize("provider", ("hosted_vllm", "lm_studio"))
 async def test_upstream_limits_reach_model_info_routes(
+    provider: str,
     client: TestClient,
     auth_as: Callable[[], AbstractContextManager[object]],
     monkeypatch: pytest.MonkeyPatch,
@@ -131,7 +133,7 @@ async def test_upstream_limits_reach_model_info_routes(
             {
                 "model_name": "local",
                 "litellm_params": {
-                    "model": "hosted_vllm/org/local-model",
+                    "model": f"{provider}/org/local-model",
                     "api_base": "https://backend.test/v1",
                     "api_key": "local-key",
                 },
@@ -144,8 +146,23 @@ async def test_upstream_limits_reach_model_info_routes(
     monkeypatch.setattr(proxy_server, "user_model", None)
 
     def respond(request: httpx.Request) -> httpx.Response:
-        assert request.url.path == "/v1/models"
-        return httpx.Response(200, json={"data": [{"id": "org/local-model", "max_model_len": 4096}]})
+        assert request.url.path == ("/api/v1/models" if provider == "lm_studio" else "/v1/models")
+        return httpx.Response(
+            200,
+            json=(
+                {
+                    "models": [
+                        {
+                            "key": "org/local-model",
+                            "max_context_length": 32768,
+                            "loaded_instances": [{"id": "org/local-model", "config": {"context_length": 4096}}],
+                        }
+                    ]
+                }
+                if provider == "lm_studio"
+                else {"data": [{"id": "org/local-model", "max_model_len": 4096}]}
+            ),
+        )
 
     handler: Final = AsyncHTTPHandler()
     await handler.client.aclose()
