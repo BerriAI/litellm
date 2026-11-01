@@ -88,6 +88,7 @@ OPTIONAL_KWARGS_KEYS: Final = (
             "responses_api_version",
             "allowed_openai_params",
             PROVIDER_AFFINITY_HEADER_KWARG_KEY,
+            "xai_oauth_token_file",
         }
     )
     | AWS_CREDENTIAL_KWARGS_KEYS

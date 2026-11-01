@@ -1592,6 +1592,9 @@ def responses(
         )
         local_vars["extra_headers"] = provider_headers
 
+        litellm_params: Final = GenericLiteLLMParams.model_validate(
+            {**cast("dict[str, object]", kwargs), "extra_headers": extra_headers}
+        )
         affinity_api_base: Final = (
             get_openai_credentials(api_base=litellm_params.api_base).api_base
             if custom_llm_provider == "openai"

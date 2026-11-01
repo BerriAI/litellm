@@ -4456,11 +4456,13 @@ def credential_api_key_secret_reference(credential_values: Mapping[str, object])
     return {**credential_values, "api_key": reference}
 
 
+xai_oauth_litellm_params: Final = ("xai_oauth_token_file",)
 server_owned_wif_litellm_params: Final = (
     anthropic_wif_litellm_params
     + openai_wif_litellm_params
     + oauth_token_exchange_litellm_params
     + github_copilot_oauth_litellm_params
+    + xai_oauth_litellm_params
     + ("chatgpt_auth_file",)
 )
 secret_bearing_wif_litellm_params: Final = tuple(sorted(WIF_SECRET_BEARING_KEYS))

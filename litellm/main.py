@@ -6263,6 +6263,7 @@ def completion(
                     "thought_signature_in_tool_call_id",
                     "responses_api_version",
                     "allowed_openai_params",
+                    "xai_oauth_token_file",
                 )
                 if key in kwargs
             },
