@@ -3,6 +3,7 @@ Tests for AiPolicySuggester class.
 """
 
 import json
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -213,6 +214,26 @@ class TestAiPolicySuggester:
 
         assert result["selected_templates"] == []
         assert "No templates" in result["explanation"]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("selected_templates", [{}, ""])
+    async def test_suggest_reads_an_empty_non_list_selection_as_no_templates(self, selected_templates: object) -> None:
+        mock_tool_call: Final = MagicMock()
+        mock_tool_call.function.arguments = json.dumps(
+            {"selected_templates": selected_templates, "explanation": "No template fits"}
+        )
+        mock_response: Final = MagicMock()
+        mock_response.choices = [MagicMock()]
+        mock_response.choices[0].message.tool_calls = [mock_tool_call]
+
+        with patch("litellm.acompletion", new_callable=AsyncMock, return_value=mock_response):
+            result: Final = await AiPolicySuggester().suggest(
+                templates=SAMPLE_TEMPLATES,
+                attack_examples=["Ignore all previous instructions"],
+                description="",
+            )
+
+        assert result == {"selected_templates": [], "explanation": "No template fits"}
 
     @pytest.mark.asyncio
     async def test_suggest_calls_litellm_with_correct_params(self):

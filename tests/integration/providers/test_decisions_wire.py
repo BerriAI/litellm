@@ -1,7 +1,7 @@
 import json
 import math
 import uuid
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
@@ -137,9 +137,41 @@ _PROVIDERS: Final = (
         "databricks-openjev-qwen35-4b",
         _API_KEY,
         False,
-        None,
+        "databricks/databricks-openjev-qwen35-4b",
     ),
 )
+_LOCAL_PROVIDERS: Final = (
+    pytest.param(
+        _Provider("ollama", "ollama/d3:4b", "/v1/systemone", "d3:4b", None, False, None), id="regression-ollama"
+    ),
+    pytest.param(
+        _Provider("ollama_chat", "ollama_chat/d3:4b", "/v1/systemone", "d3:4b", None, False, None),
+        id="regression-ollama_chat",
+    ),
+    pytest.param(
+        _Provider("hosted_vllm", "hosted_vllm/d3:4b", "/v1/systemone", "d3:4b", None, False, None),
+        id="guard-hosted_vllm",
+    ),
+    pytest.param(
+        _Provider("lm_studio", "lm_studio/d3:4b", "/v1/systemone", "d3:4b", None, False, None),
+        id="guard-lm_studio",
+    ),
+)
+_LOCAL_STATE: Final = "I was charged twice for order 4417."
+_LOCAL_QUESTIONS: Final[Mapping[str, JsonValue]] = {
+    "billing": {"type": "noul", "instructions": "Is this a billing issue?"}
+}
+_LOCAL_ANSWERS: Final[Mapping[str, JsonValue]] = {"billing": {"type": "noul", "noul": 0.91}}
+_LOCAL_OPENAI_QUESTIONS: Final[Sequence[JsonValue]] = (
+    {"type": "predicate", "name": "billing", "instructions": "Is this a billing issue?"},
+)
+_LOCAL_OPENAI_ANSWERS: Final[Sequence[JsonValue]] = ({"type": "predicate", "name": "billing", "probability": 0.91},)
+_LOCAL_OPENAI_USAGE: Final[Mapping[str, JsonValue]] = {
+    **_USAGE,
+    "input_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 0},
+    "output_tokens_details": {"reasoning_tokens": 0},
+    "total_tokens": 370,
+}
 _PERPLEXITY: Final = _PROVIDERS[0]
 _OPENROUTER: Final = next(provider for provider in _PROVIDERS if provider.name == "openrouter")
 _OPENROUTER_CHAT_MODEL: Final = "openrouter/openai/gpt-5-mini"
@@ -228,6 +260,26 @@ def _calls_to(requests: Sequence[dict[str, JsonValue]], handle: ScenarioHandle) 
 
 def _upstream_calls(gateway: Gateway, handle: ScenarioHandle) -> list[dict[str, JsonValue]]:
     return _calls_to(_observed_requests(gateway), handle)
+
+
+def _sdk_inference_call(gateway: Gateway, handle: ScenarioHandle, provider: _Provider) -> dict[str, JsonValue]:
+    observed: Final = _upstream_calls(gateway, handle)
+    inference_path: Final = f"/{handle.scenario_id}/v1/systemone"
+    (call,) = tuple(request for request in observed if request["path"] == inference_path)
+    metadata_calls: Final = tuple(request for request in observed if request["path"] != inference_path)
+    assert metadata_calls in (
+        (),
+        (
+            {
+                "path": f"{inference_path}/api/show",
+                "authorization": "",
+                "body": {"name": provider.body_model},
+                "method": "POST",
+                "api_key": "",
+            },
+        ),
+    ), observed
+    return call
 
 
 def _spend_row(call_id: str) -> dict[str, JsonValue]:
@@ -343,6 +395,174 @@ def test_each_provider_gets_its_own_path_key_and_body_and_is_billed(gateway: Gat
             row["completion_tokens"],
         ) == ("success", "asystemone", provider.name, model, f"{handle.api_base()}{provider.path}", 367, 3)
         assert math.isclose(_number(row["spend"]), expected_spend, rel_tol=1e-9), row
+
+
+@pytest.fixture(autouse=True)
+def _without_ambient_ollama_settings(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("OLLAMA_API_KEY", raising=False)
+    monkeypatch.delenv("OLLAMA_API_BASE", raising=False)
+
+
+@pytest.mark.parametrize("provider", _LOCAL_PROVIDERS)
+@pytest.mark.parametrize("route", ("/v1/systemone", "/v1/decisions"), ids=("systemone", "decisions"))
+@pytest.mark.parametrize(
+    ("base_suffix", "api_key"),
+    (
+        pytest.param("", None, id="root-no-key"),
+        pytest.param("/", _API_KEY, id="root-slash-key"),
+        pytest.param("/v1", None, id="v1-no-key"),
+        pytest.param("/v1/", _API_KEY, id="v1-slash-key"),
+    ),
+)
+def test_local_decisions_routes_preserve_wire_auth_usage_and_spend(
+    gateway: Gateway, provider: _Provider, route: str, base_suffix: str, api_key: str | None
+) -> None:
+    native_reply: Final[Mapping[str, JsonValue]] = {
+        "model": provider.body_model,
+        "answers": dict(_LOCAL_ANSWERS),
+        "usage": _USAGE,
+    }
+    request_body: Final[Mapping[str, JsonValue]] = (
+        {"state": _LOCAL_STATE, "questions": dict(_LOCAL_QUESTIONS)}
+        if route == "/v1/systemone"
+        else {"input": _LOCAL_STATE, "questions": list(_LOCAL_OPENAI_QUESTIONS)}
+    )
+    expected_reply: Final = (
+        native_reply
+        if route == "/v1/systemone"
+        else {"model": provider.body_model, "answers": list(_LOCAL_OPENAI_ANSWERS), "usage": dict(_LOCAL_OPENAI_USAGE)}
+    )
+    with gateway.scenario() as scenario:
+        handle: Final = _register(scenario, dict(native_reply))
+        model: Final = scenario.model(
+            model=provider.model, api_base=f"{handle.api_base()}{base_suffix}", api_key=api_key
+        )
+        response: Final = gateway.request("POST", route, {"model": model, **request_body})
+        assert response.status_code == 200, response.text
+        assert response.json() == expected_reply
+        assert response.headers["x-litellm-model-group"] == model
+        assert float(response.headers.get("x-litellm-response-cost", "0")) == 0.0
+        (call,) = _upstream_calls(gateway, handle)
+        assert (call["path"], call["authorization"], call["body"]) == (
+            f"/{handle.scenario_id}/v1/systemone",
+            f"Bearer {api_key}" if api_key else "",
+            {"model": provider.body_model, "state": _LOCAL_STATE, "questions": _LOCAL_QUESTIONS},
+        )
+        row: Final = _spend_row(response.headers["x-litellm-call-id"])
+        assert {key: value for key, value in row.items() if key != "request_tags"} == {
+            "spend": 0.0,
+            "status": "success",
+            "call_type": "asystemone" if route == "/v1/systemone" else "adecisions",
+            "model_group": model,
+            "custom_llm_provider": provider.name,
+            "api_base": f"{handle.api_base()}/v1/systemone",
+            "prompt_tokens": _USAGE["input_tokens"],
+            "completion_tokens": _USAGE["output_tokens"],
+        }
+
+
+@pytest.mark.parametrize("provider", _LOCAL_PROVIDERS)
+@pytest.mark.parametrize("asynchronous", (False, True), ids=("sync", "async"))
+async def test_local_systemone_sdk_preserves_native_wire(
+    gateway: Gateway, provider: _Provider, asynchronous: bool
+) -> None:
+    with gateway.scenario() as scenario:
+        handle: Final = _register(scenario, _answer_body(provider))
+        response: Final = (
+            await litellm.asystemone(
+                model=provider.model, state=_STATE, questions=_SDK_QUESTIONS, api_base=f"{handle.api_base()}/v1/"
+            )
+            if asynchronous
+            else litellm.systemone(
+                model=provider.model, state=_STATE, questions=_SDK_QUESTIONS, api_base=handle.api_base()
+            )
+        )
+        assert response.model_dump(mode="json") == _answer_body(provider)
+        call: Final = _sdk_inference_call(gateway, handle, provider)
+        assert (call["path"], call["authorization"], call["body"]) == (
+            f"/{handle.scenario_id}/v1/systemone",
+            "",
+            {"model": provider.body_model, "state": _STATE, "questions": _QUESTIONS},
+        )
+
+
+@pytest.mark.parametrize("provider", _LOCAL_PROVIDERS)
+@pytest.mark.parametrize("asynchronous", (False, True), ids=("sync", "async"))
+async def test_local_decisions_sdk_translates_openai_format(
+    gateway: Gateway, provider: _Provider, asynchronous: bool
+) -> None:
+    questions: Final = TypeAdapter(list[dict[str, object]]).validate_python(_LOCAL_OPENAI_QUESTIONS)
+    native_reply: Final[Mapping[str, JsonValue]] = {
+        "model": provider.body_model,
+        "answers": dict(_LOCAL_ANSWERS),
+        "usage": _USAGE,
+    }
+    with gateway.scenario() as scenario:
+        handle: Final = _register(scenario, dict(native_reply))
+        response: Final = (
+            await litellm.adecisions(
+                model=provider.model, input=_LOCAL_STATE, questions=questions, api_base=f"{handle.api_base()}/v1/"
+            )
+            if asynchronous
+            else litellm.decisions(
+                model=provider.model, input=_LOCAL_STATE, questions=questions, api_base=handle.api_base()
+            )
+        )
+        assert response.model_dump(mode="json") == {
+            "model": provider.body_model,
+            "answers": list(_LOCAL_OPENAI_ANSWERS),
+            "usage": dict(_LOCAL_OPENAI_USAGE),
+        }
+        call: Final = _sdk_inference_call(gateway, handle, provider)
+        assert (call["path"], call["authorization"], call["body"]) == (
+            f"/{handle.scenario_id}/v1/systemone",
+            "",
+            {"model": provider.body_model, "state": _LOCAL_STATE, "questions": _LOCAL_QUESTIONS},
+        )
+
+
+@pytest.mark.parametrize("provider", _LOCAL_PROVIDERS[:2])
+@pytest.mark.parametrize(
+    ("environment_base", "api_key", "environment_key", "authorization"),
+    (
+        pytest.param(True, None, _ENV_KEY, f"Bearer {_ENV_KEY}", id="environment-base-and-key"),
+        pytest.param(False, _API_KEY, _ENV_KEY, f"Bearer {_API_KEY}", id="explicit-overrides-environment"),
+        pytest.param(False, "fake-api-key", _ENV_KEY, "", id="fake-key-suppresses-environment"),
+        pytest.param(False, None, None, "", id="unrelated-keys-not-forwarded"),
+    ),
+)
+def test_ollama_decisions_sdk_respects_environment_and_explicit_auth(
+    gateway: Gateway,
+    monkeypatch: pytest.MonkeyPatch,
+    provider: _Provider,
+    environment_base: bool,
+    api_key: str | None,
+    environment_key: str | None,
+    authorization: str,
+) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "synthetic-unrelated-openai-key")
+    monkeypatch.setenv("LITELLM_API_KEY", "synthetic-unrelated-litellm-key")
+    if environment_key is not None:
+        monkeypatch.setenv("OLLAMA_API_KEY", environment_key)
+    with gateway.scenario() as scenario:
+        handle: Final = _register(scenario, _answer_body(provider))
+        unused: Final = _register(scenario, _answer_body(provider))
+        monkeypatch.setenv("OLLAMA_API_BASE", handle.api_base() if environment_base else unused.api_base())
+        response: Final = litellm.systemone(
+            model=provider.model,
+            state=_STATE,
+            questions=_SDK_QUESTIONS,
+            api_base=None if environment_base else f"{handle.api_base()}/v1/",
+            api_key=api_key,
+        )
+        assert response.model_dump(mode="json") == _answer_body(provider)
+        call: Final = _sdk_inference_call(gateway, handle, provider)
+        assert (call["path"], call["authorization"], call["body"]) == (
+            f"/{handle.scenario_id}/v1/systemone",
+            authorization,
+            {"model": provider.body_model, "state": _STATE, "questions": _QUESTIONS},
+        )
+        assert _upstream_calls(gateway, unused) == []
 
 
 def test_test_connection_evaluation_mode_uses_typesafe_decisions_path(gateway: Gateway) -> None:
@@ -576,13 +796,26 @@ def test_upstream_errors_keep_their_status_and_log_an_unbilled_failure(gateway: 
         )
 
 
-def test_upstream_success_without_answers_is_a_gateway_side_server_error(gateway: Gateway) -> None:
+@pytest.mark.parametrize(
+    ("reply", "field"),
+    (
+        pytest.param({"model": _PERPLEXITY.body_model, "usage": _USAGE}, "answers", id="missing_answers"),
+        pytest.param(
+            {"model": _PERPLEXITY.body_model, "answers": {"defect": {"type": "Request timed out"}}, "usage": _USAGE},
+            "answers.defect",
+            id="answer_type_timeout_text",
+        ),
+    ),
+)
+def test_a_malformed_upstream_success_is_a_server_error_naming_the_field(
+    gateway: Gateway, reply: dict[str, JsonValue], field: str
+) -> None:
     with gateway.scenario() as scenario:
-        handle: Final = _register(scenario, {"model": _PERPLEXITY.body_model, "usage": _USAGE})
+        handle: Final = _register(scenario, reply)
         model: Final = _deployment(scenario, handle, _PERPLEXITY)
         response: Final = _decide(gateway, model, num_retries=0)
-        assert 500 <= response.status_code < 600, response.text
-        assert "answers" in response.text
+        assert response.status_code == 500, response.text
+        assert field in response.text
         assert _spend_row(response.headers["x-litellm-call-id"])["status"] == "failure"
 
 
@@ -660,3 +893,22 @@ def test_a_deployment_whose_provider_has_no_decisions_support_is_refused_naming_
         for provider in _PROVIDERS:
             assert provider.name in response.text, response.text
         assert _upstream_calls(gateway, handle) == []
+
+
+def test_typesafe_gateway_preserves_missing_usage(gateway: Gateway) -> None:
+    with gateway.scenario() as scenario:
+        body = {"model": "jev-1.13.0", "answers": {"exp": {"type": "noul", "noul": 0.8}}}
+        handle = _register(scenario, body)
+        model = _deployment(scenario, handle, _PROVIDERS[1])
+        response = gateway.request(
+            "POST",
+            "/v1/systemone",
+            {
+                "model": model,
+                "state": {"finding": "x"},
+                "questions": {"exp": {"type": "noul", "instructions": "Is it exploitable?"}},
+            },
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["usage"] is None
+        assert response.json()["answers"] == body["answers"]

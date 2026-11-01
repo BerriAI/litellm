@@ -23,8 +23,7 @@ pub(crate) fn ensure_index(
 ) -> Result<(), Error> {
     if index
         .dimension
-        .lock()
-        .map_err(|_| Error::Unavailable)?
+        .lock()?
         .is_some_and(|existing| existing == dimension)
     {
         return Ok(());
@@ -50,22 +49,40 @@ pub(crate) fn ensure_index(
         .arg("DISTANCE_METRIC")
         .arg("COSINE")
         .query::<String>(connection)
-        .map(|_| ())
-        .map_err(|error| error.to_string());
-    if let Err(message) = create {
-        if !message.to_ascii_lowercase().contains("already exists") {
-            return Err(Error::Unavailable);
+        .map(|_| ());
+    if let Err(error) = create {
+        if !index_exists(&error) {
+            return Err(Error::unavailable(error));
         }
         let info = redis::cmd("FT.INFO")
             .arg(&index.name)
             .query::<redis::Value>(connection)
-            .map_err(|_| Error::Unavailable)?;
-        if index_dimension_from_info(&info).is_some_and(|existing| existing != dimension) {
-            return Err(Error::Unavailable);
+            .map_err(Error::unavailable)?;
+        if let Some(existing) =
+            index_dimension_from_info(&info).filter(|existing| *existing != dimension)
+        {
+            return Err(Error::unavailable(DimensionMismatch {
+                existing,
+                dimension,
+            }));
         }
     }
-    *index.dimension.lock().map_err(|_| Error::Unavailable)? = Some(dimension);
+    *index.dimension.lock()? = Some(dimension);
     Ok(())
+}
+
+fn index_exists(error: &redis::RedisError) -> bool {
+    error.code().is_some()
+        && error
+            .detail()
+            .is_some_and(|detail| detail.to_ascii_lowercase().contains("already exists"))
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("index exists with dimension {existing}, not {dimension}")]
+struct DimensionMismatch {
+    existing: usize,
+    dimension: usize,
 }
 
 /// `_extract_index_dim`: flatten each attribute one level and read the value after

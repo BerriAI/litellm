@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any, Final, Literal, cast, overload
 import httpx
 from pydantic import BaseModel, ConfigDict, TypeAdapter
 
+from litellm.anthropic_beta_gated_fields import log_beta_gated_strips, strip_beta_gated_thinking
 from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
 from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
     handle_invalid_parallel_tool_calls,
@@ -22,6 +23,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     strip_name_from_message,
     strip_prefill_prefix_field,
 )
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.base_utils import (
     type_to_response_format_param,  # pyright: ignore[reportUnknownVariableType]  # base_utils helper returns an untyped dict
@@ -339,10 +341,7 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
         stream: bool | None = None,
     ) -> str:
         use_ai_gateway: Final = self.uses_ai_gateway(model)
-        api_base = self._get_api_base(api_base, use_ai_gateway=use_ai_gateway)
-        url_base: Final = api_base.rstrip("/") if use_ai_gateway else api_base
-        complete_url: Final = f"{url_base}/chat/completions"
-        return complete_url
+        return join_api_base(self._get_api_base(api_base, use_ai_gateway=use_ai_gateway), "chat/completions")
 
     def get_supported_openai_params(self, model: str | None = None) -> list:
         return [
@@ -516,6 +515,14 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
         self.update_optional_params_with_thinking_tokens(
             non_default_params=non_default_params, optional_params=mapped_params
         )
+        gated_thinking: Final = strip_beta_gated_thinking(
+            mapped_params.get("thinking"),  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # mapped_params is the base config's bare dict
+            frozenset(),
+            drop_params=drop_params,
+        )
+        if gated_thinking.stripped:
+            log_beta_gated_strips(gated_thinking.stripped, model=model, provider="databricks")
+            mapped_params["thinking"] = gated_thinking.thinking
 
         return mapped_params
 
@@ -824,6 +831,7 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
         sync_stream: bool,
         json_mode: bool | None,
         optional_params: Mapping[str, object],
+        logging_obj: LiteLLMLoggingObj | None = None,
     ) -> "DatabricksChatResponseIterator":
         return self.get_model_response_iterator(
             streaming_response=streaming_response, sync_stream=sync_stream, json_mode=json_mode

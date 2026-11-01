@@ -586,3 +586,19 @@ async def test_a_query_issued_while_the_last_one_finishes_keeps_the_engine_drain
     await second
     await asyncio.wait_for(drained, timeout=1)
     assert engine.queries_finished == 2
+
+
+def test_migration_dry_run_summary_without_migrations_has_nothing_to_dry_run(unset_database_url):
+    """`prisma db push` applies no migration files, so the dry run reports that instead of connecting."""
+    from litellm.proxy.db.prisma_client import PrismaManager
+
+    assert PrismaManager.migration_dry_run_summary(use_migrate=False) == (
+        True,
+        "The schema is pushed rather than migrated, there is nothing to dry-run.",
+    )
+
+
+def test_migration_dry_run_summary_needs_database_url(unset_database_url):
+    from litellm.proxy.db.prisma_client import PrismaManager
+
+    assert PrismaManager.migration_dry_run_summary(use_migrate=True) == (False, "DATABASE_URL is not set.")

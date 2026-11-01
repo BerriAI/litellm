@@ -17,10 +17,11 @@ if TYPE_CHECKING:
 
     from litellm.litellm_core_utils.litellm_logging import Logging
     from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+    from litellm.router_api import AttemptedFallbackTargets
     from litellm.router_strategy.complexity_router.context_compaction import CompactionState
-    from litellm.router_utils.fallback_event_handlers import AttemptedFallbackTargets
     from litellm.types.caching import DynamicCacheControl
     from litellm.types.llms.openai import ChatCompletionAssistantMessage, ChatCompletionUserMessage
+    from litellm.types.proxy.guardrails.guardrail_hooks.headroom import HeadroomRequestContext
     from litellm.types.proxy.litellm_pre_call_utils import SecretFields
     from litellm.types.router import ConfigurableClientsideParamsCustomAuth, DeploymentTypedDict, RetryPolicy
     from litellm.types.router_weights import RouterWeights
@@ -91,6 +92,7 @@ class ProviderConnection:
     litellm_credential_name: str | None = None
     configurable_clientside_auth_params: "Sequence[str | ConfigurableClientsideParamsCustomAuth] | None" = None
     use_xai_oauth: bool | None = None
+    chatgpt_auth_file: str | None = None
     github_copilot_auth_type: str | None = None
     github_copilot_host: str | None = None
     github_copilot_user_session: object | None = None
@@ -188,6 +190,9 @@ class DeploymentOptions:
     tpm: int | None = None
     itpm: int | None = None
     otpm: int | None = None
+    rpd: int | None = None
+    tpd: int | None = None
+    daily_reset_time: str | None = None
     kubernetes_pod_discovery: bool | None = None
     default_api_key_rpm_limit: int | None = None
     default_api_key_tpm_limit: int | None = None
@@ -283,6 +288,7 @@ class PromptOptions:
 @dataclass(frozen=True, slots=True, kw_only=True)
 class ResponseOptions:
     merge_reasoning_content_in_choices: bool | None = None
+    thought_signature_in_tool_call_id: bool | None = None
     enable_json_schema_validation: bool | None = None
     complete_response: bool | None = None
     keepalive_seconds: float | None = None
@@ -348,6 +354,7 @@ class CallState:
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class AgenticLoopState:
+    headroom_context: "HeadroomRequestContext | None" = field(default=None, metadata=wire("_headroom_request_context"))
     depth: int | None = field(default=None, metadata=wire("_agentic_loop_depth"))
     fingerprints: Sequence[str] | None = field(default=None, metadata=wire("_agentic_loop_fingerprints"))
     api_surface: Literal["chat_completions", "responses"] | None = field(
@@ -386,6 +393,9 @@ class AgenticLoopState:
 @dataclass(frozen=True, slots=True, kw_only=True)
 class RouterState:
     weights: "RouterWeights | None" = field(default=None, metadata=wire("_router_weights"))
+    encrypted_content_affinity_pinned: bool | None = field(
+        default=None, metadata=wire("_encrypted_content_affinity_pinned")
+    )
     fallback_depth: int | None = None
     max_fallbacks: int | None = None
     attempted_targets: "AttemptedFallbackTargets | None" = None

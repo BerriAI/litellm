@@ -19,6 +19,6 @@ pub mod huggingface;
 pub mod tiktoken;
 
 pub use counter::{InputTokenCount, TokenCounter};
-pub use error::Error;
+pub use error::{Error, Unsupported};
 pub use tokenizer::{TextCodec, Tokenizer};
 pub use types::CountableRequest;

@@ -427,6 +427,57 @@ it("sorts by spend ascending when 'Spend ascending' is chosen from the Spend / B
   });
 });
 
+it.each([
+  ["expires", "Expires", "asc"],
+  ["last_active", "Last Active", "asc"],
+  ["budget_reset_at", "Budget Reset", "asc"],
+  ["total_spend", "Lifetime Spend", "desc"],
+])("sorts %s in both directions and resets pagination", async (field, label, direction) => {
+  const user = userEvent.setup();
+  renderWithProviders(<VirtualKeysTable />, { searchParams: { page: "2" } });
+  if (field === "expires") {
+    await user.click(screen.getByRole("button", { name: "Columns" }));
+    await user.click(await screen.findByText("Expires"));
+    await user.keyboard("{Escape}");
+  }
+  await user.click(screen.getByRole("button", { name: label, exact: true }));
+  await waitFor(() => {
+    expect(mockUseKeys).toHaveBeenLastCalledWith(
+      1,
+      50,
+      expect.objectContaining({ sortBy: field, sortOrder: direction }),
+    );
+  });
+  await user.click(screen.getByRole("button", { name: label, exact: true }));
+  await waitFor(() => {
+    expect(mockUseKeys).toHaveBeenLastCalledWith(
+      1,
+      50,
+      expect.objectContaining({ sortBy: field, sortOrder: direction === "asc" ? "desc" : "asc" }),
+    );
+  });
+});
+
+it.each([
+  ["TPM", "tpm_limit"],
+  ["RPM", "rpm_limit"],
+])("sorts by %s through the rate-limit menu", async (label, field) => {
+  const user = userEvent.setup();
+  renderWithProviders(<VirtualKeysTable />);
+  await user.click(screen.getByRole("button", { name: "Columns" }));
+  await user.click(await screen.findByText("Rate Limits"));
+  await user.keyboard("{Escape}");
+  await chooseSelectOption(
+    user,
+    screen.getByRole("button", { name: "Sort options for TPM or RPM" }),
+    `${label} ascending`,
+    "menuitem",
+  );
+  await waitFor(() => {
+    expect(mockUseKeys).toHaveBeenLastCalledWith(1, 50, expect.objectContaining({ sortBy: field, sortOrder: "asc" }));
+  });
+});
+
 it("clicking the key cell deep-links via ?key=", async () => {
   const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
   renderWithProviders(<VirtualKeysTable />, { onUrlUpdate });

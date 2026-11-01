@@ -51,6 +51,7 @@ from litellm.types.videos.utils import (
 
 from fastapi import Response
 from starlette.datastructures import UploadFile as StarletteUploadFile
+from tests.unit.proxy.router_entry_point_stubs import route_entry_points_to_stubs
 
 # --------------------------------------------------------------------------- #
 # A real model-encoded video id: decodes (for real) to provider "azure",
@@ -142,7 +143,7 @@ class Harness:
 def harness():
     logging = MagicMock(spec=ProxyLogging)
 
-    router = MagicMock(spec=Router)
+    router = route_entry_points_to_stubs(MagicMock(spec=Router))
     resolve_model = MagicMock(
         side_effect=lambda model_id, custom_llm_provider=None: RESOLVED_MODELS.get(model_id)
     )

@@ -21,7 +21,7 @@ from litellm.proxy.auth.auth_utils import (
 )
 from litellm.proxy.auth.budget_throttle import throttled_limit
 from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
-from litellm.proxy.hooks.rate_limiter_utils import resolve_llm_provider_for_rate_limit
+from litellm.proxy.hooks.rate_limiter_utils import resolve_llm_provider_for_rate_limit, socket_session_usage
 from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 from litellm.types.utils import CallTypes, Usage
 
@@ -41,10 +41,12 @@ def _precise_minute(now: datetime) -> str:
     return now.strftime("%Y-%m-%d-%H-%M")
 
 
-def _response_total_tokens(response_obj: object) -> int:
-    if not isinstance(response_obj, (ModelResponse, EmbeddingResponse, TextCompletionResponse)):
-        return 0
-    response_usage: Final = getattr(response_obj, "usage", None)
+def _response_total_tokens(kwargs: Mapping[str, object], response_obj: object) -> int:
+    response_usage: Final = (
+        getattr(response_obj, "usage", None)
+        if isinstance(response_obj, (ModelResponse, EmbeddingResponse, TextCompletionResponse))
+        else socket_session_usage(kwargs, response_obj)
+    )
     return response_usage.total_tokens if isinstance(response_usage, Usage) else 0
 
 
@@ -556,7 +558,10 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
 
             precise_minute: Final = _precise_minute(self._clock())
 
-            total_tokens: int = _response_total_tokens(response_obj)
+            total_tokens: Final = _response_total_tokens(
+                kwargs,  # pyright: ignore[reportUnknownArgumentType]  # legacy callback kwargs are untyped
+                response_obj,
+            )
 
             # ------------
             # Update usage - API Key
@@ -630,8 +635,6 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
             # Update usage - User
             # ------------
             if user_api_key_user_id is not None:
-                total_tokens = _response_total_tokens(response_obj)
-
                 request_count_api_key = f"{user_api_key_user_id}::{precise_minute}::request_count"
 
                 current = await self.internal_usage_cache.async_get_cache(
@@ -639,7 +642,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                     litellm_parent_otel_span=litellm_parent_otel_span,
                 ) or {
                     "current_requests": 1,
-                    "current_tpm": total_tokens,
+                    "current_tpm": 0,
                     "current_rpm": 1,
                 }
 
@@ -656,8 +659,6 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
             # Update usage - Team
             # ------------
             if user_api_key_team_id is not None:
-                total_tokens = _response_total_tokens(response_obj)
-
                 request_count_api_key = f"{user_api_key_team_id}::{precise_minute}::request_count"
 
                 current = await self.internal_usage_cache.async_get_cache(
@@ -665,7 +666,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                     litellm_parent_otel_span=litellm_parent_otel_span,
                 ) or {
                     "current_requests": 1,
-                    "current_tpm": total_tokens,
+                    "current_tpm": 0,
                     "current_rpm": 1,
                 }
 
@@ -682,8 +683,6 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
             # Update usage - End User
             # ------------
             if user_api_key_end_user_id is not None:
-                total_tokens = _response_total_tokens(response_obj)
-
                 request_count_api_key = f"{user_api_key_end_user_id}::{precise_minute}::request_count"
 
                 current = await self.internal_usage_cache.async_get_cache(
@@ -691,7 +690,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                     litellm_parent_otel_span=litellm_parent_otel_span,
                 ) or {
                     "current_requests": 1,
-                    "current_tpm": total_tokens,
+                    "current_tpm": 0,
                     "current_rpm": 1,
                 }
 
@@ -892,7 +891,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                 {**_hidden_params, "additional_headers": _additional_headers},
             )
 
-            return await super().async_post_call_success_hook(data, user_api_key_dict, response)
+            await super().async_post_call_success_hook(data, user_api_key_dict, response)
 
 
 PROXY_MaxParallelRequestsHandler: Final = _PROXY_MaxParallelRequestsHandler

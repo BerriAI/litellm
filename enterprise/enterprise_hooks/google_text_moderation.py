@@ -6,14 +6,22 @@
 # +-----------------------------------------------+
 #  Thank you users! We ❤️ you! - Krrish & Ishaan
 
+from typing import Final
+
 from fastapi import HTTPException
+from pydantic import TypeAdapter
 
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.proxy.guardrails._content_utils import iter_message_text
+from litellm.proxy.guardrails._content_utils import (
+    is_non_conversational_request,
+    iter_message_text,
+)
 from litellm.types.utils import CallTypesLiteral
+
+_THRESHOLD_VALUE: Final = TypeAdapter(object)
 
 
 class ENTERPRISE_GoogleTextModeration(CustomLogger):
@@ -69,9 +77,11 @@ class ENTERPRISE_GoogleTextModeration(CustomLogger):
                     f"{category}_confidence_threshold",
                     default_confidence_threshold,
                 )
-            set_confidence_value = getattr(
-                self,
-                f"{category}_confidence_threshold",
+            set_confidence_value = _THRESHOLD_VALUE.validate_python(
+                getattr(
+                    self,
+                    f"{category}_confidence_threshold",
+                )
             )
             verbose_proxy_logger.info(
                 f"Google Text Moderation: {category}_confidence_threshold: {set_confidence_value}"
@@ -87,7 +97,7 @@ class ENTERPRISE_GoogleTextModeration(CustomLogger):
 
     async def async_moderation_hook(
         self,
-        data: dict,
+        data: dict[str, object],
         user_api_key_dict: UserAPIKeyAuth,
         call_type: CallTypesLiteral,
     ):
@@ -95,6 +105,9 @@ class ENTERPRISE_GoogleTextModeration(CustomLogger):
         - Calls Google's Text Moderation API
         - Rejects request if it fails safety check
         """
+        if is_non_conversational_request(call_type, data):
+            verbose_proxy_logger.debug("Google text moderation: skipping non-conversational call type %s", call_type)
+            return
         # Covers multimodal list content + Responses-API input.
         text = "".join(iter_message_text(data))
         if text:

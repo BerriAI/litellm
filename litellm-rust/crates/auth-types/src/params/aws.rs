@@ -4,15 +4,17 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use veil::Redact;
 
-use super::ParamSpec;
+use super::{ParamKind, ParamSpec};
 
 const fn spec(
     setting: &'static str,
+    kind: ParamKind,
     wire: &'static [&'static str],
     env: &'static [&'static str],
 ) -> ParamSpec {
     ParamSpec {
         setting,
+        kind,
         wire,
         module_global: None,
         env,
@@ -53,40 +55,67 @@ pub struct AwsParams {
 impl AwsParams {
     pub const ACCESS_KEY_ID: ParamSpec = spec(
         "access key id",
+        ParamKind::Credential,
         &["aws_access_key_id"],
         &["AWS_ACCESS_KEY_ID"],
     );
     pub const SECRET_ACCESS_KEY: ParamSpec = spec(
         "secret access key",
+        ParamKind::Credential,
         &["aws_secret_access_key"],
         &["AWS_SECRET_ACCESS_KEY"],
     );
     pub const SESSION_TOKEN: ParamSpec = spec(
         "session token",
+        ParamKind::Credential,
         &["aws_session_token"],
         &["AWS_SESSION_TOKEN"],
     );
     pub const REGION: ParamSpec = spec(
         "region",
+        ParamKind::Setting,
         &["aws_region_name"],
         &["AWS_REGION_NAME", "AWS_REGION"],
     );
-    pub const SESSION_NAME: ParamSpec =
-        spec("session name", &["aws_session_name"], &["AWS_SESSION_NAME"]);
-    pub const PROFILE_NAME: ParamSpec =
-        spec("profile name", &["aws_profile_name"], &["AWS_PROFILE_NAME"]);
-    pub const ROLE_NAME: ParamSpec = spec("role name", &["aws_role_name"], &["AWS_ROLE_NAME"]);
+    pub const SESSION_NAME: ParamSpec = spec(
+        "session name",
+        ParamKind::Setting,
+        &["aws_session_name"],
+        &["AWS_SESSION_NAME"],
+    );
+    pub const PROFILE_NAME: ParamSpec = spec(
+        "profile name",
+        ParamKind::Setting,
+        &["aws_profile_name"],
+        &["AWS_PROFILE_NAME"],
+    );
+    pub const ROLE_NAME: ParamSpec = spec(
+        "role name",
+        ParamKind::Setting,
+        &["aws_role_name"],
+        &["AWS_ROLE_NAME"],
+    );
     pub const WEB_IDENTITY_TOKEN: ParamSpec = spec(
         "web identity token",
+        ParamKind::Credential,
         &["aws_web_identity_token"],
         &["AWS_WEB_IDENTITY_TOKEN"],
     );
-    pub const STS_ENDPOINT: ParamSpec =
-        spec("STS endpoint", &["aws_sts_endpoint"], &["AWS_STS_ENDPOINT"]);
-    pub const EXTERNAL_ID: ParamSpec =
-        spec("external id", &["aws_external_id"], &["AWS_EXTERNAL_ID"]);
+    pub const STS_ENDPOINT: ParamSpec = spec(
+        "STS endpoint",
+        ParamKind::Setting,
+        &["aws_sts_endpoint"],
+        &["AWS_STS_ENDPOINT"],
+    );
+    pub const EXTERNAL_ID: ParamSpec = spec(
+        "external id",
+        ParamKind::Setting,
+        &["aws_external_id"],
+        &["AWS_EXTERNAL_ID"],
+    );
     pub const BEDROCK_RUNTIME_ENDPOINT: ParamSpec = spec(
         "Bedrock runtime endpoint",
+        ParamKind::Setting,
         &["aws_bedrock_runtime_endpoint"],
         &["AWS_BEDROCK_RUNTIME_ENDPOINT"],
     );

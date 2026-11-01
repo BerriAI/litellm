@@ -914,6 +914,31 @@ async def test_sync_user_role_and_teams_cache_invalidation_on_team_change():
 
 
 @pytest.mark.asyncio
+async def test_sync_user_role_and_teams_keeps_record_order_and_adds_claim_teams_in_claim_order():
+    jwt_handler: Final = JWTHandler()
+    jwt_handler.update_environment(
+        prisma_client=None,
+        user_api_key_cache=AsyncMock(),
+        litellm_jwtauth=LiteLLM_JWTAuth(team_ids_jwt_field="groups", sync_user_role_and_teams=True),
+    )
+    cache: Final = AsyncMock()
+    user: Final = LiteLLM_UserTable(user_id="u1", teams=["team-zeta", "team-kappa", "team-alpha"])
+    token: Final = {"groups": ["team-mu", "team-alpha", "team-beta", "team-mu", "team-zeta", "team-omega"]}
+
+    with patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2.patch_team_membership",
+        new_callable=AsyncMock,
+    ) as mock_patch:
+        await JWTAuthManager.sync_user_role_and_teams(jwt_handler, token, user, AsyncMock(), user_api_key_cache=cache)
+
+    assert mock_patch.await_args.kwargs["teams_ids_to_add_user_to"] == ["team-mu", "team-beta", "team-omega"]
+    assert mock_patch.await_args.kwargs["teams_ids_to_remove_user_from"] == ["team-kappa"]
+    expected_teams: Final = ["team-zeta", "team-alpha", "team-mu", "team-beta", "team-omega"]
+    assert user.teams == expected_teams
+    assert cache.async_set_cache.await_args.kwargs["value"].teams == expected_teams
+
+
+@pytest.mark.asyncio
 async def test_sync_user_role_and_teams_no_cache_write_when_nothing_changes():
     """Test that cache is NOT written when role and teams already match."""
     mock_cache = AsyncMock()
@@ -4368,6 +4393,7 @@ async def test_removed_signing_key_stops_being_trusted_once_the_stale_window_exp
 
     assert exc_info.value.code == "503"
     assert exc_info.value.type == ProxyErrorTypes.auth_provider_unavailable
+    assert exc_info.value.param is None
 
 
 @pytest.mark.asyncio

@@ -1,5 +1,6 @@
 "use client";
 
+import { useTerminology } from "@/contexts/TerminologyContext";
 import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings";
 import { useUpdateUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUpdateUISettings";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
@@ -11,7 +12,11 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { Button } from "@/components/ui/button";
 import { uiHref } from "@/utils/uiHref";
+import { relativeTimeOptions } from "@/components/shared/date_range_presets";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Label } from "@/components/ui/label";
 import PageVisibilitySettings from "./PageVisibilitySettings";
+import BackgroundChatSettings from "./BackgroundChatSettings";
 
 interface SettingRowProps {
   ariaLabel: string;
@@ -48,6 +53,7 @@ function SettingRow({
 }
 
 export default function UISettings() {
+  const term = useTerminology();
   const { accessToken } = useAuthorized();
   const { data, isLoading, isError, error } = useUISettings();
   const { mutate: updateSettings, isPending: isUpdating, error: updateError } = useUpdateUISettings(accessToken);
@@ -68,6 +74,10 @@ export default function UISettings() {
   const scopeUserSearchProperty = schema?.properties?.scope_user_search_to_org;
   const disableCustomApiKeysProperty = schema?.properties?.disable_custom_api_keys;
   const values = data?.values ?? {};
+  const usageRange =
+    relativeTimeOptions.find((option) => option.settingValue === values.usage_default_time_range)?.settingValue ??
+    "last_7_days";
+  const usageRangeConfigOwned = data?.source?.usage_default_time_range === "config";
   const moyaiUrl = (values.moyai_url as string | undefined) ?? null;
   const isDisabledForInternalUsers = Boolean(values.disable_model_add_for_internal_users);
   const isDisabledTeamAdminDeleteTeamUser = Boolean(values.disable_team_admin_delete_team_user);
@@ -312,6 +322,46 @@ export default function UISettings() {
               </Alert>
             )}
 
+            <div className="space-y-2">
+              <Label htmlFor="usage-default-time-range">Default Usage time range</Label>
+              <p id="usage-default-time-range-help" className="text-sm text-muted-foreground">
+                The starting range for everyone opening Usage. Shared links and manual date selections take precedence.
+                Calendar ranges use your browser’s timezone.
+              </p>
+              <Select
+                value={usageRange}
+                disabled={isUpdating || usageRangeConfigOwned}
+                items={relativeTimeOptions.map((option) => ({ value: option.settingValue, label: option.label }))}
+                onValueChange={(value) => {
+                  if (value === null) return;
+                  updateSettings(
+                    { usage_default_time_range: value },
+                    {
+                      onSuccess: () => toast.success("UI settings updated successfully"),
+                      onError: (error) => toast.fromError(error),
+                    },
+                  );
+                }}
+              >
+                <SelectTrigger
+                  id="usage-default-time-range"
+                  aria-describedby="usage-default-time-range-help"
+                  className="w-64"
+                >
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {relativeTimeOptions.map((option) => (
+                    <SelectItem key={option.settingValue} value={option.settingValue}>
+                      {option.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              {usageRangeConfigOwned && (
+                <p className="text-sm text-muted-foreground">Managed by the deployment configuration.</p>
+              )}
+            </div>
             <SettingRow
               checked={isDisabledForInternalUsers}
               disabled={isUpdating}
@@ -332,9 +382,13 @@ export default function UISettings() {
               checked={Boolean(values.require_auth_for_public_ai_hub)}
               disabled={isUpdating}
               onCheckedChange={handleToggleRequireAuthForPublicAIHub}
-              ariaLabel={requireAuthForPublicAIHubProperty?.description ?? "Require authentication for public AI Hub"}
-              label="Require authentication for public AI Hub"
-              description={requireAuthForPublicAIHubProperty?.description}
+              ariaLabel={term(
+                requireAuthForPublicAIHubProperty?.description ?? "Require authentication for public AI Hub",
+              )}
+              label={term("Require authentication for public AI Hub")}
+              description={
+                requireAuthForPublicAIHubProperty?.description && term(requireAuthForPublicAIHubProperty.description)
+              }
             />
             <SettingRow
               checked={Boolean(values.forward_client_headers_to_llm_api)}
@@ -376,12 +430,14 @@ export default function UISettings() {
               disabled={isUpdating}
               onCheckedChange={handleToggleEnableChatUI}
               ariaLabel={enableChatUIProperty?.description ?? "Enable Chat page"}
-              label="[BETA] Enable Chat page (page will refresh)"
+              label="Enable Chat page (page will refresh)"
               description={
                 enableChatUIProperty?.description ??
                 "If enabled, shows the Chat page in the UI sidebar, letting users chat with an LLM and connect their own MCP server credentials via OAuth."
               }
             />
+
+            <BackgroundChatSettings />
 
             <Separator />
             <div className="flex items-start justify-between gap-3">

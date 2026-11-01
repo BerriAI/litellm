@@ -9,7 +9,7 @@ This file is a wrapper around caching.py
 
 This class is used to handle caching logic specific for LLM API requests (completion / embedding / text_completion / transcription etc)
 
-It utilizes the (RedisCache, s3Cache, RedisSemanticCache, QdrantSemanticCache, InMemoryCache, DiskCache) based on what the user has setup
+It utilizes the (RedisCache, s3Cache, RedisSemanticCache, QdrantSemanticCache, InMemoryCache) based on what the user has setup
 
 In each method it will call the appropriate method from caching.py
 """
@@ -56,7 +56,7 @@ from litellm.types.utils import (
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-    from litellm.llms.anthropic.pass_through.messages.response_cache import (
+    from litellm.llms.anthropic.messages.native.response_cache import (
         AnthropicMessagesStreamCacheWriter,
     )
     from litellm.types.utils import PromptTokensDetailsWrapper
@@ -182,7 +182,7 @@ def _should_defer_streaming_cache_hit_callbacks(*, cached_result: object) -> boo
     spend and callback records. A plain (non-stream) replay logs here, since nothing
     else will.
     """
-    from litellm.llms.anthropic.pass_through.messages.response_cache import (
+    from litellm.llms.anthropic.messages.native.response_cache import (
         CachedAnthropicMessagesStreamIterator,
     )
     from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
@@ -830,6 +830,13 @@ class LLMCachingHandler:
         if is_internal_call.get():
             return
 
+        if logging_obj.defer_async_logging and not logging_obj.stream:
+            from litellm.utils import dispatch_success_logging
+
+            logging_obj.model_call_details["cache_hit"] = cache_hit  # rebind-ok: capture cache status before deferring
+            dispatch_success_logging(logging_obj, cached_result, start_time, end_time, False, False)
+            return
+
         from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 
         GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(
@@ -1040,7 +1047,7 @@ class LLMCachingHandler:
         elif (
             call_type == CallTypes.anthropic_messages.value or call_type == CallTypes.aanthropic_messages.value
         ) and isinstance(cached_result, dict):
-            from litellm.llms.anthropic.pass_through.messages.response_cache import (
+            from litellm.llms.anthropic.messages.native.response_cache import (
                 convert_cached_anthropic_messages_result,
             )
 
@@ -1270,7 +1277,7 @@ class LLMCachingHandler:
             return result
         if not isinstance(result, AsyncIterator):
             return result
-        from litellm.llms.anthropic.pass_through.messages.response_cache import (
+        from litellm.llms.anthropic.messages.native.response_cache import (
             AnthropicMessagesStreamCacheWriter,
         )
 

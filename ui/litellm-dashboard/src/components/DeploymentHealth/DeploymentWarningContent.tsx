@@ -59,12 +59,12 @@ const licenseExpiryContent = (expirationDate: string, now: Date): DeploymentWarn
     ? {
         title: `Your LiteLLM Enterprise license expired on ${formattedDate}`,
         fix: <>Enterprise features are now disabled. Reach out to {salesLink} to restore access</>,
-        docsUrl: "https://docs.litellm.ai/docs/proxy/enterprise",
+        docsUrl: "https://docs.litellm.ai/docs/enterprise",
       }
     : {
         title: `Your LiteLLM Enterprise license ${describeCountdown(days)} (${formattedDate})`,
         fix: <>Renew before it lapses to keep enterprise features. Reach out to {salesLink}</>,
-        docsUrl: "https://docs.litellm.ai/docs/proxy/enterprise",
+        docsUrl: "https://docs.litellm.ai/docs/enterprise",
       };
 };
 

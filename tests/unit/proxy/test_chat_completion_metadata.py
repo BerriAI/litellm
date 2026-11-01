@@ -119,7 +119,7 @@ async def test_completion_metadata_population():
             # Verify
             call_args = MockProcessor.call_args
             assert call_args is not None
-            data_arg = call_args.kwargs.get("data")
+            data_arg = mock_instance.data
             assert data_arg is not None
 
             assert "metadata" in data_arg

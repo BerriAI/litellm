@@ -1,14 +1,17 @@
 """The shared Responses API config contract."""
 
 import asyncio, importlib, json
+from collections.abc import Mapping
 
 import httpx
 import pytest
+import respx
 
 import litellm
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.types.router import GenericLiteLLMParams
 from litellm import Router
+from pydantic import BaseModel, ConfigDict
 from litellm.constants import STREAM_SSE_DONE_STRING
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
@@ -880,38 +883,6 @@ def test_combine_responses_fallback_usage_passthrough_for_unknown_event():
     Router._combine_responses_fallback_usage(other, partial)
 
 @pytest.mark.usefixtures("_vcr_outcome_gate_router_unit", "setup_and_teardown_router_unit")
-def test_build_responses_continuation_input_from_string():
-    out = Router._build_responses_continuation_input("Hello world", "partial assistant text")
-    assert len(out) == 3
-    assert out[0]["role"] == "user"
-    assert out[0]["content"][0]["text"] == "Hello world"
-    assert out[1]["role"] == "developer"
-    assert out[2]["role"] == "assistant"
-    assert out[2]["content"][0]["text"] == "partial assistant text"
-
-@pytest.mark.usefixtures("_vcr_outcome_gate_router_unit", "setup_and_teardown_router_unit")
-def test_build_responses_continuation_input_from_list_preserves_items():
-    existing: List[Any] = [
-        {
-            "type": "message",
-            "role": "user",
-            "content": [{"type": "input_text", "text": "msg1"}],
-        }
-    ]
-    out = Router._build_responses_continuation_input(existing, "partial")
-    assert len(out) == 3
-    assert out[0]["content"][0]["text"] == "msg1"
-    assert out[1]["role"] == "developer"
-    assert out[2]["role"] == "assistant"
-
-@pytest.mark.usefixtures("_vcr_outcome_gate_router_unit", "setup_and_teardown_router_unit")
-def test_build_responses_continuation_input_from_none():
-    out = Router._build_responses_continuation_input(None, "partial")
-    assert len(out) == 2
-    assert out[0]["role"] == "developer"
-    assert out[1]["role"] == "assistant"
-
-@pytest.mark.usefixtures("_vcr_outcome_gate_router_unit", "setup_and_teardown_router_unit")
 @pytest.mark.asyncio
 async def test_aresponses_streaming_iterator_passthrough():
     """
@@ -1355,9 +1326,573 @@ async def test_aresponses_fallback_uses_continuation_input_after_partial_content
     continuation = mock_fallback.await_args.kwargs["kwargs"]["input"]
     assert isinstance(continuation, list)
     assert continuation[0]["content"][0]["text"] == "original question"
-    assert continuation[-2]["role"] == "developer"
-    assert continuation[-1]["role"] == "assistant"
-    assert continuation[-1]["content"][0]["text"] == "partial answer"
+    assert continuation[-2]["role"] == "assistant"
+    assert continuation[-2]["content"][0]["text"] == "partial answer"
+    assert continuation[-1]["role"] == "user"
+
+
+def _sse(*events: Mapping[str, object]) -> httpx.Response:
+    return httpx.Response(
+        200,
+        headers={"content-type": "text/event-stream"},
+        content="".join(f"event: {event['type']}\ndata: {json.dumps(event)}\n\n" for event in events),
+    )
+
+
+def _openai_stream_cut_after(partial: str) -> httpx.Response:
+    return _sse(
+        *(
+            ({
+                "type": "response.output_text.delta", "sequence_number": 0,
+                "item_id": "msg_primary", "output_index": 0, "content_index": 0, "delta": partial,
+            },)
+            if partial else ()
+        ),
+        {
+            "type": "error", "sequence_number": 1,
+            "error": {"type": "server_error", "code": "internal_error", "message": "interrupted"},
+        },
+    )
+
+
+def _anthropic_stream(text: str) -> httpx.Response:
+    return _sse(
+        {"type": "message_start", "message": {
+            "id": "msg_fallback", "type": "message", "role": "assistant",
+            "model": "claude-fallback", "content": [], "usage": {"input_tokens": 10, "output_tokens": 0},
+        }},
+        {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+        {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": text}},
+        {"type": "content_block_stop", "index": 0},
+        {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 5}},
+        {"type": "message_stop"},
+    )
+
+
+def _primary_with_fallback(fallback_model: str) -> Router:
+    return Router(
+        model_list=[
+            {"model_name": "primary", "litellm_params": {"model": "openai/gpt-6-astra", "api_key": "synthetic"}},
+            {"model_name": "fallback", "litellm_params": {"model": fallback_model, "api_key": "synthetic"}},
+        ],
+        fallbacks=[{"primary": ["fallback"]}],
+        num_retries=0,
+    )
+
+
+def _streamed_text(events: tuple[Any, ...]) -> str:
+    return "".join(event.delta for event in events if event.type == ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA)
+
+
+@pytest.fixture
+def claude_with_prefill() -> str:
+    model: Final = "anthropic/claude-prefill-capable-test-model"
+    litellm.register_model(
+        {model: {"litellm_provider": "anthropic", "mode": "chat", "supports_assistant_prefill": True}},
+        persist_across_reloads=False,
+    )
+    litellm.get_model_info.cache_clear()
+    return model
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("partial", ["", "1, 2, "])
+async def test_responses_fallback_can_continue_on_a_provider_without_prefill(
+    partial: str, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    prompt: Final = "Print the integers 1 through 5, separated by commas."
+    primary: Final = respx_mock.post("https://api.openai.com/v1/responses").mock(
+        return_value=_openai_stream_cut_after(partial)
+    )
+
+    def no_prefill_provider(request: httpx.Request) -> httpx.Response:
+        body: Final = json.loads(request.content)
+        if body["messages"][-1]["role"] != "user":
+            return httpx.Response(
+                400,
+                json={"type": "error", "error": {
+                    "type": "invalid_request_error", "message": "The conversation must end with a user message",
+                }},
+            )
+        return _anthropic_stream("3, 4, 5" if partial else "1, 2, 3, 4, 5")
+
+    fallback: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(side_effect=no_prefill_provider)
+    router: Final = _primary_with_fallback("anthropic/claude-opus-5-5")
+    try:
+        stream: Final = await router.aresponses(model="primary", input=prompt, stream=True, max_output_tokens=100)
+        events: Final = tuple([event async for event in stream])
+        assert _streamed_text(events) == "1, 2, 3, 4, 5"
+        assert events[-1].type == ResponsesAPIStreamEvents.RESPONSE_COMPLETED
+        assert primary.call_count == fallback.call_count == 1
+        messages: Final = json.loads(fallback.calls.last.request.content)["messages"]
+        assert messages[0] == {"role": "user", "content": [{"type": "text", "text": prompt}]}
+        if partial:
+            assert [message["role"] for message in messages] == ["user", "assistant", "user"]
+            assert messages[-2] == {"role": "assistant", "content": [{"type": "text", "text": partial}]}
+            assert json.dumps(partial) in messages[-1]["content"][0]["text"]
+        else:
+            assert len(messages) == 1
+    finally:
+        router.discard()
+
+
+@pytest.mark.asyncio
+async def test_responses_fallback_continues_a_claude_that_takes_prefill_from_its_own_partial(
+    claude_with_prefill: str, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    respx_mock.post("https://api.openai.com/v1/responses").mock(return_value=_openai_stream_cut_after("1, 2, "))
+    fallback: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(
+        return_value=_anthropic_stream(" 3, 4, 5")
+    )
+    router: Final = _primary_with_fallback(claude_with_prefill)
+    try:
+        stream: Final = await router.aresponses(
+            model="primary", input="Print the integers 1 through 5.", stream=True, max_output_tokens=100
+        )
+        events: Final = tuple([event async for event in stream])
+        assert _streamed_text(events) == "1, 2, 3, 4, 5"
+        assert events[-1].type == ResponsesAPIStreamEvents.RESPONSE_COMPLETED
+        messages: Final = json.loads(fallback.calls.last.request.content)["messages"]
+        assert [message["role"] for message in messages] == ["user", "assistant"]
+        assert messages[-1]["content"][0]["text"].startswith("1, 2,")
+    finally:
+        router.discard()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fallback_takes_prefill", [True, False], ids=["prefill", "request_to_continue"])
+async def test_responses_fallback_continuation_drops_reasoning_the_fallback_cannot_decrypt(
+    fallback_takes_prefill: bool,
+    claude_with_prefill: str,
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    respx_mock.post("https://api.openai.com/v1/responses").mock(return_value=_openai_stream_cut_after("1, 2, "))
+    fallback: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(
+        return_value=_anthropic_stream(" 3, 4, 5")
+    )
+    router: Final = _primary_with_fallback(claude_with_prefill if fallback_takes_prefill else "anthropic/claude-opus-5-5")
+    try:
+        stream: Final = await router.aresponses(
+            model="primary",
+            input=[
+                {"role": "user", "content": "Print the integers 1 through 5."},
+                {"type": "reasoning", "id": "rs_1", "summary": [], "encrypted_content": "primary-only-ciphertext"},
+            ],
+            stream=True,
+            max_output_tokens=100,
+        )
+        _ = [event async for event in stream]
+        assert fallback.call_count == 1
+        assert "primary-only-ciphertext" not in fallback.calls.last.request.content.decode()
+    finally:
+        router.discard()
+
+
+class _Numbers(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    numbers: tuple[int, ...]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "constraint",
+    [
+        {"text": {"format": {"type": "json_schema", "name": "numbers", "strict": True, "schema": {"type": "object"}}}},
+        {"text": {"format": {"type": "json_object"}}},
+        {"tool_choice": "required", "tools": [{"type": "function", "name": "lookup", "parameters": {"type": "object"}}]},
+        {"text_format": _Numbers},
+    ],
+    ids=["json_schema", "json_object", "required_tool", "sdk_text_format"],
+)
+async def test_responses_fallback_surfaces_the_primary_error_once_constrained_output_was_streamed(
+    constraint: dict[str, object],
+    claude_with_prefill: str,
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    respx_mock.post("https://api.openai.com/v1/responses").mock(
+        return_value=_openai_stream_cut_after('{"numbers": [1, 2, ')
+    )
+    fallback: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(
+        return_value=_anthropic_stream("3]}")
+    )
+    router: Final = _primary_with_fallback(claude_with_prefill)
+    try:
+        stream: Final = await router.aresponses(
+            model="primary", input="Numbers 1 to 3 as JSON.", stream=True, max_output_tokens=100, **constraint
+        )
+        with pytest.raises(litellm.InternalServerError, match="interrupted"):
+            [event async for event in stream]
+        assert fallback.call_count == 0
+    finally:
+        router.discard()
+
+
+@pytest.mark.asyncio
+async def test_responses_fallback_continues_within_the_callers_output_ceiling(
+    claude_with_prefill: str, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    respx_mock.post("https://api.openai.com/v1/responses").mock(return_value=_openai_stream_cut_after("1, 2, "))
+    fallback: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(
+        return_value=_anthropic_stream("3, 4, 5")
+    )
+    router: Final = _primary_with_fallback(claude_with_prefill)
+    try:
+        stream: Final = await router.aresponses(model="primary", input="Count to 5.", stream=True, max_output_tokens=100)
+        events: Final = tuple([event async for event in stream])
+        assert _streamed_text(events) == "1, 2, 3, 4, 5"
+        assert json.loads(fallback.calls.last.request.content)["max_tokens"] == 100 - litellm.token_counter(
+            text="1, 2, "
+        )
+    finally:
+        router.discard()
+
+
+@pytest.mark.asyncio
+async def test_responses_fallback_surfaces_the_primary_error_once_the_cut_stream_used_the_output_ceiling(
+    claude_with_prefill: str, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    respx_mock.post("https://api.openai.com/v1/responses").mock(return_value=_openai_stream_cut_after("1, 2, "))
+    fallback: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(
+        return_value=_anthropic_stream("3, 4, 5")
+    )
+    router: Final = _primary_with_fallback(claude_with_prefill)
+    try:
+        stream: Final = await router.aresponses(
+            model="primary", input="Count to 5.", stream=True, max_output_tokens=litellm.token_counter(text="1, 2, ")
+        )
+        with pytest.raises(litellm.InternalServerError, match="interrupted"):
+            [event async for event in stream]
+        assert fallback.call_count == 0
+    finally:
+        router.discard()
+
+
+def _openai_stream_cut_mid_tool_call(preamble: str, *, announce_item: bool = True) -> httpx.Response:
+    text: Final = {
+        "type": "response.output_text.delta", "sequence_number": 0,
+        "item_id": "msg_primary", "output_index": 0, "content_index": 0, "delta": preamble,
+    }
+    item_added: Final = {
+        "type": "response.output_item.added", "sequence_number": 1, "output_index": 1,
+        "item": {
+            "type": "function_call", "id": "fc_primary", "call_id": "call_primary",
+            "name": "lookup", "arguments": "", "status": "in_progress",
+        },
+    }
+    arguments: Final = {
+        "type": "response.function_call_arguments.delta", "sequence_number": 2,
+        "item_id": "fc_primary", "output_index": 1, "delta": '{"city": "Par',
+    }
+    error: Final = {
+        "type": "error", "sequence_number": 3,
+        "error": {"type": "server_error", "code": "internal_error", "message": "interrupted"},
+    }
+    return _sse(*((text, item_added, arguments, error) if announce_item else (text, arguments, error)))
+
+
+def _anthropic_stream_cut_mid_tool_call(preamble: str, tool_block: Mapping[str, object] | None = None) -> httpx.Response:
+    return _sse(
+        {"type": "message_start", "message": {
+            "id": "msg_primary", "type": "message", "role": "assistant",
+            "model": "claude-primary", "content": [], "usage": {"input_tokens": 10, "output_tokens": 0},
+        }},
+        {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+        {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": preamble}},
+        {"type": "content_block_stop", "index": 0},
+        {"type": "content_block_start", "index": 1, "content_block": tool_block or {
+            "type": "tool_use", "id": "toolu_primary", "name": "lookup", "input": {},
+        }},
+        {"type": "content_block_delta", "index": 1, "delta": {"type": "input_json_delta", "partial_json": '{"city": "Par'}},
+        {"type": "error", "error": {"type": "overloaded_error", "message": "interrupted"}},
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("announce_item", [True, False], ids=["announced_item", "arguments_only"])
+async def test_responses_fallback_surfaces_the_primary_error_once_the_cut_stream_began_a_tool_call(
+    announce_item: bool, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    respx_mock.post("https://api.openai.com/v1/responses").mock(
+        return_value=_openai_stream_cut_mid_tool_call("Let me look that up. ", announce_item=announce_item)
+    )
+    fallback: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(
+        return_value=_anthropic_stream("It is sunny in Paris.")
+    )
+    router: Final = _primary_with_fallback("anthropic/claude-opus-5-5")
+    try:
+        stream: Final = await router.aresponses(
+            model="primary",
+            input="What is the weather in Paris?",
+            stream=True,
+            tools=[{"type": "function", "name": "lookup", "parameters": {"type": "object"}}],
+        )
+        with pytest.raises(litellm.InternalServerError, match="interrupted"):
+            [event async for event in stream]
+        assert fallback.call_count == 0
+    finally:
+        router.discard()
+
+
+def _openai_stream_cut_after_event(preamble: str, event: Mapping[str, object]) -> httpx.Response:
+    return _sse(
+        {
+            "type": "response.output_text.delta", "sequence_number": 0,
+            "item_id": "msg_primary", "output_index": 0, "content_index": 0, "delta": preamble,
+        },
+        {**event, "sequence_number": 1},
+        {
+            "type": "error", "sequence_number": 2,
+            "error": {"type": "server_error", "code": "internal_error", "message": "interrupted"},
+        },
+    )
+
+
+def _openai_stream_cut_after_output_item(preamble: str, item: Mapping[str, object]) -> httpx.Response:
+    return _openai_stream_cut_after_event(
+        preamble, {"type": "response.output_item.added", "output_index": 1, "item": item}
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "item",
+    [
+        {"type": "shell_call", "id": "sh_1", "call_id": "call_1", "action": {"commands": ["ls"]}, "status": "in_progress"},
+        {
+            "type": "apply_patch_call", "id": "apc_1", "call_id": "call_1", "status": "in_progress",
+            "operation": {"type": "update_file", "path": "a.py", "diff": "@@"},
+        },
+        {
+            "type": "local_shell_call", "id": "lsh_1", "call_id": "call_1", "status": "in_progress",
+            "action": {"type": "exec", "command": ["ls"], "env": {}},
+        },
+        {
+            "type": "computer_call", "id": "cu_1", "call_id": "call_1", "status": "in_progress",
+            "action": {"type": "screenshot"}, "pending_safety_checks": [],
+        },
+        {"type": "mcp_approval_request", "id": "mcpr_1", "name": "lookup", "arguments": "{}", "server_label": "docs"},
+    ],
+    ids=lambda item: item["type"],
+)
+async def test_responses_fallback_surfaces_the_primary_error_once_the_cut_stream_began_a_client_run_tool_call(
+    item: Mapping[str, object], respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    respx_mock.post("https://api.openai.com/v1/responses").mock(
+        return_value=_openai_stream_cut_after_output_item("Let me check the repo. ", item)
+    )
+    fallback: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(
+        return_value=_anthropic_stream("The repo has two files.")
+    )
+    router: Final = _primary_with_fallback("anthropic/claude-opus-5-5")
+    try:
+        stream: Final = await router.aresponses(model="primary", input="What is in the repo?", stream=True)
+        with pytest.raises(litellm.InternalServerError, match="interrupted"):
+            [event async for event in stream]
+        assert fallback.call_count == 0
+    finally:
+        router.discard()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "server_run_event",
+    [
+        {
+            "type": "response.output_item.added", "output_index": 1,
+            "item": {
+                "type": "mcp_call", "id": "mcp_1", "name": "ask_question", "arguments": "{}",
+                "server_label": "docs", "status": "in_progress",
+            },
+        },
+        {"type": "response.mcp_call_arguments.delta", "output_index": 1, "item_id": "mcp_1", "delta": '{"question": "set'},
+    ],
+    ids=["mcp_call_item", "mcp_call_arguments"],
+)
+async def test_responses_fallback_continues_after_a_server_run_mcp_call(
+    server_run_event: Mapping[str, object], respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    respx_mock.post("https://api.openai.com/v1/responses").mock(
+        return_value=_openai_stream_cut_after_event("Let me check the docs. ", server_run_event)
+    )
+    fallback: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(
+        return_value=_anthropic_stream("The docs cover setup.")
+    )
+    router: Final = _primary_with_fallback("anthropic/claude-opus-5-5")
+    try:
+        stream: Final = await router.aresponses(model="primary", input="What do the docs cover?", stream=True)
+        events: Final = tuple([event async for event in stream])
+        assert _streamed_text(events).endswith("The docs cover setup.")
+        assert fallback.call_count == 1
+    finally:
+        router.discard()
+
+
+@pytest.mark.asyncio
+async def test_responses_fallback_continues_when_allowed_tools_in_auto_mode_leaves_the_reply_open(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    openai: Final = respx_mock.post("https://api.openai.com/v1/responses").mock(
+        side_effect=[
+            _openai_stream_cut_after("1, 2, "),
+            _sse(
+                {
+                    "type": "response.output_text.delta", "sequence_number": 0,
+                    "item_id": "msg_fallback", "output_index": 0, "content_index": 0, "delta": "3, 4, 5",
+                },
+                {
+                    "type": "response.completed", "sequence_number": 1,
+                    "response": {
+                        "id": "resp_fallback", "object": "response", "created_at": 0, "status": "completed",
+                        "model": "gpt-6.1-terra", "output": [],
+                        "usage": {"input_tokens": 5, "output_tokens": 5, "total_tokens": 10},
+                    },
+                },
+            ),
+        ]
+    )
+    router: Final = _primary_with_fallback("openai/gpt-6.1-terra")
+    try:
+        stream: Final = await router.aresponses(
+            model="primary",
+            input="Print the integers 1 through 5.",
+            stream=True,
+            tools=[{"type": "function", "name": "lookup", "parameters": {"type": "object"}}],
+            tool_choice={"type": "allowed_tools", "mode": "auto", "tools": [{"type": "function", "name": "lookup"}]},
+        )
+        events: Final = tuple([event async for event in stream])
+        assert _streamed_text(events) == "1, 2, 3, 4, 5"
+        assert openai.call_count == 2
+        continued_input: Final = json.loads(openai.calls.last.request.content)["input"]
+        assert [item["role"] for item in continued_input[-2:]] == ["assistant", "user"]
+    finally:
+        router.discard()
+
+
+@pytest.mark.asyncio
+async def test_responses_fallback_surfaces_a_content_filter_that_cut_the_stream_mid_answer(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    respx_mock.post("https://api.openai.com/v1/responses").mock(
+        return_value=_sse(
+            {
+                "type": "response.output_text.delta", "sequence_number": 0,
+                "item_id": "msg_primary", "output_index": 0, "content_index": 0, "delta": "Step one is to obtain the",
+            },
+            {
+                "type": "error", "sequence_number": 1,
+                "error": {
+                    "type": "invalid_request_error", "code": "content_policy_violation",
+                    "message": "The response was halted mid-stream.", "param": None,
+                },
+            },
+        )
+    )
+    fallback: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(
+        return_value=_anthropic_stream(" reagents.")
+    )
+    router: Final = Router(
+        model_list=[
+            {"model_name": "primary", "litellm_params": {"model": "openai/gpt-6-astra", "api_key": "synthetic"}},
+            {"model_name": "fallback", "litellm_params": {"model": "anthropic/claude-opus-5-5", "api_key": "synthetic"}},
+        ],
+        fallbacks=[{"primary": ["fallback"]}],
+        content_policy_fallbacks=[{"primary": ["fallback"]}],
+        num_retries=0,
+    )
+    try:
+        stream: Final = await router.aresponses(model="primary", input="How do I make it?", stream=True)
+        with pytest.raises(litellm.ContentPolicyViolationError, match="halted mid-stream"):
+            [event async for event in stream]
+        assert fallback.call_count == 0
+    finally:
+        router.discard()
+
+
+@pytest.mark.asyncio
+async def test_bridged_responses_fallback_surfaces_the_primary_error_once_the_cut_stream_began_a_tool_call(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    provider: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(
+        side_effect=[
+            _anthropic_stream_cut_mid_tool_call("Let me look that up. "),
+            _anthropic_stream("It is sunny in Paris."),
+        ]
+    )
+    router: Final = Router(
+        model_list=[
+            {"model_name": "primary", "litellm_params": {"model": "anthropic/claude-primary", "api_key": "synthetic"}},
+            {"model_name": "fallback", "litellm_params": {"model": "anthropic/claude-opus-5-5", "api_key": "synthetic"}},
+        ],
+        fallbacks=[{"primary": ["fallback"]}],
+        num_retries=0,
+    )
+    try:
+        stream: Final = await router.aresponses(
+            model="primary",
+            input="What is the weather in Paris?",
+            stream=True,
+            tools=[{"type": "function", "name": "lookup", "parameters": {"type": "object"}}],
+        )
+        with pytest.raises(litellm.InternalServerError, match="interrupted"):
+            [event async for event in stream]
+        assert provider.call_count == 1
+    finally:
+        router.discard()
+
+
+@pytest.mark.asyncio
+async def test_bridged_responses_fallback_continues_after_a_server_run_tool_search(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    provider: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(
+        side_effect=[
+            _anthropic_stream_cut_mid_tool_call(
+                "Let me find the right tool. ",
+                {"type": "server_tool_use", "id": "srvtoolu_primary", "name": "tool_search_tool_regex", "input": {}},
+            ),
+            _anthropic_stream("It is sunny in Paris."),
+        ]
+    )
+    router: Final = Router(
+        model_list=[
+            {"model_name": "primary", "litellm_params": {"model": "anthropic/claude-primary", "api_key": "synthetic"}},
+            {"model_name": "fallback", "litellm_params": {"model": "anthropic/claude-opus-5-5", "api_key": "synthetic"}},
+        ],
+        fallbacks=[{"primary": ["fallback"]}],
+        num_retries=0,
+    )
+    try:
+        stream: Final = await router.aresponses(
+            model="primary",
+            input="What is the weather in Paris?",
+            stream=True,
+            tools=[
+                {"type": "tool_search", "execution": "server"},
+                {"type": "function", "name": "lookup", "parameters": {"type": "object"}, "defer_loading": True},
+            ],
+        )
+        events: Final = tuple([event async for event in stream])
+        assert _streamed_text(events).endswith("It is sunny in Paris.")
+        assert provider.call_count == 2
+    finally:
+        router.discard()
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate_router_unit", "setup_and_teardown_router_unit")
 @pytest.mark.asyncio

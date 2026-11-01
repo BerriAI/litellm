@@ -17,6 +17,7 @@ import litellm
 import litellm.litellm_core_utils
 import litellm.types
 import litellm.types.utils
+from litellm.anthropic_beta_gated_fields import strip_beta_gated_request_body
 from litellm.anthropic_beta_headers_manager import (
     update_request_with_filtered_beta,
 )
@@ -38,6 +39,7 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     get_httpx_client,
 )
+from litellm.llms.custom_httpx.sse_lines import aiter_sse_lines, iter_sse_lines
 from litellm.types.llms.anthropic import (
     ContentBlockDelta,
     ContentBlockStart,
@@ -68,7 +70,12 @@ from litellm.types.utils import (
 )
 
 from ...base import BaseLLM
-from ..common_utils import AnthropicError, process_anthropic_headers, refusal_provider_specific_fields
+from ..common_utils import (
+    AnthropicError,
+    process_anthropic_headers,
+    refusal_params,
+    stop_reason_provider_specific_fields,
+)
 from .transformation import ANTHROPIC_TOOL_NAME_REVERSE_MAP_KEY, AnthropicConfig, JsonModeRequest
 
 if TYPE_CHECKING:
@@ -233,7 +240,7 @@ async def make_call(
         raise AnthropicError(status_code=500, message=str(e))
 
     completion_stream: Final = ModelResponseIterator(
-        streaming_response=response.aiter_lines(),
+        streaming_response=aiter_sse_lines(response.aiter_text()),
         sync_stream=False,
         json_mode=json_mode,
         speed=speed,
@@ -304,7 +311,7 @@ def make_sync_call(
         )
 
     completion_stream: Final = ModelResponseIterator(
-        streaming_response=response.iter_lines(),
+        streaming_response=iter_sse_lines(response.iter_text()),
         sync_stream=True,
         json_mode=json_mode,
         speed=speed,
@@ -505,10 +512,19 @@ class AnthropicChatCompletion(BaseLLM):
             The pair stays mutable because the streaming path rewrites it in
             place (`data["stream"] = True`) before sending.
             """
-            request_headers, data = update_request_with_filtered_beta(
+            request_headers, filtered_data = update_request_with_filtered_beta(
                 headers=headers,
                 request_data=request_data,
                 provider=custom_llm_provider,
+            )
+            data: Final = dict(
+                strip_beta_gated_request_body(
+                    filtered_data,
+                    request_headers,
+                    drop_params=litellm_params.get("drop_params"),  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # litellm_params is the handler's bare dict
+                    model=model,
+                    provider=custom_llm_provider,
+                )
             )
             logging_obj.pre_call(
                 input=messages,
@@ -856,11 +872,21 @@ class ModelResponseIterator:
                 if reasoning_content is None:
                     reasoning_content = ""
         elif "content" in content_block["delta"] and content_block["delta"].get("type") == "compaction_delta":
-            # Handle compaction delta
+            compaction_delta: Final = content_block["delta"]["content"]
             provider_specific_fields["compaction_delta"] = {
                 "type": "compaction_delta",
-                "content": content_block["delta"]["content"],
+                "content": compaction_delta,
             }
+            if self.compaction_blocks and isinstance(compaction_delta, str):
+                streamed_summary: Final = self.compaction_blocks[-1].get("content")
+                self.compaction_blocks = [
+                    *self.compaction_blocks[:-1],
+                    {
+                        **self.compaction_blocks[-1],
+                        "content": (streamed_summary if isinstance(streamed_summary, str) else "") + compaction_delta,
+                    },
+                ]
+                provider_specific_fields["compaction_blocks"] = self.compaction_blocks
 
         return (
             text,
@@ -904,6 +930,17 @@ class ModelResponseIterator:
 
     def _web_search_call_snapshot(self) -> dict[str, object]:
         return dict(self._web_search_calls)
+
+    def _refresh_pending_web_search_call(self, tool_use_id: str) -> bool:
+        if tool_use_id not in self._web_search_calls:
+            return False
+        self._web_search_calls[tool_use_id] = build_web_search_call(
+            tool_use_id,
+            self._server_tool_inputs.get(tool_use_id, {}),
+            {"content": []},
+            status="in_progress",
+        )
+        return True
 
     def _complete_web_search_call(self, result: dict[str, object]) -> None:
         tool_use_id: Final = result.get("tool_use_id")
@@ -1107,6 +1144,8 @@ class ModelResponseIterator:
                                 self._server_tool_inputs[self._current_server_tool_id] = json.loads(args)
                             except (json.JSONDecodeError, TypeError):
                                 pass
+                        if self._refresh_pending_web_search_call(self._current_server_tool_id):
+                            provider_specific_fields["web_search_calls"] = self._web_search_call_snapshot()
                         self._current_server_tool_id = None
                 if self.is_response_format_tool:
                     text = self._flush_response_format_buffer()
@@ -1119,8 +1158,8 @@ class ModelResponseIterator:
                 # These are automatically handled by Anthropic API, we just pass them through
                 pass
             elif type_chunk == "message_delta":
-                finish_reason, usage, container, refusal_fields = self._handle_message_delta(chunk)
-                provider_specific_fields.update(refusal_fields)
+                finish_reason, usage, container, stop_reason_fields = self._handle_message_delta(chunk)
+                provider_specific_fields.update(stop_reason_fields)
                 text = self._release_answer_close() + self._drain_split_answer_blocks()
                 if container:
                     provider_specific_fields["container"] = container
@@ -1169,6 +1208,7 @@ class ModelResponseIterator:
                 )
 
             text, tool_use = self._handle_json_mode_chunk(text=text, tool_use=tool_use)
+            refusal_fields: Final = refusal_params(provider_specific_fields)
 
             returned_chunk: Final = ModelResponseStream(
                 choices=[
@@ -1180,6 +1220,7 @@ class ModelResponseIterator:
                             provider_specific_fields=(provider_specific_fields if provider_specific_fields else None),
                             thinking_blocks=(thinking_blocks if thinking_blocks else None),
                             reasoning_content=reasoning_content,
+                            **refusal_fields,
                         ),
                         finish_reason=finish_reason,
                     )
@@ -1350,7 +1391,7 @@ class ModelResponseIterator:
             self._handle_usage(anthropic_usage_chunk=message_delta["usage"]) if "usage" in message_delta else None
         )
         container: Final = message_delta["delta"].get("container")
-        return finish_reason, usage, container, refusal_provider_specific_fields(message_delta["delta"])
+        return finish_reason, usage, container, stop_reason_provider_specific_fields(message_delta["delta"])
 
     def _handle_accumulated_json_chunk(self, data_str: str, is_final: bool = False) -> ModelResponseStream | None:
         """
