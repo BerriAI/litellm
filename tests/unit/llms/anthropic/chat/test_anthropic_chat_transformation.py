@@ -6787,20 +6787,32 @@ def test_eager_input_streaming_not_set_on_computer_use_tool():
     assert "eager_input_streaming" not in mapped_tool
 
 
-@pytest.mark.parametrize("tool_type", ["computer_20241022", "computer_20250124", "computer_20251124"])
-def test_computer_tools_drop_defer_loading_and_allowed_callers(tool_type: str):
-    computer_tool: Final = {
+def _computer_tool_with_defer_loading_and_allowed_callers(tool_type: str) -> dict[str, object]:
+    return {
         "type": tool_type,
         "function": {"name": "computer", "parameters": {"display_width_px": 1024, "display_height_px": 768}},
         "defer_loading": True,
         "allowed_callers": ["code_execution_20250825"],
     }
 
-    mapped_tool, _ = AnthropicConfig().map_tool_helper(computer_tool)
+
+@pytest.mark.parametrize("tool_type", ["computer_20241022", "computer_20250124"])
+def test_legacy_computer_tools_drop_defer_loading_and_allowed_callers(tool_type: str):
+    mapped_tool, _ = AnthropicConfig().map_tool_helper(_computer_tool_with_defer_loading_and_allowed_callers(tool_type))
 
     assert mapped_tool["type"] == tool_type
     assert "defer_loading" not in mapped_tool
     assert "allowed_callers" not in mapped_tool
+
+
+def test_computer_20251124_keeps_defer_loading_and_allowed_callers():
+    mapped_tool, _ = AnthropicConfig().map_tool_helper(
+        _computer_tool_with_defer_loading_and_allowed_callers("computer_20251124")
+    )
+
+    assert mapped_tool["type"] == "computer_20251124"
+    assert mapped_tool["defer_loading"] is True
+    assert mapped_tool["allowed_callers"] == ["code_execution_20250825"]
 
 
 def test_eager_input_streaming_reaches_anthropic_request_tools():

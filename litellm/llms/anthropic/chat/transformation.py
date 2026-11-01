@@ -1114,9 +1114,11 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         if returned_tool is not None:
             # Only set defer_loading on tools that support it (not tool search tools or computer tools)
             tool_type = returned_tool.get("type", "")
-            if not tool_type.startswith("computer_") and tool_type not in (
+            if tool_type not in (
                 "tool_search_tool_regex_20251119",
                 "tool_search_tool_bm25_20251119",
+                "computer_20241022",
+                "computer_20250124",
             ):
                 if _defer_loading is not None:
                     returned_tool["defer_loading"] = _validated_defer_loading(_defer_loading)
@@ -1131,9 +1133,11 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         if returned_tool is not None:
             # Only set allowed_callers on tools that support it (not tool search tools or computer tools)
             tool_type = returned_tool.get("type", "")
-            if not tool_type.startswith("computer_") and tool_type not in (
+            if tool_type not in (
                 "tool_search_tool_regex_20251119",
                 "tool_search_tool_bm25_20251119",
+                "computer_20241022",
+                "computer_20250124",
             ):
                 if _allowed_callers is not None:
                     if not isinstance(_allowed_callers, list) or not all(
