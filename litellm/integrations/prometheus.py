@@ -5024,7 +5024,26 @@ class PrometheusLogger(CustomLogger):
 
         # Mount the metrics app to the app
         app.mount("/metrics", metrics_app)
-        verbose_proxy_logger.debug("Starting Prometheus Metrics on /metrics (no authentication)")
+        is_auth_required = (
+            getattr(litellm, "allow_unauthenticated_metrics", None) is not True
+            and getattr(litellm, "require_auth_for_metrics_endpoint", None) is not False
+        )
+        if is_auth_required:
+            verbose_proxy_logger.debug("Starting Prometheus Metrics on /metrics (authenticated)")
+        else:
+            verbose_proxy_logger.warning(
+                "SECURITY WARNING: /metrics endpoint is exposed WITHOUT authentication. "
+                "Sensitive multi-tenant operational data and metric labels may be visible to unauthorized clients. "
+                "To secure this endpoint, remove allow_unauthenticated_metrics or set require_auth_for_metrics_endpoint: true."
+            )
+            import warnings
+
+            warnings.warn(
+                "/metrics endpoint is exposed without authentication. "
+                "Ensure this endpoint is behind a firewall/private VPC or set require_auth_for_metrics_endpoint: true.",
+                UserWarning,
+                stacklevel=2,
+            )
 
 
 def _label_source(enum_values: UserAPIKeyLabelValues) -> Mapping[str, object]:

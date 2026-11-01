@@ -209,7 +209,10 @@ def _normalize_public_auth_route(route: str) -> str:
 def _route_requires_auth_despite_public(route: str, general_settings: dict | None) -> bool:
     normalized_route: Final = _normalize_public_auth_route(route)
     if normalized_route == "/metrics":
-        return litellm.require_auth_for_metrics_endpoint is not False
+        return (
+            litellm.allow_unauthenticated_metrics is not True
+            and litellm.require_auth_for_metrics_endpoint is not False
+        )
 
     return False
 

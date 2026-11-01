@@ -207,6 +207,43 @@ def test_no_auth_metrics_when_disabled(app_with_middleware, monkeypatch):
     assert response.json() == {"msg": "metrics OK"}
 
 
+def test_allow_unauthenticated_metrics_opt_out(app_with_middleware, monkeypatch):
+    """
+    Test that when allow_unauthenticated_metrics is True, requests to /metrics
+    bypass the auth check (explicit opt-out).
+    """
+    monkeypatch.setattr(litellm, "allow_unauthenticated_metrics", True)
+
+    def should_not_be_called(*args, **kwargs):
+        raise Exception("Auth should not be called when unauthenticated metrics allowed")
+
+    monkeypatch.setattr(
+        "litellm.proxy.middleware.prometheus_auth_middleware.user_api_key_auth",
+        should_not_be_called,
+    )
+
+    client = TestClient(app_with_middleware)
+    response = client.get("/metrics")
+    assert response.status_code == 200, response.text
+    assert response.json() == {"msg": "metrics OK"}
+
+
+def test_allow_unauthenticated_metrics_false_enforces_auth(app_with_middleware, monkeypatch):
+    """
+    Test that when allow_unauthenticated_metrics is explicitly False, auth is enforced.
+    """
+    monkeypatch.setattr(litellm, "allow_unauthenticated_metrics", False)
+    monkeypatch.setattr(
+        "litellm.proxy.middleware.prometheus_auth_middleware.user_api_key_auth",
+        fake_invalid_auth,
+    )
+
+    client = TestClient(app_with_middleware)
+    response = client.get("/metrics")
+    assert response.status_code == 401, response.text
+    assert "allow_unauthenticated_metrics" in response.text
+
+
 def test_non_metrics_requests_pass_through(app_with_middleware, monkeypatch):
     """
     Test that non-metrics endpoints pass through the middleware unaffected.
