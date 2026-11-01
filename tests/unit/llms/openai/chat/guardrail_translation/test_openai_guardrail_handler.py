@@ -1670,6 +1670,49 @@ class TestOpenAIChatCompletionsHandlerStreamingOutput:
         assert [c["function"]["arguments"] for c in sent] == ['{"city": "Paris"}', '{"city": "Rome"}']
 
     @pytest.mark.asyncio
+    async def test_partial_arguments_stay_out_of_what_each_choice_inspects(self) -> None:
+        """Half a JSON object is not a call a guardrail can judge, at any number of choices."""
+        from litellm.llms.base_llm.guardrail_translation.base_translation import StreamTransformSink
+        from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+
+        class RecordingGuardrail(CustomGuardrail):
+            seen: list[object] = []
+
+            async def apply_guardrail(
+                self, inputs: GenericGuardrailAPIInputs, request_data: dict[str, object],
+                input_type: Literal["request", "response"], logging_obj: object = None,
+            ) -> GenericGuardrailAPIInputs:
+                type(self).seen.append(request_data.get("response"))
+                return inputs
+
+        def choice(index: int, arguments: str, label: str) -> StreamingChoices:
+            return StreamingChoices(
+                index=index,
+                delta=Delta(content="looking", tool_calls=[
+                    {"index": 0, "id": "call_" + label, "type": "function",
+                     "function": {"name": "weather", "arguments": arguments}},
+                ]),
+                finish_reason="tool_calls",
+            )
+
+        RecordingGuardrail.seen = []
+        await OpenAIChatCompletionsHandler().process_output_streaming_response(
+            responses_so_far=[ModelResponseStream(choices=[
+                choice(0, '{"city": "Pa', "partial"), choice(1, '{"city": "Rome"}', "rome"),
+            ])],
+            guardrail_to_apply=RecordingGuardrail(guardrail_name="recording"),
+            litellm_logging_obj=None, request_data={},
+            stream_transform_sink=StreamTransformSink(),
+        )
+        arguments: Final = tuple(
+            tool_call.function.arguments
+            for response in RecordingGuardrail.seen
+            for single in getattr(response, "choices", None) or ()
+            for tool_call in single.message.tool_calls or ()
+        )
+        assert arguments == ('{"city": "Rome"}',)
+
+    @pytest.mark.asyncio
     async def test_a_caller_cannot_set_the_choice_index_label(self) -> None:
         """The label says which choice the round inspected, so only the round may set it."""
         from litellm.llms.base_llm.guardrail_translation.base_translation import StreamTransformSink
