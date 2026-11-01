@@ -26568,6 +26568,20 @@
               ],
               "title": "Annotations"
             },
+            "logprobs": {
+              "anyOf": [
+                {
+                  "items": {
+                    "$ref": "#/components/schemas/OutputTextLogprob"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Logprobs"
+            },
             "text": {
               "anyOf": [
                 {
@@ -26597,6 +26611,80 @@
             "annotations"
           ],
           "title": "OutputText",
+          "type": "object"
+        },
+        "OutputTextLogprob": {
+          "additionalProperties": true,
+          "properties": {
+            "bytes": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "integer"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Bytes"
+            },
+            "logprob": {
+              "title": "Logprob",
+              "type": "number"
+            },
+            "token": {
+              "title": "Token",
+              "type": "string"
+            },
+            "top_logprobs": {
+              "items": {
+                "$ref": "#/components/schemas/OutputTextTopLogprob"
+              },
+              "title": "Top Logprobs",
+              "type": "array"
+            }
+          },
+          "required": [
+            "token",
+            "logprob",
+            "top_logprobs"
+          ],
+          "title": "OutputTextLogprob",
+          "type": "object"
+        },
+        "OutputTextTopLogprob": {
+          "additionalProperties": true,
+          "properties": {
+            "bytes": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "integer"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Bytes"
+            },
+            "logprob": {
+              "title": "Logprob",
+              "type": "number"
+            },
+            "token": {
+              "title": "Token",
+              "type": "string"
+            }
+          },
+          "required": [
+            "token",
+            "logprob"
+          ],
+          "title": "OutputTextTopLogprob",
           "type": "object"
         },
         "OutputTokensDetails": {

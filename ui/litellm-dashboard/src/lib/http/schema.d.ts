@@ -40749,10 +40749,36 @@ export interface components {
         OutputText: {
             /** Annotations */
             annotations: components["schemas"]["GenericResponseOutputItemContentAnnotation"][] | null;
+            /** Logprobs */
+            logprobs?: components["schemas"]["OutputTextLogprob"][] | null;
             /** Text */
             text: string | null;
             /** Type */
             type: string | null;
+        } & {
+            [key: string]: unknown;
+        };
+        /** OutputTextLogprob */
+        OutputTextLogprob: {
+            /** Bytes */
+            bytes?: number[] | null;
+            /** Logprob */
+            logprob: number;
+            /** Token */
+            token: string;
+            /** Top Logprobs */
+            top_logprobs: components["schemas"]["OutputTextTopLogprob"][];
+        } & {
+            [key: string]: unknown;
+        };
+        /** OutputTextTopLogprob */
+        OutputTextTopLogprob: {
+            /** Bytes */
+            bytes?: number[] | null;
+            /** Logprob */
+            logprob: number;
+            /** Token */
+            token: string;
         } & {
             [key: string]: unknown;
         };
