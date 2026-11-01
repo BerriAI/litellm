@@ -1,3 +1,5 @@
+import { Trans, useTranslation } from "react-i18next";
+
 import { $api } from "@/lib/http/api";
 import { toast } from "@/lib/toast";
 import { Button } from "@/components/ui/button";
@@ -6,11 +8,12 @@ import { Switch } from "@/components/ui/switch";
 import { uiHref } from "@/utils/uiHref";
 
 export default function BackgroundChatSettings() {
+  const { t } = useTranslation();
   const query = $api.useQuery("get", "/get/background_chat_settings");
   const update = $api.useMutation("patch", "/update/background_chat_settings", {
     onSuccess: () => {
       void query.refetch();
-      toast.success("Background chat settings saved.");
+      toast.success(t("adminPanel.backgroundChat.toasts.saved"));
     },
     onError: (error) => toast.fromError(error),
   });
@@ -19,9 +22,9 @@ export default function BackgroundChatSettings() {
   if (query.isError || !query.data)
     return (
       <div role="alert" className="text-sm text-destructive">
-        Could not load background chat settings.
+        {t("adminPanel.backgroundChat.errors.loadFailed")}
         <Button variant="ghost" size="sm" onClick={() => void query.refetch()}>
-          Retry
+          {t("adminPanel.backgroundChat.retry")}
         </Button>
       </div>
     );
@@ -37,36 +40,29 @@ export default function BackgroundChatSettings() {
         checked={settings.enabled}
         disabled={disabled}
         onCheckedChange={(enabled) => update.mutate({ body: { enabled } })}
-        aria-label="Continue chats in the background"
+        aria-label={t("adminPanel.backgroundChat.label")}
         aria-describedby="background-chat-description"
       />
       <div className="space-y-1">
-        <p className="text-sm font-medium text-foreground">Continue chats in the background</p>
+        <p className="text-sm font-medium text-foreground">{t("adminPanel.backgroundChat.label")}</p>
         <p id="background-chat-description" className="text-sm text-muted-foreground">
-          Keep replies and tool runs going after users close the browser. Return to the same browser to see the result.
+          {t("adminPanel.backgroundChat.description")}
         </p>
         {!settings.redis_configured && (
           <p className="text-sm text-muted-foreground">
-            Requires Redis.{" "}
-            <a className="text-primary underline" href={uiHref("/caching")}>
-              Configure it in Caching → Coordination Redis
-            </a>
-            , then restart the proxy.
+            <Trans
+              i18nKey="adminPanel.backgroundChat.requiresRedis"
+              components={{ cachingLink: <a className="text-primary underline" href={uiHref("/caching")} /> }}
+            />
           </p>
         )}
         {settings.managed_by_config && (
-          <p className="text-sm text-muted-foreground">
-            Managed by your config file. Update its background polling setting to change this.
-          </p>
+          <p className="text-sm text-muted-foreground">{t("adminPanel.backgroundChat.managedByConfig")}</p>
         )}
         {!settings.can_save && !settings.managed_by_config && (
-          <p className="text-sm text-muted-foreground">Enable database-backed configuration to save this setting.</p>
+          <p className="text-sm text-muted-foreground">{t("adminPanel.backgroundChat.dbConfigRequired")}</p>
         )}
-        {!readOnly && (
-          <p className="text-sm text-muted-foreground">
-            Changes apply automatically when the proxy refreshes its configuration.
-          </p>
-        )}
+        {!readOnly && <p className="text-sm text-muted-foreground">{t("adminPanel.backgroundChat.autoApply")}</p>}
       </div>
     </div>
   );

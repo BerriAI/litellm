@@ -1,4 +1,7 @@
+import type { ParseKeys, TFunction } from "i18next";
+
 import type { StatusTone } from "@/components/shared/table_cells/status_badge";
+import i18n from "@/i18n/i18n";
 import {
   COORDINATION_FIELDS,
   CoordinationField,
@@ -118,31 +121,41 @@ export interface SourceBadgeDescriptor {
   readonly tooltip: string;
 }
 
-const SOURCE_BADGES: Readonly<Record<CoordinationRedisSource, SourceBadgeDescriptor>> = {
+interface SourceBadgeKeys {
+  readonly tone: StatusTone;
+  readonly label: ParseKeys;
+  readonly tooltip: ParseKeys;
+}
+
+const SOURCE_BADGES: Readonly<Record<CoordinationRedisSource, SourceBadgeKeys>> = {
   coordination_redis: {
     tone: "success",
-    label: "Configured here",
-    tooltip: "general_settings.coordination_redis is set, so coordination uses its own Redis connection.",
+    label: "caching.coordinationRedis.source.coordinationRedis.label",
+    tooltip: "caching.coordinationRedis.source.coordinationRedis.tooltip",
   },
   cache_backend: {
     tone: "info",
-    label: "Borrowed from response cache",
-    tooltip: "No coordination Redis is configured; the proxy reuses the response cache's Redis connection.",
+    label: "caching.coordinationRedis.source.cacheBackend.label",
+    tooltip: "caching.coordinationRedis.source.cacheBackend.tooltip",
   },
   environment: {
     tone: "info",
-    label: "From REDIS_* environment",
-    tooltip: "No coordination Redis is configured; the proxy falls back to the REDIS_* environment variables.",
+    label: "caching.coordinationRedis.source.environment.label",
+    tooltip: "caching.coordinationRedis.source.environment.tooltip",
   },
 };
 
-const NOT_CONFIGURED_BADGE: SourceBadgeDescriptor = {
+const NOT_CONFIGURED_BADGE: SourceBadgeKeys = {
   tone: "neutral",
-  label: "Not configured",
-  tooltip: "Cross-pod rate limits, spend tracking, and the pod lock manager have no Redis to coordinate through.",
+  label: "caching.coordinationRedis.source.notConfigured.label",
+  tooltip: "caching.coordinationRedis.source.notConfigured.tooltip",
 };
 
-export const sourceBadge = (source: string | null | undefined): SourceBadgeDescriptor => {
-  const known: Readonly<Record<string, SourceBadgeDescriptor>> = SOURCE_BADGES;
-  return (source && known[source]) || NOT_CONFIGURED_BADGE;
+export const sourceBadge = (
+  source: string | null | undefined,
+  t: TFunction = i18n.t.bind(i18n),
+): SourceBadgeDescriptor => {
+  const known: Readonly<Record<string, SourceBadgeKeys>> = SOURCE_BADGES;
+  const badge = source && Object.hasOwn(known, source) ? known[source] : NOT_CONFIGURED_BADGE;
+  return { tone: badge.tone, label: t(badge.label), tooltip: t(badge.tooltip) };
 };

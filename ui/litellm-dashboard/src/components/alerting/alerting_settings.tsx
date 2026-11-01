@@ -2,6 +2,7 @@
  * UI for controlling slack alerting settings
  */
 import React, { useState, useEffect } from "react";
+import { useTranslation } from "react-i18next";
 
 import { alertingSettingsCall, updateConfigFieldSetting } from "../networking";
 import DynamicForm from "./dynamic_form";
@@ -23,6 +24,7 @@ interface AlertingSettingsProps {
 }
 
 const AlertingSettings: React.FC<AlertingSettingsProps> = ({ accessToken, premiumUser }) => {
+  const { t } = useTranslation();
   const [alertingSettings, setAlertingSettings] = useState<alertingSettingsItem[]>([]);
 
   useEffect(() => {
@@ -74,7 +76,7 @@ const AlertingSettings: React.FC<AlertingSettingsProps> = ({ accessToken, premiu
         }
       }
       // update value in state
-      toast.success("Wait 10s for proxy to update.");
+      toast.success(t("loggingAndAlerts.alerting.toasts.saved"));
     } catch (error) {
       toast.error(extractProxyErrorMessage(error));
     }

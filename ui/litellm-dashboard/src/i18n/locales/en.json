@@ -710,6 +710,1845 @@
       }
     }
   },
+  "adminPanel": {
+    "page": {
+      "title": "Admin Access",
+      "subtitle": "Go to 'Internal Users' page to add other admins.",
+      "tabs": {
+        "ssoSettings": "SSO Settings",
+        "securitySettings": "Security Settings",
+        "uiSettings": "UI Settings",
+        "loggingSettings": "Logging Settings",
+        "plugins": "Plugins",
+        "webSearchInterception": "Web Search Interception"
+      },
+      "security": {
+        "title": "✨ Security Settings",
+        "deprecatedTitle": "SSO Configuration Deprecated",
+        "deprecatedDescription": "Editing SSO Settings on this page is deprecated and will be removed in a future version. Please use the SSO Settings tab for SSO configuration.",
+        "editSso": "Edit SSO Settings",
+        "addSso": "Add SSO",
+        "allowedIps": "Allowed IPs",
+        "uiAccessControl": "UI Access Control",
+        "loginWithoutSsoTitle": "Login without SSO",
+        "loginWithoutSso": "If you need to login without sso, you can access <url/>"
+      },
+      "allowedIps": {
+        "title": "Manage Allowed IP Addresses",
+        "columns": {
+          "ipAddress": "IP Address",
+          "action": "Action"
+        },
+        "allAllowed": "All IP Addresses Allowed",
+        "delete": "Delete",
+        "addIp": "Add IP Address",
+        "close": "Close"
+      },
+      "addIp": {
+        "title": "Add Allowed IP Address",
+        "placeholder": "Enter IP address",
+        "submit": "Add IP Address",
+        "required": "Please enter an IP address"
+      },
+      "deleteIp": {
+        "title": "Confirm Delete",
+        "message": "Are you sure you want to delete the IP address: <ip/>?",
+        "confirm": "Yes",
+        "close": "Close"
+      },
+      "uiAccessControlModal": {
+        "title": "UI Access Control Settings"
+      },
+      "toasts": {
+        "premiumRequired": "This feature is only available for premium users. Please upgrade your account.",
+        "uiAccessControlPremiumRequired": "Only premium users can configure UI access control",
+        "fetchIpsFailed": "Failed to fetch allowed IPs {{error}}",
+        "addIpSuccess": "IP address added successfully",
+        "addIpFailed": "Failed to add IP address {{error}}",
+        "deleteIpSuccess": "IP address deleted successfully",
+        "deleteIpFailed": "Failed to delete IP address {{error}}",
+        "uiAccessControlUpdated": "UI Access Control settings updated successfully"
+      }
+    },
+    "ssoSettings": {
+      "header": {
+        "title": "SSO Configuration",
+        "description": "Manage Single Sign-On authentication settings",
+        "loading": "Loading SSO configuration"
+      },
+      "actions": {
+        "edit": "Edit SSO Settings",
+        "delete": "Delete SSO Settings"
+      },
+      "details": {
+        "provider": "Provider",
+        "clientId": "Client ID",
+        "clientSecret": "Client Secret",
+        "proxyBaseUrl": "Proxy Base URL",
+        "tenant": "Tenant",
+        "authorizationEndpoint": "Authorization Endpoint",
+        "tokenEndpoint": "Token Endpoint",
+        "userInfoEndpoint": "User Info Endpoint",
+        "scopes": "Scopes",
+        "teamIdsJwtField": "Team IDs JWT Field",
+        "samlIdpMetadataUrl": "IdP Metadata URL",
+        "samlIdpMetadataXml": "IdP Metadata XML",
+        "samlSpEntityId": "SP Entity ID",
+        "samlAllowUnsolicited": "Allow IdP-initiated (unsolicited) responses",
+        "provided": "Provided",
+        "enabled": "Enabled",
+        "disabled": "Disabled",
+        "notConfigured": "Not configured",
+        "copyValue": "Copy value",
+        "copied": "Copied to clipboard"
+      },
+      "redactableField": {
+        "notConfigured": "Not configured",
+        "showValue": "Show value",
+        "hideValue": "Hide value"
+      },
+      "emptyPlaceholder": {
+        "title": "No SSO Configuration Found",
+        "description": "Configure Single Sign-On (SSO) to enable seamless authentication for your team members using your identity provider.",
+        "configure": "Configure SSO"
+      },
+      "roleMappings": {
+        "title": "Role Mappings",
+        "groupClaim": "Group Claim",
+        "defaultRole": "Default Role",
+        "columns": {
+          "role": "Role",
+          "mappedGroups": "Mapped Groups"
+        },
+        "noGroups": "No groups mapped"
+      },
+      "roles": {
+        "internalUserViewer": "Internal Viewer",
+        "internalUser": "Internal User",
+        "proxyAdminViewer": "Proxy Admin Viewer",
+        "proxyAdmin": "Proxy Admin"
+      },
+      "providers": {
+        "google": "Google SSO",
+        "microsoft": "Microsoft SSO",
+        "okta": "Okta / Auth0 SSO",
+        "generic": "Generic SSO",
+        "saml": "SAML SSO",
+        "fallback": "{{name}} SSO"
+      },
+      "form": {
+        "fields": {
+          "ssoProvider": "SSO Provider",
+          "proxyAdminEmail": "Proxy Admin Email",
+          "proxyBaseUrl": "Proxy Base URL",
+          "useRoleMappings": "Use Role Mappings",
+          "useTeamMappings": "Use Team Mappings",
+          "groupClaim": "Group Claim",
+          "defaultRole": "Default Role",
+          "proxyAdminTeams": "Proxy Admin Teams",
+          "adminViewerTeams": "Admin Viewer Teams",
+          "internalUserTeams": "Internal User Teams",
+          "internalViewerTeams": "Internal Viewer Teams",
+          "teamIdsJwtField": "Team IDs JWT Field",
+          "googleClientId": "Google Client ID",
+          "googleClientSecret": "Google Client Secret",
+          "microsoftClientId": "Microsoft Client ID",
+          "microsoftClientSecret": "Microsoft Client Secret",
+          "microsoftTenant": "Microsoft Tenant",
+          "genericClientId": "Generic Client ID",
+          "genericClientSecret": "Generic Client Secret",
+          "authorizationEndpoint": "Authorization Endpoint",
+          "tokenEndpoint": "Token Endpoint",
+          "userinfoEndpoint": "Userinfo Endpoint",
+          "scopes": "Scopes",
+          "samlIdpMetadataUrl": "IdP Metadata URL",
+          "samlIdpMetadataXml": "IdP Metadata XML",
+          "samlSpEntityId": "SP Entity ID",
+          "samlAllowUnsolicited": "Allow IdP-initiated (unsolicited) responses"
+        },
+        "placeholders": {
+          "samlIdpMetadataUrl": "https://idp.example.com/metadata (use this or the metadata XML below)",
+          "samlIdpMetadataXml": "Paste the IdP metadata XML here if you do not have a metadata URL",
+          "samlSpEntityId": "Defaults to <proxy base url>/sso/saml/metadata"
+        },
+        "defaultRoles": {
+          "internalUserViewer": "Internal Viewer",
+          "internalUser": "Internal User",
+          "proxyAdminViewer": "Admin Viewer",
+          "proxyAdmin": "Proxy Admin"
+        },
+        "errors": {
+          "providerRequired": "Please select an SSO provider",
+          "userEmailRequired": "Please enter the email of the proxy admin",
+          "proxyBaseUrlRequired": "Please enter the proxy base url",
+          "groupClaimRequired": "Please enter the group claim",
+          "teamIdsJwtFieldRequired": "Please enter the team IDs JWT field",
+          "fieldRequired": "Please enter the {{field}}",
+          "urlScheme": "URL must start with http:// or https://",
+          "urlTrailingSlash": "URL must not end with a trailing slash"
+        }
+      },
+      "addModal": {
+        "title": "Add SSO",
+        "cancel": "Cancel",
+        "submit": "Add SSO",
+        "submitting": "Adding...",
+        "toasts": {
+          "success": "SSO settings added successfully",
+          "saveFailed": "Failed to save SSO settings: {{error}}"
+        }
+      },
+      "editModal": {
+        "title": "Edit SSO Settings",
+        "cancel": "Cancel",
+        "save": "Save",
+        "saving": "Saving...",
+        "toasts": {
+          "success": "SSO settings updated successfully",
+          "saveFailed": "Failed to save SSO settings: {{error}}",
+          "processFailed": "Failed to process SSO settings: {{error}}"
+        }
+      },
+      "deleteModal": {
+        "title": "Confirm Clear SSO Settings",
+        "alert": "This action cannot be undone.",
+        "message": "Are you sure you want to clear all SSO settings? Users will no longer be able to login using SSO after this change.",
+        "resourceTitle": "SSO Settings",
+        "provider": "Provider",
+        "providerFallback": "Generic",
+        "toasts": {
+          "success": "SSO settings cleared successfully",
+          "failed": "Failed to clear SSO settings: {{error}}"
+        }
+      }
+    },
+    "ssoModals": {
+      "titleEdit": "Edit SSO Settings",
+      "titleAdd": "Add SSO",
+      "useRoleMappings": "Use Role Mappings",
+      "clear": "Clear",
+      "save": "Save",
+      "clearConfirm": {
+        "title": "Confirm Clear SSO Settings",
+        "message": "Are you sure you want to clear all SSO settings? This action cannot be undone.",
+        "warning": "Users will no longer be able to login using SSO after this change.",
+        "cancel": "Cancel",
+        "confirm": "Yes, Clear"
+      },
+      "instructions": {
+        "title": "SSO Setup Instructions",
+        "intro": "Follow these steps to complete the SSO setup:",
+        "step1": "1. DO NOT Exit this TAB",
+        "step2": "2. Open a new tab, visit your proxy base url",
+        "step3": "3. Confirm your SSO is configured correctly and you can login on the new Tab",
+        "step4": "4. If Step 3 is successful, you can close this tab",
+        "done": "Done"
+      },
+      "toasts": {
+        "noAccessToken": "No access token available",
+        "saveFailed": "Failed to save SSO settings: {{error}}",
+        "clearSuccess": "SSO settings cleared successfully",
+        "clearFailed": "Failed to clear SSO settings"
+      }
+    },
+    "scim": {
+      "title": "SCIM Configuration",
+      "description": "System for Cross-domain Identity Management (SCIM) allows you to automatically provision and manage users and groups in LiteLLM.",
+      "tenantUrl": {
+        "title": "SCIM Tenant URL",
+        "description": "Use this URL in your identity provider SCIM integration settings.",
+        "copy": "Copy"
+      },
+      "token": {
+        "title": "Authentication Token",
+        "alertTitle": "Using SCIM",
+        "alertDescription": "You need a SCIM token to authenticate with the SCIM API. Create one below and use it in your SCIM provider configuration.",
+        "nameLabel": "Token Name",
+        "namePlaceholder": "SCIM Access Token",
+        "nameRequired": "Please enter a name for your token",
+        "create": "Create SCIM Token"
+      },
+      "created": {
+        "title": "Your SCIM Token",
+        "warning": "Make sure to copy this token now. You will not be able to see it again.",
+        "copy": "Copy",
+        "createAnother": "Create Another Token"
+      },
+      "toasts": {
+        "notLoggedIn": "You need to be logged in to create a SCIM token",
+        "created": "SCIM token created successfully",
+        "createFailed": "Failed to create SCIM token: {{error}}",
+        "urlCopied": "URL copied to clipboard",
+        "tokenCopied": "Token copied to clipboard"
+      }
+    },
+    "uiAccessControl": {
+      "description": "Configure who can access the UI interface and how group information is extracted from JWT tokens.",
+      "fields": {
+        "accessMode": "UI Access Mode",
+        "accessModeHint": "Controls who can access the UI interface",
+        "accessModePlaceholder": "Select access mode",
+        "restrictedGroup": "Restricted SSO Group",
+        "jwtField": "SSO Group JWT Field",
+        "jwtFieldHint": "JWT field name that contains team/group information. Use dot notation to access nested fields."
+      },
+      "modes": {
+        "allAuthenticatedUsers": "All Authenticated Users",
+        "restrictedSsoGroup": "Restricted SSO Group"
+      },
+      "errors": {
+        "restrictedGroupRequired": "Please enter the restricted SSO group"
+      },
+      "submit": "Update UI Access Control",
+      "toasts": {
+        "noAccessToken": "No access token available",
+        "saveFailed": "Failed to save UI access settings"
+      }
+    },
+    "uiSettings": {
+      "title": "UI Settings",
+      "loadingAriaLabel": "Loading UI settings",
+      "errors": {
+        "loadFailed": "Could not load UI settings",
+        "updateFailed": "Could not update UI settings"
+      },
+      "toasts": {
+        "updated": "UI settings updated successfully",
+        "updatedRefreshing": "UI settings updated successfully. Refreshing page...",
+        "pageVisibilityUpdated": "Page visibility settings updated successfully"
+      },
+      "usageRange": {
+        "label": "Default Usage time range",
+        "help": "The starting range for everyone opening Usage. Shared links and manual date selections take precedence. Calendar ranges use your browser’s timezone.",
+        "managedByConfig": "Managed by the deployment configuration."
+      },
+      "settings": {
+        "disableModelAdd": {
+          "label": "Disable model add for internal users"
+        },
+        "disableTeamAdminDelete": {
+          "label": "Disable team admin delete team user"
+        },
+        "requireAuthForPublicAIHub": {
+          "label": "Require authentication for public AI Hub"
+        },
+        "forwardClientHeaders": {
+          "label": "Forward client headers to LLM API",
+          "description": "Forwards client headers (Authorization, anthropic-beta, and x-* custom headers) to the upstream LLM. Enable for Claude Code with a Max subscription (forwards the OAuth token) or to pass custom/tracing headers through to the provider. Independent of the BYOK toggle — enable only the one(s) you need."
+        },
+        "forwardLLMProviderAuthHeaders": {
+          "label": "Forward LLM provider auth headers",
+          "description": "Forwards provider auth headers (x-api-key, x-goog-api-key, api-key, ocp-apim-subscription-key) to the upstream LLM, overriding any deployment-configured key for that request. Enable for Claude Code BYOK (clients bring their own API key). Independent of the client-headers toggle — enable only the one(s) you need."
+        },
+        "enableProjects": {
+          "ariaLabel": "Enable Projects UI",
+          "label": "[BETA] Enable Projects (page will refresh)",
+          "description": "If enabled, shows the Projects feature in the UI sidebar and the project field in key management."
+        },
+        "enableChat": {
+          "ariaLabel": "Enable Chat page",
+          "label": "Enable Chat page (page will refresh)",
+          "description": "If enabled, shows the Chat page in the UI sidebar, letting users chat with an LLM and connect their own MCP server credentials via OAuth."
+        },
+        "disableAgents": {
+          "label": "Disable agents for internal users"
+        },
+        "allowAgentsTeamAdmins": {
+          "label": "Allow agents for team admins"
+        },
+        "disableVectorStores": {
+          "label": "Disable vector stores for internal users"
+        },
+        "allowVectorStoresTeamAdmins": {
+          "label": "Allow vector stores for team admins"
+        },
+        "scopeUserSearch": {
+          "label": "Scope user search to organization",
+          "description": "If enabled, the user search endpoint restricts results by organization. When off, any authenticated user can search all users."
+        },
+        "disableCustomApiKeys": {
+          "label": "Disable custom Virtual key values",
+          "description": "If true, users cannot specify custom key values. All keys must be auto-generated."
+        }
+      },
+      "moyai": {
+        "connectedTo": "Connected to {{url}}",
+        "notConnected": "Not connected",
+        "disconnect": "Disconnect",
+        "connectLink": "Connect from the Moyai page"
+      }
+    },
+    "pageVisibility": {
+      "title": "Internal User Page Visibility",
+      "selectedCount_one": "{{count}} page selected",
+      "selectedCount_other": "{{count}} pages selected",
+      "notSet": "Not set (all pages visible)",
+      "defaultHint": "By default, all pages are visible to internal users. Select specific pages to restrict visibility.",
+      "adminOnlyNote": "Note: Only pages accessible to internal user roles are shown here. Admin-only pages are excluded as they cannot be made visible to internal users regardless of this setting.",
+      "configure": "Configure Page Visibility",
+      "save": "Save Page Visibility Settings",
+      "reset": "Reset to Default (All Pages)"
+    },
+    "teamAdminEditableFields": {
+      "title": "Team admin editable fields",
+      "enabledCount_one": "{{count}} field enabled",
+      "enabledCount_other": "{{count}} fields enabled",
+      "noneEnabled": "Team admins cannot edit team settings",
+      "defaultDescription": "Team settings fields a team admin may change on the teams they administer.",
+      "unsupported": "This proxy version does not support enabling any team settings fields for team admins yet.",
+      "raiseMaxBudgetHelp": {
+        "ariaLabel": "About raising the team's max budget",
+        "tooltip": "Lets team admins raise the budget too, capped by the organization's budget when the team has one. Only proxy admins can remove it."
+      },
+      "metadataHelp": {
+        "ariaLabel": "About editing team metadata",
+        "tooltip": "Lets team admins add, change and remove their own metadata keys. Keys the proxy reads as settings stay with proxy admins, and keys declared in the team metadata schema can be changed but not removed."
+      },
+      "learnMore": "Learn more",
+      "saving": "Saving...",
+      "save": "Save",
+      "toasts": {
+        "updated": "Team admin editable fields updated successfully"
+      }
+    },
+    "hashicorpVault": {
+      "description": "Manage secret manager configuration",
+      "loadingAriaLabel": "Loading Hashicorp Vault configuration",
+      "errors": {
+        "loadFailed": "Could not load Hashicorp Vault configuration"
+      },
+      "authMethodLabel": "Auth Method",
+      "authMethods": {
+        "tlsCertificate": "TLS Certificate",
+        "token": "Token",
+        "none": "None"
+      },
+      "notConfigured": "Not configured",
+      "actions": {
+        "testConnection": "Test Connection",
+        "testing": "Testing...",
+        "edit": "Edit Configuration",
+        "delete": "Delete Configuration",
+        "clearField": "Clear {{field}}"
+      },
+      "secretsInfo": {
+        "title": "Secrets must be stored with the field name \"key\"",
+        "docsLink": "View documentation"
+      },
+      "toasts": {
+        "connectionSuccess": "Connection to Vault successful!",
+        "deleted": "Hashicorp Vault configuration deleted",
+        "fieldCleared": "{{field}} cleared",
+        "updated": "Hashicorp Vault configuration updated successfully"
+      },
+      "deleteModal": {
+        "title": "Delete Hashicorp Vault Configuration?",
+        "message": "Models using Vault secrets will lose access to their API keys until a new configuration is saved.",
+        "resourceTitle": "Vault Configuration",
+        "vaultAddress": "Vault Address"
+      },
+      "clearModal": {
+        "title": "Clear {{field}}?",
+        "message": "This will remove the stored value.",
+        "resourceTitle": "Field",
+        "fieldLabel": "Field"
+      },
+      "fields": {
+        "vaultAddr": "Vault Address",
+        "vaultNamespace": "Namespace",
+        "vaultLoginNamespace": "Login Namespace",
+        "vaultSecretNamespace": "Secret Namespace",
+        "vaultMountName": "KV Mount Name",
+        "vaultPathPrefix": "Path Prefix",
+        "vaultToken": "Token",
+        "approleRoleId": "Role ID",
+        "approleSecretId": "Secret ID",
+        "approleMountPath": "Mount Path",
+        "clientCert": "Client Certificate",
+        "clientKey": "Client Key",
+        "vaultCertRole": "Certificate Role"
+      },
+      "emptyPlaceholder": {
+        "title": "No Vault Configuration Found",
+        "description": "Configure Hashicorp Vault to securely manage provider API keys and secrets for your LiteLLM deployment.",
+        "configure": "Configure Vault"
+      },
+      "editModal": {
+        "title": "Edit Hashicorp Vault Configuration",
+        "groups": {
+          "connection": {
+            "title": "Connection"
+          },
+          "token": {
+            "title": "Token Authentication",
+            "subtitle": "Use a Vault token to authenticate. Only one auth method is required."
+          },
+          "appRole": {
+            "title": "AppRole Authentication",
+            "subtitle": "Use AppRole credentials to authenticate. Only one auth method is required."
+          },
+          "tls": {
+            "title": "TLS",
+            "subtitle": "Optional client certificate for mTLS."
+          }
+        },
+        "keepExistingPlaceholder": "Leave blank to keep existing ({{value}})",
+        "errors": {
+          "invalidUrl": "Must start with http:// or https://"
+        },
+        "cancel": "Cancel",
+        "saving": "Saving...",
+        "save": "Save"
+      }
+    },
+    "cyberArk": {
+      "description": "Manage secret manager configuration",
+      "loadingAriaLabel": "Loading CyberArk configuration",
+      "errors": {
+        "loadFailed": "Could not load CyberArk configuration"
+      },
+      "authMethodLabel": "Auth Method",
+      "authMethods": {
+        "apiKey": "API Key",
+        "tlsCertificate": "TLS Certificate",
+        "none": "None"
+      },
+      "notConfigured": "Not configured",
+      "actions": {
+        "testConnection": "Test Connection",
+        "testing": "Testing...",
+        "edit": "Edit Configuration",
+        "delete": "Delete Configuration",
+        "clearField": "Clear {{field}}"
+      },
+      "hotReloadInfo": {
+        "title": "Configuration changes are hot-reloaded across all proxy instances",
+        "docsLink": "View documentation"
+      },
+      "toasts": {
+        "connectionSuccess": "Connection to CyberArk Conjur successful!",
+        "deleted": "CyberArk configuration deleted",
+        "fieldCleared": "{{field}} cleared",
+        "updated": "CyberArk configuration updated successfully"
+      },
+      "deleteModal": {
+        "title": "Delete CyberArk Configuration?",
+        "message": "Models using CyberArk secrets will lose access to their API keys until a new configuration is saved.",
+        "resourceTitle": "CyberArk Configuration",
+        "serverUrl": "Conjur Server URL"
+      },
+      "clearModal": {
+        "title": "Clear {{field}}?",
+        "message": "This will remove the stored value.",
+        "resourceTitle": "Field",
+        "fieldLabel": "Field"
+      },
+      "fields": {
+        "apiBase": "Conjur Server URL",
+        "account": "Account",
+        "username": "Username",
+        "apiKey": "API Key",
+        "clientCert": "Client Certificate",
+        "clientKey": "Client Key",
+        "sslVerify": "SSL Verification",
+        "refreshInterval": "Token Refresh Interval (seconds)"
+      },
+      "emptyPlaceholder": {
+        "title": "No CyberArk Configuration Found",
+        "description": "Configure CyberArk Conjur to securely manage provider API keys and secrets for your LiteLLM deployment.",
+        "configure": "Configure CyberArk"
+      },
+      "editModal": {
+        "title": "Edit CyberArk Configuration",
+        "groups": {
+          "connection": {
+            "title": "Connection"
+          },
+          "apiKey": {
+            "title": "API Key Authentication",
+            "subtitle": "Use a Conjur API key to authenticate. Only one auth method is required."
+          },
+          "certificate": {
+            "title": "Certificate Authentication",
+            "subtitle": "Use a client TLS certificate and key to authenticate. Only one auth method is required."
+          },
+          "advanced": {
+            "title": "Advanced",
+            "subtitle": "Optional TLS and token caching settings."
+          }
+        },
+        "keepExistingPlaceholder": "Leave blank to keep existing ({{value}})",
+        "errors": {
+          "invalidUrl": "Must start with http:// or https://"
+        },
+        "cancel": "Cancel",
+        "saving": "Saving...",
+        "save": "Save"
+      }
+    },
+    "pluginSettings": {
+      "title": "Plugins",
+      "description": "Register external services as plugins. Once added, users can toggle to the plugin from the mode switcher in the top-left of the sidebar.",
+      "manifestHint": "Each plugin must expose <code>{{endpoint}}</code> returning nav items and capabilities.",
+      "addPlugin": "Add Plugin",
+      "columns": {
+        "name": "Name",
+        "displayName": "Display Name",
+        "url": "URL",
+        "pluginKey": "Plugin Key",
+        "actions": "Actions"
+      },
+      "noData": "No data",
+      "editAriaLabel": "Edit {{name}}",
+      "deleteAriaLabel": "Delete {{name}}",
+      "modal": {
+        "addTitle": "Add Plugin",
+        "editTitle": "Edit Plugin",
+        "fields": {
+          "name": {
+            "label": "Name (identifier)",
+            "description": "Used in URLs and config. No spaces. E.g. litellm-platform-plugin"
+          },
+          "displayName": {
+            "label": "Display Name"
+          },
+          "url": {
+            "label": "URL",
+            "description": "Base URL of the plugin service"
+          },
+          "pluginKey": {
+            "label": "Plugin Key",
+            "description": "Optional. The plugin's own credential, injected as Authorization: Bearer <key> only when litellm reverse-proxies API calls to the plugin's backend (/plugin-proxy/<name>/*). Leave blank for plugins that use the forwarded litellm user token (e.g. iframe plugins) — that path uses the user's token, not this key.",
+            "keepCurrentPlaceholder": "Leave blank to keep current key",
+            "newPlaceholder": "sk-... (optional)",
+            "show": "Show plugin key",
+            "hide": "Hide plugin key"
+          }
+        },
+        "cancel": "Cancel",
+        "save": "Save"
+      },
+      "errors": {
+        "required": "Required",
+        "invalidUrl": "Must be a valid URL"
+      }
+    },
+    "loggingSettings": {
+      "title": "Logging Settings",
+      "description": "Proxy-wide settings that control how request and response data are written to spend logs.",
+      "fields": {
+        "storePrompts": {
+          "label": "Store Prompts in Spend Logs",
+          "hint": "When enabled, prompts will be stored in spend logs for tracking and analysis purposes."
+        },
+        "retentionPeriod": {
+          "label": "Maximum Spend Logs Retention Period (Optional)",
+          "placeholder": "e.g., 7d, 30d",
+          "hint": "Set the maximum retention period for spend logs (e.g., '7d' for 7 days, '30d' for 30 days). Leave empty for no limit."
+        },
+        "cleanupBatchSize": {
+          "label": "Spend Logs Cleanup Batch Size (Optional)",
+          "placeholder": "e.g., 1000",
+          "hint": "Rows deleted per DELETE statement during cleanup. Leave empty to use the default of 1000."
+        },
+        "cleanupMaxBatches": {
+          "label": "Spend Logs Cleanup Max Batches (Optional)",
+          "placeholder": "e.g., 500",
+          "hint": "Maximum number of DELETE statements run per table per cleanup run. Leave empty to use the default of 500."
+        },
+        "cleanupRunBudget": {
+          "label": "Spend Logs Cleanup Run Budget (Optional)",
+          "placeholder": "e.g., 5m",
+          "hint": "Wall-clock budget for a whole cleanup run, shared across every table it cleans (e.g., '5m'). Leave empty to use the default of 5m."
+        },
+        "cleanupBatchTimeout": {
+          "label": "Spend Logs Cleanup Batch Timeout (Optional)",
+          "placeholder": "e.g., 30s",
+          "hint": "Postgres statement and lock timeout applied to each cleanup batch, so cleanup never monopolizes a connection (e.g., '30s'). Leave empty to use the default of 30s."
+        }
+      },
+      "savingAriaLabel": "loading",
+      "saving": "Saving...",
+      "save": "Save Settings",
+      "toasts": {
+        "updated": "Spend logs settings updated successfully",
+        "saveFailed": "Failed to save spend logs settings: {{error}}",
+        "clearFailed": "Failed to clear saved value for: {{fields}}"
+      }
+    },
+    "webSearchInterception": {
+      "notLoggedIn": "Please log in to configure web search interception settings.",
+      "errors": {
+        "loadFailed": "Could not load web search interception settings",
+        "updateFailed": "Could not update settings"
+      },
+      "notApplied": {
+        "title": "Not running on the proxy that answered this page",
+        "description": "Interception is switched on for the cluster, but the proxy serving this page has not applied it. That is expected for about 10 seconds after a change or a restart. If it persists, check that proxy's logs: requests it handles are not being intercepted."
+      },
+      "info": {
+        "title": "Web Search Interception",
+        "description": "Serve web search tool calls from a configured search tool instead of passing them upstream, so models without native web search can still answer with fresh results. Click 'Save Settings' to apply changes across all pods (takes effect within 10 seconds)."
+      },
+      "fields": {
+        "enabled": {
+          "label": "Enable Web Search Interception",
+          "hint": "When enabled, web search tool calls are executed server-side through the selected search tool"
+        },
+        "providers": {
+          "label": "Providers",
+          "hint": "Which LLM providers to intercept for. Leave empty to intercept Bedrock only.",
+          "placeholder": "Select providers (defaults to Bedrock)"
+        },
+        "searchTool": {
+          "label": "Search Tool",
+          "hint": "Which configured search tool runs the searches. Leave empty to use the first one available.",
+          "placeholder": "Select a search tool (defaults to the first available)"
+        },
+        "maxAgenticLoops": {
+          "label": "Max Agentic Loops",
+          "hint": "How many follow-up model calls one intercepted request may chain. Leave empty for the default of 3."
+        }
+      },
+      "save": "Save Settings",
+      "toasts": {
+        "updated": "Settings updated successfully. Changes will be applied across all pods within 10 seconds."
+      }
+    },
+    "userBannerSettings": {
+      "title": "User Banner",
+      "description": "Publish an announcement to all dashboard users. Markdown is supported; the banner appears below the header on every page until you unpublish it. Users can dismiss it, and it reappears whenever the content changes.",
+      "publish": "Publish user banner",
+      "message": {
+        "label": "Message",
+        "placeholder": "**Scheduled maintenance** tonight at 10 PM UTC. See [status page](https://example.com).",
+        "missing": "Add a message before publishing."
+      },
+      "severity": {
+        "label": "Severity",
+        "ariaLabel": "Banner severity",
+        "placeholder": "Severity",
+        "options": {
+          "info": "Info",
+          "warning": "Warning",
+          "error": "Error"
+        }
+      },
+      "preview": "Preview",
+      "saving": "Saving...",
+      "save": "Save banner",
+      "toasts": {
+        "updated": "User banner updated successfully"
+      }
+    },
+    "backgroundChat": {
+      "toasts": {
+        "saved": "Background chat settings saved."
+      },
+      "errors": {
+        "loadFailed": "Could not load background chat settings."
+      },
+      "retry": "Retry",
+      "label": "Continue chats in the background",
+      "description": "Keep replies and tool runs going after users close the browser. Return to the same browser to see the result.",
+      "requiresRedis": "Requires Redis. <cachingLink>Configure it in Caching → Coordination Redis</cachingLink>, then restart the proxy.",
+      "managedByConfig": "Managed by your config file. Update its background polling setting to change this.",
+      "dbConfigRequired": "Enable database-backed configuration to save this setting.",
+      "autoApply": "Changes apply automatically when the proxy refreshes its configuration."
+    }
+  },
+  "caching": {
+    "dashboard": {
+      "tabs": {
+        "analytics": "Cache Analytics",
+        "health": "Cache Health",
+        "settings": "Cache Settings",
+        "coordination": "Coordination Redis"
+      },
+      "lastRefreshed": "Last Refreshed: ",
+      "refresh": "Refresh",
+      "description": "Analytics for LiteLLM's <cacheDocs>response cache</cacheDocs> (e.g. Redis / in-memory): requests answered from cache without calling the LLM provider. Provider-side <promptDocs>prompt caching</promptDocs> (cached input tokens from Anthropic, OpenAI, etc.) is not shown here; see \"Prompt Caching Metrics\" on the Usage page or individual requests in the Logs page.",
+      "filters": {
+        "virtualKeysPlaceholder": "Select Virtual Keys",
+        "noVirtualKeys": "No virtual keys found",
+        "modelsPlaceholder": "Select Models",
+        "noModels": "No models found"
+      },
+      "stats": {
+        "cacheHitRatio": "Cache Hit Ratio",
+        "cacheHits": "Cache Hits",
+        "cachedCompletionTokens": "Cached Completion Tokens"
+      },
+      "series": {
+        "apiRequests": "LLM API requests",
+        "cacheHits": "Cache hit",
+        "failed": "Failed requests",
+        "cachedCompletionTokens": "Cached Completion Tokens",
+        "generatedCompletionTokens": "Generated Completion Tokens"
+      },
+      "requestsChart": {
+        "title": "Cache Hits vs API Requests",
+        "hint": "Click a red failed-requests segment to see which error codes caused those failures.",
+        "unknownCallTypeNote": "Unknown groups spend logs that recorded no endpoint. Older proxy versions wrote those for requests rejected before routing, so they are not necessarily LLM API requests.",
+        "loadFailed": "Failed to load cache activity"
+      },
+      "tokensChart": {
+        "title": "Cached Completion Tokens vs Generated Completion Tokens"
+      },
+      "healthCheck": {
+        "running": "Running cache health check...",
+        "unknownError": "Unknown error occurred"
+      }
+    },
+    "errorDrilldown": {
+      "title": "Failed requests by error code: ",
+      "close": "Close error breakdown",
+      "hint": "Hover a bar to see the error classes behind that code.",
+      "tooltipTitle": "Error code {{code}}: {{total}} failed"
+    },
+    "responseTime": "{{value}}ms",
+    "health": {
+      "runButton": "Run Health Check",
+      "running": "Running Health Check...",
+      "tabs": {
+        "summary": "Summary",
+        "raw": "Raw Response"
+      },
+      "cacheStatus": "Cache Status: ",
+      "notAvailable": "N/A",
+      "unknownError": "Unknown error",
+      "noTraceback": "No traceback available",
+      "parseFailed": "Error parsing details",
+      "errorDetails": "Error Details",
+      "errorMessage": "Error Message",
+      "traceback": "Traceback",
+      "cacheDetails": "Cache Details",
+      "cacheConfiguration": "Cache Configuration",
+      "pingResponse": "Ping Response",
+      "setCacheResponse": "Set Cache Response",
+      "redisDetails": "Redis Details",
+      "redisHost": "Redis Host",
+      "redisPort": "Redis Port",
+      "redisVersion": "Redis Version",
+      "startupNodes": "Startup Nodes",
+      "namespace": "Namespace",
+      "formatFailed": "Error formatting JSON: {{message}}"
+    },
+    "settings": {
+      "title": "Cache Settings",
+      "subtitle": "Configure Redis cache for LiteLLM",
+      "sections": {
+        "connection": "Connection Settings",
+        "cluster": "Cluster Configuration",
+        "sentinel": "Sentinel Configuration",
+        "semantic": "Semantic Configuration",
+        "ssl": "SSL Settings",
+        "cacheManagement": "Cache Management",
+        "gcp": "GCP Authentication"
+      },
+      "advanced": "Advanced Settings",
+      "testConnection": "Test Connection",
+      "testing": "Testing...",
+      "saveChanges": "Save Changes",
+      "saving": "Saving...",
+      "toasts": {
+        "loadFailed": "Failed to load cache settings",
+        "testSucceeded": "Cache connection test successful!",
+        "testFailed": "Connection test failed: {{error}}",
+        "unknownError": "Unknown error",
+        "saved": "Cache settings updated successfully",
+        "saveFailed": "Failed to update cache settings"
+      },
+      "redisType": {
+        "label": "Redis Type",
+        "fallbackDescription": "Select the type of Redis deployment you're using",
+        "options": {
+          "node": "Node (Single Instance)",
+          "cluster": "Cluster",
+          "sentinel": "Sentinel",
+          "semantic": "Semantic"
+        },
+        "descriptions": {
+          "node": "Standard Redis node/single instance",
+          "cluster": "Redis Cluster mode for high availability and horizontal scaling",
+          "sentinel": "Redis Sentinel mode for high availability with automatic failover",
+          "semantic": "Semantic caching that reuses responses for similar prompts"
+        }
+      },
+      "field": {
+        "secretAlreadySet": "Already set. Enter a new value to replace it.",
+        "selectPlaceholder": "Select an option",
+        "modelSearchPlaceholder": "Search and select a model...",
+        "noModels": "No models found"
+      },
+      "validation": {
+        "port": "Port must be an integer between 1 and 65535",
+        "jsonArrayInvalid": "Must be a valid JSON array (use double quotes)",
+        "jsonArrayRequired": "Must be a JSON array",
+        "nonNegativeInteger": "Must be a non-negative integer",
+        "number": "Must be a number"
+      },
+      "fields": {
+        "url": {
+          "label": "Redis URL",
+          "helpText": "Full Redis/Valkey connection URL (e.g. redis://:password@host:6379/1). When set, it takes precedence over Host, Port, Password, and Database Index."
+        },
+        "host": {
+          "label": "Host",
+          "helpText": "Redis server hostname or IP address"
+        },
+        "port": {
+          "label": "Port",
+          "helpText": "Redis server port number"
+        },
+        "db": {
+          "label": "Database Index",
+          "helpText": "Logical database index to isolate the cache (e.g. 1 for redis://host:6379/1)"
+        },
+        "password": {
+          "label": "Password",
+          "helpText": "Redis server password"
+        },
+        "username": {
+          "label": "Username",
+          "helpText": "Redis server username (if required)"
+        },
+        "redisStartupNodes": {
+          "label": "Startup Nodes",
+          "helpText": "List of startup nodes for Redis Cluster (e.g., [{\"host\": \"127.0.0.1\", \"port\": \"7001\"}])"
+        },
+        "sentinelNodes": {
+          "label": "Sentinel Nodes",
+          "helpText": "List of Sentinel nodes (e.g., [[\"localhost\", 26379]])"
+        },
+        "serviceName": {
+          "label": "Service Name",
+          "helpText": "Master service name for Redis Sentinel"
+        },
+        "sentinelPassword": {
+          "label": "Sentinel Password",
+          "helpText": "Password for Redis Sentinel authentication"
+        },
+        "similarityThreshold": {
+          "label": "Similarity Threshold",
+          "helpText": "Similarity threshold for semantic cache"
+        },
+        "embeddingModel": {
+          "label": "Embedding Model",
+          "helpText": "Embedding model for semantic cache"
+        },
+        "semanticCacheScope": {
+          "label": "Semantic Cache Scope",
+          "helpText": "Who can share a semantic cache hit. Key shares hits between all end users of a key/team/org. End user also isolates per end user; requests without an end user fall back to the key scope."
+        },
+        "ssl": {
+          "label": "SSL",
+          "helpText": "Enable SSL/TLS connection"
+        },
+        "sslCertReqs": {
+          "label": "SSL Cert Reqs",
+          "helpText": "SSL certificate requirements (None, CERT_REQUIRED, CERT_OPTIONAL)"
+        },
+        "sslCheckHostname": {
+          "label": "SSL Check Hostname",
+          "helpText": "Enable SSL hostname verification"
+        },
+        "namespace": {
+          "label": "Namespace",
+          "helpText": "Namespace prefix for cache keys"
+        },
+        "ttl": {
+          "label": "TTL (seconds)",
+          "helpText": "Time-to-live for cached items in seconds"
+        },
+        "maxConnections": {
+          "label": "Max Connections",
+          "helpText": "Maximum number of connections in the connection pool"
+        },
+        "gcpServiceAccount": {
+          "label": "GCP Service Account",
+          "helpText": "GCP service account for IAM authentication (e.g., projects/-/serviceAccounts/your-sa@project.iam.gserviceaccount.com)"
+        },
+        "gcpSslCaCerts": {
+          "label": "GCP SSL CA Certs",
+          "helpText": "Path to SSL CA certificate file for GCP Memorystore Redis"
+        }
+      },
+      "scopeOptions": {
+        "key": "Key (shared by all end users of the key/team/org)",
+        "endUser": "End user (isolated per end user)"
+      }
+    },
+    "coordinationRedis": {
+      "title": "Coordination Redis",
+      "description": "Redis used to coordinate work across proxy pods: cross-pod rate limits, spend tracking, and the pod lock manager. It is configured independently of the response cache.",
+      "restartNote": "Saved changes take effect on proxy restart.",
+      "sections": {
+        "connection": "Connection Settings",
+        "cluster": "Cluster Configuration",
+        "sentinel": "Sentinel Configuration",
+        "ssl": "SSL Settings"
+      },
+      "testConnection": "Test Connection",
+      "testing": "Testing...",
+      "saveChanges": "Save Changes",
+      "saving": "Saving...",
+      "toasts": {
+        "loadFailed": "Failed to load coordination Redis settings",
+        "testSucceeded": "Coordination Redis connection test successful!",
+        "testFailed": "Connection test failed: {{error}}",
+        "unknownError": "Unknown error",
+        "saved": "Coordination Redis settings saved. Restart the proxy to apply them.",
+        "saveFailed": "Failed to update coordination Redis settings"
+      },
+      "redisType": {
+        "label": "Redis Type",
+        "options": {
+          "node": "Node (Single Instance)",
+          "cluster": "Cluster",
+          "sentinel": "Sentinel"
+        },
+        "descriptions": {
+          "node": "Standard Redis node/single instance",
+          "cluster": "Redis Cluster mode for high availability and horizontal scaling",
+          "sentinel": "Redis Sentinel mode for high availability with automatic failover"
+        }
+      },
+      "field": {
+        "secretAlreadySet": "Already set. Enter a new value to replace it."
+      },
+      "validation": {
+        "port": "Port must be an integer between 1 and 65535",
+        "jsonArrayInvalid": "Must be a valid JSON array (use double quotes)",
+        "jsonArrayRequired": "Must be a JSON array"
+      },
+      "fields": {
+        "url": {
+          "label": "Redis URL",
+          "helpText": "Full Redis/Valkey connection URL (e.g. redis://:password@host:6379/1). When set, it takes precedence over Host, Port, Username, and Password."
+        },
+        "host": {
+          "label": "Host",
+          "helpText": "Redis server hostname or IP address"
+        },
+        "port": {
+          "label": "Port",
+          "helpText": "Redis server port number"
+        },
+        "username": {
+          "label": "Username",
+          "helpText": "Redis server username (if required)"
+        },
+        "password": {
+          "label": "Password",
+          "helpText": "Redis server password"
+        },
+        "startupNodes": {
+          "label": "Startup Nodes",
+          "helpText": "List of startup nodes for Redis Cluster (e.g., [{\"host\": \"127.0.0.1\", \"port\": 7001}])"
+        },
+        "sentinelNodes": {
+          "label": "Sentinel Nodes",
+          "helpText": "List of Sentinel nodes (e.g., [[\"localhost\", 26379]])"
+        },
+        "serviceName": {
+          "label": "Service Name",
+          "helpText": "Master service name for Redis Sentinel"
+        },
+        "sentinelPassword": {
+          "label": "Sentinel Password",
+          "helpText": "Password for Redis Sentinel authentication"
+        },
+        "ssl": {
+          "label": "SSL",
+          "helpText": "Enable SSL/TLS connection"
+        }
+      },
+      "source": {
+        "coordinationRedis": {
+          "label": "Configured here",
+          "tooltip": "general_settings.coordination_redis is set, so coordination uses its own Redis connection."
+        },
+        "cacheBackend": {
+          "label": "Borrowed from response cache",
+          "tooltip": "No coordination Redis is configured; the proxy reuses the response cache's Redis connection."
+        },
+        "environment": {
+          "label": "From REDIS_* environment",
+          "tooltip": "No coordination Redis is configured; the proxy falls back to the REDIS_* environment variables."
+        },
+        "notConfigured": {
+          "label": "Not configured",
+          "tooltip": "Cross-pod rate limits, spend tracking, and the pod lock manager have no Redis to coordinate through."
+        }
+      }
+    }
+  },
+  "accessGroups": {
+    "page": {
+      "title": "Access Groups",
+      "description": "Manage resource permissions for your organization",
+      "create": "Create Access Group",
+      "searchPlaceholder": "Search groups by name, ID, or description...",
+      "clearSearch": "Clear search",
+      "deleteModal": {
+        "title": "Delete Access Group",
+        "message": "Are you sure you want to delete this access group? This action cannot be undone.",
+        "informationTitle": "Access Group Information",
+        "id": "ID",
+        "name": "Name",
+        "description": "Description"
+      }
+    },
+    "table": {
+      "loading": "Loading access groups…",
+      "empty": {
+        "title": "No access groups yet",
+        "description": "Create an access group to manage resource permissions for your organization.",
+        "filteredTitle": "No matching access groups",
+        "filteredDescription": "Try a different search term."
+      },
+      "columns": {
+        "id": "ID",
+        "name": "Name",
+        "resources": "Resources",
+        "created": "Created",
+        "updated": "Updated",
+        "actions": "Actions"
+      },
+      "resources": {
+        "models": "{{count}} Models",
+        "mcpServers": "{{count}} MCP Servers",
+        "agents": "{{count}} Agents",
+        "skills": "{{count}} Skills"
+      },
+      "rowActions": {
+        "open": "Open access group actions",
+        "delete": "Delete access group"
+      }
+    },
+    "detail": {
+      "back": "Back",
+      "notFound": "Access group not found",
+      "idLabel": "ID: ",
+      "copyId": "Copy access group ID",
+      "edit": "Edit Access Group",
+      "groupDetails": "Group Details",
+      "description": "Description",
+      "created": "Created",
+      "lastUpdated": "Last Updated",
+      "by": "by",
+      "attachedKeys": "Attached Keys",
+      "attachedTeams": "Attached Teams",
+      "showLess": "Show Less",
+      "viewAll": "View All ({{count}})",
+      "noKeys": "No keys attached",
+      "noTeams": "No teams attached",
+      "tabs": {
+        "models": "Models",
+        "mcpServers": "MCP Servers",
+        "agents": "Agents",
+        "skills": "Skills"
+      },
+      "empty": {
+        "models": "No models assigned to this group",
+        "mcpServers": "No MCP servers assigned to this group",
+        "agents": "No agents assigned to this group",
+        "skills": "No skills assigned to this group"
+      },
+      "toolPermissions": {
+        "label": "MCP tool permissions",
+        "allTools": "All tools",
+        "noTools": "No tools"
+      }
+    },
+    "form": {
+      "tabs": {
+        "general": "General Info",
+        "models": "Models",
+        "mcpServers": "MCP Servers",
+        "agents": "Agents",
+        "skills": "Skills"
+      },
+      "name": {
+        "label": "Group Name",
+        "placeholder": "e.g. Engineering Team",
+        "required": "Please enter the access group name"
+      },
+      "description": {
+        "label": "Description",
+        "placeholder": "Describe the purpose of this access group..."
+      },
+      "models": {
+        "label": "Allowed Models"
+      },
+      "mcpServers": {
+        "label": "Allowed MCP Servers",
+        "placeholder": "Select MCP servers"
+      },
+      "agents": {
+        "label": "Allowed Agents",
+        "placeholder": "Select agents"
+      },
+      "skills": {
+        "label": "Allowed Skills",
+        "description": "Enabled skills are visible to everyone. Grant disabled (private) Claude Code plugins to the teams and keys in this group here.",
+        "placeholder": "Select skills (optional)"
+      }
+    },
+    "create": {
+      "title": "Create Access Group",
+      "cancel": "Cancel",
+      "submit": "Create Group",
+      "submitting": "Creating...",
+      "success": "Access group created successfully",
+      "failed": "Failed to create access group"
+    },
+    "edit": {
+      "title": "Edit Access Group",
+      "cancel": "Cancel",
+      "save": "Save Changes",
+      "success": "Access group updated successfully"
+    }
+  },
+  "skillSelector": {
+    "placeholder": "Select skills (optional)",
+    "clearAll": "Clear all skills",
+    "loading": "Loading skills…",
+    "empty": "No skills found",
+    "privateOptionLabel": "{{skill}} (private)",
+    "privateBadge": "private"
+  },
+  "loggingAndAlerts": {
+    "page": {
+      "tabs": {
+        "loggingCallbacks": "Logging Callbacks",
+        "cloudZero": "CloudZero Cost Tracking",
+        "alertingTypes": "Alerting Types",
+        "alertingSettings": "Alerting Settings",
+        "emailAlerts": "Email Alerts",
+        "msTeamsAlerts": "MS Teams Alerts"
+      }
+    },
+    "alertTypes": {
+      "intro": "Alerts are sent to any Slack-compatible incoming webhook URL (Slack, Rocket.Chat, Mattermost, etc.). Get Slack webhook urls from <docs>here</docs>",
+      "columns": {
+        "webhookUrl": "Webhook URL (Slack-compatible)"
+      },
+      "labels": {
+        "llmExceptions": "LLM Exceptions",
+        "llmTooSlow": "LLM Responses Too Slow",
+        "llmRequestsHanging": "LLM Requests Hanging",
+        "budgetAlerts": "Budget Alerts (API Keys, Users)",
+        "userSpendThresholds": "User Spend Thresholds (Daily/Monthly)",
+        "userSpendAnomalies": "User Spend Anomaly Detection",
+        "dbExceptions": "Database Exceptions (Read/Write)",
+        "dailyReports": "Weekly/Monthly Spend Reports",
+        "outageAlerts": "Outage Alerts",
+        "regionOutageAlerts": "Region Outage Alerts",
+        "modelDeprecationWarnings": "Model Deprecation Warnings"
+      },
+      "enterpriseFeature": "✨ Enterprise Feature",
+      "saveChanges": "Save Changes",
+      "testAlerts": "Test Alerts",
+      "toasts": {
+        "saved": "Alerts updated successfully",
+        "testTriggered": "Alert test triggered. Test request to slack made - check logs/alerts on slack to verify"
+      }
+    },
+    "loggingCallbacks": {
+      "table": {
+        "title": "Active Logging Callbacks",
+        "add": "Add Callback",
+        "loading": "Loading callbacks…",
+        "empty": {
+          "title": "No callbacks configured",
+          "description": "Add your first callback to start logging data to external services."
+        },
+        "columns": {
+          "name": "Callback Name",
+          "mode": "Mode",
+          "actions": "Actions"
+        },
+        "modes": {
+          "success": "Success",
+          "failure": "Failure",
+          "successAndFailure": "Success & Failure"
+        },
+        "readOnly": "Read only",
+        "readOnlyHint": "Active callback that was not added through the dashboard. Edit it where it was configured.",
+        "actions": {
+          "open": "Open callback actions",
+          "test": "Test",
+          "edit": "Edit",
+          "delete": "Delete"
+        }
+      },
+      "selector": {
+        "label": "Callback",
+        "placeholder": "Choose a logging callback...",
+        "noResults": "No results",
+        "required": "Please select a callback"
+      },
+      "params": {
+        "required": "Please enter the {{field}}",
+        "selectPlaceholder": "Select {{field}}",
+        "inputPlaceholder": "Enter your {{field}}",
+        "numberPlaceholder": "Enter {{field}}"
+      },
+      "addDialog": {
+        "title": "Add Logging Callback",
+        "docsLink": "LiteLLM Docs: Logging",
+        "cancel": "Cancel",
+        "submit": "Add Callback",
+        "submitting": "Adding..."
+      },
+      "editDialog": {
+        "title": "Edit Callback Settings",
+        "cancel": "Cancel",
+        "submit": "Save Changes",
+        "submitting": "Saving..."
+      },
+      "deleteDialog": {
+        "title": "Delete Callback",
+        "message": "Are you sure you want to delete this callback? This action cannot be undone.",
+        "infoTitle": "Callback Information",
+        "callbackName": "Callback Name",
+        "mode": "Mode"
+      },
+      "toasts": {
+        "configsLoadFailed": "Failed to load callback configs: {{error}}",
+        "added": "Callback {{name}} added successfully",
+        "updated": "Callback updated successfully",
+        "deleted": "Callback {{name}} deleted successfully",
+        "healthCheckTriggered": "Health check triggered"
+      }
+    },
+    "emailSettings": {
+      "title": "Email Server Settings",
+      "docsLink": "LiteLLM Docs: email alerts",
+      "required": " Required * ",
+      "help": {
+        "smtpHost": "Enter the SMTP host address, e.g. `smtp.resend.com`",
+        "smtpPort": "Enter the SMTP port number, e.g. `587`",
+        "smtpUsername": "Enter the SMTP username, e.g. `username`",
+        "smtpSenderEmail": "Enter the sender email address, e.g. `sender@berri.ai`",
+        "testEmailAddress": "Email Address to send `Test Email Alert` to. example: `info@berri.ai`",
+        "emailLogoUrl": "(Optional) Customize the Logo that appears in the email, pass a url to your logo",
+        "emailSupportContact": "(Optional) Customize the support email address that appears in the email. Default is support@berri.ai"
+      },
+      "showCredential": "Show credential",
+      "hideCredential": "Hide credential",
+      "saveChanges": "Save Changes",
+      "testEmailAlerts": "Test Email Alerts",
+      "toasts": {
+        "saved": "Email settings updated successfully",
+        "testTriggered": "Email test triggered. Check your configured email inbox/logs."
+      }
+    },
+    "emailEvents": {
+      "title": "Email Notifications",
+      "description": "Select which events should trigger email notifications.",
+      "descriptions": {
+        "virtualKeyCreated": "An email will be sent to the user when a new virtual key is created with their user ID",
+        "newUserInvitation": "An email will be sent to the email address of the user when a new user is created",
+        "generic": "Receive an email notification when {{event}}"
+      },
+      "saveChanges": "Save Changes",
+      "resetToDefaults": "Reset to Defaults",
+      "toasts": {
+        "saved": "Email event settings updated successfully",
+        "reset": "Email event settings reset to defaults"
+      }
+    },
+    "msTeams": {
+      "title": "Microsoft Teams Alerting Settings",
+      "intro": "Send LiteLLM alerts to a Microsoft Teams channel via an incoming webhook. Create one from <docs>Microsoft Docs: incoming webhooks</docs>",
+      "required": " Required * ",
+      "help": {
+        "webhookUrl": "Incoming webhook URL for your Teams channel (Workflows or incoming webhook connector)"
+      },
+      "showCredential": "Show credential",
+      "hideCredential": "Hide credential",
+      "saveChanges": "Save Changes",
+      "testAlerts": "Test MS Teams Alerts",
+      "toasts": {
+        "saved": "MS Teams settings updated successfully",
+        "testTriggered": "MS Teams test alert triggered. Check your Teams channel."
+      }
+    },
+    "alerting": {
+      "enterpriseFeature": "✨ Enterprise Feature",
+      "storage": {
+        "inDb": "In DB",
+        "inConfig": "In Config",
+        "notSet": "Not Set"
+      },
+      "resetField": "Reset {{field}}",
+      "submit": "Update Settings",
+      "toasts": {
+        "saved": "Wait 10s for proxy to update."
+      }
+    },
+    "cloudZero": {
+      "page": {
+        "loading": "Loading CloudZero settings...",
+        "loadErrorPrefix": "Error loading CloudZero settings: "
+      },
+      "emptyPlaceholder": {
+        "title": "No CloudZero Integration Found",
+        "description": "Connect your CloudZero account to start tracking and analyzing your cloud costs directly from LiteLLM.",
+        "add": "Add CloudZero Integration"
+      },
+      "form": {
+        "apiKey": "CloudZero API Key",
+        "apiKeyPlaceholder": "Enter your CloudZero API key",
+        "apiKeyRequired": "Please enter your CloudZero API key",
+        "connectionId": "Connection ID",
+        "connectionIdPlaceholder": "Enter your CloudZero connection ID",
+        "connectionIdRequired": "Please enter your CloudZero connection ID",
+        "timezone": "Timezone",
+        "timezoneHint": "Timezone for date handling (defaults to UTC if not provided)",
+        "showApiKey": "Show API key",
+        "hideApiKey": "Hide API key"
+      },
+      "createModal": {
+        "title": "Create CloudZero Integration",
+        "cancel": "Cancel",
+        "submit": "Create",
+        "submitting": "Creating...",
+        "toasts": {
+          "created": "CloudZero integration created successfully",
+          "createFailed": "Failed to create CloudZero integration"
+        }
+      },
+      "updateModal": {
+        "title": "Edit CloudZero Integration",
+        "apiKeyHint": "Leave empty to keep the existing API key",
+        "apiKeyPlaceholder": "Leave empty to keep existing",
+        "cancel": "Cancel",
+        "submit": "Update",
+        "submitting": "Updating...",
+        "toasts": {
+          "updated": "CloudZero integration updated successfully",
+          "updateFailed": "Failed to update CloudZero integration"
+        }
+      },
+      "settings": {
+        "title": "CloudZero Configuration",
+        "statusFallback": "Active",
+        "edit": "Edit",
+        "delete": "Delete",
+        "fields": {
+          "apiKey": "API Key (Redacted)",
+          "connectionId": "Connection ID",
+          "timezone": "Timezone"
+        },
+        "notConfigured": "Not configured",
+        "defaultTimezone": "Default (UTC)",
+        "actions": "Actions",
+        "dryRun": "Run Dry Run Simulation",
+        "exportNow": "Export Data Now",
+        "dryRunResults": "Dry Run Results",
+        "simulationOutputPrefix": "Simulation output for connection: ",
+        "exportDialog": {
+          "title": "Export Data to CloudZero",
+          "description": "This will push the current accumulated cost data to CloudZero. Continue?",
+          "cancel": "Cancel",
+          "confirm": "Export"
+        },
+        "deleteDialog": {
+          "title": "Delete CloudZero Integration?",
+          "message": "Are you sure you want to delete this CloudZero integration? All associated settings and configurations will be permanently removed.",
+          "infoTitle": "Integration Details",
+          "connectionId": "Connection ID",
+          "timezone": "Timezone"
+        },
+        "toasts": {
+          "dryRunSucceeded": "Dry run completed successfully",
+          "dryRunFailed": "Failed to perform dry run",
+          "exported": "Data successfully exported to CloudZero",
+          "exportFailed": "Failed to export data",
+          "deleted": "CloudZero integration deleted successfully",
+          "deleteFailed": "Failed to delete CloudZero integration"
+        }
+      }
+    }
+  },
+  "tagManagement": {
+    "page": {
+      "title": "Tag Management",
+      "lastRefreshedPrefix": "Last Refreshed: ",
+      "refresh": "Refresh tags",
+      "intro": "Click on a tag name to view and edit its details.",
+      "routingHelp": "You can use tags to restrict the usage of certain LLMs based on tags passed in the request. Read more about tag routing <docs>here</docs>.",
+      "create": "+ Create New Tag",
+      "deleteDialog": {
+        "title": "Delete Tag",
+        "message": "Are you sure you want to delete this tag? This action cannot be undone.",
+        "infoTitle": "Tag Information",
+        "tagName": "Tag Name"
+      },
+      "toasts": {
+        "fetchTagsFailed": "Error fetching tags: {{error}}",
+        "fetchModelsFailed": "Error fetching models: {{error}}",
+        "created": "Tag created successfully",
+        "createFailed": "Error creating tag: {{error}}",
+        "deleted": "Tag deleted successfully",
+        "deleteFailed": "Error deleting tag: {{error}}"
+      }
+    },
+    "table": {
+      "loading": "Loading tags…",
+      "empty": {
+        "title": "No tags yet",
+        "description": "Create a tag to start routing and restricting model usage."
+      },
+      "noMatch": {
+        "title": "No matching tags",
+        "description": "Try a different tag name or description."
+      },
+      "filters": {
+        "name": "Filter by tag name",
+        "namePlaceholder": "Filter by tag name…",
+        "description": "Filter by description",
+        "descriptionPlaceholder": "Filter by description…"
+      },
+      "columns": {
+        "name": "Tag Name",
+        "description": "Description",
+        "models": "Allowed Models",
+        "created": "Created",
+        "actions": "Actions"
+      },
+      "dynamicTagHint": "You cannot view the information of a dynamically generated spend tag",
+      "allModels": "All Models",
+      "modelId": "ID: {{id}}",
+      "actions": {
+        "open": "Open tag actions",
+        "edit": "Edit",
+        "delete": "Delete",
+        "editDisabled": "Dynamically generated spend tags cannot be edited",
+        "deleteDisabled": "Dynamically generated spend tags cannot be deleted"
+      }
+    },
+    "createModal": {
+      "title": "Create New Tag",
+      "fields": {
+        "name": "Tag Name",
+        "description": "Description",
+        "models": "Allowed Models",
+        "modelsHint": "Select which models are allowed to process requests from this tag",
+        "modelsPlaceholder": "Select Models",
+        "maxBudget": "Max Budget (USD)",
+        "maxBudgetHint": "Maximum amount in USD this tag can spend. When reached, requests with this tag will be blocked",
+        "resetBudget": "Reset Budget",
+        "resetBudgetHint": "How often the budget should reset. For example, setting 'daily' will reset the budget every 24 hours"
+      },
+      "budgetSection": "Budget & Rate Limits (Optional)",
+      "rateLimitsNotice": "TPM/RPM limits for tags are not currently supported. If you need this feature, please <issue>create a GitHub issue</issue>.",
+      "submit": "Create Tag",
+      "validation": {
+        "nameRequired": "Please input a tag name"
+      }
+    },
+    "info": {
+      "loading": "Loading...",
+      "back": "← Back to Tags",
+      "tagNameLabel": "Tag Name:",
+      "noDescription": "No description",
+      "editTag": "Edit Tag",
+      "details": {
+        "title": "Tag Details",
+        "name": "Name",
+        "description": "Description",
+        "models": "Allowed Models",
+        "allModels": "All Models",
+        "modelId": "ID: {{id}}",
+        "created": "Created",
+        "lastUpdated": "Last Updated"
+      },
+      "budget": {
+        "title": "Budget & Rate Limits",
+        "maxBudget": "Max Budget",
+        "duration": "Budget Duration",
+        "tpmLimit": "TPM Limit",
+        "rpmLimit": "RPM Limit"
+      },
+      "toasts": {
+        "fetchFailed": "Error fetching tag details: {{error}}",
+        "updated": "Tag updated successfully",
+        "updateFailed": "Error updating tag: {{error}}"
+      }
+    },
+    "editForm": {
+      "fields": {
+        "name": "Tag Name",
+        "description": "Description",
+        "models": "Allowed Models",
+        "modelsDescription": "Select which models are allowed to process this type of data",
+        "modelsPlaceholder": "Select Models",
+        "maxBudget": "Max Budget (USD)",
+        "maxBudgetDescription": "Maximum amount in USD this tag can spend",
+        "resetBudget": "Reset Budget",
+        "resetBudgetDescription": "How often the budget should reset"
+      },
+      "budgetSection": "Budget & Rate Limits",
+      "rateLimitsNotice": "TPM/RPM limits for tags are not currently supported. If you need this feature, please <issue>create a GitHub issue</issue>.",
+      "cancel": "Cancel",
+      "save": "Save Changes",
+      "validation": {
+        "nameRequired": "Please input a tag name",
+        "budgetNonnegative": "Enter a nonnegative budget"
+      }
+    }
+  },
+  "routerSettings": {
+    "generalSettings": {
+      "tabs": {
+        "loadbalancing": "Loadbalancing",
+        "routingGroups": "Routing Groups",
+        "fallbacks": "Fallbacks",
+        "promptCaching": "Prompt Caching",
+        "general": "General"
+      },
+      "columns": {
+        "setting": "Setting",
+        "value": "Value",
+        "status": "Status",
+        "action": "Action"
+      },
+      "status": {
+        "inDb": "In DB",
+        "inConfig": "In Config",
+        "notSet": "Not Set"
+      },
+      "update": "Update",
+      "listPlaceholder": "Comma-separated values",
+      "selectDefault": "Default"
+    },
+    "promptCaching": {
+      "title": "Prompt Caching",
+      "anthropicCaching": "Automatic Anthropic prompt caching",
+      "cacheLifetime": "Cache lifetime (TTL)",
+      "ttlDefault": "5m (default)",
+      "systemMessagesFirst": "System messages first for OpenAI"
+    },
+    "requestTagMappings": {
+      "priorityHint": "Exact value mappings take priority over any-value rules for the same key.",
+      "modes": {
+        "exact": "Exact value",
+        "any": "Any value"
+      },
+      "problems": {
+        "keyRequired": "Enter a baggage key",
+        "keyInvalid": "Use only letters, digits, and !#$%&'*+-.^_`|~ in the baggage key",
+        "valueRequired": "Enter a match value",
+        "tagRequired": "Enter a tag",
+        "tagPrefixRequired": "Enter a tag prefix",
+        "duplicate": "Another mapping already matches this key and value"
+      },
+      "mappingLabel": "Mapping {{number}}",
+      "modeAriaLabel": "Mapping {{number}} mode",
+      "deleteAriaLabel": "Delete mapping {{number}}",
+      "baggageKey": "Baggage key",
+      "baggageKeyAriaLabel": "Mapping {{number}} baggage key",
+      "matchValue": "Match value",
+      "matchValueAriaLabel": "Mapping {{number}} match value",
+      "tag": "Tag",
+      "tagAriaLabel": "Mapping {{number}} tag",
+      "tagPrefix": "Tag prefix",
+      "tagPrefixAriaLabel": "Mapping {{number}} tag prefix",
+      "previewValue": "value",
+      "previewTag": "tag",
+      "required": "Require a mapped value",
+      "requiredAriaLabel": "Mapping {{number}} required",
+      "requireBudget": "Require an existing tag budget",
+      "requireBudgetAriaLabel": "Mapping {{number}} require budget",
+      "configManaged": "Managed in config.yaml. Edit the YAML to change these rules.",
+      "addMapping": "Add mapping"
+    },
+    "fallbacks": {
+      "empty": "No fallbacks configured. Add fallbacks to automatically try another model when the primary fails.",
+      "columns": {
+        "modelName": "Model Name",
+        "fallbacks": "Fallbacks",
+        "actions": "Actions"
+      },
+      "actions": {
+        "test": "Test fallback",
+        "edit": "Edit fallback",
+        "delete": "Delete fallback"
+      },
+      "deleteModal": {
+        "title": "Delete Fallback?",
+        "message": "Are you sure you want to delete this fallback? This action cannot be undone.",
+        "informationTitle": "Fallback Information",
+        "modelName": "Model Name"
+      },
+      "toasts": {
+        "updated": "Router settings updated successfully",
+        "updateFailed": "Failed to update router settings: {{error}}",
+        "testing": "Testing fallback model response...",
+        "testResult": "Test model=<model/>, received model=<received/>. See <docs>curl</docs>",
+        "testFailed": "Error occurred while generating model response. Please try again. Error: {{error}}"
+      }
+    },
+    "addFallbacks": {
+      "addButton": "Add Fallbacks",
+      "cancel": "Cancel",
+      "saving": "Saving Configuration...",
+      "saveAll": "Save All Configurations",
+      "toasts": {
+        "incomplete_one": "Please complete configuration for all groups. {{count}} group(s) incomplete.",
+        "incomplete_other": "Please complete configuration for all groups. {{count}} group(s) incomplete.",
+        "added_one": "{{count}} fallback configuration(s) added successfully!",
+        "added_other": "{{count}} fallback configuration(s) added successfully!",
+        "noOnChange": "onChange callback not provided"
+      }
+    },
+    "addFallbacksModal": {
+      "title": "Configure Model Fallbacks",
+      "description": "Manage multiple fallback chains for different models (up to 5 groups at a time)"
+    },
+    "editFallbacks": {
+      "cancel": "Cancel",
+      "saving": "Saving Changes...",
+      "save": "Save Changes",
+      "toasts": {
+        "updated": "Fallbacks for {{model}} updated successfully!"
+      }
+    },
+    "fallbackSelectionForm": {
+      "atLeastOneGroup": "At least one group is required",
+      "groupLabel": "Group {{number}}",
+      "removeGroup": "Remove {{group}}",
+      "empty": "No fallback groups configured",
+      "createFirstGroup": "Create First Group",
+      "addGroup": "Add fallback group"
+    },
+    "fallbackGroupConfig": {
+      "primaryModel": "Primary Model",
+      "primaryPlaceholder": "Select primary model",
+      "noModelsFound": "No models found",
+      "selectPrimaryHint": "Select a model to begin configuring fallbacks",
+      "ifFails": "IF FAILS, TRY...",
+      "fallbackChain": "Fallback Chain",
+      "maxAtATime": "(Max {{max}} fallbacks at a time)",
+      "addPlaceholder": "Select fallback models to add...",
+      "maxReached": "Maximum {{max}} fallbacks reached",
+      "searchHint": "Search and select multiple models. Selected models will appear below in order. ({{used}}/{{max}} used)",
+      "maxReachedHint": "Maximum {{max}} fallbacks reached. Remove some to add more.",
+      "noFallbacksSelected": "No fallback models selected",
+      "addFromDropdown": "Add models from the dropdown above",
+      "chainAriaLabel": "Fallback chain",
+      "removeModel": "Remove {{model}}"
+    }
+  },
+  "routingGroups": {
+    "strategies": {
+      "simpleShuffle": "Simple Shuffle",
+      "leastBusy": "Least Busy",
+      "usageBased": "Usage Based",
+      "latencyBased": "Latency Based",
+      "priority": "Priority"
+    },
+    "page": {
+      "searchPlaceholder": "Search groups...",
+      "clearSearch": "Clear search",
+      "refresh": "Refresh",
+      "createGroup": "Create Group",
+      "showingResults_one": "Showing {{count}} result",
+      "showingResults_other": "Showing {{count}} results",
+      "toasts": {
+        "created": "Created routing group \"{{name}}\"",
+        "updated": "Updated routing group \"{{name}}\"",
+        "saveFailed": "Failed to save routing group",
+        "deleted": "Deleted routing group \"{{name}}\"",
+        "deleteFailed": "Failed to delete routing group"
+      },
+      "deleteDialog": {
+        "title": "Delete routing group?",
+        "priorityBody": "Calls to <group/> will stop working. Direct requests to its member models keep their existing routing behavior. This cannot be undone.",
+        "strategyBody": "Models in <group/> will fall back to the proxy's top-level routing strategy. This cannot be undone.",
+        "cancel": "Cancel",
+        "delete": "Delete"
+      }
+    },
+    "table": {
+      "columns": {
+        "groupName": "Group Name",
+        "models": "Models",
+        "strategy": "Strategy",
+        "actions": "Actions"
+      },
+      "rowActions": {
+        "openFor": "Open actions for {{name}}",
+        "edit": "Edit",
+        "delete": "Delete"
+      },
+      "loading": "Loading routing groups…",
+      "emptyTitle": "No routing groups yet",
+      "emptyDescription": "Create a group to load-balance a set of models behind one name."
+    },
+    "usagePanel": {
+      "title": "How routing works for this group",
+      "priorityExplanation": "Request <group/> to try eligible models in priority order. Direct requests to a member model keep their existing routing behavior.",
+      "strategyExplanation": "Callers request any model in the group by name; LiteLLM picks a deployment behind the scenes using the <strategy/> strategy."
+    },
+    "modal": {
+      "createTitle": "Create Routing Group",
+      "editTitle": "Edit {{name}}",
+      "validation": {
+        "nameRequired": "Group name is required",
+        "nameTooLong": "Must be {{max}} characters or fewer",
+        "nameTaken": "A group with this name already exists",
+        "modelsRequired": "Select at least one model",
+        "strategyRequired": "Strategy is required"
+      },
+      "groupName": "Group Name",
+      "groupNameDescription": "Use this name as the model in API calls. LiteLLM routes the request to one of the group's models.",
+      "models": "Models",
+      "modelsPriorityDescription": "Models from your model list that this group routes between. Models can belong to multiple priority groups.",
+      "modelsDescription": "Models from your model list that this group routes between. A model can belong to one non-priority group.",
+      "modelsPlaceholder": "Select models",
+      "noModelsFound": "No models found",
+      "routingStrategy": "Routing Strategy",
+      "priorityStrategyDescription": "Lower priorities are tried first. Models with the same priority share traffic. Applies only when calling this group.",
+      "strategyPlaceholder": "Select strategy",
+      "modelPriorities": "Model Priorities",
+      "modelPrioritiesDescription": "Use 1 for your first choice, 2 for your next choice, and so on. Unavailable models are skipped.",
+      "modelPrioritiesAriaLabel": "Model priorities",
+      "selectModelsForPriorities": "Select models to set priorities",
+      "modelNotSelected": "Model is not selected",
+      "priorityFor": "Priority for {{model}}",
+      "removePriorityFor": "Remove priority for {{model}}",
+      "remove": "Remove",
+      "strategyArgs": "Strategy Arguments (JSON)",
+      "latencyArgsExample": "Example: { \"ttl\": 3600, \"lowest_latency_buffer\": 0 }",
+      "defaultArgsExample": "Example: { \"ttl\": 60 }",
+      "priorityFootnote": "Direct requests to a member model keep their existing routing behavior.",
+      "strategyFootnote": "Models outside non-priority groups use the proxy's top-level routing strategy.",
+      "cancel": "Cancel",
+      "createGroup": "Create Group",
+      "saveChanges": "Save Changes"
+    },
+    "payload": {
+      "prioritiesMismatch": "Set a priority for each selected model and remove unused priorities",
+      "prioritiesInvalid": "Priorities must be whole numbers from 1 to 9007199254740991",
+      "invalidJson": "Must be valid JSON"
+    },
+    "modelOwnership": {
+      "claimedBy": "{{model}} (in \"{{group}}\")",
+      "conflict": "Each model may belong to at most one non-priority group. Already claimed: {{detail}}"
+    }
+  },
+  "metadataKeyValueFields": {
+    "keyPlaceholder": "Key",
+    "valuePlaceholder": "Value",
+    "removePair": "Remove key-value pair",
+    "addPair": "Add Key-Value Pair"
+  },
   "toolPolicies": {
     "view": {
       "adminOnly": {

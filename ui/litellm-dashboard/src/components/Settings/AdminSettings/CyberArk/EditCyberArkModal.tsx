@@ -4,7 +4,9 @@ import { useCyberArkConfig } from "@/app/(dashboard)/hooks/configOverrides/useCy
 import { useUpdateCyberArkConfig } from "@/app/(dashboard)/hooks/configOverrides/useUpdateCyberArkConfig";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { toast } from "@/lib/toast";
+import type { ParseKeys } from "i18next";
 import React, { useMemo } from "react";
+import { useTranslation } from "react-i18next";
 import { z } from "zod";
 import { FieldGroup } from "@/components/ui/field";
 import { FormField } from "@/components/shared/form/FormField";
@@ -14,33 +16,34 @@ import { Input } from "@/components/ui/input";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import { Separator } from "@/components/ui/separator";
 import { useZodForm } from "@/lib/forms/useZodForm";
+import i18n from "@/i18n/i18n";
 import { SENSITIVE_FIELDS, FIELD_LABELS } from "./constants";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
 interface CyberArkFieldGroup {
-  title: string;
-  subtitle?: string;
+  title: ParseKeys;
+  subtitle?: ParseKeys;
   fields: string[];
 }
 
 const FIELD_GROUPS: CyberArkFieldGroup[] = [
   {
-    title: "Connection",
+    title: "adminPanel.cyberArk.editModal.groups.connection.title",
     fields: ["cyberark_api_base", "cyberark_account", "cyberark_username"],
   },
   {
-    title: "API Key Authentication",
-    subtitle: "Use a Conjur API key to authenticate. Only one auth method is required.",
+    title: "adminPanel.cyberArk.editModal.groups.apiKey.title",
+    subtitle: "adminPanel.cyberArk.editModal.groups.apiKey.subtitle",
     fields: ["cyberark_api_key"],
   },
   {
-    title: "Certificate Authentication",
-    subtitle: "Use a client TLS certificate and key to authenticate. Only one auth method is required.",
+    title: "adminPanel.cyberArk.editModal.groups.certificate.title",
+    subtitle: "adminPanel.cyberArk.editModal.groups.certificate.subtitle",
     fields: ["client_cert", "client_key"],
   },
   {
-    title: "Advanced",
-    subtitle: "Optional TLS and token caching settings.",
+    title: "adminPanel.cyberArk.editModal.groups.advanced.title",
+    subtitle: "adminPanel.cyberArk.editModal.groups.advanced.subtitle",
     fields: ["ssl_verify", "refresh_interval"],
   },
 ];
@@ -54,7 +57,7 @@ const buildSchema = (fields: readonly string[]): z.ZodType<CyberArkFormValues, C
         name,
         name === "cyberark_api_base"
           ? z.string().refine((value) => value.length === 0 || /^https?:\/\/.+/.test(value), {
-              message: "Must start with http:// or https://",
+              error: () => i18n.t("adminPanel.cyberArk.editModal.errors.invalidUrl"),
             })
           : z.string(),
       ]),
@@ -68,6 +71,7 @@ interface EditCyberArkModalProps {
 }
 
 const EditCyberArkModal: React.FC<EditCyberArkModalProps> = ({ isVisible, onCancel, onSuccess }) => {
+  const { t } = useTranslation();
   const { accessToken } = useAuthorized();
   const { data } = useCyberArkConfig();
   const { mutate, isPending } = useUpdateCyberArkConfig(accessToken);
@@ -105,7 +109,7 @@ const EditCyberArkModal: React.FC<EditCyberArkModalProps> = ({ isVisible, onCanc
 
     mutate(config, {
       onSuccess: () => {
-        toast.success("CyberArk configuration updated successfully");
+        toast.success(t("adminPanel.cyberArk.toasts.updated"));
         onSuccess();
       },
       onError: (err) => {
@@ -126,10 +130,17 @@ const EditCyberArkModal: React.FC<EditCyberArkModalProps> = ({ isVisible, onCanc
     const isSensitive = SENSITIVE_FIELDS.has(fieldName);
     const existingValue = rawValues[fieldName];
     const hasExistingValue = isSensitive && existingValue != null && existingValue !== "";
-    const placeholder = hasExistingValue ? `Leave blank to keep existing (${existingValue})` : fieldSchema?.description;
+    const placeholder = hasExistingValue
+      ? t("adminPanel.cyberArk.editModal.keepExistingPlaceholder", { value: existingValue })
+      : fieldSchema?.description;
 
     return (
-      <FormField key={fieldName} control={form.control} name={fieldName} label={FIELD_LABELS[fieldName] ?? fieldName}>
+      <FormField
+        key={fieldName}
+        control={form.control}
+        name={fieldName}
+        label={(Object.hasOwn(FIELD_LABELS, fieldName) && t(FIELD_LABELS[fieldName])) || fieldName}
+      >
         {({ ref, ...field }) =>
           isSensitive ? (
             <PasswordInput ref={ref} placeholder={placeholder} {...field} />
@@ -145,14 +156,14 @@ const EditCyberArkModal: React.FC<EditCyberArkModalProps> = ({ isVisible, onCanc
     <Dialog open={isVisible} onOpenChange={(open) => !open && handleCancel()}>
       <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-[700px]">
         <DialogHeader>
-          <DialogTitle>Edit CyberArk Configuration</DialogTitle>
+          <DialogTitle>{t("adminPanel.cyberArk.editModal.title")}</DialogTitle>
         </DialogHeader>
         <form onSubmit={form.handleSubmit(handleSubmit)}>
           {FIELD_GROUPS.map((group, index) => (
             <div key={group.title}>
               {index > 0 && <Separator className="my-6" />}
-              <h5 className="mb-1 text-base font-semibold text-foreground">{group.title}</h5>
-              {group.subtitle && <p className="mb-4 text-sm text-muted-foreground">{group.subtitle}</p>}
+              <h5 className="mb-1 text-base font-semibold text-foreground">{t(group.title)}</h5>
+              {group.subtitle && <p className="mb-4 text-sm text-muted-foreground">{t(group.subtitle)}</p>}
               <FieldGroup>{group.fields.map(renderField)}</FieldGroup>
             </div>
           ))}
@@ -160,11 +171,11 @@ const EditCyberArkModal: React.FC<EditCyberArkModalProps> = ({ isVisible, onCanc
         <DialogFooter>
           <div className="flex items-center justify-end gap-2">
             <Button type="button" variant="outline" onClick={handleCancel} disabled={isPending}>
-              Cancel
+              {t("adminPanel.cyberArk.editModal.cancel")}
             </Button>
             <Button type="button" disabled={isPending} onClick={() => void form.handleSubmit(handleSubmit)()}>
               {isPending && <UiLoadingSpinner className="size-4 mr-1" />}
-              {isPending ? "Saving..." : "Save"}
+              {isPending ? t("adminPanel.cyberArk.editModal.saving") : t("adminPanel.cyberArk.editModal.save")}
             </Button>
           </div>
         </DialogFooter>

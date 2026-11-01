@@ -2,6 +2,7 @@
 
 import React from "react";
 import { X } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { BarChart } from "@/components/shared/charts";
 import type { ChartTooltipProps } from "@/components/shared/charts/chart_tooltip";
 import { Button } from "@/components/ui/button";
@@ -40,6 +41,7 @@ export const groupErrorBuckets = (buckets: readonly CacheActivityErrorBucket[], 
 };
 
 export const ErrorCodeTooltip = ({ active, payload, label }: ChartTooltipProps) => {
+  const { t } = useTranslation();
   if (!active || !payload || payload.length === 0) return null;
   const datum = payload[0]?.payload as ErrorCodeDatum | undefined;
   if (!datum) return null;
@@ -47,7 +49,10 @@ export const ErrorCodeTooltip = ({ active, payload, label }: ChartTooltipProps) 
   return (
     <div className="min-w-40 rounded-lg border border-border/50 bg-background px-2.5 py-1.5 text-xs shadow-xl">
       <p className="mb-1.5 font-medium text-foreground">
-        Error code {String(label)}: {datum[FAILED_REQUESTS_SERIES].toLocaleString()} failed
+        {t("caching.errorDrilldown.tooltipTitle", {
+          code: String(label),
+          total: datum[FAILED_REQUESTS_SERIES].toLocaleString(),
+        })}
       </p>
       <div className="grid gap-1.5">
         {datum.classes.map((errorClass) => (
@@ -70,27 +75,33 @@ interface ErrorDrilldownCardProps {
   onClose: () => void;
 }
 
-export const ErrorDrilldownCard = ({ callType, buckets, valueFormatter, onClose }: ErrorDrilldownCardProps) => (
-  <Card className="mt-4">
-    <CardHeader className="flex flex-row items-center justify-between">
-      <CardTitle className="text-base font-semibold">Failed requests by error code: {callType}</CardTitle>
-      <Button variant="outline" size="icon-sm" onClick={onClose} aria-label="Close error breakdown">
-        <X />
-      </Button>
-    </CardHeader>
-    <CardContent>
-      <p className="text-sm text-muted-foreground">Hover a bar to see the error classes behind that code.</p>
-      <BarChart
-        data={groupErrorBuckets(buckets, callType)}
-        index="error_code"
-        categories={[FAILED_REQUESTS_SERIES]}
-        colors={["red"]}
-        valueFormatter={valueFormatter}
-        showLegend={false}
-        customTooltip={ErrorCodeTooltip}
-        yAxisWidth={48}
-        className="mt-2"
-      />
-    </CardContent>
-  </Card>
-);
+export const ErrorDrilldownCard = ({ callType, buckets, valueFormatter, onClose }: ErrorDrilldownCardProps) => {
+  const { t } = useTranslation();
+  return (
+    <Card className="mt-4">
+      <CardHeader className="flex flex-row items-center justify-between">
+        <CardTitle className="text-base font-semibold">
+          {t("caching.errorDrilldown.title")}
+          {callType}
+        </CardTitle>
+        <Button variant="outline" size="icon-sm" onClick={onClose} aria-label={t("caching.errorDrilldown.close")}>
+          <X />
+        </Button>
+      </CardHeader>
+      <CardContent>
+        <p className="text-sm text-muted-foreground">{t("caching.errorDrilldown.hint")}</p>
+        <BarChart
+          data={groupErrorBuckets(buckets, callType)}
+          index="error_code"
+          categories={[FAILED_REQUESTS_SERIES]}
+          colors={["red"]}
+          valueFormatter={valueFormatter}
+          showLegend={false}
+          customTooltip={ErrorCodeTooltip}
+          yAxisWidth={48}
+          className="mt-2"
+        />
+      </CardContent>
+    </Card>
+  );
+};
