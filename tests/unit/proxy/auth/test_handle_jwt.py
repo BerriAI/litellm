@@ -4278,6 +4278,42 @@ def _get_jwt_handler_with_scripted_endpoint(
     return jwt_handler
 
 
+class _GatedJWKSEndpoint:
+    """Injected ``http_handler`` whose JWKS response waits on a test-controlled event.
+
+    Lets a test prove requests finish while the refresh is still in flight, with no timing involved.
+    """
+
+    def __init__(self, body: Mapping[str, object], gate: asyncio.Event) -> None:
+        self.body = body
+        self.gate = gate
+        self.call_count = 0
+
+    async def get(
+        self,
+        url: str,
+        params: Mapping[str, str] | None = None,
+        headers: Mapping[str, str] | None = None,
+    ) -> MagicMock:
+        self.call_count += 1
+        await self.gate.wait()
+        response = MagicMock()
+        response.status_code = 200
+        response.json.return_value = self.body
+        return response
+
+
+async def _await_background_jwks_refresh(jwt_handler: JWTHandler, cache_key: str) -> None:
+    """Wait out the background refresh scheduled for ``cache_key``, if one is still running.
+
+    The schedule happens synchronously inside the request that triggered it, so once that request has
+    returned the task is either registered or already finished, never still to be created.
+    """
+    pending = jwt_handler._refresh_tasks.get(cache_key)
+    if pending is not None:
+        await pending
+
+
 @pytest.mark.asyncio
 async def test_get_public_key_retries_transient_jwks_fetch_failure():
     """A single connect timeout to the IdP must be retried, not surfaced to the caller."""
@@ -4397,8 +4433,11 @@ async def test_removed_signing_key_stops_being_trusted_once_the_stale_window_exp
 
 
 @pytest.mark.asyncio
-async def test_key_removed_from_a_reachable_jwks_is_rejected_without_consulting_the_stale_copy():
-    """A reachable IdP always wins: dropping a key revokes it immediately, stale copy included."""
+async def test_key_removed_from_a_reachable_jwks_is_rejected_once_the_triggered_refresh_lands():
+    """A reachable IdP always wins, just not mid-flight: the expiry triggers a refresh, and once that refresh
+    lands the dropped key is rejected and the stale copy is replaced. Requests served while the refresh runs
+    still see the last trusted copy; the revocation delay is bounded by one fetch, never by the stale window.
+    """
     from litellm.caching.dual_cache import DualCache
 
     jwks_url = "https://rotating-issuer.example.com/keys"
@@ -4413,6 +4452,9 @@ async def test_key_removed_from_a_reachable_jwks_is_rejected_without_consulting_
     active_cache_key = f"litellm_jwt_auth_keys_{jwks_url}"
     await cache.async_delete_cache(key=active_cache_key)
     endpoint.outcomes = ({"keys": [current_jwk]},)
+
+    assert await jwt_handler._get_public_key_from_jwks_url(jwks_url=jwks_url, kid="retired-key") == retired_jwk
+    await _await_background_jwks_refresh(jwt_handler, active_cache_key)
 
     with pytest.raises(NoMatchingJWTPublicKeyError):
         await jwt_handler._get_public_key_from_jwks_url(jwks_url=jwks_url, kid="retired-key")
@@ -4621,6 +4663,158 @@ async def test_public_key_stale_ttl_defaults_to_one_hour():
 
 
 @pytest.mark.asyncio
+async def test_expiry_serves_stale_keys_without_waiting_for_the_slow_refresh():
+    """A slow IdP must not stall JWT-authenticated traffic when `public_key_ttl` lapses.
+
+    Regression test: on a fresh-cache miss every caller used to queue behind the single-flight lock while the
+    first caller ran the live fetch. The fetch below never completes during the burst, so any caller that
+    waited for it would hang the gather.
+    """
+    from litellm.caching.dual_cache import DualCache
+
+    jwks_url = "https://slow-idp.example.com/keys"
+    _, jwk = _get_rsa_key_and_jwk(kid="slow-idp-key")
+    cache = DualCache()
+    gate = asyncio.Event()
+    gate.set()
+    endpoint = _GatedJWKSEndpoint({"keys": [jwk]}, gate)
+    jwt_handler = _get_jwt_handler_with_scripted_endpoint(cache, endpoint)
+    active_key = f"litellm_jwt_auth_keys_{jwks_url}"
+
+    assert await jwt_handler._get_public_key_from_jwks_url(jwks_url=jwks_url, kid="slow-idp-key") == jwk
+
+    await cache.async_delete_cache(key=active_key)
+    gate.clear()
+    results = await asyncio.wait_for(
+        asyncio.gather(
+            *(
+                jwt_handler._get_public_key_from_jwks_url(jwks_url=jwks_url, kid="slow-idp-key")
+                for _ in range(10)
+            )
+        ),
+        timeout=5,
+    )
+
+    assert results == [jwk] * 10
+    gate.set()
+    await _await_background_jwks_refresh(jwt_handler, active_key)
+    assert endpoint.call_count == 2
+    assert await cache.async_get_cache(key=active_key) == [jwk]
+    assert await jwt_handler._get_public_key_from_jwks_url(jwks_url=jwks_url, kid="slow-idp-key") == jwk
+    assert endpoint.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_each_expiry_window_triggers_exactly_one_background_refresh():
+    """Concurrent requests in one TTL window must share a single background refresh, not one per request."""
+    from litellm.caching.dual_cache import DualCache
+
+    jwks_url = "https://single-flight.example.com/keys"
+    _, jwk = _get_rsa_key_and_jwk(kid="single-flight-key")
+    cache = DualCache()
+    gate = asyncio.Event()
+    gate.set()
+    endpoint = _GatedJWKSEndpoint({"keys": [jwk]}, gate)
+    jwt_handler = _get_jwt_handler_with_scripted_endpoint(cache, endpoint)
+    active_key = f"litellm_jwt_auth_keys_{jwks_url}"
+
+    assert await jwt_handler._get_public_key_from_jwks_url(jwks_url=jwks_url, kid="single-flight-key") == jwk
+
+    for _ in range(3):
+        await cache.async_delete_cache(key=active_key)
+        results = await asyncio.wait_for(
+            asyncio.gather(
+                *(
+                    jwt_handler._get_public_key_from_jwks_url(jwks_url=jwks_url, kid="single-flight-key")
+                    for _ in range(10)
+                )
+            ),
+            timeout=5,
+        )
+        assert results == [jwk] * 10
+        await _await_background_jwks_refresh(jwt_handler, active_key)
+
+    assert endpoint.call_count == 4
+
+
+@pytest.mark.asyncio
+async def test_cold_start_blocks_concurrent_requests_until_keys_arrive():
+    """With no cached copy at all there is nothing to serve, so callers wait on the single-flight refresh."""
+    from litellm.caching.dual_cache import DualCache
+
+    jwks_url = "https://cold-start.example.com/keys"
+    _, jwk = _get_rsa_key_and_jwk(kid="cold-start-key")
+    cache = DualCache()
+    gate = asyncio.Event()
+    endpoint = _GatedJWKSEndpoint({"keys": [jwk]}, gate)
+    jwt_handler = _get_jwt_handler_with_scripted_endpoint(cache, endpoint)
+
+    pending = [
+        asyncio.create_task(jwt_handler._get_public_key_from_jwks_url(jwks_url=jwks_url, kid="cold-start-key"))
+        for _ in range(5)
+    ]
+    for _ in range(10):
+        await asyncio.sleep(0)
+    assert all(not task.done() for task in pending)
+
+    gate.set()
+    assert await asyncio.gather(*pending) == [jwk] * 5
+    assert endpoint.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_failed_background_refresh_keeps_serving_stale_keys():
+    """A refresh that fails off-path must not poison later requests; the stale copy keeps serving."""
+    from litellm.caching.dual_cache import DualCache
+
+    jwks_url = "https://flapping-idp.example.com/keys"
+    _, jwk = _get_rsa_key_and_jwk(kid="flapping-key")
+    cache = DualCache()
+    endpoint = _ScriptedJWKSEndpoint(({"keys": [jwk]},))
+    jwt_handler = _get_jwt_handler_with_scripted_endpoint(cache, endpoint)
+    active_key = f"litellm_jwt_auth_keys_{jwks_url}"
+
+    assert await jwt_handler._get_public_key_from_jwks_url(jwks_url=jwks_url, kid="flapping-key") == jwk
+
+    await cache.async_delete_cache(key=active_key)
+    endpoint.outcomes = (httpx.ConnectTimeout("connect timed out"),)
+
+    assert await jwt_handler._get_public_key_from_jwks_url(jwks_url=jwks_url, kid="flapping-key") == jwk
+    await _await_background_jwks_refresh(jwt_handler, active_key)
+    assert endpoint.call_count == 1 + JWKS_FETCH_ATTEMPTS
+
+    assert await jwt_handler._get_public_key_from_jwks_url(jwks_url=jwks_url, kid="flapping-key") == jwk
+    await _await_background_jwks_refresh(jwt_handler, active_key)
+    assert endpoint.call_count == 1 + JWKS_FETCH_ATTEMPTS
+
+
+@pytest.mark.asyncio
+async def test_stale_copy_past_the_staleness_cap_is_not_served_off_path():
+    """The staleness bound is enforced before anything is served: an aged-out copy still fails closed."""
+    from litellm.caching.dual_cache import DualCache
+
+    jwks_url = "https://aged-out.example.com/keys"
+    _, jwk = _get_rsa_key_and_jwk(kid="aged-out-key")
+    cache = DualCache()
+    endpoint = _ScriptedJWKSEndpoint((httpx.ConnectTimeout("connect timed out"),))
+    jwt_handler = _get_jwt_handler_with_scripted_endpoint(
+        cache, endpoint, public_key_ttl=600, public_key_stale_ttl=3600
+    )
+    active_key = f"litellm_jwt_auth_keys_{jwks_url}"
+
+    await cache.async_set_cache(key=f"{STALE_CACHE_KEY_PREFIX}{active_key}", value=[jwk], ttl=4200)
+    await cache.async_set_cache(
+        key=f"{STALE_WRITTEN_AT_CACHE_KEY_PREFIX}{active_key}",
+        value=time.time() - 4201,
+        ttl=4200,
+    )
+
+    with pytest.raises(JWKSUnreachableError):
+        await jwt_handler._get_public_key_from_jwks_url(jwks_url=jwks_url, kid="aged-out-key")
+    assert endpoint.call_count == JWKS_FETCH_ATTEMPTS
+
+
+@pytest.mark.asyncio
 async def test_stale_fallback_warns_with_the_kid_and_how_stale_the_jwks_copy_is(caplog):
     """Serving an unrefreshed signing key is a security-relevant event, so it must be legible in the logs."""
     import logging
@@ -4646,6 +4840,7 @@ async def test_stale_fallback_warns_with_the_kid_and_how_stale_the_jwks_copy_is(
 
     caplog.set_level(logging.WARNING)
     await jwt_handler._get_public_key_from_jwks_url(jwks_url=jwks_url, kid="warned-key")
+    await _await_background_jwks_refresh(jwt_handler, active_cache_key)
 
     warnings = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
     stale_warnings = [m for m in warnings if "stale JWKS copy" in m]
@@ -4661,8 +4856,15 @@ async def test_stale_fallback_warns_with_the_kid_and_how_stale_the_jwks_copy_is(
 
 
 @pytest.mark.asyncio
-async def test_unparseable_jwks_response_does_not_fall_back_to_the_stale_copy():
-    """Only an unreachable IdP unlocks the stale copy. A reachable one that answers badly must surface the error."""
+async def test_unparseable_jwks_response_never_poisons_the_cached_keys(caplog):
+    """A reachable IdP that answers badly must not poison the cache, and the failure must be loud.
+
+    The in-flight request is still served from the trusted copy while the refresh runs off-path, but the
+    garbled body invalidates the stale copy, so the next request takes the blocking path and the parse
+    error surfaces instead of silently trusting keys the IdP may have rotated away.
+    """
+    import logging
+
     from litellm.caching.dual_cache import DualCache
 
     jwks_url = "https://garbled-issuer.example.com/keys"
@@ -4673,20 +4875,38 @@ async def test_unparseable_jwks_response_does_not_fall_back_to_the_stale_copy():
 
     assert await jwt_handler._get_public_key_from_jwks_url(jwks_url=jwks_url, kid="garbled-key") == jwk
 
-    await cache.async_delete_cache(key=f"litellm_jwt_auth_keys_{jwks_url}")
+    active_cache_key = f"litellm_jwt_auth_keys_{jwks_url}"
+    await cache.async_delete_cache(key=active_cache_key)
     garbled = MagicMock()
     garbled.status_code = 200
     garbled.text = "<html>not json</html>"
     garbled.json.side_effect = ValueError("Expecting value: line 1 column 1")
     endpoint.outcomes = (garbled,)
 
+    caplog.set_level(logging.WARNING)
+    assert await jwt_handler._get_public_key_from_jwks_url(jwks_url=jwks_url, kid="garbled-key") == jwk
+    await _await_background_jwks_refresh(jwt_handler, active_cache_key)
+
+    assert await cache.async_get_cache(key=active_cache_key) is None
+    assert await cache.async_get_cache(key=f"{STALE_CACHE_KEY_PREFIX}{active_cache_key}") is None
+    assert await cache.async_get_cache(key=f"{STALE_WRITTEN_AT_CACHE_KEY_PREFIX}{active_cache_key}") is None
+    warnings = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+    assert any("raised unexpectedly" in m and "garbled-key" in m for m in warnings)
+
     with pytest.raises(Exception, match="Error parsing response"):
         await jwt_handler._get_public_key_from_jwks_url(jwks_url=jwks_url, kid="garbled-key")
 
 
 @pytest.mark.asyncio
-async def test_jwks_error_response_is_not_cached_over_the_last_known_good_keys():
-    """An IdP error body must never be stored as the key set, least of all as the stale copy."""
+async def test_jwks_error_response_is_not_cached_over_the_last_known_good_keys(caplog):
+    """An IdP error body must never be stored as the key set, least of all as the stale copy.
+
+    The in-flight request is still served from the trusted copy while the refresh runs off-path, but the
+    error invalidates the stale copy, so the next request takes the blocking path and the 503 surfaces
+    instead of silently trusting keys the IdP may have rotated away.
+    """
+    import logging
+
     from litellm.caching.dual_cache import DualCache
 
     jwks_url = "https://erroring-issuer.example.com/keys"
@@ -4705,11 +4925,18 @@ async def test_jwks_error_response_is_not_cached_over_the_last_known_good_keys()
     server_error.json.return_value = {"error": "upstream unavailable"}
     endpoint.outcomes = (server_error,)
 
-    with pytest.raises(Exception, match="returned status 503"):
-        await jwt_handler._get_public_key_from_jwks_url(jwks_url=jwks_url, kid="erroring-key")
+    caplog.set_level(logging.WARNING)
+    assert await jwt_handler._get_public_key_from_jwks_url(jwks_url=jwks_url, kid="erroring-key") == jwk
+    await _await_background_jwks_refresh(jwt_handler, active_cache_key)
 
     assert await cache.async_get_cache(key=active_cache_key) is None
-    assert await cache.async_get_cache(key=f"{STALE_CACHE_KEY_PREFIX}{active_cache_key}") == [jwk]
+    assert await cache.async_get_cache(key=f"{STALE_CACHE_KEY_PREFIX}{active_cache_key}") is None
+    assert await cache.async_get_cache(key=f"{STALE_WRITTEN_AT_CACHE_KEY_PREFIX}{active_cache_key}") is None
+    warnings = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+    assert any("raised unexpectedly" in m and "erroring-key" in m for m in warnings)
+
+    with pytest.raises(Exception, match="returned status 503"):
+        await jwt_handler._get_public_key_from_jwks_url(jwks_url=jwks_url, kid="erroring-key")
 
 
 @pytest.mark.asyncio
@@ -4734,6 +4961,7 @@ async def test_sustained_jwks_outage_refetches_once_per_backoff_window_not_once_
     )
 
     assert public_keys == [jwk] * 6
+    await _await_background_jwks_refresh(jwt_handler, f"litellm_jwt_auth_keys_{jwks_url}")
     assert endpoint.call_count - calls_before_outage == JWKS_FETCH_ATTEMPTS
 
 
