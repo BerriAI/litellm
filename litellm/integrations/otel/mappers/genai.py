@@ -34,6 +34,7 @@ from litellm.integrations.otel.model.semconv import (
     GenAI,
     JsonRpc,
     LiteLLM,
+    OpenAI,
     RpcSystem,
     Server,
 )
@@ -63,6 +64,8 @@ class GenAIMapper:
         GenAI.RESPONSE_ID: lambda d: d.response_id,
         GenAI.RESPONSE_FINISH_REASONS: lambda d: list(d.finish_reasons) if d.finish_reasons else None,
         GenAI.RESPONSE_TIME_TO_FIRST_CHUNK: lambda d: d.time_to_first_chunk_seconds,
+        OpenAI.REQUEST_SERVICE_TIER: lambda d: d.requested_service_tier,
+        OpenAI.RESPONSE_SERVICE_TIER: lambda d: d.served_service_tier,
         GenAI.USAGE_INPUT_TOKENS: lambda d: d.usage.input_tokens,
         GenAI.USAGE_OUTPUT_TOKENS: lambda d: d.usage.output_tokens,
         GenAI.USAGE_CACHE_CREATION_INPUT_TOKENS: lambda d: d.usage.cache_creation_input_tokens,
