@@ -739,12 +739,6 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         )
 
     @staticmethod
-    def _streamed_choice_indices(responses_so_far: Sequence["ModelResponseStream"]) -> Iterator[int]:
-        for chunk in responses_so_far:
-            for choice in chunk.choices:
-                yield choice.index
-
-    @staticmethod
     def _streamed_argument_fragments(
         responses_so_far: Sequence["ModelResponseStream"],
     ) -> Iterator[tuple[tuple[int, int], str]]:
@@ -960,11 +954,10 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
             inputs: Final = GenericGuardrailAPIInputs(texts=texts_to_check)
             if self._streamed_tool_call_fingerprints(responses_so_far):
                 stream_ended: Final = self._first_choice_has_finished(responses_so_far)
-                streamed_choice_indices: Final = frozenset(self._streamed_choice_indices(responses_so_far))
                 tool_arguments_complete: Final = self._streamed_tool_arguments_are_complete(responses_so_far)
                 assembled: Final = (
                     None
-                    if len(streamed_choice_indices) == 1 and not stream_ended and not tool_arguments_complete
+                    if not stream_ended and not tool_arguments_complete
                     else self._rebuild_ended_stream_per_choice(responses_so_far, litellm_logging_obj)
                 )
                 inspected: Final = (

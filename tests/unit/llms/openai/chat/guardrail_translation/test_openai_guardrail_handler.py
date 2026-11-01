@@ -1670,6 +1670,42 @@ class TestOpenAIChatCompletionsHandlerStreamingOutput:
         assert [c["function"]["arguments"] for c in sent] == ['{"city": "Paris"}', '{"city": "Rome"}']
 
     @pytest.mark.asyncio
+    async def test_a_round_with_nothing_to_judge_costs_one_call_at_n2(self) -> None:
+        """Per-choice rounds buy tool-call context. While no call is complete there is none to buy,
+        and charging a vendor once per choice for every sampled round buys nothing."""
+        from litellm.llms.base_llm.guardrail_translation.base_translation import StreamTransformSink
+        from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+
+        class CountingGuardrail(CustomGuardrail):
+            calls: list[object] = []
+
+            async def apply_guardrail(
+                self, inputs: GenericGuardrailAPIInputs, request_data: dict[str, object],
+                input_type: Literal["request", "response"], logging_obj: object = None,
+            ) -> GenericGuardrailAPIInputs:
+                type(self).calls.append(inputs.get("texts"))
+                return inputs
+
+        def choice(index: int, arguments: str) -> StreamingChoices:
+            return StreamingChoices(
+                index=index,
+                delta=Delta(content="looking", tool_calls=[
+                    {"index": 0, "id": f"call_{index}", "type": "function",
+                     "function": {"name": "weather", "arguments": arguments}},
+                ]),
+                finish_reason=None,
+            )
+
+        CountingGuardrail.calls = []
+        await OpenAIChatCompletionsHandler().process_output_streaming_response(
+            responses_so_far=[ModelResponseStream(choices=[choice(0, '{"city": "Pa'), choice(1, '{"ci')])],
+            guardrail_to_apply=CountingGuardrail(guardrail_name="counting"),
+            litellm_logging_obj=None, request_data={},
+            stream_transform_sink=StreamTransformSink(),
+        )
+        assert len(CountingGuardrail.calls) == 1
+
+    @pytest.mark.asyncio
     async def test_partial_arguments_stay_out_of_what_each_choice_inspects(self) -> None:
         """Half a JSON object is not a call a guardrail can judge, at any number of choices."""
         from litellm.llms.base_llm.guardrail_translation.base_translation import StreamTransformSink
